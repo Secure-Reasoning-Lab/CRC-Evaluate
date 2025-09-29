@@ -229,3 +229,10 @@ crsbench-patch-test-*/
 .litellm_cache/
 agent_logs/
 conversation_history/
+
+# Builder specific
+builder_workspace/
+ossfuzz_builds/
+*.build
+compile_commands.json
+.bear/

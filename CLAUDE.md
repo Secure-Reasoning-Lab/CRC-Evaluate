@@ -56,6 +56,13 @@ need of LLM used in modern AI-powered CRS.
 "$PROJECT" and "$REPO" both exists and are not interchangeable.
 
 
+## Reference projects
+Some reference projects are put in `claude_refernece_projects`, you should look
+when asked.
+
+### Docs
+Please summarize reference projects by creating markdown files in `docs_reference_projects`.
+
 ## Coding standard
 ### Python
 - use absolute import instead of relative import; so moving files around for
@@ -64,6 +71,10 @@ need of LLM used in modern AI-powered CRS.
 ## Documents standard
 - create entry in README.md when adding a new component.
 - create a README.md to summarize each component in their own directories.
+
+## Usage or reference of third party codebase
+- Please document the usage of third party codebase for good open-source gesture
+  :)
 
 ## Other instructions
 - create a TODO.md to track remaining TODO items. and an DONE.md for finished items.
