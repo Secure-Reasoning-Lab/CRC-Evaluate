@@ -56,6 +56,11 @@ need of LLM used in modern AI-powered CRS.
 "$PROJECT" and "$REPO" both exists and are not interchangeable.
 
 
+## Coding standard
+### Python
+- use absolute import instead of relative import; so moving files around for
+  restructuring is straightforward without further editing import statements.
+
 ## Other instructions
 - create a TODO.md to track remaining TODO items. and an DONE.md for finished items.
 - read TODO.md in the new session.
