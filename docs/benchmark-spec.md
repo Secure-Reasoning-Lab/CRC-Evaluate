@@ -29,11 +29,6 @@ cybersecurity capabilities:
 - Ensuring patches maintain program functionality while addressing security
   issues
 
-#### SARIF Report Evaluation (Next Step)
-
-- Analysis of Static Analysis Results Interchange Format (SARIF) reports
-- Filter out false positives
-
 ## Benchmark Goals
 
 ### Primary Objectives
@@ -42,7 +37,7 @@ cybersecurity capabilities:
 - Prevent LLM training data contamination
 - Enable fair evaluation across different CRS implementations
 - Analyze CRS performance on specific challenge types (C/Java,
-  full/delta mode, harnessed/unharnessed)
+  full/delta mode, harnessed)
 - Classify challenges by difficulty level
 
 ### Benchmark Definition

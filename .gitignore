@@ -200,6 +200,14 @@ evaluation_results.yaml
 *_evaluation_results.*
 deduplication_results.json
 *_deduplication_results.*
+validation_results.json
+validation_results.yaml
+*_validation_results.*
+
+# Reproducer temporary files
+harness_*
+*.exec
+temp_harness/
 
 # Claude Code specific
 .claude/
