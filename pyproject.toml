@@ -4,4 +4,17 @@ version = "0.1.0"
 description = "A benchmark suite for evaluating Cyber Reasoning Systems (CRS)"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "aiofiles>=24.1.0",
+    "asyncio-throttle>=1.0.2",
+    "click>=8.3.0",
+    "jinja2>=3.1.6",
+    "langchain>=0.3.27",
+    "langgraph>=0.6.8",
+    "litellm>=1.77.5",
+    "loguru>=0.7.3",
+    "pydantic>=2.11.9",
+    "python-dotenv>=1.1.1",
+    "rich>=14.1.0",
+    "typer>=0.19.2",
+]

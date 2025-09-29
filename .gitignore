@@ -198,3 +198,11 @@ evaluation-results/
 
 # Claude Code specific
 .claude/
+
+# LLM and AI specific
+.openai_api_key
+.anthropic_api_key
+.langchain_cache/
+.litellm_cache/
+agent_logs/
+conversation_history/
