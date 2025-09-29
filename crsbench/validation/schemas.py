@@ -50,9 +50,9 @@ class HarnessFile(BaseModel):
     def validate_path(cls, v):
         if not v or not v.strip():
             raise ValueError("Harness path cannot be empty")
-        # Basic path validation - should contain $REPO or be relative
-        if not (v.startswith('$REPO/') or v.startswith('./')):
-            raise ValueError("Harness path should start with '$REPO/' or be a relative path")
+        # Basic path validation - should contain $REPO, $PROJECT, or be relative
+        if not (v.startswith('$REPO/') or v.startswith('$PROJECT/') or v.startswith('./')):
+            raise ValueError("Harness path should start with '$REPO/', '$PROJECT/', or be a relative path")
         return v.strip()
 
 

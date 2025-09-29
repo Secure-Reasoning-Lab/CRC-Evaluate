@@ -195,6 +195,8 @@ results/
 output/
 artifacts/
 evaluation-results/
+evaluation_results.json
+*_evaluation_results.*
 
 # Claude Code specific
 .claude/

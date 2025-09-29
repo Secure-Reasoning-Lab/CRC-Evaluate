@@ -49,7 +49,15 @@ On top of that, we also provide basic infrastructure like LiteLLM to support the
 need of LLM used in modern AI-powered CRS.
 
 
+## Some variable in meta.yaml
+- "$PROJECT": the project directory
+- "$REPO": the source code repository directory
+
+"$PROJECT" and "$REPO" both exists and are not interchangeable.
+
+
 ## Other instructions
 - create a TODO.md to track remaining TODO items. and an DONE.md for finished items.
 - read TODO.md in the new session.
 - use uv as python package manager
+- don't consider backward compatability (no cpvs; just throw errors for old formats)
