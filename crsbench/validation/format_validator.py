@@ -10,7 +10,7 @@ from typing import Union, Dict, Any
 from pathlib import Path
 from pydantic import ValidationError as PydanticValidationError
 
-from .schemas import BenchmarkConfig, ValidationMetadata
+from .schemas import BenchmarkConfig, ValidationMetadata, HarnessFile, FullMode
 from .errors import (
     ValidationResult, ValidationError, ValidationCodes,
     ValidationSeverity
@@ -241,14 +241,18 @@ def _validate_schema(data: Dict[str, Any], result: ValidationResult) -> Benchmar
                 context={"validation_error": error}
             )
         # Return a minimal config to continue validation
-        return BenchmarkConfig(harness_files=[])
+        dummy_harness = HarnessFile(name="dummy", path="$REPO/dummy.c")
+        dummy_full_mode = FullMode(base_commit="abc123def456")
+        return BenchmarkConfig(harness_files=[dummy_harness], full_mode=dummy_full_mode)
     except Exception as e:
         result.add_error(
             ValidationCodes.SCHEMA_VALIDATION_ERROR,
             f"Schema validation failed: {str(e)}",
             context={"error": str(e)}
         )
-        return BenchmarkConfig(harness_files=[])
+        dummy_harness = HarnessFile(name="dummy", path="$REPO/dummy.c")
+        dummy_full_mode = FullMode(base_commit="abc123def456")
+        return BenchmarkConfig(harness_files=[dummy_harness], full_mode=dummy_full_mode)
 
 
 def _validate_configuration_logic(config: BenchmarkConfig, result: ValidationResult):
