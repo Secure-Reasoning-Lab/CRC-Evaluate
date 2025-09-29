@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Union, Optional, Dict, Any, List
 from crsbench.validation import validate_benchmark, ValidationResult
 from crsbench.validation.schemas import BenchmarkConfig, HarnessFile, POV
-from .crs_executor import CRSExecutor, StubCRSExecutor
-from .results import ResultCollector, EvaluationReport, HarnessResult, POVResult, POVStatus
+from crsbench.evaluation.crs_executor import CRSExecutor, StubCRSExecutor
+from crsbench.evaluation.results import ResultCollector, EvaluationReport, HarnessResult, POVResult, POVStatus
 
 # Set up logging
 logger = logging.getLogger(__name__)

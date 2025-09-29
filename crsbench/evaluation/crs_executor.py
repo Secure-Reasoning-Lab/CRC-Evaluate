@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from crsbench.validation.schemas import BenchmarkConfig, HarnessFile, POV
-from .results import POVResult, HarnessResult, POVStatus
+from crsbench.evaluation.results import POVResult, HarnessResult, POVStatus
 
 
 @dataclass

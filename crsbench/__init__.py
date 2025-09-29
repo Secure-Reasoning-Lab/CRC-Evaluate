@@ -5,7 +5,7 @@ __author__ = "CRSBench Team"
 __description__ = "A benchmark suite for evaluating Cyber Reasoning Systems"
 
 # Make submodules available
-from . import utils
-from . import migration
-from . import hint_generation
-from . import validation
+from crsbench import utils
+from crsbench import migration
+from crsbench import hint_generation
+from crsbench import validation

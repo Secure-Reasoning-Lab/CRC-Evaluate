@@ -2,9 +2,9 @@
 
 from typing import Optional
 from crsbench.evaluation.results import EvaluationReport
-from .deduplicator import POVDeduplicator, DeduplicationResult, DeduplicationReporter
-from .analyzer import RootCauseAnalyzer
-from .strategies import DeduplicationStrategy
+from crsbench.deduplication.deduplicator import POVDeduplicator, DeduplicationResult, DeduplicationReporter
+from crsbench.deduplication.analyzer import RootCauseAnalyzer
+from crsbench.deduplication.strategies import DeduplicationStrategy
 
 
 def deduplicate_evaluation_results(

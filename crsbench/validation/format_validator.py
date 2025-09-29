@@ -10,8 +10,8 @@ from typing import Union, Dict, Any
 from pathlib import Path
 from pydantic import ValidationError as PydanticValidationError
 
-from .schemas import BenchmarkConfig, ValidationMetadata, HarnessFile, FullMode
-from .errors import (
+from crsbench.validation.schemas import BenchmarkConfig, ValidationMetadata, HarnessFile, FullMode
+from crsbench.validation.errors import (
     ValidationResult, ValidationError, ValidationCodes,
     ValidationSeverity
 )

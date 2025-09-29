@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Set, Dict, Tuple
 from dataclasses import dataclass
-from .analyzer import RootCause
+from crsbench.deduplication.analyzer import RootCause
 
 
 @dataclass

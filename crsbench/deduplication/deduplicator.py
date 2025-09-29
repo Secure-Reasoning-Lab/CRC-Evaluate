@@ -3,8 +3,8 @@
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 from crsbench.evaluation.results import POVResult, HarnessResult, EvaluationReport
-from .analyzer import RootCauseAnalyzer, MultiSanitizerAnalyzer, RootCause
-from .strategies import DeduplicationStrategy, HybridStrategy, DeduplicationGroup
+from crsbench.deduplication.analyzer import RootCauseAnalyzer, MultiSanitizerAnalyzer, RootCause
+from crsbench.deduplication.strategies import DeduplicationStrategy, HybridStrategy, DeduplicationGroup
 
 
 @dataclass
