@@ -209,6 +209,16 @@ harness_*
 *.exec
 temp_harness/
 
+# Patch tester temporary files
+patch_test_results.json
+patch_test_results.yaml
+*_patch_test_results.*
+*.patch
+*.diff
+build/
+temp_patches/
+crsbench-patch-test-*/
+
 # Claude Code specific
 .claude/
 

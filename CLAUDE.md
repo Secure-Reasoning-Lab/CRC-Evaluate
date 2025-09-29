@@ -61,6 +61,10 @@ need of LLM used in modern AI-powered CRS.
 - use absolute import instead of relative import; so moving files around for
   restructuring is straightforward without further editing import statements.
 
+## Documents standard
+- create entry in README.md when adding a new component.
+- create a README.md to summarize each component in their own directories.
+
 ## Other instructions
 - create a TODO.md to track remaining TODO items. and an DONE.md for finished items.
 - read TODO.md in the new session.
