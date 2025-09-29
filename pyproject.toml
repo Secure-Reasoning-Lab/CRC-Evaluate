@@ -1,0 +1,7 @@
+[project]
+name = "crsbench"
+version = "0.1.0"
+description = "A benchmark suite for evaluating Cyber Reasoning Systems (CRS)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []

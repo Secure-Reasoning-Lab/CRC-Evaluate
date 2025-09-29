@@ -50,3 +50,4 @@ need of LLM used in modern AI-powered CRS.
 
 
 ## Other instructions
+- use uv as python package manager
