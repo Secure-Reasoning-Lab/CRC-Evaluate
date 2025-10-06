@@ -704,25 +704,20 @@ Each base difficulty level can be further modified by corpus quality:
 - **Multiple POVs + Detailed Hints + Rich Corpus**: Lowest difficulty - comprehensive guidance
 - **0 POVs + No Hints + Targeted Corpus**: High difficulty - corpus-guided discovery without crash evidence
 
-#### Baseline Fuzzing Difficulty Metric
+#### Difficulty Scoring
 
-The benchmark includes a baseline time-to-discovery metric that measures how long a naive fuzzer (like AFL) takes to uncover the vulnerability:
+The benchmark assigns a difficulty level to each POV based on numerous metrics. The difficulty level is represented as a single numeric value that reflects the overall challenge of discovering and patching the vulnerability.
 
-##### Baseline Time-to-Discovery
+##### Difficulty Calculation Factors
 
-- **Definition**: Time required for AFL or similar coverage-guided fuzzer to find the first crash
-- **Measurement**: Median time across multiple fuzzing runs with standard configuration
-- **Purpose**: Provides objective difficulty scoring independent of CRS capabilities
-- **Storage**: Recorded in `meta.yaml` for each POV
+The difficulty level is calculated based on multiple metrics including:
 
-##### Difficulty Scoring Integration
-
-Baseline fuzzing time contributes to overall difficulty assessment:
-
-- **Fast Discovery (< 1 hour)**: Lower difficulty - easily discoverable bugs
-- **Moderate Discovery (1-24 hours)**: Medium difficulty - requires sustained fuzzing
-- **Slow Discovery (1-7 days)**: High difficulty - challenging to find
-- **Very Slow Discovery (> 7 days)**: Highest difficulty - deep or complex bugs
+- **Time-to-Discovery**: Time required by baseline fuzzers (e.g., AFL++) to discover the vulnerability
+- **POV Quantity**: Number of proof-of-vulnerability inputs provided
+- **Hint Availability**: Whether hints are provided and their specificity level
+- **Corpus Quality**: Initial corpus size and coverage characteristics
+- **Code Complexity**: Complexity of the vulnerable code and surrounding codebase
+- **Other Factors**: Additional characteristics that affect discovery difficulty
 
 ##### Meta.yaml Integration
 
@@ -734,24 +729,18 @@ harness_files:
       - name: "buffer_overflow_main"
         sanitizer: "address"
         error_token: "ERROR: AddressSanitizer: heap-buffer-overflow"
-        baseline_fuzzing_time_seconds: 14400  # 4 hours median discovery time
-        baseline_fuzzer: "AFL++"
-        baseline_config: "default"
-        difficulty_factors:
-          pov_count: 3
-          hint_level: "basic"
-          baseline_time: "moderate"
+        difficulty_level: 3
 ```
+
+The difficulty level is typically represented as an integer (e.g., 1-5, where 1 is easiest and 5 is most difficult), though the exact scale may vary depending on the benchmark implementation.
 
 #### Real-World Mapping
 
-The combined POV, hint, corpus, and baseline fuzzing levels correspond to different real-world scenarios:
+The combined difficulty factors correspond to different real-world scenarios:
 
-- **0 POVs + No Hints + No Corpus + Slow Baseline**: Maximum difficulty - novel vulnerability research with minimal tooling
-- **1 POV + Basic Hints + Minimal Corpus + Fast Baseline**: Medium difficulty - obvious bug with basic fuzzing setup
-- **Multiple POVs + Detailed Hints + Rich Corpus + Fast Baseline**: Low difficulty - well-documented vulnerability with comprehensive testing infrastructure
-- **0 POVs + No Hints + Targeted Corpus + Moderate Baseline**: High difficulty - guided discovery using sophisticated corpus engineering
-- **Progressive Hints + Seed Corpus + Variable Baseline**: Security research with incremental information and standard fuzzing practices
+- **Difficulty Level 1**: Well-documented vulnerability with comprehensive testing infrastructure and multiple POVs
+- **Difficulty Level 2-3**: Moderate complexity bugs requiring sustained analysis and standard fuzzing
+- **Difficulty Level 4-5**: Novel vulnerability research with minimal tooling and guidance
 
 ### Performance Metrics
 
