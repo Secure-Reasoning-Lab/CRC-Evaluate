@@ -5,7 +5,7 @@ author: Yu-Fu Fu
 # RFC for Standard Benchmark Specification for Cyber Reasoning Systems (CRS) v0.1
 
 This specification defines a standardized benchmark format for
-evaluating Cyber Reasoning Systems (CRS) developed during AIxCC competition.
+evaluating Cyber Reasoning Systems (CRS) developed during the AIxCC competition.
 
 The benchmark ensures reproducibility, prevents LLM training data
 contamination, and enables fair evaluation across different CRS
@@ -149,7 +149,7 @@ harness_files:
 #### Harness mode
 
 - With provided harness.
-- Dynamic analyis enabled.
+- Dynamic analysis enabled.
 
 ### Patch Exclusion List
 
@@ -157,37 +157,37 @@ The `patch_exclude_list` configuration defines files and patterns that CRS-gener
 
 #### Purpose and Rationale
 
-- **Build System Protection**: Prevents modification of build scripts, makefiles, and configuration files
-- **Harness Integrity**: Protects fuzzing harnesses from being altered or disabled
-- **Metadata Security**: Safeguards benchmark configuration and ground truth data
-- **Test Isolation**: Prevents patches from modifying test files to artificially pass validation
-- **Fair Evaluation**: Ensures all CRS systems operate under identical constraints
+- Build System Protection: Prevents modification of build scripts, makefiles, and configuration files
+- Harness Integrity: Protects fuzzing harnesses from being altered or disabled
+- Metadata Security: Safeguards benchmark configuration and ground truth data
+- Test Isolation: Prevents patches from modifying test files to artificially pass validation
+- Fair Evaluation: Ensures all CRS systems operate under identical constraints
 
 #### Supported Patterns
 
 The exclusion list supports various file matching patterns:
 
-- **Exact filenames**: `"build.sh"`, `"Makefile"`
-- **Glob patterns**: `"*.ac"`, `"configure*"`
-- **Directory patterns**: `"docs/**"`, `".aixcc/**"`
-- **Complex patterns**: `"**/*test*.c"` (any file containing "test" in name)
+- Exact filenames: `"build.sh"`, `"Makefile"`
+- Glob patterns: `"*.ac"`, `"configure*"`
+- Directory patterns: `"docs/**"`, `".aixcc/**"`
+- Complex patterns: `"**/*test*.c"` (any file containing "test" in name)
 
 #### Common Exclusion Categories
 
-- **Build Infrastructure**: `build.sh`, `Makefile`, `CMakeLists.txt`, `configure*`, `*.ac`, `*.am`
-- **Benchmark Files**: `.aixcc/**`, `meta.yaml`, `*.patch`, `*.blob`
-- **Harness Files**: Fuzzing harness source files as specified in harness_files configuration
-- **Test Files**: Unit tests, integration tests, and validation scripts
-- **Documentation**: `README*`, `docs/**`, `*.md`
-- **Version Control**: `.git/**`, `.gitignore`, `.gitmodules`
+- Build Infrastructure: `build.sh`, `Makefile`, `CMakeLists.txt`, `configure*`, `*.ac`, `*.am`
+- Benchmark Files: `.aixcc/**`, `meta.yaml`, `*.patch`, `*.blob`
+- Harness Files: Fuzzing harness source files as specified in harness_files configuration
+- Test Files: Unit tests, integration tests, and validation scripts
+- Documentation: `README*`, `docs/**`, `*.md`
+- Version Control: `.git/**`, `.gitignore`, `.gitmodules`
 
 #### Enforcement
 
 The patch exclusion list is enforced during:
 
-- **Patch Validation**: Before applying patches to source code
-- **Build Process**: Docker build fails if excluded files are modified
-- **Evaluation Scoring**: Violations result in patch rejection and scoring penalties
+- Patch Validation: Before applying patches to source code
+- Build Process: Docker build fails if excluded files are modified
+- Evaluation Scoring: Violations result in patch rejection and scoring penalties
 
 ### Harness Files
 
@@ -257,10 +257,10 @@ RUN ./build.sh
 
 The Docker-based build system supports efficient builds through:
 
-- **Base Image Caching**: Pre-compiled dependencies cached in base images
-- **Layer Reuse**: Unchanged Docker layers are reused across different patch evaluations
-- **Incremental Compilation**: Build systems (Make, CMake) handle incremental builds within containers
-- **Parallel Builds**: Multiple patch evaluations can run simultaneously in separate containers
+- Base Image Caching: Pre-compiled dependencies cached in base images
+- Layer Reuse: Unchanged Docker layers are reused across different patch evaluations
+- Incremental Compilation: Build systems (Make, CMake) handle incremental builds within containers
+- Parallel Builds: Multiple patch evaluations can run simultaneously in separate containers
 
 ### Usage Examples
 
@@ -300,12 +300,12 @@ The helper script automatically:
 
 The Docker-based build system enforces the following constraints to ensure fair evaluation:
 
-- **Immutable build scripts**: CRS cannot modify build.sh or Docker build configuration
-- **Codebase-only patches**: CRS can only generate patches that modify source code files
-- **Fixed build environment**: Compiler flags, dependencies, and build options are predetermined in base images
-- **Reproducible builds**: All builds are deterministic through Docker layer caching and fixed base images
-- **Container isolation**: Each patch evaluation runs in a completely isolated container environment
-- **Upstreamed location**: build.sh is located at `projects/[name]/build.sh` following OSS-Fuzz convention
+- Immutable build scripts: CRS cannot modify build.sh or Docker build configuration
+- Codebase-only patches: CRS can only generate patches that modify source code files
+- Fixed build environment: Compiler flags, dependencies, and build options are predetermined in base images
+- Reproducible builds: All builds are deterministic through Docker layer caching and fixed base images
+- Container isolation: Each patch evaluation runs in a completely isolated container environment
+- Upstreamed location: build.sh is located at `projects/[name]/build.sh` following OSS-Fuzz convention
 
 ## Docker Container Architecture
 
@@ -482,10 +482,10 @@ This approach significantly reduces test execution time by focusing validation e
 
 Various approaches may be used to verify patch correctness:
 
-- Check whether compiled
+- Check whether it compiles
 - Check crash no longer happens
 - Unit tests
-- Differential Testing
+- Differential testing
 - Fuzzing after patch
 - LLM as a judge
 
@@ -515,11 +515,11 @@ The benchmark implements a difficulty classification system based on the number 
 
 #### POV Definition and Purpose
 
-- **POV (Proof of Vulnerability)**: An input that triggers a crash when executed against a fuzzing harness
-- **POV Deduplication**: POVs are deduplicated based on root cause analysis, not sanitizer error type
+- POV (Proof of Vulnerability): An input that triggers a crash when executed against a fuzzing harness
+- POV Deduplication: POVs are deduplicated based on root cause analysis, not sanitizer error type
   - Multiple POVs with the same sanitizer error may represent different vulnerabilities (different root causes)
   - Multiple POVs with different stack traces may represent the same vulnerability (same root cause, different code paths)
-- **Purpose**: Multiple deduplicated POVs (same root cause) provide different ways to trigger the same vulnerability, aiding root cause analysis for accurate patch generation
+- Purpose: Multiple deduplicated POVs (same root cause) provide different ways to trigger the same vulnerability, aiding root cause analysis for accurate patch generation
 
 #### Difficulty Levels Based on POV Quantity
 
@@ -557,11 +557,11 @@ Difficulty is determined by how many deduplicated POVs (same root cause) are pro
 
 Multiple deduplicated POVs (same root cause) enhance CRS patch generation capabilities by:
 
-- **Pattern Recognition**: Identifying common elements across different ways to trigger the same vulnerability
-- **Code Path Analysis**: Understanding various paths that lead to the same underlying bug
-- **Attack Vector Coverage**: Seeing different input variations that exploit the same root cause
-- **Completeness Validation**: Ensuring patches address all known ways to trigger the vulnerability
-- **Regression Prevention**: Verifying fixes work across all provided attack scenarios
+- Pattern Recognition: Identifying common elements across different ways to trigger the same vulnerability
+- Code Path Analysis: Understanding various paths that lead to the same underlying bug
+- Attack Vector Coverage: Seeing different input variations that exploit the same root cause
+- Completeness Validation: Ensuring patches address all known ways to trigger the vulnerability
+- Regression Prevention: Verifying fixes work across all provided attack scenarios
 
 #### Hint System for Additional Guidance
 
@@ -569,10 +569,10 @@ Beyond POV quantity, the benchmark supports optional hints that provide varying 
 
 ##### Hint Types and Examples
 
-- **Vulnerability Category Hints**: "The bug is a buffer overflow", "Memory safety issue present", "Use-after-free vulnerability"
-- **Location Hints**: "The bug is in the parsing module", "Vulnerability in file processing code", "Issue in network handling functions"
-- **Severity Hints**: "Critical security vulnerability", "Exploitable memory corruption", "Remote code execution possible"
-- **Technical Hints**: "Missing bounds checking", "Unvalidated input processing", "Race condition in threading code"
+- Vulnerability Category Hints: "The bug is a buffer overflow", "Memory safety issue present", "Use-after-free vulnerability"
+- Location Hints: "The bug is in the parsing module", "Vulnerability in file processing code", "Issue in network handling functions"
+- Severity Hints: "Critical security vulnerability", "Exploitable memory corruption", "Remote code execution possible"
+- Technical Hints: "Missing bounds checking", "Unvalidated input processing", "Race condition in threading code"
 
 ##### Multiple Hints per Vulnerability
 
@@ -591,62 +591,19 @@ hints:
     text: "Line 245: buffer[i] = input[i] without length validation"
 ```
 
-##### Hint-Based Difficulty Modulation
-
-Hints create additional difficulty dimensions:
-
-- **No Hints + No POVs**: Maximum difficulty - pure vulnerability discovery
-- **Basic Hints + No POVs**: High difficulty - guided discovery without crash examples
-- **Detailed Hints + Multiple POVs**: Lower difficulty - comprehensive guidance with crash data
-- **Progressive Hints**: CRS can request increasingly specific hints with cost penalties
-
 #### Initial Corpus Variations
 
 Beyond POVs and hints, the benchmark supports providing different levels of initial fuzzing corpus to control discovery difficulty:
 
 ##### Corpus Quality Levels
 
-- **No Corpus**: Empty starting corpus - CRS must generate inputs from scratch
-- **Minimal Corpus**: Basic valid inputs (e.g., empty file, simple valid format)
-- **Seed Corpus**: Representative valid inputs covering basic functionality
-- **Rich Corpus**: Comprehensive inputs covering various features and edge cases
-- **Targeted Corpus**: Inputs specifically designed to exercise vulnerable code paths
+- **level-0**: Maximum help - inputs specifically designed to exercise vulnerable code paths, may include "almost crashes"
+- **level-1**: Significant help - comprehensive inputs covering various features and edge cases
+- **level-2**: Moderate help - representative valid inputs covering basic functionality
+- **level-3**: Minimal help - basic valid inputs (e.g., empty file, simple valid format)
+- **level-4**: No help - empty corpus, CRS must generate inputs from scratch
 
-##### Corpus Coverage Characteristics
-
-Each corpus level provides different code coverage and fuzzing guidance:
-
-**No Corpus (Highest Difficulty)**
-- No initial inputs provided
-- CRS must synthesize test inputs from format specifications or examples
-- Fuzzer starts with random or grammar-based generation
-- Maximum time required to achieve meaningful coverage
-
-**Minimal Corpus (High Difficulty)**
-- 1-3 very basic valid inputs (e.g., "hello", empty file, single valid packet)
-- Provides basic format understanding
-- Limited coverage of input space
-- Requires extensive mutation to find interesting paths
-
-**Seed Corpus (Medium Difficulty)**
-- 10-50 representative inputs covering normal functionality
-- Achieves reasonable baseline code coverage (20-40%)
-- Covers main code paths but not edge cases
-- Good starting point for mutation-based fuzzing
-
-**Rich Corpus (Lower Difficulty)**
-- 100+ diverse inputs covering extensive functionality
-- High baseline code coverage (60-80%)
-- Includes various input formats, sizes, and structures
-- Enables rapid discovery of shallow bugs
-
-**Targeted Corpus (Lowest Difficulty)**
-- Inputs specifically crafted to exercise vulnerable functions
-- Very high coverage of vulnerability-adjacent code
-- May include inputs that are "almost crashes" (near-miss cases)
-- Significantly reduces time to vulnerability discovery
-
-##### Corpus Integration with Meta.yaml
+##### Corpus Integration with meta.yaml
 
 ```yaml
 harness_files:
@@ -661,45 +618,6 @@ harness_files:
       level-4: "corpus-fuzz-level-4"
     default_corpus_level: "level-2"
 ```
-
-##### Corpus-Based Difficulty Impact
-
-Initial corpus quality affects CRS performance in multiple ways:
-
-- **Discovery Time**: Better corpus reduces time to find first crashes
-- **Coverage Efficiency**: Rich corpus enables faster code exploration
-- **Mutation Effectiveness**: Good seeds provide better mutation starting points
-- **Vulnerability Reachability**: Targeted corpus guides fuzzing toward vulnerable code
-
-#### Combined Difficulty Matrix
-
-The final difficulty level combines POV quantity, hint availability, and initial corpus quality. The following is an example multi-dimensional matrix:
-
-##### Base Matrix (POVs + Hints)
-
-| POVs | No Hints | Basic Hints | Detailed Hints |
-|------|----------|-------------|----------------|
-| 0 POVs | Highest | High | Medium-High |
-| 1 POV | High | Medium-High | Medium |
-| 2-3 POVs | Medium-High | Medium | Low-Medium |
-| 4+ POVs | Medium | Low-Medium | Lowest |
-
-##### Corpus Modulation
-
-Each base difficulty level can be further modified by corpus quality:
-
-- **+ No Corpus**: Increases difficulty by 1 level (e.g., Medium → High)
-- **+ Minimal Corpus**: No change to base difficulty
-- **+ Seed Corpus**: Decreases difficulty by 0.5 levels
-- **+ Rich Corpus**: Decreases difficulty by 1 level (e.g., High → Medium)
-- **+ Targeted Corpus**: Decreases difficulty by 1.5 levels
-
-##### Example Combined Scenarios
-
-- **0 POVs + No Hints + No Corpus**: Maximum difficulty - pure vulnerability research
-- **1 POV + Basic Hints + Seed Corpus**: Medium difficulty - guided fuzzing with crash example
-- **Multiple POVs + Detailed Hints + Rich Corpus**: Lowest difficulty - comprehensive guidance
-- **0 POVs + No Hints + Targeted Corpus**: High difficulty - corpus-guided discovery without crash evidence
 
 #### Intrinsic Difficulty Level
 
@@ -717,7 +635,7 @@ The intrinsic difficulty level is calculated based on:
   - Number of preconditions required to trigger the bug
   - Interaction complexity between components
 
-##### Meta.yaml Integration
+##### meta.yaml Integration
 
 ```yaml
 harness_files:
@@ -751,6 +669,7 @@ The final evaluation score is based on:
 **Score = f(difficulty_level, hint_level, corpus_level, pov_count)**
 
 Where:
+
 - **difficulty_level**: The intrinsic difficulty of the vulnerability (1-5)
 - **hint_level**: Level of hints provided to the CRS (0 = no hints, 1-4 = increasing specificity)
 - **corpus_level**: Quality of initial corpus provided (0 = no corpus, 1-4 = increasing quality)
@@ -759,6 +678,7 @@ Where:
 ##### Scoring Rationale
 
 Higher scores are awarded for:
+
 - Discovering/patching higher difficulty vulnerabilities
 - Achieving success with less assistance (fewer hints, smaller corpus, fewer POVs)
 - Finding vulnerabilities in less time with fewer resources
@@ -895,18 +815,6 @@ Fuzz Introspector helps CRS systems identify the most promising fuzzing targets:
 - Historical vulnerability pattern analysis for risk assessment
 - Integration with existing fuzzing harnesses and test infrastructure
 
-#### Usage Integration
-
-```bash
-# Generate fuzz introspector report for project
-fuzz-introspector --target-dir=$SRC --output-dir=$WORK/introspector
-
-# Analyze specific harness effectiveness
-fuzz-introspector --harness=$OUT/harness_binary --coverage-dir=$WORK/coverage
-
-# Compare multiple fuzzing approaches
-fuzz-introspector --compare --baseline=$WORK/baseline --current=$WORK/current
-```
 
 ### LiteLLM Universal Interface
 
@@ -916,11 +824,11 @@ LiteLLM provides a unified interface for interacting with multiple Large Languag
 
 LiteLLM supports consistent API access across major LLM providers:
 
-- OpenAI (GPT-3.5, GPT-4, GPT-4-turbo, GPT-o1)
-- Anthropic (Claude-3, Claude-3.5-Sonnet, Claude-3.5-Haiku)
-- Google (Gemini Pro, Gemini Ultra)
-- Open-source models (Llama, CodeLlama, etc.)
-- Local model deployments (Ollama, vLLM, etc.)
+- OpenAI GPT
+- Anthropic Claude
+- Google Gemini
+- Open-source models
+- Local model deployments
 
 #### Standardized Metrics Collection
 
@@ -1004,12 +912,11 @@ This standardized tooling approach ensures that CRS evaluations focus on reasoni
 ## Reproducible Archive Format
 
 The reproducible archive format ensures consistent benchmark distribution and
-execution across different environments, enabling deterministic replay and
+execution across different environments, providing comprehensive logging and
 validation of CRS evaluation results.
 
-### Goal
+### Goals
 
-- Enable deterministic replay of CRS evaluation runs
 - Provide comprehensive validation and verification capabilities
 - Ensure consistent results across different evaluation environments
 - Support comparative analysis between different CRS implementations
@@ -1031,46 +938,56 @@ validation of CRS evaluation results.
 - Random seed values for all non-deterministic operations
 - Checkpoint snapshots at key execution milestones
 
+#### CRS Logging
+
+Comprehensive logging of CRS activities and discoveries:
+
+- **Found POVs**: All discovered proof-of-vulnerability inputs with timestamps
+- **Generated Patches**: All patches generated during evaluation with metadata
+- **Fuzzing Corpus**: Evolution of fuzzing corpus over time
+- **Static Analysis Results**: Findings from static analysis tools
+- **Dynamic Analysis Results**: Runtime analysis and instrumentation data
+- **Vulnerability Reports**: Generated vulnerability descriptions and classifications
+
+#### Custom Logging Interface
+
+The framework provides a custom logging interface for CRS-specific data:
+
+- **Structured Logging Format**: JSON-based format for consistent data storage
+- **CRS-Specific Logs**: Custom fields for CRS implementation-specific information
+- **Extension Points**: API for CRS to log custom metrics and intermediate results
+- **Log Aggregation**: Centralized collection of logs from all CRS components
+
 #### LLM Interaction Logging
 
-- Request payloads with exact timestamps
-- Response data with processing times
-- Token usage statistics (input/output/cached)
-- API rate limiting and retry information
-- Cache hit/miss ratios and patterns
+Detailed tracking of all LLM API interactions:
+
+- **Request and Response Data**: Complete request payloads and response data with exact timestamps
+- **Token Usage Statistics**: Input tokens, output tokens, and cached tokens per request
+- **Model Selection**: Which model was used for each request (e.g., GPT-4, Claude-3.5-Sonnet)
+- **Cache Efficiency**: Cache hit/miss ratios and patterns
+- **API Rate Limiting**: Rate limiting events and retry information
+- **Processing Times**: Response latency and processing duration
+
+#### Timestamp and Budget Tracking
+
+Track progress and resource consumption throughout evaluation:
+
+- **Timestamp for Each Finding**: Record exact time when each POV or vulnerability is discovered
+- **Remaining Budget**: Track remaining compute and LLM API budget at each checkpoint
+- **Resource Consumption**: Cumulative resource usage over time
+- **CRS State Proxy**: Timestamps and budgets serve as proxy for CRS internal state
+- **Continuation Support**: Enable CRS to resume from saved state with accurate resource tracking
+- **Ensembling Support**: Allow state synchronization between multiple CRS instances for ensemble approaches
 
 ### Validation and Integrity
 
-#### Replay Validation
+Archive integrity validation ensures consistent and reliable evaluation data:
 
-- Verification that replay produces identical results
-- Checkpoints for validating intermediate states
-- Error handling for replay divergences
-
-### Replay Capabilities
-
-#### Deterministic Replay
-
-Mock all non-deterministic operations:
-
-- LLM API responses return archived data with original timing
-- Fuzzer outputs replay from archived results with timestamps
-- Random number generation uses archived seed sequences
-- File system operations replay from captured snapshots
-
-#### Partial Replay Support
-
-- Checkpoint-based replay from specific time points
-- Fast-forward capabilities for long executions
-- Selective replay of specific components (LLM-only, fuzzing-only)
-- Differential replay comparing multiple CRS runs
-
-#### Speed Controls
-
-- Real-time replay maintaining original timing
-- Accelerated replay for analysis purposes
-- Slow-motion replay for detailed examination
-- Step-by-step execution for debugging
+- **Archive Completeness**: Verify all required logs and data are present
+- **Data Consistency**: Check for consistency between different log sources
+- **Timestamp Validation**: Ensure timeline consistency across all logged events
+- **Budget Verification**: Validate resource consumption matches logged activities
 
 ### Privacy and Security
 
@@ -1081,26 +998,40 @@ Mock all non-deterministic operations:
 
 ### Analysis Tools
 
+The framework provides comprehensive analysis tools to dissect CRS performance across different aspects of vulnerability discovery and patching.
+
 #### Archive Inspection
 
-- Command-line tools for examining archive contents
-- Metadata extraction without full replay
-- Timeline visualization of execution events
-- Resource usage analysis and graphing
+- **Command-line Tools**: Utilities for examining archive contents and extracting specific data
+- **Metadata Extraction**: Extract evaluation metadata, configuration, and summary statistics
+- **Timeline Visualization**: Visual representation of CRS activities over time
+- **Resource Usage Analysis**: Detailed graphs and charts of resource consumption patterns
+- **Log Querying**: Query interface for searching and filtering logged events
+
+#### Performance Dissection
+
+Tools to analyze CRS performance across different dimensions:
+
+- **Vulnerability Discovery Analysis**: Time-to-discovery, coverage metrics, fuzzing effectiveness
+- **Patch Generation Analysis**: Patch quality, correctness rate, iteration count
+- **LLM Usage Analysis**: Token efficiency, model selection patterns, cache utilization
+- **Resource Efficiency Analysis**: Cost per finding, resource allocation strategies
+- **Strategy Effectiveness**: Success rates for different CRS approaches and techniques
 
 #### Comparative Analysis
 
-- Side-by-side comparison of multiple CRS runs
-- Performance difference analysis
-- Strategy variation identification
-- Success rate comparisons across different scenarios
+- **Side-by-Side Comparison**: Compare multiple CRS runs with synchronized timeline views
+- **Performance Benchmarking**: Rank different CRS implementations across various metrics
+- **Strategy Variation Identification**: Identify different approaches used by different CRS systems
+- **Success Rate Comparisons**: Compare success rates across different difficulty levels and scenarios
+- **Cost-Effectiveness Analysis**: Compare resource usage and costs relative to success rates
 
 #### Validation Tools
 
-- Archive integrity verification scripts
-- Replay consistency checking
-- Performance regression detection
-- Format migration utilities for version updates
+- **Archive Integrity Verification**: Scripts to verify archive completeness and consistency
+- **Data Validation**: Ensure logged data matches evaluation requirements
+- **Performance Regression Detection**: Detect performance changes across different versions
+- **Format Migration Utilities**: Tools for migrating archives between format versions
 
 ## Anti-Contamination Measures
 
