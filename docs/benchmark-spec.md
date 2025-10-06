@@ -43,8 +43,7 @@ cybersecurity capabilities:
 ### Benchmark Definition
 
 A benchmark consists of a set of projects, each containing vulnerability
-discovery challenges, program repair tasks, and SARIF report evaluation
-components.
+discovery challenges and program repair tasks.
 
 ### Extensibility Requirements
 
@@ -61,22 +60,24 @@ The framework is designed to be extensible and must support:
 ### Directory Layout
 
 ```example
-projects/[name]/
+benchmarks/[project-name]/
 ├── build.sh                     # Unified build script (upstreamed)
+├── build-pre.sh                 # Pre-build setup script
+├── build-apply.sh               # Patch application script
+├── Dockerfile                   # Docker build configuration
+├── (Other files used in the Dockerfile)
 └── .aixcc/
     ├── meta.yaml                # Configuration metadata
-    ├── ref.diff                 # Delta mode reference diff (for delta mode only)
+    ├── ref.diff                 # Delta mode reference diff
     ├── test.sh                  # Invariant checking script
-    ├── sarif-truth.json         # True positive SARIF results ground truth
-    ├── sarif/                   # SARIF reports directory
-    │   ├── report1.sarif        # Static analysis report files
-    │   ├── report2.sarif
-    │   └── ...
-    └── [harness]/               # Per-harness directories (Ground Truth)
-        ├── {pov-keyword}.md     # Vulnerability description
-        ├── {pov-keyword}.blob   # Input data/payload
-        ├── {pov-keyword}.patch  # Bug-fixing patch
-        └── {pov-keyword}.log    # Sanitizer/crash outputs
+    └── [harness_name]/
+        └── [pov-keyword]/
+            ├── {pov-keyword}.md         # Vulnerability description
+            ├── {pov-variant-id}.blob    # Input data/payload
+            ├── {pov-variant-id}.log     # Sanitizer/crash outputs
+            └── patches/
+                ├── {patch-variant-id}.patch  # Bug-fixing patch
+                └── {patch-variant-id}.patch  # Bug-fixing patch
 ```
 
 
@@ -230,16 +231,6 @@ Vulnerability (POV). For example, with POVs `pov_0` and `pov_1`:
   vulnerability (e.g., `pov_0.patch`, `pov_1.patch`)
 - `{pov-keyword}.log` - Sanitizer crash output or exception logs
   demonstrating the vulnerability (e.g., `pov_0.log`, `pov_1.log`)
-
-### SARIF Report Evaluation Components
-
-The `.aixcc/` directory also contains SARIF-related ground truth data:
-
-- `sarif/` - Directory containing multiple SARIF report files from various
-  static analysis tools
-- `sarif-truth.json` - Ground truth file identifying true positive
-  vulnerabilities within the SARIF reports, used for evaluating CRS reachability
-  analysis capabilities
 
 ## Build System
 
@@ -954,7 +945,7 @@ LiteLLM enables fair cost comparisons between different model choices:
 All analysis tools in the benchmark framework implement consistent interfaces:
 
 - Common command-line argument patterns
-- Standardized output formats (JSON, SARIF where applicable)
+- Standardized output formats (JSON)
 - Uniform error handling and logging
 - Consistent configuration file formats
 
