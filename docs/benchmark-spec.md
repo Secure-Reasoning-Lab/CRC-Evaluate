@@ -490,8 +490,6 @@ The coverage mapping process involves:
 
 This approach significantly reduces test execution time by focusing validation efforts on code paths most likely to be affected by the applied patches.
 
-TODO: decide diff format (udiff / git diff / not-git repo?)
-
 ### Possible Invariant Checking Methods
 
 Various approaches may be used to verify patch correctness:
@@ -660,23 +658,20 @@ Each corpus level provides different code coverage and fuzzing guidance:
 - May include inputs that are "almost crashes" (near-miss cases)
 - Significantly reduces time to vulnerability discovery
 
-##### Corpus Integration with Meta.toml
+##### Corpus Integration with Meta.yaml
 
-```toml
-[[harness_files]]
-name = "customfuzz3"
-path = "$REPO/test/customfuzz3.c"
-
-# Corpus configuration for different difficulty levels
-[harness_files.corpus]
-none = []                                    # No initial corpus
-minimal = ["inputs/empty.txt", "inputs/hello.txt"]
-seed = ["corpus/seed/*.txt"]                 # Directory with seed files
-rich = ["corpus/comprehensive/*.dat"]        # Large diverse corpus
-targeted = ["corpus/vuln-focused/*.bin"]     # Vulnerability-targeted inputs
-
-# Default corpus level for this benchmark
-default_corpus_level = "seed"
+```yaml
+harness_files:
+  - name: "customfuzz3"
+    path: "$REPO/test/customfuzz3.c"
+    # Corpus configuration for different difficulty levels
+    corpus:
+      level-0: "corpus-fuzz-level-0"
+      level-1: "corpus-fuzz-level-1"
+      level-2: "corpus-fuzz-level-2"
+      level-3: "corpus-fuzz-level-3"
+      level-4: "corpus-fuzz-level-4"
+    default_corpus_level: "level-2"
 ```
 
 ##### Corpus-Based Difficulty Impact
@@ -738,21 +733,23 @@ Baseline fuzzing time contributes to overall difficulty assessment:
 - **Slow Discovery (1-7 days)**: High difficulty - challenging to find
 - **Very Slow Discovery (> 7 days)**: Highest difficulty - deep or complex bugs
 
-##### Meta.toml Integration
+##### Meta.yaml Integration
 
-```toml
-[[harness_files.povs]]
-name = "buffer_overflow_main"
-sanitizer = "address"
-error_token = "ERROR: AddressSanitizer: heap-buffer-overflow"
-baseline_fuzzing_time_seconds = 14400  # 4 hours median discovery time
-baseline_fuzzer = "AFL++"
-baseline_config = "default"
-difficulty_factors = {
-    pov_count = 3,
-    hint_level = "basic",
-    baseline_time = "moderate"
-}
+```yaml
+harness_files:
+  - name: "ossfuzz"
+    path: "$REPO/test/ossfuzz.c"
+    povs:
+      - name: "buffer_overflow_main"
+        sanitizer: "address"
+        error_token: "ERROR: AddressSanitizer: heap-buffer-overflow"
+        baseline_fuzzing_time_seconds: 14400  # 4 hours median discovery time
+        baseline_fuzzer: "AFL++"
+        baseline_config: "default"
+        difficulty_factors:
+          pov_count: 3
+          hint_level: "basic"
+          baseline_time: "moderate"
 ```
 
 #### Real-World Mapping
