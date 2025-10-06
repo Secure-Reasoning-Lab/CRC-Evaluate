@@ -70,8 +70,8 @@ benchmarks/[project-name]/
     ├── meta.yaml                # Configuration metadata
     ├── ref.diff                 # Delta mode reference diff
     ├── test.sh                  # Invariant checking script
-    └── [harness_name]/
-        └── [pov-keyword]/
+    └── [harness_name]/          # One directory for each harness
+        └── [pov-keyword]/       # One subdirectory for each POV keyword
             ├── {pov-keyword}.md         # Vulnerability description
             ├── {pov-variant-id}.blob    # Input data/payload
             ├── {pov-variant-id}.log     # Sanitizer/crash outputs
@@ -89,10 +89,10 @@ evaluation modes, harness files, and vulnerability detection criteria.
 ```yaml
 # Patch exclusion list - files that patches cannot modify (global setting)
 patch_exclude_list:
-  - "build.sh"                    # Build scripts are immutable
-  - "Makefile"                    # Build configuration files
+  - "build.sh"                   # Build scripts are immutable
+  - "Makefile"                   # Build configuration files
   - "CMakeLists.txt"             # Build system files
-  - "configure*"                  # Configuration scripts
+  - "configure*"                 # Configuration scripts
   - "*.ac"                       # Autotools files
   - "*.am"                       # Automake files
   - ".gitignore"                 # Version control files
@@ -123,11 +123,9 @@ harness_files:
       - name: "pov_0"
         sanitizer: "address"
         error_token: "ERROR: AddressSanitizer: stack-buffer-overflow"
-        requires_clean_build: true
       - name: "pov_1"
         sanitizer: "memory"
         error_token: "ERROR: MemorySanitizer: use-of-uninitialized-value"
-        requires_clean_build: false
 ```
 
 ## Configuration Fields
@@ -216,7 +214,6 @@ Defines how vulnerabilities are detected and verified:
 - Error tokens are matched using substring matching against sanitizer output
 - Used for deduplicating discovered vulnerabilities based on error
   signatures
-- `requires_clean_build`: Boolean flag indicating whether this POV requires a clean build (e.g., header modifications, template changes)
 
 ### Benchmark Components - Ground Truth
 
