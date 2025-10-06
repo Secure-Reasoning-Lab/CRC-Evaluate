@@ -704,20 +704,21 @@ Each base difficulty level can be further modified by corpus quality:
 - **Multiple POVs + Detailed Hints + Rich Corpus**: Lowest difficulty - comprehensive guidance
 - **0 POVs + No Hints + Targeted Corpus**: High difficulty - corpus-guided discovery without crash evidence
 
-#### Difficulty Scoring
+#### Intrinsic Difficulty Level
 
-The benchmark assigns a difficulty level to each POV based on numerous metrics. The difficulty level is represented as a single numeric value that reflects the overall challenge of discovering and patching the vulnerability.
+The benchmark assigns an intrinsic difficulty level to each vulnerability based on characteristics of the vulnerability itself, independent of what assistance (POVs, hints, corpus) is provided to the CRS. The difficulty level is represented as a single numeric value.
 
 ##### Difficulty Calculation Factors
 
-The difficulty level is calculated based on multiple metrics including:
+The intrinsic difficulty level is calculated based on:
 
-- **Time-to-Discovery**: Time required by baseline fuzzers (e.g., AFL++) to discover the vulnerability
-- **POV Quantity**: Number of proof-of-vulnerability inputs provided
-- **Hint Availability**: Whether hints are provided and their specificity level
-- **Corpus Quality**: Initial corpus size and coverage characteristics
-- **Code Complexity**: Complexity of the vulnerable code and surrounding codebase
-- **Other Factors**: Additional characteristics that affect discovery difficulty
+- **Time-to-Discovery by Baseline Fuzzer**: Time required by baseline fuzzers (e.g., AFL++) to discover the vulnerability from scratch
+- **Code Complexity**: Complexity of the vulnerable code, nesting depth, control flow complexity, and surrounding codebase characteristics
+- **Other Factors**: Additional intrinsic characteristics such as:
+  - Vulnerability type and exploitability
+  - Code path depth to reach vulnerable code
+  - Number of preconditions required to trigger the bug
+  - Interaction complexity between components
 
 ##### Meta.yaml Integration
 
@@ -734,13 +735,38 @@ harness_files:
 
 The difficulty level is typically represented as an integer (e.g., 1-5, where 1 is easiest and 5 is most difficult), though the exact scale may vary depending on the benchmark implementation.
 
-#### Real-World Mapping
+##### Difficulty Level Mapping
 
-The combined difficulty factors correspond to different real-world scenarios:
+The intrinsic difficulty levels correspond to:
 
-- **Difficulty Level 1**: Well-documented vulnerability with comprehensive testing infrastructure and multiple POVs
-- **Difficulty Level 2-3**: Moderate complexity bugs requiring sustained analysis and standard fuzzing
-- **Difficulty Level 4-5**: Novel vulnerability research with minimal tooling and guidance
+- **Difficulty Level 1**: Easily discoverable vulnerabilities with simple code paths and minimal preconditions
+- **Difficulty Level 2-3**: Moderate complexity bugs requiring sustained fuzzing and analysis
+- **Difficulty Level 4-5**: Deep or complex vulnerabilities requiring extensive analysis and specialized techniques
+
+#### Scoring System
+
+While the difficulty level represents the intrinsic challenge of a vulnerability, the **scoring system** evaluates CRS performance by considering both the intrinsic difficulty and the assistance provided during evaluation.
+
+##### Score Calculation
+
+The final evaluation score is based on:
+
+**Score = f(difficulty_level, hint_level, corpus_level, pov_count)**
+
+Where:
+- **difficulty_level**: The intrinsic difficulty of the vulnerability (1-5)
+- **hint_level**: Level of hints provided to the CRS (0 = no hints, 1-4 = increasing specificity)
+- **corpus_level**: Quality of initial corpus provided (0 = no corpus, 1-4 = increasing quality)
+- **pov_count**: Number of POV examples provided to the CRS (0 = discovery mode, 1+ = varying assistance)
+
+##### Scoring Rationale
+
+Higher scores are awarded for:
+- Discovering/patching higher difficulty vulnerabilities
+- Achieving success with less assistance (fewer hints, smaller corpus, fewer POVs)
+- Finding vulnerabilities in less time with fewer resources
+
+This two-tier system allows fair comparison of CRS capabilities across different assistance levels while maintaining objective difficulty classification.
 
 ### Performance Metrics
 
