@@ -71,13 +71,17 @@ benchmarks/[project-name]/
     ├── ref.diff                 # Delta mode reference diff
     ├── test.sh                  # Invariant checking script
     └── [harness_name]/          # One directory for each harness
-        └── [pov-keyword]/       # One subdirectory for each POV keyword
-            ├── {pov-keyword}.md         # Vulnerability description
-            ├── {pov-variant-id}.blob    # Input data/payload
-            ├── {pov-variant-id}.log     # Sanitizer/crash outputs
-            └── patches/
-                ├── {patch-variant-id}.patch  # Bug-fixing patch
-                └── {patch-variant-id}.patch  # Bug-fixing patch
+        └── [vuln-keyword]/      # One subdirectory for each vulnerability keyword
+            ├── {vuln-keyword}.md         # Vulnerability description and root cause
+            ├── patches/
+            │   ├── {patch-variant-id}.patch  # Bug-fixing patch
+            │   └── {patch-variant-id}.patch  # Bug-fixing patch
+            ├── [pov-variant-id]/        # Multiple POV variants for this vulnerability
+            │   ├── {pov-variant-id}.blob  # Binary blob trigger crash
+            │   └── {pov-variant-id}.log   # Crash log
+            └── [pov-variant-id]/
+                ├── {pov-variant-id}.blob  # Binary blob trigger crash
+                └── {pov-variant-id}.log   # Crash log
 ```
 
 
@@ -118,14 +122,21 @@ harness_files:
 
   - name: "customfuzz3"
     path: "$REPO/test/customfuzz3.c"
-    # Proof of Vulnerability configurations for customfuzz3
-    povs:
-      - name: "pov_0"
-        sanitizer: "address"
-        error_token: "ERROR: AddressSanitizer: stack-buffer-overflow"
-      - name: "pov_1"
-        sanitizer: "memory"
-        error_token: "ERROR: MemorySanitizer: use-of-uninitialized-value"
+    # Vulnerability configurations for customfuzz3
+    vulns:
+      - vuln_keyword: "buffer_overflow"      # Maps to directory name
+        povs:
+          - id: "pov_0"                      # POV variant ID
+            sanitizer: "address"
+            error_token: "ERROR: AddressSanitizer: heap-buffer-overflow"
+          - id: "pov_1"                      # POV variant ID
+            sanitizer: "undefined"
+            error_token: "runtime error: index out of bounds"
+      - vuln_keyword: "use_after_free"       # Maps to directory name
+        povs:
+          - id: "pov_0"                      # POV variant ID
+            sanitizer: "memory"
+            error_token: "ERROR: MemorySanitizer: use-of-uninitialized-value"
 ```
 
 ## Configuration Fields
@@ -196,7 +207,7 @@ Define the test harnesses used for vulnerability discovery:
 - Support multiple harnesses per project
 - Link harnesses source code to their filesystem locations within the
   repository
-- Harnesses without POV configurations serve as distractor harnesses or baseline
+- Harnesses without vulnerability configurations serve as distractor harnesses or baseline
   tests
 - CRS systems must analyze all provided harnesses and prioritize those most
   likely to trigger vulnerabilities
@@ -207,9 +218,8 @@ Define the test harnesses used for vulnerability discovery:
 
 Defines how vulnerabilities are detected and verified:
 
-- Multiple POVs allowed per harness to test different vulnerability
-  types
-- Specifies detection method (sanitizer type: address, memory, etc.)
+- Multiple vulnerabilities allowed per harness, each with multiple POV variants
+- Each POV specifies detection method (sanitizer type: address, memory, undefined, etc.)
 - Defines error patterns for automated verification and result matching
 - Error tokens are matched using substring matching against sanitizer output
 - Used for deduplicating discovered vulnerabilities based on error
@@ -217,17 +227,15 @@ Defines how vulnerabilities are detected and verified:
 
 ### Benchmark Components - Ground Truth
 
-Each harness directory contains the following files for each Proof of
-Vulnerability (POV). For example, with POVs `pov_0` and `pov_1`:
+Each harness directory contains subdirectories for each vulnerability keyword, which groups related POV variants by their root cause. For example, with vulnerability `buffer_overflow` having POV variants `pov_0` and `pov_1`:
 
-- `{pov-keyword}.md` - Human-readable vulnerability description and
-  analysis (e.g., `pov_0.md`, `pov_1.md`)
-- `{pov-keyword}.blob` - Binary input data, payloads, or test cases that
-  trigger the vulnerability (e.g., `pov_0.blob`, `pov_1.blob`)
-- `{pov-keyword}.patch` - Code patch that fixes the identified
-  vulnerability (e.g., `pov_0.patch`, `pov_1.patch`)
-- `{pov-keyword}.log` - Sanitizer crash output or exception logs
-  demonstrating the vulnerability (e.g., `pov_0.log`, `pov_1.log`)
+- `{vuln-keyword}/` - Directory for each vulnerability (e.g., `buffer_overflow/`)
+  - `{vuln-keyword}.md` - Human-readable vulnerability description and root cause analysis (e.g., `buffer_overflow.md`)
+  - `patches/` - Directory containing patches that fix all POV variants of this vulnerability
+    - `{patch-variant-id}.patch` - Bug-fixing patch (e.g., `patch_0.patch`, `patch_1.patch`)
+  - `{pov-variant-id}/` - Directory for each POV variant (e.g., `pov_0/`, `pov_1/`)
+    - `{pov-variant-id}.blob` - Binary blob trigger crash (e.g., `pov_0.blob`)
+    - `{pov-variant-id}.log` - Crash log (e.g., `pov_0.log`)
 
 ## Build System
 
@@ -266,13 +274,13 @@ The Docker-based build system supports efficient builds through:
 
 ```bash
 # Build Docker image for specific patch evaluation
-docker build -t project-pov0 .
+docker build -t project-vuln0 .
 
 # Run evaluation with patched image
-docker run --name eval-pov0 project-pov0
+docker run --name eval-vuln0 project-vuln0
 
 # Extract build artifacts from container
-docker cp eval-pov0:/out ./evaluation-results/pov_0/
+docker cp eval-vuln0:/out ./evaluation-results/buffer_overflow/
 ```
 
 ### Helper Script Integration
@@ -280,14 +288,14 @@ docker cp eval-pov0:/out ./evaluation-results/pov_0/
 The evaluation framework provides automated Docker image management:
 
 ```bash
-# Build evaluation image for specific POV
-helper.py build-image --pov pov_0 --tag project-pov0
+# Build evaluation image for specific vulnerability
+helper.py build-image --vuln buffer_overflow --tag project-vuln0
 
 # Run complete evaluation workflow
-helper.py evaluate --pov pov_0 --output-dir ./results/
+helper.py evaluate --vuln buffer_overflow --output-dir ./results/
 
 # Compare multiple patch evaluations
-helper.py compare --baseline project-base --patches pov_0,pov_1,pov_2
+helper.py compare --baseline project-base --vulns buffer_overflow,use_after_free,null_deref
 ```
 
 The helper script automatically:
@@ -421,7 +429,7 @@ The test script can identify and execute only the subset of tests affected by a 
 
 ```bash
 # Run coverage-guided test selection
-./test.sh --coverage-guided --patch-file=pov_0.patch
+./test.sh --coverage-guided --patch-file=buffer_overflow/patches/patch_0.patch
 
 # Run specific test categories based on coverage
 ./test.sh --unit-tests --affected-only
@@ -641,11 +649,16 @@ The intrinsic difficulty level is calculated based on:
 harness_files:
   - name: "ossfuzz"
     path: "$REPO/test/ossfuzz.c"
-    povs:
-      - name: "buffer_overflow_main"
-        sanitizer: "address"
-        error_token: "ERROR: AddressSanitizer: heap-buffer-overflow"
-        difficulty_level: 3
+    vulns:
+      - vuln_keyword: "buffer_overflow_main"  # Maps to directory name
+        difficulty_level: 3                   # Intrinsic difficulty level
+        povs:
+          - id: "pov_0"                       # POV variant ID
+            sanitizer: "address"
+            error_token: "ERROR: AddressSanitizer: heap-buffer-overflow"
+          - id: "pov_1"                       # POV variant ID
+            sanitizer: "address"
+            error_token: "ERROR: AddressSanitizer: heap-buffer-overflow"
 ```
 
 The difficulty level is typically represented as an integer (e.g., 1-5, where 1 is easiest and 5 is most difficult), though the exact scale may vary depending on the benchmark implementation.
