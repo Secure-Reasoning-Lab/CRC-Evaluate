@@ -71,12 +71,12 @@ benchmarks/[project-name]/
     ├── ref.diff                 # Delta mode reference diff
     ├── test.sh                  # Invariant checking script
     └── [harness_name]/          # One directory for each harness
-        └── [vuln-keyword]/      # One subdirectory for each vulnerability keyword
-            ├── {vuln-keyword}.md         # Vulnerability description and root cause
+        └── [vuln-keyword]/      # One subdirectory for each vulnerability
+            ├── {vuln-keyword}.md         # description and root cause
             ├── patches/
             │   ├── {patch-variant-id}.patch  # Bug-fixing patch
             │   └── {patch-variant-id}.patch  # Bug-fixing patch
-            ├── [pov-variant-id]/        # Multiple POV variants for this vulnerability
+            ├── [pov-variant-id]/        # Multiple POV for this vuln
             │   ├── {pov-variant-id}.blob  # Binary blob trigger crash
             │   └── {pov-variant-id}.log   # Crash log
             └── [pov-variant-id]/
@@ -299,6 +299,7 @@ helper.py compare --baseline project-base --vulns buffer_overflow,use_after_free
 ```
 
 The helper script automatically:
+
 - Reads patch information from `meta.yaml`
 - Builds appropriate Docker images for each evaluation
 - Manages container lifecycle and artifact collection
@@ -656,9 +657,9 @@ harness_files:
           - id: "pov_0"                       # POV variant ID
             sanitizer: "address"
             error_token: "ERROR: AddressSanitizer: heap-buffer-overflow"
-          - id: "pov_1"                       # POV variant ID
-            sanitizer: "address"
-            error_token: "ERROR: AddressSanitizer: heap-buffer-overflow"
+          - id: "pov_1"                      # POV variant ID
+            sanitizer: "undefined"
+            error_token: "runtime error: index out of bounds"
 ```
 
 The difficulty level is typically represented as an integer (e.g., 1-5, where 1 is easiest and 5 is most difficult), though the exact scale may vary depending on the benchmark implementation.
