@@ -20,13 +20,14 @@
     - [ ] automatic meta.yaml generation with commit range & ref.diff
 - [ ] visualize & sample report & ranking
 - [ ] meta.yaml
-    - store absolute path for fuzzing harness source code in container instead
+    - [x] store absolute path for fuzzing harness source code in container instead
       of $REPO/$PROJECT
-    - remove redundant "[pov-keyword]/[pov-keyword].{blog,log}"
+    - [x] remove redundant "[pov-keyword]/[pov-keyword].{blog,log}"
     - where to store blob/log (git LFS?)
 - [ ] corpus
      - other than level; also "corpus-[timestamp]" for 1h/1d pre-fuzzing corpus.
      - where to store corpus (git LFS?)
+- [ ] job queue and worker (like fuzzbench with redis)
 
 Kudu opinions:
 consider other than bug finding/patching => e.g., confidential leaking
