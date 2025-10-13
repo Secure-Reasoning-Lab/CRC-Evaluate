@@ -1,12 +1,12 @@
 # CRSBench TODO List
 
-## Benchmark Converting [@Youngjoon, @Dongkwan]
+## Benchmark Converting [@Youngjoon, @Dongkwan, @Jiho]
 
 - [x]  Define RFC format using json schema or Pydantic [@Yufu]
 - [ ]  Automatically convert Team-Atlanta benchmarks to RFC format [@Youngjoon]
 - [ ]  Add pov-variants and patch-variants into the repo [@Dongkwan]
-- [ ]  Define and assign difficulty level based on results of naive fuzzer or multilang [@Dongkwan]
-- [ ]  Corpus collecting; also "corpus-[timestamp]" for 1h/1d pre-fuzzing corpus. [@Dongkwan]
+- [ ]  Define and assign difficulty level based on results of naive fuzzer or multilang [@Jiho]
+- [ ]  Corpus collecting; also "corpus-[timestamp]" for 1h/1d pre-fuzzing corpus. [@Jiho]
 - [ ]  Generate hints in natural language [@all]
 - [ ]  Convert hints to SARIF format [@Youngjoon]
 - [ ]  Create `test.sh` if missing [@all]
