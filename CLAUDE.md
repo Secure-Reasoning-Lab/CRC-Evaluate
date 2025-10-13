@@ -11,6 +11,23 @@ The proposed standard for CRS benchmark is in `docs/benchmark-spec.md`.
 - POV: proof of vulnerability
 - CP: challenge project
 
+## Documentation Structure
+This repository has two types of documentation:
+
+### docs/ - RFC and High-Level Usage
+- Contains RFC specifications (benchmark-spec.md)
+- High-level format examples (meta-example.yaml)
+- User-facing documentation
+- Target audience: Users and CRS developers using the benchmark
+
+### design-docs/ - Implementation Details
+- Architecture and design decisions
+- Module implementation documentation
+- Internal APIs and data flows
+- Target audience: CRSBench contributors and curious readers
+
+When implementing or modifying CRSBench components, refer to design-docs/ for detailed implementation guidance.
+
 ## Projects
 - Each project is a directory under `benchmarks`.
 - The project is Google OSS-Fuzz compatible.
@@ -67,6 +84,15 @@ Please summarize reference projects by creating markdown files in `docs_referenc
 ### Python
 - use absolute import instead of relative import; so moving files around for
   restructuring is straightforward without further editing import statements.
+
+### Testing
+- Follow TDD (Test-Driven Development) design when applicable
+- **MUST run corresponding tests when modifying a module**
+- Test files are located in `tests/` directory
+- Test file naming: `test_<module_name>.py` (e.g., `test_validation.py`)
+- Run tests with: `pytest tests/test_<module_name>.py -v`
+- Run with coverage: `pytest tests/test_<module_name>.py --cov=crsbench.<module_name>`
+- Update tests when changing module behavior or adding features
 
 ## Documents standard
 - create entry in README.md when adding a new component.
