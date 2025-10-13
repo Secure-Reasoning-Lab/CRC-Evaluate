@@ -104,6 +104,11 @@ Please summarize reference projects by creating markdown files in `docs_referenc
 - Run tests with: `pytest tests/test_<module_name>.py -v`
 - Run with coverage: `pytest tests/test_<module_name>.py --cov=crsbench.<module_name>`
 - Update tests when changing module behavior or adding features
+- **DO NOT use `cat` command or heredocs to create test files**
+  - Create proper Python test scripts using the Write tool
+  - Use Python's `tempfile` module for temporary test data
+  - Use `with open()` context managers for file operations in tests
+  - Example: See `test_orchestrator_e2e.py` for proper test file creation
 
 ## Documents standard
 - create entry in README.md when adding a new component.
