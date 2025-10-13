@@ -814,7 +814,7 @@ The benchmark provides a comprehensive framework for running CRS evaluations wit
 A single entry point for running experiments:
 
 ```sh
-$ python3 experiment/run_experiment.py \
+$ crsbench \
   --experiment-config <CONFIG_FILE: e.g. experiment-config.yaml> \
   --benchmarks <BENCHMARK: list of benchmarks or group of benchmark> \
   --experiment-name <EXPERIMENT_NAME> \

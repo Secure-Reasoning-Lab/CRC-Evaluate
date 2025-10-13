@@ -76,6 +76,47 @@ Please summarize reference projects by creating markdown files in `docs_referenc
 - Please document the usage of third party codebase for good open-source gesture
   :)
 
+## Testing crsbench CLI
+The main CLI entry point is `crsbench` command provided by `crsbench/run_experiment.py`.
+
+### Installation
+Install the package in editable mode:
+```bash
+uv pip install -e .
+```
+
+This creates the `crsbench` executable in `.venv/bin/crsbench`.
+
+### Running crsbench
+After installation, run it using:
+```bash
+# From within venv
+.venv/bin/crsbench --help
+
+# Or as a Python module
+python -m crsbench.run_experiment --help
+
+# Example with arguments
+.venv/bin/crsbench \
+  --experiment-config config.yaml \
+  --benchmarks bench1,bench2 \
+  --experiment-name test-exp \
+  --crses atlantis-c,atlantis-multilang
+```
+
+### Testing argument parsing
+```bash
+# Create test config
+echo "trials: 1" > /tmp/test-config.yaml
+
+# Test with sample arguments
+python crsbench/run_experiment.py \
+  --experiment-config /tmp/test-config.yaml \
+  --benchmarks bench1,bench2 \
+  --experiment-name test \
+  --crses crs1,crs2
+```
+
 ## Other instructions
 - create a TODO.md to track remaining TODO items. and an DONE.md for finished items.
 - read TODO.md in the new session.
