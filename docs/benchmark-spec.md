@@ -118,25 +118,25 @@ full_mode:
 # Harness specifications
 harness_files:
   - name: "ossfuzz"
-    path: "$REPO/test/ossfuzz.c"
+    path: "/src/project/test/ossfuzz.c"
 
   - name: "customfuzz3"
-    path: "$REPO/test/customfuzz3.c"
+    path: "/src/project/test/customfuzz3.c"
     # Vulnerability configurations for customfuzz3
     vulns:
       - vuln_keyword: "buffer_overflow"      # Maps to directory name
         povs:
           - id: "pov_0"                      # POV variant ID
             sanitizer: "address"
-            error_token: "ERROR: AddressSanitizer: heap-buffer-overflow"
+            error_token: "ERROR: AddressSanitizer: heap-buffer-overflow"  # optional field for descriptive purpose
           - id: "pov_1"                      # POV variant ID
             sanitizer: "undefined"
-            error_token: "runtime error: index out of bounds"
+            error_token: "runtime error: index out of bounds"  # optional field for descriptive purpose
       - vuln_keyword: "use_after_free"       # Maps to directory name
         povs:
           - id: "pov_0"                      # POV variant ID
             sanitizer: "memory"
-            error_token: "ERROR: MemorySanitizer: use-of-uninitialized-value"
+            error_token: "ERROR: MemorySanitizer: use-of-uninitialized-value"  # optional field for descriptive purpose
 ```
 
 ## Configuration Fields
@@ -221,7 +221,7 @@ Defines how vulnerabilities are detected and verified:
 - Multiple vulnerabilities allowed per harness, each with multiple POV variants
 - Each POV specifies detection method (sanitizer type: address, memory, undefined, etc.)
 - Defines error patterns for automated verification and result matching
-- Error tokens are matched using substring matching against sanitizer output
+- Error tokens (optional, for descriptive purposes) are matched using substring matching against sanitizer output
 - Used for deduplicating discovered vulnerabilities based on error
   signatures
 
@@ -617,7 +617,7 @@ Beyond POVs and hints, the benchmark supports providing different levels of init
 ```yaml
 harness_files:
   - name: "customfuzz3"
-    path: "$REPO/test/customfuzz3.c"
+    path: "/src/project/test/customfuzz3.c"
     # Corpus configuration for different difficulty levels
     corpus:
       level-0: "corpus-fuzz-level-0"
@@ -649,17 +649,17 @@ The intrinsic difficulty level is calculated based on:
 ```yaml
 harness_files:
   - name: "ossfuzz"
-    path: "$REPO/test/ossfuzz.c"
+    path: "/src/project/test/ossfuzz.c"
     vulns:
       - vuln_keyword: "buffer_overflow_main"  # Maps to directory name
         difficulty_level: 3                   # Intrinsic difficulty level
         povs:
           - id: "pov_0"                       # POV variant ID
             sanitizer: "address"
-            error_token: "ERROR: AddressSanitizer: heap-buffer-overflow"
-          - id: "pov_1"                      # POV variant ID
+            error_token: "ERROR: AddressSanitizer: heap-buffer-overflow"  # optional field for descriptive purpose
+          - id: "pov_1"                       # POV variant ID
             sanitizer: "undefined"
-            error_token: "runtime error: index out of bounds"
+            error_token: "runtime error: index out of bounds"  # optional field for descriptive purpose
 ```
 
 The difficulty level is typically represented as an integer (e.g., 1-5, where 1 is easiest and 5 is most difficult), though the exact scale may vary depending on the benchmark implementation.

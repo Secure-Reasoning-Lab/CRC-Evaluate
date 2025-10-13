@@ -1,0 +1,46 @@
+# Patch exclusion list - files that patches cannot modify (global setting)
+patch_exclude_list:
+  - "build.sh"                   # Build scripts are immutable
+  - "Makefile"                   # Build configuration files
+  - "CMakeLists.txt"             # Build system files
+  - "configure*"                 # Configuration scripts
+  - "*.ac"                       # Autotools files
+  - "*.am"                       # Automake files
+  - ".gitignore"                 # Version control files
+  - ".aixcc/**"                  # Benchmark metadata files
+  - "test/ossfuzz.c"             # Harness files are protected
+  - "include/config.h"           # System configuration headers
+  - "**/*test*.c"                # Test files cannot be modified
+  - "docs/**"                    # Documentation is protected
+
+# Delta mode: provides bug-inducing diff between two commits
+delta_mode:
+  base_commit: "35af1ffb5dd21ae47332577c2b6c889da302b497"
+  ref_commit: "baacf7a0891d4a478c403515f05c2387044a94d0"
+
+# Full mode: only vulnerable repository available
+full_mode:
+  base_commit: "baacf7a0891d4a478c403515f05c2387044a94d0"
+
+# Harness specifications
+harness_files:
+  - name: "ossfuzz"
+    path: "/src/project/test/ossfuzz.c"
+
+  - name: "customfuzz3"
+    path: "/src/project/customfuzz3.c"
+    # Vulnerability configurations for customfuzz3
+    vulns:
+      - vuln_keyword: "buffer_overflow"      # Maps to directory name
+        povs:
+          - id: "pov_0"                      # POV variant ID
+            sanitizer: "address"
+            error_token: "ERROR: AddressSanitizer: heap-buffer-overflow" # optional field for descriptive purpose
+          - id: "pov_1"                      # POV variant ID
+            sanitizer: "undefined"
+            error_token: "runtime error: index out of bounds"
+      - vuln_keyword: "use_after_free"       # Maps to directory name
+        povs:
+          - id: "pov_0"                      # POV variant ID
+            sanitizer: "memory"
+            error_token: "ERROR: MemorySanitizer: use-of-uninitialized-value"
