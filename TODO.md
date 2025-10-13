@@ -12,7 +12,7 @@
 - [ ]  Create `test.sh` if missing [@all]
 - [ ]  Manual review and finalize each benchmark entries [@all]
 
-## Running CRSes [@Yufu]
+## Running RFC-compliant CRSes [@Yufu]
 
 - [ ]  Implement experiment scripts and configurations (e.g., run_experiment.py)
 - [x]  job queue and worker (like fuzzbench with redis)
@@ -30,7 +30,7 @@
             - [ ]  make sure no filesystem conflicts & severe resource contention
     - [ ]  distributed test
 
-## Validation
+## Bug-finding and Patch Validation
 
 - [ ]  Bug finding validation
     - [ ]  PoV deduplication
