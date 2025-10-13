@@ -8,15 +8,14 @@ import re
 class POV(BaseModel):
     """Proof of Vulnerability configuration."""
 
-    name: str = Field(..., description="Name of the POV")
-    sanitizer: str = Field(..., description="Sanitizer type (address, memory, etc.)")
-    error_token: str = Field(..., description="Expected error pattern from sanitizer")
-    requires_clean_build: Optional[bool] = Field(default=False, description="Whether POV requires clean build")
+    id: str = Field(..., description="POV variant ID (e.g., pov_0, pov_1)")
+    sanitizer: str = Field(..., description="Sanitizer type (address, memory, undefined, etc.)")
+    error_token: Optional[str] = Field(default=None, description="Expected error pattern from sanitizer (optional)")
 
-    @validator('name')
-    def validate_name(cls, v):
+    @validator('id')
+    def validate_id(cls, v):
         if not v or not v.strip():
-            raise ValueError("POV name cannot be empty")
+            raise ValueError("POV id cannot be empty")
         return v.strip()
 
     @validator('sanitizer')
@@ -28,17 +27,45 @@ class POV(BaseModel):
 
     @validator('error_token')
     def validate_error_token(cls, v):
+        # error_token is now optional
+        if v is not None and not v.strip():
+            raise ValueError("Error token cannot be empty string (use None if not provided)")
+        return v.strip() if v else None
+
+
+class Vulnerability(BaseModel):
+    """Vulnerability configuration grouping related POV variants."""
+
+    vuln_keyword: str = Field(..., description="Vulnerability keyword (maps to directory name)")
+    difficulty_level: Optional[int] = Field(default=None, ge=1, le=5, description="Intrinsic difficulty level (1-5)")
+    povs: List[POV] = Field(..., description="List of POV variants for this vulnerability")
+
+    @validator('vuln_keyword')
+    def validate_vuln_keyword(cls, v):
         if not v or not v.strip():
-            raise ValueError("Error token cannot be empty")
+            raise ValueError("Vulnerability keyword cannot be empty")
         return v.strip()
+
+    @validator('povs')
+    def validate_povs(cls, v):
+        if not v:
+            raise ValueError("At least one POV variant must be specified for each vulnerability")
+
+        # Check for duplicate POV IDs
+        pov_ids = [pov.id for pov in v]
+        if len(pov_ids) != len(set(pov_ids)):
+            duplicates = [pov_id for pov_id in pov_ids if pov_ids.count(pov_id) > 1]
+            raise ValueError(f"Duplicate POV IDs found: {', '.join(set(duplicates))}")
+
+        return v
 
 
 class HarnessFile(BaseModel):
     """Harness file configuration."""
 
     name: str = Field(..., description="Name of the harness")
-    path: str = Field(..., description="Path to harness file")
-    povs: Optional[List[POV]] = Field(default_factory=list, description="List of POVs for this harness")
+    path: str = Field(..., description="Path to harness file (absolute path in container)")
+    vulns: Optional[List[Vulnerability]] = Field(default_factory=list, description="List of vulnerabilities for this harness")
 
     @validator('name')
     def validate_name(cls, v):
@@ -50,10 +77,12 @@ class HarnessFile(BaseModel):
     def validate_path(cls, v):
         if not v or not v.strip():
             raise ValueError("Harness path cannot be empty")
-        # Basic path validation - should contain $REPO, $PROJECT, or be relative
-        if not (v.startswith('$REPO/') or v.startswith('$PROJECT/') or v.startswith('./')):
-            raise ValueError("Harness path should start with '$REPO/', '$PROJECT/', or be a relative path")
-        return v.strip()
+        # Accept absolute paths (most common in Docker containers)
+        # or relative paths starting with ./
+        path = v.strip()
+        if not (path.startswith('/') or path.startswith('./')):
+            raise ValueError("Harness path should be absolute (e.g., /src/project/test/harness.c) or relative (e.g., ./test/harness.c)")
+        return path
 
 
 class DeltaMode(BaseModel):
@@ -153,7 +182,8 @@ class ValidationMetadata(BaseModel):
     yaml_valid: bool = Field(default=False, description="Whether YAML is syntactically valid")
     schema_valid: bool = Field(default=False, description="Whether content matches schema")
     total_harnesses: int = Field(default=0, description="Total number of harnesses")
-    total_povs: int = Field(default=0, description="Total number of POVs")
+    total_vulns: int = Field(default=0, description="Total number of vulnerabilities")
+    total_povs: int = Field(default=0, description="Total number of POV variants")
     has_delta_mode: bool = Field(default=False, description="Whether delta mode is configured")
     has_full_mode: bool = Field(default=False, description="Whether full mode is configured")
     patch_exclude_patterns: int = Field(default=0, description="Number of patch exclusion patterns")

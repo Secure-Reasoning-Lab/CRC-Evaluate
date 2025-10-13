@@ -43,7 +43,8 @@ result = validate_benchmark("/path/to/benchmark/.aixcc/meta.yaml")
 if result.is_valid:
     print("✅ Benchmark is valid!")
     print(f"Found {result.metadata['total_harnesses']} harnesses")
-    print(f"Found {result.metadata['total_povs']} POVs")
+    print(f"Found {result.metadata['total_vulns']} vulnerabilities")
+    print(f"Found {result.metadata['total_povs']} POV variants")
 else:
     print(f"❌ Validation failed with {result.error_count} errors")
     for error in result.errors:
@@ -67,11 +68,13 @@ full_mode:
 
 harness_files:
   - name: "test_harness"
-    path: "$REPO/test/harness.c"
-    povs:
-      - name: "pov_0"
-        sanitizer: "address"
-        error_token: "AddressSanitizer: heap-buffer-overflow"
+    path: "/src/project/test/harness.c"
+    vulns:
+      - vuln_keyword: "buffer_overflow"
+        povs:
+          - id: "pov_0"
+            sanitizer: "address"
+            error_token: "AddressSanitizer: heap-buffer-overflow"
 """
 
 result = validate_benchmark_from_string(yaml_content)
@@ -115,6 +118,8 @@ for error in result.errors:
 
 # Access metadata
 print(f"Benchmark has {result.metadata['total_harnesses']} harnesses")
+print(f"Found {result.metadata['total_vulns']} vulnerabilities")
+print(f"Found {result.metadata['total_povs']} POV variants")
 print(f"Using {'delta' if result.metadata['has_delta_mode'] else 'full'} mode")
 
 # Serialize for agent communication
@@ -144,7 +149,7 @@ json_result = result.to_dict()
 - ⚠️ Missing patch exclusion patterns
 - ⚠️ Large number of harnesses (>20)
 - ⚠️ Complex glob patterns
-- ⚠️ No POV configurations
+- ⚠️ No vulnerability configurations
 
 ## Schema Definition
 
@@ -163,16 +168,22 @@ class HarnessFile(BaseModel):
     """Harness configuration."""
 
     name: str
-    path: str
-    povs: Optional[List[POV]] = []
+    path: str  # Absolute path in container (e.g., /src/project/test/harness.c)
+    vulns: Optional[List[Vulnerability]] = []
+
+class Vulnerability(BaseModel):
+    """Vulnerability grouping POV variants by root cause."""
+
+    vuln_keyword: str  # Maps to directory name
+    difficulty_level: Optional[int] = None  # 1-5, intrinsic difficulty
+    povs: List[POV]
 
 class POV(BaseModel):
-    """Proof of Vulnerability."""
+    """Proof of Vulnerability variant."""
 
-    name: str
+    id: str  # POV variant ID (e.g., pov_0, pov_1)
     sanitizer: str  # address, memory, thread, undefined, leak
-    error_token: str
-    requires_clean_build: Optional[bool] = False
+    error_token: Optional[str] = None  # Optional error pattern
 ```
 
 ## Error Codes
@@ -197,6 +208,7 @@ The validation system uses structured error codes for consistent error handling:
 - `DUPLICATE_HARNESS_NAME`: Duplicate harness names
 - `INVALID_COMMIT_HASH`: Malformed commit hash
 - `INVALID_PATH_FORMAT`: Invalid harness path format
+- `EMPTY_VULN_LIST`: No vulnerability configurations
 
 ## Usage in LangGraph Agents
 
@@ -248,6 +260,7 @@ The validation result includes rich metadata for agent decision-making:
     "yaml_valid": true,
     "schema_valid": true,
     "total_harnesses": 5,
+    "total_vulns": 8,
     "total_povs": 12,
     "has_delta_mode": true,
     "has_full_mode": false,
@@ -326,12 +339,16 @@ def hint_generation_workflow(benchmark_path: str):
     if not result.is_valid:
         return {"error": "Cannot generate hints for invalid benchmark"}
 
-    # Check if benchmark has POVs
-    if result.metadata["total_povs"] == 0:
-        return {"warning": "No POVs found, cannot generate hints"}
+    # Check if benchmark has vulnerabilities
+    if result.metadata["total_vulns"] == 0:
+        return {"warning": "No vulnerabilities found, cannot generate hints"}
 
-    # Generate hints based on POV count
-    hints = generate_hints(benchmark_path, pov_count=result.metadata["total_povs"])
+    # Generate hints based on vulnerability and POV count
+    hints = generate_hints(
+        benchmark_path,
+        vuln_count=result.metadata["total_vulns"],
+        pov_count=result.metadata["total_povs"]
+    )
     return {"hints": hints, "benchmark_metadata": result.metadata}
 ```
 

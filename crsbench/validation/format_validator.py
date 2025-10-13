@@ -241,7 +241,7 @@ def _validate_schema(data: Dict[str, Any], result: ValidationResult) -> Benchmar
                 context={"validation_error": error}
             )
         # Return a minimal config to continue validation
-        dummy_harness = HarnessFile(name="dummy", path="$REPO/dummy.c")
+        dummy_harness = HarnessFile(name="dummy", path="/tmp/dummy.c")
         dummy_full_mode = FullMode(base_commit="abc123def456")
         return BenchmarkConfig(harness_files=[dummy_harness], full_mode=dummy_full_mode)
     except Exception as e:
@@ -250,7 +250,7 @@ def _validate_schema(data: Dict[str, Any], result: ValidationResult) -> Benchmar
             f"Schema validation failed: {str(e)}",
             context={"error": str(e)}
         )
-        dummy_harness = HarnessFile(name="dummy", path="$REPO/dummy.c")
+        dummy_harness = HarnessFile(name="dummy", path="/tmp/dummy.c")
         dummy_full_mode = FullMode(base_commit="abc123def456")
         return BenchmarkConfig(harness_files=[dummy_harness], full_mode=dummy_full_mode)
 
@@ -272,12 +272,12 @@ def _validate_configuration_logic(config: BenchmarkConfig, result: ValidationRes
             "At least one harness file must be specified"
         )
 
-    # Check for harnesses with POVs
-    harnesses_with_povs = [h for h in config.harness_files if h.povs]
-    if not harnesses_with_povs:
+    # Check for harnesses with vulnerabilities
+    harnesses_with_vulns = [h for h in config.harness_files if h.vulns]
+    if not harnesses_with_vulns:
         result.add_warning(
-            ValidationCodes.EMPTY_POV_LIST,
-            "No harness files have POV configurations"
+            ValidationCodes.EMPTY_VULN_LIST,
+            "No harness files have vulnerability configurations"
         )
 
     # Validate commit hashes in delta mode
@@ -292,9 +292,17 @@ def _validate_configuration_logic(config: BenchmarkConfig, result: ValidationRes
 
 def _generate_metadata(config: BenchmarkConfig, result: ValidationResult):
     """Generate metadata about the configuration."""
+    total_vulns = sum(len(h.vulns or []) for h in config.harness_files)
+    total_povs = sum(
+        len(vuln.povs)
+        for h in config.harness_files
+        for vuln in (h.vulns or [])
+    )
+
     result.metadata.update({
         "total_harnesses": len(config.harness_files),
-        "total_povs": sum(len(h.povs or []) for h in config.harness_files),
+        "total_vulns": total_vulns,
+        "total_povs": total_povs,
         "has_delta_mode": config.delta_mode is not None,
         "has_full_mode": config.full_mode is not None,
         "patch_exclude_patterns": len(config.patch_exclude_list or [])
