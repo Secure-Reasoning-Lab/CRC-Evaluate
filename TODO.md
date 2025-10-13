@@ -4,7 +4,11 @@
 - [x]  Implement converting script from AFC format to RFC format (Jiho has already convert AFC benchmarks into our format)
 - [ ]  Converting script from Team-Atlanta format to RFC format
 - [ ]  Wrapper codes for running bug finding CRS
+  - [ ] mock CRS bug-finding interface
+  - [ ] agreement with CRS standardization team
 - [ ]  Wrapper codes for running patching CRS
+  - [ ] mock CRS patching interface
+  - [ ] agreement with CRS standardization team / oss-patch
 - [ ]  Implement experiment scripts
 - [ ]  Bug finding validation
     - [ ]  PoV deduplication
@@ -27,7 +31,15 @@
 - [ ] corpus
      - other than level; also "corpus-[timestamp]" for 1h/1d pre-fuzzing corpus.
      - where to store corpus (git LFS?)
-- [ ] job queue and worker (like fuzzbench with redis)
+- [x] job queue and worker (like fuzzbench with redis)
+- [ ] end-to-end test with run_experiment.py
+     - [ ] local test
+       - [ ] one job
+       - [ ] multiple jobs
+         - [ ] proper way to find a reasonable number for concurrent jobs for a
+               machine or user-defined ...
+         - [ ] make sure no filesystem conflicts & severe resource contention
+     - [ ] distributed test
 
 Kudu opinions:
 consider other than bug finding/patching => e.g., confidential leaking
