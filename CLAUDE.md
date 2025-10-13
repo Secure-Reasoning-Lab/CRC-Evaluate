@@ -81,6 +81,17 @@ when asked.
 Please summarize reference projects by creating markdown files in `docs_reference_projects`.
 
 ## Coding standard
+
+### Module Organization
+- **Only `run_experiment.py` should be at the root of `crsbench/` directory**
+  - This is the main CLI entry point for the `crsbench` command
+  - All other functionality should be organized into appropriate subdirectories
+- Create dedicated modules for major features (e.g., `crsbench/distributed/`, `crsbench/validation/`)
+- Keep modules focused and cohesive
+- Avoid creating files in the root `crsbench/` directory unless they are:
+  - Entry points (like `run_experiment.py`)
+  - Package initialization (`__init__.py`)
+
 ### Python
 - use absolute import instead of relative import; so moving files around for
   restructuring is straightforward without further editing import statements.
@@ -97,6 +108,17 @@ Please summarize reference projects by creating markdown files in `docs_referenc
 ## Documents standard
 - create entry in README.md when adding a new component.
 - create a README.md to summarize each component in their own directories.
+
+## Design Documentation Requirement
+- **MUST create design document in `design-docs/` before implementing new features**
+- Design doc should cover:
+  - Architecture overview and component interaction
+  - Data flow and API design
+  - File structure and module organization
+  - Integration points with existing code
+  - Testing strategy
+- Reference: See `design-docs/` directory for examples
+- Target audience: Implementation developers and code reviewers
 
 ## Usage or reference of third party codebase
 - Please document the usage of third party codebase for good open-source gesture
