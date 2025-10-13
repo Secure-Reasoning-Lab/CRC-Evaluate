@@ -187,3 +187,73 @@ class ValidationMetadata(BaseModel):
     has_delta_mode: bool = Field(default=False, description="Whether delta mode is configured")
     has_full_mode: bool = Field(default=False, description="Whether full mode is configured")
     patch_exclude_patterns: int = Field(default=0, description="Number of patch exclusion patterns")
+
+
+class ExperimentConfig(BaseModel):
+    """Experiment configuration schema."""
+
+    trials: int = Field(..., ge=1, description="Number of trials (must be >= 1)")
+    max_total_time: int = Field(..., ge=1, description="Maximum time in seconds per trial (must be >= 1)")
+    difficulty_level: int = Field(..., ge=0, le=4, description="Difficulty level controlling assistance (0-4)")
+    experiment_filestore: str = Field(..., description="Directory path for experiment data storage")
+    report_filestore: str = Field(..., description="Directory path for HTML reports and summary data")
+
+    @validator('experiment_filestore', 'report_filestore')
+    def validate_filestore_path(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Filestore path cannot be empty")
+        return v.strip()
+
+
+class BenchmarkSuiteConfig(BaseModel):
+    """Benchmark suite configuration schema."""
+
+    model_config = {"populate_by_name": True}  # Pydantic V2 syntax
+
+    Name: str = Field(..., description="Unique identifier for the benchmark suite")
+    Description: str = Field(..., description="Description of the benchmark suite purpose and scope")
+    benchmark_list: List[str] = Field(..., description="List of benchmark IDs included in the suite")
+
+    # Note: "Release date" field name has a space, handling with Field alias
+    release_date: str = Field(..., alias="Release date", description="Release date of the benchmark suite")
+
+    @validator('Name')
+    def validate_name(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Benchmark suite Name cannot be empty")
+        return v.strip()
+
+    @validator('Description')
+    def validate_description(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Benchmark suite Description cannot be empty")
+        return v.strip()
+
+    @validator('release_date')
+    def validate_release_date(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Release date cannot be empty")
+
+        # Validate date format MM.DD.YYYY
+        date_str = v.strip()
+        if not re.match(r'^\d{2}\.\d{2}\.\d{4}$', date_str):
+            raise ValueError(f"Invalid release date format: {date_str}. Expected format: MM.DD.YYYY (e.g., 09.23.2025)")
+
+        return date_str
+
+    @validator('benchmark_list')
+    def validate_benchmark_list(cls, v):
+        if not v:
+            raise ValueError("benchmark_list must contain at least one benchmark ID")
+
+        # Check for empty strings
+        cleaned = [bid.strip() for bid in v if bid and bid.strip()]
+        if len(cleaned) != len(v):
+            raise ValueError("benchmark_list contains empty benchmark IDs")
+
+        # Check for duplicates
+        if len(cleaned) != len(set(cleaned)):
+            duplicates = [bid for bid in cleaned if cleaned.count(bid) > 1]
+            raise ValueError(f"Duplicate benchmark IDs found: {', '.join(set(duplicates))}")
+
+        return cleaned

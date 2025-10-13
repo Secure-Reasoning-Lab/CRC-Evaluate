@@ -4,8 +4,15 @@ import pytest
 from pathlib import Path
 from pydantic import ValidationError as PydanticValidationError
 
-from crsbench.validation import validate_benchmark, validate_benchmark_from_string
-from crsbench.validation.schemas import POV, Vulnerability, HarnessFile, BenchmarkConfig
+from crsbench.validation import (
+    validate_benchmark,
+    validate_benchmark_from_string,
+    validate_experiment_config,
+    validate_experiment_config_from_string,
+    validate_benchmark_suite,
+    validate_benchmark_suite_from_string
+)
+from crsbench.validation.schemas import POV, Vulnerability, HarnessFile, BenchmarkConfig, ExperimentConfig, BenchmarkSuiteConfig
 from crsbench.validation.errors import ValidationCodes
 
 
@@ -493,8 +500,10 @@ class TestIntegration:
 
     def test_validate_meta_example_yaml(self):
         """Test validation of docs/meta-example.yaml."""
-        # Can use either direct path or symlink in tests/assets
-        result = validate_benchmark("tests/assets/meta-example.yaml")
+        # Use Path to construct path relative to test file
+        test_dir = Path(__file__).parent
+        meta_path = test_dir / "assets" / "meta-example.yaml"
+        result = validate_benchmark(meta_path)
 
         assert result.is_valid is True
         assert result.metadata["total_harnesses"] == 2
@@ -535,3 +544,392 @@ harness_files:
         summary = result.summary()
         assert isinstance(summary, str)
         assert "INVALID" in summary or "error" in summary.lower()
+
+
+# ============================================================================
+# Experiment Config Tests
+# ============================================================================
+
+class TestExperimentConfigSchema:
+    """Test ExperimentConfig schema validation."""
+
+    def test_experiment_config_valid(self):
+        """Test valid experiment config."""
+        config = ExperimentConfig(
+            trials=3,
+            max_total_time=86400,
+            difficulty_level=2,
+            experiment_filestore="/tmp/experiment-data",
+            report_filestore="/tmp/report-data"
+        )
+        assert config.trials == 3
+        assert config.max_total_time == 86400
+        assert config.difficulty_level == 2
+
+    def test_experiment_config_invalid_trials(self):
+        """Test experiment config with invalid trials."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            ExperimentConfig(
+                trials=0,  # Invalid: must be >= 1
+                max_total_time=86400,
+                difficulty_level=1,
+                experiment_filestore="/tmp/exp",
+                report_filestore="/tmp/rep"
+            )
+        assert "trials" in str(exc_info.value).lower()
+
+    def test_experiment_config_invalid_time(self):
+        """Test experiment config with invalid max_total_time."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            ExperimentConfig(
+                trials=1,
+                max_total_time=0,  # Invalid: must be >= 1
+                difficulty_level=1,
+                experiment_filestore="/tmp/exp",
+                report_filestore="/tmp/rep"
+            )
+        assert "max_total_time" in str(exc_info.value).lower()
+
+    def test_experiment_config_invalid_difficulty(self):
+        """Test experiment config with invalid difficulty level."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            ExperimentConfig(
+                trials=1,
+                max_total_time=86400,
+                difficulty_level=5,  # Invalid: must be 0-4
+                experiment_filestore="/tmp/exp",
+                report_filestore="/tmp/rep"
+            )
+        assert "difficulty_level" in str(exc_info.value).lower()
+
+    def test_experiment_config_empty_filestore(self):
+        """Test experiment config with empty filestore paths."""
+        with pytest.raises(PydanticValidationError):
+            ExperimentConfig(
+                trials=1,
+                max_total_time=86400,
+                difficulty_level=1,
+                experiment_filestore="",  # Empty
+                report_filestore="/tmp/rep"
+            )
+
+
+class TestExperimentConfigValidation:
+    """Test experiment config validation with YAML."""
+
+    def test_validate_experiment_valid(self):
+        """Test validation with valid experiment config."""
+        yaml_content = """
+trials: 1
+max_total_time: 86400
+difficulty_level: 1
+experiment_filestore: /tmp/experiment-data
+report_filestore: /tmp/report-data
+"""
+        result = validate_experiment_config_from_string(yaml_content)
+
+        assert result.is_valid is True
+        assert result.error_count == 0
+        assert result.metadata["trials"] == 1
+        assert result.metadata["max_total_time"] == 86400
+        assert result.metadata["difficulty_level"] == 1
+
+    def test_validate_experiment_missing_field(self):
+        """Test validation with missing required field."""
+        yaml_content = """
+trials: 1
+max_total_time: 86400
+# Missing difficulty_level
+experiment_filestore: /tmp/experiment-data
+report_filestore: /tmp/report-data
+"""
+        result = validate_experiment_config_from_string(yaml_content)
+
+        assert result.is_valid is False
+        assert result.error_count > 0
+        assert any("difficulty_level" in e.message.lower() for e in result.errors)
+
+    def test_validate_experiment_negative_trials(self):
+        """Test validation with negative trials."""
+        yaml_content = """
+trials: -1
+max_total_time: 86400
+difficulty_level: 1
+experiment_filestore: /tmp/exp
+report_filestore: /tmp/rep
+"""
+        result = validate_experiment_config_from_string(yaml_content)
+
+        assert result.is_valid is False
+        assert any("trials" in e.message.lower() for e in result.errors)
+
+    def test_validate_experiment_out_of_range_difficulty(self):
+        """Test validation with out of range difficulty level."""
+        yaml_content = """
+trials: 1
+max_total_time: 86400
+difficulty_level: 10
+experiment_filestore: /tmp/exp
+report_filestore: /tmp/rep
+"""
+        result = validate_experiment_config_from_string(yaml_content)
+
+        assert result.is_valid is False
+        assert any("difficulty_level" in e.message.lower() for e in result.errors)
+
+    def test_validate_experiment_empty_yaml(self):
+        """Test validation with empty YAML."""
+        result = validate_experiment_config_from_string("")
+
+        assert result.is_valid is False
+        assert any(e.code == ValidationCodes.EMPTY_FILE for e in result.errors)
+
+    def test_validate_experiment_invalid_yaml_syntax(self):
+        """Test validation with invalid YAML syntax."""
+        invalid_yaml = "trials: [invalid: yaml"
+        result = validate_experiment_config_from_string(invalid_yaml)
+
+        assert result.is_valid is False
+        assert any(e.code == ValidationCodes.YAML_SYNTAX_ERROR for e in result.errors)
+
+
+# ============================================================================
+# Benchmark Suite Config Tests
+# ============================================================================
+
+class TestBenchmarkSuiteSchema:
+    """Test BenchmarkSuiteConfig schema validation."""
+
+    def test_benchmark_suite_valid(self):
+        """Test valid benchmark suite config."""
+        config = BenchmarkSuiteConfig(
+            Name="crsbench-c",
+            Description="A benchmark suite for evaluating C/C++ CRS",
+            benchmark_list=["bench1", "bench2", "bench3"],
+            release_date="09.23.2025"
+        )
+        assert config.Name == "crsbench-c"
+        assert config.Description == "A benchmark suite for evaluating C/C++ CRS"
+        assert len(config.benchmark_list) == 3
+        assert config.release_date == "09.23.2025"
+
+    def test_benchmark_suite_with_alias(self):
+        """Test benchmark suite with 'Release date' field alias."""
+        config = BenchmarkSuiteConfig(**{
+            "Name": "test-suite",
+            "Description": "Test suite",
+            "benchmark_list": ["bench1"],
+            "Release date": "01.01.2025"  # Using aliased field name
+        })
+        assert config.release_date == "01.01.2025"
+
+    def test_benchmark_suite_empty_name(self):
+        """Test benchmark suite with empty name."""
+        with pytest.raises(PydanticValidationError):
+            BenchmarkSuiteConfig(
+                Name="",
+                Description="Test",
+                benchmark_list=["bench1"],
+                release_date="01.01.2025"
+            )
+
+    def test_benchmark_suite_empty_benchmark_list(self):
+        """Test benchmark suite with empty benchmark list."""
+        with pytest.raises(PydanticValidationError):
+            BenchmarkSuiteConfig(
+                Name="test-suite",
+                Description="Test",
+                benchmark_list=[],  # Empty
+                release_date="01.01.2025"
+            )
+
+    def test_benchmark_suite_invalid_date_format(self):
+        """Test benchmark suite with invalid date format."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            BenchmarkSuiteConfig(
+                Name="test-suite",
+                Description="Test",
+                benchmark_list=["bench1"],
+                release_date="2025-09-23"  # Wrong format
+            )
+        assert "release date" in str(exc_info.value).lower() or "format" in str(exc_info.value).lower()
+
+    def test_benchmark_suite_duplicate_benchmarks(self):
+        """Test benchmark suite with duplicate benchmark IDs."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            BenchmarkSuiteConfig(
+                Name="test-suite",
+                Description="Test",
+                benchmark_list=["bench1", "bench1"],  # Duplicate
+                release_date="01.01.2025"
+            )
+        assert "duplicate" in str(exc_info.value).lower()
+
+
+class TestBenchmarkSuiteValidation:
+    """Test benchmark suite validation with YAML."""
+
+    def test_validate_suite_valid(self):
+        """Test validation with valid benchmark suite config."""
+        yaml_content = """
+Name: crsbench-c
+Description: A benchmark suite for evaluating C/C++ CRS
+Release date: 09.23.2025
+benchmark_list:
+  - benchmark_id_1
+  - benchmark_id_2
+  - benchmark_id_3
+"""
+        result = validate_benchmark_suite_from_string(yaml_content)
+
+        assert result.is_valid is True
+        assert result.error_count == 0
+        assert result.metadata["suite_name"] == "crsbench-c"
+        assert result.metadata["total_benchmarks"] == 3
+        assert result.metadata["release_date"] == "09.23.2025"
+
+    def test_validate_suite_missing_name(self):
+        """Test validation with missing Name field."""
+        yaml_content = """
+Description: Test suite
+Release date: 01.01.2025
+benchmark_list:
+  - bench1
+"""
+        result = validate_benchmark_suite_from_string(yaml_content)
+
+        assert result.is_valid is False
+        assert any("name" in e.message.lower() for e in result.errors)
+
+    def test_validate_suite_invalid_date(self):
+        """Test validation with invalid date format."""
+        yaml_content = """
+Name: test-suite
+Description: Test suite
+Release date: 2025/09/23
+benchmark_list:
+  - bench1
+"""
+        result = validate_benchmark_suite_from_string(yaml_content)
+
+        assert result.is_valid is False
+        assert any("release date" in e.message.lower() or "format" in e.message.lower() for e in result.errors)
+
+    def test_validate_suite_empty_benchmark_list(self):
+        """Test validation with empty benchmark list."""
+        yaml_content = """
+Name: test-suite
+Description: Test suite
+Release date: 01.01.2025
+benchmark_list: []
+"""
+        result = validate_benchmark_suite_from_string(yaml_content)
+
+        assert result.is_valid is False
+        assert any("benchmark_list" in e.message.lower() for e in result.errors)
+
+    def test_validate_suite_duplicate_benchmarks(self):
+        """Test validation with duplicate benchmark IDs."""
+        yaml_content = """
+Name: test-suite
+Description: Test suite
+Release date: 01.01.2025
+benchmark_list:
+  - bench1
+  - bench2
+  - bench1
+"""
+        result = validate_benchmark_suite_from_string(yaml_content)
+
+        assert result.is_valid is False
+        assert any("duplicate" in e.message.lower() for e in result.errors)
+
+    def test_validate_suite_empty_yaml(self):
+        """Test validation with empty YAML."""
+        result = validate_benchmark_suite_from_string("")
+
+        assert result.is_valid is False
+        assert any(e.code == ValidationCodes.EMPTY_FILE for e in result.errors)
+
+    def test_validate_suite_invalid_yaml_syntax(self):
+        """Test validation with invalid YAML syntax."""
+        invalid_yaml = "Name: [invalid: yaml"
+        result = validate_benchmark_suite_from_string(invalid_yaml)
+
+        assert result.is_valid is False
+        assert any(e.code == ValidationCodes.YAML_SYNTAX_ERROR for e in result.errors)
+
+
+# ============================================================================
+# Integration Tests for All Config Types
+# ============================================================================
+
+class TestIntegrationAllConfigs:
+    """Integration tests with all configuration types."""
+
+    def test_validate_experiment_example_yaml(self):
+        """Test validation of docs/experiment-example.yaml."""
+        # Use Path to construct path relative to test file
+        test_dir = Path(__file__).parent
+        exp_path = test_dir / "assets" / "experiment-example.yaml"
+        result = validate_experiment_config(exp_path)
+
+        assert result.is_valid is True
+        assert result.metadata["trials"] == 1
+        assert result.metadata["max_total_time"] == 86400
+        assert result.metadata["difficulty_level"] == 1
+
+    def test_validate_suite_example_format(self):
+        """Test validation of benchmark suite with proper format (not placeholders)."""
+        # The example file contains YAML placeholders {benchmark_id_X} which are invalid
+        # So test with a proper YAML string instead
+        suite_yaml = """
+Name: crsbench-c
+Description: A benchmark suite for evaluating C/C++ CRS.
+Release date: 09.23.2025
+benchmark_list:
+  - benchmark_id_1
+  - benchmark_id_2
+  - benchmark_id_3
+"""
+        result = validate_benchmark_suite_from_string(suite_yaml)
+
+        assert result.is_valid is True
+        assert result.metadata["suite_name"] == "crsbench-c"
+        assert "C/C++" in result.metadata["suite_description"]
+        assert result.metadata["release_date"] == "09.23.2025"
+
+    def test_all_config_types_serialization(self):
+        """Test that all config validation results can be serialized."""
+        # Benchmark config
+        benchmark_yaml = """
+full_mode:
+  base_commit: "abc123def"
+harness_files:
+  - name: "test"
+    path: "/src/test.c"
+"""
+        benchmark_result = validate_benchmark_from_string(benchmark_yaml)
+        assert isinstance(benchmark_result.to_dict(), dict)
+
+        # Experiment config
+        experiment_yaml = """
+trials: 1
+max_total_time: 86400
+difficulty_level: 1
+experiment_filestore: /tmp/exp
+report_filestore: /tmp/rep
+"""
+        experiment_result = validate_experiment_config_from_string(experiment_yaml)
+        assert isinstance(experiment_result.to_dict(), dict)
+
+        # Benchmark suite config
+        suite_yaml = """
+Name: test-suite
+Description: Test suite
+Release date: 01.01.2025
+benchmark_list:
+  - bench1
+"""
+        suite_result = validate_benchmark_suite_from_string(suite_yaml)
+        assert isinstance(suite_result.to_dict(), dict)

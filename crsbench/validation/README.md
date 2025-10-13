@@ -352,6 +352,171 @@ def hint_generation_workflow(benchmark_path: str):
     return {"hints": hints, "benchmark_metadata": result.metadata}
 ```
 
+## Experiment Config Validation
+
+### `validate_experiment_config(path: Union[str, Path]) -> ValidationResult`
+
+Validates experiment configuration files that control experiment settings.
+
+```python
+from crsbench.validation import validate_experiment_config
+
+# Validate experiment config file
+result = validate_experiment_config("/path/to/experiment-config.yaml")
+
+if result.is_valid:
+    print("✅ Experiment config is valid!")
+    print(f"Trials: {result.metadata['trials']}")
+    print(f"Max time: {result.metadata['max_total_time']} seconds")
+    print(f"Difficulty level: {result.metadata['difficulty_level']}")
+else:
+    print(f"❌ Validation failed with {result.error_count} errors")
+    for error in result.errors:
+        print(f"  - {error}")
+```
+
+### `validate_experiment_config_from_string(yaml_content: str) -> ValidationResult`
+
+Validates experiment configuration from YAML string.
+
+```python
+from crsbench.validation import validate_experiment_config_from_string
+
+experiment_yaml = """
+trials: 3
+max_total_time: 86400
+difficulty_level: 2
+experiment_filestore: /tmp/experiment-data
+report_filestore: /tmp/report-data
+"""
+
+result = validate_experiment_config_from_string(experiment_yaml)
+```
+
+### Experiment Config Schema
+
+```python
+class ExperimentConfig(BaseModel):
+    """Experiment configuration schema."""
+
+    trials: int                    # Number of trials (>= 1)
+    max_total_time: int            # Max time in seconds per trial (>= 1)
+    difficulty_level: int          # Difficulty level 0-4
+    experiment_filestore: str      # Experiment data storage path
+    report_filestore: str          # Report output path
+```
+
+### Experiment Config Validation Checks
+
+- ✅ All required fields present
+- ✅ `trials >= 1`
+- ✅ `max_total_time >= 1`
+- ✅ `difficulty_level` in range 0-4
+- ✅ Filestore paths are non-empty strings
+
+### Experiment Config Metadata
+
+```python
+{
+    "trials": 3,
+    "max_total_time": 86400,
+    "difficulty_level": 2,
+    "experiment_filestore": "/tmp/experiment-data",
+    "report_filestore": "/tmp/report-data"
+}
+```
+
+## Benchmark Suite Validation
+
+### `validate_benchmark_suite(path: Union[str, Path]) -> ValidationResult`
+
+Validates benchmark suite configuration files that define collections of benchmarks.
+
+```python
+from crsbench.validation import validate_benchmark_suite
+
+# Validate benchmark suite config file
+result = validate_benchmark_suite("/path/to/benchmark-suite.yaml")
+
+if result.is_valid:
+    print("✅ Benchmark suite is valid!")
+    print(f"Suite name: {result.metadata['suite_name']}")
+    print(f"Description: {result.metadata['suite_description']}")
+    print(f"Total benchmarks: {result.metadata['total_benchmarks']}")
+else:
+    print(f"❌ Validation failed with {result.error_count} errors")
+    for error in result.errors:
+        print(f"  - {error}")
+```
+
+### `validate_benchmark_suite_from_string(yaml_content: str) -> ValidationResult`
+
+Validates benchmark suite configuration from YAML string.
+
+```python
+from crsbench.validation import validate_benchmark_suite_from_string
+
+suite_yaml = """
+Name: crsbench-c
+Description: A benchmark suite for evaluating C/C++ CRS
+Release date: 09.23.2025
+benchmark_list:
+  - benchmark_id_1
+  - benchmark_id_2
+  - benchmark_id_3
+"""
+
+result = validate_benchmark_suite_from_string(suite_yaml)
+```
+
+### Benchmark Suite Schema
+
+```python
+class BenchmarkSuiteConfig(BaseModel):
+    """Benchmark suite configuration schema."""
+
+    Name: str                      # Unique suite identifier
+    Description: str               # Suite description
+    release_date: str              # Release date (MM.DD.YYYY format)
+    benchmark_list: List[str]      # List of benchmark IDs
+```
+
+### Benchmark Suite Validation Checks
+
+- ✅ All required fields present
+- ✅ `Name` is non-empty
+- ✅ `Description` is non-empty
+- ✅ `Release date` in format MM.DD.YYYY
+- ✅ `benchmark_list` has at least one benchmark ID
+- ✅ No duplicate benchmark IDs
+- ✅ No empty benchmark IDs
+
+### Benchmark Suite Metadata
+
+```python
+{
+    "suite_name": "crsbench-c",
+    "suite_description": "A benchmark suite for evaluating C/C++ CRS",
+    "release_date": "09.23.2025",
+    "total_benchmarks": 3,
+    "benchmark_ids": ["benchmark_id_1", "benchmark_id_2", "benchmark_id_3"]
+}
+```
+
+### Error Codes for Experiment and Benchmark Suite
+
+**Experiment Config Errors:**
+- `INVALID_TRIALS`: trials must be >= 1
+- `INVALID_TIME_LIMIT`: max_total_time must be >= 1
+- `INVALID_DIFFICULTY_LEVEL`: difficulty_level must be 0-4
+- `INVALID_DIRECTORY_PATH`: filestore paths must be valid
+
+**Benchmark Suite Errors:**
+- `INVALID_SUITE_NAME`: Name cannot be empty
+- `INVALID_RELEASE_DATE`: Release date format invalid
+- `EMPTY_BENCHMARK_LIST`: benchmark_list must have at least one entry
+- `DUPLICATE_BENCHMARK_ID`: Duplicate benchmark IDs found
+
 ## Best Practices
 
 ### For Agent Developers

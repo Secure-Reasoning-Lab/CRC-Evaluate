@@ -10,7 +10,7 @@ from typing import Union, Dict, Any
 from pathlib import Path
 from pydantic import ValidationError as PydanticValidationError
 
-from crsbench.validation.schemas import BenchmarkConfig, ValidationMetadata, HarnessFile, FullMode
+from crsbench.validation.schemas import BenchmarkConfig, ValidationMetadata, HarnessFile, FullMode, ExperimentConfig, BenchmarkSuiteConfig
 from crsbench.validation.errors import (
     ValidationResult, ValidationError, ValidationCodes,
     ValidationSeverity
@@ -336,3 +336,349 @@ def _check_for_warnings(config: BenchmarkConfig, result: ValidationResult):
             ValidationCodes.COMPLEX_PATHS,
             f"Complex glob patterns detected: {', '.join(complex_patterns[:3])}{'...' if len(complex_patterns) > 3 else ''}. Ensure they work as expected."
         )
+
+
+# ============================================================================
+# Experiment Config Validation
+# ============================================================================
+
+def validate_experiment_config(path: Union[str, Path]) -> ValidationResult:
+    """
+    Validate an experiment configuration.
+
+    This is a pure function with no side effects that validates the format
+    of an experiment configuration. It only reads files and returns validation
+    results without modifying anything.
+
+    Args:
+        path: Path to experiment config YAML file
+
+    Returns:
+        ValidationResult: Comprehensive validation results
+
+    Raises:
+        ValidationError: Only for unexpected errors during validation process
+    """
+    result = ValidationResult(is_valid=True)
+
+    try:
+        # Resolve path
+        config_path = Path(path)
+
+        # Update metadata with file info
+        if config_path.exists():
+            result.metadata["file_path"] = str(config_path)
+            result.metadata["file_size"] = config_path.stat().st_size
+        else:
+            result.add_error(
+                ValidationCodes.FILE_NOT_FOUND,
+                f"Experiment config file not found: {config_path}",
+                context={"expected_path": str(config_path)}
+            )
+            return result
+
+        # Validate file is readable
+        if not os.access(config_path, os.R_OK):
+            result.add_error(
+                ValidationCodes.FILE_NOT_READABLE,
+                f"Cannot read file: {config_path}",
+                context={"path": str(config_path)}
+            )
+            return result
+
+        # Load and parse YAML
+        yaml_content = _load_yaml_file(config_path, result)
+        if not result.is_valid:
+            return result
+
+        # Validate against schema
+        config = _validate_experiment_schema(yaml_content, result)
+        if not result.is_valid:
+            return result
+
+        # Generate metadata
+        _generate_experiment_metadata(config, result)
+
+    except Exception as e:
+        raise ValidationError(
+            f"Unexpected error during experiment config validation: {str(e)}",
+            code="VALIDATION_PROCESS_ERROR",
+            context={"path": str(path), "error": str(e)}
+        )
+
+    return result
+
+
+def validate_experiment_config_from_string(yaml_content: str) -> ValidationResult:
+    """
+    Validate experiment configuration from YAML string.
+
+    Pure function that validates YAML content without file system access.
+
+    Args:
+        yaml_content: YAML content as string
+
+    Returns:
+        ValidationResult: Comprehensive validation results
+    """
+    result = ValidationResult(is_valid=True)
+
+    try:
+        # Parse YAML content
+        try:
+            data = yaml.safe_load(yaml_content)
+            result.metadata["yaml_valid"] = True
+        except yaml.YAMLError as e:
+            result.add_error(
+                ValidationCodes.YAML_SYNTAX_ERROR,
+                f"Invalid YAML syntax: {str(e)}",
+                context={"yaml_error": str(e)}
+            )
+            return result
+
+        # Check for empty content
+        if data is None:
+            result.add_error(
+                ValidationCodes.EMPTY_FILE,
+                "YAML content is empty"
+            )
+            return result
+
+        # Validate against schema
+        config = _validate_experiment_schema(data, result)
+        if not result.is_valid:
+            return result
+
+        # Generate metadata
+        _generate_experiment_metadata(config, result)
+
+    except Exception as e:
+        raise ValidationError(
+            f"Unexpected error during experiment config validation: {str(e)}",
+            code="VALIDATION_PROCESS_ERROR",
+            context={"error": str(e)}
+        )
+
+    return result
+
+
+def _validate_experiment_schema(data: Dict[str, Any], result: ValidationResult) -> ExperimentConfig:
+    """Validate data against ExperimentConfig schema."""
+    try:
+        config = ExperimentConfig(**data)
+        result.metadata["schema_valid"] = True
+        return config
+    except PydanticValidationError as e:
+        result.metadata["schema_valid"] = False
+        for error in e.errors():
+            field_path = ".".join(str(item) for item in error["loc"])
+            result.add_error(
+                ValidationCodes.SCHEMA_VALIDATION_ERROR,
+                f"Schema validation error in '{field_path}': {error['msg']}",
+                field=field_path,
+                context={"validation_error": error}
+            )
+        # Return a minimal config to avoid crashes
+        return ExperimentConfig(
+            trials=1,
+            max_total_time=1,
+            difficulty_level=0,
+            experiment_filestore="/tmp",
+            report_filestore="/tmp"
+        )
+    except Exception as e:
+        result.add_error(
+            ValidationCodes.SCHEMA_VALIDATION_ERROR,
+            f"Schema validation failed: {str(e)}",
+            context={"error": str(e)}
+        )
+        return ExperimentConfig(
+            trials=1,
+            max_total_time=1,
+            difficulty_level=0,
+            experiment_filestore="/tmp",
+            report_filestore="/tmp"
+        )
+
+
+def _generate_experiment_metadata(config: ExperimentConfig, result: ValidationResult):
+    """Generate metadata about the experiment configuration."""
+    result.metadata.update({
+        "trials": config.trials,
+        "max_total_time": config.max_total_time,
+        "difficulty_level": config.difficulty_level,
+        "experiment_filestore": config.experiment_filestore,
+        "report_filestore": config.report_filestore
+    })
+
+
+# ============================================================================
+# Benchmark Suite Config Validation
+# ============================================================================
+
+def validate_benchmark_suite(path: Union[str, Path]) -> ValidationResult:
+    """
+    Validate a benchmark suite configuration.
+
+    This is a pure function with no side effects that validates the format
+    of a benchmark suite configuration. It only reads files and returns
+    validation results without modifying anything.
+
+    Args:
+        path: Path to benchmark suite config YAML file
+
+    Returns:
+        ValidationResult: Comprehensive validation results
+
+    Raises:
+        ValidationError: Only for unexpected errors during validation process
+    """
+    result = ValidationResult(is_valid=True)
+
+    try:
+        # Resolve path
+        config_path = Path(path)
+
+        # Update metadata with file info
+        if config_path.exists():
+            result.metadata["file_path"] = str(config_path)
+            result.metadata["file_size"] = config_path.stat().st_size
+        else:
+            result.add_error(
+                ValidationCodes.FILE_NOT_FOUND,
+                f"Benchmark suite config file not found: {config_path}",
+                context={"expected_path": str(config_path)}
+            )
+            return result
+
+        # Validate file is readable
+        if not os.access(config_path, os.R_OK):
+            result.add_error(
+                ValidationCodes.FILE_NOT_READABLE,
+                f"Cannot read file: {config_path}",
+                context={"path": str(config_path)}
+            )
+            return result
+
+        # Load and parse YAML
+        yaml_content = _load_yaml_file(config_path, result)
+        if not result.is_valid:
+            return result
+
+        # Validate against schema
+        config = _validate_benchmark_suite_schema(yaml_content, result)
+        if not result.is_valid:
+            return result
+
+        # Generate metadata
+        _generate_benchmark_suite_metadata(config, result)
+
+    except Exception as e:
+        raise ValidationError(
+            f"Unexpected error during benchmark suite config validation: {str(e)}",
+            code="VALIDATION_PROCESS_ERROR",
+            context={"path": str(path), "error": str(e)}
+        )
+
+    return result
+
+
+def validate_benchmark_suite_from_string(yaml_content: str) -> ValidationResult:
+    """
+    Validate benchmark suite configuration from YAML string.
+
+    Pure function that validates YAML content without file system access.
+
+    Args:
+        yaml_content: YAML content as string
+
+    Returns:
+        ValidationResult: Comprehensive validation results
+    """
+    result = ValidationResult(is_valid=True)
+
+    try:
+        # Parse YAML content
+        try:
+            data = yaml.safe_load(yaml_content)
+            result.metadata["yaml_valid"] = True
+        except yaml.YAMLError as e:
+            result.add_error(
+                ValidationCodes.YAML_SYNTAX_ERROR,
+                f"Invalid YAML syntax: {str(e)}",
+                context={"yaml_error": str(e)}
+            )
+            return result
+
+        # Check for empty content
+        if data is None:
+            result.add_error(
+                ValidationCodes.EMPTY_FILE,
+                "YAML content is empty"
+            )
+            return result
+
+        # Validate against schema
+        config = _validate_benchmark_suite_schema(data, result)
+        if not result.is_valid:
+            return result
+
+        # Generate metadata
+        _generate_benchmark_suite_metadata(config, result)
+
+    except Exception as e:
+        raise ValidationError(
+            f"Unexpected error during benchmark suite config validation: {str(e)}",
+            code="VALIDATION_PROCESS_ERROR",
+            context={"error": str(e)}
+        )
+
+    return result
+
+
+def _validate_benchmark_suite_schema(data: Dict[str, Any], result: ValidationResult) -> BenchmarkSuiteConfig:
+    """Validate data against BenchmarkSuiteConfig schema."""
+    try:
+        config = BenchmarkSuiteConfig(**data)
+        result.metadata["schema_valid"] = True
+        return config
+    except PydanticValidationError as e:
+        result.metadata["schema_valid"] = False
+        for error in e.errors():
+            field_path = ".".join(str(item) for item in error["loc"])
+            result.add_error(
+                ValidationCodes.SCHEMA_VALIDATION_ERROR,
+                f"Schema validation error in '{field_path}': {error['msg']}",
+                field=field_path,
+                context={"validation_error": error}
+            )
+        # Return a minimal config to avoid crashes
+        return BenchmarkSuiteConfig(
+            Name="dummy",
+            Description="dummy",
+            benchmark_list=["dummy"],
+            release_date="01.01.2025"
+        )
+    except Exception as e:
+        result.add_error(
+            ValidationCodes.SCHEMA_VALIDATION_ERROR,
+            f"Schema validation failed: {str(e)}",
+            context={"error": str(e)}
+        )
+        return BenchmarkSuiteConfig(
+            Name="dummy",
+            Description="dummy",
+            benchmark_list=["dummy"],
+            release_date="01.01.2025"
+        )
+
+
+def _generate_benchmark_suite_metadata(config: BenchmarkSuiteConfig, result: ValidationResult):
+    """Generate metadata about the benchmark suite configuration."""
+    result.metadata.update({
+        "suite_name": config.Name,
+        "suite_description": config.Description,
+        "release_date": config.release_date,
+        "total_benchmarks": len(config.benchmark_list),
+        "benchmark_ids": config.benchmark_list
+    })
