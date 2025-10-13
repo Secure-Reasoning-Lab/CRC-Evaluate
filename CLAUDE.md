@@ -171,7 +171,6 @@ python crsbench/run_experiment.py \
 ```
 
 ## Other instructions
-- create a TODO.md to track remaining TODO items. and an DONE.md for finished items.
 - read TODO.md in the new session.
 - use uv as python package manager
 - don't consider backward compatability (no cpvs; just throw errors for old formats)
