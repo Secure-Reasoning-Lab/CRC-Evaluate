@@ -1,5 +1,40 @@
 # CRSBench TODO List
 
+## Discussion 10/07
+- [x]  Implement converting script from AFC format to RFC format (Jiho has already convert AFC benchmarks into our format)
+- [ ]  Converting script from Team-Atlanta format to RFC format
+- [ ]  Wrapper codes for running bug finding CRS
+- [ ]  Wrapper codes for running patching CRS
+- [ ]  Implement experiment scripts
+- [ ]  Bug finding validation
+    - [ ]  PoV deduplication
+- [ ]  Patch validation
+    - [ ]  Build incremental build script for each project (should we add it to oss-patch instead of benchmark??)
+    - [ ]  incremental building; generate Dockerfile for each patch & build
+    - [ ]  Implement selective unit test (should we add it to oss-patch instead of benchmark??)
+- [ ]  Assign ppl to review the each benchmark
+    - [ ]  Check the automatically converted format
+    - [ ]  Adding hints as a SARIF format
+- [ ]  assign difficulty level (maybe after running first evals?)
+- [ ]  Implement CI/CD??
+    - [ ] automatic meta.yaml generation with commit range & ref.diff
+- [ ] visualize & sample report & ranking
+- [ ] meta.yaml
+    - store absolute path for fuzzing harness source code in container instead
+      of $REPO/$PROJECT
+    - remove redundant "[pov-keyword]/[pov-keyword].{blog,log}"
+    - where to store blob/log (git LFS?)
+- [ ] corpus
+     - other than level; also "corpus-[timestamp]" for 1h/1d pre-fuzzing corpus.
+     - where to store corpus (git LFS?)
+
+Kudu opinions:
+consider other than bug finding/patching => e.g., confidential leaking
+difficulty level changes when LLM become smarter??
+
+
+
+
 ## High Priority
 
 ### 🔄 Migration Implementation
