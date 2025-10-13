@@ -805,6 +805,110 @@ Different resource availability scenarios to test CRS adaptability:
 These combinations reveal how CRS systems adapt their strategies based
 on available resources and identify optimal operating conditions.
 
+## CRS Evaluation Framework
+
+The benchmark provides a comprehensive framework for running CRS evaluations with standardized experiment configurations, CRS integration, and benchmark suite management.
+
+### Experiment Running Script
+
+A single entry point for running experiments:
+
+```sh
+$ python3 experiment/run_experiment.py \
+  --experiment-config <CONFIG_FILE: e.g. experiment-config.yaml> \
+  --benchmarks <BENCHMARK: list of benchmarks or group of benchmark> \
+  --experiment-name <EXPERIMENT_NAME> \
+  --crses <CRS_LIST: list of crses. e.g atlantis-c, atlantis-multilang>
+```
+
+The user can specify:
+- Experiment configuration file
+- Target benchmarks or benchmark suites
+- Experiment name for tracking and reporting
+- List of CRS implementations to evaluate
+
+### Experiment Configuration File
+
+A single YAML file provides experiment configurations for each evaluation:
+
+```yaml
+# The number of trials.
+trials: 1
+
+# The amount of time in seconds that each trial is run for.
+max_total_time: 86400
+
+# Difficulty control of the experiment (e.g., corpus level or hint level)
+difficulty_level: 1
+
+# The folder that will store most of the experiment data.
+experiment_filestore: /tmp/experiment-data
+
+# The folder where HTML reports and summary data will be stored.
+report_filestore: /tmp/report-data
+```
+
+Configuration parameters:
+
+- **trials**: Number of trials to run for statistical significance
+- **max_total_time**: Maximum time in seconds for each trial
+- **difficulty_level**: Controls assistance provided (corpus level, hint level)
+- **experiment_filestore**: Directory for experiment data storage
+- **report_filestore**: Directory for HTML reports and summary data
+
+### Supported CRSes
+
+All supported CRS implementations are stored in the crses directory of the main repository:
+
+- CRS developers can add their CRS to the benchmark main repository as a submodule
+- To test a private CRS, users can add the CRS repo to a subdirectory in the local environment
+- All CRS implementations and CRS configurations must follow the CRS RFC format
+
+```example
+crses/[crs-name]/
+├── pkg.yaml                     # Package manager for CRS installation
+└── config-crs.yaml              # CRS configuration
+```
+
+#### CRS Directory Structure
+
+- **pkg.yaml**: Defines CRS dependencies, installation requirements, and package management
+- **config-crs.yaml**: Specifies CRS-specific configuration, runtime parameters, and evaluation settings
+
+### Benchmark Suite
+
+A benchmark suite is a collection of benchmarks grouped for experimental convenience:
+
+- Used to evaluate CRS for specific languages, input formats, and more
+- Users can select the suite through the --benchmarks option of run_experiment.py
+
+```yaml
+# Name of the benchmark suite.
+Name: crsbench-c
+# Simple description of the benchmark group.
+Description: A benchmark suite for evaluating C/C++ CRS.
+# Release date of benchmark suite.
+Release date: 09.23.2025
+# List of benchmarks included in the benchmark suite.
+benchmark_list:
+  - {benchmark_id_1}
+  - {benchmark_id_2}
+  - {benchmark_id_3}
+```
+
+#### Benchmark Suite Configuration
+
+- **Name**: Unique identifier for the benchmark suite
+- **Description**: Purpose and scope of the benchmark collection
+- **Release date**: Version tracking for benchmark suite updates
+- **benchmark_list**: List of benchmark IDs included in the suite
+
+Benchmark suites enable:
+- Language-specific evaluation (C/C++, Java, Rust, etc.)
+- Domain-specific testing (parsing, cryptography, networking)
+- Difficulty-based grouping (easy, medium, hard)
+- Feature-specific testing (delta mode, full mode, harnessed)
+
 ## Universal Analysis Tools
 
 To ensure fair evaluation and consistent analysis capabilities across different CRS implementations, the benchmark framework integrates standardized analysis tools that provide common functionality and interfaces.

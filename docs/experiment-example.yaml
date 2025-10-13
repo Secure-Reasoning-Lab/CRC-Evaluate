@@ -1,0 +1,14 @@
+# The number of trials.
+trials: 1
+
+# The amount of time in seconds that each trial is run for.
+max_total_time: 86400
+
+# Difficulty control of the experiment (e.g., corpus level or hint level)
+difficulty_level: 1
+
+# The folder that will store most of the experiment data.
+experiment_filestore: /tmp/experiment-data
+
+# The folder where HTML reports and summary data will be stored.
+report_filestore: /tmp/report-data

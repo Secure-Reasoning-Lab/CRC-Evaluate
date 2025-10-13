@@ -1,0 +1,11 @@
+# Name of the benchmark suite.
+Name: crsbench-c
+# Simple description of the benchmark group.
+Description: A benchmark suite for evaluating C/C++ CRS.
+# Release date of benchmark suite.
+Release date: 09.23.2025
+# List of benchmarks included in the benchmark suite.
+benchmark_list:
+  - {benchmark_id_1}
+  - {benchmark_id_2}
+  - {benchmark_id_3}
