@@ -475,16 +475,86 @@ def generate_trial_matrix(args, config):
 
 ### 5.1 Experiment Configuration
 
-Add `redis_host` field to experiment configuration:
+Add `redis_host` and `benchmarks_root` fields to experiment configuration:
+
+**Configuration Fields**:
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| trials | int | Yes | - | Number of trials per CRS-benchmark combination (≥1) |
+| max_total_time | int | Yes | - | Maximum time in seconds per trial (≥1) |
+| difficulty_level | int | Yes | - | Difficulty level (0-4) controlling assistance provided |
+| experiment_filestore | str | Yes | - | Directory for storing experiment data and results |
+| report_filestore | str | Yes | - | Directory for HTML reports and summary data |
+| redis_host | str | No | None | Redis server hostname/IP (omit or set to "none" for local mode) |
+| benchmarks_root | str | No | ./benchmarks | Root directory containing benchmark projects |
+
+**Benchmark Path Resolution**:
+
+The `benchmarks_root` field specifies where to find benchmark directories. Path resolution follows this order:
+
+1. **Absolute path**: If benchmark argument is an absolute path, use it directly
+2. **Config root**: If `benchmarks_root` specified, look in `{benchmarks_root}/{benchmark_id}`
+3. **Default root**: Look in `./benchmarks/{benchmark_id}` (relative to repo root)
+4. **Error**: Raise `FileNotFoundError` if benchmark not found
+
+**Usage Examples**:
 
 ```yaml
-# experiment-config.yaml
+# Example 1: Standard configuration with default benchmarks location
+# Benchmarks expected in ./benchmarks/
 trials: 1
 max_total_time: 86400
 difficulty_level: 1
 experiment_filestore: /tmp/experiment-data
 report_filestore: /tmp/report-data
-redis_host: queue-server  # NEW: Redis server hostname or IP
+redis_host: queue-server
+
+# Example 2: Custom benchmarks directory
+# Useful for testing with benchmarks in non-standard location
+trials: 1
+max_total_time: 86400
+difficulty_level: 1
+experiment_filestore: /tmp/experiment-data
+report_filestore: /tmp/report-data
+redis_host: queue-server
+benchmarks_root: /custom/path/to/benchmarks
+
+# Example 3: Local mode without Redis (single job)
+# benchmarks_root omitted, uses ./benchmarks/
+trials: 1
+max_total_time: 3600
+difficulty_level: 0
+experiment_filestore: /tmp/experiment-data
+report_filestore: /tmp/report-data
+# redis_host: none  # Omit for local mode
+
+# Example 4: CI/CD configuration with absolute paths
+trials: 1
+max_total_time: 1800
+difficulty_level: 1
+experiment_filestore: /var/lib/crsbench/experiments
+report_filestore: /var/lib/crsbench/reports
+benchmarks_root: /opt/crsbench/benchmarks
+```
+
+**Benchmark Argument Resolution**:
+
+```python
+# Command line
+crsbench --benchmarks bench1,bench2 --experiment-config config.yaml
+
+# Resolution for benchmark "bench1":
+# 1. Check if "bench1" is absolute path: No
+# 2. Check config.benchmarks_root:
+#    - If set: {benchmarks_root}/bench1
+#    - If not set: ./benchmarks/bench1
+# 3. If found: Use that path
+# 4. If not found: Raise FileNotFoundError
+
+# Using absolute path (bypasses benchmarks_root)
+crsbench --benchmarks /abs/path/to/bench1 --experiment-config config.yaml
+# Resolution: Use /abs/path/to/bench1 directly
 ```
 
 ### 5.2 Schema Validation Update
@@ -500,13 +570,31 @@ class ExperimentConfig(BaseModel):
     difficulty_level: int = Field(..., ge=0, le=4)
     experiment_filestore: str = Field(...)
     report_filestore: str = Field(...)
-    redis_host: str = Field(default="localhost", description="Redis server hostname")  # NEW
+    redis_host: Optional[str] = Field(
+        default=None,
+        description="Redis server hostname (optional, omit for local mode)"
+    )
+    benchmarks_root: Optional[str] = Field(
+        default=None,
+        description="Root directory containing benchmarks (defaults to ./benchmarks)"
+    )
 
     @validator('redis_host')
     def validate_redis_host(cls, v):
-        if not v or not v.strip():
-            raise ValueError("Redis host cannot be empty")
-        return v.strip()
+        if v and v.strip() and v.strip().lower() != 'none':
+            return v.strip()
+        return None  # Treat empty or "none" as None
+
+    @validator('benchmarks_root')
+    def validate_benchmarks_root(cls, v):
+        if v and v.strip():
+            path = Path(v.strip())
+            if not path.exists():
+                raise ValueError(f"Benchmarks root directory does not exist: {v}")
+            if not path.is_dir():
+                raise ValueError(f"Benchmarks root must be a directory: {v}")
+            return str(path.absolute())
+        return None  # Use default if not specified
 ```
 
 ## 6. Docker Infrastructure

@@ -197,12 +197,52 @@ class ExperimentConfig(BaseModel):
     difficulty_level: int = Field(..., ge=0, le=4, description="Difficulty level controlling assistance (0-4)")
     experiment_filestore: str = Field(..., description="Directory path for experiment data storage")
     report_filestore: str = Field(..., description="Directory path for HTML reports and summary data")
+    redis_host: Optional[str] = Field(
+        default=None,
+        description="Redis server hostname or IP (optional, omit or set to 'none' for local mode)"
+    )
+    benchmarks_root: Optional[str] = Field(
+        default=None,
+        description="Root directory containing benchmark projects (defaults to ./benchmarks)"
+    )
 
     @validator('experiment_filestore', 'report_filestore')
     def validate_filestore_path(cls, v):
         if not v or not v.strip():
             raise ValueError("Filestore path cannot be empty")
         return v.strip()
+
+    @validator('redis_host')
+    def validate_redis_host(cls, v):
+        """Validate Redis host field."""
+        if v and v.strip() and v.strip().lower() != 'none':
+            return v.strip()
+        return None  # Treat empty or "none" as None (local mode)
+
+    @validator('benchmarks_root')
+    def validate_benchmarks_root(cls, v):
+        """Validate benchmarks root directory."""
+        if v and v.strip():
+            from pathlib import Path
+            path = Path(v.strip())
+            if not path.exists():
+                raise ValueError(f"Benchmarks root directory does not exist: {v}")
+            if not path.is_dir():
+                raise ValueError(f"Benchmarks root must be a directory: {v}")
+            return str(path.absolute())
+        return None  # Use default ./benchmarks if not specified
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert configuration to dictionary for job serialization."""
+        return {
+            'trials': self.trials,
+            'max_total_time': self.max_total_time,
+            'difficulty_level': self.difficulty_level,
+            'experiment_filestore': self.experiment_filestore,
+            'report_filestore': self.report_filestore,
+            'redis_host': self.redis_host,
+            'benchmarks_root': self.benchmarks_root,
+        }
 
 
 class BenchmarkSuiteConfig(BaseModel):

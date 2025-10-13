@@ -508,7 +508,9 @@ def _generate_experiment_metadata(config: ExperimentConfig, result: ValidationRe
         "max_total_time": config.max_total_time,
         "difficulty_level": config.difficulty_level,
         "experiment_filestore": config.experiment_filestore,
-        "report_filestore": config.report_filestore
+        "report_filestore": config.report_filestore,
+        "redis_host": config.redis_host,
+        "benchmarks_root": config.benchmarks_root
     })
 
 

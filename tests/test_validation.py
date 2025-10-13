@@ -613,6 +613,113 @@ class TestExperimentConfigSchema:
                 report_filestore="/tmp/rep"
             )
 
+    def test_experiment_config_with_redis_host(self):
+        """Test experiment config with redis_host field."""
+        config = ExperimentConfig(
+            trials=1,
+            max_total_time=86400,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            redis_host="localhost"
+        )
+        assert config.redis_host == "localhost"
+
+    def test_experiment_config_without_redis_host(self):
+        """Test experiment config without redis_host (defaults to None)."""
+        config = ExperimentConfig(
+            trials=1,
+            max_total_time=86400,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep"
+        )
+        assert config.redis_host is None
+
+    def test_experiment_config_redis_host_none_string(self):
+        """Test experiment config with redis_host='none' (converted to None)."""
+        config = ExperimentConfig(
+            trials=1,
+            max_total_time=86400,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            redis_host="none"
+        )
+        assert config.redis_host is None
+
+    def test_experiment_config_with_benchmarks_root(self):
+        """Test experiment config with valid benchmarks_root."""
+        import tempfile
+        import os
+
+        # Create a temporary directory for testing
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ExperimentConfig(
+                trials=1,
+                max_total_time=86400,
+                difficulty_level=1,
+                experiment_filestore="/tmp/exp",
+                report_filestore="/tmp/rep",
+                benchmarks_root=tmpdir
+            )
+            # Should return absolute path
+            assert config.benchmarks_root == str(Path(tmpdir).absolute())
+
+    def test_experiment_config_invalid_benchmarks_root(self):
+        """Test experiment config with non-existent benchmarks_root."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            ExperimentConfig(
+                trials=1,
+                max_total_time=86400,
+                difficulty_level=1,
+                experiment_filestore="/tmp/exp",
+                report_filestore="/tmp/rep",
+                benchmarks_root="/nonexistent/path"
+            )
+        assert "does not exist" in str(exc_info.value).lower()
+
+    def test_experiment_config_benchmarks_root_not_directory(self):
+        """Test experiment config with benchmarks_root pointing to a file."""
+        import tempfile
+
+        # Create a temporary file (not directory)
+        with tempfile.NamedTemporaryFile(delete=False) as tmpfile:
+            tmpfile_path = tmpfile.name
+
+        try:
+            with pytest.raises(PydanticValidationError) as exc_info:
+                ExperimentConfig(
+                    trials=1,
+                    max_total_time=86400,
+                    difficulty_level=1,
+                    experiment_filestore="/tmp/exp",
+                    report_filestore="/tmp/rep",
+                    benchmarks_root=tmpfile_path
+                )
+            assert "must be a directory" in str(exc_info.value).lower()
+        finally:
+            Path(tmpfile_path).unlink()
+
+    def test_experiment_config_to_dict(self):
+        """Test experiment config to_dict() method."""
+        config = ExperimentConfig(
+            trials=3,
+            max_total_time=86400,
+            difficulty_level=2,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            redis_host="redis-server"
+        )
+        config_dict = config.to_dict()
+
+        assert isinstance(config_dict, dict)
+        assert config_dict['trials'] == 3
+        assert config_dict['max_total_time'] == 86400
+        assert config_dict['difficulty_level'] == 2
+        assert config_dict['redis_host'] == "redis-server"
+        assert config_dict['benchmarks_root'] is None
+
 
 class TestExperimentConfigValidation:
     """Test experiment config validation with YAML."""
@@ -691,6 +798,55 @@ report_filestore: /tmp/rep
 
         assert result.is_valid is False
         assert any(e.code == ValidationCodes.YAML_SYNTAX_ERROR for e in result.errors)
+
+    def test_validate_experiment_with_redis_host(self):
+        """Test validation with redis_host field."""
+        yaml_content = """
+trials: 1
+max_total_time: 86400
+difficulty_level: 1
+experiment_filestore: /tmp/experiment-data
+report_filestore: /tmp/report-data
+redis_host: queue-server
+"""
+        result = validate_experiment_config_from_string(yaml_content)
+
+        assert result.is_valid is True
+        assert result.metadata.get("redis_host") == "queue-server"
+
+    def test_validate_experiment_with_benchmarks_root(self):
+        """Test validation with benchmarks_root field."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yaml_content = f"""
+trials: 1
+max_total_time: 86400
+difficulty_level: 1
+experiment_filestore: /tmp/experiment-data
+report_filestore: /tmp/report-data
+benchmarks_root: {tmpdir}
+"""
+            result = validate_experiment_config_from_string(yaml_content)
+
+            assert result.is_valid is True
+            assert result.metadata.get("benchmarks_root") == str(Path(tmpdir).absolute())
+
+    def test_validate_experiment_redis_none_for_local_mode(self):
+        """Test validation with redis_host set to 'none' for local mode."""
+        yaml_content = """
+trials: 1
+max_total_time: 86400
+difficulty_level: 1
+experiment_filestore: /tmp/experiment-data
+report_filestore: /tmp/report-data
+redis_host: none
+"""
+        result = validate_experiment_config_from_string(yaml_content)
+
+        assert result.is_valid is True
+        # 'none' should be converted to None
+        assert result.metadata.get("redis_host") is None
 
 
 # ============================================================================
