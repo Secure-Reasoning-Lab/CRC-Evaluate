@@ -22,12 +22,10 @@ CRSBench/
 │   ├── reproducer/             # POV reproduction and verification
 │   ├── patch_tester/           # Patch validation and testing
 │   ├── deduplication/          # POV deduplication logic
-│   ├── migration/              # Format migration tools
+│   ├── migration/              # Format migration tools (Team-Atlanta to RFC)
 │   ├── hint_generation/        # Hint generation for difficulty control
 │   └── utils/                  # Shared utilities
-├── benchmarks/                 # Benchmark projects (new format)
-├── benchmarks-internal/        # Internal testing benchmarks (old format)
-├── benchmarks-afc/             # Official AIxCC benchmarks
+├── benchmarks/                 # Benchmark projects in RFC format
 ├── experiments/                # Experiment configurations and results
 ├── crses/                      # CRS implementations
 ├── docs/                       # RFC specifications and user docs
@@ -121,13 +119,16 @@ Evaluation Image (with applied patches)
 **Key Insight**: Multiple POVs with same sanitizer error may be different bugs; multiple POVs with different stack traces may be same bug.
 
 ### 7. migration/
-**Purpose**: Migrate benchmarks to new format.
+**Purpose**: Migrate Team-Atlanta format benchmarks to RFC format.
 
 **Responsibilities**:
-- Convert old internal format to RFC format
-- Migrate AIxCC benchmarks to RFC format
+- Convert Team-Atlanta format to RFC format
+- Transform config.yaml to meta.yaml
+- Generate vulnerability metadata from original files
+- Parse crash logs to extract function names (C/C++ and JVM)
 - Validate migrated benchmarks
-- Preserve ground truth data
+- Preserve all ground truth data
+- Generate detailed CSV reports
 
 ### 8. hint_generation/
 **Purpose**: Generate hints for difficulty control.

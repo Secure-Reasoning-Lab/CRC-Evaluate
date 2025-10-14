@@ -35,13 +35,11 @@ Unlike traditional fuzzing benchmarks (like FuzzBench) that only report coverage
 CRSBench/
 ├── docs/
 │   └── benchmark-spec.md         # RFC specification for CRS benchmarks
-├── benchmarks/                   # Standard benchmark projects (target format)
-├── benchmarks-internal/          # Internal format benchmarks (legacy)
-├── benchmarks-afc/              # Official AIxCC competition benchmarks
+├── benchmarks/                   # Standard benchmark projects in RFC format
 ├── crsbench/                    # Main Python package
 │   ├── utils/                   # Shared utilities
 │   ├── validation/              # Benchmark format validation
-│   ├── migration/               # Format migration tools
+│   ├── migration/               # Format migration tools (Team-Atlanta to RFC)
 │   └── hint_generation/         # Progressive hint generation
 └── pyproject.toml               # Python project configuration
 ```
@@ -79,16 +77,9 @@ else:
         print(f"  - {error}")
 ```
 
-## Benchmark Formats
+## Benchmark Format
 
-CRSBench unifies multiple benchmark formats into a single standard:
-
-### Current Formats
-- **Internal Format** (`benchmarks-internal/`): Development format with `config.yaml`
-- **Official AIxCC Format** (`benchmarks-afc/`): Competition format with `challenge.yaml`
-
-### Unified Format (Target)
-All benchmarks will be migrated to the new unified `meta.yaml` format:
+CRSBench uses a standardized RFC format with `meta.yaml` configuration:
 
 ```yaml
 # Comprehensive patch exclusion list

@@ -43,21 +43,6 @@ This repository has two types of documentation:
 There is an `.aixcc` directory under each project, which is used to store the
 metadata of the benchmark and ground truth for each vulnerability.
 
-## Old format used for internal usage
-The current project use old format for internal testing when developing CRS.
-We would like standardize it by enhancing it.
-
-Example project is in `benchmarks-internal/r3_5-binutils`.
-
-## Official AIxCC Benchmark for CRS.
-AIxCC organizer also design a benchmark used to evaluate each team's CRS.
-We would like to build on top of that and improve them.
-Therefore, the official benchmark is provided in directory `benchmark-afc`.
-The goal is to find a superset of features between ours and official one to
-define a new standard for CRS benchmark and migrate them to the new standard.
-
-Example project is in `benchmarks-afc/official-afc-systemd`.
-
 ## Comparison against FuzzBench
 Unlike FuzzBench used to evaluate fuzzer, which only reports the
 coverage/crashes.
