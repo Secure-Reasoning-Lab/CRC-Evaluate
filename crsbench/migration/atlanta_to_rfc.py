@@ -44,6 +44,7 @@ class MigrationContext:
     dry_run: bool
     project_name: str
     successful: bool = True
+    skipped: bool = False  # True if migration was skipped (already exists)
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     num_vulns: int = 0
@@ -55,7 +56,7 @@ class MigrationContext:
 class AtlantaToRFCMigrator:
     """Main migration orchestrator."""
 
-    def __init__(self, source_dir: Path, target_dir: Path, dry_run: bool = False):
+    def __init__(self, source_dir: Path, target_dir: Path, dry_run: bool = False, force: bool = False):
         """
         Initialize the migrator.
 
@@ -63,10 +64,12 @@ class AtlantaToRFCMigrator:
             source_dir: Team-Atlanta projects directory
             target_dir: CRSBench benchmarks directory
             dry_run: If True, perform validation without actual file operations
+            force: If True, overwrite existing migrated projects (default: False, skip existing)
         """
         self.source_dir = source_dir
         self.target_dir = target_dir
         self.dry_run = dry_run
+        self.force = force
         self.logger = logging.getLogger(__name__)
 
         # Initialize converters
@@ -140,6 +143,13 @@ class AtlantaToRFCMigrator:
             project_name=project_name
         )
         ctx.language = language
+
+        # Check if project already exists (skip by default unless --force)
+        target_meta = ctx.target_dir / ".aixcc" / "meta.yaml"
+        if target_meta.exists() and not self.force:
+            ctx.skipped = True
+            self.logger.info(f"  Project already migrated, skipping (use --force to overwrite)")
+            return ctx
 
         try:
             # Step 1: Validate source structure
@@ -462,7 +472,19 @@ def write_csv_report(results: List[MigrationContext], output_file: Path) -> None
         ])
 
         for ctx in results:
-            if not ctx.successful:
+            if ctx.skipped:
+                # For skipped migrations, write a single row indicating it was skipped
+                writer.writerow([
+                    ctx.project_name,
+                    'Team-Atlanta',
+                    'N/A (Already Migrated - Skipped)',
+                    'N/A',
+                    'N/A',
+                    getattr(ctx, 'language', 'Unknown'),
+                    'N/A',
+                    'N/A'
+                ])
+            elif not ctx.successful:
                 # For failed migrations, write a single row with error info
                 writer.writerow([
                     ctx.project_name,
@@ -518,6 +540,7 @@ class ColoredFormatter(logging.Formatter):
         log_message = log_message.replace('Successfully migrated', f'{self.BOLD}\033[32m✓ Successfully migrated{self.RESET}')
         log_message = log_message.replace('Failed', f'{self.BOLD}\033[31m✗ Failed{self.RESET}')
         log_message = log_message.replace('Processing project:', f'{self.BOLD}\033[34m→{self.RESET} Processing project:')
+        log_message = log_message.replace('already migrated, skipping', f'{self.BOLD}\033[33m⊘ already migrated, skipping{self.RESET}')
         log_message = log_message.replace('Would write:', f'{self.DIM}Would write:{self.RESET}')
         log_message = log_message.replace('Would copy:', f'{self.DIM}Would copy:{self.RESET}')
 
@@ -549,8 +572,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Migrate all projects
+  # Migrate all projects (skip existing by default)
   python atlanta_to_rfc.py --source-dir /path/to/oss-fuzz/projects --target-dir /path/to/CRSBench/benchmarks
+
+  # Force re-migration of all projects (overwrite existing)
+  python atlanta_to_rfc.py --source-dir /path/to/oss-fuzz/projects --target-dir /path/to/CRSBench/benchmarks --force
 
   # Dry run to validate
   python atlanta_to_rfc.py --source-dir /path/to/oss-fuzz/projects --target-dir /path/to/CRSBench/benchmarks --dry-run
@@ -599,6 +625,12 @@ Examples:
         help='Enable verbose logging'
     )
 
+    parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Force migration even if project already exists (default: skip existing)'
+    )
+
     args = parser.parse_args()
 
     # Setup logging
@@ -622,19 +654,22 @@ Examples:
     migrator = AtlantaToRFCMigrator(
         source_dir=args.source_dir,
         target_dir=args.target_dir,
-        dry_run=args.dry_run
+        dry_run=args.dry_run,
+        force=args.force
     )
 
     results = migrator.migrate_all(specific_projects)
 
     # Print summary
-    successful = sum(1 for r in results if r.successful)
-    failed = len(results) - successful
+    successful = sum(1 for r in results if r.successful and not r.skipped)
+    skipped = sum(1 for r in results if r.skipped)
+    failed = sum(1 for r in results if not r.successful and not r.skipped)
 
     logger.info("=" * 60)
     logger.info(f"Migration {'DRY RUN ' if args.dry_run else ''}Summary:")
     logger.info(f"  Total projects: {len(results)}")
     logger.info(f"  Successful: {successful}")
+    logger.info(f"  Skipped (already exists): {skipped}")
     logger.info(f"  Failed: {failed}")
     logger.info("=" * 60)
 

@@ -11,6 +11,8 @@ This document describes the design of a migration script that converts Team-Atla
 - Maintain file integrity during migration
 - Provide comprehensive logging and reporting
 - Support dry-run mode for validation before actual migration
+- Skip already-migrated projects by default to prevent accidental overwrites
+- Allow forced re-migration when needed with `--force` flag
 
 ## Input/Output
 
@@ -18,7 +20,10 @@ This document describes the design of a migration script that converts Team-Atla
 - `--source-dir`: Team-Atlanta benchmark repository path (contains `projects/` directory)
 - `--target-dir`: CRSBench benchmark repository path (will contain `benchmarks/` directory)
 - `--dry-run`: Flag to perform validation without actual file operations
+- `--force`: Flag to force migration even if project already exists (default: skip existing)
 - `--output-csv`: Path to CSV file for migration report
+- `--verbose`: Enable verbose logging
+- `--projects`: Comma-separated list of specific projects to migrate
 
 ### Output
 - Converted benchmark projects in RFC format
@@ -164,12 +169,14 @@ If original vulnerability file not found:
 ### Modules
 
 #### 1. `atlanta_to_rfc.py` (Main Script)
-- CLI argument parsing
+- CLI argument parsing (including `--force` flag for overwriting)
 - Orchestrates migration process
+- Skip-existing behavior (checks for `meta.yaml` existence)
 - Colored logging setup with ANSI codes
 - CSV report generation (vulnerability-level detail)
 - Language filtering (C and Java/JVM only)
 - Repository URL extraction from project.yaml
+- Summary reporting (successful, skipped, failed counts)
 
 #### 2. `models.py`
 - Pydantic models for type-safe YAML generation
@@ -210,6 +217,7 @@ class MigrationContext:
     dry_run: bool
     project_name: str
     successful: bool = True
+    skipped: bool = False  # True if migration was skipped (already exists)
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     num_vulns: int = 0
@@ -254,6 +262,11 @@ class VulnInfo:
 - Missing optional metadata fields
 - File permission issues
 
+### Skip Behavior (Default)
+- **Project already migrated**: If target `.aixcc/meta.yaml` exists, skip migration
+- Use `--force` flag to override and re-migrate existing projects
+- Skipped projects are tracked separately in summary and CSV report
+
 ## Logging
 
 ### Log Levels
@@ -283,6 +296,7 @@ Special markers:
 
 ### Progress Indicators
 - Project-level: "→ Processing project: {project_name}"
+- Skip indicator: "⊘ Project already migrated, skipping (use --force to overwrite)"
 - Operation-level: "  Converting config.yaml to meta.yaml"
 - Vulnerability-level: "    Processing {harness}/{cpv_id}"
 - Debug details: "      Copied: {source} -> {target}"
@@ -296,18 +310,23 @@ Special markers:
 Project Name,Source,Vuln. Repo URL,Mode,Branch,Language,Harness Name,Vuln. ID
 curl-delta-04,Team-Atlanta,git@github.com:Team-Atlanta/official-afc-curl.git,delta,master,C,curl_fuzzer_http,cpv_0
 curl-delta-04,Team-Atlanta,git@github.com:Team-Atlanta/official-afc-curl.git,delta,master,C,curl_fuzzer_ws,cpv_1
+libxml2-delta-03,Team-Atlanta,N/A (Already Migrated - Skipped),N/A,N/A,C,N/A,N/A
 apache-commons-compress-delta-01,Team-Atlanta,git@github.com:Team-Atlanta/official-afc-commons-compress.git,delta,master,JVM,CompressTarFuzzer,cpv_0
 ```
 
 Fields:
 - **Project Name**: Project directory name
 - **Source**: Always "Team-Atlanta"
-- **Vuln. Repo URL**: Repository URL from project.yaml's `main_repo` field
-- **Mode**: "delta" or "full"
-- **Branch**: Default "master"
+- **Vuln. Repo URL**: Repository URL from project.yaml's `main_repo` field, or status message for skipped/failed projects
+- **Mode**: "delta" or "full" (N/A for skipped/failed)
+- **Branch**: Default "master" (N/A for skipped/failed)
 - **Language**: "C" or "JVM" (extracted from directory path)
-- **Harness Name**: Harness identifier
-- **Vuln. ID**: CPV identifier (e.g., cpv_0, cpv_1)
+- **Harness Name**: Harness identifier (N/A for skipped/failed)
+- **Vuln. ID**: CPV identifier (e.g., cpv_0, cpv_1) (N/A for skipped/failed)
+
+**Special Cases**:
+- Skipped projects: Single row with "N/A (Already Migrated - Skipped)"
+- Failed migrations: Single row with "N/A (Migration Failed)"
 
 ## Implementation Details
 
@@ -352,11 +371,22 @@ locations:
 
 ## Usage Examples
 
-### Basic Migration
+### Basic Migration (Skip Existing by Default)
 ```bash
 .venv/bin/python crsbench/migration/atlanta_to_rfc.py \
   --source-dir /path/to/oss-fuzz/projects \
   --target-dir /path/to/CRSBench/benchmarks \
+  --output-csv migration_report.csv
+```
+
+**Note**: Projects already migrated (with existing `meta.yaml`) will be skipped automatically.
+
+### Force Re-migration (Overwrite Existing)
+```bash
+.venv/bin/python crsbench/migration/atlanta_to_rfc.py \
+  --source-dir /path/to/oss-fuzz/projects \
+  --target-dir /path/to/CRSBench/benchmarks \
+  --force \
   --output-csv migration_report.csv
 ```
 
@@ -379,8 +409,10 @@ locations:
 ```
 
 ### Example Output
+
+#### Successful Migration
 ```
-[2025-10-13 23:27:10] [INFO] Found 1 projects to migrate
+[2025-10-13 23:27:10] [INFO] Found 3 projects to migrate
 [2025-10-13 23:27:10] [INFO] → Processing project: curl-delta-04
 [2025-10-13 23:27:10] [INFO]   Converting config.yaml to meta.yaml
 [2025-10-13 23:27:10] [DEBUG] Migrated from Team-Atlanta format to RFC format: /tmp/test/curl-delta-04/.aixcc/meta.yaml
@@ -391,4 +423,15 @@ locations:
 [2025-10-13 23:27:10] [DEBUG] Parsed function name 'Curl_doh_close' from crash log
 [2025-10-13 23:27:10] [DEBUG] Migrated vulnerability metadata from ... to .../vuln.yaml
 [2025-10-13 23:27:10] [INFO] ✓ Successfully migrated curl-delta-04
+[2025-10-13 23:27:11] [INFO] → Processing project: libxml2-delta-03
+[2025-10-13 23:27:11] [INFO]   ⊘ Project already migrated, skipping (use --force to overwrite)
+[2025-10-13 23:27:11] [INFO] → Processing project: apache-commons-compress-delta-01
+[2025-10-13 23:27:11] [INFO] ✓ Successfully migrated apache-commons-compress-delta-01
+============================================================
+[2025-10-13 23:27:11] [INFO] Migration Summary:
+[2025-10-13 23:27:11] [INFO]   Total projects: 3
+[2025-10-13 23:27:11] [INFO]   Successful: 2
+[2025-10-13 23:27:11] [INFO]   Skipped (already exists): 1
+[2025-10-13 23:27:11] [INFO]   Failed: 0
+============================================================
 ```
