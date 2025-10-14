@@ -4,13 +4,16 @@
 
 - [x]  Define RFC format using json schema or Pydantic [@Yufu]
 - [ ]  Automatically convert Team-Atlanta benchmarks to RFC format [@Youngjoon]
-- [ ]  Add pov-variants and patch-variants into the repo [@Dongkwan]
+- [ ]  Add pov-variants into the repo [@Dongkwan]
+- [ ]  Add patch-variants into the repo []
 - [ ]  Define and assign difficulty level based on results of naive fuzzer or multilang [@Jiho]
 - [ ]  Corpus collecting; also "corpus-[timestamp]" for 1h/1d pre-fuzzing corpus. [@Jiho]
+- [ ]  Make hint generation LLM-agent [@Youngjoon]
 - [ ]  Generate hints in natural language [@all]
 - [ ]  Convert hints to SARIF format [@Youngjoon]
 - [ ]  Create `test.sh` if missing [@all]
 - [ ]  Manual review and finalize each benchmark entries [@all]
+- [ ]  Change `repo_url` of r2 and r3 benchmarks to use afc one [@Youngjoon]
 
 ## Running RFC-compliant CRSes [@Yufu]
 
@@ -35,6 +38,7 @@
 - [ ]  Bug finding validation
     - [ ]  PoV deduplication
 - [ ]  Patch validaiton
+    - [ ]  Develop LLM agent for dual-phase build script generation []
     - [ ]  Incremental building; generate incremental build scripts (build-pre.sh, build-apply.sh) for each project
         - [ ]  Test on curl-delta-02 and wireshark [@Youngjoon]
     - [ ]  Incremental building; generate Dockerfile for each patch & build
