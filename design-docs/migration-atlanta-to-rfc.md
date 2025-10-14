@@ -67,7 +67,7 @@ benchmarks/{project-name}/
         └── {cpv_id}/         # Vulnerability ID (e.g., cpv_0)
             ├── vuln.yaml     # Vulnerability metadata
             ├── patches/
-            │   └── patch_0.patch, patch_1.patch, ...
+            │   └── patch_0.diff, patch_1.diff, ...
             ├── blobs/
             │   └── pov_0.blob, pov_1.blob, ...
             └── logs/
@@ -144,8 +144,8 @@ If original vulnerability file not found:
 
 #### Patches
 - **Source**: `.aixcc/patches/{harness}/{cpv_id}.diff`
-- **Target**: `.aixcc/{harness}/{cpv_id}/patches/patch_0.patch`
-- Multiple patches from same source get IDs: `patch_0.patch`, `patch_1.patch`, etc.
+- **Target**: `.aixcc/{harness}/{cpv_id}/patches/patch_0.diff`
+- Multiple patches from same source get IDs: `patch_0.diff`, `patch_1.diff`, etc.
 - **Naming convention**: Underscore format (`patch_0`, not `patch-0`)
 
 #### POV Blobs
@@ -364,7 +364,7 @@ locations:
 |------|--------|----------|
 | Vulnerability ID | `cpv_{N}` | cpv_0, cpv_1, cpv_2 |
 | POV ID | `pov_{N}` | pov_0, pov_1, pov_2 |
-| Patch ID | `patch_{N}` | patch_0, patch_1 |
+| Patch ID | `patch_{N}.diff` | patch_0.diff, patch_1.diff |
 | Vulnerability file | `vuln.yaml` | vuln.yaml (not cpv_0.yaml) |
 
 **Note**: Underscore format is used throughout, not hyphen.

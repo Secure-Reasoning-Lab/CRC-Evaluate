@@ -74,8 +74,8 @@ benchmarks/[project-name]/
         └── [vuln-keyword]/      # One subdirectory for each vulnerability
             ├── {vuln-keyword}.md         # description and root cause
             ├── patches/
-            │   ├── {patch-variant-id}.patch  # Bug-fixing patch
-            │   └── {patch-variant-id}.patch  # Bug-fixing patch
+            │   ├── {patch-variant-id}.diff  # Bug-fixing patch
+            │   └── {patch-variant-id}.diff  # Bug-fixing patch
             ├── [pov-variant-id]/        # Multiple POV for this vuln
             │   ├── {pov-variant-id}.blob  # Binary blob trigger crash
             │   └── {pov-variant-id}.log   # Crash log
@@ -232,7 +232,7 @@ Each harness directory contains subdirectories for each vulnerability keyword, w
 - `{vuln-keyword}/` - Directory for each vulnerability (e.g., `buffer_overflow/`)
   - `{vuln-keyword}.md` - Human-readable vulnerability description and root cause analysis (e.g., `buffer_overflow.md`)
   - `patches/` - Directory containing patches that fix all POV variants of this vulnerability
-    - `{patch-variant-id}.patch` - Bug-fixing patch (e.g., `patch_0.patch`, `patch_1.patch`)
+    - `{patch-variant-id}.diff` - Bug-fixing patch (e.g., `patch_0.diff`, `patch_1.diff`)
   - `{pov-variant-id}/` - Directory for each POV variant (e.g., `pov_0/`, `pov_1/`)
     - `{pov-variant-id}.blob` - Binary blob trigger crash (e.g., `pov_0.blob`)
     - `{pov-variant-id}.log` - Crash log (e.g., `pov_0.log`)
@@ -430,7 +430,7 @@ The test script can identify and execute only the subset of tests affected by a 
 
 ```bash
 # Run coverage-guided test selection
-./test.sh --coverage-guided --patch-file=buffer_overflow/patches/patch_0.patch
+./test.sh --coverage-guided --patch-file=buffer_overflow/patches/patch_0.diff
 
 # Run specific test categories based on coverage
 ./test.sh --unit-tests --affected-only

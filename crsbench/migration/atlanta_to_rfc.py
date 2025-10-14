@@ -375,7 +375,7 @@ class AtlantaToRFCMigrator:
             ctx.warnings.append(f"Missing patch for {harness_name}/{cpv_name}")
             return
 
-        target_patch = vuln_dir / "patches" / "patch_0.patch"
+        target_patch = vuln_dir / "patches" / "patch_0.diff"
         self.file_migrator.copy_file(source_patch, target_patch, ctx)
 
     def _migrate_pov_blobs(self, ctx: MigrationContext, harness_name: str,
