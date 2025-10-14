@@ -26,7 +26,10 @@ This repository has two types of documentation:
 - Internal APIs and data flows
 - Target audience: CRSBench contributors and curious readers
 
-When implementing or modifying CRSBench components, refer to design-docs/ for detailed implementation guidance.
+- When writing documentation, avoid lengthy or unnecessary details.
+- Include only the essential features that must be implemented.
+- Do not add extra requirements unless explicitly requested by the user, as doing so increases the framework’s complexity without real benefit.
+- When implementing or modifying CRSBench components, refer to design-docs/ for detailed implementation guidance.
 
 ## Projects
 - Each project is a directory under `benchmarks`.
