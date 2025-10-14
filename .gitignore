@@ -236,3 +236,7 @@ ossfuzz_builds/
 *.build
 compile_commands.json
 .bear/
+
+
+# Logs and Results
+migration_report.csv
