@@ -1,0 +1,16 @@
+Name: crsbench-afc-jvm
+Description: A benchmark suite for evaluating JVM-based CRS with official AFC benchmarks.
+Release date: 10.13.2025
+benchmark_list:
+  - apache-commons-compress-delta-01
+  - apache-commons-compress-delta-04
+  - apache-commons-compress-delta-05
+  - apache-commons-compress-delta-06
+  - apache-commons-compress-delta-07
+  - apache-poi-delta-01
+  - apache-poi-full-01
+  - dicoogle-full-01
+  - log4j2-delta-01
+  - pdfbox-delta-01
+  - pdfbox-full-01
+  - tika-delta-06
