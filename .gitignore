@@ -49,18 +49,6 @@ cover/
 *.mo
 *.pot
 
-# Django
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask
-instance/
-.webassets-cache
-
-# Scrapy
-.scrapy
 
 # Sphinx documentation
 docs/_build/
@@ -98,9 +86,6 @@ ENV/
 env.bak/
 venv.bak/
 
-# Spyder
-.spyderproject
-.spyproject
 
 # Rope
 .ropeproject
@@ -170,9 +155,6 @@ $RECYCLE.BIN/
 .Trash-*
 .nfs*
 
-# Logs
-logs/
-
 # Temporary files
 *.tmp
 *.temp
@@ -213,8 +195,6 @@ temp_harness/
 patch_test_results.json
 patch_test_results.yaml
 *_patch_test_results.*
-*.patch
-*.diff
 build/
 temp_patches/
 crsbench-patch-test-*/
