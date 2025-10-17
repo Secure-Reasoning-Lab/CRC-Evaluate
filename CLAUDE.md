@@ -64,11 +64,21 @@ CRSBench uses a fundamentally different execution model compared to FuzzBench:
   - Each fuzzer directory contains fuzzer-specific build and execution logic
   - Reference: See `claude_reference_projects/fuzzbench/fuzzers/*/fuzzer.py`
 
-- **CRSBench Approach**: Uses OSS-Fuzz's standardized `infra/helper.py` interface
-  - Build CRS: `python3 infra/helper.py build_crs <crs-config-dir> <project-name>`
-  - Run CRS: `python3 infra/helper.py run_crs <crs-config-dir> <project-name> <harness-name>`
+- **CRSBench Approach**: Uses OSS-Fuzz's standardized interface
+  - **Current Format** (using `infra/helper.py`):
+    - Build CRS: `python3 infra/helper.py build_crs <crs-config-dir> <project-name>`
+    - Run CRS: `python3 infra/helper.py run_crs <crs-config-dir> <project-name> <harness-name>`
+  - **Future Format** (installable commands - in development by OSS-Fuzz team):
+    - **`oss-fuzz-crs`**: For bug finding / vulnerability discovery CRS
+      - Example: `oss-fuzz-crs build <crs-config-dir> <project-name>`
+      - Example: `oss-fuzz-crs run <crs-config-dir> <project-name> <harness-name>`
+    - **`oss-patch-crs`**: For patch generation / program repair CRS
+      - Example: `oss-patch-crs build <crs-config-dir> <project-name>`
+      - Example: `oss-patch-crs run <crs-config-dir> <project-name> <harness-name> [<pov-name>]`
+      - Note: `<pov-name>` is optional - CRS can generate patches without a specific POV
+    - Both will be installable via pip/uv for easier deployment
   - **No individual `fuzzer.py` per CRS** - all CRS implementations use the same interface
-  - May have thin wrappers around `infra/helper.py` for convenience, but no per-CRS build/run scripts
+  - May have thin wrappers around the helper interface for convenience, but no per-CRS build/run scripts
   - This standardization simplifies CRS integration and ensures consistency
 
 **Why This Matters**:
@@ -76,6 +86,15 @@ CRSBench uses a fundamentally different execution model compared to FuzzBench:
 - All CRS implementations must conform to the OSS-Fuzz interface standard
 - Build and execution logic is centralized in OSS-Fuzz infrastructure
 - Easier to add new CRS implementations without modifying CRSBench core
+- Supports both vulnerability discovery (`oss-fuzz-crs`) and patch generation (`oss-patch-crs`) workflows
+
+**Implementation Considerations**:
+- **Current State**: CRSBench implementation uses `python3 infra/helper.py` format
+- **Future Migration**: When OSS-Fuzz team releases the installable command wrappers:
+  - CRSBench should support both `oss-fuzz-crs` (bug finding) and `oss-patch-crs` (patch generation)
+  - Consider feature detection: check if commands exist, fallback to `python3 infra/helper.py`
+  - This ensures compatibility during the transition period
+- **Design Principle**: Keep CRS execution logic flexible to accommodate command format changes
 
 **Reference Documentation**: `docs/ossfuzz-crs-interface.md`
 
