@@ -21,15 +21,52 @@ This repository has two types of documentation:
 - Target audience: Users and CRS developers using the benchmark
 
 ### design-docs/ - Implementation Details
+- **MUST create design document in `design-docs/` before implementing new features**
 - Architecture and design decisions
 - Module implementation documentation
 - Internal APIs and data flows
 - Target audience: CRSBench contributors and curious readers
 
-- When writing documentation, avoid lengthy or unnecessary details.
-- Include only the essential features that must be implemented.
-- Do not add extra requirements unless explicitly requested by the user, as doing so increases the framework’s complexity without real benefit.
-- When implementing or modifying CRSBench components, refer to design-docs/ for detailed implementation guidance.
+**Design doc should cover:**
+
+- Architecture overview and component interaction
+- Data flow and API design
+- File structure and module organization
+- Integration points with existing code
+- Testing strategy
+
+**Organization:**
+
+Design documents are organized by CRSBench module:
+
+```
+design-docs/
+├── validation/              # Validation module design docs
+│   └── validation.md
+├── evaluation/              # Evaluation module design docs
+│   ├── evaluation.md
+│   └── crs-executors.md
+├── migration/               # Migration module design docs
+│   └── migration-atlanta-to-rfc.md
+├── distributed/             # Distributed execution design docs
+│   └── distributed-job-queue.md
+└── architecture.md          # General architecture (root level)
+```
+
+**Rules:**
+
+- Module-specific docs go in `design-docs/<module-name>/`
+- Only create directories for actual `crsbench/` modules (validation, evaluation, migration, distributed, etc.)
+- General/cross-cutting docs (like architecture.md) stay at `design-docs/` root
+- Do NOT create directories for non-existent modules (e.g., general/, orchestrator/)
+- Match directory names exactly to `crsbench/` module names
+
+**Writing guidelines:**
+
+- Avoid lengthy or unnecessary details
+- Include only the essential features that must be implemented
+- Do not add extra requirements unless explicitly requested by the user, as doing so increases the framework's complexity without real benefit
+- When implementing or modifying CRSBench components, refer to design-docs/ for detailed implementation guidance
 
 ## Projects
 - Each project is a directory under `benchmarks`.
@@ -142,44 +179,10 @@ Please summarize reference projects by creating markdown files in `docs_referenc
   - Use `with open()` context managers for file operations in tests
   - Example: See `test_orchestrator_e2e.py` for proper test file creation
 
-## Documents standard
-- create entry in README.md when adding a new component.
-- create a README.md to summarize each component in their own directories.
-
-## Design Documentation Requirement
-- **MUST create design document in `design-docs/` before implementing new features**
-- Design doc should cover:
-  - Architecture overview and component interaction
-  - Data flow and API design
-  - File structure and module organization
-  - Integration points with existing code
-  - Testing strategy
-- Reference: See `design-docs/` directory for examples
-- Target audience: Implementation developers and code reviewers
-
-### Design Docs Organization
-Design documents are organized by CRSBench module:
-
-```
-design-docs/
-├── validation/              # Validation module design docs
-│   └── validation.md
-├── evaluation/              # Evaluation module design docs
-│   ├── evaluation.md
-│   └── crs-executors.md
-├── migration/               # Migration module design docs
-│   └── migration-atlanta-to-rfc.md
-├── distributed/             # Distributed execution design docs
-│   └── distributed-job-queue.md
-└── architecture.md          # General architecture (root level)
-```
-
-**Rules**:
-- Module-specific docs go in `design-docs/<module-name>/`
-- Only create directories for actual `crsbench/` modules (validation, evaluation, migration, distributed, etc.)
-- General/cross-cutting docs (like architecture.md) stay at `design-docs/` root
-- Do NOT create directories for non-existent modules (e.g., general/, orchestrator/)
-- Match directory names exactly to `crsbench/` module names
+## Documentation Standards
+- Create entry in README.md when adding a new component
+- Create a README.md to summarize each component in their own directories
+- Reference: See `design-docs/` directory for design doc examples
 
 ## Usage or reference of third party codebase
 - Please document the usage of third party codebase for good open-source gesture
