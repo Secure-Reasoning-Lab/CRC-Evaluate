@@ -53,6 +53,32 @@ found or missed.
 On top of that, we also provide basic infrastructure like LiteLLM to support the
 need of LLM used in modern AI-powered CRS.
 
+### CRS Execution Architecture vs FuzzBench
+
+**Key Difference: CRS Interface Design**
+
+CRSBench uses a fundamentally different execution model compared to FuzzBench:
+
+- **FuzzBench Approach**: Each fuzzer has its own `fuzzer.py` with `build()` and `fuzz()` functions
+  - Example: `fuzzers/aflplusplus/fuzzer.py`, `fuzzers/libfuzzer/fuzzer.py`, etc.
+  - Each fuzzer directory contains fuzzer-specific build and execution logic
+  - Reference: See `claude_reference_projects/fuzzbench/fuzzers/*/fuzzer.py`
+
+- **CRSBench Approach**: Uses OSS-Fuzz's standardized `infra/helper.py` interface
+  - Build CRS: `python3 infra/helper.py build_crs <crs-config-dir> <project-name>`
+  - Run CRS: `python3 infra/helper.py run_crs <crs-config-dir> <project-name> <harness-name>`
+  - **No individual `fuzzer.py` per CRS** - all CRS implementations use the same interface
+  - May have thin wrappers around `infra/helper.py` for convenience, but no per-CRS build/run scripts
+  - This standardization simplifies CRS integration and ensures consistency
+
+**Why This Matters**:
+- CRSBench doesn't need fuzzer-specific integration code for each CRS
+- All CRS implementations must conform to the OSS-Fuzz interface standard
+- Build and execution logic is centralized in OSS-Fuzz infrastructure
+- Easier to add new CRS implementations without modifying CRSBench core
+
+**Reference Documentation**: `docs/ossfuzz-crs-interface.md`
+
 
 ## Standardized CRS interface
 The document for standardized CRS interface is in `docs/ossfuzz-crs-interface.md`.
