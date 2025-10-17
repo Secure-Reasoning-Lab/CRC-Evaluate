@@ -54,13 +54,6 @@ On top of that, we also provide basic infrastructure like LiteLLM to support the
 need of LLM used in modern AI-powered CRS.
 
 
-## Some variable in meta.yaml
-- "$PROJECT": the project directory
-- "$REPO": the source code repository directory
-
-"$PROJECT" and "$REPO" both exists and are not interchangeable.
-
-
 ## Reference projects
 Some reference projects are put in `claude_refernece_projects`, you should look
 when asked.
