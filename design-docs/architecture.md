@@ -18,16 +18,16 @@ CRSBench/
 │   ├── run_experiment.py       # CLI entry point (crsbench command)
 │   ├── validation/             # Benchmark format validation
 │   ├── evaluation/             # CRS evaluation and scoring
-│   ├── builder/                # Docker image building for benchmarks
-│   ├── reproducer/             # POV reproduction and verification
-│   ├── patch_tester/           # Patch validation and testing
-│   ├── deduplication/          # POV deduplication logic
 │   ├── migration/              # Format migration tools (Team-Atlanta to RFC)
 │   ├── hint_generation/        # Hint generation for difficulty control
+│   ├── distributed/            # Distributed job queue (Redis/RQ)
 │   └── utils/                  # Shared utilities
 ├── benchmarks/                 # Benchmark projects in RFC format
-├── experiments/                # Experiment configurations and results
-├── crses/                      # CRS implementations
+├── benchmark-suites/           # Curated benchmark suite definitions
+├── experiment-configs/         # Experiment configuration files
+├── crses/                      # CRS configuration files
+├── oss-fuzz/                   # OSS-Fuzz submodule (bug finding infrastructure)
+├── oss-patch/                  # OSS-Patch submodule (patch generation infrastructure)
 ├── docs/                       # RFC specifications and user docs
 │   ├── benchmark-spec.md       # RFC for benchmark format
 │   └── meta-example.yaml       # Example configuration
@@ -70,55 +70,7 @@ See [design-docs/validation.md](./validation.md) for detailed documentation.
 - StubCRSExecutor for testing
 - Result aggregation and reporting
 
-### 3. builder/
-**Purpose**: Build Docker images for benchmark projects.
-
-**Responsibilities**:
-- OSS-Fuzz compatible image building
-- Layered Docker architecture (base → project → evaluation)
-- Patch application and incremental builds
-- Harness compilation and artifact management
-
-**Architecture**:
-```
-OSS-Fuzz Base Image
-    ↓
-Project Base Image (pre-compiled dependencies)
-    ↓
-Evaluation Image (with applied patches)
-```
-
-### 4. reproducer/
-**Purpose**: Reproduce and verify POVs.
-
-**Responsibilities**:
-- Execute harnesses with POV inputs
-- Capture sanitizer output
-- Verify expected crashes
-- Match error tokens for deduplication
-
-### 5. patch_tester/
-**Purpose**: Validate CRS-generated patches.
-
-**Responsibilities**:
-- Apply patches to source code
-- Check patch exclusion list compliance
-- Run invariant tests (test.sh)
-- Verify POVs no longer crash
-- Ensure program functionality maintained
-
-### 6. deduplication/
-**Purpose**: Deduplicate discovered POVs.
-
-**Responsibilities**:
-- Group POVs by root cause analysis
-- Match sanitizer error signatures
-- Handle multiple variants of same vulnerability
-- Support deduplication across different sanitizers
-
-**Key Insight**: Multiple POVs with same sanitizer error may be different bugs; multiple POVs with different stack traces may be same bug.
-
-### 7. migration/
+### 3. migration/
 **Purpose**: Migrate Team-Atlanta format benchmarks to RFC format.
 
 **Responsibilities**:
@@ -130,7 +82,7 @@ Evaluation Image (with applied patches)
 - Preserve all ground truth data
 - Generate detailed CSV reports
 
-### 8. hint_generation/
+### 4. hint_generation/
 **Purpose**: Generate hints for difficulty control.
 
 **Responsibilities**:
@@ -139,7 +91,26 @@ Evaluation Image (with applied patches)
 - Maintain hint quality and specificity
 - Support multiple hint types (category, location, severity, technical)
 
-### 9. utils/
+### 5. distributed/
+**Purpose**: Distributed job execution using Redis queue.
+
+**Responsibilities**:
+- Job queue management with Redis/RQ
+- Worker process coordination
+- Job result collection
+- Distributed experiment execution
+
+**Key Components**:
+- `queue.py`: Redis queue initialization and management
+- `worker.py`: Worker process implementation
+- `jobs.py`: Job definitions for CRS trials
+
+**Use Cases**:
+- Multi-trial experiments across multiple machines
+- Horizontal scaling for large benchmark suites
+- Async job execution with monitoring
+
+### 6. utils/
 **Purpose**: Shared utilities across modules.
 
 **Common Utilities**:
@@ -234,10 +205,7 @@ crsbench = "crsbench.run_experiment:main"
 run_experiment.py
     ├→ validation (validate experiment config)
     ├→ evaluation (run evaluations)
-    │   ├→ builder (build Docker images)
-    │   ├→ reproducer (verify POVs)
-    │   ├→ patch_tester (test patches)
-    │   └→ deduplication (deduplicate results)
+    ├→ distributed (distribute jobs to workers)
     ├→ hint_generation (generate hints based on difficulty)
     └→ utils (shared utilities)
 ```
@@ -245,7 +213,9 @@ run_experiment.py
 ### External Integrations
 - **Docker**: For isolated benchmark execution
 - **LiteLLM**: For unified LLM API access and usage tracking
-- **OSS-Fuzz**: Compatible build system and fuzzing infrastructure
+- **OSS-Fuzz** (submodule): Build system and bug finding infrastructure
+- **OSS-Patch** (submodule): Patch generation and testing infrastructure
+- **Redis/RQ**: For distributed job queue
 - **Git**: For version control and commit-based evaluation modes
 
 ## Technology Stack
