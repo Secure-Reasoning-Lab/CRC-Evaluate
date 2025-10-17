@@ -1,5 +1,5 @@
 # Instructions
-This repository is a benchmark to evaluate CRS (Cyber Reasoning System).
+This repository CRSBench is a benchmark to evaluate CRS (Cyber Reasoning System).
 Benchmark is consists of a set of projects.
 
 ## Proposed RFC
@@ -53,6 +53,12 @@ found or missed.
 On top of that, we also provide basic infrastructure like LiteLLM to support the
 need of LLM used in modern AI-powered CRS.
 
+
+## Standardized CRS interface
+The document for standardized CRS interface is in `docs/ossfuzz-crs-interface.md`.
+
+CRSBench will utilize this interface to build CRS docker images and run those
+docker images to evaluate CRS.
 
 ## Reference projects
 Some reference projects are put in `claude_refernece_projects`, you should look
