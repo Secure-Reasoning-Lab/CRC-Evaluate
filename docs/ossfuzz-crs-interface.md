@@ -163,21 +163,59 @@ python3 infra/helper.py build_crs multi-retrieval aixcc/c/mock-c --oss-fuzz $OSS
 
 ### Running CRS for patch generation
 
-Run command with POV and LiteLLM configuration:
+Run command with POV(s), hints, and LiteLLM configuration:
 
 ```sh
 python3 infra/helper.py run_crs <crs-config-name> <project-name> \
   --harness <harness-name> \
-  [--pov <pov-name>] \
+  [--pov <pov-file> | --povs <povs-dir>] \
+  [--hints <hints-dir>] \
   --litellm-base <litellm-api-base> \
   --litellm-key <litellm-api-key>
 ```
 
-**Example**:
+**Example - With single POV**:
 ```sh
 python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
-  --pov pov1 \
   --harness fuzz_process_input_header \
+  --pov /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs/pov_0 \
+  --litellm-base https://api.litellm.com \
+  --litellm-key sk-your-key-here
+```
+
+**Example - With POVs directory**:
+```sh
+python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
+  --harness fuzz_process_input_header \
+  --povs /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs \
+  --litellm-base https://api.litellm.com \
+  --litellm-key sk-your-key-here
+```
+
+**Example - Without POV specification (process all available POVs)**:
+```sh
+python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
+  --harness fuzz_process_input_header \
+  --litellm-base https://api.litellm.com \
+  --litellm-key sk-your-key-here
+```
+
+**Example - With single POV and hints**:
+```sh
+python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
+  --harness fuzz_process_input_header \
+  --pov /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs/pov_0 \
+  --hints /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/hints \
+  --litellm-base https://api.litellm.com \
+  --litellm-key sk-your-key-here
+```
+
+**Example - With POVs directory and hints**:
+```sh
+python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
+  --harness fuzz_process_input_header \
+  --povs /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs \
+  --hints /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/hints \
   --litellm-base https://api.litellm.com \
   --litellm-key sk-your-key-here
 ```
@@ -186,9 +224,207 @@ python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
 - `<crs-config-name>`: Configuration name for the patch generation CRS
 - `<project-name>`: Project name
 - `--harness <harness-name>`: Fuzzing harness name (required)
-- `--pov <pov-name>`: Specific POV to generate patch for (optional - CRS can generate patches without specific POV)
+- `--pov <pov-file>`: Path to a single POV file (optional, mutually exclusive with `--povs`)
+  - Specifies a single POV test case file
+  - Mounted to `/pov` in the container (single file)
+  - Use when targeting a specific vulnerability
+- `--povs <povs-dir>`: Path to directory containing POVs (optional, mutually exclusive with `--pov`)
+  - Directory contains multiple POV files: `povs/pov_0`, `povs/pov_1`, etc.
+  - Mounted to `/povs/` in the container (directory)
+  - Use when processing multiple POVs
+  - **CRSBench generates this directory** based on experiment configuration
+- If neither `--pov` nor `--povs` is specified, CRS can attempt to generate patches for all available vulnerabilities (implementation-dependent)
+- `--hints <hints-dir>`: Path to hints directory (optional)
+  - Provides SARIF reports and pre-fuzzing corpus to guide patch generation
+  - Same structure as OSS-Fuzz bug finding hints (see above)
+  - **CRSBench generates this directory** based on experiment configuration
 - `--litellm-base <url>`: LiteLLM API base URL (required)
 - `--litellm-key <key>`: LiteLLM API key (required)
+
+### Filesystem mapping between host and docker container
+
+OSS-Patch mounts POV file(s) to provide vulnerability information to the CRS.
+
+**Single POV file mapping (--pov):**
+
+When `--pov <pov-file>` is provided:
+- Host: `<pov-file>` (e.g., `benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs/pov_0`)
+- Container: `/pov` (single file, not a directory)
+
+**POVs directory mapping (--povs):**
+
+When `--povs <povs-dir>` is provided:
+- Host: `<povs-dir>` (e.g., `benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs/`)
+- Container: `/povs/` (directory)
+
+The host povs directory structure is flattened and mounted directly to `/povs/` in the container.
+
+**Container filesystem structure:**
+
+Inside the container, CRS can access POV test case(s):
+
+**With --pov (single file):**
+```
+/pov                     # Single POV test case file
+```
+
+**With --povs (directory):**
+```
+/povs/
+├── pov_0                # Test case that triggers a vulnerability
+├── pov_1                # Test case
+├── pov_2                # Test case
+└── ...
+```
+
+**Usage notes:**
+
+- CRSBench generates the `povs/` directory based on experiment configuration
+- **Single POV mode (`--pov`):**
+  - Mount a single POV file to `/pov` in the container
+  - Use when targeting a specific vulnerability or for focused patch generation
+  - CRS runs `/pov` to generate crash log and generate a patch
+- **Multiple POVs mode (`--povs`):**
+  - Mount a directory of POVs to `/povs/` in the container
+  - Each POV is a file directly in the directory (e.g., `/povs/pov_0`)
+  - CRS must iterate through all POVs in `/povs/`
+  - **CRS must determine which POVs share the same root cause** (grouping is CRS's responsibility)
+  - POVs are not pre-grouped by vulnerabilities - they are flat files
+- **No POV specification:**
+  - If neither `--pov` nor `--povs` is specified, CRS may process all available POVs (implementation-dependent)
+- **CRS is responsible for running each POV to generate crash logs**
+- CRS must analyze crash logs (generated by running POVs) to understand the vulnerability
+- No vulnerability metadata, crash logs, or reference patches are provided
+- POVs are used to:
+  1. Generate crash logs for analysis
+  2. Verify that generated patches fix the vulnerabilities
+
+**Typical benchmark structure on host:**
+
+```
+benchmarks/mock-c/
+├── .aixcc/
+│   ├── meta.yaml
+│   └── fuzz_process_input_header/
+│       ├── cpv_0/                     # Ground truth vulnerability groups
+│       │   └── blobs/
+│       │       └── pov_0.blob
+│       │   └── logs/
+│       │       └── pov_0.log         # For evaluation only
+│       ├── cpv_1/
+│       │   └── blobs/
+│       │       ├── pov_1.blob
+│       │       └── pov_2.blob
+│       │   └── logs/
+│       │       ├── pov_1.log         # For evaluation only
+│       │       └── pov_2.log         # For evaluation only
+│       └── povs/                       # Generated by CRSBench for CRS
+│           ├── pov_0                  # POV file (no subdirectory)
+│           ├── pov_1                  # POV file
+│           └── pov_2                  # POV file
+```
+
+**How it works:**
+
+1. **Ground truth**: CPV directories (`cpv_*/`) contain the actual vulnerabilities with POV blobs and logs (for evaluation)
+2. **CRSBench generates**: The `povs/` directory from CPVs based on experiment configuration (which POVs to include)
+3. **POVs are flattened**: Individual POVs are extracted as flat files (not grouped by CPV, no subdirectories)
+4. **Only POV files provided**: The `povs/` directory contains only POV test case files, not logs
+5. **Mounted to container**: The `povs/` directory is mounted to `/povs/` in the container
+6. **CRS generates logs**: CRS runs each POV file to generate crash logs for analysis
+7. **CRS discovers grouping**: CRS must determine which POVs (pov_0, pov_1, pov_2) share the same root cause
+
+### Optional Hints Support for Patch Generation
+
+Like the OSS-Fuzz bug finding interface, OSS-Patch CRS can optionally receive hints to improve patch generation.
+
+**Hints directory mapping:**
+
+When `--hints` is provided:
+- Host: `<hints-dir>` (e.g., `benchmarks/mock-c/.aixcc/fuzz_process_input_header/hints/`)
+- Container: `/hints/`
+
+**Hints directory structure (same as bug finding):**
+
+```
+hints/
+├── sarif/                    # Static analysis reports
+│   ├── codeql.sarif         # May identify vulnerability locations
+│   ├── semgrep.sarif        # Pattern-based bug detection
+│   └── ...
+└── corpus/                   # Pre-fuzzing corpus
+    ├── 1h/                  # Corpus from 1 hour of fuzzing
+    │   └── ...
+    └── 1d/                  # Corpus from 1 day of fuzzing
+        └── ...
+```
+
+**Container access:**
+
+Inside the container, CRS can access:
+- `/hints/sarif/*.sarif` - Static analysis reports pointing to bug locations
+- `/hints/corpus/1h/*` - Test inputs to verify patch correctness
+- `/hints/corpus/1d/*` - More comprehensive test inputs
+
+**Usage for patch generation:**
+
+- **SARIF reports**: May help identify vulnerability root causes and suggest fix locations
+- **Pre-fuzzing corpus**: Can be used as regression tests to ensure patches don't break functionality
+- **Combination with POVs**: Use POV blobs from `/povs/` to verify vulnerability is fixed, and corpus from `/hints/` to verify no regressions
+
+**Complete container filesystem for patch generation:**
+
+**With --pov (single POV):**
+```
+/
+├── pov                      # Single POV test case (if --pov provided)
+├── hints/                   # Optional hints (if --hints provided)
+│   ├── sarif/
+│   └── corpus/
+├── out/                     # Output directory for generated patches
+│   └── patches/
+├── src/                     # Project source code
+└── work/                    # Working directory
+```
+
+**With --povs (multiple POVs):**
+```
+/
+├── povs/                    # POV test cases (if --povs provided)
+│   ├── pov_0               # POV file
+│   ├── pov_1               # POV file
+│   ├── pov_2               # POV file
+│   └── ...
+├── hints/                   # Optional hints (if --hints provided)
+│   ├── sarif/
+│   └── corpus/
+├── out/                     # Output directory for generated patches
+│   └── patches/
+├── src/                     # Project source code
+└── work/                    # Working directory
+```
+
+**Example workflow (single POV with --pov):**
+
+1. CRS runs `/pov` to generate crash log
+2. CRS analyzes the crash log to understand the vulnerability (sanitizer output, stack trace)
+3. CRS reads `/hints/sarif/*.sarif` to find potential bug locations (optional)
+4. CRS generates patch candidates for the vulnerability
+5. CRS tests patch with `/pov` (must fix the POV)
+6. CRS validates with `/hints/corpus/1h/*` (must not break existing functionality)
+7. CRS outputs final patch to `/out/patches/`
+
+**Example workflow (multiple POVs with --povs):**
+
+1. CRS iterates through POVs in `/povs/` (e.g., pov_0, pov_1, pov_2)
+2. For each POV, CRS runs `/povs/pov_0` to generate crash log
+3. CRS analyzes the crash log to understand the vulnerability (sanitizer output, stack trace)
+4. CRS reads `/hints/sarif/*.sarif` to find potential bug locations (optional)
+5. CRS determines which POVs share the same root cause (e.g., pov_0 and pov_1 might be the same bug)
+6. CRS generates patch candidates for each unique vulnerability
+7. CRS tests patches with `/povs/pov_0`, `/povs/pov_1`, etc. (must fix all related POVs)
+8. CRS validates with `/hints/corpus/1h/*` (must not break existing functionality)
+9. CRS outputs final patches to `/out/patches/`
 
 ### Key Differences from OSS-Fuzz Interface
 
@@ -196,10 +432,13 @@ python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
 |------------------|-------------------------|----------------------------------------------|
 | Repository       | `oss-fuzz`              | `oss-patch`                                  |
 | Purpose          | Vulnerability discovery | Program repair                               |
-| POV argument     | Not applicable          | Optional (`--pov`)                           |
+| POV argument     | Not applicable          | Optional (`--pov <pov-file>`)                |
+| POVs argument    | Not applicable          | Optional (`--povs <povs-dir>`)               |
+| Hints argument   | Optional (`--hints`)    | Optional (`--hints`)                         |
 | Harness argument | Positional              | Named (`--harness`)                          |
 | LiteLLM          | Optional                | Required (`--litellm-base`, `--litellm-key`) |
 | OSS-Fuzz path    | Not needed              | Required (`--oss-fuzz`)                      |
+| Container mounts | `/hints/` (optional)    | `/pov` or `/povs/`, `/hints/` (all optional) |
 
 ---
 
