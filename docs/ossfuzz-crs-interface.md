@@ -72,14 +72,9 @@ hints/
 │   ├── semgrep.sarif        # Semgrep analysis results
 │   └── ...                  # Other SARIF-format reports
 └── corpus/                   # Pre-fuzzing corpus
-    ├── 1h/                  # Corpus from 1 hour of fuzzing
-    │   ├── input-001
-    │   ├── input-002
-    │   └── ...
-    └── 1d/                  # Corpus from 1 day of fuzzing
-        ├── input-001
-        ├── input-002
-        └── ...
+    ├── input-001.blob
+    ├── input-002.blob
+    └── ...
 ```
 
 **Container filesystem mapping:**
@@ -91,14 +86,12 @@ When `--hints` is provided, the hints directory is mounted in the container:
 
 Inside the container, CRS can access:
 - `/hints/sarif/*.sarif` - Static analysis reports in SARIF format
-- `/hints/corpus/1h/*.blob` - Corpus from 1 hour of fuzzing
-- `/hints/corpus/1d/*.blob` - Corpus from 1 day of fuzzing
+- `/hints/corpus/*.blob` - Pre-fuzzing corpus files
 
 **Usage notes:**
 
 - Hints are optional - CRS should work without them
 - CRS can choose which hints to use (e.g., only SARIF, only corpus, or both)
-- CRS can select corpus difficulty level (1h = easier, 1d = harder)
 - Multiple SARIF files from different tools can be provided
 - SARIF format: [SARIF v2.1.0 specification](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
 
@@ -116,11 +109,9 @@ benchmarks/json-c/
 │   │       │   ├── codeql.sarif
 │   │       │   └── semgrep.sarif
 │   │       └── corpus/
-│   │           ├── 1h/
-│   │           │   ├── input-001
-│   │           │   └── ...
-│   │           └── 1d/
-│   │               └── ...
+│   │           ├── input-001.blob
+│   │           ├── input-002.blob
+│   │           └── ...
 │   └── json_parse_fuzzer/
 │       └── hints/              # Separate hints per harness
 │           └── ...
@@ -353,18 +344,16 @@ hints/
 │   ├── semgrep.sarif        # Pattern-based bug detection
 │   └── ...
 └── corpus/                   # Pre-fuzzing corpus
-    ├── 1h/                  # Corpus from 1 hour of fuzzing
-    │   └── ...
-    └── 1d/                  # Corpus from 1 day of fuzzing
-        └── ...
+    ├── input-001.blob
+    ├── input-002.blob
+    └── ...
 ```
 
 **Container access:**
 
 Inside the container, CRS can access:
 - `/hints/sarif/*.sarif` - Static analysis reports pointing to bug locations
-- `/hints/corpus/1h/*` - Test inputs to verify patch correctness
-- `/hints/corpus/1d/*` - More comprehensive test inputs
+- `/hints/corpus/*.blob` - Pre-fuzzing corpus to verify patch correctness
 
 **Usage for patch generation:**
 
@@ -411,7 +400,7 @@ Inside the container, CRS can access:
 3. CRS reads `/hints/sarif/*.sarif` to find potential bug locations (optional)
 4. CRS generates patch candidates for the vulnerability
 5. CRS tests patch with `/pov` (must fix the POV)
-6. CRS validates with `/hints/corpus/1h/*` (must not break existing functionality)
+6. CRS validates with `/hints/corpus/*.blob` (must not break existing functionality)
 7. CRS outputs final patch to `/out/patches/`
 
 **Example workflow (multiple POVs with --povs):**
@@ -423,7 +412,7 @@ Inside the container, CRS can access:
 5. CRS determines which POVs share the same root cause (e.g., pov_0 and pov_1 might be the same bug)
 6. CRS generates patch candidates for each unique vulnerability
 7. CRS tests patches with `/povs/pov_0`, `/povs/pov_1`, etc. (must fix all related POVs)
-8. CRS validates with `/hints/corpus/1h/*` (must not break existing functionality)
+8. CRS validates with `/hints/corpus/*.blob` (must not break existing functionality)
 9. CRS outputs final patches to `/out/patches/`
 
 ### Key Differences from OSS-Fuzz Interface
