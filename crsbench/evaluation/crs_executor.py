@@ -95,9 +95,6 @@ class StubCRSExecutor(CRSExecutor):
         success = random.random() < 0.95  # 95% execution success rate
 
         if success:
-            # Resolve path for display purposes
-            resolved_path = self._resolve_path_variables(harness.path, benchmark_path)
-
             # Generate mock CRS output
             mode = "delta" if ref_commit else "full"
             output = f"""
@@ -106,7 +103,7 @@ Mode: {mode}
 Base commit: {base_commit}
 {f"Ref commit: {ref_commit}" if ref_commit else ""}
 Benchmark path: {benchmark_path}
-Harness path: {resolved_path}
+Harness path: {harness.path}
 
 Analyzing harness for potential vulnerabilities...
 Running fuzzing campaign...
@@ -192,21 +189,3 @@ POVs analyzed: {len(harness.povs or [])}
             ))
 
         return pov_results
-
-    def _resolve_path_variables(self, path: str, benchmark_path: Path) -> str:
-        """Resolve path variables like $REPO and $PROJECT.
-
-        $REPO refers to the benchmark repository root directory.
-        $PROJECT refers to the project directory (distinct from $REPO).
-        """
-        resolved = path
-
-        # Replace $REPO with benchmark path
-        if "$REPO/" in resolved:
-            resolved = resolved.replace("$REPO/", str(benchmark_path) + "/")
-
-        # $PROJECT is handled differently - it may refer to a project subdirectory
-        # For now, we keep it as-is since the actual CRS implementation will handle it
-        # This is a placeholder for when we know the actual $PROJECT resolution logic
-
-        return resolved
