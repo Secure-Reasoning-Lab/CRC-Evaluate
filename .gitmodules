@@ -1,0 +1,6 @@
+[submodule "oss-fuzz"]
+	path = oss-fuzz
+	url = https://github.com/Team-Atlanta/oss-fuzz-post-aixcc
+[submodule "oss-patch"]
+	path = oss-patch
+	url = https://github.com/Team-Atlanta/oss-patch
