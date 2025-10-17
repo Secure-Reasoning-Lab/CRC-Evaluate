@@ -64,27 +64,28 @@ delta_mode:
 # Harness configurations
 harness_files:
   - name: "test_harness_1"
-    path: "$REPO/test_harness_1.c"
-    povs:
-      - name: "buffer_overflow_test"
-        sanitizer: "address"
-        error_token: "AddressSanitizer: heap-buffer-overflow"
-        requires_clean_build: false
+    path: "/src/project/test_harness_1.c"
+    vulns:
+      - vuln_keyword: "buffer_overflow_test"
+        povs:
+          - id: "pov_0"
+            sanitizer: "address"
+            error_token: "AddressSanitizer: heap-buffer-overflow"
 
   - name: "test_harness_2"
-    path: "$PROJECT/harness/test.c"  # $PROJECT for project-specific paths
-    povs:
-      - name: "use_after_free_test"
-        sanitizer: "address"
-        error_token: "AddressSanitizer: heap-use-after-free"
-        requires_clean_build: true
+    path: "/src/project/harness/test.c"
+    vulns:
+      - vuln_keyword: "use_after_free_test"
+        povs:
+          - id: "pov_0"
+            sanitizer: "address"
+            error_token: "AddressSanitizer: heap-use-after-free"
 ```
 
-## Path Variables
+## Path Format
 
-- `$REPO/` - Resolves to the benchmark repository root directory
-- `$PROJECT/` - Project-specific path (handled by CRS implementation)
-- `./` - Relative paths from benchmark directory
+- Use absolute paths: `/src/project/...` for harness files
+- Relative paths (`./...`) also supported for flexibility
 
 ## Evaluation Modes
 

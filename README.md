@@ -123,12 +123,13 @@ delta_mode:
 # Harness specifications with embedded POVs
 harness_files:
   - name: "fuzz_parser"
-    path: "$REPO/test/fuzz_parser.c"
-    povs:
-      - name: "buffer_overflow_main"
-        sanitizer: "address"
-        error_token: "AddressSanitizer: heap-buffer-overflow"
-        requires_clean_build: false
+    path: "/src/project/test/fuzz_parser.c"
+    vulns:
+      - vuln_keyword: "buffer_overflow_main"
+        povs:
+          - id: "pov_0"
+            sanitizer: "address"
+            error_token: "AddressSanitizer: heap-buffer-overflow"
 ```
 
 ## Core Components
