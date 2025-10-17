@@ -1,14 +1,96 @@
-# The number of trials.
+# ===== Experiment Identity =====
+
+# Unique identifier for this experiment run.
+# Used for organizing results and generating reports.
+experiment: "test-experiment"
+
+# Human-readable description of the experiment's purpose.
+# Helps document what is being tested and why.
+description: "Test experiment evaluating CRS systems"
+
+# ===== Execution Configuration =====
+
+# The number of trials to run for each CRS-benchmark combination.
+# More trials provide better statistical significance.
 trials: 1
 
 # The amount of time in seconds that each trial is run for.
+# Default: 86400 (24 hours)
 max_total_time: 86400
 
-# Difficulty control of the experiment (e.g., corpus level or hint level)
+# ===== CRS and Benchmark Selection =====
+
+# List of CRS (Cyber Reasoning Systems) to evaluate.
+# Each CRS name should correspond to a configuration in the CRS configs directory.
+crses:
+  - atlantis-c
+  - atlantis-multilang
+
+# ===== Benchmark Selection (Choose ONE method) =====
+
+# Method 1: Direct benchmark list
+# List specific benchmark projects to test against.
+# Each benchmark should exist in the benchmarks/ directory.
+benchmarks:
+  - curl-delta-02
+  - curl-delta-03
+
+# Method 2: Benchmark suite (ALTERNATIVE - mutually exclusive with 'benchmarks')
+# Specify a benchmark suite name to load from benchmark-suites/ directory.
+# The suite file (e.g., benchmark-suites/crsbench-afc-c.yaml) contains the benchmark list.
+# IMPORTANT: You must specify EITHER 'benchmarks' OR 'benchmark_suite', not both.
+#
+# To use a benchmark suite:
+# 1. Comment out the 'benchmarks' field above
+# 2. Uncomment and set 'benchmark_suite' below
+#
+# benchmark_suite: crsbench-afc-c
+#
+# Available suites in benchmark-suites/:
+#   - crsbench-afc-c     (C/C++ benchmarks from AFC)
+#   - crsbench-afc-jvm   (JVM benchmarks from AFC)
+
+# ===== Difficulty Control =====
+
+# Difficulty level control (e.g., corpus size, hint availability).
+# Higher values typically mean harder/more realistic conditions.
+# Range: 1-5 (implementation-dependent)
 difficulty_level: 1
 
+# ===== Monitoring & Snapshots =====
+
+# Interval in seconds for taking snapshots of CRS progress.
+# Snapshots capture coverage, POVs found, patches generated, etc.
+# Default: 900 (15 minutes)
+snapshot_period: 900
+
+# ===== Resource Management =====
+
+## TODO: overwrite config-resource.yaml?
+### litellm
+
+# ===== Storage Configuration =====
+
 # The folder that will store most of the experiment data.
+# Includes trial logs, POVs, patches, and intermediate results.
+# Can be local path or cloud storage (gs://, s3://, etc.)
 experiment_filestore: /tmp/experiment-data
 
 # The folder where HTML reports and summary data will be stored.
+# Can be local path or cloud storage (gs://, s3://, etc.)
 report_filestore: /tmp/report-data
+
+# ===== Reproducibility =====
+
+# Git commit hash for reproducibility tracking.
+# If null, will be auto-detected from current repository state.
+# Useful for ensuring experiment results can be reproduced.
+git_hash: null
+
+# ===== Advanced Options (Optional) =====
+
+# Docker registry for custom images (if not using default).
+# docker_registry: gcr.io/my-project
+
+# Timeout multiplier for adjusting all timeouts (e.g., for slow CRS).
+# timeout_multiplier: 1.5

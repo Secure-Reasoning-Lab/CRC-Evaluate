@@ -75,9 +75,9 @@ Examples:
     parser.add_argument(
         '--benchmarks',
         type=str,
-        required=True,
+        required=False,
         metavar='BENCHMARK_LIST',
-        help='Comma-separated list of benchmarks or benchmark suite name (e.g., bench1,bench2 or crsbench-c)'
+        help='Comma-separated list of benchmarks (overrides config file if specified)'
     )
 
     parser.add_argument(
@@ -560,23 +560,41 @@ def main() -> None:
     # Validate arguments
     validate_arguments(args)
 
-    # Parse list arguments
-    benchmarks = parse_list_argument(args.benchmarks)
+    # Parse list arguments from CLI
+    cli_benchmarks = parse_list_argument(args.benchmarks) if args.benchmarks else None
     crses = parse_list_argument(args.crses)
 
-    # Log experiment configuration
+    # Log initial configuration
     logger.info("="*60)
     logger.info("CRSBench Experiment Runner")
     logger.info("="*60)
     logger.info(f"Experiment name: {args.experiment_name}")
     logger.info(f"Configuration file: {args.experiment_config}")
-    logger.info(f"Benchmarks ({len(benchmarks)}): {', '.join(benchmarks)}")
+    if cli_benchmarks:
+        logger.info(f"CLI Benchmarks ({len(cli_benchmarks)}): {', '.join(cli_benchmarks)}")
     logger.info(f"CRSes ({len(crses)}): {', '.join(crses)}")
     logger.info("="*60)
 
     # Load and validate experiment configuration
     config_path = Path(args.experiment_config)
     config = load_experiment_config(config_path)
+
+    # Resolve benchmarks from config (either benchmarks list or benchmark_suite)
+    try:
+        # Use CLI benchmarks if provided, otherwise use config benchmarks
+        if cli_benchmarks:
+            benchmarks = cli_benchmarks
+            logger.info(f"Using CLI-specified benchmarks: {', '.join(benchmarks)}")
+        else:
+            benchmarks = config.get_benchmark_list()
+            if config.benchmark_suite:
+                logger.info(f"Using benchmark suite '{config.benchmark_suite}': {', '.join(benchmarks)}")
+            else:
+                logger.info(f"Using config-specified benchmarks: {', '.join(benchmarks)}")
+
+    except ValueError as e:
+        logger.error(f"Failed to resolve benchmarks: {e}")
+        sys.exit(1)
 
     # Calculate total jobs
     total_jobs = len(benchmarks) * len(crses) * config.trials

@@ -302,7 +302,21 @@ max_total_time: 86400           # Seconds per trial
 difficulty_level: 1              # Assistance level (0-4)
 experiment_filestore: /path/    # Experiment data storage
 report_filestore: /path/        # Report output directory
+
+# Benchmark selection (use ONE of these):
+benchmarks:                      # Option 1: Direct list
+  - curl-delta-02
+  - curl-delta-03
+# OR
+benchmark_suite: crsbench-afc-c  # Option 2: Suite name (mutually exclusive)
 ```
+
+**Benchmark Suite Support**:
+- Benchmark suites are defined in `benchmark-suites/` directory
+- Each suite is a YAML file containing a curated list of benchmarks
+- Suites provide consistency for standardized evaluations
+- Validation enforces mutual exclusivity between `benchmarks` and `benchmark_suite`
+- CLI `--benchmarks` arg overrides config if provided
 
 ### pkg.yaml (CRS Package Configuration)
 Location: `crses/[crs-name]/pkg.yaml`

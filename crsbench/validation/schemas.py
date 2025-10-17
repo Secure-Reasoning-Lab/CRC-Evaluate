@@ -205,6 +205,14 @@ class ExperimentConfig(BaseModel):
         default=None,
         description="Root directory containing benchmark projects (defaults to ./benchmarks)"
     )
+    benchmarks: Optional[List[str]] = Field(
+        default=None,
+        description="List of benchmark IDs to evaluate (mutually exclusive with benchmark_suite)"
+    )
+    benchmark_suite: Optional[str] = Field(
+        default=None,
+        description="Benchmark suite name to load from benchmark-suites/ (mutually exclusive with benchmarks)"
+    )
 
     @validator('experiment_filestore', 'report_filestore')
     def validate_filestore_path(cls, v):
@@ -232,6 +240,88 @@ class ExperimentConfig(BaseModel):
             return str(path.absolute())
         return None  # Use default ./benchmarks if not specified
 
+    @validator('benchmarks')
+    def validate_benchmarks(cls, v):
+        """Validate benchmarks list."""
+        if v is None:
+            return None
+
+        if not isinstance(v, list):
+            raise ValueError("benchmarks must be a list")
+
+        # Check for empty strings
+        cleaned = [bid.strip() for bid in v if bid and bid.strip()]
+        if len(cleaned) != len(v):
+            raise ValueError("benchmarks list contains empty benchmark IDs")
+
+        # Check for duplicates
+        if len(cleaned) != len(set(cleaned)):
+            duplicates = [bid for bid in cleaned if cleaned.count(bid) > 1]
+            raise ValueError(f"Duplicate benchmark IDs found: {', '.join(set(duplicates))}")
+
+        return cleaned if cleaned else None
+
+    @validator('benchmark_suite')
+    def validate_benchmark_suite(cls, v, values):
+        """Validate benchmark_suite and ensure mutual exclusivity with benchmarks."""
+        if v is None:
+            return None
+
+        # Check mutual exclusivity
+        if values.get('benchmarks') is not None:
+            raise ValueError("Cannot specify both 'benchmarks' and 'benchmark_suite'. Please use only one.")
+
+        # Validate suite name format
+        suite_name = v.strip()
+        if not suite_name:
+            raise ValueError("benchmark_suite cannot be empty string")
+
+        return suite_name
+
+    def __init__(self, **data):
+        super().__init__(**data)
+
+        # Ensure at least one of benchmarks or benchmark_suite is specified
+        if self.benchmarks is None and self.benchmark_suite is None:
+            raise ValueError("Either 'benchmarks' or 'benchmark_suite' must be specified")
+
+    def get_benchmark_list(self, benchmark_suites_dir: str = "benchmark-suites") -> List[str]:
+        """Get the list of benchmarks, resolving benchmark_suite if necessary.
+
+        Args:
+            benchmark_suites_dir: Directory containing benchmark suite YAML files
+
+        Returns:
+            List of benchmark IDs
+
+        Raises:
+            ValueError: If benchmark_suite file doesn't exist or is invalid
+        """
+        if self.benchmarks is not None:
+            return self.benchmarks
+
+        if self.benchmark_suite is not None:
+            from pathlib import Path
+            import yaml
+
+            # Construct path to suite file
+            suite_path = Path(benchmark_suites_dir) / f"{self.benchmark_suite}.yaml"
+
+            if not suite_path.exists():
+                raise ValueError(f"Benchmark suite file not found: {suite_path}")
+
+            # Load and validate suite file
+            with open(suite_path, 'r') as f:
+                suite_data = yaml.safe_load(f)
+
+            # Validate using BenchmarkSuiteConfig schema
+            suite_config = BenchmarkSuiteConfig(**suite_data)
+
+            return suite_config.benchmark_list
+
+        # Should never reach here due to __init__ validation
+        raise ValueError("No benchmark source specified")
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary for job serialization."""
         return {
@@ -242,6 +332,8 @@ class ExperimentConfig(BaseModel):
             'report_filestore': self.report_filestore,
             'redis_host': self.redis_host,
             'benchmarks_root': self.benchmarks_root,
+            'benchmarks': self.benchmarks,
+            'benchmark_suite': self.benchmark_suite,
         }
 
 
