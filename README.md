@@ -61,6 +61,30 @@ uv pip install -e .
 pip install -e .
 ```
 
+### Environment Configuration
+
+CRSBench supports environment variable configuration through `.env` files for easy local development and deployment:
+
+```bash
+# Copy the example configuration file
+cp .env.example .env
+
+# Edit .env with your settings
+# The .env file is automatically loaded when CRSBench runs
+```
+
+**Common environment variables:**
+
+- `REDIS_HOST` - Redis server for distributed execution (default: localhost)
+- `LITELLM_URL` - LiteLLM API endpoint for AI-powered CRS
+- `LITELLM_MASTER_KEY` - Authentication key for LiteLLM
+- `OSS_FUZZ_PATH` - Path to OSS-Fuzz installation
+- `LOG_LEVEL` - Logging verbosity (DEBUG, INFO, WARNING, ERROR)
+
+See `.env.example` for a complete list of supported configuration options.
+
+**Note:** The `.env` file is optional. You can also set environment variables directly in your shell or CI/CD pipeline.
+
 ### Basic Usage
 
 ```python

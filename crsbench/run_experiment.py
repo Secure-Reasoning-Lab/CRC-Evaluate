@@ -21,6 +21,10 @@ import time
 from pathlib import Path
 from typing import List, NamedTuple, Dict, Any, Optional
 from collections import namedtuple
+from dotenv import load_dotenv
+
+# Load environment variables from .env file if present
+load_dotenv()
 
 # Set up logging
 logging.basicConfig(
