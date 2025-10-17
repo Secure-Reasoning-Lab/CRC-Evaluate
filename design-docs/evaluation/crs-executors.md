@@ -167,6 +167,143 @@ def run_crs(
     )
 ```
 
+### Optional Hints Support
+
+CRS implementations can optionally receive hints to improve bug finding effectiveness.
+
+**Configuration**:
+
+```python
+def configure_crs(self, config: Dict[str, Any]) -> None:
+    """Configure the CRS with hints support."""
+    self.config = config.copy()
+
+    # Check if hints are enabled
+    self.hints_enabled = config.get("hints_enabled", False)
+    self.hints_corpus_level = config.get("hints_corpus_level", "1h")  # "1h" or "1d"
+```
+
+**Hints Path Resolution**:
+
+```python
+def _get_hints_path(self, benchmark_path: Path, harness_name: str) -> Optional[Path]:
+    """Get hints directory path for a specific harness.
+
+    Args:
+        benchmark_path: Path to benchmark directory
+        harness_name: Name of the harness
+
+    Returns:
+        Path to hints directory if it exists, None otherwise
+    """
+    hints_dir = benchmark_path / ".aixcc" / harness_name / "hints"
+
+    if hints_dir.exists():
+        return hints_dir
+
+    return None
+```
+
+**Updated run_crs Implementation**:
+
+```python
+def run_crs(
+    self,
+    benchmark_path: Path,
+    harness: HarnessFile,
+    base_commit: str,
+    ref_commit: Optional[str] = None
+) -> CRSResult:
+    """Run CRS on specific harness with optional hints."""
+    project_name = self._extract_project_name(benchmark_path)
+
+    # Build if needed
+    self._build_crs_if_needed(project_name)
+
+    # Extract harness name (without extension)
+    harness_name = Path(harness.name).stem
+
+    crs_config_dir = self._resolve_crs_config_dir()
+
+    cmd = [
+        "python3", "infra/helper.py", "run_crs",
+        str(crs_config_dir), project_name, harness_name
+    ]
+
+    # Add hints if enabled
+    if self.hints_enabled:
+        hints_path = self._get_hints_path(benchmark_path, harness_name)
+        if hints_path:
+            cmd.extend(["--hints", str(hints_path)])
+            logger.info(f"Using hints from {hints_path}")
+        else:
+            logger.warning(f"Hints enabled but not found for {harness_name}")
+
+    start_time = time.time()
+    result = subprocess.run(
+        cmd,
+        cwd=self.oss_fuzz_path,
+        capture_output=True,
+        text=True,
+        timeout=self.config.get("run_timeout", 3600)
+    )
+    execution_time = time.time() - start_time
+
+    return CRSResult(
+        harness_name=harness.name,
+        execution_time=execution_time,
+        success=(result.returncode == 0),
+        output=result.stdout,
+        error=result.stderr if result.returncode != 0 else None
+    )
+```
+
+**Hints Directory Structure**:
+
+The hints directory is expected to follow this structure:
+```
+benchmarks/<project>/.aixcc/<harness>/hints/
+├── sarif/                    # Static analysis reports
+│   ├── codeql.sarif
+│   ├── semgrep.sarif
+│   └── ...
+└── corpus/                   # Pre-fuzzing corpus
+    ├── 1h/                  # 1 hour fuzzing corpus
+    │   ├── input-001
+    │   └── ...
+    └── 1d/                  # 1 day fuzzing corpus
+        ├── input-001
+        └── ...
+```
+
+**Docker Volume Mapping**:
+
+When `--hints` is provided to the OSS-Fuzz interface:
+- Host: `<benchmark-path>/.aixcc/<harness>/hints/`
+- Container: `/hints/`
+
+Inside the container, CRS can access:
+- `/hints/sarif/*.sarif` - Static analysis reports
+- `/hints/corpus/1h/*` - Corpus from 1 hour of fuzzing
+- `/hints/corpus/1d/*` - Corpus from 1 day of fuzzing
+
+**Configuration Example**:
+
+```yaml
+# In experiment config
+crses:
+  ensemble-c:
+    hints_enabled: true
+    hints_corpus_level: "1h"  # Use 1-hour corpus (easier)
+```
+
+**Usage Notes**:
+
+- Hints are optional - CRS execution works without hints
+- Hints path is only passed if it exists on the filesystem
+- CRS implementation decides how to use hints (SARIF, corpus, or both)
+- Corpus level selection allows experimenting with different difficulty levels
+
 ### Output Directory Structure
 
 OSS-Fuzz produces output in:
@@ -757,6 +894,7 @@ Maintain backward compatibility during transition:
 - [ ] `_get_crashes_dir()` - Locate crash output
 - [ ] `_replay_crash_with_sanitizer()` - Re-execute crash
 - [ ] `_get_command_prefix()` - Future command detection
+- [ ] `_get_hints_path()` - Locate hints directory for harness
 
 ### Phase 4: Integration
 

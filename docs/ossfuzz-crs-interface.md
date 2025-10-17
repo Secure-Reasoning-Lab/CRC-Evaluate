@@ -43,6 +43,90 @@ On host, it is `build/out/<crs-name>/<project-name>/<harness-name>/{crashes, cor
 
 In the docker container, the directory will be mapped to `/out/<harness-name>/{crashes, corpus}`.
 
+### Optional Hints Support
+
+CRS implementations can optionally receive hints to guide vulnerability discovery. Hints include:
+
+- **SARIF reports**: Static analysis results pointing to potential bug locations
+- **Pre-fuzzing corpus**: Seed inputs from short fuzzing runs to bootstrap fuzzing
+
+**Command-line interface:**
+
+```sh
+python3 infra/helper.py run_crs <config> <project> <harness> --hints <hints-dir>
+```
+
+**Example:**
+
+```sh
+python3 infra/helper.py run_crs ensemble-c json-c json_array_fuzzer \
+  --hints /path/to/benchmarks/json-c/.aixcc/json_array_fuzzer/hints
+```
+
+**Hints directory structure:**
+
+```
+hints/
+├── sarif/                    # Static analysis reports
+│   ├── codeql.sarif         # CodeQL analysis results
+│   ├── semgrep.sarif        # Semgrep analysis results
+│   └── ...                  # Other SARIF-format reports
+└── corpus/                   # Pre-fuzzing corpus
+    ├── 1h/                  # Corpus from 1 hour of fuzzing
+    │   ├── input-001
+    │   ├── input-002
+    │   └── ...
+    └── 1d/                  # Corpus from 1 day of fuzzing
+        ├── input-001
+        ├── input-002
+        └── ...
+```
+
+**Container filesystem mapping:**
+
+When `--hints` is provided, the hints directory is mounted in the container:
+
+- Host: `<hints-dir>` (e.g., `benchmarks/json-c/.aixcc/json_array_fuzzer/hints/`)
+- Container: `/hints/`
+
+Inside the container, CRS can access:
+- `/hints/sarif/*.sarif` - Static analysis reports in SARIF format
+- `/hints/corpus/1h/*.blob` - Corpus from 1 hour of fuzzing
+- `/hints/corpus/1d/*.blob` - Corpus from 1 day of fuzzing
+
+**Usage notes:**
+
+- Hints are optional - CRS should work without them
+- CRS can choose which hints to use (e.g., only SARIF, only corpus, or both)
+- CRS can select corpus difficulty level (1h = easier, 1d = harder)
+- Multiple SARIF files from different tools can be provided
+- SARIF format: [SARIF v2.1.0 specification](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
+
+**Typical benchmark structure:**
+
+```
+benchmarks/json-c/
+├── .aixcc/
+│   ├── meta.yaml
+│   ├── json_array_fuzzer/
+│   │   ├── cpv_0/
+│   │   │   └── vuln.yaml
+│   │   └── hints/              # Hints for this harness
+│   │       ├── sarif/
+│   │       │   ├── codeql.sarif
+│   │       │   └── semgrep.sarif
+│   │       └── corpus/
+│   │           ├── 1h/
+│   │           │   ├── input-001
+│   │           │   └── ...
+│   │           └── 1d/
+│   │               └── ...
+│   └── json_parse_fuzzer/
+│       └── hints/              # Separate hints per harness
+│           └── ...
+└── ...
+```
+
 ---
 
 ## OSS-Patch CRS Interface (Patch Generation)
@@ -108,14 +192,14 @@ python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
 
 ### Key Differences from OSS-Fuzz Interface
 
-| Feature | OSS-Fuzz (Bug Finding) | OSS-Patch (Patch Generation) |
-|---------|------------------------|------------------------------|
-| Repository | `oss-fuzz` | `oss-patch` |
-| Purpose | Vulnerability discovery | Program repair |
-| POV argument | Not applicable | Optional (`--pov`) |
-| Harness argument | Positional | Named (`--harness`) |
-| LiteLLM | Optional | Required (`--litellm-base`, `--litellm-key`) |
-| OSS-Fuzz path | Not needed | Required (`--oss-fuzz`) |
+| Feature          | OSS-Fuzz (Bug Finding)  | OSS-Patch (Patch Generation)                 |
+|------------------|-------------------------|----------------------------------------------|
+| Repository       | `oss-fuzz`              | `oss-patch`                                  |
+| Purpose          | Vulnerability discovery | Program repair                               |
+| POV argument     | Not applicable          | Optional (`--pov`)                           |
+| Harness argument | Positional              | Named (`--harness`)                          |
+| LiteLLM          | Optional                | Required (`--litellm-base`, `--litellm-key`) |
+| OSS-Fuzz path    | Not needed              | Required (`--oss-fuzz`)                      |
 
 ---
 
