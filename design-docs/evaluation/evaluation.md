@@ -244,35 +244,53 @@ full_mode:
 
 The evaluation module is designed to integrate with the OSS-Fuzz CRS interface for actual CRS implementations.
 
-### Future CRSExecutor Implementation
+**See [CRS Executors Design](./crs-executors.md) for complete implementation details** covering:
+- `OSSFuzzBugFindingExecutor` for vulnerability discovery
+- `OSSPatchExecutor` for patch generation
+- Docker integration and container management
+- POV detection logic and crash analysis
+- Configuration management
+- Build caching strategy
+- Command migration to future formats
+
+### Executor Overview
+
+Concrete CRS executors wrap the OSS-Fuzz/OSS-Patch command-line interfaces:
 
 ```python
-class OSSFuzzCRSExecutor(CRSExecutor):
-    """CRS executor using OSS-Fuzz interface."""
+# Bug Finding Executor
+class OSSFuzzBugFindingExecutor(CRSExecutor):
+    """Wraps OSS-Fuzz bug finding interface."""
+    # Build: python3 infra/helper.py build_crs <config-dir> <project>
+    # Run: python3 infra/helper.py run_crs <config-dir> <project> <harness>
 
-    def __init__(self, crs_config_name: str, oss_fuzz_path: Path):
-        self.crs_config_name = crs_config_name
-        self.oss_fuzz_path = oss_fuzz_path
-
-    def configure_crs(self, config: Dict[str, Any]) -> None:
-        # Build CRS docker image
-        # python3 infra/helper.py build_crs <crs-config-name> <project-name>
-        pass
-
-    def run_crs(self, benchmark_path: Path, harness: HarnessFile,
-                base_commit: str, ref_commit: Optional[str] = None) -> CRSResult:
-        # Run CRS on harness
-        # python3 infra/helper.py run_crs <crs-config-name> <project-name> <harness-name>
-        pass
-
-    def process_pov_results(self, crs_result: CRSResult,
-                           harness: HarnessFile) -> List[POVResult]:
-        # Analyze crashes/corpus output
-        # Match against known POVs
-        pass
+# Patch Generation Executor
+class OSSPatchExecutor(CRSExecutor):
+    """Wraps OSS-Patch interface."""
+    # Build: python3 infra/helper.py build_crs <config> <project> --oss-fuzz $OSS_FUZZ_HOME
+    # Run: python3 infra/helper.py run_crs <config> <project> --harness <name> --litellm-*
 ```
 
-See `docs/ossfuzz-crs-interface.md` for the complete interface specification.
+### Usage Example
+
+```python
+from crsbench.evaluation import BenchmarkRunner, OSSFuzzBugFindingExecutor
+
+# Create executor
+executor = OSSFuzzBugFindingExecutor(
+    crs_config_name="ensemble-c",
+    oss_fuzz_path=Path("/path/to/oss-fuzz")
+)
+
+# Run evaluation
+runner = BenchmarkRunner(executor)
+result = runner.run_benchmark(
+    benchmark_path=Path("benchmarks/json-c"),
+    mode="auto"
+)
+```
+
+See [CRS Executors Design](./crs-executors.md) and [OSS-Fuzz CRS Interface](../docs/ossfuzz-crs-interface.md) for complete details.
 
 ## Error Handling
 
@@ -547,7 +565,7 @@ if validation.metadata["has_delta_mode"]:
 
 ## References
 
-- [RFC Specification](../docs/benchmark-spec.md): Benchmark format specification
-- [Architecture](./architecture.md): Overall CRSBench architecture
-- [OSS-Fuzz Interface](../docs/ossfuzz-crs-interface.md): CRS interface specification
-- [Validation Module](./validation.md): Validation module design
+- [RFC Specification](../../docs/benchmark-spec.md): Benchmark format specification
+- [Architecture](../architecture.md): Overall CRSBench architecture
+- [OSS-Fuzz Interface](../../docs/ossfuzz-crs-interface.md): CRS interface specification
+- [Validation Module](../validation/validation.md): Validation module design

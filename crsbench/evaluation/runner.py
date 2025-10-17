@@ -152,7 +152,7 @@ class BenchmarkRunner:
             # If validation failed, create minimal config to continue
             self.logger.warning(f"Failed to parse config, using minimal fallback: {e}")
             from crsbench.validation.schemas import HarnessFile, FullMode
-            dummy_harness = HarnessFile(name="dummy", path="$REPO/dummy.c")
+            dummy_harness = HarnessFile(name="dummy", path="/src/project/dummy.c")
             dummy_full_mode = FullMode(base_commit="abc123def456")
             return BenchmarkConfig(harness_files=[dummy_harness], full_mode=dummy_full_mode)
 
@@ -274,21 +274,3 @@ class BenchmarkRunner:
                 )
 
                 collector.add_harness_result(harness_result)
-
-    def _resolve_path_variables(self, path: str, benchmark_path: Path) -> str:
-        """Resolve path variables like $REPO and $PROJECT.
-
-        $REPO refers to the benchmark repository root directory.
-        $PROJECT refers to the project directory (distinct from $REPO).
-        """
-        resolved = path
-
-        # Replace $REPO with benchmark path
-        if "$REPO/" in resolved:
-            resolved = resolved.replace("$REPO/", str(benchmark_path) + "/")
-
-        # $PROJECT is handled differently - it may refer to a project subdirectory
-        # For now, we keep it as-is since the actual CRS implementation will handle it
-        # This is a placeholder for when we know the actual $PROJECT resolution logic
-
-        return resolved

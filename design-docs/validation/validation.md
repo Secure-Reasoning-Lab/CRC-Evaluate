@@ -743,5 +743,5 @@ def validate(data: dict) -> ValidationResult:
 
 - [RFC Specification](../docs/benchmark-spec.md): Full benchmark format specification
 - [Module README](../crsbench/validation/README.md): User-facing documentation
-- [Architecture](./architecture.md): Overall CRSBench architecture
+- [Architecture](../architecture.md): Overall CRSBench architecture
 - [Pydantic Documentation](https://docs.pydantic.dev/): Pydantic v2 docs

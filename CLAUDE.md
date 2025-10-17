@@ -157,6 +157,30 @@ Please summarize reference projects by creating markdown files in `docs_referenc
 - Reference: See `design-docs/` directory for examples
 - Target audience: Implementation developers and code reviewers
 
+### Design Docs Organization
+Design documents are organized by CRSBench module:
+
+```
+design-docs/
+├── validation/              # Validation module design docs
+│   └── validation.md
+├── evaluation/              # Evaluation module design docs
+│   ├── evaluation.md
+│   └── crs-executors.md
+├── migration/               # Migration module design docs
+│   └── migration-atlanta-to-rfc.md
+├── distributed/             # Distributed execution design docs
+│   └── distributed-job-queue.md
+└── architecture.md          # General architecture (root level)
+```
+
+**Rules**:
+- Module-specific docs go in `design-docs/<module-name>/`
+- Only create directories for actual `crsbench/` modules (validation, evaluation, migration, distributed, etc.)
+- General/cross-cutting docs (like architecture.md) stay at `design-docs/` root
+- Do NOT create directories for non-existent modules (e.g., general/, orchestrator/)
+- Match directory names exactly to `crsbench/` module names
+
 ## Usage or reference of third party codebase
 - Please document the usage of third party codebase for good open-source gesture
   :)

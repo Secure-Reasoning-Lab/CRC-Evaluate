@@ -53,7 +53,7 @@ CRSBench/
 - Safe for LLM agent tool calls
 - Graceful error handling with detailed reporting
 
-See [design-docs/validation.md](./validation.md) for detailed documentation.
+See [design-docs/validation/validation.md](./validation/validation.md) for detailed documentation.
 
 ### 2. evaluation/
 **Purpose**: Run CRS evaluations and generate reports.
@@ -398,6 +398,10 @@ When contributing to CRSBench:
 ## Related Documentation
 
 - [RFC Specification](../docs/benchmark-spec.md): Benchmark format specification
-- [Validation Module](./validation.md): Detailed validation documentation
+- [Validation Module](./validation/validation.md): Detailed validation documentation
+- [Evaluation Module](./evaluation/evaluation.md): Evaluation module design
+- [CRS Executors](./evaluation/crs-executors.md): CRS executor implementations
+- [Migration Module](./migration/migration-atlanta-to-rfc.md): Atlanta to RFC migration
+- [Distributed Module](./distributed/distributed-job-queue.md): Distributed job queue
 - [Example Scripts](../example_*.py): Usage examples
 - [Module READMEs](../crsbench/*/README.md): Per-module documentation
