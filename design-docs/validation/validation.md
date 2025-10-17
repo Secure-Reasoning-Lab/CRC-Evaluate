@@ -155,6 +155,65 @@ class BenchmarkConfig(BaseModel):
 - Harness names must be unique
 - Commit hashes must be valid (7-40 hex characters)
 
+### ExperimentConfig Model
+
+```python
+class ExperimentConfig(BaseModel):
+    experiment: str                         # Unique experiment identifier
+    trials: int                            # Number of trials (>= 1)
+    max_total_time: int                    # Max time per trial in seconds (>= 1)
+    difficulty_level: int                  # Difficulty level (0-4)
+    experiment_filestore: str              # Experiment data storage path
+    report_filestore: str                  # Report output path
+    crses: List[str]                       # List of CRS to evaluate
+    benchmarks: Optional[List[str]]        # Benchmark IDs (mutually exclusive with benchmark_suite)
+    benchmark_suite: Optional[str]         # Suite name (mutually exclusive with benchmarks)
+    redis_host: Optional[str]              # Redis server for distributed mode
+    benchmarks_root: Optional[str]         # Root directory for benchmarks
+```
+
+**Validation Rules**:
+- `experiment` cannot be empty
+- `crses` must have at least one CRS, no duplicates, no empty strings
+- `trials` must be >= 1
+- `max_total_time` must be >= 1
+- `difficulty_level` must be 0-4
+- `experiment_filestore` and `report_filestore` cannot be empty
+- **Mutual Exclusivity**: Must specify EITHER `benchmarks` OR `benchmark_suite`, not both
+- **At Least One**: Must specify at least one of `benchmarks` or `benchmark_suite`
+- `redis_host` if "none" is converted to None (local mode)
+- `benchmarks_root` if provided must exist and be a directory
+
+**Helper Methods**:
+```python
+def get_benchmark_list(benchmark_suites_dir: str = "benchmark-suites") -> List[str]:
+    """Resolve benchmarks from either direct list or suite file."""
+    if self.benchmarks:
+        return self.benchmarks
+    if self.benchmark_suite:
+        # Load suite file and return benchmark_list
+        ...
+    raise ValueError("No benchmark source specified")
+```
+
+### BenchmarkSuiteConfig Model
+
+```python
+class BenchmarkSuiteConfig(BaseModel):
+    Name: str                               # Suite identifier
+    Description: str                        # Suite description
+    release_date: str                       # Release date (MM.DD.YYYY)
+    benchmark_list: List[str]               # Benchmark IDs in suite
+```
+
+**Validation Rules**:
+- `Name` cannot be empty
+- `Description` cannot be empty
+- `release_date` must match format MM.DD.YYYY (e.g., "09.23.2025")
+- `benchmark_list` must have at least one benchmark
+- No duplicate benchmark IDs in list
+- No empty strings in benchmark_list
+
 ## Validation Pipeline (format_validator.py)
 
 ### Validation Flow

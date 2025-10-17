@@ -187,16 +187,26 @@ uv pip install -e .
 ```bash
 crsbench \
   --experiment-config <YAML config> \
-  --benchmarks <list or suite name> \
-  --experiment-name <identifier> \
-  --crses <list of CRS implementations>
+  [--experiment-name <identifier>] \
+  [--crses <list of CRS implementations>] \
+  [--benchmarks <list of benchmarks>] \
+  [--benchmark-suite <suite name>] \
+  [--local-only]
 ```
+
+**Key Features**:
+- All arguments except `--experiment-config` are optional
+- CLI arguments override config file values
+- Automatic local vs. distributed mode selection
+- Supports benchmark suites or direct benchmark lists
 
 **Configuration**: Defined in `pyproject.toml`:
 ```toml
 [project.scripts]
 crsbench = "crsbench.run_experiment:main"
 ```
+
+**See**: [Orchestration Design](./orchestration.md) for detailed implementation documentation
 
 ## Integration Points
 
@@ -412,6 +422,7 @@ When contributing to CRSBench:
 ## Related Documentation
 
 - [RFC Specification](../docs/benchmark-spec.md): Benchmark format specification
+- [Orchestration Module](./orchestration.md): Experiment orchestration and CLI design
 - [Validation Module](./validation/validation.md): Detailed validation documentation
 - [Evaluation Module](./evaluation/evaluation.md): Evaluation module design
 - [CRS Executors](./evaluation/crs-executors.md): CRS executor implementations

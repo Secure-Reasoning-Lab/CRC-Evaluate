@@ -73,6 +73,22 @@ Examples:
     )
 
     parser.add_argument(
+        '--experiment-name',
+        type=str,
+        required=False,
+        metavar='EXPERIMENT_NAME',
+        help='Name for this experiment (overrides config file if specified)'
+    )
+
+    parser.add_argument(
+        '--crses',
+        type=str,
+        required=False,
+        metavar='CRS_LIST',
+        help='Comma-separated list of CRS implementations (overrides config file if specified)'
+    )
+
+    parser.add_argument(
         '--benchmarks',
         type=str,
         required=False,
@@ -81,19 +97,11 @@ Examples:
     )
 
     parser.add_argument(
-        '--experiment-name',
+        '--benchmark-suite',
         type=str,
-        required=True,
-        metavar='EXPERIMENT_NAME',
-        help='Name for this experiment (used for tracking and reporting)'
-    )
-
-    parser.add_argument(
-        '--crses',
-        type=str,
-        required=True,
-        metavar='CRS_LIST',
-        help='Comma-separated list of CRS implementations to evaluate (e.g., atlantis-c,atlantis-multilang)'
+        required=False,
+        metavar='SUITE_NAME',
+        help='Benchmark suite name (overrides config file if specified, mutually exclusive with --benchmarks)'
     )
 
     parser.add_argument(
@@ -243,13 +251,13 @@ def should_use_distributed_mode(args: argparse.Namespace, config, total_jobs: in
     return True
 
 
-def run_experiment_local(args: argparse.Namespace, config, benchmarks: List[str], crses: List[str]) -> None:
+def run_experiment_local(experiment_name: str, config, benchmarks: List[str], crses: List[str]) -> None:
     """Run experiment locally without Redis queue.
 
     Executes all trials sequentially in the current process.
 
     Args:
-        args: Parsed command line arguments
+        experiment_name: Experiment identifier
         config: Experiment configuration
         benchmarks: List of benchmark identifiers
         crses: List of CRS identifiers
@@ -298,7 +306,7 @@ def run_experiment_local(args: argparse.Namespace, config, benchmarks: List[str]
     logger.info("Experiment Complete - Generating Report")
     logger.info("="*60)
 
-    generate_final_report(results, args.experiment_name, config)
+    generate_final_report(results, experiment_name, config)
 
 
 def monitor_jobs(queue, job_list: List, experiment_name: str) -> List[Dict[str, Any]]:
@@ -439,11 +447,11 @@ def _monitor_jobs_rich(queue, job_list: List, experiment_name: str) -> List[Dict
     return results
 
 
-def run_experiment_distributed(args: argparse.Namespace, config, benchmarks: List[str], crses: List[str]) -> None:
+def run_experiment_distributed(experiment_name: str, config, benchmarks: List[str], crses: List[str]) -> None:
     """Run experiment using Redis queue-based distributed execution.
 
     Args:
-        args: Parsed command line arguments
+        experiment_name: Experiment identifier
         config: Experiment configuration
         benchmarks: List of benchmark identifiers
         crses: List of CRS identifiers
@@ -457,11 +465,11 @@ def run_experiment_distributed(args: argparse.Namespace, config, benchmarks: Lis
 
     # Initialize queue
     try:
-        queue = initialize_queue(config.redis_host, args.experiment_name)
+        queue = initialize_queue(config.redis_host, experiment_name)
     except Exception as e:
         logger.error(f"Failed to initialize queue: {e}")
         logger.error("Falling back to local execution mode")
-        run_experiment_local(args, config, benchmarks, crses)
+        run_experiment_local(experiment_name, config, benchmarks, crses)
         return
 
     # Generate trial matrix
@@ -493,14 +501,14 @@ def run_experiment_distributed(args: argparse.Namespace, config, benchmarks: Lis
 
     # Monitor progress
     logger.info("\nMonitoring job progress...")
-    results = monitor_jobs(queue, jobs, args.experiment_name)
+    results = monitor_jobs(queue, jobs, experiment_name)
 
     # Generate final report
     logger.info("\n" + "="*60)
     logger.info("Experiment Complete - Generating Report")
     logger.info("="*60)
 
-    generate_final_report(results, args.experiment_name, config)
+    generate_final_report(results, experiment_name, config)
 
 
 def generate_final_report(results: List[Dict[str, Any]], experiment_name: str, config) -> None:
@@ -560,41 +568,72 @@ def main() -> None:
     # Validate arguments
     validate_arguments(args)
 
-    # Parse list arguments from CLI
-    cli_benchmarks = parse_list_argument(args.benchmarks) if args.benchmarks else None
-    crses = parse_list_argument(args.crses)
-
-    # Log initial configuration
-    logger.info("="*60)
-    logger.info("CRSBench Experiment Runner")
-    logger.info("="*60)
-    logger.info(f"Experiment name: {args.experiment_name}")
-    logger.info(f"Configuration file: {args.experiment_config}")
-    if cli_benchmarks:
-        logger.info(f"CLI Benchmarks ({len(cli_benchmarks)}): {', '.join(cli_benchmarks)}")
-    logger.info(f"CRSes ({len(crses)}): {', '.join(crses)}")
-    logger.info("="*60)
-
     # Load and validate experiment configuration
     config_path = Path(args.experiment_config)
     config = load_experiment_config(config_path)
 
-    # Resolve benchmarks from config (either benchmarks list or benchmark_suite)
+    # Resolve experiment name (CLI overrides config)
+    experiment_name = args.experiment_name if args.experiment_name else config.experiment
+    logger.info("="*60)
+    logger.info("CRSBench Experiment Runner")
+    logger.info("="*60)
+    logger.info(f"Experiment name: {experiment_name}")
+    if args.experiment_name:
+        logger.info(f"  (overridden from CLI, config has: {config.experiment})")
+    logger.info(f"Configuration file: {args.experiment_config}")
+
+    # Resolve CRSes (CLI overrides config)
+    if args.crses:
+        crses = parse_list_argument(args.crses)
+        logger.info(f"CRSes ({len(crses)}): {', '.join(crses)}")
+        logger.info(f"  (overridden from CLI, config has: {', '.join(config.crses)})")
+    else:
+        crses = config.crses
+        logger.info(f"CRSes ({len(crses)}): {', '.join(crses)}")
+
+    # Resolve benchmarks (CLI has highest priority)
+    # Priority: --benchmarks > --benchmark-suite > config.benchmarks > config.benchmark_suite
     try:
-        # Use CLI benchmarks if provided, otherwise use config benchmarks
-        if cli_benchmarks:
-            benchmarks = cli_benchmarks
-            logger.info(f"Using CLI-specified benchmarks: {', '.join(benchmarks)}")
+        if args.benchmarks and args.benchmark_suite:
+            logger.error("Cannot specify both --benchmarks and --benchmark-suite")
+            sys.exit(1)
+
+        if args.benchmarks:
+            # CLI --benchmarks has highest priority
+            benchmarks = parse_list_argument(args.benchmarks)
+            logger.info(f"Benchmarks ({len(benchmarks)}): {', '.join(benchmarks)}")
+            logger.info("  (overridden from CLI --benchmarks)")
+        elif args.benchmark_suite:
+            # CLI --benchmark-suite has second priority
+            from crsbench.validation.schemas import BenchmarkSuiteConfig
+            import yaml
+
+            suite_path = Path("benchmark-suites") / f"{args.benchmark_suite}.yaml"
+            if not suite_path.exists():
+                logger.error(f"Benchmark suite file not found: {suite_path}")
+                sys.exit(1)
+
+            with open(suite_path, 'r') as f:
+                suite_data = yaml.safe_load(f)
+            suite_config = BenchmarkSuiteConfig(**suite_data)
+            benchmarks = suite_config.benchmark_list
+            logger.info(f"Benchmark suite: {args.benchmark_suite}")
+            logger.info(f"Benchmarks ({len(benchmarks)}): {', '.join(benchmarks)}")
+            logger.info("  (overridden from CLI --benchmark-suite)")
         else:
+            # Use config (benchmarks or benchmark_suite)
             benchmarks = config.get_benchmark_list()
             if config.benchmark_suite:
-                logger.info(f"Using benchmark suite '{config.benchmark_suite}': {', '.join(benchmarks)}")
+                logger.info(f"Benchmark suite: {config.benchmark_suite}")
+                logger.info(f"Benchmarks ({len(benchmarks)}): {', '.join(benchmarks)}")
             else:
-                logger.info(f"Using config-specified benchmarks: {', '.join(benchmarks)}")
+                logger.info(f"Benchmarks ({len(benchmarks)}): {', '.join(benchmarks)}")
 
     except ValueError as e:
         logger.error(f"Failed to resolve benchmarks: {e}")
         sys.exit(1)
+
+    logger.info("="*60)
 
     # Calculate total jobs
     total_jobs = len(benchmarks) * len(crses) * config.trials
@@ -605,9 +644,9 @@ def main() -> None:
 
     # Run experiment in appropriate mode
     if use_distributed:
-        run_experiment_distributed(args, config, benchmarks, crses)
+        run_experiment_distributed(experiment_name, config, benchmarks, crses)
     else:
-        run_experiment_local(args, config, benchmarks, crses)
+        run_experiment_local(experiment_name, config, benchmarks, crses)
 
 
 if __name__ == "__main__":

@@ -192,11 +192,13 @@ class ValidationMetadata(BaseModel):
 class ExperimentConfig(BaseModel):
     """Experiment configuration schema."""
 
+    experiment: str = Field(..., description="Unique identifier for this experiment run")
     trials: int = Field(..., ge=1, description="Number of trials (must be >= 1)")
     max_total_time: int = Field(..., ge=1, description="Maximum time in seconds per trial (must be >= 1)")
     difficulty_level: int = Field(..., ge=0, le=4, description="Difficulty level controlling assistance (0-4)")
     experiment_filestore: str = Field(..., description="Directory path for experiment data storage")
     report_filestore: str = Field(..., description="Directory path for HTML reports and summary data")
+    crses: List[str] = Field(..., description="List of CRS implementations to evaluate")
     redis_host: Optional[str] = Field(
         default=None,
         description="Redis server hostname or IP (optional, omit or set to 'none' for local mode)"
@@ -213,6 +215,31 @@ class ExperimentConfig(BaseModel):
         default=None,
         description="Benchmark suite name to load from benchmark-suites/ (mutually exclusive with benchmarks)"
     )
+
+    @validator('experiment')
+    def validate_experiment(cls, v):
+        """Validate experiment name."""
+        if not v or not v.strip():
+            raise ValueError("Experiment name cannot be empty")
+        return v.strip()
+
+    @validator('crses')
+    def validate_crses(cls, v):
+        """Validate CRS list."""
+        if not v:
+            raise ValueError("At least one CRS must be specified")
+
+        # Check for empty strings
+        cleaned = [crs.strip() for crs in v if crs and crs.strip()]
+        if len(cleaned) != len(v):
+            raise ValueError("crses list contains empty CRS names")
+
+        # Check for duplicates
+        if len(cleaned) != len(set(cleaned)):
+            duplicates = [crs for crs in cleaned if cleaned.count(crs) > 1]
+            raise ValueError(f"Duplicate CRS names found: {', '.join(set(duplicates))}")
+
+        return cleaned
 
     @validator('experiment_filestore', 'report_filestore')
     def validate_filestore_path(cls, v):
@@ -325,11 +352,13 @@ class ExperimentConfig(BaseModel):
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary for job serialization."""
         return {
+            'experiment': self.experiment,
             'trials': self.trials,
             'max_total_time': self.max_total_time,
             'difficulty_level': self.difficulty_level,
             'experiment_filestore': self.experiment_filestore,
             'report_filestore': self.report_filestore,
+            'crses': self.crses,
             'redis_host': self.redis_host,
             'benchmarks_root': self.benchmarks_root,
             'benchmarks': self.benchmarks,
