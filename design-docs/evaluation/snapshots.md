@@ -5,19 +5,20 @@ This document describes the design and implementation of periodic snapshot funct
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Architecture](#architecture)
-3. [Configuration](#configuration)
-4. [Threading Model](#threading-model)
-5. [Snapshot Capture Process](#snapshot-capture-process)
-6. [Data Structures](#data-structures)
-7. [Storage Structure](#storage-structure)
-8. [Implementation Details](#implementation-details)
-9. [Integration Points](#integration-points)
-10. [Testing Strategy](#testing-strategy)
-11. [Performance Considerations](#performance-considerations)
-12. [Comparison with FuzzBench](#comparison-with-fuzzbench)
-13. [Implementation Checklist](#implementation-checklist)
-14. [Future Extensions](#future-extensions)
+2. [Incremental vs Full Snapshot Strategy](#incremental-vs-full-snapshot-strategy)
+3. [Architecture](#architecture)
+4. [Configuration](#configuration)
+5. [Threading Model](#threading-model)
+6. [Snapshot Capture Process](#snapshot-capture-process)
+7. [Data Structures](#data-structures)
+8. [Storage Structure](#storage-structure)
+9. [Implementation Details](#implementation-details)
+10. [Integration Points](#integration-points)
+11. [Testing Strategy](#testing-strategy)
+12. [Performance Considerations](#performance-considerations)
+13. [Comparison with FuzzBench](#comparison-with-fuzzbench)
+14. [Implementation Checklist](#implementation-checklist)
+15. [Future Extensions](#future-extensions)
 
 ## Overview
 
@@ -36,8 +37,9 @@ Snapshots provide **progress monitoring** for long-running CRS trials by periodi
 **What snapshots capture:**
 - POVs discovered so far
 - Patches generated so far
+- Corpus files (if CRS generates corpus)
 - LLM usage metrics (tokens, costs, API calls)
-- CRS log excerpts
+- CRS logs (complete output)
 
 **What snapshots do NOT do:**
 - **No verification**: POVs/patches are not tested during snapshot
@@ -49,10 +51,70 @@ Verification and scoring happen **only at trial end**, keeping snapshots fast an
 ### Design Goals
 
 1. **Minimal overhead**: Snapshots should not significantly slow CRS execution
-2. **Filesystem-only**: No database dependencies, simple JSON files
+2. **Filesystem-only**: No database dependencies, compressed tar.gz archives
 3. **Extensible**: Easy to add new snapshot data types
 4. **Thread-safe**: Safe concurrent access between CRS and snapshot threads
-5. **Simple storage**: Human-readable, self-contained snapshot directories
+5. **Efficient storage**: Compressed archives with incremental capture
+
+## Incremental vs Full Snapshot Strategy
+
+### Overview
+
+CRSBench uses a **hybrid capture strategy** inspired by FuzzBench:
+- **Incremental capture**: Only new data since last snapshot (saves storage)
+- **Full capture**: Complete state at each snapshot (easier inspection)
+- **Compression**: All snapshots compressed to tar.gz (reduces storage overhead)
+
+### Capture Strategy by Data Type
+
+| Data Type    | Strategy    | Tracking Method   | Deduplication     | Rationale                                                             |
+|--------------|-------------|-------------------|-------------------|-----------------------------------------------------------------------|
+| **POVs**     | Incremental | Filename set      | During validation | New POVs tracked by filename; stored as-is; deduped later             |
+| **Patches**  | Incremental | Filename set      | During validation | New patches tracked by filename; stored as-is; deduped later          |
+| **Corpus**   | Incremental | Modification time | N/A               | New/modified corpus files tracked by mtime (like FuzzBench)           |
+| **LLM logs** | Full        | N/A               | N/A               | Complete llm-usage.json; simpler than computing JSON diffs            |
+| **CRS logs** | Full        | N/A               | N/A               | Complete crs-output.log; easier to inspect any snapshot independently |
+| **Metadata** | Full        | N/A               | N/A               | Always complete for that snapshot                                     |
+
+### Rationale
+
+**Why incremental for POVs/patches/corpus?**
+- File-based data with clear identifiers (filenames)
+- Easy to track what's new using sets (POVs/patches) or timestamps (corpus)
+- Significant storage savings (only store each POV/patch once)
+- Follows FuzzBench pattern for corpus
+
+**Note on POV/patch deduplication:**
+- Snapshots store POVs/patches **as-is** (no deduplication during capture)
+- CRS may generate duplicate POVs (same vulnerability, different inputs)
+- CRS may generate duplicate patches (same fix, different variations)
+- **Deduplication happens during validation/evaluation phase**
+- This keeps snapshot capture fast and simple
+- Allows post-hoc analysis of CRS behavior (e.g., how many duplicates generated)
+
+**Why full for LLM/CRS logs?**
+- Complex nested JSON structure (LLM logs) - computing diffs is error-prone
+- Plain text logs (CRS logs) - users want complete log at any snapshot
+- Compression mitigates storage overhead (logs compress well)
+- Simpler implementation and easier debugging
+
+**Why compression?**
+- Follows FuzzBench pattern (tar.gz archives)
+- Significant space savings (especially for logs and text data)
+- Easy to decompress and inspect with standard tools
+- Typical compression ratio: 5-10x for text/JSON
+
+### Storage Comparison
+
+**Without compression (current design):**
+- 24-hour trial, 15-min snapshots = 96 snapshots
+- ~2 MB per snapshot = ~200 MB per trial
+
+**With compression and incremental capture:**
+- Same trial configuration
+- Incremental POVs/patches: ~100 KB per snapshot (only new files)
+- Full logs with compression: ~500 KB per snapshot
+- **Total: ~50-100 MB per trial (50-75% reduction)**
 
 ## Architecture
 
@@ -84,25 +146,29 @@ BenchmarkRunner
 
 ### Comparison with FuzzBench
 
-| Aspect | FuzzBench | CRSBench |
-|--------|-----------|----------|
-| Threading | Main + worker thread | **Same** |
-| Timing | Sleep-based polling | **Same** |
-| Storage | Google Cloud Storage | **Filesystem only** |
-| Measurement | Separate measurer process | **No separate process** |
-| Verification | Async coverage analysis | **No verification** |
-| Database | PostgreSQL | **None** |
-| Data format | Tar.gz archives | **JSON + diffs** |
+| Aspect           | FuzzBench                      | CRSBench                    |
+|------------------|--------------------------------|-----------------------------|
+| Threading        | Main + worker thread           | **Same**                    |
+| Timing           | Sleep-based polling            | **Same**                    |
+| Storage          | Google Cloud Storage           | **Filesystem only**         |
+| Compression      | tar.gz archives                | **tar.gz archives (same)**  |
+| Incremental data | Corpus only                    | **Corpus + POVs + patches** |
+| Full data        | Crashes (not used for ranking) | **LLM logs + CRS logs**     |
+| Measurement      | Separate measurer process      | **No separate process**     |
+| Verification     | Async coverage analysis        | **No verification**         |
+| Database         | PostgreSQL                     | **None**                    |
 
 **What we adopt:**
 - Simple main + worker thread pattern
 - Sleep-based timing mechanism
 - Incremental capture (only new data)
+- tar.gz compression
 
 **What we adapt:**
 - Local filesystem instead of cloud storage
 - CRS-specific data (POVs, patches, LLM metrics)
 - No separate measurement process
+- Incremental strategy extended to POVs/patches (not just corpus)
 
 **What we skip:**
 - Database storage
@@ -285,119 +351,83 @@ class SnapshotManager:
 ### Capture Flow
 
 ```
-1. Create snapshot directory
-   └─ {trial_dir}/snapshot-{cycle:04d}/
+1. Create temp snapshot directory
+   └─ {trial_dir}/.snapshot-{cycle:04d}/
 
 2. Capture metadata
    └─ Write metadata.json (timestamp, cycle, elapsed_time)
 
-3. Capture POVs (if any new)
+3. Capture POVs (incremental - new only)
    └─ Read {trial_dir}/povs/
-   └─ Write povs.json
+   └─ Track by filename set
+   └─ Copy new POVs to snapshot/povs/
 
-4. Capture patches (if any new)
+4. Capture patches (incremental - new only)
    └─ Read {trial_dir}/patches/
-   └─ Copy to snapshot-{cycle}/patches/
+   └─ Track by filename set
+   └─ Copy new patches to snapshot/patches/
 
-5. Capture LLM metrics
-   └─ Read LLM usage tracker
-   └─ Write llm-usage.json
+5. Capture corpus (incremental - new/modified only)
+   └─ Read {trial_dir}/corpus/
+   └─ Track by modification time (mtime)
+   └─ Copy new/modified corpus to snapshot/corpus/
 
-6. Capture CRS logs
-   └─ Read {trial_dir}/crs-output.log
-   └─ Write crs-log-tail.txt (last 100 lines)
+6. Capture LLM logs (full)
+   └─ Copy complete {trial_dir}/llm-usage.json
+   └─ Includes all cumulative metrics
 
-7. Mark snapshot complete
-   └─ Write .complete marker file
+7. Capture CRS logs (full)
+   └─ Copy complete {trial_dir}/crs-output.log
+   └─ Entire log file
+
+8. Compress snapshot
+   └─ Create snapshot-{cycle:04d}.tar.gz
+   └─ Compress entire .snapshot-{cycle:04d}/ directory
+   └─ Delete temp directory
+
+9. Mark snapshot complete
+   └─ Create snapshot-{cycle:04d}.complete marker file
 ```
 
-### Incremental Capture
+### Incremental Tracking
 
-Only capture **new data since last snapshot**:
+**Implementation approach:**
 
-```python
-def capture_snapshot(self):
-    """Capture a single snapshot."""
-    snapshot_dir = self.trial_dir / f"snapshot-{self.cycle:04d}"
-    snapshot_dir.mkdir(parents=True, exist_ok=True)
-
-    # 1. Metadata
-    metadata = SnapshotMetadata(
-        cycle=self.cycle,
-        timestamp=time.time(),
-        elapsed_time=time.time() - self.start_time,
-        snapshot_period=self.snapshot_period
-    )
-    self._write_json(snapshot_dir / "metadata.json", metadata.to_dict())
-
-    # 2. POVs (incremental)
-    new_povs = self._get_new_povs()
-    if new_povs:
-        self._write_json(snapshot_dir / "povs.json", new_povs)
-
-    # 3. Patches (incremental)
-    new_patches = self._get_new_patches()
-    if new_patches:
-        self._copy_patches(new_patches, snapshot_dir / "patches")
-
-    # 4. LLM metrics (cumulative)
-    llm_usage = self._get_llm_usage()
-    self._write_json(snapshot_dir / "llm-usage.json", llm_usage)
-
-    # 5. CRS log tail
-    log_tail = self._get_log_tail(lines=100)
-    self._write_text(snapshot_dir / "crs-log-tail.txt", log_tail)
-
-    # 6. Mark complete
-    (snapshot_dir / ".complete").touch()
-
-    logger.info(f"Snapshot {self.cycle} captured: {len(new_povs)} POVs, "
-                f"{len(new_patches)} patches")
-```
-
-### Tracking State
-
-Track what has been captured to enable incremental snapshots:
+Track captured files to identify new data:
 
 ```python
 class SnapshotManager:
     def __init__(self, ...):
-        # ... other fields ...
-        self.captured_pov_ids: Set[str] = set()
-        self.captured_patch_ids: Set[str] = set()
-        self.last_log_position: int = 0
+        # Incremental tracking
+        self.captured_pov_ids: Set[str] = set()        # POVs: track by filename
+        self.captured_patch_ids: Set[str] = set()      # Patches: track by filename
+        self.last_corpus_archive_time: float = 0.0     # Corpus: track by mtime
 
-    def _get_new_povs(self) -> List[Dict[str, Any]]:
+    def _get_new_povs(self) -> List[Path]:
         """Get POVs discovered since last snapshot."""
-        pov_dir = self.trial_dir / "povs"
-        if not pov_dir.exists():
-            return []
-
-        new_povs = []
-        for pov_file in pov_dir.glob("*.json"):
-            pov_id = pov_file.stem
-            if pov_id not in self.captured_pov_ids:
-                pov_data = self._read_json(pov_file)
-                new_povs.append(pov_data)
-                self.captured_pov_ids.add(pov_id)
-
-        return new_povs
+        # Return POV files not in captured_pov_ids set
+        # Track by filename (e.g., "pov_001")
 
     def _get_new_patches(self) -> List[Path]:
         """Get patches generated since last snapshot."""
-        patch_dir = self.trial_dir / "patches"
-        if not patch_dir.exists():
-            return []
+        # Return patch files not in captured_patch_ids set
+        # Track by filename (e.g., "patch_001.diff")
 
-        new_patches = []
-        for patch_file in patch_dir.glob("*.diff"):
-            patch_id = patch_file.stem
-            if patch_id not in self.captured_patch_ids:
-                new_patches.append(patch_file)
-                self.captured_patch_ids.add(patch_id)
-
-        return new_patches
+    def _get_new_corpus_files(self) -> List[Path]:
+        """Get new/modified corpus files since last snapshot."""
+        # Return corpus files where mtime > last_corpus_archive_time
+        # Like FuzzBench's incremental corpus archiving
 ```
+
+**Key methods:**
+- `capture_snapshot()`: Main capture orchestration
+- `_get_new_povs()`: Identify new POV files
+- `_get_new_patches()`: Identify new patch files
+- `_get_new_corpus_files()`: Identify new/modified corpus files
+- `_create_tar_gz()`: Compress snapshot directory
+- `_cleanup_temp_dir()`: Remove temporary snapshot directory
+
+See `crsbench/evaluation/snapshot_manager.py` for full implementation.
 
 ## Data Structures
 
@@ -428,36 +458,46 @@ class SnapshotMetadata:
 
 ### POV Data Format
 
-**File:** `snapshot-{cycle}/povs.json`
+**Files:** `povs/` directory (inside snapshot tar.gz)
 
-```json
-[
-  {
-    "pov_id": "pov_001",
-    "harness_name": "parse_harness",
-    "discovered_at": 1234567890.5,
-    "sanitizer": "address",
-    "error_token": "heap-buffer-overflow",
-    "crash_input": "base64_encoded_input...",
-    "discovery_method": "fuzzing"
-  },
-  {
-    "pov_id": "pov_002",
-    "harness_name": "parse_harness",
-    "discovered_at": 1234567950.2,
-    "sanitizer": "address",
-    "error_token": "use-after-free",
-    "crash_input": "base64_encoded_input...",
-    "discovery_method": "static_analysis"
-  }
-]
+**Capture strategy:** Incremental (new POVs only)
+
+Each snapshot contains only POV files that are new since the last snapshot. POVs are stored **as-is** without deduplication.
+
+**Format:** Binary blobs (test inputs that trigger vulnerabilities)
+
 ```
+povs/
+├── pov_001        # Binary blob (not .json)
+├── pov_002        # Binary blob
+└── pov_003        # Binary blob
+```
+
+**Note:**
+- POVs are binary test case files, not JSON
+- Each POV is a test input that triggers a vulnerability when run against the harness
+- CRS may generate duplicate POVs for the same vulnerability
+- Snapshots store all POVs; deduplication happens during the validation/evaluation phase
+- No metadata stored in snapshot - POV validation will determine sanitizer output, error tokens, etc.
 
 ### Patch Data Format
 
-**File:** `snapshot-{cycle}/patches/patch-{id}.diff`
+**Files:** `patches/` directory (inside snapshot tar.gz)
 
-Standard unified diff format:
+**Capture strategy:** Incremental (new patches only)
+
+Each snapshot contains only patch files that are new since the last snapshot. Patches are stored **as-is** exactly as reported by the CRS, without deduplication.
+
+```
+patches/
+├── patch_001.diff
+├── patch_002.diff
+└── patch_003.diff
+```
+
+**Example patch file (patch_001.diff):**
+
+Standard unified diff format (or whatever format CRS produces):
 
 ```diff
 --- a/src/parser.c
@@ -470,23 +510,18 @@ Standard unified diff format:
  }
 ```
 
-**File:** `snapshot-{cycle}/patches/metadata.json`
-
-```json
-[
-  {
-    "patch_id": "patch_001",
-    "generated_at": 1234567920.0,
-    "target_files": ["src/parser.c"],
-    "description": "Increase buffer size to prevent overflow",
-    "confidence": 0.85
-  }
-]
-```
+**Note:**
+- Patches stored exactly as CRS generates them (no metadata.json)
+- CRS may generate duplicate or similar patches
+- Snapshots store all patches; deduplication and validation happen during the evaluation phase
 
 ### LLM Usage Data Format
 
-**File:** `snapshot-{cycle}/llm-usage.json`
+**File:** `llm-usage.json` (inside snapshot tar.gz)
+
+**Capture strategy:** Full cumulative snapshot
+
+Each snapshot contains the **complete** LLM usage metrics up to that point:
 
 ```json
 {
@@ -519,18 +554,37 @@ Standard unified diff format:
 
 ### CRS Log Format
 
-**File:** `snapshot-{cycle}/crs-log-tail.txt`
+**File:** `crs-output.log` (inside snapshot tar.gz)
 
-Plain text, last N lines of CRS output:
+**Capture strategy:** Full log (not tail)
+
+Each snapshot contains the **complete** CRS output log:
 
 ```
+[2025-01-15 10:00:00] INFO: CRS starting up
+[2025-01-15 10:00:05] INFO: Initializing fuzzing engine
 [2025-01-15 10:45:23] INFO: Starting fuzzing campaign
 [2025-01-15 10:45:30] INFO: Generated 1000 test cases
 [2025-01-15 10:46:15] INFO: Found crash: heap-buffer-overflow
 [2025-01-15 10:47:00] INFO: Analyzing crash with LLM
 [2025-01-15 10:47:45] INFO: Generated POV candidate pov_001
 ...
-(last 100 lines)
+(complete log from trial start to snapshot time)
+```
+
+### Corpus Data Format (if CRS generates corpus)
+
+**Files:** `corpus/` directory (inside snapshot tar.gz)
+
+**Capture strategy:** Incremental (new/modified files only)
+
+Each snapshot contains only corpus files that are new or modified since the last snapshot:
+
+```
+corpus/
+├── input-001        # Binary test input
+├── input-002
+└── input-003
 ```
 
 ## Storage Structure
@@ -542,84 +596,83 @@ experiment_filestore/
 └── {experiment_name}/
     └── {benchmark_id}__{crs_name}/
         └── trial-{trial_id}/
-            ├── snapshot-0001/
-            │   ├── .complete                 # Marker: snapshot finished
-            │   ├── metadata.json             # Snapshot metadata
-            │   ├── povs.json                 # POVs discovered (incremental)
-            │   ├── patches/                  # Patches generated (incremental)
-            │   │   ├── patch-001.diff
-            │   │   ├── patch-002.diff
-            │   │   └── metadata.json
-            │   ├── llm-usage.json            # LLM metrics (cumulative)
-            │   └── crs-log-tail.txt          # CRS log excerpt
-            ├── snapshot-0002/
-            │   ├── .complete
-            │   ├── metadata.json
-            │   ├── povs.json
-            │   ├── patches/
-            │   ├── llm-usage.json
-            │   └── crs-log-tail.txt
-            ├── snapshot-0003/
+            ├── snapshot-0001.tar.gz         # Compressed snapshot cycle 1
+            ├── snapshot-0001.complete       # Marker: snapshot 1 finished
+            ├── snapshot-0002.tar.gz         # Compressed snapshot cycle 2
+            ├── snapshot-0002.complete       # Marker: snapshot 2 finished
+            ├── snapshot-0003.tar.gz
+            ├── snapshot-0003.complete
+            ├── povs/                        # Source POV files (copied from CRS output)
+            │   ├── pov_001                  # Binary blob
+            │   ├── pov_002                  # Binary blob
             │   └── ...
-            ├── povs/                         # Full POV directory (source)
-            │   ├── pov_001.json
-            │   ├── pov_002.json
-            │   └── ...
-            ├── patches/                      # Full patch directory (source)
+            ├── patches/                     # Source patch files (copied from CRS output)
             │   ├── patch-001.diff
             │   ├── patch-002.diff
             │   └── ...
-            ├── crs-output.log               # Full CRS output (source)
-            └── final-report.json            # Trial result (after completion)
+            ├── corpus/                      # Source corpus files (copied from CRS output)
+            │   ├── input-001
+            │   └── ...
+            ├── llm-usage.json              # Cumulative LLM metrics (copied from CRS output)
+            ├── crs-output.log              # Complete CRS log (copied from CRS output)
+            └── final-report.json           # Trial result (after completion)
+```
+
+### Inside Each Snapshot Archive
+
+When extracted, `snapshot-0001.tar.gz` contains:
+
+```
+snapshot-0001/
+├── metadata.json                # Snapshot metadata
+├── povs/                        # New POVs only (incremental)
+│   └── pov_001                  # Binary blob
+├── patches/                     # New patches only (incremental)
+│   └── patch-001.diff
+├── corpus/                      # New/modified corpus only (incremental)
+│   └── input-001
+├── llm-usage.json              # Full cumulative LLM metrics
+└── crs-output.log              # Full CRS log
+```
+
+When extracted, `snapshot-0002.tar.gz` contains:
+
+```
+snapshot-0002/
+├── metadata.json
+├── povs/                        # Only pov_002 (new since snapshot 1)
+│   └── pov_002                  # Binary blob
+├── patches/                     # Only patch-002 (new since snapshot 1)
+│   └── patch-002.diff
+├── corpus/                      # Only new/modified corpus
+│   └── input-002
+├── llm-usage.json              # Full cumulative metrics (updated)
+└── crs-output.log              # Full log (grown since snapshot 1)
 ```
 
 ### File Naming Conventions
 
-- **Snapshot directories**: `snapshot-{cycle:04d}` (e.g., `snapshot-0001`, `snapshot-0023`)
-- **POV files**: `pov_{id}.json` where `id` is sequential or hash-based
+- **Snapshot archives**: `snapshot-{cycle:04d}.tar.gz` (e.g., `snapshot-0001.tar.gz`, `snapshot-0023.tar.gz`)
+- **Completion markers**: `snapshot-{cycle:04d}.complete` (empty file, presence indicates complete snapshot)
+- **POV files**: `pov_{id}` where `id` is sequential or hash-based (binary blobs, no extension)
 - **Patch files**: `patch-{id}.diff` where `id` is sequential or hash-based
-- **Completion marker**: `.complete` (empty file, presence indicates complete snapshot)
+- **Corpus files**: Any filename (binary test inputs)
 
 ### Snapshot Validation
 
-Check if snapshot is complete and valid:
+**Completion check:**
+- Snapshot is complete if `snapshot-{cycle:04d}.complete` marker exists
+- Marker created only after successful compression and cleanup
 
-```python
-def is_snapshot_complete(snapshot_dir: Path) -> bool:
-    """Check if snapshot completed successfully."""
-    complete_marker = snapshot_dir / ".complete"
-    metadata_file = snapshot_dir / "metadata.json"
+**Integrity check:**
+- tar.gz archive can be extracted without errors
+- Required files exist inside archive:
+  - `metadata.json`
+  - `llm-usage.json`
+  - `crs-output.log`
+- metadata.json contains valid SnapshotMetadata structure
 
-    return complete_marker.exists() and metadata_file.exists()
-
-def validate_snapshot(snapshot_dir: Path) -> bool:
-    """Validate snapshot integrity."""
-    if not is_snapshot_complete(snapshot_dir):
-        return False
-
-    # Check required files
-    required_files = [
-        "metadata.json",
-        "llm-usage.json",
-        "crs-log-tail.txt"
-    ]
-
-    for filename in required_files:
-        if not (snapshot_dir / filename).exists():
-            logger.warning(f"Missing required file: {filename}")
-            return False
-
-    # Validate JSON files
-    try:
-        metadata = SnapshotMetadata.from_dict(
-            json.loads((snapshot_dir / "metadata.json").read_text())
-        )
-    except Exception as e:
-        logger.error(f"Invalid metadata.json: {e}")
-        return False
-
-    return True
-```
+**Implementation:** See `crsbench/evaluation/snapshot_manager.py` for validation functions.
 
 ## Implementation Details
 
@@ -627,323 +680,90 @@ def validate_snapshot(snapshot_dir: Path) -> bool:
 
 **File:** `crsbench/evaluation/snapshot_manager.py` (new file)
 
+**Key responsibilities:**
+- Run in separate thread for periodic snapshots
+- Track incremental state (captured POVs/patches/corpus)
+- Create compressed snapshot archives
+- Cleanup temporary directories
+
+**Main interfaces:**
+
 ```python
-"""Snapshot manager for periodic trial progress capture."""
-
-import time
-import json
-import logging
-import threading
-from pathlib import Path
-from typing import Optional, List, Dict, Any, Set
-
-logger = logging.getLogger(__name__)
-
-
 class SnapshotManager:
-    """Manages periodic snapshots of trial progress.
-
-    This class runs in a separate thread and periodically captures
-    trial state without interfering with CRS execution.
-    """
-
-    def __init__(
-        self,
-        trial_dir: Path,
-        snapshot_period: int = 900,
-        start_time: Optional[float] = None
-    ):
-        """Initialize snapshot manager.
-
-        Args:
-            trial_dir: Directory for trial output and snapshots
-            snapshot_period: Seconds between snapshots (default 900 / 15 min)
-            start_time: Trial start time (Unix timestamp), defaults to now
-        """
-        self.trial_dir = Path(trial_dir)
-        self.snapshot_period = snapshot_period
-        self.start_time = start_time or time.time()
-
-        # State tracking
-        self.cycle = 0
-        self.running = False
-        self.last_snapshot_time: Optional[float] = None
-
-        # Incremental capture tracking
-        self.captured_pov_ids: Set[str] = set()
-        self.captured_patch_ids: Set[str] = set()
-        self.last_log_position: int = 0
-
-        logger.info(f"SnapshotManager initialized: period={snapshot_period}s")
+    def __init__(self, trial_dir: Path, snapshot_period: int = 900):
+        """Initialize with trial directory and snapshot interval."""
 
     def run(self):
         """Main snapshot loop (runs in separate thread)."""
-        self.running = True
-        logger.info("Snapshot thread started")
-
-        while self.running:
-            self.sleep_until_next_snapshot()
-
-            if not self.running:
-                break
-
-            self.cycle += 1
-            logger.info(f"Capturing snapshot {self.cycle}")
-
-            try:
-                self.capture_snapshot()
-            except Exception as e:
-                logger.error(f"Snapshot {self.cycle} failed: {e}", exc_info=True)
-                # Continue to next snapshot
-
-        logger.info("Snapshot thread stopped")
 
     def stop(self):
-        """Stop the snapshot loop."""
-        logger.info("Stopping snapshot thread...")
-        self.running = False
-
-    def sleep_until_next_snapshot(self):
-        """Sleep until it's time for the next snapshot."""
-        if self.last_snapshot_time is not None:
-            next_snapshot_time = self.last_snapshot_time + self.snapshot_period
-            sleep_time = next_snapshot_time - time.time()
-        else:
-            sleep_time = self.snapshot_period
-
-        # Sleep in 1-second increments to allow quick shutdown
-        while sleep_time > 0 and self.running:
-            time.sleep(min(sleep_time, 1.0))
-            sleep_time -= 1.0
-
-        self.last_snapshot_time = time.time()
+        """Stop snapshot loop gracefully."""
 
     def capture_snapshot(self):
-        """Capture a single snapshot."""
-        snapshot_dir = self.trial_dir / f"snapshot-{self.cycle:04d}"
-        snapshot_dir.mkdir(parents=True, exist_ok=True)
-
-        # 1. Metadata
-        metadata = {
-            "cycle": self.cycle,
-            "timestamp": time.time(),
-            "elapsed_time": time.time() - self.start_time,
-            "snapshot_period": self.snapshot_period
-        }
-        self._write_json(snapshot_dir / "metadata.json", metadata)
-
-        # 2. POVs (incremental)
-        new_povs = self._get_new_povs()
-        if new_povs:
-            self._write_json(snapshot_dir / "povs.json", new_povs)
-            logger.debug(f"Captured {len(new_povs)} new POVs")
-
-        # 3. Patches (incremental)
-        new_patches = self._get_new_patches()
-        if new_patches:
-            self._copy_patches(new_patches, snapshot_dir / "patches")
-            logger.debug(f"Captured {len(new_patches)} new patches")
-
-        # 4. LLM metrics (cumulative)
-        llm_usage = self._get_llm_usage()
-        self._write_json(snapshot_dir / "llm-usage.json", llm_usage)
-
-        # 5. CRS log tail
-        log_tail = self._get_log_tail(lines=100)
-        if log_tail:
-            self._write_text(snapshot_dir / "crs-log-tail.txt", log_tail)
-
-        # 6. Mark complete
-        (snapshot_dir / ".complete").touch()
-
-        logger.info(
-            f"Snapshot {self.cycle} complete: "
-            f"{len(new_povs)} POVs, {len(new_patches)} patches"
-        )
-
-    # === Incremental capture methods ===
-
-    def _get_new_povs(self) -> List[Dict[str, Any]]:
-        """Get POVs discovered since last snapshot."""
-        pov_dir = self.trial_dir / "povs"
-        if not pov_dir.exists():
-            return []
-
-        new_povs = []
-        for pov_file in pov_dir.glob("*.json"):
-            pov_id = pov_file.stem
-            if pov_id not in self.captured_pov_ids:
-                try:
-                    pov_data = json.loads(pov_file.read_text())
-                    new_povs.append(pov_data)
-                    self.captured_pov_ids.add(pov_id)
-                except Exception as e:
-                    logger.warning(f"Failed to read POV {pov_id}: {e}")
-
-        return new_povs
-
-    def _get_new_patches(self) -> List[Path]:
-        """Get patches generated since last snapshot."""
-        patch_dir = self.trial_dir / "patches"
-        if not patch_dir.exists():
-            return []
-
-        new_patches = []
-        for patch_file in patch_dir.glob("*.diff"):
-            patch_id = patch_file.stem
-            if patch_id not in self.captured_patch_ids:
-                new_patches.append(patch_file)
-                self.captured_patch_ids.add(patch_id)
-
-        return new_patches
-
-    def _get_llm_usage(self) -> Dict[str, Any]:
-        """Get cumulative LLM usage metrics."""
-        llm_usage_file = self.trial_dir / "llm-usage.json"
-
-        if not llm_usage_file.exists():
-            return {
-                "total_api_calls": 0,
-                "total_input_tokens": 0,
-                "total_output_tokens": 0,
-                "total_cost_usd": 0.0
-            }
-
-        try:
-            return json.loads(llm_usage_file.read_text())
-        except Exception as e:
-            logger.warning(f"Failed to read LLM usage: {e}")
-            return {}
-
-    def _get_log_tail(self, lines: int = 100) -> str:
-        """Get last N lines of CRS log."""
-        log_file = self.trial_dir / "crs-output.log"
-
-        if not log_file.exists():
-            return ""
-
-        try:
-            with open(log_file, 'r') as f:
-                # Read all lines and take last N
-                all_lines = f.readlines()
-                tail_lines = all_lines[-lines:]
-                return ''.join(tail_lines)
-        except Exception as e:
-            logger.warning(f"Failed to read log tail: {e}")
-            return ""
-
-    # === Helper methods ===
-
-    def _write_json(self, path: Path, data: Any):
-        """Write data as JSON."""
-        path.write_text(json.dumps(data, indent=2))
-
-    def _write_text(self, path: Path, text: str):
-        """Write text file."""
-        path.write_text(text)
-
-    def _copy_patches(self, patch_files: List[Path], dest_dir: Path):
-        """Copy patch files to snapshot directory."""
-        import shutil
-
-        dest_dir.mkdir(parents=True, exist_ok=True)
-
-        for patch_file in patch_files:
-            dest_file = dest_dir / patch_file.name
-            shutil.copy2(patch_file, dest_file)
+        """Capture single snapshot with compression."""
 ```
+
+**Key methods:**
+- `sleep_until_next_snapshot()`: Timing mechanism with quick shutdown support
+- `_get_new_povs()`: Identify new POV files (filename tracking)
+- `_get_new_patches()`: Identify new patch files (filename tracking)
+- `_get_new_corpus_files()`: Identify new/modified corpus (mtime tracking)
+- `_create_tar_gz()`: Compress snapshot directory
+- `_cleanup_temp_dir()`: Remove temporary snapshot directory
+
+**State tracking:**
+- `captured_pov_ids: Set[str]`: Filenames of captured POVs
+- `captured_patch_ids: Set[str]`: Filenames of captured patches
+- `last_corpus_archive_time: float`: Timestamp for corpus incremental tracking
+
+See full implementation in `crsbench/evaluation/snapshot_manager.py`.
 
 ### Integration with BenchmarkRunner
 
 **File:** `crsbench/evaluation/runner.py` (modifications)
 
+**Changes needed:**
+1. Add `snapshot_period` parameter to `__init__()`
+2. Add `trial_output_dir` parameter to `run_benchmark()`
+3. Start snapshot thread before CRS execution
+4. Stop snapshot thread after CRS completes
+
+**Integration pattern:**
 ```python
 class BenchmarkRunner:
-    def __init__(
-        self,
-        crs_executor: Optional[CRSExecutor] = None,
-        snapshot_period: Optional[int] = None  # New parameter
-    ):
-        """Initialize benchmark runner.
-
-        Args:
-            crs_executor: CRS executor instance
-            snapshot_period: Seconds between snapshots (None = no snapshots)
-        """
-        self.crs_executor = crs_executor or StubCRSExecutor()
+    def __init__(self, crs_executor, snapshot_period=None):
         self.snapshot_period = snapshot_period
-        self.logger = logging.getLogger(__name__)
 
-    def run_benchmark(
-        self,
-        benchmark_path: Union[str, Path],
-        trial_output_dir: Optional[Path] = None,  # New parameter
-        mode: Optional[str] = None,
-        crs_config: Optional[Dict[str, Any]] = None
-    ) -> EvaluationResult:
-        """Run benchmark evaluation with optional snapshots.
-
-        Args:
-            benchmark_path: Path to benchmark
-            trial_output_dir: Directory for trial outputs and snapshots
-            mode: Evaluation mode
-            crs_config: CRS configuration
-
-        Returns:
-            EvaluationResult
-        """
-        # ... existing validation and setup ...
-
+    def run_benchmark(self, ..., trial_output_dir=None):
         # Start snapshot manager if configured
-        snapshot_manager = None
-        snapshot_thread = None
-
         if self.snapshot_period and trial_output_dir:
-            from crsbench.evaluation.snapshot_manager import SnapshotManager
-
-            snapshot_manager = SnapshotManager(
-                trial_dir=trial_output_dir,
-                snapshot_period=self.snapshot_period,
-                start_time=time.time()
-            )
-
-            snapshot_thread = threading.Thread(
-                target=snapshot_manager.run,
-                daemon=True
-            )
+            snapshot_manager = SnapshotManager(trial_output_dir, self.snapshot_period)
+            snapshot_thread = threading.Thread(target=snapshot_manager.run, daemon=True)
             snapshot_thread.start()
-            self.logger.info("Snapshot thread started")
 
         try:
-            # Run CRS evaluation (existing code)
-            # ... existing evaluation logic ...
-
+            # Run CRS evaluation
+            result = self._run_crs_evaluation(...)
             return result
-
         finally:
             # Stop snapshot thread
             if snapshot_manager:
                 snapshot_manager.stop()
-                if snapshot_thread:
-                    snapshot_thread.join(timeout=5.0)
-                    self.logger.info("Snapshot thread stopped")
+                snapshot_thread.join(timeout=5.0)
 ```
 
 ### Integration with Orchestrator
 
 **File:** `crsbench/run_experiment.py` (modifications)
 
-Pass `snapshot_period` from experiment config to trial runner:
+**Changes needed:**
+1. Pass `config.snapshot_period` to `BenchmarkRunner`
+2. Create trial output directories before running
+3. Pass `trial_output_dir` to `run_benchmark()`
 
+**Integration pattern:**
 ```python
-def run_experiment_local(
-    experiment_name: str,
-    config: ExperimentConfig,
-    benchmarks: List[str],
-    crses: List[str]
-) -> None:
-    """Run experiment locally."""
-
+def run_experiment_local(experiment_name, config, benchmarks, crses):
     for benchmark_id in benchmarks:
         for crs_name in crses:
             for trial_num in range(1, config.trials + 1):
@@ -954,20 +774,18 @@ def run_experiment_local(
                     f"{benchmark_id}__{crs_name}" /
                     f"trial-{trial_num}"
                 )
-                trial_output_dir.mkdir(parents=True, exist_ok=True)
 
                 # Create runner with snapshot support
                 runner = BenchmarkRunner(
                     crs_executor=create_crs_executor(crs_name),
-                    snapshot_period=config.snapshot_period  # Pass from config
+                    snapshot_period=config.snapshot_period
                 )
 
-                # Run benchmark
+                # Run with output directory
                 result = runner.run_benchmark(
                     benchmark_path=benchmark_path,
-                    trial_output_dir=trial_output_dir,  # Pass output dir
-                    mode="auto",
-                    crs_config=crs_config
+                    trial_output_dir=trial_output_dir,
+                    mode="auto"
                 )
 ```
 
@@ -1025,21 +843,28 @@ def generate_snapshot_report(trial_dir: Path) -> Dict[str, Any]:
     """Generate report from trial snapshots."""
 
     snapshots = []
-    for snapshot_dir in sorted(trial_dir.glob("snapshot-*")):
-        if not is_snapshot_complete(snapshot_dir):
+    for snapshot_archive in sorted(trial_dir.glob("snapshot-*.tar.gz")):
+        if not (trial_dir / f"{snapshot_archive.stem}.complete").exists():
             continue
 
-        metadata = json.loads((snapshot_dir / "metadata.json").read_text())
-        povs = json.loads((snapshot_dir / "povs.json").read_text()) if (snapshot_dir / "povs.json").exists() else []
-        llm_usage = json.loads((snapshot_dir / "llm-usage.json").read_text())
+        # Extract and analyze snapshot
+        with tarfile.open(snapshot_archive, 'r:gz') as tar:
+            tar.extractall(temp_dir)
 
-        snapshots.append({
-            "cycle": metadata["cycle"],
-            "elapsed_time": metadata["elapsed_time"],
-            "pov_count": len(povs),
-            "llm_tokens": llm_usage.get("total_input_tokens", 0) + llm_usage.get("total_output_tokens", 0),
-            "llm_cost": llm_usage.get("total_cost_usd", 0.0)
-        })
+            metadata = json.loads((temp_dir / "metadata.json").read_text())
+
+            # Count POV files
+            pov_count = len(list((temp_dir / "povs").glob("pov_*"))) if (temp_dir / "povs").exists() else 0
+
+            llm_usage = json.loads((temp_dir / "llm-usage.json").read_text())
+
+            snapshots.append({
+                "cycle": metadata["cycle"],
+                "elapsed_time": metadata["elapsed_time"],
+                "pov_count": pov_count,
+                "llm_tokens": llm_usage.get("total_input_tokens", 0) + llm_usage.get("total_output_tokens", 0),
+                "llm_cost": llm_usage.get("total_cost_usd", 0.0)
+            })
 
     return {
         "snapshots": snapshots,
@@ -1094,23 +919,23 @@ def test_incremental_pov_capture():
 
         manager = SnapshotManager(trial_dir, snapshot_period=60)
 
-        # Create first POV
-        (pov_dir / "pov_001.json").write_text('{"id": "pov_001"}')
+        # Create first POV (binary blob)
+        (pov_dir / "pov_001").write_bytes(b'\x00\x01\x02\x03')
 
         new_povs = manager._get_new_povs()
         assert len(new_povs) == 1
-        assert new_povs[0]["id"] == "pov_001"
+        assert new_povs[0].name == "pov_001"
 
         # Second call should return empty (already captured)
         new_povs = manager._get_new_povs()
         assert len(new_povs) == 0
 
         # Create second POV
-        (pov_dir / "pov_002.json").write_text('{"id": "pov_002"}')
+        (pov_dir / "pov_002").write_bytes(b'\x04\x05\x06\x07')
 
         new_povs = manager._get_new_povs()
         assert len(new_povs) == 1
-        assert new_povs[0]["id"] == "pov_002"
+        assert new_povs[0].name == "pov_002"
 ```
 
 #### 2. Integration Tests
@@ -1165,19 +990,23 @@ def test_snapshot_thread_cleanup():
 def test_snapshot_validation():
     """Test snapshot validation logic."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        snapshot_dir = Path(tmpdir) / "snapshot-0001"
-        snapshot_dir.mkdir()
+        trial_dir = Path(tmpdir)
+        snapshot_archive = trial_dir / "snapshot-0001.tar.gz"
+        completion_marker = trial_dir / "snapshot-0001.complete"
 
-        # Incomplete snapshot
-        assert not is_snapshot_complete(snapshot_dir)
+        # Incomplete snapshot (no marker)
+        assert not is_snapshot_complete(trial_dir, cycle=1)
 
-        # Add metadata
-        (snapshot_dir / "metadata.json").write_text('{}')
-        assert not is_snapshot_complete(snapshot_dir)
+        # Create empty tar.gz
+        with tarfile.open(snapshot_archive, 'w:gz') as tar:
+            pass
+
+        # Still incomplete (no marker)
+        assert not is_snapshot_complete(trial_dir, cycle=1)
 
         # Add completion marker
-        (snapshot_dir / ".complete").touch()
-        assert is_snapshot_complete(snapshot_dir)
+        completion_marker.touch()
+        assert is_snapshot_complete(trial_dir, cycle=1)
 ```
 
 ### Running Tests
@@ -1198,39 +1027,51 @@ pytest tests/test_snapshot_manager.py -k integration -v
 ### Overhead Analysis
 
 **Snapshot thread overhead:**
-- CPU: <1% (mostly sleeping)
+- CPU: ~2-3% during capture (compression overhead)
 - Memory: <10 MB (tracking sets and file handles)
-- I/O: Depends on data volume (typically KB-MB per snapshot)
+- I/O: Depends on data volume
+
+**Per-snapshot timing:**
+- File copying: <0.5s (incremental POVs/patches/corpus)
+- tar.gz compression: 1-3s (depends on log size)
+- Total: ~2-4s per snapshot
 
 **CRS execution impact:**
 - Minimal: Snapshot thread reads files, doesn't block CRS
 - Filesystem provides natural buffering and caching
 - No locks or synchronization needed
+- Compression happens in separate thread
 
 ### Scalability
 
-**Per-trial resource usage:**
-- Disk: ~1-10 MB per snapshot (depends on POVs/patches)
-- Example: 10 snapshots/hour × 2 MB/snapshot = 20 MB/hour/trial
-- 24-hour trial with 15-min snapshots = 96 snapshots = ~200 MB
+**Per-trial storage (with compression):**
+- Without compression/incremental: ~200 MB for 96 snapshots (24h, 15min interval)
+- With compression/incremental: ~50-100 MB (50-75% reduction)
 
-**Storage optimization:**
-- Incremental capture reduces duplication
-- Patches stored as diffs (not full files)
-- Logs tail only (not full log)
-- No compression needed (JSON is compressible if needed later)
+**Breakdown per snapshot (compressed):**
+- Incremental POVs/patches: ~50-100 KB (only new files)
+- Incremental corpus: ~100-500 KB (depends on generation rate)
+- Full LLM logs: ~200-300 KB (JSON compresses well)
+- Full CRS logs: ~200-500 KB (text compresses well)
+- **Total: ~600 KB - 1.5 MB per snapshot**
+
+**Compression ratios:**
+- JSON (LLM logs): ~5-8x compression
+- Text logs (CRS logs): ~5-10x compression
+- Binary corpus: ~1-2x compression (varies widely)
 
 ### Timing Accuracy
 
 **Expected timing:**
 - Snapshot period: ±1 second accuracy
+- Compression adds 1-3s to capture time
 - Good enough for 15-minute (900s) intervals
-- If higher precision needed, reduce sleep increment from 1.0s
 
 **Jitter sources:**
-- Snapshot capture duration (typically <1s)
+- Snapshot capture: 2-4s (copying + compression)
 - OS scheduling delays
 - I/O wait time
+- Disk speed (especially for large logs)
 
 ## Comparison with FuzzBench
 
@@ -1372,8 +1213,10 @@ class SnapshotManager:
         # ... existing capture ...
 
         if self.verify_povs:
-            verified_povs = self._verify_povs_immediate(new_povs)
-            self._write_json(snapshot_dir / "verified-povs.json", verified_povs)
+            # Run POVs against harness to verify they trigger crashes
+            verified_results = self._verify_povs_immediate(new_pov_files)
+            # Store verification results as metadata
+            self._write_json(snapshot_dir / "verification-results.json", verified_results)
 ```
 
 ### 2. Snapshot-Based Reporting
