@@ -29,7 +29,6 @@ class VulnInfo:
     source: str
     repo_url: str
     mode: str
-    branch: str
     language: str
     harness_name: str
     vuln_id: str
@@ -51,6 +50,8 @@ class MigrationContext:
     num_harnesses: int = 0
     vulns: List[VulnInfo] = field(default_factory=list)
     repo_url: str = ""  # Repository URL from project.yaml
+    language: str = ""  # Programming language
+    mode: str = ""  # delta or full
 
 
 class AtlantaToRFCMigrator:
@@ -325,13 +326,15 @@ class AtlantaToRFCMigrator:
                 # Migrate crash logs
                 self._migrate_crash_logs(ctx, harness_name, cpv_name, vuln_dir)
 
+                # Determine source based on project name
+                source = "Team-Atlanta" if "atlanta" in ctx.project_name.lower() else "AFC"
+
                 # Record vulnerability info for CSV report
                 vuln_info = VulnInfo(
                     project_name=ctx.project_name,
-                    source="Team-Atlanta",
+                    source=source,
                     repo_url=ctx.repo_url,  # From project.yaml
                     mode=getattr(ctx, 'mode', 'unknown'),
-                    branch="master",  # Default branch
                     language=getattr(ctx, 'language', 'Unknown'),
                     harness_name=harness_name,
                     vuln_id=cpv_name
@@ -430,6 +433,113 @@ class AtlantaToRFCMigrator:
             ctx.successful = False
             ctx.errors.append("meta.yaml was not created")
 
+    def collect_project_info(self, project_dir: Path) -> MigrationContext:
+        """
+        Collect project information for reporting without performing migration.
+
+        Args:
+            project_dir: Path to the Team-Atlanta project directory
+
+        Returns:
+            MigrationContext with project information
+        """
+        project_name = project_dir.name
+        self.logger.info(f"Collecting info: {project_name}")
+
+        # Extract language from project path
+        language = self._extract_language(project_dir)
+
+        ctx = MigrationContext(
+            source_dir=project_dir,
+            target_dir=self.target_dir / project_name,
+            dry_run=True,  # Report-only doesn't do actual operations
+            project_name=project_name
+        )
+        ctx.language = language
+
+        try:
+            # Read project.yaml for repo URL
+            self._read_project_yaml(ctx)
+
+            # Read config.yaml to extract vulnerability info
+            source_config = ctx.source_dir / ".aixcc" / "config.yaml"
+            if not source_config.exists():
+                ctx.successful = False
+                ctx.errors.append(f"Missing config.yaml")
+                return ctx
+
+            # Parse config to get harness and vulnerability info
+            with open(source_config, 'r') as f:
+                config_data = yaml.safe_load(f)
+
+            # Determine mode
+            if 'delta_mode' in config_data and config_data['delta_mode']:
+                ctx.mode = 'delta'
+            elif 'full_mode' in config_data and config_data['full_mode']:
+                ctx.mode = 'full'
+            else:
+                ctx.mode = 'unknown'
+
+            # Extract harness and vulnerability information
+            harness_files = config_data.get('harness_files', [])
+            for harness in harness_files:
+                harness_name = harness.get('name', 'unknown')
+                cpvs = harness.get('cpvs', [])
+
+                for cpv in cpvs:
+                    # Use 'name' key, same as migration code
+                    cpv_id = cpv.get('name', 'unknown')
+
+                    # Determine source based on project name
+                    source = "Team-Atlanta" if "atlanta" in ctx.project_name.lower() else "AFC"
+
+                    # Create VulnInfo for CSV report
+                    vuln_info = VulnInfo(
+                        project_name=ctx.project_name,
+                        source=source,
+                        repo_url=ctx.repo_url,
+                        mode=ctx.mode,
+                        language=language,
+                        harness_name=harness_name,
+                        vuln_id=cpv_id
+                    )
+                    ctx.vulns.append(vuln_info)
+
+            ctx.successful = True
+            self.logger.debug(f"  Found {len(ctx.vulns)} vulnerabilities in {project_name}")
+
+        except Exception as e:
+            ctx.successful = False
+            ctx.errors.append(f"Error collecting info: {str(e)}")
+            self.logger.exception(f"Error collecting info for {project_name}")
+
+        return ctx
+
+    def collect_all_info(self, specific_projects: Optional[List[str]] = None) -> List[MigrationContext]:
+        """
+        Collect information from all projects for reporting without migration.
+
+        Args:
+            specific_projects: Optional list of specific project names to process
+
+        Returns:
+            List of MigrationContext objects with project information
+        """
+        projects = self.discover_projects(specific_projects)
+
+        if not projects:
+            self.logger.warning("No projects found")
+            return []
+
+        self.logger.info(f"Found {len(projects)} projects to analyze")
+
+        results = []
+        for project_dir in projects:
+            ctx = self.collect_project_info(project_dir)
+            results.append(ctx)
+
+        return results
+
     def migrate_all(self, specific_projects: Optional[List[str]] = None) -> List[MigrationContext]:
         """
         Migrate all discovered projects.
@@ -465,20 +575,21 @@ def write_csv_report(results: List[MigrationContext], output_file: Path) -> None
             'Source',
             'Vuln. Repo URL',
             'Mode',
-            'Branch',
             'Language',
             'Harness Name',
             'Vuln. ID'
         ])
 
         for ctx in results:
+            # Determine source based on project name
+            source = "Team-Atlanta" if "atlanta" in ctx.project_name.lower() else "AFC"
+
             if ctx.skipped:
                 # For skipped migrations, write a single row indicating it was skipped
                 writer.writerow([
                     ctx.project_name,
-                    'Team-Atlanta',
+                    source,
                     'N/A (Already Migrated - Skipped)',
-                    'N/A',
                     'N/A',
                     getattr(ctx, 'language', 'Unknown'),
                     'N/A',
@@ -488,9 +599,8 @@ def write_csv_report(results: List[MigrationContext], output_file: Path) -> None
                 # For failed migrations, write a single row with error info
                 writer.writerow([
                     ctx.project_name,
-                    'Team-Atlanta',
+                    source,
                     'N/A (Migration Failed)',
-                    'N/A',
                     'N/A',
                     getattr(ctx, 'language', 'Unknown'),
                     'N/A',
@@ -504,7 +614,6 @@ def write_csv_report(results: List[MigrationContext], output_file: Path) -> None
                         vuln.source,
                         vuln.repo_url,
                         vuln.mode,
-                        vuln.branch,
                         vuln.language,
                         vuln.harness_name,
                         vuln.vuln_id
@@ -581,6 +690,9 @@ Examples:
   # Dry run to validate
   python atlanta_to_rfc.py --source-dir /path/to/oss-fuzz/projects --target-dir /path/to/CRSBench/benchmarks --dry-run
 
+  # Generate CSV report only (fast, no migration or validation)
+  python atlanta_to_rfc.py --source-dir /path/to/oss-fuzz/projects --target-dir /path/to/CRSBench/benchmarks --report-only --output-csv report.csv
+
   # Migrate specific projects
   python atlanta_to_rfc.py --source-dir /path/to/oss-fuzz/projects --target-dir /path/to/CRSBench/benchmarks --projects curl-delta-04,libxml2-delta-03
         """
@@ -620,6 +732,12 @@ Examples:
     )
 
     parser.add_argument(
+        '--report-only',
+        action='store_true',
+        help='Generate CSV report only without migration or validation (fast)'
+    )
+
+    parser.add_argument(
         '--verbose',
         action='store_true',
         help='Enable verbose logging'
@@ -642,7 +760,7 @@ Examples:
         logger.error(f"Source directory does not exist: {args.source_dir}")
         sys.exit(1)
 
-    if not args.dry_run:
+    if not args.dry_run and not args.report_only:
         args.target_dir.mkdir(parents=True, exist_ok=True)
 
     # Parse projects list
@@ -650,7 +768,7 @@ Examples:
     if args.projects:
         specific_projects = [p.strip() for p in args.projects.split(',')]
 
-    # Run migration
+    # Create migrator
     migrator = AtlantaToRFCMigrator(
         source_dir=args.source_dir,
         target_dir=args.target_dir,
@@ -658,20 +776,40 @@ Examples:
         force=args.force
     )
 
-    results = migrator.migrate_all(specific_projects)
+    # Run in appropriate mode
+    if args.report_only:
+        # Report-only mode: fast collection without validation
+        logger.info("Running in REPORT-ONLY mode (no migration or validation)")
+        results = migrator.collect_all_info(specific_projects)
 
-    # Print summary
-    successful = sum(1 for r in results if r.successful and not r.skipped)
-    skipped = sum(1 for r in results if r.skipped)
-    failed = sum(1 for r in results if not r.successful and not r.skipped)
+        # Print summary
+        successful = sum(1 for r in results if r.successful)
+        failed = sum(1 for r in results if not r.successful)
+        total_vulns = sum(len(r.vulns) for r in results)
 
-    logger.info("=" * 60)
-    logger.info(f"Migration {'DRY RUN ' if args.dry_run else ''}Summary:")
-    logger.info(f"  Total projects: {len(results)}")
-    logger.info(f"  Successful: {successful}")
-    logger.info(f"  Skipped (already exists): {skipped}")
-    logger.info(f"  Failed: {failed}")
-    logger.info("=" * 60)
+        logger.info("=" * 60)
+        logger.info(f"Report Collection Summary:")
+        logger.info(f"  Total projects: {len(results)}")
+        logger.info(f"  Successful: {successful}")
+        logger.info(f"  Failed: {failed}")
+        logger.info(f"  Total vulnerabilities: {total_vulns}")
+        logger.info("=" * 60)
+    else:
+        # Normal migration mode
+        results = migrator.migrate_all(specific_projects)
+
+        # Print summary
+        successful = sum(1 for r in results if r.successful and not r.skipped)
+        skipped = sum(1 for r in results if r.skipped)
+        failed = sum(1 for r in results if not r.successful and not r.skipped)
+
+        logger.info("=" * 60)
+        logger.info(f"Migration {'DRY RUN ' if args.dry_run else ''}Summary:")
+        logger.info(f"  Total projects: {len(results)}")
+        logger.info(f"  Successful: {successful}")
+        logger.info(f"  Skipped (already exists): {skipped}")
+        logger.info(f"  Failed: {failed}")
+        logger.info("=" * 60)
 
     # Write CSV report
     if results:
@@ -679,6 +817,7 @@ Examples:
         logger.info(f"CSV report written to: {args.output_csv}")
 
     # Exit with appropriate code
+    failed = sum(1 for r in results if not r.successful and not r.skipped)
     sys.exit(0 if failed == 0 else 1)
 
 
