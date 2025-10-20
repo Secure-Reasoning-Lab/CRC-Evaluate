@@ -174,14 +174,35 @@ Please summarize reference projects by creating markdown files in `docs_referenc
 - **MUST run corresponding tests when modifying a module**
 - Test files are located in `tests/` directory
 - Test file naming: `test_<module_name>.py` (e.g., `test_validation.py`)
-- Run tests with: `pytest tests/test_<module_name>.py -v`
-- Run with coverage: `pytest tests/test_<module_name>.py --cov=crsbench.<module_name>`
+- **IMPORTANT: Always use `uv run pytest` instead of bare `pytest`**
+  - This ensures tests run in the correct virtual environment
+  - Example: `uv run pytest tests/test_<module_name>.py -v`
+  - Example: `uv run pytest tests/test_<module_name>.py --cov=crsbench.<module_name>`
 - Update tests when changing module behavior or adding features
 - **DO NOT use `cat` command or heredocs to create test files**
   - Create proper Python test scripts using the Write tool
   - Use Python's `tempfile` module for temporary test data
   - Use `with open()` context managers for file operations in tests
   - Example: See `test_orchestrator_e2e.py` for proper test file creation
+
+#### Pydantic Validators
+- Use Pydantic V2 style validators (migrated from V1)
+- **Field validators**: Use `@field_validator` with `@classmethod`
+  ```python
+  @field_validator('field_name')
+  @classmethod
+  def validate_field_name(cls, v):
+      # validation logic
+      return v
+  ```
+- **Model validators** (cross-field validation): Use `@model_validator(mode='after')`
+  ```python
+  @model_validator(mode='after')
+  def check_mutual_exclusivity(self):
+      # validation logic
+      return self
+  ```
+- All validators have been migrated to V2 style - no deprecation warnings
 
 ## Documentation Standards
 - Create entry in README.md when adding a new component
