@@ -1,0 +1,71 @@
+# Experiment Configuration - Multiple CRS with Explicit Benchmark List
+#
+# This configuration demonstrates running multiple CRS implementations against
+# a curated list of benchmarks. All parameters can be overridden via CLI.
+#
+# Usage:
+#   crsbench --experiment-config experiment-configs/experiment-config-multi-crs.yaml
+#
+# CLI Override Examples:
+#   --experiment-name my-custom-experiment
+#   --crses atlantis-c,custom-crs
+#   --benchmarks curl-delta-02,libxml2-delta-03
+
+# Experiment identifier for tracking and reporting
+experiment: multi-crs-baseline-eval
+
+# Number of trials to run for statistical significance
+# Each trial is an independent execution of CRS on benchmark
+trials: 3
+
+# Maximum time in seconds that each trial is allowed to run
+# Default: 24 hours (86400 seconds)
+max_total_time: 86400
+
+# Difficulty level controls assistance provided to CRS
+# Level 1: Maximum assistance (hints, larger corpus)
+# Level 2-3: Moderate assistance
+# Level 4-5: Minimal assistance (discovery mode)
+difficulty_level: 2
+
+# Directory where experiment data will be stored
+# Contains trial outputs, POVs, patches, logs, and execution metadata
+experiment_filestore: /tmp/crsbench/experiment-data
+
+# Directory where HTML reports and summary data will be stored
+# Contains aggregated results, statistics, and visualizations
+report_filestore: /tmp/crsbench/report-data
+
+# List of CRS implementations to evaluate
+# Each CRS must have configuration in crses/{crs-name}/
+crses:
+  - atlantis-c           # C/C++ focused CRS
+  - atlantis-multilang   # Multi-language CRS
+  - ensemble-c           # Ensemble-based CRS for C
+
+# Explicit list of benchmarks to evaluate
+# Mix of delta mode (focused on diffs) and full mode (entire codebase)
+# Mix of C/C++ and JVM benchmarks to test multi-language capabilities
+benchmarks:
+  # C/C++ benchmarks
+  - curl-delta-02        # Delta mode: focused vulnerability in curl
+  - libxml2-delta-03     # Delta mode: XML parsing vulnerability
+  - mongoose-full-01     # Full mode: comprehensive codebase analysis
+  - wireshark-delta-04   # Delta mode: network protocol vulnerability
+
+  # JVM benchmarks
+  - apache-poi-delta-01  # Delta mode: Java document processing
+  - pdfbox-full-01       # Full mode: Java PDF library
+
+# Optional: Redis configuration for distributed execution
+# If not specified or set to "none", will use local execution mode
+# redis_host: localhost
+# redis_port: 6379
+
+# Optional: LLM API configuration (if CRS uses LiteLLM)
+# litellm_api_key: sk-...
+# litellm_model: claude-3-5-sonnet
+
+# Optional: Resource constraints
+# max_memory_mb: 8192
+# max_cpu_cores: 4

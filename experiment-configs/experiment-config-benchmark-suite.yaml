@@ -1,0 +1,70 @@
+# Experiment Configuration - Multiple CRS with Benchmark Suite
+#
+# This configuration demonstrates running multiple CRS implementations against
+# a predefined benchmark suite. Benchmark suites group related benchmarks for
+# convenient evaluation (e.g., language-specific, difficulty-based).
+#
+# Usage:
+#   crsbench --experiment-config experiment-configs/experiment-config-benchmark-suite.yaml
+#
+# CLI Override Examples:
+#   --experiment-name jvm-focused-eval
+#   --benchmark-suite crsbench-afc-jvm
+#   --crses atlantis-multilang,custom-jvm-crs
+
+# Experiment identifier for tracking and reporting
+experiment: afc-c-suite-evaluation
+
+# Number of trials to run for statistical significance
+# Fewer trials for suite evaluation due to large benchmark count
+trials: 2
+
+# Maximum time in seconds that each trial is allowed to run
+# Default: 24 hours (86400 seconds)
+# Consider increasing for comprehensive suite evaluations
+max_total_time: 86400
+
+# Difficulty level controls assistance provided to CRS
+# Level 2: Moderate assistance (balanced evaluation)
+difficulty_level: 2
+
+# Directory where experiment data will be stored
+# Contains trial outputs, POVs, patches, logs, and execution metadata
+experiment_filestore: /tmp/crsbench/experiment-data
+
+# Directory where HTML reports and summary data will be stored
+# Contains aggregated results, statistics, and visualizations
+report_filestore: /tmp/crsbench/report-data
+
+# List of CRS implementations to evaluate
+crses:
+  - atlantis-c           # C/C++ focused CRS
+  - ensemble-c           # Ensemble-based CRS for C
+
+# Benchmark suite to evaluate
+# Suite name corresponds to file in benchmark-suites/{suite-name}.yaml
+# Available suites:
+#   - crsbench-afc-c: Official AFC C/C++ benchmarks (24 benchmarks)
+#   - crsbench-afc-jvm: Official AFC JVM benchmarks (12 benchmarks)
+benchmark_suite: crsbench-afc-c
+
+# Note: Cannot specify both 'benchmarks' and 'benchmark_suite'
+# Use CLI override to switch: --benchmarks bench1,bench2
+# Or switch suite: --benchmark-suite crsbench-afc-jvm
+
+# Optional: Redis configuration for distributed execution
+# Highly recommended for suite evaluation due to large job count
+# redis_host: localhost
+# redis_port: 6379
+
+# Optional: LLM API configuration
+# litellm_api_key: sk-...
+# litellm_model: claude-3-5-sonnet
+
+# Optional: Resource constraints
+# max_memory_mb: 8192
+# max_cpu_cores: 4
+
+# Performance Note:
+# This configuration will create: 2 CRSes × 24 benchmarks × 2 trials = 96 total trials
+# Estimated time: ~96 × max_total_time (serial) or much faster with distributed workers
