@@ -1,7 +1,7 @@
 """Pydantic schemas for benchmark configuration validation."""
 
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 import re
 
 
@@ -12,20 +12,23 @@ class POV(BaseModel):
     sanitizer: str = Field(..., description="Sanitizer type (address, memory, undefined, etc.)")
     error_token: Optional[str] = Field(default=None, description="Expected error pattern from sanitizer (optional)")
 
-    @validator('id')
+    @field_validator('id')
+    @classmethod
     def validate_id(cls, v):
         if not v or not v.strip():
             raise ValueError("POV id cannot be empty")
         return v.strip()
 
-    @validator('sanitizer')
+    @field_validator('sanitizer')
+    @classmethod
     def validate_sanitizer(cls, v):
         valid_sanitizers = {'address', 'memory', 'thread', 'undefined', 'leak'}
         if v not in valid_sanitizers:
             raise ValueError(f"Invalid sanitizer: {v}. Must be one of: {', '.join(valid_sanitizers)}")
         return v
 
-    @validator('error_token')
+    @field_validator('error_token')
+    @classmethod
     def validate_error_token(cls, v):
         # error_token is now optional
         if v is not None and not v.strip():
@@ -40,13 +43,15 @@ class Vulnerability(BaseModel):
     difficulty_level: Optional[int] = Field(default=None, ge=1, le=5, description="Intrinsic difficulty level (1-5)")
     povs: List[POV] = Field(..., description="List of POV variants for this vulnerability")
 
-    @validator('vuln_keyword')
+    @field_validator('vuln_keyword')
+    @classmethod
     def validate_vuln_keyword(cls, v):
         if not v or not v.strip():
             raise ValueError("Vulnerability keyword cannot be empty")
         return v.strip()
 
-    @validator('povs')
+    @field_validator('povs')
+    @classmethod
     def validate_povs(cls, v):
         if not v:
             raise ValueError("At least one POV variant must be specified for each vulnerability")
@@ -67,21 +72,30 @@ class HarnessFile(BaseModel):
     path: str = Field(..., description="Path to harness file (absolute path in container)")
     vulns: Optional[List[Vulnerability]] = Field(default_factory=list, description="List of vulnerabilities for this harness")
 
-    @validator('name')
+    @field_validator('name')
+    @classmethod
     def validate_name(cls, v):
         if not v or not v.strip():
             raise ValueError("Harness name cannot be empty")
         return v.strip()
 
-    @validator('path')
+    @field_validator('path')
+    @classmethod
     def validate_path(cls, v):
         if not v or not v.strip():
             raise ValueError("Harness path cannot be empty")
+
+        path = v.strip()
+
+        # Reject old variable patterns (no backward compatibility)
+        if '$REPO' in path or '$PROJECT' in path:
+            raise ValueError("Path variables $REPO and $PROJECT are no longer supported. Use absolute paths (e.g., /src/project/test/harness.c) or relative paths (e.g., ./test/harness.c)")
+
         # Accept absolute paths (most common in Docker containers)
         # or relative paths starting with ./
-        path = v.strip()
         if not (path.startswith('/') or path.startswith('./')):
             raise ValueError("Harness path should be absolute (e.g., /src/project/test/harness.c) or relative (e.g., ./test/harness.c)")
+
         return path
 
 
@@ -91,7 +105,8 @@ class DeltaMode(BaseModel):
     base_commit: str = Field(..., description="Base commit hash")
     ref_commit: str = Field(..., description="Reference commit hash")
 
-    @validator('base_commit', 'ref_commit')
+    @field_validator('base_commit', 'ref_commit')
+    @classmethod
     def validate_commit_hash(cls, v):
         if not v or not v.strip():
             raise ValueError("Commit hash cannot be empty")
@@ -109,7 +124,8 @@ class FullMode(BaseModel):
 
     base_commit: str = Field(..., description="Base commit hash")
 
-    @validator('base_commit')
+    @field_validator('base_commit')
+    @classmethod
     def validate_commit_hash(cls, v):
         if not v or not v.strip():
             raise ValueError("Commit hash cannot be empty")
@@ -130,7 +146,8 @@ class BenchmarkConfig(BaseModel):
     full_mode: Optional[FullMode] = Field(default=None, description="Full mode configuration")
     harness_files: List[HarnessFile] = Field(..., description="List of harness files")
 
-    @validator('harness_files')
+    @field_validator('harness_files')
+    @classmethod
     def validate_harness_files(cls, v):
         if not v:
             raise ValueError("At least one harness file must be specified")
@@ -143,7 +160,8 @@ class BenchmarkConfig(BaseModel):
 
         return v
 
-    @validator('patch_exclude_list')
+    @field_validator('patch_exclude_list')
+    @classmethod
     def validate_patch_exclude_list(cls, v):
         if v is None:
             return []
@@ -152,12 +170,12 @@ class BenchmarkConfig(BaseModel):
         cleaned = [pattern.strip() for pattern in v if pattern and pattern.strip()]
         return cleaned
 
-    def __init__(self, **data):
-        super().__init__(**data)
-
-        # Validate that at least one mode is specified
+    @model_validator(mode='after')
+    def check_at_least_one_mode(self):
+        """Validate that at least one mode is specified."""
         if not self.delta_mode and not self.full_mode:
             raise ValueError("At least one evaluation mode (delta_mode or full_mode) must be specified")
+        return self
 
 
 class Hint(BaseModel):
@@ -167,7 +185,8 @@ class Hint(BaseModel):
     text: str = Field(..., description="Hint text content")
     category: Optional[str] = Field(default=None, description="Hint category")
 
-    @validator('text')
+    @field_validator('text')
+    @classmethod
     def validate_text(cls, v):
         if not v or not v.strip():
             raise ValueError("Hint text cannot be empty")
@@ -216,14 +235,16 @@ class ExperimentConfig(BaseModel):
         description="Benchmark suite name to load from benchmark-suites/ (mutually exclusive with benchmarks)"
     )
 
-    @validator('experiment')
+    @field_validator('experiment')
+    @classmethod
     def validate_experiment(cls, v):
         """Validate experiment name."""
         if not v or not v.strip():
             raise ValueError("Experiment name cannot be empty")
         return v.strip()
 
-    @validator('crses')
+    @field_validator('crses')
+    @classmethod
     def validate_crses(cls, v):
         """Validate CRS list."""
         if not v:
@@ -241,20 +262,23 @@ class ExperimentConfig(BaseModel):
 
         return cleaned
 
-    @validator('experiment_filestore', 'report_filestore')
+    @field_validator('experiment_filestore', 'report_filestore')
+    @classmethod
     def validate_filestore_path(cls, v):
         if not v or not v.strip():
             raise ValueError("Filestore path cannot be empty")
         return v.strip()
 
-    @validator('redis_host')
+    @field_validator('redis_host')
+    @classmethod
     def validate_redis_host(cls, v):
         """Validate Redis host field."""
         if v and v.strip() and v.strip().lower() != 'none':
             return v.strip()
         return None  # Treat empty or "none" as None (local mode)
 
-    @validator('benchmarks_root')
+    @field_validator('benchmarks_root')
+    @classmethod
     def validate_benchmarks_root(cls, v):
         """Validate benchmarks root directory."""
         if v and v.strip():
@@ -267,7 +291,8 @@ class ExperimentConfig(BaseModel):
             return str(path.absolute())
         return None  # Use default ./benchmarks if not specified
 
-    @validator('benchmarks')
+    @field_validator('benchmarks')
+    @classmethod
     def validate_benchmarks(cls, v):
         """Validate benchmarks list."""
         if v is None:
@@ -288,15 +313,12 @@ class ExperimentConfig(BaseModel):
 
         return cleaned if cleaned else None
 
-    @validator('benchmark_suite')
-    def validate_benchmark_suite(cls, v, values):
-        """Validate benchmark_suite and ensure mutual exclusivity with benchmarks."""
+    @field_validator('benchmark_suite')
+    @classmethod
+    def validate_benchmark_suite(cls, v):
+        """Validate benchmark_suite format."""
         if v is None:
             return None
-
-        # Check mutual exclusivity
-        if values.get('benchmarks') is not None:
-            raise ValueError("Cannot specify both 'benchmarks' and 'benchmark_suite'. Please use only one.")
 
         # Validate suite name format
         suite_name = v.strip()
@@ -305,12 +327,18 @@ class ExperimentConfig(BaseModel):
 
         return suite_name
 
-    def __init__(self, **data):
-        super().__init__(**data)
+    @model_validator(mode='after')
+    def check_benchmarks_configuration(self):
+        """Ensure benchmarks configuration is valid."""
+        # Check mutual exclusivity
+        if self.benchmarks is not None and self.benchmark_suite is not None:
+            raise ValueError("Cannot specify both 'benchmarks' and 'benchmark_suite'. Please use only one.")
 
-        # Ensure at least one of benchmarks or benchmark_suite is specified
+        # Ensure at least one is specified
         if self.benchmarks is None and self.benchmark_suite is None:
             raise ValueError("Either 'benchmarks' or 'benchmark_suite' must be specified")
+
+        return self
 
     def get_benchmark_list(self, benchmark_suites_dir: str = "benchmark-suites") -> List[str]:
         """Get the list of benchmarks, resolving benchmark_suite if necessary.
@@ -378,19 +406,22 @@ class BenchmarkSuiteConfig(BaseModel):
     # Note: "Release date" field name has a space, handling with Field alias
     release_date: str = Field(..., alias="Release date", description="Release date of the benchmark suite")
 
-    @validator('Name')
+    @field_validator('Name')
+    @classmethod
     def validate_name(cls, v):
         if not v or not v.strip():
             raise ValueError("Benchmark suite Name cannot be empty")
         return v.strip()
 
-    @validator('Description')
+    @field_validator('Description')
+    @classmethod
     def validate_description(cls, v):
         if not v or not v.strip():
             raise ValueError("Benchmark suite Description cannot be empty")
         return v.strip()
 
-    @validator('release_date')
+    @field_validator('release_date')
+    @classmethod
     def validate_release_date(cls, v):
         if not v or not v.strip():
             raise ValueError("Release date cannot be empty")
@@ -402,7 +433,8 @@ class BenchmarkSuiteConfig(BaseModel):
 
         return date_str
 
-    @validator('benchmark_list')
+    @field_validator('benchmark_list')
+    @classmethod
     def validate_benchmark_list(cls, v):
         if not v:
             raise ValueError("benchmark_list must contain at least one benchmark ID")

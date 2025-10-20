@@ -556,11 +556,14 @@ class TestExperimentConfigSchema:
     def test_experiment_config_valid(self):
         """Test valid experiment config."""
         config = ExperimentConfig(
+            experiment="test",
             trials=3,
             max_total_time=86400,
             difficulty_level=2,
             experiment_filestore="/tmp/experiment-data",
-            report_filestore="/tmp/report-data"
+            report_filestore="/tmp/report-data",
+            crses=["test-crs"],
+            benchmarks=["test-bench"]
         )
         assert config.trials == 3
         assert config.max_total_time == 86400
@@ -570,11 +573,14 @@ class TestExperimentConfigSchema:
         """Test experiment config with invalid trials."""
         with pytest.raises(PydanticValidationError) as exc_info:
             ExperimentConfig(
+                experiment="test",
                 trials=0,  # Invalid: must be >= 1
                 max_total_time=86400,
                 difficulty_level=1,
                 experiment_filestore="/tmp/exp",
-                report_filestore="/tmp/rep"
+                report_filestore="/tmp/rep",
+                crses=["test-crs"],
+                benchmarks=["test-bench"]
             )
         assert "trials" in str(exc_info.value).lower()
 
@@ -582,11 +588,14 @@ class TestExperimentConfigSchema:
         """Test experiment config with invalid max_total_time."""
         with pytest.raises(PydanticValidationError) as exc_info:
             ExperimentConfig(
+                experiment="test",
                 trials=1,
                 max_total_time=0,  # Invalid: must be >= 1
                 difficulty_level=1,
                 experiment_filestore="/tmp/exp",
-                report_filestore="/tmp/rep"
+                report_filestore="/tmp/rep",
+                crses=["test-crs"],
+                benchmarks=["test-bench"]
             )
         assert "max_total_time" in str(exc_info.value).lower()
 
@@ -594,11 +603,14 @@ class TestExperimentConfigSchema:
         """Test experiment config with invalid difficulty level."""
         with pytest.raises(PydanticValidationError) as exc_info:
             ExperimentConfig(
+                experiment="test",
                 trials=1,
                 max_total_time=86400,
                 difficulty_level=5,  # Invalid: must be 0-4
                 experiment_filestore="/tmp/exp",
-                report_filestore="/tmp/rep"
+                report_filestore="/tmp/rep",
+                crses=["test-crs"],
+                benchmarks=["test-bench"]
             )
         assert "difficulty_level" in str(exc_info.value).lower()
 
@@ -606,21 +618,27 @@ class TestExperimentConfigSchema:
         """Test experiment config with empty filestore paths."""
         with pytest.raises(PydanticValidationError):
             ExperimentConfig(
+                experiment="test",
                 trials=1,
                 max_total_time=86400,
                 difficulty_level=1,
                 experiment_filestore="",  # Empty
-                report_filestore="/tmp/rep"
+                report_filestore="/tmp/rep",
+                crses=["test-crs"],
+                benchmarks=["test-bench"]
             )
 
     def test_experiment_config_with_redis_host(self):
         """Test experiment config with redis_host field."""
         config = ExperimentConfig(
+            experiment="test",
             trials=1,
             max_total_time=86400,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
+            crses=["test-crs"],
+            benchmarks=["test-bench"],
             redis_host="localhost"
         )
         assert config.redis_host == "localhost"
@@ -628,22 +646,28 @@ class TestExperimentConfigSchema:
     def test_experiment_config_without_redis_host(self):
         """Test experiment config without redis_host (defaults to None)."""
         config = ExperimentConfig(
+            experiment="test",
             trials=1,
             max_total_time=86400,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
-            report_filestore="/tmp/rep"
+            report_filestore="/tmp/rep",
+            crses=["test-crs"],
+            benchmarks=["test-bench"]
         )
         assert config.redis_host is None
 
     def test_experiment_config_redis_host_none_string(self):
         """Test experiment config with redis_host='none' (converted to None)."""
         config = ExperimentConfig(
+            experiment="test",
             trials=1,
             max_total_time=86400,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
+            crses=["test-crs"],
+            benchmarks=["test-bench"],
             redis_host="none"
         )
         assert config.redis_host is None
@@ -656,11 +680,14 @@ class TestExperimentConfigSchema:
         # Create a temporary directory for testing
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ExperimentConfig(
+                experiment="test",
                 trials=1,
                 max_total_time=86400,
                 difficulty_level=1,
                 experiment_filestore="/tmp/exp",
                 report_filestore="/tmp/rep",
+                crses=["test-crs"],
+                benchmarks=["test-bench"],
                 benchmarks_root=tmpdir
             )
             # Should return absolute path
@@ -670,11 +697,14 @@ class TestExperimentConfigSchema:
         """Test experiment config with non-existent benchmarks_root."""
         with pytest.raises(PydanticValidationError) as exc_info:
             ExperimentConfig(
+                experiment="test",
                 trials=1,
                 max_total_time=86400,
                 difficulty_level=1,
                 experiment_filestore="/tmp/exp",
                 report_filestore="/tmp/rep",
+                crses=["test-crs"],
+                benchmarks=["test-bench"],
                 benchmarks_root="/nonexistent/path"
             )
         assert "does not exist" in str(exc_info.value).lower()
@@ -690,11 +720,14 @@ class TestExperimentConfigSchema:
         try:
             with pytest.raises(PydanticValidationError) as exc_info:
                 ExperimentConfig(
+                    experiment="test",
                     trials=1,
                     max_total_time=86400,
                     difficulty_level=1,
                     experiment_filestore="/tmp/exp",
                     report_filestore="/tmp/rep",
+                    crses=["test-crs"],
+                    benchmarks=["test-bench"],
                     benchmarks_root=tmpfile_path
                 )
             assert "must be a directory" in str(exc_info.value).lower()
@@ -704,11 +737,14 @@ class TestExperimentConfigSchema:
     def test_experiment_config_to_dict(self):
         """Test experiment config to_dict() method."""
         config = ExperimentConfig(
+            experiment="test",
             trials=3,
             max_total_time=86400,
             difficulty_level=2,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
+            crses=["test-crs"],
+            benchmarks=["test-bench"],
             redis_host="redis-server"
         )
         config_dict = config.to_dict()
@@ -727,11 +763,16 @@ class TestExperimentConfigValidation:
     def test_validate_experiment_valid(self):
         """Test validation with valid experiment config."""
         yaml_content = """
+experiment: test
 trials: 1
 max_total_time: 86400
 difficulty_level: 1
 experiment_filestore: /tmp/experiment-data
 report_filestore: /tmp/report-data
+crses:
+  - test-crs
+benchmarks:
+  - test-bench
 """
         result = validate_experiment_config_from_string(yaml_content)
 
@@ -744,11 +785,16 @@ report_filestore: /tmp/report-data
     def test_validate_experiment_missing_field(self):
         """Test validation with missing required field."""
         yaml_content = """
+experiment: test
 trials: 1
 max_total_time: 86400
 # Missing difficulty_level
 experiment_filestore: /tmp/experiment-data
 report_filestore: /tmp/report-data
+crses:
+  - test-crs
+benchmarks:
+  - test-bench
 """
         result = validate_experiment_config_from_string(yaml_content)
 
@@ -759,11 +805,16 @@ report_filestore: /tmp/report-data
     def test_validate_experiment_negative_trials(self):
         """Test validation with negative trials."""
         yaml_content = """
+experiment: test
 trials: -1
 max_total_time: 86400
 difficulty_level: 1
 experiment_filestore: /tmp/exp
 report_filestore: /tmp/rep
+crses:
+  - test-crs
+benchmarks:
+  - test-bench
 """
         result = validate_experiment_config_from_string(yaml_content)
 
@@ -773,11 +824,16 @@ report_filestore: /tmp/rep
     def test_validate_experiment_out_of_range_difficulty(self):
         """Test validation with out of range difficulty level."""
         yaml_content = """
+experiment: test
 trials: 1
 max_total_time: 86400
 difficulty_level: 10
 experiment_filestore: /tmp/exp
 report_filestore: /tmp/rep
+crses:
+  - test-crs
+benchmarks:
+  - test-bench
 """
         result = validate_experiment_config_from_string(yaml_content)
 
@@ -802,11 +858,16 @@ report_filestore: /tmp/rep
     def test_validate_experiment_with_redis_host(self):
         """Test validation with redis_host field."""
         yaml_content = """
+experiment: test
 trials: 1
 max_total_time: 86400
 difficulty_level: 1
 experiment_filestore: /tmp/experiment-data
 report_filestore: /tmp/report-data
+crses:
+  - test-crs
+benchmarks:
+  - test-bench
 redis_host: queue-server
 """
         result = validate_experiment_config_from_string(yaml_content)
@@ -820,11 +881,16 @@ redis_host: queue-server
 
         with tempfile.TemporaryDirectory() as tmpdir:
             yaml_content = f"""
+experiment: test
 trials: 1
 max_total_time: 86400
 difficulty_level: 1
 experiment_filestore: /tmp/experiment-data
 report_filestore: /tmp/report-data
+crses:
+  - test-crs
+benchmarks:
+  - test-bench
 benchmarks_root: {tmpdir}
 """
             result = validate_experiment_config_from_string(yaml_content)
@@ -835,11 +901,16 @@ benchmarks_root: {tmpdir}
     def test_validate_experiment_redis_none_for_local_mode(self):
         """Test validation with redis_host set to 'none' for local mode."""
         yaml_content = """
+experiment: test
 trials: 1
 max_total_time: 86400
 difficulty_level: 1
 experiment_filestore: /tmp/experiment-data
 report_filestore: /tmp/report-data
+crses:
+  - test-crs
+benchmarks:
+  - test-bench
 redis_host: none
 """
         result = validate_experiment_config_from_string(yaml_content)
@@ -1024,10 +1095,10 @@ class TestIntegrationAllConfigs:
     """Integration tests with all configuration types."""
 
     def test_validate_experiment_example_yaml(self):
-        """Test validation of docs/experiment-example.yaml."""
+        """Test validation of docs/experiment-config-example.yaml."""
         # Use Path to construct path relative to test file
         test_dir = Path(__file__).parent
-        exp_path = test_dir / "assets" / "experiment-example.yaml"
+        exp_path = test_dir / "assets" / "experiment-config-example.yaml"
         result = validate_experiment_config(exp_path)
 
         assert result.is_valid is True

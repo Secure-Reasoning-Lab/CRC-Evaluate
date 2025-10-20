@@ -480,11 +480,14 @@ def _validate_experiment_schema(data: Dict[str, Any], result: ValidationResult) 
             )
         # Return a minimal config to avoid crashes
         return ExperimentConfig(
+            experiment="dummy",
             trials=1,
             max_total_time=1,
             difficulty_level=0,
             experiment_filestore="/tmp",
-            report_filestore="/tmp"
+            report_filestore="/tmp",
+            crses=["dummy"],
+            benchmarks=["dummy"]
         )
     except Exception as e:
         result.add_error(
@@ -493,11 +496,14 @@ def _validate_experiment_schema(data: Dict[str, Any], result: ValidationResult) 
             context={"error": str(e)}
         )
         return ExperimentConfig(
+            experiment="dummy",
             trials=1,
             max_total_time=1,
             difficulty_level=0,
             experiment_filestore="/tmp",
-            report_filestore="/tmp"
+            report_filestore="/tmp",
+            crses=["dummy"],
+            benchmarks=["dummy"]
         )
 
 
