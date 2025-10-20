@@ -67,14 +67,17 @@ CRSBench uses a **hybrid capture strategy** inspired by FuzzBench:
 
 ### Capture Strategy by Data Type
 
-| Data Type    | Strategy    | Tracking Method   | Deduplication     | Rationale                                                             |
-|--------------|-------------|-------------------|-------------------|-----------------------------------------------------------------------|
-| **POVs**     | Incremental | Filename set      | During validation | New POVs tracked by filename; stored as-is; deduped later             |
-| **Patches**  | Incremental | Filename set      | During validation | New patches tracked by filename; stored as-is; deduped later          |
-| **Corpus**   | Incremental | Modification time | N/A               | New/modified corpus files tracked by mtime (like FuzzBench)           |
-| **LLM logs** | Full        | N/A               | N/A               | Complete llm-usage.json; simpler than computing JSON diffs            |
-| **CRS logs** | Full        | N/A               | N/A               | Complete crs-output.log; easier to inspect any snapshot independently |
-| **Metadata** | Full        | N/A               | N/A               | Always complete for that snapshot                                     |
+| Data Type          | Strategy    | Tracking Method   | Deduplication     | Rationale                                                             |
+|--------------------|-------------|-------------------|-------------------|-----------------------------------------------------------------------|
+| **POVs**           | Incremental | Filename set      | During validation | New POVs tracked by filename; stored as-is; deduped later             |
+| **Patches**        | Incremental | Filename set      | During validation | New patches tracked by filename; stored as-is; deduped later          |
+| **Corpus**         | Incremental | Modification time | N/A               | New/modified corpus files tracked by mtime (like FuzzBench)           |
+| **CRS data**       | Incremental | Modification time | N/A               | CRS-specific outputs tracked by mtime                                 |
+| **Config**         | Full        | N/A               | N/A               | Experiment config (config.yaml); static, copied once                  |
+| **Execution meta** | Full        | N/A               | N/A               | Execution metadata (execution.json); static, copied once              |
+| **LLM logs**       | Full        | N/A               | N/A               | Complete llm-usage.json; simpler than computing JSON diffs            |
+| **CRS logs**       | Full        | N/A               | N/A               | Complete crs-output.log; easier to inspect any snapshot independently |
+| **Metadata**       | Full        | N/A               | N/A               | Always complete for that snapshot                                     |
 
 ### Rationale
 
@@ -358,35 +361,48 @@ class SnapshotManager:
    └─ Write metadata.json (timestamp, cycle, elapsed_time)
 
 3. Capture POVs (incremental - new only)
-   └─ Read {trial_dir}/povs/
+   └─ Read {trial_dir}/output/povs/
    └─ Track by filename set
    └─ Copy new POVs to snapshot/povs/
 
 4. Capture patches (incremental - new only)
-   └─ Read {trial_dir}/patches/
+   └─ Read {trial_dir}/output/patches/
    └─ Track by filename set
    └─ Copy new patches to snapshot/patches/
 
 5. Capture corpus (incremental - new/modified only)
-   └─ Read {trial_dir}/corpus/
+   └─ Read {trial_dir}/output/corpus/
    └─ Track by modification time (mtime)
    └─ Copy new/modified corpus to snapshot/corpus/
 
-6. Capture LLM logs (full)
+6. Capture CRS-specific data (incremental - new/modified only)
+   └─ Read {trial_dir}/output/crs-data/
+   └─ Track by modification time (mtime)
+   └─ Copy new/modified files to snapshot/crs-data/
+
+7. Capture experiment config (full)
+   └─ Copy {trial_dir}/config.yaml
+   └─ Experiment configuration from orchestrator
+
+8. Capture execution metadata (full)
+   └─ Copy {trial_dir}/execution.json
+   └─ Execution details from executor
+
+9. Capture LLM logs (full)
    └─ Copy complete {trial_dir}/llm-usage.json
    └─ Includes all cumulative metrics
 
-7. Capture CRS logs (full)
-   └─ Copy complete {trial_dir}/crs-output.log
-   └─ Entire log file
+10. Capture CRS logs (full)
+    └─ Copy complete {trial_dir}/crs-output.log
+    └─ Entire log file
 
-8. Compress snapshot
-   └─ Create snapshot-{cycle:04d}.tar.gz
-   └─ Compress entire .snapshot-{cycle:04d}/ directory
-   └─ Delete temp directory
+11. Compress snapshot
+    └─ Create snapshot-{cycle:04d}.tar.gz
+    └─ Compress entire .snapshot-{cycle:04d}/ directory
+    └─ Delete temp directory
 
-9. Mark snapshot complete
-   └─ Create snapshot-{cycle:04d}.complete marker file
+12. Mark snapshot complete
+    └─ Create snapshot-{cycle:04d}.complete marker file
 ```
 
 ### Incremental Tracking
@@ -405,18 +421,27 @@ class SnapshotManager:
 
     def _get_new_povs(self) -> List[Path]:
         """Get POVs discovered since last snapshot."""
+        pov_dir = self.trial_dir / "output" / "povs"
         # Return POV files not in captured_pov_ids set
         # Track by filename (e.g., "pov_001")
 
     def _get_new_patches(self) -> List[Path]:
         """Get patches generated since last snapshot."""
+        patches_dir = self.trial_dir / "output" / "patches"
         # Return patch files not in captured_patch_ids set
         # Track by filename (e.g., "patch_001.diff")
 
     def _get_new_corpus_files(self) -> List[Path]:
         """Get new/modified corpus files since last snapshot."""
+        corpus_dir = self.trial_dir / "output" / "corpus"
         # Return corpus files where mtime > last_corpus_archive_time
         # Like FuzzBench's incremental corpus archiving
+
+    def _get_new_crs_data_files(self) -> List[Path]:
+        """Get new/modified CRS-specific data files since last snapshot."""
+        crs_data_dir = self.trial_dir / "output" / "crs-data"
+        # Return files where mtime > last_crs_data_archive_time
+        # Track by modification time like corpus
 ```
 
 **Key methods:**
@@ -424,6 +449,7 @@ class SnapshotManager:
 - `_get_new_povs()`: Identify new POV files
 - `_get_new_patches()`: Identify new patch files
 - `_get_new_corpus_files()`: Identify new/modified corpus files
+- `_get_new_crs_data_files()`: Identify new/modified CRS-specific data
 - `_create_tar_gz()`: Compress snapshot directory
 - `_cleanup_temp_dir()`: Remove temporary snapshot directory
 
@@ -602,21 +628,34 @@ experiment_filestore/
             ├── snapshot-0002.complete       # Marker: snapshot 2 finished
             ├── snapshot-0003.tar.gz
             ├── snapshot-0003.complete
-            ├── povs/                        # Source POV files (copied from CRS output)
-            │   ├── pov_001                  # Binary blob
-            │   ├── pov_002                  # Binary blob
+            ├── output/                      # CRS outputs (what we snapshot)
+            │   ├── povs/                    # POVs discovered by CRS
+            │   │   ├── pov_001              # Binary blob
+            │   │   ├── pov_002
+            │   │   └── ...
+            │   ├── patches/                 # Patches generated by CRS
+            │   │   ├── patch-001.diff
+            │   │   ├── patch-002.diff
+            │   │   └── ...
+            │   ├── corpus/                  # Corpus generated by CRS
+            │   │   ├── input-001
+            │   │   └── ...
+            │   └── crs-data/                # CRS-specific outputs
+            │       └── ...
+            ├── hints/                       # Prepared hints (input to CRS, not snapshotted)
+            │   ├── sarif/
+            │   └── corpus/
+            ├── povs/                        # Prepared POVs (input for patch gen, not snapshotted)
+            │   ├── pov_0
             │   └── ...
-            ├── patches/                     # Source patch files (copied from CRS output)
-            │   ├── patch-001.diff
-            │   ├── patch-002.diff
-            │   └── ...
-            ├── corpus/                      # Source corpus files (copied from CRS output)
-            │   ├── input-001
-            │   └── ...
-            ├── llm-usage.json              # Cumulative LLM metrics (copied from CRS output)
-            ├── crs-output.log              # Complete CRS log (copied from CRS output)
+            ├── config.yaml                  # Experiment config (from orchestrator)
+            ├── execution.json               # Execution metadata (from executor)
+            ├── llm-usage.json              # Cumulative LLM metrics
+            ├── crs-output.log              # Complete CRS log
             └── final-report.json           # Trial result (after completion)
 ```
+
+**Note:** Snapshots capture CRS **outputs** from `output/` directory, not the prepared **inputs** in `hints/` and `povs/` directories.
 
 ### Inside Each Snapshot Archive
 
@@ -631,6 +670,10 @@ snapshot-0001/
 │   └── patch-001.diff
 ├── corpus/                      # New/modified corpus only (incremental)
 │   └── input-001
+├── crs-data/                    # CRS-specific outputs (incremental)
+│   └── analysis-report.txt
+├── config.yaml                  # Experiment config (full)
+├── execution.json               # Execution metadata (full)
 ├── llm-usage.json              # Full cumulative LLM metrics
 └── crs-output.log              # Full CRS log
 ```
@@ -646,6 +689,10 @@ snapshot-0002/
 │   └── patch-002.diff
 ├── corpus/                      # Only new/modified corpus
 │   └── input-002
+├── crs-data/                    # Only new/modified CRS data
+│   └── debug-trace.log
+├── config.yaml                  # Full experiment config
+├── execution.json               # Full execution metadata
 ├── llm-usage.json              # Full cumulative metrics (updated)
 └── crs-output.log              # Full log (grown since snapshot 1)
 ```
