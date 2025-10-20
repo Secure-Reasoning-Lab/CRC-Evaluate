@@ -33,12 +33,25 @@ python3 infra/helper.py build_crs infra/crs/example_configs/ensemble-c json-c
 following arguments:
 
 - fuzzing harness name: `json_array_fuzzer`
+- `--output <output-dir>`: Directory where CRS writes its outputs (POVs, corpus, etc.)
 
 ```sh
-python3 infra/helper.py run_crs infra/crs/example_configs/ensemble-c json-c json_array_fuzzer
+python3 infra/helper.py run_crs infra/crs/example_configs/ensemble-c json-c json_array_fuzzer \
+  --output /path/to/output
 ```
 
 ### Filesystem mapping between host and docker container
+
+**CRS output directory mapping:**
+
+When `--output <output-dir>` is provided:
+- Host: `<output-dir>` (e.g., `/tmp/trial-1/output/`)
+- Container: `/out/`
+
+CRS writes its outputs to `/out/` in the container, which maps to the host output directory.
+
+**Legacy mapping (for reference):**
+
 On host, it is `build/out/<crs-name>/<project-name>/<harness-name>/{crashes, corpus}`.
 
 In the docker container, the directory will be mapped to `/out/<harness-name>/{crashes, corpus}`.
@@ -118,6 +131,62 @@ benchmarks/json-c/
 └── ...
 ```
 
+### CRS Output Directory Structure
+
+CRS must write its outputs to `/out/` in the container. CRSBench will snapshot this directory periodically for evaluation.
+
+**Required output structure:**
+
+```
+/out/                           # CRS output directory (container)
+├── povs/                       # POVs discovered (required for bug finding CRS)
+│   ├── pov_001                 # Binary blob (test input that triggers vulnerability)
+│   ├── pov_002                 # Binary blob
+│   └── pov_003                 # Binary blob
+├── corpus/                     # Fuzzing corpus (optional)
+│   ├── input-001               # Test input
+│   ├── input-002
+│   └── input-003
+└── crs-data/                   # CRS-specific outputs (optional)
+    ├── analysis-report.txt     # Any additional data CRS wants to record
+    ├── intermediate-results.json
+    └── debug-trace.log
+```
+
+**What CRS writes:**
+- **POVs** (`/out/povs/`): Binary blob files that trigger vulnerabilities when run against the harness
+- **Corpus** (`/out/corpus/`, optional): Generated test inputs from fuzzing
+- **CRS-specific data** (`/out/crs-data/`, optional): Any additional outputs CRS wants to snapshot
+
+**What CRSBench records (separately):**
+- **LLM usage**: CRSBench tracks LLM API calls, tokens, and costs (via LiteLLM proxy)
+- **CRS logs**: CRSBench captures stdout/stderr from CRS execution
+
+**Snapshot behavior:**
+
+CRSBench periodically snapshots the `/out/` directory along with LLM usage and CRS logs. These snapshots enable:
+- Progress monitoring during long-running trials
+- Incremental POV/corpus discovery tracking
+- Resource usage analysis (LLM tokens, costs)
+- Recovery from interrupted trials
+
+See the CRSBench snapshot design documentation for details on snapshot frequency and contents.
+
+**Container filesystem (complete view):**
+
+```
+/
+├── out/                        # CRS output (mounted from host --output)
+│   ├── povs/                   # CRS writes POVs here
+│   ├── corpus/                 # CRS writes corpus here (optional)
+│   └── crs-data/               # CRS writes custom data here (optional)
+├── hints/                      # Optional hints (mounted from host --hints)
+│   ├── sarif/                  # Static analysis reports
+│   └── corpus/                 # Pre-fuzzing corpus
+├── src/                        # Project source code
+└── work/                       # Working directory
+```
+
 ---
 
 ## OSS-Patch CRS Interface (Patch Generation)
@@ -154,13 +223,14 @@ python3 infra/helper.py build_crs multi-retrieval aixcc/c/mock-c --oss-fuzz $OSS
 
 ### Running CRS for patch generation
 
-Run command with POV(s), hints, and LiteLLM configuration:
+Run command with POV(s), hints, output directory, and LiteLLM configuration:
 
 ```sh
 python3 infra/helper.py run_crs <crs-config-name> <project-name> \
   --harness <harness-name> \
   [--pov <pov-file> | --povs <povs-dir>] \
   [--hints <hints-dir>] \
+  [--output <output-dir>] \
   --litellm-base <litellm-api-base> \
   --litellm-key <litellm-api-key>
 ```
@@ -170,6 +240,7 @@ python3 infra/helper.py run_crs <crs-config-name> <project-name> \
 python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
   --harness fuzz_process_input_header \
   --pov /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs/pov_0 \
+  --output /tmp/trial-1/output \
   --litellm-base https://api.litellm.com \
   --litellm-key sk-your-key-here
 ```
@@ -179,6 +250,7 @@ python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
 python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
   --harness fuzz_process_input_header \
   --povs /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs \
+  --output /tmp/trial-1/output \
   --litellm-base https://api.litellm.com \
   --litellm-key sk-your-key-here
 ```
@@ -187,6 +259,7 @@ python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
 ```sh
 python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
   --harness fuzz_process_input_header \
+  --output /tmp/trial-1/output \
   --litellm-base https://api.litellm.com \
   --litellm-key sk-your-key-here
 ```
@@ -197,6 +270,7 @@ python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
   --harness fuzz_process_input_header \
   --pov /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs/pov_0 \
   --hints /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/hints \
+  --output /tmp/trial-1/output \
   --litellm-base https://api.litellm.com \
   --litellm-key sk-your-key-here
 ```
@@ -207,6 +281,7 @@ python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
   --harness fuzz_process_input_header \
   --povs /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs \
   --hints /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/hints \
+  --output /tmp/trial-1/output \
   --litellm-base https://api.litellm.com \
   --litellm-key sk-your-key-here
 ```
@@ -229,10 +304,24 @@ python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
   - Provides SARIF reports and pre-fuzzing corpus to guide patch generation
   - Same structure as OSS-Fuzz bug finding hints (see above)
   - **CRSBench generates this directory** based on experiment configuration
+- `--output <output-dir>`: Path to output directory (optional)
+  - Directory where CRS writes its outputs (patches, test results, etc.)
+  - Mounted to `/out/` in the container
+  - **CRSBench snapshots this directory** for evaluation
 - `--litellm-base <url>`: LiteLLM API base URL (required)
 - `--litellm-key <key>`: LiteLLM API key (required)
 
 ### Filesystem mapping between host and docker container
+
+**CRS output directory mapping:**
+
+When `--output <output-dir>` is provided:
+- Host: `<output-dir>` (e.g., `/tmp/trial-1/output/`)
+- Container: `/out/`
+
+CRS writes its outputs to `/out/` in the container, which maps to the host output directory.
+
+**POV file(s) mapping:**
 
 OSS-Patch mounts POV file(s) to provide vulnerability information to the CRS.
 
@@ -361,6 +450,42 @@ Inside the container, CRS can access:
 - **Pre-fuzzing corpus**: Can be used as regression tests to ensure patches don't break functionality
 - **Combination with POVs**: Use POV blobs from `/povs/` to verify vulnerability is fixed, and corpus from `/hints/` to verify no regressions
 
+### CRS Output Directory Structure
+
+CRS must write its outputs to `/out/` in the container. CRSBench will snapshot this directory periodically for evaluation.
+
+**Required output structure:**
+
+```
+/out/                           # CRS output directory (container)
+├── patches/                    # Generated patches (required for patch generation CRS)
+│   ├── patch_001.diff          # Unified diff format
+│   ├── patch_002.diff
+│   └── patch_003.diff
+└── crs-data/                   # CRS-specific outputs (optional)
+    ├── patch-analysis.json     # Any additional data CRS wants to record
+    ├── repair-attempts.log
+    └── test-results.json
+```
+
+**What CRS writes:**
+- **Patches** (`/out/patches/`): Patch files in unified diff format (or whatever format CRS generates)
+- **CRS-specific data** (`/out/crs-data/`, optional): Any additional outputs CRS wants to snapshot
+
+**What CRSBench records (separately):**
+- **LLM usage**: CRSBench tracks LLM API calls, tokens, and costs (via LiteLLM proxy)
+- **CRS logs**: CRSBench captures stdout/stderr from CRS execution
+
+**Snapshot behavior:**
+
+CRSBench periodically snapshots the `/out/` directory along with LLM usage and CRS logs. These snapshots enable:
+- Progress monitoring during long-running trials
+- Incremental patch generation tracking
+- Resource usage analysis (LLM tokens, costs)
+- Recovery from interrupted trials
+
+See the CRSBench snapshot design documentation for details on snapshot frequency and contents.
+
 **Complete container filesystem for patch generation:**
 
 **With --pov (single POV):**
@@ -370,8 +495,9 @@ Inside the container, CRS can access:
 ├── hints/                   # Optional hints (if --hints provided)
 │   ├── sarif/
 │   └── corpus/
-├── out/                     # Output directory for generated patches
-│   └── patches/
+├── out/                     # CRS output (mounted from host --output)
+│   ├── patches/             # CRS writes patches here
+│   └── crs-data/            # CRS writes custom data here (optional)
 ├── src/                     # Project source code
 └── work/                    # Working directory
 ```
@@ -387,8 +513,9 @@ Inside the container, CRS can access:
 ├── hints/                   # Optional hints (if --hints provided)
 │   ├── sarif/
 │   └── corpus/
-├── out/                     # Output directory for generated patches
-│   └── patches/
+├── out/                     # CRS output (mounted from host --output)
+│   ├── patches/             # CRS writes patches here
+│   └── crs-data/            # CRS writes custom data here (optional)
 ├── src/                     # Project source code
 └── work/                    # Working directory
 ```
@@ -424,10 +551,12 @@ Inside the container, CRS can access:
 | POV argument     | Not applicable          | Optional (`--pov <pov-file>`)                |
 | POVs argument    | Not applicable          | Optional (`--povs <povs-dir>`)               |
 | Hints argument   | Optional (`--hints`)    | Optional (`--hints`)                         |
+| Output argument  | Optional (`--output`)   | Optional (`--output`)                        |
 | Harness argument | Positional              | Named (`--harness`)                          |
 | LiteLLM          | Optional                | Required (`--litellm-base`, `--litellm-key`) |
 | OSS-Fuzz path    | Not needed              | Required (`--oss-fuzz`)                      |
-| Container mounts | `/hints/` (optional)    | `/pov` or `/povs/`, `/hints/` (all optional) |
+| Container mounts | `/hints/`, `/out/`      | `/pov` or `/povs/`, `/hints/`, `/out/`       |
+| CRS outputs      | POVs, corpus            | Patches                                      |
 
 ---
 
