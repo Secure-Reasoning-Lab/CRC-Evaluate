@@ -251,6 +251,16 @@ def run_crs(
     )
     execution_time = time.time() - start_time
 
+    # Store execution metadata for reproducibility
+    self._store_execution_metadata(
+        trial_output_dir=trial_output_dir,
+        cmd=cmd,
+        hints_path=hints_path,
+        povs_path=None,  # Bug finding doesn't use POVs input
+        execution_time=execution_time,
+        returncode=result.returncode
+    )
+
     return CRSResult(
         harness_name=harness.name,
         execution_time=execution_time,
@@ -347,6 +357,8 @@ trial_output_dir/                    # Provided by BenchmarkRunner
 │   ├── pov_0                        # Flattened POV blobs
 │   ├── pov_1
 │   └── pov_2
+├── config.yaml                      # Experiment config (from orchestrator)
+├── execution.json                   # Execution metadata (from executor)
 ├── llm-usage.json                   # CRSBench records LLM metrics
 └── crs-output.log                   # CRSBench captures stdout/stderr
 ```
@@ -448,6 +460,128 @@ def _prepare_hints(
 
     return hints_dir
 ```
+
+### Execution Metadata Storage
+
+**Purpose**: Store execution details for reproducibility and debugging.
+
+CRS executor records what was actually executed, enabling:
+- Full reproducibility of trial execution
+- Debugging execution issues
+- Understanding what hints/POVs were provided
+- Audit trail of CRS runs
+
+**Implementation**:
+
+```python
+def _store_execution_metadata(
+    self,
+    trial_output_dir: Path,
+    cmd: List[str],
+    hints_path: Optional[Path],
+    povs_path: Optional[Path],
+    execution_time: float,
+    returncode: int
+) -> None:
+    """Store execution metadata for reproducibility.
+
+    Args:
+        trial_output_dir: Trial-specific output directory
+        cmd: Command executed
+        hints_path: Path to prepared hints (or None)
+        povs_path: Path to prepared POVs (or None)
+        execution_time: Execution duration in seconds
+        returncode: Process exit code
+
+    Writes execution.json with:
+        - Timestamp
+        - Exact command run
+        - Hints preparation details (enabled, path, corpus level, file counts)
+        - POVs preparation details (provided, path, count)
+        - Execution timing and result
+        - CRS configuration
+    """
+    metadata = {
+        "timestamp": datetime.now().isoformat(),
+        "command": cmd,
+        "crs_config": self.config.copy(),
+        "hints": {
+            "enabled": hints_path is not None,
+            "path": str(hints_path) if hints_path else None,
+            "corpus_level": self.config.get("hints_corpus_level") if hints_path else None,
+            "sarif_count": len(list((hints_path / "sarif").glob("*.sarif"))) if hints_path and (hints_path / "sarif").exists() else 0,
+            "corpus_count": len(list((hints_path / "corpus").iterdir())) if hints_path and (hints_path / "corpus").exists() else 0,
+        },
+        "povs": {
+            "provided": povs_path is not None,
+            "path": str(povs_path) if povs_path else None,
+            "count": len(list(povs_path.iterdir())) if povs_path and povs_path.exists() else 0,
+        },
+        "execution": {
+            "duration_seconds": execution_time,
+            "returncode": returncode,
+            "success": returncode == 0,
+        },
+    }
+
+    execution_file = trial_output_dir / "execution.json"
+    with open(execution_file, "w") as f:
+        json.dump(metadata, f, indent=2)
+
+    logger.info(f"Stored execution metadata to {execution_file}")
+```
+
+**Example execution.json**:
+
+```json
+{
+  "timestamp": "2025-10-20T15:30:45.123456",
+  "command": [
+    "python3",
+    "infra/helper.py",
+    "run_crs",
+    "ensemble-c",
+    "json-c",
+    "json_array_fuzzer",
+    "--output",
+    "/tmp/trial-1/output",
+    "--hints",
+    "/tmp/trial-1/hints"
+  ],
+  "crs_config": {
+    "hints_enabled": true,
+    "hints_corpus_level": "1h",
+    "run_timeout": 3600
+  },
+  "hints": {
+    "enabled": true,
+    "path": "/tmp/trial-1/hints",
+    "corpus_level": "1h",
+    "sarif_count": 2,
+    "corpus_count": 150
+  },
+  "povs": {
+    "provided": false,
+    "path": null,
+    "count": 0
+  },
+  "execution": {
+    "duration_seconds": 1823.45,
+    "returncode": 0,
+    "success": true
+  }
+}
+```
+
+**Orchestrator Responsibility**:
+
+The orchestrator stores high-level experiment configuration to `trial_output_dir/config.yaml`:
+- Experiment name and parameters
+- Benchmark/CRS/harness selection
+- Trial number and metadata
+- Experiment-level configuration
+
+Together, `execution.json` (from executor) and `config.yaml` (from orchestrator) provide complete reproducibility.
 
 ### POV Detection Logic
 
@@ -748,6 +882,16 @@ def run_crs(
         timeout=self.config.get("run_timeout", 3600)
     )
     execution_time = time.time() - start_time
+
+    # Store execution metadata for reproducibility
+    self._store_execution_metadata(
+        trial_output_dir=trial_output_dir,
+        cmd=cmd,
+        hints_path=hints_path,
+        povs_path=povs_path,  # Patch generation uses POVs
+        execution_time=execution_time,
+        returncode=result.returncode
+    )
 
     return CRSResult(
         harness_name=harness.name,
@@ -1247,6 +1391,7 @@ Maintain backward compatibility during transition:
 - [ ] `_prepare_output_directory()` - Create base output directory
 - [ ] `_prepare_hints()` - Prepare and filter hints directory from benchmark
 - [ ] `_prepare_povs()` - Prepare and filter POVs directory from benchmark
+- [ ] `_store_execution_metadata()` - Store execution details to execution.json
 - [ ] `_analyze_discovered_povs()` - Analyze POVs discovered by CRS
 - [ ] `_replay_pov_with_sanitizer()` - Re-execute POV to verify
 - [ ] `_get_command_prefix()` - Future command detection
@@ -1564,6 +1709,7 @@ output_dir.mkdir(parents=True, exist_ok=True)
 - Prepare hints directory (copy and filter from benchmark based on config)
 - Prepare POVs directory for patch generation (copy and filter from benchmark)
 - Pass `--output`, `--hints`, `--povs` parameters to CRS interface
+- Store execution metadata to `execution.json` (command, hints/POVs details, timing)
 - Collect and analyze outputs from trial directory
 - Do NOT create `/out/` subdirectories - CRS is responsible for directory structure
 
@@ -1572,6 +1718,12 @@ output_dir.mkdir(parents=True, exist_ok=True)
 - Record LLM usage to `trial_output_dir/llm-usage.json`
 - Capture CRS logs to `trial_output_dir/crs-output.log`
 - Manage snapshot system (periodically snapshot `output/` directory)
+
+**CRSBench Orchestrator:**
+- Store experiment configuration to `trial_output_dir/config.yaml`
+- Record experiment name, parameters, benchmark/CRS/harness selection
+- Record trial number and metadata
+- Provide high-level reproducibility information
 
 **Snapshot System:**
 - Periodically capture `trial_output_dir/output/` directory contents
@@ -1587,7 +1739,9 @@ When updating existing CRS executor code:
 - [ ] Implement `_prepare_output_directory()` (base directory only)
 - [ ] Implement `_prepare_hints()` (copy and filter from benchmark)
 - [ ] Implement `_prepare_povs()` (copy and filter from benchmark)
+- [ ] Implement `_store_execution_metadata()` (store execution details)
 - [ ] Call preparation methods before CRS execution
+- [ ] Call `_store_execution_metadata()` after CRS execution
 - [ ] Add `--output`, `--hints`, `--povs` parameters to command construction
 - [ ] Update POV collection to read from `trial_output_dir/output/povs/`
 - [ ] Update patch collection to read from `trial_output_dir/output/patches/`
@@ -1599,6 +1753,8 @@ When updating existing CRS executor code:
 - [ ] Update documentation and examples
 - [ ] Document that CRS is responsible for creating subdirectories
 - [ ] Document hints/POVs filtering based on experiment config
+- [ ] Document execution metadata storage (execution.json)
+- [ ] Coordinate with orchestrator for config.yaml storage
 
 ## References
 
