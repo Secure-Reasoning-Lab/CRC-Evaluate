@@ -534,7 +534,7 @@ See the CRSBench snapshot design documentation for details on snapshot frequency
 4. CRS generates patch candidates for the vulnerability
 5. CRS tests patch with `/pov` (must fix the POV)
 6. CRS validates with `/hints/corpus/*.blob` (must not break existing functionality)
-7. CRS outputs final patch to `/out/patches/`
+7. CRS outputs final patch to `/out/patches/<pov_id>/patch.diff` (e.g., `/out/patches/pov_0/patch.diff`)
 
 **Example workflow (multiple POVs with --povs):**
 
@@ -546,7 +546,7 @@ See the CRSBench snapshot design documentation for details on snapshot frequency
 6. CRS generates patch candidates for each unique vulnerability
 7. CRS tests patches with `/povs/pov_0`, `/povs/pov_1`, etc. (must fix all related POVs)
 8. CRS validates with `/hints/corpus/*.blob` (must not break existing functionality)
-9. CRS outputs final patches to `/out/patches/`
+9. CRS outputs final patches to `/out/patches/<pov_id>/patch.diff` for each POV (e.g., `/out/patches/pov_0/patch.diff`, `/out/patches/pov_1/patch.diff`)
 
 ### Key Differences from OSS-Fuzz Interface
 

@@ -119,7 +119,7 @@ crsbench/reporting/
 3. Snapshot Parsing
    └─ Extract metadata.json (timestamp, cycle, etc.)
    └─ Extract POVs/ directory (binary blobs)
-   └─ Extract patches/ directory (.diff files)
+   └─ Extract patches/ directory (organized by POV ID: patches/<pov_id>/patch.diff)
    └─ Extract llm-usage.json (full LLM metrics)
    └─ Extract crs-output.log (full CRS logs)
 
@@ -165,7 +165,8 @@ for snapshot_archive in trial_dir.glob("snapshot-*.tar.gz"):
     # Parse snapshot data
     metadata = json.loads((temp_dir / "metadata.json").read_text())
     povs = list((temp_dir / "povs").glob("pov_*"))
-    patches = list((temp_dir / "patches").glob("*.diff"))
+    # Patches organized by POV ID: patches/<pov_id>/patch.diff
+    patches = list((temp_dir / "patches").glob("*/patch.diff"))
     llm_usage = json.loads((temp_dir / "llm-usage.json").read_text())
     crs_log = (temp_dir / "crs-output.log").read_text()
 
@@ -983,8 +984,8 @@ def extract_snapshot(snapshot_path: Path) -> SnapshotData:
         # Parse POVs (binary blobs)
         pov_files = list((snapshot_dir / "povs").glob("pov_*")) if (snapshot_dir / "povs").exists() else []
 
-        # Parse patches
-        patch_files = list((snapshot_dir / "patches").glob("*.diff")) if (snapshot_dir / "patches").exists() else []
+        # Parse patches (organized by POV ID: patches/<pov_id>/patch.diff)
+        patch_files = list((snapshot_dir / "patches").glob("*/patch.diff")) if (snapshot_dir / "patches").exists() else []
 
         # Parse LLM usage
         llm_usage = json.loads((snapshot_dir / "llm-usage.json").read_text())

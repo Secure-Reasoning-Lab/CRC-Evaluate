@@ -367,9 +367,9 @@ trial_output_dir/                    # Provided by BenchmarkRunner
 ```
 /out/                                # Mapped from host trial_output_dir/output/
 ├── povs/                            # CRS writes discovered POVs
-│   ├── pov_001
-│   ├── pov_002
-│   └── pov_003
+│   ├── pov_0
+│   ├── pov_1
+│   └── pov_2
 ├── corpus/                          # CRS writes generated corpus
 │   ├── input-001
 │   ├── input-002
@@ -987,22 +987,25 @@ def _prepare_povs(
 
 **Implementation**:
 ```python
-def _collect_patches(self, trial_output_dir: Path) -> List[str]:
+def _collect_patches(self, trial_output_dir: Path) -> Dict[str, str]:
     """Collect generated patches from output directory.
 
     Args:
         trial_output_dir: Trial-specific output directory
 
     Returns:
-        List of patch contents as strings
+        Dict mapping POV ID to patch content
     """
     patches_dir = trial_output_dir / "output" / "patches"
 
-    patches = []
+    patches = {}
     if patches_dir.exists():
-        # Collect all .diff files
-        for patch_file in patches_dir.glob("*.diff"):
-            patches.append(patch_file.read_text())
+        # Collect patches organized by POV ID: patches/<pov_id>/patch.diff
+        for pov_dir in patches_dir.iterdir():
+            if pov_dir.is_dir():
+                patch_file = pov_dir / "patch.diff"
+                if patch_file.exists():
+                    patches[pov_dir.name] = patch_file.read_text()
 
     return patches
 ```
@@ -1164,9 +1167,9 @@ project_name: "json-c"
 /
 ├── out/                         # CRS output (mounted from host trial_output_dir/output/)
 │   ├── povs/                    # CRS writes discovered POVs here
-│   │   ├── pov_001
-│   │   ├── pov_002
-│   │   └── pov_003
+│   │   ├── pov_0
+│   │   ├── pov_1
+│   │   └── pov_2
 │   ├── corpus/                  # CRS writes generated corpus here
 │   │   ├── input-001
 │   │   ├── input-002
@@ -1190,10 +1193,13 @@ project_name: "json-c"
 ```
 /
 ├── out/                         # CRS output (mounted from host trial_output_dir/output/)
-│   ├── patches/                 # CRS writes generated patches here
-│   │   ├── patch_001.diff
-│   │   ├── patch_002.diff
-│   │   └── patch_003.diff
+│   ├── patches/                 # CRS writes generated patches here (organized by POV ID)
+│   │   ├── pov_0/
+│   │   │   └── patch.diff
+│   │   ├── pov_1/
+│   │   │   └── patch.diff
+│   │   └── pov_2/
+│   │       └── patch.diff
 │   └── crs-data/                # CRS-specific outputs (optional)
 │       └── ...
 ├── povs/                        # POVs to fix (mounted if --povs provided)
