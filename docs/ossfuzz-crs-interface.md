@@ -459,9 +459,12 @@ CRS must write its outputs to `/out/` in the container. CRSBench will snapshot t
 ```
 /out/                           # CRS output directory (container)
 ├── patches/                    # Generated patches (required for patch generation CRS)
-│   ├── patch_001.diff          # Unified diff format
-│   ├── patch_002.diff
-│   └── patch_003.diff
+│   ├── pov_0/                  # Patches for pov_0
+│   │   └── patch.diff          # Unified diff format
+│   ├── pov_1/                  # Patches for pov_1
+│   │   └── patch.diff
+│   └── pov_2/                  # Patches for pov_2
+│       └── patch.diff
 └── crs-data/                   # CRS-specific outputs (optional)
     ├── patch-analysis.json     # Any additional data CRS wants to record
     ├── repair-attempts.log
@@ -469,7 +472,10 @@ CRS must write its outputs to `/out/` in the container. CRSBench will snapshot t
 ```
 
 **What CRS writes:**
-- **Patches** (`/out/patches/`): Patch files in unified diff format (or whatever format CRS generates)
+- **Patches** (`/out/patches/<pov_id>/patch.diff`): Patch files organized by POV ID, in unified diff format (or whatever format CRS generates)
+  - Each POV gets its own subdirectory named after the POV ID (e.g., `pov_0`, `pov_1`)
+  - The patch file is always named `patch.diff` within each POV directory
+  - This structure allows CRSBench to easily associate patches with the POVs they fix
 - **CRS-specific data** (`/out/crs-data/`, optional): Any additional outputs CRS wants to snapshot
 
 **What CRSBench records (separately):**
