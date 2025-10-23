@@ -3,9 +3,9 @@
 ## Benchmark Converting [@Youngjoon, @Dongkwan, @Jiho]
 
 - [x]  Define RFC format using json schema or Pydantic [@Yufu]
-- [ ]  Automatically convert Team-Atlanta benchmarks to RFC format [@Youngjoon]
-- [ ]  Add pov-variants into the repo [@Dongkwan]
-- [ ]  Add patch-variants into the repo []
+- [x]  Automatically convert Team-Atlanta benchmarks to RFC format [@Youngjoon]
+- [x]  Add pov-variants into the repo [@Dongkwan]
+- [x]  Add patch-variants into the repo [@Youngjoon]
 - [ ]  Define and assign difficulty level based on results of naive fuzzer or multilang [@Jiho]
 - [ ]  Corpus collecting; also "corpus-[timestamp]" for 1h/1d pre-fuzzing corpus. [@Jiho]
 - [ ]  Make hint generation LLM-agent [@Youngjoon]
@@ -13,7 +13,7 @@
 - [ ]  Convert hints to SARIF format [@Youngjoon]
 - [ ]  Create `test.sh` if missing [@all]
 - [ ]  Manual review and finalize each benchmark entries [@all]
-- [ ]  Change `repo_url` of r2 and r3 benchmarks to use afc one [@Youngjoon]
+- [x]  Change `repo_url` of r2 and r3 benchmarks to use afc one [@Youngjoon]
 
 ## Running RFC-compliant CRSes [@Yufu]
 
