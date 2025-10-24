@@ -220,3 +220,6 @@ compile_commands.json
 
 # Logs and Results
 migration_report.csv
+
+# Agent logs
+*agent_log.txt
