@@ -172,8 +172,9 @@ Please summarize reference projects by creating markdown files in `docs_referenc
 ### Testing
 - Follow TDD (Test-Driven Development) design when applicable
 - **MUST run corresponding tests when modifying a module**
+- **ALL test code MUST be in `tests/` directory, NOT in module directories**
 - Test files are located in `tests/` directory
-- Test file naming: `test_<module_name>.py` (e.g., `test_validation.py`)
+- Test file naming: `test_<module_name>.py` (e.g., `test_validation.py`, `test_agent.py`)
 - **IMPORTANT: Always use `uv run pytest` instead of bare `pytest`**
   - This ensures tests run in the correct virtual environment
   - Example: `uv run pytest tests/test_<module_name>.py -v`

@@ -76,7 +76,7 @@ cp .env.example .env
 **Common environment variables:**
 
 - `REDIS_HOST` - Redis server for distributed execution (default: localhost)
-- `LITELLM_URL` - LiteLLM API endpoint for AI-powered CRS
+- `LITELLM_BASE_URL` - LiteLLM API endpoint for AI-powered CRS
 - `LITELLM_MASTER_KEY` - Authentication key for LiteLLM
 - `OSS_FUZZ_PATH` - Path to OSS-Fuzz installation
 - `LOG_LEVEL` - Logging verbosity (DEBUG, INFO, WARNING, ERROR)
