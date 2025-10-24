@@ -48,4 +48,174 @@ Handles file operations with dry-run support.
 
 ### Design Documentation
 
-See [migration design document](../../design-docs/migration-atlanta-to-rfc.md) for implementation details.
+See [migration design document](../../design-docs/migration/migration-atlanta-to-rfc.md) for implementation details.
+
+---
+
+## Test.sh Generator
+
+Automated tool to generate `test.sh` functional test scripts for benchmarks using Claude Agent SDK.
+
+### Overview
+
+Security patch validation requires functional testing beyond vulnerability triggering. The test.sh generator automatically creates test scripts by:
+1. Analyzing project repositories to find unit tests
+2. Identifying build systems and test frameworks
+3. Generating appropriate test.sh scripts for Docker environments
+
+### Quick Start
+
+#### Option 1: Using .env file (Recommended)
+
+```bash
+# Create .env file in project root
+cat > .env << 'EOF'
+LITELLM_BASE_URL=http://localhost:4000
+LITELLM_API_KEY=your-api-key-here
+PROJECT_REPOS_DIR=/home/acorn421/work/team-atlanta/afc-repos
+EOF
+
+# .env is automatically loaded by the tool
+```
+
+#### Option 2: Set environment variables manually
+
+```bash
+export LITELLM_BASE_URL="http://localhost:4000"
+export LITELLM_API_KEY="your-api-key"
+export PROJECT_REPOS_DIR="/home/acorn421/work/team-atlanta/afc-repos"
+```
+
+#### Generate test.sh for a benchmark
+
+**Option 1: Auto-clone (simplest!)**
+```bash
+# Repository is automatically cloned if not found
+python crsbench/migration/generate_test_sh.py \
+  --benchmark apache-commons-compress-delta-01 \
+  --verbose
+
+# Cloned to PROJECT_REPOS_DIR/commons-compress
+```
+
+**Option 2: Specify existing project directory**
+```bash
+python crsbench/migration/generate_test_sh.py \
+  --benchmark apache-commons-compress-delta-01 \
+  --project-dir /path/to/commons-compress \
+  --verbose
+```
+
+### Features
+
+- ✅ **Auto-clone repositories**: Automatically clones project repos from benchmark config
+- ✅ Automatic unit test discovery using Claude Agent SDK
+- ✅ Multi-build system support (Maven, Make, CMake, Gradle)
+- ✅ Docker environment handling (test exclusions, permission issues)
+- ✅ Generates both test.sh and analysis documentation
+
+### Testing the Agent
+
+Two test scripts are provided:
+
+#### Minimal Test (No Dependencies)
+```bash
+python crsbench/migration/test_agent_minimal.py
+```
+Basic structure validation without requiring Claude Agent SDK.
+
+#### Full Test (Requires LiteLLM)
+```bash
+# Set up environment first
+export LITELLM_BASE_URL="http://localhost:4000"
+export LITELLM_API_KEY="your-api-key"
+
+# Run full test suite
+python crsbench/migration/test_agent_simple.py
+```
+Tests actual agent functionality including:
+- Simple queries
+- Tool usage (Read, Grep, Glob)
+- Agent initialization
+
+### Programmatic Usage
+
+```python
+from crsbench.migration.test_sh_generator import generate_test_sh_for_benchmark
+
+result = generate_test_sh_for_benchmark(
+    benchmark_name="apache-commons-compress-delta-01",
+    benchmark_dir="benchmarks/apache-commons-compress-delta-01",
+    project_dir="/path/to/commons-compress",
+    verbose=True
+)
+
+if result["success"]:
+    print(f"✅ Generated: {result['test_sh_path']}")
+    print(f"📄 Analysis: {result['analysis_md_path']}")
+```
+
+### Design Documentation
+
+See [test.sh generator design document](../../design-docs/migration/test-sh-generator.md) for architecture details.
+
+---
+
+## vuln.yaml Generator
+
+Automatically generates vuln.yaml files for CPVs by analyzing crash logs, POV files, and source code.
+
+### Features
+- Analyzes crash logs (pov_*.log) to extract vulnerability information
+- Identifies CWE classifications based on vulnerability type
+- Locates vulnerable code in source files
+- Generates accurate vuln.yaml with proper metadata
+- **Auto-detects temporary MOCK files** and regenerates them automatically
+
+### Usage
+
+```bash
+# Generate vuln.yaml for ALL CPVs in a benchmark
+python crsbench/migration/generate_vuln_yaml.py \
+  --benchmark atlanta-curl-delta-01
+
+# Generate vuln.yaml for a specific CPV
+python crsbench/migration/generate_vuln_yaml.py \
+  --benchmark atlanta-curl-delta-01 \
+  --harness curl_fuzzer_http \
+  --cpv cpv_0
+
+# Force overwrite ALL existing vuln.yaml files
+python crsbench/migration/generate_vuln_yaml.py \
+  --benchmark atlanta-curl-delta-01 \
+  --force
+```
+
+### MOCK File Auto-Detection
+
+The generator automatically detects and replaces temporary vuln.yaml files:
+- Files containing `MOCK:` are considered temporary
+- Files containing `(TBD)` are considered temporary
+- These files are automatically regenerated **without** needing `--force`
+
+Example:
+```yaml
+# This will be auto-detected and replaced:
+name: 'MOCK: cpv_0 vulnerability in curl_fuzzer_http'
+description: 'MOCK: ... (TBD) ...'
+```
+
+### Generated Files
+1. **vuln.yaml** - Vulnerability metadata (per CPV)
+2. **vuln_analysis.md** - Detailed analysis document (per CPV)
+3. **vuln_agent_log.txt** - Agent execution log (per CPV)
+
+### Requirements
+- LITELLM_BASE_URL and LITELLM_API_KEY environment variables
+- Claude Agent SDK
+- Project source code (auto-cloned if not present)
+
+### Design Documentation
+
+See [vuln.yaml generator design document](../../design-docs/migration/vuln-yaml-generator.md) for architecture details.
+

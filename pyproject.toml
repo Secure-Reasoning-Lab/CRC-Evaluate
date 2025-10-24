@@ -36,3 +36,12 @@ crsbench = "crsbench.run_experiment:main"
 
 [tool.setuptools.packages.find]
 include = ["crsbench*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks tests as integration tests (requiring external services like LiteLLM, Redis, etc.)",
+]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
