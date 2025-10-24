@@ -157,7 +157,11 @@ if result["success"]:
 
 ### Design Documentation
 
-See [test.sh generator design document](../../design-docs/migration/test-sh-generator.md) for architecture details.## vuln.yaml Generator
+See [test.sh generator design document](../../design-docs/migration/test-sh-generator.md) for architecture details.
+
+---
+
+## vuln.yaml Generator
 
 Automatically generates vuln.yaml files for CPVs by analyzing crash logs, POV files, and source code.
 
@@ -210,4 +214,8 @@ description: 'MOCK: ... (TBD) ...'
 - LITELLM_BASE_URL and LITELLM_API_KEY environment variables
 - Claude Agent SDK
 - Project source code (auto-cloned if not present)
+
+### Design Documentation
+
+See [vuln.yaml generator design document](../../design-docs/migration/vuln-yaml-generator.md) for architecture details.
 
