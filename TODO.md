@@ -19,6 +19,9 @@
 
 - [ ]  Implement experiment scripts and configurations (e.g., run_experiment.py)
 - [x]  job queue and worker (like fuzzbench with redis)
+- [x]  CRS interface
+    - [x] bug-finding
+    - [x] patch
 - [ ]  Wrapper codes for running bug finding CRS
     - [ ]  Mock CRS bug-finding interface
     - [ ]  Agreement with CRS standardization team
@@ -32,6 +35,12 @@
             - [ ]  proper way to find a reasonable number for concurrent jobs for a machine or user-defined
             - [ ]  make sure no filesystem conflicts & severe resource contention
     - [ ]  distributed test
+- [ ] fault tolerance (e.g. CRS exits/killed, timeout handling)
+- [ ] snapshots
+  - [x] take snapshots
+  - [ ] snapshot example
+  - [ ] mock bug/patch validation interface to test snapshots
+  - [ ] mock interface for reports
 
 ## Bug-finding and Patch Validation
 
@@ -47,3 +56,4 @@
 ## Reporting
 
 - [ ]  HTML format report generation (+ visualize)
+- [ ]  report from validation results & snapshots
