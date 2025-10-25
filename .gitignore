@@ -186,6 +186,10 @@ validation_results.json
 validation_results.yaml
 *_validation_results.*
 
+# Snapshot examples - ignore extracted directories
+snapshot-examples/*/extracted/
+snapshot-examples/*/.snapshot-*/
+
 # Reproducer temporary files
 harness_*
 *.exec

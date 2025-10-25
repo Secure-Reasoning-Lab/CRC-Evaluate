@@ -1365,9 +1365,179 @@ class SnapshotManager:
             self._write_json(snapshot_dir / f"{collector.name}.json", data)
 ```
 
+## Sample Snapshot Generation
+
+For testing and documentation purposes, CRSBench provides a script to generate realistic sample snapshots.
+
+### Generator Script
+
+**Location:** `snapshot-examples/generate_snapshot.py`
+
+**Features:**
+- Generates realistic snapshot archives with proper tar.gz compression
+- Simulates incremental POV/patch discovery over time
+- Creates proper directory structure and file formats
+- Includes snapshot validation functionality
+
+### Generation Design
+
+The generator creates snapshots that demonstrate the full snapshot specification:
+
+**Snapshot 1 (15 minutes):**
+- 2 initial POVs discovered
+- 1 patch generated for pov_0
+- 2 initial corpus files
+- 50 LLM API calls, 25K tokens
+
+**Snapshot 2 (30 minutes):**
+- 1 new POV (total: 3)
+- 2 new patches for pov_1 and pov_2 (total: 3)
+- 3 new corpus files (total: 5)
+- 95 LLM API calls (cumulative), 47.5K tokens
+
+**Snapshot 3 (45 minutes):**
+- 2 new POVs (total: 5)
+- 1 new patch for pov_3 (total: 4)
+- 1 new corpus file (total: 6)
+- 130 LLM API calls (cumulative), 65K tokens
+
+### Data Generation Methods
+
+**POVs:** Binary blobs (256 bytes of test data)
+- Stored as `povs/pov_NNN` (no extension)
+- Incremental tracking by filename
+
+**Patches:** Standard unified diff format
+- Stored as `patches/pov_N/patch.diff`
+- Organized by POV ID in subdirectories
+- Incremental tracking by path
+
+**Corpus:** Binary test inputs
+- Stored as `corpus/input-NNN`
+- Incremental tracking by modification time
+
+**LLM Usage:** Cumulative JSON metrics
+- Full snapshot of all metrics up to that point
+- Includes breakdowns by model and operation
+- Realistic token counts and costs
+
+**CRS Logs:** Complete log from trial start
+- Full log file (not incremental)
+- Includes log entries for all discovered POVs
+- Shows realistic CRS execution flow
+
+### Validation Functionality
+
+The generator includes comprehensive validation:
+
+```python
+class SnapshotValidator:
+    """Validate snapshot format and structure."""
+
+    def validate_all(self) -> bool:
+        """Validate all snapshots in directory."""
+        # Checks all snapshot archives
+
+    def validate_snapshot(self, archive_path: Path) -> bool:
+        """Validate a single snapshot archive."""
+        # Validates structure, files, and metadata
+```
+
+**Validation checks:**
+1. Completion marker exists (`.complete` file)
+2. Archive is valid tar.gz
+3. Required files present
+4. JSON structure valid
+5. Metadata cycle matches filename
+6. Patch directory structure correct (organized by POV ID)
+
+### Usage
+
+**Generate snapshots:**
+```bash
+python snapshot-examples/generate_snapshot.py [output_dir]
+```
+
+**Validate snapshots:**
+```bash
+python snapshot-examples/generate_snapshot.py --validate [snapshot_dir]
+```
+
+**Inspect snapshots:**
+```bash
+# List contents
+tar -tzf snapshot-examples/trial-example/snapshot-0001.tar.gz
+
+# Extract
+tar -xzf snapshot-examples/trial-example/snapshot-0001.tar.gz
+
+# View metadata
+cat metadata.json
+```
+
+### Integration with Testing
+
+The generated snapshots are used for:
+
+1. **Unit tests:** Test snapshot parsing and validation logic
+2. **Integration tests:** Test report generation from snapshots
+3. **Documentation:** Demonstrate snapshot format
+4. **Development:** Quick reference for snapshot structure
+
+Example test usage:
+
+```python
+def test_snapshot_parsing():
+    """Test parsing snapshot metadata."""
+    snapshot_dir = Path("snapshot-examples/trial-example")
+
+    # Load snapshot
+    with tarfile.open(snapshot_dir / "snapshot-0001.tar.gz", 'r:gz') as tar:
+        metadata_file = tar.extractfile("metadata.json")
+        metadata = json.load(metadata_file)
+
+    # Validate structure
+    assert metadata["cycle"] == 1
+    assert "timestamp" in metadata
+    assert "elapsed_time" in metadata
+```
+
+### Design Rationale
+
+**Why a generator script?**
+- Manual creation is error-prone and time-consuming
+- Ensures snapshots match specification exactly
+- Easy to regenerate when format changes
+- Provides validation for real snapshots
+
+**Why include validation?**
+- Catch format errors early
+- Ensure compliance with specification
+- Provide clear error messages
+- Support development and debugging
+
+**Why realistic data?**
+- Tests must handle real-world scenarios
+- Documentation examples should be authentic
+- Helps developers understand format
+- Enables meaningful integration tests
+
+### Maintenance
+
+When updating the snapshot specification:
+
+1. Update the generator script to match new format
+2. Regenerate sample snapshots
+3. Run validation to ensure compliance
+4. Update tests that depend on snapshot structure
+5. Update documentation examples
+
+The generator script serves as executable documentation of the snapshot format.
+
 ## References
 
 - [FuzzBench Snapshot Analysis](../../docs_reference_projects/fuzzbench-snapshots.md): Detailed analysis of FuzzBench implementation
 - [Evaluation Module Design](./evaluation.md): Evaluation module overview
 - [Architecture](../architecture.md): Overall CRSBench architecture
 - [Orchestration](../orchestration.md): Experiment orchestration design
+- [Sample Snapshots](../../snapshot-examples/): Generated snapshot examples and tools
