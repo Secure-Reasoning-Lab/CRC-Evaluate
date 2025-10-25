@@ -1426,6 +1426,60 @@ The generator creates snapshots that demonstrate the full snapshot specification
 - Includes log entries for all discovered POVs
 - Shows realistic CRS execution flow
 
+### Listing Functionality
+
+The generator includes snapshot listing capabilities:
+
+```python
+class SnapshotLister:
+    """List snapshot contents and provide summaries."""
+
+    def list_directory(self, snapshot_dir: Path):
+        """List all snapshots in a directory with summaries."""
+        # Shows overview of all snapshots
+
+    def list_snapshot(self, archive_path: Path):
+        """List detailed contents of a single snapshot."""
+        # Shows file tree with sizes and metadata
+```
+
+**Directory listing features:**
+- Summary of each snapshot (cycle, elapsed time, file count)
+- Categorized file counts (POVs, patches, corpus, config, logs)
+- File size for each archive
+- POV and patch names
+
+**Single snapshot listing features:**
+- Metadata display (cycle, timestamp, elapsed time, period)
+- Complete file tree with proper indentation
+- File sizes in human-readable format (B, K, M)
+- Directory structure visualization
+
+**Example output (directory listing):**
+```
+[Snapshot 0001] snapshot-0001.tar.gz (1.8K)
+  Cycle: 1, Elapsed: 900s (15m)
+  Files: 10 total
+    - POVs: 2 (pov_001, pov_002)
+    - Patches: 1 (patches/pov_0)
+    - Corpus: 2 files
+```
+
+**Example output (single snapshot listing):**
+```
+Metadata:
+  Cycle: 1
+  Timestamp: 2025-10-25 18:19:41
+  Elapsed: 900s (15m)
+
+Files (10 total):
+  patches/
+    pov_0/
+      patch.diff (183B)
+  povs/
+    pov_001 (256B)
+```
+
 ### Validation Functionality
 
 The generator includes comprehensive validation:
@@ -1458,12 +1512,21 @@ class SnapshotValidator:
 python snapshot-examples/generate_snapshot.py [output_dir]
 ```
 
+**List snapshots:**
+```bash
+# List all snapshots in directory with summaries
+python snapshot-examples/generate_snapshot.py --list [snapshot_dir]
+
+# List detailed contents of specific snapshot
+python snapshot-examples/generate_snapshot.py --list-snapshot <snapshot.tar.gz>
+```
+
 **Validate snapshots:**
 ```bash
 python snapshot-examples/generate_snapshot.py --validate [snapshot_dir]
 ```
 
-**Inspect snapshots:**
+**Inspect snapshots (manual):**
 ```bash
 # List contents
 tar -tzf snapshot-examples/trial-example/snapshot-0001.tar.gz

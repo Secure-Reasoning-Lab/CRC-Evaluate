@@ -38,7 +38,8 @@
 - [ ] fault tolerance (e.g. CRS exits/killed, timeout handling)
 - [ ] snapshots
   - [x] take snapshots
-  - [ ] snapshot example
+  - [x] snapshot example
+  - [x] inspect/list snapshot contents
   - [ ] mock bug/patch validation interface to test snapshots
   - [ ] mock interface for reports
 

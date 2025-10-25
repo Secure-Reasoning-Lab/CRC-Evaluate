@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate and validate sample snapshots for testing and documentation.
+Generate, list, and validate sample snapshots for testing and documentation.
 
 This script creates realistic snapshot archives that demonstrate the CRSBench
 snapshot format, including:
@@ -10,8 +10,17 @@ snapshot format, including:
 - Completion markers
 
 Usage:
-    python generate_snapshot.py [output_dir]              # Generate snapshots
-    python generate_snapshot.py --validate [snapshot_dir] # Validate snapshots
+    # Generate snapshots
+    python generate_snapshot.py [output_dir]
+
+    # List all snapshots in a directory with summaries
+    python generate_snapshot.py --list [snapshot_dir]
+
+    # List detailed contents of a specific snapshot
+    python generate_snapshot.py --list-snapshot <snapshot.tar.gz>
+
+    # Validate snapshots
+    python generate_snapshot.py --validate [snapshot_dir]
 
 The script generates snapshots for a simulated trial showing POV discovery
 and patch generation over time.
@@ -312,6 +321,202 @@ class SnapshotGenerator:
                     tar.add(item, arcname=arcname)
 
 
+class SnapshotLister:
+    """List snapshot contents and provide summaries."""
+
+    def __init__(self):
+        pass
+
+    def list_directory(self, snapshot_dir: Path):
+        """List all snapshots in a directory with summaries."""
+        print(f"Snapshots in {snapshot_dir}:\n")
+
+        # Find all snapshot archives
+        snapshot_archives = sorted(snapshot_dir.glob("snapshot-*.tar.gz"))
+
+        if not snapshot_archives:
+            print("No snapshot archives found.")
+            return
+
+        for archive in snapshot_archives:
+            self._list_snapshot_summary(archive)
+            print()
+
+    def list_snapshot(self, archive_path: Path):
+        """List detailed contents of a single snapshot."""
+        if not archive_path.exists():
+            print(f"Error: Snapshot not found: {archive_path}")
+            return
+
+        print(f"Snapshot: {archive_path.name}\n")
+
+        try:
+            with tarfile.open(archive_path, 'r:gz') as tar:
+                members = tar.getmembers()
+
+                # Read and display metadata if present
+                try:
+                    metadata_member = tar.getmember("metadata.json")
+                    metadata_content = tar.extractfile(metadata_member).read()
+                    metadata = json.loads(metadata_content)
+
+                    print("Metadata:")
+                    print(f"  Cycle: {metadata.get('cycle', 'N/A')}")
+
+                    timestamp = metadata.get('timestamp')
+                    if timestamp:
+                        dt = datetime.fromtimestamp(timestamp)
+                        print(f"  Timestamp: {dt.strftime('%Y-%m-%d %H:%M:%S')}")
+
+                    elapsed = metadata.get('elapsed_time', 0)
+                    print(f"  Elapsed: {elapsed}s ({self._format_duration(elapsed)})")
+                    print(f"  Period: {metadata.get('snapshot_period', 'N/A')}s")
+                    print()
+                except:
+                    pass
+
+                # List all files with sizes
+                print(f"Files ({len(members)} total):")
+                self._list_files_tree(members)
+
+        except Exception as e:
+            print(f"Error reading snapshot: {e}")
+
+    def _list_snapshot_summary(self, archive_path: Path):
+        """Print a summary of a single snapshot."""
+        # Extract cycle number
+        name_without_gz = archive_path.name.replace('.gz', '')
+        cycle = int(Path(name_without_gz).stem.split('-')[1])
+
+        # Get file size
+        size = archive_path.stat().st_size
+        size_str = self._format_size(size)
+
+        print(f"[Snapshot {cycle:04d}] {archive_path.name} ({size_str})")
+
+        try:
+            with tarfile.open(archive_path, 'r:gz') as tar:
+                members = tar.getmembers()
+                member_names = [m.name for m in members]
+
+                # Read metadata
+                try:
+                    metadata_member = tar.getmember("metadata.json")
+                    metadata_content = tar.extractfile(metadata_member).read()
+                    metadata = json.loads(metadata_content)
+
+                    elapsed = metadata.get('elapsed_time', 0)
+                    print(f"  Cycle: {metadata.get('cycle', 'N/A')}, Elapsed: {elapsed}s ({self._format_duration(elapsed)})")
+                except:
+                    pass
+
+                print(f"  Files: {len(members)} total")
+
+                # Count POVs
+                pov_files = [n for n in member_names if n.startswith("povs/") and n != "povs/"]
+                if pov_files:
+                    pov_names = [Path(p).name for p in pov_files]
+                    print(f"    - POVs: {len(pov_files)} ({', '.join(sorted(pov_names))})")
+
+                # Count patches
+                patch_files = [n for n in member_names if n.endswith(".diff")]
+                if patch_files:
+                    patch_paths = [str(Path(p).parent) for p in patch_files]
+                    print(f"    - Patches: {len(patch_files)} ({', '.join(sorted(set(patch_paths)))})")
+
+                # Count corpus
+                corpus_files = [n for n in member_names if n.startswith("corpus/") and n != "corpus/"]
+                if corpus_files:
+                    print(f"    - Corpus: {len(corpus_files)} files")
+
+                # List config files
+                config_files = [n for n in member_names if n in ["config.yaml", "execution.json"]]
+                if config_files:
+                    print(f"    - Config: {', '.join(config_files)}")
+
+                # List log files
+                log_files = [n for n in member_names if n.endswith(".json") or n.endswith(".log")]
+                log_files = [f for f in log_files if f not in config_files and f != "metadata.json"]
+                if log_files:
+                    print(f"    - Logs: {', '.join(log_files)}")
+
+                # Metadata
+                if "metadata.json" in member_names:
+                    print(f"    - Metadata: metadata.json")
+
+        except Exception as e:
+            print(f"  Error: {e}")
+
+    def _list_files_tree(self, members: List[tarfile.TarInfo]):
+        """List files in a tree structure."""
+        # Group files by directory
+        dirs = {}
+        root_files = []
+
+        for member in members:
+            if member.isdir():
+                continue
+
+            parts = Path(member.name).parts
+            if len(parts) == 1:
+                # Root file
+                root_files.append((member.name, member.size))
+            else:
+                # File in directory
+                dir_name = parts[0]
+                if dir_name not in dirs:
+                    dirs[dir_name] = []
+                rel_path = str(Path(*parts[1:]))
+                dirs[dir_name].append((rel_path, member.size))
+
+        # Print root files
+        for name, size in sorted(root_files):
+            print(f"  {name} ({self._format_size(size)})")
+
+        # Print directories with proper tree structure
+        for dir_name in sorted(dirs.keys()):
+            print(f"  {dir_name}/")
+
+            # Build tree structure for this directory
+            tree_printed = set()  # Track what we've already printed
+
+            for file_path, size in sorted(dirs[dir_name]):
+                path_obj = Path(file_path)
+                parts = path_obj.parts
+
+                # Print intermediate directories
+                for i in range(len(parts) - 1):
+                    subdir_path = str(Path(*parts[:i+1]))
+                    if subdir_path not in tree_printed:
+                        indent = "    " + "  " * i
+                        print(f"{indent}{parts[i]}/")
+                        tree_printed.add(subdir_path)
+
+                # Print the file
+                indent = "    " + "  " * (len(parts) - 1)
+                print(f"{indent}{path_obj.name} ({self._format_size(size)})")
+
+    def _format_size(self, size: int) -> str:
+        """Format byte size to human-readable string."""
+        if size < 1024:
+            return f"{size}B"
+        elif size < 1024 * 1024:
+            return f"{size / 1024:.1f}K"
+        else:
+            return f"{size / (1024 * 1024):.1f}M"
+
+    def _format_duration(self, seconds: float) -> str:
+        """Format duration in seconds to human-readable string."""
+        if seconds < 60:
+            return f"{seconds:.0f}s"
+        elif seconds < 3600:
+            return f"{seconds / 60:.0f}m"
+        else:
+            hours = int(seconds / 3600)
+            minutes = int((seconds % 3600) / 60)
+            return f"{hours}h{minutes}m"
+
+
 class SnapshotValidator:
     """Validate snapshot format and structure."""
 
@@ -499,6 +704,29 @@ class SnapshotValidator:
 
 def main():
     """Main entry point."""
+    # Check for list directory mode
+    if len(sys.argv) > 1 and sys.argv[1] == "--list":
+        if len(sys.argv) > 2:
+            snapshot_dir = Path(sys.argv[2])
+        else:
+            snapshot_dir = Path(__file__).parent / "trial-example"
+
+        lister = SnapshotLister()
+        lister.list_directory(snapshot_dir)
+        sys.exit(0)
+
+    # Check for list single snapshot mode
+    if len(sys.argv) > 1 and sys.argv[1] == "--list-snapshot":
+        if len(sys.argv) < 3:
+            print("Error: --list-snapshot requires a snapshot file path")
+            print(f"Usage: python {Path(__file__).name} --list-snapshot <snapshot.tar.gz>")
+            sys.exit(1)
+
+        snapshot_file = Path(sys.argv[2])
+        lister = SnapshotLister()
+        lister.list_snapshot(snapshot_file)
+        sys.exit(0)
+
     # Check for validation mode
     if len(sys.argv) > 1 and sys.argv[1] == "--validate":
         if len(sys.argv) > 2:
@@ -524,10 +752,9 @@ def main():
     print("Sample snapshots generated successfully!")
     print("="*60)
     print(f"\nLocation: {output_dir}")
-    print("\nTo inspect a snapshot:")
-    print(f"  tar -tzf {output_dir}/snapshot-0001.tar.gz  # List contents")
-    print(f"  tar -xzf {output_dir}/snapshot-0001.tar.gz  # Extract")
-    print(f"  cat snapshot-0001/metadata.json             # View metadata")
+    print("\nTo list snapshots:")
+    print(f"  python {Path(__file__).name} --list {output_dir}")
+    print(f"  python {Path(__file__).name} --list-snapshot {output_dir}/snapshot-0001.tar.gz")
     print("\nTo validate snapshots:")
     print(f"  python {Path(__file__).name} --validate {output_dir}")
 

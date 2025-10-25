@@ -32,6 +32,26 @@ This creates a realistic trial directory with:
 - Snapshot 2 (30 min): 1 new POV, 2 new patches
 - Snapshot 3 (45 min): 2 new POVs, 1 new patch
 
+### List Snapshots
+
+```bash
+# List all snapshots in a directory with summaries
+python generate_snapshot.py --list [snapshot_dir]
+
+# List detailed contents of a specific snapshot
+python generate_snapshot.py --list-snapshot <snapshot.tar.gz>
+```
+
+**Directory listing** shows:
+- Snapshot cycle and elapsed time
+- File counts by category (POVs, patches, corpus)
+- Summary of contents
+
+**Single snapshot listing** shows:
+- Metadata (cycle, timestamp, elapsed time)
+- Complete file tree with sizes
+- Proper directory structure
+
 ### Validate Snapshots
 
 ```bash
@@ -46,7 +66,7 @@ This validates:
 - Completion markers exist
 - Patch directory structure (patches organized by POV ID)
 
-### Inspect Snapshots
+### Inspect Snapshots (Manual)
 
 ```bash
 # List archive contents
