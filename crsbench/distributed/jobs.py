@@ -117,14 +117,27 @@ def run_crs_trial(
     start_time = time.time()
 
     try:
-        # Initialize benchmark runner with CRS executor
+        # Get snapshot configuration
+        snapshot_period = config.get('snapshot_period')
+
+        # Initialize benchmark runner with CRS executor and snapshot configuration
         # TODO: Replace StubCRSExecutor with actual CRS executor factory
         crs_executor = StubCRSExecutor()
-        runner = BenchmarkRunner(crs_executor)
+        runner = BenchmarkRunner(crs_executor, snapshot_period=snapshot_period)
 
         # Resolve benchmark path
         benchmark_path = _resolve_benchmark_path(benchmark, config)
         logger.debug(f"Resolved benchmark path: {benchmark_path}")
+
+        # Create trial output directory for snapshots
+        trial_output_dir = None
+        if snapshot_period and snapshot_period > 0:
+            # Create trial-specific output directory
+            experiment_filestore = Path(config.get('experiment_filestore', '/tmp/experiments'))
+            experiment_name = config.get('experiment', 'unknown')
+            trial_output_dir = experiment_filestore / experiment_name / f"{crs}_{benchmark}_trial{trial_num}"
+            trial_output_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Trial output directory: {trial_output_dir}")
 
         # Run benchmark evaluation
         result = runner.run_benchmark(
@@ -133,7 +146,8 @@ def run_crs_trial(
             crs_config={
                 'simulation_delay': 0.1,
                 'success_rate': 0.7
-            }
+            },
+            trial_output_dir=trial_output_dir
         )
 
         execution_time = time.time() - start_time
