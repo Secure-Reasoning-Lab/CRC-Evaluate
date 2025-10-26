@@ -43,6 +43,7 @@
   - [ ] mock bug/patch validation interface to test snapshots
   - [ ] mock interface for reports
 - [ ]  CRS-specific analysis scripts (their own crs-data)
+- [ ] build/health check for CRS images before evaluation
 
 ## Bug-finding and Patch Validation
 
