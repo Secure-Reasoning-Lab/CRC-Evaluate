@@ -19,6 +19,7 @@ from crsbench.evaluation.snapshot import (
     extract_snapshot,
     validate_snapshot_structure
 )
+from crsbench.evaluation.snapshot_manager import SnapshotManager
 
 __all__ = [
     'BenchmarkRunner',
@@ -31,6 +32,7 @@ __all__ = [
     'EvaluationReport',
     'SnapshotMetadata',
     'SnapshotSummary',
+    'SnapshotManager',
     'is_snapshot_complete',
     'get_snapshot_archive_path',
     'get_completion_marker_path',
