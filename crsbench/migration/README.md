@@ -219,3 +219,89 @@ description: 'MOCK: ... (TBD) ...'
 
 See [vuln.yaml generator design document](../../design-docs/migration/vuln-yaml-generator.md) for architecture details.
 
+---
+
+## Repository Manager
+
+Core utility for automatic cloning and checkout of project repositories needed during migration and test generation workflows.
+
+### Overview
+
+The repository manager (`repo_manager.py`) provides:
+- **Automatic repository cloning** from benchmark configuration
+- **Smart repository caching** to avoid redundant clones
+- **Commit checkout** for reproducible testing
+- **Configuration extraction** from benchmark metadata
+
+### Key Features
+
+- ✅ **Reads repository info** from `project.yaml` and `.aixcc/meta.yaml`
+- ✅ **Auto-clones repositories** if they don't exist locally
+- ✅ **Caches repositories** in `PROJECT_REPOS_DIR` for reuse
+- ✅ **Checks out specific commits** for reproducibility
+- ✅ **Smart reuse** - detects existing git repositories
+- ✅ **Graceful error handling** with detailed logging
+
+### Usage
+
+#### Basic Usage
+```python
+from crsbench.migration.repo_manager import find_or_clone_project
+
+# Automatically clone if needed
+project_dir = find_or_clone_project(
+    benchmark_name="json-c",
+    benchmarks_root="benchmarks",
+    verbose=True
+)
+```
+
+#### With Custom Cache Location
+```python
+import os
+from crsbench.migration.repo_manager import ensure_project_repository
+
+# Set custom cache
+os.environ['PROJECT_REPOS_DIR'] = '/mnt/ssd/git-cache'
+
+project_dir = ensure_project_repository(
+    benchmark_dir="benchmarks/curl",
+    verbose=True
+)
+```
+
+#### Using Existing Clone
+```python
+from crsbench.migration.repo_manager import ensure_project_repository
+
+# Use pre-cloned repository
+project_dir = ensure_project_repository(
+    benchmark_dir="benchmarks/json-c",
+    project_dir="/home/user/projects/json-c",
+    verbose=True
+)
+```
+
+### Environment Variables
+
+**`PROJECT_REPOS_DIR`** (optional)
+- Default cache location for cloned repositories
+- Default: `/home/acorn421/work/team-atlanta/afc-repos`
+- Override to customize cache location
+
+### Integration
+
+The repository manager is used by:
+- **test.sh generator** - Needs project source for test discovery
+- **vuln.yaml generator** - Needs source code for vulnerability analysis
+- **Migration scripts** - Can pre-clone repositories for batch operations
+
+### Design Documentation
+
+See [repository manager design document](../../design-docs/migration/repo-manager.md) for full implementation details including:
+- Architecture and component relationships
+- Function workflows and algorithms
+- Error handling strategies
+- Configuration requirements
+- Usage examples and testing approaches
+

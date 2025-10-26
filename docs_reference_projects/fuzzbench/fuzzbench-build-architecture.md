@@ -129,49 +129,6 @@ Level 6: Final Runner (Ready for Trials)
 └──────────────────────────────────────────────────────────────┘
 ```
 
-## File Organization
-
-```
-FuzzBench Project
-│
-├── benchmarks/                      [User Input: Benchmark Definitions]
-│   ├── libpng_libpng_read_fuzzer/
-│   │   ├── Dockerfile              [OSS-Fuzz base + benchmark setup]
-│   │   ├── benchmark.yaml           [Metadata: commit, fuzz_target]
-│   │   ├── build.sh                 [OSS-Fuzz build script]
-│   │   └── seeds/
-│   │       └── seed.png
-│   │
-│   └── vorbis_decode_fuzzer/
-│       └── [same structure]
-│
-├── fuzzers/                         [User Input: Fuzzer Integrations]
-│   ├── libfuzzer/
-│   │   ├── fuzzer.py                [build() and fuzz() functions]
-│   │   ├── builder.Dockerfile       [Fuzzer build environment]
-│   │   ├── runner.Dockerfile        [Fuzzer runtime environment]
-│   │   └── patch.diff
-│   │
-│   └── aflplusplus/
-│       └── [similar structure]
-│
-├── docker/                          [Build Infrastructure]
-│   ├── image_types.yaml             [CONFIGURATION: Template definitions]
-│   ├── generate_makefile.py         [GENERATION: Creates build rules]
-│   ├── base-image/
-│   │   └── Dockerfile               [Python 3.10 + tools]
-│   ├── benchmark-builder/
-│   │   ├── Dockerfile               [ORCHESTRATOR: Runs build]
-│   │   ├── checkout_commit.py       [Checks out benchmark version]
-│   │   └── fuzzer_build             [Calls fuzzer.build()]
-│   └── benchmark-runner/
-│       ├── Dockerfile               [ORCHESTRATOR: Final packaging]
-│       └── startup-runner.sh        [Fuzzing entrypoint]
-│
-└── experiment/build/
-    └── docker_images.py             [INSTANTIATION: Template substitution]
-```
-
 ## Data Flow Through the Build Process
 
 ```
@@ -238,6 +195,49 @@ Input Data Sources
 │                                                  │
 │  Ready to run: docker run [image]               │
 └──────────────────────────────────────────────────┘
+```
+
+## File Organization
+
+```
+FuzzBench Project
+│
+├── benchmarks/                      [User Input: Benchmark Definitions]
+│   ├── libpng_libpng_read_fuzzer/
+│   │   ├── Dockerfile              [OSS-Fuzz base + benchmark setup]
+│   │   ├── benchmark.yaml           [Metadata: commit, fuzz_target]
+│   │   ├── build.sh                 [OSS-Fuzz build script]
+│   │   └── seeds/
+│   │       └── seed.png
+│   │
+│   └── vorbis_decode_fuzzer/
+│       └── [same structure]
+│
+├── fuzzers/                         [User Input: Fuzzer Integrations]
+│   ├── libfuzzer/
+│   │   ├── fuzzer.py                [build() and fuzz() functions]
+│   │   ├── builder.Dockerfile       [Fuzzer build environment]
+│   │   ├── runner.Dockerfile        [Fuzzer runtime environment]
+│   │   └── patch.diff
+│   │
+│   └── aflplusplus/
+│       └── [similar structure]
+│
+├── docker/                          [Build Infrastructure]
+│   ├── image_types.yaml             [CONFIGURATION: Template definitions]
+│   ├── generate_makefile.py         [GENERATION: Creates build rules]
+│   ├── base-image/
+│   │   └── Dockerfile               [Python 3.10 + tools]
+│   ├── benchmark-builder/
+│   │   ├── Dockerfile               [ORCHESTRATOR: Runs build]
+│   │   ├── checkout_commit.py       [Checks out benchmark version]
+│   │   └── fuzzer_build             [Calls fuzzer.build()]
+│   └── benchmark-runner/
+│       ├── Dockerfile               [ORCHESTRATOR: Final packaging]
+│       └── startup-runner.sh        [Fuzzing entrypoint]
+│
+└── experiment/build/
+    └── docker_images.py             [INSTANTIATION: Template substitution]
 ```
 
 ## Build Stages in Detail
