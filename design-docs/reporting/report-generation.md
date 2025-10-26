@@ -106,6 +106,92 @@ crsbench/reporting/
 
 ## Data Flow
 
+### Metadata Files
+
+The reporting module relies on three levels of metadata files to discover and validate trials without parsing directory names:
+
+#### 1. Experiment Metadata
+
+**Location**: `experiment_filestore/{experiment_name}/experiment-metadata.json`
+
+**Purpose**: Lists all expected trials for the experiment. Created by the experiment orchestrator at experiment start.
+
+**Structure**:
+```json
+{
+  "experiment_name": "test-experiment",
+  "created_at": "2025-01-15T10:00:00Z",
+  "config": {
+    "timeout": 3600,
+    "max_cycles": 100
+  },
+  "trials": [
+    {
+      "trial_id": "trial-1",
+      "benchmark": "json-c",
+      "crs": "ensemble-c",
+      "trial_number": 1,
+      "trial_dir": "json-c__ensemble-c/trial-1"
+    },
+    {
+      "trial_id": "trial-2",
+      "benchmark": "json-c",
+      "crs": "multi-retrieval",
+      "trial_number": 1,
+      "trial_dir": "json-c__multi-retrieval/trial-1"
+    }
+  ]
+}
+```
+
+**Usage**: Report generator reads this to discover expected trials and detect missing ones.
+
+#### 2. Trial Metadata
+
+**Location**: `experiment_filestore/{experiment_name}/{trial_dir}/trial-metadata.json`
+
+**Purpose**: Describes trial configuration and context. Created by trial executor at trial start.
+
+**Structure**:
+```json
+{
+  "trial_id": "trial-1",
+  "experiment_name": "test-experiment",
+  "benchmark": "json-c",
+  "crs": "ensemble-c",
+  "trial_number": 1,
+  "started_at": "2025-01-15T10:00:00Z",
+  "config": {
+    "timeout": 3600,
+    "max_cycles": 100,
+    "crs_config": {
+      "llm_model": "claude-sonnet-4"
+    }
+  }
+}
+```
+
+**Usage**: Provides ground truth for trial context. Report generator validates snapshots against this.
+
+#### 3. Snapshot Metadata
+
+**Location**: Inside each snapshot archive at `metadata.json`
+
+**Purpose**: Links snapshot to its trial and provides snapshot timing information.
+
+**Structure**:
+```json
+{
+  "trial_id": "trial-1",
+  "cycle": 1,
+  "timestamp": 1234567890.0,
+  "elapsed_time": 900.0,
+  "snapshot_created_at": "2025-01-15T10:15:00Z"
+}
+```
+
+**Usage**: Report generator reads this to link snapshot to trial without parsing directory names.
+
 ### End-to-End Flow
 
 ```
@@ -191,10 +277,41 @@ for snapshot_archive in trial_dir.glob("snapshot-*.tar.gz"):
 ```python
 class SnapshotLoader:
     def load_trial_snapshots(self, trial_dir: Path) -> List[SnapshotData]:
-        """Load all complete snapshots for a trial."""
+        """Load all complete snapshots for a trial.
 
-    def load_snapshot(self, snapshot_path: Path) -> SnapshotData:
-        """Load and parse a single snapshot archive."""
+        Uses trial metadata, not directory names.
+        """
+        # Read trial metadata first
+        trial_metadata_path = trial_dir / "trial-metadata.json"
+        if not trial_metadata_path.exists():
+            raise ReportError(f"Missing trial metadata: {trial_metadata_path}")
+
+        trial_metadata = json.loads(trial_metadata_path.read_text())
+        trial_id = trial_metadata["trial_id"]
+
+        # Load snapshots
+        snapshots = []
+        for snapshot_path in self._discover_snapshots(trial_dir):
+            snapshot_data = self.load_snapshot(snapshot_path, trial_id=trial_id)
+            snapshots.append(snapshot_data)
+
+        return snapshots
+
+    def load_snapshot(self, snapshot_path: Path, trial_id: str) -> SnapshotData:
+        """Load and parse a single snapshot archive.
+
+        Args:
+            snapshot_path: Path to snapshot tar.gz file
+            trial_id: Expected trial ID (from trial metadata)
+
+        Returns:
+            Parsed snapshot data
+
+        Raises:
+            ReportError: If snapshot metadata doesn't match trial_id
+        """
+        # Extract and parse snapshot (implementation in next section)
+        # Validates trial_id consistency
 
     def _validate_snapshot(self, snapshot_dir: Path) -> bool:
         """Validate snapshot structure and required files."""
@@ -205,6 +322,10 @@ class SnapshotLoader:
 @dataclass
 class SnapshotData:
     """Parsed snapshot data."""
+    # Trial context (from snapshot metadata)
+    trial_id: str                  # Links snapshot to trial
+
+    # Snapshot timing
     cycle: int
     timestamp: float
     elapsed_time: float
@@ -220,6 +341,8 @@ class SnapshotData:
     # Corpus (if present)
     corpus_files: List[Path]       # Fuzzing corpus files
 ```
+
+**Note**: This requires updating `crsbench.evaluation.snapshot.SnapshotMetadata` to include `trial_id` field.
 
 ### 2. ReproducerInterface
 
@@ -506,6 +629,90 @@ class TimeSeriesAnalyzer:
         """Identify periods with no new discoveries."""
 ```
 
+### 6. ExperimentValidator
+
+**Purpose**: Validate experiment completeness and detect missing trials.
+
+**Responsibilities**:
+- Compare expected vs actual trials
+- Detect missing trial directories
+- Detect inconsistent trial metadata
+- Generate completeness reports
+
+**Key Methods**:
+```python
+class ExperimentValidator:
+    def validate_experiment_completeness(
+        self,
+        experiment_dir: Path
+    ) -> ExperimentValidationResult:
+        """Validate experiment completeness and detect missing trials.
+
+        Returns:
+            Validation result with missing/incomplete trials
+        """
+        trials = discover_trials(experiment_dir)
+
+        missing_trials = [t for t in trials if t.status == "missing"]
+        inconsistent_trials = [t for t in trials if t.status == "inconsistent"]
+        valid_trials = [t for t in trials if t.status == "valid"]
+
+        return ExperimentValidationResult(
+            total_expected=len(trials),
+            valid_count=len(valid_trials),
+            missing_count=len(missing_trials),
+            inconsistent_count=len(inconsistent_trials),
+            missing_trials=missing_trials,
+            inconsistent_trials=inconsistent_trials,
+            valid_trials=valid_trials
+        )
+
+    def generate_completeness_report(
+        self,
+        validation_result: ExperimentValidationResult
+    ) -> str:
+        """Generate human-readable completeness report."""
+        report = []
+        report.append("Experiment Completeness Report")
+        report.append("=" * 60)
+        report.append(f"Total expected trials: {validation_result.total_expected}")
+        report.append(f"Valid trials: {validation_result.valid_count}")
+        report.append(f"Missing trials: {validation_result.missing_count}")
+        report.append(f"Inconsistent trials: {validation_result.inconsistent_count}")
+
+        if validation_result.missing_trials:
+            report.append("\nMissing Trials:")
+            for trial in validation_result.missing_trials:
+                report.append(f"  - {trial.trial_id} ({trial.crs} on {trial.benchmark})")
+                report.append(f"    Error: {trial.error}")
+
+        if validation_result.inconsistent_trials:
+            report.append("\nInconsistent Trials:")
+            for trial in validation_result.inconsistent_trials:
+                report.append(f"  - {trial.trial_id} ({trial.crs} on {trial.benchmark})")
+                report.append(f"    Error: {trial.error}")
+
+        return "\n".join(report)
+```
+
+**Validation Result Format**:
+```python
+@dataclass
+class ExperimentValidationResult:
+    """Result from experiment completeness validation."""
+    total_expected: int
+    valid_count: int
+    missing_count: int
+    inconsistent_count: int
+    missing_trials: List[TrialInfo]
+    inconsistent_trials: List[TrialInfo]
+    valid_trials: List[TrialInfo]
+
+    def is_complete(self) -> bool:
+        """Check if all expected trials are valid."""
+        return self.missing_count == 0 and self.inconsistent_count == 0
+```
+
 ## Report Types
 
 ### 1. Trial Report
@@ -768,14 +975,16 @@ class TimeSeriesAnalyzer:
 
 ### With Snapshot Module
 
-**Input**: Reads snapshot archives from experiment_filestore
+**Input**: Reads snapshot archives and metadata from experiment_filestore
 
-```python
-# Snapshot directory structure (from snapshots design)
+**Directory Structure**:
+```
 experiment_filestore/
 └── {experiment_name}/
-    └── {benchmark_id}__{crs_name}/
+    ├── experiment-metadata.json         # NEW: Lists all expected trials
+    └── {benchmark_id}__{crs_name}/      # ℹ️  For organization only, don't parse!
         └── trial-{trial_id}/
+            ├── trial-metadata.json      # NEW: Trial configuration
             ├── snapshot-0001.tar.gz
             ├── snapshot-0001.complete
             ├── snapshot-0002.tar.gz
@@ -783,14 +992,41 @@ experiment_filestore/
             └── ...
 ```
 
+**Key Points**:
+- **experiment-metadata.json**: Created by experiment orchestrator at experiment start
+- **trial-metadata.json**: Created by trial executor at trial start
+- **Snapshot metadata.json**: Each snapshot contains `trial_id` field (links to trial)
+- **Directory names**: Used for organization only, reporting module does NOT parse them
+
 **Usage**:
 ```python
-from crsbench.reporting import SnapshotLoader
+from crsbench.reporting import SnapshotLoader, discover_trials
 
-loader = SnapshotLoader()
-trial_dir = Path("experiment_filestore/test-exp/json-c__ensemble-c/trial-1")
-snapshots = loader.load_trial_snapshots(trial_dir)
+# Discover trials using metadata (not directory parsing)
+experiment_dir = Path("experiment_filestore/test-exp")
+trials = discover_trials(experiment_dir)
+
+# Load snapshots for a specific trial
+for trial in trials:
+    if trial.status == "valid":
+        loader = SnapshotLoader()
+        snapshots = loader.load_trial_snapshots(trial.trial_dir)
+        # snapshots[0].trial_id links back to trial
 ```
+
+**Coordination Requirements**:
+This requires updates to:
+1. **Snapshot module** (`crsbench.evaluation.snapshot`):
+   - Add `trial_id` field to `SnapshotMetadata` class
+   - Update `SnapshotManager._capture_metadata()` to include `trial_id`
+
+2. **Trial executor** (`crsbench.distributed.jobs`):
+   - Create `trial-metadata.json` at trial start
+   - Pass `trial_id` to `SnapshotManager`
+
+3. **Experiment orchestrator** (`crsbench.run_experiment`):
+   - Create `experiment-metadata.json` at experiment start
+   - List all expected trials with their configurations
 
 ### With Reproducer Module
 
@@ -920,13 +1156,104 @@ trial_report = generator.generate_trial_report(
 
 ## Snapshot Processing
 
+### Trial Discovery
+
+**Purpose**: Discover trials using experiment metadata, not directory parsing.
+
+**Process**:
+1. Read `experiment-metadata.json` to get expected trials
+2. For each trial, validate `trial-metadata.json` exists
+3. Verify trial metadata consistency
+4. Return list of discovered trials with validation status
+
+**Implementation**:
+```python
+@dataclass
+class TrialInfo:
+    """Information about a discovered trial."""
+    trial_id: str
+    benchmark: str
+    crs: str
+    trial_dir: Path
+    metadata: Dict[str, Any]
+    status: str  # "valid", "missing", "inconsistent"
+    error: Optional[str] = None
+
+def discover_trials(experiment_dir: Path) -> List[TrialInfo]:
+    """Discover trials using experiment metadata.
+
+    Returns:
+        List of discovered trials with validation status
+    """
+    # Read expected trials from experiment metadata
+    exp_metadata_path = experiment_dir / "experiment-metadata.json"
+    if not exp_metadata_path.exists():
+        raise ReportError(f"Missing experiment metadata: {exp_metadata_path}")
+
+    exp_metadata = json.loads(exp_metadata_path.read_text())
+    expected_trials = {t["trial_id"]: t for t in exp_metadata["trials"]}
+
+    # Validate each trial
+    discovered_trials = []
+    for trial_id, trial_info in expected_trials.items():
+        trial_dir = experiment_dir / trial_info["trial_dir"]
+
+        # Validate trial metadata exists
+        trial_metadata_path = trial_dir / "trial-metadata.json"
+        if not trial_metadata_path.exists():
+            logger.warning(f"Missing trial metadata for {trial_id}: {trial_metadata_path}")
+            discovered_trials.append(TrialInfo(
+                trial_id=trial_id,
+                benchmark=trial_info["benchmark"],
+                crs=trial_info["crs"],
+                trial_dir=trial_dir,
+                metadata={},
+                status="missing",
+                error="No trial metadata found"
+            ))
+            continue
+
+        # Read and validate trial metadata
+        trial_metadata = json.loads(trial_metadata_path.read_text())
+
+        # Verify consistency
+        if trial_metadata["trial_id"] != trial_id:
+            logger.error(f"Trial ID mismatch: expected {trial_id}, got {trial_metadata['trial_id']}")
+            discovered_trials.append(TrialInfo(
+                trial_id=trial_id,
+                benchmark=trial_info["benchmark"],
+                crs=trial_info["crs"],
+                trial_dir=trial_dir,
+                metadata=trial_metadata,
+                status="inconsistent",
+                error="Trial metadata mismatch"
+            ))
+            continue
+
+        # Trial is valid
+        discovered_trials.append(TrialInfo(
+            trial_id=trial_id,
+            benchmark=trial_metadata["benchmark"],
+            crs=trial_metadata["crs"],
+            trial_dir=trial_dir,
+            metadata=trial_metadata,
+            status="valid"
+        ))
+
+    return discovered_trials
+```
+
 ### Snapshot Discovery
+
+**Purpose**: Discover snapshots within a trial directory.
 
 **Process**:
 1. Scan trial directory for `snapshot-*.tar.gz` files
 2. Check for corresponding `.complete` marker
 3. Sort by cycle number (extracted from filename)
 4. Return list of valid snapshot paths
+
+**Note**: This still scans for files, but trial context comes from metadata, not directory names.
 
 **Implementation**:
 ```python
@@ -964,8 +1291,19 @@ def discover_snapshots(trial_dir: Path) -> List[Path]:
 
 **Implementation**:
 ```python
-def extract_snapshot(snapshot_path: Path) -> SnapshotData:
-    """Extract and parse snapshot archive."""
+def extract_snapshot(snapshot_path: Path, trial_id: str) -> SnapshotData:
+    """Extract and parse snapshot archive.
+
+    Args:
+        snapshot_path: Path to snapshot tar.gz file
+        trial_id: Expected trial ID (from trial metadata)
+
+    Returns:
+        Parsed snapshot data
+
+    Raises:
+        ReportError: If snapshot metadata doesn't match trial_id
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
         temp_dir = Path(tmpdir)
 
@@ -973,25 +1311,27 @@ def extract_snapshot(snapshot_path: Path) -> SnapshotData:
         with tarfile.open(snapshot_path, 'r:gz') as tar:
             tar.extractall(temp_dir)
 
-        # Validate structure
-        snapshot_dir = temp_dir / snapshot_path.stem
-        if not snapshot_dir.exists():
-            raise ReportError(f"Invalid snapshot structure: {snapshot_path}")
+        # Parse metadata (files are extracted flat, not in subdirectory)
+        metadata = json.loads((temp_dir / "metadata.json").read_text())
 
-        # Parse metadata
-        metadata = json.loads((snapshot_dir / "metadata.json").read_text())
+        # Validate trial_id consistency
+        if metadata.get("trial_id") != trial_id:
+            raise ReportError(
+                f"Snapshot trial_id mismatch: expected {trial_id}, "
+                f"got {metadata.get('trial_id')} in {snapshot_path}"
+            )
 
         # Parse POVs (binary blobs)
-        pov_files = list((snapshot_dir / "povs").glob("pov_*")) if (snapshot_dir / "povs").exists() else []
+        pov_files = list((temp_dir / "povs").glob("pov_*")) if (temp_dir / "povs").exists() else []
 
         # Parse patches (organized by POV ID: patches/<pov_id>/patch.diff)
-        patch_files = list((snapshot_dir / "patches").glob("*/patch.diff")) if (snapshot_dir / "patches").exists() else []
+        patch_files = list((temp_dir / "patches").glob("*/patch.diff")) if (temp_dir / "patches").exists() else []
 
         # Parse LLM usage
-        llm_usage = json.loads((snapshot_dir / "llm-usage.json").read_text())
+        llm_usage = json.loads((temp_dir / "llm-usage.json").read_text())
 
         # Parse CRS log
-        crs_log = (snapshot_dir / "crs-output.log").read_text()
+        crs_log = (temp_dir / "crs-output.log").read_text()
 
         # Copy files to persistent location for reproducer
         persistent_dir = snapshot_path.parent / f".snapshot-data-{metadata['cycle']:04d}"
@@ -1004,6 +1344,7 @@ def extract_snapshot(snapshot_path: Path) -> SnapshotData:
             shutil.copy(patch, persistent_dir / patch.name)
 
         return SnapshotData(
+            trial_id=trial_id,  # NEW: Include trial context
             cycle=metadata["cycle"],
             timestamp=metadata["timestamp"],
             elapsed_time=metadata["elapsed_time"],

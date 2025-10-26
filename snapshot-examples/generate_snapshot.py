@@ -165,6 +165,7 @@ class SnapshotGenerator:
     def _write_metadata(self, temp_dir: Path, cycle: int, elapsed_time: float):
         """Write snapshot metadata."""
         metadata = {
+            "trial_id": "trial-001",  # Links snapshot to trial
             "cycle": cycle,
             "timestamp": time.time(),
             "elapsed_time": elapsed_time,
@@ -613,7 +614,7 @@ class SnapshotValidator:
             else:
                 print(f"  ✓ Metadata cycle matches: {cycle}")
 
-            required_metadata_keys = ["cycle", "timestamp", "elapsed_time", "snapshot_period"]
+            required_metadata_keys = ["trial_id", "cycle", "timestamp", "elapsed_time", "snapshot_period"]
             for key in required_metadata_keys:
                 if key not in metadata:
                     self.errors.append(f"  ✗ Metadata missing key: {key}")
