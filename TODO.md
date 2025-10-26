@@ -42,6 +42,7 @@
   - [x] inspect/list snapshot contents
   - [ ] mock bug/patch validation interface to test snapshots
   - [ ] mock interface for reports
+- [ ]  CRS-specific analysis scripts (their own crs-data)
 
 ## Bug-finding and Patch Validation
 
@@ -58,3 +59,4 @@
 
 - [ ]  HTML format report generation (+ visualize)
 - [ ]  report from validation results & snapshots
+- [ ]  CRS-specific reports
