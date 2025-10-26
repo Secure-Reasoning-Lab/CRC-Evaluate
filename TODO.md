@@ -63,6 +63,16 @@
     - [ ]  Incremental building; generate Dockerfile for each patch & build
     - [ ]  Implement selective unit test
 
+## LLM setup Logging
+- [ ] liteLLM setup
+  - [ ] all available models & total budgets
+  - [ ] master key? CRS can allocate budgets for models by themselves
+  - [ ] each trial (CRS, benchmark, trial_id) should have its own liteLLM
+        instance to prevent conflict. Assume that multiple trials on the same
+        host machine.
+- [ ] [liteLLM logging](https://docs.litellm.ai/docs/proxy/logging)
+We need a format that can be easier snapshotted. Better just a file..
+
 ## Reporting
 
 - [ ]  HTML format report generation (+ visualize)
