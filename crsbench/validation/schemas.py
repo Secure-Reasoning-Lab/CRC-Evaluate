@@ -98,6 +98,14 @@ class HarnessFile(BaseModel):
 
         return path
 
+    @property
+    def povs(self) -> List[POV]:
+        """Get flattened list of all POVs from all vulnerabilities."""
+        all_povs = []
+        for vuln in (self.vulns or []):
+            all_povs.extend(vuln.povs)
+        return all_povs
+
 
 class DeltaMode(BaseModel):
     """Delta mode configuration with base and ref commits."""

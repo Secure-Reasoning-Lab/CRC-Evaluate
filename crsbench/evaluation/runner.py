@@ -261,6 +261,7 @@ class BenchmarkRunner:
                 crs_result = self.crs_executor.run_crs(
                     benchmark_path=benchmark_path,
                     harness=harness,
+                    trial_output_dir=trial_output_dir or Path("."),
                     base_commit=base_commit,
                     ref_commit=ref_commit
                 )
@@ -268,7 +269,11 @@ class BenchmarkRunner:
                 # Process POV results
                 pov_results = []
                 if harness.povs:
-                    pov_results = self.crs_executor.process_pov_results(crs_result, harness)
+                    # Pass trial_output_dir if executor needs it (for new-style executors)
+                    # StubExecutor ignores it for backward compatibility
+                    pov_results = self.crs_executor.process_pov_results(
+                        crs_result, harness, trial_output_dir or Path(".")
+                    )
                 else:
                     self.logger.warning(f"Harness '{harness.name}' has no POVs configured")
 

@@ -6,6 +6,7 @@ collect results, and report on POV detection performance.
 
 from crsbench.evaluation.runner import BenchmarkRunner, EvaluationResult, EvaluationError
 from crsbench.evaluation.crs_executor import CRSExecutor, CRSResult, StubCRSExecutor
+from crsbench.evaluation.oss_patch_executor import OSSPatchExecutor
 from crsbench.evaluation.results import ResultCollector, EvaluationReport
 from crsbench.evaluation.snapshot import (
     SnapshotMetadata,
@@ -33,6 +34,7 @@ __all__ = [
     'CRSExecutor',
     'CRSResult',
     'StubCRSExecutor',
+    'OSSPatchExecutor',
     'ResultCollector',
     'EvaluationReport',
     'SnapshotMetadata',

@@ -54,12 +54,14 @@ class CRSExecutor(ABC):
 
     @abstractmethod
     def run_crs(self, benchmark_path: Path, harness: HarnessFile,
-                base_commit: str, ref_commit: Optional[str] = None) -> CRSResult:
+                trial_output_dir: Path, base_commit: str,
+                ref_commit: Optional[str] = None) -> CRSResult:
         """Run CRS on a specific harness.
 
         Args:
             benchmark_path: Path to benchmark directory
             harness: Harness file configuration
+            trial_output_dir: Directory for this trial's outputs
             base_commit: Base commit hash
             ref_commit: Reference commit hash (for delta mode)
 
@@ -69,12 +71,14 @@ class CRSExecutor(ABC):
         pass
 
     @abstractmethod
-    def process_pov_results(self, crs_result: CRSResult, harness: HarnessFile) -> List[POVResult]:
+    def process_pov_results(self, crs_result: CRSResult, harness: HarnessFile,
+                           trial_output_dir: Path) -> List[POVResult]:
         """Process CRS results to determine POV detection status.
 
         Args:
             crs_result: Raw CRS execution result
             harness: Harness configuration with POVs
+            trial_output_dir: Directory containing CRS outputs
 
         Returns:
             List[POVResult]: POV detection results
@@ -101,7 +105,8 @@ class StubCRSExecutor(CRSExecutor):
             self.success_rate = config['success_rate']
 
     def run_crs(self, benchmark_path: Path, harness: HarnessFile,
-                base_commit: str, ref_commit: Optional[str] = None) -> CRSResult:
+                trial_output_dir: Path, base_commit: str,
+                ref_commit: Optional[str] = None) -> CRSResult:
         """Run stub CRS execution."""
         start_time = time.time()
 
@@ -136,11 +141,11 @@ POVs analyzed: {len(harness.povs or [])}
             if harness.povs:
                 for pov in harness.povs:
                     if random.random() < self.success_rate:
-                        detected_povs.append(pov.name)
-                        output += f"✓ POV '{pov.name}' detected - {pov.sanitizer} sanitizer triggered\n"
+                        detected_povs.append(pov.id)
+                        output += f"✓ POV '{pov.id}' detected - {pov.sanitizer} sanitizer triggered\n"
                         output += f"  Error pattern: {pov.error_token}\n"
                     else:
-                        output += f"✗ POV '{pov.name}' not detected\n"
+                        output += f"✗ POV '{pov.id}' not detected\n"
 
             return CRSResult(
                 harness_name=harness.name,
@@ -167,7 +172,8 @@ POVs analyzed: {len(harness.povs or [])}
                 error=error
             )
 
-    def process_pov_results(self, crs_result: CRSResult, harness: HarnessFile) -> List[POVResult]:
+    def process_pov_results(self, crs_result: CRSResult, harness: HarnessFile,
+                           trial_output_dir: Path) -> List[POVResult]:
         """Process stub CRS results to determine POV status."""
         pov_results = []
 
@@ -178,7 +184,7 @@ POVs analyzed: {len(harness.povs or [])}
             # If CRS execution failed, mark all POVs as error
             for pov in harness.povs:
                 pov_results.append(POVResult(
-                    name=pov.name,
+                    name=pov.id,
                     harness_name=harness.name,
                     sanitizer=pov.sanitizer,
                     error_token=pov.error_token,
@@ -192,13 +198,13 @@ POVs analyzed: {len(harness.povs or [])}
         detected_povs = crs_result.povs_detected or []
 
         for pov in harness.povs:
-            if pov.name in detected_povs:
+            if pov.id in detected_povs:
                 status = POVStatus.FOUND
             else:
                 status = POVStatus.MISSED
 
             pov_results.append(POVResult(
-                name=pov.name,
+                name=pov.id,
                 harness_name=harness.name,
                 sanitizer=pov.sanitizer,
                 error_token=pov.error_token,
