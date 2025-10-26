@@ -208,10 +208,13 @@ export OSS_FUZZ_HOME=/path/to/oss-fuzz
 Build command with OSS-Fuzz path:
 
 ```sh
-oss-patch-crs build <crs-config-name> <project-name> --oss-fuzz $OSS_FUZZ_HOME
+oss-patch-crs build <crs-config-name> <project-name> \
+  --oss-fuzz $OSS_FUZZ_HOME \
+  [--project-path <path>] \
+  [--source-path <path>]
 ```
 
-**Example**:
+**Example (Standard OSS-Fuzz method)**:
 ```sh
 oss-patch-crs build multi-retrieval aixcc/c/mock-c --oss-fuzz $OSS_FUZZ_HOME
 ```
@@ -219,7 +222,104 @@ oss-patch-crs build multi-retrieval aixcc/c/mock-c --oss-fuzz $OSS_FUZZ_HOME
 **Arguments**:
 - `<crs-config-name>`: Configuration name for the patch generation CRS (e.g., `multi-retrieval`)
 - `<project-name>`: Project name (e.g., `aixcc/c/mock-c`)
-- `--oss-fuzz`: Path to OSS-Fuzz home directory
+- `--oss-fuzz`: Path to OSS-Fuzz home directory (required, provides infrastructure)
+- `--project-path` (optional): Path to OSS-Fuzz compatible project directory (alternative to `oss-fuzz/projects/{name}`)
+- `--source-path` (optional): Path to pre-cloned source code directory (alternative to cloning from `project.yaml` main_repo). Requires `--project-path`
+
+### Alternative Build Methods
+
+OSS-Patch supports three build methods to accommodate different workflows:
+
+#### Method 1: Standard OSS-Fuzz (Default)
+
+Use projects from OSS-Fuzz repository, clone source from git during build.
+
+**Command**:
+```sh
+oss-patch-crs build multi-retrieval json-c --oss-fuzz $OSS_FUZZ_HOME
+```
+
+**Workflow**:
+1. Locate project: `$OSS_FUZZ_HOME/projects/json-c/`
+2. Read `project.yaml` for `main_repo` URL
+3. Clone source from git during build
+4. Build CRS images
+
+**Requirements**:
+- Full OSS-Fuzz repository
+- Project exists in `projects/` directory
+- Network access for git clone
+- Valid `main_repo` in project.yaml
+
+**Use Case**: Standard OSS-Fuzz projects, CI/CD pipelines
+
+#### Method 2: External Project + Pre-cloned Source (Recommended for CRSBench)
+
+Use out-of-tree project directory with pre-cloned source code.
+
+**Command**:
+```sh
+oss-patch-crs build multi-retrieval mock-c \
+  --oss-fuzz $OSS_FUZZ_HOME \
+  --project-path /path/to/benchmarks/mock-c \
+  --source-path /path/to/repos/mock-c-source
+```
+
+**Workflow**:
+1. Locate project: `/path/to/benchmarks/mock-c/` (user-provided)
+2. Read `project.yaml` (main_repo not required)
+3. Copy pre-cloned source (no git clone)
+4. Build CRS images
+
+**Requirements**:
+- OSS-Fuzz repository (for infrastructure only)
+- External OSS-Fuzz compatible project directory (with `project.yaml`, `Dockerfile`, `build.sh`)
+- Pre-cloned source directory
+- No network access needed
+
+**Use Case**:
+- **CRSBench evaluation**: Benchmarks are out-of-tree, sources managed by repository manager
+- Local development with source modifications
+- Offline builds
+- Testing without git access
+
+**CRSBench Integration**:
+```python
+# CRSBench provides both paths
+project_path = benchmark_dir  # e.g., benchmarks/mock-c
+source_path = repo_manager.ensure_project_repository(benchmark_dir)
+
+# Build CRS
+cmd = ["oss-patch-crs", "build", crs_name, project_name,
+       "--oss-fuzz", oss_fuzz_path,
+       "--project-path", project_path,
+       "--source-path", source_path]
+```
+
+#### Method 3: External Project + Git Clone (Hybrid)
+
+Use out-of-tree project directory, but still clone source from git.
+
+**Command**:
+```sh
+oss-patch-crs build multi-retrieval json-c \
+  --oss-fuzz $OSS_FUZZ_HOME \
+  --project-path /path/to/my-projects/json-c-fuzzing
+```
+
+**Workflow**:
+1. Locate project: `/path/to/my-projects/json-c-fuzzing/` (user-provided)
+2. Read `project.yaml` for `main_repo` URL (required)
+3. Clone source from git during build
+4. Build CRS images
+
+**Requirements**:
+- OSS-Fuzz repository (for infrastructure)
+- External OSS-Fuzz compatible project directory
+- Network access for git clone
+- Valid `main_repo` in external project.yaml
+
+**Use Case**: Out-of-tree project metadata maintenance with standard git workflow
 
 ### Running CRS for patch generation
 
@@ -562,6 +662,8 @@ See the CRSBench snapshot design documentation for details on snapshot frequency
 | Harness argument | Positional              | Named (`--harness`)                          |
 | LiteLLM          | Optional                | Required (`--litellm-base`, `--litellm-key`) |
 | OSS-Fuzz path    | Not needed              | Required (`--oss-fuzz`)                      |
+| Project source   | N/A                     | 3 methods: standard / external+clone / external+pre-cloned |
+| Build flexibility| N/A                     | Optional `--project-path`, `--source-path`   |
 | Container mounts | `/hints/`, `/out/`      | `/pov` or `/povs/`, `/hints/`, `/out/`       |
 | CRS outputs      | POVs, corpus            | Patches                                      |
 

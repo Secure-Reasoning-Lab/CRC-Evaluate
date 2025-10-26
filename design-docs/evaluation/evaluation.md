@@ -267,8 +267,10 @@ class OSSFuzzBugFindingExecutor(CRSExecutor):
 # Patch Generation Executor
 class OSSPatchExecutor(CRSExecutor):
     """Wraps OSS-Patch interface."""
-    # Build: oss-patch-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME
-    # Run: oss-patch-crs run <config> <project> --harness <name> [--pov <file> | --povs <dir>] [--hints <dir>] [--output <dir>] --litellm-*
+    # Build: oss-patch-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME \
+    #        --project-path <benchmark-dir> --source-path <repo-manager-source>
+    # Run: oss-patch-crs run <config> <project> --harness <name> \
+    #      [--pov <file> | --povs <dir>] [--hints <dir>] [--output <dir>] --litellm-*
 ```
 
 ### Usage Example

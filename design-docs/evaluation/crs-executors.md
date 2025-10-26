@@ -731,49 +731,82 @@ class OSSPatchExecutor(CRSExecutor):
         oss_patch_path: Path,
         oss_fuzz_path: Path,
         litellm_base: str,
-        litellm_key: str
+        litellm_key: str,
+        benchmarks_root: Path
     ):
         """Initialize executor.
 
         Args:
             crs_config_name: CRS configuration name
             oss_patch_path: Path to oss-patch repository
-            oss_fuzz_path: Path to oss-fuzz repository (required)
+            oss_fuzz_path: Path to oss-fuzz repository (required for infrastructure)
             litellm_base: LiteLLM API base URL
             litellm_key: LiteLLM API key
+            benchmarks_root: Path to benchmarks directory (for finding benchmark dirs)
         """
         self.crs_config_name = crs_config_name
         self.oss_patch_path = oss_patch_path
         self.oss_fuzz_path = oss_fuzz_path
         self.litellm_base = litellm_base
         self.litellm_key = litellm_key
+        self.benchmarks_root = benchmarks_root
         self.config: Dict[str, Any] = {}
         self.built_projects: Set[str] = set()
 ```
 
 ### Build Phase
 
-**Command**: `oss-patch-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME`
+**Command**: `oss-patch-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME --project-path <benchmark-dir> --source-path <source-dir>`
 
 **Workflow**:
 1. Set OSS_FUZZ_HOME environment variable
 2. Resolve CRS configuration
-3. Execute build command in oss-patch directory
-4. Cache successful builds
+3. **Use repository manager to ensure source code exists**
+4. Get benchmark directory path (contains project.yaml)
+5. Execute build command with `--project-path` (benchmark) and `--source-path` (pre-cloned source)
+6. Cache successful builds
+
+**CRSBench Method**: Uses OSS-Patch Method 2 (External Project + Pre-cloned Source)
+- Benchmark directories are out-of-tree (`benchmarks/`)
+- Repository manager provides pre-cloned source
+- No git clone during build (offline-capable)
 
 **Implementation**:
 ```python
-def _build_crs_if_needed(self, project_name: str) -> None:
-    """Build patch generation CRS if not already built."""
+def _build_crs_if_needed(self, benchmark_path: Path, project_name: str) -> None:
+    """Build patch generation CRS if not already built.
+
+    Args:
+        benchmark_path: Path to benchmark directory (contains project.yaml)
+        project_name: Project name for caching
+    """
     build_key = f"{self.crs_config_name}:{project_name}"
 
     if build_key in self.built_projects:
         return
 
+    # Use repository manager to ensure source code exists
+    from crsbench.migration.repo_manager import ensure_project_repository
+
+    source_path = ensure_project_repository(
+        benchmark_dir=str(benchmark_path),
+        verbose=self.config.get("verbose", False)
+    )
+
+    if not source_path:
+        raise EvaluationError(
+            f"Failed to obtain source code for {project_name}. "
+            "Check that project.yaml has valid main_repo or provide source manually."
+        )
+
+    logger.info(f"Using source from: {source_path}")
+
     cmd = [
         "oss-patch-crs", "build",
         self.crs_config_name, project_name,
-        "--oss-fuzz", str(self.oss_fuzz_path)
+        "--oss-fuzz", str(self.oss_fuzz_path),
+        "--project-path", str(benchmark_path),  # Benchmark dir (OSS-Fuzz compatible)
+        "--source-path", str(source_path)        # Pre-cloned source from repo manager
     ]
 
     env = os.environ.copy()
@@ -792,6 +825,7 @@ def _build_crs_if_needed(self, project_name: str) -> None:
         raise EvaluationError(f"Patch CRS build failed: {result.stderr}")
 
     self.built_projects.add(build_key)
+    logger.info(f"Successfully built CRS for {project_name}")
 ```
 
 ### Run Phase
@@ -842,8 +876,8 @@ def run_crs(
     """
     project_name = self._extract_project_name(benchmark_path)
 
-    # Build if needed
-    self._build_crs_if_needed(project_name)
+    # Build if needed (pass benchmark_path for repo manager integration)
+    self._build_crs_if_needed(benchmark_path, project_name)
 
     # Prepare base output directory (CRS creates subdirectories)
     self._prepare_output_directory(trial_output_dir)
@@ -975,6 +1009,116 @@ def _prepare_povs(
     logger.info(f"Prepared {pov_count} POVs for {harness_name}")
     return povs_dir
 ```
+
+### CRSBench Integration Strategy
+
+**OSS-Patch Method**: CRSBench uses Method 2 (External Project + Pre-cloned Source) for patch generation CRS builds.
+
+**Why This Method**:
+1. **Out-of-tree benchmarks**: Benchmarks are in `benchmarks/` directory, not `oss-fuzz/projects/`
+2. **Repository manager**: Centralized source management with caching
+3. **Reproducibility**: Exact commit checkout via `meta.yaml` base_commit
+4. **Efficiency**: No duplicate clones, no network access during build
+5. **Offline builds**: Pre-cloned sources enable offline operation
+
+**Component Integration**:
+
+```
+BenchmarkRunner
+    ↓ provides benchmark_path
+OSSPatchExecutor._build_crs_if_needed()
+    ↓ calls
+Repository Manager (repo_manager.py)
+    ↓ reads config from
+benchmark/.aixcc/meta.yaml + project.yaml
+    ↓ clones/returns
+Pre-cloned Source (cached in PROJECT_REPOS_DIR)
+    ↓ passed to
+OSS-Patch build command
+    ↓ copies (not clones)
+Docker Build Context
+```
+
+**Repository Manager Benefits**:
+- **Clone once, reuse many times**: Same source used for multiple CRS builds
+- **Smart caching**: Detects existing git repos, avoids redundant clones
+- **Commit checkout**: Ensures reproducible builds at specific commits
+- **Configuration extraction**: Reads main_repo from project.yaml automatically
+
+**Build Flow**:
+```python
+# 1. BenchmarkRunner creates executor
+executor = OSSPatchExecutor(
+    crs_config_name="multi-retrieval",
+    oss_patch_path=Path("/path/to/oss-patch"),
+    oss_fuzz_path=Path("/path/to/oss-fuzz"),
+    litellm_base="https://api.litellm.com",
+    litellm_key="sk-key",
+    benchmarks_root=Path("benchmarks")
+)
+
+# 2. Executor builds CRS (internally calls repo manager)
+executor._build_crs_if_needed(
+    benchmark_path=Path("benchmarks/mock-c"),
+    project_name="mock-c"
+)
+
+# Inside _build_crs_if_needed():
+#   - Calls ensure_project_repository(benchmark_path)
+#   - Gets source_path from repo manager
+#   - Passes both paths to oss-patch-crs build:
+#       --project-path benchmarks/mock-c
+#       --source-path /repos/mock-c-source
+```
+
+**Configuration Requirements**:
+
+**benchmark/.aixcc/meta.yaml**:
+```yaml
+delta_mode:
+  base_commit: abc123...
+  ref_commit: def456...
+```
+
+**benchmark/project.yaml** (OSS-Fuzz compatible):
+```yaml
+language: c
+main_repo: https://github.com/project/repo.git
+homepage: https://github.com/project/repo
+```
+
+**Environment**:
+```bash
+# Optional: Override default repo cache location
+export PROJECT_REPOS_DIR=/custom/path/to/repos
+```
+
+**Error Handling**:
+
+**Scenario**: Repository manager fails to clone source
+```python
+source_path = ensure_project_repository(benchmark_dir=str(benchmark_path))
+if not source_path:
+    raise EvaluationError(
+        f"Failed to obtain source code for {project_name}. "
+        "Check that project.yaml has valid main_repo or provide source manually."
+    )
+```
+
+**Scenario**: Network failure during clone (first time)
+- Repository manager returns None
+- Executor raises EvaluationError
+- User can manually clone and set PROJECT_REPOS_DIR
+
+**Scenario**: Source already cloned (subsequent runs)
+- Repository manager detects existing .git directory
+- Returns path immediately (no clone attempt)
+- Build proceeds with cached source
+
+**Design References**:
+- OSS-Patch alternative methods: `docs/ossfuzz-crs-interface.md` (Alternative Build Methods)
+- Repository manager: `design-docs/migration/repo-manager.md`
+- OSS-Patch implementation: `oss-patch/design-docs/alternative-project-sources.md`
 
 ### Patch Collection
 
@@ -1308,15 +1452,24 @@ if pov.error_token and pov.error_token not in crash_log:
 oss-crs build <config-dir> <project>
 oss-crs run <config-dir> <project> <harness> [--output <dir>] [--hints <dir>]
 
-# Patch generation
+# Patch generation (Standard OSS-Fuzz method)
 oss-patch-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME
+
+# Patch generation (CRSBench method - with external project + pre-cloned source)
+oss-patch-crs build <config> <project> \
+  --oss-fuzz $OSS_FUZZ_HOME \
+  --project-path <benchmark-dir> \
+  --source-path <source-dir>
+
+# Patch generation (Run command - unchanged)
 oss-patch-crs run <config> <project> --harness <name> [--pov <file> | --povs <dir>] [--hints <dir>] [--output <dir>] --litellm-base <url> --litellm-key <key>
 ```
 
 **Notes**:
 - Config paths use relative format: `example_configs/ensemble-c` (no `infra/crs/` prefix)
 - Commands are installable via pip/uv
-- All arguments except command prefix remain the same
+- **CRSBench uses alternative build method** with `--project-path` and `--source-path`
+- Run command arguments unchanged for both bug finding and patch generation
 
 ### Implementation Notes
 
@@ -1332,9 +1485,35 @@ oss-patch-crs run <config> <project> --harness <name> [--pov <file> | --povs <di
 cmd = ["oss-crs", "build", str(crs_config_dir), project_name]
 cmd = ["oss-crs", "run", str(crs_config_dir), project_name, harness_name, "--output", str(output_dir)]
 
-# Patch generation
-cmd = ["oss-patch-crs", "build", crs_config_name, project_name, "--oss-fuzz", str(oss_fuzz_path)]
-cmd = ["oss-patch-crs", "run", crs_config_name, project_name, "--harness", harness_name, "--output", str(output_dir), "--litellm-base", url, "--litellm-key", key]
+# Patch generation (CRSBench method)
+cmd = ["oss-patch-crs", "build", crs_config_name, project_name,
+       "--oss-fuzz", str(oss_fuzz_path),
+       "--project-path", str(benchmark_path),
+       "--source-path", str(source_path)]
+
+cmd = ["oss-patch-crs", "run", crs_config_name, project_name,
+       "--harness", harness_name,
+       "--output", str(output_dir),
+       "--litellm-base", url,
+       "--litellm-key", key]
+```
+
+**Repository Manager Integration**:
+```python
+from crsbench.migration.repo_manager import ensure_project_repository
+
+# Get pre-cloned source path
+source_path = ensure_project_repository(
+    benchmark_dir=str(benchmark_path),
+    verbose=config.get("verbose", False)
+)
+
+if not source_path:
+    raise EvaluationError("Failed to obtain source code")
+
+# Use in build command
+cmd.extend(["--project-path", str(benchmark_path)])
+cmd.extend(["--source-path", str(source_path)])
 ```
 
 ## Implementation Checklist
