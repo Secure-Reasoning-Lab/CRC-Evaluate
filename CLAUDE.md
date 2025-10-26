@@ -147,11 +147,33 @@ CRSBench will utilize this interface to build CRS docker images and run those
 docker images to evaluate CRS.
 
 ## Reference projects
-Some reference projects are put in `claude_refernece_projects`, you should look
-when asked.
+Some reference projects are put in `claude_reference_projects`, you should look when asked.
 
 ### Docs
-Please summarize reference projects by creating markdown files in `docs_reference_projects`.
+Documentation for reference projects is organized in `docs_reference_projects/` by project:
+
+```
+docs_reference_projects/
+├── fuzzbench/                      # FuzzBench documentation
+│   ├── FUZZBENCH-INDEX.md         # Navigation guide and quick lookup
+│   ├── FUZZBENCH-OVERVIEW.md      # Master overview and architecture
+│   ├── fuzzbench-build-architecture.md  # Build pipeline details
+│   ├── fuzzbench-docker-build-process.md  # Docker build process
+│   ├── fuzzbench-redis-architecture.md  # Redis infrastructure
+│   ├── fuzzbench-snapshots.md     # Snapshot system
+│   └── README-fuzzbench.md        # Quick reference
+├── patchagent/                     # PatchAgent documentation
+│   └── patchagent.md
+├── crs-multilang-e2e-eval/        # CRS multilang eval documentation
+│   └── crs-multilang-e2e-eval.md
+└── scoring-pipeline/              # Scoring pipeline documentation
+    └── aixcc-scoring-pipeline-deduplication.md
+```
+
+**Guidelines:**
+- When documenting a new reference project, create a subdirectory under `docs_reference_projects/`
+- Subdirectory name should match the reference project name in `claude_reference_projects/`
+- Include a README or index file for multi-document projects
 
 ## Coding standard
 
