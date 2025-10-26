@@ -49,7 +49,14 @@
 
 - [ ]  Bug finding validation
     - [ ]  PoV deduplication
-- [ ]  Patch validaiton
+    - [ ]  stability test (e.g., crash 10/10 times)
+- [ ]  Patch validation
+    - [ ]  stability test (e.g., no crash 10/10 times)
+    - [ ]  patch validation methods (check crete, AutoPatchBench)
+      - [ ] how many/all POVs are killed.
+      - [ ] fuzzing after patch for spurious crashes.
+      - [ ] differential fuzzing.
+      - [ ] delta debugging.
     - [ ]  Develop LLM agent for dual-phase build script generation []
     - [ ]  Incremental building; generate incremental build scripts (build-pre.sh, build-apply.sh) for each project
         - [ ]  Test on curl-delta-02 and wireshark [@Youngjoon]
