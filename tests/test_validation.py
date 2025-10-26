@@ -120,22 +120,21 @@ class TestHarnessFileModel:
         )
         assert harness.path == "./test/harness.c"
 
-    def test_harness_repo_variable_invalid(self):
-        """Test harness with $REPO variable (should fail)."""
-        with pytest.raises(PydanticValidationError) as exc_info:
-            HarnessFile(
-                name="test_harness",
-                path="$REPO/test/harness.c"
-            )
-        assert "absolute" in str(exc_info.value).lower() or "relative" in str(exc_info.value).lower()
+    def test_harness_repo_variable_valid(self):
+        """Test harness with $REPO variable (should pass)."""
+        harness = HarnessFile(
+            name="test_harness",
+            path="$REPO/test/harness.c"
+        )
+        assert harness.path == "$REPO/test/harness.c"
 
-    def test_harness_project_variable_invalid(self):
-        """Test harness with $PROJECT variable (should fail)."""
-        with pytest.raises(PydanticValidationError):
-            HarnessFile(
-                name="test_harness",
-                path="$PROJECT/test/harness.c"
-            )
+    def test_harness_project_variable_valid(self):
+        """Test harness with $PROJECT variable (should pass)."""
+        harness = HarnessFile(
+            name="test_harness",
+            path="$PROJECT/test/harness.c"
+        )
+        assert harness.path == "$PROJECT/test/harness.c"
 
     def test_harness_without_vulns(self):
         """Test harness without vulnerabilities (distractor harness)."""
@@ -401,8 +400,8 @@ harness_files:
         result = validate_benchmark_from_string(yaml_content)
         assert result.is_valid is True
 
-    def test_repo_variable_rejected(self):
-        """Test $REPO/ paths are rejected."""
+    def test_repo_variable_accepted(self):
+        """Test $REPO/ paths are accepted."""
         yaml_content = """
 full_mode:
   base_commit: "abc123def"
@@ -411,10 +410,10 @@ harness_files:
     path: "$REPO/test/harness.c"
 """
         result = validate_benchmark_from_string(yaml_content)
-        assert result.is_valid is False
+        assert result.is_valid is True
 
-    def test_project_variable_rejected(self):
-        """Test $PROJECT/ paths are rejected."""
+    def test_project_variable_accepted(self):
+        """Test $PROJECT/ paths are accepted."""
         yaml_content = """
 full_mode:
   base_commit: "abc123def"
@@ -423,7 +422,7 @@ harness_files:
     path: "$PROJECT/test/harness.c"
 """
         result = validate_benchmark_from_string(yaml_content)
-        assert result.is_valid is False
+        assert result.is_valid is True
 
 
 # ============================================================================

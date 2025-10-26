@@ -81,18 +81,20 @@ vulns:
 - Deduplication should use more robust methods than simple string matching
 - Allows flexibility for different vulnerability detection strategies
 
-#### Absolute Paths (No $REPO/$PROJECT)
+#### Path Variables ($REPO and $PROJECT)
 
-**Design Decision**: Remove `$REPO/` and `$PROJECT/` variable support.
+**Design Decision**: Support `$REPO` and `$PROJECT` variable substitution.
 
 **Rationale**:
-- Simplifies implementation (no variable substitution)
-- More explicit and less error-prone
-- Docker containers use absolute paths anyway (`/src/project/...`)
-- Relative paths (`./...`) still supported for flexibility
-- Clean break from old format (no backward compatibility)
+- Provides flexibility for different repository structures
+- Allows harness paths to remain valid across different environments
+- `$REPO`: The cloned repository directory (where source code lives)
+- `$PROJECT`: The OSS-Fuzz compatible project directory (containing `project.yaml`, `build.sh`, etc.)
+- Also supports absolute paths (`/...`) and relative paths (`./...`) for flexibility
 
-**Migration**: Old `$REPO/test/harness.c` → New `/src/project/test/harness.c`
+**Examples**:
+- `$REPO/test/harness.c` - Harness in the repository's test directory
+- `$PROJECT/customfuzz.c` - Custom harness in the project directory
 
 ### POV Model
 
@@ -129,13 +131,16 @@ class Vulnerability(BaseModel):
 ```python
 class HarnessFile(BaseModel):
     name: str                        # Harness identifier
-    path: str                        # Absolute or relative path
+    path: str                        # Path with variable support or absolute/relative
     vulns: Optional[List[Vulnerability]]  # Optional vulnerabilities
 ```
 
 **Validation Rules**:
 - `name` cannot be empty
-- `path` must be absolute (`/...`) or relative (`./...`)
+- `path` must be one of:
+  - Variable path: `$REPO/...` or `$PROJECT/...`
+  - Absolute path: `/...`
+  - Relative path: `./...`
 - No duplicate harness names in same benchmark
 - Harnesses without `vulns` are allowed (distractor harnesses)
 
@@ -540,15 +545,19 @@ def test_missing_required_field():
 
 #### 4. Path Validation Tests
 
-Test new path requirements:
+Test path requirements with variable support:
 ```python
+def test_repo_variable_valid():
+    harness = HarnessFile(name="test", path="$REPO/test/harness.c")
+    assert harness.path == "$REPO/test/harness.c"
+
+def test_project_variable_valid():
+    harness = HarnessFile(name="test", path="$PROJECT/harness.c")
+    assert harness.path == "$PROJECT/harness.c"
+
 def test_absolute_path_valid():
     harness = HarnessFile(name="test", path="/src/project/test.c")
     assert harness.path == "/src/project/test.c"
-
-def test_repo_variable_invalid():
-    with pytest.raises(ValidationError):
-        HarnessFile(name="test", path="$REPO/test.c")
 
 def test_relative_path_valid():
     harness = HarnessFile(name="test", path="./test/harness.c")

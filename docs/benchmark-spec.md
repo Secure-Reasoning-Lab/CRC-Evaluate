@@ -118,10 +118,10 @@ full_mode:
 # Harness specifications
 harness_files:
   - name: "ossfuzz"
-    path: "/src/project/test/ossfuzz.c"
+    path: "$REPO/test/ossfuzz.c"
 
   - name: "customfuzz3"
-    path: "/src/project/test/customfuzz3.c"
+    path: "$PROJECT/customfuzz3.c"
     # Vulnerability configurations for customfuzz3
     vulns:
       - vuln_keyword: "buffer_overflow"      # Maps to directory name
@@ -213,6 +213,17 @@ Define the test harnesses used for vulnerability discovery:
   likely to trigger vulnerabilities
 - This tests CRS capability to distinguish between productive and
   unproductive fuzzing targets
+
+#### Harness Path Specification
+
+Harness file paths support variable substitution for flexible location specification:
+
+- `$REPO/path/to/file`: Path relative to the cloned repository directory (where source code lives)
+- `$PROJECT/path/to/file`: Path relative to the OSS-Fuzz compatible project directory (containing `project.yaml`, `build.sh`, etc.)
+- `/absolute/path/to/file`: Absolute path within the container
+- `./relative/path/to/file`: Relative path from current directory
+
+The `$REPO` and `$PROJECT` variables allow harness paths to remain valid across different repository structures and container configurations.
 
 ### Proof of Vulnerability (POV)
 

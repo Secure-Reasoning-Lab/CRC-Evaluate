@@ -87,14 +87,16 @@ class HarnessFile(BaseModel):
 
         path = v.strip()
 
-        # Reject old variable patterns (no backward compatibility)
-        if '$REPO' in path or '$PROJECT' in path:
-            raise ValueError("Path variables $REPO and $PROJECT are no longer supported. Use absolute paths (e.g., /src/project/test/harness.c) or relative paths (e.g., ./test/harness.c)")
+        # Accept path variable patterns
+        # $REPO: The cloned repository directory (where source code lives)
+        # $PROJECT: The OSS-Fuzz compatible project directory (containing project.yaml, build.sh, etc.)
+        if path.startswith('$REPO/') or path.startswith('$PROJECT/'):
+            return path
 
         # Accept absolute paths (most common in Docker containers)
         # or relative paths starting with ./
         if not (path.startswith('/') or path.startswith('./')):
-            raise ValueError("Harness path should be absolute (e.g., /src/project/test/harness.c) or relative (e.g., ./test/harness.c)")
+            raise ValueError("Harness path should be one of: $REPO/..., $PROJECT/..., /absolute/path, or ./relative/path")
 
         return path
 

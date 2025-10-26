@@ -295,7 +295,7 @@ delta_mode: {...}                # Optional delta mode config
 full_mode: {...}                 # Optional full mode config
 harness_files:                   # Required
   - name: "harness_name"
-    path: "/absolute/path/to/harness.c"
+    path: "$REPO/test/harness.c" # Supports $REPO, $PROJECT, /absolute, ./relative
     vulns:                       # Optional
       - vuln_keyword: "buffer_overflow"
         difficulty_level: 3      # Optional 1-5
