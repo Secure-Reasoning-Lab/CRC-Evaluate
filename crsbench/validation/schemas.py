@@ -234,6 +234,11 @@ class ExperimentConfig(BaseModel):
         default=None,
         description="Benchmark suite name to load from benchmark-suites/ (mutually exclusive with benchmarks)"
     )
+    snapshot_period: Optional[int] = Field(
+        default=900,
+        ge=0,
+        description="Snapshot interval in seconds (0 to disable, default 900 = 15 minutes)"
+    )
 
     @field_validator('experiment')
     @classmethod
@@ -326,6 +331,24 @@ class ExperimentConfig(BaseModel):
             raise ValueError("benchmark_suite cannot be empty string")
 
         return suite_name
+
+    @field_validator('snapshot_period')
+    @classmethod
+    def validate_snapshot_period(cls, v):
+        """Validate snapshot period."""
+        if v is None:
+            return 900  # Default: 15 minutes
+
+        if v == 0:
+            return 0  # Disabled
+
+        if v < 60:
+            raise ValueError("snapshot_period must be at least 60 seconds (or 0 to disable)")
+
+        if v > 86400:
+            raise ValueError(f"snapshot_period of {v}s (>{v/3600:.1f} hours) exceeds maximum of 24 hours")
+
+        return v
 
     @model_validator(mode='after')
     def check_benchmarks_configuration(self):

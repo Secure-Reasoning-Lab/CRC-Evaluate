@@ -180,6 +180,39 @@ BenchmarkRunner
 
 ## Configuration
 
+### Snapshot Period Constraints
+
+**Default**: 900 seconds (15 minutes)
+**Minimum**: 60 seconds (1 minute)
+**Maximum**: 86400 seconds (24 hours)
+**Special**: 0 (snapshots disabled)
+
+**Rationale for constraints**:
+
+**Minimum (60 seconds)**:
+- **I/O overhead**: Creating tar.gz archives and file copying takes time (~5-30 seconds depending on data size)
+- **Filesystem pressure**: Too-frequent snapshots cause excessive I/O, potentially slowing CRS execution
+- **Diminishing returns**: For typical CRS runs (hours long), sub-minute granularity provides little additional insight
+- **Storage waste**: More snapshots = more duplicate log data (logs are captured fully, not incrementally)
+- **Practical lower bound**: Even 60s is aggressive; typical use cases favor 5-15 minute intervals
+
+**Maximum (24 hours)**:
+- **Trial duration**: Most trials complete within 2-24 hours; longer periods defeat snapshot purpose
+- **Progress visibility**: Beyond 24h intervals, snapshots lose value for monitoring
+- **Failure recovery**: If trial crashes after 23 hours without snapshot, significant data loss
+- **Sanity check**: Values >24h likely indicate configuration error (typo in seconds vs hours)
+
+**Why 900s (15 minutes) default?**:
+- Matches FuzzBench's snapshot frequency
+- Good balance: frequent enough for progress tracking, infrequent enough to minimize overhead
+- For typical 2-hour trial: 8 snapshots, manageable storage (~100-200 MB)
+- For 24-hour trial: 96 snapshots, still reasonable (~1-2 GB compressed)
+
+**When to use different values**:
+- **300-600s (5-10 min)**: Short trials (<1 hour), need fine-grained monitoring
+- **1800-3600s (30-60 min)**: Long trials (>12 hours), minimize storage overhead
+- **0**: Very short trials (<15 min), testing, or storage-constrained environments
+
 ### ExperimentConfig Schema
 
 Add new field to `crsbench/validation/schemas.py`:
@@ -190,19 +223,28 @@ class ExperimentConfig(BaseModel):
 
     # ... existing fields ...
 
-    snapshot_period: int = Field(
+    snapshot_period: Optional[int] = Field(
         default=900,
-        ge=60,
-        description="Snapshot interval in seconds (minimum 60, default 900)"
+        ge=0,
+        description="Snapshot interval in seconds (0 to disable, default 900 = 15 minutes)"
     )
 
-    @validator('snapshot_period')
+    @field_validator('snapshot_period')
+    @classmethod
     def validate_snapshot_period(cls, v):
         """Validate snapshot period is reasonable."""
+        if v is None:
+            return 900  # Default: 15 minutes
+
+        if v == 0:
+            return 0  # Disabled
+
         if v < 60:
-            raise ValueError("snapshot_period must be at least 60 seconds")
-        if v > 86400:  # 24 hours
-            logger.warning(f"snapshot_period of {v}s (>{v/3600:.1f} hours) is unusually long")
+            raise ValueError("snapshot_period must be at least 60 seconds (or 0 to disable)")
+
+        if v > 86400:
+            raise ValueError(f"snapshot_period of {v}s (>{v/3600:.1f} hours) exceeds maximum of 24 hours")
+
         return v
 ```
 
