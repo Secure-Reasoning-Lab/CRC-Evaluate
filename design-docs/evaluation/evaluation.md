@@ -261,14 +261,14 @@ Concrete CRS executors wrap the OSS-Fuzz/OSS-Patch command-line interfaces:
 # Bug Finding Executor
 class OSSFuzzBugFindingExecutor(CRSExecutor):
     """Wraps OSS-Fuzz bug finding interface."""
-    # Build: python3 infra/helper.py build_crs <config-dir> <project>
-    # Run: python3 infra/helper.py run_crs <config-dir> <project> <harness>
+    # Build: oss-crs build <config-dir> <project>
+    # Run: oss-crs run <config-dir> <project> <harness> [--output <dir>] [--hints <dir>]
 
 # Patch Generation Executor
 class OSSPatchExecutor(CRSExecutor):
     """Wraps OSS-Patch interface."""
-    # Build: python3 infra/helper.py build_crs <config> <project> --oss-fuzz $OSS_FUZZ_HOME
-    # Run: python3 infra/helper.py run_crs <config> <project> --harness <name> --litellm-*
+    # Build: oss-patch-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME
+    # Run: oss-patch-crs run <config> <project> --harness <name> [--pov <file> | --povs <dir>] [--hints <dir>] [--output <dir>] --litellm-*
 ```
 
 ### Usage Example

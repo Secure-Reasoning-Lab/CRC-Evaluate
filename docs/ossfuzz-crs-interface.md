@@ -19,24 +19,24 @@ Both use `infra/helper.py` but from different repositories with different capabi
 Repository: `oss-fuzz`
 
 ### Building CRS docker image
-It starts with `build_crs` command with following arguments:
+It starts with `build` command with following arguments:
 
-- configuration files directory for a CRS `ensemble-c`: `infra/crs/example_configs/ensemble-c`
+- configuration files directory for a CRS `ensemble-c`: `example_configs/ensemble-c`
 - project name: `json-c`
 
 ```sh
-python3 infra/helper.py build_crs infra/crs/example_configs/ensemble-c json-c
+oss-crs build example_configs/ensemble-c json-c
 ```
 
 ## Running CRS for specific fuzzing harnesses
-`run_crs` accepts the same arguments as `build_crs`, it additionally accept the
+`run` accepts the same arguments as `build`, it additionally accept the
 following arguments:
 
 - fuzzing harness name: `json_array_fuzzer`
 - `--output <output-dir>`: Directory where CRS writes its outputs (POVs, corpus, etc.)
 
 ```sh
-python3 infra/helper.py run_crs infra/crs/example_configs/ensemble-c json-c json_array_fuzzer \
+oss-crs run example_configs/ensemble-c json-c json_array_fuzzer \
   --output /path/to/output
 ```
 
@@ -66,13 +66,13 @@ CRS implementations can optionally receive hints to guide vulnerability discover
 **Command-line interface:**
 
 ```sh
-python3 infra/helper.py run_crs <config> <project> <harness> --hints <hints-dir>
+oss-crs run <config> <project> <harness> --hints <hints-dir>
 ```
 
 **Example:**
 
 ```sh
-python3 infra/helper.py run_crs ensemble-c json-c json_array_fuzzer \
+oss-crs run ensemble-c json-c json_array_fuzzer \
   --hints /path/to/benchmarks/json-c/.aixcc/json_array_fuzzer/hints
 ```
 
@@ -208,12 +208,12 @@ export OSS_FUZZ_HOME=/path/to/oss-fuzz
 Build command with OSS-Fuzz path:
 
 ```sh
-python3 infra/helper.py build_crs <crs-config-name> <project-name> --oss-fuzz $OSS_FUZZ_HOME
+oss-patch-crs build <crs-config-name> <project-name> --oss-fuzz $OSS_FUZZ_HOME
 ```
 
 **Example**:
 ```sh
-python3 infra/helper.py build_crs multi-retrieval aixcc/c/mock-c --oss-fuzz $OSS_FUZZ_HOME
+oss-patch-crs build multi-retrieval aixcc/c/mock-c --oss-fuzz $OSS_FUZZ_HOME
 ```
 
 **Arguments**:
@@ -226,7 +226,7 @@ python3 infra/helper.py build_crs multi-retrieval aixcc/c/mock-c --oss-fuzz $OSS
 Run command with POV(s), hints, output directory, and LiteLLM configuration:
 
 ```sh
-python3 infra/helper.py run_crs <crs-config-name> <project-name> \
+oss-patch-crs run <crs-config-name> <project-name> \
   --harness <harness-name> \
   [--pov <pov-file> | --povs <povs-dir>] \
   [--hints <hints-dir>] \
@@ -237,7 +237,7 @@ python3 infra/helper.py run_crs <crs-config-name> <project-name> \
 
 **Example - With single POV**:
 ```sh
-python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
+oss-patch-crs run multi-retrieval aixcc/c/mock-c \
   --harness fuzz_process_input_header \
   --pov /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs/pov_0 \
   --output /tmp/trial-1/output \
@@ -247,7 +247,7 @@ python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
 
 **Example - With POVs directory**:
 ```sh
-python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
+oss-patch-crs run multi-retrieval aixcc/c/mock-c \
   --harness fuzz_process_input_header \
   --povs /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs \
   --output /tmp/trial-1/output \
@@ -257,7 +257,7 @@ python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
 
 **Example - Without POV specification (process all available POVs)**:
 ```sh
-python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
+oss-patch-crs run multi-retrieval aixcc/c/mock-c \
   --harness fuzz_process_input_header \
   --output /tmp/trial-1/output \
   --litellm-base https://api.litellm.com \
@@ -266,7 +266,7 @@ python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
 
 **Example - With single POV and hints**:
 ```sh
-python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
+oss-patch-crs run multi-retrieval aixcc/c/mock-c \
   --harness fuzz_process_input_header \
   --pov /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs/pov_0 \
   --hints /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/hints \
@@ -277,7 +277,7 @@ python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
 
 **Example - With POVs directory and hints**:
 ```sh
-python3 infra/helper.py run_crs multi-retrieval aixcc/c/mock-c \
+oss-patch-crs run multi-retrieval aixcc/c/mock-c \
   --harness fuzz_process_input_header \
   --povs /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs \
   --hints /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/hints \
@@ -553,6 +553,7 @@ See the CRSBench snapshot design documentation for details on snapshot frequency
 | Feature          | OSS-Fuzz (Bug Finding)  | OSS-Patch (Patch Generation)                 |
 |------------------|-------------------------|----------------------------------------------|
 | Repository       | `oss-fuzz`              | `oss-patch`                                  |
+| Command          | `oss-crs`               | `oss-patch-crs`                              |
 | Purpose          | Vulnerability discovery | Program repair                               |
 | POV argument     | Not applicable          | Optional (`--pov <pov-file>`)                |
 | POVs argument    | Not applicable          | Optional (`--povs <povs-dir>`)               |
@@ -566,11 +567,35 @@ See the CRSBench snapshot design documentation for details on snapshot frequency
 
 ---
 
-## Future Command Wrappers
+## Command Reference
 
-The OSS-Fuzz team is developing installable command wrappers:
+The OSS-Fuzz ecosystem provides installable command wrappers for CRS execution:
 
-- **`oss-fuzz-crs`**: Wrapper for bug finding CRS (from `oss-fuzz` repo)
-- **`oss-patch-crs`**: Wrapper for patch generation CRS (from `oss-patch` repo)
+- **`oss-crs`**: Command for bug finding / vulnerability discovery CRS (from `oss-fuzz` repo)
+- **`oss-patch-crs`**: Command for patch generation / program repair CRS (from `oss-patch` repo)
 
-These will be installable via pip/uv and provide a cleaner interface than direct `infra/helper.py` invocation.
+These commands are installable via pip/uv and provide a cleaner interface than direct `infra/helper.py` invocation.
+
+**Installation:**
+```sh
+# For bug finding
+pip install oss-crs
+# or
+uv pip install oss-crs
+
+# For patch generation
+pip install oss-patch-crs
+# or
+uv pip install oss-patch-crs
+```
+
+**Usage:**
+```sh
+# Bug finding
+oss-crs build <config> <project>
+oss-crs run <config> <project> <harness> [--output <dir>] [--hints <dir>]
+
+# Patch generation
+oss-patch-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME
+oss-patch-crs run <config> <project> --harness <name> [--pov <file> | --povs <dir>] [--hints <dir>] [--output <dir>] --litellm-base <url> --litellm-key <key>
+```

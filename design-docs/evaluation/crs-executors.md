@@ -72,7 +72,7 @@ class OSSFuzzBugFindingExecutor(CRSExecutor):
 
 ### Build Phase
 
-**Command**: `python3 infra/helper.py build_crs <crs-config-dir> <project-name>`
+**Command**: `oss-crs build <crs-config-dir> <project-name>`
 
 **Workflow**:
 1. Resolve CRS configuration directory from `crses/` or from full path
@@ -94,7 +94,7 @@ def _build_crs_if_needed(self, project_name: str) -> None:
     crs_config_dir = self._resolve_crs_config_dir()
 
     cmd = [
-        "python3", "infra/helper.py", "build_crs",
+        "oss-crs", "build",
         str(crs_config_dir), project_name
     ]
 
@@ -114,7 +114,7 @@ def _build_crs_if_needed(self, project_name: str) -> None:
 
 ### Run Phase
 
-**Command**: `python3 infra/helper.py run_crs <crs-config-dir> <project-name> <harness-name> --output <output-dir>`
+**Command**: `oss-crs run <crs-config-dir> <project-name> <harness-name> --output <output-dir>`
 
 **Workflow**:
 1. Build CRS if not already built
@@ -162,7 +162,7 @@ def run_crs(
 
     # Build command with output directory
     cmd = [
-        "python3", "infra/helper.py", "run_crs",
+        "oss-crs", "run",
         str(crs_config_dir), project_name, harness_name,
         "--output", str(trial_output_dir / "output")
     ]
@@ -230,7 +230,7 @@ def run_crs(
     crs_config_dir = self._resolve_crs_config_dir()
 
     cmd = [
-        "python3", "infra/helper.py", "run_crs",
+        "oss-crs", "run",
         str(crs_config_dir), project_name, harness_name,
         "--output", str(trial_output_dir / "output")
     ]
@@ -537,9 +537,8 @@ def _store_execution_metadata(
 {
   "timestamp": "2025-10-20T15:30:45.123456",
   "command": [
-    "python3",
-    "infra/helper.py",
-    "run_crs",
+    "oss-crs",
+    "run",
     "ensemble-c",
     "json-c",
     "json_array_fuzzer",
@@ -754,7 +753,7 @@ class OSSPatchExecutor(CRSExecutor):
 
 ### Build Phase
 
-**Command**: `python3 infra/helper.py build_crs <config> <project> --oss-fuzz $OSS_FUZZ_HOME`
+**Command**: `oss-patch-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME`
 
 **Workflow**:
 1. Set OSS_FUZZ_HOME environment variable
@@ -772,7 +771,7 @@ def _build_crs_if_needed(self, project_name: str) -> None:
         return
 
     cmd = [
-        "python3", "infra/helper.py", "build_crs",
+        "oss-patch-crs", "build",
         self.crs_config_name, project_name,
         "--oss-fuzz", str(self.oss_fuzz_path)
     ]
@@ -799,7 +798,7 @@ def _build_crs_if_needed(self, project_name: str) -> None:
 
 **Command**:
 ```bash
-python3 infra/helper.py run_crs <config> <project> \
+oss-patch-crs run <config> <project> \
   --harness <harness-name> \
   [--pov <pov-file> | --povs <povs-dir>] \
   [--hints <hints-dir>] \
@@ -853,7 +852,7 @@ def run_crs(
 
     # Build command
     cmd = [
-        "python3", "infra/helper.py", "run_crs",
+        "oss-patch-crs", "run",
         self.crs_config_name, project_name,
         "--harness", harness_name,
         "--output", str(trial_output_dir / "output"),
@@ -1306,59 +1305,37 @@ if pov.error_token and pov.error_token not in crash_log:
 
 ```bash
 # Bug finding
-python3 infra/helper.py build_crs <config-dir> <project>
-python3 infra/helper.py run_crs <config-dir> <project> <harness>
+oss-crs build <config-dir> <project>
+oss-crs run <config-dir> <project> <harness> [--output <dir>] [--hints <dir>]
 
 # Patch generation
-python3 infra/helper.py build_crs <config> <project> --oss-fuzz $OSS_FUZZ_HOME
-python3 infra/helper.py run_crs <config> <project> --harness <name> --litellm-base <url> --litellm-key <key>
+oss-patch-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME
+oss-patch-crs run <config> <project> --harness <name> [--pov <file> | --povs <dir>] [--hints <dir>] [--output <dir>] --litellm-base <url> --litellm-key <key>
 ```
 
-### Future Format
+**Notes**:
+- Config paths use relative format: `example_configs/ensemble-c` (no `infra/crs/` prefix)
+- Commands are installable via pip/uv
+- All arguments except command prefix remain the same
 
-```bash
-# Bug finding
-oss-fuzz-crs build <config-dir> <project>
-oss-fuzz-crs run <config-dir> <project> <harness>
+### Implementation Notes
 
-# Patch generation
-oss-patch-crs build <config> <project>
-oss-patch-crs run <config> <project> <harness> [<pov>]
-```
+**Command Usage**:
+- Use `oss-crs` for bug finding CRS execution
+- Use `oss-patch-crs` for patch generation CRS execution
+- Both commands should be available in the environment
+- Config paths are relative (e.g., `example_configs/ensemble-c`)
 
-### Feature Detection
-
-**Implementation**:
+**Command Construction**:
 ```python
-def _get_command_prefix(self, command_type: str) -> List[str]:
-    """Get command prefix based on available commands.
+# Bug finding
+cmd = ["oss-crs", "build", str(crs_config_dir), project_name]
+cmd = ["oss-crs", "run", str(crs_config_dir), project_name, harness_name, "--output", str(output_dir)]
 
-    Args:
-        command_type: "bug_finding" or "patch_generation"
-
-    Returns:
-        Command prefix (either new command or python3 infra/helper.py)
-    """
-    if command_type == "bug_finding":
-        if shutil.which("oss-fuzz-crs"):
-            return ["oss-fuzz-crs"]
-        else:
-            return ["python3", "infra/helper.py"]
-
-    elif command_type == "patch_generation":
-        if shutil.which("oss-patch-crs"):
-            return ["oss-patch-crs"]
-        else:
-            return ["python3", "infra/helper.py"]
+# Patch generation
+cmd = ["oss-patch-crs", "build", crs_config_name, project_name, "--oss-fuzz", str(oss_fuzz_path)]
+cmd = ["oss-patch-crs", "run", crs_config_name, project_name, "--harness", harness_name, "--output", str(output_dir), "--litellm-base", url, "--litellm-key", key]
 ```
-
-### Compatibility Layer
-
-Maintain backward compatibility during transition:
-- Try new command first
-- Fall back to old format if not found
-- Log which format is being used
-- No code changes needed when commands become available
 
 ## Implementation Checklist
 
