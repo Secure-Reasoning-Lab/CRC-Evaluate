@@ -1,4 +1,23 @@
-"""CRS executor interface and stub implementation."""
+"""CRS executor interface and stub implementation.
+
+NOTE: When implementing concrete CRS executors (OSSFuzzBugFindingExecutor, OSSPatchExecutor),
+use the new command format:
+
+Bug Finding (oss-crs):
+    Build:  ["oss-crs", "build", config_dir, project_name]
+    Run:    ["oss-crs", "run", config_dir, project_name, harness_name,
+             "--output", output_dir, "--hints", hints_dir]
+
+Patch Generation (oss-patch-crs):
+    Build:  ["oss-patch-crs", "build", config_name, project_name,
+             "--oss-fuzz", oss_fuzz_path]
+    Run:    ["oss-patch-crs", "run", config_name, project_name,
+             "--harness", harness_name, "--output", output_dir,
+             "--povs", povs_dir, "--hints", hints_dir,
+             "--litellm-base", url, "--litellm-key", key]
+
+See design-docs/evaluation/crs-executors.md for full implementation details.
+"""
 
 import time
 import random

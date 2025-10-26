@@ -146,6 +146,7 @@ def main():
         print("   1. Review the generated test.sh")
         print("   2. Test it in OSS-Fuzz container:")
         print(f"      cd /path/to/oss-fuzz")
+        print(f"      # Use OSS-Fuzz helper to enter container shell")
         print(f"      python3 infra/helper.py shell {args.benchmark}")
         print(f"      # Inside container:")
         print(f"      cd /src/{args.benchmark}")
