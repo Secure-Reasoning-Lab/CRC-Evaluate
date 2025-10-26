@@ -1176,6 +1176,217 @@ pytest tests/test_snapshot_manager.py -k integration -v
 - FuzzBench: GCE instances + GCS + dispatcher
 - CRSBench: Local execution
 
+## Implementation Status and Notes
+
+### Sample Snapshot Generator ✅
+
+**Status**: COMPLETE
+
+A sample snapshot generator has been implemented in `snapshot-examples/generate_snapshot.py` with:
+- Full generation, validation, and listing capabilities
+- Demonstrates incremental capture strategy
+- Provides reference implementation for snapshot format
+- Includes comprehensive validation
+
+This serves as:
+1. Reference for implementing production snapshot system
+2. Testing tool for snapshot parsing code
+3. Documentation of snapshot format
+
+### Production Snapshot System (This Section)
+
+**Status**: IN PROGRESS
+
+This design doc describes the production snapshot system that will:
+- Capture snapshots during actual CRS execution
+- Run in separate thread alongside CRS subprocess
+- Integrate with BenchmarkRunner and Orchestrator
+- Handle real-time incremental tracking
+
+### Trial Directory Structure
+
+The production snapshot system operates on the following directory structure:
+
+```
+trial_output_dir/                          # Created by Orchestrator
+├── output/                                # Created by CRS (snapshotted)
+│   ├── povs/                              # CRS writes POVs here
+│   │   ├── pov_001
+│   │   ├── pov_002
+│   │   └── ...
+│   ├── patches/                           # CRS writes patches here (organized by POV ID)
+│   │   ├── pov_0/
+│   │   │   └── patch.diff
+│   │   ├── pov_1/
+│   │   │   └── patch.diff
+│   │   └── ...
+│   ├── corpus/                            # CRS writes corpus here (optional)
+│   │   ├── input-001
+│   │   └── ...
+│   └── crs-data/                          # CRS-specific outputs (optional)
+│       └── ...
+├── hints/                                 # Prepared by BenchmarkRunner (NOT snapshotted)
+│   ├── sarif/                             # Filtered SARIF reports
+│   │   └── report.sarif
+│   └── corpus/                            # Pre-fuzzing corpus
+│       └── ...
+├── povs/                                  # For patch-gen mode (NOT snapshotted)
+│   ├── pov_0
+│   └── ...
+├── config.yaml                            # Experiment config (copied once, static)
+├── execution.json                         # Execution metadata (written by BenchmarkRunner, static)
+├── llm-usage.json                         # LLM metrics (updated by CRS, snapshotted fully)
+├── crs-output.log                         # CRS stdout/stderr (growing, snapshotted fully)
+├── snapshot-0001.tar.gz                   # Snapshot archives
+├── snapshot-0001.complete                 # Completion markers
+├── snapshot-0002.tar.gz
+├── snapshot-0002.complete
+└── ...
+```
+
+**Key Points**:
+- **Snapshots capture `output/` directory contents** (POVs, patches, corpus, crs-data)
+- **Snapshots also capture logs** (`llm-usage.json`, `crs-output.log`)
+- **Snapshots also capture static config** (`config.yaml`, `execution.json`)
+- **Snapshots do NOT capture inputs** (`hints/`, `povs/` for patch-gen)
+- **CRS creates `output/` and subdirectories** as needed
+- **BenchmarkRunner creates `hints/` and `povs/`** before CRS execution
+
+### LLM Usage Tracking
+
+**Who writes `llm-usage.json`?**
+- CRS is responsible for writing/updating `llm-usage.json`
+- CRS should update this file periodically during execution
+- SnapshotManager reads and copies the complete file
+
+**Format** (based on design doc example):
+```json
+{
+  "total_api_calls": 150,
+  "total_input_tokens": 45000,
+  "total_output_tokens": 12000,
+  "total_cached_tokens": 20000,
+  "total_cost_usd": 1.25,
+  "by_model": {
+    "claude-sonnet-4": {...},
+    "gpt-4": {...}
+  },
+  "by_operation": {
+    "fuzzing": {...},
+    "static_analysis": {...},
+    "patch_generation": {...}
+  }
+}
+```
+
+**If CRS doesn't use LLM**:
+- CRS should either not create `llm-usage.json`
+- Or create empty/minimal structure: `{"total_api_calls": 0, "total_cost_usd": 0.0}`
+- Snapshot will copy file if it exists, skip if it doesn't
+
+### Snapshot Disabling
+
+Snapshots can be disabled when not needed:
+
+**Configuration**:
+```yaml
+# Disable snapshots
+snapshot_period: 0
+
+# Or explicitly null
+snapshot_period: null
+```
+
+**When to disable**:
+- Very short trials (<15 minutes) where snapshots add overhead without value
+- Testing/development scenarios
+- When storage is limited
+
+**Implementation**:
+- `snapshot_period: 0` or `null` → SnapshotManager not created
+- BenchmarkRunner checks `if snapshot_period and snapshot_period > 0` before starting thread
+
+### Thread Lifecycle and Error Handling
+
+**Thread Start Sequence**:
+1. BenchmarkRunner creates trial_output_dir
+2. BenchmarkRunner starts CRS subprocess
+3. BenchmarkRunner creates SnapshotManager with trial_output_dir
+4. BenchmarkRunner starts snapshot thread (daemon=True)
+5. Snapshot thread begins periodic capture loop
+
+**Thread Stop Sequence**:
+1. CRS subprocess completes (success or failure)
+2. BenchmarkRunner calls `snapshot_manager.stop()`
+3. SnapshotManager sets `self.running = False`
+4. Snapshot thread wakes from sleep, sees `running=False`, exits loop
+5. BenchmarkRunner calls `snapshot_thread.join(timeout=5.0)`
+6. If join times out, log warning (daemon thread will be killed anyway)
+
+**Error Handling Strategy**:
+
+**Snapshot Capture Errors**:
+- Snapshot failures should NOT crash CRS execution
+- Log error with full traceback
+- Continue to next snapshot cycle
+- Mark trial as "partial snapshots" in metadata
+
+**File Access Errors**:
+- Handle ENOENT (file doesn't exist yet)
+- Handle permission errors
+- Handle disk full errors
+- Retry logic for transient errors
+
+**Implementation**:
+```python
+def capture_snapshot(self):
+    """Capture single snapshot with error handling."""
+    try:
+        self.cycle += 1
+        logger.info(f"Capturing snapshot {self.cycle}")
+
+        # Create temp directory
+        temp_dir = self.trial_dir / f".snapshot-{self.cycle:04d}"
+        temp_dir.mkdir(exist_ok=True)
+
+        try:
+            # Capture all data
+            self._capture_metadata(temp_dir)
+            self._capture_povs(temp_dir)
+            self._capture_patches(temp_dir)
+            # ... more capture methods
+
+            # Compress to tar.gz
+            archive_path = self.trial_dir / f"snapshot-{self.cycle:04d}.tar.gz"
+            self._create_tar_gz(temp_dir, archive_path)
+
+            # Mark complete
+            marker_path = self.trial_dir / f"snapshot-{self.cycle:04d}.complete"
+            marker_path.touch()
+
+            logger.info(f"Snapshot {self.cycle} completed successfully")
+
+        finally:
+            # Always cleanup temp directory
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+    except Exception as e:
+        logger.error(f"Snapshot {self.cycle} failed: {e}", exc_info=True)
+        # Don't raise - continue to next snapshot
+```
+
+**Graceful Shutdown**:
+- Use daemon thread so Python doesn't wait indefinitely
+- Implement quick shutdown check (every second during sleep)
+- Join with timeout to avoid hanging
+
+**Race Conditions**:
+- CRS may be writing files while snapshot reads
+- Use `try/except` for file operations
+- Partial files in snapshots are acceptable (will be complete in next snapshot)
+- No locks needed (filesystem provides natural ordering)
+
 ## Implementation Checklist
 
 ### Phase 1: Core Implementation
