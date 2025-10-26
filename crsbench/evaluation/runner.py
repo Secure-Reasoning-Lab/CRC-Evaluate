@@ -3,12 +3,15 @@
 import os
 import re
 import logging
+import threading
+import time
 from pathlib import Path
 from typing import Union, Optional, Dict, Any, List
 from crsbench.validation import validate_benchmark, ValidationResult
 from crsbench.validation.schemas import BenchmarkConfig, HarnessFile, POV
 from crsbench.evaluation.crs_executor import CRSExecutor, StubCRSExecutor
 from crsbench.evaluation.results import ResultCollector, EvaluationReport, HarnessResult, POVResult, POVStatus
+from crsbench.evaluation.snapshot_manager import SnapshotManager
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -50,24 +53,28 @@ class EvaluationResult:
 class BenchmarkRunner:
     """Main class for running benchmark evaluations."""
 
-    def __init__(self, crs_executor: Optional[CRSExecutor] = None):
+    def __init__(self, crs_executor: Optional[CRSExecutor] = None, snapshot_period: Optional[int] = None):
         """Initialize benchmark runner.
 
         Args:
             crs_executor: CRS executor instance. If None, uses stub executor.
+            snapshot_period: Snapshot interval in seconds (0 or None to disable)
         """
         self.crs_executor = crs_executor or StubCRSExecutor()
+        self.snapshot_period = snapshot_period
         self.logger = logging.getLogger(__name__)
 
     def run_benchmark(self, benchmark_path: Union[str, Path],
                       mode: Optional[str] = None,
-                      crs_config: Optional[Dict[str, Any]] = None) -> EvaluationResult:
+                      crs_config: Optional[Dict[str, Any]] = None,
+                      trial_output_dir: Optional[Path] = None) -> EvaluationResult:
         """Run a complete benchmark evaluation.
 
         Args:
             benchmark_path: Path to benchmark directory or meta.yaml
             mode: Evaluation mode ('delta', 'full', or 'auto' to detect)
             crs_config: Configuration for CRS executor
+            trial_output_dir: Trial output directory for snapshots (required if snapshots enabled)
 
         Returns:
             EvaluationResult: Complete evaluation results
@@ -78,6 +85,18 @@ class BenchmarkRunner:
         benchmark_path = Path(benchmark_path)
 
         self.logger.info(f"Starting benchmark evaluation: {benchmark_path}")
+
+        # Initialize snapshot management
+        snapshot_manager = None
+        snapshot_thread = None
+        trial_start_time = time.time()
+
+        # Validate snapshot configuration
+        if self.snapshot_period and self.snapshot_period > 0:
+            if not trial_output_dir:
+                raise EvaluationError("trial_output_dir is required when snapshots are enabled")
+            if not trial_output_dir.exists():
+                raise EvaluationError(f"trial_output_dir does not exist: {trial_output_dir}")
 
         try:
             # Step 1: Validate benchmark configuration
@@ -115,10 +134,32 @@ class BenchmarkRunner:
             if crs_config:
                 collector.set_crs_config(crs_config)
 
-            # Step 7: Run evaluation on each harness
-            self._run_harness_evaluations(config, benchmark_path, collector, evaluation_mode)
+            # Step 7: Start snapshot thread if enabled
+            if self.snapshot_period and self.snapshot_period > 0 and trial_output_dir:
+                self.logger.info(f"Starting snapshot manager (period={self.snapshot_period}s)")
+                snapshot_manager = SnapshotManager(
+                    trial_dir=trial_output_dir,
+                    snapshot_period=self.snapshot_period,
+                    trial_start_time=trial_start_time
+                )
+                snapshot_thread = threading.Thread(target=snapshot_manager.run, daemon=True)
+                snapshot_thread.start()
 
-            # Step 8: Generate final report
+            try:
+                # Step 8: Run evaluation on each harness
+                self._run_harness_evaluations(config, benchmark_path, collector, evaluation_mode)
+
+            finally:
+                # Step 9: Stop snapshot thread
+                if snapshot_manager:
+                    self.logger.info("Stopping snapshot manager...")
+                    snapshot_manager.stop()
+                    if snapshot_thread and snapshot_thread.is_alive():
+                        snapshot_thread.join(timeout=5.0)
+                        if snapshot_thread.is_alive():
+                            self.logger.warning("Snapshot thread did not stop within timeout")
+
+            # Step 10: Generate final report
             report = collector.finalize_report()
 
             self.logger.info(f"Evaluation completed: {report.povs_found}/{report.total_povs} POVs detected "
