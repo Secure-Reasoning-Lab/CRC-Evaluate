@@ -25,10 +25,10 @@ full_mode:
 # Harness specifications
 harness_files:
   - name: "ossfuzz"
-    path: "/src/project/test/ossfuzz.c"
+    path: "$REPO/test/ossfuzz.c"
 
   - name: "customfuzz3"
-    path: "/src/project/customfuzz3.c"
+    path: "$PROJECT/customfuzz3.c"
     # Vulnerability configurations for customfuzz3
     vulns:
       - vuln_keyword: "buffer_overflow"      # Maps to directory name

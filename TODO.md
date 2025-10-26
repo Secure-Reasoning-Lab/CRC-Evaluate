@@ -44,6 +44,9 @@
   - [ ] mock interface for reports
 - [ ]  CRS-specific analysis scripts (their own crs-data)
 - [ ] build/health check for CRS images before evaluation
+- [ ] mount harness source code in container
+  - parse $PROJECT/$REPO
+  - path
 
 ## Bug-finding and Patch Validation
 
