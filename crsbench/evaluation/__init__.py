@@ -20,6 +20,11 @@ from crsbench.evaluation.snapshot import (
     validate_snapshot_structure
 )
 from crsbench.evaluation.snapshot_manager import SnapshotManager
+from crsbench.evaluation.analysis import (
+    AnalyzerInterface,
+    AnalysisResult,
+    AnalysisManager
+)
 
 __all__ = [
     'BenchmarkRunner',
@@ -40,5 +45,8 @@ __all__ = [
     'load_snapshot_metadata',
     'inspect_snapshot',
     'extract_snapshot',
-    'validate_snapshot_structure'
+    'validate_snapshot_structure',
+    'AnalyzerInterface',
+    'AnalysisResult',
+    'AnalysisManager'
 ]
