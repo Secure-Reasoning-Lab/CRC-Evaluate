@@ -1365,6 +1365,97 @@ project_name: "json-c"
 - Snapshot system periodically captures `/out/` directory contents
 - LLM usage and CRS logs are recorded by CRSBench separately (not in `/out/`)
 
+### Harness Path Resolution and Command Arguments
+
+CRS executors can optionally provide harness source file paths to CRS commands via the `--harness-source` argument. The `path_resolver` module handles translation of `$REPO` and `$PROJECT` variables into host filesystem paths.
+
+**Purpose:**
+- Provide CRS with harness source code location for optional analysis
+- Enable CRS to understand harness structure and API if needed
+- Support advanced CRS strategies that analyze harness code
+
+**Variable Semantics:**
+- `$REPO/path/to/file`: Path relative to cloned repository (where source code lives)
+- `$PROJECT/path/to/file`: Path relative to OSS-Fuzz project directory (containing project.yaml, build.sh)
+- `/absolute/path`: Container path (not resolved, used as-is)
+- `./relative/path`: Path relative to benchmark directory
+
+**Integration with CRS Executors:**
+
+```python
+from crsbench.evaluation.path_resolver import get_harness_source_path
+
+class OSSFuzzBugFindingExecutor(CRSExecutor):
+    def run_crs(self, benchmark_path: Path, harness: HarnessFile, ...) -> CRSResult:
+        """Run CRS with optional harness source path."""
+        # Build base command
+        cmd = [
+            "oss-crs", "run",
+            self.crs_config_name,
+            project_name,
+            harness.name,
+            "--output", str(trial_output_dir)
+        ]
+
+        # Add optional harness source path
+        harness_source = get_harness_source_path(
+            harness, benchmark_path, self.repos_dir
+        )
+        if harness_source:
+            cmd.extend(["--harness-source", str(harness_source)])
+            logger.info(f"Providing harness source: {harness_source}")
+        else:
+            logger.warning("Running without harness source code")
+
+        # Add hints if available
+        if hints_dir:
+            cmd.extend(["--hints", str(hints_dir)])
+
+        # Execute
+        result = subprocess.run(cmd, ...)
+        return self._parse_result(result)
+```
+
+**Argument Passing Example:**
+
+For harness with `path: "$REPO/test/harness.c"`:
+```python
+# Resolution
+host_path = Path("/tmp/repos/json-c/test/harness.c")  # Resolved from $REPO
+
+# Command with argument
+cmd = [
+    "oss-crs", "run",
+    "ensemble-c", "json-c", "json_array_fuzzer",
+    "--output", "/tmp/output",
+    "--harness-source", "/tmp/repos/json-c/test/harness.c"
+]
+```
+
+**CRS Implementation Flexibility:**
+The CRS implementation receives the host path and decides how to use it:
+- Mount it into the container (via Docker -v during execution)
+- Copy it into the container during build phase
+- Read it from the host before launching the container
+- Ignore it if harness source code analysis is not needed
+
+**Error Handling:**
+- If harness file doesn't exist: Log warning, continue without --harness-source
+- If repository cloning fails: Log warning, continue without --harness-source
+- If path format is invalid: Log warning, continue without --harness-source
+- CRS must be robust to missing --harness-source argument
+
+**Performance:**
+- Path resolution is fast (<1ms) after initial repository clone
+- Repository cloning is cached by `repo_manager`
+- First resolution per benchmark may be slow (git clone)
+- Subsequent resolutions use cached repository
+
+**Design Documentation:**
+- Full details in `design-docs/evaluation/path-resolver.md`
+- Interface spec in `docs/ossfuzz-crs-interface.md`
+- Tests in `tests/test_path_resolver.py`
+
 ## Docker Integration
 
 ### Build Caching

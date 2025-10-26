@@ -34,10 +34,12 @@ following arguments:
 
 - fuzzing harness name: `json_array_fuzzer`
 - `--output <output-dir>`: Directory where CRS writes its outputs (POVs, corpus, etc.)
+- `--harness-source <path>` (optional): Path to harness source file on host for analysis
 
 ```sh
 oss-crs run example_configs/ensemble-c json-c json_array_fuzzer \
-  --output /path/to/output
+  --output /path/to/output \
+  --harness-source /path/to/repo/test/json_array_fuzzer.c
 ```
 
 ### Filesystem mapping between host and docker container
@@ -56,6 +58,40 @@ On host, it is `build/out/<crs-name>/<project-name>/<harness-name>/{crashes, cor
 
 In the docker container, the directory will be mapped to `/out/<harness-name>/{crashes, corpus}`.
 
+### Optional Harness Source Code Support
+
+CRS implementations can optionally receive the harness source code file path for analysis.
+
+**Command-line interface:**
+
+```sh
+oss-crs run <config> <project> <harness> --harness-source <path-to-harness-source>
+```
+
+**Purpose:**
+- Provides CRS with access to harness source code for static analysis
+- Enables CRS to understand harness structure, API usage, and code patterns
+- Supports advanced CRS strategies that analyze harness code
+
+**Usage notes:**
+- `--harness-source` is optional - CRS should work without it
+- Path is on the host filesystem (e.g., `/path/to/repos/json-c/test/json_array_fuzzer.c`)
+- CRS implementation decides how to handle this path:
+  - Mount it into the container
+  - Copy it into the container
+  - Read it from the host before container execution
+  - Ignore it if not needed
+- CRSBench resolves `$REPO`/`$PROJECT` variables from `meta.yaml` to provide the actual host path
+
+**Example:**
+
+```sh
+# CRSBench provides resolved harness source path
+oss-crs run ensemble-c json-c json_array_fuzzer \
+  --output /path/to/output \
+  --harness-source /path/to/repos/json-c/test/json_array_fuzzer.c
+```
+
 ### Optional Hints Support
 
 CRS implementations can optionally receive hints to guide vulnerability discovery. Hints include:
@@ -73,7 +109,8 @@ oss-crs run <config> <project> <harness> --hints <hints-dir>
 
 ```sh
 oss-crs run ensemble-c json-c json_array_fuzzer \
-  --hints /path/to/benchmarks/json-c/.aixcc/json_array_fuzzer/hints
+  --hints /path/to/benchmarks/json-c/.aixcc/json_array_fuzzer/hints \
+  --harness-source /path/to/repos/json-c/test/json_array_fuzzer.c
 ```
 
 **Hints directory structure:**
@@ -331,6 +368,7 @@ oss-patch-crs run <crs-config-name> <project-name> \
   [--pov <pov-file> | --povs <povs-dir>] \
   [--hints <hints-dir>] \
   [--output <output-dir>] \
+  [--harness-source <path>] \
   --litellm-base <litellm-api-base> \
   --litellm-key <litellm-api-key>
 ```
@@ -364,12 +402,13 @@ oss-patch-crs run multi-retrieval aixcc/c/mock-c \
   --litellm-key sk-your-key-here
 ```
 
-**Example - With single POV and hints**:
+**Example - With single POV, hints, and harness source**:
 ```sh
 oss-patch-crs run multi-retrieval aixcc/c/mock-c \
   --harness fuzz_process_input_header \
   --pov /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs/pov_0 \
   --hints /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/hints \
+  --harness-source /path/to/repos/mock-c/fuzzers/fuzz_process_input_header.c \
   --output /tmp/trial-1/output \
   --litellm-base https://api.litellm.com \
   --litellm-key sk-your-key-here
@@ -404,6 +443,10 @@ oss-patch-crs run multi-retrieval aixcc/c/mock-c \
   - Provides SARIF reports and pre-fuzzing corpus to guide patch generation
   - Same structure as OSS-Fuzz bug finding hints (see above)
   - **CRSBench generates this directory** based on experiment configuration
+- `--harness-source <path>`: Path to harness source file on host (optional)
+  - Provides CRS with harness source code for analysis
+  - CRS implementation decides how to handle this path (mount, copy, or read)
+  - **CRSBench resolves `$REPO`/`$PROJECT` variables from `meta.yaml` to provide the actual host path**
 - `--output <output-dir>`: Path to output directory (optional)
   - Directory where CRS writes its outputs (patches, test results, etc.)
   - Mounted to `/out/` in the container
