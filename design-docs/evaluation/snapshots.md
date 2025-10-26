@@ -121,31 +121,148 @@ CRSBench uses a **hybrid capture strategy** inspired by FuzzBench:
 
 ## Architecture
 
-### High-Level Design
+### Threading and Process Model
+
+**IMPORTANT: Process vs Thread Distinction**
+
+CRSBench uses a **hybrid model** with processes for parallelism and threads for monitoring:
 
 ```
-BenchmarkRunner
-├── Main thread (snapshot manager)
+Orchestrator (Main Process)
+│
+├── Local Mode (Sequential)
+│   └── For each trial (sequential in main process):
+│       ├── Process: run_crs_trial() in main process
+│       │   ├── Thread 1 (Main): BenchmarkRunner orchestration
+│       │   │   └── Spawns CRS subprocess (Docker container)
+│       │   └── Thread 2 (Daemon): SnapshotManager
+│       │       └── Periodic snapshot capture
+│       └── Process: CRS subprocess (Docker)
+│           └── Writes outputs: POVs, patches, logs
+│
+└── Distributed Mode (Parallel)
+    └── RQ Workers (separate processes, potentially on different machines)
+        └── For each worker:
+            └── Executes jobs from queue:
+                └── run_crs_trial() job:
+                    ├── Thread 1 (Main): BenchmarkRunner orchestration
+                    │   └── Spawns CRS subprocess (Docker container)
+                    └── Thread 2 (Daemon): SnapshotManager
+                        └── Periodic snapshot capture
+```
+
+**Key Points:**
+
+1. **Parallelism Model**:
+   - **Local mode**: Trials execute sequentially in orchestrator process
+   - **Distributed mode**: Trials execute in parallel across multiple RQ worker processes
+   - Each worker process handles one trial at a time
+
+2. **Threading Within Each Trial**:
+   - **Thread 1 (Main)**: Runs in BenchmarkRunner.run_benchmark()
+     - Orchestrates CRS execution
+     - Spawns CRS as subprocess (Docker container)
+     - Waits for CRS to complete
+     - Collects results
+   - **Thread 2 (Daemon)**: SnapshotManager thread
+     - Started before CRS subprocess
+     - Runs independently, capturing snapshots periodically
+     - Stopped when CRS completes
+     - Dies automatically if main thread exits (daemon=True)
+
+3. **CRS Subprocess**:
+   - **Not a thread** - it's a separate process (Docker container)
+   - Spawned by BenchmarkRunner via CRSExecutor
+   - Writes outputs to trial_output_dir
+   - BenchmarkRunner waits for subprocess to complete
+   - Snapshot thread reads outputs while subprocess runs
+
+4. **No Concurrency Within Trial**:
+   - Each trial has exactly 2 threads (main + snapshot)
+   - Only 1 CRS subprocess per trial
+   - Threads don't compete for resources (read vs write)
+   - Filesystem provides natural synchronization
+
+5. **Multi-Trial Concurrency** (Distributed Mode Only):
+   - Multiple RQ worker processes run concurrently
+   - Each worker has its own thread pair (main + snapshot)
+   - Workers are isolated (different trial_output_dirs)
+   - No shared state between workers
+
+### Resource Usage Examples
+
+**Local Mode (Sequential) - 3 trials**:
+```
+Time →
+Trial 1: [Main Thread + Snapshot Thread + CRS Subprocess] ────────→
+         └── Completes
+Trial 2:                                                    [Main Thread + Snapshot Thread + CRS Subprocess] ────────→
+                                                            └── Completes
+Trial 3:                                                                                                       [Main Thread + Snapshot Thread + CRS Subprocess] ────────→
+
+Total concurrent: 1 trial at a time (2 threads + 1 subprocess per trial)
+```
+
+**Distributed Mode (Parallel) - 3 workers, 9 trials**:
+```
+Time →
+Worker 1: [Trial 1: Main+Snap+CRS] → [Trial 4: Main+Snap+CRS] → [Trial 7: Main+Snap+CRS]
+Worker 2: [Trial 2: Main+Snap+CRS] → [Trial 5: Main+Snap+CRS] → [Trial 8: Main+Snap+CRS]
+Worker 3: [Trial 3: Main+Snap+CRS] → [Trial 6: Main+Snap+CRS] → [Trial 9: Main+Snap+CRS]
+
+Total concurrent: 3 trials (6 threads + 3 subprocesses total)
+```
+
+**Per-Trial Resource Breakdown**:
+- **Threads**: 2 (main + snapshot, both in Python)
+- **Processes**: 1 (CRS subprocess, Docker container)
+- **Memory**:
+  - Main thread: ~50 MB (BenchmarkRunner, result collection)
+  - Snapshot thread: ~20 MB (SnapshotManager state tracking)
+  - CRS subprocess: Variable (depends on CRS, typically 100MB-2GB)
+- **CPU**:
+  - Main thread: Minimal (mostly waiting for CRS)
+  - Snapshot thread: Periodic spikes during capture (~1-5% average)
+  - CRS subprocess: Heavy (fuzzing, static analysis, LLM calls)
+
+### High-Level Design (Single Trial)
+
+```
+BenchmarkRunner (in main thread)
+│
+├── Main Thread
+│   ├── 1. Create SnapshotManager
+│   ├── 2. Start snapshot thread (daemon=True)
+│   ├── 3. Spawn CRS subprocess (Docker)
+│   ├── 4. Wait for CRS subprocess to complete
+│   ├── 5. Stop snapshot thread
+│   └── 6. Join snapshot thread (timeout=5s)
+│
+├── Snapshot Thread (daemon)
 │   └── Periodic polling loop:
 │       ├── Sleep for snapshot_period seconds
 │       └── Capture snapshot:
 │           ├── Read CRS output files
 │           ├── Collect LLM metrics
 │           ├── Copy logs
-│           └── Write snapshot directory
+│           └── Write snapshot archive
 │
-└── Worker thread (CRS execution)
-    └── Run CRS subprocess:
-        ├── Writes POVs to output directory
-        ├── Writes patches to output directory
-        └── Accumulates LLM usage
+└── CRS Subprocess (Docker container)
+    └── Writes outputs:
+        ├── POVs to output/povs/
+        ├── Patches to output/patches/pov_N/
+        ├── Corpus to output/corpus/
+        ├── LLM usage to llm-usage.json
+        └── Logs to crs-output.log
 ```
 
 **Key characteristics:**
 - **Location**: Trial runner (`crsbench/evaluation/`)
-- **Threading**: Main + worker thread (no async/await)
+- **Threading**: Main + snapshot thread (no async/await)
+- **Subprocess**: CRS runs in Docker container (separate process)
 - **Storage**: Local filesystem in `experiment_filestore`
 - **Timing**: Fixed interval polling (default 900s / 15 minutes)
+- **Isolation**: Each trial has independent directory structure
 
 ### Comparison with FuzzBench
 
