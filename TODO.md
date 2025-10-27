@@ -22,12 +22,20 @@
 - [x]  CRS interface
     - [x] bug-finding
     - [x] patch
+    - [ ] make sure them could be run from any cwd
+    - [ ] everything CRSBench need to pass to them are configurable
 - [ ]  Wrapper codes for running bug finding CRS
     - [ ]  Mock CRS bug-finding interface
     - [ ]  Agreement with CRS standardization team
 - [ ]  Wrapper codes for running patching CRS
     - [ ]  Mock CRS patching interface
     - [ ]  Agreement with CRS standardization team / oss-patch
+    - [ ]  pass `patch_exclude_list` or not?
+- [ ] passing hints
+  - [ ] corpus (for oss-patch too?)
+  - [ ] SARIF
+- [ ] passing POVs to oss-patch
+  - [ ] how many POVs? (all? hidden POVs?)
 - [ ]  end-to-end test with run_experiment.py
     - [ ]  local test
         - [ ]  one job
@@ -50,16 +58,21 @@
 
 ## Bug-finding and Patch Validation
 
+- [ ]  extract POVs/patches from (incremental) snapshots
+- [ ]  sanitizers? (other than ASAN?)
+- [ ]  timeout bugs like AIxCC?
 - [ ]  Bug finding validation
     - [ ]  PoV deduplication
     - [ ]  stability test (e.g., crash 10/10 times)
 - [ ]  Patch validation
     - [ ]  stability test (e.g., no crash 10/10 times)
+    - [ ]  `patch_exclude_list` checking.
     - [ ]  patch validation methods (check crete, AutoPatchBench)
       - [ ] how many/all POVs are killed.
       - [ ] fuzzing after patch for spurious crashes.
       - [ ] differential fuzzing.
       - [ ] delta debugging.
+      - [ ] invariant checking (e.g. unit tests)
     - [ ]  Develop LLM agent for dual-phase build script generation []
     - [ ]  Incremental building; generate incremental build scripts (build-pre.sh, build-apply.sh) for each project
         - [ ]  Test on curl-delta-02 and wireshark [@Youngjoon]
