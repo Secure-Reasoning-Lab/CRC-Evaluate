@@ -1,0 +1,21 @@
+version: "3.8"
+
+services:
+  valkey:
+    image: valkey/valkey:8.0-alpine
+    container_name: crsbench-valkey
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - valkey-data:/data
+    restart: unless-stopped
+    command: valkey-server --appendonly yes
+
+volumes:
+  valkey-data:
+    driver: local

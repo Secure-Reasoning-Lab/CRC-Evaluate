@@ -5,6 +5,8 @@
 **Status**: Implementation
 **Reference**: Adapted from FuzzBench's Redis+RQ architecture
 
+> **Note on Valkey**: CRSBench uses Valkey as the queue backend instead of Redis. Valkey is a fully Redis-compatible open-source data store. Throughout this document, "Redis" refers to the Redis protocol/interface that Valkey implements. The Python `redis` package and RQ (Redis Queue) library work seamlessly with Valkey. For deployment, see `services/valkey/docker-compose.yml`.
+
 ## 1. Overview
 
 This document describes the design and implementation of a distributed job queue system for CRSBench, enabling scalable parallel execution of CRS (Cyber Reasoning System) trials across multiple worker processes.
@@ -70,10 +72,12 @@ This document describes the design and implementation of a distributed job queue
 
 ### 2.2 Technology Stack
 
-- **Redis 4.3.4+**: Message broker and job queue storage
-- **RQ (Redis Queue) 1.11.1+**: Python job queue library
+- **Valkey 8.0+**: Message broker and job queue storage (Redis-compatible)
+- **RQ (Redis Queue) 1.11.1+**: Python job queue library (works with Valkey)
 - **Docker Compose**: Local orchestration
 - **Python 3.11+**: Implementation language
+
+> Note: The Python `redis` package is used to connect to Valkey, as Valkey is fully Redis-protocol-compatible.
 
 ## 3. Component Design
 
@@ -601,21 +605,28 @@ class ExperimentConfig(BaseModel):
 
 ### 6.1 Docker Compose Architecture
 
-**File**: `compose/crsbench.yaml`
+**File**: `services/valkey/docker-compose.yml` (Production-ready Valkey service)
+
+See `services/valkey/docker-compose.yml` for the standalone Valkey service configuration.
+
+**Full Stack Example**: `compose/crsbench.yaml` (Orchestrator + Workers + Valkey)
 
 ```yaml
 version: "3.8"
 
 services:
   queue-server:
-    image: redis:7-alpine
+    image: valkey/valkey:8.0-alpine
     ports:
       - "6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
+    volumes:
+      - valkey-data:/data
+    command: valkey-server --appendonly yes
 
   run-experiment:
     build:
@@ -655,6 +666,7 @@ services:
       replicas: 2  # Start with 2 workers
 
 volumes:
+  valkey-data:
   experiment-data:
   report-data:
 ```

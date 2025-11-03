@@ -84,17 +84,17 @@ sudo systemctl status redis-server
 
 **Arch Linux:**
 ```bash
-# Install Redis
-sudo pacman -S redis
+# Install Valkey (Redis alternative)
+sudo pacman -S valkey
 
-# Start Redis service
-sudo systemctl start redis
+# Start Valkey service
+sudo systemctl start valkey
 
-# Enable Redis to start on boot
-sudo systemctl enable redis
+# Enable Valkey to start on boot
+sudo systemctl enable valkey
 
-# Verify Redis is running
-redis-cli ping
+# Verify Valkey is running
+valkey-cli ping
 # Expected output: PONG
 ```
 
@@ -110,49 +110,61 @@ redis-server /etc/redis/redis.conf --daemonize yes
 redis-cli shutdown
 ```
 
-#### Option 2: Docker Redis (Recommended)
+#### Option 2: Docker Valkey (Recommended)
 
 ```bash
-# Run Redis in Docker
+# Run Valkey in Docker
 docker run -d \
-  --name crsbench-redis \
+  --name crsbench-valkey \
   -p 6379:6379 \
-  redis:7-alpine
+  valkey/valkey:8.0-alpine
 
-# Verify Redis is running
-docker exec crsbench-redis redis-cli ping
+# Verify Valkey is running
+docker exec crsbench-valkey valkey-cli ping
 # Expected output: PONG
 ```
 
 #### Option 3: Docker Compose (Production)
 
-Create `docker-compose.yml`:
+**Recommended**: Use the provided docker-compose configuration in `services/valkey/`:
+
+```bash
+# Start Valkey service
+docker-compose -f services/valkey/docker-compose.yml up -d
+
+# Verify it's running
+docker exec crsbench-valkey valkey-cli ping
+```
+
+Or create your own `docker-compose.yml`:
 
 ```yaml
 version: "3.8"
 
 services:
-  redis:
-    image: redis:7-alpine
-    container_name: crsbench-redis
+  valkey:
+    image: valkey/valkey:8.0-alpine
+    container_name: crsbench-valkey
     ports:
       - "6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
     volumes:
-      - redis-data:/data
+      - valkey-data:/data
+    restart: unless-stopped
+    command: valkey-server --appendonly yes
 
 volumes:
-  redis-data:
+  valkey-data:
 ```
 
-Start Redis:
+Start Valkey:
 
 ```bash
-docker-compose up -d redis
+docker-compose up -d
 ```
 
 ## Configuration
@@ -280,14 +292,17 @@ redis-cli DBSIZE
 
 ## Running Distributed Experiments
 
-### Step 1: Start Redis Server
+### Step 1: Start Valkey Server
 
 ```bash
 # Using Docker
-docker run -d --name crsbench-redis -p 6379:6379 redis:7-alpine
+docker run -d --name crsbench-valkey -p 6379:6379 valkey/valkey:8.0-alpine
+
+# Or using Docker Compose (recommended)
+docker-compose -f services/valkey/docker-compose.yml up -d
 
 # Verify
-redis-cli ping
+valkey-cli ping
 ```
 
 ### Step 2: Start Workers
@@ -379,12 +394,12 @@ Create `docker-compose.yml`:
 version: "3.8"
 
 services:
-  redis:
-    image: redis:7-alpine
+  valkey:
+    image: valkey/valkey:8.0-alpine
     ports:
       - "6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -392,10 +407,10 @@ services:
   orchestrator:
     build: .
     depends_on:
-      redis:
+      valkey:
         condition: service_healthy
     environment:
-      - REDIS_HOST=redis
+      - REDIS_HOST=valkey
       - EXPERIMENT_NAME=${EXPERIMENT_NAME:-experiment}
     volumes:
       - ./experiments:/tmp/experiments
@@ -411,10 +426,10 @@ services:
   worker:
     build: .
     depends_on:
-      - redis
+      - valkey
       - orchestrator
     environment:
-      - REDIS_HOST=redis
+      - REDIS_HOST=valkey
       - EXPERIMENT_NAME=${EXPERIMENT_NAME:-experiment}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock  # For CRS Docker execution
@@ -453,10 +468,10 @@ docker-compose up --scale worker=8
 
 For distributed execution across multiple physical machines:
 
-**Machine 1 (Redis + Orchestrator):**
+**Machine 1 (Valkey + Orchestrator):**
 ```bash
-# Start Redis
-docker run -d --name redis -p 6379:6379 redis:7-alpine
+# Start Valkey
+docker run -d --name valkey -p 6379:6379 valkey/valkey:8.0-alpine
 
 # Run orchestrator
 crsbench \
@@ -468,7 +483,7 @@ crsbench \
 
 **Machine 2 (Workers):**
 ```bash
-# Point to Machine 1's Redis
+# Point to Machine 1's Valkey
 export REDIS_HOST=10.0.1.100  # IP of Machine 1
 export EXPERIMENT_NAME=cluster-exp
 
@@ -711,11 +726,11 @@ crsbench \
   --local-only
 ```
 
-### Workflow 2: Small Experiment (Local Redis)
+### Workflow 2: Small Experiment (Local Valkey)
 
 ```bash
-# Start Redis
-redis-server &
+# Start Valkey with Docker
+docker run -d --name crsbench-valkey -p 6379:6379 valkey/valkey:8.0-alpine
 
 # Start 2 workers
 python -m crsbench.distributed.worker &
@@ -738,7 +753,7 @@ experiment: large-exp
 trials: 5
 max_total_time: 14400
 difficulty_level: 2
-redis_host: redis
+redis_host: valkey
 experiment_filestore: /experiments
 report_filestore: /reports
 crses:
@@ -752,6 +767,9 @@ benchmarks:
   - zlib
 EOF
 
+# Start Valkey service
+docker-compose -f services/valkey/docker-compose.yml up -d
+
 # Start with 8 workers
 docker-compose up --scale worker=8
 
@@ -764,15 +782,15 @@ docker-compose up --scale worker=8
 ```bash
 # Stop workers (Ctrl+C in each terminal)
 
-# Stop Redis
-docker stop crsbench-redis
-docker rm crsbench-redis
+# Stop Valkey
+docker stop crsbench-valkey
+docker rm crsbench-valkey
 
 # Or with Docker Compose
-docker-compose down
+docker-compose -f services/valkey/docker-compose.yml down
 
-# Clean up Redis data
-docker volume rm crsbench_redis-data
+# Clean up Valkey data
+docker volume rm valkey_valkey-data
 ```
 
 ## See Also

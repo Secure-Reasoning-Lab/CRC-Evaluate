@@ -1,0 +1,12 @@
+# Environment files
+.env
+
+# Docker volumes data
+data/
+
+# Valkey dump files (if using local dumps)
+*.rdb
+*.aof
+
+# Logs
+*.log
