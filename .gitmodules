@@ -4,3 +4,6 @@
 [submodule "oss-patch"]
 	path = oss-patch
 	url = https://github.com/Team-Atlanta/oss-patch
+[submodule "oss-crs"]
+	path = oss-crs
+	url = https://github.com/Team-Atlanta/oss-crs
