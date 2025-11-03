@@ -617,8 +617,10 @@ version: "3.8"
 services:
   queue-server:
     image: valkey/valkey:8.0-alpine
-    ports:
-      - "6379:6379"
+    # NOTE: Ports NOT exposed to host by default for security
+    # Only accessible within Docker network
+    expose:
+      - "6379"
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
       interval: 5s

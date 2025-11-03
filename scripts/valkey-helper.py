@@ -8,8 +8,11 @@ operations for testing and development workflows.
 Usage:
     # Service management
     python scripts/valkey-helper.py start
+    python scripts/valkey-helper.py --bind-host start   # Enable host access
+    python scripts/valkey-helper.py start --bind-host   # Alternative syntax
     python scripts/valkey-helper.py stop
     python scripts/valkey-helper.py restart
+    python scripts/valkey-helper.py --bind-host restart # Enable host access
     python scripts/valkey-helper.py status
     python scripts/valkey-helper.py logs
 
@@ -23,9 +26,15 @@ Usage:
     python scripts/valkey-helper.py stats
 
 Examples:
-    # Quick start for testing
+    # Quick start for testing (Docker network only)
     $ python scripts/valkey-helper.py start
     $ python scripts/valkey-helper.py status
+
+    # Start with host access (for running workers on host)
+    $ python scripts/valkey-helper.py --bind-host start
+    # Or: python scripts/valkey-helper.py start --bind-host
+    $ export REDIS_HOST=localhost
+    $ python -m crsbench.distributed.worker
 
     # Clean up between experiments
     $ python scripts/valkey-helper.py clean test-exp-1
@@ -126,7 +135,12 @@ def docker_compose_cmd(compose_file: Path, *args: str) -> list[str]:
 
 
 def valkey_cli_cmd(container: str, *args: str) -> list[str]:
-    """Build valkey-cli command via docker exec."""
+    """
+    Build valkey-cli command via docker exec.
+
+    Note: We use docker exec to access Valkey since ports are not exposed
+    to the host by default for security reasons.
+    """
     return ["docker", "exec", container, "valkey-cli", *args]
 
 
@@ -152,8 +166,28 @@ def cmd_start(args: argparse.Namespace) -> None:
         print_warning("Valkey is already running")
         return
 
-    print_info("Starting Valkey service...")
-    run_command(docker_compose_cmd(compose_file, "up", "-d"))
+    # Build docker run command if binding to host
+    if args.bind_host:
+        print_info("Starting Valkey service with host binding (localhost:6379)...")
+        print_warning("Port 6379 will be accessible from host machine")
+
+        # Stop any existing container first
+        run_command(["docker", "stop", "crsbench-valkey"], check=False, capture_output=True)
+        run_command(["docker", "rm", "crsbench-valkey"], check=False, capture_output=True)
+
+        # Start with port binding
+        run_command([
+            "docker", "run", "-d",
+            "--name", "crsbench-valkey",
+            "-p", "127.0.0.1:6379:6379",  # Bind to localhost
+            "-v", "valkey_valkey-data:/data",
+            "--restart", "unless-stopped",
+            "valkey/valkey:8.0-alpine",
+            "valkey-server", "--appendonly", "yes"
+        ])
+    else:
+        print_info("Starting Valkey service (Docker network only, no host access)...")
+        run_command(docker_compose_cmd(compose_file, "up", "-d"))
 
     # Wait a moment and check status
     import time
@@ -161,6 +195,14 @@ def cmd_start(args: argparse.Namespace) -> None:
 
     if is_valkey_running():
         print_success("Valkey service started")
+
+        if args.bind_host:
+            print_success("Host access enabled at localhost:6379")
+            print_info("Workers can connect with: REDIS_HOST=localhost")
+        else:
+            print_info("No host access (Docker network only)")
+            print_info("To enable host access, use: --bind-host flag")
+
         # Test connection
         try:
             result = run_command(
@@ -178,14 +220,21 @@ def cmd_start(args: argparse.Namespace) -> None:
 
 def cmd_stop(args: argparse.Namespace) -> None:
     """Stop Valkey service."""
-    compose_file = get_compose_file_path()
-
     if not is_valkey_running():
         print_warning("Valkey is not running")
         return
 
     print_info("Stopping Valkey service...")
-    run_command(docker_compose_cmd(compose_file, "down"))
+
+    # Try docker-compose first
+    compose_file = get_compose_file_path()
+    result = run_command(docker_compose_cmd(compose_file, "down"), check=False, capture_output=True)
+
+    # If that didn't work, try stopping container directly
+    if is_valkey_running():
+        run_command(["docker", "stop", "crsbench-valkey"], check=False, capture_output=True)
+        run_command(["docker", "rm", "crsbench-valkey"], check=False, capture_output=True)
+
     print_success("Valkey service stopped")
 
 
@@ -200,9 +249,25 @@ def cmd_status(args: argparse.Namespace) -> None:
     if not is_valkey_running():
         print_error("Valkey is not running")
         print_info("Start it with: python scripts/valkey-helper.py start")
+        print_info("Start with host access: python scripts/valkey-helper.py start --bind-host")
         sys.exit(1)
 
     print_success("Valkey container is running")
+
+    # Check port binding
+    try:
+        result = run_command(
+            ["docker", "port", "crsbench-valkey"],
+            capture_output=True,
+            check=False
+        )
+        if result.stdout.strip():
+            print_success(f"Host access: ENABLED")
+            print_info(f"Port binding: {result.stdout.strip()}")
+        else:
+            print_info("Host access: DISABLED (Docker network only)")
+    except:
+        pass
 
     # Test connection
     try:
@@ -454,6 +519,7 @@ def main():
         epilog="""
 Examples:
   %(prog)s start              Start Valkey service
+  %(prog)s --bind-host start  Start with host access
   %(prog)s status             Check if running
   %(prog)s clean my-exp       Clean specific experiment
   %(prog)s clean-all          Flush entire database
@@ -461,12 +527,17 @@ Examples:
         """
     )
 
+    # Add global --bind-host flag
+    parser.add_argument('--bind-host', action='store_true',
+                        help='Bind to localhost (127.0.0.1:6379) for host access (for start/restart commands)')
+
     subparsers = parser.add_subparsers(dest='command', required=True, help='Command to run')
 
     # Service management commands
     subparsers.add_parser('start', help='Start Valkey service')
     subparsers.add_parser('stop', help='Stop Valkey service')
     subparsers.add_parser('restart', help='Restart Valkey service')
+
     subparsers.add_parser('status', help='Check service status')
     subparsers.add_parser('logs', help='View service logs')
 

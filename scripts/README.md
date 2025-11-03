@@ -13,10 +13,13 @@ Valkey service management helper for distributed execution testing.
 **Usage:**
 ```bash
 # Service management
-python scripts/valkey-helper.py start
+python scripts/valkey-helper.py start                    # Docker network only (secure)
+python scripts/valkey-helper.py --bind-host start        # Bind to localhost for host access
+python scripts/valkey-helper.py start --bind-host        # Alternative: flag after command
 python scripts/valkey-helper.py stop
 python scripts/valkey-helper.py restart
-python scripts/valkey-helper.py status
+python scripts/valkey-helper.py --bind-host restart      # Restart with host access
+python scripts/valkey-helper.py status                   # Shows port binding status
 python scripts/valkey-helper.py logs
 
 # Queue management
@@ -30,14 +33,26 @@ python scripts/valkey-helper.py stats
 ```
 
 **Quick Start:**
+
+**For Docker network only (default):**
 ```bash
-# Start Valkey for testing
+# Start Valkey (secure, no host access)
 python scripts/valkey-helper.py start
 
 # Check it's running
 python scripts/valkey-helper.py status
+```
 
-# Run your experiment
+**For host-based workers:**
+```bash
+# Start with host access (flag before or after command)
+python scripts/valkey-helper.py --bind-host start
+
+# Run workers on host
+export REDIS_HOST=localhost
+python -m crsbench.distributed.worker
+
+# Run experiment
 crsbench --experiment-name test-exp ...
 
 # Clean up after testing

@@ -191,9 +191,11 @@ python scripts/valkey-helper.py logs
 # Start Valkey service
 docker-compose -f services/valkey/docker-compose.yml up -d
 
-# Verify
+# Verify (via docker exec, ports not exposed by default for security)
 docker exec crsbench-valkey valkey-cli ping
 ```
+
+**Security Note**: By default, Valkey ports are **NOT exposed** to the host. The service is only accessible within the Docker network. This is intentional for security. The helper script uses `docker exec` to interact with Valkey, which works without exposed ports.
 
 **Option 3: System Service (Arch Linux)**
 
@@ -231,10 +233,10 @@ crsbench \
 Test with workers and queue:
 
 ```bash
-# 1. Start Valkey
-python scripts/valkey-helper.py start
+# 1. Start Valkey with host access
+python scripts/valkey-helper.py start --bind-host
 
-# 2. Start workers (in separate terminals or background)
+# 2. Start workers on host
 export REDIS_HOST=localhost
 export EXPERIMENT_NAME=dist-test
 
@@ -252,13 +254,15 @@ crsbench \
 python scripts/valkey-helper.py clean dist-test
 ```
 
+**Note**: The `--bind-host` flag binds Valkey to `localhost:6379` (127.0.0.1 only), which is secure for local development.
+
 ### Workflow 3: Development Testing Loop
 
 Rapid iteration during development:
 
 ```bash
-# 1. Start Valkey once
-python scripts/valkey-helper.py start
+# 1. Start Valkey once (with host access if testing distributed features)
+python scripts/valkey-helper.py start --bind-host
 
 # 2. Run tests repeatedly
 uv run pytest tests/test_myfeature.py -v
@@ -269,6 +273,7 @@ uv run pytest tests/test_myfeature.py -v
 uv run pytest tests/test_myfeature.py -v
 
 # 4. Test with real experiment
+export REDIS_HOST=localhost
 crsbench --experiment-name dev-test ...
 
 # 5. Clean up between runs

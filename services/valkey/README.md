@@ -8,22 +8,43 @@ Valkey is an open-source, high-performance key/value datastore that is fully com
 
 ## Quick Start
 
-### Using Helper Script (Recommended for Testing)
+### Using Helper Script (Recommended)
 
 The easiest way to manage Valkey is using the helper script:
 
+**For Docker network only (secure default):**
 ```bash
-# Start Valkey
+# Start Valkey (no host access)
 python scripts/valkey-helper.py start
 
 # Check status
 python scripts/valkey-helper.py status
+```
 
+**For host access (running workers on host):**
+```bash
+# Start with host binding (localhost:6379)
+# Flag can be before or after the command
+python scripts/valkey-helper.py --bind-host start
+
+# Check status (shows port binding)
+python scripts/valkey-helper.py status
+
+# Now you can run workers on host
+export REDIS_HOST=localhost
+python -m crsbench.distributed.worker
+```
+
+**Other commands:**
+```bash
 # View logs
 python scripts/valkey-helper.py logs
 
 # Stop Valkey
 python scripts/valkey-helper.py stop
+
+# Restart (preserves bind-host setting if used)
+python scripts/valkey-helper.py restart --bind-host
 ```
 
 See [scripts/README.md](../../scripts/README.md) for complete helper script documentation.
@@ -71,9 +92,23 @@ docker-compose down -v
 
 ## Configuration
 
+### Network Security
+
+**Important**: By default, Valkey ports are **NOT exposed** to the host machine for security reasons. The service is only accessible to other Docker containers via the `expose` directive.
+
+If you need direct host access for development (e.g., using `valkey-cli` from your host), you can uncomment the `ports` section in `docker-compose.yml`:
+
+```yaml
+ports:
+  - "127.0.0.1:6379:6379"  # Bind to localhost only
+```
+
+**Security Note**: Always bind to `127.0.0.1` (localhost) rather than `0.0.0.0` to prevent external access.
+
 ### Ports
 
-- **6379**: Valkey server port (mapped to host)
+- **6379**: Valkey server port (exposed to Docker network only by default)
+- Can be bound to `127.0.0.1:6379` for local development if needed
 
 ### Volumes
 

@@ -132,9 +132,11 @@ docker exec crsbench-valkey valkey-cli ping
 # Start Valkey service
 docker-compose -f services/valkey/docker-compose.yml up -d
 
-# Verify it's running
+# Verify it's running (via docker exec, ports not exposed by default)
 docker exec crsbench-valkey valkey-cli ping
 ```
+
+**Security Note**: By default, Valkey ports are **NOT exposed** to the host for security. The service is only accessible to other Docker containers. If you need host access for development, uncomment the `ports` section in the docker-compose.yml and bind to `127.0.0.1` only.
 
 Or create your own `docker-compose.yml`:
 
@@ -145,8 +147,12 @@ services:
   valkey:
     image: valkey/valkey:8.0-alpine
     container_name: crsbench-valkey
-    ports:
-      - "6379:6379"
+    # NOTE: Ports NOT exposed to host by default for security
+    # Uncomment for local development ONLY:
+    # ports:
+    #   - "127.0.0.1:6379:6379"  # Bind to localhost only
+    expose:
+      - "6379"  # Expose to Docker network only
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
@@ -350,7 +356,28 @@ docker-compose -f services/valkey/docker-compose.yml up -d
 valkey-cli ping
 ```
 
-### Step 2: Start Workers
+### Step 2: Enable Host Access (If Running Workers on Host)
+
+> **Important**: By default, Valkey ports are NOT exposed to the host for security. If you're running workers on your host machine (not in Docker), use the `--bind-host` flag.
+
+**Quick Enable:**
+
+```bash
+# Start Valkey with host binding
+python scripts/valkey-helper.py start --bind-host
+
+# Or if already running, restart with binding
+python scripts/valkey-helper.py restart --bind-host
+
+# Verify host access is enabled
+python scripts/valkey-helper.py status
+```
+
+This binds Valkey to `localhost:6379` (127.0.0.1 only) - secure for local development.
+
+**Alternative**: Run workers in Docker network (no port exposure needed) - see Advanced Usage section.
+
+### Step 3: Start Workers
 
 Open **multiple terminal windows** (or use `tmux`/`screen`) and start workers:
 
@@ -382,7 +409,7 @@ python -m crsbench.distributed.worker
 
 **Note**: Start as many workers as you want for parallelism. Each worker will execute one trial at a time.
 
-### Step 3: Run Experiment (Orchestrator)
+### Step 4: Run Experiment (Orchestrator)
 
 In a separate terminal, run the experiment orchestrator:
 
@@ -401,7 +428,7 @@ The orchestrator will:
 4. Collect results as jobs complete
 5. Generate final report when all jobs finish
 
-### Step 4: Monitor Progress
+### Step 5: Monitor Progress
 
 The orchestrator provides real-time progress updates:
 
