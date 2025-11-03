@@ -203,15 +203,30 @@ benchmarks:
 | `redis_host: 10.0.1.5` | Remote Redis IP address | Cloud/cluster |
 | `redis_host: none` or omit | Disable distributed mode | Local execution |
 
-## Redis Cleanup (Important!)
+## Valkey Cleanup (Important!)
 
-**Before running a new experiment**, it's recommended to clean up Redis to avoid conflicts with previous experiments.
+**Before running a new experiment**, it's recommended to clean up Valkey to avoid conflicts with previous experiments.
 
-### Option 1: Clean Specific Experiment Queue (Recommended)
+### Quick Cleanup with Helper Script (Recommended)
 
 ```bash
-# Connect to Redis
-redis-cli
+# Clean specific experiment
+python scripts/valkey-helper.py clean my-old-exp
+
+# Or clean all experiments (with confirmation)
+python scripts/valkey-helper.py clean-all
+
+# Check what's in the queues
+python scripts/valkey-helper.py list-queues
+```
+
+### Manual Cleanup Options
+
+**Option 1: Clean Specific Experiment Queue**
+
+```bash
+# Connect to Valkey
+valkey-cli
 
 # Delete specific experiment queue
 > DEL rq:queue:crsbench_my-old-exp
@@ -224,47 +239,51 @@ redis-cli
 > DEL rq:failed:crsbench_my-old-exp
 > DEL rq:started:crsbench_my-old-exp
 
-# Exit Redis CLI
+# Exit Valkey CLI
 > exit
 ```
 
 **One-liner to clean specific experiment:**
 ```bash
-redis-cli KEYS "rq:*crsbench_my-old-exp*" | xargs redis-cli DEL
+valkey-cli KEYS "rq:*crsbench_my-old-exp*" | xargs valkey-cli DEL
 ```
 
-### Option 2: Flush Entire Redis Database (Use with Caution!)
+**Option 2: Flush Entire Database (Use with Caution!)**
 
-**WARNING**: This deletes ALL data in Redis, including data from other applications!
+**WARNING**: This deletes ALL data in Valkey, including data from other applications!
 
 ```bash
-# Flush current database (database 0 by default)
-redis-cli FLUSHDB
+# Using helper script (with confirmation)
+python scripts/valkey-helper.py clean-all
 
-# Or flush ALL databases
-redis-cli FLUSHALL
+# Or manually
+valkey-cli FLUSHDB    # Flush current database
+valkey-cli FLUSHALL   # Flush ALL databases
 ```
 
-### Option 3: Restart Redis (Complete Cleanup)
+**Option 3: Restart Valkey (Complete Cleanup)**
 
 **For development/testing** - this ensures a completely clean state:
 
 ```bash
+# Using helper script
+python scripts/valkey-helper.py restart
+
 # If using systemd (Ubuntu/Debian/Arch)
 sudo systemctl restart redis-server  # Ubuntu/Debian
-sudo systemctl restart redis          # Arch
+sudo systemctl restart valkey         # Arch
 
 # If using Docker
-docker restart crsbench-redis
+docker restart crsbench-valkey
 
 # Or stop and remove Docker container
-docker stop crsbench-redis
-docker rm crsbench-redis
+docker stop crsbench-valkey
+docker rm crsbench-valkey
 # Then start fresh
-docker run -d --name crsbench-redis -p 6379:6379 redis:7-alpine
+docker run -d --name crsbench-valkey -p 6379:6379 valkey/valkey:8.0-alpine
 ```
 
-### When to Clean Redis
+### When to Clean Valkey
 
 **Always clean before:**
 - Starting a new experiment with the same name
@@ -275,30 +294,56 @@ docker run -d --name crsbench-redis -p 6379:6379 redis:7-alpine
 - Using a unique experiment name each time
 - Running completely independent experiments
 
-### Verify Redis is Clean
+### Verify Valkey is Clean
 
+**Using Helper Script:**
+```bash
+python scripts/valkey-helper.py list-queues  # Should show no queues
+python scripts/valkey-helper.py stats        # Check database size
+```
+
+**Manual Commands:**
 ```bash
 # Check if specific experiment queue exists
-redis-cli EXISTS rq:queue:crsbench_my-exp
+valkey-cli EXISTS rq:queue:crsbench_my-exp
 # Output: 0 = doesn't exist (clean)
 # Output: 1 = exists (has data)
 
 # List all CRSBench queues
-redis-cli KEYS "rq:*crsbench_*"
+valkey-cli KEYS "rq:*crsbench_*"
 
-# Count total keys in Redis
-redis-cli DBSIZE
+# Count total keys
+valkey-cli DBSIZE
 ```
 
 ## Running Distributed Experiments
 
+> **Quick Start**: Use the helper script for easier Valkey management:
+> ```bash
+> python scripts/valkey-helper.py start
+> python scripts/valkey-helper.py status
+> ```
+> See [scripts/README.md](../scripts/README.md) for complete documentation.
+
 ### Step 1: Start Valkey Server
+
+**Option A: Using Helper Script (Recommended for Testing)**
+
+```bash
+# Start Valkey
+python scripts/valkey-helper.py start
+
+# Verify it's running
+python scripts/valkey-helper.py status
+```
+
+**Option B: Manual Docker Commands**
 
 ```bash
 # Using Docker
 docker run -d --name crsbench-valkey -p 6379:6379 valkey/valkey:8.0-alpine
 
-# Or using Docker Compose (recommended)
+# Or using Docker Compose
 docker-compose -f services/valkey/docker-compose.yml up -d
 
 # Verify

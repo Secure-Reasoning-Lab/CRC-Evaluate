@@ -1,0 +1,143 @@
+# CRSBench Utility Scripts
+
+This directory contains helper scripts for common CRSBench development and testing workflows.
+
+## Available Scripts
+
+### valkey-helper.py
+
+Valkey service management helper for distributed execution testing.
+
+**Purpose**: Simplifies common Valkey operations without needing to remember docker-compose and valkey-cli commands.
+
+**Usage:**
+```bash
+# Service management
+python scripts/valkey-helper.py start
+python scripts/valkey-helper.py stop
+python scripts/valkey-helper.py restart
+python scripts/valkey-helper.py status
+python scripts/valkey-helper.py logs
+
+# Queue management
+python scripts/valkey-helper.py clean <experiment-name>
+python scripts/valkey-helper.py clean-all [--force]
+python scripts/valkey-helper.py list-queues
+python scripts/valkey-helper.py queue-info <experiment-name>
+
+# Monitoring
+python scripts/valkey-helper.py stats
+```
+
+**Quick Start:**
+```bash
+# Start Valkey for testing
+python scripts/valkey-helper.py start
+
+# Check it's running
+python scripts/valkey-helper.py status
+
+# Run your experiment
+crsbench --experiment-name test-exp ...
+
+# Clean up after testing
+python scripts/valkey-helper.py clean test-exp
+```
+
+**Common Testing Workflows:**
+
+**Workflow 1: Quick Test**
+```bash
+# Setup
+python scripts/valkey-helper.py start
+
+# Test
+crsbench --experiment-config config.yaml --experiment-name quick-test ...
+
+# Cleanup
+python scripts/valkey-helper.py clean quick-test
+```
+
+**Workflow 2: Multiple Test Runs (Clean Between)**
+```bash
+python scripts/valkey-helper.py start
+
+# Run test 1
+crsbench --experiment-name test-1 ...
+python scripts/valkey-helper.py clean test-1
+
+# Run test 2
+crsbench --experiment-name test-2 ...
+python scripts/valkey-helper.py clean test-2
+```
+
+**Workflow 3: Complete Reset**
+```bash
+# Full cleanup (removes all experiments)
+python scripts/valkey-helper.py clean-all
+
+# Verify clean state
+python scripts/valkey-helper.py list-queues
+python scripts/valkey-helper.py stats
+```
+
+**Workflow 4: Debug Queue Issues**
+```bash
+# Check what's in the queues
+python scripts/valkey-helper.py list-queues
+
+# Get detailed info
+python scripts/valkey-helper.py queue-info my-experiment
+
+# Check overall stats
+python scripts/valkey-helper.py stats
+
+# View live logs
+python scripts/valkey-helper.py logs
+```
+
+**Requirements:**
+- Docker and docker-compose installed
+- Python 3.11+ (standard library only)
+- Valkey docker-compose setup in `services/valkey/`
+
+**See Also:**
+- [Distributed Execution Guide](../docs/distributed-execution.md) - Full distributed execution documentation
+- [Testing Setup Guide](../docs/testing-setup.md) - Complete testing environment setup
+- [Valkey Service README](../services/valkey/README.md) - Valkey service details
+
+## Adding New Scripts
+
+When adding new utility scripts to this directory:
+
+1. **Naming**: Use kebab-case (e.g., `my-helper.py`)
+2. **Language**: Prefer Python for cross-platform compatibility
+3. **Documentation**: Include comprehensive docstring with usage examples
+4. **CLI**: Use `argparse` for command-line interface
+5. **Error Handling**: Provide clear error messages and appropriate exit codes
+6. **Update README**: Document the new script in this file
+
+**Example Script Structure:**
+```python
+#!/usr/bin/env python3
+"""
+Script description and purpose.
+
+Usage:
+    python scripts/my-helper.py command [options]
+
+Examples:
+    python scripts/my-helper.py start
+    python scripts/my-helper.py status
+"""
+
+import argparse
+import sys
+
+def main():
+    parser = argparse.ArgumentParser(description="...")
+    # ... implement CLI
+
+if __name__ == "__main__":
+    main()
+```

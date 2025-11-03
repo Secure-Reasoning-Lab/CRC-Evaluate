@@ -8,6 +8,28 @@ Valkey is an open-source, high-performance key/value datastore that is fully com
 
 ## Quick Start
 
+### Using Helper Script (Recommended for Testing)
+
+The easiest way to manage Valkey is using the helper script:
+
+```bash
+# Start Valkey
+python scripts/valkey-helper.py start
+
+# Check status
+python scripts/valkey-helper.py status
+
+# View logs
+python scripts/valkey-helper.py logs
+
+# Stop Valkey
+python scripts/valkey-helper.py stop
+```
+
+See [scripts/README.md](../../scripts/README.md) for complete helper script documentation.
+
+### Manual Docker Compose
+
 ### Start Valkey Service
 
 ```bash
@@ -88,8 +110,30 @@ python -m crsbench.distributed.worker
 
 ## Management
 
-### Clean Up Experiment Data
+### Using Helper Script (Recommended)
 
+```bash
+# Clean specific experiment
+python scripts/valkey-helper.py clean my-experiment
+
+# List all queues
+python scripts/valkey-helper.py list-queues
+
+# Get queue details
+python scripts/valkey-helper.py queue-info my-experiment
+
+# View statistics
+python scripts/valkey-helper.py stats
+
+# Full cleanup (with confirmation)
+python scripts/valkey-helper.py clean-all
+```
+
+### Manual Valkey CLI Commands
+
+For advanced users who need direct access:
+
+**Clean Up Experiment Data:**
 ```bash
 # Connect to Valkey
 docker exec -it crsbench-valkey valkey-cli
@@ -102,8 +146,7 @@ docker exec -it crsbench-valkey valkey-cli
 docker exec crsbench-valkey valkey-cli KEYS "rq:*crsbench_*" | xargs docker exec crsbench-valkey valkey-cli DEL
 ```
 
-### Flush All Data (Use with Caution!)
-
+**Flush All Data (Use with Caution!):**
 ```bash
 # Flush current database
 docker exec crsbench-valkey valkey-cli FLUSHDB
@@ -112,8 +155,7 @@ docker exec crsbench-valkey valkey-cli FLUSHDB
 docker exec crsbench-valkey valkey-cli FLUSHALL
 ```
 
-### Check Queue Status
-
+**Check Queue Status:**
 ```bash
 # Enter Valkey CLI
 docker exec -it crsbench-valkey valkey-cli
