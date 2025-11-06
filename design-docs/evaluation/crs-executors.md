@@ -1204,6 +1204,9 @@ def process_pov_results(
 
 ### CRS Configuration Directory Structure
 
+CRSBench uses two directories for CRS configurations:
+
+**`crses/`** - Production evaluation configurations:
 ```
 crses/
 ├── ensemble-c/
@@ -1216,6 +1219,11 @@ crses/
 │   └── ...
 └── ...
 ```
+
+**`oss-crs-registry/`** - Development/testing reference configurations (submodule):
+- Contains reference CRS implementations from the open-source registry
+- Same structure as `crses/` but for development and testing purposes
+- See `oss-crs-registry/crs/` for configuration examples
 
 ### Configuration Files
 
@@ -1234,6 +1242,8 @@ max_iterations: 10
 temperature: 0.7
 model: "anthropic/claude-3-sonnet"
 ```
+
+**Configuration Examples**: See `oss-crs-registry/crs/` for reference CRS configurations with complete examples of `pkg.yaml` and `config-crs.yaml` formats.
 
 ### Configuration Loading
 

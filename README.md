@@ -41,8 +41,45 @@ CRSBench/
 │   ├── validation/              # Benchmark format validation
 │   ├── migration/               # Format migration tools (Team-Atlanta to RFC)
 │   └── hint_generation/         # Progressive hint generation
+├── oss-crs-registry/            # Open-source CRS registry (development/testing)
+├── crses/                       # CRS configurations for evaluation (production)
 └── pyproject.toml               # Python project configuration
 ```
+
+## CRS Registry Structure
+
+CRSBench uses two directories for managing CRS (Cyber Reasoning System) configurations:
+
+### `oss-crs-registry/` - Development & Testing Registry
+- **Purpose**: Open-source registry containing reference CRS implementations
+- **Use Case**: Development, testing, and reference examples
+- **Source**: Git submodule from the open-source CRS registry
+- **Structure**: Contains `crs/` directory with CRS configurations
+
+### `crses/` - Production Evaluation Configurations
+- **Purpose**: Final CRS configurations that CRSBench will evaluate
+- **Use Case**: Production benchmark runs and experiments
+- **Source**: Committed to CRSBench repository
+- **Structure**: Follows the same format as `oss-crs-registry/`
+
+Both directories follow the same structure with `crs/<crs-name>/` subdirectories containing:
+- `pkg.yaml` - CRS metadata and source information
+- `config-crs.yaml` - Runtime configuration and resource requirements (optional)
+
+Example CRS configuration structure:
+```
+crs/
+├── atlantis-c-deepgen/      # Bug-finding CRS (C/C++)
+│   ├── pkg.yaml
+│   └── config-crs.yaml
+├── patch-agent/             # Bug-fixing CRS
+│   ├── pkg.yaml
+│   └── config-crs.yaml
+└── mock-crs/                # Testing CRS
+    └── pkg.yaml
+```
+
+See `oss-crs-registry/` for reference examples of CRS configurations.
 
 ## Quick Start
 
