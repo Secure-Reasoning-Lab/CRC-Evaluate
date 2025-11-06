@@ -1,6 +1,6 @@
 """CRS executor interface and stub implementation.
 
-NOTE: When implementing concrete CRS executors (OSSFuzzBugFindingExecutor, OSSPatchExecutor),
+NOTE: When implementing concrete CRS executors (CRSBugFindingExecutor, CRSPatchExecutor),
 use the oss-crs CLI with trial-specific parameters:
 
 Bug Finding (oss-crs):

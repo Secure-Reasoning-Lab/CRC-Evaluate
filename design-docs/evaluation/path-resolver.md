@@ -341,7 +341,7 @@ except Exception as e:
 ```python
 from crsbench.evaluation.path_resolver import get_harness_source_path
 
-class OSSFuzzBugFindingExecutor(CRSExecutor):
+class CRSBugFindingExecutor(CRSExecutor):
     def run_crs(self, benchmark_path: Path, harness: HarnessFile, ...) -> CRSResult:
         """Run CRS with optional harness source path."""
         # Build base command
@@ -377,7 +377,7 @@ class OSSFuzzBugFindingExecutor(CRSExecutor):
 ```python
 from crsbench.evaluation.path_resolver import get_harness_source_path
 
-class OSSPatchExecutor(CRSExecutor):
+class CRSPatchExecutor(CRSExecutor):
     def run_crs(self, benchmark_path: Path, harness: HarnessFile, ...) -> CRSResult:
         """Run patch CRS with optional harness source path."""
         # Build base command

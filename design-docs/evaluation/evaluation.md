@@ -245,8 +245,8 @@ full_mode:
 The evaluation module is designed to integrate with the OSS-Fuzz CRS interface for actual CRS implementations.
 
 **See [CRS Executors Design](./crs-executors.md) for complete implementation details** covering:
-- `OSSFuzzBugFindingExecutor` for vulnerability discovery
-- `OSSPatchExecutor` for patch generation
+- `CRSBugFindingExecutor` for vulnerability discovery
+- `CRSPatchExecutor` for patch generation
 - Docker integration and container management
 - POV detection logic and crash analysis
 - Configuration management
@@ -259,13 +259,13 @@ Concrete CRS executors wrap the OSS-Fuzz/OSS-Patch command-line interfaces:
 
 ```python
 # Bug Finding Executor
-class OSSFuzzBugFindingExecutor(CRSExecutor):
+class CRSBugFindingExecutor(CRSExecutor):
     """Wraps OSS-Fuzz bug finding interface."""
     # Build: oss-crs build <config-dir> <project>
     # Run: oss-crs run <config-dir> <project> <harness> [--output <dir>] [--hints <dir>]
 
 # Patch Generation Executor
-class OSSPatchExecutor(CRSExecutor):
+class CRSPatchExecutor(CRSExecutor):
     """Wraps OSS-Patch interface."""
     # Build: oss-patch-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME \
     #        --project-path <benchmark-dir> --source-path <repo-manager-source>
@@ -276,10 +276,10 @@ class OSSPatchExecutor(CRSExecutor):
 ### Usage Example
 
 ```python
-from crsbench.evaluation import BenchmarkRunner, OSSFuzzBugFindingExecutor
+from crsbench.evaluation import BenchmarkRunner, CRSBugFindingExecutor
 
 # Create executor
-executor = OSSFuzzBugFindingExecutor(
+executor = CRSBugFindingExecutor(
     crs_config_name="ensemble-c",
     oss_fuzz_path=Path("/path/to/oss-fuzz")
 )

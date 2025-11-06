@@ -18,8 +18,8 @@ Bridge between CRSBench's evaluation module and the standardized OSS-Fuzz/OSS-Pa
 ```
 CRSExecutor (abstract)
 ├── StubCRSExecutor (testing)
-├── OSSFuzzBugFindingExecutor (bug finding)
-└── OSSPatchExecutor (patch generation)
+├── CRSBugFindingExecutor (bug finding)
+└── CRSPatchExecutor (patch generation)
 ```
 
 ### Integration with Evaluation Module
@@ -70,7 +70,7 @@ Execute bug finding CRS implementations using the OSS-Fuzz interface.
 ### Class Definition
 
 ```python
-class OSSFuzzBugFindingExecutor(CRSExecutor):
+class CRSBugFindingExecutor(CRSExecutor):
     """CRS executor for bug finding using OSS-Fuzz interface."""
 
     def __init__(self, crs_config_name: str, oss_fuzz_path: Path):
@@ -737,7 +737,7 @@ Execute patch generation CRS implementations using the OSS-Patch interface.
 ### Class Definition
 
 ```python
-class OSSPatchExecutor(CRSExecutor):
+class CRSPatchExecutor(CRSExecutor):
     """CRS executor for patch generation using OSS-Patch interface."""
 
     def __init__(
@@ -1042,7 +1042,7 @@ def _prepare_povs(
 ```
 BenchmarkRunner
     ↓ provides benchmark_path
-OSSPatchExecutor._build_crs_if_needed()
+CRSPatchExecutor._build_crs_if_needed()
     ↓ calls
 Repository Manager (repo_manager.py)
     ↓ reads config from
@@ -1064,7 +1064,7 @@ Docker Build Context
 **Build Flow**:
 ```python
 # 1. BenchmarkRunner creates executor
-executor = OSSPatchExecutor(
+executor = CRSPatchExecutor(
     crs_config_name="multi-retrieval",
     oss_patch_path=Path("/path/to/oss-patch"),
     oss_fuzz_path=Path("/path/to/oss-fuzz"),
@@ -1411,7 +1411,7 @@ CRS executors can optionally provide harness source file paths to CRS commands v
 ```python
 from crsbench.evaluation.path_resolver import get_harness_source_path
 
-class OSSFuzzBugFindingExecutor(CRSExecutor):
+class CRSBugFindingExecutor(CRSExecutor):
     def run_crs(self, benchmark_path: Path, harness: HarnessFile, ...) -> CRSResult:
         """Run CRS with optional harness source path."""
         # Build base command
@@ -1635,10 +1635,10 @@ cmd.extend(["--source-path", str(source_path)])
 
 ## Implementation Checklist
 
-### Phase 1: OSSFuzzBugFindingExecutor
+### Phase 1: CRSBugFindingExecutor
 
 - [ ] Create `crsbench/evaluation/oss_fuzz_executor.py`
-- [ ] Implement `OSSFuzzBugFindingExecutor` class
+- [ ] Implement `CRSBugFindingExecutor` class
   - [ ] `__init__` with crs_config_name and oss_fuzz_path
   - [ ] `configure_crs()` method
   - [ ] `_build_crs_if_needed()` helper
@@ -1651,10 +1651,10 @@ cmd.extend(["--source-path", str(source_path)])
 - [ ] Add timeout handling
 - [ ] Add error handling
 
-### Phase 2: OSSPatchExecutor
+### Phase 2: CRSPatchExecutor
 
 - [ ] Create `crsbench/evaluation/oss_patch_executor.py` (or add to same file)
-- [ ] Implement `OSSPatchExecutor` class
+- [ ] Implement `CRSPatchExecutor` class
   - [ ] `__init__` with paths and LiteLLM config
   - [ ] `configure_crs()` method
   - [ ] `_build_crs_if_needed()` with OSS_FUZZ_HOME
@@ -1704,7 +1704,7 @@ cmd.extend(["--source-path", str(source_path)])
 **Test Command Building**:
 ```python
 def test_build_command_construction():
-    executor = OSSFuzzBugFindingExecutor("ensemble-c", Path("/path/to/oss-fuzz"))
+    executor = CRSBugFindingExecutor("ensemble-c", Path("/path/to/oss-fuzz"))
     # Mock subprocess to capture command
     # Assert correct command structure
 ```
@@ -1720,7 +1720,7 @@ def test_matches_pov_with_error_token():
 **Test Configuration Resolution**:
 ```python
 def test_resolve_crs_config_dir():
-    executor = OSSFuzzBugFindingExecutor("ensemble-c", Path("/oss-fuzz"))
+    executor = CRSBugFindingExecutor("ensemble-c", Path("/oss-fuzz"))
     config_dir = executor._resolve_crs_config_dir()
     assert config_dir.exists()
     assert config_dir.name == "ensemble-c"
@@ -1740,7 +1740,7 @@ def test_run_crs_with_mock_interface():
 **Test Build Caching**:
 ```python
 def test_build_cache_avoids_rebuild():
-    executor = OSSFuzzBugFindingExecutor("ensemble-c", oss_fuzz_path)
+    executor = CRSBugFindingExecutor("ensemble-c", oss_fuzz_path)
 
     # First build
     executor._build_crs_if_needed("json-c")
@@ -1773,7 +1773,7 @@ tests/fixtures/crses/
 
 ### Why Separate Executors for Bug Finding vs Patch Generation?
 
-**Decision**: Create `OSSFuzzBugFindingExecutor` and `OSSPatchExecutor` as separate classes.
+**Decision**: Create `CRSBugFindingExecutor` and `CRSPatchExecutor` as separate classes.
 
 **Rationale**:
 - Different interfaces (different arguments, different repos)
