@@ -147,9 +147,7 @@ def run_crs(
     self,
     benchmark_path: Path,
     harness: HarnessFile,
-    trial_output_dir: Path,  # NEW: Trial-specific output directory
-    base_commit: str,
-    ref_commit: Optional[str] = None
+    trial_output_dir: Path
 ) -> CRSResult:
     """Run CRS on specific harness.
 
@@ -157,11 +155,14 @@ def run_crs(
         benchmark_path: Path to benchmark directory
         harness: Harness configuration
         trial_output_dir: Directory for this trial's outputs
-        base_commit: Base commit for evaluation
-        ref_commit: Optional reference commit
 
     Returns:
         CRSResult with execution details
+
+    Note:
+        Source code is already cloned at the correct commit by
+        TrialDirectoryPreparer. The executor does not need commit
+        information.
     """
     project_name = self._extract_project_name(benchmark_path)
 
@@ -227,9 +228,7 @@ def run_crs(
     self,
     benchmark_path: Path,
     harness: HarnessFile,
-    trial_output_dir: Path,
-    base_commit: str,
-    ref_commit: Optional[str] = None
+    trial_output_dir: Path
 ) -> CRSResult:
     """Run CRS on specific harness with optional hints."""
     project_name = self._extract_project_name(benchmark_path)
@@ -874,9 +873,7 @@ def run_crs(
     self,
     benchmark_path: Path,
     harness: HarnessFile,
-    trial_output_dir: Path,  # NEW: Trial-specific output directory
-    base_commit: str,
-    ref_commit: Optional[str] = None
+    trial_output_dir: Path
 ) -> CRSResult:
     """Run patch generation CRS.
 
@@ -884,11 +881,14 @@ def run_crs(
         benchmark_path: Path to benchmark directory
         harness: Harness configuration
         trial_output_dir: Directory for this trial's outputs
-        base_commit: Base commit for evaluation
-        ref_commit: Optional reference commit
 
     Returns:
         CRSResult with execution details
+
+    Note:
+        Source code is already cloned at the correct commit by
+        TrialDirectoryPreparer. The executor does not need commit
+        information.
     """
     project_name = self._extract_project_name(benchmark_path)
 
@@ -1960,8 +1960,8 @@ output_dir.mkdir(parents=True, exist_ok=True)
 
 **4. Method Signatures**
 - **Old**: `run_crs(benchmark_path, harness, base_commit, ref_commit)`
-- **New**: `run_crs(benchmark_path, harness, trial_output_dir, base_commit, ref_commit)`
-- **Why**: Executors need to know where to write trial-specific outputs
+- **New**: `run_crs(benchmark_path, harness, trial_output_dir)`
+- **Why**: Executors need to know where to write trial-specific outputs; commits are handled by TrialDirectoryPreparer
 
 **5. POV/Patch Collection**
 - **Old**: Hardcoded paths in `oss-fuzz/build/out/...`
@@ -2013,7 +2013,7 @@ output_dir.mkdir(parents=True, exist_ok=True)
 
 When updating existing CRS executor code:
 
-- [ ] Add `trial_output_dir: Path` parameter to `run_crs()` methods
+- [ ] Update `run_crs()` signature: `run_crs(benchmark_path, harness, trial_output_dir)` - remove commit parameters
 - [ ] Add `trial_output_dir: Path` parameter to `process_pov_results()` methods
 - [ ] Implement `_prepare_output_directory()` (base directory only)
 - [ ] Implement `_prepare_hints()` (copy and filter from benchmark)

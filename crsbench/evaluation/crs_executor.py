@@ -1,22 +1,45 @@
 """CRS executor interface and stub implementation.
 
 NOTE: When implementing concrete CRS executors (OSSFuzzBugFindingExecutor, OSSPatchExecutor),
-use the new command format:
+use the oss-crs CLI with trial-specific parameters:
 
 Bug Finding (oss-crs):
-    Build:  ["oss-crs", "build", config_dir, project_name]
-    Run:    ["oss-crs", "run", config_dir, project_name, harness_name,
+    Build:  ["oss-crs", "build",
+             "--build-dir", trial_build_dir,
+             "--oss-fuzz-dir", oss_fuzz_submodule,
+             "--registry-dir", crs_registry_dir,
+             "--project-path", benchmark_dir,
+             config_name, project_name, source_path]
+
+    Run:    ["oss-crs", "run",
+             "--build-dir", trial_build_dir,
+             "--oss-fuzz-dir", oss_fuzz_submodule,
+             "--registry-dir", crs_registry_dir,
+             config_name, project_name, harness_name,
              "--output", output_dir, "--hints", hints_dir]
 
 Patch Generation (oss-patch-crs):
-    Build:  ["oss-patch-crs", "build", config_name, project_name,
-             "--oss-fuzz", oss_fuzz_path]
-    Run:    ["oss-patch-crs", "run", config_name, project_name,
-             "--harness", harness_name, "--output", output_dir,
+    Build:  ["oss-patch-crs", "build",
+             "--build-dir", trial_build_dir,
+             "--oss-fuzz-dir", oss_fuzz_submodule,
+             "--registry-dir", crs_registry_dir,
+             "--project-path", benchmark_dir,
+             config_name, project_name, source_path]
+
+    Run:    ["oss-patch-crs", "run",
+             "--build-dir", trial_build_dir,
+             "--oss-fuzz-dir", oss_fuzz_submodule,
+             "--registry-dir", crs_registry_dir,
+             config_name, project_name,
+             "--harness", harness_name,
              "--povs", povs_dir, "--hints", hints_dir,
+             "--output", output_dir,
              "--litellm-base", url, "--litellm-key", key]
 
-See design-docs/evaluation/crs-executors.md for full implementation details.
+Trial directory preparation handled by TrialDirectoryPreparer.
+See design-docs/evaluation/oss-crs-integration.md for CLI parameters.
+See design-docs/evaluation/trial-directory-preparation.md for directory structure.
+See design-docs/evaluation/crs-executors.md for executor implementation.
 """
 
 import time
@@ -54,19 +77,21 @@ class CRSExecutor(ABC):
 
     @abstractmethod
     def run_crs(self, benchmark_path: Path, harness: HarnessFile,
-                trial_output_dir: Path, base_commit: str,
-                ref_commit: Optional[str] = None) -> CRSResult:
+                trial_output_dir: Path) -> CRSResult:
         """Run CRS on a specific harness.
 
         Args:
             benchmark_path: Path to benchmark directory
             harness: Harness file configuration
             trial_output_dir: Directory for this trial's outputs
-            base_commit: Base commit hash
-            ref_commit: Reference commit hash (for delta mode)
 
         Returns:
             CRSResult: Result of CRS execution
+
+        Note:
+            Source code is already prepared at the correct commit by
+            TrialDirectoryPreparer. The executor does not need commit
+            information - it simply runs CRS on pre-prepared directories.
         """
         pass
 
@@ -105,8 +130,7 @@ class StubCRSExecutor(CRSExecutor):
             self.success_rate = config['success_rate']
 
     def run_crs(self, benchmark_path: Path, harness: HarnessFile,
-                trial_output_dir: Path, base_commit: str,
-                ref_commit: Optional[str] = None) -> CRSResult:
+                trial_output_dir: Path) -> CRSResult:
         """Run stub CRS execution."""
         start_time = time.time()
 
@@ -120,14 +144,11 @@ class StubCRSExecutor(CRSExecutor):
 
         if success:
             # Generate mock CRS output
-            mode = "delta" if ref_commit else "full"
             output = f"""
 CRS Execution Results for {harness.name}
-Mode: {mode}
-Base commit: {base_commit}
-{f"Ref commit: {ref_commit}" if ref_commit else ""}
 Benchmark path: {benchmark_path}
 Harness path: {harness.path}
+Trial directory: {trial_output_dir}
 
 Analyzing harness for potential vulnerabilities...
 Running fuzzing campaign...
