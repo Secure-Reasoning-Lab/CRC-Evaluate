@@ -141,6 +141,8 @@ harness_files:
 
 ## Configuration Fields
 
+**Important**: Each benchmark contains either `delta_mode` OR `full_mode` configuration, not both. The presence of `delta_mode` indicates the benchmark provides bug-inducing diffs, while `full_mode` indicates only the vulnerable codebase is provided.
+
 ### Evaluation Modes
 
 #### Delta Mode

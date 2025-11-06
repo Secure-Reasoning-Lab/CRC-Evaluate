@@ -13,12 +13,17 @@ patch_exclude_list:
   - "**/*test*.c"                # Test files cannot be modified
   - "docs/**"                    # Documentation is protected
 
+# NOTE: Real benchmarks contain EITHER delta_mode OR full_mode, not both.
+# This example shows both for documentation purposes only.
+
 # Delta mode: provides bug-inducing diff between two commits
+# (Only present in delta mode benchmarks)
 delta_mode:
   base_commit: "35af1ffb5dd21ae47332577c2b6c889da302b497"
   ref_commit: "baacf7a0891d4a478c403515f05c2387044a94d0"
 
 # Full mode: only vulnerable repository available
+# (Only present in full mode benchmarks)
 full_mode:
   base_commit: "baacf7a0891d4a478c403515f05c2387044a94d0"
 
