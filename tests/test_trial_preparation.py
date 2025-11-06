@@ -1,0 +1,589 @@
+"""Tests for trial directory preparation module."""
+
+import json
+import pytest
+from pathlib import Path
+from unittest.mock import Mock, patch, MagicMock
+
+from crsbench.evaluation.trial_preparation import (
+    TrialDirectoryPreparer,
+    TrialPreparationResult,
+    TrialPreparationError,
+    SourceCloneError,
+    HintsPreparationError,
+    POVsPreparationError
+)
+
+
+# Fixtures
+
+@pytest.fixture
+def temp_experiment_dir(tmp_path):
+    """Create temporary experiment directory."""
+    exp_dir = tmp_path / "experiment-1"
+    exp_dir.mkdir()
+    return exp_dir
+
+
+@pytest.fixture
+def temp_benchmarks_dir(tmp_path):
+    """Create temporary benchmarks directory."""
+    benchmarks_dir = tmp_path / "benchmarks"
+    benchmarks_dir.mkdir()
+    return benchmarks_dir
+
+
+@pytest.fixture
+def temp_oss_fuzz_dir(tmp_path):
+    """Create temporary oss-fuzz directory."""
+    oss_fuzz_dir = tmp_path / "oss-fuzz"
+    oss_fuzz_dir.mkdir()
+    return oss_fuzz_dir
+
+
+@pytest.fixture
+def mock_benchmark(temp_benchmarks_dir):
+    """Create mock benchmark directory structure."""
+    benchmark_dir = temp_benchmarks_dir / "test-bench"
+    benchmark_dir.mkdir()
+
+    # Create .aixcc directory
+    aixcc_dir = benchmark_dir / ".aixcc"
+    aixcc_dir.mkdir()
+
+    # Create meta.yaml
+    meta_yaml = aixcc_dir / "meta.yaml"
+    meta_yaml.write_text("""
+delta_mode:
+  base_commit: "abc123def456"
+  ref_commit: "def456abc789"
+""")
+
+    # Create project.yaml
+    project_yaml = benchmark_dir / "project.yaml"
+    project_yaml.write_text("""
+language: c
+main_repo: https://github.com/test/test-repo.git
+""")
+
+    return benchmark_dir
+
+
+@pytest.fixture
+def mock_benchmark_with_hints(mock_benchmark):
+    """Create mock benchmark with hints."""
+    harness_dir = mock_benchmark / ".aixcc" / "test_harness"
+    harness_dir.mkdir()
+
+    hints_dir = harness_dir / "hints"
+    hints_dir.mkdir()
+
+    # Create SARIF directory with files
+    sarif_dir = hints_dir / "sarif"
+    sarif_dir.mkdir()
+    (sarif_dir / "codeql.sarif").write_text('{"version": "2.1.0"}')
+    (sarif_dir / "semgrep.sarif").write_text('{"version": "2.1.0"}')
+
+    # Create corpus directories
+    corpus_1h = hints_dir / "corpus" / "1h"
+    corpus_1h.mkdir(parents=True)
+    (corpus_1h / "input-001").write_bytes(b"test input 1")
+    (corpus_1h / "input-002").write_bytes(b"test input 2")
+
+    corpus_1d = hints_dir / "corpus" / "1d"
+    corpus_1d.mkdir(parents=True)
+    (corpus_1d / "input-001").write_bytes(b"test input 1")
+    (corpus_1d / "input-002").write_bytes(b"test input 2")
+    (corpus_1d / "input-003").write_bytes(b"test input 3")
+
+    return mock_benchmark
+
+
+@pytest.fixture
+def mock_benchmark_with_povs(mock_benchmark):
+    """Create mock benchmark with POVs."""
+    harness_dir = mock_benchmark / ".aixcc" / "test_harness"
+    harness_dir.mkdir()
+
+    # Create cpv directories with POV blobs
+    cpv_0 = harness_dir / "cpv_0" / "blobs"
+    cpv_0.mkdir(parents=True)
+    (cpv_0 / "pov_0.blob").write_bytes(b"POV data 0")
+
+    cpv_1 = harness_dir / "cpv_1" / "blobs"
+    cpv_1.mkdir(parents=True)
+    (cpv_1 / "pov_1.blob").write_bytes(b"POV data 1")
+    (cpv_1 / "pov_2.blob").write_bytes(b"POV data 2")
+
+    return mock_benchmark
+
+
+@pytest.fixture
+def preparer(temp_experiment_dir, temp_benchmarks_dir, temp_oss_fuzz_dir):
+    """Create TrialDirectoryPreparer instance."""
+    config = {
+        "hints_enabled": False,
+        "verbose": False
+    }
+    return TrialDirectoryPreparer(
+        experiment_dir=temp_experiment_dir,
+        benchmarks_root=temp_benchmarks_dir,
+        oss_fuzz_dir=temp_oss_fuzz_dir,
+        config=config
+    )
+
+
+# Tests
+
+class TestTrialDirectoryCreation:
+    """Tests for trial directory creation."""
+
+    def test_create_trial_directory(self, preparer):
+        """Test basic trial directory creation."""
+        trial_dir = preparer._create_trial_directory("test-crs", "test-bench", 0)
+
+        assert trial_dir.exists()
+        assert trial_dir.name == "trial-0"
+        assert trial_dir.parent == preparer.experiment_dir
+
+    def test_create_multiple_trial_directories(self, preparer):
+        """Test creating multiple trial directories."""
+        trial_dir_0 = preparer._create_trial_directory("test-crs", "test-bench", 0)
+        trial_dir_1 = preparer._create_trial_directory("test-crs", "test-bench", 1)
+        trial_dir_2 = preparer._create_trial_directory("test-crs", "test-bench", 2)
+
+        assert trial_dir_0.name == "trial-0"
+        assert trial_dir_1.name == "trial-1"
+        assert trial_dir_2.name == "trial-2"
+        assert all(d.exists() for d in [trial_dir_0, trial_dir_1, trial_dir_2])
+
+
+class TestSourceCodePreparation:
+    """Tests for source code preparation."""
+
+    def test_prepare_source_code_success(self, preparer, mock_benchmark):
+        """Test successful source code preparation."""
+        build_dir = preparer.experiment_dir / "trial-0" / "build"
+        build_dir.mkdir(parents=True)
+
+        with patch("crsbench.migration.repo_manager.ensure_project_repository") as mock_ensure:
+            mock_source_path = build_dir / "src" / "test-bench"
+            mock_source_path.mkdir(parents=True)
+            mock_ensure.return_value = str(mock_source_path)
+
+            source_path = preparer._prepare_source_code("test-bench", build_dir)
+
+            assert source_path == mock_source_path
+            mock_ensure.assert_called_once()
+
+    def test_prepare_source_code_benchmark_not_found(self, preparer):
+        """Test source code preparation when benchmark doesn't exist."""
+        build_dir = preparer.experiment_dir / "trial-0" / "build"
+        build_dir.mkdir(parents=True)
+
+        with pytest.raises(SourceCloneError, match="Benchmark directory not found"):
+            preparer._prepare_source_code("nonexistent-bench", build_dir)
+
+    def test_prepare_source_code_clone_failure(self, preparer, mock_benchmark):
+        """Test source code preparation when cloning fails."""
+        build_dir = preparer.experiment_dir / "trial-0" / "build"
+        build_dir.mkdir(parents=True)
+
+        with patch("crsbench.migration.repo_manager.ensure_project_repository") as mock_ensure:
+            mock_ensure.return_value = None
+
+            with pytest.raises(SourceCloneError, match="Failed to clone source"):
+                preparer._prepare_source_code("test-bench", build_dir)
+
+
+class TestHintsPreparation:
+    """Tests for hints preparation."""
+
+    def test_prepare_hints_disabled(self, preparer, mock_benchmark_with_hints):
+        """Test hints preparation when disabled in config."""
+        trial_dir = preparer.experiment_dir / "trial-0"
+        trial_dir.mkdir()
+
+        # Config has hints_enabled=False by default
+        hints_dir = preparer._prepare_hints("test-bench", "test_harness", trial_dir)
+
+        assert hints_dir is None
+
+    def test_prepare_hints_enabled(self, mock_benchmark_with_hints, temp_experiment_dir,
+                                   temp_benchmarks_dir, temp_oss_fuzz_dir):
+        """Test hints preparation when enabled."""
+        config = {
+            "hints_enabled": True,
+            "hints_corpus_level": "1h"
+        }
+        preparer = TrialDirectoryPreparer(
+            experiment_dir=temp_experiment_dir,
+            benchmarks_root=temp_benchmarks_dir,
+            oss_fuzz_dir=temp_oss_fuzz_dir,
+            config=config
+        )
+
+        trial_dir = temp_experiment_dir / "trial-0"
+        trial_dir.mkdir()
+
+        hints_dir = preparer._prepare_hints("test-bench", "test_harness", trial_dir)
+
+        assert hints_dir is not None
+        assert hints_dir.exists()
+        assert (hints_dir / "sarif").exists()
+        assert (hints_dir / "corpus").exists()
+
+    def test_prepare_hints_corpus_level_1h(self, mock_benchmark_with_hints, temp_experiment_dir,
+                                          temp_benchmarks_dir, temp_oss_fuzz_dir):
+        """Test hints preparation with 1h corpus level."""
+        config = {
+            "hints_enabled": True,
+            "hints_corpus_level": "1h"
+        }
+        preparer = TrialDirectoryPreparer(
+            experiment_dir=temp_experiment_dir,
+            benchmarks_root=temp_benchmarks_dir,
+            oss_fuzz_dir=temp_oss_fuzz_dir,
+            config=config
+        )
+
+        trial_dir = temp_experiment_dir / "trial-0"
+        trial_dir.mkdir()
+
+        hints_dir = preparer._prepare_hints("test-bench", "test_harness", trial_dir)
+
+        corpus_files = list((hints_dir / "corpus").iterdir())
+        assert len(corpus_files) == 2  # 1h has 2 files
+
+    def test_prepare_hints_corpus_level_1d(self, mock_benchmark_with_hints, temp_experiment_dir,
+                                          temp_benchmarks_dir, temp_oss_fuzz_dir):
+        """Test hints preparation with 1d corpus level."""
+        config = {
+            "hints_enabled": True,
+            "hints_corpus_level": "1d"
+        }
+        preparer = TrialDirectoryPreparer(
+            experiment_dir=temp_experiment_dir,
+            benchmarks_root=temp_benchmarks_dir,
+            oss_fuzz_dir=temp_oss_fuzz_dir,
+            config=config
+        )
+
+        trial_dir = temp_experiment_dir / "trial-0"
+        trial_dir.mkdir()
+
+        hints_dir = preparer._prepare_hints("test-bench", "test_harness", trial_dir)
+
+        corpus_files = list((hints_dir / "corpus").iterdir())
+        assert len(corpus_files) == 3  # 1d has 3 files
+
+    def test_copy_sarif_files(self, preparer, mock_benchmark_with_hints, temp_experiment_dir):
+        """Test SARIF file copying."""
+        source_hints = mock_benchmark_with_hints / ".aixcc" / "test_harness" / "hints"
+        hints_dir = temp_experiment_dir / "hints"
+        hints_dir.mkdir()
+
+        copied = preparer._copy_sarif_files(source_hints, hints_dir)
+
+        assert copied is True
+        assert (hints_dir / "sarif" / "codeql.sarif").exists()
+        assert (hints_dir / "sarif" / "semgrep.sarif").exists()
+        assert len(list((hints_dir / "sarif").glob("*.sarif"))) == 2
+
+    def test_copy_sarif_files_no_sarif_dir(self, preparer, temp_experiment_dir):
+        """Test SARIF file copying when no SARIF directory exists."""
+        source_hints = temp_experiment_dir / "hints"
+        source_hints.mkdir()
+
+        hints_dir = temp_experiment_dir / "dest_hints"
+        hints_dir.mkdir()
+
+        copied = preparer._copy_sarif_files(source_hints, hints_dir)
+
+        assert copied is False
+
+
+class TestPOVsPreparation:
+    """Tests for POVs preparation."""
+
+    def test_prepare_povs_success(self, preparer, mock_benchmark_with_povs):
+        """Test successful POVs preparation."""
+        trial_dir = preparer.experiment_dir / "trial-0"
+        trial_dir.mkdir()
+
+        povs_dir = preparer._prepare_povs("test-bench", "test_harness", trial_dir)
+
+        assert povs_dir is not None
+        assert povs_dir.exists()
+        assert len(list(povs_dir.iterdir())) == 3  # pov_0, pov_1, pov_2
+
+    def test_prepare_povs_flattened_structure(self, preparer, mock_benchmark_with_povs):
+        """Test that POVs are flattened (no cpv_* subdirectories)."""
+        trial_dir = preparer.experiment_dir / "trial-0"
+        trial_dir.mkdir()
+
+        povs_dir = preparer._prepare_povs("test-bench", "test_harness", trial_dir)
+
+        # Check files are directly in povs_dir, not in subdirectories
+        pov_files = [f.name for f in povs_dir.iterdir()]
+        assert "pov_0" in pov_files
+        assert "pov_1" in pov_files
+        assert "pov_2" in pov_files
+
+        # Ensure no .blob extension
+        assert not any(f.endswith(".blob") for f in pov_files)
+
+    def test_prepare_povs_with_filter(self, mock_benchmark_with_povs, temp_experiment_dir,
+                                      temp_benchmarks_dir, temp_oss_fuzz_dir):
+        """Test POVs preparation with target_povs filter."""
+        config = {
+            "target_povs": ["pov_0", "pov_2"]  # Only include pov_0 and pov_2
+        }
+        preparer = TrialDirectoryPreparer(
+            experiment_dir=temp_experiment_dir,
+            benchmarks_root=temp_benchmarks_dir,
+            oss_fuzz_dir=temp_oss_fuzz_dir,
+            config=config
+        )
+
+        trial_dir = temp_experiment_dir / "trial-0"
+        trial_dir.mkdir()
+
+        povs_dir = preparer._prepare_povs("test-bench", "test_harness", trial_dir)
+
+        pov_files = [f.name for f in povs_dir.iterdir()]
+        assert len(pov_files) == 2
+        assert "pov_0" in pov_files
+        assert "pov_2" in pov_files
+        assert "pov_1" not in pov_files
+
+    def test_prepare_povs_no_harness_dir(self, preparer, mock_benchmark):
+        """Test POVs preparation when harness directory doesn't exist."""
+        trial_dir = preparer.experiment_dir / "trial-0"
+        trial_dir.mkdir()
+
+        povs_dir = preparer._prepare_povs("test-bench", "nonexistent_harness", trial_dir)
+
+        assert povs_dir is None
+
+    def test_should_include_pov_no_filter(self, preparer):
+        """Test POV inclusion without filter."""
+        assert preparer._should_include_pov("pov_0") is True
+        assert preparer._should_include_pov("pov_1") is True
+        assert preparer._should_include_pov("any_pov") is True
+
+    def test_should_include_pov_with_filter(self, temp_experiment_dir, temp_benchmarks_dir,
+                                            temp_oss_fuzz_dir):
+        """Test POV inclusion with filter."""
+        config = {"target_povs": ["pov_0", "pov_2"]}
+        preparer = TrialDirectoryPreparer(
+            experiment_dir=temp_experiment_dir,
+            benchmarks_root=temp_benchmarks_dir,
+            oss_fuzz_dir=temp_oss_fuzz_dir,
+            config=config
+        )
+
+        assert preparer._should_include_pov("pov_0") is True
+        assert preparer._should_include_pov("pov_1") is False
+        assert preparer._should_include_pov("pov_2") is True
+
+
+class TestMetadataGeneration:
+    """Tests for metadata generation."""
+
+    def test_create_metadata(self, preparer, temp_experiment_dir):
+        """Test metadata creation."""
+        source_path = temp_experiment_dir / "src" / "test-bench"
+        source_path.mkdir(parents=True)
+
+        hints_dir = temp_experiment_dir / "hints"
+        hints_dir.mkdir()
+        (hints_dir / "sarif").mkdir()
+        (hints_dir / "corpus").mkdir()
+
+        povs_dir = temp_experiment_dir / "povs"
+        povs_dir.mkdir()
+        (povs_dir / "pov_0").write_bytes(b"test")
+
+        with patch.object(preparer, "_get_git_commit", return_value="abc123"):
+            metadata = preparer._create_metadata(
+                crs="test-crs",
+                benchmark="test-bench",
+                harness="test_harness",
+                trial_num=0,
+                mode="patch_generation",
+                source_path=source_path,
+                hints_dir=hints_dir,
+                povs_dir=povs_dir
+            )
+
+        assert metadata["trial_num"] == 0
+        assert metadata["crs"] == "test-crs"
+        assert metadata["benchmark"] == "test-bench"
+        assert metadata["harness"] == "test_harness"
+        assert metadata["mode"] == "patch_generation"
+        assert metadata["source"]["commit"] == "abc123"
+        assert metadata["hints"] is not None
+        assert metadata["povs"] is not None
+
+    def test_write_metadata(self, preparer, temp_experiment_dir):
+        """Test metadata writing."""
+        trial_dir = temp_experiment_dir / "trial-0"
+        trial_dir.mkdir()
+
+        metadata = {
+            "timestamp": "2025-01-01T00:00:00",
+            "trial_num": 0,
+            "crs": "test-crs"
+        }
+
+        preparer._write_metadata(trial_dir, metadata)
+
+        metadata_file = trial_dir / "metadata.json"
+        assert metadata_file.exists()
+
+        with open(metadata_file) as f:
+            loaded = json.load(f)
+        assert loaded == metadata
+
+
+class TestCompleteTrialPreparation:
+    """Tests for complete trial preparation."""
+
+    def test_prepare_trial_bug_finding(self, mock_benchmark, temp_experiment_dir,
+                                       temp_benchmarks_dir, temp_oss_fuzz_dir):
+        """Test complete trial preparation for bug finding."""
+        config = {"hints_enabled": False}
+        preparer = TrialDirectoryPreparer(
+            experiment_dir=temp_experiment_dir,
+            benchmarks_root=temp_benchmarks_dir,
+            oss_fuzz_dir=temp_oss_fuzz_dir,
+            config=config
+        )
+
+        with patch("crsbench.migration.repo_manager.ensure_project_repository") as mock_ensure:
+            mock_source_path = temp_experiment_dir / "trial-0" / "build" / "src" / "test-bench"
+            mock_source_path.mkdir(parents=True)
+            mock_ensure.return_value = str(mock_source_path)
+
+            result = preparer.prepare_trial(
+                crs="test-crs",
+                benchmark="test-bench",
+                harness="test_harness",
+                trial_num=0,
+                mode="bug_finding"
+            )
+
+        assert result.success is True
+        assert result.trial_dir.exists()
+        assert result.build_dir.exists()
+        assert result.source_path.exists()
+        assert result.output_dir.exists()
+        assert result.hints_dir is None  # Hints disabled
+        assert result.povs_dir is None  # Bug finding mode
+        assert (result.trial_dir / "metadata.json").exists()
+
+    def test_prepare_trial_patch_generation(self, mock_benchmark_with_povs, temp_experiment_dir,
+                                            temp_benchmarks_dir, temp_oss_fuzz_dir):
+        """Test complete trial preparation for patch generation."""
+        config = {"hints_enabled": False}
+        preparer = TrialDirectoryPreparer(
+            experiment_dir=temp_experiment_dir,
+            benchmarks_root=temp_benchmarks_dir,
+            oss_fuzz_dir=temp_oss_fuzz_dir,
+            config=config
+        )
+
+        with patch("crsbench.migration.repo_manager.ensure_project_repository") as mock_ensure:
+            mock_source_path = temp_experiment_dir / "trial-0" / "build" / "src" / "test-bench"
+            mock_source_path.mkdir(parents=True)
+            mock_ensure.return_value = str(mock_source_path)
+
+            result = preparer.prepare_trial(
+                crs="test-crs",
+                benchmark="test-bench",
+                harness="test_harness",
+                trial_num=0,
+                mode="patch_generation"
+            )
+
+        assert result.success is True
+        assert result.povs_dir is not None  # Patch generation mode
+        assert result.povs_dir.exists()
+
+    def test_prepare_trial_with_hints(self, mock_benchmark_with_hints, temp_experiment_dir,
+                                      temp_benchmarks_dir, temp_oss_fuzz_dir):
+        """Test complete trial preparation with hints enabled."""
+        config = {
+            "hints_enabled": True,
+            "hints_corpus_level": "1h"
+        }
+        preparer = TrialDirectoryPreparer(
+            experiment_dir=temp_experiment_dir,
+            benchmarks_root=temp_benchmarks_dir,
+            oss_fuzz_dir=temp_oss_fuzz_dir,
+            config=config
+        )
+
+        with patch("crsbench.migration.repo_manager.ensure_project_repository") as mock_ensure:
+            mock_source_path = temp_experiment_dir / "trial-0" / "build" / "src" / "test-bench"
+            mock_source_path.mkdir(parents=True)
+            mock_ensure.return_value = str(mock_source_path)
+
+            result = preparer.prepare_trial(
+                crs="test-crs",
+                benchmark="test-bench",
+                harness="test_harness",
+                trial_num=0,
+                mode="bug_finding"
+            )
+
+        assert result.success is True
+        assert result.hints_dir is not None
+        assert result.hints_dir.exists()
+
+    def test_prepare_trial_failure_handling(self, temp_experiment_dir, temp_benchmarks_dir,
+                                            temp_oss_fuzz_dir):
+        """Test trial preparation failure handling."""
+        config = {}
+        preparer = TrialDirectoryPreparer(
+            experiment_dir=temp_experiment_dir,
+            benchmarks_root=temp_benchmarks_dir,
+            oss_fuzz_dir=temp_oss_fuzz_dir,
+            config=config
+        )
+
+        # Try to prepare with nonexistent benchmark
+        result = preparer.prepare_trial(
+            crs="test-crs",
+            benchmark="nonexistent-bench",
+            harness="test_harness",
+            trial_num=0,
+            mode="bug_finding"
+        )
+
+        assert result.success is False
+        assert result.error is not None
+        assert "Benchmark directory not found" in result.error
+
+    def test_trial_preparation_result_to_dict(self, temp_experiment_dir):
+        """Test TrialPreparationResult to_dict conversion."""
+        result = TrialPreparationResult(
+            trial_dir=temp_experiment_dir / "trial-0",
+            build_dir=temp_experiment_dir / "trial-0" / "build",
+            source_path=temp_experiment_dir / "src",
+            output_dir=temp_experiment_dir / "output",
+            hints_dir=temp_experiment_dir / "hints",
+            povs_dir=temp_experiment_dir / "povs",
+            metadata={"test": "data"},
+            success=True,
+            error=None
+        )
+
+        result_dict = result.to_dict()
+
+        assert result_dict["success"] is True
+        assert result_dict["error"] is None
+        assert result_dict["metadata"] == {"test": "data"}
+        assert all(isinstance(result_dict[k], (str, type(None)))
+                  for k in ["trial_dir", "build_dir", "source_path"])
