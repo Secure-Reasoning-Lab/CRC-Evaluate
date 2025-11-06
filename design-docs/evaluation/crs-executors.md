@@ -55,9 +55,11 @@ CRSBench provides these parameters to oss-crs commands:
 
 1. `--build-dir`: Unique per trial for isolation
 2. `--oss-fuzz-dir`: Points to oss-fuzz submodule (shared across trials)
-3. `--registry-dir`: Points to `oss-crs-registry/` (testing) or `crses/` (production)
+3. `--registry-dir`: Points to `oss-crs-registry/` (the ONLY registry for both testing and production)
 4. `--project-path`: Benchmark directory from `benchmarks/`
 5. **Source path** (positional arg): Pre-cloned by CRSBench at commit from meta.yaml
+
+**Note**: CRS configurations can come from either `oss-crs-registry/crs/<crs-name>/` (registry) or `crses/<crs-name>/` (local configs following `example_configs/` format). The `--registry-dir` parameter always points to `oss-crs-registry/`.
 
 **See [OSS-CRS Integration](./oss-crs-integration.md) for complete details on parameter mappings, trial isolation strategy, and source code management.**
 
@@ -91,11 +93,13 @@ class CRSBugFindingExecutor(CRSExecutor):
 **Command**: `oss-crs build <crs-config-dir> <project-name>`
 
 **Workflow**:
-1. Resolve CRS configuration directory from `crses/` or from full path
+1. Resolve CRS configuration directory (from `crses/<crs-name>/` or full path)
 2. Extract project name from benchmark path or meta.yaml
 3. Execute build command in oss-fuzz directory
 4. Cache successful builds (avoid rebuilding same CRS+project)
 5. Handle build failures gracefully
+
+**Note**: CRS config is resolved from `crses/<crs-name>/` directory, NOT from `oss-crs-registry/`. The `crses/` directory follows the same format as `oss-crs/example_configs/`.
 
 **Implementation**:
 ```python
@@ -1222,35 +1226,33 @@ def process_pov_results(
 
 CRSBench uses two directories for CRS configurations:
 
-**`crses/`** - Production evaluation configurations:
+**`crses/`** - CRS configuration directory (following `example_configs/` format):
 ```
 crses/
 ├── ensemble-c/
-│   ├── pkg.yaml           # Package dependencies
-│   ├── config-crs.yaml    # CRS runtime config
-│   └── ...                # CRS-specific files
+│   ├── config-crs.yaml      # CRS runtime config
+│   ├── config-litellm.yaml  # LiteLLM config (optional)
+│   ├── config-resource.yaml # Resource limits (optional)
+│   └── config-worker.yaml   # Worker config (optional)
 ├── multi-retrieval/
-│   ├── pkg.yaml
 │   ├── config-crs.yaml
+│   ├── config-litellm.yaml
 │   └── ...
 └── ...
 ```
 
-**`oss-crs-registry/`** - Development/testing reference configurations (submodule):
-- Contains reference CRS implementations from the open-source registry
-- Same structure as `crses/` but for development and testing purposes
-- See `oss-crs-registry/crs/` for configuration examples
+**Important**: `crses/` is NOT a registry - it's a directory of CRS configurations following the same format as `oss-crs/example_configs/`.
+
+**`oss-crs-registry/`** - The CRS registry (submodule):
+- The **ONLY** registry for CRS implementations (used for both testing and production)
+- Git submodule from the open-source CRS registry
+- Contains `crs/` subdirectory with CRS configurations
+- Structure: `oss-crs-registry/crs/<crs-name>/`
+- See `oss-crs-registry/crs/` for registry CRS configurations
 
 ### Configuration Files
 
-**pkg.yaml**: Package and dependency information
-```yaml
-name: ensemble-c
-version: "1.0"
-dependencies:
-  - python-packages:
-      - litellm>=1.77.5
-```
+CRS configurations (whether in `crses/` or `oss-crs-registry/crs/`) contain:
 
 **config-crs.yaml**: CRS-specific runtime parameters
 ```yaml
@@ -1259,13 +1261,38 @@ temperature: 0.7
 model: "anthropic/claude-3-sonnet"
 ```
 
-**Configuration Examples**: See `oss-crs-registry/crs/` for reference CRS configurations with complete examples of `pkg.yaml` and `config-crs.yaml` formats.
+**config-litellm.yaml**: LiteLLM configuration (optional)
+```yaml
+api_base: "https://api.litellm.com"
+api_key: "${LITELLM_API_KEY}"
+```
+
+**config-resource.yaml**: Resource limits (optional)
+```yaml
+memory_limit: "8GB"
+cpu_limit: "4"
+```
+
+**config-worker.yaml**: Worker configuration (optional)
+```yaml
+num_workers: 4
+worker_timeout: 3600
+```
+
+**Configuration Examples**: See `oss-crs/example_configs/` for reference CRS configuration format (same format used by `crses/`).
 
 ### Configuration Loading
 
 ```python
 def _resolve_crs_config_dir(self) -> Path:
     """Resolve CRS configuration directory.
+
+    Searches for CRS configuration in crses/ directory, which follows
+    the same format as oss-crs/example_configs/.
+
+    Note:
+        This does NOT search in oss-crs-registry/. The registry is only
+        used via --registry-dir parameter for oss-crs CLI.
 
     Returns:
         Path to CRS config directory (absolute)
@@ -1275,7 +1302,7 @@ def _resolve_crs_config_dir(self) -> Path:
     if config_path.is_absolute() and config_path.exists():
         return config_path
 
-    # Look in crses/ directory
+    # Look in crses/ directory (NOT oss-crs-registry/)
     crses_dir = Path(__file__).parent.parent.parent / "crses"
     config_dir = crses_dir / self.crs_config_name
 

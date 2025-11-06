@@ -46,40 +46,42 @@ CRSBench/
 └── pyproject.toml               # Python project configuration
 ```
 
-## CRS Registry Structure
+## CRS Configuration Structure
 
 CRSBench uses two directories for managing CRS (Cyber Reasoning System) configurations:
 
-### `oss-crs-registry/` - Development & Testing Registry
-- **Purpose**: Open-source registry containing reference CRS implementations
-- **Use Case**: Development, testing, and reference examples
+### `oss-crs-registry/` - The CRS Registry (Submodule)
+- **Purpose**: The **ONLY** registry for CRS implementations (used for both testing and production)
+- **Use Case**: Development, testing, and production evaluation
 - **Source**: Git submodule from the open-source CRS registry
 - **Structure**: Contains `crs/` directory with CRS configurations
+- **Registry structure**: `oss-crs-registry/crs/<crs-name>/`
 
-### `crses/` - Production Evaluation Configurations
-- **Purpose**: Final CRS configurations that CRSBench will evaluate
-- **Use Case**: Production benchmark runs and experiments
+### `crses/` - CRS Configuration Directory
+- **Purpose**: Directory containing CRS configurations for CRSBench evaluation
+- **Use Case**: Stores final CRS configs that CRSBench will evaluate
 - **Source**: Committed to CRSBench repository
-- **Structure**: Follows the same format as `oss-crs-registry/`
+- **Structure**: Follows the same format as `oss-crs/example_configs/` (NOT a registry)
+- **Configuration structure**: `crses/<crs-name>/`
 
-Both directories follow the same structure with `crs/<crs-name>/` subdirectories containing:
-- `pkg.yaml` - CRS metadata and source information
-- `config-crs.yaml` - Runtime configuration and resource requirements (optional)
+**Important**: `crses/` is NOT a registry - it's simply a directory of CRS configurations following the same format as `oss-crs/example_configs/`. The `oss-crs-registry/` is the only actual registry.
 
-Example CRS configuration structure:
+Both directories contain CRS configuration subdirectories with:
+- `config-crs.yaml` - CRS runtime configuration
+- `config-litellm.yaml` - LiteLLM configuration (optional)
+- `config-resource.yaml` - Resource limits (optional)
+- `config-worker.yaml` - Worker configuration (optional)
+
+Example CRS configuration structure (same format in both `crses/` and `oss-crs-registry/crs/`):
 ```
-crs/
-├── atlantis-c-deepgen/      # Bug-finding CRS (C/C++)
-│   ├── pkg.yaml
-│   └── config-crs.yaml
-├── patch-agent/             # Bug-fixing CRS
-│   ├── pkg.yaml
-│   └── config-crs.yaml
-└── mock-crs/                # Testing CRS
-    └── pkg.yaml
+<crs-name>/                   # e.g., atlantis-c-deepgen/
+├── config-crs.yaml          # CRS runtime configuration
+├── config-litellm.yaml      # LiteLLM settings (optional)
+├── config-resource.yaml     # Resource limits (optional)
+└── config-worker.yaml       # Worker settings (optional)
 ```
 
-See `oss-crs-registry/` for reference examples of CRS configurations.
+See `oss-crs/example_configs/` for reference examples of CRS configuration format.
 
 ## Quick Start
 
