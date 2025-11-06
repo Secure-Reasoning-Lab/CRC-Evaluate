@@ -45,6 +45,22 @@ POVResult objects
 3. **Submodule Coordination**: Work with oss-fuzz/ and oss-patch/ submodules
 4. **Future-Proof**: Support both current and future command formats
 
+## CRSBench Integration with oss-crs CLI
+
+**Important**: CRSBench uses the `oss-crs` and `oss-patch-crs` command-line interfaces with specific parameter management for trial isolation and source code control.
+
+### Key Parameters
+
+CRSBench provides these parameters to oss-crs commands:
+
+1. `--build-dir`: Unique per trial for isolation
+2. `--oss-fuzz-dir`: Points to oss-fuzz submodule (shared across trials)
+3. `--registry-dir`: Points to `oss-crs-registry/` (testing) or `crses/` (production)
+4. `--project-path`: Benchmark directory from `benchmarks/`
+5. **Source path** (positional arg): Pre-cloned by CRSBench at commit from meta.yaml
+
+**See [OSS-CRS Integration](./oss-crs-integration.md) for complete details on parameter mappings, trial isolation strategy, and source code management.**
+
 ## OSS-Fuzz Bug Finding Executor
 
 ### Purpose
@@ -2021,6 +2037,7 @@ When updating existing CRS executor code:
 
 ## References
 
+- [OSS-CRS Integration](./oss-crs-integration.md): **NEW** - Detailed integration with oss-crs CLI, parameter mappings, and trial isolation
 - [OSS-Fuzz CRS Interface](../../docs/ossfuzz-crs-interface.md): Interface specification with `--output` parameter
 - [Snapshot Design](./snapshots.md): Snapshot system implementation
 - [Evaluation Module Design](./evaluation.md): Integration with evaluation

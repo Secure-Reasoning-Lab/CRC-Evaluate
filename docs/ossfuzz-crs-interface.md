@@ -712,6 +712,82 @@ See the CRSBench snapshot design documentation for details on snapshot frequency
 
 ---
 
+## CRSBench-Specific Usage
+
+CRSBench uses the `oss-crs` and `oss-patch-crs` CLI with additional parameters for trial isolation and source code management:
+
+### Additional CLI Parameters
+
+Beyond the standard interface, CRSBench provides:
+
+1. **`--build-dir <path>`**: Unique per trial for complete isolation
+2. **`--oss-fuzz-dir <path>`**: Points to oss-fuzz submodule (shared across trials)
+3. **`--registry-dir <path>`**: Points to `oss-crs-registry/` (testing) or `crses/` (production)
+4. **`--project-path <path>`**: Benchmark directory from `benchmarks/`
+5. **Source path** (positional arg): Pre-cloned by CRSBench at commit from meta.yaml
+
+### Example CRSBench Usage
+
+**Bug Finding (with CRSBench parameters)**:
+```sh
+oss-crs build \
+  --build-dir /experiments/exp-1/trial-0/build \
+  --oss-fuzz-dir /path/to/CRSBench/oss-fuzz \
+  --registry-dir /path/to/CRSBench/crses \
+  --project-path /path/to/CRSBench/benchmarks/json-c-delta-01 \
+  example_configs/ensemble-c \
+  json-c-delta-01 \
+  /experiments/exp-1/trial-0/build/src/json-c
+
+oss-crs run \
+  --build-dir /experiments/exp-1/trial-0/build \
+  --oss-fuzz-dir /path/to/CRSBench/oss-fuzz \
+  --registry-dir /path/to/CRSBench/crses \
+  example_configs/ensemble-c \
+  json-c-delta-01 \
+  json_array_fuzzer \
+  --output /experiments/exp-1/trial-0/output \
+  --hints /experiments/exp-1/trial-0/hints
+```
+
+**Patch Generation (with CRSBench parameters)**:
+```sh
+oss-patch-crs build \
+  --build-dir /experiments/exp-1/trial-0/build \
+  --oss-fuzz-dir /path/to/CRSBench/oss-fuzz \
+  --registry-dir /path/to/CRSBench/crses \
+  --project-path /path/to/CRSBench/benchmarks/json-c-delta-01 \
+  example_configs/patch-agent \
+  json-c-delta-01 \
+  /experiments/exp-1/trial-0/build/src/json-c
+
+oss-patch-crs run \
+  --build-dir /experiments/exp-1/trial-0/build \
+  --oss-fuzz-dir /path/to/CRSBench/oss-fuzz \
+  --registry-dir /path/to/CRSBench/crses \
+  example_configs/patch-agent \
+  json-c-delta-01 \
+  --harness json_array_fuzzer \
+  --povs /experiments/exp-1/trial-0/povs \
+  --hints /experiments/exp-1/trial-0/hints \
+  --output /experiments/exp-1/trial-0/output \
+  --litellm-base https://api.litellm.com \
+  --litellm-key sk-key
+```
+
+### CRSBench Trial Isolation
+
+CRSBench provides complete trial isolation:
+
+- **Unique build directory per trial**: Enables parallel execution
+- **Pre-cloned source code**: Checked out at specific commit from meta.yaml
+- **Trial-specific output/hints/povs directories**: Clean separation
+- **Testing vs production registry**: Switch between development and production CRS
+
+**For complete details on CRSBench integration**, see:
+- [OSS-CRS Integration Design](../design-docs/evaluation/oss-crs-integration.md): Detailed parameter mappings, trial isolation strategy, and source code management
+- [CRS Executors Design](../design-docs/evaluation/crs-executors.md): Executor implementation details
+
 ## Command Reference
 
 The OSS-Fuzz ecosystem provides installable command wrappers for CRS execution:
