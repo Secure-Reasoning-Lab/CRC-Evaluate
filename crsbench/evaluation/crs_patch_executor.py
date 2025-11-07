@@ -1,7 +1,7 @@
-"""OSS-Patch CRS executor implementation.
+"""CRS Patch CRS executor implementation.
 
-This module implements the OSSPatchExecutor class which integrates with
-OSS-Patch's interface for patch generation using pre-cloned source repositories.
+This module implements the CRSPatchExecutor class which integrates with
+CRS Patch's interface for patch generation using pre-cloned source repositories.
 """
 
 import json
@@ -21,34 +21,34 @@ from crsbench.validation.schemas import HarnessFile, POV
 logger = logging.getLogger(__name__)
 
 
-class OSSPatchExecutor(CRSExecutor):
-    """CRS executor for patch generation using OSS-Patch interface.
+class CRSPatchExecutor(CRSExecutor):
+    """CRS executor for patch generation using CRS Patch interface.
 
-    This executor uses OSS-Patch's alternative build method with pre-cloned
+    This executor uses CRS Patch's alternative build method with pre-cloned
     source repositories via repository manager integration.
     """
 
     def __init__(
         self,
         crs_config_name: str,
-        oss_patch_path: Path,
+        crs_patch_path: Path,
         oss_fuzz_path: Path,
         litellm_base: str,
         litellm_key: str,
         benchmarks_root: Path
     ):
-        """Initialize OSS-Patch executor.
+        """Initialize CRS Patch executor.
 
         Args:
             crs_config_name: CRS configuration name (e.g., "multi-retrieval")
-            oss_patch_path: Path to oss-patch repository
+            crs_patch_path: Path to crs-patch repository
             oss_fuzz_path: Path to oss-fuzz repository (required for infrastructure)
             litellm_base: LiteLLM API base URL
             litellm_key: LiteLLM API key
             benchmarks_root: Path to benchmarks directory (for finding benchmark dirs)
         """
         self.crs_config_name = crs_config_name
-        self.oss_patch_path = oss_patch_path
+        self.crs_patch_path = crs_patch_path
         self.oss_fuzz_path = oss_fuzz_path
         self.litellm_base = litellm_base
         self.litellm_key = litellm_key
@@ -63,7 +63,7 @@ class OSSPatchExecutor(CRSExecutor):
             config: CRS configuration parameters
         """
         self.config = config.copy()
-        logger.info(f"Configured OSS-Patch executor with: {config}")
+        logger.info(f"Configured CRS Patch executor with: {config}")
 
     def run_crs(
         self,
@@ -86,7 +86,7 @@ class OSSPatchExecutor(CRSExecutor):
             CRSResult with execution details
         """
         project_name = self._extract_project_name(benchmark_path)
-        logger.info(f"Running OSS-Patch CRS for project '{project_name}', harness '{harness.name}'")
+        logger.info(f"Running CRS Patch CRS for project '{project_name}', harness '{harness.name}'")
 
         # Build if needed (pass benchmark_path for repo manager integration)
         self._build_crs_if_needed(benchmark_path, project_name)
@@ -124,7 +124,7 @@ class OSSPatchExecutor(CRSExecutor):
         try:
             result = subprocess.run(
                 cmd,
-                cwd=self.oss_patch_path,
+                cwd=self.crs_patch_path,
                 capture_output=True,
                 text=True,
                 timeout=self.config.get("run_timeout", 3600)
@@ -287,7 +287,7 @@ class OSSPatchExecutor(CRSExecutor):
         try:
             result = subprocess.run(
                 cmd,
-                cwd=self.oss_patch_path,
+                cwd=self.crs_patch_path,
                 env=env,
                 capture_output=True,
                 text=True,

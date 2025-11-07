@@ -1,4 +1,4 @@
-"""Basic tests for OSSPatchExecutor."""
+"""Basic tests for CRSPatchExecutor."""
 
 import json
 import tempfile
@@ -6,31 +6,31 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from crsbench.evaluation.oss_patch_executor import OSSPatchExecutor
+from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
 from crsbench.evaluation.crs_executor import CRSResult
 from crsbench.evaluation.results import POVStatus
 from crsbench.validation.schemas import HarnessFile, POV, Vulnerability
 
 
-class TestOSSPatchExecutor(unittest.TestCase):
-    """Test OSSPatchExecutor functionality."""
+class TestCRSPatchExecutor(unittest.TestCase):
+    """Test CRSPatchExecutor functionality."""
 
     def setUp(self):
         """Set up test fixtures."""
         self.temp_dir = tempfile.mkdtemp()
-        self.oss_patch_path = Path(self.temp_dir) / "oss-patch"
+        self.crs_patch_path = Path(self.temp_dir) / "oss-patch"
         self.oss_fuzz_path = Path(self.temp_dir) / "oss-fuzz"
         self.benchmarks_root = Path(self.temp_dir) / "benchmarks"
 
         # Create directory structure
-        self.oss_patch_path.mkdir(parents=True)
+        self.crs_patch_path.mkdir(parents=True)
         self.oss_fuzz_path.mkdir(parents=True)
         self.benchmarks_root.mkdir(parents=True)
 
         # Create executor
-        self.executor = OSSPatchExecutor(
+        self.executor = CRSPatchExecutor(
             crs_config_name="test-crs",
-            oss_patch_path=self.oss_patch_path,
+            crs_patch_path=self.crs_patch_path,
             oss_fuzz_path=self.oss_fuzz_path,
             litellm_base="https://api.test.com",
             litellm_key="test-key",
@@ -40,7 +40,7 @@ class TestOSSPatchExecutor(unittest.TestCase):
     def test_init(self):
         """Test executor initialization."""
         self.assertEqual(self.executor.crs_config_name, "test-crs")
-        self.assertEqual(self.executor.oss_patch_path, self.oss_patch_path)
+        self.assertEqual(self.executor.crs_patch_path, self.crs_patch_path)
         self.assertEqual(self.executor.oss_fuzz_path, self.oss_fuzz_path)
         self.assertEqual(self.executor.litellm_base, "https://api.test.com")
         self.assertEqual(self.executor.litellm_key, "test-key")
