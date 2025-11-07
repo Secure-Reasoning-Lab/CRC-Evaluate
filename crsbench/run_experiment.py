@@ -134,6 +134,12 @@ Examples:
         help='Path to benchmarks root directory (highest precedence, overrides config file)'
     )
 
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Enable debug logging (logs all commands executed with their working directories)'
+    )
+
     return parser.parse_args()
 
 
@@ -627,6 +633,11 @@ def main() -> None:
     """Main entry point for the experiment runner."""
     # Parse arguments
     args = parse_arguments()
+
+    # Set debug logging if requested
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logger.debug("Debug logging enabled")
 
     # Validate arguments
     validate_arguments(args)

@@ -134,6 +134,8 @@ class CRSBugFindingExecutor(CRSExecutor):
             )
 
             logger.info(f"Executing: {' '.join(cmd)}")
+            logger.debug(f"Command: {cmd}")
+            logger.debug(f"Working directory: {trial_output_dir}")
 
             # Get expected output location
             expected_output_dir = self._get_crs_output_dir(trial_build_dir, project_name)
@@ -145,7 +147,8 @@ class CRSBugFindingExecutor(CRSExecutor):
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                check=False
+                check=False,
+                cwd=str(trial_output_dir)
             )
 
             execution_time = time.time() - start_time
@@ -279,6 +282,8 @@ class CRSBugFindingExecutor(CRSExecutor):
         ]
 
         logger.info(f"Build command: {' '.join(cmd)}")
+        logger.debug(f"Command: {cmd}")
+        logger.debug(f"Working directory: {trial_build_dir}")
 
         timeout = self.config.get("build_timeout", 3600)
 
@@ -288,7 +293,8 @@ class CRSBugFindingExecutor(CRSExecutor):
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                check=False
+                check=False,
+                cwd=str(trial_build_dir)
             )
 
             if result.returncode != 0:
