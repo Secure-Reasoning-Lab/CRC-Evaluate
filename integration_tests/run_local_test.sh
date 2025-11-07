@@ -46,16 +46,32 @@ echo "  Registry directory: $REGISTRY_DIR"
 echo "  Benchmarks root: $BENCHMARKS_ROOT"
 echo ""
 
+# Set up virtual environment
+echo -e "${YELLOW}Setting up virtual environment...${NC}"
+cd "$PROJECT_ROOT"
+if [ ! -d ".venv" ]; then
+    echo "Creating new virtual environment..."
+    uv sync
+else
+    echo "Virtual environment exists, syncing dependencies..."
+    uv sync
+fi
+echo ""
 
 # Clean up previous test data
 echo -e "${YELLOW}Cleaning up previous test data...${NC}"
 rm -rf /tmp/crsbench-integration-test/
 
+# Activate virtual environment
+echo -e "${YELLOW}Activating virtual environment...${NC}"
+source "$PROJECT_ROOT/.venv/bin/activate"
+echo ""
+
 # Run the experiment
 echo -e "${GREEN}Running CRSBench experiment...${NC}"
 echo ""
 
-uv run crsbench \
+crsbench \
    --experiment-config "$CONFIG_FILE" \
    --experiment-name "$EXPERIMENT_NAME" \
    --benchmarks atlanta-nasm-delta-01 \
