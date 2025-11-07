@@ -110,6 +110,30 @@ Examples:
         help='Force local execution mode without Redis (useful for single jobs or testing)'
     )
 
+    parser.add_argument(
+        '--oss-fuzz-path',
+        type=str,
+        required=False,
+        metavar='OSS_FUZZ_PATH',
+        help='Path to oss-fuzz directory (highest precedence, overrides config file)'
+    )
+
+    parser.add_argument(
+        '--registry-dir',
+        type=str,
+        required=False,
+        metavar='REGISTRY_DIR',
+        help='Path to CRS registry directory (highest precedence, overrides config file)'
+    )
+
+    parser.add_argument(
+        '--benchmarks-root',
+        type=str,
+        required=False,
+        metavar='BENCHMARKS_ROOT',
+        help='Path to benchmarks root directory (highest precedence, overrides config file)'
+    )
+
     return parser.parse_args()
 
 
@@ -251,7 +275,37 @@ def should_use_distributed_mode(args: argparse.Namespace, config, total_jobs: in
     return True
 
 
-def run_experiment_local(experiment_name: str, config, benchmarks: List[str], crses: List[str]) -> None:
+def enhance_config_with_cli_args(config_dict: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
+    """Enhance config dictionary with CLI arguments (highest precedence).
+
+    CLI arguments override config file values.
+
+    Args:
+        config_dict: Config dictionary from config file
+        args: Parsed CLI arguments
+
+    Returns:
+        Enhanced config dictionary
+    """
+    enhanced = config_dict.copy()
+
+    # Override with CLI arguments (highest precedence)
+    if args.oss_fuzz_path:
+        enhanced['oss_fuzz_path'] = args.oss_fuzz_path
+        logger.info(f"Using oss-fuzz path from CLI: {args.oss_fuzz_path}")
+
+    if args.registry_dir:
+        enhanced['registry_dir'] = args.registry_dir
+        logger.info(f"Using registry directory from CLI: {args.registry_dir}")
+
+    if args.benchmarks_root:
+        enhanced['benchmarks_root'] = args.benchmarks_root
+        logger.info(f"Using benchmarks root from CLI: {args.benchmarks_root}")
+
+    return enhanced
+
+
+def run_experiment_local(experiment_name: str, config, benchmarks: List[str], crses: List[str], args: argparse.Namespace) -> None:
     """Run experiment locally without Redis queue.
 
     Executes all trials sequentially in the current process.
@@ -261,6 +315,7 @@ def run_experiment_local(experiment_name: str, config, benchmarks: List[str], cr
         config: Experiment configuration
         benchmarks: List of benchmark identifiers
         crses: List of CRS identifiers
+        args: CLI arguments for config overrides
     """
     logger.info("="*60)
     logger.info("Running CRSBench in Local Mode (No Redis)")
@@ -286,11 +341,14 @@ def run_experiment_local(experiment_name: str, config, benchmarks: List[str], cr
         # Import and execute job directly
         from crsbench.distributed.jobs import run_crs_trial
 
+        # Enhance config with CLI arguments (highest precedence)
+        enhanced_config = enhance_config_with_cli_args(config.to_dict(), args)
+
         result = run_crs_trial(
             crs=trial.crs,
             benchmark=trial.benchmark,
             trial_num=trial.trial_num,
-            config=config.to_dict()
+            config=enhanced_config
         )
 
         results.append(result)
@@ -447,7 +505,7 @@ def _monitor_jobs_rich(queue, job_list: List, experiment_name: str) -> List[Dict
     return results
 
 
-def run_experiment_distributed(experiment_name: str, config, benchmarks: List[str], crses: List[str]) -> None:
+def run_experiment_distributed(experiment_name: str, config, benchmarks: List[str], crses: List[str], args: argparse.Namespace) -> None:
     """Run experiment using Redis queue-based distributed execution.
 
     Args:
@@ -455,6 +513,7 @@ def run_experiment_distributed(experiment_name: str, config, benchmarks: List[st
         config: Experiment configuration
         benchmarks: List of benchmark identifiers
         crses: List of CRS identifiers
+        args: CLI arguments for config overrides
     """
     from crsbench.distributed.queue import initialize_queue
 
@@ -469,7 +528,7 @@ def run_experiment_distributed(experiment_name: str, config, benchmarks: List[st
     except Exception as e:
         logger.error(f"Failed to initialize queue: {e}")
         logger.error("Falling back to local execution mode")
-        run_experiment_local(experiment_name, config, benchmarks, crses)
+        run_experiment_local(experiment_name, config, benchmarks, crses, args)
         return
 
     # Generate trial matrix
@@ -483,6 +542,10 @@ def run_experiment_distributed(experiment_name: str, config, benchmarks: List[st
 
     # Enqueue jobs
     logger.info("\nEnqueuing jobs...")
+
+    # Enhance config with CLI arguments (highest precedence)
+    enhanced_config = enhance_config_with_cli_args(config.to_dict(), args)
+
     jobs = []
     for trial in trials:
         job = queue.enqueue(
@@ -490,7 +553,7 @@ def run_experiment_distributed(experiment_name: str, config, benchmarks: List[st
             crs=trial.crs,
             benchmark=trial.benchmark,
             trial_num=trial.trial_num,
-            config=config.to_dict(),
+            config=enhanced_config,
             job_timeout=config.max_total_time,
             result_ttl=-1  # Persist results forever
         )
@@ -644,9 +707,9 @@ def main() -> None:
 
     # Run experiment in appropriate mode
     if use_distributed:
-        run_experiment_distributed(experiment_name, config, benchmarks, crses)
+        run_experiment_distributed(experiment_name, config, benchmarks, crses, args)
     else:
-        run_experiment_local(experiment_name, config, benchmarks, crses)
+        run_experiment_local(experiment_name, config, benchmarks, crses, args)
 
 
 if __name__ == "__main__":

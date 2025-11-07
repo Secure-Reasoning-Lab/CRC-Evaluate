@@ -11,6 +11,7 @@ from typing import Dict, Any, Optional
 
 from crsbench.evaluation.runner import BenchmarkRunner
 from crsbench.evaluation.crs_executor import StubCRSExecutor
+from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -120,9 +121,29 @@ def run_crs_trial(
         # Get snapshot configuration
         snapshot_period = config.get('snapshot_period')
 
+        # Initialize CRS executor
+        # Get required paths from config or use defaults
+        oss_fuzz_path = Path(config.get('oss_fuzz_path') or (Path.cwd() / 'oss-fuzz'))
+        registry_dir = Path(config.get('registry_dir') or (Path.cwd() / 'crses'))
+        benchmarks_root = Path(config.get('benchmarks_root') or (Path.cwd() / 'benchmarks'))
+
+        # Create CRS bug finding executor
+        crs_executor = CRSBugFindingExecutor(
+            crs_config_name=crs,
+            oss_fuzz_path=oss_fuzz_path,
+            registry_dir=registry_dir,
+            benchmarks_root=benchmarks_root
+        )
+
+        # Configure executor
+        crs_executor.configure_crs({
+            'build_timeout': config.get('build_timeout', 3600),
+            'run_timeout': config.get('max_total_time', 7200),
+            'hints_enabled': config.get('hints_enabled', False),
+            'hints_corpus_level': config.get('hints_corpus_level', '1h')
+        })
+
         # Initialize benchmark runner with CRS executor and snapshot configuration
-        # TODO: Replace StubCRSExecutor with actual CRS executor factory
-        crs_executor = StubCRSExecutor()
         runner = BenchmarkRunner(crs_executor, snapshot_period=snapshot_period)
 
         # Resolve benchmark path
@@ -140,13 +161,11 @@ def run_crs_trial(
             logger.info(f"Trial output directory: {trial_output_dir}")
 
         # Run benchmark evaluation
+        # Note: CRS is already configured via executor.configure_crs() above
         result = runner.run_benchmark(
             benchmark_path=benchmark_path,
             mode='auto',  # Auto-detect delta/full mode
-            crs_config={
-                'simulation_delay': 0.1,
-                'success_rate': 0.7
-            },
+            crs_config={},  # Empty config - executor already configured
             trial_output_dir=trial_output_dir
         )
 
