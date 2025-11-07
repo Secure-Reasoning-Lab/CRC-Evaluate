@@ -38,6 +38,7 @@ echo "  Experiment name: $EXPERIMENT_NAME"
 echo "  Mode: Local (no distributed execution)"
 echo ""
 
+
 # Clean up previous test data
 echo -e "${YELLOW}Cleaning up previous test data...${NC}"
 rm -rf /tmp/crsbench-integration-test/
@@ -47,10 +48,10 @@ echo -e "${GREEN}Running CRSBench experiment...${NC}"
 echo ""
 
 uv run crsbench \
-  --experiment-config "$CONFIG_FILE" \
-  --experiment-name "$EXPERIMENT_NAME" \
-  --benchmarks atlanta-nasm-delta-01 \
-  --crses mock-crs
+   --experiment-config "$CONFIG_FILE" \
+   --experiment-name "$EXPERIMENT_NAME" \
+   --benchmarks atlanta-nasm-delta-01 \
+   --crses mock-crs
 
 # Check exit status
 if [ $? -eq 0 ]; then
@@ -60,9 +61,15 @@ if [ $? -eq 0 ]; then
     echo "Results stored in:"
     echo "  Experiment data: /tmp/crsbench-integration-test/experiment-data"
     echo "  Reports: /tmp/crsbench-integration-test/report-data"
+
+    [ -d /tmp/crsbench-integration-test/ ] && tree /tmp/crsbench-integration-test/
+
     exit 0
 else
     echo ""
     echo -e "${RED}=== Integration test failed ===${NC}"
+
+    [ -d /tmp/crsbench-integration-test/ ] && tree /tmp/crsbench-integration-test/
+
     exit 1
 fi

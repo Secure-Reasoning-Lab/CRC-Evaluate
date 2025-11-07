@@ -147,7 +147,7 @@ class BenchmarkRunner:
 
             try:
                 # Step 8: Run evaluation on each harness
-                self._run_harness_evaluations(config, benchmark_path, collector, evaluation_mode)
+                self._run_harness_evaluations(config, benchmark_path, collector, evaluation_mode, trial_output_dir)
 
             finally:
                 # Step 9: Stop snapshot thread
@@ -239,18 +239,13 @@ class BenchmarkRunner:
             raise EvaluationError(f"Invalid evaluation mode: {mode}")
 
     def _run_harness_evaluations(self, config: BenchmarkConfig, benchmark_path: Path,
-                                collector: ResultCollector, evaluation_mode: str) -> None:
-        """Run CRS evaluation on all harnesses."""
-        # Get commit information based on mode
-        if evaluation_mode == "delta" and config.delta_mode:
-            base_commit = config.delta_mode.base_commit
-            ref_commit = config.delta_mode.ref_commit
-        elif evaluation_mode == "full" and config.full_mode:
-            base_commit = config.full_mode.base_commit
-            ref_commit = None
-        else:
-            raise EvaluationError(f"Invalid configuration for mode {evaluation_mode}")
+                                collector: ResultCollector, evaluation_mode: str,
+                                trial_output_dir: Optional[Path] = None) -> None:
+        """Run CRS evaluation on all harnesses.
 
+        Note: Source code is already prepared at the correct commit by
+        TrialDirectoryPreparer, so commit information is not passed to executors.
+        """
         self.logger.info(f"Running evaluation on {len(config.harness_files)} harnesses...")
 
         for harness in config.harness_files:
@@ -258,12 +253,12 @@ class BenchmarkRunner:
 
             try:
                 # Run CRS on this harness (path resolution handled internally in CRS)
+                # Note: commit information is not passed to executor - source code is
+                # already prepared at the correct commit by TrialDirectoryPreparer
                 crs_result = self.crs_executor.run_crs(
                     benchmark_path=benchmark_path,
                     harness=harness,
-                    trial_output_dir=trial_output_dir or Path("."),
-                    base_commit=base_commit,
-                    ref_commit=ref_commit
+                    trial_output_dir=trial_output_dir or Path(".")
                 )
 
                 # Process POV results
@@ -302,7 +297,7 @@ class BenchmarkRunner:
                 if harness.povs:
                     for pov in harness.povs:
                         pov_results.append(POVResult(
-                            name=pov.name,
+                            name=pov.id,
                             harness_name=harness.name,
                             sanitizer=pov.sanitizer,
                             error_token=pov.error_token,
