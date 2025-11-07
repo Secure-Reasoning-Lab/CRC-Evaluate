@@ -151,10 +151,10 @@ def run_crs_trial(
         logger.debug(f"Resolved benchmark path: {benchmark_path}")
 
         # Create trial output directory for snapshots
-        trial_output_dir = None
+        trial_output_dir = Path('trial-output').resolve()
         if snapshot_period and snapshot_period > 0:
             # Create trial-specific output directory
-            experiment_filestore = Path(config.get('experiment_filestore', '/tmp/experiments'))
+            experiment_filestore = Path(config.get('experiment_filestore', '/tmp/experiments')).resolve()
             experiment_name = config.get('experiment', 'unknown')
             trial_output_dir = experiment_filestore / experiment_name / f"{crs}_{benchmark}_trial{trial_num}"
             trial_output_dir.mkdir(parents=True, exist_ok=True)
