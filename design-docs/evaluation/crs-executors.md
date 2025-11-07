@@ -75,35 +75,56 @@ Execute bug finding CRS implementations using the OSS-Fuzz interface.
 class CRSBugFindingExecutor(CRSExecutor):
     """CRS executor for bug finding using OSS-Fuzz interface."""
 
-    def __init__(self, crs_config_name: str, oss_fuzz_path: Path):
+    def __init__(
+        self,
+        crs_config_name: str,
+        oss_fuzz_path: Path,
+        registry_dir: Path,
+        benchmarks_root: Path
+    ):
         """Initialize executor.
 
         Args:
             crs_config_name: CRS configuration name (e.g., "ensemble-c")
             oss_fuzz_path: Path to oss-fuzz repository
+            registry_dir: Path to CRS registry directory (e.g., crses/ or oss-crs-registry/)
+            benchmarks_root: Path to benchmarks directory (for repo manager)
         """
         self.crs_config_name = crs_config_name
         self.oss_fuzz_path = oss_fuzz_path
+        self.registry_dir = registry_dir
+        self.benchmarks_root = benchmarks_root
         self.config: Dict[str, Any] = {}
         self.built_projects: Set[str] = set()
 ```
 
 ### Build Phase
 
-**Command**: `oss-crs build <crs-config-dir> <project-name>`
+**Command**:
+```bash
+oss-crs build \
+  --build-dir <build-dir> \
+  --oss-fuzz-dir <oss-fuzz-dir> \
+  --registry-dir <registry-dir> \
+  --project-path <project-path> \
+  <crs-config-dir> \
+  <project-name> \
+  <source-path>
+```
 
 **Workflow**:
 1. Resolve CRS configuration directory (from `crses/<crs-name>/` or full path)
 2. Extract project name from benchmark path or meta.yaml
-3. Execute build command in oss-fuzz directory
-4. Cache successful builds (avoid rebuilding same CRS+project)
-5. Handle build failures gracefully
+3. Prepare trial-specific build directory
+4. Execute build command with all required parameters
+5. Cache successful builds (avoid rebuilding same CRS+project)
+6. Handle build failures gracefully
 
 **Note**: CRS config is resolved from `crses/<crs-name>/` directory, NOT from `oss-crs-registry/`. The `crses/` directory follows the same format as `oss-crs/example_configs/`.
 
 **Implementation**:
 ```python
-def _build_crs_if_needed(self, project_name: str) -> None:
+def _build_crs_if_needed(self, benchmark_path: Path, project_name: str, trial_build_dir: Path) -> None:
     """Build CRS Docker image if not already built."""
     build_key = f"{self.crs_config_name}:{project_name}"
 
@@ -113,14 +134,24 @@ def _build_crs_if_needed(self, project_name: str) -> None:
 
     crs_config_dir = self._resolve_crs_config_dir()
 
+    # Ensure source code exists
+    from crsbench.migration.repo_manager import ensure_project_repository
+    source_path = ensure_project_repository(
+        benchmark_dir=str(benchmark_path),
+        verbose=self.config.get("verbose", False)
+    )
+
     cmd = [
         "oss-crs", "build",
-        str(crs_config_dir), project_name
+        "--build-dir", str(trial_build_dir),
+        "--oss-fuzz-dir", str(self.oss_fuzz_path),
+        "--registry-dir", str(self.registry_dir),
+        "--project-path", str(benchmark_path),
+        str(crs_config_dir), project_name, str(source_path)
     ]
 
     result = subprocess.run(
         cmd,
-        cwd=self.oss_fuzz_path,
         capture_output=True,
         text=True,
         timeout=self.config.get("build_timeout", 600)
@@ -134,16 +165,31 @@ def _build_crs_if_needed(self, project_name: str) -> None:
 
 ### Run Phase
 
-**Command**: `oss-crs run <crs-config-dir> <project-name> <harness-name> --output <output-dir>`
+**Command**:
+```bash
+oss-crs run \
+  --build-dir <build-dir> \
+  --oss-fuzz-dir <oss-fuzz-dir> \
+  --registry-dir <registry-dir> \
+  <crs-config-dir> \
+  <project-name> \
+  <harness-name> \
+  [--hints <hints-dir>]
+```
+
+**Output Directory**: CRS outputs to `{{ build_dir }}/out/{{ crs.name }}/{{ project }}/` (auto-determined from build_dir, CRS name, and project name)
+
+**Note**: No `--output` parameter for oss-crs run command. Output location is derived automatically from build_dir. Future versions may support explicit `--output` parameter.
 
 **Workflow**:
 1. Build CRS if not already built
-2. Prepare base output directory (CRS creates subdirectories)
-3. Prepare hints directory (if enabled) - copy and filter from benchmark
-4. Extract harness name from HarnessFile
-5. Execute run command in oss-fuzz directory with `--output` and optional `--hints` parameters
+2. Prepare hints directory (if enabled) - copy and filter from benchmark
+3. Extract harness name from HarnessFile
+4. Execute run command in oss-fuzz directory with optional `--hints` parameter
+5. Determine output directory using helper function (derived from build_dir, CRS name, project)
 6. Wait for completion (with timeout)
-7. Return execution result
+7. Collect outputs from derived directory
+8. Return execution result
 
 **Implementation**:
 ```python
@@ -170,33 +216,41 @@ def run_crs(
     """
     project_name = self._extract_project_name(benchmark_path)
 
-    # Build if needed
-    self._build_crs_if_needed(project_name)
+    # Prepare trial-specific build directory
+    trial_build_dir = trial_output_dir / "build"
+    trial_build_dir.mkdir(parents=True, exist_ok=True)
 
-    # Prepare base output directory (CRS creates subdirectories)
-    self._prepare_output_directory(trial_output_dir)
+    # Build if needed
+    self._build_crs_if_needed(benchmark_path, project_name, trial_build_dir)
 
     # Extract harness name (without extension)
     harness_name = Path(harness.name).stem
 
     crs_config_dir = self._resolve_crs_config_dir()
 
-    # Build command with output directory
+    # Build command (no --output parameter for oss-crs)
     cmd = [
         "oss-crs", "run",
-        str(crs_config_dir), project_name, harness_name,
-        "--output", str(trial_output_dir / "output")
+        "--build-dir", str(trial_build_dir),
+        "--oss-fuzz-dir", str(self.oss_fuzz_path),
+        "--registry-dir", str(self.registry_dir),
+        str(crs_config_dir), project_name, harness_name
     ]
 
     start_time = time.time()
     result = subprocess.run(
         cmd,
-        cwd=self.oss_fuzz_path,
         capture_output=True,
         text=True,
         timeout=self.config.get("run_timeout", 3600)
     )
     execution_time = time.time() - start_time
+
+    # Get output directory (derived from build_dir, CRS name, project)
+    output_dir = self._get_crs_output_directory(trial_build_dir, project_name)
+
+    # Collect outputs from derived directory
+    # (POVs, corpus, etc. are in output_dir/povs/, output_dir/corpus/, etc.)
 
     return CRSResult(
         harness_name=harness.name,
@@ -205,6 +259,23 @@ def run_crs(
         output=result.stdout,
         error=result.stderr if result.returncode != 0 else None
     )
+
+def _get_crs_output_directory(self, trial_build_dir: Path, project_name: str) -> Path:
+    """Get CRS output directory.
+
+    Current implementation: Returns {{ build_dir }}/out/{{ crs.name }}/{{ project }}/
+    Future: May support explicit --output parameter if oss-crs adds it.
+
+    Args:
+        trial_build_dir: Trial-specific build directory (passed via --build-dir)
+        project_name: OSS-Fuzz project name
+
+    Returns:
+        Path to CRS output directory
+    """
+    # TODO: When oss-crs supports --output parameter, check if it's provided
+    # and use that instead of the derived path
+    return trial_build_dir / "out" / self.crs_config_name / project_name
 ```
 
 ### Optional Hints Support
@@ -237,21 +308,25 @@ def run_crs(
     """Run CRS on specific harness with optional hints."""
     project_name = self._extract_project_name(benchmark_path)
 
-    # Build if needed
-    self._build_crs_if_needed(project_name)
+    # Prepare trial-specific build directory
+    trial_build_dir = trial_output_dir / "build"
+    trial_build_dir.mkdir(parents=True, exist_ok=True)
 
-    # Prepare base output directory (CRS creates subdirectories)
-    self._prepare_output_directory(trial_output_dir)
+    # Build if needed
+    self._build_crs_if_needed(benchmark_path, project_name, trial_build_dir)
 
     # Extract harness name (without extension)
     harness_name = Path(harness.name).stem
 
     crs_config_dir = self._resolve_crs_config_dir()
 
+    # Build command (no --output parameter)
     cmd = [
         "oss-crs", "run",
-        str(crs_config_dir), project_name, harness_name,
-        "--output", str(trial_output_dir / "output")
+        "--build-dir", str(trial_build_dir),
+        "--oss-fuzz-dir", str(self.oss_fuzz_path),
+        "--registry-dir", str(self.registry_dir),
+        str(crs_config_dir), project_name, harness_name
     ]
 
     # Prepare and add hints if enabled
@@ -263,12 +338,14 @@ def run_crs(
     start_time = time.time()
     result = subprocess.run(
         cmd,
-        cwd=self.oss_fuzz_path,
         capture_output=True,
         text=True,
         timeout=self.config.get("run_timeout", 3600)
     )
     execution_time = time.time() - start_time
+
+    # Get output directory (derived from build_dir, CRS name, project)
+    output_dir = self._get_crs_output_directory(trial_build_dir, project_name)
 
     # Store execution metadata for reproducibility
     self._store_execution_metadata(
@@ -279,6 +356,9 @@ def run_crs(
         execution_time=execution_time,
         returncode=result.returncode
     )
+
+    # Collect outputs from derived directory
+    # (POVs, corpus, etc. are in output_dir/povs/, output_dir/corpus/, etc.)
 
     return CRSResult(
         harness_name=harness.name,
@@ -348,23 +428,30 @@ crses:
 
 ### Output Directory Structure
 
-CRS writes outputs to the trial-specific output directory, which is mounted to `/out/` in the container:
+**Bug Finding CRS Output Location**:
 
-**Host directory structure**:
+Current: CRS outputs to `{{ trial_build_dir }}/out/{{ crs.name }}/{{ project }}/`
+- Auto-determined from trial-specific build_dir, CRS name, and project name
+- Trial build directory is `{{ trial_output_dir }}/build/`
+- No --output parameter needed for oss-crs commands
+- Use `_get_crs_output_directory(trial_build_dir, project_name)` helper to get the path
+
+**Host directory structure for Bug Finding**:
 ```
-trial_output_dir/                    # Provided by BenchmarkRunner
-├── output/                          # Mounted to /out/ in container
-│   ├── povs/                        # CRS writes POVs here (bug finding)
-│   │   ├── pov_001                  # Binary blob
-│   │   ├── pov_002
-│   │   └── pov_003
-│   ├── corpus/                      # CRS writes corpus here (optional)
-│   │   ├── input-001
-│   │   ├── input-002
-│   │   └── input-003
-│   └── crs-data/                    # CRS-specific outputs (optional)
-│       ├── intermediate-results.json
-│       └── debug-trace.log
+{{ trial_output_dir }}/build/out/{{ crs_config_name }}/{{ project_name }}/
+├── povs/                            # CRS writes POVs here (bug finding)
+│   ├── pov_001                      # Binary blob
+│   ├── pov_002
+│   └── pov_003
+├── corpus/                          # CRS writes corpus here (optional)
+│   ├── input-001
+│   ├── input-002
+│   └── input-003
+└── crs-data/                        # CRS-specific outputs (optional)
+    ├── intermediate-results.json
+    └── debug-trace.log
+
+trial_output_dir/                    # Provided by BenchmarkRunner (for metadata)
 ├── hints/                           # Prepared by _prepare_hints(), mounted to /hints/
 │   ├── sarif/                       # Filtered SARIF files
 │   │   ├── codeql.sarif
@@ -1592,12 +1679,25 @@ if pov.error_token and pov.error_token not in crash_log:
 ### Current Format
 
 ```bash
-# Bug finding
-oss-crs build <config-dir> <project>
-oss-crs run <config-dir> <project> <harness> [--output <dir>] [--hints <dir>]
+# Bug finding (CRSBench method with all parameters)
+oss-crs build \
+  --build-dir <trial-build-dir> \
+  --oss-fuzz-dir <oss-fuzz-dir> \
+  --registry-dir <registry-dir> \
+  --project-path <benchmark-dir> \
+  <config-dir> \
+  <project> \
+  <source-path>
 
-# Patch generation (Standard OSS-Fuzz method)
-oss-patch-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME
+oss-crs run \
+  --build-dir <trial-build-dir> \
+  --oss-fuzz-dir <oss-fuzz-dir> \
+  --registry-dir <registry-dir> \
+  <config-dir> \
+  <project> \
+  <harness> \
+  [--hints <dir>]
+# Note: Output directory is auto-determined as {{ build_dir }}/out/{{ crs.name }}/{{ project }}/
 
 # Patch generation (CRSBench method - with external project + pre-cloned source)
 oss-patch-crs build <config> <project> \
@@ -1612,6 +1712,8 @@ oss-patch-crs run <config> <project> --harness <name> [--pov <file> | --povs <di
 **Notes**:
 - Config paths use relative format: `example_configs/ensemble-c` (no `infra/crs/` prefix)
 - Commands are installable via pip/uv
+- **CRSBench uses trial-specific --build-dir** for isolation between trials
+- **CRSBench passes --oss-fuzz-dir and --registry-dir** for proper path resolution
 - **CRSBench uses alternative build method** with `--project-path` and `--source-path`
 - Run command arguments unchanged for both bug finding and patch generation
 
@@ -1626,8 +1728,23 @@ oss-patch-crs run <config> <project> --harness <name> [--pov <file> | --povs <di
 **Command Construction**:
 ```python
 # Bug finding
-cmd = ["oss-crs", "build", str(crs_config_dir), project_name]
-cmd = ["oss-crs", "run", str(crs_config_dir), project_name, harness_name, "--output", str(output_dir)]
+cmd = [
+    "oss-crs", "build",
+    "--build-dir", str(trial_build_dir),
+    "--oss-fuzz-dir", str(oss_fuzz_path),
+    "--registry-dir", str(registry_dir),
+    "--project-path", str(benchmark_path),
+    str(crs_config_dir), project_name, str(source_path)
+]
+
+cmd = [
+    "oss-crs", "run",
+    "--build-dir", str(trial_build_dir),
+    "--oss-fuzz-dir", str(oss_fuzz_path),
+    "--registry-dir", str(registry_dir),
+    str(crs_config_dir), project_name, harness_name
+]
+# Note: Output directory is derived from build_dir/out/crs_name/project/
 
 # Patch generation (CRSBench method)
 cmd = ["oss-patch-crs", "build", crs_config_name, project_name,
@@ -1972,7 +2089,8 @@ output_dir.mkdir(parents=True, exist_ok=True)
 
 **1. Output Directory Management**
 - **Old**: CRS outputs to `oss-fuzz/build/out/<crs>/<project>/<harness>/crashes/corpus/`
-- **New**: CRS outputs to `trial_output_dir/output/povs/corpus/crs-data/`
+- **New Bug Finding**: CRS outputs to `trial_build_dir/out/<crs>/<project>/povs/corpus/crs-data/` (where `trial_build_dir = trial_output_dir/build/`)
+- **New Patch Generation**: CRS outputs to `trial_output_dir/output/povs/patches/corpus/crs-data/`
 - **Why**: Trial-based organization enables snapshot system and better isolation
 
 **2. Directory Structure**
@@ -1981,9 +2099,9 @@ output_dir.mkdir(parents=True, exist_ok=True)
 - **Why**: Clear separation of output types, easier to snapshot and evaluate
 
 **3. Command Construction**
-- **Old**: No `--output` parameter
-- **New**: `--output` parameter required
-- **Why**: Explicit control over where CRS writes outputs
+- **Old**: Simple positional arguments only
+- **New**: Multiple required parameters (`--build-dir`, `--oss-fuzz-dir`, `--registry-dir`, `--project-path`, source path)
+- **Why**: Trial isolation, proper path resolution, and external project support
 
 **4. Method Signatures**
 - **Old**: `run_crs(benchmark_path, harness, base_commit, ref_commit)`
@@ -1992,7 +2110,8 @@ output_dir.mkdir(parents=True, exist_ok=True)
 
 **5. POV/Patch Collection**
 - **Old**: Hardcoded paths in `oss-fuzz/build/out/...`
-- **New**: Relative to `trial_output_dir/output/`
+- **New Bug Finding**: Relative to `trial_build_dir/out/<crs>/<project>/`
+- **New Patch Generation**: Relative to `trial_output_dir/output/`
 - **Why**: Flexible, supports multiple concurrent trials, enables snapshots
 
 **6. Hints/POVs Preparation**
@@ -2040,26 +2159,58 @@ output_dir.mkdir(parents=True, exist_ok=True)
 
 When updating existing CRS executor code:
 
+**Method Signatures:**
+- [ ] Update `__init__()` to accept `registry_dir: Path` and `benchmarks_root: Path` parameters
 - [ ] Update `run_crs()` signature: `run_crs(benchmark_path, harness, trial_output_dir)` - remove commit parameters
+- [ ] Update `_build_crs_if_needed()` to accept `benchmark_path: Path` and `trial_build_dir: Path` parameters
+- [ ] Update `_get_crs_output_directory()` to accept `trial_build_dir: Path` parameter
 - [ ] Add `trial_output_dir: Path` parameter to `process_pov_results()` methods
+
+**Command Construction (Bug Finding):**
+- [ ] Add `--build-dir` parameter pointing to trial-specific build directory (`trial_output_dir/build/`)
+- [ ] Add `--oss-fuzz-dir` parameter pointing to oss-fuzz repository
+- [ ] Add `--registry-dir` parameter pointing to CRS registry directory
+- [ ] Add `--project-path` parameter for build command (benchmark directory)
+- [ ] Add source path as positional argument for build command (from repo manager)
+- [ ] Remove `--output` parameter from run command (output is auto-determined from build_dir)
+- [ ] Ensure `--hints` parameter uses prepared hints directory
+
+**Command Construction (Patch Generation):**
+- [ ] Keep `--output` parameter for oss-patch-crs run command (still required)
+- [ ] Add `--povs` parameter to pass prepared POVs directory
+- [ ] Add `--hints` parameter if hints are enabled
+
+**Directory Preparation:**
+- [ ] Create trial-specific build directory before CRS execution
 - [ ] Implement `_prepare_output_directory()` (base directory only)
 - [ ] Implement `_prepare_hints()` (copy and filter from benchmark)
-- [ ] Implement `_prepare_povs()` (copy and filter from benchmark)
+- [ ] Implement `_prepare_povs()` (copy and filter from benchmark - patch generation only)
 - [ ] Implement `_store_execution_metadata()` (store execution details)
 - [ ] Call preparation methods before CRS execution
 - [ ] Call `_store_execution_metadata()` after CRS execution
-- [ ] Add `--output`, `--hints`, `--povs` parameters to command construction
-- [ ] Update POV collection to read from `trial_output_dir/output/povs/`
+
+**Output Collection:**
+- [ ] Update POV collection to read from `trial_build_dir/out/<crs>/<project>/povs/` (bug finding)
+- [ ] Update POV collection to read from `trial_output_dir/output/povs/` (patch generation)
 - [ ] Update patch collection to read from `trial_output_dir/output/patches/`
-- [ ] Update corpus collection to read from `trial_output_dir/output/corpus/`
-- [ ] Remove hardcoded `build/out/<crs>/<project>/<harness>/` paths
-- [ ] Remove hardcoded `.aixcc/<harness>/hints/` and `.aixcc/<harness>/povs/` direct references
+- [ ] Update corpus collection to read from appropriate output directory
+- [ ] Remove hardcoded `oss-fuzz/build/out/<crs>/<project>/` paths
+- [ ] Use `_get_crs_output_directory()` helper to derive output paths
+
+**Source Code Management:**
+- [ ] Integrate with repo manager to obtain pre-cloned source code
+- [ ] Pass source path to build command
 - [ ] Remove any code that creates CRS subdirectories (povs/, patches/, etc.)
+- [ ] Remove hardcoded `.aixcc/<harness>/hints/` and `.aixcc/<harness>/povs/` direct references
+
+**Testing and Documentation:**
 - [ ] Update tests to use new directory structure and preparation logic
+- [ ] Update tests to mock new command parameters
 - [ ] Update documentation and examples
 - [ ] Document that CRS is responsible for creating subdirectories
 - [ ] Document hints/POVs filtering based on experiment config
 - [ ] Document execution metadata storage (execution.json)
+- [ ] Document trial-specific build directory isolation
 - [ ] Coordinate with orchestrator for config.yaml storage
 
 ## References

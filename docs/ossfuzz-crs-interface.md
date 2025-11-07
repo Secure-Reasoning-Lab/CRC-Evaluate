@@ -814,7 +814,8 @@ uv pip install oss-patch-crs
 ```sh
 # Bug finding
 oss-crs build <config> <project>
-oss-crs run <config> <project> <harness> [--output <dir>] [--hints <dir>]
+oss-crs run <config> <project> <harness> [--hints <dir>]
+# Note: Output directory is auto-determined as {{ build_dir }}/out/{{ crs.name }}/{{ project }}/
 
 # Patch generation
 oss-patch-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME
