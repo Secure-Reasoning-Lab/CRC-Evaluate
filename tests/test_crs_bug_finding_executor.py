@@ -147,9 +147,11 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         # Build CRS
         executor._build_crs_if_needed(benchmark_path, "test-project", trial_build_dir)
 
-        # Verify repository manager was called
+        # Verify repository manager was called with project_dir
+        expected_source_dest = trial_build_dir / "src" / "test-project"
         mock_ensure_repo.assert_called_once_with(
             benchmark_dir=str(benchmark_path),
+            project_dir=str(expected_source_dest),
             verbose=False
         )
 

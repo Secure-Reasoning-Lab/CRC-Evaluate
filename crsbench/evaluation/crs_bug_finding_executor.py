@@ -110,16 +110,16 @@ class CRSBugFindingExecutor(CRSExecutor):
             trial_build_dir = trial_output_dir / "build"
             trial_build_dir.mkdir(parents=True, exist_ok=True)
 
-            # 2. Find source path
+            # 2. Build CRS Docker image (this also clones the repository)
+            self._build_crs_if_needed(benchmark_path, project_name, trial_build_dir)
+
+            # 3. Verify source path exists after build
             source_path = self._find_source_path(trial_build_dir, project_name)
             if not source_path.exists():
                 raise ExecutorError(
                     f"Source path not found: {source_path}. "
-                    "Ensure TrialDirectoryPreparer ran successfully."
+                    "Repository cloning or build preparation failed."
                 )
-
-            # 3. Build CRS Docker image
-            self._build_crs_if_needed(benchmark_path, project_name, trial_build_dir)
 
             # 4. Prepare hints if enabled
             harness_name = Path(harness.name).stem
@@ -248,8 +248,12 @@ class CRSBugFindingExecutor(CRSExecutor):
         # Use repository manager to ensure source code exists
         from crsbench.migration.repo_manager import ensure_project_repository
 
+        # Clone to trial-specific build directory
+        source_dest = trial_build_dir / "src" / project_name
+
         source_path = ensure_project_repository(
             benchmark_dir=str(benchmark_path),
+            project_dir=str(source_dest),
             verbose=self.config.get("verbose", False)
         )
 
