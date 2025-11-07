@@ -37,6 +37,9 @@ crsbench = "crsbench.run_experiment:main"
 [tool.setuptools.packages.find]
 include = ["crsbench*"]
 
+[tool.uv]
+package = true
+
 [tool.pytest.ini_options]
 markers = [
     "integration: marks tests as integration tests (requiring external services like LiteLLM, Redis, etc.)",

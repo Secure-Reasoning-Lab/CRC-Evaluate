@@ -72,10 +72,10 @@ cd CRSBench
 # Create virtual environment and install dependencies
 uv venv
 source .venv/bin/activate  # On macOS/Linux
-# .venv\Scripts\activate   # On Windows
-
 # Install CRSBench in editable mode
 uv pip install -e .
+
+# .venv\Scripts\activate   # On Windows
 
 # Verify installation
 crsbench --help
