@@ -7,7 +7,7 @@ name = "crsbench"
 version = "0.1.0"
 description = "A benchmark suite for evaluating Cyber Reasoning Systems (CRS)"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "aiofiles>=24.1.0",
     "asyncio-throttle>=1.0.2",
@@ -26,6 +26,8 @@ dependencies = [
     "rich>=14.1.0",
     "rq>=1.11.1",
     "typer>=0.19.2",
+    "oss-crs",
+    "oss-patch",
 ]
 
 [project.optional-dependencies]
@@ -43,6 +45,13 @@ include = ["crsbench*"]
 
 [tool.uv]
 package = true
+
+[tool.uv.workspace]
+members = [".", "oss-crs", "oss-patch"]
+
+[tool.uv.sources]
+oss-crs = { workspace = true }
+oss-patch = { workspace = true }
 
 [tool.pytest.ini_options]
 markers = [
