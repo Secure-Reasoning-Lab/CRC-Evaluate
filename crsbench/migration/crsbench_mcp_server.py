@@ -17,11 +17,13 @@
 
 import logging
 import os
+import re
 import shutil
 import sys
 import json
 import time
 import subprocess
+from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
 from crsbench.migration import mcp_config
@@ -45,7 +47,7 @@ def _get_benchmark_dir(benchmark_name: str) -> str:
     return os.path.join(mcp_config.BASE_BENCHMARKS_DIR, benchmark_name)
 
 
-def _get_project_source_dir(benchmark_name: str) -> str:
+def _get_project_source_dir(benchmark_name: str) -> Optional[str]:
     """Get the project source directory path from benchmark's project.yaml or .aixcc/meta.yaml."""
     benchmark_dir = _get_benchmark_dir(benchmark_name)
 
@@ -80,7 +82,55 @@ def _get_project_source_dir(benchmark_name: str) -> str:
     return None
 
 
-def _prepare_benchmark_for_oss_fuzz(benchmark_name: str) -> str:
+def _get_workdir_from_dockerfile(benchmark_name: str) -> str:
+    """
+    Parse WORKDIR from the benchmark's Dockerfile.
+
+    Args:
+        benchmark_name: Name of the benchmark
+
+    Returns:
+        The WORKDIR path (default: /src if not found)
+    """
+    benchmark_dir = _get_benchmark_dir(benchmark_name)
+    dockerfile_path = os.path.join(benchmark_dir, 'Dockerfile')
+
+    if not os.path.exists(dockerfile_path):
+        logger.warning("Dockerfile not found for benchmark %s, using default /src", benchmark_name)
+        return '/src'
+
+    # Regex pattern to match WORKDIR directive
+    workdir_regex = re.compile(r'\s*WORKDIR\s*([^\s]+)')
+
+    try:
+        with open(dockerfile_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        # Search in reverse to get the last WORKDIR (OSS-Fuzz convention)
+        for line in reversed(lines):
+            match = re.match(workdir_regex, line)
+            if match:
+                workdir = match.group(1)
+                # Replace $SRC with /src
+                workdir = workdir.replace('$SRC', '/src')
+
+                # If relative path, join with /src
+                if not os.path.isabs(workdir):
+                    workdir = os.path.join('/src', workdir)
+
+                # Normalize path
+                workdir = os.path.normpath(workdir)
+                logger.info("Found WORKDIR for benchmark %s: %s", benchmark_name, workdir)
+                return workdir
+
+    except Exception as e:
+        logger.error("Failed to parse Dockerfile for benchmark %s: %s", benchmark_name, str(e))
+
+    logger.warning("No WORKDIR found in Dockerfile for benchmark %s, using default /src", benchmark_name)
+    return '/src'
+
+
+def _prepare_benchmark_for_oss_fuzz(benchmark_name: str) -> Optional[str]:
     """
     Prepare benchmark for OSS-Fuzz by copying to oss-fuzz/projects/aixcc/.
 
@@ -137,7 +187,7 @@ def shorten_logs_if_needed(log_string: str) -> str:
 
 
 @mcp.tool()
-async def build_benchmark(benchmark_name: str) -> bool:
+async def build_benchmark(benchmark_name: str) -> dict:
     """
     Builds a CRSBench benchmark using OSS-Fuzz helper.py build_fuzzers.
 
@@ -145,22 +195,24 @@ async def build_benchmark(benchmark_name: str) -> bool:
         benchmark_name: Name of the benchmark to build (e.g., "curl-delta-01")
 
     Returns:
-        True if the build succeeds, False otherwise
+        Dictionary with 'success' (bool) and 'logs' (str) keys
     """
     # Prepare benchmark in oss-fuzz/projects/aixcc/
     oss_fuzz_project = _prepare_benchmark_for_oss_fuzz(benchmark_name)
     if not oss_fuzz_project:
-        return False
+        return {"success": False, "logs": f"Error: Failed to prepare benchmark {benchmark_name}"}
 
     # Get project source directory path
     project_source_path = _get_project_source_dir(benchmark_name)
     if not project_source_path:
-        logger.error("Could not find project source directory for benchmark '%s'", benchmark_name)
-        return False
+        error_msg = f"Error: Could not find project source directory for benchmark '{benchmark_name}'"
+        logger.error(error_msg)
+        return {"success": False, "logs": error_msg}
 
     if not os.path.isdir(project_source_path):
-        logger.error("Project source directory does not exist: %s", project_source_path)
-        return False
+        error_msg = f"Error: Project source directory does not exist: {project_source_path}"
+        logger.error(error_msg)
+        return {"success": False, "logs": error_msg}
 
     logger.info("Building benchmark '%s' using OSS-Fuzz helper.py with source path: %s",
                 benchmark_name, project_source_path)
@@ -168,61 +220,13 @@ async def build_benchmark(benchmark_name: str) -> bool:
     # Build the command with source_path
     build_cmd = f"python3 infra/helper.py build_fuzzers {oss_fuzz_project} {project_source_path}"
 
-    try:
-        subprocess.check_call(
-            build_cmd,
-            cwd=mcp_config.OSS_FUZZ_DIR,
-            shell=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.STDOUT,
-            timeout=60 * 20
-        )
-        logger.info("Successfully built benchmark '%s'", benchmark_name)
-        return True
-    except subprocess.CalledProcessError as e:
-        logger.error("Build failed for benchmark '%s': %s", benchmark_name, str(e))
-        return False
-    except subprocess.TimeoutExpired:
-        logger.error("Build timed out for benchmark '%s'", benchmark_name)
-        return False
-
-
-@mcp.tool()
-async def get_build_logs(benchmark_name: str) -> str:
-    """
-    Retrieves build logs for a CRSBench benchmark using OSS-Fuzz helper.py.
-
-    Args:
-        benchmark_name: Name of the benchmark
-
-    Returns:
-        A string containing the build logs
-    """
-    # Prepare benchmark in oss-fuzz/projects/aixcc/
-    oss_fuzz_project = _prepare_benchmark_for_oss_fuzz(benchmark_name)
-    if not oss_fuzz_project:
-        return f"Error: Failed to prepare benchmark {benchmark_name}"
-
-    # Get project source directory path
-    project_source_path = _get_project_source_dir(benchmark_name)
-    if not project_source_path:
-        return f"Error: Could not find project source directory for benchmark {benchmark_name}"
-
-    if not os.path.isdir(project_source_path):
-        return f"Error: Project source directory does not exist: {project_source_path}"
-
-    logger.info("Retrieving build logs for benchmark '%s' with source path: %s",
-                benchmark_name, project_source_path)
-
     os.makedirs(mcp_config.BASE_TMP_LOGS, exist_ok=True)
     target_logs = os.path.join(mcp_config.BASE_TMP_LOGS, f'build-log-{benchmark_name}.txt')
 
     if os.path.isfile(target_logs):
         os.remove(target_logs)
 
-    # Build the command with source_path
-    build_cmd = f"python3 infra/helper.py build_fuzzers {oss_fuzz_project} {project_source_path}"
-
+    # Run build and capture logs
     with open(target_logs, 'w', encoding='utf-8') as log_stdout:
         try:
             subprocess.check_call(
@@ -233,19 +237,28 @@ async def get_build_logs(benchmark_name: str) -> str:
                 stderr=subprocess.STDOUT,
                 timeout=60 * 20
             )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-            logger.info("Build failed for benchmark '%s': %s", benchmark_name, str(e))
+            log_stdout.write("\n\nBuild succeeded.\n")
+            success = True
+            logger.info("Successfully built benchmark '%s'", benchmark_name)
+        except subprocess.CalledProcessError as e:
+            logger.error("Build failed for benchmark '%s': %s", benchmark_name, str(e))
+            log_stdout.write(f"\n\nBuild failed with exit code {e.returncode}\n")
+            success = False
+        except subprocess.TimeoutExpired:
+            logger.error("Build timed out for benchmark '%s'", benchmark_name)
+            log_stdout.write("\n\nBuild timed out.\n")
+            success = False
 
+    # Read logs
     with open(target_logs, 'r', encoding='utf-8') as f:
         logs = f.read()
 
     logs_to_return = shorten_logs_if_needed(logs)
-    logger.info("Build logs retrieved for benchmark '%s'", benchmark_name)
-    return logs_to_return
+    return {"success": success, "logs": logs_to_return}
 
 
 @mcp.tool()
-async def check_test_sh(benchmark_name: str) -> str:
+async def check_test_sh(benchmark_name: str) -> dict:
     """
     Checks if test.sh runs successfully for a CRSBench benchmark.
     Uses OSS-Fuzz built image.
@@ -254,25 +267,41 @@ async def check_test_sh(benchmark_name: str) -> str:
         benchmark_name: Name of the benchmark
 
     Returns:
-        The logs from running test.sh
+        Dictionary with 'returncode' (int), 'output' (str), 'success' (bool), 'timed_out' (bool)
     """
     benchmark_dir = _get_benchmark_dir(benchmark_name)
 
     if not os.path.isdir(benchmark_dir):
-        return f"Error: Benchmark directory not found: {benchmark_dir}"
+        return {
+            "success": False,
+            "returncode": -1,
+            "output": f"Error: Benchmark directory not found: {benchmark_dir}",
+            "timed_out": False
+        }
 
     test_sh_path = os.path.join(benchmark_dir, 'test.sh')
     if not os.path.exists(test_sh_path):
-        return f"Error: test.sh not found for benchmark: {benchmark_name}"
+        return {
+            "success": False,
+            "returncode": -1,
+            "output": f"Error: test.sh not found for benchmark: {benchmark_name}",
+            "timed_out": False
+        }
 
     logger.info("Checking test.sh for benchmark '%s'...", benchmark_name)
 
     # Get project source directory
     project_src_dir = _get_project_source_dir(benchmark_name)
     if not project_src_dir or not os.path.isdir(project_src_dir):
-        return f"Error: Project source directory not found for {benchmark_name}"
+        return {
+            "success": False,
+            "returncode": -1,
+            "output": f"Error: Project source directory not found for {benchmark_name}",
+            "timed_out": False
+        }
 
-    project_name = os.path.basename(project_src_dir)
+    # Get WORKDIR from Dockerfile
+    workdir = _get_workdir_from_dockerfile(benchmark_name)
 
     # OSS-Fuzz image tag format: gcr.io/oss-fuzz/<project-name>
     # For aixcc benchmarks: gcr.io/oss-fuzz/aixcc/<benchmark-name>
@@ -285,123 +314,50 @@ async def check_test_sh(benchmark_name: str) -> str:
     if os.path.isfile(target_logs):
         os.remove(target_logs)
 
-    # Prepare Docker run command with project source mounted
+    # Prepare Docker run command with project source mounted to WORKDIR
     docker_cmd_parts = [
         "docker", "run", "--rm",
         "-v", f"{test_sh_path}:/src/test.sh:ro",
-        "-v", f"{project_src_dir}:/src/{project_name}:rw",  # Mount project source
+        "-v", f"{project_src_dir}:{workdir}:rw",  # Mount project source to WORKDIR
         image_tag,
         "bash", "/src/test.sh"
     ]
 
     # Run test.sh inside the container
+    returncode = 0
+    timed_out = False
+
     with open(target_logs, 'w', encoding='utf-8') as log_stdout:
         try:
-            subprocess.check_call(
+            result = subprocess.run(
                 docker_cmd_parts,
                 stdout=log_stdout,
                 stderr=subprocess.STDOUT,
                 timeout=60 * 10
             )
-            log_stdout.write("\n\ntest.sh execution succeeded.\n")
-        except subprocess.CalledProcessError as e:
-            logger.info("test.sh failed for benchmark '%s': %s", benchmark_name, str(e))
-            log_stdout.write(f"\n\ntest.sh failed with exit code {e.returncode}\n")
+            returncode = result.returncode
+            if returncode == 0:
+                log_stdout.write("\n\ntest.sh execution succeeded.\n")
+            else:
+                log_stdout.write(f"\n\ntest.sh failed with exit code {returncode}\n")
         except subprocess.TimeoutExpired:
             logger.info("test.sh timed out for benchmark '%s'", benchmark_name)
             log_stdout.write("\n\ntest.sh execution timed out.\n")
+            returncode = -1
+            timed_out = True
 
     with open(target_logs, 'r', encoding='utf-8') as f:
         logs = f.read()
 
     logs_to_return = shorten_logs_if_needed(logs)
-    logger.info("test.sh logs retrieved for benchmark '%s'", benchmark_name)
-    return logs_to_return
+    logger.info("test.sh logs retrieved for benchmark '%s' (returncode: %d)", benchmark_name, returncode)
 
-
-@mcp.tool()
-async def check_build_sh(benchmark_name: str) -> str:
-    """
-    Tests build.sh (full build before patch) for a CRSBench benchmark.
-    Uses OSS-Fuzz Docker environment.
-
-    Args:
-        benchmark_name: Name of the benchmark
-
-    Returns:
-        The logs from running build.sh
-    """
-    benchmark_dir = _get_benchmark_dir(benchmark_name)
-
-    if not os.path.isdir(benchmark_dir):
-        return f"Error: Benchmark directory not found: {benchmark_dir}"
-
-    build_path = os.path.join(benchmark_dir, 'build.sh')
-    if not os.path.exists(build_path):
-        return f"Error: build.sh not found for benchmark: {benchmark_name}"
-
-    logger.info("Testing build.sh for benchmark '%s'...", benchmark_name)
-
-    # Prepare benchmark in oss-fuzz/projects/aixcc/
-    oss_fuzz_project = _prepare_benchmark_for_oss_fuzz(benchmark_name)
-    if not oss_fuzz_project:
-        return f"Error: Failed to prepare benchmark {benchmark_name}"
-
-    # Get the base builder image
-    image_tag = "gcr.io/oss-fuzz-base/base-builder"
-
-    os.makedirs(mcp_config.BASE_TMP_LOGS, exist_ok=True)
-    target_logs = os.path.join(mcp_config.BASE_TMP_LOGS, f'build-log-{benchmark_name}.txt')
-
-    if os.path.isfile(target_logs):
-        os.remove(target_logs)
-
-    # Get project source directory
-    project_src_dir = _get_project_source_dir(benchmark_name)
-    if not project_src_dir or not os.path.isdir(project_src_dir):
-        return f"Error: Project source directory not found for {benchmark_name}"
-
-    project_name = os.path.basename(project_src_dir)
-
-    # Prepare Docker run command
-    docker_cmd_parts = [
-        "docker", "run", "--rm",
-        "-v", f"{build_path}:/src/build.sh:ro",  # Mount as build.sh
-        "-v", f"{project_src_dir}:/src/{project_name}:rw",  # Mount project source
-        "-e", f"SRC=/src",
-        "-e", f"OUT=/tmp/out",
-        "-e", f"CC=clang",
-        "-e", f"CXX=clang++",
-        "-e", f"CFLAGS=-O1 -fno-omit-frame-pointer -g",
-        "-e", f"CXXFLAGS=-O1 -fno-omit-frame-pointer -g",
-        "-w", "/src",
-        image_tag,
-        "bash", "/src/build.sh"
-    ]
-
-    # Run build.sh inside the container
-    with open(target_logs, 'w', encoding='utf-8') as log_stdout:
-        try:
-            subprocess.check_call(
-                docker_cmd_parts,
-                stdout=log_stdout,
-                stderr=subprocess.STDOUT,
-                timeout=60 * 20
-            )
-            log_stdout.write("\n\nbuild.sh execution succeeded.\n")
-        except subprocess.CalledProcessError as e:
-            logger.info("build.sh failed for benchmark '%s': %s", benchmark_name, str(e))
-            log_stdout.write(f"\n\nbuild.sh failed with exit code {e.returncode}\n")
-        except subprocess.TimeoutExpired:
-            logger.info("build.sh timed out for benchmark '%s'", benchmark_name)
-            log_stdout.write("\n\nbuild.sh execution timed out.\n")
-
-    with open(target_logs, 'r', encoding='utf-8') as f:
-        logs = f.read()
-
-    logs_to_return = shorten_logs_if_needed(logs)
-    logger.info("build.sh logs retrieved for benchmark '%s'", benchmark_name)
-    return logs_to_return
+    return {
+        "success": returncode == 0,
+        "returncode": returncode,
+        "output": logs_to_return,
+        "timed_out": timed_out
+    }
 
 
 @mcp.tool()
@@ -447,13 +403,14 @@ async def check_replay_build_sh(benchmark_name: str) -> str:
     if not project_src_dir or not os.path.isdir(project_src_dir):
         return f"Error: Project source directory not found for {benchmark_name}"
 
-    project_name = os.path.basename(project_src_dir)
+    # Get WORKDIR from Dockerfile
+    workdir = _get_workdir_from_dockerfile(benchmark_name)
 
     # Prepare Docker run command
     docker_cmd_parts = [
         "docker", "run", "--rm",
         "-v", f"{replay_build_path}:/src/replay-build.sh:ro",
-        "-v", f"{project_src_dir}:/src/{project_name}:rw",  # Mount project source
+        "-v", f"{project_src_dir}:{workdir}:rw",  # Mount project source to WORKDIR
         "-e", f"SRC=/src",
         "-e", f"OUT=/tmp/out",
         "-e", f"CC=clang",
@@ -508,7 +465,8 @@ async def run_command_in_container(benchmark_name: str, command: str) -> str:
     if not project_src_dir or not os.path.isdir(project_src_dir):
         return f"Error: Project source directory not found for {benchmark_name}"
 
-    project_name = os.path.basename(project_src_dir)
+    # Get WORKDIR from Dockerfile
+    workdir = _get_workdir_from_dockerfile(benchmark_name)
 
     # OSS-Fuzz image tag format
     oss_fuzz_project = f"aixcc/{benchmark_name}"
@@ -516,10 +474,10 @@ async def run_command_in_container(benchmark_name: str, command: str) -> str:
 
     logger.info("Running command in container for benchmark '%s': %s", benchmark_name, command)
 
-    # Prepare Docker run command with project source mounted
+    # Prepare Docker run command with project source mounted to WORKDIR
     docker_cmd_parts = [
         "docker", "run", "--rm",
-        "-v", f"{project_src_dir}:/src/{project_name}:rw",  # Mount project source
+        "-v", f"{project_src_dir}:{workdir}:rw",  # Mount project source to WORKDIR
         image_tag,
         "bash", "-c", command
     ]

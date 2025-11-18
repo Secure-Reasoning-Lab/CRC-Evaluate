@@ -15,7 +15,23 @@ import shutil
 from typing import Dict, Any, List, Optional
 import yaml
 
-from claude_agent_sdk import query, ClaudeAgentOptions, PermissionResultAllow, ToolPermissionContext
+from claude_agent_sdk import query, ClaudeAgentOptions
+
+
+def _get_crsbench_repo_root() -> str:
+    """
+    Get the crsbench repository root directory.
+
+    This is where .claude/skills/ directory is located for skill loading.
+
+    Returns:
+        Absolute path to crsbench repository root
+    """
+    # This file is at crsbench/migration/test_sh_generator.py
+    # Repository root is two levels up
+    current_file = Path(__file__).resolve()
+    repo_root = current_file.parent.parent.parent
+    return str(repo_root)
 
 
 def _copy_benchmark_files_to_project(
@@ -96,8 +112,7 @@ class ShTestGenerator:
         self,
         litellm_base_url: Optional[str] = None,
         litellm_api_key: Optional[str] = None,
-        model: str = "claude-sonnet-4-5-20250929",
-        auto_approve_bash: bool = True
+        model: str = "claude-sonnet-4-5-20250929"
     ):
         """
         Initialize the test.sh generator agent.
@@ -124,25 +139,6 @@ class ShTestGenerator:
             )
 
         self.model = model
-        self.auto_approve_bash = auto_approve_bash
-
-    async def _permission_callback(self, permission_context: ToolPermissionContext):
-        """
-        Auto-approve all tool operations for test.sh generation.
-
-        This is safe because:
-        - We're only analyzing code (Read, Grep, Glob)
-        - Bash commands are for file exploration (ls, find, etc.)
-        - Build/test execution happens in Docker via MCP tools
-        """
-        tool_name = permission_context.tool_name
-
-        # Auto-approve all operations for test.sh generation
-        if self.auto_approve_bash:
-            return PermissionResultAllow()
-
-        # Default: allow
-        return PermissionResultAllow()
 
     def _extract_bash_script(self, text: str) -> Optional[str]:
         """
@@ -249,132 +245,29 @@ class ShTestGenerator:
         Returns:
             Tuple of (markdown_document, agent_log)
         """
-        prompt = f"""You are an expert software testing analyst specialized in OSS-Fuzz projects.
+        prompt = f"""Analyze the project repository at `{project_dir}` and identify all unit tests and functional tests.
 
-Your task is to analyze the project repository at `{project_dir}` and identify all unit tests and functional tests.
+This is an OSS-Fuzz project with `.oss-fuzz/` directory containing build.sh, Dockerfile, and .aixcc/meta.yaml.
 
-# OSS-Fuzz Context
-This is an OSS-Fuzz project. The `.oss-fuzz/` directory in the project root contains:
-- **build.sh**: Build process used in OSS-Fuzz container
-- **Dockerfile**: Dependencies and build environment setup
-- **.aixcc/meta.yaml**: Harness file information and POV metadata
+Please use the appropriate skill to:
+1. Identify the build system and test framework
+2. Find all unit test files
+3. Document test commands and exclusions
+4. Generate a comprehensive patch exclude list
 
-You must examine these files to understand how the project is built and tested in the OSS-Fuzz environment.
-
-# Your Task
-1. **Identify the build system**: Check for pom.xml (Maven), build.gradle (Gradle), CMakeLists.txt (CMake), Makefile, setup.py, etc.
-2. **Find test files**: Use Glob to search for test directories (test/, tests/, src/test/) and test files (*Test.java, *_test.py, test_*.cpp, etc.)
-3. **Identify test framework**: Determine which test framework is used (JUnit, pytest, Google Test, CTest, etc.)
-4. **Extract test commands**: Document the exact commands needed to build and run tests
-5. **Identify problematic tests**: Find tests that may fail in Docker (file permissions, network, root-only tests, flaky tests)
-
-# Output Format
-Provide a markdown document with this structure:
-
-```markdown
-# Unit Test Analysis
-
-## Build System
-- Type: [Maven/Gradle/CMake/Make/pytest/etc.]
-- Language: [Java/C/C++/Python/Go/etc.]
-- Build file: [path/to/build/file]
-
-## Test Framework
-- Framework: [JUnit 5/pytest/Google Test/etc.]
-- Version: [if detectable]
-
-## Test Commands
-### Build Command
-```bash
-[exact command to build, e.g., mvn compile]
-```
-
-### Test Execution Command
-```bash
-[exact command to run tests, e.g., mvn test]
-```
-
-## Discovered Tests
-[List 5-10 representative test files with paths]
-
-## Test Exclusions
-- Docker-incompatible tests: [list with reasons]
-- Flaky tests: [list if any]
-- Skip flags needed: [e.g., -Drat.skip=true -Dcheckstyle.skip=true]
-
-## Recommendations for test.sh
-- **Prefer simple, existing test commands** - if the project has a simple command like `make check`, `mvn test`, or `pytest`, use that instead of running individual tests
-- Final test command with all necessary flags
-- Environment variables needed (e.g., MVN, PYTHON)
-- Working directory requirements
-
-## Patch Exclude List
-**IMPORTANT**: This section identifies files that should NOT receive patches from automated repair systems (CRS).
-
-Analyze the project structure and identify files that should be excluded from patching:
-
-1. **Test files** - Files in test directories (test/, tests/, src/test/, *Test.java, *_test.py, test_*.cpp, etc.)
-   - Reason: Test files verify behavior and should not be modified by repair systems
-   - List specific patterns or directories
-
-2. **Build/Configuration files** - Build scripts, configuration files, metadata
-   - Examples: pom.xml, build.gradle, CMakeLists.txt, Makefile, setup.py, package.json
-   - Reason: Build configuration should remain stable
-   - List specific files found in the project
-
-3. **Documentation and resources** - Markdown, text files, images, data files
-   - Examples: README.md, *.txt, *.md, docs/, resources/, assets/
-   - Reason: Non-code files should not be patched
-   - List relevant patterns
-
-4. **Generated files** - Auto-generated code, compiled outputs
-   - Examples: target/, build/, dist/, *.class, *.pyc, node_modules/
-   - Reason: Generated files should not be directly modified
-   - List if detectable
-
-5. **Third-party code** - Vendored dependencies, external libraries
-   - Examples: vendor/, third_party/, external/, lib/
-   - Reason: External code should not be patched
-   - List if found
-
-Provide the patch exclude list in this format:
-```yaml
-patch_exclude_list:
-  - "test/**"           # All test files
-  - "tests/**"          # Test directory
-  - "src/test/**"       # Test source files
-  - "pom.xml"           # Maven build file
-  - "*.md"              # Documentation
-  # Add project-specific patterns
-```
-```
-
-# Important
-- Use Grep and Glob extensively to discover build files and test files
-- Read `.oss-fuzz/build.sh` and `.oss-fuzz/Dockerfile` first for context
-- Focus on information needed to generate a working test.sh script
-- Cite specific file paths when listing tests
-- **CRITICAL**: test.sh is executed from $SRC directory via `bash /src/test.sh`
-- The project source code is mounted at `/src/<project-name>` (read-write access)
-- WORKDIR in Dockerfile is typically set to `$SRC/<project-name>` or `$SRC`
-- **You can use Bash for file exploration** - use SIMPLE commands only:
-  - File listing: ls, find, tree
-  - File inspection: file, cat, head, tail, wc
-  - Text search: grep (simple patterns only)
-  - AVOID: Complex pipes, redirects, chained commands with && or ||
-- **CRITICAL: DO NOT EXECUTE build or test commands** (mvn compile, mvn test, make, pytest, etc.)
-- This is STATIC ANALYSIS - discover test files, build systems, and frameworks by examining code structure
-- **CRITICAL**: Carefully analyze the project structure to create a comprehensive patch_exclude_list
-
-Now analyze the project and provide the markdown document.
+Provide your analysis as a markdown document with all required sections.
 """
 
+        # Use repo root as cwd so skills can be loaded from .claude/skills/
+        # The agent can still access project files using absolute paths
         options = ClaudeAgentOptions(
             model=self.model,
-            allowed_tools=["Read", "Write", "Edit", "Grep", "Glob", "Bash", "WebSearch", "WebFetch", "TodoWrite"],
-            permission_callback=self._permission_callback,
+            allowed_tools=["Read", "Write", "Edit", "Grep", "Glob", "Bash", "WebSearch", "WebFetch", "TodoWrite", "Skill"],
+            setting_sources=["project"],
+            cwd=_get_crsbench_repo_root(),
             system_prompt=(
                 "You are a thorough software testing analyst. "
+                "Use available skills to help with your analysis. "
                 "Use Grep to search patterns, Glob to find files, Read to examine files, Write to create files, and Edit to modify files. "
                 "You can use WebSearch to research build systems/frameworks, WebFetch for documentation, "
                 "and TodoWrite to track your analysis progress. "
@@ -468,7 +361,7 @@ Now analyze the project and provide the markdown document.
         benchmark_dir: str,
         with_docker_testing: bool = False,
         verbose: bool = False
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, str]:
         """
         Generate test.sh script from test analysis markdown.
 
@@ -480,234 +373,54 @@ Now analyze the project and provide the markdown document.
             verbose: Enable verbose logging
 
         Returns:
-            Tuple of (script_content, agent_log)
+            Tuple of (script_content, agent_response_text, agent_log)
+            - script_content: Extracted bash script
+            - agent_response_text: Full agent response (rationale, explanations)
+            - agent_log: Formatted agent conversation log
         """
         if with_docker_testing:
             # Iterative approach with Docker testing
-            prompt = f"""You are an expert software testing engineer specialized in creating test.sh scripts for CRSBench benchmarks.
+            prompt = f"""Generate a WORKING, EXECUTABLE test.sh bash script for benchmark `{benchmark_name}`.
 
-CRSBench is a benchmark framework for evaluating Cyber Reasoning Systems (CRS). Each benchmark consists of:
-- A Dockerfile for building the project
-- A build.sh script for compiling the project
-- A test.sh script for running functional/unit tests
-- A project.yaml file with metadata
-
-**CRITICAL REQUIREMENTS - READ CAREFULLY:**
-
-Your task is to generate a WORKING, EXECUTABLE test.sh bash script for benchmark `{benchmark_name}`.
-
-1. **OUTPUT FORMAT**: You MUST output a valid bash script, NOT markdown, NOT explanations
-2. **SCRIPT MUST BE EXECUTABLE**: The script must run successfully inside Docker container
-3. **DO NOT FINISH UNTIL SUCCESS**: You MUST keep iterating until the test.sh runs without errors in Docker
-4. **NO MARKDOWN**: Do NOT output markdown documents - only executable bash script
-
-**What the test.sh script should do:**
-1. Run the project's unit/functional tests (NOT fuzzers - fuzzers are separate from unit tests)
-2. Skip non-essential checks (coverage, linting, style)
-3. Exclude tests that fail in Docker (permissions, network)
-4. Exit with 0 on success, non-zero on failure
-
-**IMPORTANT**:
-- Fuzzer executables (like *_fuzzer, *_harness) are NOT unit tests
-- Only run the project's native unit/functional test suite (e.g., JUnit tests, pytest tests, make test)
-- Do NOT execute fuzzer binaries built by OSS-Fuzz
+# Context
+- Benchmark directory: {benchmark_dir}
+- **CRITICAL**: build.sh and test.sh are located at $SRC directory in the container
+- **CRITICAL**: test.sh is executed from $SRC directory via `bash $SRC/test.sh`
+- Project source code is mounted at $SRC/<project-name> in the container
 
 # Test Analysis
-The following analysis was performed on the project:
-
 ```markdown
 {test_analysis_md}
-```
-
-# Available MCP Tools (Docker Operations)
-- **mcp__crsbench__build_benchmark**: Build Docker image
-- **mcp__crsbench__check_test_sh**: Test test.sh inside Docker container
-- **mcp__crsbench__run_command_in_container**: Run commands inside Docker (e.g., 'mvn --version', 'which make')
-- **mcp__crsbench__get_build_logs**: Get Docker build logs
-- **mcp__crsbench__get_benchmark_info**: Get benchmark metadata
-
-# Available File/Research Tools
-- **Read**: Read file contents (project.yaml, Dockerfile, build.sh)
-- **Write/Edit**: Create or modify test.sh scripts
-- **Grep/Glob**: Search for files and patterns
-- **WebSearch/WebFetch**: Research build systems and frameworks
-
-**CRITICAL - BUILD/TEST EXECUTION ENVIRONMENT:**
-- **Code analysis** (Read, Grep, Glob, Bash for ls/find): Run on HOST (current environment)
-- **Build execution** (mvn compile, make, cmake, etc.): Run in DOCKER via mcp__crsbench__build_benchmark
-- **Test execution** (mvn test, pytest, make test, etc.): Run in DOCKER via mcp__crsbench__check_test_sh
-- **Tool availability checks**: Run in DOCKER via mcp__crsbench__run_command_in_container
-- DO NOT use Bash to execute build/test commands locally - use MCP tools to run them in Docker
-
-# Iterative Process - MANDATORY WORKFLOW
-Follow these steps and DO NOT STOP until test.sh succeeds:
-
-1. **Examine benchmark files**: Read .oss-fuzz/project.yaml, .oss-fuzz/Dockerfile, .oss-fuzz/build.sh
-2. **Generate initial test.sh**: Create a BASH SCRIPT (NOT markdown) based on the test analysis
-3. **Build Docker image**: Use mcp__crsbench__build_benchmark
-4. **Test the script**: Use mcp__crsbench__check_test_sh to run test.sh in Docker
-5. **Check result**:
-   - ✅ If "test.sh execution succeeded" → YOU ARE DONE, output the final script
-   - ❌ If failed → GO TO STEP 6
-6. **Analyze failures**: Examine the logs carefully to understand why it failed
-7. **Refine script**: Update test.sh with better skip flags, exclusions, or commands
-8. **MANDATORY ITERATION**: GO BACK TO STEP 4 and test again
-9. **REPEAT UNTIL SUCCESS**: You MUST keep iterating until test.sh runs successfully
-
-**YOU MUST NOT FINISH THIS TASK UNTIL test.sh EXECUTES SUCCESSFULLY IN DOCKER**
-
-The test.sh script runs inside a Docker container with:
-- WORKDIR typically set to $SRC/<project-name> (or $SRC if not specified)
-- **CRITICAL: test.sh is executed from $SRC directory** (not from project directory)
-- Project source code is mounted at `/src/<project-name>` (read-write)
-- Standard OSS-Fuzz environment variables available
-- May be running as root
-
-# Script Requirements
-The test.sh must:
-- Start with `#!/bin/bash`
-- **Prefer simple, existing test commands** - if the project has `make check`, `mvn test`, or similar, use that instead of running individual test executables
-- **CRITICAL: Skip tests that fail when run in the original project** - check the "Test Exclusions" section in the test analysis
-- Use environment variables with fallbacks (e.g., `if [ -z "${{MVN}}" ]; then MVN=mvn; fi`)
-- Skip non-essential checks (use flags like `-Drat.skip=true -Dcheckstyle.skip=true`)
-- Exclude problematic tests (use patterns like `-Dtest=!FlakyTest,!NetworkTest`)
-- Exit with appropriate status code
-
-# Example Patterns
-
-**Simple Make (PREFERRED if available):**
-```bash
-#!/bin/bash
-make check
-```
-
-**Maven:**
-```bash
-#!/bin/bash
-MAVEN_ARGS="-Djacoco.skip=true -Drat.skip=true -Dcheckstyle.skip=true -Dtest=!FlakyTest"
-if [ -z "${{MVN}}" ]; then MVN=mvn; fi
-$MVN test $MAVEN_ARGS
-```
-
-**Make/CMake:**
-```bash
-#!/bin/bash
-mkdir -p build && cd build
-cmake .. -DBUILD_TESTING=ON
-make test
-```
-
-**Python:**
-```bash
-#!/bin/bash
-if [ -z "${{PYTHON}}" ]; then PYTHON=python3; fi
-$PYTHON -m pytest tests/ -k "not slow and not network"
-```
-
-**MANDATORY WORKFLOW - DO NOT SKIP:**
-
-1. Start by generating a bash script (NOT markdown)
-2. Use mcp__crsbench__build_benchmark to build Docker image (DO NOT use local docker commands)
-3. Use mcp__crsbench__check_test_sh to test the script inside Docker
-4. If test fails, analyze logs and refine the script using Edit tool
-5. Test again with mcp__crsbench__check_test_sh (inside Docker)
-6. REPEAT steps 4-5 until test.sh succeeds
-
-**CRITICAL RULES:**
-- Output ONLY executable bash script, NO markdown, NO explanations in the final output
-- DO NOT finish until mcp__crsbench__check_test_sh returns "test.sh execution succeeded"
-- If test.sh fails, you MUST keep iterating and fixing it
-- **EXECUTION ENVIRONMENT RULES:**
-  - Static analysis (Read, Grep, Glob, Bash ls/find/cat): Run on HOST
-  - Build execution (mvn compile, make, etc.): Run in DOCKER via mcp__crsbench__build_benchmark
-  - Test execution (mvn test, pytest, etc.): Run in DOCKER via mcp__crsbench__check_test_sh
-  - DO NOT use Bash to run build/test commands - use MCP tools to execute them in Docker
-- If you need to check tool availability in Docker, use mcp__crsbench__run_command_in_container
-- TIP: Simpler is better - prefer `make check` or `mvn test` over individual test executables
-
-Begin the iterative process now and DO NOT STOP until test.sh works successfully in Docker.
-"""
-        else:
-            # Simple two-phase approach (analyze → generate)
-            prompt = f"""You are an expert bash scripting engineer specialized in OSS-Fuzz test scripts.
-
-You are tasked with generating a test.sh script for the OSS-Fuzz benchmark `{benchmark_name}`.
-
-# Test Analysis
-The following analysis was performed on the project:
-
-```markdown
-{test_analysis_md}
-```
-
-# OSS-Fuzz Context
-The test.sh script will run inside an OSS-Fuzz Docker container after the project is built.
-
-**CRITICAL Execution Environment:**
-- **test.sh is executed from $SRC directory** via `bash /src/test.sh`
-- The project source code is mounted at `/src/<project-name>` (read-write access)
-- WORKDIR in Dockerfile is typically `$SRC/<project-name>` or `$SRC`
-- You may need to `cd` into the project directory if tests expect to run from project root
-
-# Requirements
-You must create a test.sh script that:
-1. Starts with `#!/bin/bash`
-2. Runs the project's unit/functional tests (NOT fuzzers - fuzzers are separate from unit tests)
-3. **Prefer simple, existing test commands** - if the project has `make check`, `mvn test`, or similar, use that instead of running individual test executables
-4. **CRITICAL: Skip tests that fail when run in the original project** - check the "Test Exclusions" section in the analysis
-5. Excludes tests that fail in Docker (file permissions, network, root-only, flaky tests)
-6. Skips non-essential checks (coverage, linting, code style, RAT checks)
-7. Exits with 0 on success, non-zero on failure
-8. Uses environment variables for commands (e.g., `${{MVN}}`, `${{PYTHON}}`) with fallbacks
-
-**IMPORTANT**:
-- Fuzzer executables (like *_fuzzer, *_harness) are NOT unit tests
-- Only run the project's native unit/functional test suite (e.g., JUnit tests, pytest tests, make test)
-- Do NOT execute fuzzer binaries built by OSS-Fuzz
-
-# Example Patterns
-
-**Simple Make (PREFERRED if available):**
-```bash
-#!/bin/bash
-make check
-```
-
-**Maven:**
-```bash
-#!/bin/bash
-MAVEN_ARGS="-Djacoco.skip=true -Drat.skip=true -Dcheckstyle.skip=true -Dtest=!FlakyTest"
-if [ -z "${{MVN}}" ]; then MVN=mvn; fi
-$MVN test $MAVEN_ARGS
-```
-
-**Make/CMake:**
-```bash
-#!/bin/bash
-mkdir -p build && cd build
-cmake .. -DBUILD_TESTING=ON
-make test
-```
-
-**Python:**
-```bash
-#!/bin/bash
-if [ -z "${{PYTHON}}" ]; then PYTHON=python3; fi
-$PYTHON -m pytest tests/ -k "not slow"
 ```
 
 # Your Task
-Based on the test analysis above:
-1. Determine the build system and test framework
-2. Generate the appropriate test.sh script following the patterns
-3. Include all necessary skip flags from the "Test Exclusions" section
-4. Ensure the script will work correctly from the WORKDIR
+Use the appropriate skill to:
+1. Generate an initial test.sh script based on the analysis
+2. Build the Docker image and test the script iteratively
+3. Refine the script until it runs successfully in Docker
+4. Output the final working bash script
 
-# Output Format
-Provide ONLY the bash script content. No explanations, no markdown code fences, just the raw script starting with #!/bin/bash.
-**TIP: Simpler is better** - if the project already has a convenient test command (like `make check`), prefer that over running individual test executables.
+**CRITICAL**: You MUST keep iterating until mcp__crsbench__check_test_sh returns success.
+"""
+        else:
+            # Simple two-phase approach (analyze → generate)
+            prompt = f"""Generate a test.sh script for the OSS-Fuzz benchmark `{benchmark_name}`.
 
-Generate the test.sh script now:
+# Context
+- Benchmark directory: {benchmark_dir}
+- **CRITICAL**: build.sh and test.sh are located at $SRC directory in the container
+- **CRITICAL**: test.sh is executed from $SRC directory via `bash $SRC/test.sh`
+- Project source code is mounted at $SRC/<project-name> in the container
+
+# Test Analysis
+```markdown
+{test_analysis_md}
+```
+
+# Your Task
+Use the appropriate skill to generate a working test.sh script based on the test analysis above.
+
+Output ONLY the bash script content, starting with #!/bin/bash.
 """
 
         # Configure tools based on mode
@@ -716,13 +429,11 @@ Generate the test.sh script now:
             mcp_server_script = Path(__file__).parent / "crsbench_mcp_server.py"
 
             allowed_tools = [
-                "Read", "Write", "Edit", "Grep", "Glob",
-                "WebSearch", "WebFetch", "TodoWrite",
+                "Read", "Write", "Edit", "Grep", "Glob", "Bash",
+                "WebSearch", "WebFetch", "TodoWrite", "Skill",
                 # MCP tools for Docker operations
                 "mcp__crsbench__build_benchmark",
-                "mcp__crsbench__get_build_logs",
                 "mcp__crsbench__check_test_sh",
-                "mcp__crsbench__check_build_sh",
                 "mcp__crsbench__run_command_in_container",
                 "mcp__crsbench__get_benchmark_info"
             ]
@@ -736,6 +447,7 @@ Generate the test.sh script now:
 
             system_prompt = (
                 "You are an expert test.sh script generator with access to Docker build and test tools. "
+                "Use available skills to help with test.sh generation. "
                 "\n\n"
                 "**CRITICAL OUTPUT REQUIREMENT:**\n"
                 "- Your final output MUST be an EXECUTABLE BASH SCRIPT\n"
@@ -744,6 +456,9 @@ Generate the test.sh script now:
                 "- DO NOT finish until the script executes successfully\n"
                 "\n"
                 "**CRITICAL EXECUTION ENVIRONMENT:**\n"
+                "- **build.sh and test.sh are located at $SRC directory in the container**\n"
+                "- **test.sh is executed from $SRC directory via `bash $SRC/test.sh`**\n"
+                "- **Project source code is mounted at $SRC/<project-name>**\n"
                 "- **Static analysis** (Read, Grep, Glob, Bash for file exploration): Run on HOST\n"
                 "- **Build execution** (mvn compile, make, cmake, etc.): MUST run in DOCKER container\n"
                 "- **Test execution** (mvn test, pytest, make test, etc.): MUST run in DOCKER container\n"
@@ -753,11 +468,9 @@ Generate the test.sh script now:
                 "- Use mcp__crsbench__* tools exclusively for Docker operations\n"
                 "\n\n"
                 "Available MCP tools:\n"
-                "- mcp__crsbench__build_benchmark: Build Docker image for benchmark\n"
-                "- mcp__crsbench__check_test_sh: Test the test.sh script in Docker container\n"
-                "- mcp__crsbench__check_build_sh: Test the build.sh script in Docker container\n"
+                "- mcp__crsbench__build_benchmark: Build Docker image for benchmark using OSS-Fuzz helper.py. Returns dict with 'success' (bool) and 'logs' (str) keys\n"
+                "- mcp__crsbench__check_test_sh: Test the test.sh script in Docker container. Returns execution logs\n"
                 "- mcp__crsbench__run_command_in_container: Run arbitrary commands inside Docker container (e.g., 'which sbt', 'mvn --version')\n"
-                "- mcp__crsbench__get_build_logs: Get Docker build logs if build fails\n"
                 "- mcp__crsbench__get_benchmark_info: Get benchmark metadata\n"
                 "\n"
                 "For file operations, use Read/Write/Edit/Grep/Glob. "
@@ -765,48 +478,35 @@ Generate the test.sh script now:
                 "For research, use WebSearch/WebFetch. "
                 "Use TodoWrite to track your iterative refinement process. "
                 "\n\n"
-                "Tool Availability Check:\n"
-                "Use mcp__crsbench__run_command_in_container to check what tools are available inside the Docker container. "
-                "For example: run_command_in_container(benchmark_name, 'which sbt') to check if SBT is installed. "
-                "This is MORE ACCURATE than reading Dockerfile because it checks the actual container environment.\n"
-                "\n\n"
-                "**MANDATORY WORKFLOW - DO NOT DEVIATE:**\n"
-                "1. Use mcp__crsbench__get_benchmark_info to understand the benchmark\n"
-                "2. Generate test.sh bash script (NOT markdown) based on analysis\n"
-                "3. Use mcp__crsbench__build_benchmark to build Docker image (DO NOT use Bash for docker build)\n"
-                "4. Use mcp__crsbench__run_command_in_container to verify tool availability if needed (inside Docker)\n"
-                "5. Use mcp__crsbench__check_test_sh to test the script (inside Docker)\n"
-                "6. Check the result:\n"
-                "   - If 'test.sh execution succeeded' → YOU ARE DONE\n"
-                "   - If failed → Analyze logs, use Edit to fix the script, GO BACK TO STEP 5\n"
-                "7. KEEP ITERATING until test.sh succeeds - DO NOT give up or finish early\n"
-                "\n"
-                "**EXECUTION ENVIRONMENT RULES:**\n"
-                "- Static analysis (Read/Grep/Glob/Bash for ls/find): HOST (current environment)\n"
-                "- Build operations (mvn compile, make, cmake): DOCKER via mcp__crsbench__build_benchmark\n"
-                "- Test operations (mvn test, pytest, make test): DOCKER via mcp__crsbench__check_test_sh\n"
-                "- Tool availability checks (which mvn, sbt --version): DOCKER via mcp__crsbench__run_command_in_container\n"
-                "- DO NOT execute build/test commands with Bash - analyze code structure only on host\n"
-                "\n"
                 "**YOU MUST NOT FINISH THIS TASK UNTIL test.sh EXECUTES SUCCESSFULLY IN DOCKER**"
             )
         else:
-            allowed_tools = ["Read", "Write", "Edit", "WebSearch", "WebFetch", "TodoWrite"]
+            allowed_tools = ["Read", "Write", "Edit", "Grep", "Glob", "Bash", "WebSearch", "WebFetch", "TodoWrite", "Skill"]
             mcp_servers = None
             system_prompt = (
                 "You are a bash scripting expert. "
+                "Use available skills to help with test.sh generation. "
                 "Generate clean, working bash scripts following the patterns provided. "
                 "You can use Read to examine files, Write to create files, Edit to modify files, "
                 "WebSearch to research build system patterns, WebFetch for official docs, "
                 "and TodoWrite to organize your work. "
+                "\n\n"
+                "**CRITICAL EXECUTION ENVIRONMENT:**\n"
+                "- **build.sh and test.sh are located at $SRC directory in the container**\n"
+                "- **test.sh is executed from $SRC directory via `bash $SRC/test.sh`**\n"
+                "- **Project source code is mounted at $SRC/<project-name>**\n"
+                "\n"
                 "Output only the script content, no extra text."
             )
 
+        # Use repo root as cwd so skills can be loaded from .claude/skills/
+        # The agent can still access benchmark files using absolute paths
         options = ClaudeAgentOptions(
             model=self.model,
             allowed_tools=allowed_tools,
             mcp_servers=mcp_servers,
-            permission_callback=self._permission_callback,
+            setting_sources=["project"],
+            cwd=_get_crsbench_repo_root(),
             system_prompt=system_prompt,
             env={
                 "ANTHROPIC_BASE_URL": self.litellm_base_url,
@@ -885,14 +585,17 @@ echo "Error: Test script generation failed"
 exit 1
 """
 
-        # Clean up the script content
-        script_content = script_content.strip()
+        # Save original agent response text (includes rationale, explanations)
+        agent_response_text = script_content.strip()
 
         # Extract actual bash script from agent response
         # Agent may include explanations, so we need to extract the script
         extracted_script = self._extract_bash_script(script_content)
         if extracted_script:
             script_content = extracted_script
+        else:
+            # If extraction fails, try to clean up the original content
+            script_content = script_content.strip()
 
         # Remove markdown code fences if present
         if script_content.startswith("```bash"):
@@ -911,7 +614,7 @@ exit 1
         # Generate agent log
         agent_log = self._format_agent_log(messages, "Test Script Generation")
 
-        return script_content, agent_log
+        return script_content, agent_response_text, agent_log
 
     def find_unit_tests_sync(
         self,
@@ -932,11 +635,11 @@ exit 1
         benchmark_dir: str,
         with_docker_testing: bool = False,
         verbose: bool = False
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, str]:
         """Synchronous wrapper for generate_test_sh_script.
 
         Returns:
-            Tuple of (script_content, agent_log)
+            Tuple of (script_content, agent_response_text, agent_log)
         """
         return asyncio.run(
             self.generate_test_sh_script(
@@ -1029,7 +732,11 @@ def generate_test_sh_for_benchmark(
         {
             "success": bool,
             "test_sh_path": str,
-            "analysis_md_path": str,
+            "analysis_md_path": str,        # .agent/test_analysis.md
+            "test_sh_gen_md_path": str,     # .agent/test_sh_gen.md (rationale)
+            "agent_log_path": str,          # .agent/agent_log.txt
+            "execution_log_path": str,      # .agent/test_sh_execution.log
+            "test_sh_executed": bool,       # Whether test.sh ran successfully
             "message": str
         }
     """
@@ -1075,9 +782,11 @@ def generate_test_sh_for_benchmark(
 
     test_analysis_md, analysis_log = generator.find_unit_tests_sync(project_dir, verbose)
 
-    # Save analysis markdown
-    analysis_md_path = os.path.join(benchmark_dir, ".aixcc", "test_analysis.md")
-    os.makedirs(os.path.dirname(analysis_md_path), exist_ok=True)
+    # Save analysis markdown to .agent directory
+    agent_dir = os.path.join(benchmark_dir, ".agent")
+    os.makedirs(agent_dir, exist_ok=True)
+
+    analysis_md_path = os.path.join(agent_dir, "test_analysis.md")
     with open(analysis_md_path, "w") as f:
         f.write(test_analysis_md)
 
@@ -1089,7 +798,7 @@ def generate_test_sh_for_benchmark(
         mode_msg = "with Docker testing" if with_docker_testing else "two-phase"
         print(f"🔧 Generating test.sh script ({mode_msg})...")
 
-    test_sh_content, generation_log = generator.generate_test_sh_script_sync(
+    test_sh_content, agent_response_text, generation_log = generator.generate_test_sh_script_sync(
         test_analysis_md,
         benchmark_name,
         benchmark_dir,
@@ -1097,25 +806,63 @@ def generate_test_sh_for_benchmark(
         verbose
     )
 
-    # Add header comment to test.sh
-    test_sh_content = _add_generation_header(
-        test_sh_content,
-        benchmark_name,
-        with_docker_testing
-    )
+    # Save agent response (rationale) to .agent/test_sh_gen.md
+    test_sh_gen_md_path = os.path.join(agent_dir, "test_sh_gen.md")
+    with open(test_sh_gen_md_path, "w") as f:
+        f.write(f"""# test.sh Generation Response
 
-    # Save test.sh
-    with open(output_path, "w") as f:
-        f.write(test_sh_content)
+Generated: {datetime.now().isoformat()}
+Benchmark: {benchmark_name}
+Method: {"iterative Docker testing (MCP-enhanced)" if with_docker_testing else "two-phase analysis"}
 
-    # Make executable
-    os.chmod(output_path, 0o755)
+## Agent Response
+
+{agent_response_text}
+""")
 
     if verbose:
-        print(f"✅ test.sh generated at {output_path}")
+        print(f"✅ Agent response saved to {test_sh_gen_md_path}")
 
-    # Step 3: Save combined agent log
-    agent_log_path = os.path.join(benchmark_dir, ".aixcc", "agent_log.txt")
+    # Save test.sh only if NOT using Docker testing
+    # (Docker testing mode: agent already created test.sh using Write/Edit tools)
+    if not with_docker_testing:
+        # Add header comment to test.sh
+        test_sh_content = _add_generation_header(
+            test_sh_content,
+            benchmark_name,
+            with_docker_testing
+        )
+
+        # Save test.sh
+        with open(output_path, "w") as f:
+            f.write(test_sh_content)
+
+        # Make executable
+        os.chmod(output_path, 0o755)
+
+        if verbose:
+            print(f"✅ test.sh generated at {output_path}")
+    else:
+        # Docker testing mode: test.sh already exists (created by agent)
+        if verbose:
+            print(f"ℹ️  test.sh already created by agent during Docker testing at {output_path}")
+
+        # Verify test.sh exists
+        if not os.path.exists(output_path):
+            if verbose:
+                print(f"⚠️  Warning: test.sh not found at {output_path}, saving extracted script")
+            # Fallback: save extracted script
+            test_sh_content = _add_generation_header(
+                test_sh_content,
+                benchmark_name,
+                with_docker_testing
+            )
+            with open(output_path, "w") as f:
+                f.write(test_sh_content)
+            os.chmod(output_path, 0o755)
+
+    # Step 3: Save combined agent log to .agent directory
+    agent_log_path = os.path.join(agent_dir, "agent_log.txt")
 
     # Delete existing agent_log.txt if it exists
     if os.path.exists(agent_log_path):
@@ -1148,10 +895,71 @@ Method: {method_description}
     if verbose:
         print(f"✅ Agent log saved to {agent_log_path}")
 
+    # Step 4: Execute test.sh and save output
+    if verbose:
+        print(f"🧪 Executing test.sh to verify functionality...")
+
+    execution_log_path = os.path.join(agent_dir, "test_sh_execution.log")
+    execution_success = False
+    execution_output = ""
+
+    try:
+        # Import and call check_test_sh from MCP server
+        from crsbench.migration.crsbench_mcp_server import check_test_sh
+        import asyncio
+
+        # Run check_test_sh asynchronously
+        execution_output = asyncio.run(check_test_sh(benchmark_name))
+        execution_success = "Error:" not in execution_output
+
+        # Save execution output
+        with open(execution_log_path, "w") as f:
+            f.write(f"""# test.sh Execution Log
+
+Executed: {datetime.now().isoformat()}
+Benchmark: {benchmark_name}
+Status: {"✅ Success" if execution_success else "❌ Failed"}
+
+## Output
+
+{execution_output}
+""")
+
+        if verbose:
+            if execution_success:
+                print(f"✅ test.sh executed successfully")
+            else:
+                print(f"⚠️  test.sh execution had issues (see {execution_log_path})")
+            print(f"📄 Execution log saved to {execution_log_path}")
+
+    except Exception as e:
+        execution_output = f"Error executing test.sh: {str(e)}"
+        execution_success = False
+
+        # Save error log
+        with open(execution_log_path, "w") as f:
+            f.write(f"""# test.sh Execution Log
+
+Executed: {datetime.now().isoformat()}
+Benchmark: {benchmark_name}
+Status: ❌ Execution Failed
+
+## Error
+
+{execution_output}
+""")
+
+        if verbose:
+            print(f"❌ Failed to execute test.sh: {e}")
+            print(f"📄 Error log saved to {execution_log_path}")
+
     return {
         "success": True,
         "test_sh_path": output_path,
         "analysis_md_path": analysis_md_path,
+        "test_sh_gen_md_path": test_sh_gen_md_path,
         "agent_log_path": agent_log_path,
+        "execution_log_path": execution_log_path,
+        "test_sh_executed": execution_success,
         "message": f"Successfully generated test.sh for {benchmark_name}"
     }
