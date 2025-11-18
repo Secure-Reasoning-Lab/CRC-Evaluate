@@ -5,6 +5,7 @@ This test verifies that test.sh can be executed in a Docker container.
 """
 
 import asyncio
+import subprocess
 import sys
 from pathlib import Path
 
@@ -14,6 +15,21 @@ sys.path.insert(0, str(project_root))
 
 # Import MCP server module
 import crsbench.migration.crsbench_mcp_server as mcp_server
+
+
+def check_image_exists(benchmark_name: str) -> bool:
+    """Check if Docker image already exists."""
+    image_tag = f"gcr.io/oss-fuzz/aixcc/{benchmark_name}"
+    try:
+        result = subprocess.run(
+            ["docker", "images", "-q", image_tag],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        return bool(result.stdout.strip())
+    except Exception:
+        return False
 
 
 async def test_check_test_sh(benchmark_name: str):
@@ -46,18 +62,24 @@ async def test_check_test_sh(benchmark_name: str):
         print("❌ FAILED: No test.sh found for this benchmark")
         return False
 
-    # Build the benchmark first
-    print("\n2. Building Docker image...")
-    print("   (This may take several minutes...)")
-    build_success = await mcp_server.build_benchmark(benchmark_name)
+    # Check if Docker image already exists
+    print("\n2. Checking Docker image...")
+    image_exists = check_image_exists(benchmark_name)
 
-    if not build_success:
-        print("❌ FAILED: Docker build failed")
-        print("   Hint: Check that project source exists at:")
-        print(f"   {info.get('project_source_dir', 'unknown')}")
-        return False
+    if image_exists:
+        print("   ✓ Docker image already exists (skipping build)")
+    else:
+        print("   Docker image not found, building...")
+        print("   (This may take several minutes...)")
+        build_result = await mcp_server.build_benchmark(benchmark_name)
 
-    print("   ✓ Docker image built successfully")
+        if not build_result.get("success"):
+            print("❌ FAILED: Docker build failed")
+            print("   Hint: Check that project source exists at:")
+            print(f"   {info.get('project_source_dir', 'unknown')}")
+            return False
+
+        print("   ✓ Docker image built successfully")
 
     # Run check_test_sh
     print("\n3. Running test.sh in Docker container...")
@@ -66,27 +88,33 @@ async def test_check_test_sh(benchmark_name: str):
     print("\n" + "=" * 70)
     print("TEST.SH OUTPUT")
     print("=" * 70)
-    print(result)
+    print(result["output"])
+    print("=" * 70)
+
+    # Display result summary
+    print("\n" + "=" * 70)
+    print("RESULT SUMMARY")
+    print("=" * 70)
+    print(f"   Return code: {result['returncode']}")
+    print(f"   Success: {result['success']}")
+    print(f"   Timed out: {result['timed_out']}")
     print("=" * 70)
 
     # Check result
-    if "Error:" in result:
+    if result["returncode"] == -1 and not result["timed_out"]:
         print("\n❌ FAILED: Error occurred during test.sh execution")
         return False
 
-    if "test.sh execution succeeded" in result:
-        print("\n✅ PASSED: test.sh executed successfully")
+    if result["success"]:
+        print("\n✅ PASSED: test.sh executed successfully (exit code 0)")
         return True
-    elif "test.sh failed" in result:
-        print("\n⚠️  test.sh failed (the script itself has issues)")
-        print("   This is not an MCP tool failure - test.sh needs debugging")
-        return True  # Tool worked, but test.sh has issues
-    elif "test.sh execution timed out" in result:
+    elif result["timed_out"]:
         print("\n⚠️  test.sh timed out (took more than 10 minutes)")
         return True  # Tool worked, but test.sh is slow
-
-    print("\n✅ PASSED: Tool executed (check output above for details)")
-    return True
+    else:
+        print(f"\n⚠️  test.sh failed with exit code {result['returncode']}")
+        print("   This is not an MCP tool failure - test.sh needs debugging")
+        return True  # Tool worked, but test.sh has issues
 
 
 async def main():
