@@ -28,6 +28,7 @@ dependencies = [
     "typer>=0.19.2",
     "oss-crs",
     "oss-patch",
+    "claude-agent-sdk>=0.1.8",
 ]
 
 [project.optional-dependencies]
