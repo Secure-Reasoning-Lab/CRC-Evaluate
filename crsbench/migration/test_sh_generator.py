@@ -233,6 +233,7 @@ class ShTestGenerator:
     async def find_unit_tests(
         self,
         project_dir: str,
+        benchmark_dir: str,
         verbose: bool = False
     ) -> tuple[str, str]:
         """
@@ -240,6 +241,7 @@ class ShTestGenerator:
 
         Args:
             project_dir: Directory containing the project source code
+            benchmark_dir: Directory containing benchmark files (.aixcc/, etc.)
             verbose: Enable verbose logging
 
         Returns:
@@ -249,11 +251,14 @@ class ShTestGenerator:
 
 This is an OSS-Fuzz project with `.oss-fuzz/` directory containing build.sh, Dockerfile, and .aixcc/meta.yaml.
 
+**IMPORTANT**: Benchmark directory is `{benchmark_dir}`. Save your analysis to `{benchmark_dir}/.agent/test_analysis.md`.
+
 Please use the appropriate skill to:
 1. Identify the build system and test framework
 2. Find all unit test files
 3. Document test commands and exclusions
 4. Generate a comprehensive patch exclude list
+5. **Save the analysis to `{benchmark_dir}/.agent/test_analysis.md` using Write tool**
 
 Provide your analysis as a markdown document with all required sections.
 """
@@ -297,15 +302,14 @@ Provide your analysis as a markdown document with all required sections.
                     print(f"📨 Message (role: {role})")
                     print(f"{'='*60}")
 
-                if hasattr(message, 'content') and message.content:
-                    # Extract text content and print verbose info
-                    if isinstance(message.content, list):
-                        for block in message.content:
-                            block_type = type(block).__name__
+                    if hasattr(message, 'content') and message.content:
+                        # Print verbose info for debugging
+                        if isinstance(message.content, list):
+                            for block in message.content:
+                                block_type = type(block).__name__
 
-                            # Tool use block
-                            if block_type == "ToolUseBlock":
-                                if verbose:
+                                # Tool use block
+                                if block_type == "ToolUseBlock":
                                     tool_id = getattr(block, 'id', 'unknown')
                                     print(f"🔧 [Tool Call] {block.name} (id: {tool_id})")
                                     if hasattr(block, 'input'):
@@ -313,9 +317,8 @@ Provide your analysis as a markdown document with all required sections.
                                         input_str = json.dumps(block.input, indent=2) if isinstance(block.input, dict) else str(block.input)
                                         print(f"   Input: {input_str}")
 
-                            # Tool result block
-                            elif block_type == "ToolResultBlock":
-                                if verbose:
+                                # Tool result block
+                                elif block_type == "ToolResultBlock":
                                     tool_id = getattr(block, 'tool_use_id', 'unknown')
                                     print(f"✅ [Tool Result] (id: {tool_id})")
                                     if hasattr(block, 'content'):
@@ -324,19 +327,14 @@ Provide your analysis as a markdown document with all required sections.
                                             content += "... (truncated)"
                                         print(f"   Result: {content}")
 
-                            # Text block
-                            elif hasattr(block, 'text'):
-                                result_text += block.text
-                                if verbose:
-                                    # Print first 200 chars of agent response
+                                # Text block
+                                elif hasattr(block, 'text'):
                                     preview = block.text[:200]
                                     if len(block.text) > 200:
                                         preview += "..."
                                     print(f"💬 [Agent Response]\n{preview}\n")
 
-                    elif isinstance(message.content, str):
-                        result_text += message.content
-                        if verbose:
+                        elif isinstance(message.content, str):
                             preview = message.content[:200]
                             if len(message.content) > 200:
                                 preview += "..."
@@ -348,6 +346,19 @@ Provide your analysis as a markdown document with all required sections.
                 import traceback
                 traceback.print_exc()
             result_text = f"# Error\n\nFailed to analyze project: {str(e)}"
+
+        # Extract text from last assistant message only
+        if not result_text:  # Only if no error occurred
+            for message in reversed(messages):
+                if getattr(message, 'role', None) == 'assistant':
+                    if hasattr(message, 'content') and message.content:
+                        if isinstance(message.content, list):
+                            for block in message.content:
+                                if hasattr(block, 'text'):
+                                    result_text += block.text
+                        elif isinstance(message.content, str):
+                            result_text = message.content
+                    break
 
         # Generate agent log
         agent_log = self._format_agent_log(messages, "Unit Test Discovery")
@@ -380,47 +391,119 @@ Provide your analysis as a markdown document with all required sections.
         """
         if with_docker_testing:
             # Iterative approach with Docker testing
-            prompt = f"""Generate a WORKING, EXECUTABLE test.sh bash script for benchmark `{benchmark_name}`.
+            prompt = f"""Generate BOTH test.sh and bad_patch.diff for benchmark `{benchmark_name}`.
 
 # Context
 - Benchmark directory: {benchmark_dir}
-- **CRITICAL**: build.sh and test.sh are located at $SRC directory in the container
-- **CRITICAL**: test.sh is executed from $SRC directory via `bash $SRC/test.sh`
-- Project source code is mounted at $SRC/<project-name> in the container
+- **CRITICAL**: test.sh file is located at /src/test.sh in the container
+- **CRITICAL**: test.sh is executed from WORKDIR (usually /src/<project-name>)
+- **CRITICAL**: Project source code is mounted at WORKDIR, so test.sh runs in the project root
+- Example: If WORKDIR=/src/libxml2, test.sh runs `bash /src/test.sh` from /src/libxml2
 
 # Test Analysis
 ```markdown
 {test_analysis_md}
 ```
 
-# Your Task
-Use the appropriate skill to:
+# Your Task - THREE PHASES
+Use the appropriate skills to complete all tasks:
+
+## Task 1: Generate test.sh (use test-sh-generator-docker skill)
 1. Generate an initial test.sh script based on the analysis
 2. Build the Docker image and test the script iteratively
 3. Refine the script until it runs successfully in Docker
-4. Output the final working bash script
+4. Save test.sh to {benchmark_dir}/test.sh
+5. **Save rationale to {benchmark_dir}/.agent/test_sh_rationale.md**
 
 **CRITICAL**: You MUST keep iterating until mcp__crsbench__check_test_sh returns success.
+
+## Task 2: Generate bad_patch.diff (use bad-patch-generator skill)
+1. Analyze the test suite to identify tested functionality
+2. Generate 2-3 HIGH PRIORITY mutations (dummy returns, removed calls)
+3. Create bad_patch.diff that compiles but breaks tests
+4. Save bad_patch.diff to {benchmark_dir}/bad_patch.diff
+
+**CRITICAL**: Use HIGH PRIORITY mutations (dummy returns, skip function calls) to guarantee test failures.
+
+## Task 3: Verify bad_patch.diff breaks test.sh
+1. Use mcp__crsbench__verify_bad_patch to verify the patch
+2. Check if test.sh FAILS with bad_patch applied (expected behavior)
+3. If test.sh PASSES with bad_patch:
+   - This means EITHER bad_patch is too weak OR test.sh doesn't cover the mutated code
+   - **FIRST OPTION**: Regenerate STRONGER bad_patch.diff (more aggressive mutations)
+     - Mutate more critical functions
+     - Use more dummy returns
+   - **ONLY AS LAST RESORT**: Add more tests to test.sh (if existing tests are insufficient)
+   - Re-verify until bad_patch causes test failure
+4. Keep iterating until verification succeeds
+
+**CRITICAL - NO OVERFITTING**:
+- test.sh should run ONLY existing project tests, not custom bad_patch checks
+- Do NOT add special logic like "if X returns NULL, fail" to test.sh
+- bad_patch should break existing tests naturally
+- Prefer making bad_patch stronger over modifying test.sh
+
+**IF NO UNIT TESTS EXIST**:
+- If the project has no suitable unit tests, output a test.sh that indicates this:
+  ```bash
+  #!/bin/bash
+  echo "No unit tests available for this project"
+  exit 0
+  ```
+- In this case, skip bad_patch.diff generation (no tests to break)
+
+**CRITICAL**: You MUST verify bad_patch.diff and ensure test.sh fails with the patch applied.
+
+Complete ALL THREE tasks before finishing.
 """
         else:
             # Simple two-phase approach (analyze → generate)
-            prompt = f"""Generate a test.sh script for the OSS-Fuzz benchmark `{benchmark_name}`.
+            prompt = f"""Generate BOTH test.sh and bad_patch.diff for benchmark `{benchmark_name}`.
 
 # Context
 - Benchmark directory: {benchmark_dir}
-- **CRITICAL**: build.sh and test.sh are located at $SRC directory in the container
-- **CRITICAL**: test.sh is executed from $SRC directory via `bash $SRC/test.sh`
-- Project source code is mounted at $SRC/<project-name> in the container
+- **CRITICAL**: test.sh file is located at /src/test.sh in the container
+- **CRITICAL**: test.sh is executed from WORKDIR (usually /src/<project-name>)
+- **CRITICAL**: Project source code is mounted at WORKDIR, so test.sh runs in the project root
+- Example: If WORKDIR=/src/libxml2, test.sh runs `bash /src/test.sh` from /src/libxml2
 
 # Test Analysis
 ```markdown
 {test_analysis_md}
 ```
 
-# Your Task
-Use the appropriate skill to generate a working test.sh script based on the test analysis above.
+# Your Task - TWO PHASES
+Use the appropriate skills to complete both tasks:
 
-Output ONLY the bash script content, starting with #!/bin/bash.
+## Task 1: Generate test.sh (use test-sh-generator-simple skill)
+1. Generate a working test.sh script based on the test analysis
+2. Save test.sh to {benchmark_dir}/test.sh
+3. **Save rationale to {benchmark_dir}/.agent/test_sh_rationale.md**
+4. Output the bash script content for verification
+
+## Task 2: Generate bad_patch.diff (use bad-patch-generator skill)
+1. Analyze the test suite to identify tested functionality
+2. Generate 2-3 HIGH PRIORITY mutations (dummy returns, removed calls)
+3. Create bad_patch.diff that compiles but breaks tests
+4. Save bad_patch.diff to {benchmark_dir}/bad_patch.diff
+
+**CRITICAL**: Use HIGH PRIORITY mutations (dummy returns, skip function calls) to guarantee test failures.
+
+**CRITICAL - NO OVERFITTING**:
+- bad_patch should break existing unit tests that test.sh runs
+- Do NOT expect test.sh to have custom checks for your mutations
+- Mutations should break actual functionality that existing tests validate
+
+**IF NO UNIT TESTS EXIST**:
+- If the project has no suitable unit tests, output a test.sh that indicates this:
+  ```bash
+  #!/bin/bash
+  echo "No unit tests available for this project"
+  exit 0
+  ```
+- In this case, skip bad_patch.diff generation (no tests to break)
+
+Complete BOTH tasks before finishing.
 """
 
         # Configure tools based on mode
@@ -435,7 +518,8 @@ Output ONLY the bash script content, starting with #!/bin/bash.
                 "mcp__crsbench__build_benchmark",
                 "mcp__crsbench__check_test_sh",
                 "mcp__crsbench__run_command_in_container",
-                "mcp__crsbench__get_benchmark_info"
+                "mcp__crsbench__get_benchmark_info",
+                "mcp__crsbench__verify_bad_patch"
             ]
 
             mcp_servers = {
@@ -456,9 +540,9 @@ Output ONLY the bash script content, starting with #!/bin/bash.
                 "- DO NOT finish until the script executes successfully\n"
                 "\n"
                 "**CRITICAL EXECUTION ENVIRONMENT:**\n"
-                "- **build.sh and test.sh are located at $SRC directory in the container**\n"
-                "- **test.sh is executed from $SRC directory via `bash $SRC/test.sh`**\n"
-                "- **Project source code is mounted at $SRC/<project-name>**\n"
+                "- **test.sh file is located at /src/test.sh in the container**\n"
+                "- **test.sh is executed from WORKDIR (usually /src/<project-name>)**\n"
+                "- **Project source code is mounted at WORKDIR, so test.sh runs in the project root**\n"
                 "- **Static analysis** (Read, Grep, Glob, Bash for file exploration): Run on HOST\n"
                 "- **Build execution** (mvn compile, make, cmake, etc.): MUST run in DOCKER container\n"
                 "- **Test execution** (mvn test, pytest, make test, etc.): MUST run in DOCKER container\n"
@@ -472,6 +556,7 @@ Output ONLY the bash script content, starting with #!/bin/bash.
                 "- mcp__crsbench__check_test_sh: Test the test.sh script in Docker container. Returns execution logs\n"
                 "- mcp__crsbench__run_command_in_container: Run arbitrary commands inside Docker container (e.g., 'which sbt', 'mvn --version')\n"
                 "- mcp__crsbench__get_benchmark_info: Get benchmark metadata\n"
+                "- mcp__crsbench__verify_bad_patch: Apply bad_patch.diff, run test.sh, check if it fails, then restore. Returns dict with 'valid' (bool), 'test_passed' (bool), 'patch_applied' (bool), 'output' (str)\n"
                 "\n"
                 "For file operations, use Read/Write/Edit/Grep/Glob. "
                 "Use Write to create new test.sh scripts, Edit to modify existing scripts. "
@@ -492,9 +577,9 @@ Output ONLY the bash script content, starting with #!/bin/bash.
                 "and TodoWrite to organize your work. "
                 "\n\n"
                 "**CRITICAL EXECUTION ENVIRONMENT:**\n"
-                "- **build.sh and test.sh are located at $SRC directory in the container**\n"
-                "- **test.sh is executed from $SRC directory via `bash $SRC/test.sh`**\n"
-                "- **Project source code is mounted at $SRC/<project-name>**\n"
+                "- **test.sh file is located at /src/test.sh in the container**\n"
+                "- **test.sh is executed from WORKDIR (usually /src/<project-name>)**\n"
+                "- **Project source code is mounted at WORKDIR, so test.sh runs in the project root**\n"
                 "\n"
                 "Output only the script content, no extra text."
             )
@@ -515,6 +600,226 @@ Output ONLY the bash script content, starting with #!/bin/bash.
         )
 
         script_content = ""
+        messages = []
+        try:
+            async for message in query(prompt=prompt, options=options):
+                messages.append(message)
+
+                if verbose:
+                    # Print message with role
+                    role = getattr(message, 'role', 'unknown')
+                    print(f"\n{'='*60}")
+                    print(f"📨 Message (role: {role})")
+                    print(f"{'='*60}")
+
+                    if hasattr(message, 'content') and message.content:
+                        # Print verbose info for debugging
+                        if isinstance(message.content, list):
+                            for block in message.content:
+                                block_type = type(block).__name__
+
+                                # Tool use block
+                                if block_type == "ToolUseBlock":
+                                    tool_id = getattr(block, 'id', 'unknown')
+                                    print(f"🔧 [Tool Call] {block.name} (id: {tool_id})")
+                                    if hasattr(block, 'input'):
+                                        import json
+                                        input_str = json.dumps(block.input, indent=2) if isinstance(block.input, dict) else str(block.input)
+                                        print(f"   Input: {input_str}")
+
+                                # Tool result block
+                                elif block_type == "ToolResultBlock":
+                                    tool_id = getattr(block, 'tool_use_id', 'unknown')
+                                    print(f"✅ [Tool Result] (id: {tool_id})")
+                                    if hasattr(block, 'content'):
+                                        content = str(block.content)[:200]
+                                        if len(str(block.content)) > 200:
+                                            content += "... (truncated)"
+                                        print(f"   Result: {content}")
+
+                                # Text block
+                                elif hasattr(block, 'text'):
+                                    preview = block.text[:200]
+                                    if len(block.text) > 200:
+                                        preview += "..."
+                                    print(f"💬 [Agent Response]\n{preview}\n")
+
+                        elif isinstance(message.content, str):
+                            preview = message.content[:200]
+                            if len(message.content) > 200:
+                                preview += "..."
+                            print(f"💬 [Agent Response]\n{preview}\n")
+
+        except Exception as e:
+            if verbose:
+                print(f"❌ TestShGenerator agent error: {e}")
+                import traceback
+                traceback.print_exc()
+            # Fallback script
+            script_content = """#!/bin/bash
+# Auto-generated fallback test.sh
+# Failed to generate specific test script
+echo "Error: Test script generation failed"
+exit 1
+"""
+
+        # Extract text from last assistant message only
+        if not script_content:  # Only if no error occurred
+            for message in reversed(messages):
+                if getattr(message, 'role', None) == 'assistant':
+                    if hasattr(message, 'content') and message.content:
+                        if isinstance(message.content, list):
+                            for block in message.content:
+                                if hasattr(block, 'text'):
+                                    script_content += block.text
+                        elif isinstance(message.content, str):
+                            script_content = message.content
+                    break
+
+        # Save original agent response text (includes rationale, explanations)
+        agent_response_text = script_content.strip()
+
+        # Extract actual bash script from agent response
+        # Agent may include explanations, so we need to extract the script
+        extracted_script = self._extract_bash_script(script_content)
+        if extracted_script:
+            script_content = extracted_script
+        else:
+            # If extraction fails, try to clean up the original content
+            script_content = script_content.strip()
+
+        # Remove markdown code fences if present
+        if script_content.startswith("```bash"):
+            script_content = script_content[7:]
+        if script_content.startswith("```"):
+            script_content = script_content[3:]
+        if script_content.endswith("```"):
+            script_content = script_content[:-3]
+
+        script_content = script_content.strip()
+
+        # Ensure it starts with shebang
+        if not script_content.startswith("#!/bin/bash"):
+            script_content = "#!/bin/bash\n\n" + script_content
+
+        # Generate agent log
+        agent_log = self._format_agent_log(messages, "Test Script Generation")
+
+        return script_content, agent_response_text, agent_log
+
+    def find_unit_tests_sync(
+        self,
+        project_dir: str,
+        benchmark_dir: str,
+        verbose: bool = False
+    ) -> tuple[str, str]:
+        """Synchronous wrapper for find_unit_tests.
+
+        Returns:
+            Tuple of (markdown_document, agent_log)
+        """
+        return asyncio.run(self.find_unit_tests(project_dir, benchmark_dir, verbose))
+
+    def generate_test_sh_script_sync(
+        self,
+        test_analysis_md: str,
+        benchmark_name: str,
+        benchmark_dir: str,
+        with_docker_testing: bool = False,
+        verbose: bool = False
+    ) -> tuple[str, str, str]:
+        """Synchronous wrapper for generate_test_sh_script.
+
+        Returns:
+            Tuple of (script_content, agent_response_text, agent_log)
+        """
+        return asyncio.run(
+            self.generate_test_sh_script(
+                test_analysis_md,
+                benchmark_name,
+                benchmark_dir,
+                with_docker_testing,
+                verbose
+            )
+        )
+
+    async def generate_bad_patch(
+        self,
+        test_analysis_md: str,
+        project_dir: str,
+        benchmark_dir: str,
+        verbose: bool = False
+    ) -> tuple[str, str, str]:
+        """
+        Generate bad_patch.diff that breaks functionality without compilation errors.
+
+        Args:
+            test_analysis_md: Markdown document from find_unit_tests()
+            project_dir: Path to project source repository
+            benchmark_dir: Path to benchmark directory
+            verbose: Enable verbose logging
+
+        Returns:
+            Tuple of (patch_content, agent_response_text, agent_log)
+            - patch_content: Extracted diff content
+            - agent_response_text: Full agent response (rationale, explanations)
+            - agent_log: Formatted agent conversation log
+        """
+        prompt = f"""Generate a bad_patch.diff file that breaks functionality without causing compilation errors.
+
+# Context
+- Project directory: {project_dir}
+- Benchmark directory: {benchmark_dir}
+- The patch should apply cleanly but cause test.sh to fail
+
+# Test Analysis
+```markdown
+{test_analysis_md}
+```
+
+# Your Task
+Use the appropriate skill to:
+1. Analyze the test suite and identify what functionality is being tested
+2. Find source files that implement this tested functionality
+3. Generate 3-5 semantic mutations that will cause test failures
+4. Create a unified diff (bad_patch.diff) with these mutations
+5. Ensure the patch compiles but breaks functionality
+
+**CRITICAL**: The patch must:
+- Compile successfully (no syntax errors)
+- Break functionality tested by test.sh (tests will fail)
+- Make semantic changes (wrong logic, not syntax errors)
+
+Output the final bad_patch.diff content.
+"""
+
+        # Use repo root as cwd so skills can be loaded from .claude/skills/
+        options = ClaudeAgentOptions(
+            model=self.model,
+            allowed_tools=["Read", "Write", "Edit", "Grep", "Glob", "Bash", "WebSearch", "WebFetch", "TodoWrite", "Skill"],
+            setting_sources=["project"],
+            cwd=_get_crsbench_repo_root(),
+            system_prompt=(
+                "You are an expert code mutation specialist. "
+                "Use available skills to help with bad patch generation. "
+                "You can use Read to examine source files, Grep to search patterns, "
+                "Glob to find files, Write to create the patch file, "
+                "and Edit to modify files if needed. "
+                "Use TodoWrite to track your mutation strategy. "
+                "\n\n"
+                "**CRITICAL OUTPUT REQUIREMENT:**\n"
+                "- Your final output should be a valid unified diff format\n"
+                "- The patch must compile but break functionality\n"
+                "- Target files that are tested by test.sh\n"
+                "- Make semantic errors (wrong logic), not syntax errors\n"
+            ),
+            env={
+                "ANTHROPIC_BASE_URL": self.litellm_base_url,
+                "ANTHROPIC_AUTH_TOKEN": self.litellm_api_key,
+            }
+        )
+
+        patch_content = ""
         messages = []
         try:
             async for message in query(prompt=prompt, options=options):
@@ -556,7 +861,7 @@ Output ONLY the bash script content, starting with #!/bin/bash.
 
                             # Text block
                             elif hasattr(block, 'text'):
-                                script_content += block.text
+                                patch_content += block.text
                                 if verbose:
                                     # Print first 200 chars of agent response
                                     preview = block.text[:200]
@@ -565,7 +870,7 @@ Output ONLY the bash script content, starting with #!/bin/bash.
                                     print(f"💬 [Agent Response]\n{preview}\n")
 
                     elif isinstance(message.content, str):
-                        script_content += message.content
+                        patch_content += message.content
                         if verbose:
                             preview = message.content[:200]
                             if len(message.content) > 200:
@@ -574,79 +879,48 @@ Output ONLY the bash script content, starting with #!/bin/bash.
 
         except Exception as e:
             if verbose:
-                print(f"❌ TestShGenerator agent error: {e}")
+                print(f"❌ BadPatchGenerator agent error: {e}")
                 import traceback
                 traceback.print_exc()
-            # Fallback script
-            script_content = """#!/bin/bash
-# Auto-generated fallback test.sh
-# Failed to generate specific test script
-echo "Error: Test script generation failed"
-exit 1
-"""
+            patch_content = f"# Error generating bad patch: {str(e)}"
 
-        # Save original agent response text (includes rationale, explanations)
-        agent_response_text = script_content.strip()
+        # Save original agent response text
+        agent_response_text = patch_content.strip()
 
-        # Extract actual bash script from agent response
-        # Agent may include explanations, so we need to extract the script
-        extracted_script = self._extract_bash_script(script_content)
-        if extracted_script:
-            script_content = extracted_script
+        # Extract actual diff from agent response (may be in markdown code block)
+        import re
+        diff_block_pattern = r'```diff\s*\n(.*?)\n```'
+        matches = re.findall(diff_block_pattern, patch_content, re.DOTALL)
+        if matches:
+            patch_content = matches[-1].strip()
         else:
-            # If extraction fails, try to clean up the original content
-            script_content = script_content.strip()
-
-        # Remove markdown code fences if present
-        if script_content.startswith("```bash"):
-            script_content = script_content[7:]
-        if script_content.startswith("```"):
-            script_content = script_content[3:]
-        if script_content.endswith("```"):
-            script_content = script_content[:-3]
-
-        script_content = script_content.strip()
-
-        # Ensure it starts with shebang
-        if not script_content.startswith("#!/bin/bash"):
-            script_content = "#!/bin/bash\n\n" + script_content
+            # Try to find content starting with "diff --git"
+            diff_start = patch_content.find("diff --git")
+            if diff_start != -1:
+                patch_content = patch_content[diff_start:].strip()
 
         # Generate agent log
-        agent_log = self._format_agent_log(messages, "Test Script Generation")
+        agent_log = self._format_agent_log(messages, "Bad Patch Generation")
 
-        return script_content, agent_response_text, agent_log
+        return patch_content, agent_response_text, agent_log
 
-    def find_unit_tests_sync(
-        self,
-        project_dir: str,
-        verbose: bool = False
-    ) -> tuple[str, str]:
-        """Synchronous wrapper for find_unit_tests.
-
-        Returns:
-            Tuple of (markdown_document, agent_log)
-        """
-        return asyncio.run(self.find_unit_tests(project_dir, verbose))
-
-    def generate_test_sh_script_sync(
+    def generate_bad_patch_sync(
         self,
         test_analysis_md: str,
-        benchmark_name: str,
+        project_dir: str,
         benchmark_dir: str,
-        with_docker_testing: bool = False,
         verbose: bool = False
     ) -> tuple[str, str, str]:
-        """Synchronous wrapper for generate_test_sh_script.
+        """Synchronous wrapper for generate_bad_patch.
 
         Returns:
-            Tuple of (script_content, agent_response_text, agent_log)
+            Tuple of (patch_content, agent_response_text, agent_log)
         """
         return asyncio.run(
-            self.generate_test_sh_script(
+            self.generate_bad_patch(
                 test_analysis_md,
-                benchmark_name,
+                project_dir,
                 benchmark_dir,
-                with_docker_testing,
                 verbose
             )
         )
@@ -714,7 +988,7 @@ def generate_test_sh_for_benchmark(
     verbose: bool = False
 ) -> Dict[str, Any]:
     """
-    Generate test.sh for a benchmark.
+    Generate test.sh and bad_patch.diff for a benchmark.
 
     Args:
         benchmark_name: Name of the benchmark
@@ -731,12 +1005,13 @@ def generate_test_sh_for_benchmark(
         Dictionary with generation results:
         {
             "success": bool,
-            "test_sh_path": str,
-            "analysis_md_path": str,        # .agent/test_analysis.md
-            "test_sh_gen_md_path": str,     # .agent/test_sh_gen.md (rationale)
-            "agent_log_path": str,          # .agent/agent_log.txt
-            "execution_log_path": str,      # .agent/test_sh_execution.log
-            "test_sh_executed": bool,       # Whether test.sh ran successfully
+            "test_sh_path": str,               # benchmarks/<name>/test.sh
+            "bad_patch_path": str,             # benchmarks/<name>/bad_patch.diff
+            "analysis_md_path": str,           # .agent/test_analysis.md
+            "rationale_md_path": str,          # .agent/test_sh_rationale.md
+            "agent_log_path": str,             # .agent/agent_log.txt
+            "execution_log_path": str,         # .agent/test_sh_execution.log
+            "test_sh_executed": bool,          # Whether test.sh ran successfully
             "message": str
         }
     """
@@ -780,23 +1055,28 @@ def generate_test_sh_for_benchmark(
     if verbose:
         print(f"🔍 Analyzing unit tests in {project_dir}...")
 
-    test_analysis_md, analysis_log = generator.find_unit_tests_sync(project_dir, verbose)
+    test_analysis_md, analysis_log = generator.find_unit_tests_sync(project_dir, benchmark_dir, verbose)
 
     # Save analysis markdown to .agent directory
+    # Only write if agent didn't already create it via skill
     agent_dir = os.path.join(benchmark_dir, ".agent")
     os.makedirs(agent_dir, exist_ok=True)
 
     analysis_md_path = os.path.join(agent_dir, "test_analysis.md")
-    with open(analysis_md_path, "w") as f:
-        f.write(test_analysis_md)
+    if os.path.exists(analysis_md_path):
+        if verbose:
+            print(f"✅ Agent already created analysis at {analysis_md_path}")
+    else:
+        # Fallback: save extracted response if agent didn't create the file
+        with open(analysis_md_path, "w") as f:
+            f.write(test_analysis_md)
+        if verbose:
+            print(f"✅ Test analysis saved to {analysis_md_path}")
 
-    if verbose:
-        print(f"✅ Test analysis saved to {analysis_md_path}")
-
-    # Step 2: Generate test.sh
+    # Step 2: Generate test.sh and bad_patch.diff (integrated in same agent)
     if verbose:
         mode_msg = "with Docker testing" if with_docker_testing else "two-phase"
-        print(f"🔧 Generating test.sh script ({mode_msg})...")
+        print(f"🔧 Generating test.sh and bad_patch.diff ({mode_msg})...")
 
     test_sh_content, agent_response_text, generation_log = generator.generate_test_sh_script_sync(
         test_analysis_md,
@@ -806,10 +1086,16 @@ def generate_test_sh_for_benchmark(
         verbose
     )
 
-    # Save agent response (rationale) to .agent/test_sh_gen.md
-    test_sh_gen_md_path = os.path.join(agent_dir, "test_sh_gen.md")
-    with open(test_sh_gen_md_path, "w") as f:
-        f.write(f"""# test.sh Generation Response
+    # Save agent response (rationale) to .agent/test_sh_rationale.md
+    # Only write if agent didn't already create it via skill
+    rationale_md_path = os.path.join(agent_dir, "test_sh_rationale.md")
+    if os.path.exists(rationale_md_path):
+        if verbose:
+            print(f"✅ Agent already created rationale at {rationale_md_path}")
+    else:
+        # Fallback: save extracted response if agent didn't create the file
+        with open(rationale_md_path, "w") as f:
+            f.write(f"""# test.sh Generation Rationale
 
 Generated: {datetime.now().isoformat()}
 Benchmark: {benchmark_name}
@@ -819,9 +1105,18 @@ Method: {"iterative Docker testing (MCP-enhanced)" if with_docker_testing else "
 
 {agent_response_text}
 """)
+        if verbose:
+            print(f"✅ Agent response saved to {rationale_md_path}")
 
-    if verbose:
-        print(f"✅ Agent response saved to {test_sh_gen_md_path}")
+    # Verify bad_patch.diff was created by agent
+    bad_patch_path = os.path.join(benchmark_dir, "bad_patch.diff")
+    if not os.path.exists(bad_patch_path):
+        if verbose:
+            print(f"⚠️  Warning: bad_patch.diff not found at {bad_patch_path}")
+            print(f"   Agent may have failed to generate bad_patch.diff")
+    else:
+        if verbose:
+            print(f"✅ bad_patch.diff created by agent at {bad_patch_path}")
 
     # Save test.sh only if NOT using Docker testing
     # (Docker testing mode: agent already created test.sh using Write/Edit tools)
@@ -873,14 +1168,14 @@ Method: {"iterative Docker testing (MCP-enhanced)" if with_docker_testing else "
     # Determine generation method
     method_description = (
         "Phase 1: Unit test discovery using Claude Agent SDK\n"
-        "Phase 2: Test.sh generation "
+        "Phase 2: Test.sh and bad_patch.diff generation (integrated) "
     )
     if with_docker_testing:
         method_description += "with MCP-enhanced Docker testing (iterative refinement)"
     else:
         method_description += "using two-phase analysis (no Docker testing)"
 
-    combined_log = f"""# Test.sh Generation Agent Log
+    combined_log = f"""# Test.sh and Bad Patch Generation Agent Log
 Generated: {datetime.now().isoformat()}
 Benchmark: {benchmark_name}
 Project Directory: {project_dir}
@@ -956,10 +1251,11 @@ Status: ❌ Execution Failed
     return {
         "success": True,
         "test_sh_path": output_path,
+        "bad_patch_path": bad_patch_path,
         "analysis_md_path": analysis_md_path,
-        "test_sh_gen_md_path": test_sh_gen_md_path,
+        "rationale_md_path": rationale_md_path,
         "agent_log_path": agent_log_path,
         "execution_log_path": execution_log_path,
         "test_sh_executed": execution_success,
-        "message": f"Successfully generated test.sh for {benchmark_name}"
+        "message": f"Successfully generated test.sh and bad_patch.diff for {benchmark_name}"
     }

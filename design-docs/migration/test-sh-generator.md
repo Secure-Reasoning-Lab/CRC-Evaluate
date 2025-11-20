@@ -15,8 +15,9 @@ Automated tool to generate `test.sh` functional test scripts for benchmarks that
 1. **TestFinder Agent**: Discovers unit tests in project repository
 2. **DocumentationGenerator Agent**: Creates markdown documentation from discovered tests
 3. **TestShGenerator Agent**: Generates test.sh script from documentation
-4. **TestShValidator**: Validates test.sh execution in OSS-Fuzz container
-5. **CLI Orchestrator**: Coordinates the workflow
+4. **BadPatchGenerator Agent**: Generates bad_patch.diff that breaks functionality
+5. **TestShValidator**: Validates test.sh execution in OSS-Fuzz container
+6. **CLI Orchestrator**: Coordinates the workflow
 
 ### Agent Communication
 All agents use Claude Agent SDK with LiteLLM proxy (LITELLM_BASE_URL, LITELLM_API_KEY from environment)
@@ -26,6 +27,10 @@ All agents use Claude Agent SDK with LiteLLM proxy (LITELLM_BASE_URL, LITELLM_AP
 Project Repo → TestFinder → MD Doc → TestShGenerator → test.sh → Validator
                   ↓                        ↓                ↓
             unit_tests.md          test_sh_plan.md    execution.log
+                                         ↓
+                                   BadPatchGenerator → bad_patch.diff
+                                         ↓
+                                  bad_patch_plan.md
 ```
 
 ## Implementation Plan
@@ -60,7 +65,24 @@ Project Repo → TestFinder → MD Doc → TestShGenerator → test.sh → Valid
 - Handle test exclusions (e.g., -Dtest=!TestClass)
 - Add appropriate flags (skip coverage, checkstyle, etc.)
 
-### 4. TestShValidator
+### 4. BadPatchGenerator Agent
+**Input**: Test documentation markdown, project directory
+**Output**: bad_patch.diff file
+**Tools**: Read, Grep, Glob, Write, Skill
+**Prompt Strategy**:
+- Analyze test suite to understand tested functionality
+- Find source files implementing tested features
+- Generate 3-5 semantic mutations (wrong logic, not syntax errors)
+- Create unified diff that compiles but breaks tests
+- Examples: flip conditionals, change operators, modify return values
+
+**Key Requirements**:
+- Patch must compile successfully (no syntax errors)
+- Patch must break functionality (tests will fail)
+- Target files that are tested by test.sh
+- Use plausible mutations (off-by-one, wrong operator, etc.)
+
+### 5. TestShValidator
 **Input**: test.sh path, benchmark name
 **Output**: Validation report
 **Tools**: Bash (infra/helper.py)
@@ -70,22 +92,29 @@ Project Repo → TestFinder → MD Doc → TestShGenerator → test.sh → Valid
 - Capture output and exit code
 - Report success/failure
 
-### 5. CLI Orchestrator
+### 6. CLI Orchestrator
 **Command**: `crsbench generate-test-sh <benchmark-name>`
 **Workflow**:
 1. Check if test.sh already exists
 2. Locate project repository (from environment or meta.yaml)
-3. Run TestFinder agent
-4. Run DocumentationGenerator agent
-5. Run TestShGenerator agent
-6. Run TestShValidator
-7. Save test.sh to benchmark directory
+3. Run TestFinder agent (Phase 1: Unit test discovery)
+4. Run TestShGenerator agent (Phase 2: test.sh generation)
+5. Run BadPatchGenerator agent (Phase 2.5: bad_patch.diff generation)
+6. Run TestShValidator (Phase 3: Validation)
+7. Save test.sh and bad_patch.diff to benchmark directory
 
 ## File Locations
-- Tool implementation: `crsbench/validation/test_sh_generator.py`
+- Tool implementation: `crsbench/migration/test_sh_generator.py`
 - CLI integration: `crsbench/run_experiment.py` (add subcommand)
 - Tests: `tests/test_test_sh_generator.py`
-- Generated artifacts: `benchmarks/<name>/test.sh`, `benchmarks/<name>/.aixcc/test_analysis.md`
+- Skills: `.claude/skills/bad-patch-generator/SKILL.md`
+- Generated artifacts:
+  - `benchmarks/<name>/test.sh`
+  - `benchmarks/<name>/bad_patch.diff`
+  - `benchmarks/<name>/.agent/test_analysis.md`
+  - `benchmarks/<name>/.agent/test_sh_gen.md`
+  - `benchmarks/<name>/.agent/bad_patch_gen.md`
+  - `benchmarks/<name>/.agent/agent_log.txt`
 
 ## Example test.sh Patterns
 
@@ -117,7 +146,9 @@ make test
 - `PROJECT_REPO_DIR`: Optional, directory containing cloned project repos
 
 ## Future Enhancements (TODO)
-- Validate test.sh after patch application
+- Validate test.sh after patch application (verify bad_patch.diff causes test failures)
 - Support more build systems
 - Auto-detect test exclusions needed for Docker environment
 - Cache analysis results to avoid re-running agents
+- Add validation step to ensure bad_patch.diff compiles but breaks tests
+- Support multiple bad patch variants for different mutation strategies

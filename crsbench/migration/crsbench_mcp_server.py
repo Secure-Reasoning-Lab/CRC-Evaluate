@@ -23,7 +23,8 @@ import sys
 import json
 import time
 import subprocess
-from typing import Optional
+import yaml
+from typing import Optional, Tuple
 from mcp.server.fastmcp import FastMCP
 
 from crsbench.migration import mcp_config
@@ -47,23 +48,72 @@ def _get_benchmark_dir(benchmark_name: str) -> str:
     return os.path.join(mcp_config.BASE_BENCHMARKS_DIR, benchmark_name)
 
 
-def _get_project_source_dir(benchmark_name: str) -> Optional[str]:
-    """Get the project source directory path from benchmark's project.yaml or .aixcc/meta.yaml."""
+def _get_base_commit_from_meta(benchmark_name: str) -> Optional[str]:
+    """
+    Get base_commit from benchmark's meta.yaml.
+
+    For delta mode: returns delta_mode.base_commit
+    For full mode: returns full_mode.base_commit
+
+    Args:
+        benchmark_name: Name of the benchmark
+
+    Returns:
+        Commit hash or None if not found
+    """
+    benchmark_dir = _get_benchmark_dir(benchmark_name)
+    meta_yaml_path = os.path.join(benchmark_dir, '.aixcc', 'meta.yaml')
+
+    if not os.path.exists(meta_yaml_path):
+        logger.warning("meta.yaml not found for benchmark %s", benchmark_name)
+        return None
+
+    try:
+        with open(meta_yaml_path, 'r', encoding='utf-8') as f:
+            meta_data = yaml.safe_load(f)
+
+        # Try delta_mode first, then full_mode
+        if meta_data and 'delta_mode' in meta_data:
+            base_commit = meta_data['delta_mode'].get('base_commit')
+            if base_commit:
+                logger.info("Found delta_mode base_commit for %s: %s", benchmark_name, base_commit)
+                return base_commit
+
+        if meta_data and 'full_mode' in meta_data:
+            base_commit = meta_data['full_mode'].get('base_commit')
+            if base_commit:
+                logger.info("Found full_mode base_commit for %s: %s", benchmark_name, base_commit)
+                return base_commit
+
+        logger.warning("No base_commit found in meta.yaml for %s", benchmark_name)
+        return None
+
+    except Exception as e:
+        logger.error("Failed to parse meta.yaml for %s: %s", benchmark_name, str(e))
+        return None
+
+
+def _get_repo_url_from_meta(benchmark_name: str) -> Optional[str]:
+    """
+    Get repository URL from benchmark's project.yaml or meta.yaml.
+
+    Args:
+        benchmark_name: Name of the benchmark
+
+    Returns:
+        Repository URL or None if not found
+    """
     benchmark_dir = _get_benchmark_dir(benchmark_name)
 
-    # First, try project.yaml (OSS-Fuzz standard location)
+    # Try project.yaml first
     project_yaml = os.path.join(benchmark_dir, 'project.yaml')
     if os.path.exists(project_yaml):
         with open(project_yaml, 'r', encoding='utf-8') as f:
             for line in f:
                 if line.startswith('main_repo:'):
                     repo_url = line.split('main_repo:')[1].strip().strip('"').strip("'")
-                    # Extract project name from URL
-                    # e.g., git@github.com:Team-Atlanta/cp-java-shiro-src.git -> cp-java-shiro-src
-                    project_name = repo_url.rstrip('/').split('/')[-1].replace('.git', '')
-                    source_path = os.path.join(mcp_config.BASE_PROJECTS_DIR, project_name)
-                    logger.info("Found project source path from project.yaml: %s", source_path)
-                    return source_path
+                    logger.info("Found repo URL from project.yaml: %s", repo_url)
+                    return repo_url
 
     # Fallback to meta.yaml
     meta_yaml = os.path.join(benchmark_dir, '.aixcc', 'meta.yaml')
@@ -72,14 +122,127 @@ def _get_project_source_dir(benchmark_name: str) -> Optional[str]:
             for line in f:
                 if 'repository:' in line:
                     repo_url = line.split('repository:')[1].strip().strip('"').strip("'")
-                    # Extract project name from URL
-                    project_name = repo_url.rstrip('/').split('/')[-1].replace('.git', '')
-                    source_path = os.path.join(mcp_config.BASE_PROJECTS_DIR, project_name)
-                    logger.info("Found project source path from meta.yaml: %s", source_path)
-                    return source_path
+                    logger.info("Found repo URL from meta.yaml: %s", repo_url)
+                    return repo_url
 
-    logger.warning("Could not find repository info in project.yaml or meta.yaml for benchmark %s", benchmark_name)
+    logger.warning("Could not find repository URL for benchmark %s", benchmark_name)
     return None
+
+
+def _ensure_project_at_commit(benchmark_name: str) -> Optional[str]:
+    """
+    Ensure project source is cloned and checked out to the correct commit.
+    Returns commit-specific directory path.
+
+    For parallel execution safety, each commit gets its own directory:
+    .crsbench-mcp/projects/{project_name}-{short_commit}/
+
+    Args:
+        benchmark_name: Name of the benchmark
+
+    Returns:
+        Path to project source directory at correct commit, or None if failed
+    """
+    # Get commit hash from meta.yaml
+    commit_hash = _get_base_commit_from_meta(benchmark_name)
+    if not commit_hash:
+        logger.error("Could not get base_commit for benchmark %s", benchmark_name)
+        return None
+
+    # Get repository URL
+    repo_url = _get_repo_url_from_meta(benchmark_name)
+    if not repo_url:
+        logger.error("Could not get repository URL for benchmark %s", benchmark_name)
+        return None
+
+    # Extract project name from URL
+    # e.g., git@github.com:Team-Atlanta/cp-c-libxml2.git -> cp-c-libxml2
+    project_name = repo_url.rstrip('/').split('/')[-1].replace('.git', '')
+
+    # Create commit-specific directory name
+    short_commit = commit_hash[:8]  # Use first 8 chars of commit hash
+    commit_specific_name = f"{project_name}-{short_commit}"
+    source_path = os.path.join(mcp_config.BASE_PROJECTS_DIR, commit_specific_name)
+
+    # If directory already exists and has correct commit, return it
+    if os.path.isdir(source_path):
+        try:
+            # Verify it's at the correct commit
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=source_path,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                current_commit = result.stdout.strip()
+                if current_commit.startswith(commit_hash[:8]):
+                    logger.info("Project already at correct commit: %s", source_path)
+                    return source_path
+        except Exception as e:
+            logger.warning("Failed to verify commit in %s: %s", source_path, str(e))
+
+    # Clone repository and checkout commit
+    logger.info("Cloning repository %s to %s", repo_url, source_path)
+
+    # Remove directory if it exists but is not at correct commit
+    if os.path.exists(source_path):
+        shutil.rmtree(source_path)
+
+    # Create parent directory
+    os.makedirs(mcp_config.BASE_PROJECTS_DIR, exist_ok=True)
+
+    try:
+        # Clone repository
+        subprocess.run(
+            ["git", "clone", repo_url, source_path],
+            check=True,
+            capture_output=True,
+            timeout=300  # 5 minutes timeout
+        )
+        logger.info("Successfully cloned repository to %s", source_path)
+
+        # Checkout specific commit
+        subprocess.run(
+            ["git", "checkout", commit_hash],
+            cwd=source_path,
+            check=True,
+            capture_output=True,
+            timeout=30
+        )
+        logger.info("Checked out commit %s in %s", commit_hash, source_path)
+
+        return source_path
+
+    except subprocess.CalledProcessError as e:
+        logger.error("Failed to clone/checkout repository: %s", str(e))
+        logger.error("stderr: %s", e.stderr.decode('utf-8') if e.stderr else "")
+        # Clean up failed clone
+        if os.path.exists(source_path):
+            shutil.rmtree(source_path)
+        return None
+    except Exception as e:
+        logger.error("Unexpected error during clone/checkout: %s", str(e))
+        if os.path.exists(source_path):
+            shutil.rmtree(source_path)
+        return None
+
+
+def _get_project_source_dir(benchmark_name: str) -> Optional[str]:
+    """
+    Get the project source directory path, ensuring it's at the correct commit.
+
+    This is the main entry point for getting project source.
+    It ensures the project is cloned and checked out to base_commit from meta.yaml.
+
+    Args:
+        benchmark_name: Name of the benchmark
+
+    Returns:
+        Path to project source directory or None if failed
+    """
+    return _ensure_project_at_commit(benchmark_name)
 
 
 def _get_workdir_from_dockerfile(benchmark_name: str) -> str:
@@ -505,6 +668,162 @@ async def run_command_in_container(benchmark_name: str, command: str) -> str:
     except Exception as e:
         logger.error("Failed to run command for benchmark '%s': %s", benchmark_name, str(e))
         return f"Error: Failed to run command: {str(e)}"
+
+
+@mcp.tool()
+async def verify_bad_patch(benchmark_name: str, bad_patch_path: str) -> dict:
+    """
+    Verifies that bad_patch.diff breaks test.sh (test should fail after applying patch).
+
+    Workflow:
+    1. Apply bad_patch.diff to project source
+    2. Run test.sh
+    3. Check if test.sh fails (exit code != 0)
+    4. Restore project source to original state
+
+    Args:
+        benchmark_name: Name of the benchmark
+        bad_patch_path: Path to bad_patch.diff file
+
+    Returns:
+        Dictionary with:
+        - 'valid': bool (True if patch causes test failure as expected)
+        - 'test_passed': bool (True if test.sh passed with bad patch)
+        - 'patch_applied': bool (True if patch applied successfully)
+        - 'output': str (detailed logs)
+    """
+    benchmark_dir = _get_benchmark_dir(benchmark_name)
+
+    if not os.path.isdir(benchmark_dir):
+        return {
+            "valid": False,
+            "test_passed": False,
+            "patch_applied": False,
+            "output": f"Error: Benchmark directory not found: {benchmark_dir}"
+        }
+
+    if not os.path.exists(bad_patch_path):
+        return {
+            "valid": False,
+            "test_passed": False,
+            "patch_applied": False,
+            "output": f"Error: bad_patch.diff not found at {bad_patch_path}"
+        }
+
+    # Get project source directory
+    project_src_dir = _get_project_source_dir(benchmark_name)
+    if not project_src_dir or not os.path.isdir(project_src_dir):
+        return {
+            "valid": False,
+            "test_passed": False,
+            "patch_applied": False,
+            "output": f"Error: Project source directory not found for {benchmark_name}"
+        }
+
+    logger.info("Verifying bad_patch.diff for benchmark '%s'...", benchmark_name)
+
+    output_lines = []
+
+    # Step 1: Apply patch
+    output_lines.append("=== Step 1: Applying bad_patch.diff ===")
+    try:
+        # Use git apply to apply the patch
+        result = subprocess.run(
+            ["git", "apply", bad_patch_path],
+            cwd=project_src_dir,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        if result.returncode != 0:
+            output_lines.append(f"Patch application failed with exit code {result.returncode}")
+            output_lines.append(f"stdout: {result.stdout}")
+            output_lines.append(f"stderr: {result.stderr}")
+            return {
+                "valid": False,
+                "test_passed": False,
+                "patch_applied": False,
+                "output": "\n".join(output_lines)
+            }
+
+        output_lines.append("✅ Patch applied successfully")
+        patch_applied = True
+
+    except Exception as e:
+        output_lines.append(f"Error applying patch: {str(e)}")
+        return {
+            "valid": False,
+            "test_passed": False,
+            "patch_applied": False,
+            "output": "\n".join(output_lines)
+        }
+
+    # Step 2: Run test.sh
+    output_lines.append("\n=== Step 2: Running test.sh with bad patch ===")
+    try:
+        test_result = await check_test_sh(benchmark_name)
+
+        test_passed = test_result.get("success", False)
+        test_returncode = test_result.get("returncode", -1)
+        test_output = test_result.get("output", "")
+
+        output_lines.append(f"test.sh exit code: {test_returncode}")
+        output_lines.append(f"test.sh passed: {test_passed}")
+        output_lines.append(f"\ntest.sh output (truncated):\n{test_output[:1000]}")
+
+    except Exception as e:
+        output_lines.append(f"Error running test.sh: {str(e)}")
+        test_passed = False
+
+    # Step 3: Restore original state
+    output_lines.append("\n=== Step 3: Restoring original state ===")
+    try:
+        # Reverse the patch
+        result = subprocess.run(
+            ["git", "apply", "-R", bad_patch_path],
+            cwd=project_src_dir,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        if result.returncode != 0:
+            output_lines.append(f"⚠️  Failed to reverse patch (exit code {result.returncode})")
+            output_lines.append(f"stderr: {result.stderr}")
+            output_lines.append("Manual cleanup may be required!")
+        else:
+            output_lines.append("✅ Patch reversed successfully")
+
+    except Exception as e:
+        output_lines.append(f"⚠️  Error reversing patch: {str(e)}")
+        output_lines.append("Manual cleanup may be required!")
+
+    # Step 4: Evaluate result
+    output_lines.append("\n=== Verification Result ===")
+
+    # Valid bad_patch should:
+    # 1. Apply successfully (patch_applied = True)
+    # 2. Cause test.sh to fail (test_passed = False)
+    is_valid = patch_applied and not test_passed
+
+    if is_valid:
+        output_lines.append("✅ VALID: bad_patch.diff causes test.sh to fail (as expected)")
+    elif test_passed:
+        output_lines.append("❌ INVALID: test.sh PASSED with bad patch applied")
+        output_lines.append("   This means either:")
+        output_lines.append("   1. bad_patch.diff is not strong enough")
+        output_lines.append("   2. test.sh doesn't cover the mutated code")
+        output_lines.append("   → Need to regenerate test.sh or bad_patch.diff")
+    else:
+        output_lines.append("❌ INVALID: Patch failed to apply or other error occurred")
+
+    return {
+        "valid": is_valid,
+        "test_passed": test_passed,
+        "patch_applied": patch_applied,
+        "output": "\n".join(output_lines)
+    }
 
 
 @mcp.tool()
