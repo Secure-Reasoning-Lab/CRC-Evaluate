@@ -23,6 +23,7 @@ from collections import namedtuple
 from dotenv import load_dotenv
 
 from crsbench.utils.logger import get_logger, configure_logger
+from crsbench.utils import log_section, log_summary, log_progress
 
 # Load environment variables from .env file if present
 load_dotenv()
@@ -320,9 +321,7 @@ def run_experiment_local(experiment_name: str, config, benchmarks: List[str], cr
         crses: List of CRS identifiers
         args: CLI arguments for config overrides
     """
-    logger.info("="*60)
-    logger.info("Running CRSBench in Local Mode (No Redis)")
-    logger.info("="*60)
+    log_section("Running CRSBench in Local Mode (No Redis)", width=60)
 
     # Generate trial matrix
     trials = generate_trial_matrix(benchmarks, crses, config)
@@ -363,9 +362,7 @@ def run_experiment_local(experiment_name: str, config, benchmarks: List[str], cr
             logger.error(f"  ✗ Failed: {result.get('error', 'Unknown error')}")
 
     # Generate final report
-    logger.info("\n" + "="*60)
-    logger.info("Experiment Complete - Generating Report")
-    logger.info("="*60)
+    log_section("Experiment Complete - Generating Report", width=60)
 
     generate_final_report(results, experiment_name, config)
 
@@ -407,14 +404,13 @@ def _monitor_jobs_basic(queue, job_list: List, experiment_name: str) -> List[Dic
         stats = get_queue_stats(queue)
 
         # Display stats
-        print(f"\n{'='*60}")
-        print(f"Experiment: {experiment_name}")
-        print(f"{'='*60}")
-        print(f"Queued:    {stats['queued']}")
-        print(f"Started:   {stats['started']}")
-        print(f"Finished:  {stats['finished']}")
-        print(f"Failed:    {stats['failed']}")
-        print(f"{'='*60}\n")
+        log_section(f"Experiment: {experiment_name}", width=60)
+        log_summary("Queue Status", {
+            "queued": stats['queued'],
+            "started": stats['started'],
+            "finished": stats['finished'],
+            "failed": stats['failed']
+        }, show_percentage=False)
 
         # Check if all jobs completed
         completed = 0
@@ -426,7 +422,7 @@ def _monitor_jobs_basic(queue, job_list: List, experiment_name: str) -> List[Dic
             elif job.is_failed:
                 failed += 1
 
-        print(f"Progress: {completed + failed}/{len(job_list)} jobs complete ({completed} success, {failed} failed)")
+        log_progress(completed + failed, len(job_list), f"Jobs complete ({completed} success, {failed} failed)")
 
         if completed + failed >= len(job_list):
             break
@@ -520,9 +516,7 @@ def run_experiment_distributed(experiment_name: str, config, benchmarks: List[st
     """
     from crsbench.distributed.queue import initialize_queue
 
-    logger.info("="*60)
-    logger.info("Running CRSBench in Distributed Mode (Redis)")
-    logger.info("="*60)
+    log_section("Running CRSBench in Distributed Mode (Redis)", width=60)
     logger.info(f"Redis host: {config.redis_host}")
 
     # Initialize queue
@@ -570,9 +564,7 @@ def run_experiment_distributed(experiment_name: str, config, benchmarks: List[st
     results = monitor_jobs(queue, jobs, experiment_name)
 
     # Generate final report
-    logger.info("\n" + "="*60)
-    logger.info("Experiment Complete - Generating Report")
-    logger.info("="*60)
+    log_section("Experiment Complete - Generating Report", width=60)
 
     generate_final_report(results, experiment_name, config)
 
@@ -619,11 +611,9 @@ def generate_final_report(results: List[Dict[str, Any]], experiment_name: str, c
                 trial_num = result.get('trial_num', '?')
                 logger.warning(f"  [{idx+1}] {crs} on {benchmark} (trial {trial_num}): {error}")
 
-    logger.info("\n" + "="*60)
-    logger.info("Report generation complete")
+    log_section("Report generation complete", width=60)
     logger.info(f"Experiment filestore: {config.experiment_filestore}")
     logger.info(f"Report filestore: {config.report_filestore}")
-    logger.info("="*60)
 
 
 def main() -> None:

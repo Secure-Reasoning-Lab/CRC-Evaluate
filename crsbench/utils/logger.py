@@ -3,7 +3,7 @@
 This module provides a standardized logging interface for all CRSBench modules.
 It uses loguru for structured logging with automatic colored output based on log levels.
 
-Usage:
+Basic Usage:
     from crsbench.utils.logger import get_logger
 
     logger = get_logger(__name__)
@@ -12,6 +12,37 @@ Usage:
     logger.warning("Warning message")
     logger.error("Error message")
     logger.critical("Critical message")
+
+Utility Functions Usage:
+    from crsbench.utils import log_section, log_summary, log_results
+
+    # Section headers
+    log_section("Build Analysis Results")
+
+    # Summary with statistics
+    log_summary("Build Results", {
+        "total": 10,
+        "success": 7,
+        "failed": 3
+    })
+
+    # Success/failure lists
+    log_results(
+        success_items=["project-a", "project-b"],
+        failed_items=[
+            ("project-c", "Build error"),
+            ("project-d", "Test failed")
+        ]
+    )
+
+    # Other utilities
+    from crsbench.utils import log_list, log_progress, log_table, log_key_value, log_file_info
+
+    log_list(["item1", "item2"], title="My List", symbol="✓")
+    log_progress(7, 10, "Projects processed")
+    log_table(["Name", "Status"], [["proj-a", "OK"], ["proj-b", "FAIL"]])
+    log_key_value({"Benchmark": "curl", "Status": "Success"})
+    log_file_info("/path/to/file.txt", "Report saved")
 
 Configuration:
     - Log level can be set via LOG_LEVEL environment variable (default: INFO)
@@ -269,3 +300,319 @@ def getLogger(name: Optional[str] = None) -> LoggerAdapter:
 
 # Export the main logger for direct use
 logger = _loguru_logger
+
+
+# ============================================================================
+# Logging Utility Functions
+# ============================================================================
+# Common logging patterns for consistent output formatting
+
+
+def log_section(title: str, width: int = 70, char: str = "=", level: str = "info"):
+    """Log a section header with separator lines.
+
+    Args:
+        title: Section title
+        width: Width of separator line
+        char: Character to use for separator
+        level: Log level (info, debug, warning, error)
+
+    Example:
+        >>> log_section("Build Analysis Results")
+
+        ======================================================================
+        Build Analysis Results
+        ======================================================================
+
+    """
+    log_func = getattr(_loguru_logger, level.lower())
+    separator = char * width
+    log_func("")  # Empty line before
+    log_func(separator)
+    log_func(title)
+    log_func(separator)
+    log_func("")  # Empty line after
+
+
+def log_summary(
+    title: str,
+    stats: dict,
+    level: str = "info",
+    show_percentage: bool = True
+):
+    """Log a summary with statistics.
+
+    Args:
+        title: Summary title
+        stats: Dictionary of statistics (e.g., {"total": 10, "success": 7, "failed": 3})
+        level: Log level
+        show_percentage: Show percentage for each stat
+
+    Example:
+        >>> log_summary("Build Results", {"total": 10, "success": 7, "failed": 3})
+        Build Results Summary
+        Total: 10
+        Success: 7 (70.0%)
+        Failed: 3 (30.0%)
+    """
+    log_func = getattr(_loguru_logger, level.lower())
+
+    log_func(f"\n{title} Summary")
+
+    total = stats.get("total", sum(stats.values()))
+
+    for key, value in stats.items():
+        key_display = key.replace("_", " ").title()
+        if show_percentage and key != "total" and total > 0:
+            percentage = (value / total) * 100
+            log_func(f"{key_display}: {value} ({percentage:.1f}%)")
+        else:
+            log_func(f"{key_display}: {value}")
+
+
+def log_results(
+    success_items: list,
+    failed_items: list,
+    success_title: str = "Successful",
+    failed_title: str = "Failed",
+    success_symbol: str = "✓",
+    failed_symbol: str = "✗",
+    level: str = "info"
+):
+    """Log success and failure lists with symbols.
+
+    Args:
+        success_items: List of successful items
+        failed_items: List of failed items (can be tuples of (item, reason))
+        success_title: Title for success section
+        failed_title: Title for failed section
+        success_symbol: Symbol for success items
+        failed_symbol: Symbol for failed items
+        level: Log level
+
+    Example:
+        >>> log_results(
+        ...     success_items=["project-a", "project-b"],
+        ...     failed_items=[("project-c", "Build error"), ("project-d", "Test failed")]
+        ... )
+        Successful (2):
+        1. project-a ✓
+        2. project-b ✓
+
+        Failed (2):
+        1. project-c ✗
+           - Build error
+        2. project-d ✗
+           - Test failed
+    """
+    log_func = getattr(_loguru_logger, level.lower())
+
+    # Log successful items
+    if success_items:
+        log_func(f"\n{success_title} ({len(success_items)}):\n")
+        for idx, item in enumerate(success_items, 1):
+            log_func(f"{idx}. {item} {success_symbol}")
+
+    # Log failed items
+    if failed_items:
+        log_func(f"\n{failed_title} ({len(failed_items)}):\n")
+        for idx, item in enumerate(failed_items, 1):
+            if isinstance(item, (tuple, list)) and len(item) >= 2:
+                name, reason = item[0], item[1]
+                log_func(f"{idx}. {name} {failed_symbol}")
+                log_func(f"   - {reason}")
+            else:
+                log_func(f"{idx}. {item} {failed_symbol}")
+
+
+def log_list(
+    items: list,
+    title: str = None,
+    numbered: bool = True,
+    symbol: str = None,
+    level: str = "info",
+    indent: int = 0
+):
+    """Log a formatted list of items.
+
+    Args:
+        items: List of items to log
+        title: Optional title for the list
+        numbered: Use numbered list (1. 2. 3.) instead of bullets
+        symbol: Optional symbol to append to each item
+        level: Log level
+        indent: Indentation level (spaces)
+
+    Example:
+        >>> log_list(["item1", "item2", "item3"], title="My List", symbol="✓")
+        My List:
+        1. item1 ✓
+        2. item2 ✓
+        3. item3 ✓
+    """
+    log_func = getattr(_loguru_logger, level.lower())
+
+    if title:
+        log_func(f"\n{title}:")
+
+    indent_str = " " * indent
+
+    for idx, item in enumerate(items, 1):
+        if numbered:
+            prefix = f"{idx}."
+        else:
+            prefix = "•"
+
+        suffix = f" {symbol}" if symbol else ""
+        log_func(f"{indent_str}{prefix} {item}{suffix}")
+
+
+def log_progress(
+    current: int,
+    total: int,
+    description: str = "Progress",
+    level: str = "info",
+    show_percentage: bool = True
+):
+    """Log progress information.
+
+    Args:
+        current: Current progress count
+        total: Total count
+        description: Description of what's being tracked
+        level: Log level
+        show_percentage: Show percentage
+
+    Example:
+        >>> log_progress(7, 10, "Projects processed")
+        Progress: 7/10 (70.0%)
+    """
+    log_func = getattr(_loguru_logger, level.lower())
+
+    if show_percentage and total > 0:
+        percentage = (current / total) * 100
+        log_func(f"{description}: {current}/{total} ({percentage:.1f}%)")
+    else:
+        log_func(f"{description}: {current}/{total}")
+
+
+def log_table(
+    headers: list,
+    rows: list,
+    title: str = None,
+    level: str = "info",
+    min_col_width: int = 15
+):
+    """Log a simple table.
+
+    Args:
+        headers: List of column headers
+        rows: List of rows (each row is a list of values)
+        title: Optional table title
+        level: Log level
+        min_col_width: Minimum column width
+
+    Example:
+        >>> log_table(
+        ...     headers=["Project", "Status", "Time"],
+        ...     rows=[
+        ...         ["project-a", "Success", "10s"],
+        ...         ["project-b", "Failed", "5s"]
+        ...     ],
+        ...     title="Build Results"
+        ... )
+        Build Results
+        Project         Status          Time
+        ─────────────────────────────────────────────────
+        project-a       Success         10s
+        project-b       Failed          5s
+    """
+    log_func = getattr(_loguru_logger, level.lower())
+
+    # Calculate column widths
+    col_widths = [max(min_col_width, len(str(h))) for h in headers]
+    for row in rows:
+        for idx, cell in enumerate(row):
+            col_widths[idx] = max(col_widths[idx], len(str(cell)))
+
+    # Log title
+    if title:
+        log_func(f"\n{title}")
+
+    # Log headers
+    header_line = "".join(str(h).ljust(col_widths[idx] + 2) for idx, h in enumerate(headers))
+    log_func(header_line)
+
+    # Log separator
+    separator = "─" * (sum(col_widths) + len(headers) * 2)
+    log_func(separator)
+
+    # Log rows
+    for row in rows:
+        row_line = "".join(str(cell).ljust(col_widths[idx] + 2) for idx, cell in enumerate(row))
+        log_func(row_line)
+
+
+def log_key_value(
+    data: dict,
+    title: str = None,
+    level: str = "info",
+    indent: int = 2
+):
+    """Log key-value pairs in a formatted way.
+
+    Args:
+        data: Dictionary of key-value pairs
+        title: Optional title
+        level: Log level
+        indent: Indentation for values
+
+    Example:
+        >>> log_key_value(
+        ...     {"Benchmark": "curl-delta-01", "Language": "C", "Status": "Success"},
+        ...     title="Project Info"
+        ... )
+        Project Info:
+          Benchmark: curl-delta-01
+          Language: C
+          Status: Success
+    """
+    log_func = getattr(_loguru_logger, level.lower())
+
+    if title:
+        log_func(f"\n{title}:")
+
+    indent_str = " " * indent
+    max_key_len = max(len(str(k)) for k in data.keys()) if data else 0
+
+    for key, value in data.items():
+        key_str = str(key).ljust(max_key_len)
+        log_func(f"{indent_str}{key_str}: {value}")
+
+
+def log_file_info(
+    file_path: str,
+    description: str = None,
+    level: str = "info"
+):
+    """Log file path information with check if file exists.
+
+    Args:
+        file_path: Path to file
+        description: Optional description
+        level: Log level
+
+    Example:
+        >>> log_file_info("/path/to/build_analysis.md", "Build analysis saved")
+        ✓ Build analysis saved: /path/to/build_analysis.md
+    """
+    import os
+    log_func = getattr(_loguru_logger, level.lower())
+
+    exists = os.path.exists(file_path)
+    symbol = "✓" if exists else "✗"
+
+    if description:
+        log_func(f"{symbol} {description}: {file_path}")
+    else:
+        log_func(f"{symbol} {file_path}")

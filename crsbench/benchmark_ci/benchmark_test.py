@@ -43,6 +43,7 @@ from crsbench.benchmark_ci.file_validator import (
 )
 from crsbench.benchmark_ci.execution_validator import check_benchmark_execution
 from crsbench.utils.logger import get_logger
+from crsbench.utils import log_section
 
 logger = get_logger(__name__)
 
@@ -119,8 +120,8 @@ def ensure_benchmark_symlink(benchmark: str) -> None:
                 return  # Already exists and correct
             else:
                 logger.warning(f"Symlink exists but points to wrong location: {benchmark}")
-                print(f"  Current: {existing_target}")
-                print(f"  Expected: {relative_path}")
+                logger.warning(f"  Current: {existing_target}")
+                logger.warning(f"  Expected: {relative_path}")
                 return
         else:
             logger.warning(f"Path exists but is not a symlink: {target_link}")
@@ -289,9 +290,7 @@ def run_file_checks(
         logger.info("Skipping file checks")
         return
 
-    print(f"\n{'='*80}")
-    logger.info(f"Running file checks for {len(benchmarks)} benchmarks")
-    print(f"{'='*80}\n")
+    log_section(f"Running file checks for {len(benchmarks)} benchmarks", width=80)
 
     for benchmark in sorted(benchmarks):
         if is_project_disabled(benchmark):
@@ -427,7 +426,6 @@ def run_execution_checks(
     else:
         # Parallel execution by benchmark
         logger.info(f"Starting parallel execution with {workers} workers...")
-        print()
 
         with ProcessPoolExecutor(max_workers=workers) as executor:
             # Submit all benchmarks to the pool

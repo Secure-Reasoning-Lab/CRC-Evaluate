@@ -11,9 +11,27 @@ from crsbench.utils.logger import (
     warning,
     error,
     critical,
+    # Logging utility functions
+    log_section,
+    log_summary,
+    log_results,
+    log_list,
+    log_progress,
+    log_table,
+    log_key_value,
+    log_file_info,
+)
+
+from crsbench.utils.repo_manager import (
+    ensure_project_repository,
+    find_or_clone_project,
+    get_repo_info_from_benchmark,
+    derive_repo_name_from_url,
+    clone_repository,
 )
 
 __all__ = [
+    # Core logging functions
     "get_logger",
     "configure_logger",
     "getLogger",
@@ -24,4 +42,19 @@ __all__ = [
     "warning",
     "error",
     "critical",
+    # Logging utility functions
+    "log_section",
+    "log_summary",
+    "log_results",
+    "log_list",
+    "log_progress",
+    "log_table",
+    "log_key_value",
+    "log_file_info",
+    # Repository management functions
+    "ensure_project_repository",
+    "find_or_clone_project",
+    "get_repo_info_from_benchmark",
+    "derive_repo_name_from_url",
+    "clone_repository",
 ]

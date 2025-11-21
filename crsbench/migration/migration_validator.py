@@ -8,6 +8,7 @@ This module validates that migration was successful by comparing source
 import argparse
 import hashlib
 from crsbench.utils.logger import get_logger
+from crsbench.utils import log_summary
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -455,12 +456,11 @@ def main():
             logger.warning(f"    [{issue.code}] {issue.message}")
 
     # Summary
-    print("\n" + "=" * 60)
-    logger.info("Validation Summary:")
-    logger.info(f"  Total: {total}")
-    logger.info(f"  Valid: {valid}")
-    logger.info(f"  Invalid: {invalid}")
-    print("=" * 60)
+    log_summary("Validation", {
+        "total": total,
+        "valid": valid,
+        "invalid": invalid
+    }, show_percentage=False)
 
     sys.exit(0 if invalid == 0 else 1)
 
