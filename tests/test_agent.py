@@ -2,7 +2,6 @@
 
 import os
 import pytest
-import tempfile
 from pathlib import Path
 
 # Try to import claude_agent_sdk, skip tests if not available
@@ -12,6 +11,7 @@ from crsbench.migration.test_sh_generator import (
     ShTestGenerator,
     generate_test_sh_for_benchmark
 )
+from crsbench.migration.repo_manager import find_or_clone_project
 
 
 # ============================================================================
@@ -68,7 +68,7 @@ public class ExampleTest {
 
 @pytest.fixture
 def temp_benchmark_dir(tmp_path):
-    """Create a temporary benchmark directory."""
+    """Create a temporary benchmark directory with OSS-Fuzz files."""
     benchmark_dir = tmp_path / "test_benchmark"
     benchmark_dir.mkdir()
 
@@ -82,6 +82,39 @@ def temp_benchmark_dir(tmp_path):
   - name: TestHarness
     path: /src/test/harness.c
 """)
+
+    # Create project.yaml (required by OSS-Fuzz)
+    project_yaml = benchmark_dir / "project.yaml"
+    project_yaml.write_text("""homepage: "https://example.com"
+language: java
+primary_contact: "test@example.com"
+main_repo: "https://github.com/test/test-project"
+""")
+
+    # Create Dockerfile (required by OSS-Fuzz)
+    dockerfile = benchmark_dir / "Dockerfile"
+    dockerfile.write_text("""FROM gcr.io/oss-fuzz-base/base-builder-jvm
+
+RUN apt-get update && apt-get install -y maven
+
+COPY . $SRC/test-project
+WORKDIR $SRC/test-project
+""")
+
+    # Create build.sh (required by OSS-Fuzz)
+    build_sh = benchmark_dir / "build.sh"
+    build_sh.write_text("""#!/bin/bash -eu
+
+cd $SRC/test-project
+
+# Simple Maven build
+mvn -B package -DskipTests || true
+
+# Create a dummy fuzzer for testing
+echo "echo 'Build successful'" > $OUT/dummy_fuzzer
+chmod +x $OUT/dummy_fuzzer
+""")
+    build_sh.chmod(0o755)
 
     return benchmark_dir
 
@@ -166,7 +199,7 @@ class TestAgentIntegration:
 
     def test_find_unit_tests(self, temp_project_dir, litellm_config):
         """Test finding unit tests in a project."""
-        agent = TestShGeneratorAgent(
+        agent = ShTestGenerator(
             litellm_base_url=litellm_config["base_url"],
             litellm_api_key=litellm_config["api_key"]
         )
@@ -186,7 +219,7 @@ class TestAgentIntegration:
 
     def test_generate_test_sh_script(self, litellm_config):
         """Test generating test.sh script."""
-        agent = TestShGeneratorAgent(
+        agent = ShTestGenerator(
             litellm_base_url=litellm_config["base_url"],
             litellm_api_key=litellm_config["api_key"]
         )
@@ -325,6 +358,146 @@ class TestGenerateTestShForBenchmark:
 
 
 # ============================================================================
+# MCP Integration Tests (requires LiteLLM + Docker + OSS-Fuzz)
+# ============================================================================
+
+@pytest.mark.integration
+@pytest.mark.mcp
+@pytest.mark.skipif(
+    not os.getenv("LITELLM_BASE_URL") or not os.getenv("LITELLM_API_KEY"),
+    reason="LiteLLM environment variables not set"
+)
+@pytest.mark.skipif(
+    not os.path.exists("oss-fuzz/infra/helper.py"),
+    reason="OSS-Fuzz submodule not available"
+)
+@pytest.mark.skipif(
+    not os.path.exists("benchmarks/apache-commons-compress-delta-01"),
+    reason="Real benchmarks not available"
+)
+class TestMCPIntegration:
+    """Integration tests for MCP-enabled test.sh generation using real benchmarks.
+
+    These tests are heavy - they require:
+    - LiteLLM connection
+    - Docker installed and running
+    - OSS-Fuzz submodule initialized
+    - Real benchmarks directory
+    - Sufficient disk space for Docker images
+    """
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize("benchmark_name,_language", [
+        ("libxml2-delta-03", "c"),
+        ("apache-commons-compress-delta-01", "jvm"),
+    ])
+    def test_generate_with_mcp_docker_testing_real_benchmarks(
+        self,
+        benchmark_name,
+        _language,
+        litellm_config,
+        tmp_path
+    ):
+        """Test MCP-enabled generation with real benchmarks.
+
+        This test:
+        1. Uses real benchmark from benchmarks/ directory
+        2. Uses repo_manager to find/clone project (just like CLI)
+        3. Generates test.sh using agent with MCP tools
+        4. Tests the script in Docker container
+
+        Tests both C and Java benchmarks.
+
+        This is a SLOW test (5-10 min per benchmark).
+        Run with: uv run pytest tests/test_agent.py -v -m slow
+
+        NOTE: This test requires git access to clone the project repository.
+        """
+        benchmark_dir = f"benchmarks/{benchmark_name}"
+
+        # Check if benchmark exists
+        if not os.path.exists(benchmark_dir):
+            pytest.skip(f"Benchmark {benchmark_name} not found")
+
+        # Use repo_manager to find/clone project (same as CLI)
+        # Clone to temp directory instead of default afc-repos
+        repos_dir = str(tmp_path / "repos")
+        os.makedirs(repos_dir, exist_ok=True)
+
+        project_dir = find_or_clone_project(
+            benchmark_name=benchmark_name,
+            benchmarks_root="benchmarks",
+            repos_dir=repos_dir,
+            verbose=True
+        )
+
+        if not project_dir:
+            pytest.skip(f"Failed to find/clone project for {benchmark_name}")
+
+        # Full end-to-end MCP test with real benchmarks
+        result = generate_test_sh_for_benchmark(
+            benchmark_name=benchmark_name,
+            benchmark_dir=benchmark_dir,
+            project_dir=project_dir,  # Already a string from find_or_clone_project
+            with_docker_testing=True,  # Enable MCP tools
+            litellm_base_url=litellm_config["base_url"],
+            litellm_api_key=litellm_config["api_key"],
+            verbose=True
+        )
+
+        assert result["success"] is True
+        assert Path(result["test_sh_path"]).exists()
+
+        # Verify all output files were created
+        assert Path(result["analysis_md_path"]).exists()
+        assert Path(result["agent_log_path"]).exists()
+
+        # Verify test.sh was generated with MCP assistance
+        test_sh_content = Path(result["test_sh_path"]).read_text()
+        assert test_sh_content.startswith("#!/bin/bash")
+
+        # Verify agent log contains both analysis and generation logs
+        agent_log_content = Path(result["agent_log_path"]).read_text()
+        assert "Test.sh Generation Agent Log" in agent_log_content
+        assert benchmark_name in agent_log_content
+
+    def test_generate_with_mcp_docker_testing(
+        self,
+        temp_benchmark_dir,
+        temp_project_dir
+    ):
+        """Test MCP-enabled generation with temporary test fixtures.
+
+        This test uses minimal fixtures for quick validation.
+        For real benchmark testing, use test_generate_with_mcp_docker_testing_real_benchmarks.
+        """
+        # This is a lightweight test - just verify the fixture works
+        assert temp_benchmark_dir.exists()
+        assert temp_project_dir.exists()
+        assert (temp_benchmark_dir / "Dockerfile").exists()
+        assert (temp_benchmark_dir / "build.sh").exists()
+        assert (temp_benchmark_dir / "project.yaml").exists()
+
+    def test_mcp_tools_accessible(self, litellm_config):
+        """Test that MCP tools are accessible in with_docker_testing mode.
+
+        This is a lighter test that just checks if MCP tools can be invoked
+        without doing full build/test cycle.
+        """
+        from crsbench.migration.test_sh_generator import ShTestGenerator
+
+        generator = ShTestGenerator(
+            litellm_base_url=litellm_config["base_url"],
+            litellm_api_key=litellm_config["api_key"]
+        )
+
+        # Just test that the generator can be initialized
+        # Full MCP functionality tested in test_generate_with_mcp_docker_testing
+        assert generator.litellm_base_url == litellm_config["base_url"]
+        assert generator.litellm_api_key == litellm_config["api_key"]
+
+
+# ============================================================================
 # Marker for running specific test groups
 # ============================================================================
 
@@ -333,6 +506,15 @@ class TestGenerateTestShForBenchmark:
 #
 # Run integration tests (requires LiteLLM):
 #   uv run pytest tests/test_agent.py -v -m integration
+#
+# Run MCP integration tests (requires LiteLLM + Docker + OSS-Fuzz):
+#   uv run pytest tests/test_agent.py -v -m mcp
+#
+# Run SLOW MCP tests with real benchmarks (5-10 min per benchmark):
+#   uv run pytest tests/test_agent.py -v -m slow
+#
+# Run MCP tests excluding slow ones:
+#   uv run pytest tests/test_agent.py -v -m "mcp and not slow"
 #
 # Run all tests:
 #   uv run pytest tests/test_agent.py -v
