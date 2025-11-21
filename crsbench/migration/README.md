@@ -161,6 +161,82 @@ See [test.sh generator design document](../../design-docs/migration/test-sh-gene
 
 ---
 
+## MCP-Enhanced test.sh Generator
+
+An optional iterative approach to test.sh generation using Model Context Protocol (MCP) with Claude Agent SDK.
+
+### Overview
+
+The MCP-enhanced generator adds Docker testing capabilities to the standard test.sh generator:
+1. Build Docker images and analyze build logs
+2. Test generated test.sh scripts in containers
+3. Iteratively refine based on test failures
+4. Automatic retry until test.sh works
+
+### Quick Start
+
+```python
+from crsbench.migration.test_sh_generator import generate_test_sh_for_benchmark
+
+# Standard two-phase generation
+result = generate_test_sh_for_benchmark(
+    benchmark_name="curl-delta-01",
+    benchmark_dir="benchmarks/curl-delta-01",
+    project_dir="/path/to/curl",
+    verbose=True
+)
+
+# With Docker testing (MCP-enabled)
+result = generate_test_sh_for_benchmark(
+    benchmark_name="curl-delta-01",
+    benchmark_dir="benchmarks/curl-delta-01",
+    project_dir="/path/to/curl",
+    with_docker_testing=True,  # Enable MCP tools
+    verbose=True
+)
+```
+
+### Features
+
+- ✅ **Integrated approach**: MCP tools work alongside Claude Agent SDK
+- ✅ **Docker integration**: Builds images and tests scripts in containers
+- ✅ **Iterative refinement**: Tests and improves test.sh until it works
+- ✅ **Multi-language**: Supports C, C++, Java, Python, Go
+- ✅ **No separate client**: MCP server managed by SDK automatically
+
+### Available Tools
+
+**Claude Agent SDK tools** (always available):
+- `Read`, `Grep`, `Glob` - File operations
+- `WebSearch`, `WebFetch` - Research capabilities
+- `TodoWrite` - Task tracking
+
+**MCP tools** (when `with_docker_testing=True`):
+- `mcp__crsbench__build_benchmark` - Build Docker image
+- `mcp__crsbench__get_build_logs` - Retrieve build logs
+- `mcp__crsbench__check_test_sh` - Run and validate test.sh
+- `mcp__crsbench__get_benchmark_info` - Get metadata
+
+### Comparison: Standard vs MCP-Enhanced
+
+| Feature | Standard | MCP-Enhanced |
+|---------|----------|--------------|
+| Approach | Two-phase (analyze → generate) | Iterative (generate → test → refine) |
+| Testing | Post-generation (manual) | Integrated (automatic) |
+| Docker | Not used | Build and test in container |
+| Iteration | Single pass | Multiple attempts until success |
+| Setup | Simpler | Requires Docker |
+
+### Detailed Documentation
+
+See [MCP_README.md](./MCP_README.md) for:
+- Architecture details
+- MCP server implementation
+- Tool descriptions
+- Advanced usage examples
+
+---
+
 ## vuln.yaml Generator
 
 Automatically generates vuln.yaml files for CPVs by analyzing crash logs, POV files, and source code.
@@ -304,4 +380,180 @@ See [repository manager design document](../../design-docs/migration/repo-manage
 - Error handling strategies
 - Configuration requirements
 - Usage examples and testing approaches
+
+---
+
+## Build Script Splitter
+
+Automatically splits `build.sh` into `build-pre.sh` and `build-apply.sh` for incremental build systems.
+
+### Overview
+
+For patch generation CRS, incremental builds significantly reduce compile time:
+1. **build-pre.sh**: Full build before patch application (creates build cache)
+2. **build-apply.sh**: Incremental rebuild after patch (reuses cached artifacts)
+
+This is inspired by OSS-Fuzz's `replay_build.sh` system which enables fast rebuilds by caching object files and only recompiling changed sources.
+
+### Quick Start
+
+```bash
+# Set up environment
+export LITELLM_BASE_URL="http://localhost:4000"
+export LITELLM_API_KEY="your-api-key"
+
+# Single benchmark
+python -m crsbench.migration.split_build \
+  --benchmark libxml2-delta-01 \
+  --benchmark-dir benchmarks/libxml2-delta-01 \
+  --project-dir /path/to/libxml2 \
+  --verbose
+
+# Multiple benchmarks with auto-discovery
+python -m crsbench.migration.split_build \
+  --benchmarks libxml2-delta-01,curl-delta-01 \
+  --benchmarks-root benchmarks/ \
+  --projects-root /path/to/projects/ \
+  --verbose
+
+# Process all benchmarks
+python -m crsbench.migration.split_build \
+  --all \
+  --benchmarks-root benchmarks/ \
+  --projects-root /path/to/projects/ \
+  --verbose
+```
+
+### Features
+
+- ✅ **Automatic build analysis**: Analyzes build.sh to understand build process
+- ✅ **Smart script splitting**: Separates configuration from compilation
+- ✅ **OSS-Fuzz compatible**: Based on OSS-Fuzz replay_build.sh patterns
+- ✅ **Multi-build system support**: Make, CMake, Meson, Maven, Gradle, etc.
+- ✅ **Reference-driven**: Uses OSS-Fuzz examples as templates
+- ✅ **Batch processing**: Process multiple benchmarks at once
+
+### How It Works
+
+The splitter performs two-phase analysis and generation:
+
+#### Phase 1: Build Analysis
+1. Reads original `build.sh` and referenced scripts
+2. Identifies build system (Make, CMake, Maven, etc.)
+3. Categorizes build steps (configuration, compilation, installation)
+4. Determines which steps can be cached
+5. References similar OSS-Fuzz replay_build.sh examples
+
+#### Phase 2: Script Generation
+1. **build-pre.sh**: Exact copy of original build.sh
+2. **build-apply.sh**: Simplified script that:
+   - Skips configuration (./configure, cmake, meson setup)
+   - Skips clean operations (make clean, git clean)
+   - Runs only incremental compilation
+   - Copies updated fuzzers to $OUT
+
+### OSS-Fuzz Replay Build Reference
+
+The agent uses real OSS-Fuzz replay_build.sh examples as few-shot learning:
+
+**Example 1: PHP (Ultra-fast, 62s → 2s)**
+```bash
+#!/bin/bash -eu
+make -j$(nproc)
+
+FUZZERS="php-fuzz-json php-fuzz-exif php-fuzz-parser"
+for fuzzerName in $FUZZERS; do
+    cp sapi/fuzzer/$fuzzerName $OUT/
+done
+```
+
+**Example 2: OpenSSL (Function-based)**
+```bash
+#!/bin/bash -eu
+function build_fuzzers() {
+    make -j$(nproc) LDCMD="$CXX $CXXFLAGS"
+    fuzzers=$(find fuzz -executable -type f)
+    for f in $fuzzers; do
+        cp $f $OUT/$(basename $f)
+    done
+}
+cd $SRC/openssl/
+build_fuzzers ""
+```
+
+**Example 3: FFmpeg (Complex with args)**
+```bash
+#!/bin/bash -eux
+cd $SRC/ffmpeg
+make -j$(nproc) install
+
+if [ "$#" -lt 1 ]; then exit 0; fi
+make_target=$($SRC/name_mappings.py build_target_name "$1")
+make tools/${make_target}
+```
+
+These examples are **embedded in the agent's prompt** as few-shot examples.
+
+### Example Output
+
+**build-pre.sh** (Full build - exact copy of build.sh):
+```bash
+#!/bin/bash -eu
+# Original build.sh content (no changes)
+./configure --enable-fuzz
+make -j$(nproc)
+cp fuzzer $OUT/
+```
+
+**build-apply.sh** (Incremental):
+```bash
+#!/bin/bash -eu
+# Incremental rebuild after patch application
+# Configuration already done in build-pre.sh
+
+cd $SRC/project
+make -j$(nproc)  # Reuses cached .o files
+cp fuzzer $OUT/
+```
+
+### Generated Files
+
+For each benchmark, the splitter generates:
+1. **build-pre.sh** - Full build script
+2. **build-apply.sh** - Incremental rebuild script
+3. **build_analysis.md** - Build process analysis (in `.aixcc/`)
+4. **build_split_log.txt** - Agent execution log (in `.aixcc/`)
+
+### Programmatic Usage
+
+```python
+from crsbench.migration.build_script_splitter import split_build_script
+
+result = split_build_script(
+    benchmark_name="curl-delta-01",
+    benchmark_dir="benchmarks/curl-delta-01",
+    project_dir="/path/to/curl",
+    verbose=True
+)
+
+if result["success"]:
+    print(f"✅ build-pre.sh: {result['build_pre_path']}")
+    print(f"✅ build-apply.sh: {result['build_apply_path']}")
+    print(f"📄 Analysis: {result['analysis_md_path']}")
+```
+
+### Requirements
+
+- LITELLM_BASE_URL and LITELLM_API_KEY environment variables
+- Claude Agent SDK
+- Project source code (for build system analysis)
+- Existing build.sh in benchmark directory
+
+### Design Principles
+
+1. **build-pre.sh is authoritative**: Matches original build.sh behavior
+2. **build-apply.sh is minimal**: Only essential incremental steps
+3. **Cache-aware**: Leverages build system's incremental compilation
+4. **Idempotent**: build-apply.sh can run multiple times safely
+5. **Fast**: Reduces rebuild time from minutes to seconds
 
