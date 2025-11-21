@@ -194,11 +194,14 @@ def ensure_project_repository(
     verbose: bool = False
 ) -> Optional[str]:
     """
-    Ensure project repository exists, cloning if necessary.
+    Ensure project repository exists at commit-specific directory, cloning if necessary.
+
+    This function uses commit-specific directories for parallel execution safety
+    and cache efficiency. Directory structure: {repos_dir}/{repo_name}-{short_commit}
 
     Args:
         benchmark_dir: Path to benchmark directory
-        repos_dir: Directory to store cloned repositories (default: PROJECT_REPOS_DIR env var)
+        repos_dir: Directory to store cloned repositories (default: PROJECT_REPOS_DIR env var or .crsbench-repos)
         project_dir: Explicit project directory path (if provided, this is used directly)
         verbose: Enable verbose logging
 
@@ -208,7 +211,7 @@ def ensure_project_repository(
     Workflow:
         1. If project_dir is provided and exists, return it
         2. If project_dir is provided but doesn't exist, try to clone there
-        3. If project_dir is not provided, derive from benchmark and clone to repos_dir
+        3. If project_dir is not provided, use commit-specific directory in repos_dir
     """
     # Setup logging
     if verbose:
@@ -237,9 +240,12 @@ def ensure_project_repository(
         # Use the specified project_dir
         target_dir = project_dir
     else:
-        # Derive from repo URL and use repos_dir
+        # Use commit-specific directory for cache efficiency and parallel safety
         if not repos_dir:
-            repos_dir = os.getenv("PROJECT_REPOS_DIR", "/home/acorn421/work/team-atlanta/afc-repos")
+            # Try PROJECT_REPOS_DIR env var first, then default to .crsbench-repos
+            crsbench_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+            default_repos_dir = os.path.join(crsbench_root, '.crsbench-repos')
+            repos_dir = os.getenv("PROJECT_REPOS_DIR", default_repos_dir)
 
         # Use explicit repo_name if provided, otherwise derive from URL
         if repo_info.get("repo_name"):
@@ -251,22 +257,65 @@ def ensure_project_repository(
             if verbose:
                 logger.info(f"Derived repo_name from URL: {repo_name}")
 
-        target_dir = os.path.join(repos_dir, repo_name)
+        # Get base_commit and create commit-specific directory name
+        base_commit = repo_info.get("base_commit")
+        if not base_commit:
+            logger.error(f"❌ No base_commit found in meta.yaml for {benchmark_dir}")
+            return None
+
+        # Create commit-specific directory: {repo_name}-{short_commit}
+        short_commit = base_commit[:8]
+        commit_specific_name = f"{repo_name}-{short_commit}"
+        target_dir = os.path.join(repos_dir, commit_specific_name)
+
+        if verbose:
+            logger.info(f"Using commit-specific directory: {target_dir}")
+
+    # Check if directory already exists and has correct commit
+    if os.path.isdir(target_dir):
+        # Verify it's at the correct commit
+        try:
+            from pathlib import Path
+            if (Path(target_dir) / ".git").exists():
+                import subprocess
+                result = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=target_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if result.returncode == 0:
+                    current_commit = result.stdout.strip()
+                    expected_commit = repo_info.get("base_commit", "")
+                    if current_commit.startswith(expected_commit[:8]):
+                        if verbose:
+                            logger.info(f"✅ Repository already exists at correct commit: {target_dir}")
+                        return target_dir
+                    else:
+                        logger.warning(f"⚠️  Repository exists but at wrong commit: {current_commit[:8]} != {expected_commit[:8]}")
+        except Exception as e:
+            logger.warning(f"Failed to verify commit: {e}")
+
+        # If we reach here, directory exists but commit verification failed or mismatched
+        # Return existing directory anyway (assume it's usable)
+        if verbose:
+            logger.info(f"✅ Using existing repository: {target_dir}")
+        return target_dir
 
     # Clone if needed
-    if not os.path.isdir(target_dir):
-        if verbose:
-            logger.info(f"📦 Repository not found, cloning...")
+    if verbose:
+        logger.info(f"📦 Repository not found, cloning...")
 
-        success = clone_repository(
-            repo_url=repo_info["repo_url"],
-            target_dir=target_dir,
-            commit=repo_info.get("base_commit"),
-            verbose=verbose
-        )
+    success = clone_repository(
+        repo_url=repo_info["repo_url"],
+        target_dir=target_dir,
+        commit=repo_info.get("base_commit"),
+        verbose=verbose
+    )
 
-        if not success:
-            return None
+    if not success:
+        return None
 
     return target_dir
 

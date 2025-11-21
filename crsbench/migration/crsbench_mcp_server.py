@@ -15,7 +15,6 @@
 ################################################################################
 """MCP server for CRSBench test.sh generation."""
 
-import logging
 import os
 import re
 import shutil
@@ -28,16 +27,13 @@ from typing import Optional, Tuple
 from mcp.server.fastmcp import FastMCP
 
 from crsbench.migration import mcp_config
+from crsbench.utils.repo_manager import ensure_project_repository
+from crsbench.utils.logger import get_logger
 
 TARGET_BENCHMARK = ''
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="[SERVER] %(asctime)s - %(name)s - %(module)s - %(funcName)s - %(levelname)s - %(message)s",
-    stream=sys.stderr
-)
-logger = logging.getLogger("crsbench-mcp-server")
+# Get logger instance
+logger = get_logger(__name__)
 
 # Create an MCP server
 mcp = FastMCP("CRSBench Docker build and test.sh execution tools")
@@ -48,193 +44,11 @@ def _get_benchmark_dir(benchmark_name: str) -> str:
     return os.path.join(mcp_config.BASE_BENCHMARKS_DIR, benchmark_name)
 
 
-def _get_base_commit_from_meta(benchmark_name: str) -> Optional[str]:
-    """
-    Get base_commit from benchmark's meta.yaml.
-
-    For delta mode: returns delta_mode.base_commit
-    For full mode: returns full_mode.base_commit
-
-    Args:
-        benchmark_name: Name of the benchmark
-
-    Returns:
-        Commit hash or None if not found
-    """
-    benchmark_dir = _get_benchmark_dir(benchmark_name)
-    meta_yaml_path = os.path.join(benchmark_dir, '.aixcc', 'meta.yaml')
-
-    if not os.path.exists(meta_yaml_path):
-        logger.warning("meta.yaml not found for benchmark %s", benchmark_name)
-        return None
-
-    try:
-        with open(meta_yaml_path, 'r', encoding='utf-8') as f:
-            meta_data = yaml.safe_load(f)
-
-        # Try delta_mode first, then full_mode
-        if meta_data and 'delta_mode' in meta_data:
-            base_commit = meta_data['delta_mode'].get('base_commit')
-            if base_commit:
-                logger.info("Found delta_mode base_commit for %s: %s", benchmark_name, base_commit)
-                return base_commit
-
-        if meta_data and 'full_mode' in meta_data:
-            base_commit = meta_data['full_mode'].get('base_commit')
-            if base_commit:
-                logger.info("Found full_mode base_commit for %s: %s", benchmark_name, base_commit)
-                return base_commit
-
-        logger.warning("No base_commit found in meta.yaml for %s", benchmark_name)
-        return None
-
-    except Exception as e:
-        logger.error("Failed to parse meta.yaml for %s: %s", benchmark_name, str(e))
-        return None
-
-
-def _get_repo_url_from_meta(benchmark_name: str) -> Optional[str]:
-    """
-    Get repository URL from benchmark's project.yaml or meta.yaml.
-
-    Args:
-        benchmark_name: Name of the benchmark
-
-    Returns:
-        Repository URL or None if not found
-    """
-    benchmark_dir = _get_benchmark_dir(benchmark_name)
-
-    # Try project.yaml first
-    project_yaml = os.path.join(benchmark_dir, 'project.yaml')
-    if os.path.exists(project_yaml):
-        with open(project_yaml, 'r', encoding='utf-8') as f:
-            for line in f:
-                if line.startswith('main_repo:'):
-                    repo_url = line.split('main_repo:')[1].strip().strip('"').strip("'")
-                    logger.info("Found repo URL from project.yaml: %s", repo_url)
-                    return repo_url
-
-    # Fallback to meta.yaml
-    meta_yaml = os.path.join(benchmark_dir, '.aixcc', 'meta.yaml')
-    if os.path.exists(meta_yaml):
-        with open(meta_yaml, 'r', encoding='utf-8') as f:
-            for line in f:
-                if 'repository:' in line:
-                    repo_url = line.split('repository:')[1].strip().strip('"').strip("'")
-                    logger.info("Found repo URL from meta.yaml: %s", repo_url)
-                    return repo_url
-
-    logger.warning("Could not find repository URL for benchmark %s", benchmark_name)
-    return None
-
-
-def _ensure_project_at_commit(benchmark_name: str) -> Optional[str]:
-    """
-    Ensure project source is cloned and checked out to the correct commit.
-    Returns commit-specific directory path.
-
-    For parallel execution safety, each commit gets its own directory:
-    .crsbench-mcp/projects/{project_name}-{short_commit}/
-
-    Args:
-        benchmark_name: Name of the benchmark
-
-    Returns:
-        Path to project source directory at correct commit, or None if failed
-    """
-    # Get commit hash from meta.yaml
-    commit_hash = _get_base_commit_from_meta(benchmark_name)
-    if not commit_hash:
-        logger.error("Could not get base_commit for benchmark %s", benchmark_name)
-        return None
-
-    # Get repository URL
-    repo_url = _get_repo_url_from_meta(benchmark_name)
-    if not repo_url:
-        logger.error("Could not get repository URL for benchmark %s", benchmark_name)
-        return None
-
-    # Extract project name from URL
-    # e.g., git@github.com:Team-Atlanta/cp-c-libxml2.git -> cp-c-libxml2
-    project_name = repo_url.rstrip('/').split('/')[-1].replace('.git', '')
-
-    # Create commit-specific directory name
-    short_commit = commit_hash[:8]  # Use first 8 chars of commit hash
-    commit_specific_name = f"{project_name}-{short_commit}"
-    source_path = os.path.join(mcp_config.BASE_PROJECTS_DIR, commit_specific_name)
-
-    # If directory already exists and has correct commit, return it
-    if os.path.isdir(source_path):
-        try:
-            # Verify it's at the correct commit
-            result = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=source_path,
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            if result.returncode == 0:
-                current_commit = result.stdout.strip()
-                if current_commit.startswith(commit_hash[:8]):
-                    logger.info("Project already at correct commit: %s", source_path)
-                    return source_path
-        except Exception as e:
-            logger.warning("Failed to verify commit in %s: %s", source_path, str(e))
-
-    # Clone repository and checkout commit
-    logger.info("Cloning repository %s to %s", repo_url, source_path)
-
-    # Remove directory if it exists but is not at correct commit
-    if os.path.exists(source_path):
-        shutil.rmtree(source_path)
-
-    # Create parent directory
-    os.makedirs(mcp_config.BASE_PROJECTS_DIR, exist_ok=True)
-
-    try:
-        # Clone repository
-        subprocess.run(
-            ["git", "clone", repo_url, source_path],
-            check=True,
-            capture_output=True,
-            timeout=300  # 5 minutes timeout
-        )
-        logger.info("Successfully cloned repository to %s", source_path)
-
-        # Checkout specific commit
-        subprocess.run(
-            ["git", "checkout", commit_hash],
-            cwd=source_path,
-            check=True,
-            capture_output=True,
-            timeout=30
-        )
-        logger.info("Checked out commit %s in %s", commit_hash, source_path)
-
-        return source_path
-
-    except subprocess.CalledProcessError as e:
-        logger.error("Failed to clone/checkout repository: %s", str(e))
-        logger.error("stderr: %s", e.stderr.decode('utf-8') if e.stderr else "")
-        # Clean up failed clone
-        if os.path.exists(source_path):
-            shutil.rmtree(source_path)
-        return None
-    except Exception as e:
-        logger.error("Unexpected error during clone/checkout: %s", str(e))
-        if os.path.exists(source_path):
-            shutil.rmtree(source_path)
-        return None
-
-
 def _get_project_source_dir(benchmark_name: str) -> Optional[str]:
     """
     Get the project source directory path, ensuring it's at the correct commit.
 
-    This is the main entry point for getting project source.
-    It ensures the project is cloned and checked out to base_commit from meta.yaml.
+    Uses the centralized repo_manager for commit-specific directory management.
 
     Args:
         benchmark_name: Name of the benchmark
@@ -242,7 +56,26 @@ def _get_project_source_dir(benchmark_name: str) -> Optional[str]:
     Returns:
         Path to project source directory or None if failed
     """
-    return _ensure_project_at_commit(benchmark_name)
+    benchmark_dir = _get_benchmark_dir(benchmark_name)
+
+    if not os.path.isdir(benchmark_dir):
+        logger.error("Benchmark directory not found: %s", benchmark_dir)
+        return None
+
+    # Use repo_manager for consistent source management
+    # It will use PROJECT_REPOS_DIR env var or default to .crsbench-repos
+    source_path = ensure_project_repository(
+        benchmark_dir=benchmark_dir,
+        repos_dir=os.getenv("PROJECT_REPOS_DIR"),
+        verbose=True
+    )
+
+    if not source_path:
+        logger.error("Failed to get project source for benchmark %s", benchmark_name)
+        return None
+
+    logger.info("Using project source at: %s", source_path)
+    return source_path
 
 
 def _get_workdir_from_dockerfile(benchmark_name: str) -> str:

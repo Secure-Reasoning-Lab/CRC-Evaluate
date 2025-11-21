@@ -10,6 +10,7 @@ files, and organizing ground truth data according to the RFC specification.
 import argparse
 import csv
 from crsbench.utils.logger import get_logger
+from crsbench.utils import log_summary, log_section
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -741,13 +742,12 @@ Examples:
         failed = sum(1 for r in results if not r.successful)
         total_vulns = sum(len(r.vulns) for r in results)
 
-        logger.info("=" * 60)
-        logger.info(f"Report Collection Summary:")
-        logger.info(f"  Total projects: {len(results)}")
-        logger.info(f"  Successful: {successful}")
-        logger.info(f"  Failed: {failed}")
-        logger.info(f"  Total vulnerabilities: {total_vulns}")
-        logger.info("=" * 60)
+        log_summary("Report Collection", {
+            "total_projects": len(results),
+            "successful": successful,
+            "failed": failed,
+            "total_vulnerabilities": total_vulns
+        }, show_percentage=False)
     else:
         # Normal migration mode
         results = migrator.migrate_all(specific_projects)
@@ -757,13 +757,13 @@ Examples:
         skipped = sum(1 for r in results if r.skipped)
         failed = sum(1 for r in results if not r.successful and not r.skipped)
 
-        logger.info("=" * 60)
-        logger.info(f"Migration {'DRY RUN ' if args.dry_run else ''}Summary:")
-        logger.info(f"  Total projects: {len(results)}")
-        logger.info(f"  Successful: {successful}")
-        logger.info(f"  Skipped (already exists): {skipped}")
-        logger.info(f"  Failed: {failed}")
-        logger.info("=" * 60)
+        dry_run_prefix = "DRY RUN " if args.dry_run else ""
+        log_summary(f"Migration {dry_run_prefix}", {
+            "total_projects": len(results),
+            "successful": successful,
+            "skipped": skipped,
+            "failed": failed
+        }, show_percentage=False)
 
     # Write CSV report
     if results:

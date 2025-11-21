@@ -9,9 +9,11 @@ CRSBENCH_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 # Default to .crsbench-mcp under the working directory instead of home directory
 BASE_DIR = os.getenv('CRSBENCH_MCP_DIR', os.path.join(CRSBENCH_ROOT, '.crsbench-mcp'))
 
-# Directory for project source code clones
-# Use PROJECT_REPOS_DIR if set, otherwise use ~/.crsbench-mcp/projects
-BASE_PROJECTS_DIR = os.getenv('PROJECT_REPOS_DIR', f'{BASE_DIR}/projects')
+# Directory for project source code clones (DEPRECATED - use repo_manager instead)
+# NOTE: Project repositories are now managed centrally by repo_manager.py
+#       which uses PROJECT_REPOS_DIR env var or defaults to .crsbench-repos/
+#       This maintains commit-specific directories: {repo_name}-{short_commit}
+BASE_PROJECTS_DIR = os.getenv('PROJECT_REPOS_DIR', os.path.join(CRSBENCH_ROOT, '.crsbench-repos'))
 
 # CRSBench benchmarks directory (use actual benchmarks/ in the repo)
 BASE_BENCHMARKS_DIR = os.path.join(CRSBENCH_ROOT, 'benchmarks')

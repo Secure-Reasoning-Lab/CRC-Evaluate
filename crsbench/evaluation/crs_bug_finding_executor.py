@@ -249,7 +249,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         logger.info(f"Building CRS for {build_key}")
 
         # Use repository manager to ensure source code exists
-        from crsbench.migration.repo_manager import ensure_project_repository
+        from crsbench.utils.repo_manager import ensure_project_repository
 
         # Clone to trial-specific build directory
         source_dest = trial_build_dir / "src" / project_name

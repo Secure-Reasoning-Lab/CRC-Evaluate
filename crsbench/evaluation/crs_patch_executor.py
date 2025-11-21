@@ -255,7 +255,7 @@ class CRSPatchExecutor(CRSExecutor):
             return
 
         # Use repository manager to ensure source code exists
-        from crsbench.migration.repo_manager import ensure_project_repository
+        from crsbench.utils.repo_manager import ensure_project_repository
 
         logger.info(f"Ensuring source repository for {project_name}...")
         source_path = ensure_project_repository(

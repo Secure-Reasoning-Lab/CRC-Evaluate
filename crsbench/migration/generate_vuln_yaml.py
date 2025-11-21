@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from crsbench.migration.vuln_yaml_generator import generate_vuln_yaml_for_cpv
-from crsbench.migration.repo_manager import find_or_clone_project
+from crsbench.utils.repo_manager import find_or_clone_project
 
 
 def find_all_benchmarks(benchmarks_root: str):

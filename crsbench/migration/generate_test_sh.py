@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from crsbench.migration.test_sh_generator import generate_test_sh_for_benchmark
-from crsbench.migration.repo_manager import find_or_clone_project
+from crsbench.utils.repo_manager import find_or_clone_project
 
 
 def find_benchmark_dir(benchmark_name: str, benchmarks_root: str = "benchmarks") -> str:

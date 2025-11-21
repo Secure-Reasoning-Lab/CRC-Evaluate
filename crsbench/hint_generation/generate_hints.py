@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from crsbench.utils.logger import get_logger, configure_logger
+from crsbench.utils import log_summary
 from crsbench.hint_generation.sarif_generator_simple import (
     generate_hints_for_benchmark,
     HintLevel,
@@ -140,12 +141,12 @@ def generate_hints_for_all_benchmarks(
             failure_count += 1
 
     # Summary
-    logger.info("=" * 80)
-    logger.info(f"Hint generation complete!")
-    logger.info(f"  Success: {success_count}")
-    logger.info(f"  Skipped: {skipped_count}")
-    logger.info(f"  Failures: {failure_count}")
-    logger.info(f"  Total: {len(vuln_yaml_files)}")
+    log_summary("Hint generation complete", {
+        "total": len(vuln_yaml_files),
+        "success": success_count,
+        "skipped": skipped_count,
+        "failures": failure_count
+    }, show_percentage=False)
 
 
 def parse_args() -> argparse.Namespace:

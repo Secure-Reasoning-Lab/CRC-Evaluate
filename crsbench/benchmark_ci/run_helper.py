@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List, Tuple, Optional
 
 from crsbench.benchmark_ci.utils import get_oss_fuzz_root, get_benchmarks_root
-from crsbench.migration.repo_manager import ensure_project_repository
+from crsbench.utils.repo_manager import ensure_project_repository
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)

@@ -238,7 +238,7 @@ class TrialDirectoryPreparer:
         Raises:
             SourceCloneError: If source cloning fails
         """
-        from crsbench.migration.repo_manager import ensure_project_repository
+        from crsbench.utils.repo_manager import ensure_project_repository
 
         benchmark_dir = self.benchmarks_root / benchmark
 
