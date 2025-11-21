@@ -2,7 +2,7 @@
 
 import os
 import re
-import logging
+from crsbench.utils.logger import get_logger
 import threading
 import time
 from pathlib import Path
@@ -14,7 +14,7 @@ from crsbench.evaluation.results import ResultCollector, EvaluationReport, Harne
 from crsbench.evaluation.snapshot_manager import SnapshotManager
 
 # Set up logging
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class EvaluationError(Exception):
@@ -62,7 +62,7 @@ class BenchmarkRunner:
         """
         self.crs_executor = crs_executor or StubCRSExecutor()
         self.snapshot_period = snapshot_period
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
     def run_benchmark(self, benchmark_path: Union[str, Path],
                       mode: Optional[str] = None,

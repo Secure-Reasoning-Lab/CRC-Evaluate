@@ -5,7 +5,7 @@ Generates vuln.yaml files with vulnerability metadata, reading from
 Team-Atlanta format vulnerability files or generating mock data if unavailable.
 """
 
-import logging
+from crsbench.utils.logger import get_logger
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -20,7 +20,7 @@ class VulnMetadataGenerator:
 
     def __init__(self):
         """Initialize the vulnerability metadata generator."""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
     def generate(
         self,

@@ -4,8 +4,9 @@ This module provides utilities for initializing and managing Redis-backed RQ que
 for distributed CRS trial execution.
 """
 
-import logging
 from typing import List, Optional
+
+from crsbench.utils.logger import get_logger
 
 try:
     import redis
@@ -17,7 +18,7 @@ except ImportError:
     redis = None
     rq = None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def check_redis_available(redis_host: str, timeout: int = 2) -> bool:

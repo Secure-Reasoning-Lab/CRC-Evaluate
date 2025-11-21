@@ -12,7 +12,7 @@ indefinitely if shutdown takes too long.
 """
 
 import json
-import logging
+from crsbench.utils.logger import get_logger
 import shutil
 import tarfile
 import threading
@@ -22,7 +22,7 @@ from typing import Set, Optional
 
 from crsbench.evaluation.snapshot import SnapshotMetadata
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SnapshotManager:

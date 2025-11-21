@@ -14,7 +14,6 @@ Usage:
 """
 
 import argparse
-import logging
 import sys
 import yaml
 import time
@@ -23,15 +22,13 @@ from typing import List, NamedTuple, Dict, Any, Optional
 from collections import namedtuple
 from dotenv import load_dotenv
 
+from crsbench.utils.logger import get_logger, configure_logger
+
 # Load environment variables from .env file if present
 load_dotenv()
 
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Get logger instance
+logger = get_logger(__name__)
 
 # Trial configuration
 Trial = namedtuple('Trial', ['crs', 'benchmark', 'trial_num'])
@@ -636,7 +633,7 @@ def main() -> None:
 
     # Set debug logging if requested
     if args.debug:
-        logging.getLogger().setLevel(logging.DEBUG)
+        configure_logger(level="DEBUG")
         logger.debug("Debug logging enabled")
 
     # Validate arguments

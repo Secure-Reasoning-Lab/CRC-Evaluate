@@ -12,6 +12,51 @@ CRSBench provides a standardized framework for evaluating Cyber Reasoning System
 
 Unlike traditional fuzzing benchmarks (like FuzzBench) that only report coverage/crashes, CRSBench stores complete ground truth data to track whether vulnerabilities (POVs) are actually found or missed, enabling precise CRS evaluation.
 
+## Logging
+
+CRSBench uses a centralized logging system based on [loguru](https://loguru.readthedocs.io/) for consistent, colored output across all modules.
+
+### Quick Logging Example
+
+```python
+from crsbench.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+logger.info("Application started")
+logger.warning("Configuration missing")
+logger.error("Operation failed")
+```
+
+### Features
+
+- **Colored Output**: Automatic color-coded logs for different levels (DEBUG=blue, INFO=white, WARNING=yellow, ERROR=red)
+- **Module Hierarchy**: Clear module paths like `[distributed/worker]`, `[evaluation/runner]`
+- **TTY Detection**: Colors automatically disabled for file redirection
+- **Environment Control**: Set log level via `LOG_LEVEL` environment variable
+
+### Log Level Control
+
+```bash
+export LOG_LEVEL=DEBUG    # Show all messages
+export LOG_LEVEL=INFO     # Default level
+export LOG_LEVEL=WARNING  # Only warnings and errors
+```
+
+### Output Format
+
+```
+2025-11-21 11:24:23 | INFO     | [distributed/worker]            | Worker started
+2025-11-21 11:24:24 | ERROR    | [evaluation/runner]             | Trial failed
+2025-11-21 11:24:25 | SUCCESS  | [migration/repo_manager]        | Sync complete
+```
+
+### Logging Documentation
+
+- **Usage Guide**: [docs/logger-usage-guide.md](docs/logger-usage-guide.md) - Comprehensive usage examples
+- **Architecture**: [design-docs/logging/logging-architecture.md](design-docs/logging/logging-architecture.md) - Design and implementation details
+- **Migration Summary**: [docs/logging-migration-summary.md](docs/logging-migration-summary.md) - Migration from standard logging
+
 ## Key Features
 
 ### **Unified Standard**

@@ -10,7 +10,7 @@ for each trial execution, including:
 """
 
 import json
-import logging
+from crsbench.utils.logger import get_logger
 import shutil
 import subprocess
 from dataclasses import dataclass, asdict
@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TrialPreparationError(Exception):

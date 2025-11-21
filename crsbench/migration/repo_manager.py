@@ -10,9 +10,9 @@ import subprocess
 import yaml
 from pathlib import Path
 from typing import Optional, Dict, Any
-import logging
+from crsbench.utils.logger import get_logger, configure_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def get_repo_info_from_benchmark(benchmark_dir: str) -> Dict[str, Any]:
@@ -23,7 +23,7 @@ def get_repo_info_from_benchmark(benchmark_dir: str) -> Dict[str, Any]:
         benchmark_dir: Path to benchmark directory
 
     Returns:
-        Dictionary with repo_url, base_commit, ref_commit
+        Dictionary with repo_url, repo_name (optional), base_commit, ref_commit
 
     Raises:
         FileNotFoundError: If configuration files are not found
@@ -42,6 +42,9 @@ def get_repo_info_from_benchmark(benchmark_dir: str) -> Dict[str, Any]:
     repo_url = project_config.get("main_repo")
     if not repo_url:
         raise ValueError(f"main_repo not found in {project_yaml}")
+
+    # Optional: explicit repo_name to use instead of deriving from URL
+    repo_name = project_config.get("repo_name")
 
     # Read meta.yaml for commits
     meta_yaml = benchmark_path / ".aixcc" / "meta.yaml"
@@ -63,6 +66,7 @@ def get_repo_info_from_benchmark(benchmark_dir: str) -> Dict[str, Any]:
 
     return {
         "repo_url": repo_url,
+        "repo_name": repo_name,
         "base_commit": base_commit,
         "ref_commit": ref_commit,
     }
@@ -208,7 +212,7 @@ def ensure_project_repository(
     """
     # Setup logging
     if verbose:
-        logging.basicConfig(level=logging.INFO)
+        configure_logger(level="INFO")
 
     # If explicit project_dir is provided
     if project_dir:
@@ -237,7 +241,16 @@ def ensure_project_repository(
         if not repos_dir:
             repos_dir = os.getenv("PROJECT_REPOS_DIR", "/home/acorn421/work/team-atlanta/afc-repos")
 
-        repo_name = derive_repo_name_from_url(repo_info["repo_url"])
+        # Use explicit repo_name if provided, otherwise derive from URL
+        if repo_info.get("repo_name"):
+            repo_name = repo_info["repo_name"]
+            if verbose:
+                logger.info(f"Using explicit repo_name from project.yaml: {repo_name}")
+        else:
+            repo_name = derive_repo_name_from_url(repo_info["repo_url"])
+            if verbose:
+                logger.info(f"Derived repo_name from URL: {repo_name}")
+
         target_dir = os.path.join(repos_dir, repo_name)
 
     # Clone if needed

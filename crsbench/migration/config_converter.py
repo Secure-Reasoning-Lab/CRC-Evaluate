@@ -4,7 +4,7 @@ Configuration file converter for Team-Atlanta format to RFC format.
 Converts config.yaml from Team-Atlanta format to meta.yaml in RFC format.
 """
 
-import logging
+from crsbench.utils.logger import get_logger
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -25,7 +25,7 @@ class ConfigConverter:
 
     def __init__(self):
         """Initialize the configuration converter."""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
     def convert(self, config_path: Path) -> Tuple[MetaConfig, Dict[str, Dict]]:
         """

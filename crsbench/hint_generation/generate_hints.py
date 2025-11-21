@@ -21,23 +21,17 @@ Usage:
 """
 
 import argparse
-import logging
 import sys
 from pathlib import Path
 from typing import List, Optional
 
+from crsbench.utils.logger import get_logger, configure_logger
 from crsbench.hint_generation.sarif_generator_simple import (
     generate_hints_for_benchmark,
     HintLevel,
 )
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def find_vuln_yaml_files(
@@ -236,7 +230,7 @@ def main() -> int:
 
     # Set logging level
     if args.verbose:
-        logger.setLevel(logging.DEBUG)
+        configure_logger(level="DEBUG")
 
     # Determine benchmarks directory
     if args.benchmarks_dir:

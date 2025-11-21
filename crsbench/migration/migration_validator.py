@@ -7,7 +7,7 @@ This module validates that migration was successful by comparing source
 
 import argparse
 import hashlib
-import logging
+from crsbench.utils.logger import get_logger
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,42 +15,8 @@ from typing import List, Optional
 
 import yaml
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
-
-# =============================================================================
-# Colored Logging
-# =============================================================================
-
-class ColoredFormatter(logging.Formatter):
-    """Custom formatter with colors for different log levels."""
-
-    # ANSI color codes
-    COLORS = {
-        'DEBUG': '\033[36m',      # Cyan
-        'INFO': '\033[32m',       # Green
-        'WARNING': '\033[33m',    # Yellow
-        'ERROR': '\033[31m',      # Red
-        'CRITICAL': '\033[35m',   # Magenta
-    }
-    RESET = '\033[0m'
-    BOLD = '\033[1m'
-
-    def format(self, record):
-        # Add color to level name
-        levelname = record.levelname
-        if levelname in self.COLORS:
-            record.levelname = f"{self.COLORS[levelname]}{self.BOLD}{levelname}{self.RESET}"
-
-        log_message = super().format(record)
-
-        # Color special markers
-        log_message = log_message.replace('✓', f'{self.BOLD}\033[32m✓{self.RESET}')
-        log_message = log_message.replace('✗', f'{self.BOLD}\033[31m✗{self.RESET}')
-        log_message = log_message.replace('VALID', f'{self.BOLD}\033[32mVALID{self.RESET}')
-        log_message = log_message.replace('INVALID', f'{self.BOLD}\033[31mINVALID{self.RESET}')
-
-        return log_message
 
 
 def _compute_file_hash(file_path: Path) -> str:
@@ -409,19 +375,10 @@ def main():
 
     args = parser.parse_args()
 
-    # Setup logging with colors
-    log_level = logging.DEBUG if args.verbose else logging.INFO
-
-    handler = logging.StreamHandler()
-    handler.setFormatter(ColoredFormatter(
-        fmt='[%(asctime)s] [%(levelname)s] %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    ))
-
-    root_logger = logging.getLogger()
-    root_logger.setLevel(log_level)
-    root_logger.handlers = []
-    root_logger.addHandler(handler)
+    # Setup logging
+    from crsbench.utils.logger import configure_logger
+    log_level = "DEBUG" if args.verbose else "INFO"
+    configure_logger(level=log_level)
 
     source_dir = args.source_dir
     target_dir = args.target_dir

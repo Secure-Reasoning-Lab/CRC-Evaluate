@@ -15,9 +15,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 import json
 import tarfile
-import logging
+from crsbench.utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass

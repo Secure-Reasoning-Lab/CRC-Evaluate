@@ -9,7 +9,7 @@ files, and organizing ground truth data according to the RFC specification.
 
 import argparse
 import csv
-import logging
+from crsbench.utils.logger import get_logger
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -71,7 +71,7 @@ class AtlantaToRFCMigrator:
         self.target_dir = target_dir
         self.dry_run = dry_run
         self.force = force
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
         # Initialize converters
         self.config_converter = ConfigConverter()
@@ -620,58 +620,12 @@ def write_csv_report(results: List[MigrationContext], output_file: Path) -> None
                     ])
 
 
-class ColoredFormatter(logging.Formatter):
-    """Custom formatter with colors for different log levels."""
-
-    # ANSI color codes
-    COLORS = {
-        'DEBUG': '\033[36m',      # Cyan
-        'INFO': '\033[32m',       # Green
-        'WARNING': '\033[33m',    # Yellow
-        'ERROR': '\033[31m',      # Red
-        'CRITICAL': '\033[35m',   # Magenta
-    }
-    RESET = '\033[0m'
-    BOLD = '\033[1m'
-    DIM = '\033[2m'
-
-    def format(self, record):
-        # Add color to level name
-        levelname = record.levelname
-        if levelname in self.COLORS:
-            record.levelname = f"{self.COLORS[levelname]}{self.BOLD}{levelname}{self.RESET}"
-
-        # Color the timestamp
-        log_message = super().format(record)
-
-        # Color patterns for special markers
-        log_message = log_message.replace('[DRY RUN]', f'{self.BOLD}\033[35m[DRY RUN]{self.RESET}')
-        log_message = log_message.replace('Successfully migrated', f'{self.BOLD}\033[32m✓ Successfully migrated{self.RESET}')
-        log_message = log_message.replace('Failed', f'{self.BOLD}\033[31m✗ Failed{self.RESET}')
-        log_message = log_message.replace('Processing project:', f'{self.BOLD}\033[34m→{self.RESET} Processing project:')
-        log_message = log_message.replace('already migrated, skipping', f'{self.BOLD}\033[33m⊘ already migrated, skipping{self.RESET}')
-        log_message = log_message.replace('Would write:', f'{self.DIM}Would write:{self.RESET}')
-        log_message = log_message.replace('Would copy:', f'{self.DIM}Would copy:{self.RESET}')
-
-        return log_message
-
 
 def setup_logging(verbose: bool = False) -> None:
-    """Configure logging for the migration script with colors."""
-    level = logging.DEBUG if verbose else logging.INFO
-
-    # Create handler with colored formatter
-    handler = logging.StreamHandler()
-    handler.setFormatter(ColoredFormatter(
-        fmt='[%(asctime)s] [%(levelname)s] %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    ))
-
-    # Configure root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(level)
-    root_logger.handlers = []  # Remove any existing handlers
-    root_logger.addHandler(handler)
+    """Configure logging for the migration script."""
+    from crsbench.utils.logger import configure_logger
+    level = "DEBUG" if verbose else "INFO"
+    configure_logger(level=level)
 
 
 def main():
@@ -753,7 +707,7 @@ Examples:
 
     # Setup logging
     setup_logging(args.verbose)
-    logger = logging.getLogger(__name__)
+    logger = get_logger(__name__)
 
     # Validate directories
     if not args.source_dir.exists():

@@ -5,7 +5,7 @@ CRS Patch's interface for patch generation using pre-cloned source repositories.
 """
 
 import json
-import logging
+from crsbench.utils.logger import get_logger
 import os
 import shutil
 import subprocess
@@ -18,7 +18,7 @@ from crsbench.evaluation.crs_executor import CRSExecutor, CRSResult
 from crsbench.evaluation.results import POVResult, POVStatus
 from crsbench.validation.schemas import HarnessFile, POV
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class CRSPatchExecutor(CRSExecutor):

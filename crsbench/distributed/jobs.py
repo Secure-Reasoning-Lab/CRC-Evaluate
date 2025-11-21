@@ -4,16 +4,16 @@ This module defines all job types that can be executed by workers in the distrib
 job queue system. Jobs are enqueued by the orchestrator and executed by workers.
 """
 
-import logging
 import time
 from pathlib import Path
 from typing import Dict, Any, Optional
 
+from crsbench.utils.logger import get_logger
 from crsbench.evaluation.runner import BenchmarkRunner
 from crsbench.evaluation.crs_executor import StubCRSExecutor
 from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def build_crs_environment(

@@ -4,7 +4,7 @@ File migration utilities for converting benchmark file structure.
 Handles copying and organizing files from Team-Atlanta format to RFC format.
 """
 
-import logging
+from crsbench.utils.logger import get_logger
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -24,7 +24,7 @@ class FileMigrator:
             dry_run: If True, log operations without actually copying files
         """
         self.dry_run = dry_run
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
     def copy_file(self, source: Path, target: Path, ctx: 'MigrationContext') -> bool:
         """

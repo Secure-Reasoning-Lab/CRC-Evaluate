@@ -5,7 +5,7 @@ oss-crs CLI for bug finding CRS execution using pre-cloned source repositories.
 """
 
 import json
-import logging
+from crsbench.utils.logger import get_logger
 import shutil
 import subprocess
 import time
@@ -17,7 +17,7 @@ from crsbench.evaluation.crs_executor import CRSExecutor, CRSResult
 from crsbench.evaluation.results import POVResult
 from crsbench.validation.schemas import HarnessFile
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ExecutorError(Exception):

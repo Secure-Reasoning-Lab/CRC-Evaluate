@@ -8,9 +8,10 @@ Workers can be run locally or deployed in containers for horizontal scaling.
 
 import os
 import time
-import logging
 import sys
 from dotenv import load_dotenv
+
+from crsbench.utils.logger import get_logger, configure_logger
 
 # Load environment variables from .env file if present
 load_dotenv()
@@ -22,7 +23,7 @@ try:
 except ImportError:
     REDIS_AVAILABLE = False
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def main():
@@ -50,11 +51,7 @@ def main():
     """
     # Configure logging
     log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
-    logging.basicConfig(
-        level=getattr(logging, log_level),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        stream=sys.stdout
-    )
+    configure_logger(level=log_level, sink=sys.stdout)
 
     # Check if Redis/RQ available
     if not REDIS_AVAILABLE:
@@ -170,8 +167,7 @@ def run_worker_continuous(
 
             # Run worker in continuous mode (never exits)
             worker.work(
-                burst=False,  # Continuous mode
-                logging_level=logging.INFO
+                burst=False  # Continuous mode
             )
 
     except KeyboardInterrupt:

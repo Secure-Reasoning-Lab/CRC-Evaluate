@@ -20,14 +20,14 @@ Example:
     >>> print(host_path)  # /tmp/repos/json-c/test/harness.c
 """
 
-import logging
+from crsbench.utils.logger import get_logger
 from pathlib import Path
 from typing import Optional, Tuple
 
 from crsbench.migration.repo_manager import ensure_project_repository
 from crsbench.validation.schemas import HarnessFile
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class RepositoryError(Exception):

@@ -7,11 +7,11 @@ for their own CRS implementations.
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 import json
-import logging
+from crsbench.utils.logger import get_logger
 
 from crsbench.evaluation.analysis.base import AnalyzerInterface, AnalysisResult
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ExampleAnalyzer(AnalyzerInterface):
