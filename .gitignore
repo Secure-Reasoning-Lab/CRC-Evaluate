@@ -227,3 +227,6 @@ migration_report.csv
 
 # Agent logs
 *agent_log.txt
+
+# Local sources
+.crsbench-repos
