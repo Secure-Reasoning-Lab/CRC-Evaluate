@@ -11,7 +11,7 @@ from crsbench.migration.test_sh_generator import (
     ShTestGenerator,
     generate_test_sh_for_benchmark
 )
-from crsbench.migration.repo_manager import find_or_clone_project
+from crsbench.utils.repo_manager import find_or_clone_project
 
 
 # ============================================================================

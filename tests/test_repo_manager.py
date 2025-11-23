@@ -7,7 +7,7 @@ import yaml
 from pathlib import Path
 from unittest import mock
 
-from crsbench.migration.repo_manager import (
+from crsbench.utils.repo_manager import (
     get_repo_info_from_benchmark,
     derive_repo_name_from_url,
     clone_repository,
@@ -237,7 +237,7 @@ class TestEnsureProjectRepository:
         repos_dir.mkdir()
 
         # Mock the clone to avoid actual git operations
-        with mock.patch('crsbench.migration.repo_manager.clone_repository') as mock_clone:
+        with mock.patch('crsbench.utils.repo_manager.clone_repository') as mock_clone:
             mock_clone.return_value = True
 
             result = ensure_project_repository(
@@ -246,8 +246,8 @@ class TestEnsureProjectRepository:
                 verbose=False
             )
 
-            # Should derive name from URL: cp-c-curl
-            assert result == str(repos_dir / "cp-c-curl")
+            # Should derive name from URL with commit: cp-c-curl-abc123de
+            assert result == str(repos_dir / "cp-c-curl-abc123de")
             # Verify clone was called
             assert mock_clone.called
 

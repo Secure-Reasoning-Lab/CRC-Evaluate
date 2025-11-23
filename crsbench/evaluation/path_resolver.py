@@ -24,7 +24,7 @@ from crsbench.utils.logger import get_logger
 from pathlib import Path
 from typing import Optional, Tuple
 
-from crsbench.migration.repo_manager import ensure_project_repository
+from crsbench.utils.repo_manager import ensure_project_repository
 from crsbench.validation.schemas import HarnessFile
 
 logger = get_logger(__name__)
