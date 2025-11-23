@@ -24,7 +24,11 @@ import time
 import subprocess
 import yaml
 from typing import Optional, Tuple
+from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+
+# Load environment variables from .env file
+load_dotenv()
 
 from crsbench.migration import mcp_config
 from crsbench.utils.repo_manager import ensure_project_repository
