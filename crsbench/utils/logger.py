@@ -616,3 +616,67 @@ def log_file_info(
         log_func(f"{symbol} {description}: {file_path}")
     else:
         log_func(f"{symbol} {file_path}")
+
+
+def log_error_detail(
+    error: Exception,
+    context: str = None,
+    max_length: int = None,
+    level: str = "error"
+):
+    """Log error with details, handling long error messages gracefully.
+
+    Args:
+        error: Exception to log
+        context: Optional context description
+        max_length: Maximum length for error message (None = no limit)
+        level: Log level
+
+    Example:
+        >>> try:
+        ...     something()
+        ... except Exception as e:
+        ...     log_error_detail(e, "Failed to process benchmark")
+        Failed to process benchmark
+        Error type: RuntimeError
+        Message: Command 'docker run...' failed with return code 1
+                 stdout: ...
+                 stderr: ...
+    """
+    log_func = getattr(_loguru_logger, level.lower())
+
+    # Log context if provided
+    if context:
+        log_func(context)
+
+    # Log error type
+    error_type = type(error).__name__
+    log_func(f"Error type: {error_type}")
+
+    # Get error message
+    error_msg = str(error)
+
+    # Handle long messages
+    if max_length and len(error_msg) > max_length:
+        # Truncate and add indicator
+        truncated = error_msg[:max_length]
+        log_func(f"Message: {truncated}... (truncated, {len(error_msg)} total chars)")
+    elif len(error_msg) > 500:
+        # Split long messages into multiple lines for readability
+        log_func("Message:")
+        # Split by newlines if present
+        if "\n" in error_msg:
+            for line in error_msg.split("\n")[:20]:  # Limit to 20 lines
+                log_func(f"  {line}")
+            if error_msg.count("\n") > 20:
+                log_func(f"  ... ({error_msg.count('\n') - 20} more lines)")
+        else:
+            # Split long single line into chunks
+            chunk_size = 200
+            for i in range(0, min(len(error_msg), 2000), chunk_size):
+                log_func(f"  {error_msg[i:i+chunk_size]}")
+            if len(error_msg) > 2000:
+                log_func(f"  ... ({len(error_msg) - 2000} more chars)")
+    else:
+        # Normal length message
+        log_func(f"Message: {error_msg}")

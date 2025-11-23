@@ -20,6 +20,7 @@ from crsbench.utils.logger import (
     log_table,
     log_key_value,
     log_file_info,
+    log_error_detail,
 )
 
 from crsbench.utils.repo_manager import (
@@ -51,6 +52,7 @@ __all__ = [
     "log_table",
     "log_key_value",
     "log_file_info",
+    "log_error_detail",
     # Repository management functions
     "ensure_project_repository",
     "find_or_clone_project",
