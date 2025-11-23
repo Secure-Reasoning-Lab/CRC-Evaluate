@@ -192,6 +192,55 @@ def strip_ansi(text: str) -> str:
     return ansi_escape.sub("", text)
 
 
+def get_workdir_from_dockerfile(benchmark_dir: Path) -> str:
+    """
+    Parse WORKDIR from Dockerfile for the benchmark.
+
+    This follows OSS-Fuzz's helper.py logic to extract the last WORKDIR
+    directive from the Dockerfile.
+
+    Args:
+        benchmark_dir: Path to benchmark directory
+
+    Returns:
+        Absolute path to the working directory (e.g., '/src/commons-compress')
+        Defaults to '/src' if no WORKDIR found
+    """
+    dockerfile_path = benchmark_dir / "Dockerfile"
+
+    if not dockerfile_path.exists():
+        logger.warning(f"Dockerfile not found at {dockerfile_path}, using default /src")
+        return "/src"
+
+    workdir_regex = re.compile(r'\s*WORKDIR\s*([^\s]+)')
+    workdir = "/src"  # default
+
+    try:
+        with open(dockerfile_path) as f:
+            lines = f.readlines()
+
+        # Parse in reverse to get the last WORKDIR directive
+        for line in reversed(lines):
+            match = workdir_regex.match(line)
+            if match:
+                workdir = match.group(1)
+                # Replace $SRC with /src
+                workdir = workdir.replace('$SRC', '/src')
+
+                # Make absolute path if relative
+                if not os.path.isabs(workdir):
+                    workdir = os.path.join('/src', workdir)
+
+                workdir = os.path.normpath(workdir)
+                break
+    except Exception as e:
+        logger.warning(f"Failed to parse WORKDIR from Dockerfile: {e}, using default /src")
+        return "/src"
+
+    logger.info(f"Parsed WORKDIR from Dockerfile: {workdir}")
+    return workdir
+
+
 def reproduce_pov(
     benchmark: str,
     harness_name: str,
@@ -283,6 +332,8 @@ def run_test_sh(benchmark: str, expect_success: bool = True, output_dir: Optiona
     Raises:
         RuntimeError: If test.sh result doesn't match expectation
     """
+    import yaml
+
     benchmarks_root = get_benchmarks_root()
     benchmark_dir = Path(benchmarks_root) / benchmark
     test_sh_path = benchmark_dir / "test.sh"
@@ -316,16 +367,55 @@ def run_test_sh(benchmark: str, expect_success: bool = True, output_dir: Optiona
     if not os.access(test_sh_path, os.X_OK):
         os.chmod(test_sh_path, 0o755)
 
-    # Run test.sh inside Docker container
-    # Mount source at /src, test.sh at /src/test.sh, /work and /out directories
+    # Parse WORKDIR from Dockerfile to determine mount point
+    workdir = get_workdir_from_dockerfile(benchmark_dir)
+
+    # Read project.yaml for environment variables
+    project_yaml = benchmark_dir / "project.yaml"
+    with open(project_yaml) as f:
+        project_config = yaml.safe_load(f)
+
+    # Determine language mapping for FUZZING_LANGUAGE env var
+    language = project_config.get('language', 'c++')
+    # Map language to OSS-Fuzz FUZZING_LANGUAGE values
+    language_map = {
+        'jvm': 'jvm',
+        'java': 'jvm',
+        'c': 'c',
+        'c++': 'c++',
+        'go': 'go',
+        'rust': 'rust',
+        'python': 'python',
+    }
+    fuzzing_language = language_map.get(language.lower(), language)
+
+    # Get fuzzing engine and sanitizer (use first from list)
+    fuzzing_engines = project_config.get('fuzzing_engines', ['libfuzzer'])
+    fuzzing_engine = fuzzing_engines[0] if fuzzing_engines else 'libfuzzer'
+
+    sanitizers = project_config.get('sanitizers', ['address'])
+    sanitizer = sanitizers[0] if sanitizers else 'address'
+
+    # Run test.sh inside Docker container following OSS-Fuzz helper.py shell pattern
+    # Mount source at WORKDIR, test.sh at /src/test.sh, /work and /out directories
     docker_command = [
-        "docker", "run", "--rm",
-        "-v", f"{source_path}:/src",
-        "-v", f"{test_sh_path}:/src/test.sh",
+        "docker", "run",
+        "--privileged",  # Required for some operations
+        "--shm-size=2g",  # Shared memory size
+        "--platform", "linux/amd64",  # Platform
+        "--rm",  # Remove container after exit
+        "-e", f"FUZZING_ENGINE={fuzzing_engine}",
+        "-e", f"SANITIZER={sanitizer}",
+        "-e", "ARCHITECTURE=x86_64",
+        "-e", "HELPER=True",
+        "-e", f"PROJECT_NAME={benchmark}",
+        "-e", f"FUZZING_LANGUAGE={fuzzing_language}",
+        "-v", f"{source_path}:{workdir}",  # Mount source at WORKDIR
+        "-v", f"{test_sh_path}:/src/test.sh",  # Mount test.sh at /src/test.sh
         "-v", f"{project_work}:/work",
         "-v", f"{project_out}:/out",
         f"gcr.io/oss-fuzz/{benchmark}",
-        "/bin/bash", "-c", "cd /src && ./test.sh"
+        "bash", "/src/test.sh"  # Execute test.sh from /src
     ]
 
     logger.info(f"Executing: {' '.join(docker_command)}")
