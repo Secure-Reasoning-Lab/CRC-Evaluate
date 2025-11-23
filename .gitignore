@@ -186,6 +186,9 @@ validation_results.json
 validation_results.yaml
 *_validation_results.*
 
+# CI results and artifacts
+.ci-results/
+
 # Snapshot examples - ignore extracted directories
 snapshot-examples/*/extracted/
 snapshot-examples/*/.snapshot-*/
@@ -230,3 +233,5 @@ migration_report.csv
 
 # Local sources
 .crsbench-repos
+.crsbench-mcp
+.ci-results
