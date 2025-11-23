@@ -25,6 +25,7 @@ import sys
 import traceback
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Set, Optional, Tuple
 from dotenv import load_dotenv
@@ -47,9 +48,56 @@ from crsbench.benchmark_ci.file_validator import (
 )
 from crsbench.benchmark_ci.execution_validator import check_benchmark_execution
 from crsbench.utils.logger import get_logger
-from crsbench.utils import log_section
+from crsbench.utils import log_section, log_error_detail, log_file_info
 
 logger = get_logger(__name__)
+
+
+def save_error_to_file(
+    error: Exception,
+    job: JobContext,
+    output_dir: Optional[str] = None,
+) -> str:
+    """Save error details to a file and return the file path.
+
+    Args:
+        error: Exception to save
+        job: Job context
+        output_dir: Base output directory (defaults to ./ci-results)
+
+    Returns:
+        Path to the saved error file
+    """
+    # Create error logs directory
+    if output_dir:
+        error_dir = Path(output_dir) / "error-logs"
+    else:
+        error_dir = Path("./.ci-results/error-logs")
+
+    error_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate filename with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{job.benchmark}_{job.job_type.value}_{job.engine}_{job.sanitizer}_{timestamp}.txt"
+    error_file = error_dir / filename
+
+    # Write error details
+    with open(error_file, 'w') as f:
+        f.write(f"Benchmark: {job.benchmark}\n")
+        f.write(f"Job Type: {job.job_type.value}\n")
+        f.write(f"Engine: {job.engine}\n")
+        f.write(f"Sanitizer: {job.sanitizer}\n")
+        f.write(f"Timestamp: {timestamp}\n")
+        f.write("=" * 80 + "\n\n")
+        f.write(f"Error Type: {type(error).__name__}\n\n")
+        f.write("Error Message:\n")
+        f.write(str(error))
+        f.write("\n\n")
+        f.write("=" * 80 + "\n")
+        f.write("Traceback:\n")
+        f.write(traceback.format_exc())
+
+    return str(error_file)
 
 
 def get_all_benchmarks() -> Set[str]:
@@ -323,7 +371,7 @@ def _execute_benchmark_jobs(
     exit_on_error: bool,
     output_dir: Optional[str] = None,
     enable_check_build: bool = False,
-) -> Tuple[str, List[Tuple[JobContext, Exception]]]:
+) -> Tuple[str, List[Tuple[JobContext, Exception, str]]]:
     """Execute all jobs for a single benchmark.
 
     This function runs in a separate process when using parallel execution.
@@ -349,8 +397,13 @@ def _execute_benchmark_jobs(
         ensure_benchmark_symlink(benchmark)
     except Exception as e:
         logger.error(f"[{benchmark}] Failed to setup symlink")
-        logger.error(str(e))
-        failed_jobs.append((jobs[0] if jobs else None, e))
+        if jobs:
+            error_file = save_error_to_file(e, jobs[0], output_dir)
+            log_file_info(error_file, description="Error details saved to")
+            failed_jobs.append((jobs[0], e, error_file))
+        else:
+            logger.error(str(e))
+            failed_jobs.append((None, e, ""))
         return benchmark, failed_jobs
 
     for i, job in enumerate(jobs, 1):
@@ -361,10 +414,12 @@ def _execute_benchmark_jobs(
             check_benchmark_execution(job, output_dir=output_dir, enable_check_build=enable_check_build)
             logger.success(f"Job completed successfully")
         except Exception as e:
+            # Save error details to file
+            error_file = save_error_to_file(e, job, output_dir)
             logger.error(f"Job failed: {job.job_type.value}")
-            logger.error(f"Reason: {str(e)[:200]}")  # Limit error message length
+            log_file_info(error_file, description="Error details saved to")
 
-            failed_jobs.append((job, e))
+            failed_jobs.append((job, e, error_file))
 
             if exit_on_error:
                 logger.warning(f"Exiting due to --exit_on_error flag")
@@ -468,9 +523,16 @@ def run_execution_checks(
         logger.error("=" * 80)
         logger.error("FAILED JOBS")
         logger.error("=" * 80)
-        for idx, (job, error_msg) in enumerate(all_failed_jobs, 1):
-            logger.error(f"{idx}. {job.benchmark} - {job.job_type.value} ({job.engine}/{job.sanitizer})")
-            logger.error(f"   Error: {str(error_msg)[:200]}")
+        for idx, (job, error_msg, error_file) in enumerate(all_failed_jobs, 1):
+            if job:
+                logger.error(f"{idx}. {job.benchmark} - {job.job_type.value} ({job.engine}/{job.sanitizer})")
+            else:
+                logger.error(f"{idx}. Unknown job")
+            if error_file:
+                log_file_info(error_file, description="   Error details")
+            else:
+                # Fallback for cases where file wasn't saved
+                logger.error(f"   Error: {str(error_msg)[:200]}")
         raise Exception(f"{len(all_failed_jobs)} jobs failed")
 
 
@@ -626,7 +688,7 @@ if __name__ == "__main__":
         "--output-dir",
         type=str,
         help="Directory to save test artifacts (logs, crash outputs, etc.). "
-             "Example: --output-dir ./ci-results"
+             "Example: --output-dir ./.ci-results"
     )
 
     parser.add_argument(
