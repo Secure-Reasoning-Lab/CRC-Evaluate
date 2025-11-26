@@ -1,12 +1,3 @@
-[submodule "oss-fuzz"]
-	path = oss-fuzz
-	url = https://github.com/sslab-gatech/oss-fuzz
-[submodule "oss-patch"]
-	path = oss-patch
-	url = https://github.com/sslab-gatech/oss-patch
 [submodule "oss-crs"]
 	path = oss-crs
 	url = https://github.com/sslab-gatech/oss-crs
-[submodule "oss-crs-registry"]
-	path = oss-crs-registry
-	url = https://github.com/Team-Atlanta/oss-crs-registry
