@@ -497,7 +497,10 @@ class TestGeneratorIntegration:
         # Verify each snapshot
         for snapshot in snapshots:
             assert snapshot.exists()
-            marker = tmp_path / f"{snapshot.stem}.complete"
+            # snapshot.stem is "snapshot-0001.tar", we want "snapshot-0001"
+            # So we need to remove the .tar extension from stem
+            snapshot_name = snapshot.name.replace(".tar.gz", "")
+            marker = tmp_path / f"{snapshot_name}.complete"
             assert marker.exists()
 
     def test_generate_snapshots_patch_mode(self, tmp_path):
@@ -563,6 +566,10 @@ class TestGeneratorIntegration:
 
         # Create minimal meta.yaml
         meta_content = """
+delta_mode:
+  base_commit: a1b2c3d4e5f6
+  ref_commit: f6e5d4c3b2a1
+
 harness_files:
   - name: test_harness
     path: /test/harness.c
@@ -602,6 +609,10 @@ harness_files:
         aixcc_dir.mkdir()
 
         meta_content = """
+delta_mode:
+  base_commit: a1b2c3d4e5f6
+  ref_commit: f6e5d4c3b2a1
+
 harness_files:
   - name: test_harness
     path: /test/harness.c

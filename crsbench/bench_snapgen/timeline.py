@@ -285,8 +285,9 @@ def create_discovery_timeline(
     for harness in benchmark_data.meta.harness_files:
         for vuln in harness.vulns or []:
             # Get POVs for this vulnerability from ground truth
+            # key is (harness_name, vuln_keyword, pov_id)
             vuln_povs = [
-                (pov.id, key)
+                (key[2], key)  # (pov_id, full_key)
                 for key, pov_data in benchmark_data.povs.items()
                 if key[0] == harness.name and key[1] == vuln.vuln_keyword
             ]

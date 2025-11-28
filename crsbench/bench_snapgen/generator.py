@@ -67,8 +67,8 @@ def load_benchmark_ground_truth(benchmark_path: Path) -> BenchmarkData:
         raise FileNotFoundError(f"meta.yaml not found: {meta_path}")
 
     validation_result = validate_benchmark(str(benchmark_path))
-    if not validation_result.is_valid():
-        errors = "\n".join(issue.message for issue in validation_result.errors)
+    if not validation_result.is_valid:
+        errors = "\n".join(issue.message for issue in validation_result.issues)
         raise ValueError(f"Invalid meta.yaml:\n{errors}")
 
     with open(meta_path, "r") as f:
