@@ -18,6 +18,181 @@ import yaml
 
 from claude_agent_sdk import query, ClaudeAgentOptions
 
+from crsbench.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+class VulnYamlValidationError:
+    """Represents a validation error in vuln.yaml content."""
+
+    def __init__(self, field: str, message: str, value: str = ""):
+        self.field = field
+        self.message = message
+        self.value = value
+
+    def __str__(self):
+        if self.value:
+            return f"{self.field}: {self.message} (value: '{self.value}')"
+        return f"{self.field}: {self.message}"
+
+
+def validate_vuln_yaml(yaml_content: str) -> List["VulnYamlValidationError"]:
+    """
+    Validate vuln.yaml content for common issues.
+
+    Checks for:
+    - Valid YAML syntax
+    - Required fields (id, name, cwes, description, locations)
+    - Special characters in unquoted values (colons, etc.)
+    - MOCK/TBD placeholder content
+
+    Args:
+        yaml_content: The YAML content to validate
+
+    Returns:
+        List of VulnYamlValidationError objects (empty if valid)
+    """
+    errors = []
+
+    # Try to parse YAML
+    try:
+        data = yaml.safe_load(yaml_content)
+    except yaml.YAMLError as e:
+        errors.append(VulnYamlValidationError(
+            "yaml_syntax",
+            f"Invalid YAML syntax: {str(e)}"
+        ))
+        return errors
+
+    if not isinstance(data, dict):
+        errors.append(VulnYamlValidationError(
+            "structure",
+            "YAML must be a dictionary/mapping at the root level"
+        ))
+        return errors
+
+    # Check required fields
+    required_fields = ["id", "name", "cwes", "description", "locations"]
+    for field in required_fields:
+        if field not in data:
+            errors.append(VulnYamlValidationError(field, f"Missing required field: {field}"))
+
+    # Validate 'name' field - check for unquoted special characters
+    if "name" in data:
+        name = str(data["name"])
+        # Check for MOCK/TBD placeholders
+        if "MOCK:" in name or "(TBD)" in name:
+            errors.append(VulnYamlValidationError(
+                "name",
+                "Contains placeholder text (MOCK: or TBD)",
+                name
+            ))
+        # Check for problematic patterns that indicate parsing issues
+        # If the name contains a colon and the YAML parsed it incorrectly,
+        # the data structure would be wrong
+        if name == "None" or name == "":
+            errors.append(VulnYamlValidationError(
+                "name",
+                "Name field is empty or None",
+                name
+            ))
+
+    # Check the raw content for unquoted colons in name field
+    # This catches cases where YAML might parse incorrectly
+    lines = yaml_content.split('\n')
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("name:"):
+            # Get the value part after "name:"
+            value_part = stripped[5:].strip()
+            # If the value contains a colon and is not quoted, it's problematic
+            if ':' in value_part and not (
+                (value_part.startswith('"') and value_part.endswith('"')) or
+                (value_part.startswith("'") and value_part.endswith("'"))
+            ):
+                errors.append(VulnYamlValidationError(
+                    "name",
+                    "Contains unquoted colon (:) which may cause YAML parsing issues. "
+                    "Either remove the colon or wrap the value in quotes.",
+                    value_part
+                ))
+            break
+
+    # Validate 'description' field
+    if "description" in data:
+        desc = str(data["description"])
+        if "MOCK:" in desc or "(TBD)" in desc:
+            errors.append(VulnYamlValidationError(
+                "description",
+                "Contains placeholder text (MOCK: or TBD)",
+                desc[:100] + "..." if len(desc) > 100 else desc
+            ))
+        if desc == "None" or desc.strip() == "":
+            errors.append(VulnYamlValidationError(
+                "description",
+                "Description field is empty or None"
+            ))
+
+    # Validate 'cwes' field
+    if "cwes" in data:
+        cwes = data["cwes"]
+        if not isinstance(cwes, list):
+            errors.append(VulnYamlValidationError(
+                "cwes",
+                "Must be a list",
+                str(cwes)
+            ))
+        elif len(cwes) == 0:
+            errors.append(VulnYamlValidationError(
+                "cwes",
+                "CWE list is empty"
+            ))
+
+    # Validate 'locations' field
+    if "locations" in data:
+        locations = data["locations"]
+        if not isinstance(locations, list):
+            errors.append(VulnYamlValidationError(
+                "locations",
+                "Must be a list",
+                str(locations)
+            ))
+        elif len(locations) == 0:
+            errors.append(VulnYamlValidationError(
+                "locations",
+                "Locations list is empty"
+            ))
+        else:
+            for idx, loc in enumerate(locations):
+                if not isinstance(loc, dict):
+                    errors.append(VulnYamlValidationError(
+                        f"locations[{idx}]",
+                        "Each location must be a dictionary"
+                    ))
+                    continue
+
+                # Check required location fields
+                loc_required = ["path_from_root", "function_name"]
+                for field in loc_required:
+                    if field not in loc:
+                        errors.append(VulnYamlValidationError(
+                            f"locations[{idx}].{field}",
+                            f"Missing required field: {field}"
+                        ))
+
+                # Check for placeholder values in path_from_root
+                if "path_from_root" in loc:
+                    path = str(loc["path_from_root"])
+                    if path in ["unknown", "None", ""]:
+                        errors.append(VulnYamlValidationError(
+                            f"locations[{idx}].path_from_root",
+                            "Contains placeholder or empty value",
+                            path
+                        ))
+
+    return errors
+
 
 class VulnYamlGenerator:
     """
@@ -306,7 +481,7 @@ Now analyze the vulnerability and provide the markdown document.
                 messages.append(message)
 
                 if verbose:
-                    print(f"🔍 Message type: {type(message).__name__}")
+                    logger.debug(f"Message type: {type(message).__name__}")
 
                 if hasattr(message, 'content') and message.content:
                     # Extract text content
@@ -319,9 +494,7 @@ Now analyze the vulnerability and provide the markdown document.
 
         except Exception as e:
             if verbose:
-                print(f"❌ Vulnerability analyzer agent error: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.error(f"Vulnerability analyzer agent error: {e}")
             result_text = f"# Error\n\nFailed to analyze vulnerability: {str(e)}"
 
         # Generate agent log
@@ -397,6 +570,14 @@ locations:
   - "Use-after-free in HTTP chunk processing"
   - "NULL pointer dereference in JSON parser"
 - DO NOT use generic names like "MOCK: cpv_0 vulnerability"
+- **CRITICAL**: Field values MUST NOT contain special YAML characters that require quoting:
+  - DO NOT use colons (`:`) in unquoted field values
+  - DO NOT use brackets (`[`, `]`, `{{`, `}}`) unless it's the YAML list syntax
+  - DO NOT use special characters (`#`, `&`, `*`, `!`, `|`, `>`, `'`, `"`, `%`, `@`, `` ` ``)
+  - If you must include special characters, wrap the entire value in quotes
+  - Example BAD: `name: Heap buffer overflow: cr_buf_read` (colon in value)
+  - Example GOOD: `name: Heap buffer overflow in cr_buf_read` (no special chars)
+  - Example GOOD: `name: "Heap buffer overflow: cr_buf_read"` (quoted if colon needed)
 
 ## cwes
 - List of relevant CWE numbers
@@ -465,7 +646,7 @@ Generate the vuln.yaml file now:
                 messages.append(message)
 
                 if verbose:
-                    print(f"🔍 Message type: {type(message).__name__}")
+                    logger.debug(f"Message type: {type(message).__name__}")
 
                 if hasattr(message, 'content') and message.content:
                     # Extract text content
@@ -478,9 +659,7 @@ Generate the vuln.yaml file now:
 
         except Exception as e:
             if verbose:
-                print(f"❌ YAML generator agent error: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.error(f"YAML generator agent error: {e}")
             # Fallback YAML
             yaml_content = f"""id: {cpv_id}
 
@@ -517,6 +696,204 @@ locations:
         agent_log = self._format_agent_log(messages, "vuln.yaml Generation")
 
         return yaml_content, agent_log
+
+    async def fix_vuln_yaml(
+        self,
+        yaml_content: str,
+        validation_errors: List[VulnYamlValidationError],
+        cpv_id: str,
+        harness_name: str,
+        verbose: bool = False
+    ) -> Tuple[str, str]:
+        """
+        Fix validation errors in vuln.yaml content.
+
+        Args:
+            yaml_content: The invalid YAML content
+            validation_errors: List of validation errors to fix
+            cpv_id: CPV identifier
+            harness_name: Name of the harness
+            verbose: Enable verbose logging
+
+        Returns:
+            Tuple of (fixed_yaml_content, agent_log)
+        """
+        errors_description = "\n".join([f"- {str(err)}" for err in validation_errors])
+
+        prompt = f"""You are fixing a vuln.yaml file that has validation errors.
+
+# Task
+Fix the following vuln.yaml for: **{cpv_id}** in harness **{harness_name}**
+
+# Current Invalid YAML
+```yaml
+{yaml_content}
+```
+
+# Validation Errors Found
+{errors_description}
+
+# Common Fixes
+
+## For unquoted colon errors:
+- BAD: `name: Heap buffer overflow: cr_buf_read`
+- GOOD: `name: Heap buffer overflow in cr_buf_read` (replace colon with "in" or remove)
+- GOOD: `name: "Heap buffer overflow: cr_buf_read"` (wrap in quotes if colon is essential)
+
+## For MOCK/TBD placeholders:
+- Replace placeholder text with actual vulnerability information
+- Use the error type and location from crash logs
+
+## For missing fields:
+- Add the missing required fields (id, name, cwes, description, locations)
+
+## For empty values:
+- Fill in actual values based on vulnerability analysis
+
+# CRITICAL YAML Rules
+- Field values MUST NOT contain unquoted special characters (`:`, `#`, `&`, `*`, `!`, etc.)
+- If a value must contain special characters, wrap the ENTIRE value in quotes
+- Use `|` for multi-line description strings
+- CWEs must be a list format with `- CWE-XXX`
+- Locations must be a list with proper indentation
+
+# Output
+Provide ONLY the fixed vuln.yaml content. No explanation, no markdown fences, just the raw YAML.
+
+Fix the vuln.yaml now:
+"""
+
+        options = ClaudeAgentOptions(
+            model=self.model,
+            allowed_tools=[],  # No tools needed for fixing
+            system_prompt=(
+                "You are a YAML fixing expert. "
+                "Fix the validation errors while preserving the original information. "
+                "Output only the fixed YAML content, no extra text."
+            ),
+            env={
+                "ANTHROPIC_BASE_URL": self.litellm_base_url,
+                "ANTHROPIC_AUTH_TOKEN": self.litellm_api_key,
+            }
+        )
+
+        fixed_yaml = ""
+        messages = []
+        try:
+            async for message in query(prompt=prompt, options=options):
+                messages.append(message)
+
+                if verbose:
+                    logger.debug(f"Fix message type: {type(message).__name__}")
+
+                if hasattr(message, 'content') and message.content:
+                    if isinstance(message.content, list):
+                        for block in message.content:
+                            if hasattr(block, 'text'):
+                                fixed_yaml += block.text
+                    elif isinstance(message.content, str):
+                        fixed_yaml += message.content
+
+        except Exception as e:
+            if verbose:
+                logger.error(f"YAML fix agent error: {e}")
+            # Return original if fix fails
+            fixed_yaml = yaml_content
+
+        # Clean up the YAML content
+        fixed_yaml = fixed_yaml.strip()
+
+        # Remove markdown code fences if present
+        if fixed_yaml.startswith("```yaml"):
+            fixed_yaml = fixed_yaml[7:]
+        if fixed_yaml.startswith("```"):
+            fixed_yaml = fixed_yaml[3:]
+        if fixed_yaml.endswith("```"):
+            fixed_yaml = fixed_yaml[:-3]
+
+        fixed_yaml = fixed_yaml.strip()
+
+        # Generate agent log
+        agent_log = self._format_agent_log(messages, "vuln.yaml Fix")
+
+        return fixed_yaml, agent_log
+
+    async def generate_and_validate_vuln_yaml(
+        self,
+        analysis_md: str,
+        cpv_id: str,
+        harness_name: str,
+        max_retries: int = 2,
+        verbose: bool = False
+    ) -> Tuple[str, str, List[VulnYamlValidationError]]:
+        """
+        Generate vuln.yaml with validation and retry logic.
+
+        Args:
+            analysis_md: Markdown document from analyze_vulnerability()
+            cpv_id: CPV identifier
+            harness_name: Name of the harness
+            max_retries: Maximum number of fix attempts
+            verbose: Enable verbose logging
+
+        Returns:
+            Tuple of (vuln_yaml_content, combined_agent_log, remaining_errors)
+        """
+        # Initial generation
+        yaml_content, gen_log = await self.generate_vuln_yaml(
+            analysis_md, cpv_id, harness_name, verbose
+        )
+
+        combined_log = gen_log
+        remaining_errors = []
+
+        # Validation and retry loop
+        for attempt in range(max_retries + 1):
+            errors = validate_vuln_yaml(yaml_content)
+
+            if not errors:
+                if verbose and attempt > 0:
+                    logger.debug(f"Validation passed after {attempt} fix attempt(s)")
+                return yaml_content, combined_log, []
+
+            if attempt < max_retries:
+                if verbose:
+                    logger.debug(f"Validation failed with {len(errors)} error(s). Attempting fix (attempt {attempt + 1}/{max_retries})...")
+                    for err in errors:
+                        logger.debug(f"  - {err}")
+
+                # Try to fix the YAML
+                yaml_content, fix_log = await self.fix_vuln_yaml(
+                    yaml_content, errors, cpv_id, harness_name, verbose
+                )
+                combined_log += f"\n\n{'='*50}\nFix Attempt {attempt + 1}\n{'='*50}\n" + fix_log
+            else:
+                remaining_errors = errors
+                if verbose:
+                    logger.warning(f"Still has {len(errors)} validation error(s) after {max_retries} fix attempts:")
+                    for err in errors:
+                        logger.warning(f"  - {err}")
+
+        return yaml_content, combined_log, remaining_errors
+
+    def generate_and_validate_vuln_yaml_sync(
+        self,
+        analysis_md: str,
+        cpv_id: str,
+        harness_name: str,
+        max_retries: int = 2,
+        verbose: bool = False
+    ) -> Tuple[str, str, List[VulnYamlValidationError]]:
+        """Synchronous wrapper for generate_and_validate_vuln_yaml.
+
+        Returns:
+            Tuple of (vuln_yaml_content, combined_agent_log, remaining_errors)
+        """
+        return asyncio.run(
+            self.generate_and_validate_vuln_yaml(
+                analysis_md, cpv_id, harness_name, max_retries, verbose
+            )
+        )
 
     def analyze_vulnerability_sync(
         self,
@@ -621,16 +998,17 @@ def generate_vuln_yaml_for_cpv(
                 if 'MOCK:' in content or '(TBD)' in content:
                     is_temporary = True
                     if verbose:
-                        print(f"   Found temporary vuln.yaml (contains MOCK/TBD), will regenerate...")
+                        logger.debug(f"Found temporary vuln.yaml (contains MOCK/TBD), will regenerate...")
         except Exception as e:
             if verbose:
-                print(f"   Warning: Could not read existing vuln.yaml: {e}")
+                logger.warning(f"Could not read existing vuln.yaml: {e}")
 
-        # If not temporary and not force, don't overwrite
+        # If not temporary and not force, skip (not an error)
         if not is_temporary and not force:
             return {
-                "success": False,
-                "message": f"vuln.yaml already exists at {vuln_yaml_path}. Use --force to overwrite."
+                "success": True,
+                "skipped": True,
+                "message": f"vuln.yaml already exists, skipped"
             }
 
     # Create generator
@@ -641,14 +1019,14 @@ def generate_vuln_yaml_for_cpv(
 
     # Copy OSS-Fuzz files to project directory
     if verbose:
-        print(f"📋 Copying OSS-Fuzz files to {project_dir}/.oss-fuzz/...")
+        logger.debug(f"Copying OSS-Fuzz files to {project_dir}/.oss-fuzz/...")
 
     from crsbench.migration.test_sh_generator import _copy_benchmark_files_to_project
     _copy_benchmark_files_to_project(benchmark_dir, project_dir, verbose)
 
     # Step 1: Analyze vulnerability
     if verbose:
-        print(f"🔍 Analyzing vulnerability {cpv_id} in {harness_name}...")
+        logger.debug(f"Analyzing vulnerability {cpv_id} in {harness_name}...")
 
     analysis_md, analysis_log = generator.analyze_vulnerability_sync(
         project_dir, cpv_dir, cpv_id, harness_name, verbose
@@ -660,14 +1038,14 @@ def generate_vuln_yaml_for_cpv(
         f.write(analysis_md)
 
     if verbose:
-        print(f"✅ Vulnerability analysis saved to {analysis_md_path}")
+        logger.debug(f"Vulnerability analysis saved to {analysis_md_path}")
 
-    # Step 2: Generate vuln.yaml
+    # Step 2: Generate vuln.yaml with validation and retry
     if verbose:
-        print(f"🔧 Generating vuln.yaml...")
+        logger.debug(f"Generating vuln.yaml with validation...")
 
-    vuln_yaml_content, generation_log = generator.generate_vuln_yaml_sync(
-        analysis_md, cpv_id, harness_name, verbose
+    vuln_yaml_content, generation_log, validation_errors = generator.generate_and_validate_vuln_yaml_sync(
+        analysis_md, cpv_id, harness_name, max_retries=2, verbose=verbose
     )
 
     # Save vuln.yaml
@@ -675,17 +1053,30 @@ def generate_vuln_yaml_for_cpv(
         f.write(vuln_yaml_content)
 
     if verbose:
-        print(f"✅ vuln.yaml generated at {vuln_yaml_path}")
+        if validation_errors:
+            logger.warning(f"vuln.yaml generated with {len(validation_errors)} remaining validation error(s) at {vuln_yaml_path}")
+        else:
+            logger.debug(f"vuln.yaml generated and validated at {vuln_yaml_path}")
 
     # Step 3: Save combined agent log
     agent_log_path = os.path.join(cpv_dir, "vuln_agent_log.txt")
+
+    # Include validation status in log
+    validation_status = ""
+    if validation_errors:
+        validation_status = f"\n\nValidation Errors (after retries):\n"
+        for err in validation_errors:
+            validation_status += f"  - {err}\n"
+    else:
+        validation_status = "\n\nValidation: PASSED\n"
+
     combined_log = f"""# vuln.yaml Generation Agent Log
 Generated: {datetime.now().isoformat()}
 Benchmark: {benchmark_name}
 Harness: {harness_name}
 CPV: {cpv_id}
 Project Directory: {project_dir}
-
+{validation_status}
 {analysis_log}
 {generation_log}
 """
@@ -693,12 +1084,19 @@ Project Directory: {project_dir}
         f.write(combined_log)
 
     if verbose:
-        print(f"✅ Agent log saved to {agent_log_path}")
+        logger.debug(f"Agent log saved to {agent_log_path}")
+
+    # Return success even with validation errors (best effort)
+    # The validation errors are logged for manual review
+    message = f"Successfully generated vuln.yaml for {cpv_id}"
+    if validation_errors:
+        message += f" (with {len(validation_errors)} validation warning(s))"
 
     return {
         "success": True,
         "vuln_yaml_path": vuln_yaml_path,
         "analysis_md_path": analysis_md_path,
         "agent_log_path": agent_log_path,
-        "message": f"Successfully generated vuln.yaml for {cpv_id}"
+        "message": message,
+        "validation_errors": [str(e) for e in validation_errors]
     }

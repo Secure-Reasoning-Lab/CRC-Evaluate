@@ -18,6 +18,15 @@ load_dotenv()
 
 from crsbench.migration.vuln_yaml_generator import generate_vuln_yaml_for_cpv
 from crsbench.utils.repo_manager import find_or_clone_project
+from crsbench.utils.logger import (
+    get_logger,
+    log_section,
+    log_summary,
+    log_results,
+    log_progress,
+)
+
+logger = get_logger(__name__)
 
 
 def find_all_benchmarks(benchmarks_root: str):
@@ -156,14 +165,14 @@ Environment Variables:
 
     # Validate arguments
     if (args.harness and not args.cpv) or (args.cpv and not args.harness):
-        print("❌ Error: --harness and --cpv must be used together or both omitted")
-        print("   To process a specific CPV: --harness <name> --cpv <id>")
-        print("   To process all CPVs: omit both --harness and --cpv")
+        logger.error("--harness and --cpv must be used together or both omitted")
+        logger.info("To process a specific CPV: --harness <name> --cpv <id>")
+        logger.info("To process all CPVs: omit both --harness and --cpv")
         sys.exit(1)
 
     # If harness/cpv specified, benchmark must also be specified
     if (args.harness or args.cpv) and not args.benchmark:
-        print("❌ Error: --benchmark is required when --harness or --cpv is specified")
+        logger.error("--benchmark is required when --harness or --cpv is specified")
         sys.exit(1)
 
     # Determine which benchmarks to process
@@ -173,7 +182,7 @@ Environment Variables:
         # Process all benchmarks
         benchmarks_to_process = find_all_benchmarks(args.benchmarks_root)
         if not benchmarks_to_process:
-            print(f"❌ Error: No benchmarks found in {args.benchmarks_root}")
+            logger.error(f"No benchmarks found in {args.benchmarks_root}")
             sys.exit(1)
 
     # Build list of (benchmark_name, harness_name, cpv_id) tuples to process
@@ -183,7 +192,7 @@ Environment Variables:
         benchmark_dir = os.path.join(args.benchmarks_root, benchmark_name)
 
         if not os.path.isdir(benchmark_dir):
-            print(f"⚠️  Warning: Benchmark directory not found: {benchmark_dir}")
+            logger.warning(f"Benchmark directory not found: {benchmark_dir}")
             continue
 
         # Determine which CPVs to process for this benchmark
@@ -198,37 +207,61 @@ Environment Variables:
                 tasks.append((benchmark_name, harness_name, cpv_id))
 
     if not tasks:
-        print(f"❌ Error: No CPVs found to process")
+        logger.error("No CPVs found to process")
         sys.exit(1)
 
     # Print summary of what we're going to process
     if args.harness and args.cpv:
-        print(f"🚀 Generating vuln.yaml for specific CPV")
-        print(f"   Benchmark: {args.benchmark}")
-        print(f"   Harness: {args.harness}")
-        print(f"   CPV: {args.cpv}")
+        logger.info("Generating vuln.yaml for specific CPV")
+        logger.info(f"  Benchmark: {args.benchmark}")
+        logger.info(f"  Harness: {args.harness}")
+        logger.info(f"  CPV: {args.cpv}")
     elif args.benchmark:
-        print(f"🚀 Generating vuln.yaml for ALL CPVs in benchmark")
-        print(f"   Benchmark: {args.benchmark}")
-        print(f"   Found {len(tasks)} CPV(s)")
+        logger.info("Generating vuln.yaml for ALL CPVs in benchmark")
+        logger.info(f"  Benchmark: {args.benchmark}")
+        logger.info(f"  Found {len(tasks)} CPV(s)")
     else:
-        print(f"🚀 Generating vuln.yaml for ALL CPVs in ALL benchmarks")
-        print(f"   Benchmarks root: {args.benchmarks_root}")
-        print(f"   Found {len(benchmarks_to_process)} benchmark(s)")
-        print(f"   Found {len(tasks)} total CPV(s)")
+        logger.info("Generating vuln.yaml for ALL CPVs in ALL benchmarks")
+        logger.info(f"  Benchmarks root: {args.benchmarks_root}")
+        logger.info(f"  Found {len(benchmarks_to_process)} benchmark(s)")
+        logger.info(f"  Found {len(tasks)} total CPV(s)")
 
-    # Process each task
-    print(f"\n{'='*70}")
-    print(f"Starting vuln.yaml generation...")
-    print(f"{'='*70}\n")
+    log_section("Starting vuln.yaml generation")
 
     results = []
     success_count = 0
     failed_count = 0
+    skipped_count = 0
     repos_dir = os.getenv("PROJECT_REPOS_DIR")
 
-    for idx, (benchmark_name, harness_name, cpv_id) in enumerate(tasks, 1):
-        print(f"\n[{idx}/{len(tasks)}] Processing {benchmark_name}/{harness_name}/{cpv_id}...")
+    # Filter out tasks where vuln.yaml already exists (unless --force)
+    tasks_to_process = []
+    for benchmark_name, harness_name, cpv_id in tasks:
+        benchmark_dir = os.path.join(args.benchmarks_root, benchmark_name)
+        vuln_yaml_path = os.path.join(
+            benchmark_dir, ".aixcc", harness_name, cpv_id, "vuln.yaml"
+        )
+        if os.path.exists(vuln_yaml_path) and not args.force:
+            skipped_count += 1
+            results.append((benchmark_name, harness_name, cpv_id, {
+                "success": True,
+                "skipped": True,
+                "message": "vuln.yaml already exists, skipped"
+            }))
+        else:
+            tasks_to_process.append((benchmark_name, harness_name, cpv_id))
+
+    if skipped_count > 0:
+        logger.info(f"Skipping {skipped_count} CPV(s) with existing vuln.yaml")
+
+    if not tasks_to_process:
+        logger.success(f"All {len(tasks)} CPV(s) already have vuln.yaml files.")
+        return
+
+    logger.info(f"Processing {len(tasks_to_process)} CPV(s) without vuln.yaml...")
+
+    for idx, (benchmark_name, harness_name, cpv_id) in enumerate(tasks_to_process, 1):
+        log_progress(idx, len(tasks_to_process), f"Processing {benchmark_name}/{harness_name}/{cpv_id}")
 
         benchmark_dir = os.path.join(args.benchmarks_root, benchmark_name)
 
@@ -245,7 +278,7 @@ Environment Variables:
             )
 
             if not project_dir:
-                print(f"   ❌ Failed: Could not find or clone project repository")
+                logger.error(f"Could not find or clone project repository for {benchmark_name}")
                 results.append((benchmark_name, harness_name, cpv_id, {
                     "success": False,
                     "message": "Could not find or clone project repository"
@@ -267,31 +300,38 @@ Environment Variables:
 
         if result["success"]:
             success_count += 1
-            print(f"   ✅ Success: {result['vuln_yaml_path']}")
+            logger.success(f"Generated: {result['vuln_yaml_path']}")
         else:
             failed_count += 1
-            print(f"   ❌ Failed: {result['message']}")
+            logger.error(f"Failed: {result['message']}")
 
     # Print summary
-    print(f"\n{'='*70}")
-    print(f"Summary")
-    print(f"{'='*70}")
-    print(f"Total: {len(tasks)}")
-    print(f"Success: {success_count}")
-    print(f"Failed: {failed_count}")
+    log_summary("vuln.yaml Generation", {
+        "total": len(tasks),
+        "generated": success_count,
+        "skipped": skipped_count,
+        "failed": failed_count,
+    })
 
-    if failed_count > 0:
-        print(f"\nFailed CPVs:")
-        for benchmark_name, harness_name, cpv_id, result in results:
-            if not result["success"]:
-                print(f"   - {benchmark_name}/{harness_name}/{cpv_id}: {result['message']}")
+    # Log failed items
+    failed_items = [
+        (f"{bn}/{hn}/{ci}", r["message"])
+        for bn, hn, ci, r in results
+        if not r["success"]
+    ]
+    if failed_items:
+        log_results(
+            success_items=[],
+            failed_items=failed_items,
+            failed_title="Failed CPVs"
+        )
 
     if success_count > 0:
-        print(f"\nNext steps:")
-        print(f"   1. Review the generated vuln.yaml files")
-        print(f"   2. Verify CWE classifications are accurate")
-        print(f"   3. Check that code locations are correct")
-        print(f"   4. Update descriptions if needed")
+        logger.info("Next steps:")
+        logger.info("  1. Review the generated vuln.yaml files")
+        logger.info("  2. Verify CWE classifications are accurate")
+        logger.info("  3. Check that code locations are correct")
+        logger.info("  4. Update descriptions if needed")
 
     # Exit with error if any failed
     if failed_count > 0:
