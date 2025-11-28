@@ -125,6 +125,28 @@ def clone_repository(
 
         # Check if it's a git repository
         if (target_path / ".git").exists():
+            # Reset to clean state to remove any local changes from previous runs
+            try:
+                if verbose:
+                    logger.info(f"🔄 Resetting repository to clean state...")
+
+                cmd = ["git", "reset", "--hard"]
+                result = subprocess.run(
+                    cmd,
+                    cwd=target_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+
+                if result.returncode != 0:
+                    logger.warning(f"⚠️  Failed to reset repository: {result.stderr}")
+                elif verbose:
+                    logger.info(f"✅ Repository reset to clean state")
+
+            except Exception as e:
+                logger.warning(f"⚠️  Error resetting repository: {e}")
+
             if verbose:
                 logger.info(f"✅ {target_dir} is already a git repository")
             return True
@@ -191,6 +213,7 @@ def ensure_project_repository(
     benchmark_dir: str,
     repos_dir: Optional[str] = None,
     project_dir: Optional[str] = None,
+    commit: Optional[str] = None,
     verbose: bool = False
 ) -> Optional[str]:
     """
@@ -203,6 +226,7 @@ def ensure_project_repository(
         benchmark_dir: Path to benchmark directory
         repos_dir: Directory to store cloned repositories (default: PROJECT_REPOS_DIR env var or .crsbench-repos)
         project_dir: Explicit project directory path (if provided, this is used directly)
+        commit: Specific commit to checkout (if None, uses base_commit from meta.yaml)
         verbose: Enable verbose logging
 
     Returns:
@@ -220,6 +244,29 @@ def ensure_project_repository(
     # If explicit project_dir is provided
     if project_dir:
         if os.path.isdir(project_dir):
+            # Reset to clean state if it's a git repository
+            project_path = Path(project_dir)
+            if (project_path / ".git").exists():
+                try:
+                    if verbose:
+                        logger.info(f"🔄 Resetting project directory to clean state...")
+
+                    result = subprocess.run(
+                        ["git", "reset", "--hard"],
+                        cwd=project_dir,
+                        capture_output=True,
+                        text=True,
+                        timeout=60
+                    )
+
+                    if result.returncode != 0:
+                        logger.warning(f"⚠️  Failed to reset repository: {result.stderr}")
+                    elif verbose:
+                        logger.info(f"✅ Repository reset to clean state")
+
+                except Exception as e:
+                    logger.warning(f"⚠️  Error resetting repository: {e}")
+
             if verbose:
                 logger.info(f"✅ Using existing project directory: {project_dir}")
             return project_dir
@@ -257,14 +304,23 @@ def ensure_project_repository(
             if verbose:
                 logger.info(f"Derived repo_name from URL: {repo_name}")
 
-        # Get base_commit and create commit-specific directory name
-        base_commit = repo_info.get("base_commit")
-        if not base_commit:
-            logger.error(f"❌ No base_commit found in meta.yaml for {benchmark_dir}")
-            return None
+        # Determine which commit to use
+        if commit:
+            # Use explicit commit parameter
+            target_commit = commit
+            if verbose:
+                logger.info(f"Using explicit commit parameter: {target_commit[:8]}")
+        else:
+            # Default to base_commit from meta.yaml
+            target_commit = repo_info.get("base_commit")
+            if not target_commit:
+                logger.error(f"❌ No base_commit found in meta.yaml for {benchmark_dir}")
+                return None
+            if verbose:
+                logger.info(f"Using base_commit from meta.yaml: {target_commit[:8]}")
 
         # Create commit-specific directory: {repo_name}-{short_commit}
-        short_commit = base_commit[:8]
+        short_commit = target_commit[:8]
         commit_specific_name = f"{repo_name}-{short_commit}"
         target_dir = os.path.join(repos_dir, commit_specific_name)
 
@@ -275,9 +331,25 @@ def ensure_project_repository(
     if os.path.isdir(target_dir):
         # Verify it's at the correct commit
         try:
-            from pathlib import Path
             if (Path(target_dir) / ".git").exists():
-                import subprocess
+                # Reset to clean state first
+                if verbose:
+                    logger.info(f"🔄 Resetting repository to clean state...")
+
+                reset_result = subprocess.run(
+                    ["git", "reset", "--hard"],
+                    cwd=target_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+
+                if reset_result.returncode != 0:
+                    logger.warning(f"⚠️  Failed to reset repository: {reset_result.stderr}")
+                elif verbose:
+                    logger.info(f"✅ Repository reset to clean state")
+
+                # Check commit
                 result = subprocess.run(
                     ["git", "rev-parse", "HEAD"],
                     cwd=target_dir,
@@ -287,13 +359,13 @@ def ensure_project_repository(
                 )
                 if result.returncode == 0:
                     current_commit = result.stdout.strip()
-                    expected_commit = repo_info.get("base_commit", "")
-                    if current_commit.startswith(expected_commit[:8]):
+                    # Use target_commit (either from parameter or base_commit)
+                    if current_commit.startswith(target_commit[:8]):
                         if verbose:
                             logger.info(f"✅ Repository already exists at correct commit: {target_dir}")
                         return target_dir
                     else:
-                        logger.warning(f"⚠️  Repository exists but at wrong commit: {current_commit[:8]} != {expected_commit[:8]}")
+                        logger.warning(f"⚠️  Repository exists but at wrong commit: {current_commit[:8]} != {target_commit[:8]}")
         except Exception as e:
             logger.warning(f"Failed to verify commit: {e}")
 
@@ -310,7 +382,7 @@ def ensure_project_repository(
     success = clone_repository(
         repo_url=repo_info["repo_url"],
         target_dir=target_dir,
-        commit=repo_info.get("base_commit"),
+        commit=target_commit,
         verbose=verbose
     )
 
