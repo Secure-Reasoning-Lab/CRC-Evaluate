@@ -72,8 +72,8 @@ CRSBench uses a **hybrid capture strategy** inspired by FuzzBench:
 | **POVs**           | Incremental | Filename set      | During validation | New POVs tracked by filename; stored as-is; deduped later             |
 | **Patches**        | Incremental | Filename set      | During validation | New patches tracked by filename; stored as-is; deduped later          |
 | **Corpus**         | Incremental | Modification time | N/A               | New/modified corpus files tracked by mtime (like FuzzBench)           |
-| **CRS data**       | Incremental | Modification time | N/A               | CRS-specific outputs tracked by mtime                                 |
 | **Config**         | Full        | N/A               | N/A               | Experiment config (config.yaml); static, copied once                  |
+| **CRS data**       | Incremental | Modification time | N/A               | CRS-specific outputs tracked by mtime                                 |
 | **Execution meta** | Full        | N/A               | N/A               | Execution metadata (execution.json); static, copied once              |
 | **LLM logs**       | Full        | N/A               | N/A               | Complete llm-usage.json; simpler than computing JSON diffs            |
 | **CRS logs**       | Full        | N/A               | N/A               | Complete crs-output.log; easier to inspect any snapshot independently |
