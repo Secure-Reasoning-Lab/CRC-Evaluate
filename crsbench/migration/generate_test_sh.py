@@ -25,7 +25,37 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from crsbench.migration.test_sh_generator import generate_test_sh_for_benchmark
-from crsbench.utils.repo_manager import find_or_clone_project
+from crsbench.utils.repo_manager import find_or_clone_project, get_repo_info_from_benchmark
+
+
+def get_test_sh_commit(benchmark_dir: str) -> tuple[str | None, str]:
+    """
+    Determine which commit to use for test.sh generation based on mode.
+
+    For delta mode: use ref_commit (vulnerable version)
+    For full mode: use base_commit (vulnerable version)
+
+    Args:
+        benchmark_dir: Path to benchmark directory
+
+    Returns:
+        Tuple of (commit_hash, mode_name)
+        - commit_hash: The commit to use (None means use default base_commit)
+        - mode_name: "delta" or "full"
+    """
+    try:
+        repo_info = get_repo_info_from_benchmark(benchmark_dir)
+
+        # Delta mode: use ref_commit (vulnerable version)
+        if repo_info.get("ref_commit"):
+            return repo_info["ref_commit"], "delta"
+
+        # Full mode: use base_commit (vulnerable version)
+        return repo_info.get("base_commit"), "full"
+
+    except Exception as e:
+        # Fallback to base_commit if unable to determine
+        return None, "unknown"
 
 
 def find_benchmark_dir(benchmark_name: str, benchmarks_root: str = "benchmarks") -> str:
@@ -103,17 +133,33 @@ def process_single_benchmark(
             result["message"] = f"test.sh already exists at {test_sh_path} (use --force to overwrite)"
             return result
 
+        # Determine which commit to use based on mode
+        commit_to_use, mode = get_test_sh_commit(benchmark_dir)
+        if verbose:
+            if mode == "delta":
+                print(f"[{benchmark_name}] Delta mode: using ref_commit (vulnerable) {commit_to_use[:8] if commit_to_use else 'unknown'}")
+            elif mode == "full":
+                print(f"[{benchmark_name}] Full mode: using base_commit (vulnerable) {commit_to_use[:8] if commit_to_use else 'unknown'}")
+            else:
+                print(f"[{benchmark_name}] Unknown mode: using base_commit")
+
         # Find or clone project repository
         if verbose:
             print(f"[{benchmark_name}] Finding/cloning project repository...")
 
-        proj_dir = find_or_clone_project(
-            benchmark_name=benchmark_name,
-            benchmarks_root=benchmarks_root,
-            repos_dir=repos_dir,
-            project_dir=project_dir,
-            verbose=verbose
-        )
+        # Use explicit commit parameter when cloning
+        if not project_dir:
+            # Auto-clone mode: pass commit to ensure correct version
+            from crsbench.utils.repo_manager import ensure_project_repository
+            proj_dir = ensure_project_repository(
+                benchmark_dir=benchmark_dir,
+                repos_dir=repos_dir,
+                commit=commit_to_use,
+                verbose=verbose
+            )
+        else:
+            # Explicit project_dir provided: use as-is
+            proj_dir = project_dir
 
         if not proj_dir:
             result["message"] = "Failed to find or clone project repository"
@@ -434,22 +480,35 @@ def main():
             print("   Use --force to overwrite")
             sys.exit(1)
 
+        # Determine which commit to use based on mode
+        commit_to_use, mode = get_test_sh_commit(benchmark_dir)
+
         print(f"🚀 Generating test.sh for {benchmark_name}")
         print(f"   Benchmark: {benchmark_dir}")
+        if mode == "delta":
+            print(f"   Mode: Delta (using ref_commit - vulnerable version)")
+            print(f"   Commit: {commit_to_use[:8] if commit_to_use else 'unknown'}")
+        elif mode == "full":
+            print(f"   Mode: Full (using base_commit - vulnerable version)")
+            print(f"   Commit: {commit_to_use[:8] if commit_to_use else 'unknown'}")
+        else:
+            print(f"   Mode: Unknown (using base_commit)")
 
         if args.project_dir:
             print(f"   Project (specified): {args.project_dir}")
+            project_dir = args.project_dir
         else:
             print(f"   Project (auto-detect/clone): Looking in {repos_dir}")
-        print()
+            print()
 
-        project_dir = find_or_clone_project(
-            benchmark_name=benchmark_name,
-            benchmarks_root=args.benchmarks_root,
-            repos_dir=repos_dir,
-            project_dir=args.project_dir,
-            verbose=args.verbose
-        )
+            # Auto-clone with correct commit
+            from crsbench.utils.repo_manager import ensure_project_repository
+            project_dir = ensure_project_repository(
+                benchmark_dir=benchmark_dir,
+                repos_dir=repos_dir,
+                commit=commit_to_use,
+                verbose=args.verbose
+            )
 
         if not project_dir:
             print("❌ Error: Failed to find or clone project repository")
