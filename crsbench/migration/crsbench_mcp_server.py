@@ -31,7 +31,7 @@ from mcp.server.fastmcp import FastMCP
 load_dotenv()
 
 from crsbench.migration import mcp_config
-from crsbench.utils.repo_manager import ensure_project_repository
+from crsbench.utils.repo_manager import ensure_project_repository, get_repo_info_from_benchmark
 from crsbench.utils.logger import get_logger
 
 TARGET_BENCHMARK = ''
@@ -53,6 +53,8 @@ def _get_project_source_dir(benchmark_name: str) -> Optional[str]:
     Get the project source directory path, ensuring it's at the correct commit.
 
     Uses the centralized repo_manager for commit-specific directory management.
+    For delta mode: uses ref_commit (vulnerable version)
+    For full mode: uses base_commit (vulnerable version)
 
     Args:
         benchmark_name: Name of the benchmark
@@ -66,11 +68,28 @@ def _get_project_source_dir(benchmark_name: str) -> Optional[str]:
         logger.error("Benchmark directory not found: %s", benchmark_dir)
         return None
 
+    # Determine which commit to use based on mode
+    try:
+        repo_info = get_repo_info_from_benchmark(benchmark_dir)
+
+        # Delta mode: use ref_commit (vulnerable version)
+        if repo_info.get("ref_commit"):
+            commit_to_use = repo_info["ref_commit"]
+            logger.info("Delta mode: using ref_commit (vulnerable) %s", commit_to_use[:8])
+        # Full mode: use base_commit (vulnerable version)
+        else:
+            commit_to_use = repo_info.get("base_commit")
+            logger.info("Full mode: using base_commit (vulnerable) %s", commit_to_use[:8] if commit_to_use else "default")
+    except Exception as e:
+        logger.warning("Failed to determine mode, using default base_commit: %s", e)
+        commit_to_use = None
+
     # Use repo_manager for consistent source management
     # It will use PROJECT_REPOS_DIR env var or default to .crsbench-repos
     source_path = ensure_project_repository(
         benchmark_dir=benchmark_dir,
         repos_dir=os.getenv("PROJECT_REPOS_DIR"),
+        commit=commit_to_use,
         verbose=True
     )
 
@@ -303,6 +322,32 @@ async def check_test_sh(benchmark_name: str) -> dict:
     # Get WORKDIR from Dockerfile
     workdir = _get_workdir_from_dockerfile(benchmark_name)
 
+    # Read project.yaml for environment variables
+    project_yaml_path = os.path.join(benchmark_dir, "project.yaml")
+    with open(project_yaml_path) as f:
+        project_config = yaml.safe_load(f)
+
+    # Determine language mapping for FUZZING_LANGUAGE env var
+    language = project_config.get('language', 'c++')
+    # Map language to OSS-Fuzz FUZZING_LANGUAGE values
+    language_map = {
+        'jvm': 'jvm',
+        'java': 'jvm',
+        'c': 'c',
+        'c++': 'c++',
+        'go': 'go',
+        'rust': 'rust',
+        'python': 'python',
+    }
+    fuzzing_language = language_map.get(language.lower(), language)
+
+    # Get fuzzing engine and sanitizer (use first from list)
+    fuzzing_engines = project_config.get('fuzzing_engines', ['libfuzzer'])
+    fuzzing_engine = fuzzing_engines[0] if fuzzing_engines else 'libfuzzer'
+
+    sanitizers = project_config.get('sanitizers', ['address'])
+    sanitizer = sanitizers[0] if sanitizers else 'address'
+
     # OSS-Fuzz image tag format: gcr.io/oss-fuzz/<project-name>
     # For aixcc benchmarks: gcr.io/oss-fuzz/aixcc/<benchmark-name>
     oss_fuzz_project = f"aixcc/{benchmark_name}"
@@ -314,13 +359,43 @@ async def check_test_sh(benchmark_name: str) -> dict:
     if os.path.isfile(target_logs):
         os.remove(target_logs)
 
-    # Prepare Docker run command with project source mounted to WORKDIR
+    # Extract directory name from workdir path (e.g., /src/curl -> curl)
+    work_dir_name = os.path.basename(workdir)
+
+    # Get OSS-Fuzz work and out directories (needed for /work and /out mounts)
+    oss_fuzz_root = mcp_config.OSS_FUZZ_DIR
+    project_out = os.path.join(oss_fuzz_root, "build", "out", benchmark_name)
+    project_work = os.path.join(oss_fuzz_root, "build", "work", benchmark_name)
+
+    # Ensure directories exist
+    os.makedirs(project_out, exist_ok=True)
+    os.makedirs(project_work, exist_ok=True)
+
+    # Run test.sh inside Docker container following benchmark CI pattern
+    # Mount source and test.sh to temporary locations, then copy inside container
+    # This ensures clean source state and follows competition environment pattern
     docker_cmd_parts = [
-        "docker", "run", "--rm",
-        "-v", f"{test_sh_path}:/src/test.sh:ro",
-        "-v", f"{project_src_dir}:{workdir}:rw",  # Mount project source to WORKDIR
+        "docker", "run",
+        "--privileged",  # Required for some operations
+        "--shm-size=2g",  # Shared memory size
+        "--platform", "linux/amd64",  # Platform
+        "--rm",  # Remove container after exit
+        "-e", f"FUZZING_ENGINE={fuzzing_engine}",
+        "-e", f"SANITIZER={sanitizer}",
+        "-e", "ARCHITECTURE=x86_64",
+        "-e", "HELPER=True",
+        "-e", f"PROJECT_NAME={benchmark_name}",
+        "-e", f"FUZZING_LANGUAGE={fuzzing_language}",
+        "-v", f"{project_src_dir}:/local-source-mount",  # Mount source to temp location
+        "-v", f"{test_sh_path}:/test-mnt.sh",  # Mount test.sh to temp location
+        "-v", f"{project_work}:/work",  # Mount work directory
+        "-v", f"{project_out}:/out",  # Mount out directory
         image_tag,
-        "bash", "/src/test.sh"
+        "/bin/bash", "-c",
+        f"pushd $SRC && rm -rf {work_dir_name} "
+        f"&& cp -r /local-source-mount {work_dir_name} "
+        f"&& cp /test-mnt.sh $SRC/test.sh "
+        f"&& popd && bash $SRC/test.sh"
     ]
 
     # Run test.sh inside the container
