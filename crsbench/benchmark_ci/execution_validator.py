@@ -52,11 +52,11 @@ def _delta_base_check(job: JobContext, output_dir: Optional[Path] = None, enable
     """Check delta mode base commit: build and verify POVs do NOT crash.
 
     In delta mode, base_commit is the clean version before bug-inducing diff.
+    We only verify POVs do not crash; test.sh is only checked at ref_commit.
 
     Test steps:
     1. Build at base commit (clean version)
     2. Verify all POVs do NOT trigger crashes (no vulnerability yet)
-    3. Verify test.sh passes
 
     Args:
         job: Job context
@@ -64,15 +64,17 @@ def _delta_base_check(job: JobContext, output_dir: Optional[Path] = None, enable
         enable_check_build: Enable check_build validation
     """
     logger.info(f"=== DELTA BASE CHECK ===")
-    logger.info(f"Step 1/3: Building at base commit (clean version)")
+    logger.info(f"Step 1/2: Building at base commit (clean version)")
 
-    # Build at base commit
-    build_benchmark(job.benchmark, job.engine, job.sanitizer, clean=True, enable_check_build=enable_check_build)
+    # Build at base commit (clean version)
+    base_commit = job.task.base_commit
+    logger.info(f"Using base_commit: {base_commit[:8]}")
+    build_benchmark(job.benchmark, job.engine, job.sanitizer, clean=True, enable_check_build=enable_check_build, commit=base_commit)
 
     # Get all harnesses
     harnesses = get_harnesses(job.benchmark)
 
-    logger.info(f"Step 2/3: Verifying POVs do NOT crash (clean version)")
+    logger.info(f"Step 2/2: Verifying POVs do NOT crash (clean version)")
     # Test all POVs - they should NOT crash at base commit (clean)
     pov_count = 0
     for harness in harnesses:
@@ -96,11 +98,7 @@ def _delta_base_check(job: JobContext, output_dir: Optional[Path] = None, enable
                     )
 
     logger.info(f"✓ Verified {pov_count} POVs do NOT crash (clean version)")
-
-    # Test test.sh at base commit - should pass
-    logger.info(f"Step 3/3: Running test.sh (should pass)")
-    run_test_sh(job.benchmark, expect_success=True, output_dir=output_dir)
-    logger.info(f"✓ test.sh passes at base commit")
+    logger.info(f"✓ Base commit check complete (test.sh will be checked at ref_commit)")
 
 
 def _delta_ref_check(job: JobContext, output_dir: Optional[Path] = None, enable_check_build: bool = False) -> None:
@@ -109,10 +107,9 @@ def _delta_ref_check(job: JobContext, output_dir: Optional[Path] = None, enable_
     In delta mode, ref_commit is the vulnerable version after bug-inducing diff.
 
     Test steps:
-    1. Checkout ref commit (vulnerable version) - TODO: not implemented
-    2. Build at ref commit
-    3. Verify all POVs trigger crashes (vulnerability present)
-    4. Verify test.sh passes (unit tests should pass despite vulnerability)
+    1. Build at ref commit (vulnerable version)
+    2. Verify all POVs trigger crashes (vulnerability present)
+    3. Verify test.sh passes (unit tests should pass despite vulnerability)
 
     Args:
         job: Job context
@@ -120,21 +117,22 @@ def _delta_ref_check(job: JobContext, output_dir: Optional[Path] = None, enable_
         enable_check_build: Enable check_build validation
     """
     logger.info(f"=== DELTA REF CHECK ===")
-    logger.info(f"Step 1/4: Checking out ref commit (vulnerable version)")
 
-    # TODO: Need to checkout ref commit first
-    # This requires integration with repo_manager to checkout the ref commit
-    logger.warning(f"Ref commit checkout not implemented yet")
-    logger.warning(f"Assuming current code is at ref commit")
+    # Get ref_commit from task
+    ref_commit = job.task.ref_commit
+    if not ref_commit:
+        raise Exception(f"[Error] No ref_commit found for delta mode task")
 
-    logger.info(f"Step 2/4: Building at ref commit (vulnerable version)")
+    logger.info(f"Step 1/3: Building at ref commit (vulnerable version)")
+    logger.info(f"Using ref_commit: {ref_commit[:8]}")
+
     # Build at ref commit (vulnerable version)
-    build_benchmark(job.benchmark, job.engine, job.sanitizer, clean=True, enable_check_build=enable_check_build)
+    build_benchmark(job.benchmark, job.engine, job.sanitizer, clean=True, enable_check_build=enable_check_build, commit=ref_commit)
 
     # Get all harnesses
     harnesses = get_harnesses(job.benchmark)
 
-    logger.info(f"Step 3/4: Verifying POVs trigger crashes (vulnerable)")
+    logger.info(f"Step 2/3: Verifying POVs trigger crashes (vulnerable)")
     # Test all POVs - they should crash at ref commit (vulnerable)
     pov_count = 0
     for harness in harnesses:
@@ -160,8 +158,8 @@ def _delta_ref_check(job: JobContext, output_dir: Optional[Path] = None, enable_
     logger.info(f"✓ Verified {pov_count} POVs trigger crashes (vulnerable version)")
 
     # Test test.sh at ref commit - should pass even with vulnerability
-    logger.info(f"Step 4/4: Running test.sh (should pass)")
-    run_test_sh(job.benchmark, expect_success=True, output_dir=output_dir)
+    logger.info(f"Step 3/3: Running test.sh (should pass)")
+    run_test_sh(job.benchmark, expect_success=True, output_dir=output_dir, commit=ref_commit)
     logger.info(f"✓ test.sh passes at ref commit")
 
 
@@ -181,8 +179,10 @@ def _full_base_check(job: JobContext, output_dir: Optional[Path] = None, enable_
     logger.info(f"=== FULL BASE CHECK ===")
     logger.info(f"Step 1/3: Building at base commit (vulnerable version)")
 
-    # Build at base commit
-    build_benchmark(job.benchmark, job.engine, job.sanitizer, clean=True, enable_check_build=enable_check_build)
+    # Build at base commit (vulnerable version)
+    base_commit = job.task.base_commit
+    logger.info(f"Using base_commit: {base_commit[:8]}")
+    build_benchmark(job.benchmark, job.engine, job.sanitizer, clean=True, enable_check_build=enable_check_build, commit=base_commit)
 
     # Get all harnesses
     harnesses = get_harnesses(job.benchmark)
@@ -209,22 +209,23 @@ def _full_base_check(job: JobContext, output_dir: Optional[Path] = None, enable_
 
     # Test test.sh
     logger.info(f"Step 3/3: Running test.sh (should pass)")
-    run_test_sh(job.benchmark, expect_success=True, output_dir=output_dir)
+    run_test_sh(job.benchmark, expect_success=True, output_dir=output_dir, commit=base_commit)
     logger.info(f"✓ test.sh passes at base commit")
 
 
 def _patch_check(job: JobContext, output_dir: Optional[Path] = None, enable_check_build: bool = False) -> None:
     """Check that patch fixes the vulnerability.
 
-    Note: Build and POV crash verification at base commit is already done in BASE_CHECK.
-    This only tests the patch application and fix verification.
+    For FULL mode: Uses base_commit (vulnerable)
+    For DELTA mode: Uses ref_commit (vulnerable)
 
     Tests:
-    1. Apply patch
-    2. Rebuild
-    3. After patch: POV should NOT crash
-    4. test.sh should pass
-    5. Revert patch
+    1. Build at vulnerable commit
+    2. Apply patch
+    3. Rebuild with patch
+    4. After patch: POV should NOT crash
+    5. test.sh should pass
+    6. Revert patch
 
     Args:
         job: Job context with specific vulnerability and POV
@@ -240,18 +241,34 @@ def _patch_check(job: JobContext, output_dir: Optional[Path] = None, enable_chec
 
     logger.info(f"=== PATCH CHECK ===")
     logger.info(f"Verifying patch fixes {job.vulnerability.id}")
-    logger.info(f"(Note: Base commit build and POV crash already verified in BASE_CHECK)")
 
-    # Step 1: Apply patch
-    logger.info(f"Step 1/4: Applying patch {job.vulnerability.patch_path}")
+    # Determine which commit to use based on mode
+    from crsbench.benchmark_ci.utils import TaskMode
+    if job.task.mode == TaskMode.DELTA:
+        # Delta mode: ref_commit is vulnerable
+        target_commit = job.task.ref_commit
+        if not target_commit:
+            raise Exception(f"[Error] No ref_commit found for delta mode")
+        logger.info(f"Using ref_commit (vulnerable): {target_commit[:8]}")
+    else:
+        # Full mode: base_commit is vulnerable
+        target_commit = job.task.base_commit
+        logger.info(f"Using base_commit (vulnerable): {target_commit[:8]}")
+
+    # Step 1: Build at vulnerable commit
+    logger.info(f"Step 1/5: Building at vulnerable commit")
+    build_benchmark(job.benchmark, job.engine, job.sanitizer, clean=True, enable_check_build=enable_check_build, commit=target_commit)
+
+    # Step 2: Apply patch
+    logger.info(f"Step 2/5: Applying patch {job.vulnerability.patch_path}")
     apply_patch(job.benchmark, job.vulnerability.patch_path)
 
-    # Step 2: Rebuild with patch
-    logger.info(f"Step 2/4: Rebuilding with patch applied")
-    build_benchmark(job.benchmark, job.engine, job.sanitizer, clean=False, enable_check_build=enable_check_build)
+    # Step 3: Rebuild with patch
+    logger.info(f"Step 3/5: Rebuilding with patch applied")
+    build_benchmark(job.benchmark, job.engine, job.sanitizer, clean=False, enable_check_build=enable_check_build, commit=target_commit)
 
-    # Step 3: Verify POV does NOT crash after patch
-    logger.info(f"Step 3/4: Verifying POV does NOT crash after patch")
+    # Step 4: Verify POV does NOT crash after patch
+    logger.info(f"Step 4/5: Verifying POV does NOT crash after patch")
     reproduce_pov(
         job.benchmark,
         job.harness.name,
@@ -261,12 +278,12 @@ def _patch_check(job: JobContext, output_dir: Optional[Path] = None, enable_chec
     )
     logger.info(f"✓ Patch successfully fixes the vulnerability")
 
-    # Step 4: Verify test.sh passes with patch
-    logger.info(f"Step 4/4: Running test.sh with patch applied")
-    run_test_sh(job.benchmark, expect_success=True, output_dir=output_dir)
+    # Step 5: Verify test.sh passes with patch
+    logger.info(f"Step 5/5: Running test.sh with patch applied")
+    run_test_sh(job.benchmark, expect_success=True, output_dir=output_dir, commit=target_commit)
     logger.info(f"✓ test.sh passes with patch applied")
 
-    # Step 5: Revert patch (cleanup)
+    # Cleanup: Revert patch
     logger.info(f"Reverting patch for cleanup...")
     revert_patch(job.benchmark, job.vulnerability.patch_path)
 
@@ -277,6 +294,8 @@ def _test_sh_check(job: JobContext, output_dir: Optional[Path] = None, enable_ch
     """Check that test.sh passes.
 
     This tests that the benchmark's unit tests work correctly.
+    For delta mode: uses ref_commit (vulnerable but test.sh should pass)
+    For full mode: uses base_commit (vulnerable)
 
     Args:
         job: Job context
@@ -285,10 +304,27 @@ def _test_sh_check(job: JobContext, output_dir: Optional[Path] = None, enable_ch
     """
     logger.info(f"TEST.SH CHECK: Running test.sh for {job.benchmark}")
 
+    # Determine which commit to use based on mode
+    from crsbench.benchmark_ci.utils import TaskMode
+    if job.task:
+        if job.task.mode == TaskMode.DELTA:
+            # Delta mode: use ref_commit (vulnerable version where test.sh should pass)
+            target_commit = job.task.ref_commit
+            if not target_commit:
+                raise Exception(f"[Error] No ref_commit found for delta mode")
+            logger.info(f"Using ref_commit (vulnerable): {target_commit[:8]}")
+        else:
+            # Full mode: use base_commit (vulnerable version)
+            target_commit = job.task.base_commit
+            logger.info(f"Using base_commit (vulnerable): {target_commit[:8]}")
+    else:
+        target_commit = None
+        logger.info(f"No task provided, using base_commit from meta.yaml")
+
     # Build benchmark first
-    build_benchmark(job.benchmark, job.engine, job.sanitizer, clean=True, enable_check_build=enable_check_build)
+    build_benchmark(job.benchmark, job.engine, job.sanitizer, clean=True, enable_check_build=enable_check_build, commit=target_commit)
 
     # Run test.sh
-    run_test_sh(job.benchmark, expect_success=True, output_dir=output_dir)
+    run_test_sh(job.benchmark, expect_success=True, output_dir=output_dir, commit=target_commit)
 
     logger.info(f"✓ test.sh check complete")

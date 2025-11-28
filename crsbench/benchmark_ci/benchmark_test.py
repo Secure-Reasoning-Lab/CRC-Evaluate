@@ -47,6 +47,7 @@ from crsbench.benchmark_ci.file_validator import (
     get_project_config,
 )
 from crsbench.benchmark_ci.execution_validator import check_benchmark_execution
+from crsbench.benchmark_ci.result_export import ResultCollector
 from crsbench.utils.logger import get_logger
 from crsbench.utils import log_section, log_error_detail, log_file_info
 
@@ -309,16 +310,16 @@ def get_workload(
                                                 pov=pov,
                                             ))
 
-                # Add test.sh check (once per benchmark)
-                if not job_types or ExecJobType.TEST_SH_CHECK in job_types:
-                    jobs.append(JobContext(
-                        job_type=ExecJobType.TEST_SH_CHECK,
-                        task=tasks[0] if tasks else None,
-                        benchmark=benchmark,
-                        language=language,
-                        engine="libfuzzer",
-                        sanitizer="address",
-                    ))
+            # Add test.sh check (once per benchmark) - outside task/engine/sanitizer loops
+            if not job_types or ExecJobType.TEST_SH_CHECK in job_types:
+                jobs.append(JobContext(
+                    job_type=ExecJobType.TEST_SH_CHECK,
+                    task=tasks[0] if tasks else None,
+                    benchmark=benchmark,
+                    language=language,
+                    engine="libfuzzer",
+                    sanitizer="address",
+                ))
 
         except Exception as e:
             logger.error(f"Failed to generate jobs for {benchmark}: {e}")
@@ -371,7 +372,8 @@ def _execute_benchmark_jobs(
     exit_on_error: bool,
     output_dir: Optional[str] = None,
     enable_check_build: bool = False,
-) -> Tuple[str, List[Tuple[JobContext, Exception, str]]]:
+    result_collector: Optional[ResultCollector] = None,
+) -> Tuple[str, List[Tuple[JobContext, Exception, str]], List[Tuple[JobContext, str, Optional[Exception], Optional[str], datetime, datetime]]]:
     """Execute all jobs for a single benchmark.
 
     This function runs in a separate process when using parallel execution.
@@ -382,11 +384,14 @@ def _execute_benchmark_jobs(
         exit_on_error: Whether to exit immediately on error
         output_dir: Directory to save artifacts
         enable_check_build: Enable check_build validation
+        result_collector: Optional collector for results (used in sequential mode)
 
     Returns:
-        Tuple of (benchmark_name, list_of_failed_jobs)
+        Tuple of (benchmark_name, list_of_failed_jobs, list_of_job_results)
+        Job results are tuples of (job, status, error, error_file, start_time, end_time)
     """
     failed_jobs = []
+    job_results = []
 
     logger.info("-" * 80)
     logger.info(f"Processing: {benchmark} ({len(jobs)} jobs)")
@@ -397,29 +402,36 @@ def _execute_benchmark_jobs(
         ensure_benchmark_symlink(benchmark)
     except Exception as e:
         logger.error(f"[{benchmark}] Failed to setup symlink")
+        now = datetime.now()
         if jobs:
             error_file = save_error_to_file(e, jobs[0], output_dir)
             log_file_info(error_file, description="Error details saved to")
             failed_jobs.append((jobs[0], e, error_file))
+            job_results.append((jobs[0], "failed", e, error_file, now, now))
         else:
             logger.error(str(e))
             failed_jobs.append((None, e, ""))
-        return benchmark, failed_jobs
+        return benchmark, failed_jobs, job_results
 
     for i, job in enumerate(jobs, 1):
         logger.info(f"Starting job: {benchmark} | {job.job_type.value} | {job.engine}/{job.sanitizer}")
         logger.info(f"[{benchmark}] Job {i}/{len(jobs)}")
 
+        start_time = datetime.now()
         try:
             check_benchmark_execution(job, output_dir=output_dir, enable_check_build=enable_check_build)
+            end_time = datetime.now()
             logger.success(f"Job completed successfully")
+            job_results.append((job, "passed", None, None, start_time, end_time))
         except Exception as e:
+            end_time = datetime.now()
             # Save error details to file
             error_file = save_error_to_file(e, job, output_dir)
             logger.error(f"Job failed: {job.job_type.value}")
             log_file_info(error_file, description="Error details saved to")
 
             failed_jobs.append((job, e, error_file))
+            job_results.append((job, "failed", e, error_file, start_time, end_time))
 
             if exit_on_error:
                 logger.warning(f"Exiting due to --exit_on_error flag")
@@ -429,7 +441,7 @@ def _execute_benchmark_jobs(
     passed = len(jobs) - len(failed_jobs)
     logger.info(f"Benchmark {benchmark} summary: {passed}/{len(jobs)} passed, {len(failed_jobs)} failed")
 
-    return benchmark, failed_jobs
+    return benchmark, failed_jobs, job_results
 
 
 def run_execution_checks(
@@ -439,6 +451,7 @@ def run_execution_checks(
     workers: int = 1,
     output_dir: Optional[str] = None,
     enable_check_build: bool = False,
+    result_collector: Optional[ResultCollector] = None,
 ) -> None:
     """Run execution validation for jobs.
 
@@ -449,6 +462,7 @@ def run_execution_checks(
         workers: Number of parallel workers (1 = sequential, >1 = parallel by benchmark)
         output_dir: Directory to save artifacts
         enable_check_build: Enable check_build validation after building
+        result_collector: Optional collector for results
     """
     if skip_execution_check:
         logger.warning("Skipping execution checks")
@@ -472,13 +486,17 @@ def run_execution_checks(
         logger.info(f"  - {benchmark}: {len(benchmark_jobs)} jobs")
 
     all_failed_jobs = []
+    all_job_results = []
 
     if workers == 1:
         # Sequential execution (original behavior)
         for benchmark in sorted(jobs_by_benchmark.keys()):
             benchmark_jobs = jobs_by_benchmark[benchmark]
-            _, failed_jobs = _execute_benchmark_jobs(benchmark, benchmark_jobs, exit_on_error, output_dir, enable_check_build)
+            _, failed_jobs, job_results = _execute_benchmark_jobs(
+                benchmark, benchmark_jobs, exit_on_error, output_dir, enable_check_build
+            )
             all_failed_jobs.extend(failed_jobs)
+            all_job_results.extend(job_results)
 
             if exit_on_error and failed_jobs:
                 break
@@ -497,8 +515,9 @@ def run_execution_checks(
             for future in as_completed(future_to_benchmark):
                 benchmark = future_to_benchmark[future]
                 try:
-                    benchmark_name, failed_jobs = future.result()
+                    benchmark_name, failed_jobs, job_results = future.result()
                     all_failed_jobs.extend(failed_jobs)
+                    all_job_results.extend(job_results)
 
                     if exit_on_error and failed_jobs:
                         logger.warning(f"Cancelling remaining benchmarks due to --exit_on_error flag")
@@ -506,11 +525,23 @@ def run_execution_checks(
                         for pending_future in future_to_benchmark:
                             if not pending_future.done():
                                 pending_future.cancel()
-                        break
+                        break  # Exit as_completed loop after cancelling all pending futures
 
                 except Exception as e:
                     logger.error(f"Benchmark {benchmark} raised exception: {e}")
                     traceback.print_exc()
+
+    # Collect results if collector is provided
+    if result_collector:
+        for job, status, error, error_file, start_time, end_time in all_job_results:
+            result_collector.add_result(
+                job=job,
+                status=status,
+                error=error,
+                error_file=error_file,
+                start_time=start_time,
+                end_time=end_time,
+            )
 
     # Print final summary
     total_jobs = len(jobs)
@@ -548,6 +579,7 @@ def main(
     workers: int = 1,
     output_dir: Optional[str] = None,
     enable_check_build: bool = False,
+    csv_output: Optional[str] = None,
 ) -> int:
     """Main entry point for benchmark testing.
 
@@ -563,11 +595,16 @@ def main(
         workers: Number of parallel workers (1 = sequential, >1 = parallel by benchmark)
         output_dir: Directory to save test artifacts (logs, crash outputs, etc.)
         enable_check_build: Enable check_build validation (slower, default: False)
+        csv_output: Path to export results as CSV file
 
     Returns:
         Exit code (0 for success, 1 for failure)
     """
     ret_code = 0
+
+    # Initialize result collector
+    result_collector = ResultCollector()
+    result_collector.start()
 
     try:
         logger.info("=" * 80)
@@ -602,7 +639,10 @@ def main(
             logger.info(f"Saving artifacts to: {output_path.absolute()}")
 
         # Run execution checks
-        run_execution_checks(skip_execution_check, jobs, exit_on_error, workers, output_dir, enable_check_build)
+        run_execution_checks(
+            skip_execution_check, jobs, exit_on_error, workers,
+            output_dir, enable_check_build, result_collector
+        )
 
         logger.info("=" * 80)
         logger.info("ALL TESTS PASSED ✓")
@@ -612,6 +652,30 @@ def main(
         logger.error(f"Benchmark testing failed")
         logger.error(str(e))
         ret_code = 1
+
+    finally:
+        # Finalize result collection
+        result_collector.finish()
+
+        # Export CSV if requested
+        if csv_output:
+            try:
+                # Export detailed results
+                csv_path = result_collector.export_csv(csv_output)
+                logger.info(f"Results exported to: {csv_path}")
+
+                # Export summary (add _summary suffix)
+                summary_path = csv_output.replace(".csv", "_summary.csv")
+                if summary_path == csv_output:
+                    summary_path = csv_output + "_summary"
+                result_collector.export_summary_csv(summary_path)
+                logger.info(f"Summary exported to: {summary_path}")
+
+            except Exception as e:
+                logger.error(f"Failed to export CSV: {e}")
+
+        # Print summary
+        result_collector.print_summary()
 
     return ret_code
 
@@ -698,6 +762,13 @@ if __name__ == "__main__":
              "By default, check_build is disabled to speed up testing."
     )
 
+    parser.add_argument(
+        "--csv-output",
+        type=str,
+        help="Path to export results as CSV file. A summary CSV will also be created "
+             "with '_summary' suffix. Example: --csv-output ./results.csv"
+    )
+
     args = parser.parse_args()
 
     # Parse projects
@@ -750,4 +821,5 @@ if __name__ == "__main__":
         workers=args.workers,
         output_dir=args.output_dir,
         enable_check_build=args.enable_check_build,
+        csv_output=args.csv_output,
     ))

@@ -100,7 +100,8 @@ def build_benchmark(
     engine: str,
     sanitizer: str,
     clean: bool = True,
-    enable_check_build: bool = False
+    enable_check_build: bool = False,
+    commit: Optional[str] = None
 ) -> None:
     """Build a benchmark using OSS-Fuzz infrastructure.
 
@@ -115,6 +116,7 @@ def build_benchmark(
         sanitizer: Sanitizer (e.g., "address")
         clean: Whether to clean before building
         enable_check_build: Enable check_build validation (default: False)
+        commit: Specific commit to checkout (if None, uses base_commit from meta.yaml)
     """
     logger.info(f"Building benchmark {benchmark} with engine={engine} sanitizer={sanitizer}")
 
@@ -126,12 +128,16 @@ def build_benchmark(
         raise RuntimeError(f"[Error] Benchmark directory not found: {benchmark_dir}")
 
     # Ensure project source code is cloned using repo_manager
-    logger.info(f"Ensuring source code is available for {benchmark}")
+    if commit:
+        logger.info(f"Ensuring source code is available for {benchmark} at commit {commit[:8]}")
+    else:
+        logger.info(f"Ensuring source code is available for {benchmark} (using base_commit)")
     repos_dir = os.getenv("PROJECT_REPOS_DIR")
 
     source_path = ensure_project_repository(
         benchmark_dir=str(benchmark_dir),
         repos_dir=repos_dir,
+        commit=commit,
         verbose=True
     )
 
@@ -315,7 +321,7 @@ def reproduce_pov(
     return stdout_clean, stderr
 
 
-def run_test_sh(benchmark: str, expect_success: bool = True, output_dir: Optional[Path] = None) -> Tuple[str, str]:
+def run_test_sh(benchmark: str, expect_success: bool = True, output_dir: Optional[Path] = None, commit: Optional[str] = None) -> Tuple[str, str]:
     """Run test.sh for a benchmark inside Docker container.
 
     This runs test.sh inside the OSS-Fuzz Docker container, similar to how
@@ -325,6 +331,7 @@ def run_test_sh(benchmark: str, expect_success: bool = True, output_dir: Optiona
         benchmark: Benchmark name
         expect_success: Whether test.sh is expected to succeed
         output_dir: Directory to save test.sh outputs
+        commit: Specific commit to use (if None, uses base_commit from meta.yaml)
 
     Returns:
         Tuple of (stdout, stderr)
@@ -357,6 +364,7 @@ def run_test_sh(benchmark: str, expect_success: bool = True, output_dir: Optiona
     source_path = ensure_project_repository(
         benchmark_dir=str(benchmark_dir),
         repos_dir=os.getenv("PROJECT_REPOS_DIR"),
+        commit=commit,
         verbose=False
     )
 
@@ -396,8 +404,15 @@ def run_test_sh(benchmark: str, expect_success: bool = True, output_dir: Optiona
     sanitizers = project_config.get('sanitizers', ['address'])
     sanitizer = sanitizers[0] if sanitizers else 'address'
 
-    # Run test.sh inside Docker container following OSS-Fuzz helper.py shell pattern
-    # Mount source at WORKDIR, test.sh at /src/test.sh, /work and /out directories
+    # Extract directory name from workdir path
+    # e.g., /src/curl -> curl, /src/project -> project
+    work_dir_name = os.path.basename(workdir)
+
+    # Run test.sh inside Docker container following competition environment pattern
+    # Mount source and test.sh to temporary locations, then copy inside container
+    # Using the same paths as competition environment:
+    # - /local-source-mount for source
+    # - /test-mnt.sh for test.sh
     docker_command = [
         "docker", "run",
         "--privileged",  # Required for some operations
@@ -410,13 +425,46 @@ def run_test_sh(benchmark: str, expect_success: bool = True, output_dir: Optiona
         "-e", "HELPER=True",
         "-e", f"PROJECT_NAME={benchmark}",
         "-e", f"FUZZING_LANGUAGE={fuzzing_language}",
-        "-v", f"{source_path}:{workdir}",  # Mount source at WORKDIR
-        "-v", f"{test_sh_path}:/src/test.sh",  # Mount test.sh at /src/test.sh
+        "-v", f"{source_path}:/local-source-mount",  # Mount source to temp location (competition env)
+        "-v", f"{test_sh_path}:/test-mnt.sh",  # Mount test.sh to temp location (competition env)
         "-v", f"{project_work}:/work",
         "-v", f"{project_out}:/out",
         f"gcr.io/oss-fuzz/{benchmark}",
-        "bash", "/src/test.sh"  # Execute test.sh from /src
+        "/bin/bash", "-c",
+        f"pushd $SRC && rm -rf {work_dir_name} "
+        f"&& cp -r /local-source-mount {work_dir_name} "
+        f"&& cp /test-mnt.sh $SRC/test.sh "
+        f"&& popd && bash $SRC/test.sh"
     ]
+
+    # docker_command = [
+    #     "docker", "run",
+    #     "--privileged",  # Required for some operations
+    #     "--shm-size=2g",  # Shared memory size
+    #     "--rm",  # Remove container after exit
+    #     "-v", f"{source_path}:/local-source-mount",  # Mount source to temp location (competition env)
+    #     "-v", f"{test_sh_path}:/test-mnt.sh",  # Mount test.sh to temp location (competition env)
+    #     "-v", f"{project_work}:/work",
+    #     "-v", f"{project_out}:/out",
+    #     f"gcr.io/oss-fuzz/{benchmark}",
+    #     "/bin/bash", "-c",
+    #     f"pushd $SRC && rm -rf {work_dir_name} "
+    #     f"&& cp -r /local-source-mount {work_dir_name} "
+    #     f"&& cp /test-mnt.sh $SRC/test.sh "
+    #     f"&& popd && bash $SRC/test.sh"
+    # ]
+
+    # docker_command = [
+    #     "docker", "run", "--rm",
+    #     "-v", f"{source_path}:/local-source-mount",
+    #     "-v", f"{test_sh_path}:/test-mnt.sh",
+    #     f"gcr.io/oss-fuzz/{benchmark}",
+    #     "/bin/bash", "-c",
+    #     f"pushd $SRC && rm -rf {work_dir_name} "
+    #     f"&& cp -r /local-source-mount {work_dir_name} "
+    #     f"&& cp /test-mnt.sh $SRC/test.sh "
+    #     f"&& popd && $SRC/test.sh"
+    # ]
 
     logger.info(f"Executing: {' '.join(docker_command)}")
 
