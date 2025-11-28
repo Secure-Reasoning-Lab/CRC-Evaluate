@@ -47,17 +47,32 @@ crsbench/bench_snapgen/
 - Read benchmark ground truth from `.aixcc/` directory
 - Parse `meta.yaml` configuration
 - Load POVs, patches, hints from filesystem
+- **Harness selection and validation**: Ensure specified harness exists with POVs
 - Orchestrate snapshot generation across configured intervals
 - Support both bug-finding and patch-generation modes
 
 **Key Methods:**
 ```python
 class BenchmarkSnapshotGenerator:
-    def __init__(self, benchmark_path, output_dir, config)
+    def __init__(
+        self,
+        benchmark_path: Path,
+        output_dir: Path,
+        trial_duration: int = 7200,
+        snapshot_period: int = 900,
+        harness: str,  # REQUIRED
+    )
     def generate_trial_snapshots(mode, difficulty_level) -> Path
+    def _validate_harness(harness: str) -> str  # Validates harness exists with POVs
     def _create_discovery_timeline() -> DiscoveryTimeline
     def _generate_snapshot(cycle, elapsed_time, timeline)
 ```
+
+**Harness Selection:**
+- The `harness` parameter is **required** in the API
+- Validates the harness exists in `meta.yaml` and has associated POVs
+- Raises `ValueError` if harness is None, not found, or has no POVs
+- Filters timeline generation to only include POVs/patches for the specified harness
 
 #### 2. DiscoveryTimeline (timeline.py)
 
@@ -66,6 +81,8 @@ class BenchmarkSnapshotGenerator:
 - Implement difficulty-based discovery patterns
 - Cluster POVs from same root cause
 - Generate patch discovery after POV discovery
+- **Harness filtering**: Filter POVs/patches to specific harness
+- **Final epoch guarantee**: Ensure at least one POV in final snapshot
 
 **Key Classes:**
 ```python
@@ -87,7 +104,28 @@ class POVDiscoveryModel:
 
 class PatchGenerationModel:
     def get_patch_time(pov_time, difficulty) -> float
+
+def create_discovery_timeline(
+    benchmark_data: BenchmarkData,
+    difficulty_level: int,
+    max_time: float,
+    mode: str = "bug-finding",
+    harness: str = None,              # NEW: filter to specific harness
+    snapshot_period: float = 900.0,   # NEW: for final epoch calculation
+) -> DiscoveryTimeline
+
+def _ensure_final_epoch_coverage(
+    timeline: DiscoveryTimeline,
+    max_time: float,
+    snapshot_period: float,
+)  # NEW: ensures POV in final snapshot
 ```
+
+**Final Epoch Guarantee:**
+- After timeline creation, checks if any valid POV exists in `[max_time - snapshot_period, max_time]`
+- If no POV in final epoch, moves earliest POV to 75% through final epoch
+- Logs adjustment: `Moved POV {pov_id} to final epoch (t=XXX.Xs) to ensure coverage`
+- Ensures users always get meaningful results in the final snapshot
 
 #### 3. FaultInjector (fault_injection.py)
 
@@ -726,16 +764,24 @@ def inject_faults_into_timeline(
 
 ### Command Structure
 
+**Direct API:**
 ```bash
 python -m crsbench.bench_snapgen.generator [OPTIONS]
 ```
 
+**Helper Script (Recommended):**
+```bash
+python scripts/generate-snapshots.py BENCHMARK [OPTIONS]
+```
+
 ### Arguments
 
+**generator.py (Direct API):**
 ```
 Required:
   --benchmark PATH              Path to benchmark directory
   --output PATH                 Output directory for generated snapshots
+  --harness NAME                Target harness name (REQUIRED)
 
 Optional:
   --duration SECONDS            Trial duration in seconds (default: 7200)
@@ -753,51 +799,97 @@ Fault Injection:
   --fault-injection-rate FLOAT  Rate of invalid data injection (default: 0)
   --fault-types TYPE[,TYPE]     Comma-separated fault types to inject
 
-Output Control:
-  --compress / --no-compress   Compress snapshots to tar.gz (default: compress)
-  --include-corpus             Generate synthetic corpus files
-  --llm-simulation             Generate realistic LLM usage (default: True)
-
 Multiple Trials:
   --trials COUNT               Generate N independent trials (default: 1)
-  --difficulty-range START-END  Generate trials at each difficulty level
+```
+
+**generate-snapshots.py (Helper Script):**
+```
+Positional:
+  BENCHMARK                     Benchmark name (e.g., afc-curl-delta-01)
+
+Optional:
+  --harness NAME                Target harness name (default: auto-select first with POVs)
+  --output PATH, -o PATH        Output directory (default: /tmp/snapshots/<benchmark>)
+  --mode {bug,patch}            Generation mode (default: bug)
+  --difficulty LEVEL, -d LEVEL  Difficulty level 1-5 (default: 1)
+  --duration SECONDS            Trial duration in seconds (default: 7200)
+  --period SECONDS              Snapshot period in seconds (default: 900)
+  --faults RATE, -f RATE        Fault injection rate 0.0-1.0 (default: 0.0)
+  --trials COUNT, -t COUNT      Number of trials to generate (default: 1)
+  --benchmarks-root PATH        Benchmarks root directory (default: ./benchmarks)
+  --all                         Generate for all benchmarks in benchmarks/
+
+Timing Presets:
+  --quick                       30 min trial, 10 min snapshots (3 snapshots)
+  --short                       1 hour trial, 15 min snapshots (4 snapshots)
+  --long                        4 hours trial, 30 min snapshots (8 snapshots)
+```
+
+**Helper Script Features:**
+- **Auto-selects harness**: If `--harness` not specified, finds first harness with POVs
+- **Prints selection**: `Auto-selected harness: curl_fuzzer_ws (1 POVs)`
+- **Sensible defaults**: Only requires benchmark name
+- **Timing presets**: `--quick`, `--short`, `--long` for common scenarios
+- **Batch processing**: `--all` to generate for all benchmarks
 ```
 
 ### Usage Examples
 
+**Helper Script (Recommended):**
 ```bash
-# Basic usage - single trial, bug-finding mode
+# Basic usage - auto-selects harness
+python scripts/generate-snapshots.py afc-curl-delta-01
+
+# Specify harness explicitly
+python scripts/generate-snapshots.py afc-curl-delta-01 --harness curl_fuzzer_ws
+
+# Patch generation mode with higher difficulty
+python scripts/generate-snapshots.py afc-curl-delta-01 \
+    --mode patch --difficulty 3
+
+# Quick test run
+python scripts/generate-snapshots.py afc-curl-delta-01 --quick
+
+# With fault injection
+python scripts/generate-snapshots.py afc-curl-delta-01 --faults 0.1
+
+# Multiple trials
+python scripts/generate-snapshots.py afc-curl-delta-01 --trials 3
+
+# Generate for all benchmarks
+python scripts/generate-snapshots.py --all
+```
+
+**Direct API:**
+```bash
+# Basic usage - harness is REQUIRED
 python -m crsbench.bench_snapgen.generator \
-    --benchmark benchmarks/apache-commons-compress-delta-01 \
-    --output /tmp/simulated-trial
+    --benchmark benchmarks/afc-curl-delta-01 \
+    --output /tmp/simulated-trial \
+    --harness curl_fuzzer_ws
 
 # Patch generation mode with medium difficulty
 python -m crsbench.bench_snapgen.generator \
-    --benchmark benchmarks/atlanta-bcel-delta-01 \
+    --benchmark benchmarks/afc-curl-delta-01 \
     --output /tmp/patch-trial \
+    --harness curl_fuzzer_ws \
     --mode patch-generation \
     --difficulty 3
 
 # With fault injection (10% invalid data)
 python -m crsbench.bench_snapgen.generator \
-    --benchmark benchmarks/apache-poi-full-01 \
+    --benchmark benchmarks/afc-curl-delta-01 \
     --output /tmp/trial-with-faults \
-    --fault-injection-rate 0.10 \
-    --fault-types syntax_error,incomplete
+    --harness curl_fuzzer_ws \
+    --fault-injection-rate 0.10
 
-# Generate multiple trials at different difficulties
+# Generate multiple trials
 python -m crsbench.bench_snapgen.generator \
-    --benchmark benchmarks/wireshark-delta-01 \
-    --output /tmp/multi-difficulty-trials \
-    --trials 3 \
-    --difficulty-range 1-5
-
-# Custom timing: late discovery with high jitter
-python -m crsbench.bench_snapgen.generator \
-    --benchmark benchmarks/curl-delta-01 \
-    --output /tmp/late-discovery \
-    --discovery-model late \
-    --pov-jitter 0.15
+    --benchmark benchmarks/afc-curl-delta-01 \
+    --output /tmp/multi-trials \
+    --harness curl_fuzzer_ws \
+    --trials 3
 ```
 
 ### Configuration File Support
