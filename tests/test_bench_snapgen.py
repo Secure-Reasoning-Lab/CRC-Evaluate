@@ -477,12 +477,28 @@ class TestGeneratorIntegration:
                 pytest.skip("No benchmarks with .aixcc/ found")
             benchmark_path = candidates[0]
 
+        # Load benchmark data to get the first available harness
+        from crsbench.bench_snapgen.generator import load_benchmark_ground_truth
+        benchmark_data = load_benchmark_ground_truth(benchmark_path)
+
+        # Find first harness with POVs
+        harness = None
+        for h in benchmark_data.meta.harness_files:
+            harness_povs = [k for k in benchmark_data.povs if k[0] == h.name]
+            if harness_povs:
+                harness = h.name
+                break
+
+        if not harness:
+            pytest.skip("No harness with POVs found")
+
         # Generate snapshots
         generator = BenchmarkSnapshotGenerator(
             benchmark_path=benchmark_path,
             output_dir=tmp_path,
             trial_duration=1800,  # 30 minutes
             snapshot_period=600,  # 10 minutes
+            harness=harness,
         )
 
         output_dir = generator.generate_trial_snapshots(
@@ -519,6 +535,7 @@ class TestGeneratorIntegration:
             output_dir=tmp_path,
             trial_duration=900,
             snapshot_period=300,
+            harness="curl_fuzzer_ws",
         )
 
         output_dir = generator.generate_trial_snapshots(
@@ -544,6 +561,7 @@ class TestGeneratorIntegration:
             output_dir=tmp_path,
             trial_duration=900,
             snapshot_period=450,
+            harness="curl_fuzzer_ws",
         )
 
         output_dir = generator.generate_trial_snapshots(
@@ -595,6 +613,7 @@ harness_files:
             output_dir=tmp_path / "output",
             trial_duration=900,
             snapshot_period=300,
+            harness="test_harness",
         )
 
         with pytest.raises(ValueError, match="Invalid mode"):
@@ -637,6 +656,7 @@ harness_files:
             output_dir=tmp_path / "output",
             trial_duration=900,
             snapshot_period=300,
+            harness="test_harness",
         )
 
         with pytest.raises(ValueError, match="difficulty_level"):
@@ -644,3 +664,149 @@ harness_files:
 
         with pytest.raises(ValueError, match="difficulty_level"):
             generator.generate_trial_snapshots(difficulty_level=6)
+
+    def test_harness_required(self, tmp_path):
+        """Test that harness parameter is required."""
+        # Create minimal benchmark
+        benchmark_dir = tmp_path / "benchmark"
+        benchmark_dir.mkdir()
+        aixcc_dir = benchmark_dir / ".aixcc"
+        aixcc_dir.mkdir()
+
+        meta_content = """
+delta_mode:
+  base_commit: a1b2c3d4e5f6
+  ref_commit: f6e5d4c3b2a1
+
+harness_files:
+  - name: test_harness
+    path: /test/harness.c
+    vulns:
+      - vuln_keyword: cpv_0
+        difficulty_level: 1
+        povs:
+          - id: pov_0
+            sanitizer: address
+"""
+        (aixcc_dir / "meta.yaml").write_text(meta_content)
+
+        # Create POV
+        harness_dir = aixcc_dir / "test_harness"
+        harness_dir.mkdir()
+        vuln_dir = harness_dir / "cpv_0"
+        vuln_dir.mkdir()
+        blobs_dir = vuln_dir / "blobs"
+        blobs_dir.mkdir()
+        (blobs_dir / "pov_0.blob").write_bytes(b"test")
+
+        # Test that harness is required
+        with pytest.raises(ValueError, match="harness parameter is required"):
+            BenchmarkSnapshotGenerator(
+                benchmark_path=benchmark_dir,
+                output_dir=tmp_path / "output",
+                trial_duration=900,
+                snapshot_period=300,
+                harness=None,
+            )
+
+    def test_invalid_harness(self, tmp_path):
+        """Test that invalid harness raises error."""
+        # Create minimal benchmark
+        benchmark_dir = tmp_path / "benchmark"
+        benchmark_dir.mkdir()
+        aixcc_dir = benchmark_dir / ".aixcc"
+        aixcc_dir.mkdir()
+
+        meta_content = """
+delta_mode:
+  base_commit: a1b2c3d4e5f6
+  ref_commit: f6e5d4c3b2a1
+
+harness_files:
+  - name: test_harness
+    path: /test/harness.c
+    vulns:
+      - vuln_keyword: cpv_0
+        difficulty_level: 1
+        povs:
+          - id: pov_0
+            sanitizer: address
+"""
+        (aixcc_dir / "meta.yaml").write_text(meta_content)
+
+        # Create POV
+        harness_dir = aixcc_dir / "test_harness"
+        harness_dir.mkdir()
+        vuln_dir = harness_dir / "cpv_0"
+        vuln_dir.mkdir()
+        blobs_dir = vuln_dir / "blobs"
+        blobs_dir.mkdir()
+        (blobs_dir / "pov_0.blob").write_bytes(b"test")
+
+        # Test that invalid harness raises error
+        with pytest.raises(ValueError, match="Harness 'nonexistent' not found or has no POVs"):
+            BenchmarkSnapshotGenerator(
+                benchmark_path=benchmark_dir,
+                output_dir=tmp_path / "output",
+                trial_duration=900,
+                snapshot_period=300,
+                harness="nonexistent",
+            )
+
+    def test_final_epoch_guarantee(self, tmp_path):
+        """Test that at least one POV appears in final snapshot."""
+        # Create minimal benchmark
+        benchmark_dir = tmp_path / "benchmark"
+        benchmark_dir.mkdir()
+        aixcc_dir = benchmark_dir / ".aixcc"
+        aixcc_dir.mkdir()
+
+        meta_content = """
+delta_mode:
+  base_commit: a1b2c3d4e5f6
+  ref_commit: f6e5d4c3b2a1
+
+harness_files:
+  - name: test_harness
+    path: /test/harness.c
+    vulns:
+      - vuln_keyword: cpv_0
+        difficulty_level: 1
+        povs:
+          - id: pov_0
+            sanitizer: address
+"""
+        (aixcc_dir / "meta.yaml").write_text(meta_content)
+
+        # Create POV
+        harness_dir = aixcc_dir / "test_harness"
+        harness_dir.mkdir()
+        vuln_dir = harness_dir / "cpv_0"
+        vuln_dir.mkdir()
+        blobs_dir = vuln_dir / "blobs"
+        blobs_dir.mkdir()
+        (blobs_dir / "pov_0.blob").write_bytes(b"test POV data")
+
+        # Generate snapshots
+        generator = BenchmarkSnapshotGenerator(
+            benchmark_path=benchmark_dir,
+            output_dir=tmp_path / "output",
+            trial_duration=1800,  # 30 minutes
+            snapshot_period=600,  # 10 minutes
+            harness="test_harness",
+        )
+
+        generator.generate_trial_snapshots(
+            mode="bug-finding", difficulty_level=1
+        )
+
+        # Extract final snapshot and verify POV exists
+        import tarfile
+        snapshots = sorted(tmp_path.glob("output/snapshot-*.tar.gz"))
+        final_snapshot = snapshots[-1]
+
+        with tarfile.open(final_snapshot, "r:gz") as tar:
+            members = tar.getnames()
+            # Check if POV is in final snapshot
+            pov_files = [m for m in members if m.startswith("povs/")]
+            assert len(pov_files) > 0, "Final snapshot should contain at least one POV"

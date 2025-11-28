@@ -166,6 +166,7 @@ class BenchmarkSnapshotGenerator:
         output_dir: Path,
         trial_duration: int = 7200,
         snapshot_period: int = 900,
+        harness: str = None,
     ):
         """Initialize benchmark snapshot generator.
 
@@ -174,9 +175,10 @@ class BenchmarkSnapshotGenerator:
             output_dir: Output directory for snapshots
             trial_duration: Trial duration in seconds (default: 7200 = 2 hours)
             snapshot_period: Snapshot interval in seconds (default: 900 = 15 min)
+            harness: Target harness name (required)
 
         Raises:
-            ValueError: If trial_duration or snapshot_period invalid
+            ValueError: If trial_duration, snapshot_period invalid, or harness not found
             FileNotFoundError: If benchmark_path doesn't exist
         """
         if trial_duration <= 0:
@@ -185,6 +187,8 @@ class BenchmarkSnapshotGenerator:
             raise ValueError(f"snapshot_period must be > 0, got {snapshot_period}")
         if not benchmark_path.exists():
             raise FileNotFoundError(f"Benchmark not found: {benchmark_path}")
+        if harness is None:
+            raise ValueError("harness parameter is required")
 
         self.benchmark_path = benchmark_path
         self.output_dir = output_dir
@@ -194,12 +198,33 @@ class BenchmarkSnapshotGenerator:
         # Load ground truth
         self.benchmark_data = load_benchmark_ground_truth(benchmark_path)
 
+        # Validate and store harness
+        self.harness = self._validate_harness(harness)
+
         logger.info(
             f"BenchmarkSnapshotGenerator initialized: "
             f"benchmark={benchmark_path.name}, "
+            f"harness={self.harness}, "
             f"duration={trial_duration}s, "
             f"period={snapshot_period}s"
         )
+
+    def _validate_harness(self, harness: str) -> str:
+        """Validate harness name exists and has POVs.
+
+        Args:
+            harness: Harness name to validate
+
+        Returns:
+            Validated harness name
+
+        Raises:
+            ValueError: If harness not found or has no POVs
+        """
+        harness_povs = [k for k in self.benchmark_data.povs if k[0] == harness]
+        if not harness_povs:
+            raise ValueError(f"Harness '{harness}' not found or has no POVs")
+        return harness
 
     def generate_trial_snapshots(
         self,
@@ -253,6 +278,8 @@ class BenchmarkSnapshotGenerator:
             difficulty_level=difficulty_level,
             max_time=self.trial_duration,
             mode=mode,
+            harness=self.harness,
+            snapshot_period=self.snapshot_period,
         )
 
         # 2. Inject faults if requested
@@ -362,6 +389,14 @@ Examples:
         help="Difficulty level 1-5 (default: 1)",
     )
 
+    # Harness selection
+    parser.add_argument(
+        "--harness",
+        type=str,
+        required=True,
+        help="Target harness name",
+    )
+
     # Fault injection
     parser.add_argument(
         "--fault-injection-rate",
@@ -422,6 +457,7 @@ Examples:
                 output_dir=trial_output_dir,
                 trial_duration=args.duration,
                 snapshot_period=args.snapshot_period,
+                harness=args.harness,
             )
 
             output_dir = generator.generate_trial_snapshots(

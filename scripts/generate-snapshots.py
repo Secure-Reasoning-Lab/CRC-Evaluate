@@ -62,6 +62,26 @@ import sys
 from pathlib import Path
 
 
+def auto_select_harness(benchmark_data) -> str:
+    """Auto-select first harness with POVs.
+
+    Args:
+        benchmark_data: Loaded benchmark data
+
+    Returns:
+        Harness name
+
+    Raises:
+        ValueError: If no harness has POVs
+    """
+    for h in benchmark_data.meta.harness_files:
+        harness_povs = [k for k in benchmark_data.povs if k[0] == h.name]
+        if harness_povs:
+            print(f"Auto-selected harness: {h.name} ({len(harness_povs)} POVs)")
+            return h.name
+    raise ValueError("No harness with POVs found in benchmark")
+
+
 def main():
     """Main entry point for snapshot generator helper."""
     parser = argparse.ArgumentParser(
@@ -155,6 +175,13 @@ def main():
         help="Number of trials to generate (default: 1)",
     )
 
+    # Harness selection
+    parser.add_argument(
+        "--harness",
+        type=str,
+        help="Target harness name (default: auto-select first with POVs)",
+    )
+
     # Benchmarks root
     parser.add_argument(
         "--benchmarks-root",
@@ -233,6 +260,7 @@ def main():
         print(f"{'=' * 70}")
         print(f"  Benchmark: {benchmark_path}")
         print(f"  Output: {output_dir}")
+        print(f"  Harness: {args.harness or 'auto-select'}")
         print(f"  Mode: {mode}")
         print(f"  Difficulty: {args.difficulty}")
         print(f"  Duration: {duration}s ({duration / 60:.0f} min)")
@@ -246,10 +274,20 @@ def main():
         # Import here to allow script to run without full install
         try:
             from crsbench.bench_snapgen import BenchmarkSnapshotGenerator
+            from crsbench.bench_snapgen.generator import load_benchmark_ground_truth
         except ImportError:
             print("Error: crsbench.bench_snapgen not found. Install with:")
             print("  uv pip install -e .")
             sys.exit(1)
+
+        # Load benchmark data to resolve harness
+        benchmark_data = load_benchmark_ground_truth(benchmark_path)
+
+        # Resolve harness (auto-select if not specified)
+        if args.harness:
+            harness = args.harness
+        else:
+            harness = auto_select_harness(benchmark_data)
 
         # Generate snapshots
         try:
@@ -265,6 +303,7 @@ def main():
                     output_dir=trial_output_dir,
                     trial_duration=duration,
                     snapshot_period=period,
+                    harness=harness,
                 )
 
                 result_dir = generator.generate_trial_snapshots(

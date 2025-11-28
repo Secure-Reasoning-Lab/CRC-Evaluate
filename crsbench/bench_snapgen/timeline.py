@@ -244,11 +244,60 @@ class PatchGenerationModel:
         return min(patch_time, max_time)
 
 
+def _ensure_final_epoch_coverage(
+    timeline: DiscoveryTimeline,
+    max_time: float,
+    snapshot_period: float,
+):
+    """Ensure at least one POV appears in the final snapshot epoch.
+
+    If no POV is in the final epoch [max_time - snapshot_period, max_time],
+    move the earliest POV to a time within that epoch.
+
+    Args:
+        timeline: Discovery timeline to adjust
+        max_time: Maximum trial time in seconds
+        snapshot_period: Snapshot interval in seconds
+    """
+    final_epoch_start = max_time - snapshot_period
+
+    # Check if any valid POV is in final epoch
+    valid_povs = [e for e in timeline.events
+                  if e.event_type == 'pov' and e.is_valid]
+
+    if not valid_povs:
+        return  # No POVs to adjust
+
+    povs_in_final = [e for e in valid_povs
+                    if e.timestamp >= final_epoch_start]
+
+    if povs_in_final:
+        return  # Already have POV in final epoch
+
+    # Move earliest POV to final epoch
+    # Choose a time in the final epoch (e.g., 75% through)
+    new_time = final_epoch_start + (snapshot_period * 0.75)
+
+    # Find earliest POV and update its timestamp
+    earliest_pov = min(valid_povs, key=lambda e: e.timestamp)
+    earliest_pov.timestamp = new_time
+
+    # Re-sort timeline
+    timeline._sort_events()
+
+    logger.info(
+        f"Moved POV {earliest_pov.metadata.get('pov_id')} to final epoch "
+        f"(t={new_time:.1f}s) to ensure coverage"
+    )
+
+
 def create_discovery_timeline(
     benchmark_data: BenchmarkData,
     difficulty_level: int,
     max_time: float,
     mode: str = "bug-finding",
+    harness: str = None,
+    snapshot_period: float = 900.0,
 ) -> DiscoveryTimeline:
     """Create timeline of POV/patch discoveries from benchmark ground truth.
 
@@ -257,6 +306,8 @@ def create_discovery_timeline(
         difficulty_level: Difficulty level 1-5 (controls timing)
         max_time: Maximum trial time in seconds
         mode: 'bug-finding' (POVs only) or 'patch-generation' (POVs + patches)
+        harness: Filter to specific harness (optional, filters if provided)
+        snapshot_period: Snapshot interval in seconds (for final epoch calculation)
 
     Returns:
         DiscoveryTimeline with events ordered chronologically
@@ -282,19 +333,23 @@ def create_discovery_timeline(
     vuln_first_pov_times: Dict[Tuple[str, str], float] = {}
 
     # Generate POV discoveries for each vulnerability
-    for harness in benchmark_data.meta.harness_files:
-        for vuln in harness.vulns or []:
+    for h in benchmark_data.meta.harness_files:
+        # Filter to specific harness if provided
+        if harness and h.name != harness:
+            continue
+
+        for vuln in h.vulns or []:
             # Get POVs for this vulnerability from ground truth
             # key is (harness_name, vuln_keyword, pov_id)
             vuln_povs = [
                 (key[2], key)  # (pov_id, full_key)
                 for key, pov_data in benchmark_data.povs.items()
-                if key[0] == harness.name and key[1] == vuln.vuln_keyword
+                if key[0] == h.name and key[1] == vuln.vuln_keyword
             ]
 
             if not vuln_povs:
                 logger.warning(
-                    f"No POVs found for {harness.name}/{vuln.vuln_keyword}"
+                    f"No POVs found for {h.name}/{vuln.vuln_keyword}"
                 )
                 continue
 
@@ -311,7 +366,7 @@ def create_discovery_timeline(
                 timeline.add_pov(
                     time=time,
                     pov_blob=pov_data.blob,
-                    harness=harness.name,
+                    harness=h.name,
                     vuln=vuln.vuln_keyword,
                     pov_id=pov_id,
                     sanitizer=pov_data.sanitizer,
@@ -321,14 +376,18 @@ def create_discovery_timeline(
 
             # Track first POV time for patch generation
             if discovery_times:
-                vuln_key = (harness.name, vuln.vuln_keyword)
+                vuln_key = (h.name, vuln.vuln_keyword)
                 vuln_first_pov_times[vuln_key] = min(discovery_times)
 
     # Generate patch discoveries (for patch-generation mode)
     if mode == "patch-generation":
-        for harness in benchmark_data.meta.harness_files:
-            for vuln in harness.vulns or []:
-                vuln_key = (harness.name, vuln.vuln_keyword)
+        for h in benchmark_data.meta.harness_files:
+            # Filter to specific harness if provided
+            if harness and h.name != harness:
+                continue
+
+            for vuln in h.vulns or []:
+                vuln_key = (h.name, vuln.vuln_keyword)
 
                 # Only generate patch if we have POVs for this vuln
                 if vuln_key not in vuln_first_pov_times:
@@ -342,21 +401,21 @@ def create_discovery_timeline(
                 )
 
                 # Get patch from ground truth (usually patch_0 fixes all POVs)
-                patch_key = (harness.name, vuln.vuln_keyword, "patch_0")
+                patch_key = (h.name, vuln.vuln_keyword, "patch_0")
                 if patch_key in benchmark_data.patches:
                     patch_content = benchmark_data.patches[patch_key]
 
                     timeline.add_patch(
                         time=patch_time,
                         patch_diff=patch_content,
-                        harness=harness.name,
+                        harness=h.name,
                         vuln=vuln.vuln_keyword,
                         patch_id="patch_0",
                         is_valid=True,
                     )
                 else:
                     logger.warning(
-                        f"No patch found for {harness.name}/{vuln.vuln_keyword}"
+                        f"No patch found for {h.name}/{vuln.vuln_keyword}"
                     )
 
     logger.info(
@@ -364,5 +423,8 @@ def create_discovery_timeline(
         f"({len([e for e in timeline.events if e.event_type == 'pov'])} POVs, "
         f"{len([e for e in timeline.events if e.event_type == 'patch'])} patches)"
     )
+
+    # Ensure at least one POV in final epoch
+    _ensure_final_epoch_coverage(timeline, max_time, snapshot_period)
 
     return timeline
