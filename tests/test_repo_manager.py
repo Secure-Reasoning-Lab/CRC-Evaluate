@@ -150,11 +150,15 @@ class TestDeriveRepoName:
 class TestCloneRepository:
     """Test clone_repository function."""
 
-    def test_clone_already_exists(self, tmp_path):
+    @mock.patch('subprocess.run')
+    def test_clone_already_exists(self, mock_run, tmp_path):
         """Test when directory already exists and is a git repo."""
         repo_dir = tmp_path / "existing-repo"
         repo_dir.mkdir()
         (repo_dir / ".git").mkdir()
+
+        # Mock successful reset
+        mock_run.return_value = mock.Mock(returncode=0, stderr="")
 
         result = clone_repository(
             "https://example.com/repo.git",
@@ -163,6 +167,31 @@ class TestCloneRepository:
         )
 
         assert result is True
+        # Verify git reset --hard was called
+        assert mock_run.called
+        reset_call = mock_run.call_args_list[0]
+        assert "reset" in str(reset_call)
+        assert "--hard" in str(reset_call)
+
+    @mock.patch('subprocess.run')
+    def test_clone_already_exists_reset_failure(self, mock_run, tmp_path):
+        """Test when directory exists but git reset fails - should still succeed."""
+        repo_dir = tmp_path / "existing-repo"
+        repo_dir.mkdir()
+        (repo_dir / ".git").mkdir()
+
+        # Mock failed reset
+        mock_run.return_value = mock.Mock(returncode=1, stderr="error resetting")
+
+        result = clone_repository(
+            "https://example.com/repo.git",
+            str(repo_dir),
+            verbose=False
+        )
+
+        # Should still return True even if reset fails
+        assert result is True
+        assert mock_run.called
 
     def test_clone_exists_but_not_git(self, tmp_path):
         """Test when directory exists but is not a git repo."""
@@ -218,10 +247,15 @@ class TestCloneRepository:
 class TestEnsureProjectRepository:
     """Test ensure_project_repository function."""
 
-    def test_explicit_project_dir_exists(self, temp_benchmark_dir, tmp_path):
+    @mock.patch('subprocess.run')
+    def test_explicit_project_dir_exists(self, mock_run, temp_benchmark_dir, tmp_path):
         """Test with explicit project_dir that exists."""
         project_dir = tmp_path / "existing-project"
         project_dir.mkdir()
+        (project_dir / ".git").mkdir()
+
+        # Mock successful reset
+        mock_run.return_value = mock.Mock(returncode=0, stderr="")
 
         result = ensure_project_repository(
             benchmark_dir=str(temp_benchmark_dir),
@@ -230,6 +264,11 @@ class TestEnsureProjectRepository:
         )
 
         assert result == str(project_dir)
+        # Verify git reset --hard was called
+        assert mock_run.called
+        reset_call = mock_run.call_args_list[0]
+        assert "reset" in str(reset_call)
+        assert "--hard" in str(reset_call)
 
     def test_no_project_dir_auto_derive(self, temp_benchmark_dir, tmp_path):
         """Test auto-deriving project directory name."""
