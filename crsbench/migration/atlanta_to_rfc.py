@@ -166,6 +166,9 @@ class AtlantaToRFCMigrator:
             # Step 3: Migrate root files (build.sh, Dockerfile, etc.)
             self._migrate_root_files(ctx)
 
+            # Step 3.5: Migrate tests directory (if exists)
+            self._migrate_tests(ctx)
+
             # Step 4: Process each vulnerability and harness
             self._migrate_vulnerabilities(ctx)
 
@@ -425,6 +428,24 @@ class AtlantaToRFCMigrator:
                 target_log = vuln_dir / "logs" / f"pov_{log_index}.log"
                 self.file_migrator.copy_file(variant_file, target_log, ctx)
                 log_index += 1
+
+    def _migrate_tests(self, ctx: MigrationContext) -> None:
+        """Migrate tests directory (test blob files for test.sh).
+
+        The tests directory contains test input files that test.sh uses
+        to verify functionality. This directory is copied as-is to maintain
+        the same structure referenced by test.sh.
+        """
+        source_tests = ctx.source_dir / ".aixcc" / "tests"
+
+        if not source_tests.exists():
+            self.logger.debug(f"  No tests directory found, skipping")
+            return
+
+        target_tests = ctx.target_dir / ".aixcc" / "tests"
+
+        self.logger.info(f"  Migrating tests directory")
+        self.file_migrator.copy_directory(source_tests, target_tests, ctx)
 
     def _validate_target(self, ctx: MigrationContext) -> None:
         """Validate the migrated project structure."""
