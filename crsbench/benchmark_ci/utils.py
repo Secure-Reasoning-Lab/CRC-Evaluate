@@ -120,21 +120,6 @@ class JobContext:
         )
 
 
-def get_oss_fuzz_root() -> str:
-    """Get the path to OSS-Fuzz root directory."""
-    import os
-    from pathlib import Path
-
-    # Assume oss-fuzz is in the same parent directory as CRSBench
-    crsbench_root = Path(__file__).parent.parent.parent
-    oss_fuzz_path = crsbench_root / "oss-fuzz"
-
-    if not oss_fuzz_path.exists():
-        raise RuntimeError(f"OSS-Fuzz not found at {oss_fuzz_path}")
-
-    return str(oss_fuzz_path)
-
-
 def get_benchmarks_root() -> str:
     """Get the path to benchmarks directory."""
     import os

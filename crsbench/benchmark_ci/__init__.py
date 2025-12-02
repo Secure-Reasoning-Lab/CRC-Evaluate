@@ -17,6 +17,13 @@ from crsbench.benchmark_ci.utils import (
     Vulnerability,
     POV,
 )
+from crsbench.benchmark_ci.run_helper import (
+    TestExitCode,
+    TestExecutionError,
+    DockerExecutionError,
+    TestFailedError,
+    FatalTestError,
+)
 
 __all__ = [
     'JobContext',
@@ -26,4 +33,10 @@ __all__ = [
     'Harness',
     'Vulnerability',
     'POV',
+    # Test exit code handling
+    'TestExitCode',
+    'TestExecutionError',
+    'DockerExecutionError',
+    'TestFailedError',
+    'FatalTestError',
 ]

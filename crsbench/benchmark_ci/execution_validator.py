@@ -17,13 +17,14 @@ from crsbench.benchmark_ci.run_helper import (
 )
 
 
-def check_benchmark_execution(job: JobContext, output_dir: Optional[str] = None, enable_check_build: bool = False) -> None:
+def check_benchmark_execution(job: JobContext, output_dir: Optional[str] = None, enable_check_build: bool = False, force_rebuild: bool = False) -> None:
     """Execute a benchmark test job.
 
     Args:
         job: Job context describing what to test
         output_dir: Directory to save test artifacts
         enable_check_build: Enable check_build validation after building
+        force_rebuild: Force rebuild Docker images even if they already exist
 
     Raises:
         Exception: If any test fails
@@ -43,7 +44,7 @@ def check_benchmark_execution(job: JobContext, output_dir: Optional[str] = None,
     elif job.job_type == ExecJobType.PATCH_CHECK:
         _patch_check(job, job_output_dir, enable_check_build)
     elif job.job_type == ExecJobType.TEST_SH_CHECK:
-        _test_sh_check(job, job_output_dir, enable_check_build)
+        _test_sh_check(job, job_output_dir, enable_check_build, force_rebuild)
     else:
         raise Exception(f"[Error] Unknown job type: {job.job_type}")
 
@@ -290,7 +291,7 @@ def _patch_check(job: JobContext, output_dir: Optional[Path] = None, enable_chec
     logger.info(f"✓ Patch verification complete for {job.vulnerability.id}")
 
 
-def _test_sh_check(job: JobContext, output_dir: Optional[Path] = None, enable_check_build: bool = False) -> None:
+def _test_sh_check(job: JobContext, output_dir: Optional[Path] = None, enable_check_build: bool = False, force_rebuild: bool = False) -> None:
     """Check that test.sh passes.
 
     This tests that the benchmark's unit tests work correctly.
@@ -301,7 +302,10 @@ def _test_sh_check(job: JobContext, output_dir: Optional[Path] = None, enable_ch
         job: Job context
         output_dir: Directory to save artifacts
         enable_check_build: Enable check_build validation
+        force_rebuild: Force rebuild Docker images even if they already exist
     """
+    from crsbench.utils.run_helper import docker_image_exists
+
     logger.info(f"TEST.SH CHECK: Running test.sh for {job.benchmark}")
 
     # Determine which commit to use based on mode
@@ -321,8 +325,16 @@ def _test_sh_check(job: JobContext, output_dir: Optional[Path] = None, enable_ch
         target_commit = None
         logger.info(f"No task provided, using base_commit from meta.yaml")
 
-    # Build benchmark first
-    build_benchmark(job.benchmark, job.engine, job.sanitizer, clean=True, enable_check_build=enable_check_build, commit=target_commit)
+    # Check if Docker image exists (skip build if it does, unless force_rebuild)
+    image_tag = f"aixcc-afc/{job.benchmark}"
+    if not force_rebuild and docker_image_exists(image_tag):
+        logger.info(f"Docker image '{image_tag}' already exists, skipping build")
+    else:
+        if force_rebuild:
+            logger.info(f"Force rebuild requested, building benchmark...")
+        else:
+            logger.info(f"Docker image '{image_tag}' not found, building benchmark...")
+        build_benchmark(job.benchmark, job.engine, job.sanitizer, clean=True, enable_check_build=enable_check_build, commit=target_commit)
 
     # Run test.sh
     run_test_sh(job.benchmark, expect_success=True, output_dir=output_dir, commit=target_commit)

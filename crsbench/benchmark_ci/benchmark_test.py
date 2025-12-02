@@ -38,8 +38,8 @@ from crsbench.benchmark_ci.utils import (
     ExecJobType,
     TaskMode,
     get_benchmarks_root,
-    get_oss_fuzz_root,
 )
+from crsbench.utils.run_helper import get_oss_fuzz_root
 from crsbench.benchmark_ci.file_validator import (
     check_benchmark_files,
     get_tasks,
@@ -373,6 +373,7 @@ def _execute_benchmark_jobs(
     output_dir: Optional[str] = None,
     enable_check_build: bool = False,
     result_collector: Optional[ResultCollector] = None,
+    force_rebuild: bool = False,
 ) -> Tuple[str, List[Tuple[JobContext, Exception, str]], List[Tuple[JobContext, str, Optional[Exception], Optional[str], datetime, datetime]]]:
     """Execute all jobs for a single benchmark.
 
@@ -385,6 +386,7 @@ def _execute_benchmark_jobs(
         output_dir: Directory to save artifacts
         enable_check_build: Enable check_build validation
         result_collector: Optional collector for results (used in sequential mode)
+        force_rebuild: Force rebuild Docker images even if they already exist
 
     Returns:
         Tuple of (benchmark_name, list_of_failed_jobs, list_of_job_results)
@@ -419,7 +421,7 @@ def _execute_benchmark_jobs(
 
         start_time = datetime.now()
         try:
-            check_benchmark_execution(job, output_dir=output_dir, enable_check_build=enable_check_build)
+            check_benchmark_execution(job, output_dir=output_dir, enable_check_build=enable_check_build, force_rebuild=force_rebuild)
             end_time = datetime.now()
             logger.success(f"Job completed successfully")
             job_results.append((job, "passed", None, None, start_time, end_time))
@@ -452,6 +454,7 @@ def run_execution_checks(
     output_dir: Optional[str] = None,
     enable_check_build: bool = False,
     result_collector: Optional[ResultCollector] = None,
+    force_rebuild: bool = False,
 ) -> None:
     """Run execution validation for jobs.
 
@@ -463,6 +466,7 @@ def run_execution_checks(
         output_dir: Directory to save artifacts
         enable_check_build: Enable check_build validation after building
         result_collector: Optional collector for results
+        force_rebuild: Force rebuild Docker images even if they already exist
     """
     if skip_execution_check:
         logger.warning("Skipping execution checks")
@@ -493,7 +497,7 @@ def run_execution_checks(
         for benchmark in sorted(jobs_by_benchmark.keys()):
             benchmark_jobs = jobs_by_benchmark[benchmark]
             _, failed_jobs, job_results = _execute_benchmark_jobs(
-                benchmark, benchmark_jobs, exit_on_error, output_dir, enable_check_build
+                benchmark, benchmark_jobs, exit_on_error, output_dir, enable_check_build, force_rebuild=force_rebuild
             )
             all_failed_jobs.extend(failed_jobs)
             all_job_results.extend(job_results)
@@ -507,7 +511,7 @@ def run_execution_checks(
         with ProcessPoolExecutor(max_workers=workers) as executor:
             # Submit all benchmarks to the pool
             future_to_benchmark = {
-                executor.submit(_execute_benchmark_jobs, benchmark, benchmark_jobs, exit_on_error, output_dir, enable_check_build): benchmark
+                executor.submit(_execute_benchmark_jobs, benchmark, benchmark_jobs, exit_on_error, output_dir, enable_check_build, None, force_rebuild): benchmark
                 for benchmark, benchmark_jobs in jobs_by_benchmark.items()
             }
 
@@ -567,6 +571,17 @@ def run_execution_checks(
         raise Exception(f"{len(all_failed_jobs)} jobs failed")
 
 
+def _get_default_csv_output() -> str:
+    """Generate default CSV output path with timestamp.
+
+    Returns:
+        Default CSV path like './ci_results_YYYYMMDD_HHMMSS.csv'
+    """
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"./ci_results_{timestamp}.csv"
+
+
 def main(
     run_mode: str = "all",
     check_default_only: bool = False,
@@ -580,6 +595,7 @@ def main(
     output_dir: Optional[str] = None,
     enable_check_build: bool = False,
     csv_output: Optional[str] = None,
+    force_rebuild: bool = False,
 ) -> int:
     """Main entry point for benchmark testing.
 
@@ -595,12 +611,22 @@ def main(
         workers: Number of parallel workers (1 = sequential, >1 = parallel by benchmark)
         output_dir: Directory to save test artifacts (logs, crash outputs, etc.)
         enable_check_build: Enable check_build validation (slower, default: False)
-        csv_output: Path to export results as CSV file
+        csv_output: Path to export results as CSV file (default: ./ci_results_<timestamp>.csv)
+        force_rebuild: Force rebuild Docker images even if they already exist
 
     Returns:
         Exit code (0 for success, 1 for failure)
     """
     ret_code = 0
+
+    # Set default CSV output if not specified
+    # Empty string ("") means CSV output is disabled via --no-csv
+    if csv_output is None:
+        csv_output = _get_default_csv_output()
+        logger.info(f"Using default CSV output: {csv_output}")
+    elif csv_output == "":
+        csv_output = None  # Disable CSV output
+        logger.info("CSV output disabled (--no-csv)")
 
     # Initialize result collector
     result_collector = ResultCollector()
@@ -641,7 +667,7 @@ def main(
         # Run execution checks
         run_execution_checks(
             skip_execution_check, jobs, exit_on_error, workers,
-            output_dir, enable_check_build, result_collector
+            output_dir, enable_check_build, result_collector, force_rebuild
         )
 
         logger.info("=" * 80)
@@ -765,8 +791,22 @@ if __name__ == "__main__":
     parser.add_argument(
         "--csv-output",
         type=str,
-        help="Path to export results as CSV file. A summary CSV will also be created "
-             "with '_summary' suffix. Example: --csv-output ./results.csv"
+        help="Path to export results as CSV file (default: ./ci_results_<timestamp>.csv). "
+             "A summary CSV will also be created with '_summary' suffix. "
+             "Example: --csv-output ./results.csv"
+    )
+
+    parser.add_argument(
+        "--no-csv",
+        action="store_true",
+        help="Disable CSV output (by default, results are saved to ./ci_results_<timestamp>.csv)"
+    )
+
+    parser.add_argument(
+        "--force-rebuild",
+        action="store_true",
+        help="Force rebuild Docker images even if they already exist (default: False). "
+             "By default, test_sh_check skips build if image already exists."
     )
 
     args = parser.parse_args()
@@ -809,6 +849,11 @@ if __name__ == "__main__":
             logger.error(f"Failed to parse --job_types: {e}")
             sys.exit(1)
 
+    # Handle CSV output: use explicit path, default path, or disable
+    csv_output_path = args.csv_output
+    if args.no_csv:
+        csv_output_path = ""  # Empty string to disable CSV output
+
     sys.exit(main(
         run_mode=args.run_mode,
         check_default_only=args.check_default_only,
@@ -821,5 +866,6 @@ if __name__ == "__main__":
         workers=args.workers,
         output_dir=args.output_dir,
         enable_check_build=args.enable_check_build,
-        csv_output=args.csv_output,
+        csv_output=csv_output_path,
+        force_rebuild=args.force_rebuild,
     ))
