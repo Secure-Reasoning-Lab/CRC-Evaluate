@@ -253,12 +253,51 @@ This is an OSS-Fuzz project with `.oss-fuzz/` directory containing build.sh, Doc
 
 **IMPORTANT**: Benchmark directory is `{benchmark_dir}`. Save your analysis to `{benchmark_dir}/.agent/test_analysis.md`.
 
+## CRITICAL: Purpose of test.sh
+
+**test.sh is for FUNCTIONALITY TESTING (regression testing), NOT for build verification.**
+- The goal is to run tests that verify the project's functionality works correctly
+- These tests should be able to detect when code changes break existing behavior
+- We need EXISTING unit tests from the project, not smoke tests or build checks
+
+## CRITICAL: Test Discovery Requirements
+
+**You MUST exhaustively search for existing test suites. Smoke tests are a LAST RESORT.**
+
+Search for test infrastructure in this priority order:
+1. **Build system test targets**:
+   - Maven: pom.xml with surefire-plugin, `mvn test` targets
+   - Gradle: build.gradle with test task, `gradle test`
+   - CMake: CMakeLists.txt with enable_testing(), add_test()
+   - Makefile: `make check`, `make test` targets
+   - Autotools: configure.ac with AC_CONFIG_TESTDIR
+
+2. **Test framework configuration files**:
+   - Python: pytest.ini, setup.cfg [tool.pytest], pyproject.toml, tox.ini
+   - Java: src/test/java/, testng.xml
+   - JavaScript: jest.config.js, mocha.opts, package.json scripts.test
+   - Go: *_test.go files
+   - Rust: tests/ directory, #[test] in lib.rs
+
+3. **Test directories**:
+   - tests/, test/, t/, spec/, __tests__/
+   - src/test/, src/tests/
+   - integration/, e2e/
+
+**DO NOT assume a project has no tests just because they are not immediately obvious.**
+Many projects have tests in non-standard locations or use custom test frameworks.
+
 Please use the appropriate skill to:
 1. Identify the build system and test framework
-2. Find all unit test files
+2. Find all unit test files (search EXHAUSTIVELY)
 3. Document test commands and exclusions
 4. Generate a comprehensive patch exclude list
 5. **Save the analysis to `{benchmark_dir}/.agent/test_analysis.md` using Write tool**
+
+If NO tests are found after exhaustive search, document:
+- All locations searched
+- All configuration files examined
+- Why you concluded no tests exist
 
 Provide your analysis as a markdown document with all required sections.
 """
@@ -271,7 +310,14 @@ Provide your analysis as a markdown document with all required sections.
             setting_sources=["project"],
             cwd=_get_crsbench_repo_root(),
             system_prompt=(
-                "You are a thorough software testing analyst. "
+                "You are a thorough software testing analyst specializing in finding existing unit tests. "
+                "Your goal is to find EXISTING unit/functional tests in projects - NOT to create smoke tests. "
+                "\n\n"
+                "**CRITICAL PRIORITY**: "
+                "1. FIRST: Find existing unit tests (mvn test, pytest, make check, etc.) "
+                "2. SECOND: Find integration/functional tests if no unit tests exist "
+                "3. LAST RESORT ONLY: Smoke tests (only after exhaustive search proves no tests exist) "
+                "\n\n"
                 "Use available skills to help with your analysis. "
                 "Use Grep to search patterns, Glob to find files, Read to examine files, Write to create files, and Edit to modify files. "
                 "You can use WebSearch to research build systems/frameworks, WebFetch for documentation, "
@@ -400,6 +446,28 @@ Provide your analysis as a markdown document with all required sections.
 - **CRITICAL**: Project source code is mounted at WORKDIR, so test.sh runs in the project root
 - Example: If WORKDIR=/src/libxml2, test.sh runs `bash /src/test.sh` from /src/libxml2
 
+# CRITICAL: Build Environment Assumptions
+**test.sh runs in a CLEAN environment with NO pre-built artifacts.**
+
+## What is NOT available:
+- `/out` directory is NOT mounted (no fuzzer binaries)
+- `/work` directory is NOT mounted (no build cache)
+- ALL previous build artifacts are DELETED before test.sh runs
+- The source code is mounted FRESH (completely unbuilt state)
+
+## What test.sh MUST do:
+1. **BUILD the project from scratch** before running any tests
+2. For C/C++: run `./configure && make` or `cmake .. && make` first
+3. For Java/Maven: run `mvn compile` or `mvn package` before `mvn test`
+4. For Java/Gradle: run `gradle build` or `gradle compileJava` before `gradle test`
+5. For Python: install dependencies if needed (`pip install -e .`)
+
+## Common Mistakes to AVOID:
+- ❌ Assuming binaries exist in `/out/` - they DON'T
+- ❌ Assuming `make test` will work without `make` first
+- ❌ Assuming Maven test will work without compile first
+- ❌ Skipping the build step entirely
+
 # Test Analysis
 ```markdown
 {test_analysis_md}
@@ -443,14 +511,45 @@ Use the appropriate skills to complete all tasks:
 - bad_patch should break existing tests naturally
 - Prefer making bad_patch stronger over modifying test.sh
 
+## CRITICAL: test.sh Purpose and Test Selection Strategy
+
+**PURPOSE**: test.sh is for FUNCTIONALITY TESTING (regression testing), NOT for build verification.
+- test.sh should verify that the project's functionality works correctly
+- test.sh should detect when code changes break existing behavior
+- test.sh is NOT for checking if the build completes successfully
+
+**TEST SELECTION PRIORITY** (follow this order strictly):
+1. **FIRST PRIORITY - Existing Unit Tests**: Always prefer running the project's existing unit tests
+   - Maven: `mvn test`, `mvn surefire:test`
+   - Gradle: `gradle test`, `./gradlew test`
+   - Python: `pytest`, `python -m unittest`
+   - C/C++: `make check`, `ctest`, `make test`
+   - Go: `go test ./...`
+   - These tests are designed to validate functionality and detect regressions
+
+2. **SECOND PRIORITY - Integration/Functional Tests**: If unit tests don't exist, look for integration tests
+   - Look for `tests/`, `test/`, `e2e/`, `integration/` directories
+   - Check for test runners in package.json, Makefile, etc.
+
+3. **LAST RESORT ONLY - Smoke Tests**: Create smoke tests ONLY when:
+   - The project has ABSOLUTELY NO existing test suite (no test framework, no test files)
+   - You have exhaustively searched for tests and found none
+   - Document why no tests were found in the rationale
+   - Smoke tests should still validate FUNCTIONALITY, not just that binaries exist
+
+**WARNING**: Do NOT default to smoke tests. Many projects have test suites that may not be obvious.
+Search thoroughly for: CMakeLists.txt with enable_testing(), Makefile with test targets, pytest.ini,
+setup.py with test_suite, pom.xml with surefire, build.gradle with test tasks, etc.
+
 **IF NO UNIT TESTS EXIST**:
-- If the project has no suitable unit tests, output a test.sh that indicates this:
+- ONLY after exhaustive search, output a minimal test.sh:
   ```bash
   #!/bin/bash
   echo "No unit tests available for this project"
   exit 0
   ```
 - In this case, skip bad_patch.diff generation (no tests to break)
+- Document the search process in rationale (what was searched, why no tests found)
 
 **CRITICAL**: You MUST verify bad_patch.diff and ensure test.sh fails with the patch applied.
 
@@ -466,6 +565,28 @@ Complete ALL THREE tasks before finishing.
 - **CRITICAL**: test.sh is executed from WORKDIR (usually /src/<project-name>)
 - **CRITICAL**: Project source code is mounted at WORKDIR, so test.sh runs in the project root
 - Example: If WORKDIR=/src/libxml2, test.sh runs `bash /src/test.sh` from /src/libxml2
+
+# CRITICAL: Build Environment Assumptions
+**test.sh runs in a CLEAN environment with NO pre-built artifacts.**
+
+## What is NOT available:
+- `/out` directory is NOT mounted (no fuzzer binaries)
+- `/work` directory is NOT mounted (no build cache)
+- ALL previous build artifacts are DELETED before test.sh runs
+- The source code is mounted FRESH (completely unbuilt state)
+
+## What test.sh MUST do:
+1. **BUILD the project from scratch** before running any tests
+2. For C/C++: run `./configure && make` or `cmake .. && make` first
+3. For Java/Maven: run `mvn compile` or `mvn package` before `mvn test`
+4. For Java/Gradle: run `gradle build` or `gradle compileJava` before `gradle test`
+5. For Python: install dependencies if needed (`pip install -e .`)
+
+## Common Mistakes to AVOID:
+- ❌ Assuming binaries exist in `/out/` - they DON'T
+- ❌ Assuming `make test` will work without `make` first
+- ❌ Assuming Maven test will work without compile first
+- ❌ Skipping the build step entirely
 
 # Test Analysis
 ```markdown
@@ -494,14 +615,45 @@ Use the appropriate skills to complete both tasks:
 - Do NOT expect test.sh to have custom checks for your mutations
 - Mutations should break actual functionality that existing tests validate
 
+## CRITICAL: test.sh Purpose and Test Selection Strategy
+
+**PURPOSE**: test.sh is for FUNCTIONALITY TESTING (regression testing), NOT for build verification.
+- test.sh should verify that the project's functionality works correctly
+- test.sh should detect when code changes break existing behavior
+- test.sh is NOT for checking if the build completes successfully
+
+**TEST SELECTION PRIORITY** (follow this order strictly):
+1. **FIRST PRIORITY - Existing Unit Tests**: Always prefer running the project's existing unit tests
+   - Maven: `mvn test`, `mvn surefire:test`
+   - Gradle: `gradle test`, `./gradlew test`
+   - Python: `pytest`, `python -m unittest`
+   - C/C++: `make check`, `ctest`, `make test`
+   - Go: `go test ./...`
+   - These tests are designed to validate functionality and detect regressions
+
+2. **SECOND PRIORITY - Integration/Functional Tests**: If unit tests don't exist, look for integration tests
+   - Look for `tests/`, `test/`, `e2e/`, `integration/` directories
+   - Check for test runners in package.json, Makefile, etc.
+
+3. **LAST RESORT ONLY - Smoke Tests**: Create smoke tests ONLY when:
+   - The project has ABSOLUTELY NO existing test suite (no test framework, no test files)
+   - You have exhaustively searched for tests and found none
+   - Document why no tests were found in the rationale
+   - Smoke tests should still validate FUNCTIONALITY, not just that binaries exist
+
+**WARNING**: Do NOT default to smoke tests. Many projects have test suites that may not be obvious.
+Search thoroughly for: CMakeLists.txt with enable_testing(), Makefile with test targets, pytest.ini,
+setup.py with test_suite, pom.xml with surefire, build.gradle with test tasks, etc.
+
 **IF NO UNIT TESTS EXIST**:
-- If the project has no suitable unit tests, output a test.sh that indicates this:
+- ONLY after exhaustive search, output a minimal test.sh:
   ```bash
   #!/bin/bash
   echo "No unit tests available for this project"
   exit 0
   ```
 - In this case, skip bad_patch.diff generation (no tests to break)
+- Document the search process in rationale (what was searched, why no tests found)
 
 Complete BOTH tasks before finishing.
 """
@@ -533,6 +685,18 @@ Complete BOTH tasks before finishing.
                 "You are an expert test.sh script generator with access to Docker build and test tools. "
                 "Use available skills to help with test.sh generation. "
                 "\n\n"
+                "**CRITICAL: test.sh PURPOSE**\n"
+                "test.sh is for FUNCTIONALITY TESTING (regression testing), NOT for build verification.\n"
+                "- test.sh should run the project's EXISTING unit tests\n"
+                "- test.sh should detect when code changes break existing behavior\n"
+                "- test.sh is NOT just for checking if the build completes\n"
+                "\n"
+                "**CRITICAL: TEST PRIORITY**\n"
+                "1. FIRST: Use existing unit tests (mvn test, pytest, make check, gradle test, etc.)\n"
+                "2. SECOND: Use integration/functional tests if no unit tests\n"
+                "3. LAST RESORT ONLY: Smoke tests (only after exhaustive search proves no tests exist)\n"
+                "DO NOT create smoke tests if unit tests exist in the project!\n"
+                "\n"
                 "**CRITICAL OUTPUT REQUIREMENT:**\n"
                 "- Your final output MUST be an EXECUTABLE BASH SCRIPT\n"
                 "- DO NOT output markdown, explanations, or analysis documents\n"
@@ -569,9 +733,22 @@ Complete BOTH tasks before finishing.
             allowed_tools = ["Read", "Write", "Edit", "Grep", "Glob", "Bash", "WebSearch", "WebFetch", "TodoWrite", "Skill"]
             mcp_servers = None
             system_prompt = (
-                "You are a bash scripting expert. "
+                "You are a bash scripting expert specializing in running existing project test suites. "
                 "Use available skills to help with test.sh generation. "
                 "Generate clean, working bash scripts following the patterns provided. "
+                "\n\n"
+                "**CRITICAL: test.sh PURPOSE**\n"
+                "test.sh is for FUNCTIONALITY TESTING (regression testing), NOT for build verification.\n"
+                "- test.sh should run the project's EXISTING unit tests\n"
+                "- test.sh should detect when code changes break existing behavior\n"
+                "- test.sh is NOT just for checking if the build completes\n"
+                "\n"
+                "**CRITICAL: TEST PRIORITY**\n"
+                "1. FIRST: Use existing unit tests (mvn test, pytest, make check, gradle test, etc.)\n"
+                "2. SECOND: Use integration/functional tests if no unit tests\n"
+                "3. LAST RESORT ONLY: Smoke tests (only after exhaustive search proves no tests exist)\n"
+                "DO NOT create smoke tests if unit tests exist in the project!\n"
+                "\n"
                 "You can use Read to examine files, Write to create files, Edit to modify files, "
                 "WebSearch to research build system patterns, WebFetch for official docs, "
                 "and TodoWrite to organize your work. "
