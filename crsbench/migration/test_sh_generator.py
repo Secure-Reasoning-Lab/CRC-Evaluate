@@ -17,6 +17,10 @@ import yaml
 
 from claude_agent_sdk import query, ClaudeAgentOptions
 
+from crsbench.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 def _get_crsbench_repo_root() -> str:
     """
@@ -76,7 +80,7 @@ def _copy_benchmark_files_to_project(
                 shutil.copy2(src, dst)
                 copied_files.append(filename)
                 if verbose:
-                    print(f"  Copied {filename} to .oss-fuzz/")
+                    logger.debug(f"Copied {filename} to .oss-fuzz/")
 
         # Copy .aixcc directory (contains harness files metadata)
         aixcc_src = os.path.join(benchmark_dir, ".aixcc")
@@ -88,16 +92,16 @@ def _copy_benchmark_files_to_project(
             shutil.copytree(aixcc_src, aixcc_dst)
             copied_files.append(".aixcc/")
             if verbose:
-                print(f"  Copied .aixcc/ to .oss-fuzz/")
+                logger.debug(f"Copied .aixcc/ to .oss-fuzz/")
 
         if verbose and copied_files:
-            print(f"✅ Copied OSS-Fuzz files to {oss_fuzz_dir}")
+            logger.debug(f"Copied OSS-Fuzz files to {oss_fuzz_dir}")
 
         return oss_fuzz_dir
 
     except Exception as e:
         if verbose:
-            print(f"⚠️  Failed to copy benchmark files: {e}")
+            logger.warning(f"Failed to copy benchmark files: {e}")
         return None
 
 
@@ -342,55 +346,37 @@ Provide your analysis as a markdown document with all required sections.
                 messages.append(message)
 
                 if verbose:
-                    # Print message with role
                     role = getattr(message, 'role', 'unknown')
-                    print(f"\n{'='*60}")
-                    print(f"📨 Message (role: {role})")
-                    print(f"{'='*60}")
+                    logger.debug(f"Message (role: {role})")
 
                     if hasattr(message, 'content') and message.content:
-                        # Print verbose info for debugging
                         if isinstance(message.content, list):
                             for block in message.content:
                                 block_type = type(block).__name__
 
-                                # Tool use block
                                 if block_type == "ToolUseBlock":
                                     tool_id = getattr(block, 'id', 'unknown')
-                                    print(f"🔧 [Tool Call] {block.name} (id: {tool_id})")
-                                    if hasattr(block, 'input'):
-                                        import json
-                                        input_str = json.dumps(block.input, indent=2) if isinstance(block.input, dict) else str(block.input)
-                                        print(f"   Input: {input_str}")
+                                    logger.debug(f"[Tool Call] {block.name} (id: {tool_id})")
 
-                                # Tool result block
                                 elif block_type == "ToolResultBlock":
                                     tool_id = getattr(block, 'tool_use_id', 'unknown')
-                                    print(f"✅ [Tool Result] (id: {tool_id})")
-                                    if hasattr(block, 'content'):
-                                        content = str(block.content)[:200]
-                                        if len(str(block.content)) > 200:
-                                            content += "... (truncated)"
-                                        print(f"   Result: {content}")
+                                    logger.debug(f"[Tool Result] (id: {tool_id})")
 
-                                # Text block
                                 elif hasattr(block, 'text'):
                                     preview = block.text[:200]
                                     if len(block.text) > 200:
                                         preview += "..."
-                                    print(f"💬 [Agent Response]\n{preview}\n")
+                                    logger.debug(f"[Agent Response] {preview}")
 
                         elif isinstance(message.content, str):
                             preview = message.content[:200]
                             if len(message.content) > 200:
                                 preview += "..."
-                            print(f"💬 [Agent Response]\n{preview}\n")
+                            logger.debug(f"[Agent Response] {preview}")
 
         except Exception as e:
             if verbose:
-                print(f"❌ TestFinder agent error: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.error(f"TestFinder agent error: {e}")
             result_text = f"# Error\n\nFailed to analyze project: {str(e)}"
 
         # Extract text from last assistant message only
@@ -783,55 +769,37 @@ Complete BOTH tasks before finishing.
                 messages.append(message)
 
                 if verbose:
-                    # Print message with role
                     role = getattr(message, 'role', 'unknown')
-                    print(f"\n{'='*60}")
-                    print(f"📨 Message (role: {role})")
-                    print(f"{'='*60}")
+                    logger.debug(f"Message (role: {role})")
 
                     if hasattr(message, 'content') and message.content:
-                        # Print verbose info for debugging
                         if isinstance(message.content, list):
                             for block in message.content:
                                 block_type = type(block).__name__
 
-                                # Tool use block
                                 if block_type == "ToolUseBlock":
                                     tool_id = getattr(block, 'id', 'unknown')
-                                    print(f"🔧 [Tool Call] {block.name} (id: {tool_id})")
-                                    if hasattr(block, 'input'):
-                                        import json
-                                        input_str = json.dumps(block.input, indent=2) if isinstance(block.input, dict) else str(block.input)
-                                        print(f"   Input: {input_str}")
+                                    logger.debug(f"[Tool Call] {block.name} (id: {tool_id})")
 
-                                # Tool result block
                                 elif block_type == "ToolResultBlock":
                                     tool_id = getattr(block, 'tool_use_id', 'unknown')
-                                    print(f"✅ [Tool Result] (id: {tool_id})")
-                                    if hasattr(block, 'content'):
-                                        content = str(block.content)[:200]
-                                        if len(str(block.content)) > 200:
-                                            content += "... (truncated)"
-                                        print(f"   Result: {content}")
+                                    logger.debug(f"[Tool Result] (id: {tool_id})")
 
-                                # Text block
                                 elif hasattr(block, 'text'):
                                     preview = block.text[:200]
                                     if len(block.text) > 200:
                                         preview += "..."
-                                    print(f"💬 [Agent Response]\n{preview}\n")
+                                    logger.debug(f"[Agent Response] {preview}")
 
                         elif isinstance(message.content, str):
                             preview = message.content[:200]
                             if len(message.content) > 200:
                                 preview += "..."
-                            print(f"💬 [Agent Response]\n{preview}\n")
+                            logger.debug(f"[Agent Response] {preview}")
 
         except Exception as e:
             if verbose:
-                print(f"❌ TestShGenerator agent error: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.error(f"TestShGenerator agent error: {e}")
             # Fallback script
             script_content = """#!/bin/bash
 # Auto-generated fallback test.sh
@@ -1003,48 +971,31 @@ Output the final bad_patch.diff content.
                 messages.append(message)
 
                 if verbose:
-                    # Print message with role
                     role = getattr(message, 'role', 'unknown')
-                    print(f"\n{'='*60}")
-                    print(f"📨 Message (role: {role})")
-                    print(f"{'='*60}")
+                    logger.debug(f"Message (role: {role})")
 
                 if hasattr(message, 'content') and message.content:
-                    # Extract text content and print verbose info
                     if isinstance(message.content, list):
                         for block in message.content:
                             block_type = type(block).__name__
 
-                            # Tool use block
                             if block_type == "ToolUseBlock":
                                 if verbose:
                                     tool_id = getattr(block, 'id', 'unknown')
-                                    print(f"🔧 [Tool Call] {block.name} (id: {tool_id})")
-                                    if hasattr(block, 'input'):
-                                        import json
-                                        input_str = json.dumps(block.input, indent=2) if isinstance(block.input, dict) else str(block.input)
-                                        print(f"   Input: {input_str}")
+                                    logger.debug(f"[Tool Call] {block.name} (id: {tool_id})")
 
-                            # Tool result block
                             elif block_type == "ToolResultBlock":
                                 if verbose:
                                     tool_id = getattr(block, 'tool_use_id', 'unknown')
-                                    print(f"✅ [Tool Result] (id: {tool_id})")
-                                    if hasattr(block, 'content'):
-                                        content = str(block.content)[:200]
-                                        if len(str(block.content)) > 200:
-                                            content += "... (truncated)"
-                                        print(f"   Result: {content}")
+                                    logger.debug(f"[Tool Result] (id: {tool_id})")
 
-                            # Text block
                             elif hasattr(block, 'text'):
                                 patch_content += block.text
                                 if verbose:
-                                    # Print first 200 chars of agent response
                                     preview = block.text[:200]
                                     if len(block.text) > 200:
                                         preview += "..."
-                                    print(f"💬 [Agent Response]\n{preview}\n")
+                                    logger.debug(f"[Agent Response] {preview}")
 
                     elif isinstance(message.content, str):
                         patch_content += message.content
@@ -1052,13 +1003,11 @@ Output the final bad_patch.diff content.
                             preview = message.content[:200]
                             if len(message.content) > 200:
                                 preview += "..."
-                            print(f"💬 [Agent Response]\n{preview}\n")
+                            logger.debug(f"[Agent Response] {preview}")
 
         except Exception as e:
             if verbose:
-                print(f"❌ BadPatchGenerator agent error: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.error(f"BadPatchGenerator agent error: {e}")
             patch_content = f"# Error generating bad patch: {str(e)}"
 
         # Save original agent response text
@@ -1224,13 +1173,13 @@ def generate_test_sh_for_benchmark(
 
     # Step 0: Copy benchmark OSS-Fuzz files to project directory
     if verbose:
-        print(f"📋 Copying OSS-Fuzz files to {project_dir}/.oss-fuzz/...")
+        logger.debug(f"Copying OSS-Fuzz files to {project_dir}/.oss-fuzz/...")
 
     _copy_benchmark_files_to_project(benchmark_dir, project_dir, verbose)
 
     # Step 1: Find unit tests
     if verbose:
-        print(f"🔍 Analyzing unit tests in {project_dir}...")
+        logger.debug(f"Analyzing unit tests in {project_dir}...")
 
     test_analysis_md, analysis_log = generator.find_unit_tests_sync(project_dir, benchmark_dir, verbose)
 
@@ -1242,18 +1191,18 @@ def generate_test_sh_for_benchmark(
     analysis_md_path = os.path.join(agent_dir, "test_analysis.md")
     if os.path.exists(analysis_md_path):
         if verbose:
-            print(f"✅ Agent already created analysis at {analysis_md_path}")
+            logger.debug(f"Agent already created analysis at {analysis_md_path}")
     else:
         # Fallback: save extracted response if agent didn't create the file
         with open(analysis_md_path, "w") as f:
             f.write(test_analysis_md)
         if verbose:
-            print(f"✅ Test analysis saved to {analysis_md_path}")
+            logger.debug(f"Test analysis saved to {analysis_md_path}")
 
     # Step 2: Generate test.sh and bad_patch.diff (integrated in same agent)
     if verbose:
         mode_msg = "with Docker testing" if with_docker_testing else "two-phase"
-        print(f"🔧 Generating test.sh and bad_patch.diff ({mode_msg})...")
+        logger.debug(f"Generating test.sh and bad_patch.diff ({mode_msg})...")
 
     test_sh_content, agent_response_text, generation_log = generator.generate_test_sh_script_sync(
         test_analysis_md,
@@ -1268,7 +1217,7 @@ def generate_test_sh_for_benchmark(
     rationale_md_path = os.path.join(agent_dir, "test_sh_rationale.md")
     if os.path.exists(rationale_md_path):
         if verbose:
-            print(f"✅ Agent already created rationale at {rationale_md_path}")
+            logger.debug(f"Agent already created rationale at {rationale_md_path}")
     else:
         # Fallback: save extracted response if agent didn't create the file
         with open(rationale_md_path, "w") as f:
@@ -1283,17 +1232,17 @@ Method: {"iterative Docker testing (MCP-enhanced)" if with_docker_testing else "
 {agent_response_text}
 """)
         if verbose:
-            print(f"✅ Agent response saved to {rationale_md_path}")
+            logger.debug(f"Agent response saved to {rationale_md_path}")
 
     # Verify bad_patch.diff was created by agent
     bad_patch_path = os.path.join(benchmark_dir, "bad_patch.diff")
     if not os.path.exists(bad_patch_path):
         if verbose:
-            print(f"⚠️  Warning: bad_patch.diff not found at {bad_patch_path}")
-            print(f"   Agent may have failed to generate bad_patch.diff")
+            logger.warning(f"bad_patch.diff not found at {bad_patch_path}")
+            logger.warning(f"Agent may have failed to generate bad_patch.diff")
     else:
         if verbose:
-            print(f"✅ bad_patch.diff created by agent at {bad_patch_path}")
+            logger.debug(f"bad_patch.diff created by agent at {bad_patch_path}")
 
     # Save test.sh only if NOT using Docker testing
     # (Docker testing mode: agent already created test.sh using Write/Edit tools)
@@ -1313,16 +1262,16 @@ Method: {"iterative Docker testing (MCP-enhanced)" if with_docker_testing else "
         os.chmod(output_path, 0o755)
 
         if verbose:
-            print(f"✅ test.sh generated at {output_path}")
+            logger.debug(f"test.sh generated at {output_path}")
     else:
         # Docker testing mode: test.sh already exists (created by agent)
         if verbose:
-            print(f"ℹ️  test.sh already created by agent during Docker testing at {output_path}")
+            logger.debug(f"test.sh already created by agent during Docker testing at {output_path}")
 
         # Verify test.sh exists
         if not os.path.exists(output_path):
             if verbose:
-                print(f"⚠️  Warning: test.sh not found at {output_path}, saving extracted script")
+                logger.warning(f"test.sh not found at {output_path}, saving extracted script")
             # Fallback: save extracted script
             test_sh_content = _add_generation_header(
                 test_sh_content,
@@ -1340,7 +1289,7 @@ Method: {"iterative Docker testing (MCP-enhanced)" if with_docker_testing else "
     if os.path.exists(agent_log_path):
         os.remove(agent_log_path)
         if verbose:
-            print(f"🗑️  Removed existing agent_log.txt")
+            logger.debug(f"Removed existing agent_log.txt")
 
     # Determine generation method
     method_description = (
@@ -1365,24 +1314,28 @@ Method: {method_description}
         f.write(combined_log)
 
     if verbose:
-        print(f"✅ Agent log saved to {agent_log_path}")
+        logger.debug(f"Agent log saved to {agent_log_path}")
 
     # Step 4: Execute test.sh and save output
     if verbose:
-        print(f"🧪 Executing test.sh to verify functionality...")
+        logger.debug(f"Executing test.sh to verify functionality...")
 
     execution_log_path = os.path.join(agent_dir, "test_sh_execution.log")
     execution_success = False
     execution_output = ""
 
     try:
-        # Import and call check_test_sh from MCP server
-        from crsbench.migration.crsbench_mcp_server import check_test_sh
-        import asyncio
+        # Use shared run_helper for test.sh execution
+        from crsbench.utils.run_helper import run_test_sh
 
-        # Run check_test_sh asynchronously
-        execution_output = asyncio.run(check_test_sh(benchmark_name))
-        execution_success = "Error:" not in execution_output
+        # Run test.sh
+        test_result = run_test_sh(
+            benchmark=benchmark_name,
+            expect_success=True,
+            raise_exception=False,
+        )
+        execution_success = test_result.success
+        execution_output = test_result.stdout + test_result.stderr
 
         # Save execution output
         with open(execution_log_path, "w") as f:
@@ -1390,7 +1343,9 @@ Method: {method_description}
 
 Executed: {datetime.now().isoformat()}
 Benchmark: {benchmark_name}
-Status: {"✅ Success" if execution_success else "❌ Failed"}
+Status: {"Success" if execution_success else "Failed"}
+Return Code: {test_result.returncode}
+Exit Code Type: {test_result.exit_code_type.name if test_result.exit_code_type else "Unknown"}
 
 ## Output
 
@@ -1399,10 +1354,10 @@ Status: {"✅ Success" if execution_success else "❌ Failed"}
 
         if verbose:
             if execution_success:
-                print(f"✅ test.sh executed successfully")
+                logger.debug(f"test.sh executed successfully")
             else:
-                print(f"⚠️  test.sh execution had issues (see {execution_log_path})")
-            print(f"📄 Execution log saved to {execution_log_path}")
+                logger.warning(f"test.sh execution had issues (see {execution_log_path})")
+            logger.debug(f"Execution log saved to {execution_log_path}")
 
     except Exception as e:
         execution_output = f"Error executing test.sh: {str(e)}"
@@ -1414,7 +1369,7 @@ Status: {"✅ Success" if execution_success else "❌ Failed"}
 
 Executed: {datetime.now().isoformat()}
 Benchmark: {benchmark_name}
-Status: ❌ Execution Failed
+Status: Execution Failed
 
 ## Error
 
@@ -1422,8 +1377,8 @@ Status: ❌ Execution Failed
 """)
 
         if verbose:
-            print(f"❌ Failed to execute test.sh: {e}")
-            print(f"📄 Error log saved to {execution_log_path}")
+            logger.error(f"Failed to execute test.sh: {e}")
+            logger.debug(f"Error log saved to {execution_log_path}")
 
     return {
         "success": True,

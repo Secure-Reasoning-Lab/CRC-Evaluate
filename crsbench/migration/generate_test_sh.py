@@ -26,6 +26,15 @@ load_dotenv()
 
 from crsbench.migration.test_sh_generator import generate_test_sh_for_benchmark
 from crsbench.utils.repo_manager import find_or_clone_project, get_repo_info_from_benchmark
+from crsbench.utils.logger import (
+    get_logger,
+    log_section,
+    log_summary,
+    log_results,
+    log_list,
+)
+
+logger = get_logger(__name__)
 
 
 def get_test_sh_commit(benchmark_dir: str) -> tuple[str | None, str]:
@@ -137,15 +146,15 @@ def process_single_benchmark(
         commit_to_use, mode = get_test_sh_commit(benchmark_dir)
         if verbose:
             if mode == "delta":
-                print(f"[{benchmark_name}] Delta mode: using ref_commit (vulnerable) {commit_to_use[:8] if commit_to_use else 'unknown'}")
+                logger.debug(f"[{benchmark_name}] Delta mode: using ref_commit (vulnerable) {commit_to_use[:8] if commit_to_use else 'unknown'}")
             elif mode == "full":
-                print(f"[{benchmark_name}] Full mode: using base_commit (vulnerable) {commit_to_use[:8] if commit_to_use else 'unknown'}")
+                logger.debug(f"[{benchmark_name}] Full mode: using base_commit (vulnerable) {commit_to_use[:8] if commit_to_use else 'unknown'}")
             else:
-                print(f"[{benchmark_name}] Unknown mode: using base_commit")
+                logger.debug(f"[{benchmark_name}] Unknown mode: using base_commit")
 
         # Find or clone project repository
         if verbose:
-            print(f"[{benchmark_name}] Finding/cloning project repository...")
+            logger.debug(f"[{benchmark_name}] Finding/cloning project repository...")
 
         # Use explicit commit parameter when cloning
         if not project_dir:
@@ -166,7 +175,7 @@ def process_single_benchmark(
             return result
 
         if verbose:
-            print(f"[{benchmark_name}] Using project directory: {proj_dir}")
+            logger.debug(f"[{benchmark_name}] Using project directory: {proj_dir}")
 
         # Generate test.sh
         gen_result = generate_test_sh_for_benchmark(
@@ -215,13 +224,12 @@ def process_multiple_benchmarks(
     successful = []
     failed = []
 
-    print(f"🚀 Processing {len(benchmark_names)} benchmarks with {max_workers} workers")
-    print()
+    logger.info(f"Processing {len(benchmark_names)} benchmarks with {max_workers} workers")
 
     if max_workers == 1:
         # Sequential processing
         for benchmark_name in benchmark_names:
-            print(f"📝 Processing: {benchmark_name}")
+            logger.info(f"Processing: {benchmark_name}")
             result = process_single_benchmark(
                 benchmark_name=benchmark_name,
                 benchmarks_root=benchmarks_root,
@@ -238,11 +246,10 @@ def process_multiple_benchmarks(
 
             if result["success"]:
                 successful.append(benchmark_name)
-                print(f"✅ [{benchmark_name}] Success: {result['test_sh_path']}")
+                logger.success(f"[{benchmark_name}] Success: {result['test_sh_path']}")
             else:
                 failed.append(benchmark_name)
-                print(f"❌ [{benchmark_name}] Failed: {result.get('message', 'Unknown error')}")
-            print()
+                logger.error(f"[{benchmark_name}] Failed: {result.get('message', 'Unknown error')}")
     else:
         # Parallel processing
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -271,34 +278,26 @@ def process_multiple_benchmarks(
 
                     if result["success"]:
                         successful.append(benchmark_name)
-                        print(f"✅ [{benchmark_name}] Success: {result['test_sh_path']}")
+                        logger.success(f"[{benchmark_name}] Success: {result['test_sh_path']}")
                     else:
                         failed.append(benchmark_name)
-                        print(f"❌ [{benchmark_name}] Failed: {result.get('message', 'Unknown error')}")
+                        logger.error(f"[{benchmark_name}] Failed: {result.get('message', 'Unknown error')}")
                 except Exception as e:
                     failed.append(benchmark_name)
-                    print(f"❌ [{benchmark_name}] Exception: {str(e)}")
+                    logger.error(f"[{benchmark_name}] Exception: {str(e)}")
 
     # Print summary
-    print()
-    print("=" * 70)
-    print("SUMMARY")
-    print("=" * 70)
-    print(f"Total: {len(benchmark_names)}")
-    print(f"Successful: {len(successful)}")
-    print(f"Failed: {len(failed)}")
+    log_summary("test.sh Generation", {
+        "total": len(benchmark_names),
+        "successful": len(successful),
+        "failed": len(failed),
+    })
 
     if successful:
-        print()
-        print("✅ Successful:")
-        for name in successful:
-            print(f"   - {name}")
+        log_list(successful, title="Successful", symbol="✓")
 
     if failed:
-        print()
-        print("❌ Failed:")
-        for name in failed:
-            print(f"   - {name}")
+        log_list(failed, title="Failed", symbol="✗")
 
     return {
         "total": len(benchmark_names),
@@ -387,11 +386,11 @@ def main():
     litellm_api_key = args.litellm_api_key or os.getenv("LITELLM_API_KEY")
 
     if not litellm_base_url:
-        print("❌ Error: LITELLM_BASE_URL must be set in environment or passed via --litellm-base-url")
+        logger.error("LITELLM_BASE_URL must be set in environment or passed via --litellm-base-url")
         sys.exit(1)
 
     if not litellm_api_key:
-        print("❌ Error: LITELLM_API_KEY must be set in environment or passed via --litellm-api-key")
+        logger.error("LITELLM_API_KEY must be set in environment or passed via --litellm-api-key")
         sys.exit(1)
 
     repos_dir = os.getenv("PROJECT_REPOS_DIR", "/home/acorn421/work/team-atlanta/afc-repos")
@@ -399,20 +398,19 @@ def main():
     # Check if all-missing mode
     if args.all_missing:
         # Find all benchmarks without test.sh
-        print("🔍 Scanning for benchmarks without test.sh...")
+        logger.info("Scanning for benchmarks without test.sh...")
         benchmark_names = find_benchmarks_without_test_sh(args.benchmarks_root)
 
         if not benchmark_names:
-            print("✅ All benchmarks already have test.sh!")
+            logger.success("All benchmarks already have test.sh!")
             sys.exit(0)
 
-        print(f"📋 Found {len(benchmark_names)} benchmarks without test.sh:")
+        logger.info(f"Found {len(benchmark_names)} benchmarks without test.sh:")
         for name in benchmark_names:
-            print(f"   - {name}")
-        print()
+            logger.info(f"  - {name}")
 
         if args.output:
-            print("⚠️  Warning: --output is ignored in --all-missing mode")
+            logger.warning("--output is ignored in --all-missing mode")
 
         result = process_multiple_benchmarks(
             benchmark_names=benchmark_names,
@@ -440,7 +438,7 @@ def main():
         benchmark_names = [name.strip() for name in args.benchmarks.split(",")]
 
         if args.output:
-            print("⚠️  Warning: --output is ignored in multiple benchmarks mode")
+            logger.warning("--output is ignored in multiple benchmarks mode")
 
         result = process_multiple_benchmarks(
             benchmark_names=benchmark_names,
@@ -470,36 +468,35 @@ def main():
         try:
             benchmark_dir = find_benchmark_dir(benchmark_name, args.benchmarks_root)
         except ValueError as e:
-            print(f"❌ Error: {e}")
+            logger.error(str(e))
             sys.exit(1)
 
         # Check if test.sh already exists
         test_sh_path = args.output or os.path.join(benchmark_dir, "test.sh")
         if os.path.exists(test_sh_path) and not args.force:
-            print(f"❌ Error: test.sh already exists at {test_sh_path}")
-            print("   Use --force to overwrite")
+            logger.error(f"test.sh already exists at {test_sh_path}")
+            logger.info("Use --force to overwrite")
             sys.exit(1)
 
         # Determine which commit to use based on mode
         commit_to_use, mode = get_test_sh_commit(benchmark_dir)
 
-        print(f"🚀 Generating test.sh for {benchmark_name}")
-        print(f"   Benchmark: {benchmark_dir}")
+        logger.info(f"Generating test.sh for {benchmark_name}")
+        logger.info(f"  Benchmark: {benchmark_dir}")
         if mode == "delta":
-            print(f"   Mode: Delta (using ref_commit - vulnerable version)")
-            print(f"   Commit: {commit_to_use[:8] if commit_to_use else 'unknown'}")
+            logger.info(f"  Mode: Delta (using ref_commit - vulnerable version)")
+            logger.info(f"  Commit: {commit_to_use[:8] if commit_to_use else 'unknown'}")
         elif mode == "full":
-            print(f"   Mode: Full (using base_commit - vulnerable version)")
-            print(f"   Commit: {commit_to_use[:8] if commit_to_use else 'unknown'}")
+            logger.info(f"  Mode: Full (using base_commit - vulnerable version)")
+            logger.info(f"  Commit: {commit_to_use[:8] if commit_to_use else 'unknown'}")
         else:
-            print(f"   Mode: Unknown (using base_commit)")
+            logger.info(f"  Mode: Unknown (using base_commit)")
 
         if args.project_dir:
-            print(f"   Project (specified): {args.project_dir}")
+            logger.info(f"  Project (specified): {args.project_dir}")
             project_dir = args.project_dir
         else:
-            print(f"   Project (auto-detect/clone): Looking in {repos_dir}")
-            print()
+            logger.info(f"  Project (auto-detect/clone): Looking in {repos_dir}")
 
             # Auto-clone with correct commit
             from crsbench.utils.repo_manager import ensure_project_repository
@@ -511,12 +508,11 @@ def main():
             )
 
         if not project_dir:
-            print("❌ Error: Failed to find or clone project repository")
+            logger.error("Failed to find or clone project repository")
             sys.exit(1)
 
         if args.verbose or not args.project_dir:
-            print(f"✅ Using project directory: {project_dir}")
-            print()
+            logger.info(f"Using project directory: {project_dir}")
 
         result = generate_test_sh_for_benchmark(
             benchmark_name=benchmark_name,
@@ -530,24 +526,18 @@ def main():
         )
 
         if result["success"]:
-            print()
-            print("✅ Success!")
-            print(f"   test.sh: {result['test_sh_path']}")
-            print(f"   Analysis: {result['analysis_md_path']}")
-            print()
-            print("Next steps:")
-            print("   1. Review the generated test.sh")
-            print("   2. Test it in OSS-Fuzz container:")
-            print(f"      cd /path/to/oss-fuzz")
-            print(f"      # Use OSS-Fuzz helper to enter container shell")
-            print(f"      python3 infra/helper.py shell {benchmark_name}")
-            print(f"      # Inside container:")
-            print(f"      cd /src/{benchmark_name}")
-            print(f"      ./test.sh")
+            logger.success("Success!")
+            logger.info(f"  test.sh: {result['test_sh_path']}")
+            logger.info(f"  Analysis: {result['analysis_md_path']}")
+            logger.info("Next steps:")
+            logger.info("  1. Review the generated test.sh")
+            logger.info("  2. Test it in OSS-Fuzz container:")
+            logger.info(f"     cd /path/to/oss-fuzz")
+            logger.info(f"     python3 infra/helper.py shell {benchmark_name}")
+            logger.info(f"     # Inside container: cd /src/{benchmark_name} && ./test.sh")
             sys.exit(0)
         else:
-            print()
-            print(f"❌ Failed: {result['message']}")
+            logger.error(f"Failed: {result['message']}")
             sys.exit(1)
 
 
