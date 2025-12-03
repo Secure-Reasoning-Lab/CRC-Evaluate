@@ -1,3 +1,6 @@
 [submodule "oss-crs"]
 	path = oss-crs
 	url = https://github.com/sslab-gatech/oss-crs
+[submodule "oss-fuzz"]
+	path = oss-fuzz
+	url = https://github.com/sslab-gatech/oss-fuzz
