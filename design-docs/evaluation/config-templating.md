@@ -100,6 +100,396 @@ crs_overrides:
       MOCK_MODE: "true"  # CRS-specific env var
 ```
 
+## Resource Specification and Generation
+
+### User-Friendly Resource Input
+
+Instead of requiring users to manually specify `cpuset` strings, the system accepts simple integer values and **generates** the proper format strings:
+
+**Input (experiment_config.yaml):**
+```yaml
+crs_overrides:
+  default:
+    resources:
+      workers:
+        local:
+          # Option 1: Simple count (most common)
+          cpu_count: 8      # Integer: number of cores
+          memory_gb: 32     # Integer: gigabytes
+
+          # Option 2: Explicit CPU list (for non-contiguous cores)
+          # cpus: [1, 3, 5, 7]  # List: specific CPU indices
+```
+
+**Generated (config-resource.yaml):**
+```yaml
+workers:
+  local:
+    cpuset: "0-7"    # Generated from cpu_count=8
+    memory: "32G"    # Generated from memory_gb=32
+```
+
+**Auto-populated (.env):**
+```bash
+CPUSET_CPUS=0-7      # Automatically set from generated cpuset
+```
+
+### Resource Generation Functions
+
+The config renderer includes utilities to convert user-friendly input to system-required formats:
+
+```python
+def generate_cpuset_from_count(cpu_count: int, start: int = 0) -> str:
+    """Generate contiguous cpuset string from CPU count.
+
+    Args:
+        cpu_count: Number of CPUs to allocate
+        start: Starting CPU index (default 0)
+
+    Returns:
+        Cpuset string in format "start-end" or "N" for single CPU
+
+    Examples:
+        (8, 0) → "0-7"
+        (4, 8) → "8-11"
+        (1, 0) → "0"
+        (16, 0) → "0-15"
+    """
+
+def generate_cpuset_from_list(cpus: List[int]) -> str:
+    """Generate optimized cpuset string from explicit CPU list.
+
+    Automatically compresses contiguous ranges for cleaner output.
+
+    Args:
+        cpus: List of CPU indices to include
+
+    Returns:
+        Optimized cpuset string with compressed ranges
+
+    Examples:
+        [1, 3, 5, 7] → "1,3,5,7"
+        [0, 1, 2, 3, 8, 9, 10, 11] → "0-3,8-11"
+        [0, 1, 2, 3] → "0-3"
+        [5] → "5"
+    """
+
+def generate_memory(memory_gb: int) -> str:
+    """Generate memory string from gigabytes.
+
+    Args:
+        memory_gb: Memory in gigabytes
+
+    Returns:
+        Memory string in format "NG"
+
+    Examples:
+        32 → "32G"
+        64 → "64G"
+        128 → "128G"
+    """
+```
+
+### Parsing Functions (for reading existing configs)
+
+```python
+def parse_cpuset(cpuset: str) -> List[int]:
+    """Parse cpuset string to list of CPU indices.
+
+    Examples:
+        "0-7" → [0, 1, 2, 3, 4, 5, 6, 7]
+        "1,3,5,7" → [1, 3, 5, 7]
+        "0-3,8-11" → [0, 1, 2, 3, 8, 9, 10, 11]
+    """
+
+def parse_memory(memory: str) -> int:
+    """Parse memory string to gigabytes.
+
+    Examples:
+        "64G" → 64
+        "128G" → 128
+    """
+```
+
+### Rationale
+
+**Why generate instead of direct input?**
+1. **User Experience**: `cpu_count: 8` is simpler than `cpuset: "0-7"`
+2. **Less Error-Prone**: Users don't need to calculate ranges or format strings
+3. **Consistency**: System ensures proper format in all generated configs
+4. **CPUSET_CPUS Auto-Population**: `.env` automatically gets matching value
+
+**When to use `cpus` list?**
+- **Non-contiguous cores**: When CPUs aren't adjacent (e.g., NUMA aware allocation)
+- **Example**: `cpus: [0, 2, 4, 6, 16, 18, 20, 22]` for specific core selection
+- System still optimizes: `[0, 1, 2, 3, 8, 9, 10, 11]` → `"0-3,8-11"`
+
+## CPU Allocation for Concurrent Trials
+
+### Problem
+
+When running multiple trials concurrently, each trial needs **non-overlapping CPU sets** to avoid resource contention.
+
+**Example scenario**:
+- Config specifies: `cpu_count: 8`
+- 4 trials run concurrently on a 32-core machine
+- **Without tracking**: All 4 trials would try to use CPUs `0-7` → conflict!
+- **With tracking**: Trials get `0-7`, `8-15`, `16-23`, `24-31` → no conflict
+
+### Solution: CPUAllocator
+
+**File**: `crsbench/evaluation/cpu_allocator.py`
+
+A thread-safe CPU allocator that tracks usage across concurrent trials:
+
+```python
+class CPUAllocator:
+    """Tracks CPU allocation across concurrent trials.
+
+    Thread-safe allocator that assigns non-overlapping CPU sets.
+    Ensures each trial gets exclusive access to its allocated CPUs.
+    """
+
+    def __init__(self, available_cpus: List[int]):
+        """Initialize with available CPU pool.
+
+        Args:
+            available_cpus: List of CPU indices available for allocation
+                           (e.g., [0, 1, 2, ..., 31] for 32-core machine)
+        """
+        self.available_cpus = set(available_cpus)
+        self.allocated_cpus: Dict[str, Set[int]] = {}  # trial_id -> cpu set
+        self._lock = threading.Lock()
+
+    def allocate(self, trial_id: str, cpu_count: int) -> List[int]:
+        """Allocate non-overlapping CPUs for a trial.
+
+        Args:
+            trial_id: Unique trial identifier (e.g., "trial-0")
+            cpu_count: Number of CPUs needed
+
+        Returns:
+            List of allocated CPU indices (sorted)
+
+        Raises:
+            ResourceError: If not enough free CPUs available
+
+        Note:
+            Allocation strategy: Allocate lowest available CPUs first
+            for predictable placement and better cache locality.
+        """
+        with self._lock:
+            free_cpus = self.available_cpus - self._all_allocated()
+            if len(free_cpus) < cpu_count:
+                raise ResourceError(
+                    f"Not enough CPUs: need {cpu_count}, "
+                    f"available {len(free_cpus)} of {len(self.available_cpus)}"
+                )
+
+            # Allocate lowest available CPUs
+            allocated = sorted(free_cpus)[:cpu_count]
+            self.allocated_cpus[trial_id] = set(allocated)
+
+            logger.info(f"Allocated CPUs {allocated} to {trial_id}")
+            return allocated
+
+    def release(self, trial_id: str) -> None:
+        """Release CPUs when trial completes.
+
+        Args:
+            trial_id: Trial identifier whose CPUs should be released
+        """
+        with self._lock:
+            if trial_id in self.allocated_cpus:
+                released = self.allocated_cpus.pop(trial_id)
+                logger.info(f"Released CPUs {sorted(released)} from {trial_id}")
+
+    def _all_allocated(self) -> Set[int]:
+        """Get all currently allocated CPUs across all trials."""
+        return set().union(*self.allocated_cpus.values()) if self.allocated_cpus else set()
+
+    def get_allocation(self, trial_id: str) -> Optional[List[int]]:
+        """Get current CPU allocation for a trial.
+
+        Args:
+            trial_id: Trial identifier
+
+        Returns:
+            List of allocated CPUs, or None if not allocated
+        """
+        with self._lock:
+            cpus = self.allocated_cpus.get(trial_id)
+            return sorted(cpus) if cpus else None
+```
+
+### Integration with Trial Preparation
+
+**File**: `crsbench/evaluation/trial_preparation.py`
+
+The allocator is initialized once at experiment start and passed to trial preparer:
+
+```python
+class TrialDirectoryPreparer:
+    def __init__(
+        self,
+        experiment_dir: Path,
+        benchmarks_root: Path,
+        oss_fuzz_dir: Path,
+        config: Dict[str, Any],
+        cpu_allocator: Optional[CPUAllocator] = None  # NEW
+    ):
+        # ... existing init ...
+        self.cpu_allocator = cpu_allocator
+
+    def _prepare_crs_config(self, crs: str, trial_dir: Path, trial_id: str) -> Path:
+        """Generate trial-specific CRS config from template + overrides."""
+        template_dir = Path(__file__).parent.parent.parent / "crses" / "configs" / crs
+        crs_overrides = self.config.get("crs_overrides", {})
+
+        # If CPU allocator provided and cpu_count specified, allocate CPUs
+        if self.cpu_allocator:
+            cpu_count = self._get_cpu_count_from_overrides(crs_overrides, crs)
+            if cpu_count:
+                # Allocate non-overlapping CPUs for this trial
+                allocated_cpus = self.cpu_allocator.allocate(trial_id, cpu_count)
+
+                # Override with allocated CPUs (as explicit list)
+                self._set_allocated_cpus(crs_overrides, crs, allocated_cpus)
+
+        # Render config with allocated (or original) resources
+        renderer = CRSConfigRenderer(template_dir, crs, crs_overrides)
+        config_dir = trial_dir / "crs-config"
+        renderer.render_to(config_dir)
+
+        return config_dir
+
+    def _get_cpu_count_from_overrides(self, overrides: Dict, crs: str) -> Optional[int]:
+        """Extract cpu_count from merged overrides."""
+        # Check default
+        default_count = overrides.get("default", {}).get("resources", {}).get("workers", {}).get("local", {}).get("cpu_count")
+        # Check per-CRS
+        crs_count = overrides.get(crs, {}).get("resources", {}).get("workers", {}).get("local", {}).get("cpu_count")
+        return crs_count if crs_count is not None else default_count
+
+    def _set_allocated_cpus(self, overrides: Dict, crs: str, cpus: List[int]) -> None:
+        """Set allocated CPUs in overrides, replacing cpu_count."""
+        # Ensure structure exists
+        if "default" not in overrides:
+            overrides["default"] = {}
+        if "resources" not in overrides["default"]:
+            overrides["default"]["resources"] = {}
+        if "workers" not in overrides["default"]["resources"]:
+            overrides["default"]["resources"]["workers"] = {}
+        if "local" not in overrides["default"]["resources"]["workers"]:
+            overrides["default"]["resources"]["workers"]["local"] = {}
+
+        # Set cpus list, remove cpu_count
+        overrides["default"]["resources"]["workers"]["local"]["cpus"] = cpus
+        overrides["default"]["resources"]["workers"]["local"].pop("cpu_count", None)
+```
+
+### Experiment Orchestrator Setup
+
+**File**: `crsbench/run_experiment.py` (or distributed job manager)
+
+```python
+def run_experiment(config: ExperimentConfig):
+    """Run complete experiment with CPU allocation tracking."""
+
+    # Initialize CPU allocator based on available cores
+    import multiprocessing
+    available_cores = config.get("available_cores") or list(range(multiprocessing.cpu_count()))
+    cpu_allocator = CPUAllocator(available_cores)
+
+    # Create trial preparer with allocator
+    preparer = TrialDirectoryPreparer(
+        experiment_dir=experiment_dir,
+        benchmarks_root=benchmarks_root,
+        oss_fuzz_dir=oss_fuzz_dir,
+        config=config,
+        cpu_allocator=cpu_allocator  # Pass allocator
+    )
+
+    # Run trials (concurrent or sequential)
+    for trial_id in trial_ids:
+        try:
+            # Prepare trial (allocates CPUs)
+            result = preparer.prepare_trial(crs, benchmark, harness, trial_num, trial_id=trial_id)
+
+            # Run trial
+            run_crs_trial(result)
+
+        finally:
+            # Release CPUs when trial completes
+            cpu_allocator.release(trial_id)
+```
+
+### Example: Concurrent Trial Execution
+
+**Scenario**: 4 trials run concurrently on 32-core machine, each needs 8 CPUs
+
+```
+Config:
+  cpu_count: 8
+  available_cores: [0-31]
+
+Timeline:
+  T0: Trial 0 starts → allocates [0-7]   → cpuset: "0-7"
+  T1: Trial 1 starts → allocates [8-15]  → cpuset: "8-15"
+  T2: Trial 2 starts → allocates [16-23] → cpuset: "16-23"
+  T3: Trial 3 starts → allocates [24-31] → cpuset: "24-31"
+
+  T10: Trial 0 completes → releases [0-7]
+  T11: Trial 4 starts → allocates [0-7]   → cpuset: "0-7" (reused)
+
+  T15: Trial 1 completes → releases [8-15]
+  T16: Trial 5 starts → allocates [8-15]  → cpuset: "8-15" (reused)
+```
+
+**Generated configs** (trial-0/crs-config/config-resource.yaml):
+```yaml
+workers:
+  local:
+    cpuset: "0-7"    # Generated from allocated_cpus=[0,1,2,3,4,5,6,7]
+    memory: "32G"
+```
+
+**Generated .env** (trial-0/crs-config/.env):
+```bash
+CPUSET_CPUS=0-7      # Auto-populated from cpuset
+```
+
+### Benefits
+
+1. **No Resource Conflicts**: Each trial gets exclusive CPU access
+2. **Automatic Reuse**: CPUs freed by completed trials are immediately available
+3. **Error Handling**: Fails fast if insufficient CPUs (better than runtime contention)
+4. **Predictable Placement**: Lowest-first strategy provides consistent allocation
+5. **Traceability**: Generated config shows exactly which CPUs each trial used
+
+### Configuration in experiment_config.yaml
+
+Add optional `available_cores` field:
+
+```yaml
+# experiment_config.yaml
+experiment: "my-experiment"
+trials: 4
+crses: [atlantis-c]
+
+# Optional: Specify available cores for allocation
+# If omitted, uses all cores detected on machine
+available_cores: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+
+crs_overrides:
+  default:
+    resources:
+      workers:
+        local:
+          cpu_count: 4  # Each trial gets 4 cores from pool
+          memory_gb: 16
+```
+
 ### Override Semantics
 
 **Merge Order** (later overrides earlier):
@@ -178,11 +568,16 @@ class CRSConfigRenderer:
         Process:
             1. Parse template .env (KEY=value format)
             2. Override with env_overrides (key replace)
-            3. Write merged .env
+            3. Auto-populate CPUSET_CPUS if not explicitly set (from generated cpuset)
+            4. Write merged .env
+
+        Special handling:
+            - CPUSET_CPUS automatically set from config-resource.yaml cpuset if not in overrides
+            - Ensures .env and config-resource.yaml stay consistent
         """
 
     def _render_resource(self, output_dir: Path, resource_overrides: Dict) -> None:
-        """Deep merge resource overrides with config-resource.yaml.
+        """Generate config-resource.yaml with computed cpuset/memory.
 
         Args:
             output_dir: Directory containing config-resource.yaml
@@ -190,8 +585,17 @@ class CRSConfigRenderer:
 
         Process:
             1. Load template config-resource.yaml
-            2. Deep merge resource_overrides (recursive dict merge)
-            3. Write merged config-resource.yaml
+            2. For each worker in overrides:
+               - If `cpus` (list) specified: generate optimized cpuset string
+               - Elif `cpu_count` specified: generate contiguous cpuset string
+               - If `memory_gb` specified: generate memory string
+            3. Deep merge resource_overrides with template (recursive dict merge)
+            4. Write merged config-resource.yaml
+            5. Store generated cpuset for .env CPUSET_CPUS population
+
+        Example transformation:
+            Input: {"workers": {"local": {"cpu_count": 8, "memory_gb": 32}}}
+            After: {"workers": {"local": {"cpuset": "0-7", "memory": "32G"}}}
         """
 
     def _render_litellm(self, output_dir: Path, litellm_overrides: Dict) -> None:
