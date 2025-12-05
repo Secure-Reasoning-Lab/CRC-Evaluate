@@ -120,73 +120,62 @@ def get_all_benchmarks() -> Set[str]:
 
 
 def get_benchmarks_to_test(
-    run_mode: str = "all",
-    project: Optional[str] = None,
     projects: Optional[Set[str]] = None,
 ) -> Set[str]:
-    """Get benchmarks to test based on run mode.
+    """Get benchmarks to test.
 
     Args:
-        run_mode: "all" or "project"
-        project: Project name (required if run_mode is "project")
-        projects: Set of project names (overrides run_mode if provided)
+        projects: Set of project names (None means all benchmarks)
 
     Returns:
         Set of benchmark names to test
     """
-    # If projects is specified, use it (overrides run_mode)
     if projects:
         return projects
 
-    if run_mode == "project":
-        if not project:
-            raise Exception("[Error] Project name must be provided when run_mode is 'project'")
-        return {project}
-    else:
-        return get_all_benchmarks()
+    return get_all_benchmarks()
 
 
-def ensure_benchmark_symlink(benchmark: str) -> None:
-    """Ensure symlink exists for benchmark in oss-fuzz/projects/.
-
-    Creates symlink on-demand if it doesn't exist.
+def prepare_benchmarks(benchmarks: Set[str], overwrite: bool = False) -> None:
+    """Copy benchmarks to oss-fuzz/projects/.
 
     Args:
-        benchmark: Benchmark name
+        benchmarks: Set of benchmark names
+        overwrite: If True, overwrite existing directories
     """
+    import shutil
+
     benchmarks_root = Path(get_benchmarks_root())
     oss_fuzz_projects = Path(get_oss_fuzz_root()) / "projects"
 
-    target_link = oss_fuzz_projects / benchmark
-    source_path = benchmarks_root / benchmark
+    logger.info(f"Preparing {len(benchmarks)} benchmarks in oss-fuzz/projects/")
 
-    # Check if benchmark exists
-    if not source_path.exists():
-        raise FileNotFoundError(f"Benchmark not found: {source_path}")
+    for benchmark in sorted(benchmarks):
+        dest_path = oss_fuzz_projects / benchmark
+        source_path = benchmarks_root / benchmark
 
-    # If symlink already exists and points to correct location, we're done
-    if target_link.exists():
-        if target_link.is_symlink():
-            existing_target = os.readlink(target_link)
-            relative_path = os.path.relpath(source_path, oss_fuzz_projects)
-            if existing_target == relative_path:
-                return  # Already exists and correct
+        # Check if benchmark exists
+        if not source_path.exists():
+            raise FileNotFoundError(f"Benchmark not found: {source_path}")
+
+        # Handle existing destination
+        if dest_path.exists():
+            if overwrite:
+                logger.info(f"Overwriting: {benchmark}")
+                if dest_path.is_symlink():
+                    dest_path.unlink()
+                else:
+                    shutil.rmtree(dest_path)
             else:
-                logger.warning(f"Symlink exists but points to wrong location: {benchmark}")
-                logger.warning(f"  Current: {existing_target}")
-                logger.warning(f"  Expected: {relative_path}")
-                return
-        else:
-            logger.warning(f"Path exists but is not a symlink: {target_link}")
-            return
+                logger.info(f"Skipping (exists): {benchmark}")
+                continue
 
-    # Create symlink
-    relative_path = os.path.relpath(source_path, oss_fuzz_projects)
-    try:
-        os.symlink(relative_path, target_link)
-        logger.info(f"Created symlink: {benchmark} -> {relative_path}")
-    except OSError as e:
-        raise RuntimeError(f"Failed to create symlink for {benchmark}: {e}")
+        # Copy benchmark
+        try:
+            shutil.copytree(source_path, dest_path)
+            logger.info(f"Copied: {benchmark}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to copy benchmark {benchmark}: {e}")
 
 
 def is_project_disabled(benchmark: str) -> bool:
@@ -321,6 +310,17 @@ def get_workload(
                     sanitizer="address",
                 ))
 
+            # Add test-inc-build check (once per benchmark) - outside task/engine/sanitizer loops
+            if not job_types or ExecJobType.TEST_INC_BUILD in job_types:
+                jobs.append(JobContext(
+                    job_type=ExecJobType.TEST_INC_BUILD,
+                    task=tasks[0] if tasks else None,
+                    benchmark=benchmark,
+                    language=language,
+                    engine="libfuzzer",
+                    sanitizer="address",
+                ))
+
         except Exception as e:
             logger.error(f"Failed to generate jobs for {benchmark}: {e}")
             traceback.print_exc()
@@ -331,7 +331,7 @@ def get_workload(
 
 def run_file_checks(
     skip_file_check: bool,
-    benchmarks: Set[str]
+    benchmarks: Set[str],
 ) -> None:
     """Run file format validation for benchmarks.
 
@@ -349,14 +349,6 @@ def run_file_checks(
         if is_project_disabled(benchmark):
             logger.info(f"Skipping disabled benchmark: {benchmark}")
             continue
-
-        # Ensure symlink exists before checking files
-        try:
-            ensure_benchmark_symlink(benchmark)
-        except Exception as e:
-            logger.error(f"Failed to setup symlink for {benchmark}: {e}")
-            traceback.print_exc()
-            raise
 
         try:
             check_benchmark_files(benchmark)
@@ -398,22 +390,6 @@ def _execute_benchmark_jobs(
     logger.info("-" * 80)
     logger.info(f"Processing: {benchmark} ({len(jobs)} jobs)")
     logger.info("-" * 80)
-
-    # Ensure symlink exists before executing jobs
-    try:
-        ensure_benchmark_symlink(benchmark)
-    except Exception as e:
-        logger.error(f"[{benchmark}] Failed to setup symlink")
-        now = datetime.now()
-        if jobs:
-            error_file = save_error_to_file(e, jobs[0], output_dir)
-            log_file_info(error_file, description="Error details saved to")
-            failed_jobs.append((jobs[0], e, error_file))
-            job_results.append((jobs[0], "failed", e, error_file, now, now))
-        else:
-            logger.error(str(e))
-            failed_jobs.append((None, e, ""))
-        return benchmark, failed_jobs, job_results
 
     for i, job in enumerate(jobs, 1):
         logger.info(f"Starting job: {benchmark} | {job.job_type.value} | {job.engine}/{job.sanitizer}")
@@ -497,7 +473,8 @@ def run_execution_checks(
         for benchmark in sorted(jobs_by_benchmark.keys()):
             benchmark_jobs = jobs_by_benchmark[benchmark]
             _, failed_jobs, job_results = _execute_benchmark_jobs(
-                benchmark, benchmark_jobs, exit_on_error, output_dir, enable_check_build, force_rebuild=force_rebuild
+                benchmark, benchmark_jobs, exit_on_error, output_dir, enable_check_build,
+                force_rebuild=force_rebuild
             )
             all_failed_jobs.extend(failed_jobs)
             all_job_results.extend(job_results)
@@ -511,7 +488,8 @@ def run_execution_checks(
         with ProcessPoolExecutor(max_workers=workers) as executor:
             # Submit all benchmarks to the pool
             future_to_benchmark = {
-                executor.submit(_execute_benchmark_jobs, benchmark, benchmark_jobs, exit_on_error, output_dir, enable_check_build, None, force_rebuild): benchmark
+                executor.submit(_execute_benchmark_jobs, benchmark, benchmark_jobs, exit_on_error,
+                               output_dir, enable_check_build, None, force_rebuild): benchmark
                 for benchmark, benchmark_jobs in jobs_by_benchmark.items()
             }
 
@@ -583,12 +561,10 @@ def _get_default_csv_output() -> str:
 
 
 def main(
-    run_mode: str = "all",
     check_default_only: bool = False,
     skip_file_check: bool = False,
     skip_execution_check: bool = False,
     exit_on_error: bool = False,
-    project: Optional[str] = None,
     projects: Optional[Set[str]] = None,
     job_types: Optional[Set[ExecJobType]] = None,
     workers: int = 1,
@@ -596,23 +572,23 @@ def main(
     enable_check_build: bool = False,
     csv_output: Optional[str] = None,
     force_rebuild: bool = False,
+    overwrite: bool = False,
 ) -> int:
     """Main entry point for benchmark testing.
 
     Args:
-        run_mode: "all" or "project"
         check_default_only: Only test libfuzzer + address/none
         skip_file_check: Skip file validation
         skip_execution_check: Skip execution validation
         exit_on_error: Exit immediately on error
-        project: Project name (required if run_mode is "project")
-        projects: Set of project names (overrides run_mode if provided)
+        projects: Set of project names (None means all benchmarks)
         job_types: Optional set of job types to filter (None means all types)
         workers: Number of parallel workers (1 = sequential, >1 = parallel by benchmark)
         output_dir: Directory to save test artifacts (logs, crash outputs, etc.)
         enable_check_build: Enable check_build validation (slower, default: False)
         csv_output: Path to export results as CSV file (default: ./ci_results_<timestamp>.csv)
         force_rebuild: Force rebuild Docker images even if they already exist
+        overwrite: Overwrite existing benchmarks in oss-fuzz/projects/
 
     Returns:
         Exit code (0 for success, 1 for failure)
@@ -639,13 +615,14 @@ def main(
         if projects:
             logger.info(f"Testing specific projects: {', '.join(sorted(projects))}")
         else:
-            logger.info(f"Run mode: {run_mode}")
+            logger.info(f"Testing all benchmarks")
 
         # Get benchmarks to test
-        benchmarks = get_benchmarks_to_test(run_mode, project, projects)
+        benchmarks = get_benchmarks_to_test(projects)
         logger.info(f"Found {len(benchmarks)} benchmarks to test")
-        if projects:
-            logger.info(f"Benchmarks: {', '.join(sorted(benchmarks))}")
+
+        # Prepare benchmarks (copy to oss-fuzz/projects/)
+        prepare_benchmarks(benchmarks, overwrite)
 
         # Run file checks
         run_file_checks(skip_file_check, benchmarks)
@@ -714,13 +691,6 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--run_mode",
-        choices=["all", "project"],
-        default="all",
-        help="Run mode: all (default) or project"
-    )
-
-    parser.add_argument(
         "--check_default_only",
         action="store_true",
         help="Only test libfuzzer + address/none sanitizers (default: False)"
@@ -745,16 +715,10 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--project",
-        type=str,
-        help="Project name (required if run_mode is 'project')"
-    )
-
-    parser.add_argument(
         "--projects",
         type=str,
-        help="Comma-separated list of project names to test (overrides --run_mode). "
-             "Example: --projects afc-curl-delta-01,afc-curl-delta-02,afc-tika-delta-01"
+        help="Comma-separated list of project names to test (default: all benchmarks). "
+             "Example: --projects afc-curl-delta-01,afc-curl-delta-02"
     )
 
     parser.add_argument(
@@ -762,7 +726,7 @@ if __name__ == "__main__":
         type=str,
         help="Comma-separated list of job types to run (default: all). "
              "Available types: delta_base_check, delta_ref_check, full_base_check, "
-             "patch_check, test_sh_check. Example: --job_types delta_base_check,test_sh_check"
+             "patch_check, test_sh_check, test_inc_build. Example: --job_types delta_base_check,test_sh_check"
     )
 
     parser.add_argument(
@@ -807,6 +771,13 @@ if __name__ == "__main__":
         action="store_true",
         help="Force rebuild Docker images even if they already exist (default: False). "
              "By default, test_sh_check skips build if image already exists."
+    )
+
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing benchmarks in oss-fuzz/projects/ (default: False). "
+             "By default, existing benchmarks are skipped."
     )
 
     args = parser.parse_args()
@@ -855,12 +826,10 @@ if __name__ == "__main__":
         csv_output_path = ""  # Empty string to disable CSV output
 
     sys.exit(main(
-        run_mode=args.run_mode,
         check_default_only=args.check_default_only,
         skip_file_check=args.skip_file_check,
         skip_execution_check=args.skip_execution_check,
         exit_on_error=args.exit_on_error,
-        project=args.project,
         projects=projects_filter,
         job_types=job_types_filter,
         workers=args.workers,
@@ -868,4 +837,5 @@ if __name__ == "__main__":
         enable_check_build=args.enable_check_build,
         csv_output=csv_output_path,
         force_rebuild=args.force_rebuild,
+        overwrite=args.overwrite,
     ))

@@ -45,6 +45,8 @@ def check_benchmark_execution(job: JobContext, output_dir: Optional[str] = None,
         _patch_check(job, job_output_dir, enable_check_build)
     elif job.job_type == ExecJobType.TEST_SH_CHECK:
         _test_sh_check(job, job_output_dir, enable_check_build, force_rebuild)
+    elif job.job_type == ExecJobType.TEST_INC_BUILD:
+        _test_inc_build(job, job_output_dir)
     else:
         raise Exception(f"[Error] Unknown job type: {job.job_type}")
 
@@ -340,3 +342,69 @@ def _test_sh_check(job: JobContext, output_dir: Optional[Path] = None, enable_ch
     run_test_sh(job.benchmark, expect_success=True, output_dir=output_dir, commit=target_commit)
 
     logger.info(f"✓ test.sh check complete")
+
+
+def _test_inc_build(job: JobContext, output_dir: Optional[Path] = None) -> None:
+    """Test incremental build using oss-bugfix-crs test-inc-build command.
+
+    Runs oss-bugfix-crs test-inc-build which:
+    1. Builds the project (without incremental build) and measures build time
+    2. Creates incremental build snapshot
+    3. Rebuilds and measures incremental build time
+    4. Verifies POVs from .aixcc/povs/ trigger crashes
+    5. Applies patches from .aixcc/patches/
+    6. Verifies POVs no longer crash after patch
+
+    Note: Benchmark must already be copied to oss-fuzz/projects/ by prepare_benchmarks()
+
+    Args:
+        job: Job context
+        output_dir: Directory to save artifacts
+    """
+    import subprocess
+
+    from crsbench.utils.run_helper import get_oss_fuzz_root
+
+    logger.info(f"=== TEST INCREMENTAL BUILD ===")
+    logger.info(f"Testing incremental build for {job.benchmark}")
+
+    oss_fuzz_root = get_oss_fuzz_root()
+
+    logger.info(f"Running: oss-bugfix-crs test-inc-build {job.benchmark} {oss_fuzz_root}")
+
+    cmd = ["oss-bugfix-crs", "test-inc-build", job.benchmark, oss_fuzz_root]
+
+    # Run with realtime output
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    output_lines = []
+    try:
+        for line in process.stdout:
+            print(line, end='', flush=True)
+            output_lines.append(line)
+
+        process.wait()
+        output = ''.join(output_lines)
+
+        # Save output to file if output_dir is specified
+        if output_dir:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            with open(output_dir / "test_inc_build.log", "w") as f:
+                f.write(output)
+
+        if process.returncode != 0:
+            raise Exception(
+                f"[Error] oss-bugfix-crs test-inc-build failed with exit code {process.returncode}"
+            )
+
+        logger.info(f"✓ Incremental build test completed successfully")
+
+    except Exception as e:
+        process.kill()
+        raise

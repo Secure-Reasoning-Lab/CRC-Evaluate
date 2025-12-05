@@ -19,6 +19,7 @@ class ExecJobType(enum.Enum):
     POV_CHECK = "pov_check"                # Verify POV reproduction
     PATCH_CHECK = "patch_check"            # Verify patch fixes the vulnerability
     TEST_SH_CHECK = "test_sh_check"        # Verify test.sh execution
+    TEST_INC_BUILD = "test_inc_build"      # Test incremental build (oss-bugfix-crs test-inc-build)
 
 
 @dataclass
