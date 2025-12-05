@@ -6,7 +6,7 @@ The path resolver module (`crsbench/evaluation/path_resolver.py`) provides funct
 
 ## Purpose
 
-When running CRS via `oss-crs` or `oss-patch-crs` commands, harness source file paths can be provided to enable CRS to analyze harness code. Harness paths in `meta.yaml` use variables for flexibility:
+When running CRS via `oss-crs` or `oss-bugfix-crs` commands, harness source file paths can be provided to enable CRS to analyze harness code. Harness paths in `meta.yaml` use variables for flexibility:
 
 - `$REPO/test/harness.c` - Path relative to cloned repository
 - `$PROJECT/harness.c` - Path relative to OSS-Fuzz project directory
@@ -24,9 +24,9 @@ oss-crs run ensemble-c json-c json_array_fuzzer \
 ```
 
 ### 2. Patch Generation CRS
-Pass harness source path to `oss-patch-crs`:
+Pass harness source path to `oss-bugfix-crs`:
 ```bash
-oss-patch-crs run multi-retrieval mock-c \
+oss-bugfix-crs run multi-retrieval mock-c \
   --harness fuzz_process_input \
   --povs /tmp/povs \
   --harness-source /host/repos/mock-c/fuzzers/fuzz_process_input.c \
@@ -382,7 +382,7 @@ class CRSPatchExecutor(CRSExecutor):
         """Run patch CRS with optional harness source path."""
         # Build base command
         cmd = [
-            "oss-patch-crs", "run",
+            "oss-bugfix-crs", "run",
             self.crs_config_name,
             project_name,
             "--harness", harness.name,

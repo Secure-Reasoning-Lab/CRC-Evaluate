@@ -42,7 +42,7 @@ crses/configs/<crs-name>/ (templates)
 trial-N/crs-config/ (generated configs)
         |
         v
-   oss-crs build/run
+   oss-bugfind-crs build/run
 ```
 
 ### Key Components
@@ -794,7 +794,7 @@ def _construct_build_command(
     trial_build_dir: Path,
     crs_config_dir: Path  # NEW
 ) -> List[str]:
-    """Construct oss-crs build command."""
+    """Construct oss-bugfind-crs build command."""
     cmd = [
         "oss-crs", "build",
         "--build-dir", str(trial_build_dir),

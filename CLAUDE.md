@@ -103,13 +103,13 @@ CRSBench uses a fundamentally different execution model compared to FuzzBench:
 
 - **CRSBench Approach**: Uses OSS-Fuzz's standardized interface
   - **Current Format** (installable commands):
-    - **`oss-crs`**: For bug finding / vulnerability discovery CRS
-      - Build: `oss-crs build <crs-config-dir> <project-name>`
-      - Run: `oss-crs run <crs-config-dir> <project-name> <harness-name> [--output <dir>] [--hints <hints-dir>]`
+    - **`oss-bugfind-crs`**: For bug finding / vulnerability discovery CRS
+      - Build: `oss-bugfind-crs build <crs-config-dir> <project-name>`
+      - Run: `oss-bugfind-crs run <crs-config-dir> <project-name> <harness-name> [--output <dir>] [--hints <hints-dir>]`
       - Config path example: `example_configs/ensemble-c` (no `infra/crs/` prefix)
-    - **`oss-patch-crs`**: For patch generation / program repair CRS
-      - Build: `oss-patch-crs build <crs-config-dir> <project-name> --oss-fuzz $OSS_FUZZ_HOME`
-      - Run: `oss-patch-crs run <crs-config-dir> <project-name> --harness <harness-name> [--pov <pov-file> | --povs <povs-dir>] [--hints <hints-dir>] [--output <dir>] --litellm-base <url> --litellm-key <key>`
+    - **`oss-bugfix-crs`**: For patch generation / program repair CRS
+      - Build: `oss-bugfix-crs build <crs-config-dir> <project-name> --oss-fuzz $OSS_FUZZ_HOME`
+      - Run: `oss-bugfix-crs run <crs-config-dir> <project-name> --harness <harness-name> [--pov <pov-file> | --povs <povs-dir>] [--hints <hints-dir>] [--output <dir>] --litellm-base <url> --litellm-key <key>`
       - Note: `--pov` specifies a single POV file (mounted to `/pov` in container)
       - Note: `--povs` specifies a directory containing POVs (mounted to `/povs/` in container)
       - Note: If neither specified, CRS processes all available POVs (implementation-dependent)
@@ -125,10 +125,10 @@ CRSBench uses a fundamentally different execution model compared to FuzzBench:
 - All CRS implementations must conform to the OSS-Fuzz interface standard
 - Build and execution logic is centralized in OSS-Fuzz infrastructure
 - Easier to add new CRS implementations without modifying CRSBench core
-- Supports both vulnerability discovery (`oss-crs`) and patch generation (`oss-patch-crs`) workflows
+- Supports both vulnerability discovery (`oss-bugfind-crs`) and patch generation (`oss-bugfix-crs`) workflows
 
 **Implementation Considerations**:
-- **Current State**: CRSBench uses `oss-crs` (bug finding) and `oss-patch-crs` (patch generation) commands
+- **Current State**: CRSBench uses `oss-bugfind-crs` (bug finding) and `oss-bugfix-crs` (patch generation) commands
 - **Command Format**: Both commands are installable wrappers that provide cleaner interfaces
 - **Config Paths**: Use relative paths like `example_configs/ensemble-c` (no `infra/crs/` prefix)
 - **Design Principle**: CRS execution logic uses standardized commands for consistent integration

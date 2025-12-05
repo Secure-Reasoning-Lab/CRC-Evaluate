@@ -1,6 +1,6 @@
 # CRSBench Integration with oss-crs CLI
 
-This document describes how CRSBench orchestrates CRS execution using the `oss-crs` and `oss-patch-crs` command-line interfaces with trial isolation and parameter management.
+This document describes how CRSBench orchestrates CRS execution using the `oss-crs` and `oss-bugfix-crs` command-line interfaces with trial isolation and parameter management.
 
 ## Purpose
 
@@ -346,11 +346,11 @@ oss-crs run \
   --hints /experiments/exp-1/trial-0/hints
 ```
 
-### Patch Generation CRS (oss-patch-crs)
+### Patch Generation CRS (oss-bugfix-crs)
 
 **Build Phase**:
 ```bash
-oss-patch-crs build \
+oss-bugfix-crs build \
   --build-dir /experiments/exp-1/trial-0/build \
   --oss-fuzz-dir /path/to/CRSBench/oss-fuzz \
   --registry-dir /path/to/CRSBench/crses \
@@ -362,7 +362,7 @@ oss-patch-crs build \
 
 **Run Phase**:
 ```bash
-oss-patch-crs run \
+oss-bugfix-crs run \
   --build-dir /experiments/exp-1/trial-0/build \
   --oss-fuzz-dir /path/to/CRSBench/oss-fuzz \
   --registry-dir /path/to/CRSBench/crses \

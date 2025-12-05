@@ -25,7 +25,7 @@ It starts with `build` command with following arguments:
 - project name: `json-c`
 
 ```sh
-oss-crs build example_configs/ensemble-c json-c
+oss-bugfind-crs build example_configs/ensemble-c json-c
 ```
 
 ## Running CRS for specific fuzzing harnesses
@@ -37,7 +37,7 @@ following arguments:
 - `--harness-source <path>` (optional): Path to harness source file on host for analysis
 
 ```sh
-oss-crs run example_configs/ensemble-c json-c json_array_fuzzer \
+oss-bugfind-crs run example_configs/ensemble-c json-c json_array_fuzzer \
   --output /path/to/output \
   --harness-source /path/to/repo/test/json_array_fuzzer.c
 ```
@@ -65,7 +65,7 @@ CRS implementations can optionally receive the harness source code file path for
 **Command-line interface:**
 
 ```sh
-oss-crs run <config> <project> <harness> --harness-source <path-to-harness-source>
+oss-bugfind-crs run <config> <project> <harness> --harness-source <path-to-harness-source>
 ```
 
 **Purpose:**
@@ -87,7 +87,7 @@ oss-crs run <config> <project> <harness> --harness-source <path-to-harness-sourc
 
 ```sh
 # CRSBench provides resolved harness source path
-oss-crs run ensemble-c json-c json_array_fuzzer \
+oss-bugfind-crs run ensemble-c json-c json_array_fuzzer \
   --output /path/to/output \
   --harness-source /path/to/repos/json-c/test/json_array_fuzzer.c
 ```
@@ -102,13 +102,13 @@ CRS implementations can optionally receive hints to guide vulnerability discover
 **Command-line interface:**
 
 ```sh
-oss-crs run <config> <project> <harness> --hints <hints-dir>
+oss-bugfind-crs run <config> <project> <harness> --hints <hints-dir>
 ```
 
 **Example:**
 
 ```sh
-oss-crs run ensemble-c json-c json_array_fuzzer \
+oss-bugfind-crs run ensemble-c json-c json_array_fuzzer \
   --hints /path/to/benchmarks/json-c/.aixcc/json_array_fuzzer/hints \
   --harness-source /path/to/repos/json-c/test/json_array_fuzzer.c
 ```
@@ -245,7 +245,7 @@ export OSS_FUZZ_HOME=/path/to/oss-fuzz
 Build command with OSS-Fuzz path:
 
 ```sh
-oss-patch-crs build <crs-config-name> <project-name> \
+oss-bugfix-crs build <crs-config-name> <project-name> \
   --oss-fuzz $OSS_FUZZ_HOME \
   [--project-path <path>] \
   [--source-path <path>]
@@ -253,7 +253,7 @@ oss-patch-crs build <crs-config-name> <project-name> \
 
 **Example (Standard OSS-Fuzz method)**:
 ```sh
-oss-patch-crs build multi-retrieval aixcc/c/mock-c --oss-fuzz $OSS_FUZZ_HOME
+oss-bugfix-crs build multi-retrieval aixcc/c/mock-c --oss-fuzz $OSS_FUZZ_HOME
 ```
 
 **Arguments**:
@@ -273,7 +273,7 @@ Use projects from OSS-Fuzz repository, clone source from git during build.
 
 **Command**:
 ```sh
-oss-patch-crs build multi-retrieval json-c --oss-fuzz $OSS_FUZZ_HOME
+oss-bugfix-crs build multi-retrieval json-c --oss-fuzz $OSS_FUZZ_HOME
 ```
 
 **Workflow**:
@@ -296,7 +296,7 @@ Use out-of-tree project directory with pre-cloned source code.
 
 **Command**:
 ```sh
-oss-patch-crs build multi-retrieval mock-c \
+oss-bugfix-crs build multi-retrieval mock-c \
   --oss-fuzz $OSS_FUZZ_HOME \
   --project-path /path/to/benchmarks/mock-c \
   --source-path /path/to/repos/mock-c-source
@@ -327,7 +327,7 @@ project_path = benchmark_dir  # e.g., benchmarks/mock-c
 source_path = repo_manager.ensure_project_repository(benchmark_dir)
 
 # Build CRS
-cmd = ["oss-patch-crs", "build", crs_name, project_name,
+cmd = ["oss-bugfix-crs", "build", crs_name, project_name,
        "--oss-fuzz", oss_fuzz_path,
        "--project-path", project_path,
        "--source-path", source_path]
@@ -339,7 +339,7 @@ Use out-of-tree project directory, but still clone source from git.
 
 **Command**:
 ```sh
-oss-patch-crs build multi-retrieval json-c \
+oss-bugfix-crs build multi-retrieval json-c \
   --oss-fuzz $OSS_FUZZ_HOME \
   --project-path /path/to/my-projects/json-c-fuzzing
 ```
@@ -363,7 +363,7 @@ oss-patch-crs build multi-retrieval json-c \
 Run command with POV(s), hints, output directory, and LiteLLM configuration:
 
 ```sh
-oss-patch-crs run <crs-config-name> <project-name> \
+oss-bugfix-crs run <crs-config-name> <project-name> \
   --harness <harness-name> \
   [--pov <pov-file> | --povs <povs-dir>] \
   [--hints <hints-dir>] \
@@ -375,7 +375,7 @@ oss-patch-crs run <crs-config-name> <project-name> \
 
 **Example - With single POV**:
 ```sh
-oss-patch-crs run multi-retrieval aixcc/c/mock-c \
+oss-bugfix-crs run multi-retrieval aixcc/c/mock-c \
   --harness fuzz_process_input_header \
   --pov /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs/pov_0 \
   --output /tmp/trial-1/output \
@@ -385,7 +385,7 @@ oss-patch-crs run multi-retrieval aixcc/c/mock-c \
 
 **Example - With POVs directory**:
 ```sh
-oss-patch-crs run multi-retrieval aixcc/c/mock-c \
+oss-bugfix-crs run multi-retrieval aixcc/c/mock-c \
   --harness fuzz_process_input_header \
   --povs /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs \
   --output /tmp/trial-1/output \
@@ -395,7 +395,7 @@ oss-patch-crs run multi-retrieval aixcc/c/mock-c \
 
 **Example - Without POV specification (process all available POVs)**:
 ```sh
-oss-patch-crs run multi-retrieval aixcc/c/mock-c \
+oss-bugfix-crs run multi-retrieval aixcc/c/mock-c \
   --harness fuzz_process_input_header \
   --output /tmp/trial-1/output \
   --litellm-base https://api.litellm.com \
@@ -404,7 +404,7 @@ oss-patch-crs run multi-retrieval aixcc/c/mock-c \
 
 **Example - With single POV, hints, and harness source**:
 ```sh
-oss-patch-crs run multi-retrieval aixcc/c/mock-c \
+oss-bugfix-crs run multi-retrieval aixcc/c/mock-c \
   --harness fuzz_process_input_header \
   --pov /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs/pov_0 \
   --hints /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/hints \
@@ -416,7 +416,7 @@ oss-patch-crs run multi-retrieval aixcc/c/mock-c \
 
 **Example - With POVs directory and hints**:
 ```sh
-oss-patch-crs run multi-retrieval aixcc/c/mock-c \
+oss-bugfix-crs run multi-retrieval aixcc/c/mock-c \
   --harness fuzz_process_input_header \
   --povs /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/povs \
   --hints /path/to/benchmarks/mock-c/.aixcc/fuzz_process_input_header/hints \
@@ -696,7 +696,7 @@ See the CRSBench snapshot design documentation for details on snapshot frequency
 | Feature          | OSS-Fuzz (Bug Finding)  | OSS-Patch (Patch Generation)                 |
 |------------------|-------------------------|----------------------------------------------|
 | Repository       | `oss-fuzz`              | `oss-patch`                                  |
-| Command          | `oss-crs`               | `oss-patch-crs`                              |
+| Command          | `oss-bugfind-crs`               | `oss-bugfix-crs`                              |
 | Purpose          | Vulnerability discovery | Program repair                               |
 | POV argument     | Not applicable          | Optional (`--pov <pov-file>`)                |
 | POVs argument    | Not applicable          | Optional (`--povs <povs-dir>`)               |
@@ -714,7 +714,7 @@ See the CRSBench snapshot design documentation for details on snapshot frequency
 
 ## CRSBench-Specific Usage
 
-CRSBench uses the `oss-crs` and `oss-patch-crs` CLI with additional parameters for trial isolation and source code management:
+CRSBench uses the `oss-bugfind-crs` and `oss-bugfix-crs` CLI with additional parameters for trial isolation and source code management:
 
 ### Additional CLI Parameters
 
@@ -730,7 +730,7 @@ Beyond the standard interface, CRSBench provides:
 
 **Bug Finding (with CRSBench parameters)**:
 ```sh
-oss-crs build \
+oss-bugfind-crs build \
   --build-dir /experiments/exp-1/trial-0/build \
   --oss-fuzz-dir /path/to/CRSBench/oss-fuzz \
   --registry-dir /path/to/CRSBench/crses \
@@ -739,7 +739,7 @@ oss-crs build \
   json-c-delta-01 \
   /experiments/exp-1/trial-0/build/src/json-c
 
-oss-crs run \
+oss-bugfind-crs run \
   --build-dir /experiments/exp-1/trial-0/build \
   --oss-fuzz-dir /path/to/CRSBench/oss-fuzz \
   --registry-dir /path/to/CRSBench/crses \
@@ -752,7 +752,7 @@ oss-crs run \
 
 **Patch Generation (with CRSBench parameters)**:
 ```sh
-oss-patch-crs build \
+oss-bugfix-crs build \
   --build-dir /experiments/exp-1/trial-0/build \
   --oss-fuzz-dir /path/to/CRSBench/oss-fuzz \
   --registry-dir /path/to/CRSBench/crses \
@@ -761,7 +761,7 @@ oss-patch-crs build \
   json-c-delta-01 \
   /experiments/exp-1/trial-0/build/src/json-c
 
-oss-patch-crs run \
+oss-bugfix-crs run \
   --build-dir /experiments/exp-1/trial-0/build \
   --oss-fuzz-dir /path/to/CRSBench/oss-fuzz \
   --registry-dir /path/to/CRSBench/crses \
@@ -792,8 +792,8 @@ CRSBench provides complete trial isolation:
 
 The OSS-Fuzz ecosystem provides installable command wrappers for CRS execution:
 
-- **`oss-crs`**: Command for bug finding / vulnerability discovery CRS (from `oss-fuzz` repo)
-- **`oss-patch-crs`**: Command for patch generation / program repair CRS (from `oss-patch` repo)
+- **`oss-bugfind-crs`**: Command for bug finding / vulnerability discovery CRS (from `oss-fuzz` repo)
+- **`oss-bugfix-crs`**: Command for patch generation / program repair CRS (from `oss-patch` repo)
 
 These commands are installable via pip/uv and provide a cleaner interface than direct `infra/helper.py` invocation.
 
@@ -805,19 +805,19 @@ pip install oss-crs
 uv pip install oss-crs
 
 # For patch generation
-pip install oss-patch-crs
+pip install oss-bugfix-crs
 # or
-uv pip install oss-patch-crs
+uv pip install oss-bugfix-crs
 ```
 
 **Usage:**
 ```sh
 # Bug finding
-oss-crs build <config> <project>
-oss-crs run <config> <project> <harness> [--hints <dir>]
+oss-bugfind-crs build <config> <project>
+oss-bugfind-crs run <config> <project> <harness> [--hints <dir>]
 # Note: Output directory is auto-determined as {{ build_dir }}/out/{{ crs.name }}/{{ project }}/
 
 # Patch generation
-oss-patch-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME
-oss-patch-crs run <config> <project> --harness <name> [--pov <file> | --povs <dir>] [--hints <dir>] [--output <dir>] --litellm-base <url> --litellm-key <key>
+oss-bugfix-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME
+oss-bugfix-crs run <config> <project> --harness <name> [--pov <file> | --povs <dir>] [--hints <dir>] [--output <dir>] --litellm-base <url> --litellm-key <key>
 ```

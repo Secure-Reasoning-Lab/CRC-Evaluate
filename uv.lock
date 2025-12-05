@@ -2,12 +2,6 @@ version = 1
 revision = 3
 requires-python = ">=3.12"
 
-[manifest]
-members = [
-    "crsbench",
-    "oss-crs",
-]
-
 [[package]]
 name = "aiofiles"
 version = "24.1.0"
@@ -1450,12 +1444,6 @@ dependencies = [
     { name = "pyyaml" },
     { name = "requests" },
     { name = "ruff" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-cov" },
 ]
 
 [package.metadata]

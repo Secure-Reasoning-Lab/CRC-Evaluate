@@ -98,7 +98,7 @@ class CRSPatchExecutor(CRSExecutor):
 
         # Build command
         cmd = [
-            "oss-patch-crs", "run",
+            "oss-bugfix-crs", "run",
             self.crs_config_name, project_name,
             "--harness", harness_name,
             "--output", str(trial_output_dir / "output"),
@@ -272,7 +272,7 @@ class CRSPatchExecutor(CRSExecutor):
         logger.info(f"Using source from: {source_path}")
 
         cmd = [
-            "oss-patch-crs", "build",
+            "oss-bugfix-crs", "build",
             self.crs_config_name, project_name,
             "--oss-fuzz", str(self.oss_fuzz_path),
             "--project-path", str(benchmark_path),  # Benchmark dir (OSS-Fuzz compatible)

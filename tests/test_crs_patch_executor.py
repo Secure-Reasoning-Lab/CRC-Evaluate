@@ -95,7 +95,7 @@ class TestCRSPatchExecutor(unittest.TestCase):
         cmd = call_args[0][0]
 
         # Check command structure
-        self.assertEqual(cmd[0], "oss-patch-crs")
+        self.assertEqual(cmd[0], "oss-bugfix-crs")
         self.assertEqual(cmd[1], "build")
         self.assertEqual(cmd[2], "test-crs")
         self.assertEqual(cmd[3], "test-project")
@@ -199,7 +199,7 @@ class TestCRSPatchExecutor(unittest.TestCase):
         trial_dir = Path(self.temp_dir) / "trial-1"
         trial_dir.mkdir()
 
-        cmd = ["oss-patch-crs", "run", "test-crs", "test-project"]
+        cmd = ["oss-bugfix-crs", "run", "test-crs", "test-project"]
         hints_path = Path("/path/to/hints")
         povs_path = Path("/path/to/povs")
 

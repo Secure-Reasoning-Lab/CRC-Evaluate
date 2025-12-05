@@ -1,11 +1,11 @@
 # Bug Finding Executor Design
 
-This document describes the implementation of `CRSBugFindingExecutor`, which executes bug finding CRS via the oss-crs CLI.
+This document describes the implementation of `CRSBugFindingExecutor`, which executes bug finding CRS via the oss-bugfind-crs CLI.
 
 ## Purpose
 
 `CRSBugFindingExecutor` is responsible for:
-- Executing oss-crs build and run commands for bug finding CRS
+- Executing oss-bugfind-crs build and run commands for bug finding CRS
 - Capturing execution outputs and metadata
 - **NOT responsible for POV validation** - POV validation is handled by a separate snapshot module
 
@@ -18,9 +18,9 @@ TrialDirectoryPreparer.prepare_trial()
     ↓ (returns TrialPreparationResult)
 CRSBugFindingExecutor.run_crs()
     ↓
-├── Build Phase: oss-crs build
+├── Build Phase: oss-bugfind-crs build
 │   └── Creates CRS Docker image
-├── Run Phase: oss-crs run
+├── Run Phase: oss-bugfind-crs run
 │   └── Executes CRS bug finding campaign
 └── Return CRSResult
     ↓
@@ -31,8 +31,8 @@ Snapshot Module (separate)
 ## Responsibilities
 
 ### What Executor DOES:
-- Execute oss-crs build command with trial-specific parameters
-- Execute oss-crs run command with output and hints directories
+- Execute oss-bugfind-crs build command with trial-specific parameters
+- Execute oss-bugfind-crs run command with output and hints directories
 - Capture stdout, stderr, exit code
 - Store execution metadata (command, timing, outputs)
 - Return CRSResult indicating execution success/failure
@@ -53,7 +53,7 @@ from crsbench.evaluation.results import POVResult
 from crsbench.validation.schemas import HarnessFile
 
 class CRSBugFindingExecutor(CRSExecutor):
-    """Executor for bug finding CRS using oss-crs CLI."""
+    """Executor for bug finding CRS using oss-bugfind-crs CLI."""
 
     def __init__(
         self,
@@ -86,7 +86,7 @@ class CRSBugFindingExecutor(CRSExecutor):
 
         Note:
             This does NOT search in oss-crs-registry/. The registry is only
-            used via --registry-dir parameter for oss-crs CLI.
+            used via --registry-dir parameter for oss-bugfind-crs CLI.
 
         Returns:
             Path to CRS config directory
@@ -198,12 +198,12 @@ def run_crs(
     trial_output_dir: Path
 ) -> CRSResult:
     """
-    Run CRS via oss-crs CLI.
+    Run CRS via oss-bugfind-crs CLI.
 
     Process:
         1. Extract paths from trial directory
-        2. Build CRS Docker image (oss-crs build)
-        3. Run CRS bug finding campaign (oss-crs run)
+        2. Build CRS Docker image (oss-bugfind-crs build)
+        3. Run CRS bug finding campaign (oss-bugfind-crs run)
         4. Store execution metadata
         5. Return CRSResult
 
@@ -326,20 +326,20 @@ def process_pov_results(
 
 ## Important: config_dir vs crs_name
 
-The oss-crs CLI takes a `config_dir` (Path) as the first positional argument, not a `crs_name` (str):
+The oss-bugfind-crs CLI takes a `config_dir` (Path) as the first positional argument, not a `crs_name` (str):
 
 ```bash
 # Correct: config_dir is a path to the directory
-oss-crs build /path/to/crses/crs/ensemble-c json-c /path/to/source
+oss-bugfind-crs build /path/to/crses/crs/ensemble-c json-c /path/to/source
 
 # Wrong: Do not pass just the name
-oss-crs build ensemble-c json-c /path/to/source
+oss-bugfind-crs build ensemble-c json-c /path/to/source
 ```
 
 **In CRSBench:**
 - Executor stores `crs_name` in config (e.g., "ensemble-c")
 - Helper method `_resolve_crs_config_dir()` converts name to full path
-- Full path is passed to oss-crs CLI: `crses/<crs_name>/`
+- Full path is passed to oss-bugfind-crs CLI: `crses/<crs_name>/`
 
 **Example resolution:**
 - `crs_name`: "ensemble-c"
@@ -390,7 +390,7 @@ def _build_crs_image(
     source_path: Path
 ) -> subprocess.CompletedProcess:
     """
-    Build CRS Docker image using oss-crs CLI.
+    Build CRS Docker image using oss-bugfind-crs CLI.
 
     Args:
         benchmark_name: Benchmark name
@@ -403,7 +403,7 @@ def _build_crs_image(
     crs_config_dir = self._resolve_crs_config_dir()
     benchmark_dir = self.benchmarks_root / benchmark_name
 
-    # Construct oss-crs build command
+    # Construct oss-bugfind-crs build command
     cmd = [
         "oss-crs", "build",
         str(crs_config_dir),  # config_dir (positional)
@@ -452,7 +452,7 @@ def _run_crs_campaign(
     hints_dir: Optional[Path]
 ) -> subprocess.CompletedProcess:
     """
-    Run CRS bug finding campaign using oss-crs CLI.
+    Run CRS bug finding campaign using oss-bugfind-crs CLI.
 
     Args:
         benchmark_name: Benchmark name
@@ -466,11 +466,11 @@ def _run_crs_campaign(
     Note:
         Output directory is auto-determined by oss-crs as:
         {{ build_dir }}/out/{{ crs_name }}/{{ project }}/
-        No --output parameter is needed for oss-crs run command.
+        No --output parameter is needed for oss-bugfind-crs run command.
     """
     crs_config_dir = self._resolve_crs_config_dir()
 
-    # Construct oss-crs run command
+    # Construct oss-bugfind-crs run command
     cmd = [
         "oss-crs", "run",
         str(crs_config_dir),  # config_dir (positional)
@@ -721,7 +721,7 @@ The snapshot module will:
 
 **Executor does NOT do POV validation.**
 
-**Note on Output Location**: Unlike patch generation CRS which outputs to `trial_output_dir/output/`, bug finding CRS outputs to the build directory at `{{ build_dir }}/out/{{ crs_name }}/{{ project }}/`. This is auto-determined by oss-crs and cannot be changed (no `--output` parameter for oss-crs run).
+**Note on Output Location**: Unlike patch generation CRS which outputs to `trial_output_dir/output/`, bug finding CRS outputs to the build directory at `{{ build_dir }}/out/{{ crs_name }}/{{ project }}/`. This is auto-determined by oss-crs and cannot be changed (no `--output` parameter for oss-bugfind-crs run).
 
 ## Configuration Parameters
 
@@ -793,7 +793,7 @@ def test_find_source_path(tmp_path):
 
 
 def test_build_command_construction(tmp_path):
-    """Test oss-crs build command construction."""
+    """Test oss-bugfind-crs build command construction."""
     executor = CRSBugFindingExecutor(...)
     executor.configure_crs({"crs_name": "test-crs"})
 
@@ -819,7 +819,7 @@ def test_build_command_construction(tmp_path):
 
 
 def test_run_command_construction(tmp_path):
-    """Test oss-crs run command construction (without --output)."""
+    """Test oss-bugfind-crs run command construction (without --output)."""
     executor = CRSBugFindingExecutor(...)
     executor.configure_crs({"crs_name": "test-crs"})
 
@@ -935,7 +935,7 @@ def _monitor_resources(self, process: subprocess.Popen) -> Dict[str, Any]:
 
 ## References
 
-- [OSS-CRS Integration](./oss-crs-integration.md): oss-crs CLI parameters
+- [OSS-CRS Integration](./oss-crs-integration.md): oss-bugfind-crs CLI parameters
 - [Trial Directory Preparation](./trial-directory-preparation.md): Directory structure
 - [CRS Executors](./crs-executors.md): Executor overview
 - [Snapshot Module](./snapshot-validation.md): POV validation (to be implemented)

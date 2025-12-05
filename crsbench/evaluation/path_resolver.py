@@ -168,7 +168,7 @@ def get_harness_source_path(
     Resolve harness source path for passing to CRS commands via --harness-source.
 
     This function resolves the harness path to a host filesystem path that can be
-    passed as an argument to oss-crs or oss-patch-crs commands. The CRS implementation
+    passed as an argument to oss-bugfind-crs or oss-bugfix-crs commands. The CRS implementation
     then decides how to use this path (mount, copy, read, or ignore).
 
     Args:
