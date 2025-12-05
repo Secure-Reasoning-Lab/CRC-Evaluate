@@ -553,6 +553,7 @@ def handle_test_exit_code(
     stderr: str,
     benchmark: str,
     raise_exception: bool = True,
+    docker_command: Optional[str] = None,
 ) -> TestResult:
     """Handle test.sh exit code according to run_tests script semantics.
 
@@ -569,6 +570,7 @@ def handle_test_exit_code(
         stderr: Standard error
         benchmark: Benchmark name for error messages
         raise_exception: Whether to raise exceptions on errors
+        docker_command: Full docker command string for debugging
 
     Returns:
         TestResult with classification
@@ -1135,7 +1137,9 @@ def run_test_sh(
         f"&& bash $SRC/test.sh"
     ])
 
-    logger.debug(f"Executing: {' '.join(docker_command)}")
+    # Build full command string for logging
+    docker_command_str = ' '.join(docker_command)
+    logger.debug(f"Executing Docker command:\n{docker_command_str}")
 
     # Execute command
     if log_dir is not None:
@@ -1173,6 +1177,13 @@ def run_test_sh(
             exit_code = -1
         else:
             raise
+    except Exception as e:
+        # Catch any unexpected exceptions
+        logger.error(f"Unexpected error running Docker command: {e}")
+        logger.error(f"Docker command was:\n{docker_command_str}")
+        stdout = ""
+        stderr = str(e)
+        exit_code = -1
 
     # Save outputs if output_dir specified
     if output_dir:
@@ -1182,6 +1193,8 @@ def run_test_sh(
         (output_dir / "test.sh.stdout").write_text(stdout)
         (output_dir / "test.sh.stderr").write_text(stderr)
         (output_dir / "test.sh.exit_code").write_text(str(exit_code))
+        # Also save the full docker command for debugging
+        (output_dir / "docker_command.txt").write_text(docker_command_str)
 
         logger.debug(f"Saved test.sh output to: {output_dir} (exit code: {exit_code})")
 
@@ -1197,7 +1210,8 @@ def run_test_sh(
     # Handle exit code
     return handle_test_exit_code(
         exit_code, expect_success, stdout, stderr, benchmark,
-        raise_exception=raise_exception
+        raise_exception=raise_exception,
+        docker_command=docker_command_str
     )
 
 
