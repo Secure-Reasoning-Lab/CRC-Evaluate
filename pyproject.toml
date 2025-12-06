@@ -46,11 +46,8 @@ include = ["crsbench*"]
 [tool.uv]
 package = true
 
-[tool.uv.workspace]
-members = [".", "oss-crs"]
-
 [tool.uv.sources]
-oss-crs = { workspace = true }
+oss-crs = { path = "oss-crs", editable = true }
 
 [tool.pytest.ini_options]
 markers = [

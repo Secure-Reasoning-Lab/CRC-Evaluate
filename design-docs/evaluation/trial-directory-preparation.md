@@ -56,7 +56,7 @@ Trial Directory (Ready for CRS Execution)
 │   │   └── corpus/                   # Filtered corpus (1h or 1d)
 │   │       ├── input-001
 │   │       └── input-002
-│   ├── povs/                         # Prepared POVs (--povs for oss-patch-crs)
+│   ├── povs/                         # Prepared POVs (--povs for oss-bugfix-crs)
 │   │   ├── pov_0                     # Flattened POV blobs
 │   │   ├── pov_1
 │   │   └── pov_2

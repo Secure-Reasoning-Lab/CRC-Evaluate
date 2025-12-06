@@ -3,30 +3,30 @@
 NOTE: When implementing concrete CRS executors (CRSBugFindingExecutor, CRSPatchExecutor),
 use the oss-crs CLI with trial-specific parameters:
 
-Bug Finding (oss-crs):
-    Build:  ["oss-crs", "build",
+Bug Finding (oss-bugfind-crs):
+    Build:  ["oss-bugfind-crs", "build",
              "--build-dir", trial_build_dir,
              "--oss-fuzz-dir", oss_fuzz_submodule,
              "--registry-dir", crs_registry_dir,
              "--project-path", benchmark_dir,
              config_name, project_name, source_path]
 
-    Run:    ["oss-crs", "run",
+    Run:    ["oss-bugfind-crs", "run",
              "--build-dir", trial_build_dir,
              "--oss-fuzz-dir", oss_fuzz_submodule,
              "--registry-dir", crs_registry_dir,
              config_name, project_name, harness_name,
              "--output", output_dir, "--hints", hints_dir]
 
-Patch Generation (oss-patch-crs):
-    Build:  ["oss-patch-crs", "build",
+Patch Generation (oss-bugfix-crs):
+    Build:  ["oss-bugfix-crs", "build",
              "--build-dir", trial_build_dir,
              "--oss-fuzz-dir", oss_fuzz_submodule,
              "--registry-dir", crs_registry_dir,
              "--project-path", benchmark_dir,
              config_name, project_name, source_path]
 
-    Run:    ["oss-patch-crs", "run",
+    Run:    ["oss-bugfix-crs", "run",
              "--build-dir", trial_build_dir,
              "--oss-fuzz-dir", oss_fuzz_submodule,
              "--registry-dir", crs_registry_dir,

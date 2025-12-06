@@ -47,7 +47,7 @@ POVResult objects
 
 ## CRSBench Integration with oss-crs CLI
 
-**Important**: CRSBench uses the `oss-crs` and `oss-patch-crs` command-line interfaces with specific parameter management for trial isolation and source code control.
+**Important**: CRSBench uses the `oss-crs` and `oss-bugfix-crs` command-line interfaces with specific parameter management for trial isolation and source code control.
 
 ### Key Parameters
 
@@ -862,7 +862,7 @@ class CRSPatchExecutor(CRSExecutor):
 
 ### Build Phase
 
-**Command**: `oss-patch-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME --project-path <benchmark-dir> --source-path <source-dir>`
+**Command**: `oss-bugfix-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME --project-path <benchmark-dir> --source-path <source-dir>`
 
 **Workflow**:
 1. Set OSS_FUZZ_HOME environment variable
@@ -908,7 +908,7 @@ def _build_crs_if_needed(self, benchmark_path: Path, project_name: str) -> None:
     logger.info(f"Using source from: {source_path}")
 
     cmd = [
-        "oss-patch-crs", "build",
+        "oss-bugfix-crs", "build",
         self.crs_config_name, project_name,
         "--oss-fuzz", str(self.oss_fuzz_path),
         "--project-path", str(benchmark_path),  # Benchmark dir (OSS-Fuzz compatible)
@@ -938,7 +938,7 @@ def _build_crs_if_needed(self, benchmark_path: Path, project_name: str) -> None:
 
 **Command**:
 ```bash
-oss-patch-crs run <config> <project> \
+oss-bugfix-crs run <config> <project> \
   --harness <harness-name> \
   [--pov <pov-file> | --povs <povs-dir>] \
   [--hints <hints-dir>] \
@@ -993,7 +993,7 @@ def run_crs(
 
     # Build command
     cmd = [
-        "oss-patch-crs", "run",
+        "oss-bugfix-crs", "run",
         self.crs_config_name, project_name,
         "--harness", harness_name,
         "--output", str(trial_output_dir / "output"),
@@ -1173,7 +1173,7 @@ executor._build_crs_if_needed(
 # Inside _build_crs_if_needed():
 #   - Calls ensure_project_repository(benchmark_path)
 #   - Gets source_path from repo manager
-#   - Passes both paths to oss-patch-crs build:
+#   - Passes both paths to oss-bugfix-crs build:
 #       --project-path benchmarks/mock-c
 #       --source-path /repos/mock-c-source
 ```
@@ -1700,13 +1700,13 @@ oss-crs run \
 # Note: Output directory is auto-determined as {{ build_dir }}/out/{{ crs.name }}/{{ project }}/
 
 # Patch generation (CRSBench method - with external project + pre-cloned source)
-oss-patch-crs build <config> <project> \
+oss-bugfix-crs build <config> <project> \
   --oss-fuzz $OSS_FUZZ_HOME \
   --project-path <benchmark-dir> \
   --source-path <source-dir>
 
 # Patch generation (Run command - unchanged)
-oss-patch-crs run <config> <project> --harness <name> [--pov <file> | --povs <dir>] [--hints <dir>] [--output <dir>] --litellm-base <url> --litellm-key <key>
+oss-bugfix-crs run <config> <project> --harness <name> [--pov <file> | --povs <dir>] [--hints <dir>] [--output <dir>] --litellm-base <url> --litellm-key <key>
 ```
 
 **Notes**:
@@ -1721,7 +1721,7 @@ oss-patch-crs run <config> <project> --harness <name> [--pov <file> | --povs <di
 
 **Command Usage**:
 - Use `oss-crs` for bug finding CRS execution
-- Use `oss-patch-crs` for patch generation CRS execution
+- Use `oss-bugfix-crs` for patch generation CRS execution
 - Both commands should be available in the environment
 - Config paths are relative (e.g., `example_configs/ensemble-c`)
 
@@ -1747,12 +1747,12 @@ cmd = [
 # Note: Output directory is derived from build_dir/out/crs_name/project/
 
 # Patch generation (CRSBench method)
-cmd = ["oss-patch-crs", "build", crs_config_name, project_name,
+cmd = ["oss-bugfix-crs", "build", crs_config_name, project_name,
        "--oss-fuzz", str(oss_fuzz_path),
        "--project-path", str(benchmark_path),
        "--source-path", str(source_path)]
 
-cmd = ["oss-patch-crs", "run", crs_config_name, project_name,
+cmd = ["oss-bugfix-crs", "run", crs_config_name, project_name,
        "--harness", harness_name,
        "--output", str(output_dir),
        "--litellm-base", url,
@@ -2176,7 +2176,7 @@ When updating existing CRS executor code:
 - [ ] Ensure `--hints` parameter uses prepared hints directory
 
 **Command Construction (Patch Generation):**
-- [ ] Keep `--output` parameter for oss-patch-crs run command (still required)
+- [ ] Keep `--output` parameter for oss-bugfix-crs run command (still required)
 - [ ] Add `--povs` parameter to pass prepared POVs directory
 - [ ] Add `--hints` parameter if hints are enabled
 
