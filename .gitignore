@@ -234,4 +234,10 @@ migration_report.csv
 # Local sources
 .crsbench-repos
 .crsbench-mcp
+
+# local ci test results
 .ci-results
+ci_results*
+
+# oss-crs build context
+.build_context
