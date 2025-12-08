@@ -554,7 +554,7 @@ class CRSPatchExecutor(CRSExecutor):
 
         # Look in crses/ directory
         crses_dir = Path(__file__).parent.parent.parent / "crses"
-        config_dir = crses_dir / self.crs_config_name
+        config_dir = crses_dir / "configs" / self.crs_config_name
 
         if not config_dir.exists():
             raise RuntimeError(f"CRS config not found: {self.crs_config_name}")

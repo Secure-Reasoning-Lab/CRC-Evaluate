@@ -19,7 +19,7 @@ EXPERIMENT_NAME="integration-test-local"
 
 # Path overrides (CLI arguments have highest precedence)
 OSS_FUZZ_PATH="${OSS_FUZZ_PATH:-$PROJECT_ROOT/oss-fuzz}"
-REGISTRY_DIR="${REGISTRY_DIR:-$PROJECT_ROOT/oss-crs-registry}"
+REGISTRY_DIR="${REGISTRY_DIR:-$PROJECT_ROOT/crses/registry}"
 BENCHMARKS_ROOT="${BENCHMARKS_ROOT:-$PROJECT_ROOT/benchmarks}"
 
 # Colors for output

@@ -379,7 +379,7 @@ class CRSBugFindingExecutor(CRSExecutor):
 
         # Resolve from crses/ directory (NOT oss-crs-registry/)
         crses_dir = Path(__file__).parent.parent.parent / "crses"
-        crs_config_dir = crses_dir / self.crs_config_name
+        crs_config_dir = crses_dir / "configs" / self.crs_config_name
 
         if not crs_config_dir.exists():
             available = [d.name for d in crses_dir.iterdir() if d.is_dir()] if crses_dir.exists() else []
