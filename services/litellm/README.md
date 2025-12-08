@@ -134,6 +134,27 @@ LITELLM_MASTER_KEY) LITELLM_API_KEY)        providers)
 - Simplified API key management (only central instance needs provider keys)
 - Fine-grained access control per trial
 
+**Sync models from upstream:**
+
+Use the sync script to automatically fetch and configure models from upstream.
+The script automatically loads environment variables from `.env` file.
+
+```bash
+# List available models from upstream (uses .env settings)
+python scripts/sync-upstream-models.py --list-only
+
+# Sync models to default-models.yaml (uses .env settings)
+python scripts/sync-upstream-models.py
+
+# Override with command line arguments
+python scripts/sync-upstream-models.py \
+  --upstream-url http://central-litellm:4000 \
+  --api-key sk-central-master-key
+
+# Skip confirmation prompt
+python scripts/sync-upstream-models.py -y
+```
+
 **Manual configuration:**
 
 Edit your config YAML to add proxy models:
@@ -192,9 +213,11 @@ Each request creates a JSON file named `{timestamp}_{request_id}.json`:
 }
 ```
 
-## Helper Script
+## Helper Scripts
 
-The `scripts/litellm-helper.py` script provides convenient management:
+### litellm-helper.py
+
+The `scripts/litellm-helper.py` script provides convenient management of LiteLLM instances:
 
 ### Start Instance
 
@@ -226,6 +249,43 @@ python scripts/litellm-helper.py logs -f  # follow logs
 ```bash
 python scripts/litellm-helper.py health
 ```
+
+### sync-upstream-models.py
+
+The `scripts/sync-upstream-models.py` script syncs model configurations from an upstream LiteLLM instance:
+
+**List upstream models:**
+```bash
+# Uses .env file settings
+python scripts/sync-upstream-models.py --list-only
+
+# Or override with command line
+python scripts/sync-upstream-models.py --list-only \
+  --upstream-url http://central-litellm:4000 \
+  --api-key sk-central-master-key
+```
+
+**Sync models with confirmation:**
+```bash
+# Uses .env file settings (UPSTREAM_LITELLM_BASE_URL and LITELLM_API_KEY)
+python scripts/sync-upstream-models.py
+
+# Skip confirmation prompt
+python scripts/sync-upstream-models.py -y
+```
+
+**Custom output file:**
+```bash
+python scripts/sync-upstream-models.py \
+  --output services/litellm/proxy-models.yaml
+```
+
+The script will:
+1. Fetch all available models from upstream LiteLLM
+2. Display models in a formatted list
+3. Ask for confirmation before overwriting (unless `-y` flag)
+4. Backup existing config to `.backup` file
+5. Generate new proxy configuration with all upstream models
 
 ## Integration with CRSBench
 

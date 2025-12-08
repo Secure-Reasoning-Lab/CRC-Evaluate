@@ -214,6 +214,15 @@ REDIS_HOST=redis.example.com
 EXPERIMENT_NAME=org-experiment
 ```
 
+**Sync models from upstream:**
+```bash
+# List available models from central LiteLLM
+python scripts/sync-upstream-models.py --list-only
+
+# Sync models to local configuration
+python scripts/sync-upstream-models.py
+```
+
 **Benefits:**
 - ✅ Centralized cost tracking
 - ✅ Simplified key management (only central instance needs provider keys)
