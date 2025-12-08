@@ -1,0 +1,96 @@
+# Default LiteLLM Model Configuration
+#
+# This file defines the default models available in LiteLLM proxy.
+# API keys are read from environment variables.
+#
+# Usage:
+#   - Copy this file to customize models for your experiment
+#   - Set required API keys in .env file
+#   - Models are exposed via OpenAI-compatible API at http://localhost:4000
+
+model_list:
+  # OpenAI Models
+  - model_name: gpt-4o
+    litellm_params:
+      model: gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: gpt-4-turbo
+    litellm_params:
+      model: gpt-4-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Anthropic Models
+  - model_name: claude-sonnet-4-20250514
+    litellm_params:
+      model: claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: claude-3-5-sonnet-20241022
+    litellm_params:
+      model: claude-3-5-sonnet-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: claude-3-5-haiku-20241022
+    litellm_params:
+      model: claude-3-5-haiku-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # Google Models
+  - model_name: gemini-2.0-flash
+    litellm_params:
+      model: gemini/gemini-2.0-flash
+      api_key: os.environ/GOOGLE_API_KEY
+
+  - model_name: gemini-1.5-pro
+    litellm_params:
+      model: gemini/gemini-1.5-pro
+      api_key: os.environ/GOOGLE_API_KEY
+
+  # Mistral Models
+  - model_name: mistral-large
+    litellm_params:
+      model: mistral/mistral-large-latest
+      api_key: os.environ/MISTRAL_API_KEY
+
+  - model_name: mistral-small
+    litellm_params:
+      model: mistral/mistral-small-latest
+      api_key: os.environ/MISTRAL_API_KEY
+
+  # Groq Models
+  - model_name: llama-3.3-70b-versatile
+    litellm_params:
+      model: groq/llama-3.3-70b-versatile
+      api_key: os.environ/GROQ_API_KEY
+
+  # Together AI Models
+  - model_name: meta-llama-3.1-70b-instruct-turbo
+    litellm_params:
+      model: together_ai/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo
+      api_key: os.environ/TOGETHER_API_KEY
+
+  # DeepSeek Models
+  - model_name: deepseek-chat
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+# LiteLLM Settings
+litellm_settings:
+  # Enable JSON logging
+  json_logs: true
+
+  # Log full request/response
+  log_responses: true
+
+  # Don't use database (we use file logging instead)
+  store_model_in_db: false
+
+  # Telemetry
+  telemetry: false

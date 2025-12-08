@@ -1,0 +1,80 @@
+# LiteLLM Docker Compose Template
+#
+# This is a Jinja2 template for per-trial LiteLLM instances.
+# Variables are rendered by CRSBench during trial setup.
+#
+# Template variables:
+#   - trial_id: Unique trial identifier
+#   - port: Host port to expose (e.g., 4000, 4001, 4002...)
+#   - config_path: Absolute path to config YAML on host
+#   - logs_path: Absolute path to logs directory on host
+#   - network_name: Docker network name for isolation
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: litellm-{{ trial_id }}
+    environment:
+      # LiteLLM master key for authentication
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+
+      # OpenAI
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+
+      # Anthropic
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+
+      # Google AI
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+
+      # Azure OpenAI
+      - AZURE_API_KEY=${AZURE_API_KEY:-}
+      - AZURE_API_BASE=${AZURE_API_BASE:-}
+      - AZURE_API_VERSION=${AZURE_API_VERSION:-}
+
+      # Cohere
+      - COHERE_API_KEY=${COHERE_API_KEY:-}
+
+      # Mistral
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+
+      # Groq
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+
+      # Together AI
+      - TOGETHER_API_KEY=${TOGETHER_API_KEY:-}
+
+      # DeepSeek
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+
+      # Logging configuration
+      - JSON_LOGS=true
+
+    ports:
+      - "{{ port }}:4000"
+
+    volumes:
+      # Mount config file (read-only)
+      - {{ config_path }}:/app/config.yaml:ro
+
+      # Mount logs directory (read-write)
+      - {{ logs_path }}:/logs
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    command: --config /app/config.yaml --detailed_debug
+
+    networks:
+      - {{ network_name }}
+
+    restart: unless-stopped
+
+networks:
+  {{ network_name }}:
+    driver: bridge
+    name: {{ network_name }}
