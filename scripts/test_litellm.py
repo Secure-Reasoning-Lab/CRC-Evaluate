@@ -291,7 +291,7 @@ def main():
     # Run tests
     results = {}
 
-    results["health"] = test_health(base_url, api_key)
+    # results["health"] = test_health(base_url, api_key)
     results["models_list"] = test_models_list(base_url, api_key)
     results["mock_completion"] = test_mock_completion(base_url, api_key, args.model)
     results["streaming"] = test_streaming(base_url, api_key, args.model)

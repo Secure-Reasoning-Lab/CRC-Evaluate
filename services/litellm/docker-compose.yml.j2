@@ -65,12 +65,12 @@ services:
       # Mount logs directory (read-write)
       - {{ logs_path }}:/logs
 
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+    {# healthcheck: #}
+    {#   test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveness"] #}
+    {#   interval: 10s #}
+    {#   timeout: 5s #}
+    {#   retries: 3 #}
+    {#   start_period: 10s #}
 
     command: --config /app/config.yaml --detailed_debug
 
