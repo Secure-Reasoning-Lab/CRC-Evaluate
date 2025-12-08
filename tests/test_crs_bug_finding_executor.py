@@ -161,7 +161,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         cmd = call_args[0][0]
 
         # Check command structure
-        self.assertEqual(cmd[0], "oss-crs")
+        self.assertEqual(cmd[0], "oss-bugfind-crs")
         self.assertEqual(cmd[1], "build")
         self.assertIn("--build-dir", cmd)
         self.assertIn("--oss-fuzz-dir", cmd)
@@ -215,7 +215,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         )
 
         # Verify command structure
-        self.assertEqual(cmd[0], "oss-crs")
+        self.assertEqual(cmd[0], "oss-bugfind-crs")
         self.assertEqual(cmd[1], "run")
         self.assertIn("--build-dir", cmd)
         self.assertIn("--oss-fuzz-dir", cmd)
@@ -307,7 +307,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         build_dir = trial_dir / "build"
         build_dir.mkdir()
 
-        cmd = ["oss-crs", "run", "test-crs", "test-project", "test_harness"]
+        cmd = ["oss-bugfind-crs", "run", "test-crs", "test-project", "test_harness"]
         hints_path = Path("/path/to/hints")
 
         harness = HarnessFile(
@@ -468,7 +468,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
 
         # Mock build success, run timeout
         import subprocess
-        timeout_error = subprocess.TimeoutExpired(cmd=["oss-crs", "run"], timeout=10)
+        timeout_error = subprocess.TimeoutExpired(cmd=["oss-bugfind-crs", "run"], timeout=10)
         timeout_error.stdout = b"partial output"
         timeout_error.stderr = b""
 

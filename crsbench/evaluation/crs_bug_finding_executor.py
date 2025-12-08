@@ -1,7 +1,7 @@
 """CRS Bug Finding executor implementation.
 
 This module implements the CRSBugFindingExecutor class which integrates with
-oss-crs CLI for bug finding CRS execution using pre-cloned source repositories.
+oss-bugfind-crs CLI for bug finding CRS execution using pre-cloned source repositories.
 """
 
 import json
@@ -27,9 +27,9 @@ class ExecutorError(Exception):
 
 
 class CRSBugFindingExecutor(CRSExecutor):
-    """CRS executor for bug finding using oss-crs CLI.
+    """CRS executor for bug finding using oss-bugfind-crs CLI.
 
-    This executor uses oss-crs's interface with pre-cloned source repositories
+    This executor uses oss-bugfind-crs's interface with pre-cloned source repositories
     via repository manager integration. Output location is auto-determined by
     oss-crs as {{ build_dir }}/out/{{ crs_name }}/{{ project }}/.
     """
@@ -97,7 +97,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             TrialDirectoryPreparer. The executor does not need commit
             information - it simply runs CRS on pre-prepared directories.
 
-            Output location is auto-determined by oss-crs as:
+            Output location is auto-determined by oss-bugfind-crs as:
             {{ build_dir }}/out/{{ crs_name }}/{{ project }}/
         """
         start_time = time.time()
@@ -273,7 +273,7 @@ class CRSBugFindingExecutor(CRSExecutor):
 
         # Construct build command
         cmd = [
-            "oss-crs", "build",
+            "oss-bugfind-crs", "build",
             "--build-dir", str(trial_build_dir),
             "--oss-fuzz-dir", str(self.oss_fuzz_path),
             "--registry-dir", str(self.registry_dir),
@@ -317,7 +317,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         trial_build_dir: Path,
         hints_path: Optional[Path]
     ) -> List[str]:
-        """Construct oss-crs run command.
+        """Construct oss-bugfind-crs run command.
 
         Args:
             project_name: Project name
@@ -329,13 +329,13 @@ class CRSBugFindingExecutor(CRSExecutor):
             Command as list of strings
 
         Note:
-            NO --output parameter. Output location is auto-determined by oss-crs as:
+            NO --output parameter. Output location is auto-determined by oss-bugfind-crs as:
             {{ build_dir }}/out/{{ crs_name }}/{{ project }}/
         """
         crs_config_dir = self._resolve_crs_config_dir()
 
         cmd = [
-            "oss-crs", "run",
+            "oss-bugfind-crs", "run",
             "--build-dir", str(trial_build_dir),
             "--oss-fuzz-dir", str(self.oss_fuzz_path),
             "--registry-dir", str(self.registry_dir),
@@ -359,7 +359,7 @@ class CRSBugFindingExecutor(CRSExecutor):
 
         Note:
             This does NOT search in oss-crs-registry/. The registry is only
-            used via --registry-dir parameter for oss-crs CLI.
+            used via --registry-dir parameter for oss-bugfind-crs CLI.
 
         Returns:
             Path to CRS config directory (absolute)
@@ -421,7 +421,7 @@ class CRSBugFindingExecutor(CRSExecutor):
     def _get_crs_output_dir(self, build_dir: Path, benchmark_name: str) -> Path:
         """Get CRS output directory path.
 
-        The output directory is auto-determined by oss-crs as:
+        The output directory is auto-determined by oss-bugfind-crs as:
         {{ build_dir }}/out/{{ crs_name }}/{{ project }}/
 
         Args:
@@ -432,7 +432,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             Path to CRS output directory
 
         Note:
-            This directory is created and populated by oss-crs during execution.
+            This directory is created and populated by oss-bugfind-crs during execution.
             It contains subdirectories: povs/, corpus/, crs-data/
         """
         return build_dir / "out" / self.crs_config_name / benchmark_name
@@ -536,7 +536,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         """
         build_dir = trial_output_dir / "build"
 
-        # Get actual output directory (auto-determined by oss-crs)
+        # Get actual output directory (auto-determined by oss-bugfind-crs)
         crs_output_dir = self._get_crs_output_dir(build_dir, harness.name)
 
         metadata = {
