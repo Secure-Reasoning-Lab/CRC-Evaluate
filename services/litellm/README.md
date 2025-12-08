@@ -181,6 +181,95 @@ CRSBench will:
 3. Mount trial-specific logs directory
 4. Clean up instances after trial completion
 
+## Testing
+
+### Quick Test (No API Calls)
+
+Test LiteLLM with mock responses (no real API costs):
+
+```bash
+python scripts/test_litellm.py --port 4000 --mock-only
+```
+
+This tests:
+- Health endpoint
+- Models listing
+- Mock completions (no API calls)
+- Streaming responses
+
+### Full Test (With Real API Calls)
+
+⚠️ **Warning: This makes real API calls and may incur costs!**
+
+```bash
+python scripts/test_litellm.py --port 4000
+```
+
+Tests all features including real LLM API calls.
+
+### Manual Testing with cURL
+
+**Health check:**
+```bash
+curl http://localhost:4000/health
+```
+
+**List models:**
+```bash
+curl -X GET http://localhost:4000/models \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY"
+```
+
+**Mock completion (no API call):**
+```bash
+curl -X POST http://localhost:4000/chat/completions \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "mock_response": "Hello! This is a mock response."
+  }'
+```
+
+**Real completion (makes API call):**
+```bash
+curl -X POST http://localhost:4000/chat/completions \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+```
+
+### Testing with Python
+
+```python
+import openai
+
+# Configure client
+client = openai.OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-master-key"
+)
+
+# Test with mock response (no API call)
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "test"}],
+    extra_body={"mock_response": "Test successful!"}
+)
+print(response.choices[0].message.content)
+
+# Test with real API call
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+print(response.choices[0].message.content)
+```
+
 ## Troubleshooting
 
 ### Container Won't Start
