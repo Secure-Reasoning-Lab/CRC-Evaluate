@@ -39,20 +39,23 @@ class CRSBugFindingExecutor(CRSExecutor):
         crs_config_name: str,
         oss_fuzz_path: Path,
         registry_dir: Path,
-        benchmarks_root: Path
+        benchmarks_root: Path,
+        crs_configs_dir: Path
     ):
         """Initialize bug finding executor.
 
         Args:
             crs_config_name: CRS configuration name (e.g., "ensemble-c")
             oss_fuzz_path: Path to oss-fuzz repository
-            registry_dir: Path to CRS registry directory (e.g., crses/ or oss-crs-registry/)
+            registry_dir: Path to CRS registry directory (e.g., crses/registry/ or oss-crs-registry/)
             benchmarks_root: Path to benchmarks directory (for repo manager)
+            crs_configs_dir: Path to CRS configs directory
         """
         self.crs_config_name = crs_config_name
         self.oss_fuzz_path = oss_fuzz_path
         self.registry_dir = registry_dir
         self.benchmarks_root = benchmarks_root
+        self.crs_configs_dir = crs_configs_dir
         self.config: Dict[str, Any] = {}
         self.built_projects: Set[str] = set()
 
@@ -354,8 +357,8 @@ class CRSBugFindingExecutor(CRSExecutor):
     def _resolve_crs_config_dir(self) -> Path:
         """Resolve CRS configuration directory path.
 
-        Searches for CRS configuration in crses/ directory, which follows
-        the same format as oss-crs/example_configs/.
+        Searches for CRS configuration in configurable configs directory,
+        which follows the same format as oss-crs/example_configs/.
 
         Note:
             This does NOT search in oss-crs-registry/. The registry is only
@@ -369,23 +372,24 @@ class CRSBugFindingExecutor(CRSExecutor):
 
         Example:
             crs_name: "ensemble-c"
-            crses_dir: /path/to/CRSBench/crses
-            Returns: /path/to/CRSBench/crses/ensemble-c/
+            configs_dir: /path/to/CRSBench/crses/configs
+            Returns: /path/to/CRSBench/crses/configs/ensemble-c/
         """
         # Check if full path provided
         config_path = Path(self.crs_config_name)
         if config_path.is_absolute() and config_path.exists():
             return config_path
 
-        # Resolve from crses/ directory (NOT oss-crs-registry/)
-        crses_dir = Path(__file__).parent.parent.parent / "crses"
-        crs_config_dir = crses_dir / "configs" / self.crs_config_name
+        # Resolve from configs directory
+        configs_dir = Path(self.crs_configs_dir)
+
+        crs_config_dir = configs_dir / self.crs_config_name
 
         if not crs_config_dir.exists():
-            available = [d.name for d in crses_dir.iterdir() if d.is_dir()] if crses_dir.exists() else []
+            available = [d.name for d in configs_dir.iterdir() if d.is_dir()] if configs_dir.exists() else []
             raise ExecutorError(
                 f"CRS config directory not found: {crs_config_dir}\n"
-                f"Available in {crses_dir}: {available}"
+                f"Available in {configs_dir}: {available}"
             )
 
         return crs_config_dir.absolute()

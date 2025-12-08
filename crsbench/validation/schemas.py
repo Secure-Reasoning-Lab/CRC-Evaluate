@@ -249,6 +249,14 @@ class ExperimentConfig(BaseModel):
         ge=0,
         description="Snapshot interval in seconds (0 to disable, default 900 = 15 minutes)"
     )
+    registry_dir: Optional[str] = Field(
+        default=None,
+        description="Path to CRS registry directory (defaults to ./crses/registry)"
+    )
+    crs_configs_dir: Optional[str] = Field(
+        default=None,
+        description="Path to CRS configs directory (defaults to ./crses/configs)"
+    )
 
     @field_validator('experiment')
     @classmethod

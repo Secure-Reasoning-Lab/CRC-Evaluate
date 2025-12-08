@@ -27,11 +27,15 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         self.benchmarks_root.mkdir(parents=True)
 
         # Create executor
+        self.crs_configs_dir = Path(self.temp_dir) / "crses" / "configs"
+        self.crs_configs_dir.mkdir(parents=True)
+
         self.executor = CRSBugFindingExecutor(
             crs_config_name="test-crs",
             oss_fuzz_path=self.oss_fuzz_path,
             registry_dir=self.registry_dir,
-            benchmarks_root=self.benchmarks_root
+            benchmarks_root=self.benchmarks_root,
+            crs_configs_dir=self.crs_configs_dir
         )
 
     def test_init(self):
@@ -101,7 +105,8 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             crs_config_name=str(test_config),
             oss_fuzz_path=self.oss_fuzz_path,
             registry_dir=self.registry_dir,
-            benchmarks_root=self.benchmarks_root
+            benchmarks_root=self.benchmarks_root,
+            crs_configs_dir=self.crs_configs_dir
         )
 
         resolved = executor._resolve_crs_config_dir()
@@ -138,7 +143,8 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             crs_config_name=str(test_crs_dir),  # Use absolute path
             oss_fuzz_path=self.oss_fuzz_path,
             registry_dir=self.registry_dir,
-            benchmarks_root=self.benchmarks_root
+            benchmarks_root=self.benchmarks_root,
+            crs_configs_dir=self.crs_configs_dir
         )
 
         trial_build_dir = Path(self.temp_dir) / "trial-0" / "build"
@@ -202,7 +208,8 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             crs_config_name=str(test_crs_dir),
             oss_fuzz_path=self.oss_fuzz_path,
             registry_dir=self.registry_dir,
-            benchmarks_root=self.benchmarks_root
+            benchmarks_root=self.benchmarks_root,
+            crs_configs_dir=self.crs_configs_dir
         )
 
         trial_build_dir = Path(self.temp_dir) / "trial-0" / "build"
@@ -235,7 +242,8 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             crs_config_name=str(test_crs_dir),
             oss_fuzz_path=self.oss_fuzz_path,
             registry_dir=self.registry_dir,
-            benchmarks_root=self.benchmarks_root
+            benchmarks_root=self.benchmarks_root,
+            crs_configs_dir=self.crs_configs_dir
         )
 
         trial_build_dir = Path(self.temp_dir) / "trial-0" / "build"
@@ -399,7 +407,8 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             crs_config_name=str(test_crs_dir),
             oss_fuzz_path=self.oss_fuzz_path,
             registry_dir=self.registry_dir,
-            benchmarks_root=self.benchmarks_root
+            benchmarks_root=self.benchmarks_root,
+            crs_configs_dir=self.crs_configs_dir
         )
 
         harness = HarnessFile(
@@ -454,7 +463,8 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             crs_config_name=str(test_crs_dir),
             oss_fuzz_path=self.oss_fuzz_path,
             registry_dir=self.registry_dir,
-            benchmarks_root=self.benchmarks_root
+            benchmarks_root=self.benchmarks_root,
+            crs_configs_dir=self.crs_configs_dir
         )
 
         harness = HarnessFile(

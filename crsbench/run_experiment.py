@@ -125,6 +125,14 @@ Examples:
     )
 
     parser.add_argument(
+        '--crs-configs-dir',
+        type=str,
+        required=False,
+        metavar='CRS_CONFIGS_DIR',
+        help='Path to CRS configs directory (highest precedence, overrides config file)'
+    )
+
+    parser.add_argument(
         '--benchmarks-root',
         type=str,
         required=False,
@@ -301,6 +309,10 @@ def enhance_config_with_cli_args(config_dict: Dict[str, Any], args: argparse.Nam
     if args.registry_dir:
         enhanced['registry_dir'] = args.registry_dir
         logger.info(f"Using registry directory from CLI: {args.registry_dir}")
+
+    if args.crs_configs_dir:
+        enhanced['crs_configs_dir'] = args.crs_configs_dir
+        logger.info(f"Using CRS configs directory from CLI: {args.crs_configs_dir}")
 
     if args.benchmarks_root:
         enhanced['benchmarks_root'] = args.benchmarks_root

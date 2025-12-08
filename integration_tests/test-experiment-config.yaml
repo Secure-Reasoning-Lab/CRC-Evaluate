@@ -32,5 +32,9 @@ snapshot_period: 60  # 1 minute
 experiment_filestore: /tmp/crsbench-integration-test/experiment-data
 report_filestore: /tmp/crsbench-integration-test/report-data
 
+# CRS Paths - optional configuration (defaults: crses/registry, crses/configs)
+# registry_dir: crses/registry
+# crs_configs_dir: crses/configs
+
 # Reproducibility
 git_hash: null

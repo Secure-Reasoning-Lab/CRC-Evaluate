@@ -20,6 +20,7 @@ EXPERIMENT_NAME="integration-test-local"
 # Path overrides (CLI arguments have highest precedence)
 OSS_FUZZ_PATH="${OSS_FUZZ_PATH:-$PROJECT_ROOT/oss-fuzz}"
 REGISTRY_DIR="${REGISTRY_DIR:-$PROJECT_ROOT/crses/registry}"
+CRS_CONFIGS_DIR="${CRS_CONFIGS_DIR:-$PROJECT_ROOT/crses/configs}"
 BENCHMARKS_ROOT="${BENCHMARKS_ROOT:-$PROJECT_ROOT/benchmarks}"
 
 # Colors for output
@@ -43,6 +44,7 @@ echo "  Experiment name: $EXPERIMENT_NAME"
 echo "  Mode: Local (no distributed execution)"
 echo "  OSS-Fuzz path: $OSS_FUZZ_PATH"
 echo "  Registry directory: $REGISTRY_DIR"
+echo "  CRS configs directory: $CRS_CONFIGS_DIR"
 echo "  Benchmarks root: $BENCHMARKS_ROOT"
 echo ""
 
@@ -78,6 +80,7 @@ crsbench \
    --crses mock-crs \
    --oss-fuzz-path "$OSS_FUZZ_PATH" \
    --registry-dir "$REGISTRY_DIR" \
+   --crs-configs-dir "$CRS_CONFIGS_DIR" \
    --benchmarks-root "$BENCHMARKS_ROOT" \
    --debug
 

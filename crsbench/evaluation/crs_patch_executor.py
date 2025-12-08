@@ -35,7 +35,8 @@ class CRSPatchExecutor(CRSExecutor):
         oss_fuzz_path: Path,
         litellm_base: str,
         litellm_key: str,
-        benchmarks_root: Path
+        benchmarks_root: Path,
+        crs_configs_dir: Path
     ):
         """Initialize CRS Patch executor.
 
@@ -46,6 +47,7 @@ class CRSPatchExecutor(CRSExecutor):
             litellm_base: LiteLLM API base URL
             litellm_key: LiteLLM API key
             benchmarks_root: Path to benchmarks directory (for finding benchmark dirs)
+            crs_configs_dir: Path to CRS configs directory
         """
         self.crs_config_name = crs_config_name
         self.crs_patch_path = crs_patch_path
@@ -53,6 +55,7 @@ class CRSPatchExecutor(CRSExecutor):
         self.litellm_base = litellm_base
         self.litellm_key = litellm_key
         self.benchmarks_root = benchmarks_root
+        self.crs_configs_dir = crs_configs_dir
         self.config: Dict[str, Any] = {}
         self.built_projects: Set[str] = set()
 
@@ -552,9 +555,9 @@ class CRSPatchExecutor(CRSExecutor):
         if config_path.is_absolute() and config_path.exists():
             return config_path
 
-        # Look in crses/ directory
-        crses_dir = Path(__file__).parent.parent.parent / "crses"
-        config_dir = crses_dir / "configs" / self.crs_config_name
+        # Resolve from configs directory
+        configs_dir = Path(self.crs_configs_dir)
+        config_dir = configs_dir / self.crs_config_name
 
         if not config_dir.exists():
             raise RuntimeError(f"CRS config not found: {self.crs_config_name}")

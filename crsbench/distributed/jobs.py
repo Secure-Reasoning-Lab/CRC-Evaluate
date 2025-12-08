@@ -124,15 +124,17 @@ def run_crs_trial(
         # Initialize CRS executor
         # Get required paths from config or use defaults
         oss_fuzz_path = Path(config.get('oss_fuzz_path') or (Path.cwd() / 'oss-fuzz'))
-        registry_dir = Path(config.get('registry_dir') or (Path.cwd() / 'crses'))
+        registry_dir = Path(config.get('registry_dir') or (Path.cwd() / 'crses' / 'registry'))
         benchmarks_root = Path(config.get('benchmarks_root') or (Path.cwd() / 'benchmarks'))
+        crs_configs_dir = Path(config.get('crs_configs_dir') or (Path.cwd() / 'crses' / 'configs'))
 
         # Create CRS bug finding executor
         crs_executor = CRSBugFindingExecutor(
             crs_config_name=crs,
             oss_fuzz_path=oss_fuzz_path,
             registry_dir=registry_dir,
-            benchmarks_root=benchmarks_root
+            benchmarks_root=benchmarks_root,
+            crs_configs_dir=crs_configs_dir
         )
 
         # Configure executor

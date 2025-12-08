@@ -28,13 +28,17 @@ class TestCRSPatchExecutor(unittest.TestCase):
         self.benchmarks_root.mkdir(parents=True)
 
         # Create executor
+        self.crs_configs_dir = Path(self.temp_dir) / "crses" / "configs"
+        self.crs_configs_dir.mkdir(parents=True)
+
         self.executor = CRSPatchExecutor(
             crs_config_name="test-crs",
             crs_patch_path=self.crs_patch_path,
             oss_fuzz_path=self.oss_fuzz_path,
             litellm_base="https://api.test.com",
             litellm_key="test-key",
-            benchmarks_root=self.benchmarks_root
+            benchmarks_root=self.benchmarks_root,
+            crs_configs_dir=self.crs_configs_dir
         )
 
     def test_init(self):
