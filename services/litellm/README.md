@@ -161,18 +161,17 @@ Edit your config YAML to add proxy models:
 
 ```yaml
 model_list:
-  # Forward all models to upstream
-  - model_name: "*"
+  # Forward specific models to upstream
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/*
+      model: litellm_proxy/gpt-4o
       api_base: os.environ/UPSTREAM_LITELLM_BASE_URL
       api_key: os.environ/LITELLM_API_KEY
 
-  # Or forward specific models only
-  - model_name: gpt-4o
+  - model_name: claude-sonnet-4
     litellm_params:
-      model: openai/gpt-4o
-      api_base: http://central-litellm:4000
+      model: litellm_proxy/claude-sonnet-4
+      api_base: os.environ/UPSTREAM_LITELLM_BASE_URL
       api_key: os.environ/LITELLM_API_KEY
 ```
 

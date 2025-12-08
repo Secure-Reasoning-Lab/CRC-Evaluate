@@ -76,7 +76,7 @@ def generate_proxy_config(upstream_url: str, models: list[dict]) -> dict:
         model_list.append({
             "model_name": model_name,
             "litellm_params": {
-                "model": model_name,  # Use model name directly from API
+                "model": f"litellm_proxy/{model_name}",  # Prefix with litellm_proxy/
                 "api_base": "os.environ/UPSTREAM_LITELLM_BASE_URL",
                 "api_key": "os.environ/LITELLM_API_KEY"
             }
