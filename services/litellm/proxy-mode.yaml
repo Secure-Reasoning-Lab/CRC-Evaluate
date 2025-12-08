@@ -1,0 +1,46 @@
+# LiteLLM Proxy Mode Configuration
+#
+# This configuration forwards all requests to an upstream LiteLLM instance.
+# Useful for multi-tier setups, centralized model management, or cost tracking.
+#
+# Environment Variables Required:
+#   UPSTREAM_LITELLM_BASE_URL - URL of upstream LiteLLM (e.g., http://central-litellm:4000)
+#   LITELLM_API_KEY          - API key for upstream LiteLLM (reuses existing env var)
+#
+# Usage:
+#   docker run -d \
+#     -p 4000:4000 \
+#     -v $(pwd)/proxy-mode.yaml:/app/config.yaml:ro \
+#     -e UPSTREAM_LITELLM_BASE_URL=http://central-litellm:4000 \
+#     -e LITELLM_API_KEY=sk-your-key \
+#     ghcr.io/berriai/litellm:main-stable \
+#     --config /app/config.yaml
+
+model_list:
+  # Forward all models to upstream LiteLLM
+  # The wildcard "*" matches any model name requested
+  - model_name: "*"
+    litellm_params:
+      # Use OpenAI format to forward requests
+      model: openai/*
+      api_base: os.environ/UPSTREAM_LITELLM_BASE_URL
+      api_key: os.environ/LITELLM_API_KEY
+
+# LiteLLM Settings
+litellm_settings:
+  # Enable JSON logging for this proxy layer
+  json_logs: true
+
+  # Log full request/response at proxy layer
+  log_responses: true
+
+  # Don't use database
+  store_model_in_db: false
+
+  # Disable telemetry
+  telemetry: false
+
+  # Optional: Add custom headers to upstream requests
+  # default_headers:
+  #   X-Proxy-Layer: "trial-litellm"
+  #   X-Experiment-ID: "experiment-123"

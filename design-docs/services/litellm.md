@@ -10,6 +10,8 @@ LiteLLM acts as an OpenAI-compatible proxy for CRSBench, providing:
 
 ## Architecture
 
+### Direct Mode (Default)
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      CRSBench Trial                         │
@@ -24,6 +26,40 @@ LiteLLM acts as an OpenAI-compatible proxy for CRSBench, providing:
 │                      │  (JSON)  │                          │
 │                      └──────────┘                          │
 └─────────────────────────────────────────────────────────────┘
+```
+
+### Proxy Mode (Multi-tier)
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                         CRSBench Trial                             │
+│  ┌───────────┐    ┌──────────────┐    ┌───────────────┐          │
+│  │    CRS    │───▶│ Trial        │───▶│  Central      │──────────▶│
+│  │ Container │    │ LiteLLM      │    │  LiteLLM      │  Provider │
+│  └───────────┘    │ (Proxy)      │    │  (Gateway)    │           │
+│       │           └──────────────┘    └───────────────┘          │
+│  uses LITELLM_       │  forwards          │  uses provider        │
+│  MASTER_KEY          │  with              │  API keys             │
+│                      │  LITELLM_          │                        │
+│                      │  API_KEY           │                        │
+│                      ▼                     ▼                        │
+│                   ┌──────────┐          ┌──────────┐              │
+│                   │Trial Logs│          │Central   │              │
+│                   │(per-trial│          │Logs      │              │
+│                   │debugging)│          │(billing) │              │
+│                   └──────────┘          └──────────┘              │
+└────────────────────────────────────────────────────────────────────┘
+
+Key Configuration:
+- CRS containers: Use LITELLM_MASTER_KEY to authenticate with trial LiteLLM
+- Trial LiteLLM: Uses LITELLM_API_KEY to authenticate with central LiteLLM
+- Central LiteLLM: Connects to providers with provider API keys
+
+Benefits:
+- Trial-level logging for debugging
+- Central cost tracking and billing
+- Simplified API key management (only central instance needs provider keys)
+- Fine-grained access control per trial
 ```
 
 ## Directory Structure
@@ -47,18 +83,20 @@ Trial logs stored at:
 
 API keys loaded from `.env` file (env vars take precedence over config):
 
-| Variable | Provider | Required |
+| Variable | Purpose | Required |
 |----------|----------|----------|
-| `LITELLM_MASTER_KEY` | LiteLLM auth | Yes |
-| `OPENAI_API_KEY` | OpenAI | No |
-| `ANTHROPIC_API_KEY` | Anthropic | No |
-| `GOOGLE_API_KEY` | Google AI | No |
-| `AZURE_API_KEY` | Azure OpenAI | No |
-| `AZURE_API_BASE` | Azure OpenAI | No |
-| `MISTRAL_API_KEY` | Mistral | No |
-| `GROQ_API_KEY` | Groq | No |
-| `TOGETHER_API_KEY` | Together AI | No |
-| `DEEPSEEK_API_KEY` | DeepSeek | No |
+| `LITELLM_MASTER_KEY` | Authentication key passed to CRS containers | Yes |
+| `LITELLM_API_KEY` | API key for authenticating with upstream LiteLLM (proxy mode only) | Proxy mode only |
+| `UPSTREAM_LITELLM_BASE_URL` | URL of central/upstream LiteLLM instance (proxy mode only) | Proxy mode only |
+| `OPENAI_API_KEY` | OpenAI API access | No (direct mode only) |
+| `ANTHROPIC_API_KEY` | Anthropic API access | No (direct mode only) |
+| `GOOGLE_API_KEY` | Google AI API access | No (direct mode only) |
+| `AZURE_API_KEY` | Azure OpenAI access | No (direct mode only) |
+| `AZURE_API_BASE` | Azure OpenAI endpoint | No (direct mode only) |
+| `MISTRAL_API_KEY` | Mistral API access | No (direct mode only) |
+| `GROQ_API_KEY` | Groq API access | No (direct mode only) |
+| `TOGETHER_API_KEY` | Together AI API access | No (direct mode only) |
+| `DEEPSEEK_API_KEY` | DeepSeek API access | No (direct mode only) |
 
 ### Model Configuration
 

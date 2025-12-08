@@ -1,0 +1,492 @@
+# Environment Setup Guide
+
+This guide explains how to configure CRSBench using environment variables for different deployment scenarios.
+
+## Quick Start
+
+1. **Copy the example file:**
+   ```bash
+   cp .env.example .env
+   ```
+
+2. **Edit `.env` with your settings:**
+   ```bash
+   nano .env  # or your preferred editor
+   ```
+
+3. **Set required API keys** (at minimum):
+   ```bash
+   LITELLM_MASTER_KEY=sk-your-master-key
+   LITELLM_API_KEY=sk-your-api-key
+   OPENAI_API_KEY=sk-your-openai-key  # Or another LLM provider
+   ```
+
+4. **Verify configuration:**
+   ```bash
+   python scripts/litellm-helper.py start
+   python scripts/test_litellm.py --mock-only
+   ```
+
+## Configuration Scenarios
+
+### Scenario 1: Local Development (Minimal Setup)
+
+**Use case:** Testing, development, single-trial experiments
+
+**Configuration:**
+```bash
+# Disable distributed mode
+# REDIS_HOST=
+
+# LiteLLM with one provider
+LITELLM_MASTER_KEY=sk-dev-key
+LITELLM_API_KEY=sk-dev-key
+OPENAI_API_KEY=sk-your-openai-key
+```
+
+**Start services:**
+```bash
+python scripts/litellm-helper.py start
+```
+
+**Run experiment:**
+```bash
+crsbench --experiment-config config.yaml \
+         --experiment-name local-test \
+         --benchmarks test-bench \
+         --crses test-crs
+```
+
+---
+
+### Scenario 2: Local with Distributed Execution
+
+**Use case:** Multi-trial experiments, parallel execution, single machine
+
+**Configuration:**
+```bash
+# Enable local Valkey
+REDIS_HOST=localhost
+EXPERIMENT_NAME=my-experiment
+
+# LiteLLM configuration
+LITELLM_MASTER_KEY=sk-prod-key
+LITELLM_API_KEY=sk-prod-key
+OPENAI_API_KEY=sk-your-openai-key
+ANTHROPIC_API_KEY=sk-ant-your-key
+```
+
+**Start services:**
+```bash
+# Start Valkey
+python scripts/valkey-helper.py start
+
+# Start LiteLLM
+python scripts/litellm-helper.py start
+
+# Verify
+python scripts/valkey-helper.py status
+python scripts/litellm-helper.py status
+```
+
+**Run experiment:**
+```bash
+crsbench --experiment-config config.yaml \
+         --experiment-name my-experiment \
+         --benchmarks bench1,bench2 \
+         --crses crs1,crs2
+```
+
+---
+
+### Scenario 3: Multi-Machine Distributed Setup
+
+**Use case:** Large experiments, dedicated Redis server, multiple worker machines
+
+**Architecture:**
+```
+┌─────────────┐
+│ Redis/Valkey│ (redis.example.com:6379)
+│   Server    │
+└─────────────┘
+      ↑ ↓
+      │
+      ├───────────────┬───────────────┐
+      ↓               ↓               ↓
+┌──────────┐    ┌──────────┐    ┌──────────┐
+│Orchestrator│  │ Worker 1 │    │ Worker 2 │
+│  Machine   │  │ Machine  │    │ Machine  │
+└──────────┘    └──────────┘    └──────────┘
+```
+
+**Orchestrator machine (.env):**
+```bash
+# Connect to remote Redis
+REDIS_HOST=redis.example.com
+REDIS_PORT=6379
+REDIS_PASSWORD=secure-password
+EXPERIMENT_NAME=large-experiment
+
+# LiteLLM (orchestrator doesn't need it)
+# Workers will use LiteLLM
+```
+
+**Worker machines (.env):**
+```bash
+# Same Redis configuration
+REDIS_HOST=redis.example.com
+REDIS_PORT=6379
+REDIS_PASSWORD=secure-password
+EXPERIMENT_NAME=large-experiment
+WORKER_TIMEOUT=7200  # 2 hours
+
+# LiteLLM on each worker
+LITELLM_MASTER_KEY=sk-worker-key
+LITELLM_API_KEY=sk-worker-key
+OPENAI_API_KEY=sk-your-openai-key
+ANTHROPIC_API_KEY=sk-ant-your-key
+```
+
+**Run experiment:**
+```bash
+# On orchestrator
+crsbench --experiment-config config.yaml \
+         --experiment-name large-experiment \
+         --benchmarks all-benchmarks \
+         --crses all-crses
+
+# On workers (in separate terminals)
+crsbench-worker
+```
+
+---
+
+### Scenario 4: Centralized LiteLLM (Proxy Mode)
+
+**Use case:** Organization-wide LLM access, centralized billing, cost tracking
+
+**Architecture:**
+```
+┌──────────────────┐
+│  Central LiteLLM │ (central-litellm.example.com:4000)
+│   (with all      │  ← LITELLM_MASTER_KEY: sk-central-master-key
+│   provider keys) │
+└──────────────────┘
+      ↑ ↑ ↑
+      │ │ │ (authenticate with LITELLM_API_KEY)
+  ┌───┘ │ └───┐
+  ↓     ↓     ↓
+Trial Trial Trial
+LiteLLM LiteLLM LiteLLM ← CRS uses LITELLM_MASTER_KEY: sk-trial-key
+(proxy) (proxy) (proxy)
+```
+
+**Key Architecture:**
+- **CRS containers** → Use `LITELLM_MASTER_KEY` to authenticate with trial LiteLLM
+- **Trial LiteLLM** → Uses `LITELLM_API_KEY` to authenticate with central LiteLLM
+- **Central LiteLLM** → Connects directly to LLM providers with provider API keys
+
+**Central LiteLLM (.env):**
+```bash
+# Master key for central LiteLLM
+LITELLM_MASTER_KEY=sk-central-master-key
+
+# All provider API keys (only central instance needs these)
+OPENAI_API_KEY=sk-org-openai-key
+ANTHROPIC_API_KEY=sk-org-anthropic-key
+GOOGLE_API_KEY=your-org-google-key
+# ... other providers
+```
+
+**Trial machines (.env):**
+```bash
+# Master key passed to CRS containers (for trial LiteLLM authentication)
+LITELLM_MASTER_KEY=sk-trial-master-key
+
+# Proxy mode - forward to central LiteLLM
+UPSTREAM_LITELLM_BASE_URL=http://central-litellm.example.com:4000
+LITELLM_API_KEY=sk-central-master-key  # Central LiteLLM's master key
+
+# No provider keys needed on trial machines!
+
+# Distributed execution
+REDIS_HOST=redis.example.com
+EXPERIMENT_NAME=org-experiment
+```
+
+**Benefits:**
+- ✅ Centralized cost tracking
+- ✅ Simplified key management (only central instance needs provider keys)
+- ✅ Organization-wide rate limiting
+- ✅ Trial-level logging for debugging (each trial has separate logs)
+
+---
+
+## Environment Variables Reference
+
+### Core Configuration
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `REDIS_HOST` | No | (unset) | Redis server for distributed execution. Leave unset for local mode. |
+| `EXPERIMENT_NAME` | For workers | `default` | Experiment identifier for queue naming |
+
+### LiteLLM Configuration
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `LITELLM_MASTER_KEY` | Yes | - | Master key for LiteLLM authentication. Passed to CRS containers. |
+| `LITELLM_BASE_URL` | No | `http://localhost:4000` | LiteLLM proxy URL |
+| `UPSTREAM_LITELLM_BASE_URL` | For proxy mode | - | URL of upstream/central LiteLLM instance |
+| `LITELLM_API_KEY` | For proxy mode | - | API key to authenticate with upstream LiteLLM (typically upstream's master key) |
+
+### LLM Provider Keys
+
+At least **one** provider key is required:
+
+| Variable | Provider | Models |
+|----------|----------|--------|
+| `OPENAI_API_KEY` | OpenAI | gpt-4o, gpt-4o-mini, gpt-4-turbo |
+| `ANTHROPIC_API_KEY` | Anthropic | claude-sonnet-4, claude-3-5-sonnet, claude-3-5-haiku |
+| `GOOGLE_API_KEY` | Google AI | gemini-2.0-flash, gemini-1.5-pro |
+| `AZURE_API_KEY` | Azure OpenAI | Azure-hosted OpenAI models |
+| `MISTRAL_API_KEY` | Mistral | mistral-large, mistral-small |
+| `GROQ_API_KEY` | Groq | llama-3.3-70b-versatile |
+| `TOGETHER_API_KEY` | Together AI | meta-llama-3.1-70b-instruct-turbo |
+| `DEEPSEEK_API_KEY` | DeepSeek | deepseek-chat, deepseek-coder |
+| `COHERE_API_KEY` | Cohere | command-r, command-r-plus |
+
+
+### Filesystem Paths
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `PROJECT_REPOS_DIR` | No | `./repos` | Directory with cloned repositories |
+| `OSS_FUZZ_PATH` | No | `./oss-fuzz` | Path to OSS-Fuzz installation |
+
+### Redis/Valkey Configuration
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `REDIS_HOST` | For distributed | - | Redis server hostname/IP |
+| `REDIS_PORT` | No | `6379` | Redis server port |
+| `REDIS_PASSWORD` | If auth enabled | - | Redis authentication password |
+
+### Worker Configuration
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `WORKER_TIMEOUT` | No | `3600` | Job timeout in seconds |
+| `LOG_LEVEL` | No | `INFO` | Logging level (DEBUG/INFO/WARNING/ERROR) |
+
+### Development
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DEBUG` | No | `false` | Enable verbose debug logging |
+| `PYTHONPATH` | No | - | Additional Python module paths |
+
+## Configuration Priority
+
+Settings are applied in this order (highest to lowest priority):
+
+1. **CLI arguments** - Command-line flags override everything
+   ```bash
+   crsbench --redis-host redis.example.com --experiment-name test
+   ```
+
+2. **Environment variables** - Values from `.env` file
+   ```bash
+   REDIS_HOST=localhost
+   ```
+
+3. **Experiment config** - Settings in `experiment-config.yaml`
+   ```yaml
+   redis_host: localhost
+   ```
+
+4. **Code defaults** - Built-in default values
+
+## Security Best Practices
+
+### ✅ DO
+
+- ✅ Copy `.env.example` to `.env` and edit it
+- ✅ Keep `.env` out of version control (it's in `.gitignore`)
+- ✅ Use different API keys for development vs production
+- ✅ Rotate API keys regularly
+- ✅ Use strong master keys (min 16 characters)
+- ✅ Restrict file permissions: `chmod 600 .env`
+- ✅ Use environment-specific `.env` files
+  - `.env.dev` for development
+  - `.env.prod` for production
+
+### ❌ DON'T
+
+- ❌ Commit `.env` files to git
+- ❌ Share API keys in chat/email
+- ❌ Use production keys in development
+- ❌ Hardcode keys in source code
+- ❌ Use weak/simple master keys
+- ❌ Share `.env` files between environments
+
+## Troubleshooting
+
+### Problem: LiteLLM fails to start
+
+**Check:**
+1. Is `LITELLM_MASTER_KEY` set?
+   ```bash
+   grep LITELLM_MASTER_KEY .env
+   ```
+
+2. Is at least one provider key set?
+   ```bash
+   grep -E "OPENAI_API_KEY|ANTHROPIC_API_KEY" .env
+   ```
+
+3. Test LiteLLM:
+   ```bash
+   python scripts/litellm-helper.py start
+   python scripts/test_litellm.py --mock-only
+   ```
+
+### Problem: Workers not connecting to Redis
+
+**Check:**
+1. Is `REDIS_HOST` set correctly?
+   ```bash
+   grep REDIS_HOST .env
+   ```
+
+2. Can you reach Redis?
+   ```bash
+   redis-cli -h $REDIS_HOST ping
+   ```
+
+3. Is `EXPERIMENT_NAME` the same on orchestrator and workers?
+   ```bash
+   grep EXPERIMENT_NAME .env
+   ```
+
+### Problem: API calls failing
+
+**Check:**
+1. Are API keys valid?
+   ```bash
+   # Test OpenAI key
+   curl https://api.openai.com/v1/models \
+     -H "Authorization: Bearer $OPENAI_API_KEY"
+   ```
+
+2. Is LiteLLM running?
+   ```bash
+   python scripts/litellm-helper.py status
+   python scripts/litellm-helper.py health
+   ```
+
+3. Test with mock request (no real API call):
+   ```bash
+   python scripts/test_litellm.py --mock-only
+   ```
+
+### Problem: Configuration not loading
+
+**Check:**
+1. Is `.env` in the project root?
+   ```bash
+   ls -la .env
+   ```
+
+2. Are there syntax errors in `.env`?
+   ```bash
+   # No spaces around =
+   # Good: KEY=value
+   # Bad:  KEY = value
+   ```
+
+3. Verify values are being loaded:
+   ```python
+   import os
+   from dotenv import load_dotenv
+   load_dotenv()
+   print(os.getenv('LITELLM_MASTER_KEY'))
+   ```
+
+## Getting API Keys
+
+### OpenAI
+1. Go to https://platform.openai.com/api-keys
+2. Click "Create new secret key"
+3. Copy the key (starts with `sk-proj-` or `sk-`)
+4. Set billing method at https://platform.openai.com/account/billing
+
+### Anthropic
+1. Go to https://console.anthropic.com/settings/keys
+2. Click "Create Key"
+3. Copy the key (starts with `sk-ant-`)
+4. Set usage limits if desired
+
+### Google AI
+1. Go to https://makersuite.google.com/app/apikey
+2. Click "Create API Key"
+3. Copy the key
+4. Enable APIs in Google Cloud Console
+
+### Other Providers
+- **Azure OpenAI**: Set up in Azure Portal
+- **Mistral**: https://console.mistral.ai/
+- **Groq**: https://console.groq.com/
+- **Together AI**: https://api.together.xyz/
+- **DeepSeek**: https://platform.deepseek.com/
+
+## Examples
+
+### Example 1: Minimal Local Setup
+
+```bash
+# .env
+LITELLM_MASTER_KEY=sk-dev-test-key-12345
+LITELLM_API_KEY=sk-dev-test-key-12345
+OPENAI_API_KEY=sk-proj-your-real-openai-key
+```
+
+### Example 2: Production Distributed
+
+```bash
+# .env
+REDIS_HOST=redis-prod.example.com
+REDIS_PORT=6379
+REDIS_PASSWORD=super-secure-password
+EXPERIMENT_NAME=prod-experiment-2024
+
+LITELLM_MASTER_KEY=sk-prod-litellm-master-abc123
+LITELLM_API_KEY=sk-prod-litellm-master-abc123
+OPENAI_API_KEY=sk-proj-prod-openai-key
+ANTHROPIC_API_KEY=sk-ant-prod-anthropic-key
+
+WORKER_TIMEOUT=7200
+LOG_LEVEL=INFO
+```
+
+### Example 3: Proxy Mode
+
+```bash
+# .env (trial machine)
+# Master key passed to CRS containers
+LITELLM_MASTER_KEY=sk-trial-master
+
+# Proxy configuration
+UPSTREAM_LITELLM_BASE_URL=http://central-litellm:4000
+LITELLM_API_KEY=sk-central-master-key  # Central LiteLLM's master key
+
+# Distributed execution
+REDIS_HOST=redis-prod.example.com
+EXPERIMENT_NAME=proxy-experiment
+```
+
+## Related Documentation
+
+- [Distributed Execution Guide](distributed-execution.md) - Setting up Redis/Valkey and workers
+- [LiteLLM Service](../services/litellm/README.md) - LiteLLM configuration details
+- [Experiment Configuration](experiment-config-example.yaml) - YAML config file format

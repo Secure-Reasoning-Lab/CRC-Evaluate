@@ -81,6 +81,29 @@ model_list:
       model: deepseek/deepseek-chat
       api_key: os.environ/DEEPSEEK_API_KEY
 
+  # =========================================================================
+  # Proxy Mode - Forward to another LiteLLM instance
+  # =========================================================================
+  # Uncomment and configure to forward requests to another LiteLLM proxy.
+  # This is useful for:
+  #   - Multi-tier LiteLLM setups
+  #   - Centralized LiteLLM instances
+  #   - Cost tracking and rate limiting layers
+  #
+  # Example: Forward all models from a remote LiteLLM instance
+  # - model_name: "*"  # Wildcard to match all models
+  #   litellm_params:
+  #     model: openai/*
+  #     api_base: os.environ/UPSTREAM_LITELLM_BASE_URL  # e.g., http://central-litellm:4000
+  #     api_key: os.environ/LITELLM_API_KEY             # Reuses existing API key env var
+  #
+  # Example: Forward specific models only
+  # - model_name: gpt-4o
+  #   litellm_params:
+  #     model: openai/gpt-4o
+  #     api_base: os.environ/UPSTREAM_LITELLM_BASE_URL
+  #     api_key: os.environ/LITELLM_API_KEY
+
 # LiteLLM Settings
 litellm_settings:
   # Enable JSON logging

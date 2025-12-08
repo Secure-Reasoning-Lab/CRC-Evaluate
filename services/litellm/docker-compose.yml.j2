@@ -47,6 +47,11 @@ services:
       # DeepSeek
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
 
+      # Proxy Mode (optional) - Forward to upstream LiteLLM
+      # Uses UPSTREAM_LITELLM_BASE_URL for the upstream URL
+      # Uses LITELLM_API_KEY (above) for upstream authentication
+      - UPSTREAM_LITELLM_BASE_URL=${UPSTREAM_LITELLM_BASE_URL:-}
+
       # Logging configuration
       - JSON_LOGS=true
 

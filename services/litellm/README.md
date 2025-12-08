@@ -88,6 +88,73 @@ AZURE_API_BASE=https://your-resource.openai.azure.com
 AZURE_API_VERSION=2024-02-15-preview
 ```
 
+### Proxy Mode
+
+LiteLLM can forward requests to another LiteLLM instance (upstream proxy). This is useful for:
+
+- **Multi-tier setups**: Trial-level proxies forward to centralized proxy
+- **Cost tracking**: Centralized proxy tracks all LLM usage and costs
+- **Rate limiting**: Apply organization-wide rate limits
+- **Model routing**: Centralized proxy handles complex routing logic
+
+**Enable proxy mode:**
+
+1. Set environment variables:
+```bash
+# Master key passed to CRS containers (for trial LiteLLM authentication)
+LITELLM_MASTER_KEY=sk-trial-master-key
+
+# Proxy configuration
+UPSTREAM_LITELLM_BASE_URL=http://central-litellm:4000
+LITELLM_API_KEY=sk-central-master-key  # Central LiteLLM's master key
+```
+
+2. Use the proxy mode config:
+```bash
+python scripts/litellm-helper.py start --config services/litellm/proxy-mode.yaml
+```
+
+**Architecture:**
+```
+CRS Container → Trial LiteLLM (Proxy) → Central LiteLLM → LLM Providers
+   (uses          (forwards with           (connects to
+LITELLM_MASTER_KEY) LITELLM_API_KEY)        providers)
+                    ↓ logs                  ↓ logs
+              trial-logs/              central-logs/
+```
+
+**Key Configuration:**
+- **CRS containers**: Use `LITELLM_MASTER_KEY` to authenticate with trial LiteLLM
+- **Trial LiteLLM**: Uses `LITELLM_API_KEY` to authenticate with central LiteLLM
+- **Central LiteLLM**: Connects to providers with provider API keys
+
+**Benefits:**
+- Trial-level logging for debugging
+- Central billing and cost tracking
+- Simplified API key management (only central instance needs provider keys)
+- Fine-grained access control per trial
+
+**Manual configuration:**
+
+Edit your config YAML to add proxy models:
+
+```yaml
+model_list:
+  # Forward all models to upstream
+  - model_name: "*"
+    litellm_params:
+      model: openai/*
+      api_base: os.environ/UPSTREAM_LITELLM_BASE_URL
+      api_key: os.environ/LITELLM_API_KEY
+
+  # Or forward specific models only
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_base: http://central-litellm:4000
+      api_key: os.environ/LITELLM_API_KEY
+```
+
 ## Logging
 
 LiteLLM logs all requests/responses as JSON files in the mounted logs directory.
