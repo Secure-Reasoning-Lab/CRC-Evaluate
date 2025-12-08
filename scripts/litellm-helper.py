@@ -183,13 +183,14 @@ def health(args):
         print("✗ No port mapping found")
         return 1
 
-    # Check health endpoint
+    # Check health endpoint using /health/liveness (no auth required)
     try:
         import requests
-        response = requests.get(f"http://localhost:{port}/health", timeout=5)
+        response = requests.get(f"http://localhost:{port}/health/liveness", timeout=5)
         if response.status_code == 200:
             print(f"✓ LiteLLM is healthy (port {port})")
-            print(f"  Response: {response.json()}")
+            result = response.text if response.headers.get("content-type", "").startswith("text/plain") else response.json()
+            print(f"  Response: {result}")
             return 0
         else:
             print(f"✗ Health check failed: {response.status_code}")
@@ -197,7 +198,7 @@ def health(args):
     except ImportError:
         # Fallback to curl
         result = run_command([
-            "curl", "-sf", f"http://localhost:{port}/health"
+            "curl", "-sf", f"http://localhost:{port}/health/liveness"
         ])
         if result:
             print(f"✓ LiteLLM is healthy (port {port})")

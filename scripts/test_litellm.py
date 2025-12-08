@@ -2,6 +2,7 @@
 """Test LiteLLM instance to verify it's working correctly.
 
 This script tests a running LiteLLM instance with both real and mock models.
+The script automatically loads environment variables from .env file.
 
 Usage:
     python scripts/test_litellm.py --port 4000
@@ -19,18 +20,31 @@ except ImportError:
     print("Error: requests library required. Install with: pip install requests")
     sys.exit(1)
 
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    print("Error: python-dotenv library required. Install with: pip install python-dotenv")
+    sys.exit(1)
 
-def test_health(base_url):
+# Project root and load .env
+PROJECT_ROOT = Path(__file__).parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
+
+
+def test_health(base_url, api_key):
     """Test health endpoint."""
     print("=" * 60)
     print("Testing Health Endpoint")
     print("=" * 60)
 
     try:
-        response = requests.get(f"{base_url}/health", timeout=5)
+        # Use /health/liveness endpoint (doesn't require auth)
+        response = requests.get(f"{base_url}/health/liveness", timeout=5)
+
         if response.status_code == 200:
             print("✓ Health check passed")
-            print(f"  Response: {response.json()}")
+            result = response.text if response.headers.get("content-type", "").startswith("text/plain") else response.json()
+            print(f"  Response: {result}")
             return True
         else:
             print(f"✗ Health check failed: {response.status_code}")
@@ -69,14 +83,14 @@ def test_models_list(base_url, api_key):
         return False
 
 
-def test_mock_completion(base_url, api_key):
+def test_mock_completion(base_url, api_key, model="gemini-2.5-flash-lite"):
     """Test completion with mock response (no real API call)."""
     print("\n" + "=" * 60)
     print("Testing Mock Completion (no API call)")
     print("=" * 60)
 
     payload = {
-        "model": "gpt-4o-mini",
+        "model": model,
         "messages": [
             {"role": "user", "content": "Say 'test successful'"}
         ],
@@ -112,7 +126,7 @@ def test_mock_completion(base_url, api_key):
         return False
 
 
-def test_real_completion(base_url, api_key, model="gpt-4o-mini"):
+def test_real_completion(base_url, api_key, model="gemini-2.5-flash-lite"):
     """Test real completion (makes actual API call)."""
     print("\n" + "=" * 60)
     print(f"Testing Real Completion with {model}")
@@ -177,14 +191,14 @@ def test_real_completion(base_url, api_key, model="gpt-4o-mini"):
         return False
 
 
-def test_streaming(base_url, api_key):
+def test_streaming(base_url, api_key, model="gemini-2.5-flash-lite"):
     """Test streaming completion."""
     print("\n" + "=" * 60)
     print("Testing Streaming Completion")
     print("=" * 60)
 
     payload = {
-        "model": "gpt-4o-mini",
+        "model": model,
         "messages": [
             {"role": "user", "content": "Count from 1 to 5"}
         ],
@@ -256,8 +270,8 @@ def main():
         help="Only run mock tests (no real API calls)"
     )
     parser.add_argument(
-        "--model", default="gpt-4o-mini",
-        help="Model to test with (default: gpt-4o-mini)"
+        "--model", default="gemini-2.5-flash-lite",
+        help="Model to test with (default: gemini-2.5-flash-lite)"
     )
 
     args = parser.parse_args()
@@ -277,10 +291,10 @@ def main():
     # Run tests
     results = {}
 
-    results["health"] = test_health(base_url)
+    results["health"] = test_health(base_url, api_key)
     results["models_list"] = test_models_list(base_url, api_key)
-    results["mock_completion"] = test_mock_completion(base_url, api_key)
-    results["streaming"] = test_streaming(base_url, api_key)
+    results["mock_completion"] = test_mock_completion(base_url, api_key, args.model)
+    results["streaming"] = test_streaming(base_url, api_key, args.model)
 
     if not args.mock_only:
         results["real_completion"] = test_real_completion(base_url, api_key, args.model)
