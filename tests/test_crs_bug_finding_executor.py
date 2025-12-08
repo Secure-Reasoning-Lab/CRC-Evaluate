@@ -116,7 +116,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
 
         self.assertIn("CRS config directory not found", str(context.exception))
 
-    @patch('crsbench.migration.repo_manager.ensure_project_repository')
+    @patch('crsbench.utils.repo_manager.ensure_project_repository')
     @patch('subprocess.run')
     def test_build_crs_if_needed(self, mock_run, mock_ensure_repo):
         """Test CRS build with repository manager integration."""
@@ -172,7 +172,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         cache_key = f"{test_crs_dir}:test-project"
         self.assertIn(cache_key, executor.built_projects)
 
-    @patch('crsbench.migration.repo_manager.ensure_project_repository')
+    @patch('crsbench.utils.repo_manager.ensure_project_repository')
     @patch('subprocess.run')
     def test_build_crs_already_built(self, mock_run, mock_ensure_repo):
         """Test that CRS build is skipped if already built."""
@@ -375,7 +375,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         self.assertEqual(len(pov_results), 0)
         self.assertIsInstance(pov_results, list)
 
-    @patch('crsbench.migration.repo_manager.ensure_project_repository')
+    @patch('crsbench.utils.repo_manager.ensure_project_repository')
     @patch('subprocess.run')
     def test_run_crs_success(self, mock_run, mock_ensure_repo):
         """Test successful CRS execution."""
@@ -430,7 +430,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         # Verify execution metadata created
         self.assertTrue((trial_dir / "execution.json").exists())
 
-    @patch('crsbench.migration.repo_manager.ensure_project_repository')
+    @patch('crsbench.utils.repo_manager.ensure_project_repository')
     @patch('subprocess.run')
     def test_run_crs_timeout(self, mock_run, mock_ensure_repo):
         """Test CRS execution timeout handling."""

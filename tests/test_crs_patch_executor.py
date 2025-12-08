@@ -67,7 +67,7 @@ class TestCRSPatchExecutor(unittest.TestCase):
         self.assertTrue(output_dir.exists())
         self.assertTrue(output_dir.is_dir())
 
-    @patch('crsbench.migration.repo_manager.ensure_project_repository')
+    @patch('crsbench.utils.repo_manager.ensure_project_repository')
     @patch('subprocess.run')
     def test_build_crs_if_needed(self, mock_run, mock_ensure_repo):
         """Test CRS build with repository manager integration."""
@@ -106,7 +106,7 @@ class TestCRSPatchExecutor(unittest.TestCase):
         # Verify project is cached
         self.assertIn("test-crs:test-project", self.executor.built_projects)
 
-    @patch('crsbench.migration.repo_manager.ensure_project_repository')
+    @patch('crsbench.utils.repo_manager.ensure_project_repository')
     @patch('subprocess.run')
     def test_build_crs_already_built(self, mock_run, mock_ensure_repo):
         """Test that CRS build is skipped if already built."""
