@@ -257,6 +257,20 @@ class ExperimentConfig(BaseModel):
         default=None,
         description="Path to CRS configs directory (defaults to ./crses/configs)"
     )
+    hints_enabled: bool = Field(
+        default=False,
+        description="Enable hints for CRS evaluation"
+    )
+    hint_sarif_level: Optional[int] = Field(
+        default=None,
+        ge=1, le=5,
+        description="SARIF hint level (1=vague, 5=detailed). None disables SARIF hints."
+    )
+    hint_corpus_level: Optional[int] = Field(
+        default=None,
+        ge=1, le=5,
+        description="Pre-fuzz corpus level (1=minimal, 5=comprehensive). None disables corpus. [PLACEHOLDER - not yet implemented]"
+    )
 
     @field_validator('experiment')
     @classmethod
@@ -381,6 +395,16 @@ class ExperimentConfig(BaseModel):
 
         return self
 
+    @model_validator(mode='after')
+    def check_hints_configuration(self):
+        """Validate hint configuration consistency."""
+        if self.hints_enabled:
+            if self.hint_sarif_level is None and self.hint_corpus_level is None:
+                raise ValueError(
+                    "hints_enabled=True requires at least one of hint_sarif_level or hint_corpus_level to be set"
+                )
+        return self
+
     def get_benchmark_list(self, benchmark_suites_dir: str = "benchmark-suites") -> List[str]:
         """Get the list of benchmarks, resolving benchmark_suite if necessary.
 
@@ -432,6 +456,9 @@ class ExperimentConfig(BaseModel):
             'benchmarks_root': self.benchmarks_root,
             'benchmarks': self.benchmarks,
             'benchmark_suite': self.benchmark_suite,
+            'hints_enabled': self.hints_enabled,
+            'hint_sarif_level': self.hint_sarif_level,
+            'hint_corpus_level': self.hint_corpus_level,
         }
 
 

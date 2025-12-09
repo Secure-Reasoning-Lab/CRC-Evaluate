@@ -10,6 +10,7 @@ for each trial execution, including:
 """
 
 import json
+import yaml
 from crsbench.utils.logger import get_logger
 import shutil
 import subprocess
@@ -274,11 +275,17 @@ class TrialDirectoryPreparer:
         trial_dir: Path
     ) -> Optional[Path]:
         """
-        Prepare hints directory with filtered content.
+        Prepare hints directory by aggregating hints from all CPVs.
+
+        New behavior:
+        - Loads meta.yaml to discover ALL harnesses and CPVs
+        - Aggregates SARIF hints from level_N.sarif files based on hint_sarif_level
+        - Uses sequential numeric names (0.sarif, 1.sarif, ...) to avoid leaking CPV info
+        - Corpus support is placeholder for future implementation
 
         Args:
             benchmark: Benchmark name
-            harness: Harness name
+            harness: Harness name (currently IGNORED - aggregates from ALL harnesses)
             trial_dir: Trial directory
 
         Returns:
@@ -288,101 +295,117 @@ class TrialDirectoryPreparer:
             logger.debug("Hints not enabled, skipping")
             return None
 
-        benchmark_dir = self.benchmarks_root / benchmark
-        source_hints = benchmark_dir / ".aixcc" / harness / "hints"
+        sarif_level = self.config.get("hint_sarif_level")
+        corpus_level = self.config.get("hint_corpus_level")
 
-        if not source_hints.exists():
-            logger.warning(f"No hints found for {benchmark}/{harness}")
+        # Must have at least one hint type configured
+        if sarif_level is None and corpus_level is None:
+            logger.warning("hints_enabled=True but no hint levels configured")
+            return None
+
+        benchmark_dir = self.benchmarks_root / benchmark
+        if not benchmark_dir.exists():
+            logger.warning(f"Benchmark directory not found: {benchmark_dir}")
+            return None
+
+        # Load meta.yaml to discover all harnesses and CPVs
+        meta_yaml_path = benchmark_dir / ".aixcc" / "meta.yaml"
+        if not meta_yaml_path.exists():
+            logger.warning(f"No meta.yaml found for {benchmark}")
+            return None
+
+        try:
+            with open(meta_yaml_path, 'r') as f:
+                meta = yaml.safe_load(f)
+        except Exception as e:
+            logger.error(f"Failed to load meta.yaml for {benchmark}: {e}")
             return None
 
         # Create trial hints directory
         hints_dir = trial_dir / "hints"
         hints_dir.mkdir(parents=True, exist_ok=True)
 
-        try:
-            # Copy SARIF files
-            sarif_copied = self._copy_sarif_files(source_hints, hints_dir)
+        # Aggregate SARIF hints from all CPVs
+        sarif_copied = False
+        if sarif_level is not None:
+            sarif_copied = self._aggregate_sarif_hints(
+                benchmark_dir=benchmark_dir,
+                meta=meta,
+                sarif_level=sarif_level,
+                hints_dir=hints_dir
+            )
 
-            # Copy corpus based on level
-            corpus_copied = self._copy_corpus_files(source_hints, hints_dir)
+        # Aggregate corpus hints (PLACEHOLDER - not yet implemented)
+        corpus_copied = False
+        if corpus_level is not None:
+            logger.warning("Corpus hints not yet implemented (placeholder)")
+            # corpus_copied = self._aggregate_corpus_hints(...)
 
-            if sarif_copied or corpus_copied:
-                logger.info(f"Prepared hints at: {hints_dir}")
-                return hints_dir
-            else:
-                logger.warning(f"No hints content copied for {benchmark}/{harness}")
-                return None
+        if sarif_copied or corpus_copied:
+            logger.info(f"Prepared hints at: {hints_dir}")
+            return hints_dir
+        else:
+            logger.warning(f"No hints content aggregated for {benchmark}")
+            return None
 
-        except Exception as e:
-            logger.error(f"Hints preparation failed: {e}", exc_info=True)
-            raise HintsPreparationError(f"Failed to prepare hints: {e}") from e
-
-    def _copy_sarif_files(
+    def _aggregate_sarif_hints(
         self,
-        source_hints: Path,
+        benchmark_dir: Path,
+        meta: Dict[str, Any],
+        sarif_level: int,
         hints_dir: Path
     ) -> bool:
         """
-        Copy SARIF files from source hints.
+        Aggregate SARIF hints from all CPVs across all harnesses.
 
         Args:
-            source_hints: Source hints directory
+            benchmark_dir: Benchmark directory path
+            meta: Parsed meta.yaml content
+            sarif_level: SARIF level to select (1-5)
             hints_dir: Destination hints directory
 
         Returns:
-            True if any files copied
+            True if any SARIF files were copied
         """
-        source_sarif = source_hints / "sarif"
-        if not source_sarif.exists():
-            logger.debug("No SARIF directory found in hints")
+        sarif_index = 0
+        harness_files = meta.get("harness_files", [])
+
+        if not harness_files:
+            logger.warning("No harness_files found in meta.yaml")
             return False
 
-        dest_sarif = hints_dir / "sarif"
-        dest_sarif.mkdir(exist_ok=True)
+        for harness in harness_files:
+            harness_name = harness.get("name")
+            if not harness_name:
+                logger.warning("Harness missing 'name' field, skipping")
+                continue
 
-        copied = 0
-        for sarif_file in source_sarif.glob("*.sarif"):
-            shutil.copy2(sarif_file, dest_sarif)
-            copied += 1
+            vulns = harness.get("vulns", [])
+            for vuln in vulns:
+                cpv_keyword = vuln.get("vuln_keyword")
+                if not cpv_keyword:
+                    logger.warning(f"Vulnerability missing 'vuln_keyword' in {harness_name}, skipping")
+                    continue
 
-        if copied > 0:
-            logger.info(f"Copied {copied} SARIF files")
-        return copied > 0
+                # Construct path to CPV hints
+                cpv_hints_dir = benchmark_dir / ".aixcc" / harness_name / cpv_keyword / "hints"
+                sarif_file = cpv_hints_dir / f"level_{sarif_level}.sarif"
 
-    def _copy_corpus_files(
-        self,
-        source_hints: Path,
-        hints_dir: Path
-    ) -> bool:
-        """
-        Copy corpus files from source hints based on config level.
+                if sarif_file.exists():
+                    # Copy with non-leaky sequential name
+                    dest = hints_dir / f"{sarif_index}.sarif"
+                    shutil.copy2(sarif_file, dest)
+                    logger.debug(f"Copied {sarif_file} -> {dest}")
+                    sarif_index += 1
+                else:
+                    logger.debug(f"SARIF hint not found: {sarif_file}")
 
-        Args:
-            source_hints: Source hints directory
-            hints_dir: Destination hints directory
-
-        Returns:
-            True if any files copied
-        """
-        corpus_level = self.config.get("hints_corpus_level", "1h")
-        source_corpus = source_hints / "corpus" / corpus_level
-
-        if not source_corpus.exists():
-            logger.warning(f"Corpus level '{corpus_level}' not found in hints")
+        if sarif_index > 0:
+            logger.info(f"Aggregated {sarif_index} SARIF hints at level {sarif_level}")
+            return True
+        else:
+            logger.warning(f"No SARIF hints found at level {sarif_level}")
             return False
-
-        dest_corpus = hints_dir / "corpus"
-        dest_corpus.mkdir(exist_ok=True)
-
-        copied = 0
-        for corpus_file in source_corpus.iterdir():
-            if corpus_file.is_file():
-                shutil.copy2(corpus_file, dest_corpus)
-                copied += 1
-
-        if copied > 0:
-            logger.info(f"Copied {copied} corpus files (level: {corpus_level})")
-        return copied > 0
 
     def _prepare_povs(
         self,
@@ -529,13 +552,17 @@ class TrialDirectoryPreparer:
 
     def _get_hints_stats(self, hints_dir: Path) -> Dict[str, Any]:
         """Get statistics about prepared hints."""
-        sarif_dir = hints_dir / "sarif"
+        # Count SARIF files directly in hints_dir (no sarif/ subdir in new structure)
+        sarif_count = len(list(hints_dir.glob("*.sarif")))
+
+        # Corpus support placeholder
         corpus_dir = hints_dir / "corpus"
+        corpus_count = len(list(corpus_dir.iterdir())) if corpus_dir.exists() else 0
 
         return {
             "path": str(hints_dir),
-            "sarif_count": len(list(sarif_dir.glob("*.sarif"))) if sarif_dir.exists() else 0,
-            "corpus_count": len(list(corpus_dir.iterdir())) if corpus_dir.exists() else 0
+            "sarif_count": sarif_count,
+            "corpus_count": corpus_count
         }
 
     def _get_povs_stats(self, povs_dir: Path) -> Dict[str, Any]:

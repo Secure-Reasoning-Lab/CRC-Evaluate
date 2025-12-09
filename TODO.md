@@ -17,19 +17,19 @@
 
 ## Running RFC-compliant CRSes [@Yufu]
 
-- [ ]  Implement experiment scripts and configurations (e.g., run_experiment.py)
+- [x]  Implement experiment scripts and configurations (e.g., run_experiment.py)
 - [x]  job queue and worker (like fuzzbench with redis)
 - [x]  CRS interface
     - [x] bug-finding
     - [x] patch
-    - [ ] make sure them could be run from any cwd
+    - [x] make sure them could be run from any cwd
     - [ ] everything CRSBench need to pass to them are configurable
 - [ ]  Wrapper codes for running bug finding CRS
-    - [ ]  Mock CRS bug-finding interface
-    - [ ]  Agreement with CRS standardization team
+    - [x]  Mock CRS bug-finding interface
+    - [x]  Agreement with CRS standardization team
 - [ ]  Wrapper codes for running patching CRS
-    - [ ]  Mock CRS patching interface
-    - [ ]  Agreement with CRS standardization team / oss-patch
+    - [x]  Mock CRS patching interface
+    - [x]  Agreement with CRS standardization team / oss-patch
     - [ ]  pass `patch_exclude_list` or not?
 - [ ] passing hints
   - [ ] corpus (for oss-patch too?)
@@ -38,7 +38,7 @@
   - [ ] how many POVs? (all? hidden POVs?)
 - [ ]  end-to-end test with run_experiment.py
     - [ ]  local test
-        - [ ]  one job
+        - [x]  one job
         - [ ]  multiple jobs
             - [ ]  proper way to find a reasonable number for concurrent jobs for a machine or user-defined
             - [ ]  make sure no filesystem conflicts & severe resource contention
@@ -82,7 +82,7 @@
 ## LLM setup Logging
 - [ ] liteLLM setup
   - [ ] all available models & total budgets
-  - [ ] master key? CRS can allocate budgets for models by themselves
+  - [x] master key? CRS can allocate budgets for models by themselves
   - [ ] each trial (CRS, benchmark, trial_id) should have its own liteLLM
         instance to prevent conflict. Assume that multiple trials on the same
         host machine.

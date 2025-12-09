@@ -57,6 +57,29 @@ benchmarks:
 # Range: 1-5 (implementation-dependent)
 difficulty_level: 1
 
+# ===== Hints Configuration =====
+
+# Enable hints for CRS evaluation
+# When enabled, aggregates hints from all CPVs and provides them to CRS
+hints_enabled: false
+
+# SARIF hint level (1-5)
+# Controls the amount of information in static analysis hints:
+#   1 = Vague (e.g., "Memory Safety Issue")
+#   2 = CWE type (e.g., "CWE-416 - Use After Free")
+#   3 = + function location
+#   4 = + line number ranges
+#   5 = + vulnerability name and description
+# Set to null to disable SARIF hints
+hint_sarif_level: 3
+
+# Pre-fuzz corpus hint level (1-5) [PLACEHOLDER - not yet implemented]
+# Controls the size/quality of initial fuzzing corpus:
+#   1 = Minimal corpus
+#   5 = Comprehensive corpus
+# Set to null to disable corpus hints
+# hint_corpus_level: null
+
 # ===== Monitoring & Snapshots =====
 
 # Interval in seconds for taking snapshots of CRS progress.

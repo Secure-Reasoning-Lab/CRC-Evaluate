@@ -142,7 +142,8 @@ def run_crs_trial(
             'build_timeout': config.get('build_timeout', 3600),
             'run_timeout': config.get('max_total_time', 7200),
             'hints_enabled': config.get('hints_enabled', False),
-            'hints_corpus_level': config.get('hints_corpus_level', '1h')
+            'hint_sarif_level': config.get('hint_sarif_level'),
+            'hint_corpus_level': config.get('hint_corpus_level'),
         })
 
         # Initialize benchmark runner with CRS executor and snapshot configuration

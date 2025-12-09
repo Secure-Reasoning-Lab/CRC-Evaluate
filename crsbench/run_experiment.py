@@ -141,6 +141,30 @@ Examples:
     )
 
     parser.add_argument(
+        '--hints-enabled',
+        action='store_true',
+        help='Enable hints for CRS evaluation (overrides config file)'
+    )
+
+    parser.add_argument(
+        '--hint-sarif-level',
+        type=int,
+        choices=[1, 2, 3, 4, 5],
+        required=False,
+        metavar='LEVEL',
+        help='SARIF hint level 1-5 (1=vague, 5=detailed, overrides config file)'
+    )
+
+    parser.add_argument(
+        '--hint-corpus-level',
+        type=int,
+        choices=[1, 2, 3, 4, 5],
+        required=False,
+        metavar='LEVEL',
+        help='Corpus hint level 1-5 (1=minimal, 5=comprehensive, overrides config file) [PLACEHOLDER]'
+    )
+
+    parser.add_argument(
         '--debug',
         action='store_true',
         help='Enable debug logging (logs all commands executed with their working directories)'
@@ -317,6 +341,19 @@ def enhance_config_with_cli_args(config_dict: Dict[str, Any], args: argparse.Nam
     if args.benchmarks_root:
         enhanced['benchmarks_root'] = args.benchmarks_root
         logger.info(f"Using benchmarks root from CLI: {args.benchmarks_root}")
+
+    # Hint configuration overrides
+    if args.hints_enabled:
+        enhanced['hints_enabled'] = True
+        logger.info("Hints enabled via CLI")
+
+    if args.hint_sarif_level is not None:
+        enhanced['hint_sarif_level'] = args.hint_sarif_level
+        logger.info(f"Using SARIF hint level from CLI: {args.hint_sarif_level}")
+
+    if args.hint_corpus_level is not None:
+        enhanced['hint_corpus_level'] = args.hint_corpus_level
+        logger.info(f"Using corpus hint level from CLI: {args.hint_corpus_level}")
 
     return enhanced
 
