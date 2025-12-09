@@ -67,7 +67,8 @@ class BenchmarkRunner:
     def run_benchmark(self, benchmark_path: Union[str, Path],
                       mode: Optional[str] = None,
                       crs_config: Optional[Dict[str, Any]] = None,
-                      trial_output_dir: Optional[Path] = None) -> EvaluationResult:
+                      trial_output_dir: Optional[Path] = None,
+                      crs_output_dir: Optional[Path] = None) -> EvaluationResult:
         """Run a complete benchmark evaluation.
 
         Args:
@@ -75,6 +76,7 @@ class BenchmarkRunner:
             mode: Evaluation mode ('delta', 'full', or 'auto' to detect)
             crs_config: Configuration for CRS executor
             trial_output_dir: Trial output directory for snapshots (required if snapshots enabled)
+            crs_output_dir: Optional CRS output directory (for oss-bugfind-crs workaround)
 
         Returns:
             EvaluationResult: Complete evaluation results
@@ -140,7 +142,8 @@ class BenchmarkRunner:
                 snapshot_manager = SnapshotManager(
                     trial_dir=trial_output_dir,
                     snapshot_period=self.snapshot_period,
-                    trial_start_time=trial_start_time
+                    trial_start_time=trial_start_time,
+                    crs_output_dir=crs_output_dir
                 )
                 snapshot_thread = threading.Thread(target=snapshot_manager.run, daemon=True)
                 snapshot_thread.start()

@@ -37,13 +37,14 @@ class SnapshotManager:
         trial_start_time: Unix timestamp when trial started
     """
 
-    def __init__(self, trial_dir: Path, snapshot_period: int, trial_start_time: Optional[float] = None):
+    def __init__(self, trial_dir: Path, snapshot_period: int, trial_start_time: Optional[float] = None, crs_output_dir: Optional[Path] = None):
         """Initialize snapshot manager.
 
         Args:
             trial_dir: Trial output directory (must exist)
             snapshot_period: Snapshot interval in seconds (must be > 0)
             trial_start_time: Trial start timestamp (defaults to current time)
+            crs_output_dir: Optional CRS output directory (for oss-bugfind-crs workaround)
 
         Raises:
             ValueError: If snapshot_period <= 0 or trial_dir doesn't exist
@@ -57,6 +58,7 @@ class SnapshotManager:
         self.trial_dir = trial_dir
         self.snapshot_period = snapshot_period
         self.trial_start_time = trial_start_time or time.time()
+        self.crs_output_dir = crs_output_dir
 
         # State tracking
         self.cycle = 0
@@ -68,7 +70,7 @@ class SnapshotManager:
         self.captured_patches: Set[str] = set()
         self.last_corpus_mtime = 0.0
 
-        logger.info(f"SnapshotManager initialized: period={snapshot_period}s, trial_dir={trial_dir}")
+        logger.info(f"SnapshotManager initialized: period={snapshot_period}s, trial_dir={trial_dir}, crs_output_dir={crs_output_dir}")
 
     def run(self):
         """Main snapshot loop (runs in separate thread).
@@ -186,6 +188,19 @@ class SnapshotManager:
 
         return not self.running
 
+    def _get_output_dir(self) -> Path:
+        """Get the CRS output directory.
+
+        Returns crs_output_dir if provided (for oss-bugfind-crs workaround),
+        otherwise falls back to trial_dir/output/ (canonical location for future).
+
+        Returns:
+            Path to CRS output directory
+        """
+        if self.crs_output_dir and self.crs_output_dir.exists():
+            return self.crs_output_dir
+        return self.trial_dir / "output"
+
     def _capture_metadata(self, temp_dir: Path, elapsed_time: float):
         """Capture snapshot metadata."""
         metadata = SnapshotMetadata(
@@ -230,7 +245,7 @@ class SnapshotManager:
 
     def _capture_povs(self, temp_dir: Path):
         """Capture POVs (incremental - only new POVs)."""
-        output_dir = self.trial_dir / "output"
+        output_dir = self._get_output_dir()
         pov_dir = output_dir / "povs"
 
         if not pov_dir.exists():
@@ -264,7 +279,7 @@ class SnapshotManager:
 
     def _capture_patches(self, temp_dir: Path):
         """Capture patches (incremental - only new patches, organized by POV ID)."""
-        output_dir = self.trial_dir / "output"
+        output_dir = self._get_output_dir()
         patches_dir = output_dir / "patches"
 
         if not patches_dir.exists():
@@ -307,7 +322,7 @@ class SnapshotManager:
 
     def _capture_corpus(self, temp_dir: Path):
         """Capture corpus files (incremental - new/modified files by mtime)."""
-        output_dir = self.trial_dir / "output"
+        output_dir = self._get_output_dir()
         corpus_dir = output_dir / "corpus"
 
         if not corpus_dir.exists():
@@ -345,7 +360,7 @@ class SnapshotManager:
 
     def _capture_crs_data(self, temp_dir: Path):
         """Capture CRS-specific data (incremental - by mtime, optional)."""
-        output_dir = self.trial_dir / "output"
+        output_dir = self._get_output_dir()
         crs_data_dir = output_dir / "crs-data"
 
         if not crs_data_dir.exists():
