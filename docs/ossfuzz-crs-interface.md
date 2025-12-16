@@ -121,10 +121,11 @@ hints/
 │   ├── codeql.sarif         # CodeQL analysis results
 │   ├── semgrep.sarif        # Semgrep analysis results
 │   └── ...                  # Other SARIF-format reports
-└── corpus/                   # Pre-fuzzing corpus
-    ├── input-001.blob
-    ├── input-002.blob
-    └── ...
+├── corpus/                   # Pre-fuzzing corpus
+│   ├── input-001.blob
+│   ├── input-002.blob
+│   └── ...
+└── ref.diff                  # Delta mode: diff that introduced the bug (optional)
 ```
 
 **Container filesystem mapping:**
@@ -137,6 +138,7 @@ When `--hints` is provided, the hints directory is mounted in the container:
 Inside the container, CRS can access:
 - `/hints/sarif/*.sarif` - Static analysis reports in SARIF format
 - `/hints/corpus/*.blob` - Pre-fuzzing corpus files
+- `/hints/ref.diff` - Delta mode diff that introduced the bug (optional)
 
 **Usage notes:**
 
@@ -144,6 +146,36 @@ Inside the container, CRS can access:
 - CRS can choose which hints to use (e.g., only SARIF, only corpus, or both)
 - Multiple SARIF files from different tools can be provided
 - SARIF format: [SARIF v2.1.0 specification](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
+
+### Delta Mode Reference Diff (ref.diff)
+
+For delta mode benchmarks, an optional `ref.diff` file may be included in the hints directory. This file contains the unified diff between `base_commit` and `ref_commit` that introduced the vulnerability.
+
+**Key properties:**
+- The vulnerability is **guaranteed** to be introduced (directly or indirectly) by changes in this diff
+- Optional hint - if not provided, CRS works in full mode (searches entire codebase)
+- Format: Unified diff format (same as `git diff base_commit ref_commit`)
+- Available only for delta mode benchmarks
+
+**Usage for CRS:**
+- **Bug finding**: Narrow search space to functions/files modified in the diff
+- **Vulnerability localization**: Focus analysis on the changed code regions
+- **Patch generation**: Understand what code changes caused the issue; potentially revert or modify the problematic changes
+
+**Example:**
+```diff
+diff --git a/src/parser.c b/src/parser.c
+index abc123..def456 100644
+--- a/src/parser.c
++++ b/src/parser.c
+@@ -45,7 +45,7 @@ int parse_input(char *buf) {
+-    if (len > 0) {
++    if (len >= 0) {
+         process(buf);
+     }
+```
+
+In this example, the change from `> 0` to `>= 0` introduced a bug. CRS can focus its search on this function.
 
 **Typical benchmark structure:**
 
@@ -158,10 +190,11 @@ benchmarks/json-c/
 │   │       ├── sarif/
 │   │       │   ├── codeql.sarif
 │   │       │   └── semgrep.sarif
-│   │       └── corpus/
-│   │           ├── input-001.blob
-│   │           ├── input-002.blob
-│   │           └── ...
+│   │       ├── corpus/
+│   │       │   ├── input-001.blob
+│   │       │   ├── input-002.blob
+│   │       │   └── ...
+│   │       └── ref.diff        # Delta mode: diff that introduced bug
 │   └── json_parse_fuzzer/
 │       └── hints/              # Separate hints per harness
 │           └── ...
@@ -219,7 +252,8 @@ See the CRSBench snapshot design documentation for details on snapshot frequency
 │   └── crs-data/               # CRS writes custom data here (optional)
 ├── hints/                      # Optional hints (mounted from host --hints)
 │   ├── sarif/                  # Static analysis reports
-│   └── corpus/                 # Pre-fuzzing corpus
+│   ├── corpus/                 # Pre-fuzzing corpus
+│   └── ref.diff                # Delta mode: diff that introduced bug
 ├── src/                        # Project source code
 └── work/                       # Working directory
 ```
@@ -575,10 +609,11 @@ hints/
 │   ├── codeql.sarif         # May identify vulnerability locations
 │   ├── semgrep.sarif        # Pattern-based bug detection
 │   └── ...
-└── corpus/                   # Pre-fuzzing corpus
-    ├── input-001.blob
-    ├── input-002.blob
-    └── ...
+├── corpus/                   # Pre-fuzzing corpus
+│   ├── input-001.blob
+│   ├── input-002.blob
+│   └── ...
+└── ref.diff                  # Delta mode: diff that introduced the bug (optional)
 ```
 
 **Container access:**
@@ -586,11 +621,13 @@ hints/
 Inside the container, CRS can access:
 - `/hints/sarif/*.sarif` - Static analysis reports pointing to bug locations
 - `/hints/corpus/*.blob` - Pre-fuzzing corpus to verify patch correctness
+- `/hints/ref.diff` - Delta mode diff that introduced the bug (optional)
 
 **Usage for patch generation:**
 
 - **SARIF reports**: May help identify vulnerability root causes and suggest fix locations
 - **Pre-fuzzing corpus**: Can be used as regression tests to ensure patches don't break functionality
+- **ref.diff (delta mode)**: Understand what code changes introduced the bug; narrow patch search to modified functions/files
 - **Combination with POVs**: Use POV blobs from `/povs/` to verify vulnerability is fixed, and corpus from `/hints/` to verify no regressions
 
 ### CRS Output Directory Structure
@@ -643,7 +680,8 @@ See the CRSBench snapshot design documentation for details on snapshot frequency
 ├── pov                      # Single POV test case (if --pov provided)
 ├── hints/                   # Optional hints (if --hints provided)
 │   ├── sarif/
-│   └── corpus/
+│   ├── corpus/
+│   └── ref.diff             # Delta mode: diff that introduced bug
 ├── out/                     # CRS output (mounted from host --output)
 │   ├── patches/             # CRS writes patches here
 │   └── crs-data/            # CRS writes custom data here (optional)
@@ -661,7 +699,8 @@ See the CRSBench snapshot design documentation for details on snapshot frequency
 │   └── ...
 ├── hints/                   # Optional hints (if --hints provided)
 │   ├── sarif/
-│   └── corpus/
+│   ├── corpus/
+│   └── ref.diff             # Delta mode: diff that introduced bug
 ├── out/                     # CRS output (mounted from host --output)
 │   ├── patches/             # CRS writes patches here
 │   └── crs-data/            # CRS writes custom data here (optional)
