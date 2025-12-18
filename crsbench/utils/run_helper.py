@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any, Union
 from enum import IntEnum
 
-from crsbench.utils.repo_manager import ensure_project_repository, get_repo_info_from_benchmark
+from crsbench.utils.repo_manager import ensure_project_repository, get_repo_info_from_benchmark, run_git
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -385,53 +385,76 @@ def run_cmd(
     logger.debug(f"Running command (cwd: {cwd}): {' '.join(cmd)}")
     sys.stdout.flush()
 
-    try:
-        process = subprocess.Popen(
-            cmd,
-            cwd=cwd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
+    # Use run_git for git commands to support gitcache
+    if cmd and cmd[0] == 'git':
+        try:
+            result = run_git(
+                cmd[1:],  # Skip 'git' since run_git adds it
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False
+            )
+            stdout = strip_ansi(result.stdout) if result.stdout else ""
+            stderr = strip_ansi(result.stderr) if result.stderr else ""
+            process_returncode = result.returncode
+        except subprocess.TimeoutExpired:
+            stdout, stderr = "", ""
+            process_returncode = -1
+            if return_code:
+                return stdout, stderr, -1
+            raise RuntimeError(f"Command timed out after {timeout} seconds")
+    else:
+        try:
+            process = subprocess.Popen(
+                cmd,
+                cwd=cwd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
 
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        stdout, stderr = process.communicate()
+            stdout, stderr = process.communicate(timeout=timeout)
+            process_returncode = process.returncode
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+            process_returncode = -1
+            if return_code:
+                stdout = strip_ansi(stdout) if stdout else ""
+                stderr = strip_ansi(stderr) if stderr else ""
+                return stdout, stderr, -1
+            raise RuntimeError(f"Command timed out after {timeout} seconds")
+
+        # Clean ANSI escape sequences
         stdout = strip_ansi(stdout) if stdout else ""
         stderr = strip_ansi(stderr) if stderr else ""
-        if return_code:
-            return stdout, stderr, -1
-        raise RuntimeError(f"Command timed out after {timeout} seconds")
-
-    # Clean ANSI escape sequences
-    stdout = strip_ansi(stdout) if stdout else ""
-    stderr = strip_ansi(stderr) if stderr else ""
 
     sys.stdout.flush()
     sys.stderr.flush()
 
     if expect_fail:
-        if process.returncode == 0 and exception:
+        if process_returncode == 0 and exception:
             raise RuntimeError(
                 f"Command '{' '.join(cmd)}' succeeded but was expected to fail\n"
-                f"returncode: {process.returncode}\n"
+                f"returncode: {process_returncode}\n"
                 f"stdout: {stdout}\n"
                 f"stderr: {stderr}"
             )
     else:
-        if process.returncode != 0 and exception:
+        if process_returncode != 0 and exception:
             raise RuntimeError(
-                f"Command '{' '.join(cmd)}' failed with return code {process.returncode}\n"
+                f"Command '{' '.join(cmd)}' failed with return code {process_returncode}\n"
                 f"stdout: {stdout}\n"
                 f"stderr: {stderr}"
             )
 
     if return_code:
-        return stdout, stderr, process.returncode
+        return stdout, stderr, process_returncode
     return stdout, stderr
 
 

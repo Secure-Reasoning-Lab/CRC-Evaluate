@@ -12,6 +12,7 @@ for each trial execution, including:
 import json
 import yaml
 from crsbench.utils.logger import get_logger
+from crsbench.utils import run_git
 import shutil
 import subprocess
 from dataclasses import dataclass, asdict
@@ -538,11 +539,11 @@ class TrialDirectoryPreparer:
     def _get_git_commit(self, source_path: Path) -> Optional[str]:
         """Get current commit hash from git repository."""
         try:
-            result = subprocess.run(
-                ["git", "-C", str(source_path), "rev-parse", "HEAD"],
+            result = run_git(
+                ["rev-parse", "HEAD"],
+                cwd=str(source_path),
                 capture_output=True,
                 text=True,
-                check=True,
                 timeout=10
             )
             return result.stdout.strip()

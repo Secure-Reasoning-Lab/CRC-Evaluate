@@ -23,7 +23,7 @@ from collections import namedtuple
 from dotenv import load_dotenv
 
 from crsbench.utils.logger import get_logger, configure_logger
-from crsbench.utils import log_section, log_summary, log_progress
+from crsbench.utils import log_section, log_summary, log_progress, set_gitcache
 
 # Load environment variables from .env file if present
 load_dotenv()
@@ -173,6 +173,12 @@ Examples:
         help="LiteLLM mode: 'passthrough' uses external LiteLLM (UPSTREAM_LITELLM_BASE_URL, LITELLM_API_KEY), "
              "'proxy' uses self-hosted proxy (LITELLM_BASE_URL, LITELLM_MASTER_KEY). "
              "If not set, CRS deploys its own LiteLLM instance. (overrides config file)"
+    )
+
+    parser.add_argument(
+        '--gitcache',
+        action='store_true',
+        help='Use gitcache for git clone operations (caches git clones for faster CI/CD)'
     )
 
     parser.add_argument(
@@ -690,6 +696,9 @@ def main() -> None:
     if args.debug:
         configure_logger(level="DEBUG")
         logger.debug("Debug logging enabled")
+
+    # Set gitcache mode
+    set_gitcache(args.gitcache)
 
     # Validate arguments
     validate_arguments(args)

@@ -29,6 +29,8 @@ from crsbench.utils.repo_manager import (
     get_repo_info_from_benchmark,
     derive_repo_name_from_url,
     clone_repository,
+    set_gitcache,
+    run_git,
 )
 
 from crsbench.utils.run_helper import (
@@ -110,6 +112,8 @@ __all__ = [
     "get_repo_info_from_benchmark",
     "derive_repo_name_from_url",
     "clone_repository",
+    "set_gitcache",
+    "run_git",
     # Run helper - Exit codes and exceptions
     "TestExitCode",
     "TestExecutionError",

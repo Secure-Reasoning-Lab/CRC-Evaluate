@@ -9,10 +9,49 @@ import os
 import subprocess
 import yaml
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from crsbench.utils.logger import get_logger, configure_logger
 
 logger = get_logger(__name__)
+
+# Global gitcache setting
+USE_GITCACHE = False
+
+
+def set_gitcache(enabled: bool):
+    """Set global gitcache mode.
+
+    Args:
+        enabled: True to use gitcache for git operations, False otherwise
+    """
+    global USE_GITCACHE
+    USE_GITCACHE = enabled
+    logger.debug(f"Gitcache {'enabled' if enabled else 'disabled'}")
+
+
+def run_git(args: List[str], **kwargs) -> subprocess.CompletedProcess:
+    """Run git command, optionally with gitcache prefix.
+
+    Args:
+        args: Git command arguments (e.g., ['clone', 'https://...'])
+        **kwargs: Additional arguments to pass to subprocess.run
+
+    Returns:
+        CompletedProcess result from subprocess.run
+
+    Example:
+        run_git(['clone', 'https://github.com/user/repo.git', '/dest'])
+        run_git(['-C', '/repo', 'checkout', 'main'])
+    """
+    # Set check=True by default if not specified
+    if 'check' not in kwargs:
+        kwargs['check'] = True
+
+    if USE_GITCACHE:
+        cmd = f"gitcache git {' '.join(args)}"
+        return subprocess.run(cmd, shell=True, **kwargs)
+    else:
+        return subprocess.run(['git'] + args, **kwargs)
 
 
 def get_repo_info_from_benchmark(benchmark_dir: str) -> Dict[str, Any]:
@@ -130,13 +169,13 @@ def clone_repository(
                 if verbose:
                     logger.info(f"🔄 Resetting repository to clean state...")
 
-                cmd = ["git", "reset", "--hard"]
-                result = subprocess.run(
-                    cmd,
+                result = run_git(
+                    ["reset", "--hard"],
                     cwd=target_dir,
                     capture_output=True,
                     text=True,
-                    timeout=60
+                    timeout=60,
+                    check=False
                 )
 
                 if result.returncode != 0:
@@ -162,12 +201,12 @@ def clone_repository(
         if verbose:
             logger.info(f"🔄 Cloning {repo_url} to {target_dir}...")
 
-        cmd = ["git", "clone", repo_url, str(target_dir)]
-        result = subprocess.run(
-            cmd,
+        result = run_git(
+            ["clone", repo_url, str(target_dir)],
             capture_output=True,
             text=True,
-            timeout=300  # 5 minute timeout
+            timeout=300,  # 5 minute timeout
+            check=False
         )
 
         if result.returncode != 0:
@@ -182,13 +221,13 @@ def clone_repository(
             if verbose:
                 logger.info(f"🔄 Checking out commit {commit}...")
 
-            cmd = ["git", "checkout", commit]
-            result = subprocess.run(
-                cmd,
+            result = run_git(
+                ["checkout", commit],
                 cwd=target_dir,
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=60,
+                check=False
             )
 
             if result.returncode != 0:
@@ -251,12 +290,13 @@ def ensure_project_repository(
                     if verbose:
                         logger.info(f"🔄 Resetting project directory to clean state...")
 
-                    result = subprocess.run(
-                        ["git", "reset", "--hard"],
+                    result = run_git(
+                        ["reset", "--hard"],
                         cwd=project_dir,
                         capture_output=True,
                         text=True,
-                        timeout=60
+                        timeout=60,
+                        check=False
                     )
 
                     if result.returncode != 0:
@@ -336,12 +376,13 @@ def ensure_project_repository(
                 if verbose:
                     logger.info(f"🔄 Resetting repository to clean state...")
 
-                reset_result = subprocess.run(
-                    ["git", "reset", "--hard"],
+                reset_result = run_git(
+                    ["reset", "--hard"],
                     cwd=target_dir,
                     capture_output=True,
                     text=True,
-                    timeout=60
+                    timeout=60,
+                    check=False
                 )
 
                 if reset_result.returncode != 0:
@@ -350,12 +391,13 @@ def ensure_project_repository(
                     logger.info(f"✅ Repository reset to clean state")
 
                 # Check commit
-                result = subprocess.run(
-                    ["git", "rev-parse", "HEAD"],
+                result = run_git(
+                    ["rev-parse", "HEAD"],
                     cwd=target_dir,
                     capture_output=True,
                     text=True,
-                    timeout=10
+                    timeout=10,
+                    check=False
                 )
                 if result.returncode == 0:
                     current_commit = result.stdout.strip()
