@@ -23,8 +23,23 @@ def set_gitcache(enabled: bool):
 
     Args:
         enabled: True to use gitcache for git operations, False otherwise
+
+    Raises:
+        RuntimeError: If gitcache is not installed when trying to enable it
     """
     global USE_GITCACHE
+
+    if enabled:
+        # Sanity check: verify gitcache is installed
+        import shutil
+        if not shutil.which('gitcache'):
+            raise RuntimeError(
+                "gitcache is not installed or not in PATH. "
+                "Please install gitcache before enabling it. "
+                "See: https://github.com/seeraven/gitcache"
+            )
+        logger.info("Gitcache enabled (gitcache found in PATH)")
+
     USE_GITCACHE = enabled
     logger.debug(f"Gitcache {'enabled' if enabled else 'disabled'}")
 
