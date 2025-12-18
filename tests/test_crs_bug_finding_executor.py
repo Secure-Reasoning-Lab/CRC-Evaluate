@@ -91,7 +91,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         build_dir = Path(self.temp_dir) / "build"
         output_dir = self.executor._get_crs_output_dir(build_dir, "test-project")
 
-        expected = build_dir / "out" / "test-crs" / "test-project"
+        expected = build_dir / "artifacts" / "test-crs" / "test-project"
         self.assertEqual(output_dir, expected)
 
     def test_resolve_crs_config_dir_absolute(self):

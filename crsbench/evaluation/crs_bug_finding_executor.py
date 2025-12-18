@@ -31,7 +31,7 @@ class CRSBugFindingExecutor(CRSExecutor):
 
     This executor uses oss-bugfind-crs's interface with pre-cloned source repositories
     via repository manager integration. Output location is auto-determined by
-    oss-crs as {{ build_dir }}/out/{{ crs_name }}/{{ project }}/.
+    oss-crs as {{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/.
     """
 
     def __init__(
@@ -104,7 +104,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             information - it simply runs CRS on pre-prepared directories.
 
             Output location is auto-determined by oss-bugfind-crs as:
-            {{ build_dir }}/out/{{ crs_name }}/{{ project }}/
+            {{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/
         """
         start_time = time.time()
         project_name = self._extract_project_name(benchmark_path)
@@ -401,7 +401,7 @@ class CRSBugFindingExecutor(CRSExecutor):
 
         Note:
             NO --output parameter. Output location is auto-determined by oss-bugfind-crs as:
-            {{ build_dir }}/out/{{ crs_name }}/{{ project }}/
+            {{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/
         """
         crs_config_dir = self._resolve_crs_config_dir()
 
@@ -498,7 +498,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         """Get CRS output directory path.
 
         The output directory is auto-determined by oss-bugfind-crs as:
-        {{ build_dir }}/out/{{ crs_name }}/{{ project }}/
+        {{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/
 
         Args:
             build_dir: Build directory
@@ -511,7 +511,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             This directory is created and populated by oss-bugfind-crs during execution.
             It contains subdirectories: povs/, corpus/, crs-data/
         """
-        return build_dir / "out" / self.crs_config_name / benchmark_name
+        return build_dir / "artifacts" / self.crs_config_name / benchmark_name
 
     def _prepare_hints(
         self,
@@ -637,7 +637,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             "outputs": {
                 "crs_output_dir": str(crs_output_dir),
                 "build_dir": str(build_dir),
-                "note": "CRS output is at {{ build_dir }}/out/{{ crs_name }}/{{ project }}/"
+                "note": "CRS output is at {{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/"
             },
             "result": {
                 "stdout_length": len(stdout),

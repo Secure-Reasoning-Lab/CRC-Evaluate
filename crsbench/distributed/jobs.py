@@ -165,8 +165,8 @@ def run_crs_trial(
             logger.info(f"Trial output directory: {trial_output_dir}")
 
         # Compute CRS output directory for oss-bugfind-crs
-        # oss-bugfind-crs writes to: build/out/<crs_name>/<project>/
-        crs_output_dir = trial_output_dir / "build" / "out" / crs / benchmark
+        # oss-bugfind-crs writes to: build/artifacts/<crs_name>/<project>/
+        crs_output_dir = trial_output_dir / "build" / "artifacts" / crs / benchmark
 
         # Run benchmark evaluation
         # Note: CRS is already configured via executor.configure_crs() above
