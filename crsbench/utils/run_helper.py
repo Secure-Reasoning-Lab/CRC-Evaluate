@@ -17,9 +17,10 @@ import re
 import shutil
 import subprocess
 import sys
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Any, Union
+from typing import List, Tuple, Optional, Dict, Any, Union, Deque
 from enum import IntEnum
 
 from crsbench.utils.repo_manager import ensure_project_repository, get_repo_info_from_benchmark, run_git
@@ -1628,3 +1629,128 @@ def get_benchmark_info(benchmark_name: str) -> Dict[str, Any]:
         info["has_project_source"] = os.path.isdir(project_src)
 
     return info
+
+
+# =============================================================================
+# Command Execution with Rolling Output Display
+# =============================================================================
+
+def run_with_rolling_output(command: str, n: int = 5) -> None:
+    """
+    Executes a command and dynamically updates the terminal to show
+    only the last N lines of output in real-time.
+
+    Args:
+        command (str): The command string to execute.
+        n (int): The number of recent lines to keep and display. Defaults to 5.
+
+    Raises:
+        subprocess.CalledProcessError: If the command exits with a non-zero status.
+    """
+    # Use a deque (double-ended queue) with a maximum length of N.
+    recent_lines_buffer: Deque[str] = deque(maxlen=n)
+    lines_printed_count = (
+        0  # Tracks how many lines we previously printed to manage cursor
+    )
+    first_output = True  # Flag to track if this is the first output
+
+    # Get terminal width for calculating wrapped lines
+    terminal_width = shutil.get_terminal_size(fallback=(80, 24)).columns
+
+    def count_display_lines(text: str) -> int:
+        """Calculate how many terminal lines a string will occupy, accounting for wrapping."""
+        if not text:
+            return 0
+        # Each line in the text may wrap multiple times
+        lines = text.split(os.linesep)
+        total_display_lines = 0
+        for line in lines:
+            if len(line) == 0:
+                total_display_lines += 1
+            else:
+                # Calculate how many terminal lines this logical line will occupy
+                # Add terminal_width - 1 to ensure we round up
+                total_display_lines += (
+                    len(line) + terminal_width - 1
+                ) // terminal_width
+        return total_display_lines
+
+    # We use Popen to start the process non-blockingly and pipe its output
+    try:
+        # Use Python's built-in stderr=STDOUT for robust output merging
+        # start_new_session=True ensures child processes inherit I/O redirections
+        # stdin=subprocess.DEVNULL prevents TTY access from nested processes
+        process = subprocess.Popen(
+            command,
+            shell=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,  # Line-buffered reading
+            start_new_session=True,  # Ensures all child processes inherit I/O
+        )
+
+        print(f"--- Executing: '{command}' ---")
+        print(
+            f"=============================== COMMAND OUTPUT ==============================="
+        )
+
+        # Read the output line by line in real-time
+        if process.stdout:
+            for line in iter(process.stdout.readline, ""):
+                clean_line = line.strip()
+                if clean_line:
+                    # 1. Update the rolling buffer
+                    recent_lines_buffer.append(clean_line)
+
+                    # 2. Clear previous output (move cursor up and clear lines)
+                    # We move the cursor up by the number of lines we last printed.
+                    # Only do this if we've already printed output from this function call
+                    if lines_printed_count > 0 and not first_output:
+                        sys.stdout.write("\033[1A\033[K" * lines_printed_count)
+
+                    # 3. Print the new state of the buffer
+                    current_output = os.linesep.join(list(recent_lines_buffer))
+                    # Print the current content of the deque, followed by a newline
+                    sys.stdout.write(current_output + os.linesep)
+
+                    # Ensure the output is immediately shown on the console
+                    sys.stdout.flush()
+
+                    # 4. Update the tracker with actual display line count
+                    lines_printed_count = count_display_lines(current_output)
+                    first_output = False  # Mark that we've printed at least once
+
+        # Wait for the process to complete and get the return code
+        process.wait()
+
+        # Don't clear the rolling display - leave final output visible
+        # Just add a newline to separate from subsequent output
+        if lines_printed_count > 0:
+            sys.stdout.write(os.linesep)
+            sys.stdout.flush()
+
+        print(
+            f"=============================================================================="
+        )
+
+        if process.returncode != 0:
+            # Print final error state
+            print(f"--- Command FAILED (Exit Code: {process.returncode}) ---")
+            print(f"Error executing command: '{command}'")
+            print(f"\nLast {n} lines of output/error before exit:")
+            if recent_lines_buffer:
+                print(os.linesep.join(list(recent_lines_buffer)))
+            else:
+                print("[No output captured]")
+            # Re-raise the exception for caller to handle
+            raise subprocess.CalledProcessError(process.returncode, command)
+
+    except subprocess.CalledProcessError:
+        # Re-raise CalledProcessError for caller to handle
+        raise
+
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        raise

@@ -59,6 +59,7 @@ from crsbench.utils.run_helper import (
     run_cmd,
     run_cmd_with_logging,
     run_helper,
+    run_with_rolling_output,
     # Exit code handling
     is_docker_execution_error,
     classify_exit_code,
@@ -139,6 +140,7 @@ __all__ = [
     "run_cmd",
     "run_cmd_with_logging",
     "run_helper",
+    "run_with_rolling_output",
     # Run helper - Exit code handling
     "is_docker_execution_error",
     "classify_exit_code",
