@@ -12,7 +12,8 @@ from crsbench.utils.repo_manager import (
     derive_repo_name_from_url,
     clone_repository,
     ensure_project_repository,
-    find_or_clone_project
+    find_or_clone_project,
+    set_gitcache
 )
 
 
@@ -340,6 +341,37 @@ harness_files:
         )
 
         assert result == str(project_dir)
+
+
+# ============================================================================
+# Gitcache Tests
+# ============================================================================
+
+class TestSetGitcache:
+    """Tests for set_gitcache function."""
+
+    def test_disable_gitcache(self):
+        """Test disabling gitcache (should always work)."""
+        # Should not raise any exception
+        set_gitcache(False)
+
+    def test_enable_gitcache_when_installed(self):
+        """Test enabling gitcache when it's installed."""
+        with mock.patch('shutil.which', return_value='/usr/bin/gitcache'):
+            # Should not raise any exception
+            set_gitcache(True)
+            # Cleanup
+            set_gitcache(False)
+
+    def test_enable_gitcache_when_not_installed(self):
+        """Test enabling gitcache when it's not installed."""
+        with mock.patch('shutil.which', return_value=None):
+            with pytest.raises(RuntimeError) as exc_info:
+                set_gitcache(True)
+
+            error_msg = str(exc_info.value)
+            assert "gitcache is not installed" in error_msg
+            assert "github.com/seeraven/gitcache" in error_msg
 
 
 # ============================================================================

@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Any, Set
 from crsbench.evaluation.crs_executor import CRSExecutor, CRSResult
 from crsbench.evaluation.results import POVResult
 from crsbench.validation.schemas import HarnessFile
+from crsbench.utils.repo_manager import USE_GITCACHE
 
 logger = get_logger(__name__)
 
@@ -345,6 +346,10 @@ class CRSBugFindingExecutor(CRSExecutor):
         if self.litellm_mode is not None:
             cmd.append("--external-litellm")
 
+        # Add gitcache flag if enabled
+        if USE_GITCACHE:
+            cmd.append("--gitcache")
+
         logger.info(f"Build command: {' '.join(cmd)}")
         logger.debug(f"Command: {cmd}")
         logger.debug(f"Working directory: {trial_build_dir}")
@@ -423,6 +428,10 @@ class CRSBugFindingExecutor(CRSExecutor):
         # Add external LiteLLM flag if using external LiteLLM
         if self.litellm_mode is not None:
             cmd.append("--external-litellm")
+
+        # Add gitcache flag if enabled
+        if USE_GITCACHE:
+            cmd.append("--gitcache")
 
         return cmd
 

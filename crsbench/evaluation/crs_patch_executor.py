@@ -17,6 +17,7 @@ from typing import Dict, List, Optional, Any, Set
 from crsbench.evaluation.crs_executor import CRSExecutor, CRSResult
 from crsbench.evaluation.results import POVResult, POVStatus
 from crsbench.validation.schemas import HarnessFile, POV
+from crsbench.utils.repo_manager import USE_GITCACHE
 
 logger = get_logger(__name__)
 
@@ -120,6 +121,10 @@ class CRSPatchExecutor(CRSExecutor):
         if hints_path:
             cmd.extend(["--hints", str(hints_path)])
             logger.info(f"Using prepared hints from {hints_path}")
+
+        # Add gitcache flag if enabled
+        if USE_GITCACHE:
+            cmd.append("--gitcache")
 
         logger.info(f"Executing: {' '.join(cmd)}")
 
@@ -281,6 +286,10 @@ class CRSPatchExecutor(CRSExecutor):
             "--project-path", str(benchmark_path),  # Benchmark dir (OSS-Fuzz compatible)
             "--source-path", str(source_path)        # Pre-cloned source from repo manager
         ]
+
+        # Add gitcache flag if enabled
+        if USE_GITCACHE:
+            cmd.append("--gitcache")
 
         env = os.environ.copy()
         env["OSS_FUZZ_HOME"] = str(self.oss_fuzz_path)
