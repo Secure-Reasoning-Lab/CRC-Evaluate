@@ -339,6 +339,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             "--oss-fuzz-dir", str(self.oss_fuzz_path),
             "--registry-dir", str(self.registry_dir),
             "--project-path", str(benchmark_path),
+            "--project-image-prefix", self.config.get("project_image_prefix", "aixcc-afc"),
             str(crs_config_dir), project_name, str(source_path)
         ]
 

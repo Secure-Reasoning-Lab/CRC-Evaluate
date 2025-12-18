@@ -176,6 +176,15 @@ Examples:
     )
 
     parser.add_argument(
+        '--project-image-prefix',
+        type=str,
+        required=False,
+        metavar='PREFIX',
+        help="Docker image prefix for custom project images (default: aixcc-afc). "
+             "Used when building project images locally. (overrides config file)"
+    )
+
+    parser.add_argument(
         '--gitcache',
         action='store_true',
         help='Use gitcache for git clone operations (caches git clones for faster CI/CD)'
@@ -376,6 +385,11 @@ def enhance_config_with_cli_args(config_dict: Dict[str, Any], args: argparse.Nam
     if args.litellm_mode is not None:
         enhanced['litellm_mode'] = args.litellm_mode
         logger.info(f"Using LiteLLM mode from CLI: {args.litellm_mode}")
+
+    # Project image prefix override
+    if args.project_image_prefix is not None:
+        enhanced['project_image_prefix'] = args.project_image_prefix
+        logger.info(f"Using project image prefix from CLI: {args.project_image_prefix}")
 
     return enhanced
 

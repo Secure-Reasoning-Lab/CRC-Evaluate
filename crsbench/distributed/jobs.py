@@ -145,6 +145,7 @@ def run_crs_trial(
             'hints_enabled': config.get('hints_enabled', False),
             'hint_sarif_level': config.get('hint_sarif_level'),
             'hint_corpus_level': config.get('hint_corpus_level'),
+            'project_image_prefix': config.get('project_image_prefix', 'aixcc-afc'),
         })
 
         # Initialize benchmark runner with CRS executor and snapshot configuration

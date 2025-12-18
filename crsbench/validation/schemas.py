@@ -277,6 +277,10 @@ class ExperimentConfig(BaseModel):
                     "'proxy' uses self-hosted proxy (LITELLM_BASE_URL, LITELLM_MASTER_KEY). "
                     "Default is 'passthrough'."
     )
+    project_image_prefix: str = Field(
+        default="aixcc-afc",
+        description="Docker image prefix for custom project images (default: aixcc-afc)"
+    )
 
     @field_validator('experiment')
     @classmethod
@@ -474,6 +478,10 @@ class ExperimentConfig(BaseModel):
             'hint_sarif_level': self.hint_sarif_level,
             'hint_corpus_level': self.hint_corpus_level,
             'litellm_mode': self.litellm_mode,
+            'crs_configs_dir': self.crs_configs_dir,
+            'registry_dir': self.registry_dir,
+            'snapshot_period': self.snapshot_period,
+            'project_image_prefix': self.project_image_prefix,
         }
 
 
