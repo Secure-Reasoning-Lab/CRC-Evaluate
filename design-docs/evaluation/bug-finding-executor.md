@@ -233,7 +233,7 @@ def run_crs(
             raise ExecutorError(f"Source path not found: {source_path}")
 
         # Note: Output directory is auto-determined by oss-crs as:
-        # {{ build_dir }}/out/{{ crs_name }}/{{ project }}/
+        # {{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/
         # We'll retrieve it after execution using _get_crs_output_dir()
 
         # 2. Build CRS Docker image
@@ -465,7 +465,7 @@ def _run_crs_campaign(
 
     Note:
         Output directory is auto-determined by oss-crs as:
-        {{ build_dir }}/out/{{ crs_name }}/{{ project }}/
+        {{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/
         No --output parameter is needed for oss-bugfind-crs run command.
     """
     crs_config_dir = self._resolve_crs_config_dir()
@@ -489,7 +489,7 @@ def _run_crs_campaign(
         logger.info("Running without hints")
 
     logger.info(f"Running CRS: {' '.join(cmd)}")
-    logger.info(f"Output will be at: {build_dir}/out/{self.config.get('crs_name')}/{benchmark_name}/")
+    logger.info(f"Output will be at: {build_dir}/artifacts/{self.config.get('crs_name')}/{benchmark_name}/")
 
     # Execute with timeout
     timeout = self.config.get("run_timeout", 7200)
@@ -530,7 +530,7 @@ def _get_crs_output_dir(self, build_dir: Path, benchmark_name: str) -> Path:
     Get CRS output directory path.
 
     The output directory is auto-determined by oss-crs as:
-    {{ build_dir }}/out/{{ crs_name }}/{{ project }}/
+    {{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/
 
     Args:
         build_dir: Build directory
@@ -603,7 +603,7 @@ def _store_execution_metadata(
         "outputs": {
             "crs_output_dir": str(crs_output_dir),
             "build_dir": str(build_dir),
-            "note": "CRS output is at {{ build_dir }}/out/{{ crs_name }}/{{ project }}/"
+            "note": "CRS output is at {{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/"
         }
     }
 
@@ -704,15 +704,15 @@ trial_output_dir/
 ├── metadata.json
 └── execution.json         # Created by executor
 
-Note: Bug finding CRS outputs to {{ build_dir }}/out/{{ crs_name }}/{{ project }}/
+Note: Bug finding CRS outputs to {{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/
       This is different from patch generation which outputs to trial_output_dir/output/
 ```
 
 ## POV Validation (Separate Module)
 
 The snapshot module will:
-1. Read POVs from `{{ build_dir }}/out/{{ crs_name }}/{{ project }}/povs/`
-   - Full path: `trial_output_dir/build/out/<crs_name>/<project>/povs/`
+1. Read POVs from `{{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/povs/`
+   - Full path: `trial_output_dir/build/artifacts/<crs_name>/<project>/povs/`
 2. Replay POVs with sanitizers
 3. Parse sanitizer output
 4. Match against expected POVs from harness
@@ -721,7 +721,7 @@ The snapshot module will:
 
 **Executor does NOT do POV validation.**
 
-**Note on Output Location**: Unlike patch generation CRS which outputs to `trial_output_dir/output/`, bug finding CRS outputs to the build directory at `{{ build_dir }}/out/{{ crs_name }}/{{ project }}/`. This is auto-determined by oss-crs and cannot be changed (no `--output` parameter for oss-bugfind-crs run).
+**Note on Output Location**: Unlike patch generation CRS which outputs to `trial_output_dir/output/`, bug finding CRS outputs to the build directory at `{{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/`. This is auto-determined by oss-crs and cannot be changed (no `--output` parameter for oss-bugfind-crs run).
 
 ## Configuration Parameters
 

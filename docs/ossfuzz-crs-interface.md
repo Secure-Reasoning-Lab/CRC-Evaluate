@@ -48,15 +48,15 @@ oss-bugfind-crs run example_configs/ensemble-c json-c json_array_fuzzer \
 
 When `--output <output-dir>` is provided:
 - Host: `<output-dir>` (e.g., `/tmp/trial-1/output/`)
-- Container: `/out/`
+- Container: `/artifacts/`
 
-CRS writes its outputs to `/out/` in the container, which maps to the host output directory.
+CRS writes its outputs to `/artifacts/` in the container, which maps to the host output directory.
 
 **Legacy mapping (for reference):**
 
-On host, it is `build/out/<crs-name>/<project-name>/<harness-name>/{crashes, corpus}`.
+On host, it is `build/artifacts/<crs-name>/<project-name>/<harness-name>/{crashes, corpus}`.
 
-In the docker container, the directory will be mapped to `/out/<harness-name>/{crashes, corpus}`.
+In the docker container, the directory will be mapped to `/artifacts/<harness-name>/{crashes, corpus}`.
 
 ### Optional Harness Source Code Support
 
@@ -203,12 +203,12 @@ benchmarks/json-c/
 
 ### CRS Output Directory Structure
 
-CRS must write its outputs to `/out/` in the container. CRSBench will snapshot this directory periodically for evaluation.
+CRS must write its outputs to `/artifacts/` in the container. CRSBench will snapshot this directory periodically for evaluation.
 
 **Required output structure:**
 
 ```
-/out/                           # CRS output directory (container)
+/artifacts/                     # CRS output directory (container)
 ├── povs/                       # POVs discovered (required for bug finding CRS)
 │   ├── pov_001                 # Binary blob (test input that triggers vulnerability)
 │   ├── pov_002                 # Binary blob
@@ -224,9 +224,9 @@ CRS must write its outputs to `/out/` in the container. CRSBench will snapshot t
 ```
 
 **What CRS writes:**
-- **POVs** (`/out/povs/`): Binary blob files that trigger vulnerabilities when run against the harness
-- **Corpus** (`/out/corpus/`, optional): Generated test inputs from fuzzing
-- **CRS-specific data** (`/out/crs-data/`, optional): Any additional outputs CRS wants to snapshot
+- **POVs** (`/artifacts/povs/`): Binary blob files that trigger vulnerabilities when run against the harness
+- **Corpus** (`/artifacts/corpus/`, optional): Generated test inputs from fuzzing
+- **CRS-specific data** (`/artifacts/crs-data/`, optional): Any additional outputs CRS wants to snapshot
 
 **What CRSBench records (separately):**
 - **LLM usage**: CRSBench tracks LLM API calls, tokens, and costs (via LiteLLM proxy)
@@ -234,7 +234,7 @@ CRS must write its outputs to `/out/` in the container. CRSBench will snapshot t
 
 **Snapshot behavior:**
 
-CRSBench periodically snapshots the `/out/` directory along with LLM usage and CRS logs. These snapshots enable:
+CRSBench periodically snapshots the `/artifacts/` directory along with LLM usage and CRS logs. These snapshots enable:
 - Progress monitoring during long-running trials
 - Incremental POV/corpus discovery tracking
 - Resource usage analysis (LLM tokens, costs)
@@ -483,7 +483,7 @@ oss-bugfix-crs run multi-retrieval aixcc/c/mock-c \
   - **CRSBench resolves `$REPO`/`$PROJECT` variables from `meta.yaml` to provide the actual host path**
 - `--output <output-dir>`: Path to output directory (optional)
   - Directory where CRS writes its outputs (patches, test results, etc.)
-  - Mounted to `/out/` in the container
+  - Mounted to `/artifacts/` in the container
   - **CRSBench snapshots this directory** for evaluation
 - `--litellm-base <url>`: LiteLLM API base URL (required)
 - `--litellm-key <key>`: LiteLLM API key (required)
@@ -494,9 +494,9 @@ oss-bugfix-crs run multi-retrieval aixcc/c/mock-c \
 
 When `--output <output-dir>` is provided:
 - Host: `<output-dir>` (e.g., `/tmp/trial-1/output/`)
-- Container: `/out/`
+- Container: `/artifacts/`
 
-CRS writes its outputs to `/out/` in the container, which maps to the host output directory.
+CRS writes its outputs to `/artifacts/` in the container, which maps to the host output directory.
 
 **POV file(s) mapping:**
 
@@ -632,12 +632,12 @@ Inside the container, CRS can access:
 
 ### CRS Output Directory Structure
 
-CRS must write its outputs to `/out/` in the container. CRSBench will snapshot this directory periodically for evaluation.
+CRS must write its outputs to `/artifacts/` in the container. CRSBench will snapshot this directory periodically for evaluation.
 
 **Required output structure:**
 
 ```
-/out/                           # CRS output directory (container)
+/artifacts/                     # CRS output directory (container)
 ├── patches/                    # Generated patches (required for patch generation CRS)
 │   ├── pov_0/                  # Patches for pov_0
 │   │   └── patch.diff          # Unified diff format
@@ -652,11 +652,11 @@ CRS must write its outputs to `/out/` in the container. CRSBench will snapshot t
 ```
 
 **What CRS writes:**
-- **Patches** (`/out/patches/<pov_id>/patch.diff`): Patch files organized by POV ID, in unified diff format (or whatever format CRS generates)
+- **Patches** (`/artifacts/patches/<pov_id>/patch.diff`): Patch files organized by POV ID, in unified diff format (or whatever format CRS generates)
   - Each POV gets its own subdirectory named after the POV ID (e.g., `pov_0`, `pov_1`)
   - The patch file is always named `patch.diff` within each POV directory
   - This structure allows CRSBench to easily associate patches with the POVs they fix
-- **CRS-specific data** (`/out/crs-data/`, optional): Any additional outputs CRS wants to snapshot
+- **CRS-specific data** (`/artifacts/crs-data/`, optional): Any additional outputs CRS wants to snapshot
 
 **What CRSBench records (separately):**
 - **LLM usage**: CRSBench tracks LLM API calls, tokens, and costs (via LiteLLM proxy)
@@ -664,7 +664,7 @@ CRS must write its outputs to `/out/` in the container. CRSBench will snapshot t
 
 **Snapshot behavior:**
 
-CRSBench periodically snapshots the `/out/` directory along with LLM usage and CRS logs. These snapshots enable:
+CRSBench periodically snapshots the `/artifacts/` directory along with LLM usage and CRS logs. These snapshots enable:
 - Progress monitoring during long-running trials
 - Incremental patch generation tracking
 - Resource usage analysis (LLM tokens, costs)
@@ -716,7 +716,7 @@ See the CRSBench snapshot design documentation for details on snapshot frequency
 4. CRS generates patch candidates for the vulnerability
 5. CRS tests patch with `/pov` (must fix the POV)
 6. CRS validates with `/hints/corpus/*.blob` (must not break existing functionality)
-7. CRS outputs final patch to `/out/patches/<pov_id>/patch.diff` (e.g., `/out/patches/pov_0/patch.diff`)
+7. CRS outputs final patch to `/artifacts/patches/<pov_id>/patch.diff` (e.g., `/artifacts/patches/pov_0/patch.diff`)
 
 **Example workflow (multiple POVs with --povs):**
 
@@ -728,7 +728,7 @@ See the CRSBench snapshot design documentation for details on snapshot frequency
 6. CRS generates patch candidates for each unique vulnerability
 7. CRS tests patches with `/povs/pov_0`, `/povs/pov_1`, etc. (must fix all related POVs)
 8. CRS validates with `/hints/corpus/*.blob` (must not break existing functionality)
-9. CRS outputs final patches to `/out/patches/<pov_id>/patch.diff` for each POV (e.g., `/out/patches/pov_0/patch.diff`, `/out/patches/pov_1/patch.diff`)
+9. CRS outputs final patches to `/artifacts/patches/<pov_id>/patch.diff` for each POV (e.g., `/artifacts/patches/pov_0/patch.diff`, `/artifacts/patches/pov_1/patch.diff`)
 
 ### Key Differences from OSS-Fuzz Interface
 
@@ -746,7 +746,7 @@ See the CRSBench snapshot design documentation for details on snapshot frequency
 | OSS-Fuzz path    | Not needed              | Required (`--oss-fuzz`)                      |
 | Project source   | N/A                     | 3 methods: standard / external+clone / external+pre-cloned |
 | Build flexibility| N/A                     | Optional `--project-path`, `--source-path`   |
-| Container mounts | `/hints/`, `/out/`      | `/pov` or `/povs/`, `/hints/`, `/out/`       |
+| Container mounts | `/hints/`, `/artifacts/`      | `/pov` or `/povs/`, `/hints/`, `/artifacts/`       |
 | CRS outputs      | POVs, corpus            | Patches                                      |
 
 ---
@@ -854,7 +854,7 @@ uv pip install oss-bugfix-crs
 # Bug finding
 oss-bugfind-crs build <config> <project>
 oss-bugfind-crs run <config> <project> <harness> [--hints <dir>]
-# Note: Output directory is auto-determined as {{ build_dir }}/out/{{ crs.name }}/{{ project }}/
+# Note: Output directory is auto-determined as {{ build_dir }}/artifacts/{{ crs.name }}/{{ project }}/
 
 # Patch generation
 oss-bugfix-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME

@@ -83,7 +83,7 @@ Trial Directory (Ready for CRS Execution)
 
 **Created by oss-crs CLI**:
 - `trial-N/build/crs/` - CRS Docker images
-- `trial-N/build/out/` - Build artifacts
+- `trial-N/build/artifacts/` - Build artifacts
 - `trial-N/output/povs/` - POVs discovered (bug finding)
 - `trial-N/output/patches/` - Patches generated (patch gen)
 - `trial-N/output/corpus/` - Fuzzing corpus

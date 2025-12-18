@@ -293,7 +293,7 @@ docker build -t project-vuln0 .
 docker run --name eval-vuln0 project-vuln0
 
 # Extract build artifacts from container
-docker cp eval-vuln0:/out ./evaluation-results/buffer_overflow/
+docker cp eval-vuln0:/artifacts ./evaluation-results/buffer_overflow/
 ```
 
 ### Helper Script Integration

@@ -177,7 +177,7 @@ oss-crs run \
   [--hints <hints-dir>]
 ```
 
-**Output Directory**: CRS outputs to `{{ build_dir }}/out/{{ crs.name }}/{{ project }}/` (auto-determined from build_dir, CRS name, and project name)
+**Output Directory**: CRS outputs to `{{ build_dir }}/artifacts/{{ crs.name }}/{{ project }}/` (auto-determined from build_dir, CRS name, and project name)
 
 **Note**: No `--output` parameter for oss-crs run command. Output location is derived automatically from build_dir. Future versions may support explicit `--output` parameter.
 
@@ -263,7 +263,7 @@ def run_crs(
 def _get_crs_output_directory(self, trial_build_dir: Path, project_name: str) -> Path:
     """Get CRS output directory.
 
-    Current implementation: Returns {{ build_dir }}/out/{{ crs.name }}/{{ project }}/
+    Current implementation: Returns {{ build_dir }}/artifacts/{{ crs.name }}/{{ project }}/
     Future: May support explicit --output parameter if oss-crs adds it.
 
     Args:
@@ -430,7 +430,7 @@ crses:
 
 **Bug Finding CRS Output Location**:
 
-Current: CRS outputs to `{{ trial_build_dir }}/out/{{ crs.name }}/{{ project }}/`
+Current: CRS outputs to `{{ trial_build_dir }}/artifacts/{{ crs.name }}/{{ project }}/`
 - Auto-determined from trial-specific build_dir, CRS name, and project name
 - Trial build directory is `{{ trial_output_dir }}/build/`
 - No --output parameter needed for oss-crs commands
@@ -438,7 +438,7 @@ Current: CRS outputs to `{{ trial_build_dir }}/out/{{ crs.name }}/{{ project }}/
 
 **Host directory structure for Bug Finding**:
 ```
-{{ trial_output_dir }}/build/out/{{ crs_config_name }}/{{ project_name }}/
+{{ trial_output_dir }}/build/artifacts/{{ crs_config_name }}/{{ project_name }}/
 ├── povs/                            # CRS writes POVs here (bug finding)
 │   ├── pov_001                      # Binary blob
 │   ├── pov_002
@@ -471,7 +471,7 @@ trial_output_dir/                    # Provided by BenchmarkRunner (for metadata
 
 **Container directory structure**:
 ```
-/out/                                # Mapped from host trial_output_dir/output/
+/artifacts/                                # Mapped from host trial_output_dir/output/
 ├── povs/                            # CRS writes discovered POVs
 │   ├── pov_0
 │   ├── pov_1
@@ -1423,8 +1423,8 @@ project_name: "json-c"
 
 **Output directory mapping:**
 - Host: `trial_output_dir/output/`
-- Container: `/out/`
-- Purpose: CRS writes POVs/patches/corpus to `/out/` subdirectories
+- Container: `/artifacts/`
+- Purpose: CRS writes POVs/patches/corpus to `/artifacts/` subdirectories
 
 **Hints directory mapping (optional, if hints enabled):**
 - Host: `trial_output_dir/hints/` (prepared by `_prepare_hints()`)
@@ -1500,10 +1500,10 @@ project_name: "json-c"
 
 **Key points:**
 - CRS is responsible for creating subdirectories (`povs/`, `patches/`, `corpus/`, `crs-data/`)
-- CRSBench only creates the base `/out/` directory; subdirectory structure is CRS's responsibility
+- CRSBench only creates the base `/artifacts/` directory; subdirectory structure is CRS's responsibility
 - Naming convention agreement: CRS must use specified subdirectory names for proper evaluation
-- Snapshot system periodically captures `/out/` directory contents
-- LLM usage and CRS logs are recorded by CRSBench separately (not in `/out/`)
+- Snapshot system periodically captures `/artifacts/` directory contents
+- LLM usage and CRS logs are recorded by CRSBench separately (not in `/artifacts/`)
 
 ### Harness Path Resolution and Command Arguments
 
@@ -1697,7 +1697,7 @@ oss-crs run \
   <project> \
   <harness> \
   [--hints <dir>]
-# Note: Output directory is auto-determined as {{ build_dir }}/out/{{ crs.name }}/{{ project }}/
+# Note: Output directory is auto-determined as {{ build_dir }}/artifacts/{{ crs.name }}/{{ project }}/
 
 # Patch generation (CRSBench method - with external project + pre-cloned source)
 oss-bugfix-crs build <config> <project> \
@@ -1744,7 +1744,7 @@ cmd = [
     "--registry-dir", str(registry_dir),
     str(crs_config_dir), project_name, harness_name
 ]
-# Note: Output directory is derived from build_dir/out/crs_name/project/
+# Note: Output directory is derived from build_dir/artifacts/crs_name/project/
 
 # Patch generation (CRSBench method)
 cmd = ["oss-bugfix-crs", "build", crs_config_name, project_name,
@@ -2088,8 +2088,8 @@ output_dir.mkdir(parents=True, exist_ok=True)
 ### What Changed
 
 **1. Output Directory Management**
-- **Old**: CRS outputs to `oss-fuzz/build/out/<crs>/<project>/<harness>/crashes/corpus/`
-- **New Bug Finding**: CRS outputs to `trial_build_dir/out/<crs>/<project>/povs/corpus/crs-data/` (where `trial_build_dir = trial_output_dir/build/`)
+- **Old**: CRS outputs to `oss-fuzz/build/artifacts/<crs>/<project>/<harness>/crashes/corpus/`
+- **New Bug Finding**: CRS outputs to `trial_build_dir/artifacts/<crs>/<project>/povs/corpus/crs-data/` (where `trial_build_dir = trial_output_dir/build/`)
 - **New Patch Generation**: CRS outputs to `trial_output_dir/output/povs/patches/corpus/crs-data/`
 - **Why**: Trial-based organization enables snapshot system and better isolation
 
@@ -2109,8 +2109,8 @@ output_dir.mkdir(parents=True, exist_ok=True)
 - **Why**: Executors need to know where to write trial-specific outputs; commits are handled by TrialDirectoryPreparer
 
 **5. POV/Patch Collection**
-- **Old**: Hardcoded paths in `oss-fuzz/build/out/...`
-- **New Bug Finding**: Relative to `trial_build_dir/out/<crs>/<project>/`
+- **Old**: Hardcoded paths in `oss-fuzz/build/artifacts/...`
+- **New Bug Finding**: Relative to `trial_build_dir/artifacts/<crs>/<project>/`
 - **New Patch Generation**: Relative to `trial_output_dir/output/`
 - **Why**: Flexible, supports multiple concurrent trials, enables snapshots
 
@@ -2122,11 +2122,11 @@ output_dir.mkdir(parents=True, exist_ok=True)
 ### Responsibilities
 
 **CRS (via Docker container):**
-- Create output subdirectories as needed (`/out/povs/`, `/out/patches/`, etc.)
-- Write POVs to `/out/povs/`
-- Write patches to `/out/patches/`
-- Write corpus to `/out/corpus/` (optional)
-- Write custom data to `/out/crs-data/` (optional)
+- Create output subdirectories as needed (`/artifacts/povs/`, `/artifacts/patches/`, etc.)
+- Write POVs to `/artifacts/povs/`
+- Write patches to `/artifacts/patches/`
+- Write corpus to `/artifacts/corpus/` (optional)
+- Write custom data to `/artifacts/crs-data/` (optional)
 - **Naming convention agreement**: CRS must follow the specified directory names for CRSBench to properly evaluate outputs
 
 **CRSBench Executor:**
@@ -2136,7 +2136,7 @@ output_dir.mkdir(parents=True, exist_ok=True)
 - Pass `--output`, `--hints`, `--povs` parameters to CRS interface
 - Store execution metadata to `execution.json` (command, hints/POVs details, timing)
 - Collect and analyze outputs from trial directory
-- Do NOT create `/out/` subdirectories - CRS is responsible for directory structure
+- Do NOT create `/artifacts/` subdirectories - CRS is responsible for directory structure
 
 **CRSBench BenchmarkRunner:**
 - Provide `trial_output_dir` to executor
@@ -2190,11 +2190,11 @@ When updating existing CRS executor code:
 - [ ] Call `_store_execution_metadata()` after CRS execution
 
 **Output Collection:**
-- [ ] Update POV collection to read from `trial_build_dir/out/<crs>/<project>/povs/` (bug finding)
+- [ ] Update POV collection to read from `trial_build_dir/artifacts/<crs>/<project>/povs/` (bug finding)
 - [ ] Update POV collection to read from `trial_output_dir/output/povs/` (patch generation)
 - [ ] Update patch collection to read from `trial_output_dir/output/patches/`
 - [ ] Update corpus collection to read from appropriate output directory
-- [ ] Remove hardcoded `oss-fuzz/build/out/<crs>/<project>/` paths
+- [ ] Remove hardcoded `oss-fuzz/build/artifacts/<crs>/<project>/` paths
 - [ ] Use `_get_crs_output_directory()` helper to derive output paths
 
 **Source Code Management:**
