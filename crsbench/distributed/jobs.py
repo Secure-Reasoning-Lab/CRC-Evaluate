@@ -134,7 +134,8 @@ def run_crs_trial(
             oss_fuzz_path=oss_fuzz_path,
             registry_dir=registry_dir,
             benchmarks_root=benchmarks_root,
-            crs_configs_dir=crs_configs_dir
+            crs_configs_dir=crs_configs_dir,
+            litellm_mode=config.get('litellm_mode', 'passthrough')
         )
 
         # Configure executor

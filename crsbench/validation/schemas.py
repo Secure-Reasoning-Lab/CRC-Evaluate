@@ -1,6 +1,6 @@
 """Pydantic schemas for benchmark configuration validation."""
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 import re
 
@@ -271,6 +271,12 @@ class ExperimentConfig(BaseModel):
         ge=1, le=5,
         description="Pre-fuzz corpus level (1=minimal, 5=comprehensive). None disables corpus. [PLACEHOLDER - not yet implemented]"
     )
+    litellm_mode: Optional[Literal["passthrough", "proxy"]] = Field(
+        default="passthrough",
+        description="LiteLLM mode: 'passthrough' uses external LiteLLM (UPSTREAM_LITELLM_BASE_URL, LITELLM_API_KEY), "
+                    "'proxy' uses self-hosted proxy (LITELLM_BASE_URL, LITELLM_MASTER_KEY). "
+                    "Default is 'passthrough'."
+    )
 
     @field_validator('experiment')
     @classmethod
@@ -382,6 +388,14 @@ class ExperimentConfig(BaseModel):
 
         return v
 
+    @field_validator('litellm_mode')
+    @classmethod
+    def validate_litellm_mode(cls, v):
+        """Validate LiteLLM mode."""
+        if v is not None and v not in ('passthrough', 'proxy'):
+            raise ValueError(f"Invalid litellm_mode: {v}. Must be 'passthrough' or 'proxy'")
+        return v
+
     @model_validator(mode='after')
     def check_benchmarks_configuration(self):
         """Ensure benchmarks configuration is valid."""
@@ -459,6 +473,7 @@ class ExperimentConfig(BaseModel):
             'hints_enabled': self.hints_enabled,
             'hint_sarif_level': self.hint_sarif_level,
             'hint_corpus_level': self.hint_corpus_level,
+            'litellm_mode': self.litellm_mode,
         }
 
 

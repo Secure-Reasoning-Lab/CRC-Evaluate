@@ -40,7 +40,8 @@ class CRSBugFindingExecutor(CRSExecutor):
         oss_fuzz_path: Path,
         registry_dir: Path,
         benchmarks_root: Path,
-        crs_configs_dir: Path
+        crs_configs_dir: Path,
+        litellm_mode: Optional[str] = "passthrough"
     ):
         """Initialize bug finding executor.
 
@@ -50,12 +51,14 @@ class CRSBugFindingExecutor(CRSExecutor):
             registry_dir: Path to CRS registry directory (e.g., crses/registry/ or oss-crs-registry/)
             benchmarks_root: Path to benchmarks directory (for repo manager)
             crs_configs_dir: Path to CRS configs directory
+            litellm_mode: LiteLLM mode ('passthrough' or 'proxy', default: 'passthrough')
         """
         self.crs_config_name = crs_config_name
         self.oss_fuzz_path = oss_fuzz_path
         self.registry_dir = registry_dir
         self.benchmarks_root = benchmarks_root
         self.crs_configs_dir = crs_configs_dir
+        self.litellm_mode = litellm_mode
         self.config: Dict[str, Any] = {}
         self.built_projects: Set[str] = set()
 
@@ -144,6 +147,12 @@ class CRSBugFindingExecutor(CRSExecutor):
             expected_output_dir = self._get_crs_output_dir(trial_build_dir, project_name)
             logger.info(f"Expected output at: {expected_output_dir}")
 
+            # Get LiteLLM environment variables
+            import os
+            litellm_env = self._get_litellm_env()
+            env = os.environ.copy()
+            env.update(litellm_env)
+
             timeout = self.config.get("run_timeout", 7200)
             result = subprocess.run(
                 cmd,
@@ -151,7 +160,8 @@ class CRSBugFindingExecutor(CRSExecutor):
                 text=True,
                 timeout=timeout,
                 check=False,
-                cwd=str(trial_output_dir)
+                cwd=str(trial_output_dir),
+                env=env
             )
 
             execution_time = time.time() - start_time
@@ -230,6 +240,53 @@ class CRSBugFindingExecutor(CRSExecutor):
         )
         return []
 
+    def _get_litellm_env(self) -> Dict[str, str]:
+        """Get LiteLLM environment variables based on configured mode.
+
+        Returns:
+            Dictionary of environment variables for CRS subprocess
+
+        Raises:
+            ExecutorError: If required environment variables are not set
+        """
+        import os
+
+        if self.litellm_mode is None:
+            # No external LiteLLM - CRS deploys its own
+            return {}
+
+        env = {}
+
+        if self.litellm_mode == "passthrough":
+            # Use external LiteLLM with UPSTREAM_LITELLM_BASE_URL and LITELLM_API_KEY
+            url = os.environ.get('UPSTREAM_LITELLM_BASE_URL')
+            key = os.environ.get('LITELLM_API_KEY')
+
+            if not url:
+                raise ExecutorError("UPSTREAM_LITELLM_BASE_URL not set (required for passthrough mode)")
+            if not key:
+                raise ExecutorError("LITELLM_API_KEY not set (required for passthrough mode)")
+
+            env['LITELLM_URL'] = url
+            env['LITELLM_KEY'] = key
+            logger.info(f"Using passthrough LiteLLM mode with URL: {url}")
+
+        elif self.litellm_mode == "proxy":
+            # Use self-hosted LiteLLM proxy with LITELLM_BASE_URL and LITELLM_MASTER_KEY
+            url = os.environ.get('LITELLM_BASE_URL')
+            key = os.environ.get('LITELLM_MASTER_KEY')
+
+            if not url:
+                raise ExecutorError("LITELLM_BASE_URL not set (required for proxy mode)")
+            if not key:
+                raise ExecutorError("LITELLM_MASTER_KEY not set (required for proxy mode)")
+
+            env['LITELLM_URL'] = url
+            env['LITELLM_KEY'] = key
+            logger.info(f"Using proxy LiteLLM mode with URL: {url}")
+
+        return env
+
     def _build_crs_if_needed(
         self,
         benchmark_path: Path,
@@ -284,9 +341,19 @@ class CRSBugFindingExecutor(CRSExecutor):
             str(crs_config_dir), project_name, str(source_path)
         ]
 
+        # Add external LiteLLM flag if using external LiteLLM
+        if self.litellm_mode is not None:
+            cmd.append("--external-litellm")
+
         logger.info(f"Build command: {' '.join(cmd)}")
         logger.debug(f"Command: {cmd}")
         logger.debug(f"Working directory: {trial_build_dir}")
+
+        # Get LiteLLM environment variables
+        import os
+        litellm_env = self._get_litellm_env()
+        env = os.environ.copy()
+        env.update(litellm_env)
 
         timeout = self.config.get("build_timeout", 3600)
 
@@ -297,7 +364,8 @@ class CRSBugFindingExecutor(CRSExecutor):
                 text=True,
                 timeout=timeout,
                 check=False,
-                cwd=str(trial_build_dir)
+                cwd=str(trial_build_dir),
+                env=env
             )
 
             if result.returncode != 0:
@@ -351,6 +419,10 @@ class CRSBugFindingExecutor(CRSExecutor):
             logger.info(f"Using hints from: {hints_path}")
         else:
             logger.info("Running without hints")
+
+        # Add external LiteLLM flag if using external LiteLLM
+        if self.litellm_mode is not None:
+            cmd.append("--external-litellm")
 
         return cmd
 

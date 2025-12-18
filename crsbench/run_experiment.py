@@ -165,6 +165,17 @@ Examples:
     )
 
     parser.add_argument(
+        '--litellm-mode',
+        type=str,
+        choices=['passthrough', 'proxy'],
+        required=False,
+        metavar='MODE',
+        help="LiteLLM mode: 'passthrough' uses external LiteLLM (UPSTREAM_LITELLM_BASE_URL, LITELLM_API_KEY), "
+             "'proxy' uses self-hosted proxy (LITELLM_BASE_URL, LITELLM_MASTER_KEY). "
+             "If not set, CRS deploys its own LiteLLM instance. (overrides config file)"
+    )
+
+    parser.add_argument(
         '--debug',
         action='store_true',
         help='Enable debug logging (logs all commands executed with their working directories)'
@@ -354,6 +365,11 @@ def enhance_config_with_cli_args(config_dict: Dict[str, Any], args: argparse.Nam
     if args.hint_corpus_level is not None:
         enhanced['hint_corpus_level'] = args.hint_corpus_level
         logger.info(f"Using corpus hint level from CLI: {args.hint_corpus_level}")
+
+    # LiteLLM mode override
+    if args.litellm_mode is not None:
+        enhanced['litellm_mode'] = args.litellm_mode
+        logger.info(f"Using LiteLLM mode from CLI: {args.litellm_mode}")
 
     return enhanced
 
