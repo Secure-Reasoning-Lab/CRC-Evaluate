@@ -14,8 +14,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Configuration
-CONFIG_FILE="$SCRIPT_DIR/test-experiment-config.yaml"
-EXPERIMENT_NAME="integration-test-local"
+CONFIG_FILE="$SCRIPT_DIR/test-experiment-config-libafl.yaml"
+EXPERIMENT_NAME="integration-test-libafl"
 
 # Path overrides (CLI arguments have highest precedence)
 OSS_FUZZ_PATH="${OSS_FUZZ_PATH:-$PROJECT_ROOT/oss-fuzz}"
@@ -62,7 +62,7 @@ echo ""
 
 # Clean up previous test data
 echo -e "${YELLOW}Cleaning up previous test data...${NC}"
-rm -rf /tmp/crsbench-integration-test/
+rm -rf /tmp/crsbench-integration-test-libafl/
 
 # Activate virtual environment
 echo -e "${YELLOW}Activating virtual environment...${NC}"
@@ -90,17 +90,17 @@ if [ $? -eq 0 ]; then
     echo -e "${GREEN}=== Integration test completed successfully ===${NC}"
     echo ""
     echo "Results stored in:"
-    echo "  Experiment data: /tmp/crsbench-integration-test/experiment-data"
-    echo "  Reports: /tmp/crsbench-integration-test/report-data"
+    echo "  Experiment data: /tmp/crsbench-integration-test-libafl/experiment-data"
+    echo "  Reports: /tmp/crsbench-integration-test-libafl/report-data"
 
-    [ -d /tmp/crsbench-integration-test/ ] && tree /tmp/crsbench-integration-test/
+    [ -d /tmp/crsbench-integration-test-libafl/ ] && tree /tmp/crsbench-integration-test-libafl/
 
     exit 0
 else
     echo ""
     echo -e "${RED}=== Integration test failed ===${NC}"
 
-    [ -d /tmp/crsbench-integration-test/ ] && tree /tmp/crsbench-integration-test/
+    [ -d /tmp/crsbench-integration-test-libafl/ ] && tree /tmp/crsbench-integration-test-libafl/
 
     exit 1
 fi
