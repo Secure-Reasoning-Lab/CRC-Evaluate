@@ -5,9 +5,11 @@ from crsbench.validation.variant.models import (
     BenchmarkMode,
     BuildVersion,
 )
+from crsbench.validation.variant.builder import VariantBuilder
 
 __all__ = [
     'BuildTag',
     'BenchmarkMode',
     'BuildVersion',
+    'VariantBuilder',
 ]
