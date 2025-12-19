@@ -9,13 +9,17 @@ This module provides the main orchestrator for POV verification:
 6. Deduplicate results
 """
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
-from crsbench.validation.meta_adapter import MetaYamlAdapter
-from crsbench.validation.variant.builder import VariantBuilder
 from crsbench.validation.variant.models import BenchmarkMode, BuildTag, BuildVersion
+
+if TYPE_CHECKING:
+    from crsbench.validation.meta_adapter import MetaYamlAdapter
+    from crsbench.validation.variant.builder import VariantBuilder
 from crsbench.validation.verification.dedup import (
     DeduplicationStrategy,
     PatchBasedDedup,
@@ -64,6 +68,9 @@ class VerificationEngine:
             timeout: Timeout for reproduce operations in seconds
             dedup_strategy: Name of deduplication strategy to use
         """
+        # Lazy import to avoid circular dependencies
+        from crsbench.validation.variant.builder import VariantBuilder
+
         self.oss_fuzz_path = Path(oss_fuzz_path)
         self.timeout = timeout
         self.builder = VariantBuilder(oss_fuzz_path)
@@ -268,6 +275,9 @@ class VerificationEngine:
         Returns:
             MetaYamlAdapter or None if loading fails
         """
+        # Lazy import to avoid circular dependencies
+        from crsbench.validation.meta_adapter import MetaYamlAdapter
+
         meta_yaml = benchmark_path / ".aixcc" / "meta.yaml"
         project_yaml = benchmark_path / "project.yaml"
 

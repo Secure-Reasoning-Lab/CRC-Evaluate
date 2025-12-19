@@ -22,8 +22,8 @@ from crsbench.validation.variant import (
     BuildTag,
     BenchmarkMode,
     BuildVersion,
-    VariantBuilder,
 )
+from crsbench.validation.variant.builder import VariantBuilder
 from crsbench.validation.verification import (
     VerificationStatus,
     VerificationRequest,
