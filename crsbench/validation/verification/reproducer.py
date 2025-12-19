@@ -4,6 +4,12 @@ This module provides a wrapper around OSS-Fuzz's helper.py for:
 1. Building fuzzers for benchmark variants
 2. Reproducing crashes with POV testcases
 3. Checking build cache status
+
+Exit code handling (with --propagate_exit_codes):
+- 0: No crash (fuzzer ran successfully, no bug found)
+- 77: ASAN crash (AddressSanitizer detected memory error)
+- 124: Timeout (subprocess or helper.py timeout)
+- Other non-zero: Other crash types (UBSAN, MSAN, etc.)
 """
 
 import logging
@@ -14,6 +20,9 @@ from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Exit code constants from helper.py
+EXIT_CODE_TIMEOUT = 124  # Subprocess timeout in helper.py
 
 
 class OSSFuzzReproducer:
@@ -131,6 +140,12 @@ class OSSFuzzReproducer:
     ) -> bool:
         """Reproduce a crash using OSS-Fuzz helper.py.
 
+        Uses --propagate_exit_codes to get explicit exit codes:
+        - 0: No crash
+        - 77: ASAN crash
+        - 124: Timeout (treated as no crash)
+        - Other non-zero: Other crash types
+
         Args:
             project_name: Project name
             harness: Harness name to run
@@ -146,37 +161,55 @@ class OSSFuzzReproducer:
             f.write(pov_data)
             testcase_path = Path(f.name)
 
+        effective_timeout = timeout or self.timeout
+        req_prefix = f"[Request #{request_id}] " if request_id else ""
+
         try:
             cmd = [
                 "python3",
                 str(self._helper_script),
                 "reproduce",
+                "--propagate_exit_codes",
+                "--timeout", str(effective_timeout),
                 project_name,
                 harness,
                 str(testcase_path),
+                "--",
+                "-detect_leaks=0",
             ]
 
-            req_prefix = f"[Request #{request_id}] " if request_id else ""
             logger.debug(f"{req_prefix}Reproducing: {' '.join(cmd)}")
 
+            # Use slightly longer subprocess timeout to let helper.py handle it
             result = subprocess.run(
                 cmd,
                 cwd=self.oss_fuzz_path,
                 capture_output=True,
                 text=True,
-                timeout=timeout or self.timeout,
+                timeout=effective_timeout + 30,  # Grace period for helper.py
             )
 
-            # Non-zero return code means crash occurred
+            # Handle exit codes explicitly
             if result.returncode == 0:
                 logger.info(f"{req_prefix}{project_name}/{harness} did not crash")
                 return False
+            elif result.returncode == EXIT_CODE_TIMEOUT:
+                logger.info(
+                    f"{req_prefix}{project_name}/{harness} timed out (exit code 124)"
+                )
+                return False
             else:
-                logger.info(f"{req_prefix}{project_name}/{harness} crashed")
+                logger.info(
+                    f"{req_prefix}{project_name}/{harness} crashed "
+                    f"(exit code {result.returncode})"
+                )
                 return True
 
         except subprocess.TimeoutExpired:
-            logger.warning(f"{req_prefix}Reproduce timeout for {project_name}/{harness}")
+            # Our subprocess timeout (shouldn't happen with grace period)
+            logger.warning(
+                f"{req_prefix}Subprocess timeout for {project_name}/{harness}"
+            )
             return False
         except Exception as e:
             logger.error(f"{req_prefix}Reproduce error for {project_name}/{harness}: {e}")
