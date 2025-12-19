@@ -78,9 +78,18 @@ Examples:
         "--harness",
         type=str,
         default=None,
-        help="Filter to a specific harness name",
+        help="Filter to a specific harness name (required when using --pov)",
     )
-    parser.add_argument(
+
+    # POV input options (mutually exclusive)
+    pov_group = parser.add_mutually_exclusive_group()
+    pov_group.add_argument(
+        "--pov",
+        type=Path,
+        default=None,
+        help="Single POV file to validate (requires --harness)",
+    )
+    pov_group.add_argument(
         "--pov-dir",
         type=Path,
         default=None,
