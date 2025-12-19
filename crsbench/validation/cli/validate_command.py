@@ -167,6 +167,16 @@ def run_validate(args: argparse.Namespace) -> int:
         logger.error(f"Benchmark path not found: {args.benchmark_path}")
         return 1
 
+    # Validate single POV mode requires harness
+    pov_file = getattr(args, 'pov', None)
+    if pov_file and not args.harness:
+        logger.error("--harness is required when using --pov for single file validation")
+        return 1
+
+    if pov_file and not pov_file.exists():
+        logger.error(f"POV file not found: {pov_file}")
+        return 1
+
     # Determine oss-fuzz path
     oss_fuzz_path = args.oss_fuzz or Path("./oss-fuzz")
     if not oss_fuzz_path.exists():
@@ -181,15 +191,27 @@ def run_validate(args: argparse.Namespace) -> int:
         dedup_strategy=dedup_strategy,
     )
 
-    # Run verification
     logger.info(f"Validating benchmark: {args.benchmark_path}")
-    results = engine.verify_benchmark(
-        benchmark_path=args.benchmark_path,
-        pov_dir=args.pov_dir,
-        harness_filter=args.harness,
-        force_rebuild=args.force_rebuild,
-        deduplicate=not args.no_dedup,
-    )
+
+    # Handle single POV file vs directory
+    if pov_file:
+        # Single POV file mode
+        results = run_single_pov_validation(
+            engine=engine,
+            benchmark_path=args.benchmark_path,
+            pov_file=pov_file,
+            harness=args.harness,
+            force_rebuild=args.force_rebuild,
+        )
+    else:
+        # Directory mode (original behavior)
+        results = engine.verify_benchmark(
+            benchmark_path=args.benchmark_path,
+            pov_dir=args.pov_dir,
+            harness_filter=args.harness,
+            force_rebuild=args.force_rebuild,
+            deduplicate=not args.no_dedup,
+        )
 
     if not results:
         logger.warning("No verification results generated")
@@ -202,6 +224,59 @@ def run_validate(args: argparse.Namespace) -> int:
     print_summary(results)
 
     return 0
+
+
+def run_single_pov_validation(
+    engine: VerificationEngine,
+    benchmark_path: Path,
+    pov_file: Path,
+    harness: str,
+    force_rebuild: bool,
+) -> List[VerificationResult]:
+    """Run validation for a single POV file.
+
+    Args:
+        engine: VerificationEngine instance
+        benchmark_path: Path to benchmark directory
+        pov_file: Path to single POV file
+        harness: Harness name to test against
+        force_rebuild: Whether to force rebuild variants
+
+    Returns:
+        List containing single VerificationResult
+    """
+    from crsbench.validation.verification.models import VerificationRequest
+
+    # Load adapter
+    adapter = engine._load_adapter(benchmark_path)
+    if not adapter:
+        logger.error(f"Failed to load benchmark adapter for {benchmark_path}")
+        return []
+
+    # Build variants if needed
+    if force_rebuild:
+        engine._built_versions.pop(adapter.benchmark_name, None)
+
+    versions = engine._get_or_build_versions(adapter)
+    if not versions:
+        logger.error(f"Failed to build variants for {adapter.benchmark_name}")
+        return []
+
+    # Read POV data
+    pov_data = pov_file.read_bytes()
+    logger.info(f"Validating POV: {pov_file.name} ({len(pov_data)} bytes)")
+    logger.info(f"Harness: {harness}")
+
+    # Create request and verify
+    request = VerificationRequest(
+        pov_data=pov_data,
+        harness=harness,
+        benchmark=adapter.benchmark_name,
+        pov_id=pov_file.name,
+    )
+
+    result = engine.verify_pov(request, adapter, versions)
+    return [result]
 
 
 def output_results(

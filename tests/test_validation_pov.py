@@ -64,7 +64,7 @@ class TestBuildVersion:
         )
         assert version.benchmark_name == "test-bench"
         assert version.lang == "c"
-        assert version.project_path == "aixcc/c/test-bench-deltaref"
+        assert version.project_path == "test-bench-deltaref"
 
     def test_build_version_cpv(self):
         """Test BuildVersion with CPV."""

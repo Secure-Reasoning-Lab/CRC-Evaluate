@@ -34,7 +34,7 @@ class OSSFuzzReproducer:
             oss_fuzz_path: Path to oss-fuzz directory
             timeout: Default timeout for subprocess operations
         """
-        self.oss_fuzz_path = Path(oss_fuzz_path)
+        self.oss_fuzz_path = Path(oss_fuzz_path).resolve()  # Use absolute path
         self.timeout = timeout
         self._helper_script = self.oss_fuzz_path / "infra" / "helper.py"
 

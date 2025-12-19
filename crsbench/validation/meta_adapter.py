@@ -30,6 +30,7 @@ class MetaYamlAdapter:
         benchmark_name: Name of the benchmark (e.g., "afc-curl-delta-01")
         lang: Programming language (e.g., "c", "jvm")
         main_repo: URL or path to the main repository
+        benchmark_path: Full path to the benchmark directory
     """
 
     def __init__(
@@ -38,6 +39,7 @@ class MetaYamlAdapter:
         benchmark_name: str,
         lang: str,
         main_repo: str,
+        benchmark_path: Optional[Path] = None,
     ):
         """Initialize the adapter.
 
@@ -46,11 +48,13 @@ class MetaYamlAdapter:
             benchmark_name: Name of the benchmark
             lang: Programming language
             main_repo: Main repository URL/path
+            benchmark_path: Full path to the benchmark directory
         """
         self.config = config
         self.benchmark_name = benchmark_name
         self.lang = lang
         self.main_repo = main_repo
+        self.benchmark_path = benchmark_path
         self._harness_map = {h.name: h for h in config.harness_files}
 
     @classmethod
@@ -60,6 +64,7 @@ class MetaYamlAdapter:
         benchmark_name: str,
         lang: str,
         main_repo: str,
+        benchmark_path: Optional[Path] = None,
     ) -> "MetaYamlAdapter":
         """Create adapter from meta.yaml file.
 
@@ -68,6 +73,7 @@ class MetaYamlAdapter:
             benchmark_name: Name of the benchmark
             lang: Programming language
             main_repo: Main repository URL/path
+            benchmark_path: Full path to the benchmark directory
 
         Returns:
             MetaYamlAdapter instance
@@ -87,7 +93,11 @@ class MetaYamlAdapter:
         except Exception as e:
             raise ValueError(f"Invalid meta.yaml: {e}")
 
-        return cls(config, benchmark_name, lang, main_repo)
+        # Derive benchmark_path from meta_yaml_path if not provided
+        if benchmark_path is None:
+            benchmark_path = meta_yaml_path.parent.parent  # .aixcc/meta.yaml -> benchmark_dir
+
+        return cls(config, benchmark_name, lang, main_repo, benchmark_path)
 
     # =========================================================================
     # Harness and POV Access Methods
@@ -129,6 +139,43 @@ class MetaYamlAdapter:
         for vuln in harness.vulns:
             for pov in vuln.povs:
                 result.append((vuln.vuln_keyword, pov))
+        return result
+
+    def get_pov_path(self, harness_name: str, vuln_keyword: str, pov_id: str) -> Optional[Path]:
+        """Get the path to a POV blob file.
+
+        CRSBench structure: .aixcc/{harness}/{vuln_keyword}/blobs/{pov_id}.blob
+
+        Args:
+            harness_name: Name of the harness
+            vuln_keyword: Vulnerability keyword (e.g., "cpv_0")
+            pov_id: POV identifier (e.g., "pov_0")
+
+        Returns:
+            Full path to POV blob, or None if benchmark_path not set
+        """
+        if not self.benchmark_path:
+            return None
+        return (
+            self.benchmark_path / ".aixcc" / harness_name / vuln_keyword
+            / "blobs" / f"{pov_id}.blob"
+        )
+
+    def get_all_pov_paths(self) -> List[Tuple[str, str, Path]]:
+        """Get paths to all POV blobs in the benchmark.
+
+        Returns:
+            List of (harness_name, vuln_keyword, pov_path) tuples
+        """
+        if not self.benchmark_path:
+            return []
+
+        result = []
+        for harness_name in self.get_harness_names():
+            for vuln_keyword, pov in self.get_all_povs(harness_name):
+                pov_path = self.get_pov_path(harness_name, vuln_keyword, pov.id)
+                if pov_path and pov_path.exists():
+                    result.append((harness_name, vuln_keyword, pov_path))
         return result
 
     # =========================================================================

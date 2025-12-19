@@ -215,7 +215,7 @@ class VerificationEngine:
 
         Args:
             benchmark_path: Path to benchmark project directory
-            pov_dir: Optional POV directory (defaults to .aixcc/povs/)
+            pov_dir: Optional POV directory (overrides auto-discovery)
             harness_filter: Optional harness name to filter
             force_rebuild: Force rebuild of variants
             deduplicate: Whether to deduplicate results
@@ -228,24 +228,68 @@ class VerificationEngine:
         if not adapter:
             return []
 
-        # Determine POV directory
-        if pov_dir is None:
-            pov_dir = benchmark_path / ".aixcc" / "povs"
-
-        if not pov_dir.exists():
-            logger.error(f"POV directory not found: {pov_dir}")
-            return []
-
         # Build variants if needed
         if force_rebuild:
             self._built_versions.pop(adapter.benchmark_name, None)
 
-        return self.verify_all_povs(
-            adapter=adapter,
-            pov_dir=pov_dir,
-            harness_filter=harness_filter,
-            deduplicate=deduplicate,
-        )
+        results = []
+        versions = self._get_or_build_versions(adapter)
+        if not versions:
+            logger.error(f"Failed to build variants for {adapter.benchmark_name}")
+            return []
+
+        # Discover POVs using adapter (from meta.yaml)
+        if pov_dir:
+            # Use explicit POV directory (override)
+            harness_names = [harness_filter] if harness_filter else adapter.get_harness_names()
+            for harness_name in harness_names:
+                pov_files = list(pov_dir.glob("*.blob")) + list(pov_dir.glob("*.bin"))
+                for pov_file in pov_files:
+                    pov_data = pov_file.read_bytes()
+                    request = VerificationRequest(
+                        pov_data=pov_data,
+                        harness=harness_name,
+                        benchmark=adapter.benchmark_name,
+                        pov_id=pov_file.name,
+                    )
+                    result = self.verify_pov(request, adapter, versions)
+                    results.append(result)
+        else:
+            # Discover POVs from meta.yaml via adapter
+            all_povs = adapter.get_all_pov_paths()
+
+            # Filter by harness if specified
+            if harness_filter:
+                all_povs = [(h, v, p) for h, v, p in all_povs if h == harness_filter]
+
+            if not all_povs:
+                logger.warning(f"No POVs found in benchmark meta.yaml")
+                return []
+
+            logger.info(f"Verifying {len(all_povs)} POVs from meta.yaml")
+
+            for harness_name, vuln_keyword, pov_path in all_povs:
+                pov_data = pov_path.read_bytes()
+                request = VerificationRequest(
+                    pov_data=pov_data,
+                    harness=harness_name,
+                    benchmark=adapter.benchmark_name,
+                    pov_id=pov_path.name,
+                )
+                result = self.verify_pov(request, adapter, versions)
+                results.append(result)
+
+        # Deduplicate if requested
+        if deduplicate and results:
+            original_count = len(results)
+            results = self.dedup_strategy.deduplicate(results)
+            if len(results) < original_count:
+                logger.info(
+                    f"Deduplicated: {original_count} -> {len(results)} results "
+                    f"(using {self.dedup_strategy.name})"
+                )
+
+        return results
 
     def _get_or_build_versions(
         self,
@@ -285,18 +329,18 @@ class VerificationEngine:
             logger.error(f"meta.yaml not found: {meta_yaml}")
             return None
 
-        # Extract benchmark info from path
-        # Expected: .../aixcc/{lang}/{benchmark_name}
+        # Extract benchmark name from path
         benchmark_name = benchmark_path.name
-        lang = benchmark_path.parent.name
 
-        # Get main_repo from project.yaml
+        # Get language and main_repo from project.yaml
+        lang = "c"  # Default
         main_repo = ""
         if project_yaml.exists():
             import yaml
 
             with open(project_yaml) as f:
                 project_data = yaml.safe_load(f)
+            lang = project_data.get("language", "c")
             main_repo = project_data.get("main_repo", "")
 
         try:

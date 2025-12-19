@@ -200,7 +200,8 @@ class VariantBuilder:
             BuildVersion if successful, None otherwise
         """
         variant_name = adapter.get_variant_name(build_tag, cpv_num)
-        project_path = f"aixcc/{adapter.lang}/{variant_name}"
+        # Project path for OSS-Fuzz - use benchmark name directly without aixcc prefix
+        project_path = variant_name
 
         # Check cache
         if not force_rebuild and self.reproducer.is_variant_built(project_path):
@@ -227,12 +228,16 @@ class VariantBuilder:
 
                 # Apply patches if needed
                 if apply_patches:
-                    original_project = (
-                        self.projects_base / "aixcc" / adapter.lang / adapter.benchmark_name
-                    )
-                    self._apply_patches(
+                    # Use benchmark_path from adapter for patches location
+                    # CRSBench structure: .aixcc/{harness}/cpv_{N}/patches/
+                    if adapter.benchmark_path and adapter.benchmark_path.exists():
+                        aixcc_dir = adapter.benchmark_path / ".aixcc"
+                    else:
+                        aixcc_dir = self.projects_base / adapter.benchmark_name / ".aixcc"
+
+                    self._apply_cpv_patches(
                         repo_path,
-                        original_project / ".aixcc" / "patches",
+                        aixcc_dir,
                         exclude_cpv,
                     )
 
@@ -263,10 +268,14 @@ class VariantBuilder:
         Returns:
             Path to variant project, or None on failure
         """
-        original_path = (
-            self.projects_base / "aixcc" / adapter.lang / adapter.benchmark_name
-        )
-        variant_path = self.projects_base / "aixcc" / adapter.lang / variant_name
+        # Use benchmark_path from adapter if available
+        if adapter.benchmark_path and adapter.benchmark_path.exists():
+            original_path = adapter.benchmark_path
+        else:
+            original_path = self.projects_base / adapter.benchmark_name
+
+        # Variant projects go directly under oss-fuzz/projects/
+        variant_path = self.projects_base / variant_name
 
         if variant_path.exists():
             logger.debug(f"Variant project already exists: {variant_path}")
@@ -277,6 +286,8 @@ class VariantBuilder:
             return None
 
         try:
+            # Create parent directories if needed
+            variant_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(original_path, variant_path)
             logger.info(f"Created variant project: {variant_name}")
             return variant_path
@@ -349,13 +360,69 @@ class VariantBuilder:
             logger.error(f"Clone error: {e}")
             return False
 
+    def _apply_cpv_patches(
+        self,
+        repo_path: Path,
+        aixcc_dir: Path,
+        exclude_cpv: Optional[int],
+    ) -> None:
+        """Apply CPV patches from CRSBench structure.
+
+        CRSBench structure: .aixcc/{harness}/cpv_{N}/patches/patch_*.diff
+
+        Args:
+            repo_path: Path to the repository
+            aixcc_dir: Path to .aixcc directory
+            exclude_cpv: CPV number to exclude (skip its patch)
+        """
+        if not aixcc_dir.exists():
+            logger.warning(f".aixcc directory not found: {aixcc_dir}")
+            return
+
+        # Find all cpv_* directories across all harnesses
+        cpv_patches: Dict[int, List[Path]] = {}
+
+        for harness_dir in aixcc_dir.iterdir():
+            if not harness_dir.is_dir() or harness_dir.name in ('tests', 'povs'):
+                continue
+
+            # Look for cpv_* directories in each harness
+            for cpv_dir in harness_dir.glob("cpv_*"):
+                if not cpv_dir.is_dir():
+                    continue
+
+                try:
+                    cpv_num = int(cpv_dir.name.split("_")[1])
+                except (IndexError, ValueError):
+                    continue
+
+                # Get patches from this CPV
+                patches_dir = cpv_dir / "patches"
+                if patches_dir.exists():
+                    for patch_file in patches_dir.glob("*.diff"):
+                        if cpv_num not in cpv_patches:
+                            cpv_patches[cpv_num] = []
+                        cpv_patches[cpv_num].append(patch_file)
+
+        # Apply patches, excluding the specified CPV
+        for cpv_num, patch_files in sorted(cpv_patches.items()):
+            if exclude_cpv is not None and cpv_num == exclude_cpv:
+                logger.debug(f"Skipping patches for cpv_{cpv_num}")
+                continue
+
+            for patch_file in patch_files:
+                if not self._apply_patch(repo_path, patch_file):
+                    logger.warning(f"Failed to apply patch: {patch_file}")
+                else:
+                    logger.debug(f"Applied patch: {patch_file.name} (cpv_{cpv_num})")
+
     def _apply_patches(
         self,
         repo_path: Path,
         patches_dir: Path,
         exclude_cpv: Optional[int],
     ) -> None:
-        """Apply patches to a repository.
+        """Apply patches to a repository (legacy format).
 
         Args:
             repo_path: Path to the repository
@@ -407,8 +474,10 @@ class VariantBuilder:
             True if successful, False otherwise
         """
         try:
+            # Resolve to absolute path since git apply runs from repo_path
+            patch_file_abs = patch_file.resolve()
             result = subprocess.run(
-                ["git", "apply", "--3way", str(patch_file)],
+                ["git", "apply", "--3way", str(patch_file_abs)],
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
@@ -449,12 +518,11 @@ class VariantBuilder:
         Args:
             adapter: MetaYamlAdapter with config
         """
-        lang_dir = self.projects_base / "aixcc" / adapter.lang
-        if not lang_dir.exists():
+        if not self.projects_base.exists():
             return
 
         prefix = f"{adapter.benchmark_name}-"
-        for variant_dir in lang_dir.iterdir():
+        for variant_dir in self.projects_base.iterdir():
             if variant_dir.is_dir() and variant_dir.name.startswith(prefix):
                 try:
                     shutil.rmtree(variant_dir)

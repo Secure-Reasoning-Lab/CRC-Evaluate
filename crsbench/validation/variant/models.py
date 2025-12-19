@@ -55,7 +55,7 @@ class BuildVersion:
     @property
     def project_path(self) -> str:
         """Return the OSS-Fuzz project path for this variant."""
-        return f"aixcc/{self.lang}/{self.variant_project_name}"
+        return self.variant_project_name
 
     def __str__(self) -> str:
         if self.build_tag == BuildTag.CPV:
