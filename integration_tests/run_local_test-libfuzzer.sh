@@ -93,14 +93,14 @@ if [ $? -eq 0 ]; then
     echo "  Experiment data: /tmp/crsbench-integration-test-libfuzzer/experiment-data"
     echo "  Reports: /tmp/crsbench-integration-test-libfuzzer/report-data"
 
-    [ -d /tmp/crsbench-integration-test-libfuzzer/ ] && tree /tmp/crsbench-integration-test-libfuzzer/
+    [ -d /tmp/crsbench-integration-test-libfuzzer/ ] && tree -L 4 /tmp/crsbench-integration-test-libfuzzer/
 
     exit 0
 else
     echo ""
     echo -e "${RED}=== Integration test failed ===${NC}"
 
-    [ -d /tmp/crsbench-integration-test-libfuzzer/ ] && tree /tmp/crsbench-integration-test-libfuzzer/
+    [ -d /tmp/crsbench-integration-test-libfuzzer/ ] && tree -L 4 /tmp/crsbench-integration-test-libfuzzer/
 
     exit 1
 fi

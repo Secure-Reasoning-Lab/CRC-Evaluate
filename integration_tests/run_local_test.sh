@@ -93,14 +93,14 @@ if [ $? -eq 0 ]; then
     echo "  Experiment data: /tmp/crsbench-integration-test/experiment-data"
     echo "  Reports: /tmp/crsbench-integration-test/report-data"
 
-    [ -d /tmp/crsbench-integration-test/ ] && tree /tmp/crsbench-integration-test/
+    [ -d /tmp/crsbench-integration-test/ ] && tree -L 4 /tmp/crsbench-integration-test/
 
     exit 0
 else
     echo ""
     echo -e "${RED}=== Integration test failed ===${NC}"
 
-    [ -d /tmp/crsbench-integration-test/ ] && tree /tmp/crsbench-integration-test/
+    [ -d /tmp/crsbench-integration-test/ ] && tree -L 4 /tmp/crsbench-integration-test/
 
     exit 1
 fi
