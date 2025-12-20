@@ -223,6 +223,27 @@ docs_reference_projects/
   ```
 - All validators have been migrated to V2 style - no deprecation warnings
 
+### Type Checking
+- **MUST run `just typecheck` after making code changes**
+  - This ensures type safety and catches type errors early
+  - Example: `just typecheck`
+- Use Python's `typing` module for type annotations
+  - Use `Optional[T]` for optional types, not `T | None` (for consistency with existing code)
+  - Import: `from typing import Optional`
+- When working with functions that have Union return types:
+  - Use `cast()` from typing module to help the type checker
+  - Example: When `run_cmd()` returns `Union[Tuple[str, str], Tuple[str, str, int]]`:
+    ```python
+    from typing import cast, Tuple
+
+    result = run_cmd(cmd, return_code=True)
+    stdout, stderr, exit_code = cast(Tuple[str, str, int], result)
+    ```
+- **Legacy/auto-generated code exceptions**:
+  - `crsbench/hint_generation/sarif_model.py` - Auto-generated SARIF schema (Pydantic V1 style)
+  - `crsbench/migration/` - Legacy migration tools
+  - Type errors in these files can be ignored unless actively working on them
+
 ## Documentation Standards
 - Create entry in README.md when adding a new component
 - Create a README.md to summarize each component in their own directories
