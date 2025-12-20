@@ -91,10 +91,12 @@ class OSSFuzzReproducer:
         Returns:
             True if build succeeded, False otherwise
         """
+        uid = os.getuid()
         cmd = [
             "python3",
             str(self._helper_script),
             "build_fuzzers",
+            "-e", f"BUILD_UID={uid}",
             project_name,
         ]
 
@@ -115,7 +117,6 @@ class OSSFuzzReproducer:
 
             if result.returncode == 0:
                 logger.info(f"Successfully built fuzzers for {project_name}")
-                self._fix_permissions()
                 return True
             else:
                 logger.error(
@@ -217,24 +218,3 @@ class OSSFuzzReproducer:
         finally:
             # Clean up temporary file
             testcase_path.unlink(missing_ok=True)
-
-    def _fix_permissions(self) -> None:
-        """Fix permissions on build directory.
-
-        OSS-Fuzz builds run as root in Docker, so we need to fix
-        ownership of the build output.
-        """
-        build_dir = self.oss_fuzz_path / "build"
-        if build_dir.exists():
-            try:
-                # Try to chown to current user
-                uid = os.getuid()
-                gid = os.getgid()
-                subprocess.run(
-                    ["sudo", "chown", "-R", f"{uid}:{gid}", str(build_dir)],
-                    capture_output=True,
-                    timeout=30,
-                )
-            except Exception:
-                # Ignore permission fixing errors
-                pass
