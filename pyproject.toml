@@ -65,3 +65,11 @@ dev = [
     "datamodel-code-generator>=0.35.0",
     "ty>=0.0.4",
 ]
+
+[tool.ty.src]
+exclude = [
+    "crsbench/hint_generation/sarif_model.py",
+]
+include = [
+    "crsbench",
+]
