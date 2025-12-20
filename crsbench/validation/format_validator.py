@@ -661,24 +661,24 @@ def _validate_benchmark_suite_schema(data: Dict[str, Any], result: ValidationRes
                 context={"validation_error": error}
             )
         # Return a minimal config to avoid crashes
-        return BenchmarkSuiteConfig(
-            Name="dummy",
-            Description="dummy",
-            benchmark_list=["dummy"],
-            release_date="01.01.2025"
-        )
+        return BenchmarkSuiteConfig.model_validate({
+            "Name": "dummy",
+            "Description": "dummy",
+            "benchmark_list": ["dummy"],
+            "Release date": "01.01.2025"
+        })
     except Exception as e:
         result.add_error(
             ValidationCodes.SCHEMA_VALIDATION_ERROR,
             f"Schema validation failed: {str(e)}",
             context={"error": str(e)}
         )
-        return BenchmarkSuiteConfig(
-            Name="dummy",
-            Description="dummy",
-            benchmark_list=["dummy"],
-            release_date="01.01.2025"
-        )
+        return BenchmarkSuiteConfig.model_validate({
+            "Name": "dummy",
+            "Description": "dummy",
+            "benchmark_list": ["dummy"],
+            "Release date": "01.01.2025"
+        })
 
 
 def _generate_benchmark_suite_metadata(config: BenchmarkSuiteConfig, result: ValidationResult):

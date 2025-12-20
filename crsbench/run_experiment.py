@@ -650,13 +650,9 @@ def run_experiment_distributed(experiment_name: str, config, benchmarks: List[st
     logger.info(f"Redis host: {config.redis_host}")
 
     # Initialize queue
-    try:
-        queue = initialize_queue(config.redis_host, experiment_name)
-    except Exception as e:
-        logger.error(f"Failed to initialize queue: {e}")
-        logger.error("Falling back to local execution mode")
-        run_experiment_local(experiment_name, config, benchmarks, crses, args)
-        return
+    queue = initialize_queue(config.redis_host, experiment_name)
+    if queue is None:
+        raise RuntimeError(f"Failed to initialize Redis queue at {config.redis_host}")
 
     # Generate trial matrix
     trials = generate_trial_matrix(benchmarks, crses, config)

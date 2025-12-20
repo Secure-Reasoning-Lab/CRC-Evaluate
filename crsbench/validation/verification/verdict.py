@@ -20,7 +20,7 @@ DELTA Mode:
 """
 
 import logging
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from crsbench.validation.variant.models import BenchmarkMode, BuildTag
 from crsbench.validation.verification.models import (
@@ -44,7 +44,7 @@ class VerdictResolver:
         crash_results: Dict[BuildTag, bool],
         cpv_crash_map: Dict[int, bool],
         benchmark_name: str,
-        pov_id: str = None,
+        pov_id: Optional[str] = None,
     ) -> VerificationResult:
         """Resolve the verification verdict based on crash results.
 
@@ -72,7 +72,7 @@ class VerdictResolver:
         crash_results: Dict[BuildTag, bool],
         cpv_crash_map: Dict[int, bool],
         benchmark_name: str,
-        pov_id: str = None,
+        pov_id: Optional[str] = None,
     ) -> VerificationResult:
         """Resolve verdict for FULL mode benchmarks.
 
@@ -141,7 +141,7 @@ class VerdictResolver:
         crash_results: Dict[BuildTag, bool],
         cpv_crash_map: Dict[int, bool],
         benchmark_name: str,
-        pov_id: str = None,
+        pov_id: Optional[str] = None,
     ) -> VerificationResult:
         """Resolve verdict for DELTA mode benchmarks.
 

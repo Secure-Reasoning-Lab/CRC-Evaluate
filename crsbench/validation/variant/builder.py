@@ -137,6 +137,10 @@ class VariantBuilder:
             else adapter.get_base_commit()
         )
 
+        if not commit:
+            logger.error("Cannot build all-patched version: commit is None")
+            return None
+
         return self._build_version(
             adapter=adapter,
             commit=commit,
@@ -159,6 +163,10 @@ class VariantBuilder:
             if mode == BenchmarkMode.DELTA
             else adapter.get_base_commit()
         )
+
+        if not commit:
+            logger.error("Cannot build CPV versions: commit is None")
+            return versions
 
         for cpv_num in adapter.get_cpv_numbers():
             version = self._build_version(

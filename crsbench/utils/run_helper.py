@@ -20,7 +20,7 @@ import sys
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Any, Union, Deque
+from typing import List, Tuple, Optional, Dict, Any, Union, Deque, cast
 from enum import IntEnum
 
 from crsbench.utils.repo_manager import ensure_project_repository, get_repo_info_from_benchmark, run_git
@@ -545,7 +545,8 @@ def run_helper(
 
     helper_path = os.path.join(oss_fuzz_root, "infra", "helper.py")
     command = ["python", helper_path] + helper_command
-    return run_cmd(command, expect_fail=expect_fail, exception=exception)
+    result = run_cmd(command, expect_fail=expect_fail, exception=exception)
+    return cast(Tuple[str, str], result)
 
 
 # =============================================================================
@@ -1186,13 +1187,14 @@ def run_test_sh(
     # In-memory mode
     timed_out = False
     try:
-        stdout, stderr, exit_code = run_cmd(
+        result = run_cmd(
             docker_command,
             expect_fail=False,
             exception=False,
             return_code=True,
             timeout=timeout
         )
+        stdout, stderr, exit_code = cast(Tuple[str, str, int], result)
     except RuntimeError as e:
         if "timed out" in str(e):
             timed_out = True
@@ -1344,11 +1346,13 @@ def apply_patch(
     logger.debug(f"Applying patch to source directory: {source_dir}")
 
     # Try git apply first
-    stdout, stderr = run_cmd(
+    result = run_cmd(
         ["git", "apply", patch_path],
         cwd=source_dir,
-        exception=False
+        exception=False,
+        return_code=True
     )
+    stdout, stderr, _ = cast(Tuple[str, str, int], result)
 
     # If git apply fails, try patch command
     if "error" in stderr.lower() or "fatal" in stderr.lower():
@@ -1384,11 +1388,13 @@ def revert_patch(
     logger.debug(f"Reverting patch from source directory: {source_dir}")
 
     # Try git apply -R first
-    stdout, stderr = run_cmd(
+    result = run_cmd(
         ["git", "apply", "-R", patch_path],
         cwd=source_dir,
-        exception=False
+        exception=False,
+        return_code=True
     )
+    stdout, stderr, _ = cast(Tuple[str, str, int], result)
 
     # If git apply fails, try patch -R
     if "error" in stderr.lower() or "fatal" in stderr.lower():
