@@ -281,6 +281,10 @@ class ExperimentConfig(BaseModel):
         default="aixcc-afc",
         description="Docker image prefix for custom project images (default: aixcc-afc)"
     )
+    skip_verification: bool = Field(
+        default=False,
+        description="Skip POV verification after CRS execution (default: False, verification enabled)"
+    )
 
     @field_validator('experiment')
     @classmethod
@@ -482,6 +486,7 @@ class ExperimentConfig(BaseModel):
             'registry_dir': self.registry_dir,
             'snapshot_period': self.snapshot_period,
             'project_image_prefix': self.project_image_prefix,
+            'skip_verification': self.skip_verification,
         }
 
 

@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Union, Optional, Dict, Any, List
 from crsbench.validation import validate_benchmark, ValidationResult
 from crsbench.validation.schemas import BenchmarkConfig, HarnessFile, POV
+from crsbench.validation import VerificationEngine, VerificationResult as VerifResult
 from crsbench.evaluation.crs_executor import CRSExecutor, StubCRSExecutor
+from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
 from crsbench.evaluation.results import ResultCollector, EvaluationReport, HarnessResult, POVResult, POVStatus
 from crsbench.evaluation.snapshot_manager import SnapshotManager
 
@@ -25,9 +27,10 @@ class EvaluationError(Exception):
 class EvaluationResult:
     """Result from a benchmark evaluation."""
 
-    def __init__(self, report: EvaluationReport, validation_result: ValidationResult):
+    def __init__(self, report: EvaluationReport, validation_result: ValidationResult, verification_results: Optional[List] = None):
         self.report = report
         self.validation_result = validation_result
+        self.verification_results = verification_results or []
 
     @property
     def is_valid(self) -> bool:
@@ -68,7 +71,9 @@ class BenchmarkRunner:
                       mode: Optional[str] = None,
                       crs_config: Optional[Dict[str, Any]] = None,
                       trial_output_dir: Optional[Path] = None,
-                      crs_output_dir: Optional[Path] = None) -> EvaluationResult:
+                      crs_output_dir: Optional[Path] = None,
+                      skip_verification: bool = False,
+                      oss_fuzz_path: Optional[Path] = None) -> EvaluationResult:
         """Run a complete benchmark evaluation.
 
         Args:
@@ -77,6 +82,8 @@ class BenchmarkRunner:
             crs_config: Configuration for CRS executor
             trial_output_dir: Trial output directory for snapshots (required if snapshots enabled)
             crs_output_dir: Optional CRS output directory (for oss-bugfind-crs workaround)
+            skip_verification: Skip POV verification (default: False, verification enabled)
+            oss_fuzz_path: Path to oss-fuzz directory (required for POV verification)
 
         Returns:
             EvaluationResult: Complete evaluation results
@@ -174,7 +181,27 @@ class BenchmarkRunner:
             self.logger.info(f"Evaluation completed: {report.povs_found}/{report.total_povs} POVs detected "
                            f"({report.success_rate:.1%} success rate)")
 
-            return EvaluationResult(report, validation_result)
+            # Step 11: Verify generated POVs (conditional on CRS type)
+            verification_results = []
+            if not skip_verification and isinstance(self.crs_executor, CRSBugFindingExecutor):
+                if report.povs_found > 0 and oss_fuzz_path:
+                    # Determine CRS output directory
+                    actual_crs_output_dir = crs_output_dir or (trial_output_dir / "output" if trial_output_dir else None)
+
+                    if actual_crs_output_dir:
+                        verification_results = self._verify_povs(
+                            benchmark_path=benchmark_path,
+                            crs_output_dir=actual_crs_output_dir,
+                            oss_fuzz_path=oss_fuzz_path
+                        )
+                    else:
+                        self.logger.warning("Cannot verify POVs: crs_output_dir not available")
+                elif not oss_fuzz_path:
+                    self.logger.warning("Skipping POV verification: oss_fuzz_path not provided")
+                else:
+                    self.logger.info("No POVs to verify")
+
+            return EvaluationResult(report, validation_result, verification_results)
 
         except Exception as e:
             self.logger.error(f"Benchmark evaluation failed: {str(e)}")
@@ -324,3 +351,36 @@ class BenchmarkRunner:
                 )
 
                 collector.add_harness_result(harness_result)
+
+    def _verify_povs(
+        self,
+        benchmark_path: Path,
+        crs_output_dir: Path,
+        oss_fuzz_path: Path
+    ) -> List[VerifResult]:
+        """Verify CRS-generated POVs against benchmark variants.
+
+        Args:
+            benchmark_path: Path to benchmark directory
+            crs_output_dir: Path to CRS output directory containing POVs
+            oss_fuzz_path: Path to oss-fuzz directory
+
+        Returns:
+            List of verification results
+        """
+        try:
+            self.logger.info("Starting POV verification...")
+            engine = VerificationEngine(
+                oss_fuzz_path=oss_fuzz_path,
+                timeout=120,
+                dedup_strategy="patch-based" # TODO: make it configuralbe
+            )
+            pov_dir = crs_output_dir / "povs"
+            return engine.verify_benchmark(
+                benchmark_path=benchmark_path,
+                pov_dir=pov_dir,
+                deduplicate=True # TODO: configurable?
+            )
+        except Exception as e:
+            self.logger.error(f"POV verification failed: {e}", exc_info=True)
+            return []
