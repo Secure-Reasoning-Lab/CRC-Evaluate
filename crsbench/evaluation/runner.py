@@ -153,8 +153,14 @@ class BenchmarkRunner:
                 self._run_harness_evaluations(config, benchmark_path, collector, evaluation_mode, trial_output_dir)
 
             finally:
-                # Step 9: Stop snapshot thread
+                # Step 9: Capture final snapshot and stop snapshot thread
                 if snapshot_manager:
+                    self.logger.info("Capturing final snapshot...")
+                    try:
+                        snapshot_manager.capture_snapshot()
+                    except Exception as e:
+                        self.logger.warning(f"Failed to capture final snapshot: {e}")
+
                     self.logger.info("Stopping snapshot manager...")
                     snapshot_manager.stop()
                     if snapshot_thread and snapshot_thread.is_alive():
