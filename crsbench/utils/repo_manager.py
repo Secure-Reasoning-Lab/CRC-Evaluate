@@ -337,6 +337,21 @@ def ensure_project_repository(
         logger.error(f"❌ Failed to get repository info: {e}")
         return None
 
+    # Determine which commit to use (MUST be done before branching on project_dir)
+    if commit:
+        # Use explicit commit parameter
+        target_commit = commit
+        if verbose:
+            logger.info(f"Using explicit commit parameter: {target_commit[:8]}")
+    else:
+        # Default to base_commit from meta.yaml
+        target_commit = repo_info.get("base_commit")
+        if not target_commit:
+            logger.error(f"❌ No base_commit found in meta.yaml for {benchmark_dir}")
+            return None
+        if verbose:
+            logger.info(f"Using base_commit from meta.yaml: {target_commit[:8]}")
+
     # Determine target directory for clone
     if project_dir:
         # Use the specified project_dir
@@ -358,21 +373,6 @@ def ensure_project_repository(
             repo_name = derive_repo_name_from_url(repo_info["repo_url"])
             if verbose:
                 logger.info(f"Derived repo_name from URL: {repo_name}")
-
-        # Determine which commit to use
-        if commit:
-            # Use explicit commit parameter
-            target_commit = commit
-            if verbose:
-                logger.info(f"Using explicit commit parameter: {target_commit[:8]}")
-        else:
-            # Default to base_commit from meta.yaml
-            target_commit = repo_info.get("base_commit")
-            if not target_commit:
-                logger.error(f"❌ No base_commit found in meta.yaml for {benchmark_dir}")
-                return None
-            if verbose:
-                logger.info(f"Using base_commit from meta.yaml: {target_commit[:8]}")
 
         # Create commit-specific directory: {repo_name}-{short_commit}
         short_commit = target_commit[:8]
