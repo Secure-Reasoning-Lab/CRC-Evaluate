@@ -62,5 +62,6 @@ python_functions = "test_*"
 dev = [
     "pytest>=8.4.2",
     "pytest-cov>=6.0.0",
-    "datamodel-code-generator>=0.35.0"
+    "datamodel-code-generator>=0.35.0",
+    "ty>=0.0.4",
 ]
