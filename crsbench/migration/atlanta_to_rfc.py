@@ -14,7 +14,7 @@ from crsbench.utils import log_summary, log_section
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 
@@ -53,6 +53,7 @@ class MigrationContext:
     repo_url: str = ""  # Repository URL from project.yaml
     language: str = ""  # Programming language
     mode: str = ""  # delta or full
+    harness_info: Dict[str, Any] = field(default_factory=dict)  # Harness information for vulnerability migration
 
 
 class AtlantaToRFCMigrator:

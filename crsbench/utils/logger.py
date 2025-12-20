@@ -427,9 +427,9 @@ def log_results(
 
 def log_list(
     items: list,
-    title: str = None,
+    title: Optional[str] = None,
     numbered: bool = True,
-    symbol: str = None,
+    symbol: Optional[str] = None,
     level: str = "info",
     indent: int = 0
 ):
@@ -499,7 +499,7 @@ def log_progress(
 def log_table(
     headers: list,
     rows: list,
-    title: str = None,
+    title: Optional[str] = None,
     level: str = "info",
     min_col_width: int = 15
 ):
@@ -555,7 +555,7 @@ def log_table(
 
 def log_key_value(
     data: dict,
-    title: str = None,
+    title: Optional[str] = None,
     level: str = "info",
     indent: int = 2
 ):
@@ -592,7 +592,7 @@ def log_key_value(
 
 def log_file_info(
     file_path: str,
-    description: str = None,
+    description: Optional[str] = None,
     level: str = "info"
 ):
     """Log file path information with check if file exists.
@@ -620,8 +620,8 @@ def log_file_info(
 
 def log_error_detail(
     error: Exception,
-    context: str = None,
-    max_length: int = None,
+    context: Optional[str] = None,
+    max_length: Optional[int] = None,
     level: str = "error"
 ):
     """Log error with details, handling long error messages gracefully.

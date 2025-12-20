@@ -17,7 +17,7 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 
@@ -116,7 +116,7 @@ def process_single_benchmark(
     benchmark_name: str,
     benchmarks_root: str,
     project_dir: str,
-    output_path: str,
+    output_path: Optional[str],
     force: bool,
     litellm_base_url: str,
     litellm_api_key: str,
@@ -201,7 +201,7 @@ def process_multiple_benchmarks(
     benchmark_names: List[str],
     benchmarks_root: str,
     project_dir: str,
-    output_path: str,
+    output_path: Optional[str],
     force: bool,
     litellm_base_url: str,
     litellm_api_key: str,
@@ -392,6 +392,10 @@ def main():
     if not litellm_api_key:
         logger.error("LITELLM_API_KEY must be set in environment or passed via --litellm-api-key")
         sys.exit(1)
+
+    # Type narrowing: after validation, these are guaranteed to be str
+    assert litellm_base_url is not None
+    assert litellm_api_key is not None
 
     repos_dir = os.getenv("PROJECT_REPOS_DIR", "/home/acorn421/work/team-atlanta/afc-repos")
 
