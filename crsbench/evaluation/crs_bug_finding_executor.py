@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Set
 
 from crsbench.evaluation.crs_executor import CRSExecutor, CRSResult
+from crsbench.evaluation.process_utils import run_with_graceful_timeout
 from crsbench.evaluation.results import POVResult
 from crsbench.validation.schemas import HarnessFile
 from crsbench.utils.repo_manager import USE_GITCACHE
@@ -155,13 +156,14 @@ class CRSBugFindingExecutor(CRSExecutor):
             env.update(litellm_env)
 
             timeout = self.config.get("run_timeout", 7200)
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
+            grace_period = self.config.get("graceful_timeout", 60)
+
+            # Run with graceful timeout handling
+            stdout, stderr, returncode, timed_out = run_with_graceful_timeout(
+                cmd=cmd,
                 timeout=timeout,
-                check=False,
-                cwd=str(trial_output_dir),
+                grace_period=grace_period,
+                cwd=trial_output_dir,
                 env=env
             )
 
@@ -174,35 +176,26 @@ class CRSBugFindingExecutor(CRSExecutor):
                 cmd=cmd,
                 hints_path=hints_path,
                 execution_time=execution_time,
-                returncode=result.returncode,
-                stdout=result.stdout,
-                stderr=result.stderr
+                returncode=returncode,
+                stdout=stdout,
+                stderr=stderr
             )
 
             # 7. Return result
-            success = result.returncode == 0
-            if not success:
-                logger.warning(f"CRS execution returned non-zero code: {result.returncode}")
-                logger.debug(f"stdout: {result.stdout}")
-                logger.debug(f"stderr: {result.stderr}")
+            success = returncode == 0 and not timed_out
+            if timed_out:
+                logger.warning(f"CRS execution timeout after {execution_time}s (returncode: {returncode})")
+            elif not success:
+                logger.warning(f"CRS execution returned non-zero code: {returncode}")
+                logger.debug(f"stdout: {stdout}")
+                logger.debug(f"stderr: {stderr}")
 
             return CRSResult(
                 harness_name=harness.name,
                 execution_time=execution_time,
                 success=success,
-                output=result.stdout,
-                error=result.stderr if not success else None
-            )
-
-        except subprocess.TimeoutExpired as e:
-            execution_time = time.time() - start_time
-            logger.warning(f"CRS execution timeout after {execution_time}s")
-            return CRSResult(
-                harness_name=harness.name,
-                execution_time=execution_time,
-                success=False,
-                output=e.stdout.decode() if e.stdout else "",
-                error=f"Timeout after {execution_time}s"
+                output=stdout,
+                error=stderr if not success or timed_out else None
             )
 
         except Exception as e:

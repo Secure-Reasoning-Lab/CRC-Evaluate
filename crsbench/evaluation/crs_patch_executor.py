@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Set
 
 from crsbench.evaluation.crs_executor import CRSExecutor, CRSResult
+from crsbench.evaluation.process_utils import run_with_graceful_timeout
 from crsbench.evaluation.results import POVResult, POVStatus
 from crsbench.validation.schemas import HarnessFile, POV
 from crsbench.utils.repo_manager import USE_GITCACHE
@@ -130,13 +131,17 @@ class CRSPatchExecutor(CRSExecutor):
 
         start_time = time.time()
         try:
-            result = subprocess.run(
-                cmd,
-                cwd=self.crs_patch_path,
-                capture_output=True,
-                text=True,
-                timeout=self.config.get("run_timeout", 3600)
+            timeout = self.config.get("run_timeout", 3600)
+            grace_period = self.config.get("graceful_timeout", 60)
+
+            # Run with graceful timeout handling
+            stdout, stderr, returncode, timed_out = run_with_graceful_timeout(
+                cmd=cmd,
+                timeout=timeout,
+                grace_period=grace_period,
+                cwd=self.crs_patch_path
             )
+
             execution_time = time.time() - start_time
 
             # Store execution metadata for reproducibility
@@ -146,36 +151,19 @@ class CRSPatchExecutor(CRSExecutor):
                 hints_path=hints_path,
                 povs_path=povs_path,
                 execution_time=execution_time,
-                returncode=result.returncode
+                returncode=returncode
             )
+
+            success = returncode == 0 and not timed_out
+            if timed_out:
+                logger.error(f"CRS execution timed out after {execution_time:.1f}s (returncode: {returncode})")
 
             return CRSResult(
                 harness_name=harness.name,
                 execution_time=execution_time,
-                success=(result.returncode == 0),
-                output=result.stdout,
-                error=result.stderr if result.returncode != 0 else None
-            )
-
-        except subprocess.TimeoutExpired as e:
-            execution_time = time.time() - start_time
-            logger.error(f"CRS execution timed out after {execution_time:.1f}s")
-
-            self._store_execution_metadata(
-                trial_output_dir=trial_output_dir,
-                cmd=cmd,
-                hints_path=hints_path,
-                povs_path=povs_path,
-                execution_time=execution_time,
-                returncode=-1
-            )
-
-            return CRSResult(
-                harness_name=harness.name,
-                execution_time=execution_time,
-                success=False,
-                output=str(e.stdout) if e.stdout else "",
-                error=f"Execution timed out after {execution_time:.1f}s"
+                success=success,
+                output=stdout,
+                error=stderr if not success or timed_out else None
             )
 
         except Exception as e:

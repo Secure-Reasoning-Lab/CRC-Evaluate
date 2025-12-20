@@ -384,8 +384,9 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         self.assertIsInstance(pov_results, list)
 
     @patch('crsbench.utils.repo_manager.ensure_project_repository')
+    @patch('crsbench.evaluation.crs_bug_finding_executor.run_with_graceful_timeout')
     @patch('subprocess.run')
-    def test_run_crs_success(self, mock_run, mock_ensure_repo):
+    def test_run_crs_success(self, mock_run, mock_graceful_timeout, mock_ensure_repo):
         """Test successful CRS execution."""
         # Setup
         benchmark_path = self.benchmarks_root / "test-project"
@@ -420,11 +421,11 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         # Mock repository manager
         mock_ensure_repo.return_value = str(source_dir)
 
-        # Mock subprocess calls (build + run)
-        mock_run.side_effect = [
-            Mock(returncode=0, stdout="Build successful", stderr=""),  # Build
-            Mock(returncode=0, stdout="Run successful", stderr="")     # Run
-        ]
+        # Mock subprocess run for build (still uses subprocess.run)
+        mock_run.return_value = Mock(returncode=0, stdout="Build successful", stderr="")
+
+        # Mock graceful timeout for CRS run
+        mock_graceful_timeout.return_value = ("Run successful", "", 0, False)
 
         # Configure and run
         executor.configure_crs({"hints_enabled": False})
@@ -440,8 +441,9 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         self.assertTrue((trial_dir / "execution.json").exists())
 
     @patch('crsbench.utils.repo_manager.ensure_project_repository')
+    @patch('crsbench.evaluation.crs_bug_finding_executor.run_with_graceful_timeout')
     @patch('subprocess.run')
-    def test_run_crs_timeout(self, mock_run, mock_ensure_repo):
+    def test_run_crs_timeout(self, mock_run, mock_graceful_timeout, mock_ensure_repo):
         """Test CRS execution timeout handling."""
         # Setup
         benchmark_path = self.benchmarks_root / "test-project"
@@ -476,16 +478,12 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         # Mock repository manager
         mock_ensure_repo.return_value = str(source_dir)
 
-        # Mock build success, run timeout
-        import subprocess
-        timeout_error = subprocess.TimeoutExpired(cmd=["oss-bugfind-crs", "run"], timeout=10)
-        timeout_error.stdout = b"partial output"
-        timeout_error.stderr = b""
+        # Mock subprocess run for build (still uses subprocess.run)
+        mock_run.return_value = Mock(returncode=0, stdout="Build successful", stderr="")
 
-        mock_run.side_effect = [
-            Mock(returncode=0, stdout="Build successful", stderr=""),  # Build
-            timeout_error  # Run timeout
-        ]
+        # Mock graceful timeout - simulate timeout occurred
+        # Returns (stdout, stderr, returncode, timed_out)
+        mock_graceful_timeout.return_value = ("partial output", "", -9, True)
 
         # Configure and run
         executor.configure_crs({"hints_enabled": False, "run_timeout": 10})
@@ -493,7 +491,8 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
 
         # Verify result
         self.assertFalse(result.success)
-        self.assertIn("Timeout", result.error)
+        # Timeout is indicated by timed_out flag, error contains partial output
+        self.assertEqual(result.output, "partial output")
 
 
 if __name__ == "__main__":
