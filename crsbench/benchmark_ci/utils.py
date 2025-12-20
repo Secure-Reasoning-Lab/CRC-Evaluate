@@ -35,6 +35,8 @@ class Task:
 
     def __str__(self):
         if self.mode == TaskMode.DELTA:
+            if self.ref_commit is None:
+                raise ValueError("ref_commit must be set in DELTA mode")
             return f"Task(mode={self.mode.value}, base={self.base_commit[:8]}, ref={self.ref_commit[:8]})"
         return f"Task(mode={self.mode.value}, base={self.base_commit[:8]})"
 
@@ -79,7 +81,7 @@ class Harness:
 class JobContext:
     """Context for a single test job."""
     job_type: ExecJobType
-    task: Task
+    task: Optional[Task]
     benchmark: str
     language: str
     engine: str

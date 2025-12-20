@@ -88,7 +88,9 @@ class CRSBugFindingExecutor(CRSExecutor):
         self,
         benchmark_path: Path,
         harness: HarnessFile,
-        trial_output_dir: Path
+        trial_output_dir: Path,
+        base_commit: Optional[str] = None,
+        ref_commit: Optional[str] = None
     ) -> CRSResult:
         """Run CRS on a specific harness.
 
@@ -96,6 +98,8 @@ class CRSBugFindingExecutor(CRSExecutor):
             benchmark_path: Path to benchmark directory
             harness: Harness configuration
             trial_output_dir: Trial directory (from TrialDirectoryPreparer)
+            base_commit: Not used by bug finding CRS (for compatibility)
+            ref_commit: Not used by bug finding CRS (for compatibility)
 
         Returns:
             CRSResult with execution details

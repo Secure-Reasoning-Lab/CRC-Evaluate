@@ -952,43 +952,43 @@ class TestBenchmarkSuiteSchema:
     def test_benchmark_suite_empty_name(self):
         """Test benchmark suite with empty name."""
         with pytest.raises(PydanticValidationError):
-            BenchmarkSuiteConfig(
-                Name="",
-                Description="Test",
-                benchmark_list=["bench1"],
-                release_date="01.01.2025"
-            )
+            BenchmarkSuiteConfig(**{
+                "Name": "",
+                "Description": "Test",
+                "benchmark_list": ["bench1"],
+                "Release date": "01.01.2025"
+            })
 
     def test_benchmark_suite_empty_benchmark_list(self):
         """Test benchmark suite with empty benchmark list."""
         with pytest.raises(PydanticValidationError):
-            BenchmarkSuiteConfig(
-                Name="test-suite",
-                Description="Test",
-                benchmark_list=[],  # Empty
-                release_date="01.01.2025"
-            )
+            BenchmarkSuiteConfig(**{
+                "Name": "test-suite",
+                "Description": "Test",
+                "benchmark_list": [],  # Empty
+                "Release date": "01.01.2025"
+            })
 
     def test_benchmark_suite_invalid_date_format(self):
         """Test benchmark suite with invalid date format."""
         with pytest.raises(PydanticValidationError) as exc_info:
-            BenchmarkSuiteConfig(
-                Name="test-suite",
-                Description="Test",
-                benchmark_list=["bench1"],
-                release_date="2025-09-23"  # Wrong format
-            )
+            BenchmarkSuiteConfig(**{
+                "Name": "test-suite",
+                "Description": "Test",
+                "benchmark_list": ["bench1"],
+                "Release date": "2025-09-23"  # Wrong format
+            })
         assert "release date" in str(exc_info.value).lower() or "format" in str(exc_info.value).lower()
 
     def test_benchmark_suite_duplicate_benchmarks(self):
         """Test benchmark suite with duplicate benchmark IDs."""
         with pytest.raises(PydanticValidationError) as exc_info:
-            BenchmarkSuiteConfig(
-                Name="test-suite",
-                Description="Test",
-                benchmark_list=["bench1", "bench1"],  # Duplicate
-                release_date="01.01.2025"
-            )
+            BenchmarkSuiteConfig(**{
+                "Name": "test-suite",
+                "Description": "Test",
+                "benchmark_list": ["bench1", "bench1"],  # Duplicate
+                "Release date": "01.01.2025"
+            })
         assert "duplicate" in str(exc_info.value).lower()
 
 

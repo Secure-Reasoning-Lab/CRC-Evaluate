@@ -2,7 +2,7 @@
 
 import random
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 from crsbench.bench_snapgen.generator import BenchmarkData
 from crsbench.utils.logger import get_logger
@@ -296,7 +296,7 @@ def create_discovery_timeline(
     difficulty_level: int,
     max_time: float,
     mode: str = "bug-finding",
-    harness: str = None,
+    harness: Optional[str] = None,
     snapshot_period: float = 900.0,
 ) -> DiscoveryTimeline:
     """Create timeline of POV/patch discoveries from benchmark ground truth.

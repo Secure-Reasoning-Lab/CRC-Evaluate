@@ -82,10 +82,10 @@ def main():
         logger.info("✓ Connected to Redis successfully")
 
         # Set up RQ connection context
-        with rq.Connection(redis_connection):
+        with rq.Connection(redis_connection):  # type: ignore[attr-defined]
             queue_name = f'crsbench_{experiment_name}'
-            queue = rq.Queue(queue_name)
-            worker = rq.Worker([queue])
+            queue = rq.Queue(queue_name)  # type: ignore[attr-defined]
+            worker = rq.Worker([queue])  # type: ignore[attr-defined]
 
             logger.info(f"Worker started, listening on queue: {queue_name}")
             logger.info("Waiting for jobs...")
@@ -158,10 +158,10 @@ def run_worker_continuous(
         redis_connection = redis.Redis(host=redis_host)
         redis_connection.ping()
 
-        with rq.Connection(redis_connection):
+        with rq.Connection(redis_connection):  # type: ignore[attr-defined]
             queue_name = f'crsbench_{experiment_name}'
-            queue = rq.Queue(queue_name)
-            worker = rq.Worker([queue])
+            queue = rq.Queue(queue_name)  # type: ignore[attr-defined]
+            worker = rq.Worker([queue])  # type: ignore[attr-defined]
 
             logger.info(f"Worker running in continuous mode on queue: {queue_name}")
 

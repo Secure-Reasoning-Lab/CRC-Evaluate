@@ -66,6 +66,9 @@ def _delta_base_check(job: JobContext, output_dir: Optional[Path] = None, enable
         output_dir: Directory to save artifacts
         enable_check_build: Enable check_build validation
     """
+    if not job.task:
+        raise Exception("[Error] DELTA_BASE_CHECK requires task")
+
     logger.info(f"=== DELTA BASE CHECK ===")
     logger.info(f"Step 1/2: Building at base commit (clean version)")
 
@@ -119,6 +122,9 @@ def _delta_ref_check(job: JobContext, output_dir: Optional[Path] = None, enable_
         output_dir: Directory to save artifacts
         enable_check_build: Enable check_build validation
     """
+    if not job.task:
+        raise Exception("[Error] DELTA_REF_CHECK requires task")
+
     logger.info(f"=== DELTA REF CHECK ===")
 
     # Get ref_commit from task
@@ -179,6 +185,9 @@ def _full_base_check(job: JobContext, output_dir: Optional[Path] = None, enable_
         output_dir: Directory to save artifacts
         enable_check_build: Enable check_build validation
     """
+    if not job.task:
+        raise Exception("[Error] FULL_BASE_CHECK requires task")
+
     logger.info(f"=== FULL BASE CHECK ===")
     logger.info(f"Step 1/3: Building at base commit (vulnerable version)")
 
@@ -235,8 +244,8 @@ def _patch_check(job: JobContext, output_dir: Optional[Path] = None, enable_chec
         output_dir: Directory to save artifacts
         enable_check_build: Enable check_build validation
     """
-    if not job.vulnerability or not job.pov:
-        raise Exception("[Error] PATCH_CHECK requires vulnerability and POV")
+    if not job.task or not job.vulnerability or not job.pov or not job.harness:
+        raise Exception("[Error] PATCH_CHECK requires task, vulnerability, POV, and harness")
 
     if not job.vulnerability.patch_path:
         logger.warning(f"No patch file for {job.vulnerability.id}, skipping")
@@ -385,6 +394,8 @@ def _test_inc_build(job: JobContext, output_dir: Optional[Path] = None) -> None:
 
     output_lines = []
     try:
+        if process.stdout is None:
+            raise Exception("[Error] process.stdout is None")
         for line in process.stdout:
             print(line, end='', flush=True)
             output_lines.append(line)

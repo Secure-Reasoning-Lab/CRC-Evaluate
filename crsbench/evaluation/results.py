@@ -23,7 +23,7 @@ class POVResult:
     name: str
     harness_name: str
     sanitizer: str
-    error_token: str
+    error_token: Optional[str]
     status: POVStatus
     execution_time: Optional[float] = None
     error_message: Optional[str] = None

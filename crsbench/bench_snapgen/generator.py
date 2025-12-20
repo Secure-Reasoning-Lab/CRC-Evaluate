@@ -166,7 +166,7 @@ class BenchmarkSnapshotGenerator:
         output_dir: Path,
         trial_duration: int = 7200,
         snapshot_period: int = 900,
-        harness: str = None,
+        harness: Optional[str] = None,
     ):
         """Initialize benchmark snapshot generator.
 

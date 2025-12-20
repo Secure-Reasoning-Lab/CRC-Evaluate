@@ -4,7 +4,7 @@ This module provides utilities for initializing and managing Redis-backed RQ que
 for distributed CRS trial execution.
 """
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from crsbench.utils.logger import get_logger
 
@@ -15,8 +15,8 @@ try:
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
-    redis = None
-    rq = None
+    redis = None  # type: ignore[assignment]
+    rq = None  # type: ignore[assignment]
 
 logger = get_logger(__name__)
 
@@ -87,7 +87,7 @@ def initialize_queue(redis_host: str, experiment_name: str) -> Optional['rq.Queu
         # Test connection
         redis_connection.ping()
 
-        queue = rq.Queue(queue_name, connection=redis_connection)
+        queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
         logger.info(f"Queue initialized successfully: {queue_name}")
         return queue
 
@@ -120,7 +120,7 @@ def get_all_jobs(queue: 'rq.Queue') -> List['rq.job.Job']:
 
     try:
         job_ids = queue.get_job_ids()
-        jobs = rq.job.Job.fetch_many(job_ids, queue.connection)
+        jobs = rq.job.Job.fetch_many(job_ids, queue.connection)  # type: ignore[attr-defined]
         return [job for job in jobs if job is not None]
     except Exception as e:
         logger.error(f"Failed to fetch jobs from queue: {e}")
@@ -193,7 +193,7 @@ def clear_queue(queue: 'rq.Queue') -> int:
 
         for job_id in job_ids:
             try:
-                job = rq.job.Job.fetch(job_id, connection=queue.connection)
+                job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
                 job.delete()
             except Exception as e:
                 logger.warning(f"Failed to delete job {job_id}: {e}")
