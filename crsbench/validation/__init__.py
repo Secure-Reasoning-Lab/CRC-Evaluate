@@ -1,9 +1,11 @@
-"""Benchmark format validation module.
+"""Benchmark format validation and POV verification module.
 
-This module provides robust validation of benchmark configurations with minimal
-side effects, suitable for use as tool calls by LLM agents.
+This module provides:
+1. Format validation of benchmark configurations
+2. POV (Proof of Vulnerability) verification against benchmark variants
 """
 
+# Format validation
 from crsbench.validation.format_validator import (
     validate_benchmark,
     validate_benchmark_from_string,
@@ -14,7 +16,28 @@ from crsbench.validation.format_validator import (
 )
 from crsbench.validation.errors import ValidationResult, ValidationError, ValidationWarning
 
+# POV verification
+from crsbench.validation.meta_adapter import MetaYamlAdapter
+from crsbench.validation.variant import (
+    BuildTag,
+    BenchmarkMode,
+    BuildVersion,
+)
+from crsbench.validation.variant.builder import VariantBuilder
+from crsbench.validation.verification import (
+    VerificationStatus,
+    VerificationRequest,
+    VerificationResult,
+    VerificationEngine,
+    VerdictResolver,
+    OSSFuzzReproducer,
+    DeduplicationStrategy,
+    PatchBasedDedup,
+    get_dedup_strategy,
+)
+
 __all__ = [
+    # Format validation
     'validate_benchmark',
     'validate_benchmark_from_string',
     'validate_experiment_config',
@@ -23,5 +46,23 @@ __all__ = [
     'validate_benchmark_suite_from_string',
     'ValidationResult',
     'ValidationError',
-    'ValidationWarning'
+    'ValidationWarning',
+    # POV verification - Adapter
+    'MetaYamlAdapter',
+    # POV verification - Variant
+    'BuildTag',
+    'BenchmarkMode',
+    'BuildVersion',
+    'VariantBuilder',
+    # POV verification - Verification
+    'VerificationStatus',
+    'VerificationRequest',
+    'VerificationResult',
+    'VerificationEngine',
+    'VerdictResolver',
+    'OSSFuzzReproducer',
+    # POV verification - Deduplication
+    'DeduplicationStrategy',
+    'PatchBasedDedup',
+    'get_dedup_strategy',
 ]

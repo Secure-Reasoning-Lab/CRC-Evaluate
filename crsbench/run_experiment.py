@@ -6,11 +6,14 @@ standardized experiment configurations, CRS integration, and benchmark suite
 management.
 
 Usage:
-    crsbench \
-        --experiment-config experiment-config.yaml \
-        --benchmarks benchmark1,benchmark2 \
-        --experiment-name my-experiment \
-        --crses atlantis-c,atlantis-multilang
+    # Run experiments
+    crsbench run --experiment-config experiment-config.yaml --benchmarks benchmark1
+
+    # Validate POVs
+    crsbench validate benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
+
+    # Legacy (backward compatible - runs 'run' subcommand)
+    crsbench --experiment-config experiment-config.yaml --benchmarks benchmark1
 """
 
 import argparse
@@ -35,33 +38,12 @@ logger = get_logger(__name__)
 Trial = namedtuple('Trial', ['crs', 'benchmark', 'trial_num'])
 
 
-def parse_arguments() -> argparse.Namespace:
-    """Parse command line arguments.
+def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add arguments for the 'run' subcommand.
 
-    Returns:
-        Parsed arguments with experiment configuration.
+    Args:
+        parser: ArgumentParser to add arguments to
     """
-    parser = argparse.ArgumentParser(
-        prog='crsbench',
-        description='Run CRS evaluation experiments',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Run single benchmark with single CRS
-  %(prog)s --experiment-config config.yaml --benchmarks bench1 \\
-           --experiment-name exp1 --crses atlantis-c
-
-  # Run multiple benchmarks with multiple CRSes
-  %(prog)s --experiment-config config.yaml \\
-           --benchmarks bench1,bench2,bench3 \\
-           --experiment-name multi-exp --crses crs1,crs2
-
-  # Run benchmark suite
-  %(prog)s --experiment-config config.yaml --benchmarks crsbench-c \\
-           --experiment-name suite-exp --crses atlantis-multilang
-        """
-    )
-
     parser.add_argument(
         '--experiment-config',
         type=str,
@@ -196,7 +178,70 @@ Examples:
         help='Enable debug logging (logs all commands executed with their working directories)'
     )
 
-    return parser.parse_args()
+
+def parse_arguments() -> argparse.Namespace:
+    """Parse command line arguments with subcommand support.
+
+    Supports both subcommands and legacy flat arguments for backward compatibility:
+    - crsbench run --experiment-config ...  (new style)
+    - crsbench validate <benchmark> ...      (new subcommand)
+    - crsbench --experiment-config ...       (legacy, equivalent to 'run')
+
+    Returns:
+        Parsed arguments with experiment configuration.
+    """
+    # Check for legacy invocation (no subcommand, starts with --)
+    # or validate subcommand
+    if len(sys.argv) > 1 and sys.argv[1] not in ['run', 'validate', '-h', '--help']:
+        # Legacy mode: insert 'run' as default subcommand
+        if sys.argv[1].startswith('-'):
+            sys.argv.insert(1, 'run')
+
+    parser = argparse.ArgumentParser(
+        prog='crsbench',
+        description='CRSBench - Cyber Reasoning System Evaluation Framework',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run CRS experiments
+  %(prog)s run --experiment-config config.yaml --benchmarks bench1 --crses crs1
+
+  # Validate POVs against benchmark variants
+  %(prog)s validate benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
+
+  # Legacy style (equivalent to 'run')
+  %(prog)s --experiment-config config.yaml --benchmarks bench1 --crses crs1
+        """
+    )
+
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+
+    # 'run' subcommand - experiment execution
+    run_parser = subparsers.add_parser(
+        'run',
+        help='Run CRS evaluation experiments',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s --experiment-config config.yaml --benchmarks bench1 --crses crs1
+  %(prog)s --experiment-config config.yaml --benchmark-suite crsbench-c
+        """
+    )
+    _add_run_arguments(run_parser)
+    run_parser.set_defaults(command='run')
+
+    # 'validate' subcommand - POV validation
+    from crsbench.validation.cli.validate_command import add_validate_subparser
+    add_validate_subparser(subparsers)
+
+    args = parser.parse_args()
+
+    # Default to 'run' if no command specified (shouldn't happen due to legacy handling)
+    if args.command is None:
+        parser.print_help()
+        sys.exit(0)
+
+    return args
 
 
 def validate_arguments(args: argparse.Namespace) -> None:
@@ -706,13 +751,22 @@ def main() -> None:
     # Parse arguments
     args = parse_arguments()
 
+    # Dispatch to appropriate command handler
+    if args.command == 'validate':
+        # Handle validate command
+        from crsbench.validation.cli.validate_command import run_validate
+        sys.exit(run_validate(args))
+
+    # Below is for 'run' command (experiment execution)
+
     # Set debug logging if requested
-    if args.debug:
+    if hasattr(args, 'debug') and args.debug:
         configure_logger(level="DEBUG")
         logger.debug("Debug logging enabled")
 
     # Set gitcache mode
-    set_gitcache(args.gitcache)
+    if hasattr(args, 'gitcache'):
+        set_gitcache(args.gitcache)
 
     # Validate arguments
     validate_arguments(args)
