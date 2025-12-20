@@ -299,10 +299,10 @@ class SnapshotManager:
         return False
 
     def _capture_povs(self, temp_dir: Path) -> list[str]:
-        """Capture all POVs.
+        """Capture all POVs (files and directories).
 
         Returns:
-            List of captured POV filenames
+            List of captured POV item names
         """
         output_dir = self._get_output_dir()
         pov_dir = output_dir / "povs"
@@ -310,39 +310,25 @@ class SnapshotManager:
         if not pov_dir.exists():
             return []
 
-        # Get all POV files
-        pov_files = []
-        try:
-            for pov_file in pov_dir.iterdir():
-                if pov_file.is_file():
-                    pov_files.append(pov_file)
-        except Exception as e:
-            logger.warning(f"Failed to list POVs: {e}")
-            return []
-
-        if not pov_files:
-            return []
-
-        # Copy all POVs
+        # Copy entire POVs directory (both files and directories)
         snapshot_pov_dir = temp_dir / "povs"
-        snapshot_pov_dir.mkdir(exist_ok=True)
-        captured_filenames = []
 
-        for pov_file in pov_files:
-            try:
-                shutil.copy2(pov_file, snapshot_pov_dir / pov_file.name)
-                captured_filenames.append(pov_file.name)
-            except Exception as e:
-                logger.warning(f"Failed to capture POV {pov_file.name}: {e}")
+        try:
+            shutil.copytree(pov_dir, snapshot_pov_dir, dirs_exist_ok=True)
 
-        logger.debug(f"Captured {len(captured_filenames)} POV(s)")
-        return captured_filenames
+            # Get list of all captured items (files and directories)
+            captured_items = [item.name for item in snapshot_pov_dir.iterdir()]
+            logger.debug(f"Captured {len(captured_items)} POV item(s)")
+            return captured_items
+        except Exception as e:
+            logger.warning(f"Failed to capture POVs: {e}")
+            return []
 
     def _capture_patches(self, temp_dir: Path) -> list[str]:
         """Capture all patches (organized by POV ID).
 
         Returns:
-            List of captured patch paths (e.g., "pov_0/patch.diff")
+            List of captured patch item names (e.g., "pov_0")
         """
         output_dir = self._get_output_dir()
         patches_dir = output_dir / "patches"
@@ -350,46 +336,25 @@ class SnapshotManager:
         if not patches_dir.exists():
             return []
 
-        # Get all patches (organized in pov_N/ subdirectories)
-        all_patches = []
-        try:
-            for pov_subdir in patches_dir.iterdir():
-                if not pov_subdir.is_dir():
-                    continue
-
-                for patch_file in pov_subdir.iterdir():
-                    if patch_file.is_file():
-                        all_patches.append((pov_subdir.name, patch_file))
-        except Exception as e:
-            logger.warning(f"Failed to list patches: {e}")
-            return []
-
-        if not all_patches:
-            return []
-
-        # Copy all patches with directory structure
+        # Copy entire patches directory (both files and directories)
         snapshot_patches_dir = temp_dir / "patches"
-        snapshot_patches_dir.mkdir(exist_ok=True)
-        captured_patch_paths = []
 
-        for pov_id, patch_file in all_patches:
-            try:
-                pov_patch_dir = snapshot_patches_dir / pov_id
-                pov_patch_dir.mkdir(exist_ok=True)
-                shutil.copy2(patch_file, pov_patch_dir / patch_file.name)
-                rel_path = f"{pov_id}/{patch_file.name}"
-                captured_patch_paths.append(rel_path)
-            except Exception as e:
-                logger.warning(f"Failed to capture patch {pov_id}/{patch_file.name}: {e}")
+        try:
+            shutil.copytree(patches_dir, snapshot_patches_dir, dirs_exist_ok=True)
 
-        logger.debug(f"Captured {len(captured_patch_paths)} patch(es)")
-        return captured_patch_paths
+            # Get list of all captured items (subdirectories and files)
+            captured_items = [item.name for item in snapshot_patches_dir.iterdir()]
+            logger.debug(f"Captured {len(captured_items)} patch item(s)")
+            return captured_items
+        except Exception as e:
+            logger.warning(f"Failed to capture patches: {e}")
+            return []
 
     def _capture_corpus(self, temp_dir: Path) -> list[str]:
-        """Capture all corpus files.
+        """Capture all corpus contents.
 
         Returns:
-            List of captured corpus filenames
+            List of captured corpus item names
         """
         output_dir = self._get_output_dir()
         corpus_dir = output_dir / "corpus"
@@ -397,33 +362,19 @@ class SnapshotManager:
         if not corpus_dir.exists():
             return []
 
-        # Get all corpus files
-        corpus_files = []
-        try:
-            for corpus_file in corpus_dir.iterdir():
-                if corpus_file.is_file():
-                    corpus_files.append(corpus_file)
-        except Exception as e:
-            logger.warning(f"Failed to list corpus: {e}")
-            return []
-
-        if not corpus_files:
-            return []
-
-        # Copy all corpus files
+        # Copy entire corpus directory (both files and directories)
         snapshot_corpus_dir = temp_dir / "corpus"
-        snapshot_corpus_dir.mkdir(exist_ok=True)
-        captured_filenames = []
 
-        for corpus_file in corpus_files:
-            try:
-                shutil.copy2(corpus_file, snapshot_corpus_dir / corpus_file.name)
-                captured_filenames.append(corpus_file.name)
-            except Exception as e:
-                logger.warning(f"Failed to capture corpus {corpus_file.name}: {e}")
+        try:
+            shutil.copytree(corpus_dir, snapshot_corpus_dir, dirs_exist_ok=True)
 
-        logger.debug(f"Captured {len(captured_filenames)} corpus file(s)")
-        return captured_filenames
+            # Get list of all captured items (files and directories)
+            captured_items = [item.name for item in snapshot_corpus_dir.iterdir()]
+            logger.debug(f"Captured {len(captured_items)} corpus item(s)")
+            return captured_items
+        except Exception as e:
+            logger.warning(f"Failed to capture corpus: {e}")
+            return []
 
     def _capture_crs_data(self, temp_dir: Path) -> bool:
         """Capture CRS-specific data (incremental - by mtime, optional).
