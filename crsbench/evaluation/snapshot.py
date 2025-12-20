@@ -15,9 +15,57 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 import json
 import tarfile
+from pydantic import BaseModel, Field
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class Snapshot(BaseModel):
+    """Pydantic model for a captured snapshot.
+
+    This model represents the result of a snapshot capture operation,
+    tracking what content was captured and where it was stored.
+
+    Attributes:
+        cycle: Snapshot cycle number (1-indexed)
+        timestamp: Unix timestamp when snapshot was captured
+        elapsed_time: Seconds elapsed since trial start
+        snapshot_period: Configured snapshot interval in seconds
+        new_povs: List of newly captured POV filenames
+        new_patches: List of newly captured patch filenames
+        new_corpus_files: List of newly captured corpus filenames
+        archive_path: Path to snapshot tar.gz file (None if not archived)
+        is_complete: Whether snapshot has completion marker
+        has_config: Whether CRS configuration was captured
+        has_execution_metadata: Whether execution metadata was captured
+        has_llm_usage: Whether LLM usage stats were captured
+        has_crs_log: Whether CRS log was captured
+        has_crs_data: Whether CRS-specific data was captured
+    """
+    # Core metadata
+    cycle: int
+    timestamp: float
+    elapsed_time: float
+    snapshot_period: int
+
+    # Captured content counts
+    new_povs: List[str] = Field(default_factory=list)
+    new_patches: List[str] = Field(default_factory=list)
+    new_corpus_files: List[str] = Field(default_factory=list)
+
+    # Archive info
+    archive_path: Optional[Path] = None
+    is_complete: bool = False
+
+    # Captured flags
+    has_config: bool = False
+    has_execution_metadata: bool = False
+    has_llm_usage: bool = False
+    has_crs_log: bool = False
+    has_crs_data: bool = False
+
+    model_config = {"arbitrary_types_allowed": True}
 
 
 @dataclass

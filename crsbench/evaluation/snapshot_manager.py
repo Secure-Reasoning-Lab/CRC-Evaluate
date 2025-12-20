@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Set, Optional
 
-from crsbench.evaluation.snapshot import SnapshotMetadata
+from crsbench.evaluation.snapshot import Snapshot, SnapshotMetadata
 
 logger = get_logger(__name__)
 
@@ -121,7 +121,7 @@ class SnapshotManager:
         self.running = False
         self.shutdown_event.set()
 
-    def capture_snapshot(self):
+    def capture_snapshot(self) -> Snapshot:
         """Capture a single snapshot.
 
         This method:
@@ -131,10 +131,14 @@ class SnapshotManager:
         4. Writes completion marker
         5. Cleans up temporary directory
 
+        Returns:
+            Snapshot object with captured content information
+
         Errors are logged but not raised (allows continuing to next snapshot).
         """
         self.cycle += 1
-        elapsed_time = time.time() - self.trial_start_time
+        snapshot_timestamp = time.time()
+        elapsed_time = snapshot_timestamp - self.trial_start_time
 
         logger.info(f"Capturing snapshot {self.cycle} (elapsed: {elapsed_time:.1f}s)")
 
@@ -142,17 +146,29 @@ class SnapshotManager:
         temp_dir = self.trial_dir / f".snapshot-{self.cycle:04d}"
         temp_dir.mkdir(exist_ok=True)
 
+        # Track captured content for return value
+        new_povs: list[str] = []
+        new_patches: list[str] = []
+        new_corpus_files: list[str] = []
+        has_config = False
+        has_execution_metadata = False
+        has_llm_usage = False
+        has_crs_log = False
+        has_crs_data = False
+
         try:
-            # Capture all snapshot data
+            # Capture all snapshot data (tracking what was captured)
             self._capture_metadata(temp_dir, elapsed_time)
-            self._capture_config(temp_dir)
-            self._capture_execution_metadata(temp_dir)
-            self._capture_llm_usage(temp_dir)
-            self._capture_crs_log(temp_dir)
-            self._capture_povs(temp_dir)
-            self._capture_patches(temp_dir)
-            self._capture_corpus(temp_dir)
-            self._capture_crs_data(temp_dir)
+
+            has_config = self._capture_config(temp_dir)
+            has_execution_metadata = self._capture_execution_metadata(temp_dir)
+            has_llm_usage = self._capture_llm_usage(temp_dir)
+            has_crs_log = self._capture_crs_log(temp_dir)
+
+            new_povs = self._capture_povs(temp_dir)
+            new_patches = self._capture_patches(temp_dir)
+            new_corpus_files = self._capture_corpus(temp_dir)
+            has_crs_data = self._capture_crs_data(temp_dir)
 
             # Compress to tar.gz
             archive_path = self.trial_dir / f"snapshot-{self.cycle:04d}.tar.gz"
@@ -163,6 +179,24 @@ class SnapshotManager:
             marker_path.touch()
 
             logger.info(f"Snapshot {self.cycle} completed: {archive_path.name}")
+
+            # Create and return Snapshot object
+            return Snapshot(
+                cycle=self.cycle,
+                timestamp=snapshot_timestamp,
+                elapsed_time=elapsed_time,
+                snapshot_period=self.snapshot_period,
+                new_povs=new_povs,
+                new_patches=new_patches,
+                new_corpus_files=new_corpus_files,
+                archive_path=archive_path,
+                is_complete=True,
+                has_config=has_config,
+                has_execution_metadata=has_execution_metadata,
+                has_llm_usage=has_llm_usage,
+                has_crs_log=has_crs_log,
+                has_crs_data=has_crs_data
+            )
 
         finally:
             # Always cleanup temp directory
@@ -213,77 +247,114 @@ class SnapshotManager:
         metadata_path = temp_dir / "metadata.json"
         metadata_path.write_text(metadata.to_json())
 
-    def _capture_config(self, temp_dir: Path):
-        """Capture experiment config (full - static)."""
+    def _capture_config(self, temp_dir: Path) -> bool:
+        """Capture experiment config (full - static).
+
+        Returns:
+            True if config was captured, False otherwise
+        """
         config_path = self.trial_dir / "config.yaml"
         if config_path.exists():
             shutil.copy2(config_path, temp_dir / "config.yaml")
+            return True
+        return False
 
-    def _capture_execution_metadata(self, temp_dir: Path):
-        """Capture execution metadata (full - static)."""
+    def _capture_execution_metadata(self, temp_dir: Path) -> bool:
+        """Capture execution metadata (full - static).
+
+        Returns:
+            True if execution metadata was captured, False otherwise
+        """
         exec_path = self.trial_dir / "execution.json"
         if exec_path.exists():
             shutil.copy2(exec_path, temp_dir / "execution.json")
+            return True
+        return False
 
-    def _capture_llm_usage(self, temp_dir: Path):
-        """Capture LLM usage log (full - cumulative)."""
+    def _capture_llm_usage(self, temp_dir: Path) -> bool:
+        """Capture LLM usage log (full - cumulative).
+
+        Returns:
+            True if LLM usage was captured, False otherwise
+        """
         llm_path = self.trial_dir / "llm-usage.json"
         if llm_path.exists():
             try:
                 shutil.copy2(llm_path, temp_dir / "llm-usage.json")
+                return True
             except Exception as e:
                 logger.warning(f"Failed to capture llm-usage.json: {e}")
+                return False
+        return False
 
-    def _capture_crs_log(self, temp_dir: Path):
-        """Capture CRS output log (full - complete log)."""
+    def _capture_crs_log(self, temp_dir: Path) -> bool:
+        """Capture CRS output log (full - complete log).
+
+        Returns:
+            True if CRS log was captured, False otherwise
+        """
         log_path = self.trial_dir / "crs-output.log"
         if log_path.exists():
             try:
                 shutil.copy2(log_path, temp_dir / "crs-output.log")
+                return True
             except Exception as e:
                 logger.warning(f"Failed to capture crs-output.log: {e}")
+                return False
+        return False
 
-    def _capture_povs(self, temp_dir: Path):
-        """Capture POVs (incremental - only new POVs)."""
+    def _capture_povs(self, temp_dir: Path) -> list[str]:
+        """Capture POVs (incremental - only new POVs).
+
+        Returns:
+            List of newly captured POV filenames
+        """
         output_dir = self._get_output_dir()
         pov_dir = output_dir / "povs"
 
         if not pov_dir.exists():
-            return
+            return []
 
         # Find new POVs (not yet captured)
-        new_povs = []
+        new_pov_files = []
         try:
             for pov_file in pov_dir.iterdir():
                 if pov_file.is_file() and pov_file.name not in self.captured_povs:
-                    new_povs.append(pov_file)
+                    new_pov_files.append(pov_file)
         except Exception as e:
             logger.warning(f"Failed to list POVs: {e}")
-            return
+            return []
 
-        if not new_povs:
-            return
+        if not new_pov_files:
+            return []
 
-        # Copy new POVs
+        # Copy new POVs and track filenames
         snapshot_pov_dir = temp_dir / "povs"
         snapshot_pov_dir.mkdir(exist_ok=True)
+        captured_filenames = []
 
-        for pov_file in new_povs:
+        for pov_file in new_pov_files:
             try:
                 shutil.copy2(pov_file, snapshot_pov_dir / pov_file.name)
                 self.captured_povs.add(pov_file.name)
+                captured_filenames.append(pov_file.name)
             except Exception as e:
                 logger.warning(f"Failed to capture POV {pov_file.name}: {e}")
 
-        logger.debug(f"Captured {len(new_povs)} new POV(s)")
+        logger.debug(f"Captured {len(captured_filenames)} new POV(s)")
+        return captured_filenames
 
-    def _capture_patches(self, temp_dir: Path):
-        """Capture patches (incremental - only new patches, organized by POV ID)."""
+    def _capture_patches(self, temp_dir: Path) -> list[str]:
+        """Capture patches (incremental - only new patches, organized by POV ID).
+
+        Returns:
+            List of newly captured patch paths (e.g., "pov_0/patch.diff")
+        """
         output_dir = self._get_output_dir()
         patches_dir = output_dir / "patches"
 
         if not patches_dir.exists():
-            return
+            return []
 
         # Find new patches (organized in pov_N/ subdirectories)
         new_patches = []
@@ -300,71 +371,86 @@ class SnapshotManager:
                             new_patches.append((pov_subdir.name, patch_file))
         except Exception as e:
             logger.warning(f"Failed to list patches: {e}")
-            return
+            return []
 
         if not new_patches:
-            return
+            return []
 
         # Copy new patches with directory structure
         snapshot_patches_dir = temp_dir / "patches"
         snapshot_patches_dir.mkdir(exist_ok=True)
+        captured_patch_paths = []
 
         for pov_id, patch_file in new_patches:
             try:
                 pov_patch_dir = snapshot_patches_dir / pov_id
                 pov_patch_dir.mkdir(exist_ok=True)
                 shutil.copy2(patch_file, pov_patch_dir / patch_file.name)
-                self.captured_patches.add(f"{pov_id}/{patch_file.name}")
+                rel_path = f"{pov_id}/{patch_file.name}"
+                self.captured_patches.add(rel_path)
+                captured_patch_paths.append(rel_path)
             except Exception as e:
                 logger.warning(f"Failed to capture patch {pov_id}/{patch_file.name}: {e}")
 
-        logger.debug(f"Captured {len(new_patches)} new patch(es)")
+        logger.debug(f"Captured {len(captured_patch_paths)} new patch(es)")
+        return captured_patch_paths
 
-    def _capture_corpus(self, temp_dir: Path):
-        """Capture corpus files (incremental - new/modified files by mtime)."""
+    def _capture_corpus(self, temp_dir: Path) -> list[str]:
+        """Capture corpus files (incremental - new/modified files by mtime).
+
+        Returns:
+            List of newly captured corpus filenames
+        """
         output_dir = self._get_output_dir()
         corpus_dir = output_dir / "corpus"
 
         if not corpus_dir.exists():
-            return
+            return []
 
         # Find new/modified corpus files (by modification time)
-        new_corpus = []
+        new_corpus_files = []
         try:
             for corpus_file in corpus_dir.iterdir():
                 if corpus_file.is_file():
                     if corpus_file.stat().st_mtime > self.last_corpus_mtime:
-                        new_corpus.append(corpus_file)
+                        new_corpus_files.append(corpus_file)
         except Exception as e:
             logger.warning(f"Failed to list corpus: {e}")
-            return
+            return []
 
-        if not new_corpus:
-            return
+        if not new_corpus_files:
+            return []
 
         # Copy new corpus files
         snapshot_corpus_dir = temp_dir / "corpus"
         snapshot_corpus_dir.mkdir(exist_ok=True)
+        captured_filenames = []
 
-        for corpus_file in new_corpus:
+        for corpus_file in new_corpus_files:
             try:
                 shutil.copy2(corpus_file, snapshot_corpus_dir / corpus_file.name)
                 # Update last mtime
                 file_mtime = corpus_file.stat().st_mtime
                 if file_mtime > self.last_corpus_mtime:
                     self.last_corpus_mtime = file_mtime
+                captured_filenames.append(corpus_file.name)
             except Exception as e:
                 logger.warning(f"Failed to capture corpus {corpus_file.name}: {e}")
 
-        logger.debug(f"Captured {len(new_corpus)} corpus file(s)")
+        logger.debug(f"Captured {len(captured_filenames)} corpus file(s)")
+        return captured_filenames
 
-    def _capture_crs_data(self, temp_dir: Path):
-        """Capture CRS-specific data (incremental - by mtime, optional)."""
+    def _capture_crs_data(self, temp_dir: Path) -> bool:
+        """Capture CRS-specific data (incremental - by mtime, optional).
+
+        Returns:
+            True if CRS data was captured, False otherwise
+        """
         output_dir = self._get_output_dir()
         crs_data_dir = output_dir / "crs-data"
 
         if not crs_data_dir.exists():
-            return
+            return False
 
         # Copy entire crs-data directory (CRS-specific, no deduplication)
         snapshot_crs_data_dir = temp_dir / "crs-data"
@@ -372,8 +458,10 @@ class SnapshotManager:
         try:
             shutil.copytree(crs_data_dir, snapshot_crs_data_dir, dirs_exist_ok=True)
             logger.debug("Captured crs-data directory")
+            return True
         except Exception as e:
             logger.warning(f"Failed to capture crs-data: {e}")
+            return False
 
     def _create_tar_gz(self, source_dir: Path, archive_path: Path):
         """Compress snapshot directory to tar.gz.
