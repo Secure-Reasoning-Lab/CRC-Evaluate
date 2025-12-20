@@ -22,8 +22,6 @@ class TestSnapshotManagerInit:
         assert manager.snapshot_period == 60
         assert manager.cycle == 0
         assert manager.running is False
-        assert len(manager.captured_povs) == 0
-        assert len(manager.captured_patches) == 0
 
     def test_init_custom_start_time(self, tmp_path):
         """Test initializing with custom start time."""
@@ -147,24 +145,24 @@ class TestSnapshotCapture:
         # Check corpus
         assert (extract_dir / "corpus" / "input-001").exists()
 
-    def test_incremental_pov_capture(self, tmp_path):
-        """Test POVs are captured incrementally."""
+    def test_full_pov_capture(self, tmp_path):
+        """Test all POVs are captured in each snapshot (full capture)."""
         trial_dir = self.setup_trial_dir(tmp_path)
         manager = SnapshotManager(trial_dir, snapshot_period=60)
 
         # First snapshot
-        manager.capture_snapshot()
-        assert len(manager.captured_povs) == 2
+        snapshot1 = manager.capture_snapshot()
+        assert len(snapshot1.povs) == 2
 
         # Add new POV
         pov_dir = trial_dir / "output" / "povs"
         (pov_dir / "pov_003").write_bytes(b"test pov 3")
 
         # Second snapshot
-        manager.capture_snapshot()
-        assert len(manager.captured_povs) == 3
+        snapshot2 = manager.capture_snapshot()
+        assert len(snapshot2.povs) == 3  # All 3 POVs captured
 
-        # Verify second snapshot only has new POV
+        # Verify second snapshot has ALL POVs (full capture)
         archive_path = trial_dir / "snapshot-0002.tar.gz"
         extract_dir = tmp_path / "extracted2"
         extract_dir.mkdir()
@@ -172,19 +170,19 @@ class TestSnapshotCapture:
         with tarfile.open(archive_path, 'r:gz') as tar:
             tar.extractall(extract_dir)
 
-        # Should only have pov_003
-        pov_files = list((extract_dir / "povs").iterdir())
-        assert len(pov_files) == 1
-        assert pov_files[0].name == "pov_003"
+        # Should have all 3 POVs
+        pov_files = sorted([p.name for p in (extract_dir / "povs").iterdir()])
+        assert len(pov_files) == 3
+        assert pov_files == ["pov_001", "pov_002", "pov_003"]
 
-    def test_incremental_patch_capture(self, tmp_path):
-        """Test patches are captured incrementally."""
+    def test_full_patch_capture(self, tmp_path):
+        """Test all patches are captured in each snapshot (full capture)."""
         trial_dir = self.setup_trial_dir(tmp_path)
         manager = SnapshotManager(trial_dir, snapshot_period=60)
 
         # First snapshot
-        manager.capture_snapshot()
-        assert len(manager.captured_patches) == 1
+        snapshot1 = manager.capture_snapshot()
+        assert len(snapshot1.patches) == 1
 
         # Add new patch
         patches_dir = trial_dir / "output" / "patches"
@@ -193,10 +191,10 @@ class TestSnapshotCapture:
         (patch_dir_1 / "patch.diff").write_text("new patch")
 
         # Second snapshot
-        manager.capture_snapshot()
-        assert len(manager.captured_patches) == 2
+        snapshot2 = manager.capture_snapshot()
+        assert len(snapshot2.patches) == 2  # All 2 patches captured
 
-        # Verify second snapshot only has new patch
+        # Verify second snapshot has ALL patches (full capture)
         archive_path = trial_dir / "snapshot-0002.tar.gz"
         extract_dir = tmp_path / "extracted2"
         extract_dir.mkdir()
@@ -204,9 +202,9 @@ class TestSnapshotCapture:
         with tarfile.open(archive_path, 'r:gz') as tar:
             tar.extractall(extract_dir)
 
-        # Should only have pov_1 patch
+        # Should have both patches
         assert (extract_dir / "patches" / "pov_1" / "patch.diff").exists()
-        assert not (extract_dir / "patches" / "pov_0").exists()
+        assert (extract_dir / "patches" / "pov_0" / "patch.diff").exists()
 
     def test_capture_without_optional_files(self, tmp_path):
         """Test snapshot works when optional files are missing."""

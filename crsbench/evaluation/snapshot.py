@@ -32,9 +32,9 @@ class Snapshot(BaseModel):
         timestamp: Unix timestamp when snapshot was captured
         elapsed_time: Seconds elapsed since trial start
         snapshot_period: Configured snapshot interval in seconds
-        new_povs: List of newly captured POV filenames
-        new_patches: List of newly captured patch filenames
-        new_corpus_files: List of newly captured corpus filenames
+        povs: List of captured POV filenames
+        patches: List of captured patch filenames
+        corpus_files: List of captured corpus filenames
         archive_path: Path to snapshot tar.gz file (None if not archived)
         is_complete: Whether snapshot has completion marker
         has_config: Whether CRS configuration was captured
@@ -49,10 +49,10 @@ class Snapshot(BaseModel):
     elapsed_time: float
     snapshot_period: int
 
-    # Captured content counts
-    new_povs: List[str] = Field(default_factory=list)
-    new_patches: List[str] = Field(default_factory=list)
-    new_corpus_files: List[str] = Field(default_factory=list)
+    # Captured content
+    povs: List[str] = Field(default_factory=list)
+    patches: List[str] = Field(default_factory=list)
+    corpus_files: List[str] = Field(default_factory=list)
 
     # Archive info
     archive_path: Optional[Path] = None

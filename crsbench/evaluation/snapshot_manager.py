@@ -65,11 +65,6 @@ class SnapshotManager:
         self.running = False
         self.shutdown_event = threading.Event()
 
-        # Incremental tracking sets
-        self.captured_povs: Set[str] = set()
-        self.captured_patches: Set[str] = set()
-        self.last_corpus_mtime = 0.0
-
         logger.info(f"SnapshotManager initialized: period={snapshot_period}s, trial_dir={trial_dir}, crs_output_dir={crs_output_dir}")
 
     def run(self):
@@ -147,9 +142,9 @@ class SnapshotManager:
         temp_dir.mkdir(exist_ok=True)
 
         # Track captured content for return value
-        new_povs: list[str] = []
-        new_patches: list[str] = []
-        new_corpus_files: list[str] = []
+        povs: list[str] = []
+        patches: list[str] = []
+        corpus_files: list[str] = []
         has_config = False
         has_execution_metadata = False
         has_llm_usage = False
@@ -165,9 +160,9 @@ class SnapshotManager:
             has_llm_usage = self._capture_llm_usage(temp_dir)
             has_crs_log = self._capture_crs_log(temp_dir)
 
-            new_povs = self._capture_povs(temp_dir)
-            new_patches = self._capture_patches(temp_dir)
-            new_corpus_files = self._capture_corpus(temp_dir)
+            povs = self._capture_povs(temp_dir)
+            patches = self._capture_patches(temp_dir)
+            corpus_files = self._capture_corpus(temp_dir)
             has_crs_data = self._capture_crs_data(temp_dir)
 
             # Compress to tar.gz
@@ -186,9 +181,9 @@ class SnapshotManager:
                 timestamp=snapshot_timestamp,
                 elapsed_time=elapsed_time,
                 snapshot_period=self.snapshot_period,
-                new_povs=new_povs,
-                new_patches=new_patches,
-                new_corpus_files=new_corpus_files,
+                povs=povs,
+                patches=patches,
+                corpus_files=corpus_files,
                 archive_path=archive_path,
                 is_complete=True,
                 has_config=has_config,
@@ -304,10 +299,10 @@ class SnapshotManager:
         return False
 
     def _capture_povs(self, temp_dir: Path) -> list[str]:
-        """Capture POVs (incremental - only new POVs).
+        """Capture all POVs.
 
         Returns:
-            List of newly captured POV filenames
+            List of captured POV filenames
         """
         output_dir = self._get_output_dir()
         pov_dir = output_dir / "povs"
@@ -315,40 +310,39 @@ class SnapshotManager:
         if not pov_dir.exists():
             return []
 
-        # Find new POVs (not yet captured)
-        new_pov_files = []
+        # Get all POV files
+        pov_files = []
         try:
             for pov_file in pov_dir.iterdir():
-                if pov_file.is_file() and pov_file.name not in self.captured_povs:
-                    new_pov_files.append(pov_file)
+                if pov_file.is_file():
+                    pov_files.append(pov_file)
         except Exception as e:
             logger.warning(f"Failed to list POVs: {e}")
             return []
 
-        if not new_pov_files:
+        if not pov_files:
             return []
 
-        # Copy new POVs and track filenames
+        # Copy all POVs
         snapshot_pov_dir = temp_dir / "povs"
         snapshot_pov_dir.mkdir(exist_ok=True)
         captured_filenames = []
 
-        for pov_file in new_pov_files:
+        for pov_file in pov_files:
             try:
                 shutil.copy2(pov_file, snapshot_pov_dir / pov_file.name)
-                self.captured_povs.add(pov_file.name)
                 captured_filenames.append(pov_file.name)
             except Exception as e:
                 logger.warning(f"Failed to capture POV {pov_file.name}: {e}")
 
-        logger.debug(f"Captured {len(captured_filenames)} new POV(s)")
+        logger.debug(f"Captured {len(captured_filenames)} POV(s)")
         return captured_filenames
 
     def _capture_patches(self, temp_dir: Path) -> list[str]:
-        """Capture patches (incremental - only new patches, organized by POV ID).
+        """Capture all patches (organized by POV ID).
 
         Returns:
-            List of newly captured patch paths (e.g., "pov_0/patch.diff")
+            List of captured patch paths (e.g., "pov_0/patch.diff")
         """
         output_dir = self._get_output_dir()
         patches_dir = output_dir / "patches"
@@ -356,8 +350,8 @@ class SnapshotManager:
         if not patches_dir.exists():
             return []
 
-        # Find new patches (organized in pov_N/ subdirectories)
-        new_patches = []
+        # Get all patches (organized in pov_N/ subdirectories)
+        all_patches = []
         try:
             for pov_subdir in patches_dir.iterdir():
                 if not pov_subdir.is_dir():
@@ -365,41 +359,37 @@ class SnapshotManager:
 
                 for patch_file in pov_subdir.iterdir():
                     if patch_file.is_file():
-                        # Track by relative path: pov_0/patch.diff
-                        rel_path = f"{pov_subdir.name}/{patch_file.name}"
-                        if rel_path not in self.captured_patches:
-                            new_patches.append((pov_subdir.name, patch_file))
+                        all_patches.append((pov_subdir.name, patch_file))
         except Exception as e:
             logger.warning(f"Failed to list patches: {e}")
             return []
 
-        if not new_patches:
+        if not all_patches:
             return []
 
-        # Copy new patches with directory structure
+        # Copy all patches with directory structure
         snapshot_patches_dir = temp_dir / "patches"
         snapshot_patches_dir.mkdir(exist_ok=True)
         captured_patch_paths = []
 
-        for pov_id, patch_file in new_patches:
+        for pov_id, patch_file in all_patches:
             try:
                 pov_patch_dir = snapshot_patches_dir / pov_id
                 pov_patch_dir.mkdir(exist_ok=True)
                 shutil.copy2(patch_file, pov_patch_dir / patch_file.name)
                 rel_path = f"{pov_id}/{patch_file.name}"
-                self.captured_patches.add(rel_path)
                 captured_patch_paths.append(rel_path)
             except Exception as e:
                 logger.warning(f"Failed to capture patch {pov_id}/{patch_file.name}: {e}")
 
-        logger.debug(f"Captured {len(captured_patch_paths)} new patch(es)")
+        logger.debug(f"Captured {len(captured_patch_paths)} patch(es)")
         return captured_patch_paths
 
     def _capture_corpus(self, temp_dir: Path) -> list[str]:
-        """Capture corpus files (incremental - new/modified files by mtime).
+        """Capture all corpus files.
 
         Returns:
-            List of newly captured corpus filenames
+            List of captured corpus filenames
         """
         output_dir = self._get_output_dir()
         corpus_dir = output_dir / "corpus"
@@ -407,32 +397,27 @@ class SnapshotManager:
         if not corpus_dir.exists():
             return []
 
-        # Find new/modified corpus files (by modification time)
-        new_corpus_files = []
+        # Get all corpus files
+        corpus_files = []
         try:
             for corpus_file in corpus_dir.iterdir():
                 if corpus_file.is_file():
-                    if corpus_file.stat().st_mtime > self.last_corpus_mtime:
-                        new_corpus_files.append(corpus_file)
+                    corpus_files.append(corpus_file)
         except Exception as e:
             logger.warning(f"Failed to list corpus: {e}")
             return []
 
-        if not new_corpus_files:
+        if not corpus_files:
             return []
 
-        # Copy new corpus files
+        # Copy all corpus files
         snapshot_corpus_dir = temp_dir / "corpus"
         snapshot_corpus_dir.mkdir(exist_ok=True)
         captured_filenames = []
 
-        for corpus_file in new_corpus_files:
+        for corpus_file in corpus_files:
             try:
                 shutil.copy2(corpus_file, snapshot_corpus_dir / corpus_file.name)
-                # Update last mtime
-                file_mtime = corpus_file.stat().st_mtime
-                if file_mtime > self.last_corpus_mtime:
-                    self.last_corpus_mtime = file_mtime
                 captured_filenames.append(corpus_file.name)
             except Exception as e:
                 logger.warning(f"Failed to capture corpus {corpus_file.name}: {e}")
