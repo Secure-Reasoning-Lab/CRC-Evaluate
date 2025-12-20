@@ -115,7 +115,7 @@ class CRSBugFindingExecutor(CRSExecutor):
 
         try:
             # 1. Prepare trial-specific build directory
-            trial_build_dir = trial_output_dir / "build"
+            trial_build_dir = trial_output_dir / "crs-build"
             trial_build_dir.mkdir(parents=True, exist_ok=True)
 
             # 2. Build CRS Docker image (this also clones the repository)
@@ -613,7 +613,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             stdout: Process stdout
             stderr: Process stderr
         """
-        build_dir = trial_output_dir / "build"
+        build_dir = trial_output_dir / "crs-build"
 
         # Get actual output directory (auto-determined by oss-bugfind-crs)
         crs_output_dir = self._get_crs_output_dir(build_dir, harness.name)

@@ -123,7 +123,7 @@ class TrialDirectoryPreparer:
             trial_dir = self._create_trial_directory(crs, benchmark, trial_num)
 
             # Create directory structure
-            build_dir = trial_dir / "build"
+            build_dir = trial_dir / "crs-build"
             output_dir = trial_dir / "output"
             build_dir.mkdir(parents=True, exist_ok=True)
             output_dir.mkdir(parents=True, exist_ok=True)

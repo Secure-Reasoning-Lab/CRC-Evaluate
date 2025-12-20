@@ -163,7 +163,7 @@ class TestSourceCodePreparation:
 
     def test_prepare_source_code_success(self, preparer, mock_benchmark):
         """Test successful source code preparation."""
-        build_dir = preparer.experiment_dir / "trial-0" / "build"
+        build_dir = preparer.experiment_dir / "trial-0" / "crs-build"
         build_dir.mkdir(parents=True)
 
         with patch("crsbench.migration.repo_manager.ensure_project_repository") as mock_ensure:
@@ -178,7 +178,7 @@ class TestSourceCodePreparation:
 
     def test_prepare_source_code_benchmark_not_found(self, preparer):
         """Test source code preparation when benchmark doesn't exist."""
-        build_dir = preparer.experiment_dir / "trial-0" / "build"
+        build_dir = preparer.experiment_dir / "trial-0" / "crs-build"
         build_dir.mkdir(parents=True)
 
         with pytest.raises(SourceCloneError, match="Benchmark directory not found"):
@@ -186,7 +186,7 @@ class TestSourceCodePreparation:
 
     def test_prepare_source_code_clone_failure(self, preparer, mock_benchmark):
         """Test source code preparation when cloning fails."""
-        build_dir = preparer.experiment_dir / "trial-0" / "build"
+        build_dir = preparer.experiment_dir / "trial-0" / "crs-build"
         build_dir.mkdir(parents=True)
 
         with patch("crsbench.migration.repo_manager.ensure_project_repository") as mock_ensure:
@@ -462,7 +462,7 @@ class TestCompleteTrialPreparation:
         )
 
         with patch("crsbench.migration.repo_manager.ensure_project_repository") as mock_ensure:
-            mock_source_path = temp_experiment_dir / "trial-0" / "build" / "src" / "test-bench"
+            mock_source_path = temp_experiment_dir / "trial-0" / "crs-build" / "src" / "test-bench"
             mock_source_path.mkdir(parents=True)
             mock_ensure.return_value = str(mock_source_path)
 
@@ -495,7 +495,7 @@ class TestCompleteTrialPreparation:
         )
 
         with patch("crsbench.migration.repo_manager.ensure_project_repository") as mock_ensure:
-            mock_source_path = temp_experiment_dir / "trial-0" / "build" / "src" / "test-bench"
+            mock_source_path = temp_experiment_dir / "trial-0" / "crs-build" / "src" / "test-bench"
             mock_source_path.mkdir(parents=True)
             mock_ensure.return_value = str(mock_source_path)
 
@@ -526,7 +526,7 @@ class TestCompleteTrialPreparation:
         )
 
         with patch("crsbench.migration.repo_manager.ensure_project_repository") as mock_ensure:
-            mock_source_path = temp_experiment_dir / "trial-0" / "build" / "src" / "test-bench"
+            mock_source_path = temp_experiment_dir / "trial-0" / "crs-build" / "src" / "test-bench"
             mock_source_path.mkdir(parents=True)
             mock_ensure.return_value = str(mock_source_path)
 
@@ -570,7 +570,7 @@ class TestCompleteTrialPreparation:
         """Test TrialPreparationResult to_dict conversion."""
         result = TrialPreparationResult(
             trial_dir=temp_experiment_dir / "trial-0",
-            build_dir=temp_experiment_dir / "trial-0" / "build",
+            build_dir=temp_experiment_dir / "trial-0" / "crs-build",
             source_path=temp_experiment_dir / "src",
             output_dir=temp_experiment_dir / "output",
             hints_dir=temp_experiment_dir / "hints",

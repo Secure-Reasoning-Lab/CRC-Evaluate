@@ -79,7 +79,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
 
     def test_find_source_path(self):
         """Test source path finding."""
-        build_dir = Path(self.temp_dir) / "build"
+        build_dir = Path(self.temp_dir) / "crs-build"
         source_path = build_dir / "src" / "test-project"
         source_path.mkdir(parents=True)
 
@@ -88,7 +88,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
 
     def test_get_crs_output_dir(self):
         """Test CRS output directory derivation."""
-        build_dir = Path(self.temp_dir) / "build"
+        build_dir = Path(self.temp_dir) / "crs-build"
         output_dir = self.executor._get_crs_output_dir(build_dir, "test-project")
 
         expected = build_dir / "artifacts" / "test-crs" / "test-project"
@@ -147,7 +147,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             crs_configs_dir=self.crs_configs_dir
         )
 
-        trial_build_dir = Path(self.temp_dir) / "trial-0" / "build"
+        trial_build_dir = Path(self.temp_dir) / "trial-0" / "crs-build"
         trial_build_dir.mkdir(parents=True)
 
         # Build CRS
@@ -188,7 +188,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         benchmark_path = self.benchmarks_root / "test-project"
         benchmark_path.mkdir()
 
-        trial_build_dir = Path(self.temp_dir) / "trial-0" / "build"
+        trial_build_dir = Path(self.temp_dir) / "trial-0" / "crs-build"
 
         # Attempt to build
         self.executor._build_crs_if_needed(benchmark_path, "test-project", trial_build_dir)
@@ -212,7 +212,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             crs_configs_dir=self.crs_configs_dir
         )
 
-        trial_build_dir = Path(self.temp_dir) / "trial-0" / "build"
+        trial_build_dir = Path(self.temp_dir) / "trial-0" / "crs-build"
 
         cmd = executor._construct_run_command(
             project_name="test-project",
@@ -246,7 +246,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             crs_configs_dir=self.crs_configs_dir
         )
 
-        trial_build_dir = Path(self.temp_dir) / "trial-0" / "build"
+        trial_build_dir = Path(self.temp_dir) / "trial-0" / "crs-build"
         hints_path = Path(self.temp_dir) / "hints"
         hints_path.mkdir()
 
@@ -312,7 +312,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         """Test execution metadata storage."""
         trial_dir = Path(self.temp_dir) / "trial-1"
         trial_dir.mkdir()
-        build_dir = trial_dir / "build"
+        build_dir = trial_dir / "crs-build"
         build_dir.mkdir()
 
         cmd = ["oss-bugfind-crs", "run", "test-crs", "test-project", "test_harness"]
@@ -394,7 +394,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
 
         trial_dir = Path(self.temp_dir) / "trial-0"
         trial_dir.mkdir()
-        build_dir = trial_dir / "build"
+        build_dir = trial_dir / "crs-build"
         build_dir.mkdir()
         source_dir = build_dir / "src" / "test-project"
         source_dir.mkdir(parents=True)
@@ -451,7 +451,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
 
         trial_dir = Path(self.temp_dir) / "trial-0"
         trial_dir.mkdir()
-        build_dir = trial_dir / "build"
+        build_dir = trial_dir / "crs-build"
         build_dir.mkdir()
         source_dir = build_dir / "src" / "test-project"
         source_dir.mkdir(parents=True)
