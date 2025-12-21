@@ -36,10 +36,9 @@ class CRSPatchExecutor(CRSExecutor):
         crs_patch_path: Path,
         oss_fuzz_path: Path,
         registry_dir: Path,
-        litellm_base: str,
-        litellm_key: str,
         benchmarks_root: Path,
-        crs_configs_dir: Path
+        crs_configs_dir: Path,
+        litellm_mode: Optional[str] = "passthrough"
     ):
         """Initialize CRS Patch executor.
 
@@ -48,17 +47,15 @@ class CRSPatchExecutor(CRSExecutor):
             crs_patch_path: Path to crs-patch repository
             oss_fuzz_path: Path to oss-fuzz repository (required for infrastructure)
             registry_dir: Path to CRS registry directory
-            litellm_base: LiteLLM API base URL
-            litellm_key: LiteLLM API key
             benchmarks_root: Path to benchmarks directory (for finding benchmark dirs)
             crs_configs_dir: Path to CRS configs directory
+            litellm_mode: LiteLLM mode ('passthrough', 'proxy', or None for CRS-managed)
         """
         self.crs_config_name = crs_config_name
         self.crs_patch_path = crs_patch_path
         self.oss_fuzz_path = oss_fuzz_path
         self.registry_dir = registry_dir
-        self.litellm_base = litellm_base
-        self.litellm_key = litellm_key
+        self.litellm_mode = litellm_mode
         self.benchmarks_root = benchmarks_root
         self.crs_configs_dir = crs_configs_dir
         self.config: Dict[str, Any] = {}
@@ -72,6 +69,51 @@ class CRSPatchExecutor(CRSExecutor):
         """
         self.config = config.copy()
         logger.info(f"Configured CRS Patch executor with: {config}")
+
+    def _get_litellm_env(self) -> Dict[str, str]:
+        """Get LiteLLM environment variables based on mode.
+
+        Returns:
+            Dict containing LITELLM_API_BASE and LITELLM_API_KEY for subprocess
+
+        Raises:
+            RuntimeError: If required environment variables are not set for the mode
+        """
+        if self.litellm_mode is None:
+            # No external LiteLLM - CRS deploys its own
+            return {}
+
+        env = {}
+
+        if self.litellm_mode == "passthrough":
+            # Use external LiteLLM with UPSTREAM_LITELLM_BASE_URL and LITELLM_API_KEY
+            url = os.environ.get('UPSTREAM_LITELLM_BASE_URL')
+            key = os.environ.get('LITELLM_API_KEY')
+
+            if not url:
+                raise RuntimeError("UPSTREAM_LITELLM_BASE_URL not set (required for passthrough mode)")
+            if not key:
+                raise RuntimeError("LITELLM_API_KEY not set (required for passthrough mode)")
+
+            env['LITELLM_API_BASE'] = url
+            env['LITELLM_API_KEY'] = key
+            logger.info(f"Using passthrough LiteLLM mode with URL: {url}")
+
+        elif self.litellm_mode == "proxy":
+            # Use self-hosted LiteLLM proxy with LITELLM_BASE_URL and LITELLM_MASTER_KEY
+            url = os.environ.get('LITELLM_BASE_URL')
+            key = os.environ.get('LITELLM_MASTER_KEY')
+
+            if not url:
+                raise RuntimeError("LITELLM_BASE_URL not set (required for proxy mode)")
+            if not key:
+                raise RuntimeError("LITELLM_MASTER_KEY not set (required for proxy mode)")
+
+            env['LITELLM_API_BASE'] = url
+            env['LITELLM_API_KEY'] = key
+            logger.info(f"Using proxy LiteLLM mode with URL: {url}")
+
+        return env
 
     def build_crs(
         self,
@@ -156,12 +198,8 @@ class CRSPatchExecutor(CRSExecutor):
 
         # Set up environment with LiteLLM configuration
         env = os.environ.copy()
-        if self.litellm_base:
-            env["LITELLM_API_BASE"] = self.litellm_base
-            logger.debug(f"Setting LITELLM_API_BASE to {self.litellm_base}")
-        if self.litellm_key:
-            env["LITELLM_API_KEY"] = self.litellm_key
-            logger.debug("Setting LITELLM_API_KEY (value hidden)")
+        litellm_env = self._get_litellm_env()
+        env.update(litellm_env)
 
         start_time = time.time()
         try:

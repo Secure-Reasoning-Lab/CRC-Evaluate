@@ -186,9 +186,10 @@ class BenchmarkRunner:
             self.logger.info(f"Evaluation completed: {report.povs_found}/{report.total_povs} POVs detected "
                            f"({report.success_rate:.1%} success rate)")
 
-            # Step 11: Verify generated POVs (conditional on CRS type)
+            # Step 11: Verify generated POVs/patches (conditional on CRS type)
             verification_results = []
             if not skip_verification and isinstance(self.crs_executor, CRSBugFindingExecutor):
+                # POV verification for bug-finding CRS
                 if report.povs_found > 0 and oss_fuzz_path:
                     # Determine CRS output directory
                     actual_crs_output_dir = crs_output_dir or (trial_output_dir / "output" if trial_output_dir else None)
@@ -205,6 +206,10 @@ class BenchmarkRunner:
                     self.logger.warning("Skipping POV verification: oss_fuzz_path not provided")
                 else:
                     self.logger.info("No POVs to verify")
+            # TODO: Add patch verification for CRSPatchExecutor when ready
+            # elif not skip_verification and isinstance(self.crs_executor, CRSPatchExecutor):
+            #     # Patch verification logic here
+            #     pass
 
             return EvaluationResult(report, validation_result, verification_results)
 

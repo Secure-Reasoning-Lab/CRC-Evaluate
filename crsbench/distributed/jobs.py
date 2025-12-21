@@ -4,7 +4,9 @@ This module defines all job types that can be executed by workers in the distrib
 job queue system. Jobs are enqueued by the orchestrator and executed by workers.
 """
 
+import os
 import time
+import yaml
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -12,8 +14,41 @@ from crsbench.utils.logger import get_logger
 from crsbench.evaluation.runner import BenchmarkRunner
 from crsbench.evaluation.crs_executor import StubCRSExecutor
 from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
+from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
 
 logger = get_logger(__name__)
+
+
+def _get_crs_type(crs_name: str, registry_dir: Path) -> str:
+    """Read CRS type from pkg.yaml in registry.
+
+    Args:
+        crs_name: Name of the CRS
+        registry_dir: Path to CRS registry directory
+
+    Returns:
+        CRS type: 'bug-finding' or 'bug-fixing'
+
+    Raises:
+        FileNotFoundError: If pkg.yaml not found
+        ValueError: If type field is missing or invalid
+    """
+    pkg_yaml_path = registry_dir / crs_name / "pkg.yaml"
+
+    if not pkg_yaml_path.exists():
+        raise FileNotFoundError(f"CRS package file not found: {pkg_yaml_path}")
+
+    with open(pkg_yaml_path, 'r') as f:
+        pkg_data = yaml.safe_load(f)
+
+    crs_type = pkg_data.get('type')
+    if not crs_type:
+        raise ValueError(f"CRS type not specified in {pkg_yaml_path}")
+
+    if crs_type not in ['bug-finding', 'bug-fixing']:
+        raise ValueError(f"Invalid CRS type '{crs_type}' in {pkg_yaml_path}. Must be 'bug-finding' or 'bug-fixing'")
+
+    return crs_type
 
 
 def build_crs_environment(
@@ -128,15 +163,32 @@ def run_crs_trial(
         benchmarks_root = Path(config.get('benchmarks_root') or (Path.cwd() / 'benchmarks'))
         crs_configs_dir = Path(config.get('crs_configs_dir') or (Path.cwd() / 'crses' / 'configs'))
 
-        # Create CRS bug finding executor
-        crs_executor = CRSBugFindingExecutor(
-            crs_config_name=crs,
-            oss_fuzz_path=oss_fuzz_path,
-            registry_dir=registry_dir,
-            benchmarks_root=benchmarks_root,
-            crs_configs_dir=crs_configs_dir,
-            litellm_mode=config.get('litellm_mode', 'passthrough')
-        )
+        # Detect CRS type from registry
+        crs_type = _get_crs_type(crs, registry_dir)
+        logger.info(f"Detected CRS type '{crs_type}' for CRS '{crs}'")
+
+        # Create appropriate executor based on CRS type
+        if crs_type == 'bug-fixing':
+            # Patch generation CRS
+            crs_executor = CRSPatchExecutor(
+                crs_config_name=crs,
+                crs_patch_path=Path('oss-crs/bug_fixing'),  # TODO: make configurable?
+                oss_fuzz_path=oss_fuzz_path,
+                registry_dir=registry_dir,
+                benchmarks_root=benchmarks_root,
+                crs_configs_dir=crs_configs_dir,
+                litellm_mode=config.get('litellm_mode', 'passthrough')
+            )
+        else:
+            # Bug finding CRS
+            crs_executor = CRSBugFindingExecutor(
+                crs_config_name=crs,
+                oss_fuzz_path=oss_fuzz_path,
+                registry_dir=registry_dir,
+                benchmarks_root=benchmarks_root,
+                crs_configs_dir=crs_configs_dir,
+                litellm_mode=config.get('litellm_mode', 'passthrough')
+            )
 
         # Configure executor
         crs_executor.configure_crs({
