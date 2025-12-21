@@ -438,7 +438,6 @@ class CRSBugFindingExecutor(CRSExecutor):
             "--build-dir", str(trial_build_dir),
             "--oss-fuzz-dir", str(self.oss_fuzz_path),
             "--registry-dir", str(self.registry_dir),
-            "--chown", # FIXME: bandaid for artifact permission issues
             str(crs_config_dir), project_name, harness_name
         ]
 
