@@ -80,9 +80,7 @@ class CRSExecutor(ABC):
         self,
         benchmark_path: Path,
         harness: HarnessFile,
-        trial_output_dir: Path,
-        base_commit: Optional[str] = None,
-        ref_commit: Optional[str] = None
+        trial_output_dir: Path
     ) -> CRSResult:
         """Run CRS on a specific harness.
 
@@ -90,8 +88,6 @@ class CRSExecutor(ABC):
             benchmark_path: Path to benchmark directory
             harness: Harness file configuration
             trial_output_dir: Directory for this trial's outputs
-            base_commit: Optional base commit for patch generation CRS
-            ref_commit: Optional reference commit for patch generation CRS
 
         Returns:
             CRSResult: Result of CRS execution
@@ -100,7 +96,6 @@ class CRSExecutor(ABC):
             Source code is already prepared at the correct commit by
             TrialDirectoryPreparer. The executor does not need commit
             information - it simply runs CRS on pre-prepared directories.
-            For patch generation CRS, base_commit and ref_commit may be required.
         """
         pass
 
@@ -142,9 +137,7 @@ class StubCRSExecutor(CRSExecutor):
         self,
         benchmark_path: Path,
         harness: HarnessFile,
-        trial_output_dir: Path,
-        base_commit: Optional[str] = None,
-        ref_commit: Optional[str] = None
+        trial_output_dir: Path
     ) -> CRSResult:
         """Run stub CRS execution."""
         start_time = time.time()

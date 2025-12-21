@@ -139,9 +139,7 @@ class CRSPatchExecutor(CRSExecutor):
         self,
         benchmark_path: Path,
         harness: HarnessFile,
-        trial_output_dir: Path,
-        base_commit: Optional[str] = None,
-        ref_commit: Optional[str] = None
+        trial_output_dir: Path
     ) -> CRSResult:
         """Run patch generation CRS.
 
@@ -149,15 +147,10 @@ class CRSPatchExecutor(CRSExecutor):
             benchmark_path: Path to benchmark directory
             harness: Harness configuration
             trial_output_dir: Directory for this trial's outputs
-            base_commit: Base commit for evaluation (required for patch generation)
-            ref_commit: Optional reference commit
 
         Returns:
             CRSResult with execution details
         """
-        if base_commit is None:
-            raise ValueError("base_commit is required for patch generation CRS")
-
         project_name = self._extract_project_name(benchmark_path)
         logger.info(f"Running CRS Patch CRS for project '{project_name}', harness '{harness.name}'")
 
