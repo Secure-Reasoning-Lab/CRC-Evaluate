@@ -176,7 +176,8 @@ def run_crs_trial(
             mode='auto',  # Auto-detect delta/full mode
             crs_config={},  # Empty config - executor already configured
             trial_output_dir=trial_output_dir,
-            crs_output_dir=crs_output_dir
+            crs_output_dir=crs_output_dir,
+            oss_fuzz_path=oss_fuzz_path
         )
 
         execution_time = time.time() - start_time
