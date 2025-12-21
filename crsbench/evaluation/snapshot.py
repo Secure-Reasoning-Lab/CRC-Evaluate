@@ -181,8 +181,12 @@ def list_snapshots(trial_dir: Path) -> List[SnapshotSummary]:
 
     snapshots = []
 
-    # Find all snapshot archives
+    # Find all snapshot archives (skip symlinks like snapshot-latest.tar.gz)
     for archive_path in sorted(trial_dir.glob("snapshot-*.tar.gz")):
+        # Skip symlinks (e.g., snapshot-latest.tar.gz, snapshot-final.tar.gz)
+        if archive_path.is_symlink():
+            continue
+
         # Extract cycle number from filename
         try:
             # snapshot-0001.tar.gz -> 0001

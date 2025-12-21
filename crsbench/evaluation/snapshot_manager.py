@@ -102,6 +102,7 @@ class SnapshotManager:
 
         finally:
             self.running = False
+            self._create_final_symlink()
             logger.info(f"Snapshot thread stopped (captured {self.cycle} snapshots)")
 
     def stop(self):
@@ -168,6 +169,9 @@ class SnapshotManager:
             # Compress to tar.gz
             archive_path = self.trial_dir / f"snapshot-{self.cycle:04d}.tar.gz"
             self._create_tar_gz(temp_dir, archive_path)
+
+            # Update snapshot-latest symlink
+            self._update_latest_symlink(archive_path)
 
             # Mark complete
             marker_path = self.trial_dir / f"snapshot-{self.cycle:04d}.complete"
@@ -411,3 +415,41 @@ class SnapshotManager:
                 if item.is_file():
                     arcname = item.relative_to(source_dir)
                     tar.add(item, arcname=arcname)
+
+    def _update_latest_symlink(self, archive_path: Path):
+        """Update snapshot-latest.tar.gz symlink to point to current snapshot.
+
+        Args:
+            archive_path: Path to the current snapshot archive
+        """
+        latest_link = self.trial_dir / "snapshot-latest.tar.gz"
+
+        # Remove existing symlink if it exists
+        if latest_link.exists() or latest_link.is_symlink():
+            latest_link.unlink()
+
+        # Create symlink to current snapshot
+        latest_link.symlink_to(archive_path.name)
+        logger.debug(f"Updated snapshot-latest.tar.gz -> {archive_path.name}")
+
+    def _create_final_symlink(self):
+        """Create snapshot-final.tar.gz symlink to the last captured snapshot."""
+        if self.cycle == 0:
+            return  # No snapshots captured
+
+        final_link = self.trial_dir / "snapshot-final.tar.gz"
+        final_archive_name = f"snapshot-{self.cycle:04d}.tar.gz"
+        final_archive_path = self.trial_dir / final_archive_name
+
+        # Only create symlink if the archive actually exists
+        if not final_archive_path.exists():
+            logger.debug(f"Skipping final symlink - archive {final_archive_name} does not exist")
+            return
+
+        # Remove existing symlink if it exists
+        if final_link.exists() or final_link.is_symlink():
+            final_link.unlink()
+
+        # Create symlink to final snapshot
+        final_link.symlink_to(final_archive_name)
+        logger.info(f"Created snapshot-final.tar.gz -> {final_archive_name}")
