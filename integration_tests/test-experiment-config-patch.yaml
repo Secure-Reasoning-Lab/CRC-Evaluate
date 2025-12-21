@@ -24,8 +24,8 @@ benchmarks:
 # Difficulty Control
 difficulty_level: 1
 
-# Monitoring & Snapshots - disabled for faster testing
-snapshot_period: 0  # Disabled
+# Monitoring & Snapshots - more frequent for testing
+snapshot_period: 60  # 1 minute
 
 # Storage Configuration - temporary directories for testing
 experiment_filestore: /tmp/crsbench-integration-test-patch/experiment-data
