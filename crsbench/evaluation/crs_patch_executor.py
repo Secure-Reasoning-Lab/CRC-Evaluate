@@ -131,9 +131,11 @@ class CRSPatchExecutor(CRSExecutor):
             for the same CRS config and project combination.
         """
         project_name = self._extract_project_name(benchmark_path)
+        trial_build_dir = trial_output_dir / "crs-build"
+        trial_build_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Pre-building CRS for project '{project_name}'")
-        self._build_crs_if_needed(benchmark_path, project_name)
+        self._build_crs_if_needed(benchmark_path, project_name, trial_build_dir)
 
     def run_crs(
         self,
@@ -154,8 +156,12 @@ class CRSPatchExecutor(CRSExecutor):
         project_name = self._extract_project_name(benchmark_path)
         logger.info(f"Running CRS Patch CRS for project '{project_name}', harness '{harness.name}'")
 
+        # Prepare trial-specific build directory
+        trial_build_dir = trial_output_dir / "crs-build"
+        trial_build_dir.mkdir(parents=True, exist_ok=True)
+
         # Build if needed (pass benchmark_path for repo manager integration)
-        self._build_crs_if_needed(benchmark_path, project_name)
+        self._build_crs_if_needed(benchmark_path, project_name, trial_build_dir)
 
         # Prepare base output directory (CRS creates subdirectories)
         self._prepare_output_directory(trial_output_dir)
@@ -184,6 +190,7 @@ class CRSPatchExecutor(CRSExecutor):
 
         logger.info(f"Run command: {' '.join(cmd)}")
         logger.debug(f"Command: {cmd}")
+        logger.debug(f"Working directory: {trial_output_dir}")
 
         # Set up environment with LiteLLM configuration
         env = os.environ.copy()
@@ -200,6 +207,7 @@ class CRSPatchExecutor(CRSExecutor):
                 cmd=cmd,
                 timeout=timeout,
                 grace_period=grace_period,
+                cwd=trial_output_dir,
                 env=env
             )
 
@@ -298,12 +306,13 @@ class CRSPatchExecutor(CRSExecutor):
 
         return pov_results
 
-    def _build_crs_if_needed(self, benchmark_path: Path, project_name: str) -> None:
+    def _build_crs_if_needed(self, benchmark_path: Path, project_name: str, trial_build_dir: Path) -> None:
         """Build patch generation CRS if not already built.
 
         Args:
             benchmark_path: Path to benchmark directory (contains project.yaml)
             project_name: Project name for caching
+            trial_build_dir: Trial-specific build directory
         """
         build_key = f"{self.crs_config_name}:{project_name}"
 
@@ -346,6 +355,7 @@ class CRSPatchExecutor(CRSExecutor):
 
         logger.info(f"Build command: {' '.join(cmd)}")
         logger.debug(f"Command: {cmd}")
+        logger.debug(f"Working directory: {trial_build_dir}")
 
         try:
             result = subprocess.run(
@@ -353,7 +363,8 @@ class CRSPatchExecutor(CRSExecutor):
                 env=env,
                 capture_output=True,
                 text=True,
-                timeout=self.config.get("build_timeout", 600)
+                timeout=self.config.get("build_timeout", 600),
+                cwd=str(trial_build_dir)
             )
 
             if result.returncode != 0:

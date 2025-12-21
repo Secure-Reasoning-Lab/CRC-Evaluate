@@ -12,6 +12,7 @@ from crsbench.validation.schemas import BenchmarkConfig, HarnessFile, POV
 from crsbench.validation import VerificationEngine, VerificationResult as VerifResult
 from crsbench.evaluation.crs_executor import CRSExecutor, StubCRSExecutor
 from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
+from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
 from crsbench.evaluation.results import ResultCollector, EvaluationReport, HarnessResult, POVResult, POVStatus
 from crsbench.evaluation.snapshot_manager import SnapshotManager
 
@@ -144,7 +145,7 @@ class BenchmarkRunner:
                 collector.set_crs_config(crs_config)
 
             # Step 6.5: Pre-build CRS (before snapshot starts)
-            if isinstance(self.crs_executor, CRSBugFindingExecutor) and trial_output_dir:
+            if isinstance(self.crs_executor, (CRSBugFindingExecutor, CRSPatchExecutor)) and trial_output_dir:
                 self.logger.info("Pre-building CRS before snapshot period...")
                 self.crs_executor.build_crs(benchmark_path, trial_output_dir)
 
