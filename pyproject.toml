@@ -52,6 +52,7 @@ oss-crs = { path = "oss-crs", editable = true }
 [tool.pytest.ini_options]
 markers = [
     "integration: marks tests as integration tests (requiring external services like LiteLLM, Redis, etc.)",
+    "slow: marks tests as slow (e.g., E2E tests with Docker builds)",
 ]
 testpaths = ["tests"]
 python_files = "test_*.py"
