@@ -206,15 +206,12 @@ def run_crs_trial(
         benchmark_path = _resolve_benchmark_path(benchmark, config)
         logger.debug(f"Resolved benchmark path: {benchmark_path}")
 
-        # Create trial output directory for snapshots
-        trial_output_dir = Path('trial-output').resolve()
-        if snapshot_period and snapshot_period > 0:
-            # Create trial-specific output directory
-            experiment_filestore = Path(config.get('experiment_filestore', '/tmp/experiments')).resolve()
-            experiment_name = config.get('experiment', 'unknown')
-            trial_output_dir = experiment_filestore / experiment_name / f"{crs}_{benchmark}_trial{trial_num}"
-            trial_output_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Trial output directory: {trial_output_dir}")
+        # Create trial output directory
+        experiment_filestore = Path(config.get('experiment_filestore', '/tmp/experiments')).resolve()
+        experiment_name = config.get('experiment', 'unknown')
+        trial_output_dir = experiment_filestore / experiment_name / f"{crs}_{benchmark}_trial{trial_num}"
+        trial_output_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Trial output directory: {trial_output_dir}")
 
         # Compute CRS output directory for oss-bugfind-crs
         # oss-bugfind-crs writes to: build/artifacts/<crs_name>/<project>/
