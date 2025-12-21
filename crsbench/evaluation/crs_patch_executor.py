@@ -35,6 +35,7 @@ class CRSPatchExecutor(CRSExecutor):
         crs_config_name: str,
         crs_patch_path: Path,
         oss_fuzz_path: Path,
+        registry_dir: Path,
         litellm_base: str,
         litellm_key: str,
         benchmarks_root: Path,
@@ -46,6 +47,7 @@ class CRSPatchExecutor(CRSExecutor):
             crs_config_name: CRS configuration name (e.g., "multi-retrieval")
             crs_patch_path: Path to crs-patch repository
             oss_fuzz_path: Path to oss-fuzz repository (required for infrastructure)
+            registry_dir: Path to CRS registry directory
             litellm_base: LiteLLM API base URL
             litellm_key: LiteLLM API key
             benchmarks_root: Path to benchmarks directory (for finding benchmark dirs)
@@ -54,6 +56,7 @@ class CRSPatchExecutor(CRSExecutor):
         self.crs_config_name = crs_config_name
         self.crs_patch_path = crs_patch_path
         self.oss_fuzz_path = oss_fuzz_path
+        self.registry_dir = registry_dir
         self.litellm_base = litellm_base
         self.litellm_key = litellm_key
         self.benchmarks_root = benchmarks_root
@@ -69,6 +72,29 @@ class CRSPatchExecutor(CRSExecutor):
         """
         self.config = config.copy()
         logger.info(f"Configured CRS Patch executor with: {config}")
+
+    def build_crs(
+        self,
+        benchmark_path: Path,
+        trial_output_dir: Path
+    ) -> None:
+        """Pre-build CRS Docker image before running.
+
+        Call this before starting snapshots to ensure build time
+        is not included in snapshot period.
+
+        Args:
+            benchmark_path: Path to benchmark directory
+            trial_output_dir: Trial directory (from TrialDirectoryPreparer)
+
+        Note:
+            This method is idempotent - it will skip building if already built
+            for the same CRS config and project combination.
+        """
+        project_name = self._extract_project_name(benchmark_path)
+
+        logger.info(f"Pre-building CRS for project '{project_name}'")
+        self._build_crs_if_needed(benchmark_path, project_name)
 
     def run_crs(
         self,
@@ -104,21 +130,19 @@ class CRSPatchExecutor(CRSExecutor):
 
         harness_name = Path(harness.name).stem
 
+        # Prepare POVs directory (required for patch generation)
+        povs_path = self._prepare_povs(benchmark_path, harness_name, trial_output_dir)
+        if not povs_path:
+            raise RuntimeError(f"No POVs found for patch generation in harness {harness_name}")
+
         # Build command
         cmd = [
             "oss-bugfix-crs", "run",
             self.crs_config_name, project_name,
             "--harness", harness_name,
-            "--output", str(trial_output_dir / "output"),
-            "--litellm-base", self.litellm_base,
-            "--litellm-key", self.litellm_key
+            "--povs", str(povs_path),
+            "--out", str(trial_output_dir / "output"),
         ]
-
-        # Prepare and add POVs directory
-        povs_path = self._prepare_povs(benchmark_path, harness_name, trial_output_dir)
-        if povs_path:
-            cmd.extend(["--povs", str(povs_path)])
-            logger.info(f"Using prepared POVs from {povs_path}")
 
         # Prepare and add hints if enabled
         hints_path = self._prepare_hints(benchmark_path, harness_name, trial_output_dir)
@@ -126,11 +150,18 @@ class CRSPatchExecutor(CRSExecutor):
             cmd.extend(["--hints", str(hints_path)])
             logger.info(f"Using prepared hints from {hints_path}")
 
-        # Add gitcache flag if enabled
-        if USE_GITCACHE:
-            cmd.append("--gitcache")
+        logger.info(f"Run command: {' '.join(cmd)}")
+        logger.debug(f"Command: {cmd}")
+        logger.debug(f"Working directory: {self.crs_patch_path}")
 
-        logger.info(f"Executing: {' '.join(cmd)}")
+        # Set up environment with LiteLLM configuration
+        env = os.environ.copy()
+        if self.litellm_base:
+            env["LITELLM_API_BASE"] = self.litellm_base
+            logger.debug(f"Setting LITELLM_API_BASE to {self.litellm_base}")
+        if self.litellm_key:
+            env["LITELLM_API_KEY"] = self.litellm_key
+            logger.debug("Setting LITELLM_API_KEY (value hidden)")
 
         start_time = time.time()
         try:
@@ -142,7 +173,8 @@ class CRSPatchExecutor(CRSExecutor):
                 cmd=cmd,
                 timeout=timeout,
                 grace_period=grace_period,
-                cwd=self.crs_patch_path
+                cwd=self.crs_patch_path,
+                env=env
             )
 
             execution_time = time.time() - start_time
@@ -275,7 +307,8 @@ class CRSPatchExecutor(CRSExecutor):
             self.crs_config_name, project_name,
             "--oss-fuzz", str(self.oss_fuzz_path),
             "--project-path", str(benchmark_path),  # Benchmark dir (OSS-Fuzz compatible)
-            "--source-path", str(source_path)        # Pre-cloned source from repo manager
+            "--source-path", str(source_path),       # Pre-cloned source from repo manager
+            "--registry", str(self.registry_dir),
         ]
 
         # Add gitcache flag if enabled
@@ -285,7 +318,9 @@ class CRSPatchExecutor(CRSExecutor):
         env = os.environ.copy()
         env["OSS_FUZZ_HOME"] = str(self.oss_fuzz_path)
 
-        logger.info(f"Building CRS: {' '.join(cmd)}")
+        logger.info(f"Build command: {' '.join(cmd)}")
+        logger.debug(f"Command: {cmd}")
+        logger.debug(f"Working directory: {self.crs_patch_path}")
 
         try:
             result = subprocess.run(
