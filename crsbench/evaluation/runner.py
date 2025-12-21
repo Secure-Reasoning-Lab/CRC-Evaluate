@@ -143,6 +143,11 @@ class BenchmarkRunner:
             if crs_config:
                 collector.set_crs_config(crs_config)
 
+            # Step 6.5: Pre-build CRS (before snapshot starts)
+            if isinstance(self.crs_executor, CRSBugFindingExecutor) and trial_output_dir:
+                self.logger.info("Pre-building CRS before snapshot period...")
+                self.crs_executor.build_crs(benchmark_path, trial_output_dir)
+
             # Step 7: Start snapshot thread if enabled
             if self.snapshot_period and self.snapshot_period > 0 and trial_output_dir:
                 self.logger.info(f"Starting snapshot manager (period={self.snapshot_period}s)")

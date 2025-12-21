@@ -84,6 +84,31 @@ class CRSBugFindingExecutor(CRSExecutor):
 
         logger.info(f"Configured CRS Bug Finding executor with: {config}")
 
+    def build_crs(
+        self,
+        benchmark_path: Path,
+        trial_output_dir: Path
+    ) -> None:
+        """Pre-build CRS Docker image before running.
+
+        Call this before starting snapshots to ensure build time
+        is not included in snapshot period.
+
+        Args:
+            benchmark_path: Path to benchmark directory
+            trial_output_dir: Trial directory (from TrialDirectoryPreparer)
+
+        Note:
+            This method is idempotent - it will skip building if already built
+            for the same CRS config and project combination.
+        """
+        project_name = self._extract_project_name(benchmark_path)
+        trial_build_dir = trial_output_dir / "crs-build"
+        trial_build_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info(f"Pre-building CRS for project '{project_name}'")
+        self._build_crs_if_needed(benchmark_path, project_name, trial_build_dir)
+
     def run_crs(
         self,
         benchmark_path: Path,
@@ -145,7 +170,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 hints_path=hints_path
             )
 
-            logger.info(f"Executing: {' '.join(cmd)}")
+            logger.info(f"Run command: {' '.join(cmd)}")
             logger.debug(f"Command: {cmd}")
             logger.debug(f"Working directory: {trial_output_dir}")
 
@@ -413,6 +438,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             "--build-dir", str(trial_build_dir),
             "--oss-fuzz-dir", str(self.oss_fuzz_path),
             "--registry-dir", str(self.registry_dir),
+            "--chown", # FIXME: bandaid for artifact permission issues
             str(crs_config_dir), project_name, harness_name
         ]
 
