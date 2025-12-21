@@ -172,7 +172,6 @@ def run_crs_trial(
             # Patch generation CRS
             crs_executor = CRSPatchExecutor(
                 crs_config_name=crs,
-                crs_patch_path=Path('oss-crs/bug_fixing'),  # TODO: make configurable?
                 oss_fuzz_path=oss_fuzz_path,
                 registry_dir=registry_dir,
                 benchmarks_root=benchmarks_root,

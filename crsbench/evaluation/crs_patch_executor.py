@@ -33,7 +33,6 @@ class CRSPatchExecutor(CRSExecutor):
     def __init__(
         self,
         crs_config_name: str,
-        crs_patch_path: Path,
         oss_fuzz_path: Path,
         registry_dir: Path,
         benchmarks_root: Path,
@@ -44,7 +43,6 @@ class CRSPatchExecutor(CRSExecutor):
 
         Args:
             crs_config_name: CRS configuration name (e.g., "multi-retrieval")
-            crs_patch_path: Path to crs-patch repository
             oss_fuzz_path: Path to oss-fuzz repository (required for infrastructure)
             registry_dir: Path to CRS registry directory
             benchmarks_root: Path to benchmarks directory (for finding benchmark dirs)
@@ -52,7 +50,6 @@ class CRSPatchExecutor(CRSExecutor):
             litellm_mode: LiteLLM mode ('passthrough', 'proxy', or None for CRS-managed)
         """
         self.crs_config_name = crs_config_name
-        self.crs_patch_path = crs_patch_path
         self.oss_fuzz_path = oss_fuzz_path
         self.registry_dir = registry_dir
         self.litellm_mode = litellm_mode
@@ -194,7 +191,6 @@ class CRSPatchExecutor(CRSExecutor):
 
         logger.info(f"Run command: {' '.join(cmd)}")
         logger.debug(f"Command: {cmd}")
-        logger.debug(f"Working directory: {self.crs_patch_path}")
 
         # Set up environment with LiteLLM configuration
         env = os.environ.copy()
@@ -211,7 +207,6 @@ class CRSPatchExecutor(CRSExecutor):
                 cmd=cmd,
                 timeout=timeout,
                 grace_period=grace_period,
-                cwd=self.crs_patch_path,
                 env=env
             )
 
@@ -358,12 +353,10 @@ class CRSPatchExecutor(CRSExecutor):
 
         logger.info(f"Build command: {' '.join(cmd)}")
         logger.debug(f"Command: {cmd}")
-        logger.debug(f"Working directory: {self.crs_patch_path}")
 
         try:
             result = subprocess.run(
                 cmd,
-                cwd=self.crs_patch_path,
                 env=env,
                 capture_output=True,
                 text=True,
