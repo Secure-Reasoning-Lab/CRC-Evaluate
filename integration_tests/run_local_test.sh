@@ -62,7 +62,11 @@ echo ""
 
 # Clean up previous test data
 echo -e "${YELLOW}Cleaning up previous test data...${NC}"
-rm -rf /tmp/crsbench-integration-test/
+TEST_DIR="/tmp/crsbench-integration-test/"
+if [ -n "$TEST_DIR" ] && [ -d "$TEST_DIR" ]; then
+    # sudo rm -rf "$TEST_DIR"
+    rm -rf "$TEST_DIR"
+fi
 
 # Activate virtual environment
 echo -e "${YELLOW}Activating virtual environment...${NC}"
