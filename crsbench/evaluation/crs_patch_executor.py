@@ -428,22 +428,24 @@ class CRSPatchExecutor(CRSExecutor):
         povs_dir = trial_output_dir / "crs-input" / "povs"
         povs_dir.mkdir(parents=True, exist_ok=True)
 
-        # Collect POVs from all cpv_* directories
+        # Collect POVs from directories containing blobs
         pov_count = 0
-        for cpv_dir in sorted(source_harness_dir.glob("cpv_*")):
-            blobs_dir = cpv_dir / "blobs"
-            if not blobs_dir.exists():
+        for blobs_dir in sorted(source_harness_dir.glob("*/blobs")):
+            if not blobs_dir.is_dir():
                 continue
 
-            for pov_blob in sorted(blobs_dir.glob("*.blob")):
+            # Get all files in blobs directory
+            for pov_file in sorted(blobs_dir.iterdir()):
+                if not pov_file.is_file():
+                    continue
+
                 # Filter based on config if specified
                 if self.config.get("target_povs"):
-                    if pov_blob.stem not in self.config["target_povs"]:
+                    if pov_file.stem not in self.config["target_povs"]:
                         continue
 
-                # Copy and flatten: pov_0.blob -> povs/pov_0
-                dest_name = pov_blob.stem  # Remove .blob extension
-                shutil.copy2(pov_blob, povs_dir / dest_name)
+                # Copy with original filename
+                shutil.copy2(pov_file, povs_dir / pov_file.name)
                 pov_count += 1
 
         if pov_count == 0:
