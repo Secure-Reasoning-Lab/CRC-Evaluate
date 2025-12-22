@@ -221,7 +221,7 @@ class SnapshotManager:
 
         return not self.running
 
-    def _get_output_dir(self) -> Path:
+    def _get_crs_output_dir(self) -> Path:
         """Get the CRS output directory.
 
         Returns crs_output_dir if provided (for oss-bugfind-crs workaround),
@@ -308,7 +308,7 @@ class SnapshotManager:
         Returns:
             List of captured POV item names
         """
-        output_dir = self._get_output_dir()
+        output_dir = self._get_crs_output_dir()
         pov_dir = output_dir / "povs"
 
         if not pov_dir.exists():
@@ -328,13 +328,14 @@ class SnapshotManager:
             logger.warning(f"Failed to capture POVs: {e}")
             return []
 
+    # FIXME: not right => change oss-patch to align with RFC
     def _capture_patches(self, temp_dir: Path) -> list[str]:
         """Capture all patches (organized by POV ID).
 
         Returns:
             List of captured patch item names (e.g., "pov_0")
         """
-        output_dir = self._get_output_dir()
+        output_dir = self._get_crs_output_dir()
         patches_dir = output_dir / "patches"
 
         if not patches_dir.exists():
@@ -360,7 +361,7 @@ class SnapshotManager:
         Returns:
             List of captured corpus item names
         """
-        output_dir = self._get_output_dir()
+        output_dir = self._get_crs_output_dir()
         corpus_dir = output_dir / "corpus"
 
         if not corpus_dir.exists():
@@ -386,7 +387,7 @@ class SnapshotManager:
         Returns:
             True if CRS data was captured, False otherwise
         """
-        output_dir = self._get_output_dir()
+        output_dir = self._get_crs_output_dir()
         crs_data_dir = output_dir / "crs-data"
 
         if not crs_data_dir.exists():
