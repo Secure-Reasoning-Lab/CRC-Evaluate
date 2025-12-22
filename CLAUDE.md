@@ -184,8 +184,183 @@ docs_reference_projects/
   - Package initialization (`__init__.py`)
 
 ### Python
-- use absolute import instead of relative import; so moving files around for
-  restructuring is straightforward without further editing import statements.
+
+#### Import Style
+- Use absolute import instead of relative import
+- Moving files around for restructuring is straightforward without editing import statements
+
+#### Clean Code Principles
+
+**Core Philosophy**: Code is clean if it can be understood easily by everyone on the team.
+
+**General Rules**:
+- Follow established conventions in the codebase
+- Keep it simple - reduce complexity wherever possible
+- Boy Scout Rule: leave code better than you found it
+- Fix root causes, not symptoms
+
+**Naming**:
+- Use `snake_case` for functions, methods, variables, modules
+- Use `PascalCase` for classes
+- Use `UPPER_SNAKE_CASE` for constants
+- Choose descriptive, unambiguous names that reveal intent
+- Use pronounceable, searchable names
+- Replace magic numbers with named constants
+- Make meaningful distinctions (`get_active_users()` vs `get_users()`)
+
+**Functions**:
+- Keep functions short: ideally under 20 lines, max 50 lines
+- Single responsibility: one function does one thing
+- Minimize parameters (0-2 ideal, max 3-4)
+- Avoid boolean flag parameters - split into separate functions
+  ```python
+  # Bad
+  def get_users(include_inactive: bool): ...
+
+  # Good
+  def get_active_users(): ...
+  def get_all_users(): ...
+  ```
+- No side effects: function should do what its name says, nothing more
+- Use descriptive names: `calculate_monthly_revenue()` not `calc()`
+
+**Indentation and Nesting**:
+- Maximum 3 levels of indentation; refactor if deeper
+- Use early returns to reduce nesting
+  ```python
+  # Bad
+  def process(data):
+      if data:
+          if data.is_valid():
+              if data.has_items():
+                  # deep nesting
+                  return result
+      return None
+
+  # Good
+  def process(data):
+      if not data:
+          return None
+      if not data.is_valid():
+          return None
+      if not data.has_items():
+          return None
+      # main logic at minimal indentation
+      return result
+  ```
+- Extract complex conditions into well-named functions
+- Extract loop bodies into separate functions when complex
+
+**Comments**:
+- Code should be self-documenting; minimize need for comments
+- Don't comment what code does - make code clear instead
+- Use comments for: intent, clarification of complexity, warnings, TODOs
+- Delete commented-out code - version control exists
+- Docstrings for public APIs only; skip for obvious internal functions
+
+**Code Organization**:
+- Declare variables near their usage
+- Group related code together; separate unrelated concepts with blank lines
+- Order in classes: class variables → `__init__` → public methods → private methods
+- Keep line lengths under 88 characters (configured in ruff)
+- Keep files under 300-400 lines; split into multiple modules if larger
+  - Extract related functions into separate modules
+  - Use `__init__.py` to re-export public APIs for clean imports
+
+**Classes and Modules**:
+- Single Responsibility Principle: one reason to change
+- Keep classes small with minimal instance variables
+- Prefer composition over inheritance
+- Law of Demeter: only talk to immediate dependencies
+  ```python
+  # Bad
+  user.get_address().get_city().get_name()
+
+  # Good
+  user.get_city_name()
+  ```
+
+**Error Handling**:
+- Use exceptions rather than return codes
+- Don't return `None` for errors - raise exceptions with context
+- Be specific with exception types
+- Don't use exceptions for flow control
+
+**Code Smells to Avoid**:
+- **Rigidity**: small changes require many modifications
+- **Fragility**: one change breaks unrelated code
+- **Needless Complexity**: over-engineering for hypothetical futures
+- **Needless Repetition**: DRY violations (but don't over-abstract)
+- **Opacity**: hard-to-understand code
+- **Long Parameter Lists**: use dataclasses or TypedDict instead
+
+#### Python-Specific Style
+
+**Pythonic Idioms**:
+```python
+# Use list comprehensions for simple transformations
+names = [user.name for user in users if user.is_active]
+
+# Use enumerate instead of manual index
+for i, item in enumerate(items):
+    ...
+
+# Use zip for parallel iteration
+for name, age in zip(names, ages):
+    ...
+
+# Use context managers for resource management
+with open(path) as f:
+    content = f.read()
+
+# Use f-strings for formatting
+message = f"User {name} has {count} items"
+
+# Use pathlib for file paths
+from pathlib import Path
+config_path = Path(__file__).parent / "config.yaml"
+```
+
+**Avoid Anti-patterns**:
+```python
+# Bad: mutable default argument
+def append_to(item, target=[]):
+    target.append(item)
+    return target
+
+# Good
+def append_to(item, target=None):
+    if target is None:
+        target = []
+    target.append(item)
+    return target
+
+# Bad: bare except
+try:
+    risky_operation()
+except:
+    pass
+
+# Good: specific exception
+try:
+    risky_operation()
+except ValueError as e:
+    logger.error(f"Invalid value: {e}")
+    raise
+
+# Bad: type checking with type()
+if type(obj) == list:
+    ...
+
+# Good: use isinstance
+if isinstance(obj, list):
+    ...
+```
+
+**Dataclasses and Pydantic**:
+- Use `@dataclass` for simple data containers
+- Use Pydantic `BaseModel` for validation and serialization
+- Prefer these over plain dicts for structured data
 
 ### Testing
 - Follow TDD (Test-Driven Development) design when applicable
