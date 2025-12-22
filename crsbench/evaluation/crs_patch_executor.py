@@ -425,7 +425,7 @@ class CRSPatchExecutor(CRSExecutor):
             return None
 
         # Create trial-specific POVs directory
-        povs_dir = trial_output_dir / "povs"
+        povs_dir = trial_output_dir / "crs-input" / "povs"
         povs_dir.mkdir(parents=True, exist_ok=True)
 
         # Collect POVs from all cpv_* directories
