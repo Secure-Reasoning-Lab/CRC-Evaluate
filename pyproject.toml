@@ -65,6 +65,7 @@ dev = [
     "pytest-cov>=6.0.0",
     "datamodel-code-generator>=0.35.0",
     "ty>=0.0.4",
+    "ruff>=0.8.0",
 ]
 
 [tool.ty.src]
@@ -75,3 +76,48 @@ exclude = [
 include = [
     "crsbench",
 ]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+src = ["crsbench"]
+exclude = [
+    "crsbench/hint_generation/sarif_model.py",
+    "crsbench/migration/",
+    "tests/",
+    "oss-fuzz/",
+    "oss-patch/",
+    "oss-crs/",
+    "oss-crs-registry/",
+    "snapshot-examples/",
+    "scripts/",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "N",      # pep8-naming
+    "ARG",    # flake8-unused-arguments
+    "TD",     # flake8-todos
+    "TC",     # flake8-type-checking
+    "ERA",    # eradicate
+    # "ANN",    # flake8-annotations (disabled for now)
+    # "BLE",    # flake8-blind-except (too strict for this codebase)
+    # "FBT",    # flake8-boolean-trap (too strict for this codebase)
+    "C4",     # flake8-comprehensions
+    "PTH",    # flake8-use-pathlib
+    "RET",    # flake8-return
+    "PT",     # flake8-pytest-style
+    "PIE",    # flake8-pie
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

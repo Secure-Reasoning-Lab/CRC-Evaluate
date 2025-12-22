@@ -244,6 +244,38 @@ docs_reference_projects/
   - `crsbench/migration/` - Legacy migration tools
   - Type errors in these files can be ignored unless actively working on them
 
+### Linting and Formatting
+- **MUST run `just lint` after making code changes**
+  - This catches code style issues and potential bugs
+  - Example: `just lint`
+- **Use `just lint-fix` to auto-fix issues**
+  - Example: `just lint-fix`
+- **Use `just format` to format code**
+  - Example: `just format`
+- **Use `just check` to run all checks (typecheck + lint + format)**
+  - Example: `just check`
+- Ruff is configured to check:
+  - `E`, `W`: pycodestyle errors and warnings
+  - `F`: Pyflakes
+  - `I`: isort (import sorting)
+  - `B`: flake8-bugbear
+  - `N`: pep8-naming (enforces naming conventions)
+  - `ARG`: flake8-unused-arguments
+  - `TD`: flake8-todos (TODO comment format)
+  - `TC`: flake8-type-checking (TYPE_CHECKING imports)
+  - `ERA`: eradicate (commented-out code detection)
+  - `BLE`: flake8-blind-except (no bare except)
+  - `FBT`: flake8-boolean-trap (no boolean positional args)
+  - `C4`: flake8-comprehensions (prefer comprehensions)
+  - `PTH`: flake8-use-pathlib (use pathlib over os.path)
+  - `RET`: flake8-return (return statement checks)
+  - `PT`: flake8-pytest-style (pytest best practices)
+  - `PIE`: flake8-pie (misc lints)
+- Line length: 88 characters (configured in ruff)
+- **Legacy/auto-generated code exceptions** (same as type checking):
+  - `crsbench/hint_generation/sarif_model.py`
+  - `crsbench/migration/`
+
 ## Documentation Standards
 - Create entry in README.md when adding a new component
 - Create a README.md to summarize each component in their own directories

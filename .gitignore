@@ -242,3 +242,5 @@ ci_results*
 # oss-crs build context
 .build_context
 /services/litellm/default-models.yaml.backup
+
+.ruff_cache
