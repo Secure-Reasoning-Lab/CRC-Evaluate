@@ -207,7 +207,7 @@ temp_patches/
 crsbench-patch-test-*/
 
 # Claude Code specific
-.claude/
+settings.local.json
 
 # LLM and AI specific
 .openai_api_key
@@ -243,4 +243,5 @@ ci_results*
 .build_context
 /services/litellm/default-models.yaml.backup
 
+# Lint cache
 .ruff_cache
