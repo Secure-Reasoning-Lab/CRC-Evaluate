@@ -108,6 +108,8 @@ select = [
     # "ANN",    # flake8-annotations (disabled for now)
     # "BLE",    # flake8-blind-except (too strict for this codebase)
     # "FBT",    # flake8-boolean-trap (too strict for this codebase)
+    "FBT002", # flake8-boolean-trap
+    "FBT003", # flake8-boolean-trap
     "C4",     # flake8-comprehensions
     "PTH",    # flake8-use-pathlib
     "RET",    # flake8-return
@@ -116,7 +118,30 @@ select = [
 ]
 ignore = [
     "E501",   # line too long (handled by formatter)
+    "TD002",  # Missing author in TODO - existing codebase convention
+    "TD003",  # Missing issue link for TODO - existing codebase convention
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"crsbench/utils/logger.py" = ["N802"]  # getLogger follows standard logging interface naming
+# Test files have relaxed linting - allow unittest style, unused args in fixtures, etc.
+"tests/**/*.py" = [
+    "ARG002",   # Unused method arguments (common in test fixtures)
+    "PT009",    # Use regular assert instead of unittest-style (legacy tests)
+    "PT011",    # pytest.raises too broad (acceptable in tests)
+    "PT027",    # Use pytest.raises instead of assertRaises (legacy tests)
+    "PT006",    # Wrong type for parametrize first arg (legacy tests)
+    "PTH103",   # os.makedirs (acceptable in tests)
+    "PTH110",   # os.path.exists (acceptable in tests)
+    "PTH112",   # os.path.isdir (acceptable in tests)
+    "PTH118",   # os.path.join (acceptable in tests)
+    "PTH123",   # open() instead of Path.open() (acceptable in tests)
+    "E402",     # Module import not at top (acceptable in tests)
+    "F841",     # Unused variable (common in tests for side effects)
+    "ERA001",   # Commented-out code (acceptable in tests for documentation)
+    "B007",     # Loop variable not used (acceptable in tests)
+]
+"tests/fixtures/**/*.py" = ["PTH123"]  # Fixtures can use open()
 
 [tool.ruff.format]
 quote-style = "double"
