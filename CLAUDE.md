@@ -189,6 +189,13 @@ docs_reference_projects/
 - Use absolute import instead of relative import
 - Moving files around for restructuring is straightforward without editing import statements
 
+#### Logging
+- Use centralized logger from `crsbench/utils/logger.py`
+  ```python
+  from crsbench.utils.logger import get_logger
+  logger = get_logger(__name__)
+  ```
+
 #### Clean Code Principles
 
 **Core Philosophy**: Code is clean if it can be understood easily by everyone on the team.
