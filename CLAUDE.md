@@ -212,6 +212,9 @@ docs_reference_projects/
 - Keep functions short: ideally under 20 lines, max 50 lines
 - Single responsibility: one function does one thing
 - Minimize parameters (0-2 ideal, max 3-4)
+- **Remove unused arguments** - don't prefix with `_` to silence linter warnings
+  - If an argument is unused, remove it from the function signature
+  - Exception: callback/interface implementations where signature is required
 - Avoid boolean flag parameters - split into separate functions
   ```python
   # Bad
@@ -220,6 +223,36 @@ docs_reference_projects/
   # Good
   def get_active_users(): ...
   def get_all_users(): ...
+  ```
+- **Always pass boolean values as keyword arguments** (FBT002/FBT003)
+  ```python
+  # Bad - unclear what True means
+  process_data(data, True)
+  run_command(cmd, False, True)
+
+  # Good - explicit and readable
+  process_data(data, validate=True)
+  run_command(cmd, capture_output=False, check=True)
+  ```
+- **Use `*` to force keyword-only arguments for booleans**
+  - Move boolean parameters to the end of the parameter list
+  - Place `*` before the boolean parameters to make them keyword-only
+  - This keeps other arguments positional (no unnecessary keyword requirement)
+  ```python
+  # Bad - allows positional boolean args
+  def process_data(data, validate: bool = False):
+      ...
+
+  # Bad - forces all args to be keyword-only unnecessarily
+  def fetch_data(*, url: str, timeout: int, retry: bool = False):
+      ...
+
+  # Good - only booleans are keyword-only
+  def process_data(data, *, validate: bool = False):
+      ...
+
+  def fetch_data(url: str, timeout: int, *, retry: bool = False):
+      ...
   ```
 - No side effects: function should do what its name says, nothing more
 - Use descriptive names: `calculate_monthly_revenue()` not `calc()`
@@ -447,6 +480,16 @@ if isinstance(obj, list):
   - `PT`: flake8-pytest-style (pytest best practices)
   - `PIE`: flake8-pie (misc lints)
 - Line length: 88 characters (configured in ruff)
+- **Avoid `# noqa` comments**:
+  - `# noqa` should be used only as a last resort when there is absolutely no other way to fix the lint error
+  - Before using `# noqa`, try these alternatives first:
+    - Remove unused arguments from function signatures
+    - Use underscore prefix (`_arg`) for intentionally unused loop variables
+    - Refactor code to avoid the lint violation
+  - Valid use cases for `# noqa`:
+    - Method overrides where parameter names must match the base class (interface compatibility)
+    - Auto-generated code that cannot be modified
+  - When using `# noqa`, always specify the rule code (e.g., `# noqa: ARG002`)
 - **Legacy/auto-generated code exceptions** (same as type checking):
   - `crsbench/hint_generation/sarif_model.py`
   - `crsbench/migration/`
