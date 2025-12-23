@@ -428,6 +428,7 @@ dev = [
     { name = "datamodel-code-generator" },
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "ruff" },
     { name = "ty" },
 ]
 
@@ -463,6 +464,7 @@ dev = [
     { name = "datamodel-code-generator", specifier = ">=0.35.0" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-cov", specifier = ">=6.0.0" },
+    { name = "ruff", specifier = ">=0.8.0" },
     { name = "ty", specifier = ">=0.0.4" },
 ]
 
@@ -1461,9 +1463,6 @@ requires-dist = [
     { name = "ruff", specifier = ">=0.14.5" },
 ]
 provides-extras = ["dev"]
-
-[package.metadata.requires-dev]
-dev = [{ name = "ty", specifier = ">=0.0.4" }]
 
 [[package]]
 name = "packaging"
