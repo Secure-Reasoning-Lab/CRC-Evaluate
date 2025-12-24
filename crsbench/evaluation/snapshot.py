@@ -32,15 +32,15 @@ class Snapshot(BaseModel):
         timestamp: Unix timestamp when snapshot was captured
         elapsed_time: Seconds elapsed since trial start
         snapshot_period: Configured snapshot interval in seconds
-        povs: List of captured POV filenames
-        patches: List of captured patch filenames
-        corpus_files: List of captured corpus filenames
         archive_path: Path to snapshot tar.gz file (None if not archived)
         is_complete: Whether snapshot has completion marker
         has_config: Whether CRS configuration was captured
         has_execution_metadata: Whether execution metadata was captured
         has_llm_usage: Whether LLM usage stats were captured
         has_crs_log: Whether CRS log was captured
+        has_povs: Whether POVs directory was captured
+        has_patches: Whether patches directory was captured
+        has_corpus: Whether corpus directory was captured
         has_crs_data: Whether CRS-specific data was captured
     """
     # Core metadata
@@ -48,11 +48,6 @@ class Snapshot(BaseModel):
     timestamp: float
     elapsed_time: float
     snapshot_period: int
-
-    # Captured content
-    povs: List[str] = Field(default_factory=list)
-    patches: List[str] = Field(default_factory=list)
-    corpus_files: List[str] = Field(default_factory=list)
 
     # Archive info
     archive_path: Optional[Path] = None
@@ -63,6 +58,9 @@ class Snapshot(BaseModel):
     has_execution_metadata: bool = False
     has_llm_usage: bool = False
     has_crs_log: bool = False
+    has_povs: bool = False
+    has_patches: bool = False
+    has_corpus: bool = False
     has_crs_data: bool = False
 
     model_config = {"arbitrary_types_allowed": True}

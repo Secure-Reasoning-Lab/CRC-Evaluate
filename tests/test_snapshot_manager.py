@@ -152,7 +152,7 @@ class TestSnapshotCapture:
 
         # First snapshot
         snapshot1 = manager.capture_snapshot()
-        assert len(snapshot1.povs) == 2
+        assert snapshot1.has_povs
 
         # Add new POV
         pov_dir = trial_dir / "output" / "povs"
@@ -160,7 +160,7 @@ class TestSnapshotCapture:
 
         # Second snapshot
         snapshot2 = manager.capture_snapshot()
-        assert len(snapshot2.povs) == 3  # All 3 POVs captured
+        assert snapshot2.has_povs  # POVs captured
 
         # Verify second snapshot has ALL POVs (full capture)
         archive_path = trial_dir / "snapshot-0002.tar.gz"
@@ -182,7 +182,7 @@ class TestSnapshotCapture:
 
         # First snapshot
         snapshot1 = manager.capture_snapshot()
-        assert len(snapshot1.patches) == 1
+        assert snapshot1.has_patches
 
         # Add new patch
         patches_dir = trial_dir / "output" / "patches"
@@ -192,7 +192,7 @@ class TestSnapshotCapture:
 
         # Second snapshot
         snapshot2 = manager.capture_snapshot()
-        assert len(snapshot2.patches) == 2  # All 2 patches captured
+        assert snapshot2.has_patches  # Patches captured
 
         # Verify second snapshot has ALL patches (full capture)
         archive_path = trial_dir / "snapshot-0002.tar.gz"
