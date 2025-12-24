@@ -242,31 +242,6 @@ class CRSBugFindingExecutor(CRSExecutor):
                 error=str(e)
             )
 
-    def process_pov_results(
-        self,
-        crs_result: CRSResult,
-        harness: HarnessFile,
-        trial_output_dir: Path
-    ) -> List[POVResult]:
-        """Process CRS results.
-
-        Note: For bug finding executor, this is a stub.
-        POV validation is handled by the snapshot module separately.
-
-        Args:
-            crs_result: CRS execution result
-            harness: Harness configuration
-            trial_output_dir: Trial directory
-
-        Returns:
-            Empty list (POV validation done by snapshot module)
-        """
-        logger.debug(
-            f"Bug finding executor does not process POV results. "
-            f"POV validation handled by snapshot module for {harness.name}"
-        )
-        return []
-
     def _get_litellm_env(self) -> Dict[str, str]:
         """Get LiteLLM environment variables based on configured mode.
 

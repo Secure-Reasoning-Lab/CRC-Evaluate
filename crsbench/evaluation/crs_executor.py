@@ -99,21 +99,6 @@ class CRSExecutor(ABC):
         """
         pass
 
-    @abstractmethod
-    def process_pov_results(self, crs_result: CRSResult, harness: HarnessFile,
-                           trial_output_dir: Path) -> List[POVResult]:
-        """Process CRS results to determine POV detection status.
-
-        Args:
-            crs_result: Raw CRS execution result
-            harness: Harness configuration with POVs
-            trial_output_dir: Directory containing CRS outputs
-
-        Returns:
-            List[POVResult]: POV detection results
-        """
-        pass
-
 
 class StubCRSExecutor(CRSExecutor):
     """Stub implementation of CRS executor for testing and development."""
@@ -200,46 +185,3 @@ POVs analyzed: {len(harness.povs or [])}
                 output=f"CRS execution failed for {harness.name}",
                 error=error
             )
-
-    def process_pov_results(self, crs_result: CRSResult, harness: HarnessFile,
-                           trial_output_dir: Path) -> List[POVResult]:
-        """Process stub CRS results to determine POV status."""
-        pov_results = []
-
-        if not harness.povs:
-            return pov_results
-
-        if not crs_result.success:
-            # If CRS execution failed, mark all POVs as error
-            for pov in harness.povs:
-                pov_results.append(POVResult(
-                    name=pov.id,
-                    harness_name=harness.name,
-                    sanitizer=pov.sanitizer,
-                    error_token=pov.error_token,
-                    status=POVStatus.ERROR,
-                    error_message=crs_result.error,
-                    crs_output=crs_result.output
-                ))
-            return pov_results
-
-        # Process each POV
-        detected_povs = crs_result.povs_detected or []
-
-        for pov in harness.povs:
-            if pov.id in detected_povs:
-                status = POVStatus.FOUND
-            else:
-                status = POVStatus.MISSED
-
-            pov_results.append(POVResult(
-                name=pov.id,
-                harness_name=harness.name,
-                sanitizer=pov.sanitizer,
-                error_token=pov.error_token,
-                status=status,
-                execution_time=crs_result.execution_time / len(harness.povs),
-                crs_output=crs_result.output
-            ))
-
-        return pov_results

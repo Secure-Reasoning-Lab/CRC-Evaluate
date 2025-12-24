@@ -144,6 +144,7 @@ class ResultCollector:
         povs_missed = 0
         povs_error = 0
 
+        # FIXME: no pov found for crs-libfuzzer and nasm
         for harness_result in self.harness_results:
             for pov_result in harness_result.pov_results:
                 total_povs += 1

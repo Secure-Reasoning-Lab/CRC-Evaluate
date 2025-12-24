@@ -305,16 +305,8 @@ class BenchmarkRunner:
                     trial_output_dir=trial_output_dir or Path(".")
                 )
 
-                # Process POV results
+                # POV processing now handled by _verify_povs() after all harness evaluations
                 pov_results = []
-                if harness.povs:
-                    # Pass trial_output_dir if executor needs it (for new-style executors)
-                    # StubExecutor ignores it for backward compatibility
-                    pov_results = self.crs_executor.process_pov_results(
-                        crs_result, harness, trial_output_dir or Path(".")
-                    )
-                else:
-                    self.logger.warning(f"Harness '{harness.name}' has no POVs configured")
 
                 # Create harness result
                 harness_result = HarnessResult(
@@ -328,26 +320,10 @@ class BenchmarkRunner:
 
                 collector.add_harness_result(harness_result)
 
-                # Log results for this harness
-                if pov_results:
-                    found_count = sum(1 for pov in pov_results if pov.status == POVStatus.FOUND)
-                    total_count = len(pov_results)
-                    self.logger.info(f"  {found_count}/{total_count} POVs detected in {harness.name}")
-
             except Exception as e:
                 self.logger.error(f"Failed to evaluate harness '{harness.name}': {str(e)}")
-                # Create error result for this harness
+                # Create error result for this harness (POV verification happens later)
                 pov_results = []
-                if harness.povs:
-                    for pov in harness.povs:
-                        pov_results.append(POVResult(
-                            name=pov.id,
-                            harness_name=harness.name,
-                            sanitizer=pov.sanitizer,
-                            error_token=pov.error_token,
-                            status=POVStatus.ERROR,
-                            error_message=str(e)
-                        ))
 
                 harness_result = HarnessResult(
                     name=harness.name,

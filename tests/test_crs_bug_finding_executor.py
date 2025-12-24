@@ -349,40 +349,6 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         self.assertTrue(metadata["execution"]["success"])
         self.assertTrue(metadata["hints"]["enabled"])
 
-    def test_process_pov_results_stub(self):
-        """Test POV result processing (stub implementation)."""
-        trial_dir = Path(self.temp_dir) / "trial-1"
-        trial_dir.mkdir()
-
-        # Create CRS result
-        crs_result = CRSResult(
-            harness_name="test_harness",
-            execution_time=100.0,
-            success=True,
-            output="CRS executed successfully"
-        )
-
-        # Create harness with POVs
-        harness = HarnessFile(
-            name="test_harness",
-            path="/src/test_harness.c",
-            vulns=[
-                Vulnerability(
-                    vuln_keyword="heap-overflow",
-                    povs=[
-                        POV(id="pov_0", sanitizer="address", error_token="heap-buffer-overflow")
-                    ]
-                )
-            ]
-        )
-
-        # Process POV results
-        pov_results = self.executor.process_pov_results(crs_result, harness, trial_dir)
-
-        # Verify empty list returned (stub implementation)
-        self.assertEqual(len(pov_results), 0)
-        self.assertIsInstance(pov_results, list)
-
     @patch('crsbench.utils.repo_manager.ensure_project_repository')
     @patch('crsbench.evaluation.crs_bug_finding_executor.run_with_graceful_timeout')
     @patch('subprocess.run')
