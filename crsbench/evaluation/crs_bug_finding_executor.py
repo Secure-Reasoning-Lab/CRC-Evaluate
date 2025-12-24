@@ -174,6 +174,14 @@ class CRSBugFindingExecutor(CRSExecutor):
             expected_output_dir = self._get_crs_output_dir(trial_build_dir, project_name)
             logger.info(f"Expected output at: {expected_output_dir}")
 
+            # Create relative symlink for easy access to output
+            symlink_path = trial_output_dir / "output"
+            if not symlink_path.exists():
+                # Compute relative path from symlink location to target
+                relative_target = Path("crs-build") / "artifacts" / self.crs_config_name / project_name
+                symlink_path.symlink_to(relative_target)
+                logger.debug(f"Created output symlink: {symlink_path} -> {relative_target}")
+
             # Get LiteLLM environment variables
             import os
             litellm_env = self._get_litellm_env()
