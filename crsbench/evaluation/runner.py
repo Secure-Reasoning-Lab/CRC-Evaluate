@@ -72,7 +72,6 @@ class BenchmarkRunner:
                       mode: Optional[str] = None,
                       crs_config: Optional[Dict[str, Any]] = None,
                       trial_output_dir: Optional[Path] = None,
-                      crs_output_dir: Optional[Path] = None,
                       skip_verification: bool = False,
                       oss_fuzz_path: Optional[Path] = None) -> EvaluationResult:
         """Run a complete benchmark evaluation.
@@ -82,7 +81,6 @@ class BenchmarkRunner:
             mode: Evaluation mode ('delta', 'full', or 'auto' to detect)
             crs_config: Configuration for CRS executor
             trial_output_dir: Trial output directory for snapshots (required if snapshots enabled)
-            crs_output_dir: Optional CRS output directory (for oss-bugfind-crs workaround)
             skip_verification: Skip POV verification (default: False, verification enabled)
             oss_fuzz_path: Path to oss-fuzz directory (required for POV verification)
 
@@ -155,8 +153,7 @@ class BenchmarkRunner:
                 snapshot_manager = SnapshotManager(
                     trial_dir=trial_output_dir,
                     snapshot_period=self.snapshot_period,
-                    trial_start_time=trial_start_time,
-                    crs_output_dir=crs_output_dir
+                    trial_start_time=trial_start_time
                 )
                 snapshot_thread = threading.Thread(target=snapshot_manager.run, daemon=True)
                 snapshot_thread.start()
@@ -193,7 +190,7 @@ class BenchmarkRunner:
                 # POV verification for bug-finding CRS
                 if report.povs_found > 0 and oss_fuzz_path:
                     # Determine CRS output directory
-                    actual_crs_output_dir = crs_output_dir or (trial_output_dir / "output" if trial_output_dir else None)
+                    actual_crs_output_dir = trial_output_dir / "output" if trial_output_dir else None
 
                     if actual_crs_output_dir:
                         verification_results = self._verify_povs(

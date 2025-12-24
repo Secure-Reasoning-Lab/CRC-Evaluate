@@ -213,10 +213,6 @@ def run_crs_trial(
         trial_output_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Trial output directory: {trial_output_dir}")
 
-        # Compute CRS output directory for oss-bugfind-crs
-        # oss-bugfind-crs writes to: build/artifacts/<crs_name>/<project>/
-        crs_output_dir = trial_output_dir / "crs-build" / "artifacts" / crs / benchmark
-
         # Run benchmark evaluation
         # Note: CRS is already configured via executor.configure_crs() above
         result = runner.run_benchmark(
@@ -224,7 +220,6 @@ def run_crs_trial(
             mode='auto',  # Auto-detect delta/full mode
             crs_config={},  # Empty config - executor already configured
             trial_output_dir=trial_output_dir,
-            crs_output_dir=crs_output_dir,
             oss_fuzz_path=oss_fuzz_path
         )
 

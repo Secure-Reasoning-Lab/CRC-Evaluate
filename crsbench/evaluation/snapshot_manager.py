@@ -37,14 +37,13 @@ class SnapshotManager:
         trial_start_time: Unix timestamp when trial started
     """
 
-    def __init__(self, trial_dir: Path, snapshot_period: int, trial_start_time: Optional[float] = None, crs_output_dir: Optional[Path] = None):
+    def __init__(self, trial_dir: Path, snapshot_period: int, trial_start_time: Optional[float] = None):
         """Initialize snapshot manager.
 
         Args:
             trial_dir: Trial output directory (must exist)
             snapshot_period: Snapshot interval in seconds (must be > 0)
             trial_start_time: Trial start timestamp (defaults to current time)
-            crs_output_dir: Optional CRS output directory (for oss-bugfind-crs workaround)
 
         Raises:
             ValueError: If snapshot_period <= 0 or trial_dir doesn't exist
@@ -58,14 +57,13 @@ class SnapshotManager:
         self.trial_dir = trial_dir
         self.snapshot_period = snapshot_period
         self.trial_start_time = trial_start_time or time.time()
-        self.crs_output_dir = crs_output_dir
 
         # State tracking
         self.cycle = 0
         self.running = False
         self.shutdown_event = threading.Event()
 
-        logger.info(f"SnapshotManager initialized: period={snapshot_period}s, trial_dir={trial_dir}, crs_output_dir={crs_output_dir}")
+        logger.info(f"SnapshotManager initialized: period={snapshot_period}s, trial_dir={trial_dir}")
 
     def run(self):
         """Main snapshot loop (runs in separate thread).
@@ -224,14 +222,9 @@ class SnapshotManager:
     def _get_crs_output_dir(self) -> Path:
         """Get the CRS output directory.
 
-        Returns crs_output_dir if provided (for oss-bugfind-crs workaround),
-        otherwise falls back to trial_dir/output/ (canonical location for future).
-
         Returns:
-            Path to CRS output directory
+            Path to CRS output directory (trial_dir/output/)
         """
-        if self.crs_output_dir and self.crs_output_dir.exists():
-            return self.crs_output_dir
         return self.trial_dir / "output"
 
     def _capture_metadata(self, temp_dir: Path, elapsed_time: float):
