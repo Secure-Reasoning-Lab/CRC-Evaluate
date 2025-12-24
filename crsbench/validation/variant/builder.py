@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from crsbench.utils.repo_manager import run_git
 from crsbench.validation.meta_adapter import MetaYamlAdapter
 from crsbench.validation.variant.models import BenchmarkMode, BuildTag, BuildVersion
 from crsbench.validation.verification.reproducer import OSSFuzzReproducer
@@ -230,6 +231,7 @@ class VariantBuilder:
             try:
                 repo_path = Path(temp_dir) / "repo"
 
+                # TODO: use ensure_project_repository to reuse repo already cloned
                 # Clone and checkout
                 if not self._clone_and_checkout(adapter.main_repo, commit, repo_path):
                     return None
@@ -321,39 +323,41 @@ class VariantBuilder:
         """
         try:
             # Clone
-            result = subprocess.run(
-                ["git", "clone", "--depth", "1", repo_url, str(dest_path)],
+            result = run_git(
+                ["clone", "--depth", "1", repo_url, str(dest_path)],
                 capture_output=True,
                 text=True,
                 timeout=300,
+                check=False,
             )
             if result.returncode != 0:
                 # Try full clone if shallow fails
-                result = subprocess.run(
-                    ["git", "clone", repo_url, str(dest_path)],
+                result = run_git(
+                    ["clone", repo_url, str(dest_path)],
                     capture_output=True,
                     text=True,
                     timeout=600,
+                    check=False,
                 )
                 if result.returncode != 0:
                     logger.error(f"Failed to clone {repo_url}: {result.stderr}")
                     return False
 
             # Fetch the specific commit
-            subprocess.run(
-                ["git", "fetch", "origin", commit],
-                cwd=dest_path,
+            run_git(
+                ["-C", str(dest_path), "fetch", "origin", commit],
                 capture_output=True,
                 timeout=120,
+                check=False,
             )
 
             # Checkout
-            result = subprocess.run(
-                ["git", "checkout", commit],
-                cwd=dest_path,
+            result = run_git(
+                ["-C", str(dest_path), "checkout", commit],
                 capture_output=True,
                 text=True,
                 timeout=60,
+                check=False,
             )
             if result.returncode != 0:
                 logger.error(f"Failed to checkout {commit}: {result.stderr}")
