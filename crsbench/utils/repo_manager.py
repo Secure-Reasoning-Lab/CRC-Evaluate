@@ -152,6 +152,57 @@ def derive_repo_name_from_url(repo_url: str) -> str:
     return name
 
 
+def reset_and_clean_repo(repo_dir: str, verbose: bool = False) -> bool:
+    """Reset repository to clean state and remove all untracked/ignored files.
+
+    This performs:
+    1. git reset --hard: Reset tracked files to HEAD
+    2. git clean -xdf: Remove untracked files, directories, and ignored files
+
+    Args:
+        repo_dir: Path to git repository
+        verbose: Enable verbose logging
+
+    Returns:
+        True if successful, False otherwise
+    """
+    if verbose:
+        logger.info(f"🔄 Resetting repository to pristine state...")
+
+    # First, reset tracked files
+    reset_result = run_git(
+        ["reset", "--hard"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False
+    )
+
+    if reset_result.returncode != 0:
+        logger.warning(f"⚠️  Failed to reset repository: {reset_result.stderr}")
+        return False
+
+    # Then, remove all untracked and ignored files
+    clean_result = run_git(
+        ["clean", "-xdf"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False
+    )
+
+    if clean_result.returncode != 0:
+        logger.warning(f"⚠️  Failed to clean repository: {clean_result.stderr}")
+        return False
+
+    if verbose:
+        logger.info(f"✅ Repository reset and cleaned to pristine state")
+
+    return True
+
+
 def clone_repository(
     repo_url: str,
     target_dir: str,
@@ -181,23 +232,7 @@ def clone_repository(
         if (target_path / ".git").exists():
             # Reset to clean state to remove any local changes from previous runs
             try:
-                if verbose:
-                    logger.info(f"🔄 Resetting repository to clean state...")
-
-                result = run_git(
-                    ["reset", "--hard"],
-                    cwd=target_dir,
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                    check=False
-                )
-
-                if result.returncode != 0:
-                    logger.warning(f"⚠️  Failed to reset repository: {result.stderr}")
-                elif verbose:
-                    logger.info(f"✅ Repository reset to clean state")
-
+                reset_and_clean_repo(target_dir, verbose=verbose)
             except Exception as e:
                 logger.warning(f"⚠️  Error resetting repository: {e}")
 
@@ -350,23 +385,7 @@ def ensure_project_repository(
             project_path = Path(project_dir)
             if (project_path / ".git").exists():
                 try:
-                    if verbose:
-                        logger.info(f"🔄 Resetting project directory to clean state...")
-
-                    result = run_git(
-                        ["reset", "--hard"],
-                        cwd=project_dir,
-                        capture_output=True,
-                        text=True,
-                        timeout=60,
-                        check=False
-                    )
-
-                    if result.returncode != 0:
-                        logger.warning(f"⚠️  Failed to reset repository: {result.stderr}")
-                    elif verbose:
-                        logger.info(f"✅ Repository reset to clean state")
-
+                    reset_and_clean_repo(project_dir, verbose=verbose)
                 except Exception as e:
                     logger.warning(f"⚠️  Error resetting repository: {e}")
 
@@ -440,22 +459,7 @@ def ensure_project_repository(
         try:
             if (Path(target_dir) / ".git").exists():
                 # Reset to clean state first
-                if verbose:
-                    logger.info(f"🔄 Resetting repository to clean state...")
-
-                reset_result = run_git(
-                    ["reset", "--hard"],
-                    cwd=target_dir,
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                    check=False
-                )
-
-                if reset_result.returncode != 0:
-                    logger.warning(f"⚠️  Failed to reset repository: {reset_result.stderr}")
-                elif verbose:
-                    logger.info(f"✅ Repository reset to clean state")
+                reset_and_clean_repo(target_dir, verbose=verbose)
 
                 # Check commit
                 result = run_git(
