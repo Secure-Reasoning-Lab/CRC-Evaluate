@@ -6,6 +6,7 @@ needed for test.sh generation.
 """
 
 import os
+import shutil
 import subprocess
 import yaml
 from pathlib import Path
@@ -31,7 +32,6 @@ def set_gitcache(enabled: bool):
 
     if enabled:
         # Sanity check: verify gitcache is installed
-        import shutil
         if not shutil.which('gitcache'):
             raise RuntimeError(
                 "gitcache is not installed or not in PATH. "
@@ -402,7 +402,28 @@ def ensure_project_repository(
 
     # Determine target directory for clone
     if project_dir:
-        # Use the specified project_dir
+        # project_dir specified but doesn't exist - check if we can copy from cache
+        cache_dir = get_commit_specific_cache_dir(
+            repo_info=repo_info,
+            target_commit=target_commit,
+            repos_dir=repos_dir,
+            verbose=verbose
+        )
+
+        if os.path.isdir(cache_dir):
+            # Cache exists - copy instead of cloning
+            if verbose:
+                logger.info(f"📦 Copying from cache: {cache_dir} -> {project_dir}")
+            try:
+                shutil.copytree(cache_dir, project_dir, symlinks=True, ignore_dangling_symlinks=True)
+                if verbose:
+                    logger.info(f"✅ Successfully copied from cache to {project_dir}")
+                return project_dir
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to copy from cache: {e}, will clone instead")
+                # Fall through to clone
+
+        # Use the specified project_dir as target for clone
         target_dir = project_dir
     else:
         # Use commit-specific directory for cache efficiency and parallel safety
