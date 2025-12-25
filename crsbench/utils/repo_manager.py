@@ -263,6 +263,54 @@ def clone_repository(
         return False
 
 
+def get_commit_specific_cache_dir(
+    repo_info: Dict[str, Any],
+    target_commit: str,
+    repos_dir: Optional[str] = None,
+    verbose: bool = False
+) -> str:
+    """Get commit-specific cache directory for repository.
+
+    Creates a cache directory path using the pattern: {repos_dir}/{repo_name}-{short_commit}
+    This enables parallel execution safety and cache efficiency.
+
+    Args:
+        repo_info: Repository info dict with 'repo_url' and optional 'repo_name'
+        target_commit: Full commit hash to checkout
+        repos_dir: Directory to store cloned repositories (default: PROJECT_REPOS_DIR env var or .crsbench-repos)
+        verbose: Enable verbose logging
+
+    Returns:
+        Path to commit-specific cache directory
+    """
+    # Determine repos_dir
+    if not repos_dir:
+        # Try PROJECT_REPOS_DIR env var first, then default to .crsbench-repos
+        crsbench_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        default_repos_dir = os.path.join(crsbench_root, '.crsbench-repos')
+        repos_dir = os.getenv("PROJECT_REPOS_DIR", default_repos_dir)
+
+    # Use explicit repo_name if provided, otherwise derive from URL
+    if repo_info.get("repo_name"):
+        repo_name = repo_info["repo_name"]
+        if verbose:
+            logger.info(f"Using explicit repo_name from project.yaml: {repo_name}")
+    else:
+        repo_name = derive_repo_name_from_url(repo_info["repo_url"])
+        if verbose:
+            logger.info(f"Derived repo_name from URL: {repo_name}")
+
+    # Create commit-specific directory: {repo_name}-{short_commit}
+    short_commit = target_commit[:8]
+    commit_specific_name = f"{repo_name}-{short_commit}"
+    target_dir = os.path.join(repos_dir, commit_specific_name)
+
+    if verbose:
+        logger.info(f"Using commit-specific directory: {target_dir}")
+
+    return target_dir
+
+
 def ensure_project_repository(
     benchmark_dir: str,
     repos_dir: Optional[str] = None,
@@ -358,29 +406,12 @@ def ensure_project_repository(
         target_dir = project_dir
     else:
         # Use commit-specific directory for cache efficiency and parallel safety
-        if not repos_dir:
-            # Try PROJECT_REPOS_DIR env var first, then default to .crsbench-repos
-            crsbench_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-            default_repos_dir = os.path.join(crsbench_root, '.crsbench-repos')
-            repos_dir = os.getenv("PROJECT_REPOS_DIR", default_repos_dir)
-
-        # Use explicit repo_name if provided, otherwise derive from URL
-        if repo_info.get("repo_name"):
-            repo_name = repo_info["repo_name"]
-            if verbose:
-                logger.info(f"Using explicit repo_name from project.yaml: {repo_name}")
-        else:
-            repo_name = derive_repo_name_from_url(repo_info["repo_url"])
-            if verbose:
-                logger.info(f"Derived repo_name from URL: {repo_name}")
-
-        # Create commit-specific directory: {repo_name}-{short_commit}
-        short_commit = target_commit[:8]
-        commit_specific_name = f"{repo_name}-{short_commit}"
-        target_dir = os.path.join(repos_dir, commit_specific_name)
-
-        if verbose:
-            logger.info(f"Using commit-specific directory: {target_dir}")
+        target_dir = get_commit_specific_cache_dir(
+            repo_info=repo_info,
+            target_commit=target_commit,
+            repos_dir=repos_dir,
+            verbose=verbose
+        )
 
     # Check if directory already exists and has correct commit
     if os.path.isdir(target_dir):
