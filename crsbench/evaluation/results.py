@@ -6,31 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any, TYPE_CHECKING
 from dataclasses import dataclass, asdict
-from enum import Enum
-
 if TYPE_CHECKING:
     from crsbench.validation.verification.models import VerificationResult
-
-
-class POVStatus(Enum):
-    """Status of a POV detection."""
-    NOT_RUN = "not_run"
-    FOUND = "found"
-    MISSED = "missed"
-    ERROR = "error"
-
-
-@dataclass
-class POVResult:
-    """Result for a single POV."""
-    name: str
-    harness_name: str
-    sanitizer: str
-    error_token: Optional[str]
-    status: POVStatus
-    execution_time: Optional[float] = None
-    error_message: Optional[str] = None
-    crs_output: Optional[str] = None
 
 
 @dataclass
@@ -85,10 +62,6 @@ class EvaluationReport:
         # Convert datetime objects to strings
         data['start_time'] = self.start_time.isoformat()
         data['end_time'] = self.end_time.isoformat()
-        # Convert enums to strings
-        for harness_result in data['harness_results']:
-            for pov_result in harness_result['pov_results']:
-                pov_result['status'] = pov_result['status'].value
         return data
 
     def to_json(self, indent: int = 2) -> str:

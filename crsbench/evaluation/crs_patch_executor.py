@@ -16,7 +16,6 @@ from typing import Dict, List, Optional, Any, Set
 
 from crsbench.evaluation.crs_executor import CRSExecutor, CRSResult
 from crsbench.evaluation.process_utils import run_with_graceful_timeout
-from crsbench.evaluation.results import POVResult, POVStatus
 from crsbench.validation.schemas import HarnessFile, POV
 from crsbench.utils.repo_manager import USE_GITCACHE
 

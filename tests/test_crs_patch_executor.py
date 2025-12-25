@@ -8,7 +8,6 @@ from unittest.mock import Mock, patch, MagicMock
 
 from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
 from crsbench.evaluation.crs_executor import CRSResult
-from crsbench.evaluation.results import POVStatus
 from crsbench.validation.schemas import HarnessFile, POV, Vulnerability
 
 

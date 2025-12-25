@@ -13,7 +13,7 @@ from crsbench.validation import VerificationEngine, VerificationResult as VerifR
 from crsbench.evaluation.crs_executor import CRSExecutor, StubCRSExecutor
 from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
 from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
-from crsbench.evaluation.results import ResultCollector, EvaluationReport, HarnessResult, POVResult, POVStatus
+from crsbench.evaluation.results import ResultCollector, EvaluationReport, HarnessResult
 from crsbench.evaluation.snapshot_manager import SnapshotManager
 
 # Set up logging
