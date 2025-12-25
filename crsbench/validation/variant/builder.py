@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from crsbench.utils.repo_manager import run_git
+from crsbench.utils.repo_manager import clone_or_copy_cached_repo, run_git
 from crsbench.validation.meta_adapter import MetaYamlAdapter
 from crsbench.validation.variant.models import BenchmarkMode, BuildTag, BuildVersion
 from crsbench.validation.verification.reproducer import OSSFuzzReproducer
@@ -231,9 +231,15 @@ class VariantBuilder:
             try:
                 repo_path = Path(temp_dir) / "repo"
 
-                # TODO: use ensure_project_repository to reuse repo already cloned
-                # Clone and checkout
-                if not self._clone_and_checkout(adapter.main_repo, commit, repo_path):
+                # Clone and checkout using cached repository if available
+                repo_path_str = clone_or_copy_cached_repo(
+                    repo_url=adapter.main_repo,
+                    commit=commit,
+                    target_dir=str(repo_path),
+                    repo_name=adapter.repo_name,
+                    verbose=True
+                )
+                if not repo_path_str:
                     return None
 
                 # Apply patches if needed
@@ -305,6 +311,7 @@ class VariantBuilder:
             logger.error(f"Failed to create variant project: {e}")
             return None
 
+    # FIXME: unused now
     def _clone_and_checkout(
         self,
         repo_url: str,
