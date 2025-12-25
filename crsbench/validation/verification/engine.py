@@ -243,7 +243,7 @@ class VerificationEngine:
             # Use explicit POV directory (override)
             harness_names = [harness_filter] if harness_filter else adapter.get_harness_names()
             for harness_name in harness_names:
-                pov_files = list(pov_dir.glob("*.blob")) + list(pov_dir.glob("*.bin"))
+                pov_files = [f for f in pov_dir.glob("*") if f.is_file()]
                 for pov_file in pov_files:
                     pov_data = pov_file.read_bytes()
                     request = VerificationRequest(
