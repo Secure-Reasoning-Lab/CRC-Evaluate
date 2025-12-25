@@ -332,9 +332,10 @@ class VerificationEngine:
         # Extract benchmark name from path
         benchmark_name = benchmark_path.name
 
-        # Get language and main_repo from project.yaml
+        # Get language, main_repo, and optional repo_name from project.yaml
         lang = "c"  # Default
         main_repo = ""
+        repo_name = None
         if project_yaml.exists():
             import yaml
 
@@ -342,6 +343,8 @@ class VerificationEngine:
                 project_data = yaml.safe_load(f)
             lang = project_data.get("language", "c")
             main_repo = project_data.get("main_repo", "")
+            # Optional: explicit repo_name to use instead of deriving from URL
+            repo_name = project_data.get("repo_name")
 
         try:
             return MetaYamlAdapter.from_meta_yaml(
@@ -349,6 +352,7 @@ class VerificationEngine:
                 benchmark_name=benchmark_name,
                 lang=lang,
                 main_repo=main_repo,
+                repo_name=repo_name,
             )
         except Exception as e:
             logger.error(f"Failed to load adapter: {e}")

@@ -30,6 +30,7 @@ class MetaYamlAdapter:
         benchmark_name: Name of the benchmark (e.g., "afc-curl-delta-01")
         lang: Programming language (e.g., "c", "jvm")
         main_repo: URL or path to the main repository
+        repo_name: Optional repository name (overrides derivation from URL)
         benchmark_path: Full path to the benchmark directory
     """
 
@@ -40,6 +41,7 @@ class MetaYamlAdapter:
         lang: str,
         main_repo: str,
         benchmark_path: Optional[Path] = None,
+        repo_name: Optional[str] = None,
     ):
         """Initialize the adapter.
 
@@ -49,11 +51,13 @@ class MetaYamlAdapter:
             lang: Programming language
             main_repo: Main repository URL/path
             benchmark_path: Full path to the benchmark directory
+            repo_name: Optional repository name (overrides derivation from URL)
         """
         self.config = config
         self.benchmark_name = benchmark_name
         self.lang = lang
         self.main_repo = main_repo
+        self.repo_name = repo_name
         self.benchmark_path = benchmark_path
         self._harness_map = {h.name: h for h in config.harness_files}
 
@@ -65,6 +69,7 @@ class MetaYamlAdapter:
         lang: str,
         main_repo: str,
         benchmark_path: Optional[Path] = None,
+        repo_name: Optional[str] = None,
     ) -> "MetaYamlAdapter":
         """Create adapter from meta.yaml file.
 
@@ -74,6 +79,7 @@ class MetaYamlAdapter:
             lang: Programming language
             main_repo: Main repository URL/path
             benchmark_path: Full path to the benchmark directory
+            repo_name: Optional repository name (overrides derivation from URL)
 
         Returns:
             MetaYamlAdapter instance
@@ -97,7 +103,7 @@ class MetaYamlAdapter:
         if benchmark_path is None:
             benchmark_path = meta_yaml_path.parent.parent  # .aixcc/meta.yaml -> benchmark_dir
 
-        return cls(config, benchmark_name, lang, main_repo, benchmark_path)
+        return cls(config, benchmark_name, lang, main_repo, benchmark_path, repo_name)
 
     # =========================================================================
     # Harness and POV Access Methods
