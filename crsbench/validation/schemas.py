@@ -303,9 +303,11 @@ class ExperimentConfig(BaseModel):
         default=None,
         description="Root directory containing benchmark projects (defaults to ./benchmarks)",
     )
-    benchmarks: Optional[List[str]] = Field(
+    benchmarks: Optional[List[Union[str, Dict[str, List[str]]]]] = Field(
         default=None,
-        description="List of benchmark IDs to evaluate (mutually exclusive with benchmark_suite)",
+        description="List of benchmarks to evaluate (mutually exclusive with benchmark_suite). "
+        "Each entry can be either a string (benchmark name, runs all harnesses) "
+        "or a dict mapping benchmark name to list of specific harnesses to run.",
     )
     benchmark_suite: Optional[str] = Field(
         default=None,
@@ -414,26 +416,63 @@ class ExperimentConfig(BaseModel):
     @field_validator("benchmarks")
     @classmethod
     def validate_benchmarks(cls, v):
-        """Validate benchmarks list."""
+        """Validate benchmarks list (supports both string and dict formats)."""
         if v is None:
             return None
 
         if not isinstance(v, list):
             raise ValueError("benchmarks must be a list")
 
-        # Check for empty strings
-        cleaned = [bid.strip() for bid in v if bid and bid.strip()]
-        if len(cleaned) != len(v):
-            raise ValueError("benchmarks list contains empty benchmark IDs")
+        cleaned_list = []
+        benchmark_names = []
 
-        # Check for duplicates
-        if len(cleaned) != len(set(cleaned)):
-            duplicates = [bid for bid in cleaned if cleaned.count(bid) > 1]
+        for item in v:
+            if isinstance(item, str):
+                # Simple string format
+                name = item.strip()
+                if not name:
+                    raise ValueError("benchmarks list contains empty benchmark ID")
+                benchmark_names.append(name)
+                cleaned_list.append(name)
+            elif isinstance(item, dict):
+                # Dict format: {benchmark_name: [harness_list]}
+                if len(item) != 1:
+                    raise ValueError(
+                        "Each dict entry must have exactly one benchmark name as key"
+                    )
+                name = list(item.keys())[0].strip()
+                harnesses = item[name]
+
+                if not name:
+                    raise ValueError("Benchmark name cannot be empty")
+                if not isinstance(harnesses, list) or not harnesses:
+                    raise ValueError(
+                        f"Harness list for '{name}' must be a non-empty list"
+                    )
+                if any(not h or not str(h).strip() for h in harnesses):
+                    raise ValueError(
+                        f"Harness list for '{name}' contains empty harness names"
+                    )
+
+                benchmark_names.append(name)
+                # Store normalized format
+                cleaned_list.append({name: [str(h).strip() for h in harnesses]})
+            else:
+                raise ValueError(
+                    f"Invalid benchmarks entry type: {type(item).__name__}. "
+                    "Expected str or dict"
+                )
+
+        # Check for duplicate benchmark names
+        if len(benchmark_names) != len(set(benchmark_names)):
+            duplicates = [
+                name for name in benchmark_names if benchmark_names.count(name) > 1
+            ]
             raise ValueError(
                 f"Duplicate benchmark IDs found: {', '.join(set(duplicates))}"
             )
 
-        return cleaned if cleaned else None
+        return cleaned_list if cleaned_list else None
 
     @field_validator("benchmark_suite")
     @classmethod
@@ -523,7 +562,14 @@ class ExperimentConfig(BaseModel):
             ValueError: If benchmark_suite file doesn't exist or is invalid
         """
         if self.benchmarks is not None:
-            return self.benchmarks
+            # Extract benchmark names (handle both str and dict formats)
+            names = []
+            for item in self.benchmarks:
+                if isinstance(item, str):
+                    names.append(item)
+                elif isinstance(item, dict):
+                    names.append(list(item.keys())[0])
+            return names
 
         if self.benchmark_suite is not None:
             from pathlib import Path
@@ -563,8 +609,16 @@ class ExperimentConfig(BaseModel):
             ValueError: If benchmark_suite file doesn't exist or is invalid
         """
         if self.benchmarks is not None:
-            # Convert simple list to BenchmarkEntry objects
-            return [BenchmarkEntry(name=b, harnesses=None) for b in self.benchmarks]
+            # Convert benchmarks list to BenchmarkEntry objects
+            entries = []
+            for item in self.benchmarks:
+                if isinstance(item, str):
+                    entries.append(BenchmarkEntry(name=item, harnesses=None))
+                elif isinstance(item, dict):
+                    name = list(item.keys())[0]
+                    harnesses = item[name]
+                    entries.append(BenchmarkEntry(name=name, harnesses=harnesses))
+            return entries
 
         if self.benchmark_suite is not None:
             from pathlib import Path
