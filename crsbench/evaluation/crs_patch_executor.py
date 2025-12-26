@@ -5,19 +5,19 @@ CRS Patch's interface for patch generation using pre-cloned source repositories.
 """
 
 import json
-from crsbench.utils.logger import get_logger
 import os
 import shutil
 import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Set
+from typing import Any, Dict, List, Optional, Set
 
 from crsbench.evaluation.crs_executor import CRSExecutor, CRSResult
 from crsbench.evaluation.process_utils import run_with_graceful_timeout
-from crsbench.validation.schemas import HarnessFile, POV
+from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import USE_GITCACHE
+from crsbench.validation.schemas import HarnessFile
 
 logger = get_logger(__name__)
 
@@ -36,7 +36,7 @@ class CRSPatchExecutor(CRSExecutor):
         registry_dir: Path,
         benchmarks_root: Path,
         crs_configs_dir: Path,
-        litellm_mode: Optional[str] = "passthrough"
+        litellm_mode: Optional[str] = "passthrough",
     ):
         """Initialize CRS Patch executor.
 
@@ -83,39 +83,41 @@ class CRSPatchExecutor(CRSExecutor):
 
         if self.litellm_mode == "passthrough":
             # Use external LiteLLM with UPSTREAM_LITELLM_BASE_URL and LITELLM_API_KEY
-            url = os.environ.get('UPSTREAM_LITELLM_BASE_URL')
-            key = os.environ.get('LITELLM_API_KEY')
+            url = os.environ.get("UPSTREAM_LITELLM_BASE_URL")
+            key = os.environ.get("LITELLM_API_KEY")
 
             if not url:
-                raise RuntimeError("UPSTREAM_LITELLM_BASE_URL not set (required for passthrough mode)")
+                raise RuntimeError(
+                    "UPSTREAM_LITELLM_BASE_URL not set (required for passthrough mode)"
+                )
             if not key:
-                raise RuntimeError("LITELLM_API_KEY not set (required for passthrough mode)")
+                raise RuntimeError(
+                    "LITELLM_API_KEY not set (required for passthrough mode)"
+                )
 
-            env['LITELLM_API_BASE'] = url
-            env['LITELLM_API_KEY'] = key
+            env["LITELLM_API_BASE"] = url
+            env["LITELLM_API_KEY"] = key
             logger.info(f"Using passthrough LiteLLM mode with URL: {url}")
 
         elif self.litellm_mode == "proxy":
             # Use self-hosted LiteLLM proxy with LITELLM_BASE_URL and LITELLM_MASTER_KEY
-            url = os.environ.get('LITELLM_BASE_URL')
-            key = os.environ.get('LITELLM_MASTER_KEY')
+            url = os.environ.get("LITELLM_BASE_URL")
+            key = os.environ.get("LITELLM_MASTER_KEY")
 
             if not url:
                 raise RuntimeError("LITELLM_BASE_URL not set (required for proxy mode)")
             if not key:
-                raise RuntimeError("LITELLM_MASTER_KEY not set (required for proxy mode)")
+                raise RuntimeError(
+                    "LITELLM_MASTER_KEY not set (required for proxy mode)"
+                )
 
-            env['LITELLM_API_BASE'] = url
-            env['LITELLM_API_KEY'] = key
+            env["LITELLM_API_BASE"] = url
+            env["LITELLM_API_KEY"] = key
             logger.info(f"Using proxy LiteLLM mode with URL: {url}")
 
         return env
 
-    def build_crs(
-        self,
-        benchmark_path: Path,
-        trial_output_dir: Path
-    ) -> None:
+    def build_crs(self, benchmark_path: Path, trial_output_dir: Path) -> None:
         """Pre-build CRS Docker image before running.
 
         Call this before starting snapshots to ensure build time
@@ -137,10 +139,7 @@ class CRSPatchExecutor(CRSExecutor):
         self._build_crs_if_needed(benchmark_path, project_name, trial_build_dir)
 
     def run_crs(
-        self,
-        benchmark_path: Path,
-        harness: HarnessFile,
-        trial_output_dir: Path
+        self, benchmark_path: Path, harness: HarnessFile, trial_output_dir: Path
     ) -> CRSResult:
         """Run patch generation CRS.
 
@@ -153,7 +152,9 @@ class CRSPatchExecutor(CRSExecutor):
             CRSResult with execution details
         """
         project_name = self._extract_project_name(benchmark_path)
-        logger.info(f"Running CRS Patch CRS for project '{project_name}', harness '{harness.name}'")
+        logger.info(
+            f"Running CRS Patch CRS for project '{project_name}', harness '{harness.name}'"
+        )
 
         # Prepare trial-specific build directory
         trial_build_dir = trial_output_dir / "crs-build"
@@ -170,15 +171,22 @@ class CRSPatchExecutor(CRSExecutor):
         # Prepare POVs directory (required for patch generation)
         povs_path = self._prepare_povs(benchmark_path, harness_name, trial_output_dir)
         if not povs_path:
-            raise RuntimeError(f"No POVs found for patch generation in harness {harness_name}")
+            raise RuntimeError(
+                f"No POVs found for patch generation in harness {harness_name}"
+            )
 
         # Build command
         cmd = [
-            "oss-bugfix-crs", "run",
-            self.crs_config_name, project_name,
-            "--harness", harness_name,
-            "--povs", str(povs_path),
-            "--out", str(trial_output_dir / "output"),
+            "oss-bugfix-crs",
+            "run",
+            self.crs_config_name,
+            project_name,
+            "--harness",
+            harness_name,
+            "--povs",
+            str(povs_path),
+            "--out",
+            str(trial_output_dir / "output"),
         ]
 
         # Prepare and add hints if enabled
@@ -207,7 +215,7 @@ class CRSPatchExecutor(CRSExecutor):
                 timeout=timeout,
                 grace_period=grace_period,
                 cwd=trial_output_dir,
-                env=env
+                env=env,
             )
 
             execution_time = time.time() - start_time
@@ -219,19 +227,21 @@ class CRSPatchExecutor(CRSExecutor):
                 hints_path=hints_path,
                 povs_path=povs_path,
                 execution_time=execution_time,
-                returncode=returncode
+                returncode=returncode,
             )
 
             success = returncode == 0 and not timed_out
             if timed_out:
-                logger.error(f"CRS execution timed out after {execution_time:.1f}s (returncode: {returncode})")
+                logger.error(
+                    f"CRS execution timed out after {execution_time:.1f}s (returncode: {returncode})"
+                )
 
             return CRSResult(
                 harness_name=harness.name,
                 execution_time=execution_time,
                 success=success,
                 output=stdout,
-                error=stderr if not success or timed_out else None
+                error=stderr if not success or timed_out else None,
             )
 
         except Exception as e:
@@ -243,10 +253,12 @@ class CRSPatchExecutor(CRSExecutor):
                 execution_time=execution_time,
                 success=False,
                 output="",
-                error=str(e)
+                error=str(e),
             )
 
-    def _build_crs_if_needed(self, benchmark_path: Path, project_name: str, trial_build_dir: Path) -> None:
+    def _build_crs_if_needed(
+        self, benchmark_path: Path, project_name: str, trial_build_dir: Path
+    ) -> None:
         """Build patch generation CRS if not already built.
 
         Args:
@@ -265,8 +277,7 @@ class CRSPatchExecutor(CRSExecutor):
 
         logger.info(f"Ensuring source repository for {project_name}...")
         source_path = ensure_project_repository(
-            benchmark_dir=str(benchmark_path),
-            verbose=self.config.get("verbose", False)
+            benchmark_dir=str(benchmark_path), verbose=self.config.get("verbose", False)
         )
 
         if not source_path:
@@ -278,12 +289,18 @@ class CRSPatchExecutor(CRSExecutor):
         logger.info(f"Using source from: {source_path}")
 
         cmd = [
-            "oss-bugfix-crs", "build",
-            self.crs_config_name, project_name,
-            "--oss-fuzz", str(self.oss_fuzz_path),
-            "--project-path", str(benchmark_path),  # Benchmark dir (OSS-Fuzz compatible)
-            "--source-path", str(source_path),       # Pre-cloned source from repo manager
-            "--registry", str(self.registry_dir),
+            "oss-bugfix-crs",
+            "build",
+            self.crs_config_name,
+            project_name,
+            "--oss-fuzz",
+            str(self.oss_fuzz_path),
+            "--project-path",
+            str(benchmark_path),  # Benchmark dir (OSS-Fuzz compatible)
+            "--source-path",
+            str(source_path),  # Pre-cloned source from repo manager
+            "--registry",
+            str(self.registry_dir),
         ]
 
         # Add gitcache flag if enabled
@@ -304,7 +321,7 @@ class CRSPatchExecutor(CRSExecutor):
                 capture_output=True,
                 text=True,
                 timeout=self.config.get("build_timeout", 600),
-                cwd=str(trial_build_dir)
+                cwd=str(trial_build_dir),
             )
 
             if result.returncode != 0:
@@ -314,9 +331,9 @@ class CRSPatchExecutor(CRSExecutor):
             self.built_projects.add(build_key)
             logger.info(f"Successfully built CRS for {project_name}")
 
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
             logger.error("CRS build timed out")
-            raise RuntimeError("CRS build timed out")
+            raise RuntimeError("CRS build timed out") from e
 
     def _prepare_output_directory(self, trial_output_dir: Path) -> None:
         """Prepare output directory before CRS execution.
@@ -334,10 +351,7 @@ class CRSPatchExecutor(CRSExecutor):
         logger.debug(f"Prepared output directory: {output_dir}")
 
     def _prepare_povs(
-        self,
-        benchmark_path: Path,
-        harness_name: str,
-        trial_output_dir: Path
+        self, benchmark_path: Path, harness_name: str, trial_output_dir: Path
     ) -> Optional[Path]:
         """Prepare POVs directory with filtered POVs from benchmark.
 
@@ -396,10 +410,7 @@ class CRSPatchExecutor(CRSExecutor):
         return povs_dir
 
     def _prepare_hints(
-        self,
-        benchmark_path: Path,
-        harness_name: str,
-        trial_output_dir: Path
+        self, benchmark_path: Path, harness_name: str, trial_output_dir: Path
     ) -> Optional[Path]:
         """Prepare hints directory with filtered content from benchmark.
 
@@ -466,7 +477,7 @@ class CRSPatchExecutor(CRSExecutor):
         hints_path: Optional[Path],
         povs_path: Optional[Path],
         execution_time: float,
-        returncode: int
+        returncode: int,
     ) -> None:
         """Store execution metadata for reproducibility.
 
@@ -493,14 +504,22 @@ class CRSPatchExecutor(CRSExecutor):
             "hints": {
                 "enabled": hints_path is not None,
                 "path": str(hints_path) if hints_path else None,
-                "corpus_level": self.config.get("hints_corpus_level") if hints_path else None,
-                "sarif_count": len(list((hints_path / "sarif").glob("*.sarif"))) if hints_path and (hints_path / "sarif").exists() else 0,
-                "corpus_count": len(list((hints_path / "corpus").iterdir())) if hints_path and (hints_path / "corpus").exists() else 0,
+                "corpus_level": self.config.get("hints_corpus_level")
+                if hints_path
+                else None,
+                "sarif_count": len(list((hints_path / "sarif").glob("*.sarif")))
+                if hints_path and (hints_path / "sarif").exists()
+                else 0,
+                "corpus_count": len(list((hints_path / "corpus").iterdir()))
+                if hints_path and (hints_path / "corpus").exists()
+                else 0,
             },
             "povs": {
                 "provided": povs_path is not None,
                 "path": str(povs_path) if povs_path else None,
-                "count": len(list(povs_path.iterdir())) if povs_path and povs_path.exists() else 0,
+                "count": len(list(povs_path.iterdir()))
+                if povs_path and povs_path.exists()
+                else 0,
             },
             "execution": {
                 "duration_seconds": execution_time,
@@ -510,7 +529,7 @@ class CRSPatchExecutor(CRSExecutor):
         }
 
         execution_file = trial_output_dir / "execution.json"
-        with open(execution_file, "w") as f:
+        with execution_file.open("w") as f:
             json.dump(metadata, f, indent=2)
 
         logger.debug(f"Stored execution metadata to {execution_file}")

@@ -1,21 +1,21 @@
 """Tests for the path_resolver module."""
 
-import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
+import pytest
 from crsbench.evaluation.path_resolver import (
-    resolve_harness_path,
-    get_harness_source_path,
     RepositoryError,
-    _resolve_repo_path
+    _resolve_repo_path,
+    get_harness_source_path,
+    resolve_harness_path,
 )
 from crsbench.validation.schemas import HarnessFile
-
 
 # ============================================================================
 # Test Helpers
 # ============================================================================
+
 
 def create_test_benchmark(tmp_path: Path, project_name: str = "json-c") -> Path:
     """Create a minimal test benchmark directory structure."""
@@ -65,6 +65,7 @@ def create_test_repository(tmp_path: Path, project_name: str = "json-c") -> Path
 # Test $REPO Variable Resolution
 # ============================================================================
 
+
 class TestRepoVariableResolution:
     """Test resolution of $REPO variable in harness paths."""
 
@@ -77,9 +78,7 @@ class TestRepoVariableResolution:
 
         # Test
         resolved = resolve_harness_path(
-            "$REPO/test/harness.c",
-            benchmark_dir=benchmark,
-            repos_dir=repos_dir
+            "$REPO/test/harness.c", benchmark_dir=benchmark, repos_dir=repos_dir
         )
 
         # Verify
@@ -98,9 +97,7 @@ class TestRepoVariableResolution:
 
         # Test with explicit project_dir (bypasses repo_manager)
         resolved = resolve_harness_path(
-            "$REPO/test/harness.c",
-            benchmark_dir=benchmark,
-            project_dir=custom_repo
+            "$REPO/test/harness.c", benchmark_dir=benchmark, project_dir=custom_repo
         )
 
         # Verify - should use custom_repo not repos_dir
@@ -117,9 +114,7 @@ class TestRepoVariableResolution:
         # Test
         with pytest.raises(FileNotFoundError) as exc_info:
             resolve_harness_path(
-                "$REPO/test/nonexistent.c",
-                benchmark_dir=benchmark,
-                repos_dir=repos_dir
+                "$REPO/test/nonexistent.c", benchmark_dir=benchmark, repos_dir=repos_dir
             )
 
         # Verify error message
@@ -128,7 +123,7 @@ class TestRepoVariableResolution:
         assert "nonexistent.c" in error_msg
         assert "$REPO/test/nonexistent.c" in error_msg
 
-    @patch('crsbench.evaluation.path_resolver.ensure_project_repository')
+    @patch("crsbench.evaluation.path_resolver.ensure_project_repository")
     def test_resolve_repo_variable_clone_failure(self, mock_ensure_repo, tmp_path):
         """Test error when repository cloning fails."""
         # Setup
@@ -140,17 +135,21 @@ class TestRepoVariableResolution:
             resolve_harness_path(
                 "$REPO/test/harness.c",
                 benchmark_dir=benchmark,
-                repos_dir=tmp_path / "repos"
+                repos_dir=tmp_path / "repos",
             )
 
         # Verify error message
         error_msg = str(exc_info.value)
-        assert "repo_manager returned None" in error_msg or "Failed to obtain repository" in error_msg
+        assert (
+            "repo_manager returned None" in error_msg
+            or "Failed to obtain repository" in error_msg
+        )
 
 
 # ============================================================================
 # Test $PROJECT Variable Resolution
 # ============================================================================
+
 
 class TestProjectVariableResolution:
     """Test resolution of $PROJECT variable in harness paths."""
@@ -163,10 +162,7 @@ class TestProjectVariableResolution:
         harness_file.write_text("// Project-level harness")
 
         # Test
-        resolved = resolve_harness_path(
-            "$PROJECT/fuzz.c",
-            benchmark_dir=benchmark
-        )
+        resolved = resolve_harness_path("$PROJECT/fuzz.c", benchmark_dir=benchmark)
 
         # Verify
         assert resolved == harness_file
@@ -183,9 +179,7 @@ class TestProjectVariableResolution:
 
         # Test with explicit project_dir
         resolved = resolve_harness_path(
-            "$PROJECT/fuzz.c",
-            benchmark_dir=benchmark,
-            project_dir=custom_project
+            "$PROJECT/fuzz.c", benchmark_dir=benchmark, project_dir=custom_project
         )
 
         # Verify - should use custom_project not benchmark_dir
@@ -199,10 +193,7 @@ class TestProjectVariableResolution:
 
         # Test
         with pytest.raises(FileNotFoundError) as exc_info:
-            resolve_harness_path(
-                "$PROJECT/missing.c",
-                benchmark_dir=benchmark
-            )
+            resolve_harness_path("$PROJECT/missing.c", benchmark_dir=benchmark)
 
         # Verify error message
         error_msg = str(exc_info.value)
@@ -215,6 +206,7 @@ class TestProjectVariableResolution:
 # Test Absolute Path Handling
 # ============================================================================
 
+
 class TestAbsolutePathHandling:
     """Test handling of absolute paths (container paths)."""
 
@@ -225,8 +217,7 @@ class TestAbsolutePathHandling:
 
         # Test
         resolved = resolve_harness_path(
-            "/src/container/harness.c",
-            benchmark_dir=benchmark
+            "/src/container/harness.c", benchmark_dir=benchmark
         )
 
         # Verify - absolute paths are not validated, just returned
@@ -239,8 +230,7 @@ class TestAbsolutePathHandling:
 
         # Test - should not raise error even if path doesn't exist
         resolved = resolve_harness_path(
-            "/nonexistent/path/to/harness.c",
-            benchmark_dir=benchmark
+            "/nonexistent/path/to/harness.c", benchmark_dir=benchmark
         )
 
         # Verify
@@ -250,6 +240,7 @@ class TestAbsolutePathHandling:
 # ============================================================================
 # Test Relative Path Handling
 # ============================================================================
+
 
 class TestRelativePathHandling:
     """Test handling of relative paths (./...)."""
@@ -263,10 +254,7 @@ class TestRelativePathHandling:
         harness_file.write_text("// relative harness")
 
         # Test
-        resolved = resolve_harness_path(
-            "./test/harness.c",
-            benchmark_dir=benchmark
-        )
+        resolved = resolve_harness_path("./test/harness.c", benchmark_dir=benchmark)
 
         # Verify
         assert resolved == harness_file
@@ -280,10 +268,7 @@ class TestRelativePathHandling:
 
         # Test
         with pytest.raises(FileNotFoundError) as exc_info:
-            resolve_harness_path(
-                "./test/missing.c",
-                benchmark_dir=benchmark
-            )
+            resolve_harness_path("./test/missing.c", benchmark_dir=benchmark)
 
         # Verify error message
         error_msg = str(exc_info.value)
@@ -294,6 +279,7 @@ class TestRelativePathHandling:
 # ============================================================================
 # Test Harness Source Path Resolution
 # ============================================================================
+
 
 class TestHarnessSourcePathResolution:
     """Test harness source path resolution for CRS arguments."""
@@ -309,9 +295,7 @@ class TestHarnessSourcePathResolution:
 
         # Test
         harness_path = get_harness_source_path(
-            harness,
-            benchmark_dir=benchmark,
-            repos_dir=repos_dir
+            harness, benchmark_dir=benchmark, repos_dir=repos_dir
         )
 
         # Verify
@@ -328,10 +312,7 @@ class TestHarnessSourcePathResolution:
         harness = HarnessFile(name="customfuzz", path="$PROJECT/fuzz.cpp")
 
         # Test
-        harness_path = get_harness_source_path(
-            harness,
-            benchmark_dir=benchmark
-        )
+        harness_path = get_harness_source_path(harness, benchmark_dir=benchmark)
 
         # Verify
         assert harness_path == harness_file
@@ -345,9 +326,7 @@ class TestHarnessSourcePathResolution:
 
         # Test - should return None instead of raising
         harness_path = get_harness_source_path(
-            harness,
-            benchmark_dir=benchmark,
-            repos_dir=tmp_path / "nonexistent"
+            harness, benchmark_dir=benchmark, repos_dir=tmp_path / "nonexistent"
         )
 
         # Verify
@@ -372,10 +351,7 @@ class TestHarnessSourcePathResolution:
             harness = HarnessFile(name="test", path=f"$PROJECT/{filename}")
 
             # Test
-            harness_path = get_harness_source_path(
-                harness,
-                benchmark_dir=benchmark
-            )
+            harness_path = get_harness_source_path(harness, benchmark_dir=benchmark)
 
             # Verify
             assert harness_path == harness_file
@@ -387,6 +363,7 @@ class TestHarnessSourcePathResolution:
 # Test Error Handling
 # ============================================================================
 
+
 class TestErrorHandling:
     """Test error handling and validation."""
 
@@ -397,7 +374,7 @@ class TestErrorHandling:
         with pytest.raises(ValueError) as exc_info:
             resolve_harness_path(
                 "test/harness.c",  # Invalid: missing ./ prefix
-                benchmark_dir=benchmark
+                benchmark_dir=benchmark,
             )
 
         error_msg = str(exc_info.value)
@@ -409,10 +386,7 @@ class TestErrorHandling:
         benchmark = create_test_benchmark(tmp_path)
 
         with pytest.raises(ValueError):
-            resolve_harness_path(
-                "",
-                benchmark_dir=benchmark
-            )
+            resolve_harness_path("", benchmark_dir=benchmark)
 
     def test_repository_error_with_context(self, tmp_path):
         """Test that RepositoryError provides helpful context."""
@@ -423,25 +397,26 @@ class TestErrorHandling:
 
         with pytest.raises(RepositoryError) as exc_info:
             resolve_harness_path(
-                "$REPO/test.c",
-                benchmark_dir=benchmark,
-                repos_dir=tmp_path / "repos"
+                "$REPO/test.c", benchmark_dir=benchmark, repos_dir=tmp_path / "repos"
             )
 
         error_msg = str(exc_info.value)
         # Should get error related to repository failure
-        assert ("Failed to obtain repository" in error_msg or
-                "repo_manager returned None" in error_msg)
+        assert (
+            "Failed to obtain repository" in error_msg
+            or "repo_manager returned None" in error_msg
+        )
 
 
 # ============================================================================
 # Test Integration with repo_manager
 # ============================================================================
 
+
 class TestRepoManagerIntegration:
     """Test integration with repo_manager module."""
 
-    @patch('crsbench.evaluation.path_resolver.ensure_project_repository')
+    @patch("crsbench.evaluation.path_resolver.ensure_project_repository")
     def test_calls_ensure_project_repository(self, mock_ensure_repo, tmp_path):
         """Test that _resolve_repo_path calls ensure_project_repository."""
         # Setup
@@ -451,9 +426,7 @@ class TestRepoManagerIntegration:
 
         # Test
         result = _resolve_repo_path(
-            benchmark_dir=benchmark,
-            repos_dir=tmp_path / "repos",
-            project_dir=None
+            benchmark_dir=benchmark, repos_dir=tmp_path / "repos", project_dir=None
         )
 
         # Verify
@@ -468,11 +441,11 @@ class TestRepoManagerIntegration:
         explicit_repo.mkdir(parents=True)
 
         # Test
-        with patch('crsbench.evaluation.path_resolver.ensure_project_repository') as mock:
+        with patch(
+            "crsbench.evaluation.path_resolver.ensure_project_repository"
+        ) as mock:
             result = _resolve_repo_path(
-                benchmark_dir=benchmark,
-                repos_dir=None,
-                project_dir=explicit_repo
+                benchmark_dir=benchmark, repos_dir=None, project_dir=explicit_repo
             )
 
             # Verify repo_manager was NOT called
@@ -486,9 +459,7 @@ class TestRepoManagerIntegration:
 
         with pytest.raises(FileNotFoundError) as exc_info:
             _resolve_repo_path(
-                benchmark_dir=benchmark,
-                repos_dir=None,
-                project_dir=nonexistent
+                benchmark_dir=benchmark, repos_dir=None, project_dir=nonexistent
             )
 
         assert "Explicit project directory not found" in str(exc_info.value)
@@ -497,6 +468,7 @@ class TestRepoManagerIntegration:
 # ============================================================================
 # Integration Tests
 # ============================================================================
+
 
 class TestIntegration:
     """Integration tests with realistic scenarios."""
@@ -509,16 +481,11 @@ class TestIntegration:
         repos_dir = tmp_path / "repos"
 
         # Create harness object
-        harness = HarnessFile(
-            name="xml_parser",
-            path="$REPO/test/harness.c"
-        )
+        harness = HarnessFile(name="xml_parser", path="$REPO/test/harness.c")
 
         # Test resolution
         harness_path = get_harness_source_path(
-            harness,
-            benchmark_dir=benchmark,
-            repos_dir=repos_dir
+            harness, benchmark_dir=benchmark, repos_dir=repos_dir
         )
 
         # Verify
@@ -552,9 +519,7 @@ class TestIntegration:
         resolved_paths = []
         for harness in harnesses:
             harness_path = get_harness_source_path(
-                harness,
-                benchmark_dir=benchmark,
-                repos_dir=repos_dir
+                harness, benchmark_dir=benchmark, repos_dir=repos_dir
             )
             resolved_paths.append(harness_path)
 
@@ -579,7 +544,7 @@ class TestIntegration:
         resolved = resolve_harness_path(
             "$REPO/src/test/fuzzing/harnesses/deep_harness.c",
             benchmark_dir=benchmark,
-            repos_dir=repos_dir
+            repos_dir=repos_dir,
         )
 
         # Verify

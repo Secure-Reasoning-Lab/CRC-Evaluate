@@ -1,24 +1,29 @@
 """Tests for the validation module."""
 
-import pytest
 from pathlib import Path
-from pydantic import ValidationError as PydanticValidationError
 
+import pytest
 from crsbench.validation import (
     validate_benchmark,
     validate_benchmark_from_string,
+    validate_benchmark_suite_from_string,
     validate_experiment_config,
     validate_experiment_config_from_string,
-    validate_benchmark_suite,
-    validate_benchmark_suite_from_string
 )
-from crsbench.validation.schemas import POV, Vulnerability, HarnessFile, BenchmarkConfig, ExperimentConfig, BenchmarkSuiteConfig
 from crsbench.validation.errors import ValidationCodes
-
+from crsbench.validation.schemas import (
+    POV,
+    BenchmarkSuiteConfig,
+    ExperimentConfig,
+    HarnessFile,
+    Vulnerability,
+)
+from pydantic import ValidationError as PydanticValidationError
 
 # ============================================================================
 # Schema Validation Tests
 # ============================================================================
+
 
 class TestPOVModel:
     """Test POV model validation."""
@@ -28,7 +33,7 @@ class TestPOVModel:
         pov = POV(
             id="pov_0",
             sanitizer="address",
-            error_token="ERROR: AddressSanitizer: heap-buffer-overflow"
+            error_token="ERROR: AddressSanitizer: heap-buffer-overflow",
         )
         assert pov.id == "pov_0"
         assert pov.sanitizer == "address"
@@ -68,8 +73,8 @@ class TestVulnerabilityModel:
             difficulty_level=3,
             povs=[
                 POV(id="pov_0", sanitizer="address"),
-                POV(id="pov_1", sanitizer="undefined")
-            ]
+                POV(id="pov_1", sanitizer="undefined"),
+            ],
         )
         assert vuln.vuln_keyword == "buffer_overflow"
         assert vuln.difficulty_level == 3
@@ -78,8 +83,7 @@ class TestVulnerabilityModel:
     def test_vulnerability_without_difficulty(self):
         """Test vulnerability without difficulty level (optional)."""
         vuln = Vulnerability(
-            vuln_keyword="use_after_free",
-            povs=[POV(id="pov_0", sanitizer="memory")]
+            vuln_keyword="use_after_free", povs=[POV(id="pov_0", sanitizer="memory")]
         )
         assert vuln.difficulty_level is None
 
@@ -90,8 +94,8 @@ class TestVulnerabilityModel:
                 vuln_keyword="buffer_overflow",
                 povs=[
                     POV(id="pov_0", sanitizer="address"),
-                    POV(id="pov_0", sanitizer="undefined")  # Duplicate
-                ]
+                    POV(id="pov_0", sanitizer="undefined"),  # Duplicate
+                ],
             )
         assert "duplicate" in str(exc_info.value).lower()
 
@@ -106,48 +110,34 @@ class TestHarnessFileModel:
 
     def test_harness_absolute_path(self):
         """Test harness with absolute path."""
-        harness = HarnessFile(
-            name="test_harness",
-            path="/src/project/test/harness.c"
-        )
+        harness = HarnessFile(name="test_harness", path="/src/project/test/harness.c")
         assert harness.path == "/src/project/test/harness.c"
 
     def test_harness_relative_path(self):
         """Test harness with relative path."""
-        harness = HarnessFile(
-            name="test_harness",
-            path="./test/harness.c"
-        )
+        harness = HarnessFile(name="test_harness", path="./test/harness.c")
         assert harness.path == "./test/harness.c"
 
     def test_harness_repo_variable_valid(self):
         """Test harness with $REPO variable (should pass)."""
-        harness = HarnessFile(
-            name="test_harness",
-            path="$REPO/test/harness.c"
-        )
+        harness = HarnessFile(name="test_harness", path="$REPO/test/harness.c")
         assert harness.path == "$REPO/test/harness.c"
 
     def test_harness_project_variable_valid(self):
         """Test harness with $PROJECT variable (should pass)."""
-        harness = HarnessFile(
-            name="test_harness",
-            path="$PROJECT/test/harness.c"
-        )
+        harness = HarnessFile(name="test_harness", path="$PROJECT/test/harness.c")
         assert harness.path == "$PROJECT/test/harness.c"
 
     def test_harness_without_vulns(self):
         """Test harness without vulnerabilities (distractor harness)."""
-        harness = HarnessFile(
-            name="distractor",
-            path="/src/project/test/distractor.c"
-        )
+        harness = HarnessFile(name="distractor", path="/src/project/test/distractor.c")
         assert harness.vulns == []
 
 
 # ============================================================================
 # Format Validator Tests
 # ============================================================================
+
 
 class TestValidateCorrectFormat:
     """Test validation with correct meta.yaml configurations."""
@@ -275,7 +265,12 @@ harness_files:
 
         assert result.is_valid is False
         # Error is caught at schema level (BenchmarkConfig.__init__)
-        assert any("evaluation mode" in e.message.lower() or "delta_mode" in e.message.lower() or "full_mode" in e.message.lower() for e in result.errors)
+        assert any(
+            "evaluation mode" in e.message.lower()
+            or "delta_mode" in e.message.lower()
+            or "full_mode" in e.message.lower()
+            for e in result.errors
+        )
 
     def test_validate_invalid_commit_hash(self):
         """Test validation with invalid commit hash."""
@@ -330,6 +325,7 @@ harness_files:
 # Error Handling Tests
 # ============================================================================
 
+
 class TestErrorHandling:
     """Test error handling and graceful degradation."""
 
@@ -372,6 +368,7 @@ harness_files:
 # ============================================================================
 # Path Validation Tests
 # ============================================================================
+
 
 class TestPathValidation:
     """Test path validation rules."""
@@ -428,6 +425,7 @@ harness_files:
 # ============================================================================
 # Metadata Generation Tests
 # ============================================================================
+
 
 class TestMetadataGeneration:
     """Test metadata generation."""
@@ -494,6 +492,7 @@ harness_files:
 # Integration Tests
 # ============================================================================
 
+
 class TestIntegration:
     """Integration tests with actual files."""
 
@@ -549,6 +548,7 @@ harness_files:
 # Experiment Config Tests
 # ============================================================================
 
+
 class TestExperimentConfigSchema:
     """Test ExperimentConfig schema validation."""
 
@@ -562,7 +562,7 @@ class TestExperimentConfigSchema:
             experiment_filestore="/tmp/experiment-data",
             report_filestore="/tmp/report-data",
             crses=["test-crs"],
-            benchmarks=["test-bench"]
+            benchmarks=["test-bench"],
         )
         assert config.trials == 3
         assert config.max_total_time == 86400
@@ -579,7 +579,7 @@ class TestExperimentConfigSchema:
                 experiment_filestore="/tmp/exp",
                 report_filestore="/tmp/rep",
                 crses=["test-crs"],
-                benchmarks=["test-bench"]
+                benchmarks=["test-bench"],
             )
         assert "trials" in str(exc_info.value).lower()
 
@@ -594,7 +594,7 @@ class TestExperimentConfigSchema:
                 experiment_filestore="/tmp/exp",
                 report_filestore="/tmp/rep",
                 crses=["test-crs"],
-                benchmarks=["test-bench"]
+                benchmarks=["test-bench"],
             )
         assert "max_total_time" in str(exc_info.value).lower()
 
@@ -609,7 +609,7 @@ class TestExperimentConfigSchema:
                 experiment_filestore="/tmp/exp",
                 report_filestore="/tmp/rep",
                 crses=["test-crs"],
-                benchmarks=["test-bench"]
+                benchmarks=["test-bench"],
             )
         assert "difficulty_level" in str(exc_info.value).lower()
 
@@ -624,7 +624,7 @@ class TestExperimentConfigSchema:
                 experiment_filestore="",  # Empty
                 report_filestore="/tmp/rep",
                 crses=["test-crs"],
-                benchmarks=["test-bench"]
+                benchmarks=["test-bench"],
             )
 
     def test_experiment_config_with_redis_host(self):
@@ -638,7 +638,7 @@ class TestExperimentConfigSchema:
             report_filestore="/tmp/rep",
             crses=["test-crs"],
             benchmarks=["test-bench"],
-            redis_host="localhost"
+            redis_host="localhost",
         )
         assert config.redis_host == "localhost"
 
@@ -652,7 +652,7 @@ class TestExperimentConfigSchema:
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
             crses=["test-crs"],
-            benchmarks=["test-bench"]
+            benchmarks=["test-bench"],
         )
         assert config.redis_host is None
 
@@ -667,14 +667,13 @@ class TestExperimentConfigSchema:
             report_filestore="/tmp/rep",
             crses=["test-crs"],
             benchmarks=["test-bench"],
-            redis_host="none"
+            redis_host="none",
         )
         assert config.redis_host is None
 
     def test_experiment_config_with_benchmarks_root(self):
         """Test experiment config with valid benchmarks_root."""
         import tempfile
-        import os
 
         # Create a temporary directory for testing
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -687,7 +686,7 @@ class TestExperimentConfigSchema:
                 report_filestore="/tmp/rep",
                 crses=["test-crs"],
                 benchmarks=["test-bench"],
-                benchmarks_root=tmpdir
+                benchmarks_root=tmpdir,
             )
             # Should return absolute path
             assert config.benchmarks_root == str(Path(tmpdir).absolute())
@@ -704,7 +703,7 @@ class TestExperimentConfigSchema:
                 report_filestore="/tmp/rep",
                 crses=["test-crs"],
                 benchmarks=["test-bench"],
-                benchmarks_root="/nonexistent/path"
+                benchmarks_root="/nonexistent/path",
             )
         assert "does not exist" in str(exc_info.value).lower()
 
@@ -727,7 +726,7 @@ class TestExperimentConfigSchema:
                     report_filestore="/tmp/rep",
                     crses=["test-crs"],
                     benchmarks=["test-bench"],
-                    benchmarks_root=tmpfile_path
+                    benchmarks_root=tmpfile_path,
                 )
             assert "must be a directory" in str(exc_info.value).lower()
         finally:
@@ -744,16 +743,16 @@ class TestExperimentConfigSchema:
             report_filestore="/tmp/rep",
             crses=["test-crs"],
             benchmarks=["test-bench"],
-            redis_host="redis-server"
+            redis_host="redis-server",
         )
         config_dict = config.to_dict()
 
         assert isinstance(config_dict, dict)
-        assert config_dict['trials'] == 3
-        assert config_dict['max_total_time'] == 86400
-        assert config_dict['difficulty_level'] == 2
-        assert config_dict['redis_host'] == "redis-server"
-        assert config_dict['benchmarks_root'] is None
+        assert config_dict["trials"] == 3
+        assert config_dict["max_total_time"] == 86400
+        assert config_dict["difficulty_level"] == 2
+        assert config_dict["redis_host"] == "redis-server"
+        assert config_dict["benchmarks_root"] is None
 
 
 class TestExperimentConfigValidation:
@@ -895,7 +894,9 @@ benchmarks_root: {tmpdir}
             result = validate_experiment_config_from_string(yaml_content)
 
             assert result.is_valid is True
-            assert result.metadata.get("benchmarks_root") == str(Path(tmpdir).absolute())
+            assert result.metadata.get("benchmarks_root") == str(
+                Path(tmpdir).absolute()
+            )
 
     def test_validate_experiment_redis_none_for_local_mode(self):
         """Test validation with redis_host set to 'none' for local mode."""
@@ -923,6 +924,7 @@ redis_host: none
 # Benchmark Suite Config Tests
 # ============================================================================
 
+
 class TestBenchmarkSuiteSchema:
     """Test BenchmarkSuiteConfig schema validation."""
 
@@ -932,7 +934,7 @@ class TestBenchmarkSuiteSchema:
             Name="crsbench-c",
             Description="A benchmark suite for evaluating C/C++ CRS",
             benchmark_list=["bench1", "bench2", "bench3"],
-            release_date="09.23.2025"
+            release_date="09.23.2025",
         )
         assert config.Name == "crsbench-c"
         assert config.Description == "A benchmark suite for evaluating C/C++ CRS"
@@ -941,54 +943,67 @@ class TestBenchmarkSuiteSchema:
 
     def test_benchmark_suite_with_alias(self):
         """Test benchmark suite with 'Release date' field alias."""
-        config = BenchmarkSuiteConfig(**{
-            "Name": "test-suite",
-            "Description": "Test suite",
-            "benchmark_list": ["bench1"],
-            "Release date": "01.01.2025"  # Using aliased field name
-        })
+        config = BenchmarkSuiteConfig(
+            **{
+                "Name": "test-suite",
+                "Description": "Test suite",
+                "benchmark_list": ["bench1"],
+                "Release date": "01.01.2025",  # Using aliased field name
+            }
+        )
         assert config.release_date == "01.01.2025"
 
     def test_benchmark_suite_empty_name(self):
         """Test benchmark suite with empty name."""
         with pytest.raises(PydanticValidationError):
-            BenchmarkSuiteConfig(**{
-                "Name": "",
-                "Description": "Test",
-                "benchmark_list": ["bench1"],
-                "Release date": "01.01.2025"
-            })
+            BenchmarkSuiteConfig(
+                **{
+                    "Name": "",
+                    "Description": "Test",
+                    "benchmark_list": ["bench1"],
+                    "Release date": "01.01.2025",
+                }
+            )
 
     def test_benchmark_suite_empty_benchmark_list(self):
         """Test benchmark suite with empty benchmark list."""
         with pytest.raises(PydanticValidationError):
-            BenchmarkSuiteConfig(**{
-                "Name": "test-suite",
-                "Description": "Test",
-                "benchmark_list": [],  # Empty
-                "Release date": "01.01.2025"
-            })
+            BenchmarkSuiteConfig(
+                **{
+                    "Name": "test-suite",
+                    "Description": "Test",
+                    "benchmark_list": [],  # Empty
+                    "Release date": "01.01.2025",
+                }
+            )
 
     def test_benchmark_suite_invalid_date_format(self):
         """Test benchmark suite with invalid date format."""
         with pytest.raises(PydanticValidationError) as exc_info:
-            BenchmarkSuiteConfig(**{
-                "Name": "test-suite",
-                "Description": "Test",
-                "benchmark_list": ["bench1"],
-                "Release date": "2025-09-23"  # Wrong format
-            })
-        assert "release date" in str(exc_info.value).lower() or "format" in str(exc_info.value).lower()
+            BenchmarkSuiteConfig(
+                **{
+                    "Name": "test-suite",
+                    "Description": "Test",
+                    "benchmark_list": ["bench1"],
+                    "Release date": "2025-09-23",  # Wrong format
+                }
+            )
+        assert (
+            "release date" in str(exc_info.value).lower()
+            or "format" in str(exc_info.value).lower()
+        )
 
     def test_benchmark_suite_duplicate_benchmarks(self):
         """Test benchmark suite with duplicate benchmark IDs."""
         with pytest.raises(PydanticValidationError) as exc_info:
-            BenchmarkSuiteConfig(**{
-                "Name": "test-suite",
-                "Description": "Test",
-                "benchmark_list": ["bench1", "bench1"],  # Duplicate
-                "Release date": "01.01.2025"
-            })
+            BenchmarkSuiteConfig(
+                **{
+                    "Name": "test-suite",
+                    "Description": "Test",
+                    "benchmark_list": ["bench1", "bench1"],  # Duplicate
+                    "Release date": "01.01.2025",
+                }
+            )
         assert "duplicate" in str(exc_info.value).lower()
 
 
@@ -1039,7 +1054,10 @@ benchmark_list:
         result = validate_benchmark_suite_from_string(yaml_content)
 
         assert result.is_valid is False
-        assert any("release date" in e.message.lower() or "format" in e.message.lower() for e in result.errors)
+        assert any(
+            "release date" in e.message.lower() or "format" in e.message.lower()
+            for e in result.errors
+        )
 
     def test_validate_suite_empty_benchmark_list(self):
         """Test validation with empty benchmark list."""
@@ -1089,6 +1107,7 @@ benchmark_list:
 # ============================================================================
 # Integration Tests for All Config Types
 # ============================================================================
+
 
 class TestIntegrationAllConfigs:
     """Integration tests with all configuration types."""

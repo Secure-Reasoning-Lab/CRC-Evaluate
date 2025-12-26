@@ -4,7 +4,7 @@ This module provides utilities for initializing and managing Redis-backed RQ que
 for distributed CRS trial execution.
 """
 
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from crsbench.utils.logger import get_logger
 
@@ -12,6 +12,7 @@ try:
     import redis
     import rq
     import rq.job
+
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
@@ -53,7 +54,7 @@ def check_redis_available(redis_host: str, timeout: int = 2) -> bool:
         return False
 
 
-def initialize_queue(redis_host: str, experiment_name: str) -> Optional['rq.Queue']:
+def initialize_queue(redis_host: str, experiment_name: str) -> Optional["rq.Queue"]:
     """
     Initialize Redis-backed RQ queue for an experiment.
 
@@ -79,7 +80,7 @@ def initialize_queue(redis_host: str, experiment_name: str) -> Optional['rq.Queu
             "Install with: pip install redis rq"
         )
 
-    queue_name = f'crsbench_{experiment_name}'
+    queue_name = f"crsbench_{experiment_name}"
     logger.info(f"Initializing queue: {queue_name}")
 
     try:
@@ -99,7 +100,7 @@ def initialize_queue(redis_host: str, experiment_name: str) -> Optional['rq.Queu
         raise
 
 
-def get_all_jobs(queue: 'rq.Queue') -> List['rq.job.Job']:
+def get_all_jobs(queue: "rq.Queue") -> List["rq.job.Job"]:
     """
     Get all jobs currently in the queue.
 
@@ -127,7 +128,7 @@ def get_all_jobs(queue: 'rq.Queue') -> List['rq.job.Job']:
         return []
 
 
-def get_queue_stats(queue: 'rq.Queue') -> dict:
+def get_queue_stats(queue: "rq.Queue") -> dict:
     """
     Get statistics about the current queue state.
 
@@ -147,26 +148,28 @@ def get_queue_stats(queue: 'rq.Queue') -> dict:
 
     try:
         return {
-            'queued': queue.count,
-            'started': queue.started_job_registry.count,
-            'deferred': queue.deferred_job_registry.count,
-            'finished': queue.finished_job_registry.count,
-            'failed': queue.failed_job_registry.count,
-            'scheduled': queue.scheduled_job_registry.count if hasattr(queue, 'scheduled_job_registry') else 0,
+            "queued": queue.count,
+            "started": queue.started_job_registry.count,
+            "deferred": queue.deferred_job_registry.count,
+            "finished": queue.finished_job_registry.count,
+            "failed": queue.failed_job_registry.count,
+            "scheduled": queue.scheduled_job_registry.count
+            if hasattr(queue, "scheduled_job_registry")
+            else 0,
         }
     except Exception as e:
         logger.error(f"Failed to get queue stats: {e}")
         return {
-            'queued': 0,
-            'started': 0,
-            'deferred': 0,
-            'finished': 0,
-            'failed': 0,
-            'scheduled': 0,
+            "queued": 0,
+            "started": 0,
+            "deferred": 0,
+            "finished": 0,
+            "failed": 0,
+            "scheduled": 0,
         }
 
 
-def clear_queue(queue: 'rq.Queue') -> int:
+def clear_queue(queue: "rq.Queue") -> int:
     """
     Clear all jobs from the queue.
 

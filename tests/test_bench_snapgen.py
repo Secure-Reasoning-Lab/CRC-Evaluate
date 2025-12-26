@@ -1,31 +1,26 @@
 """Tests for bench_snapgen module."""
 
-import json
 import tarfile
-import tempfile
-import pytest
 from pathlib import Path
-from unittest.mock import MagicMock
 
-from crsbench.bench_snapgen.generator import (
-    BenchmarkSnapshotGenerator,
-    BenchmarkData,
-    POVData,
-    load_benchmark_ground_truth,
-)
-from crsbench.bench_snapgen.timeline import (
-    DiscoveryEvent,
-    DiscoveryTimeline,
-    POVDiscoveryModel,
-    PatchGenerationModel,
-    create_discovery_timeline,
-)
+import pytest
+from crsbench.bench_snapgen.builder import SnapshotBuilder
 from crsbench.bench_snapgen.fault_injection import (
     FaultInjector,
     inject_faults_into_timeline,
 )
-from crsbench.bench_snapgen.builder import SnapshotBuilder
-from crsbench.validation.schemas import BenchmarkConfig, HarnessFile, Vulnerability, POV
+from crsbench.bench_snapgen.generator import (
+    BenchmarkData,
+    BenchmarkSnapshotGenerator,
+    POVData,
+    load_benchmark_ground_truth,
+)
+from crsbench.bench_snapgen.timeline import (
+    DiscoveryTimeline,
+    PatchGenerationModel,
+    POVDiscoveryModel,
+)
+from crsbench.validation.schemas import BenchmarkConfig
 
 
 class TestBenchmarkReading:
@@ -203,7 +198,9 @@ class TestPOVDiscoveryModel:
 
         # Test each difficulty level
         for difficulty in range(1, 6):
-            times = model.get_discovery_times(difficulty, pov_count=1, max_time=max_time)
+            times = model.get_discovery_times(
+                difficulty, pov_count=1, max_time=max_time
+            )
 
             assert len(times) == 1
 
@@ -212,9 +209,9 @@ class TestPOVDiscoveryModel:
             expected_min = max_time * min_pct
             expected_max = max_time * max_pct
 
-            assert (
-                expected_min <= times[0] <= expected_max
-            ), f"Difficulty {difficulty}: time {times[0]} not in range [{expected_min}, {expected_max}]"
+            assert expected_min <= times[0] <= expected_max, (
+                f"Difficulty {difficulty}: time {times[0]} not in range [{expected_min}, {expected_max}]"
+            )
 
     def test_pov_clustering(self):
         """Test multiple POVs clustered together."""
@@ -222,7 +219,9 @@ class TestPOVDiscoveryModel:
         max_time = 7200.0
         pov_count = 5
 
-        times = model.get_discovery_times(difficulty=2, pov_count=pov_count, max_time=max_time)
+        times = model.get_discovery_times(
+            difficulty=2, pov_count=pov_count, max_time=max_time
+        )
 
         assert len(times) == pov_count
 
@@ -236,7 +235,9 @@ class TestPOVDiscoveryModel:
         max_time = 7200.0
 
         for difficulty in range(1, 6):
-            times = model.get_discovery_times(difficulty, pov_count=10, max_time=max_time)
+            times = model.get_discovery_times(
+                difficulty, pov_count=10, max_time=max_time
+            )
 
             for time in times:
                 assert 0.0 <= time <= max_time
@@ -279,7 +280,9 @@ class TestPatchGenerationModel:
         first_pov_time = 7000.0
         max_time = 7200.0
 
-        patch_time = model.get_patch_time(first_pov_time, difficulty=1, max_time=max_time)
+        patch_time = model.get_patch_time(
+            first_pov_time, difficulty=1, max_time=max_time
+        )
 
         # Should be capped at max_time
         assert patch_time <= max_time
@@ -479,6 +482,7 @@ class TestGeneratorIntegration:
 
         # Load benchmark data to get the first available harness
         from crsbench.bench_snapgen.generator import load_benchmark_ground_truth
+
         benchmark_data = load_benchmark_ground_truth(benchmark_path)
 
         # Find first harness with POVs
@@ -744,7 +748,9 @@ harness_files:
         (blobs_dir / "pov_0.blob").write_bytes(b"test")
 
         # Test that invalid harness raises error
-        with pytest.raises(ValueError, match="Harness 'nonexistent' not found or has no POVs"):
+        with pytest.raises(
+            ValueError, match="Harness 'nonexistent' not found or has no POVs"
+        ):
             BenchmarkSnapshotGenerator(
                 benchmark_path=benchmark_dir,
                 output_dir=tmp_path / "output",
@@ -796,12 +802,11 @@ harness_files:
             harness="test_harness",
         )
 
-        generator.generate_trial_snapshots(
-            mode="bug-finding", difficulty_level=1
-        )
+        generator.generate_trial_snapshots(mode="bug-finding", difficulty_level=1)
 
         # Extract final snapshot and verify POV exists
         import tarfile
+
         snapshots = sorted(tmp_path.glob("output/snapshot-*.tar.gz"))
         final_snapshot = snapshots[-1]
 

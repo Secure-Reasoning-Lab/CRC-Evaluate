@@ -23,21 +23,20 @@ Usage:
 
 from crsbench.distributed.jobs import (
     build_crs_environment,
-    run_crs_trial,
     evaluate_crs_trial,
+    run_crs_trial,
 )
-
 from crsbench.distributed.queue import (
-    initialize_queue,
-    get_all_jobs,
     check_redis_available,
+    get_all_jobs,
+    initialize_queue,
 )
 
 __all__ = [
-    'build_crs_environment',
-    'run_crs_trial',
-    'evaluate_crs_trial',
-    'initialize_queue',
-    'get_all_jobs',
-    'check_redis_available',
+    "build_crs_environment",
+    "run_crs_trial",
+    "evaluate_crs_trial",
+    "initialize_queue",
+    "get_all_jobs",
+    "check_redis_available",
 ]

@@ -7,11 +7,12 @@ Workers can be run locally or deployed in containers for horizontal scaling.
 """
 
 import os
-import time
 import sys
+import time
+
 from dotenv import load_dotenv
 
-from crsbench.utils.logger import get_logger, configure_logger
+from crsbench.utils.logger import configure_logger, get_logger
 
 # Load environment variables from .env file if present
 load_dotenv()
@@ -19,6 +20,7 @@ load_dotenv()
 try:
     import redis
     import rq
+
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
@@ -50,7 +52,7 @@ def main():
         3: Worker error
     """
     # Configure logging
-    log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
+    log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
     configure_logger(level=log_level, sink=sys.stdout)
 
     # Check if Redis/RQ available
@@ -60,17 +62,17 @@ def main():
         sys.exit(1)
 
     # Get configuration from environment
-    redis_host = os.environ.get('REDIS_HOST', 'localhost')
-    experiment_name = os.environ.get('EXPERIMENT_NAME', 'default')
-    worker_timeout = int(os.environ.get('WORKER_TIMEOUT', '3600'))
+    redis_host = os.environ.get("REDIS_HOST", "localhost")
+    experiment_name = os.environ.get("EXPERIMENT_NAME", "default")
+    worker_timeout = int(os.environ.get("WORKER_TIMEOUT", "3600"))
 
-    logger.info("="*60)
+    logger.info("=" * 60)
     logger.info("CRSBench Distributed Worker")
-    logger.info("="*60)
+    logger.info("=" * 60)
     logger.info(f"Redis host: {redis_host}")
     logger.info(f"Experiment: {experiment_name}")
     logger.info(f"Worker timeout: {worker_timeout}s")
-    logger.info("="*60)
+    logger.info("=" * 60)
 
     try:
         # Connect to Redis
@@ -83,7 +85,7 @@ def main():
 
         # Set up RQ connection context
         with rq.Connection(redis_connection):  # type: ignore[attr-defined]
-            queue_name = f'crsbench_{experiment_name}'
+            queue_name = f"crsbench_{experiment_name}"
             queue = rq.Queue(queue_name)  # type: ignore[attr-defined]
             worker = rq.Worker([queue])  # type: ignore[attr-defined]
 
@@ -107,9 +109,9 @@ def main():
                 # Brief sleep to allow queue state to update
                 time.sleep(2)
 
-            logger.info("="*60)
+            logger.info("=" * 60)
             logger.info("Queue empty, worker shutting down")
-            logger.info("="*60)
+            logger.info("=" * 60)
 
     except redis.ConnectionError as e:
         logger.error(f"Cannot connect to Redis at {redis_host}: {e}")
@@ -129,11 +131,7 @@ def main():
         sys.exit(3)
 
 
-def run_worker_continuous(
-    redis_host: str,
-    experiment_name: str,
-    timeout: int = 3600
-):
+def run_worker_continuous(redis_host: str, experiment_name: str, _timeout: int = 3600):
     """
     Run worker in continuous mode (polling indefinitely).
 
@@ -159,7 +157,7 @@ def run_worker_continuous(
         redis_connection.ping()
 
         with rq.Connection(redis_connection):  # type: ignore[attr-defined]
-            queue_name = f'crsbench_{experiment_name}'
+            queue_name = f"crsbench_{experiment_name}"
             queue = rq.Queue(queue_name)  # type: ignore[attr-defined]
             worker = rq.Worker([queue])  # type: ignore[attr-defined]
 
@@ -177,5 +175,5 @@ def run_worker_continuous(
         raise
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

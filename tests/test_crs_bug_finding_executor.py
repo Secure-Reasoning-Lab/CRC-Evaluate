@@ -4,11 +4,13 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
-from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor, ExecutorError
-from crsbench.evaluation.crs_executor import CRSResult
-from crsbench.validation.schemas import HarnessFile, POV, Vulnerability
+from crsbench.evaluation.crs_bug_finding_executor import (
+    CRSBugFindingExecutor,
+    ExecutorError,
+)
+from crsbench.validation.schemas import HarnessFile
 
 
 class TestCRSBugFindingExecutor(unittest.TestCase):
@@ -35,7 +37,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             oss_fuzz_path=self.oss_fuzz_path,
             registry_dir=self.registry_dir,
             benchmarks_root=self.benchmarks_root,
-            crs_configs_dir=self.crs_configs_dir
+            crs_configs_dir=self.crs_configs_dir,
         )
 
     def test_init(self):
@@ -53,7 +55,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             "hints_enabled": True,
             "hints_corpus_level": "1h",
             "build_timeout": 600,
-            "run_timeout": 1200
+            "run_timeout": 1200,
         }
         self.executor.configure_crs(config)
 
@@ -106,7 +108,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             oss_fuzz_path=self.oss_fuzz_path,
             registry_dir=self.registry_dir,
             benchmarks_root=self.benchmarks_root,
-            crs_configs_dir=self.crs_configs_dir
+            crs_configs_dir=self.crs_configs_dir,
         )
 
         resolved = executor._resolve_crs_config_dir()
@@ -121,8 +123,8 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
 
         self.assertIn("CRS config directory not found", str(context.exception))
 
-    @patch('crsbench.utils.repo_manager.ensure_project_repository')
-    @patch('subprocess.run')
+    @patch("crsbench.utils.repo_manager.ensure_project_repository")
+    @patch("subprocess.run")
     def test_build_crs_if_needed(self, mock_run, mock_ensure_repo):
         """Test CRS build with repository manager integration."""
         # Mock repository manager response
@@ -144,7 +146,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             oss_fuzz_path=self.oss_fuzz_path,
             registry_dir=self.registry_dir,
             benchmarks_root=self.benchmarks_root,
-            crs_configs_dir=self.crs_configs_dir
+            crs_configs_dir=self.crs_configs_dir,
         )
 
         trial_build_dir = Path(self.temp_dir) / "trial-0" / "crs-build"
@@ -158,7 +160,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         mock_ensure_repo.assert_called_once_with(
             benchmark_dir=str(benchmark_path),
             project_dir=str(expected_source_dest),
-            verbose=False
+            verbose=False,
         )
 
         # Verify build command was called
@@ -178,8 +180,8 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         cache_key = f"{test_crs_dir}:test-project"
         self.assertIn(cache_key, executor.built_projects)
 
-    @patch('crsbench.utils.repo_manager.ensure_project_repository')
-    @patch('subprocess.run')
+    @patch("crsbench.utils.repo_manager.ensure_project_repository")
+    @patch("subprocess.run")
     def test_build_crs_already_built(self, mock_run, mock_ensure_repo):
         """Test that CRS build is skipped if already built."""
         # Pre-populate cache
@@ -191,7 +193,9 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         trial_build_dir = Path(self.temp_dir) / "trial-0" / "crs-build"
 
         # Attempt to build
-        self.executor._build_crs_if_needed(benchmark_path, "test-project", trial_build_dir)
+        self.executor._build_crs_if_needed(
+            benchmark_path, "test-project", trial_build_dir
+        )
 
         # Verify no calls were made
         mock_ensure_repo.assert_not_called()
@@ -209,7 +213,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             oss_fuzz_path=self.oss_fuzz_path,
             registry_dir=self.registry_dir,
             benchmarks_root=self.benchmarks_root,
-            crs_configs_dir=self.crs_configs_dir
+            crs_configs_dir=self.crs_configs_dir,
         )
 
         trial_build_dir = Path(self.temp_dir) / "trial-0" / "crs-build"
@@ -218,7 +222,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             project_name="test-project",
             harness_name="test_harness",
             trial_build_dir=trial_build_dir,
-            hints_path=None
+            hints_path=None,
         )
 
         # Verify command structure
@@ -243,7 +247,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             oss_fuzz_path=self.oss_fuzz_path,
             registry_dir=self.registry_dir,
             benchmarks_root=self.benchmarks_root,
-            crs_configs_dir=self.crs_configs_dir
+            crs_configs_dir=self.crs_configs_dir,
         )
 
         trial_build_dir = Path(self.temp_dir) / "trial-0" / "crs-build"
@@ -254,7 +258,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             project_name="test-project",
             harness_name="test_harness",
             trial_build_dir=trial_build_dir,
-            hints_path=hints_path
+            hints_path=hints_path,
         )
 
         # Verify hints parameter present
@@ -271,7 +275,9 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         self.executor.configure_crs({"hints_enabled": False})
 
         # Prepare hints
-        hints_path = self.executor._prepare_hints(benchmark_path, "test_harness", trial_dir)
+        hints_path = self.executor._prepare_hints(
+            benchmark_path, "test_harness", trial_dir
+        )
 
         # Verify None returned
         self.assertIsNone(hints_path)
@@ -296,7 +302,9 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         self.executor.configure_crs({"hints_enabled": True, "hints_corpus_level": "1h"})
 
         # Prepare hints
-        hints_path = self.executor._prepare_hints(benchmark_path, "test_harness", trial_dir)
+        hints_path = self.executor._prepare_hints(
+            benchmark_path, "test_harness", trial_dir
+        )
 
         # Verify directory created
         self.assertIsNotNone(hints_path)
@@ -319,9 +327,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         hints_path = Path("/path/to/hints")
 
         harness = HarnessFile(
-            name="test_harness.c",
-            path="/src/test_harness.c",
-            vulns=[]
+            name="test_harness.c", path="/src/test_harness.c", vulns=[]
         )
 
         self.executor._store_execution_metadata(
@@ -332,7 +338,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             execution_time=100.5,
             returncode=0,
             stdout="success",
-            stderr=""
+            stderr="",
         )
 
         # Verify file created
@@ -349,9 +355,9 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         self.assertTrue(metadata["execution"]["success"])
         self.assertTrue(metadata["hints"]["enabled"])
 
-    @patch('crsbench.utils.repo_manager.ensure_project_repository')
-    @patch('crsbench.evaluation.crs_bug_finding_executor.run_with_graceful_timeout')
-    @patch('subprocess.run')
+    @patch("crsbench.utils.repo_manager.ensure_project_repository")
+    @patch("crsbench.evaluation.crs_bug_finding_executor.run_with_graceful_timeout")
+    @patch("subprocess.run")
     def test_run_crs_success(self, mock_run, mock_graceful_timeout, mock_ensure_repo):
         """Test successful CRS execution."""
         # Setup
@@ -375,13 +381,11 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             oss_fuzz_path=self.oss_fuzz_path,
             registry_dir=self.registry_dir,
             benchmarks_root=self.benchmarks_root,
-            crs_configs_dir=self.crs_configs_dir
+            crs_configs_dir=self.crs_configs_dir,
         )
 
         harness = HarnessFile(
-            name="test_harness.c",
-            path="/src/test_harness.c",
-            vulns=[]
+            name="test_harness.c", path="/src/test_harness.c", vulns=[]
         )
 
         # Mock repository manager
@@ -406,9 +410,9 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         # Verify execution metadata created
         self.assertTrue((trial_dir / "execution.json").exists())
 
-    @patch('crsbench.utils.repo_manager.ensure_project_repository')
-    @patch('crsbench.evaluation.crs_bug_finding_executor.run_with_graceful_timeout')
-    @patch('subprocess.run')
+    @patch("crsbench.utils.repo_manager.ensure_project_repository")
+    @patch("crsbench.evaluation.crs_bug_finding_executor.run_with_graceful_timeout")
+    @patch("subprocess.run")
     def test_run_crs_timeout(self, mock_run, mock_graceful_timeout, mock_ensure_repo):
         """Test CRS execution timeout handling."""
         # Setup
@@ -432,13 +436,11 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             oss_fuzz_path=self.oss_fuzz_path,
             registry_dir=self.registry_dir,
             benchmarks_root=self.benchmarks_root,
-            crs_configs_dir=self.crs_configs_dir
+            crs_configs_dir=self.crs_configs_dir,
         )
 
         harness = HarnessFile(
-            name="test_harness.c",
-            path="/src/test_harness.c",
-            vulns=[]
+            name="test_harness.c", path="/src/test_harness.c", vulns=[]
         )
 
         # Mock repository manager

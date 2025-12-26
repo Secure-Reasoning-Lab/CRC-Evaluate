@@ -19,12 +19,16 @@ import subprocess
 import sys
 from collections import deque
 from dataclasses import dataclass
-from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Any, Union, Deque, cast
 from enum import IntEnum
+from pathlib import Path
+from typing import Any, Deque, Dict, List, Optional, Tuple, Union, cast
 
-from crsbench.utils.repo_manager import ensure_project_repository, get_repo_info_from_benchmark, run_git
 from crsbench.utils.logger import get_logger
+from crsbench.utils.repo_manager import (
+    ensure_project_repository,
+    get_repo_info_from_benchmark,
+    run_git,
+)
 
 logger = get_logger(__name__)
 
@@ -32,6 +36,7 @@ logger = get_logger(__name__)
 # =============================================================================
 # Exit Code Handling
 # =============================================================================
+
 
 class TestExitCode(IntEnum):
     """Exit codes from run_tests script (v2.4.0).
@@ -42,6 +47,7 @@ class TestExitCode(IntEnum):
     - 202 (fail): Test failed or unexpected result
     - 125, 126, 127, 137: Docker mount/execution failures
     """
+
     SUCCESS = 0
     FATAL_ERROR = 201  # die() - Docker failed, script not found, etc.
     TEST_FAILURE = 202  # fail() - Test failed or unexpected pass
@@ -54,7 +60,9 @@ class TestExitCode(IntEnum):
 class TestExecutionError(Exception):
     """Exception raised when test execution fails."""
 
-    def __init__(self, message: str, exit_code: int = -1, stdout: str = "", stderr: str = ""):
+    def __init__(
+        self, message: str, exit_code: int = -1, stdout: str = "", stderr: str = ""
+    ):
         super().__init__(message)
         self.message = message
         self.exit_code = exit_code
@@ -74,32 +82,31 @@ class TestExecutionError(Exception):
         """Support pickling for multiprocessing."""
         return (
             self.__class__,
-            (self.message, self.exit_code, self.stdout, self.stderr)
+            (self.message, self.exit_code, self.stdout, self.stderr),
         )
 
 
 class DockerExecutionError(TestExecutionError):
     """Exception raised when Docker fails to mount or run."""
-    pass
 
 
 class TestFailedError(TestExecutionError):
     """Exception raised when test fails (exit code 202)."""
-    pass
 
 
 class FatalTestError(TestExecutionError):
     """Exception raised for fatal test errors (exit code 201)."""
-    pass
 
 
 # =============================================================================
 # Result Data Classes
 # =============================================================================
 
+
 @dataclass
 class CommandResult:
     """Result of a command execution."""
+
     stdout: str
     stderr: str
     returncode: int
@@ -120,6 +127,7 @@ class CommandResult:
 @dataclass
 class TestResult:
     """Result of test.sh execution."""
+
     stdout: str
     stderr: str
     returncode: int
@@ -141,6 +149,7 @@ class TestResult:
 @dataclass
 class BuildResult:
     """Result of benchmark build."""
+
     success: bool
     logs: str
     returncode: int = 0
@@ -156,6 +165,7 @@ class BuildResult:
 @dataclass
 class PatchResult:
     """Result of patch verification."""
+
     valid: bool
     test_passed: bool
     patch_applied: bool
@@ -175,6 +185,7 @@ class PatchResult:
 # Docker Utilities
 # =============================================================================
 
+
 def docker_image_exists(image_tag: str) -> bool:
     """Check if a Docker image exists locally.
 
@@ -186,9 +197,7 @@ def docker_image_exists(image_tag: str) -> bool:
     """
     try:
         result = subprocess.run(
-            ["docker", "image", "inspect", image_tag],
-            capture_output=True,
-            text=True
+            ["docker", "image", "inspect", image_tag], capture_output=True, text=True
         )
         return result.returncode == 0
     except Exception as e:
@@ -199,6 +208,7 @@ def docker_image_exists(image_tag: str) -> bool:
 # =============================================================================
 # Configuration
 # =============================================================================
+
 
 def get_oss_fuzz_root() -> str:
     """Get OSS-Fuzz root directory.
@@ -217,10 +227,9 @@ def get_oss_fuzz_root() -> str:
     # 1. Check environment variable first
     env_path = os.getenv("OSS_FUZZ_ROOT")
     if env_path:
-        if os.path.isdir(env_path):
+        if Path(env_path).is_dir():
             return env_path
-        else:
-            logger.warning(f"OSS_FUZZ_ROOT={env_path} does not exist, trying other paths")
+        logger.warning(f"OSS_FUZZ_ROOT={env_path} does not exist, trying other paths")
 
     # 2. Check sibling directory (../oss-fuzz relative to CRSBench)
     # This file is at crsbench/utils/run_helper.py
@@ -247,8 +256,8 @@ def get_oss_fuzz_root() -> str:
 
 def get_benchmarks_root() -> str:
     """Get benchmarks root directory from environment or default."""
-    default = os.path.join(os.path.dirname(__file__), "..", "..", "benchmarks")
-    return os.getenv("BENCHMARKS_ROOT", os.path.abspath(default))
+    default = Path(__file__).parent.parent.parent / "benchmarks"
+    return os.getenv("BENCHMARKS_ROOT", str(default.resolve()))
 
 
 def get_benchmark_dir(benchmark_name: str) -> Path:
@@ -260,6 +269,7 @@ def get_benchmark_dir(benchmark_name: str) -> Path:
 # Utility Functions
 # =============================================================================
 
+
 def strip_ansi(text: str) -> str:
     """Remove ANSI escape sequences from text."""
     ansi_escape = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
@@ -269,7 +279,7 @@ def strip_ansi(text: str) -> str:
 def shorten_logs(log_string: str, max_length: int = 5000) -> str:
     """Shorten log string if it exceeds max length."""
     if len(log_string) > max_length:
-        return log_string[:1000] + '\n... [truncated] ...\n' + log_string[-3700:]
+        return log_string[:1000] + "\n... [truncated] ...\n" + log_string[-3700:]
     return log_string
 
 
@@ -293,11 +303,11 @@ def get_workdir_from_dockerfile(benchmark_dir: Union[str, Path]) -> str:
         logger.warning(f"Dockerfile not found at {dockerfile_path}, using default /src")
         return "/src"
 
-    workdir_regex = re.compile(r'\s*WORKDIR\s*([^\s]+)')
+    workdir_regex = re.compile(r"\s*WORKDIR\s*([^\s]+)")
     workdir = "/src"  # default
 
     try:
-        with open(dockerfile_path) as f:
+        with dockerfile_path.open() as f:
             lines = f.readlines()
 
         # Parse in reverse to get the last WORKDIR directive
@@ -306,16 +316,19 @@ def get_workdir_from_dockerfile(benchmark_dir: Union[str, Path]) -> str:
             if match:
                 workdir = match.group(1)
                 # Replace $SRC with /src
-                workdir = workdir.replace('$SRC', '/src')
+                workdir = workdir.replace("$SRC", "/src")
 
                 # Make absolute path if relative
-                if not os.path.isabs(workdir):
-                    workdir = os.path.join('/src', workdir)
+                if not Path(workdir).is_absolute():
+                    workdir = f"/src/{workdir}"
 
-                workdir = os.path.normpath(workdir)
+                # Normalize the path (don't resolve since this is a Docker path)
+                workdir = str(Path(workdir))
                 break
     except Exception as e:
-        logger.warning(f"Failed to parse WORKDIR from Dockerfile: {e}, using default /src")
+        logger.warning(
+            f"Failed to parse WORKDIR from Dockerfile: {e}, using default /src"
+        )
         return "/src"
 
     logger.debug(f"Parsed WORKDIR from Dockerfile: {workdir}")
@@ -324,19 +337,19 @@ def get_workdir_from_dockerfile(benchmark_dir: Union[str, Path]) -> str:
 
 def detect_language(benchmark_dir: Union[str, Path]) -> str:
     """Detect language from project.yaml."""
-    project_yaml = Path(benchmark_dir) / 'project.yaml'
+    project_yaml = Path(benchmark_dir) / "project.yaml"
     if not project_yaml.exists():
-        return 'unknown'
+        return "unknown"
 
     try:
-        with open(project_yaml, 'r', encoding='utf-8') as f:
+        with project_yaml.open(encoding="utf-8") as f:
             for line in f:
-                if line.startswith('language:'):
-                    return line.split('language:')[1].strip().lower()
+                if line.startswith("language:"):
+                    return line.split("language:")[1].strip().lower()
     except Exception:
         pass
 
-    return 'unknown'
+    return "unknown"
 
 
 def get_project_config(benchmark_dir: Union[str, Path]) -> Dict[str, Any]:
@@ -354,7 +367,7 @@ def get_project_config(benchmark_dir: Union[str, Path]) -> Dict[str, Any]:
     if not project_yaml.exists():
         return {}
 
-    with open(project_yaml) as f:
+    with project_yaml.open() as f:
         return yaml.safe_load(f) or {}
 
 
@@ -362,13 +375,15 @@ def get_project_config(benchmark_dir: Union[str, Path]) -> Dict[str, Any]:
 # Command Execution
 # =============================================================================
 
+
 def run_cmd(
     cmd: List[str],
     cwd: Optional[str] = None,
+    timeout: Optional[int] = None,
+    *,
     expect_fail: bool = False,
     exception: bool = True,
     return_code: bool = False,
-    timeout: Optional[int] = None,
 ) -> Union[Tuple[str, str], Tuple[str, str, int]]:
     """Run a command and return stdout/stderr.
 
@@ -387,7 +402,7 @@ def run_cmd(
     sys.stdout.flush()
 
     # Use run_git for git commands to support gitcache
-    if cmd and cmd[0] == 'git':
+    if cmd and cmd[0] == "git":
         try:
             result = run_git(
                 cmd[1:],  # Skip 'git' since run_git adds it
@@ -395,7 +410,7 @@ def run_cmd(
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                check=False
+                check=False,
             )
             stdout = strip_ansi(result.stdout) if result.stdout else ""
             stderr = strip_ansi(result.stderr) if result.stderr else ""
@@ -405,7 +420,7 @@ def run_cmd(
             process_returncode = -1
             if return_code:
                 return stdout, stderr, -1
-            raise RuntimeError(f"Command timed out after {timeout} seconds")
+            raise RuntimeError(f"Command timed out after {timeout} seconds") from None
     else:
         try:
             process = subprocess.Popen(
@@ -429,7 +444,7 @@ def run_cmd(
                 stdout = strip_ansi(stdout) if stdout else ""
                 stderr = strip_ansi(stderr) if stderr else ""
                 return stdout, stderr, -1
-            raise RuntimeError(f"Command timed out after {timeout} seconds")
+            raise RuntimeError(f"Command timed out after {timeout} seconds") from None
 
         # Clean ANSI escape sequences
         stdout = strip_ansi(stdout) if stdout else ""
@@ -461,7 +476,7 @@ def run_cmd(
 
 def run_cmd_with_logging(
     cmd: List[str],
-    log_file: str,
+    log_file: Union[str, Path],
     cwd: Optional[str] = None,
     timeout: int = 1200,
 ) -> CommandResult:
@@ -476,22 +491,23 @@ def run_cmd_with_logging(
     Returns:
         CommandResult with execution details
     """
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    log_path = Path(log_file)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if os.path.isfile(log_file):
-        os.remove(log_file)
+    if log_path.is_file():
+        log_path.unlink()
 
     timed_out = False
     returncode = 0
 
-    with open(log_file, 'w', encoding='utf-8') as log_stdout:
+    with log_path.open("w", encoding="utf-8") as log_stdout:
         try:
             result = subprocess.run(
                 cmd,
                 cwd=cwd,
                 stdout=log_stdout,
                 stderr=subprocess.STDOUT,
-                timeout=timeout
+                timeout=timeout,
             )
             returncode = result.returncode
             if returncode == 0:
@@ -507,15 +523,14 @@ def run_cmd_with_logging(
             log_stdout.write(f"\n\nCommand failed with exit code {e.returncode}\n")
             returncode = e.returncode
 
-    with open(log_file, 'r', encoding='utf-8') as f:
-        logs = f.read()
+    logs = log_path.read_text(encoding="utf-8")
 
     return CommandResult(
         stdout=logs,
         stderr="",
         returncode=returncode,
         success=returncode == 0,
-        timed_out=timed_out
+        timed_out=timed_out,
     )
 
 
@@ -523,11 +538,13 @@ def run_cmd_with_logging(
 # OSS-Fuzz Helper
 # =============================================================================
 
+
 def run_helper(
     helper_command: List[str],
+    oss_fuzz_root: Optional[str] = None,
+    *,
     expect_fail: bool = False,
     exception: bool = True,
-    oss_fuzz_root: Optional[str] = None,
 ) -> Tuple[str, str]:
     """Run OSS-Fuzz helper.py command.
 
@@ -543,15 +560,16 @@ def run_helper(
     if oss_fuzz_root is None:
         oss_fuzz_root = get_oss_fuzz_root()
 
-    helper_path = os.path.join(oss_fuzz_root, "infra", "helper.py")
-    command = ["python", helper_path] + helper_command
+    helper_path = Path(oss_fuzz_root) / "infra" / "helper.py"
+    command = ["python", str(helper_path)] + helper_command
     result = run_cmd(command, expect_fail=expect_fail, exception=exception)
-    return cast(Tuple[str, str], result)
+    return cast("Tuple[str, str]", result)
 
 
 # =============================================================================
 # Exit Code Handling
 # =============================================================================
+
 
 def is_docker_execution_error(exit_code: int) -> bool:
     """Check if exit code indicates Docker execution failure."""
@@ -577,8 +595,8 @@ def handle_test_exit_code(
     stdout: str,
     stderr: str,
     benchmark: str,
+    *,
     raise_exception: bool = True,
-    docker_command: Optional[str] = None,
 ) -> TestResult:
     """Handle test.sh exit code according to run_tests script semantics.
 
@@ -607,7 +625,7 @@ def handle_test_exit_code(
         RuntimeError: For unexpected results
     """
     exit_code_type = classify_exit_code(exit_code)
-    output = stdout + stderr
+    stdout + stderr
 
     # Handle Docker execution errors (always fatal)
     if is_docker_execution_error(exit_code):
@@ -616,7 +634,7 @@ def handle_test_exit_code(
             stderr=stderr,
             returncode=exit_code,
             success=False,
-            exit_code_type=exit_code_type
+            exit_code_type=exit_code_type,
         )
         if raise_exception:
             raise DockerExecutionError(
@@ -624,7 +642,7 @@ def handle_test_exit_code(
                 f"Exit code: {exit_code}",
                 exit_code=exit_code,
                 stdout=stdout,
-                stderr=stderr
+                stderr=stderr,
             )
         return result
 
@@ -635,7 +653,7 @@ def handle_test_exit_code(
             stderr=stderr,
             returncode=exit_code,
             success=False,
-            exit_code_type=TestExitCode.FATAL_ERROR
+            exit_code_type=TestExitCode.FATAL_ERROR,
         )
         if raise_exception:
             raise FatalTestError(
@@ -643,7 +661,7 @@ def handle_test_exit_code(
                 f"Docker/script issue or test.sh not executable",
                 exit_code=exit_code,
                 stdout=stdout,
-                stderr=stderr
+                stderr=stderr,
             )
         return result
 
@@ -655,25 +673,24 @@ def handle_test_exit_code(
                 stderr=stderr,
                 returncode=exit_code,
                 success=False,
-                exit_code_type=TestExitCode.TEST_FAILURE
+                exit_code_type=TestExitCode.TEST_FAILURE,
             )
             if raise_exception:
                 raise TestFailedError(
                     f"Test failed for {benchmark} but was expected to pass",
                     exit_code=exit_code,
                     stdout=stdout,
-                    stderr=stderr
+                    stderr=stderr,
                 )
             return result
-        else:
-            logger.info(f"✓ test.sh correctly failed for {benchmark} (exit code 202)")
-            return TestResult(
-                stdout=stdout,
-                stderr=stderr,
-                returncode=exit_code,
-                success=True,  # Expected failure
-                exit_code_type=TestExitCode.TEST_FAILURE
-            )
+        logger.info(f"✓ test.sh correctly failed for {benchmark} (exit code 202)")
+        return TestResult(
+            stdout=stdout,
+            stderr=stderr,
+            returncode=exit_code,
+            success=True,  # Expected failure
+            exit_code_type=TestExitCode.TEST_FAILURE,
+        )
 
     # Handle success
     if exit_code == TestExitCode.SUCCESS:
@@ -684,24 +701,23 @@ def handle_test_exit_code(
                 stderr=stderr,
                 returncode=exit_code,
                 success=True,
-                exit_code_type=TestExitCode.SUCCESS
+                exit_code_type=TestExitCode.SUCCESS,
             )
-        else:
-            result = TestResult(
+        result = TestResult(
+            stdout=stdout,
+            stderr=stderr,
+            returncode=exit_code,
+            success=False,
+            exit_code_type=TestExitCode.SUCCESS,
+        )
+        if raise_exception:
+            raise TestFailedError(
+                f"Test passed for {benchmark} but was expected to fail",
+                exit_code=exit_code,
                 stdout=stdout,
                 stderr=stderr,
-                returncode=exit_code,
-                success=False,
-                exit_code_type=TestExitCode.SUCCESS
             )
-            if raise_exception:
-                raise TestFailedError(
-                    f"Test passed for {benchmark} but was expected to fail",
-                    exit_code=exit_code,
-                    stdout=stdout,
-                    stderr=stderr
-                )
-            return result
+        return result
 
     # Handle other non-zero exit codes
     if exit_code != 0:
@@ -711,7 +727,7 @@ def handle_test_exit_code(
                 stderr=stderr,
                 returncode=exit_code,
                 success=False,
-                exit_code_type=exit_code_type
+                exit_code_type=exit_code_type,
             )
             if raise_exception:
                 raise RuntimeError(
@@ -720,15 +736,16 @@ def handle_test_exit_code(
                     f"stderr: {stderr}"
                 )
             return result
-        else:
-            logger.info(f"✓ test.sh failed as expected for {benchmark} (exit code {exit_code})")
-            return TestResult(
-                stdout=stdout,
-                stderr=stderr,
-                returncode=exit_code,
-                success=True,  # Expected failure
-                exit_code_type=exit_code_type
-            )
+        logger.info(
+            f"✓ test.sh failed as expected for {benchmark} (exit code {exit_code})"
+        )
+        return TestResult(
+            stdout=stdout,
+            stderr=stderr,
+            returncode=exit_code,
+            success=True,  # Expected failure
+            exit_code_type=exit_code_type,
+        )
 
     # Should not reach here
     return TestResult(
@@ -736,7 +753,7 @@ def handle_test_exit_code(
         stderr=stderr,
         returncode=exit_code,
         success=True,
-        exit_code_type=exit_code_type
+        exit_code_type=exit_code_type,
     )
 
 
@@ -744,9 +761,11 @@ def handle_test_exit_code(
 # Source Code Management
 # =============================================================================
 
+
 def get_project_source_dir(
     benchmark_name: str,
     commit: Optional[str] = None,
+    *,
     use_ref_commit_for_delta: bool = True,
 ) -> Optional[str]:
     """Get project source directory, ensuring it's at the correct commit.
@@ -777,7 +796,9 @@ def get_project_source_dir(
             # Full mode: use base_commit (vulnerable version)
             else:
                 commit = repo_info.get("base_commit")
-                logger.debug(f"Full mode: using base_commit {commit[:8] if commit else 'default'}")
+                logger.debug(
+                    f"Full mode: using base_commit {commit[:8] if commit else 'default'}"
+                )
         except Exception as e:
             logger.warning(f"Failed to determine commit, using default: {e}")
 
@@ -785,7 +806,7 @@ def get_project_source_dir(
         benchmark_dir=str(benchmark_dir),
         repos_dir=os.getenv("PROJECT_REPOS_DIR"),
         commit=commit,
-        verbose=True
+        verbose=True,
     )
 
     if not source_path:
@@ -799,6 +820,7 @@ def get_project_source_dir(
 # =============================================================================
 # OSS-Fuzz Project Management
 # =============================================================================
+
 
 def prepare_benchmark_for_oss_fuzz(
     benchmark_name: str,
@@ -823,18 +845,18 @@ def prepare_benchmark_for_oss_fuzz(
         return None
 
     # Create aixcc directory in oss-fuzz/projects if it doesn't exist
-    aixcc_dir = os.path.join(oss_fuzz_root, "projects", "aixcc")
-    os.makedirs(aixcc_dir, exist_ok=True)
+    aixcc_dir = Path(oss_fuzz_root) / "projects" / "aixcc"
+    aixcc_dir.mkdir(parents=True, exist_ok=True)
 
     # Target directory
-    target_dir = os.path.join(aixcc_dir, benchmark_name)
+    target_dir = aixcc_dir / benchmark_name
 
     # Remove existing directory if it exists
-    if os.path.exists(target_dir):
+    if target_dir.exists():
         shutil.rmtree(target_dir)
 
     # Copy benchmark to oss-fuzz/projects/aixcc/
-    shutil.copytree(str(benchmark_dir), target_dir)
+    shutil.copytree(str(benchmark_dir), str(target_dir))
     logger.debug(f"Copied benchmark {benchmark_name} to {target_dir}")
 
     return f"aixcc/{benchmark_name}"
@@ -844,14 +866,16 @@ def prepare_benchmark_for_oss_fuzz(
 # Build Functions
 # =============================================================================
 
+
 def build_benchmark(
     benchmark: str,
     engine: str = "libfuzzer",
     sanitizer: str = "address",
-    clean: bool = True,
-    enable_check_build: bool = False,
     commit: Optional[str] = None,
     oss_fuzz_root: Optional[str] = None,
+    *,
+    clean: bool = True,
+    enable_check_build: bool = False,
 ) -> None:
     """Build a benchmark using OSS-Fuzz infrastructure.
 
@@ -869,7 +893,9 @@ def build_benchmark(
         commit: Specific commit to checkout
         oss_fuzz_root: OSS-Fuzz root directory
     """
-    logger.info(f"Building benchmark {benchmark} with engine={engine} sanitizer={sanitizer}")
+    logger.info(
+        f"Building benchmark {benchmark} with engine={engine} sanitizer={sanitizer}"
+    )
 
     benchmark_dir = get_benchmark_dir(benchmark)
 
@@ -893,13 +919,18 @@ def build_benchmark(
     if clean:
         helper_command.append("--clean")
 
-    helper_command.extend([
-        "--engine", engine,
-        "--sanitizer", sanitizer,
-        "--architecture", "x86_64",
-        benchmark,
-        source_path
-    ])
+    helper_command.extend(
+        [
+            "--engine",
+            engine,
+            "--sanitizer",
+            sanitizer,
+            "--architecture",
+            "x86_64",
+            benchmark,
+            source_path,
+        ]
+    )
 
     run_helper(helper_command, oss_fuzz_root=oss_fuzz_root)
 
@@ -931,42 +962,53 @@ def build_benchmark_with_logging(
     if oss_fuzz_root is None:
         oss_fuzz_root = get_oss_fuzz_root()
 
+    oss_fuzz_path = Path(oss_fuzz_root)
+    log_dir_path: Path
     if log_dir is None:
-        log_dir = os.path.join(oss_fuzz_root, "build", "logs")
+        log_dir_path = oss_fuzz_path / "build" / "logs"
+    else:
+        log_dir_path = Path(log_dir)
 
     # Prepare benchmark in oss-fuzz/projects/aixcc/
     oss_fuzz_project = prepare_benchmark_for_oss_fuzz(benchmark_name, oss_fuzz_root)
     if not oss_fuzz_project:
         return BuildResult(
-            success=False,
-            logs=f"Error: Failed to prepare benchmark {benchmark_name}"
+            success=False, logs=f"Error: Failed to prepare benchmark {benchmark_name}"
         )
 
     # Get project source directory path
     if source_path is None:
         source_path = get_project_source_dir(benchmark_name)
 
-    if not source_path or not os.path.isdir(source_path):
+    if not source_path or not Path(source_path).is_dir():
         return BuildResult(
             success=False,
-            logs=f"Error: Could not find project source directory for '{benchmark_name}'"
+            logs=f"Error: Could not find project source directory for '{benchmark_name}'",
         )
 
     logger.info(f"Building benchmark '{benchmark_name}' with source: {source_path}")
 
     # Build command
-    helper_path = os.path.join(oss_fuzz_root, "infra", "helper.py")
-    build_cmd = ["python3", helper_path, "build_fuzzers", oss_fuzz_project, source_path]
+    helper_path = oss_fuzz_path / "infra" / "helper.py"
+    build_cmd = [
+        "python3",
+        str(helper_path),
+        "build_fuzzers",
+        oss_fuzz_project,
+        source_path,
+    ]
 
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, f'build-log-{benchmark_name}.txt')
+    log_dir_path.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir_path / f"build-log-{benchmark_name}.txt"
 
-    result = run_cmd_with_logging(build_cmd, log_file, cwd=oss_fuzz_root, timeout=timeout)
+    result = run_cmd_with_logging(
+        build_cmd, log_file, cwd=oss_fuzz_root, timeout=timeout
+    )
 
     return BuildResult(
         success=result.success,
         logs=result.stdout,  # Full logs for CI - use shorten_logs() only for display
-        returncode=result.returncode
+        returncode=result.returncode,
     )
 
 
@@ -988,10 +1030,13 @@ def check_build(
 
     helper_command = [
         "check_build",
-        "--engine", engine,
-        "--sanitizer", sanitizer,
-        "--architecture", "x86_64",
-        benchmark
+        "--engine",
+        engine,
+        "--sanitizer",
+        sanitizer,
+        "--architecture",
+        "x86_64",
+        benchmark,
     ]
 
     run_helper(helper_command, oss_fuzz_root=oss_fuzz_root)
@@ -1001,17 +1046,19 @@ def check_build(
 # Test Execution
 # =============================================================================
 
+
 def run_test_sh(
     benchmark: str,
-    expect_success: bool = True,
     output_dir: Optional[Path] = None,
     commit: Optional[str] = None,
-    raise_exception: bool = True,
     timeout: int = 600,
-    privileged: bool = True,
     oss_fuzz_root: Optional[str] = None,
     log_dir: Optional[str] = None,
     source_path: Optional[str] = None,
+    *,
+    expect_success: bool = True,
+    raise_exception: bool = True,
+    privileged: bool = True,
 ) -> TestResult:
     """Run test.sh for a benchmark inside Docker container.
 
@@ -1053,46 +1100,40 @@ def run_test_sh(
         if log_dir is not None:
             # MCP server mode: return error result
             return TestResult(
-                stdout="",
-                stderr=f"Error: {error_msg}",
-                returncode=-1,
-                success=False
+                stdout="", stderr=f"Error: {error_msg}", returncode=-1, success=False
             )
         # CI mode: skip with warning
         logger.warning(f"{error_msg}, skipping")
         return TestResult(
-            stdout="",
-            stderr="test.sh not found",
-            returncode=0,
-            success=True
+            stdout="", stderr="test.sh not found", returncode=0, success=True
         )
 
     # Get source path
     if source_path is None:
         source_path = get_project_source_dir(benchmark, commit=commit)
 
-    if not source_path or not os.path.isdir(source_path):
+    if not source_path or not Path(source_path).is_dir():
         error_msg = f"Project source directory not found for {benchmark}"
         if log_dir is not None:
             return TestResult(
-                stdout="",
-                stderr=f"Error: {error_msg}",
-                returncode=-1,
-                success=False
+                stdout="", stderr=f"Error: {error_msg}", returncode=-1, success=False
             )
         raise RuntimeError(f"[Error] Failed to get source path for {benchmark}")
 
-    logger.info(f"Running test.sh for {benchmark} inside Docker, expect_success={expect_success}")
+    logger.info(
+        f"Running test.sh for {benchmark} inside Docker, expect_success={expect_success}"
+    )
 
     # Ensure project directories exist
-    project_out = os.path.join(oss_fuzz_root, "build", "out", benchmark)
-    project_work = os.path.join(oss_fuzz_root, "build", "work", benchmark)
-    os.makedirs(project_out, exist_ok=True)
-    os.makedirs(project_work, exist_ok=True)
+    oss_fuzz_path = Path(oss_fuzz_root)
+    project_out = oss_fuzz_path / "build" / "out" / benchmark
+    project_work = oss_fuzz_path / "build" / "work" / benchmark
+    project_out.mkdir(parents=True, exist_ok=True)
+    project_work.mkdir(parents=True, exist_ok=True)
 
     # Make test.sh executable
     if not os.access(test_sh_path, os.X_OK):
-        os.chmod(test_sh_path, 0o755)
+        test_sh_path.chmod(0o755)
 
     # Parse WORKDIR from Dockerfile
     workdir = get_workdir_from_dockerfile(benchmark_dir)
@@ -1101,19 +1142,24 @@ def run_test_sh(
     project_config = get_project_config(benchmark_dir)
 
     # Language mapping
-    language = project_config.get('language', 'c++')
+    language = project_config.get("language", "c++")
     language_map = {
-        'jvm': 'jvm', 'java': 'jvm', 'c': 'c', 'c++': 'c++',
-        'go': 'go', 'rust': 'rust', 'python': 'python',
+        "jvm": "jvm",
+        "java": "jvm",
+        "c": "c",
+        "c++": "c++",
+        "go": "go",
+        "rust": "rust",
+        "python": "python",
     }
     fuzzing_language = language_map.get(language.lower(), language)
 
     # Engine and sanitizer
-    fuzzing_engines = project_config.get('fuzzing_engines', ['libfuzzer'])
-    fuzzing_engine = fuzzing_engines[0] if fuzzing_engines else 'libfuzzer'
+    fuzzing_engines = project_config.get("fuzzing_engines", ["libfuzzer"])
+    fuzzing_engine = fuzzing_engines[0] if fuzzing_engines else "libfuzzer"
 
-    sanitizers = project_config.get('sanitizers', ['address'])
-    sanitizer = sanitizers[0] if sanitizers else 'address'
+    sanitizers = project_config.get("sanitizers", ["address"])
+    sanitizer = sanitizers[0] if sanitizers else "address"
 
     # Docker image tag
     image_tag = f"aixcc-afc/{benchmark}"
@@ -1122,55 +1168,76 @@ def run_test_sh(
     docker_command = ["docker", "run"]
 
     if privileged:
-        docker_command.extend([
-            "--privileged",
-            "--shm-size=2g",
-            "--platform", "linux/amd64",
-        ])
+        docker_command.extend(
+            [
+                "--privileged",
+                "--shm-size=2g",
+                "--platform",
+                "linux/amd64",
+            ]
+        )
 
     docker_command.append("--rm")
 
     # Environment variables (always set for consistency)
-    docker_command.extend([
-        "-e", f"FUZZING_ENGINE={fuzzing_engine}",
-        "-e", f"SANITIZER={sanitizer}",
-        "-e", "ARCHITECTURE=x86_64",
-        "-e", "HELPER=True",
-        "-e", f"PROJECT_NAME={benchmark}",
-        "-e", f"FUZZING_LANGUAGE={fuzzing_language}",
-    ])
+    docker_command.extend(
+        [
+            "-e",
+            f"FUZZING_ENGINE={fuzzing_engine}",
+            "-e",
+            f"SANITIZER={sanitizer}",
+            "-e",
+            "ARCHITECTURE=x86_64",
+            "-e",
+            "HELPER=True",
+            "-e",
+            f"PROJECT_NAME={benchmark}",
+            "-e",
+            f"FUZZING_LANGUAGE={fuzzing_language}",
+        ]
+    )
 
     # Volume mounts
-    docker_command.extend([
-        "-v", f"{source_path}:/local-source-mount",
-        "-v", f"{test_sh_path}:/test-mnt.sh",
-        "-v", f"{project_out}:/local-out-mount",
-        "-v", f"{project_work}:/local-work-mount",
-    ])
+    docker_command.extend(
+        [
+            "-v",
+            f"{source_path}:/local-source-mount",
+            "-v",
+            f"{test_sh_path}:/test-mnt.sh",
+            "-v",
+            f"{project_out}:/local-out-mount",
+            "-v",
+            f"{project_work}:/local-work-mount",
+        ]
+    )
 
     # Image and command
     # Copy source, out, and work from mounted volumes to avoid conflicts
-    docker_command.extend([
-        image_tag,
-        "/bin/bash", "-c",
-        f"pushd $SRC && rm -rf {workdir} "
-        f"&& cp -r /local-source-mount {workdir} "
-        f"&& cp /test-mnt.sh $SRC/test.sh "
-        f"&& popd "
-        f"&& rm -rf /out/* && cp -r /local-out-mount/. /out/ 2>/dev/null || true "
-        f"&& rm -rf /work/* && cp -r /local-work-mount/. /work/ 2>/dev/null || true "
-        f"&& bash $SRC/test.sh"
-    ])
+    docker_command.extend(
+        [
+            image_tag,
+            "/bin/bash",
+            "-c",
+            f"pushd $SRC && rm -rf {workdir} "
+            f"&& cp -r /local-source-mount {workdir} "
+            f"&& cp /test-mnt.sh $SRC/test.sh "
+            f"&& popd "
+            f"&& rm -rf /out/* && cp -r /local-out-mount/. /out/ 2>/dev/null || true "
+            f"&& rm -rf /work/* && cp -r /local-work-mount/. /work/ 2>/dev/null || true "
+            f"&& bash $SRC/test.sh",
+        ]
+    )
 
     # Build full command string for logging
-    docker_command_str = ' '.join(docker_command)
+    docker_command_str = " ".join(docker_command)
     logger.debug(f"Executing Docker command:\n{docker_command_str}")
 
     # Execute command
     if log_dir is not None:
         # Log to file mode
-        os.makedirs(log_dir, exist_ok=True)
-        log_file = os.path.join(log_dir, f'test-sh-log-{benchmark}.txt')
+        log_dir_path = Path(log_dir)
+        log_dir_path.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir_path / f"test-sh-log-{benchmark}.txt"
 
         result = run_cmd_with_logging(docker_command, log_file, timeout=timeout)
         exit_code_type = classify_exit_code(result.returncode)
@@ -1181,7 +1248,7 @@ def run_test_sh(
             returncode=result.returncode,
             success=result.returncode == 0,
             timed_out=result.timed_out,
-            exit_code_type=exit_code_type
+            exit_code_type=exit_code_type,
         )
 
     # In-memory mode
@@ -1192,9 +1259,9 @@ def run_test_sh(
             expect_fail=False,
             exception=False,
             return_code=True,
-            timeout=timeout
+            timeout=timeout,
         )
-        stdout, stderr, exit_code = cast(Tuple[str, str, int], result)
+        stdout, stderr, exit_code = cast("Tuple[str, str, int]", result)
     except RuntimeError as e:
         if "timed out" in str(e):
             timed_out = True
@@ -1230,20 +1297,24 @@ def run_test_sh(
             stderr=stderr,
             returncode=exit_code,
             success=False,
-            timed_out=True
+            timed_out=True,
         )
 
     # Handle exit code
     return handle_test_exit_code(
-        exit_code, expect_success, stdout, stderr, benchmark,
+        exit_code,
+        expect_success,
+        stdout,
+        stderr,
+        benchmark,
         raise_exception=raise_exception,
-        docker_command=docker_command_str
     )
 
 
 # =============================================================================
 # POV Reproduction
 # =============================================================================
+
 
 def reproduce_pov(
     benchmark: str,
@@ -1271,20 +1342,17 @@ def reproduce_pov(
     Raises:
         Exception: If crash expectation doesn't match reality
     """
-    logger.info(f"Reproducing POV for {benchmark}/{harness_name}, expect_crash={expect_crash}")
+    logger.info(
+        f"Reproducing POV for {benchmark}/{harness_name}, expect_crash={expect_crash}"
+    )
 
-    helper_command = [
-        "reproduce",
-        benchmark,
-        harness_name,
-        pov_path
-    ]
+    helper_command = ["reproduce", benchmark, harness_name, pov_path]
 
     stdout, stderr = run_helper(
         helper_command,
         expect_fail=expect_crash,
         exception=False,
-        oss_fuzz_root=oss_fuzz_root
+        oss_fuzz_root=oss_fuzz_root,
     )
     stdout_clean = strip_ansi(stdout)
 
@@ -1314,7 +1382,7 @@ def reproduce_pov(
                 f"[Error] Expected no crash after patch, but error token '{error_token}' found in output\n"
                 f"stdout: {stdout_clean}"
             )
-        logger.info(f"✓ POV correctly does not crash (patch works)")
+        logger.info("✓ POV correctly does not crash (patch works)")
 
     return stdout_clean, stderr
 
@@ -1322,6 +1390,7 @@ def reproduce_pov(
 # =============================================================================
 # Patch Management
 # =============================================================================
+
 
 def apply_patch(
     benchmark: str,
@@ -1347,20 +1416,14 @@ def apply_patch(
 
     # Try git apply first
     result = run_cmd(
-        ["git", "apply", patch_path],
-        cwd=source_dir,
-        exception=False,
-        return_code=True
+        ["git", "apply", patch_path], cwd=source_dir, exception=False, return_code=True
     )
-    stdout, stderr, _ = cast(Tuple[str, str, int], result)
+    stdout, stderr, _ = cast("Tuple[str, str, int]", result)
 
     # If git apply fails, try patch command
     if "error" in stderr.lower() or "fatal" in stderr.lower():
         logger.debug("git apply failed, trying patch command...")
-        run_cmd(
-            ["patch", "-p1", "-i", patch_path],
-            cwd=source_dir
-        )
+        run_cmd(["patch", "-p1", "-i", patch_path], cwd=source_dir)
 
     logger.info(f"✓ Patch applied successfully to {source_dir}")
 
@@ -1392,17 +1455,14 @@ def revert_patch(
         ["git", "apply", "-R", patch_path],
         cwd=source_dir,
         exception=False,
-        return_code=True
+        return_code=True,
     )
-    stdout, stderr, _ = cast(Tuple[str, str, int], result)
+    stdout, stderr, _ = cast("Tuple[str, str, int]", result)
 
     # If git apply fails, try patch -R
     if "error" in stderr.lower() or "fatal" in stderr.lower():
         logger.debug("git apply -R failed, trying patch -R...")
-        run_cmd(
-            ["patch", "-R", "-p1", "-i", patch_path],
-            cwd=source_dir
-        )
+        run_cmd(["patch", "-R", "-p1", "-i", patch_path], cwd=source_dir)
 
     logger.info(f"✓ Patch reverted successfully from {source_dir}")
 
@@ -1435,25 +1495,25 @@ def verify_bad_patch(
             valid=False,
             test_passed=False,
             patch_applied=False,
-            output=f"Error: Benchmark directory not found: {benchmark_dir}"
+            output=f"Error: Benchmark directory not found: {benchmark_dir}",
         )
 
-    if not os.path.exists(bad_patch_path):
+    if not Path(bad_patch_path).exists():
         return PatchResult(
             valid=False,
             test_passed=False,
             patch_applied=False,
-            output=f"Error: bad_patch.diff not found at {bad_patch_path}"
+            output=f"Error: bad_patch.diff not found at {bad_patch_path}",
         )
 
     # Get project source directory
     project_src_dir = get_project_source_dir(benchmark_name)
-    if not project_src_dir or not os.path.isdir(project_src_dir):
+    if not project_src_dir or not Path(project_src_dir).is_dir():
         return PatchResult(
             valid=False,
             test_passed=False,
             patch_applied=False,
-            output=f"Error: Project source directory not found for {benchmark_name}"
+            output=f"Error: Project source directory not found for {benchmark_name}",
         )
 
     logger.info(f"Verifying bad_patch.diff for benchmark '{benchmark_name}'...")
@@ -1472,7 +1532,7 @@ def verify_bad_patch(
             valid=False,
             test_passed=False,
             patch_applied=False,
-            output="\n".join(output_lines)
+            output="\n".join(output_lines),
         )
 
     # Step 2: Run test.sh
@@ -1482,13 +1542,15 @@ def verify_bad_patch(
             benchmark_name,
             expect_success=True,
             raise_exception=False,
-            oss_fuzz_root=oss_fuzz_root
+            oss_fuzz_root=oss_fuzz_root,
         )
 
         test_passed = test_result.success
         output_lines.append(f"test.sh exit code: {test_result.returncode}")
         output_lines.append(f"test.sh passed: {test_passed}")
-        output_lines.append(f"\ntest.sh output (truncated):\n{shorten_logs(test_result.stdout, 1000)}")
+        output_lines.append(
+            f"\ntest.sh output (truncated):\n{shorten_logs(test_result.stdout, 1000)}"
+        )
 
     except Exception as e:
         output_lines.append(f"Error running test.sh: {str(e)}")
@@ -1512,7 +1574,9 @@ def verify_bad_patch(
     is_valid = patch_applied and not test_passed
 
     if is_valid:
-        output_lines.append("✅ VALID: bad_patch.diff causes test.sh to fail (as expected)")
+        output_lines.append(
+            "✅ VALID: bad_patch.diff causes test.sh to fail (as expected)"
+        )
     elif test_passed:
         output_lines.append("❌ INVALID: test.sh PASSED with bad patch applied")
         output_lines.append("   This means either:")
@@ -1525,13 +1589,14 @@ def verify_bad_patch(
         valid=is_valid,
         test_passed=test_passed,
         patch_applied=patch_applied,
-        output="\n".join(output_lines)
+        output="\n".join(output_lines),
     )
 
 
 # =============================================================================
 # Container Command Execution
 # =============================================================================
+
 
 def run_command_in_container(
     benchmark_name: str,
@@ -1555,7 +1620,7 @@ def run_command_in_container(
 
     # Get project source directory
     project_src_dir = get_project_source_dir(benchmark_name)
-    if not project_src_dir or not os.path.isdir(project_src_dir):
+    if not project_src_dir or not Path(project_src_dir).is_dir():
         return f"Error: Project source directory not found for {benchmark_name}"
 
     # Get WORKDIR from Dockerfile
@@ -1565,21 +1630,25 @@ def run_command_in_container(
     # Docker image tag
     image_tag = f"aixcc-afc/{benchmark_name}"
 
-    logger.debug(f"Running command in container for benchmark '{benchmark_name}': {command}")
+    logger.debug(
+        f"Running command in container for benchmark '{benchmark_name}': {command}"
+    )
 
     docker_cmd_parts = [
-        "docker", "run", "--rm",
-        "-v", f"{project_src_dir}:{workdir}:rw",
+        "docker",
+        "run",
+        "--rm",
+        "-v",
+        f"{project_src_dir}:{workdir}:rw",
         image_tag,
-        "bash", "-c", command
+        "bash",
+        "-c",
+        command,
     ]
 
     try:
         result = subprocess.run(
-            docker_cmd_parts,
-            capture_output=True,
-            text=True,
-            timeout=timeout
+            docker_cmd_parts, capture_output=True, text=True, timeout=timeout
         )
 
         output = result.stdout + result.stderr
@@ -1603,6 +1672,7 @@ def run_command_in_container(
 # Benchmark Info
 # =============================================================================
 
+
 def get_benchmark_info(benchmark_name: str) -> Dict[str, Any]:
     """Get information about a benchmark.
 
@@ -1621,18 +1691,18 @@ def get_benchmark_info(benchmark_name: str) -> Dict[str, Any]:
         "benchmark_name": benchmark_name,
         "benchmark_dir": str(benchmark_dir),
         "language": detect_language(benchmark_dir),
-        "has_dockerfile": (benchmark_dir / 'Dockerfile').exists(),
-        "has_build_sh": (benchmark_dir / 'build.sh').exists(),
-        "has_replay_build_sh": (benchmark_dir / 'replay-build.sh').exists(),
-        "has_test_sh": (benchmark_dir / 'test.sh').exists(),
-        "has_project_yaml": (benchmark_dir / 'project.yaml').exists(),
+        "has_dockerfile": (benchmark_dir / "Dockerfile").exists(),
+        "has_build_sh": (benchmark_dir / "build.sh").exists(),
+        "has_replay_build_sh": (benchmark_dir / "replay-build.sh").exists(),
+        "has_test_sh": (benchmark_dir / "test.sh").exists(),
+        "has_project_yaml": (benchmark_dir / "project.yaml").exists(),
     }
 
     # Get project source directory if available
     project_src = get_project_source_dir(benchmark_name)
     if project_src:
         info["project_source_dir"] = project_src
-        info["has_project_source"] = os.path.isdir(project_src)
+        info["has_project_source"] = Path(project_src).is_dir()
 
     return info
 
@@ -1640,6 +1710,7 @@ def get_benchmark_info(benchmark_name: str) -> Dict[str, Any]:
 # =============================================================================
 # Command Execution with Rolling Output Display
 # =============================================================================
+
 
 def run_with_rolling_output(command: str, n: int = 5) -> None:
     """
@@ -1699,7 +1770,7 @@ def run_with_rolling_output(command: str, n: int = 5) -> None:
 
         print(f"--- Executing: '{command}' ---")
         print(
-            f"=============================== COMMAND OUTPUT ==============================="
+            "=============================== COMMAND OUTPUT ==============================="
         )
 
         # Read the output line by line in real-time
@@ -1738,7 +1809,7 @@ def run_with_rolling_output(command: str, n: int = 5) -> None:
             sys.stdout.flush()
 
         print(
-            f"=============================================================================="
+            "=============================================================================="
         )
 
         if process.returncode != 0:

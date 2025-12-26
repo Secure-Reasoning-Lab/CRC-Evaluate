@@ -1,12 +1,12 @@
 """Result collection and CSV export for benchmark CI testing."""
 
 import csv
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
-from crsbench.benchmark_ci.utils import JobContext, ExecJobType
+from crsbench.benchmark_ci.utils import JobContext
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -193,7 +193,7 @@ class ResultCollector:
             "end_time",
         ]
 
-        with open(path, "w", newline="", encoding="utf-8") as f:
+        with path.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
             writer.writeheader()
 
@@ -220,31 +220,35 @@ class ResultCollector:
         # Write benchmark summary
         columns = ["benchmark", "passed", "failed", "skipped", "total", "pass_rate"]
 
-        with open(path, "w", newline="", encoding="utf-8") as f:
+        with path.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=columns)
             writer.writeheader()
 
             for benchmark, stats in summary["by_benchmark"].items():
                 total = stats["passed"] + stats["failed"] + stats["skipped"]
                 pass_rate = stats["passed"] / total * 100 if total > 0 else 0
-                writer.writerow({
-                    "benchmark": benchmark,
-                    "passed": stats["passed"],
-                    "failed": stats["failed"],
-                    "skipped": stats["skipped"],
-                    "total": total,
-                    "pass_rate": f"{pass_rate:.1f}%",
-                })
+                writer.writerow(
+                    {
+                        "benchmark": benchmark,
+                        "passed": stats["passed"],
+                        "failed": stats["failed"],
+                        "skipped": stats["skipped"],
+                        "total": total,
+                        "pass_rate": f"{pass_rate:.1f}%",
+                    }
+                )
 
             # Write total row
-            writer.writerow({
-                "benchmark": "TOTAL",
-                "passed": summary["passed"],
-                "failed": summary["failed"],
-                "skipped": summary["skipped"],
-                "total": summary["total"],
-                "pass_rate": f"{summary['pass_rate']:.1f}%",
-            })
+            writer.writerow(
+                {
+                    "benchmark": "TOTAL",
+                    "passed": summary["passed"],
+                    "failed": summary["failed"],
+                    "skipped": summary["skipped"],
+                    "total": summary["total"],
+                    "pass_rate": f"{summary['pass_rate']:.1f}%",
+                }
+            )
 
         logger.info(f"Exported summary to {path}")
         return str(path)

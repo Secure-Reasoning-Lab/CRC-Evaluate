@@ -15,14 +15,11 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
 
-from crsbench.validation.variant.models import BenchmarkMode, BuildTag, BuildVersion
+from crsbench.validation.variant.models import BuildTag, BuildVersion
 
 if TYPE_CHECKING:
     from crsbench.validation.meta_adapter import MetaYamlAdapter
-    from crsbench.validation.variant.builder import VariantBuilder
 from crsbench.validation.verification.dedup import (
-    DeduplicationStrategy,
-    PatchBasedDedup,
     get_dedup_strategy,
 )
 from crsbench.validation.verification.models import (
@@ -141,6 +138,7 @@ class VerificationEngine:
         adapter: MetaYamlAdapter,
         pov_dir: Path,
         harness_filter: Optional[str] = None,
+        *,
         deduplicate: bool = True,
     ) -> List[VerificationResult]:
         """Verify all POVs in a directory against a benchmark.
@@ -172,9 +170,7 @@ class VerificationEngine:
 
         # Get harness names to test
         harness_names = (
-            [harness_filter]
-            if harness_filter
-            else adapter.get_harness_names()
+            [harness_filter] if harness_filter else adapter.get_harness_names()
         )
 
         for pov_file in pov_files:
@@ -208,6 +204,7 @@ class VerificationEngine:
         benchmark_path: Path,
         pov_dir: Optional[Path] = None,
         harness_filter: Optional[str] = None,
+        *,
         force_rebuild: bool = False,
         deduplicate: bool = True,
     ) -> List[VerificationResult]:
@@ -241,7 +238,9 @@ class VerificationEngine:
         # Discover POVs using adapter (from meta.yaml)
         if pov_dir:
             # Use explicit POV directory (override)
-            harness_names = [harness_filter] if harness_filter else adapter.get_harness_names()
+            harness_names = (
+                [harness_filter] if harness_filter else adapter.get_harness_names()
+            )
             for harness_name in harness_names:
                 pov_files = [f for f in pov_dir.glob("*") if f.is_file()]
                 for pov_file in pov_files:
@@ -263,12 +262,12 @@ class VerificationEngine:
                 all_povs = [(h, v, p) for h, v, p in all_povs if h == harness_filter]
 
             if not all_povs:
-                logger.warning(f"No POVs found in benchmark meta.yaml")
+                logger.warning("No POVs found in benchmark meta.yaml")
                 return []
 
             logger.info(f"Verifying {len(all_povs)} POVs from meta.yaml")
 
-            for harness_name, vuln_keyword, pov_path in all_povs:
+            for harness_name, _vuln_keyword, pov_path in all_povs:
                 pov_data = pov_path.read_bytes()
                 request = VerificationRequest(
                     pov_data=pov_data,
@@ -339,7 +338,7 @@ class VerificationEngine:
         if project_yaml.exists():
             import yaml
 
-            with open(project_yaml) as f:
+            with project_yaml.open() as f:
                 project_data = yaml.safe_load(f)
             lang = project_data.get("language", "c")
             main_repo = project_data.get("main_repo", "")

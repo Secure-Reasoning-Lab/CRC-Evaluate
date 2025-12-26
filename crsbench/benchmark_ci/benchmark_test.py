@@ -20,36 +20,33 @@ Usage:
 """
 
 import argparse
-import os
 import sys
 import traceback
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Set, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
+
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
-
+from crsbench.benchmark_ci.execution_validator import check_benchmark_execution
+from crsbench.benchmark_ci.file_validator import (
+    check_benchmark_files,
+    get_harnesses,
+    get_project_config,
+    get_tasks,
+)
+from crsbench.benchmark_ci.result_export import ResultCollector
 from crsbench.benchmark_ci.utils import (
-    JobContext,
     ExecJobType,
+    JobContext,
     TaskMode,
     get_benchmarks_root,
 )
-from crsbench.utils.run_helper import get_oss_fuzz_root
-from crsbench.benchmark_ci.file_validator import (
-    check_benchmark_files,
-    get_tasks,
-    get_harnesses,
-    get_project_config,
-)
-from crsbench.benchmark_ci.execution_validator import check_benchmark_execution
-from crsbench.benchmark_ci.result_export import ResultCollector
+from crsbench.utils import log_file_info, log_section
 from crsbench.utils.logger import get_logger
-from crsbench.utils import log_section, log_error_detail, log_file_info
+from crsbench.utils.run_helper import get_oss_fuzz_root
 
 logger = get_logger(__name__)
 
@@ -83,7 +80,7 @@ def save_error_to_file(
     error_file = error_dir / filename
 
     # Write error details
-    with open(error_file, 'w') as f:
+    with error_file.open("w") as f:
         f.write(f"Benchmark: {job.benchmark}\n")
         f.write(f"Job Type: {job.job_type.value}\n")
         f.write(f"Engine: {job.engine}\n")
@@ -136,7 +133,7 @@ def get_benchmarks_to_test(
     return get_all_benchmarks()
 
 
-def prepare_benchmarks(benchmarks: Set[str], overwrite: bool = False) -> None:
+def prepare_benchmarks(benchmarks: Set[str], *, overwrite: bool = False) -> None:
     """Copy benchmarks to oss-fuzz/projects/.
 
     Args:
@@ -175,7 +172,7 @@ def prepare_benchmarks(benchmarks: Set[str], overwrite: bool = False) -> None:
             shutil.copytree(source_path, dest_path)
             logger.info(f"Copied: {benchmark}")
         except Exception as e:
-            raise RuntimeError(f"Failed to copy benchmark {benchmark}: {e}")
+            raise RuntimeError(f"Failed to copy benchmark {benchmark}: {e}") from e
 
 
 def is_project_disabled(benchmark: str) -> bool:
@@ -245,37 +242,52 @@ def get_workload(
 
                         # Delta mode: test base and ref commits
                         if task.mode == TaskMode.DELTA:
-                            if not job_types or ExecJobType.DELTA_BASE_CHECK in job_types:
-                                jobs.append(JobContext(
-                                    job_type=ExecJobType.DELTA_BASE_CHECK,
-                                    task=task,
-                                    benchmark=benchmark,
-                                    language=language,
-                                    engine=engine,
-                                    sanitizer=sanitizer,
-                                ))
+                            if (
+                                not job_types
+                                or ExecJobType.DELTA_BASE_CHECK in job_types
+                            ):
+                                jobs.append(
+                                    JobContext(
+                                        job_type=ExecJobType.DELTA_BASE_CHECK,
+                                        task=task,
+                                        benchmark=benchmark,
+                                        language=language,
+                                        engine=engine,
+                                        sanitizer=sanitizer,
+                                    )
+                                )
 
-                            if not job_types or ExecJobType.DELTA_REF_CHECK in job_types:
-                                jobs.append(JobContext(
-                                    job_type=ExecJobType.DELTA_REF_CHECK,
-                                    task=task,
-                                    benchmark=benchmark,
-                                    language=language,
-                                    engine=engine,
-                                    sanitizer=sanitizer,
-                                ))
+                            if (
+                                not job_types
+                                or ExecJobType.DELTA_REF_CHECK in job_types
+                            ):
+                                jobs.append(
+                                    JobContext(
+                                        job_type=ExecJobType.DELTA_REF_CHECK,
+                                        task=task,
+                                        benchmark=benchmark,
+                                        language=language,
+                                        engine=engine,
+                                        sanitizer=sanitizer,
+                                    )
+                                )
 
                         # Full mode: test base commit
                         if task.mode == TaskMode.FULL:
-                            if not job_types or ExecJobType.FULL_BASE_CHECK in job_types:
-                                jobs.append(JobContext(
-                                    job_type=ExecJobType.FULL_BASE_CHECK,
-                                    task=task,
-                                    benchmark=benchmark,
-                                    language=language,
-                                    engine=engine,
-                                    sanitizer=sanitizer,
-                                ))
+                            if (
+                                not job_types
+                                or ExecJobType.FULL_BASE_CHECK in job_types
+                            ):
+                                jobs.append(
+                                    JobContext(
+                                        job_type=ExecJobType.FULL_BASE_CHECK,
+                                        task=task,
+                                        benchmark=benchmark,
+                                        language=language,
+                                        engine=engine,
+                                        sanitizer=sanitizer,
+                                    )
+                                )
 
                         # Patch checks for each vulnerability
                         if not job_types or ExecJobType.PATCH_CHECK in job_types:
@@ -283,43 +295,50 @@ def get_workload(
                                 for vuln in harness.vulnerabilities:
                                     for pov in vuln.povs:
                                         # Only test if sanitizer matches and patch exists
-                                        if (pov.sanitizer == sanitizer and
-                                            engine == "libfuzzer" and
-                                            vuln.patch_path):
-
-                                            jobs.append(JobContext(
-                                                job_type=ExecJobType.PATCH_CHECK,
-                                                task=task,
-                                                benchmark=benchmark,
-                                                language=language,
-                                                engine=engine,
-                                                sanitizer=sanitizer,
-                                                harness=harness,
-                                                vulnerability=vuln,
-                                                pov=pov,
-                                            ))
+                                        if (
+                                            pov.sanitizer == sanitizer
+                                            and engine == "libfuzzer"
+                                            and vuln.patch_path
+                                        ):
+                                            jobs.append(
+                                                JobContext(
+                                                    job_type=ExecJobType.PATCH_CHECK,
+                                                    task=task,
+                                                    benchmark=benchmark,
+                                                    language=language,
+                                                    engine=engine,
+                                                    sanitizer=sanitizer,
+                                                    harness=harness,
+                                                    vulnerability=vuln,
+                                                    pov=pov,
+                                                )
+                                            )
 
             # Add test.sh check (once per benchmark) - outside task/engine/sanitizer loops
             if not job_types or ExecJobType.TEST_SH_CHECK in job_types:
-                jobs.append(JobContext(
-                    job_type=ExecJobType.TEST_SH_CHECK,
-                    task=tasks[0] if tasks else None,
-                    benchmark=benchmark,
-                    language=language,
-                    engine="libfuzzer",
-                    sanitizer="address",
-                ))
+                jobs.append(
+                    JobContext(
+                        job_type=ExecJobType.TEST_SH_CHECK,
+                        task=tasks[0] if tasks else None,
+                        benchmark=benchmark,
+                        language=language,
+                        engine="libfuzzer",
+                        sanitizer="address",
+                    )
+                )
 
             # Add test-inc-build check (once per benchmark) - outside task/engine/sanitizer loops
             if not job_types or ExecJobType.TEST_INC_BUILD in job_types:
-                jobs.append(JobContext(
-                    job_type=ExecJobType.TEST_INC_BUILD,
-                    task=tasks[0] if tasks else None,
-                    benchmark=benchmark,
-                    language=language,
-                    engine="libfuzzer",
-                    sanitizer="address",
-                ))
+                jobs.append(
+                    JobContext(
+                        job_type=ExecJobType.TEST_INC_BUILD,
+                        task=tasks[0] if tasks else None,
+                        benchmark=benchmark,
+                        language=language,
+                        engine="libfuzzer",
+                        sanitizer="address",
+                    )
+                )
 
         except Exception as e:
             logger.error(f"Failed to generate jobs for {benchmark}: {e}")
@@ -363,10 +382,16 @@ def _execute_benchmark_jobs(
     jobs: List[JobContext],
     exit_on_error: bool,
     output_dir: Optional[str] = None,
+    *,
     enable_check_build: bool = False,
-    result_collector: Optional[ResultCollector] = None,
     force_rebuild: bool = False,
-) -> Tuple[str, List[Tuple[JobContext, Exception, str]], List[Tuple[JobContext, str, Optional[Exception], Optional[str], datetime, datetime]]]:
+) -> Tuple[
+    str,
+    List[Tuple[JobContext, Exception, str]],
+    List[
+        Tuple[JobContext, str, Optional[Exception], Optional[str], datetime, datetime]
+    ],
+]:
     """Execute all jobs for a single benchmark.
 
     This function runs in a separate process when using parallel execution.
@@ -377,7 +402,6 @@ def _execute_benchmark_jobs(
         exit_on_error: Whether to exit immediately on error
         output_dir: Directory to save artifacts
         enable_check_build: Enable check_build validation
-        result_collector: Optional collector for results (used in sequential mode)
         force_rebuild: Force rebuild Docker images even if they already exist
 
     Returns:
@@ -392,14 +416,21 @@ def _execute_benchmark_jobs(
     logger.info("-" * 80)
 
     for i, job in enumerate(jobs, 1):
-        logger.info(f"Starting job: {benchmark} | {job.job_type.value} | {job.engine}/{job.sanitizer}")
+        logger.info(
+            f"Starting job: {benchmark} | {job.job_type.value} | {job.engine}/{job.sanitizer}"
+        )
         logger.info(f"[{benchmark}] Job {i}/{len(jobs)}")
 
         start_time = datetime.now()
         try:
-            check_benchmark_execution(job, output_dir=output_dir, enable_check_build=enable_check_build, force_rebuild=force_rebuild)
+            check_benchmark_execution(
+                job,
+                output_dir=output_dir,
+                enable_check_build=enable_check_build,
+                force_rebuild=force_rebuild,
+            )
             end_time = datetime.now()
-            logger.success(f"Job completed successfully")
+            logger.success("Job completed successfully")
             job_results.append((job, "passed", None, None, start_time, end_time))
         except Exception as e:
             end_time = datetime.now()
@@ -412,12 +443,14 @@ def _execute_benchmark_jobs(
             job_results.append((job, "failed", e, error_file, start_time, end_time))
 
             if exit_on_error:
-                logger.warning(f"Exiting due to --exit_on_error flag")
+                logger.warning("Exiting due to --exit_on_error flag")
                 break
 
     # Print benchmark summary
     passed = len(jobs) - len(failed_jobs)
-    logger.info(f"Benchmark {benchmark} summary: {passed}/{len(jobs)} passed, {len(failed_jobs)} failed")
+    logger.info(
+        f"Benchmark {benchmark} summary: {passed}/{len(jobs)} passed, {len(failed_jobs)} failed"
+    )
 
     return benchmark, failed_jobs, job_results
 
@@ -428,8 +461,9 @@ def run_execution_checks(
     exit_on_error: bool,
     workers: int = 1,
     output_dir: Optional[str] = None,
-    enable_check_build: bool = False,
     result_collector: Optional[ResultCollector] = None,
+    *,
+    enable_check_build: bool = False,
     force_rebuild: bool = False,
 ) -> None:
     """Run execution validation for jobs.
@@ -440,8 +474,8 @@ def run_execution_checks(
         exit_on_error: Whether to exit immediately on error
         workers: Number of parallel workers (1 = sequential, >1 = parallel by benchmark)
         output_dir: Directory to save artifacts
-        enable_check_build: Enable check_build validation after building
         result_collector: Optional collector for results
+        enable_check_build: Enable check_build validation after building
         force_rebuild: Force rebuild Docker images even if they already exist
     """
     if skip_execution_check:
@@ -454,7 +488,7 @@ def run_execution_checks(
     if workers > 1:
         logger.info(f"Using {workers} parallel workers (benchmark-level parallelism)")
     else:
-        logger.info(f"Using sequential execution")
+        logger.info("Using sequential execution")
 
     # Group jobs by benchmark
     jobs_by_benchmark: Dict[str, List[JobContext]] = defaultdict(list)
@@ -473,8 +507,12 @@ def run_execution_checks(
         for benchmark in sorted(jobs_by_benchmark.keys()):
             benchmark_jobs = jobs_by_benchmark[benchmark]
             _, failed_jobs, job_results = _execute_benchmark_jobs(
-                benchmark, benchmark_jobs, exit_on_error, output_dir, enable_check_build,
-                force_rebuild=force_rebuild
+                benchmark,
+                benchmark_jobs,
+                exit_on_error,
+                output_dir,
+                enable_check_build=enable_check_build,
+                force_rebuild=force_rebuild,
             )
             all_failed_jobs.extend(failed_jobs)
             all_job_results.extend(job_results)
@@ -487,11 +525,18 @@ def run_execution_checks(
 
         with ProcessPoolExecutor(max_workers=workers) as executor:
             # Submit all benchmarks to the pool
-            future_to_benchmark = {
-                executor.submit(_execute_benchmark_jobs, benchmark, benchmark_jobs, exit_on_error,
-                               output_dir, enable_check_build, None, force_rebuild): benchmark
-                for benchmark, benchmark_jobs in jobs_by_benchmark.items()
-            }
+            future_to_benchmark = {}
+            for benchmark, benchmark_jobs in jobs_by_benchmark.items():
+                future = executor.submit(
+                    _execute_benchmark_jobs,
+                    benchmark,
+                    benchmark_jobs,
+                    exit_on_error,
+                    output_dir,
+                    enable_check_build=enable_check_build,
+                    force_rebuild=force_rebuild,
+                )
+                future_to_benchmark[future] = benchmark
 
             # Process results as they complete
             for future in as_completed(future_to_benchmark):
@@ -502,7 +547,9 @@ def run_execution_checks(
                     all_job_results.extend(job_results)
 
                     if exit_on_error and failed_jobs:
-                        logger.warning(f"Cancelling remaining benchmarks due to --exit_on_error flag")
+                        logger.warning(
+                            "Cancelling remaining benchmarks due to --exit_on_error flag"
+                        )
                         # Cancel pending futures
                         for pending_future in future_to_benchmark:
                             if not pending_future.done():
@@ -529,7 +576,9 @@ def run_execution_checks(
     total_jobs = len(jobs)
     passed_jobs = total_jobs - len(all_failed_jobs)
     logger.info("=" * 80)
-    logger.info(f"FINAL SUMMARY: {passed_jobs}/{total_jobs} jobs passed, {len(all_failed_jobs)} failed")
+    logger.info(
+        f"FINAL SUMMARY: {passed_jobs}/{total_jobs} jobs passed, {len(all_failed_jobs)} failed"
+    )
     logger.info("=" * 80)
 
     if all_failed_jobs:
@@ -538,7 +587,9 @@ def run_execution_checks(
         logger.error("=" * 80)
         for idx, (job, error_msg, error_file) in enumerate(all_failed_jobs, 1):
             if job:
-                logger.error(f"{idx}. {job.benchmark} - {job.job_type.value} ({job.engine}/{job.sanitizer})")
+                logger.error(
+                    f"{idx}. {job.benchmark} - {job.job_type.value} ({job.engine}/{job.sanitizer})"
+                )
             else:
                 logger.error(f"{idx}. Unknown job")
             if error_file:
@@ -556,11 +607,13 @@ def _get_default_csv_output() -> str:
         Default CSV path like './ci_results_YYYYMMDD_HHMMSS.csv'
     """
     from datetime import datetime
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return f"./ci_results_{timestamp}.csv"
 
 
 def main(
+    *,
     check_default_only: bool = False,
     skip_file_check: bool = False,
     skip_execution_check: bool = False,
@@ -615,14 +668,14 @@ def main(
         if projects:
             logger.info(f"Testing specific projects: {', '.join(sorted(projects))}")
         else:
-            logger.info(f"Testing all benchmarks")
+            logger.info("Testing all benchmarks")
 
         # Get benchmarks to test
         benchmarks = get_benchmarks_to_test(projects)
         logger.info(f"Found {len(benchmarks)} benchmarks to test")
 
         # Prepare benchmarks (copy to oss-fuzz/projects/)
-        prepare_benchmarks(benchmarks, overwrite)
+        prepare_benchmarks(benchmarks, overwrite=overwrite)
 
         # Run file checks
         run_file_checks(skip_file_check, benchmarks)
@@ -631,7 +684,9 @@ def main(
         jobs = get_workload(benchmarks, check_default_only, job_types)
         logger.info(f"Generated {len(jobs)} test jobs")
         if job_types:
-            logger.info(f"Filtered to job types: {', '.join(jt.value for jt in job_types)}")
+            logger.info(
+                f"Filtered to job types: {', '.join(jt.value for jt in job_types)}"
+            )
         if not enable_check_build:
             logger.info("check_build is disabled (use --enable-check-build to enable)")
 
@@ -643,8 +698,14 @@ def main(
 
         # Run execution checks
         run_execution_checks(
-            skip_execution_check, jobs, exit_on_error, workers,
-            output_dir, enable_check_build, result_collector, force_rebuild
+            skip_execution_check,
+            jobs,
+            exit_on_error,
+            workers,
+            output_dir,
+            result_collector,
+            enable_check_build=enable_check_build,
+            force_rebuild=force_rebuild,
         )
 
         logger.info("=" * 80)
@@ -652,7 +713,7 @@ def main(
         logger.info("=" * 80)
 
     except Exception as e:
-        logger.error(f"Benchmark testing failed")
+        logger.error("Benchmark testing failed")
         logger.error(str(e))
         ret_code = 1
 
@@ -684,49 +745,52 @@ def main(
 
 
 if __name__ == "__main__":
+    # Load environment variables from .env file
+    load_dotenv()
+
     parser = argparse.ArgumentParser(
         description="CRSBench Benchmark End-to-End Testing",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__
+        epilog=__doc__,
     )
 
     parser.add_argument(
         "--check_default_only",
         action="store_true",
-        help="Only test libfuzzer + address/none sanitizers (default: False)"
+        help="Only test libfuzzer + address/none sanitizers (default: False)",
     )
 
     parser.add_argument(
         "--skip_file_check",
         action="store_true",
-        help="Skip file format validation (default: False)"
+        help="Skip file format validation (default: False)",
     )
 
     parser.add_argument(
         "--skip_execution_check",
         action="store_true",
-        help="Skip execution validation (default: False)"
+        help="Skip execution validation (default: False)",
     )
 
     parser.add_argument(
         "--exit_on_error",
         action="store_true",
-        help="Exit immediately on first error (default: False)"
+        help="Exit immediately on first error (default: False)",
     )
 
     parser.add_argument(
         "--projects",
         type=str,
         help="Comma-separated list of project names to test (default: all benchmarks). "
-             "Example: --projects afc-curl-delta-01,afc-curl-delta-02"
+        "Example: --projects afc-curl-delta-01,afc-curl-delta-02",
     )
 
     parser.add_argument(
         "--job_types",
         type=str,
         help="Comma-separated list of job types to run (default: all). "
-             "Available types: delta_base_check, delta_ref_check, full_base_check, "
-             "patch_check, test_sh_check, test_inc_build. Example: --job_types delta_base_check,test_sh_check"
+        "Available types: delta_base_check, delta_ref_check, full_base_check, "
+        "patch_check, test_sh_check, test_inc_build. Example: --job_types delta_base_check,test_sh_check",
     )
 
     parser.add_argument(
@@ -734,50 +798,50 @@ if __name__ == "__main__":
         type=int,
         default=1,
         help="Number of parallel workers for benchmark execution (default: 1 = sequential). "
-             "Benchmarks are processed in parallel, with each benchmark's jobs running sequentially. "
-             "Example: --workers 4 to run up to 4 benchmarks in parallel"
+        "Benchmarks are processed in parallel, with each benchmark's jobs running sequentially. "
+        "Example: --workers 4 to run up to 4 benchmarks in parallel",
     )
 
     parser.add_argument(
         "--output-dir",
         type=str,
         help="Directory to save test artifacts (logs, crash outputs, etc.). "
-             "Example: --output-dir ./.ci-results"
+        "Example: --output-dir ./.ci-results",
     )
 
     parser.add_argument(
         "--enable-check-build",
         action="store_true",
         help="Enable check_build validation after building (slower, default: False). "
-             "By default, check_build is disabled to speed up testing."
+        "By default, check_build is disabled to speed up testing.",
     )
 
     parser.add_argument(
         "--csv-output",
         type=str,
         help="Path to export results as CSV file (default: ./ci_results_<timestamp>.csv). "
-             "A summary CSV will also be created with '_summary' suffix. "
-             "Example: --csv-output ./results.csv"
+        "A summary CSV will also be created with '_summary' suffix. "
+        "Example: --csv-output ./results.csv",
     )
 
     parser.add_argument(
         "--no-csv",
         action="store_true",
-        help="Disable CSV output (by default, results are saved to ./ci_results_<timestamp>.csv)"
+        help="Disable CSV output (by default, results are saved to ./ci_results_<timestamp>.csv)",
     )
 
     parser.add_argument(
         "--force-rebuild",
         action="store_true",
         help="Force rebuild Docker images even if they already exist (default: False). "
-             "By default, test_sh_check skips build if image already exists."
+        "By default, test_sh_check skips build if image already exists.",
     )
 
     parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Overwrite existing benchmarks in oss-fuzz/projects/ (default: False). "
-             "By default, existing benchmarks are skipped."
+        "By default, existing benchmarks are skipped.",
     )
 
     args = parser.parse_args()
@@ -787,7 +851,7 @@ if __name__ == "__main__":
     if args.projects:
         try:
             projects_filter = set()
-            for project_name in args.projects.split(','):
+            for project_name in args.projects.split(","):
                 project_name = project_name.strip()
                 if project_name:
                     projects_filter.add(project_name)
@@ -806,7 +870,7 @@ if __name__ == "__main__":
     if args.job_types:
         try:
             job_types_filter = set()
-            for job_type_str in args.job_types.split(','):
+            for job_type_str in args.job_types.split(","):
                 job_type_str = job_type_str.strip()
                 # Map string to ExecJobType enum
                 try:
@@ -814,7 +878,9 @@ if __name__ == "__main__":
                     job_types_filter.add(job_type)
                 except ValueError:
                     logger.error(f"Invalid job type: {job_type_str}")
-                    logger.error(f"Valid types: {', '.join(jt.value for jt in ExecJobType)}")
+                    logger.error(
+                        f"Valid types: {', '.join(jt.value for jt in ExecJobType)}"
+                    )
                     sys.exit(1)
         except Exception as e:
             logger.error(f"Failed to parse --job_types: {e}")
@@ -825,17 +891,19 @@ if __name__ == "__main__":
     if args.no_csv:
         csv_output_path = ""  # Empty string to disable CSV output
 
-    sys.exit(main(
-        check_default_only=args.check_default_only,
-        skip_file_check=args.skip_file_check,
-        skip_execution_check=args.skip_execution_check,
-        exit_on_error=args.exit_on_error,
-        projects=projects_filter,
-        job_types=job_types_filter,
-        workers=args.workers,
-        output_dir=args.output_dir,
-        enable_check_build=args.enable_check_build,
-        csv_output=csv_output_path,
-        force_rebuild=args.force_rebuild,
-        overwrite=args.overwrite,
-    ))
+    sys.exit(
+        main(
+            check_default_only=args.check_default_only,
+            skip_file_check=args.skip_file_check,
+            skip_execution_check=args.skip_execution_check,
+            exit_on_error=args.exit_on_error,
+            projects=projects_filter,
+            job_types=job_types_filter,
+            workers=args.workers,
+            output_dir=args.output_dir,
+            enable_check_build=args.enable_check_build,
+            csv_output=csv_output_path,
+            force_rebuild=args.force_rebuild,
+            overwrite=args.overwrite,
+        )
+    )

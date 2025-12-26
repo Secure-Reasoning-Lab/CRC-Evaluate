@@ -10,12 +10,14 @@ Snapshots enable:
 - Partial result recovery from interrupted trials
 """
 
-from dataclasses import dataclass, field, asdict
-from pathlib import Path
-from typing import Dict, List, Optional, Any
 import json
 import tarfile
-from pydantic import BaseModel, Field
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel
+
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -43,6 +45,7 @@ class Snapshot(BaseModel):
         has_corpus: Whether corpus directory was captured
         has_crs_data: Whether CRS-specific data was captured
     """
+
     # Core metadata
     cycle: int
     timestamp: float
@@ -76,6 +79,7 @@ class SnapshotMetadata:
         elapsed_time: Seconds elapsed since trial start
         snapshot_period: Configured snapshot interval in seconds
     """
+
     cycle: int
     timestamp: float
     elapsed_time: float
@@ -86,13 +90,13 @@ class SnapshotMetadata:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'SnapshotMetadata':
+    def from_dict(cls, data: Dict[str, Any]) -> "SnapshotMetadata":
         """Create from dictionary loaded from JSON."""
         return cls(
-            cycle=data['cycle'],
-            timestamp=data['timestamp'],
-            elapsed_time=data['elapsed_time'],
-            snapshot_period=data['snapshot_period']
+            cycle=data["cycle"],
+            timestamp=data["timestamp"],
+            elapsed_time=data["elapsed_time"],
+            snapshot_period=data["snapshot_period"],
         )
 
     def to_json(self) -> str:
@@ -100,7 +104,7 @@ class SnapshotMetadata:
         return json.dumps(self.to_dict(), indent=2)
 
     @classmethod
-    def from_json(cls, json_str: str) -> 'SnapshotMetadata':
+    def from_json(cls, json_str: str) -> "SnapshotMetadata":
         """Deserialize from JSON string."""
         return cls.from_dict(json.loads(json_str))
 
@@ -117,6 +121,7 @@ class SnapshotSummary:
         archive_size_bytes: Size of tar.gz archive in bytes
         metadata: Snapshot metadata (None if not loaded)
     """
+
     cycle: int
     archive_path: Path
     is_complete: bool
@@ -188,8 +193,8 @@ def list_snapshots(trial_dir: Path) -> List[SnapshotSummary]:
         # Extract cycle number from filename
         try:
             # snapshot-0001.tar.gz -> 0001
-            name_without_gz = archive_path.name.replace('.tar.gz', '')
-            cycle = int(Path(name_without_gz).stem.split('-')[1])
+            name_without_gz = archive_path.name.replace(".tar.gz", "")
+            cycle = int(Path(name_without_gz).stem.split("-")[1])
         except (IndexError, ValueError) as e:
             logger.warning(f"Invalid snapshot filename: {archive_path.name}: {e}")
             continue
@@ -200,12 +205,14 @@ def list_snapshots(trial_dir: Path) -> List[SnapshotSummary]:
         # Get file size
         archive_size = archive_path.stat().st_size if archive_path.exists() else None
 
-        snapshots.append(SnapshotSummary(
-            cycle=cycle,
-            archive_path=archive_path,
-            is_complete=is_complete,
-            archive_size_bytes=archive_size
-        ))
+        snapshots.append(
+            SnapshotSummary(
+                cycle=cycle,
+                archive_path=archive_path,
+                is_complete=is_complete,
+                archive_size_bytes=archive_size,
+            )
+        )
 
     return snapshots
 
@@ -220,13 +227,13 @@ def load_snapshot_metadata(archive_path: Path) -> Optional[SnapshotMetadata]:
         SnapshotMetadata object, or None if metadata cannot be loaded
     """
     try:
-        with tarfile.open(archive_path, 'r:gz') as tar:
+        with tarfile.open(archive_path, "r:gz") as tar:
             # Try to extract metadata.json
             try:
                 metadata_member = tar.getmember("metadata.json")
                 metadata_file = tar.extractfile(metadata_member)
                 if metadata_file:
-                    metadata_json = metadata_file.read().decode('utf-8')
+                    metadata_json = metadata_file.read().decode("utf-8")
                     return SnapshotMetadata.from_json(metadata_json)
             except KeyError:
                 logger.warning(f"No metadata.json in snapshot: {archive_path}")
@@ -250,8 +257,8 @@ def inspect_snapshot(archive_path: Path) -> Optional[SnapshotSummary]:
 
     try:
         # Extract cycle from filename
-        name_without_gz = archive_path.name.replace('.tar.gz', '')
-        cycle = int(Path(name_without_gz).stem.split('-')[1])
+        name_without_gz = archive_path.name.replace(".tar.gz", "")
+        cycle = int(Path(name_without_gz).stem.split("-")[1])
     except (IndexError, ValueError) as e:
         logger.error(f"Invalid snapshot filename: {archive_path.name}: {e}")
         return None
@@ -266,7 +273,7 @@ def inspect_snapshot(archive_path: Path) -> Optional[SnapshotSummary]:
     # Count files in archive
     file_count = None
     try:
-        with tarfile.open(archive_path, 'r:gz') as tar:
+        with tarfile.open(archive_path, "r:gz") as tar:
             members = tar.getmembers()
             # Count only files, not directories
             file_count = len([m for m in members if m.isfile()])
@@ -279,7 +286,7 @@ def inspect_snapshot(archive_path: Path) -> Optional[SnapshotSummary]:
         is_complete=is_complete,
         file_count=file_count,
         archive_size_bytes=archive_size,
-        metadata=metadata
+        metadata=metadata,
     )
 
 
@@ -296,7 +303,7 @@ def extract_snapshot(archive_path: Path, extract_dir: Path) -> bool:
     try:
         extract_dir.mkdir(parents=True, exist_ok=True)
 
-        with tarfile.open(archive_path, 'r:gz') as tar:
+        with tarfile.open(archive_path, "r:gz") as tar:
             tar.extractall(path=extract_dir)
 
         logger.info(f"Extracted snapshot to {extract_dir}")
@@ -323,7 +330,7 @@ def validate_snapshot_structure(archive_path: Path) -> tuple[bool, List[str]]:
         return False, errors
 
     try:
-        with tarfile.open(archive_path, 'r:gz') as tar:
+        with tarfile.open(archive_path, "r:gz") as tar:
             member_names = [m.name for m in tar.getmembers()]
 
             # Check for required files
@@ -344,7 +351,9 @@ def validate_snapshot_structure(archive_path: Path) -> tuple[bool, List[str]]:
                     if metadata.elapsed_time < 0:
                         errors.append(f"Invalid elapsed_time: {metadata.elapsed_time}")
                     if metadata.snapshot_period < 60 and metadata.snapshot_period != 0:
-                        errors.append(f"Invalid snapshot_period: {metadata.snapshot_period}")
+                        errors.append(
+                            f"Invalid snapshot_period: {metadata.snapshot_period}"
+                        )
 
     except Exception as e:
         errors.append(f"Failed to read archive: {e}")

@@ -96,7 +96,8 @@ class OSSFuzzReproducer:
             "python3",
             str(self._helper_script),
             "build_fuzzers",
-            "-e", f"BUILD_UID={uid}",
+            "-e",
+            f"BUILD_UID={uid}",
             project_name,
         ]
 
@@ -118,11 +119,8 @@ class OSSFuzzReproducer:
             if result.returncode == 0:
                 logger.info(f"Successfully built fuzzers for {project_name}")
                 return True
-            else:
-                logger.error(
-                    f"Failed to build fuzzers for {project_name}: {result.stderr}"
-                )
-                return False
+            logger.error(f"Failed to build fuzzers for {project_name}: {result.stderr}")
+            return False
 
         except subprocess.TimeoutExpired:
             logger.error(f"Build timeout for {project_name}")
@@ -171,7 +169,8 @@ class OSSFuzzReproducer:
                 str(self._helper_script),
                 "reproduce",
                 "--propagate_exit_codes",
-                "--timeout", str(effective_timeout),
+                "--timeout",
+                str(effective_timeout),
                 project_name,
                 harness,
                 str(testcase_path),
@@ -194,17 +193,16 @@ class OSSFuzzReproducer:
             if result.returncode == 0:
                 logger.info(f"{req_prefix}{project_name}/{harness} did not crash")
                 return False
-            elif result.returncode == EXIT_CODE_TIMEOUT:
+            if result.returncode == EXIT_CODE_TIMEOUT:
                 logger.info(
                     f"{req_prefix}{project_name}/{harness} timed out (exit code 124)"
                 )
                 return False
-            else:
-                logger.info(
-                    f"{req_prefix}{project_name}/{harness} crashed "
-                    f"(exit code {result.returncode})"
-                )
-                return True
+            logger.info(
+                f"{req_prefix}{project_name}/{harness} crashed "
+                f"(exit code {result.returncode})"
+            )
+            return True
 
         except subprocess.TimeoutExpired:
             # Our subprocess timeout (shouldn't happen with grace period)
@@ -213,7 +211,9 @@ class OSSFuzzReproducer:
             )
             return False
         except Exception as e:
-            logger.error(f"{req_prefix}Reproduce error for {project_name}/{harness}: {e}")
+            logger.error(
+                f"{req_prefix}Reproduce error for {project_name}/{harness}: {e}"
+            )
             return False
         finally:
             # Clean up temporary file

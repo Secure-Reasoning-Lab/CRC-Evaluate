@@ -4,17 +4,16 @@ This module defines all job types that can be executed by workers in the distrib
 job queue system. Jobs are enqueued by the orchestrator and executed by workers.
 """
 
-import os
 import time
-import yaml
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any, Dict
 
-from crsbench.utils.logger import get_logger
-from crsbench.evaluation.runner import BenchmarkRunner
-from crsbench.evaluation.crs_executor import StubCRSExecutor
+import yaml
+
 from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
 from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
+from crsbench.evaluation.runner import BenchmarkRunner
+from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -38,23 +37,23 @@ def _get_crs_type(crs_name: str, registry_dir: Path) -> str:
     if not pkg_yaml_path.exists():
         raise FileNotFoundError(f"CRS package file not found: {pkg_yaml_path}")
 
-    with open(pkg_yaml_path, 'r') as f:
+    with pkg_yaml_path.open("r") as f:
         pkg_data = yaml.safe_load(f)
 
-    crs_type = pkg_data.get('type')
+    crs_type = pkg_data.get("type")
     if not crs_type:
         raise ValueError(f"CRS type not specified in {pkg_yaml_path}")
 
-    if crs_type not in ['bug-finding', 'bug-fixing']:
-        raise ValueError(f"Invalid CRS type '{crs_type}' in {pkg_yaml_path}. Must be 'bug-finding' or 'bug-fixing'")
+    if crs_type not in ["bug-finding", "bug-fixing"]:
+        raise ValueError(
+            f"Invalid CRS type '{crs_type}' in {pkg_yaml_path}. Must be 'bug-finding' or 'bug-fixing'"
+        )
 
     return crs_type
 
 
 def build_crs_environment(
-    crs: str,
-    benchmark: str,
-    config: Dict[str, Any]
+    crs: str, benchmark: str, _config: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
     Prepare CRS execution environment.
@@ -89,14 +88,11 @@ def build_crs_environment(
         # Verify benchmark path
 
         result = {
-            'success': True,
-            'crs': crs,
-            'benchmark': benchmark,
-            'environment_ready': True,
-            'metadata': {
-                'setup_time': 0.0,
-                'timestamp': time.time()
-            }
+            "success": True,
+            "crs": crs,
+            "benchmark": benchmark,
+            "environment_ready": True,
+            "metadata": {"setup_time": 0.0, "timestamp": time.time()},
         }
 
         logger.info(f"Environment setup completed for {crs}")
@@ -105,22 +101,17 @@ def build_crs_environment(
     except Exception as e:
         logger.error(f"Environment setup failed for {crs}: {e}")
         return {
-            'success': False,
-            'crs': crs,
-            'benchmark': benchmark,
-            'environment_ready': False,
-            'error': str(e),
-            'metadata': {
-                'timestamp': time.time()
-            }
+            "success": False,
+            "crs": crs,
+            "benchmark": benchmark,
+            "environment_ready": False,
+            "error": str(e),
+            "metadata": {"timestamp": time.time()},
         }
 
 
 def run_crs_trial(
-    crs: str,
-    benchmark: str,
-    trial_num: int,
-    config: Dict[str, Any]
+    crs: str, benchmark: str, trial_num: int, config: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
     Execute a single CRS trial.
@@ -154,21 +145,27 @@ def run_crs_trial(
 
     try:
         # Get snapshot configuration
-        snapshot_period = config.get('snapshot_period')
+        snapshot_period = config.get("snapshot_period")
 
         # Initialize CRS executor
         # Get required paths from config or use defaults
-        oss_fuzz_path = Path(config.get('oss_fuzz_path') or (Path.cwd() / 'oss-fuzz'))
-        registry_dir = Path(config.get('registry_dir') or (Path.cwd() / 'crses' / 'registry'))
-        benchmarks_root = Path(config.get('benchmarks_root') or (Path.cwd() / 'benchmarks'))
-        crs_configs_dir = Path(config.get('crs_configs_dir') or (Path.cwd() / 'crses' / 'configs'))
+        oss_fuzz_path = Path(config.get("oss_fuzz_path") or (Path.cwd() / "oss-fuzz"))
+        registry_dir = Path(
+            config.get("registry_dir") or (Path.cwd() / "crses" / "registry")
+        )
+        benchmarks_root = Path(
+            config.get("benchmarks_root") or (Path.cwd() / "benchmarks")
+        )
+        crs_configs_dir = Path(
+            config.get("crs_configs_dir") or (Path.cwd() / "crses" / "configs")
+        )
 
         # Detect CRS type from registry
         crs_type = _get_crs_type(crs, registry_dir)
         logger.info(f"Detected CRS type '{crs_type}' for CRS '{crs}'")
 
         # Create appropriate executor based on CRS type
-        if crs_type == 'bug-fixing':
+        if crs_type == "bug-fixing":
             # Patch generation CRS
             crs_executor = CRSPatchExecutor(
                 crs_config_name=crs,
@@ -176,7 +173,7 @@ def run_crs_trial(
                 registry_dir=registry_dir,
                 benchmarks_root=benchmarks_root,
                 crs_configs_dir=crs_configs_dir,
-                litellm_mode=config.get('litellm_mode', 'passthrough')
+                litellm_mode=config.get("litellm_mode", "passthrough"),
             )
         else:
             # Bug finding CRS
@@ -186,18 +183,20 @@ def run_crs_trial(
                 registry_dir=registry_dir,
                 benchmarks_root=benchmarks_root,
                 crs_configs_dir=crs_configs_dir,
-                litellm_mode=config.get('litellm_mode', 'passthrough')
+                litellm_mode=config.get("litellm_mode", "passthrough"),
             )
 
         # Configure executor
-        crs_executor.configure_crs({
-            'build_timeout': config.get('build_timeout', 3600),
-            'run_timeout': config.get('max_total_time', 7200),
-            'hints_enabled': config.get('hints_enabled', False),
-            'hint_sarif_level': config.get('hint_sarif_level'),
-            'hint_corpus_level': config.get('hint_corpus_level'),
-            'project_image_prefix': config.get('project_image_prefix', 'aixcc-afc'),
-        })
+        crs_executor.configure_crs(
+            {
+                "build_timeout": config.get("build_timeout", 3600),
+                "run_timeout": config.get("max_total_time", 7200),
+                "hints_enabled": config.get("hints_enabled", False),
+                "hint_sarif_level": config.get("hint_sarif_level"),
+                "hint_corpus_level": config.get("hint_corpus_level"),
+                "project_image_prefix": config.get("project_image_prefix", "aixcc-afc"),
+            }
+        )
 
         # Initialize benchmark runner with CRS executor and snapshot configuration
         runner = BenchmarkRunner(crs_executor, snapshot_period=snapshot_period)
@@ -207,9 +206,15 @@ def run_crs_trial(
         logger.debug(f"Resolved benchmark path: {benchmark_path}")
 
         # Create trial output directory
-        experiment_filestore = Path(config.get('experiment_filestore', '/tmp/experiments')).resolve()
-        experiment_name = config.get('experiment', 'unknown')
-        trial_output_dir = experiment_filestore / experiment_name / f"{crs}_{benchmark}_trial{trial_num}"
+        experiment_filestore = Path(
+            config.get("experiment_filestore", "/tmp/experiments")
+        ).resolve()
+        experiment_name = config.get("experiment", "unknown")
+        trial_output_dir = (
+            experiment_filestore
+            / experiment_name
+            / f"{crs}_{benchmark}_trial{trial_num}"
+        )
         trial_output_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Trial output directory: {trial_output_dir}")
 
@@ -217,32 +222,32 @@ def run_crs_trial(
         # Note: CRS is already configured via executor.configure_crs() above
         result = runner.run_benchmark(
             benchmark_path=benchmark_path,
-            mode='auto',  # Auto-detect delta/full mode
+            mode="auto",  # Auto-detect delta/full mode
             crs_config={},  # Empty config - executor already configured
             trial_output_dir=trial_output_dir,
-            oss_fuzz_path=oss_fuzz_path
+            oss_fuzz_path=oss_fuzz_path,
         )
 
         execution_time = time.time() - start_time
 
         # Prepare trial result
         trial_result = {
-            'crs': crs,
-            'benchmark': benchmark,
-            'trial_num': trial_num,
-            'success': result.is_valid,
-            'povs_found': result.povs_found,
-            'total_povs': result.total_povs,
-            'success_rate': result.success_rate,
-            'execution_time': execution_time,
-            'report': result.report.to_dict(),
-            'metadata': {
-                'experiment_filestore': config.get('experiment_filestore'),
-                'max_total_time': config.get('max_total_time'),
-                'difficulty_level': config.get('difficulty_level'),
-                'timestamp_start': start_time,
-                'timestamp_end': time.time(),
-            }
+            "crs": crs,
+            "benchmark": benchmark,
+            "trial_num": trial_num,
+            "success": result.is_valid,
+            "povs_found": result.povs_found,
+            "total_povs": result.total_povs,
+            "success_rate": result.success_rate,
+            "execution_time": execution_time,
+            "report": result.report.to_dict(),
+            "metadata": {
+                "experiment_filestore": config.get("experiment_filestore"),
+                "max_total_time": config.get("max_total_time"),
+                "difficulty_level": config.get("difficulty_level"),
+                "timestamp_start": start_time,
+                "timestamp_end": time.time(),
+            },
         }
 
         logger.info(
@@ -256,41 +261,38 @@ def run_crs_trial(
         execution_time = time.time() - start_time
         logger.error(f"[Trial {trial_num}] Benchmark not found: {e}")
         return {
-            'crs': crs,
-            'benchmark': benchmark,
-            'trial_num': trial_num,
-            'success': False,
-            'error': f"Benchmark not found: {str(e)}",
-            'error_type': 'FileNotFoundError',
-            'execution_time': execution_time,
-            'metadata': {
-                'timestamp_start': start_time,
-                'timestamp_end': time.time(),
-            }
+            "crs": crs,
+            "benchmark": benchmark,
+            "trial_num": trial_num,
+            "success": False,
+            "error": f"Benchmark not found: {str(e)}",
+            "error_type": "FileNotFoundError",
+            "execution_time": execution_time,
+            "metadata": {
+                "timestamp_start": start_time,
+                "timestamp_end": time.time(),
+            },
         }
 
     except Exception as e:
         execution_time = time.time() - start_time
         logger.error(f"[Trial {trial_num}] Failed with error: {e}", exc_info=True)
         return {
-            'crs': crs,
-            'benchmark': benchmark,
-            'trial_num': trial_num,
-            'success': False,
-            'error': str(e),
-            'error_type': type(e).__name__,
-            'execution_time': execution_time,
-            'metadata': {
-                'timestamp_start': start_time,
-                'timestamp_end': time.time(),
-            }
+            "crs": crs,
+            "benchmark": benchmark,
+            "trial_num": trial_num,
+            "success": False,
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "execution_time": execution_time,
+            "metadata": {
+                "timestamp_start": start_time,
+                "timestamp_end": time.time(),
+            },
         }
 
 
-def evaluate_crs_trial(
-    trial_id: str,
-    trial_data: Dict[str, Any]
-) -> Dict[str, Any]:
+def evaluate_crs_trial(trial_id: str, trial_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Evaluate and aggregate CRS trial results.
 
@@ -322,15 +324,12 @@ def evaluate_crs_trial(
         # - Statistical analysis
 
         evaluation_result = {
-            'trial_id': trial_id,
-            'evaluation_complete': True,
-            'crs': trial_data.get('crs'),
-            'benchmark': trial_data.get('benchmark'),
-            'trial_num': trial_data.get('trial_num'),
-            'metadata': {
-                'evaluation_time': 0.0,
-                'timestamp': time.time()
-            }
+            "trial_id": trial_id,
+            "evaluation_complete": True,
+            "crs": trial_data.get("crs"),
+            "benchmark": trial_data.get("benchmark"),
+            "trial_num": trial_data.get("trial_num"),
+            "metadata": {"evaluation_time": 0.0, "timestamp": time.time()},
         }
 
         logger.info(f"Evaluation completed for trial {trial_id}")
@@ -339,12 +338,10 @@ def evaluate_crs_trial(
     except Exception as e:
         logger.error(f"Evaluation failed for trial {trial_id}: {e}")
         return {
-            'trial_id': trial_id,
-            'evaluation_complete': False,
-            'error': str(e),
-            'metadata': {
-                'timestamp': time.time()
-            }
+            "trial_id": trial_id,
+            "evaluation_complete": False,
+            "error": str(e),
+            "metadata": {"timestamp": time.time()},
         }
 
 
@@ -379,7 +376,7 @@ def _resolve_benchmark_path(benchmark: str, config: Dict[str, Any]) -> Path:
         return benchmark_path
 
     # Try to get benchmarks root from config
-    benchmarks_root = config.get('benchmarks_root')
+    benchmarks_root = config.get("benchmarks_root")
     if benchmarks_root:
         benchmark_path = Path(benchmarks_root) / benchmark
         if benchmark_path.exists():
@@ -388,7 +385,7 @@ def _resolve_benchmark_path(benchmark: str, config: Dict[str, Any]) -> Path:
 
     # Fall back to standard location
     # TODO: Make this configurable or discover dynamically
-    default_benchmarks_root = Path(__file__).parent.parent.parent / 'benchmarks'
+    default_benchmarks_root = Path(__file__).parent.parent.parent / "benchmarks"
     benchmark_path = default_benchmarks_root / benchmark
 
     if benchmark_path.exists():

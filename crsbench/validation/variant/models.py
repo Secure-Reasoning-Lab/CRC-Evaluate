@@ -11,6 +11,7 @@ from typing import Optional
 
 class BenchmarkMode(Enum):
     """Benchmark testing mode."""
+
     FULL = "full"
     DELTA = "delta"
 
@@ -24,6 +25,7 @@ class BuildTag(Enum):
     - ALL_PATCHED: All patches applied (should not crash)
     - CPV: Single CPV excluded (should crash if POV triggers that CPV)
     """
+
     FULL_BASE = "fullbase"
     DELTA_BASE = "deltabase"
     DELTA_REF = "deltaref"
@@ -44,6 +46,7 @@ class BuildVersion:
         variant_project_name: Full variant name (e.g., "afc-curl-delta-01-cpv0")
         cpv_num: CPV number if build_tag is CPV, None otherwise
     """
+
     benchmark_name: str
     lang: str
     mode: BenchmarkMode

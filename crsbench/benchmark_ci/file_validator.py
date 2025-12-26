@@ -1,19 +1,20 @@
 """File validation for benchmark format and structure."""
 
 import os
-import yaml
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List
 
-from crsbench.utils.logger import get_logger
+import yaml
+
 from crsbench.benchmark_ci.utils import (
+    POV,
+    Harness,
     Task,
     TaskMode,
-    Harness,
     Vulnerability,
-    POV,
     get_benchmarks_root,
 )
+from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -47,7 +48,7 @@ def check_benchmark_files(benchmark: str) -> None:
         raise Exception(f"[Error] meta.yaml not found: {meta_yaml_path}")
 
     # Load and validate meta.yaml
-    with open(meta_yaml_path) as f:
+    with meta_yaml_path.open() as f:
         meta_config = yaml.safe_load(f)
 
     _validate_meta_yaml_structure(meta_config, meta_yaml_path)
@@ -58,13 +59,13 @@ def check_benchmark_files(benchmark: str) -> None:
         raise Exception(f"[Error] project.yaml not found: {project_yaml_path}")
 
     # Load and validate project.yaml
-    with open(project_yaml_path) as f:
+    with project_yaml_path.open() as f:
         project_config = yaml.safe_load(f)
 
     _validate_project_yaml_structure(project_config, project_yaml_path)
 
     # Check harnesses and vulnerabilities
-    _check_harness_files(benchmark, meta_config, aixcc_dir)
+    _check_harness_files(meta_config, aixcc_dir)
 
     # Check test.sh exists and is executable
     test_sh_path = benchmark_dir / "test.sh"
@@ -91,7 +92,9 @@ def _validate_meta_yaml_structure(config: Dict[str, Any], path: Path) -> None:
     has_full = "full_mode" in config
 
     if not has_delta and not has_full:
-        raise Exception(f"[Error] meta.yaml must have 'delta_mode' or 'full_mode': {path}")
+        raise Exception(
+            f"[Error] meta.yaml must have 'delta_mode' or 'full_mode': {path}"
+        )
 
     # Validate delta_mode structure
     if has_delta:
@@ -127,18 +130,14 @@ def _validate_project_yaml_structure(config: Dict[str, Any], path: Path) -> None
             raise Exception(f"[Error] 'sanitizers' must be a list: {path}")
 
 
-def _check_harness_files(
-    benchmark: str,
-    meta_config: Dict[str, Any],
-    aixcc_dir: Path
-) -> None:
+def _check_harness_files(meta_config: Dict[str, Any], aixcc_dir: Path) -> None:
     """Check that harness directories and files exist."""
     harness_files = meta_config.get("harness_files", [])
 
     for harness_entry in harness_files:
         harness_name = harness_entry.get("name")
         if not harness_name:
-            raise Exception(f"[Error] Harness entry missing 'name' in meta.yaml")
+            raise Exception("[Error] Harness entry missing 'name' in meta.yaml")
 
         # Check harness directory in .aixcc
         harness_dir = aixcc_dir / harness_name
@@ -148,7 +147,9 @@ def _check_harness_files(
         for vuln in vulns:
             vuln_keyword = vuln.get("vuln_keyword")
             if not vuln_keyword:
-                raise Exception(f"[Error] Vulnerability missing 'vuln_keyword' for harness {harness_name}")
+                raise Exception(
+                    f"[Error] Vulnerability missing 'vuln_keyword' for harness {harness_name}"
+                )
 
             vuln_dir = harness_dir / vuln_keyword
             if not vuln_dir.exists():
@@ -172,7 +173,9 @@ def _check_harness_files(
             if patches_dir.exists():
                 patch_files = list(patches_dir.glob("*.diff"))
                 if not patch_files:
-                    logger.warning(f"patches directory exists but no .diff files: {patches_dir}")
+                    logger.warning(
+                        f"patches directory exists but no .diff files: {patches_dir}"
+                    )
 
 
 def get_tasks(benchmark: str) -> List[Task]:
@@ -187,7 +190,7 @@ def get_tasks(benchmark: str) -> List[Task]:
     benchmarks_root = get_benchmarks_root()
     meta_yaml_path = Path(benchmarks_root) / benchmark / ".aixcc" / "meta.yaml"
 
-    with open(meta_yaml_path) as f:
+    with meta_yaml_path.open() as f:
         meta_config = yaml.safe_load(f)
 
     tasks = []
@@ -195,19 +198,18 @@ def get_tasks(benchmark: str) -> List[Task]:
     # Check for delta mode
     if "delta_mode" in meta_config:
         delta_mode = meta_config["delta_mode"]
-        tasks.append(Task(
-            mode=TaskMode.DELTA,
-            base_commit=delta_mode["base_commit"],
-            ref_commit=delta_mode["ref_commit"]
-        ))
+        tasks.append(
+            Task(
+                mode=TaskMode.DELTA,
+                base_commit=delta_mode["base_commit"],
+                ref_commit=delta_mode["ref_commit"],
+            )
+        )
 
     # Check for full mode
     if "full_mode" in meta_config:
         full_mode = meta_config["full_mode"]
-        tasks.append(Task(
-            mode=TaskMode.FULL,
-            base_commit=full_mode["base_commit"]
-        ))
+        tasks.append(Task(mode=TaskMode.FULL, base_commit=full_mode["base_commit"]))
 
     return tasks
 
@@ -226,7 +228,7 @@ def get_harnesses(benchmark: str) -> List[Harness]:
     meta_yaml_path = benchmark_dir / ".aixcc" / "meta.yaml"
     aixcc_dir = benchmark_dir / ".aixcc"
 
-    with open(meta_yaml_path) as f:
+    with meta_yaml_path.open() as f:
         meta_config = yaml.safe_load(f)
 
     harnesses = []
@@ -249,16 +251,12 @@ def get_harnesses(benchmark: str) -> List[Harness]:
             vuln_cwes = []
 
             if vuln_yaml_path.exists():
-                with open(vuln_yaml_path) as f:
+                with vuln_yaml_path.open() as f:
                     vuln_config = yaml.safe_load(f)
                     vuln_name = vuln_config.get("name", vuln_keyword)
                     vuln_cwes = vuln_config.get("cwes", [])
 
-            vuln = Vulnerability(
-                id=vuln_keyword,
-                name=vuln_name,
-                cwes=vuln_cwes
-            )
+            vuln = Vulnerability(id=vuln_keyword, name=vuln_name, cwes=vuln_cwes)
 
             # Parse POVs
             povs = vuln_entry.get("povs", [])
@@ -273,7 +271,7 @@ def get_harnesses(benchmark: str) -> List[Harness]:
                     id=pov_id,
                     sanitizer=pov_sanitizer,
                     error_token=pov_error_token,
-                    blob_path=str(pov_blob_path)
+                    blob_path=str(pov_blob_path),
                 )
                 vuln.povs.append(pov)
 
@@ -303,5 +301,5 @@ def get_project_config(benchmark: str) -> Dict[str, Any]:
     benchmarks_root = get_benchmarks_root()
     project_yaml_path = Path(benchmarks_root) / benchmark / "project.yaml"
 
-    with open(project_yaml_path) as f:
+    with project_yaml_path.open() as f:
         return yaml.safe_load(f)

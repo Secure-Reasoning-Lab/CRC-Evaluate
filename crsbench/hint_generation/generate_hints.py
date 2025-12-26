@@ -25,12 +25,12 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from crsbench.utils.logger import get_logger, configure_logger
-from crsbench.utils import log_summary
 from crsbench.hint_generation.sarif_generator_simple import (
-    generate_hints_for_benchmark,
     HintLevel,
+    generate_hints_for_benchmark,
 )
+from crsbench.utils import log_summary
+from crsbench.utils.logger import configure_logger, get_logger
 
 logger = get_logger(__name__)
 
@@ -72,6 +72,7 @@ def generate_hints_for_all_benchmarks(
     benchmark_names: Optional[List[str]] = None,
     levels: Optional[List[HintLevel]] = None,
     output_subdir: str = "hints",
+    *,
     force_regenerate: bool = False,
 ) -> None:
     """Generate SARIF hints for all benchmarks with vuln.yaml files.
@@ -141,12 +142,16 @@ def generate_hints_for_all_benchmarks(
             failure_count += 1
 
     # Summary
-    log_summary("Hint generation complete", {
-        "total": len(vuln_yaml_files),
-        "success": success_count,
-        "skipped": skipped_count,
-        "failures": failure_count
-    }, show_percentage=False)
+    log_summary(
+        "Hint generation complete",
+        {
+            "total": len(vuln_yaml_files),
+            "success": success_count,
+            "skipped": skipped_count,
+            "failures": failure_count,
+        },
+        show_percentage=False,
+    )
 
 
 def parse_args() -> argparse.Namespace:

@@ -1,8 +1,8 @@
 """Variant building module for POV validation."""
 
 from crsbench.validation.variant.models import (
-    BuildTag,
     BenchmarkMode,
+    BuildTag,
     BuildVersion,
 )
 
@@ -10,7 +10,7 @@ from crsbench.validation.variant.models import (
 # Use: from crsbench.validation.variant.builder import VariantBuilder
 
 __all__ = [
-    'BuildTag',
-    'BenchmarkMode',
-    'BuildVersion',
+    "BuildTag",
+    "BenchmarkMode",
+    "BuildVersion",
 ]

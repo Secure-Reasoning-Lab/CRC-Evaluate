@@ -6,18 +6,15 @@ Tests validate:
 3. Cross-CPV POVs should not match wrong CPVs
 """
 
-import pytest
 from pathlib import Path
-from unittest.mock import Mock, patch
 
-from crsbench.validation.variant.models import BenchmarkMode, BuildTag, BuildVersion
+import pytest
+from crsbench.validation.meta_adapter import MetaYamlAdapter
+from crsbench.validation.variant.models import BenchmarkMode, BuildTag
 from crsbench.validation.verification.models import (
-    VerificationRequest,
-    VerificationResult,
     VerificationStatus,
 )
 from crsbench.validation.verification.verdict import VerdictResolver
-from crsbench.validation.meta_adapter import MetaYamlAdapter
 
 
 class TestSanityMockCDeltaValidation:
@@ -57,7 +54,14 @@ class TestSanityMockCDeltaValidation:
 
     def test_cpv0_pov_location_exists(self, benchmark_path):
         """Verify CPV_0 POV blob exists."""
-        pov_path = benchmark_path / ".aixcc" / "fuzz_process_input_header" / "cpv_0" / "blobs" / "pov_0.blob"
+        pov_path = (
+            benchmark_path
+            / ".aixcc"
+            / "fuzz_process_input_header"
+            / "cpv_0"
+            / "blobs"
+            / "pov_0.blob"
+        )
         if not pov_path.exists():
             pytest.skip(f"POV not found: {pov_path}")
         assert pov_path.exists()
@@ -65,7 +69,14 @@ class TestSanityMockCDeltaValidation:
 
     def test_cpv1_pov_location_exists(self, benchmark_path):
         """Verify CPV_1 POV blob exists."""
-        pov_path = benchmark_path / ".aixcc" / "fuzz_parse_buffer_section" / "cpv_1" / "blobs" / "pov_0.blob"
+        pov_path = (
+            benchmark_path
+            / ".aixcc"
+            / "fuzz_parse_buffer_section"
+            / "cpv_1"
+            / "blobs"
+            / "pov_0.blob"
+        )
         if not pov_path.exists():
             pytest.skip(f"POV not found: {pov_path}")
         assert pov_path.exists()
@@ -85,11 +96,11 @@ class TestSanityMockCDeltaValidation:
             mode=BenchmarkMode.DELTA,
             crash_results={
                 BuildTag.DELTA_BASE: False,  # Base doesn't crash
-                BuildTag.DELTA_REF: True,    # Ref crashes (has the bug)
-                BuildTag.ALL_PATCHED: False, # All patched doesn't crash
+                BuildTag.DELTA_REF: True,  # Ref crashes (has the bug)
+                BuildTag.ALL_PATCHED: False,  # All patched doesn't crash
             },
             cpv_crash_map={
-                0: True,   # CPV_0 variant crashes (missing cpv_0 patch)
+                0: True,  # CPV_0 variant crashes (missing cpv_0 patch)
                 1: False,  # CPV_1 variant doesn't crash (cpv_0 patch applied)
             },
             benchmark_name="sanity-mock-c-delta-01",
@@ -119,7 +130,7 @@ class TestSanityMockCDeltaValidation:
             },
             cpv_crash_map={
                 0: False,  # CPV_0 variant doesn't crash (cpv_1 patch applied)
-                1: True,   # CPV_1 variant crashes (missing cpv_1 patch)
+                1: True,  # CPV_1 variant crashes (missing cpv_1 patch)
             },
             benchmark_name="sanity-mock-c-delta-01",
             pov_id="cpv_1_pov_0",
@@ -250,11 +261,26 @@ class TestMetaYamlAdapterIntegration:
         )
 
         # Test variant naming
-        assert adapter.get_variant_name(BuildTag.DELTA_BASE) == "sanity-mock-c-delta-01-deltabase"
-        assert adapter.get_variant_name(BuildTag.DELTA_REF) == "sanity-mock-c-delta-01-deltaref"
-        assert adapter.get_variant_name(BuildTag.ALL_PATCHED) == "sanity-mock-c-delta-01-allpatched"
-        assert adapter.get_variant_name(BuildTag.CPV, cpv_num=0) == "sanity-mock-c-delta-01-cpv0"
-        assert adapter.get_variant_name(BuildTag.CPV, cpv_num=1) == "sanity-mock-c-delta-01-cpv1"
+        assert (
+            adapter.get_variant_name(BuildTag.DELTA_BASE)
+            == "sanity-mock-c-delta-01-deltabase"
+        )
+        assert (
+            adapter.get_variant_name(BuildTag.DELTA_REF)
+            == "sanity-mock-c-delta-01-deltaref"
+        )
+        assert (
+            adapter.get_variant_name(BuildTag.ALL_PATCHED)
+            == "sanity-mock-c-delta-01-allpatched"
+        )
+        assert (
+            adapter.get_variant_name(BuildTag.CPV, cpv_num=0)
+            == "sanity-mock-c-delta-01-cpv0"
+        )
+        assert (
+            adapter.get_variant_name(BuildTag.CPV, cpv_num=1)
+            == "sanity-mock-c-delta-01-cpv1"
+        )
 
     def test_adapter_harness_names(self, meta_yaml_path):
         """Test harness name extraction."""

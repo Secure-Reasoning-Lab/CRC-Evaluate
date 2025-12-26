@@ -25,7 +25,7 @@ def check_image_exists(benchmark_name: str) -> bool:
             ["docker", "images", "-q", image_tag],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
         )
         return bool(result.stdout.strip())
     except Exception:
@@ -58,7 +58,7 @@ async def test_check_test_sh(benchmark_name: str):
     print(f"   Has test.sh: {info.get('has_test_sh', False)}")
     print(f"   Project source: {info.get('project_source_dir', 'Not found')}")
 
-    if not info.get('has_test_sh'):
+    if not info.get("has_test_sh"):
         print("❌ FAILED: No test.sh found for this benchmark")
         return False
 
@@ -108,13 +108,12 @@ async def test_check_test_sh(benchmark_name: str):
     if result["success"]:
         print("\n✅ PASSED: test.sh executed successfully (exit code 0)")
         return True
-    elif result["timed_out"]:
+    if result["timed_out"]:
         print("\n⚠️  test.sh timed out (took more than 10 minutes)")
         return True  # Tool worked, but test.sh is slow
-    else:
-        print(f"\n⚠️  test.sh failed with exit code {result['returncode']}")
-        print("   This is not an MCP tool failure - test.sh needs debugging")
-        return True  # Tool worked, but test.sh has issues
+    print(f"\n⚠️  test.sh failed with exit code {result['returncode']}")
+    print("   This is not an MCP tool failure - test.sh needs debugging")
+    return True  # Tool worked, but test.sh has issues
 
 
 async def main():
@@ -136,13 +135,13 @@ async def main():
         if success:
             print("\n✅ Test completed successfully")
             return 0
-        else:
-            print("\n❌ Test failed")
-            return 1
+        print("\n❌ Test failed")
+        return 1
 
     except Exception as e:
         print(f"\n❌ Exception occurred: {e}")
         import traceback
+
         traceback.print_exc()
         return 1
 

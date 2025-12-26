@@ -13,7 +13,10 @@ Future extensions can add:
 from abc import ABC, abstractmethod
 from typing import List
 
-from crsbench.validation.verification.models import VerificationResult, VerificationStatus
+from crsbench.validation.verification.models import (
+    VerificationResult,
+    VerificationStatus,
+)
 
 
 class DeduplicationStrategy(ABC):
@@ -35,13 +38,11 @@ class DeduplicationStrategy(ABC):
         Returns:
             List of unique verification results
         """
-        pass
 
     @property
     @abstractmethod
     def name(self) -> str:
         """Return the name of this deduplication strategy."""
-        pass
 
 
 class PatchBasedDedup(DeduplicationStrategy):

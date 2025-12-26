@@ -1,23 +1,20 @@
 """Unit tests for snapshot data structures and utilities."""
 
 import json
-import pytest
 import tarfile
 import time
-from pathlib import Path
-from tempfile import TemporaryDirectory
 
 from crsbench.evaluation.snapshot import (
     SnapshotMetadata,
     SnapshotSummary,
-    is_snapshot_complete,
-    get_snapshot_archive_path,
+    extract_snapshot,
     get_completion_marker_path,
+    get_snapshot_archive_path,
+    inspect_snapshot,
+    is_snapshot_complete,
     list_snapshots,
     load_snapshot_metadata,
-    inspect_snapshot,
-    extract_snapshot,
-    validate_snapshot_structure
+    validate_snapshot_structure,
 )
 
 
@@ -27,10 +24,7 @@ class TestSnapshotMetadata:
     def test_create_metadata(self):
         """Test creating snapshot metadata."""
         metadata = SnapshotMetadata(
-            cycle=1,
-            timestamp=1234567890.0,
-            elapsed_time=900.0,
-            snapshot_period=900
+            cycle=1, timestamp=1234567890.0, elapsed_time=900.0, snapshot_period=900
         )
 
         assert metadata.cycle == 1
@@ -41,26 +35,23 @@ class TestSnapshotMetadata:
     def test_to_dict(self):
         """Test converting metadata to dict."""
         metadata = SnapshotMetadata(
-            cycle=2,
-            timestamp=1234567890.0,
-            elapsed_time=1800.0,
-            snapshot_period=600
+            cycle=2, timestamp=1234567890.0, elapsed_time=1800.0, snapshot_period=600
         )
 
         data = metadata.to_dict()
 
-        assert data['cycle'] == 2
-        assert data['timestamp'] == 1234567890.0
-        assert data['elapsed_time'] == 1800.0
-        assert data['snapshot_period'] == 600
+        assert data["cycle"] == 2
+        assert data["timestamp"] == 1234567890.0
+        assert data["elapsed_time"] == 1800.0
+        assert data["snapshot_period"] == 600
 
     def test_from_dict(self):
         """Test creating metadata from dict."""
         data = {
-            'cycle': 3,
-            'timestamp': 1234567890.0,
-            'elapsed_time': 2700.0,
-            'snapshot_period': 900
+            "cycle": 3,
+            "timestamp": 1234567890.0,
+            "elapsed_time": 2700.0,
+            "snapshot_period": 900,
         }
 
         metadata = SnapshotMetadata.from_dict(data)
@@ -73,17 +64,14 @@ class TestSnapshotMetadata:
     def test_to_json(self):
         """Test JSON serialization."""
         metadata = SnapshotMetadata(
-            cycle=1,
-            timestamp=1234567890.0,
-            elapsed_time=900.0,
-            snapshot_period=900
+            cycle=1, timestamp=1234567890.0, elapsed_time=900.0, snapshot_period=900
         )
 
         json_str = metadata.to_json()
         data = json.loads(json_str)
 
-        assert data['cycle'] == 1
-        assert data['timestamp'] == 1234567890.0
+        assert data["cycle"] == 1
+        assert data["timestamp"] == 1234567890.0
 
     def test_from_json(self):
         """Test JSON deserialization."""
@@ -176,7 +164,7 @@ class TestSnapshotArchive:
             cycle=cycle,
             timestamp=time.time(),
             elapsed_time=cycle * 900.0,
-            snapshot_period=900
+            snapshot_period=900,
         )
         (content_dir / "metadata.json").write_text(metadata.to_json())
 
@@ -196,8 +184,8 @@ class TestSnapshotArchive:
 
         # Create tar.gz archive
         archive_path = tmp_path / f"snapshot-{cycle:04d}.tar.gz"
-        with tarfile.open(archive_path, 'w:gz') as tar:
-            for item in content_dir.rglob('*'):
+        with tarfile.open(archive_path, "w:gz") as tar:
+            for item in content_dir.rglob("*"):
                 if item.is_file():
                     arcname = item.relative_to(content_dir)
                     tar.add(item, arcname=arcname)
@@ -208,6 +196,7 @@ class TestSnapshotArchive:
 
         # Cleanup temp directory
         import shutil
+
         shutil.rmtree(content_dir)
 
         return archive_path
@@ -303,10 +292,11 @@ class TestSnapshotArchive:
         (content_dir / "config.yaml").write_text("test")
 
         archive_path = tmp_path / "snapshot-0001.tar.gz"
-        with tarfile.open(archive_path, 'w:gz') as tar:
+        with tarfile.open(archive_path, "w:gz") as tar:
             tar.add(content_dir / "config.yaml", arcname="config.yaml")
 
         import shutil
+
         shutil.rmtree(content_dir)
 
         is_valid, errors = validate_snapshot_structure(archive_path)
@@ -328,7 +318,7 @@ class TestSnapshotSummary:
             archive_path=archive_path,
             is_complete=True,
             file_count=10,
-            archive_size_bytes=1024
+            archive_size_bytes=1024,
         )
 
         assert summary.cycle == 1
@@ -342,17 +332,11 @@ class TestSnapshotSummary:
         """Test summary with metadata."""
         archive_path = tmp_path / "snapshot-0002.tar.gz"
         metadata = SnapshotMetadata(
-            cycle=2,
-            timestamp=time.time(),
-            elapsed_time=1800.0,
-            snapshot_period=900
+            cycle=2, timestamp=time.time(), elapsed_time=1800.0, snapshot_period=900
         )
 
         summary = SnapshotSummary(
-            cycle=2,
-            archive_path=archive_path,
-            is_complete=True,
-            metadata=metadata
+            cycle=2, archive_path=archive_path, is_complete=True, metadata=metadata
         )
 
         assert summary.metadata is not None

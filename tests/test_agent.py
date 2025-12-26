@@ -1,29 +1,30 @@
 """Tests for Claude Agent SDK integration."""
 
 import os
-import pytest
 from pathlib import Path
+
+import pytest
 
 # Try to import claude_agent_sdk, skip tests if not available
 pytest.importorskip("claude_agent_sdk")
 
 from crsbench.migration.test_sh_generator import (
     ShTestGenerator,
-    generate_test_sh_for_benchmark
+    generate_test_sh_for_benchmark,
 )
 from crsbench.utils.repo_manager import find_or_clone_project
-
 
 # ============================================================================
 # Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def litellm_config():
     """Get LiteLLM configuration from environment."""
     return {
         "base_url": os.getenv("LITELLM_BASE_URL", "http://localhost:4000"),
-        "api_key": os.getenv("LITELLM_API_KEY", "test-key")
+        "api_key": os.getenv("LITELLM_API_KEY", "test-key"),
     }
 
 
@@ -123,6 +124,7 @@ chmod +x $OUT/dummy_fuzzer
 # TestShGeneratorAgent Tests
 # ============================================================================
 
+
 class TestShTestGenerator:
     """Test ShTestGenerator class."""
 
@@ -130,7 +132,7 @@ class TestShTestGenerator:
         """Test agent can be initialized."""
         agent = ShTestGenerator(
             litellm_base_url=litellm_config["base_url"],
-            litellm_api_key=litellm_config["api_key"]
+            litellm_api_key=litellm_config["api_key"],
         )
 
         assert agent.litellm_base_url == litellm_config["base_url"]
@@ -170,7 +172,7 @@ class TestShTestGenerator:
         """Test agent has all required methods."""
         agent = ShTestGenerator(
             litellm_base_url=litellm_config["base_url"],
-            litellm_api_key=litellm_config["api_key"]
+            litellm_api_key=litellm_config["api_key"],
         )
 
         assert hasattr(agent, "find_unit_tests")
@@ -189,10 +191,11 @@ class TestShTestGenerator:
 # Integration Tests (requires actual LiteLLM connection)
 # ============================================================================
 
+
 @pytest.mark.integration
 @pytest.mark.skipif(
     not os.getenv("LITELLM_BASE_URL") or not os.getenv("LITELLM_API_KEY"),
-    reason="LiteLLM environment variables not set"
+    reason="LiteLLM environment variables not set",
 )
 class TestAgentIntegration:
     """Integration tests requiring actual LiteLLM connection."""
@@ -201,7 +204,7 @@ class TestAgentIntegration:
         """Test finding unit tests in a project."""
         agent = ShTestGenerator(
             litellm_base_url=litellm_config["base_url"],
-            litellm_api_key=litellm_config["api_key"]
+            litellm_api_key=litellm_config["api_key"],
         )
 
         # This will make actual API call
@@ -221,7 +224,7 @@ class TestAgentIntegration:
         """Test generating test.sh script."""
         agent = ShTestGenerator(
             litellm_base_url=litellm_config["base_url"],
-            litellm_api_key=litellm_config["api_key"]
+            litellm_api_key=litellm_config["api_key"],
         )
 
         # Mock test analysis
@@ -247,9 +250,7 @@ mvn test
 
         # This will make actual API call
         result, log = agent.generate_test_sh_script_sync(
-            test_analysis,
-            "test-benchmark",
-            verbose=False
+            test_analysis, "test-benchmark", verbose=False
         )
 
         # Check we got a bash script
@@ -262,10 +263,7 @@ mvn test
         assert len(log) > 0
 
     def test_generate_test_sh_for_benchmark(
-        self,
-        temp_benchmark_dir,
-        temp_project_dir,
-        litellm_config
+        self, temp_benchmark_dir, temp_project_dir, litellm_config
     ):
         """Test full workflow of generating test.sh for benchmark."""
         result = generate_test_sh_for_benchmark(
@@ -274,7 +272,7 @@ mvn test
             project_dir=str(temp_project_dir),
             litellm_base_url=litellm_config["base_url"],
             litellm_api_key=litellm_config["api_key"],
-            verbose=False
+            verbose=False,
         )
 
         # Check result
@@ -303,6 +301,7 @@ mvn test
 # Function Tests
 # ============================================================================
 
+
 class TestGenerateTestShForBenchmark:
     """Test generate_test_sh_for_benchmark function."""
 
@@ -313,7 +312,7 @@ class TestGenerateTestShForBenchmark:
             benchmark_dir="/nonexistent/path",
             project_dir=str(temp_project_dir),
             litellm_base_url=litellm_config["base_url"],
-            litellm_api_key=litellm_config["api_key"]
+            litellm_api_key=litellm_config["api_key"],
         )
 
         assert result["success"] is False
@@ -326,17 +325,14 @@ class TestGenerateTestShForBenchmark:
             benchmark_dir=str(temp_benchmark_dir),
             project_dir="/nonexistent/path",
             litellm_base_url=litellm_config["base_url"],
-            litellm_api_key=litellm_config["api_key"]
+            litellm_api_key=litellm_config["api_key"],
         )
 
         assert result["success"] is False
         assert "not found" in result["message"].lower()
 
     def test_existing_test_sh_without_force(
-        self,
-        temp_benchmark_dir,
-        temp_project_dir,
-        litellm_config
+        self, temp_benchmark_dir, temp_project_dir, litellm_config
     ):
         """Test when test.sh already exists without force flag."""
         # Create existing test.sh
@@ -349,7 +345,7 @@ class TestGenerateTestShForBenchmark:
             project_dir=str(temp_project_dir),
             litellm_base_url=litellm_config["base_url"],
             litellm_api_key=litellm_config["api_key"],
-            verbose=False
+            verbose=False,
         )
 
         # Should fail without force
@@ -361,19 +357,20 @@ class TestGenerateTestShForBenchmark:
 # MCP Integration Tests (requires LiteLLM + Docker + OSS-Fuzz)
 # ============================================================================
 
+
 @pytest.mark.integration
 @pytest.mark.mcp
 @pytest.mark.skipif(
     not os.getenv("LITELLM_BASE_URL") or not os.getenv("LITELLM_API_KEY"),
-    reason="LiteLLM environment variables not set"
+    reason="LiteLLM environment variables not set",
 )
 @pytest.mark.skipif(
     not os.path.exists("oss-fuzz/infra/helper.py"),
-    reason="OSS-Fuzz submodule not available"
+    reason="OSS-Fuzz submodule not available",
 )
 @pytest.mark.skipif(
     not os.path.exists("benchmarks/apache-commons-compress-delta-01"),
-    reason="Real benchmarks not available"
+    reason="Real benchmarks not available",
 )
 class TestMCPIntegration:
     """Integration tests for MCP-enabled test.sh generation using real benchmarks.
@@ -387,16 +384,15 @@ class TestMCPIntegration:
     """
 
     @pytest.mark.slow
-    @pytest.mark.parametrize("benchmark_name,_language", [
-        ("libxml2-delta-03", "c"),
-        ("apache-commons-compress-delta-01", "jvm"),
-    ])
+    @pytest.mark.parametrize(
+        "benchmark_name,_language",
+        [
+            ("libxml2-delta-03", "c"),
+            ("apache-commons-compress-delta-01", "jvm"),
+        ],
+    )
     def test_generate_with_mcp_docker_testing_real_benchmarks(
-        self,
-        benchmark_name,
-        _language,
-        litellm_config,
-        tmp_path
+        self, benchmark_name, _language, litellm_config, tmp_path
     ):
         """Test MCP-enabled generation with real benchmarks.
 
@@ -428,7 +424,7 @@ class TestMCPIntegration:
             benchmark_name=benchmark_name,
             benchmarks_root="benchmarks",
             repos_dir=repos_dir,
-            verbose=True
+            verbose=True,
         )
 
         if not project_dir:
@@ -442,7 +438,7 @@ class TestMCPIntegration:
             with_docker_testing=True,  # Enable MCP tools
             litellm_base_url=litellm_config["base_url"],
             litellm_api_key=litellm_config["api_key"],
-            verbose=True
+            verbose=True,
         )
 
         assert result["success"] is True
@@ -462,9 +458,7 @@ class TestMCPIntegration:
         assert benchmark_name in agent_log_content
 
     def test_generate_with_mcp_docker_testing(
-        self,
-        temp_benchmark_dir,
-        temp_project_dir
+        self, temp_benchmark_dir, temp_project_dir
     ):
         """Test MCP-enabled generation with temporary test fixtures.
 
@@ -488,7 +482,7 @@ class TestMCPIntegration:
 
         generator = ShTestGenerator(
             litellm_base_url=litellm_config["base_url"],
-            litellm_api_key=litellm_config["api_key"]
+            litellm_api_key=litellm_config["api_key"],
         )
 
         # Just test that the generator can be initialized

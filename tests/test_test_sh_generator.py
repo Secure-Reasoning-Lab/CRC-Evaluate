@@ -4,8 +4,6 @@ Tests for test.sh generator module.
 Tests the test.sh generation functionality including header comment addition.
 """
 
-import pytest
-from datetime import datetime
 from crsbench.migration.test_sh_generator import _add_generation_header
 
 
@@ -49,9 +47,7 @@ class TestAddGenerationHeader:
         """Test that Docker testing method is reflected in header."""
         original = "#!/bin/bash\necho 'test'"
         result = _add_generation_header(
-            original,
-            "test-benchmark",
-            with_docker_testing=True
+            original, "test-benchmark", with_docker_testing=True
         )
 
         # Check Docker testing method is mentioned
@@ -61,9 +57,7 @@ class TestAddGenerationHeader:
         """Test that two-phase method is reflected in header."""
         original = "#!/bin/bash\necho 'test'"
         result = _add_generation_header(
-            original,
-            "test-benchmark",
-            with_docker_testing=False
+            original, "test-benchmark", with_docker_testing=False
         )
 
         # Check two-phase method is mentioned

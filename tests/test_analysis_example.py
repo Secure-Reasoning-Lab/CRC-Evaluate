@@ -1,9 +1,8 @@
 """Unit tests for ExampleAnalyzer."""
 
-import pytest
 import json
-from pathlib import Path
 
+import pytest
 from crsbench.evaluation.analysis.analyzers.example import ExampleAnalyzer
 
 
@@ -26,11 +25,9 @@ class TestExampleAnalyzer:
         crs_data_dir.mkdir()
 
         metrics_file = crs_data_dir / "metrics.json"
-        metrics_file.write_text(json.dumps({
-            "iterations": 100,
-            "discoveries": 5,
-            "timestamp": 1234567890.0
-        }))
+        metrics_file.write_text(
+            json.dumps({"iterations": 100, "discoveries": 5, "timestamp": 1234567890.0})
+        )
 
         result = analyzer.analyze_snapshot(tmp_path)
 
@@ -104,10 +101,7 @@ class TestExampleAnalyzer:
         crs_data_dir.mkdir()
 
         metrics_file = crs_data_dir / "metrics.json"
-        metrics_file.write_text(json.dumps({
-            "iterations": 200,
-            "discoveries": 10
-        }))
+        metrics_file.write_text(json.dumps({"iterations": 200, "discoveries": 10}))
 
         result = analyzer.analyze_trial(tmp_path)
 
@@ -134,11 +128,15 @@ class TestExampleAnalyzer:
             crs_data_dir.mkdir()
 
             metrics_file = crs_data_dir / "metrics.json"
-            metrics_file.write_text(json.dumps({
-                "iterations": (i + 1) * 100,
-                "discoveries": i + 1,
-                "timestamp": 1234567890.0 + i * 60
-            }))
+            metrics_file.write_text(
+                json.dumps(
+                    {
+                        "iterations": (i + 1) * 100,
+                        "discoveries": i + 1,
+                        "timestamp": 1234567890.0 + i * 60,
+                    }
+                )
+            )
 
             snapshots.append(snapshot_dir)
 
@@ -218,10 +216,9 @@ class TestExampleAnalyzer:
 
             metrics_file = crs_data_dir / "metrics.json"
             # No timestamp field
-            metrics_file.write_text(json.dumps({
-                "iterations": (i + 1) * 100,
-                "discoveries": i + 1
-            }))
+            metrics_file.write_text(
+                json.dumps({"iterations": (i + 1) * 100, "discoveries": i + 1})
+            )
 
             snapshots.append(snapshot_dir)
 

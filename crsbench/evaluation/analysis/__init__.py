@@ -17,11 +17,11 @@ Example usage:
     >>>     print(result.metrics)
 """
 
-from crsbench.evaluation.analysis.base import AnalyzerInterface, AnalysisResult
+from crsbench.evaluation.analysis.base import AnalysisResult, AnalyzerInterface
 from crsbench.evaluation.analysis.manager import AnalysisManager
 
 __all__ = [
-    'AnalyzerInterface',
-    'AnalysisResult',
-    'AnalysisManager',
+    "AnalyzerInterface",
+    "AnalysisResult",
+    "AnalysisManager",
 ]

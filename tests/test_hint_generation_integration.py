@@ -9,12 +9,11 @@ import tempfile
 from pathlib import Path
 
 import pytest
-
 from crsbench.hint_generation.sarif_generator_simple import (
-    generate_hints_for_benchmark,
     HintLevel,
-    VulnInfo,
     SarifHintGenerator,
+    VulnInfo,
+    generate_hints_for_benchmark,
 )
 
 

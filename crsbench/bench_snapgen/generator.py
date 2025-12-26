@@ -2,14 +2,15 @@
 
 import argparse
 import sys
-import yaml
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Tuple, Optional
+from typing import Dict, Optional, Tuple
+
+import yaml
 
 from crsbench.utils.logger import get_logger
-from crsbench.validation.schemas import BenchmarkConfig
 from crsbench.validation.format_validator import validate_benchmark
+from crsbench.validation.schemas import BenchmarkConfig
 
 logger = get_logger(__name__)
 
@@ -71,7 +72,7 @@ def load_benchmark_ground_truth(benchmark_path: Path) -> BenchmarkData:
         errors = "\n".join(issue.message for issue in validation_result.issues)
         raise ValueError(f"Invalid meta.yaml:\n{errors}")
 
-    with open(meta_path, "r") as f:
+    with meta_path.open("r") as f:
         meta_dict = yaml.safe_load(f)
     meta = BenchmarkConfig(**meta_dict)
 
@@ -262,12 +263,12 @@ class BenchmarkSnapshotGenerator:
         )
 
         # Import here to avoid circular imports
-        from crsbench.bench_snapgen.timeline import create_discovery_timeline
+        from crsbench.bench_snapgen.builder import SnapshotBuilder
         from crsbench.bench_snapgen.fault_injection import (
             FaultInjector,
             inject_faults_into_timeline,
         )
-        from crsbench.bench_snapgen.builder import SnapshotBuilder
+        from crsbench.bench_snapgen.timeline import create_discovery_timeline
 
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -305,9 +306,7 @@ class BenchmarkSnapshotGenerator:
                 crs_name="bench-snapgen",
             )
 
-        logger.info(
-            f"Generated {num_snapshots} snapshots in {self.output_dir}"
-        )
+        logger.info(f"Generated {num_snapshots} snapshots in {self.output_dir}")
 
         return self.output_dir
 

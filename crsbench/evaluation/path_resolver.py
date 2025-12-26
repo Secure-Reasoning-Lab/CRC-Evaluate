@@ -20,10 +20,10 @@ Example:
     >>> print(host_path)  # /tmp/repos/json-c/test/harness.c
 """
 
-from crsbench.utils.logger import get_logger
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
+from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import ensure_project_repository
 from crsbench.validation.schemas import HarnessFile
 
@@ -32,14 +32,13 @@ logger = get_logger(__name__)
 
 class RepositoryError(Exception):
     """Raised when repository cannot be obtained for $REPO resolution."""
-    pass
 
 
 def resolve_harness_path(
     harness_path: str,
     benchmark_dir: Path,
     repos_dir: Optional[Path] = None,
-    project_dir: Optional[Path] = None
+    project_dir: Optional[Path] = None,
 ) -> Path:
     """
     Resolve harness path with $REPO/$PROJECT variables to host filesystem path.
@@ -86,7 +85,7 @@ def resolve_harness_path(
     harness_path = harness_path.strip()
 
     # $REPO variable resolution - uses repo_manager to get cloned repository
-    if harness_path.startswith('$REPO/'):
+    if harness_path.startswith("$REPO/"):
         relative_path = harness_path[6:]  # Remove "$REPO/" prefix
         repo_path = _resolve_repo_path(benchmark_dir, repos_dir, project_dir)
         resolved = repo_path / relative_path
@@ -107,7 +106,7 @@ def resolve_harness_path(
         return resolved.absolute()
 
     # $PROJECT variable resolution - uses benchmark directory as project root
-    elif harness_path.startswith('$PROJECT/'):
+    if harness_path.startswith("$PROJECT/"):
         relative_path = harness_path[9:]  # Remove "$PROJECT/" prefix
         project_path = project_dir if project_dir else benchmark_dir
         resolved = project_path / relative_path
@@ -127,12 +126,12 @@ def resolve_harness_path(
         return resolved.absolute()
 
     # Absolute paths - assume container paths, return as-is without validation
-    elif harness_path.startswith('/'):
+    if harness_path.startswith("/"):
         logger.debug(f"Absolute path (container): {harness_path}")
         return Path(harness_path)
 
     # Relative paths - resolve relative to benchmark directory
-    elif harness_path.startswith('./'):
+    if harness_path.startswith("./"):
         relative_path = harness_path[2:]  # Remove "./" prefix
         resolved = benchmark_dir / relative_path
 
@@ -147,22 +146,21 @@ def resolve_harness_path(
         return resolved.absolute()
 
     # Invalid path format
-    else:
-        raise ValueError(
-            f"Invalid harness path format: {harness_path}\n"
-            f"  Expected one of:\n"
-            f"    - $REPO/path/to/file (repository-relative)\n"
-            f"    - $PROJECT/path/to/file (project-relative)\n"
-            f"    - /absolute/path (container path)\n"
-            f"    - ./relative/path (benchmark-relative)"
-        )
+    raise ValueError(
+        f"Invalid harness path format: {harness_path}\n"
+        f"  Expected one of:\n"
+        f"    - $REPO/path/to/file (repository-relative)\n"
+        f"    - $PROJECT/path/to/file (project-relative)\n"
+        f"    - /absolute/path (container path)\n"
+        f"    - ./relative/path (benchmark-relative)"
+    )
 
 
 def get_harness_source_path(
     harness: HarnessFile,
     benchmark_dir: Path,
     repos_dir: Optional[Path] = None,
-    project_dir: Optional[Path] = None
+    project_dir: Optional[Path] = None,
 ) -> Optional[Path]:
     """
     Resolve harness source path for passing to CRS commands via --harness-source.
@@ -197,10 +195,7 @@ def get_harness_source_path(
     """
     try:
         host_path = resolve_harness_path(
-            harness.path,
-            benchmark_dir,
-            repos_dir,
-            project_dir
+            harness.path, benchmark_dir, repos_dir, project_dir
         )
         logger.debug(f"Resolved harness source: {host_path}")
         return host_path
@@ -210,9 +205,7 @@ def get_harness_source_path(
 
 
 def _resolve_repo_path(
-    benchmark_dir: Path,
-    repos_dir: Optional[Path],
-    project_dir: Optional[Path]
+    benchmark_dir: Path, repos_dir: Optional[Path], project_dir: Optional[Path]
 ) -> Path:
     """
     Get repository path for $REPO variable resolution.
@@ -252,7 +245,7 @@ def _resolve_repo_path(
         repo_path = ensure_project_repository(
             benchmark_dir=str(benchmark_dir),
             repos_dir=str(repos_dir) if repos_dir else None,
-            verbose=False
+            verbose=False,
         )
     except Exception as e:
         raise RepositoryError(

@@ -8,22 +8,23 @@ to avoid compatibility issues with the auto-generated sarif_model.py.
 """
 
 import json
-from pathlib import Path
-from typing import List, Optional, Dict, Any
 from enum import IntEnum
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import yaml
 
-from crsbench.hint_generation.cwe_mapping import get_general_class, get_cwe_name
+from crsbench.hint_generation.cwe_mapping import get_general_class
 
 
 class HintLevel(IntEnum):
     """Hint levels for vulnerability information disclosure."""
+
     GENERAL_CLASS = 1  # General vulnerability class only
     SPECIFIC_TYPE = 2  # Specific vulnerability type
     WITH_FUNCTION = 3  # + Function-level location
-    WITH_LINES = 4     # + Line range-level location
-    WITH_NAME_DESC = 5 # + Vulnerability name and description
+    WITH_LINES = 4  # + Line range-level location
+    WITH_NAME_DESC = 5  # + Vulnerability name and description
 
 
 class VulnInfo:
@@ -51,7 +52,7 @@ class VulnInfo:
         Returns:
             VulnInfo instance
         """
-        with open(yaml_path, 'r') as f:
+        with yaml_path.open("r") as f:
             data = yaml.safe_load(f)
         return cls(data)
 
@@ -108,13 +109,11 @@ class SarifHintGenerator:
         run = {"tool": tool, "results": results}
 
         # Create root SARIF object
-        sarif = {
+        return {
             "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
             "version": "2.1.0",
             "runs": [run],
         }
-
-        return sarif
 
     def _create_rules(self, level: HintLevel) -> List[Dict[str, Any]]:
         """Create rule descriptors based on hint level.
@@ -133,7 +132,9 @@ class SarifHintGenerator:
                 "id": "unknown-vulnerability",
                 "name": "Unknown Vulnerability",
                 "shortDescription": {"text": "Unknown vulnerability detected"},
-                "fullDescription": {"text": "A vulnerability was detected but no CWE classification is available."},
+                "fullDescription": {
+                    "text": "A vulnerability was detected but no CWE classification is available."
+                },
             }
             return [rule]
 
@@ -151,7 +152,9 @@ class SarifHintGenerator:
                     "id": rule_id,
                     "name": general_class,
                     "shortDescription": {"text": f"{general_class} detected"},
-                    "fullDescription": {"text": f"A {general_class.lower()} was detected in the code."},
+                    "fullDescription": {
+                        "text": f"A {general_class.lower()} was detected in the code."
+                    },
                 }
                 rules.append(rule)
         else:
@@ -162,7 +165,9 @@ class SarifHintGenerator:
                     "id": cwe,
                     "name": f"{cwe}: {cwe_description}",
                     "shortDescription": {"text": cwe_description},
-                    "fullDescription": {"text": f"Specific vulnerability type: {cwe_description}"},
+                    "fullDescription": {
+                        "text": f"Specific vulnerability type: {cwe_description}"
+                    },
                 }
                 rules.append(rule)
 
@@ -197,7 +202,9 @@ class SarifHintGenerator:
             }
 
             if level >= HintLevel.WITH_FUNCTION:
-                location_level = HintLevel.WITH_LINES if level == HintLevel.WITH_NAME_DESC else level
+                location_level = (
+                    HintLevel.WITH_LINES if level == HintLevel.WITH_NAME_DESC else level
+                )
                 locations = self._create_locations(location_level)
                 if locations:
                     result["locations"] = locations
@@ -230,10 +237,12 @@ class SarifHintGenerator:
                 if level == HintLevel.SPECIFIC_TYPE:
                     message_text = f"{cwe} - {cwe_description}"
                 elif level == HintLevel.WITH_FUNCTION:
-                    func_names = list(set([
-                        loc.get("function_name") or "unknown"
-                        for loc in self.vuln_info.locations
-                    ]))
+                    func_names = list(
+                        {
+                            loc.get("function_name") or "unknown"
+                            for loc in self.vuln_info.locations
+                        }
+                    )
                     message_text = f"{cwe} - {cwe_description} in function(s): {', '.join(func_names)}"
                 elif level == HintLevel.WITH_LINES:
                     location_strs = []
@@ -244,7 +253,9 @@ class SarifHintGenerator:
                         start = loc.get("startLine", 0)
                         end = loc.get("endLine", 0)
                         location_strs.append(f"{path}:{start}-{end}")
-                    message_text = f"{cwe} - {cwe_description} at: {'; '.join(location_strs)}"
+                    message_text = (
+                        f"{cwe} - {cwe_description} at: {'; '.join(location_strs)}"
+                    )
                 else:  # HintLevel.WITH_NAME_DESC
                     message_text = (
                         f"{cwe} - {cwe_description}\n"
@@ -260,7 +271,11 @@ class SarifHintGenerator:
 
                 # Add locations if level >= 3 (deduplicated)
                 if level >= HintLevel.WITH_FUNCTION:
-                    location_level = HintLevel.WITH_LINES if level == HintLevel.WITH_NAME_DESC else level
+                    location_level = (
+                        HintLevel.WITH_LINES
+                        if level == HintLevel.WITH_NAME_DESC
+                        else level
+                    )
                     locations = self._create_locations(location_level)
                     if locations:
                         result["locations"] = locations
@@ -332,7 +347,11 @@ class SarifHintGenerator:
 
             # Add logical location (function name) for Level 3+
             # Only add if function name is known (not None, not empty, not "unknown")
-            if level >= HintLevel.WITH_FUNCTION and func_name and func_name not in (None, "", "unknown"):
+            if (
+                level >= HintLevel.WITH_FUNCTION
+                and func_name
+                and func_name not in (None, "", "unknown")
+            ):
                 logical_locations = [
                     {
                         "name": func_name,
@@ -350,6 +369,7 @@ def generate_hints_for_benchmark(
     vuln_yaml_path: Path,
     output_dir: Path,
     levels: Optional[List[HintLevel]] = None,
+    *,
     skip_existing: bool = True,
 ) -> Dict[HintLevel, Path]:
     """Generate SARIF hints for all levels for a benchmark.
@@ -387,7 +407,7 @@ def generate_hints_for_benchmark(
         sarif_json = generator.generate(level)
 
         # Save to file
-        with open(output_file, "w") as f:
+        with output_file.open("w") as f:
             f.write(sarif_json)
 
         output_files[level] = output_file

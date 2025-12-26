@@ -4,12 +4,12 @@ This is a minimal working example that CRS developers can copy and adapt
 for their own CRS implementations.
 """
 
-from pathlib import Path
-from typing import Optional, Dict, Any, List
 import json
-from crsbench.utils.logger import get_logger
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from crsbench.evaluation.analysis.base import AnalyzerInterface, AnalysisResult
+from crsbench.evaluation.analysis.base import AnalysisResult, AnalyzerInterface
+from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -59,11 +59,11 @@ class ExampleAnalyzer(AnalyzerInterface):
                 metrics={},
                 summary="No metrics available",
                 warnings=["metrics.json not found in crs-data/"],
-                metadata={"analyzer_version": "1.0"}
+                metadata={"analyzer_version": "1.0"},
             )
 
         try:
-            with open(metrics_file) as f:
+            with metrics_file.open() as f:
                 data = json.load(f)
 
             # Extract whatever metrics your CRS writes
@@ -86,7 +86,7 @@ class ExampleAnalyzer(AnalyzerInterface):
                 metrics=metrics,
                 summary=summary,
                 warnings=[],
-                metadata={"analyzer_version": "1.0"}
+                metadata={"analyzer_version": "1.0"},
             )
 
         except json.JSONDecodeError as e:
@@ -96,7 +96,7 @@ class ExampleAnalyzer(AnalyzerInterface):
                 metrics={},
                 summary="Analysis failed",
                 warnings=[f"Invalid JSON in metrics.json: {e}"],
-                metadata={"analyzer_version": "1.0"}
+                metadata={"analyzer_version": "1.0"},
             )
 
         except Exception as e:
@@ -106,7 +106,7 @@ class ExampleAnalyzer(AnalyzerInterface):
                 metrics={},
                 summary="Analysis failed",
                 warnings=[f"Error reading metrics: {e}"],
-                metadata={"analyzer_version": "1.0"}
+                metadata={"analyzer_version": "1.0"},
             )
 
     def analyze_trial(self, trial_dir: Path) -> Optional[AnalysisResult]:
@@ -158,7 +158,8 @@ class ExampleAnalyzer(AnalyzerInterface):
         time_series_data = {
             "iterations_over_time": iterations_over_time,
             "discoveries_over_time": discoveries_over_time,
-            "avg_iterations_per_cycle": sum(iterations_over_time) / len(iterations_over_time),
+            "avg_iterations_per_cycle": sum(iterations_over_time)
+            / len(iterations_over_time),
             "total_discoveries": sum(discoveries_over_time),
         }
 

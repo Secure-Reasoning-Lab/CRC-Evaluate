@@ -13,7 +13,7 @@ from typing import List, Optional, Tuple
 
 import yaml
 
-from crsbench.validation.schemas import BenchmarkConfig, HarnessFile, POV
+from crsbench.validation.schemas import POV, BenchmarkConfig, HarnessFile
 from crsbench.validation.variant.models import BenchmarkMode, BuildTag
 
 logger = logging.getLogger(__name__)
@@ -91,17 +91,19 @@ class MetaYamlAdapter:
         if not meta_yaml_path.exists():
             raise FileNotFoundError(f"meta.yaml not found: {meta_yaml_path}")
 
-        with open(meta_yaml_path, "r") as f:
+        with meta_yaml_path.open() as f:
             data = yaml.safe_load(f)
 
         try:
             config = BenchmarkConfig(**data)
         except Exception as e:
-            raise ValueError(f"Invalid meta.yaml: {e}")
+            raise ValueError(f"Invalid meta.yaml: {e}") from e
 
         # Derive benchmark_path from meta_yaml_path if not provided
         if benchmark_path is None:
-            benchmark_path = meta_yaml_path.parent.parent  # .aixcc/meta.yaml -> benchmark_dir
+            benchmark_path = (
+                meta_yaml_path.parent.parent
+            )  # .aixcc/meta.yaml -> benchmark_dir
 
         return cls(config, benchmark_name, lang, main_repo, benchmark_path, repo_name)
 
@@ -147,7 +149,9 @@ class MetaYamlAdapter:
                 result.append((vuln.vuln_keyword, pov))
         return result
 
-    def get_pov_path(self, harness_name: str, vuln_keyword: str, pov_id: str) -> Optional[Path]:
+    def get_pov_path(
+        self, harness_name: str, vuln_keyword: str, pov_id: str
+    ) -> Optional[Path]:
         """Get the path to a POV blob file.
 
         CRSBench structure: .aixcc/{harness}/{vuln_keyword}/blobs/{pov_id}.blob
@@ -163,8 +167,12 @@ class MetaYamlAdapter:
         if not self.benchmark_path:
             return None
         return (
-            self.benchmark_path / ".aixcc" / harness_name / vuln_keyword
-            / "blobs" / f"{pov_id}.blob"
+            self.benchmark_path
+            / ".aixcc"
+            / harness_name
+            / vuln_keyword
+            / "blobs"
+            / f"{pov_id}.blob"
         )
 
     def get_all_pov_paths(self) -> List[Tuple[str, str, Path]]:

@@ -10,42 +10,41 @@ for each trial execution, including:
 """
 
 import json
-import yaml
-from crsbench.utils.logger import get_logger
-from crsbench.utils import run_git
 import shutil
 import subprocess
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, Optional
+
+import yaml
+
+from crsbench.utils import run_git
+from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
 class TrialPreparationError(Exception):
     """Raised when trial preparation fails."""
-    pass
 
 
 class SourceCloneError(TrialPreparationError):
     """Raised when source code cloning fails."""
-    pass
 
 
 class HintsPreparationError(TrialPreparationError):
     """Raised when hints preparation fails."""
-    pass
 
 
 class POVsPreparationError(TrialPreparationError):
     """Raised when POVs preparation fails."""
-    pass
 
 
 @dataclass
 class TrialPreparationResult:
     """Result of trial directory preparation."""
+
     trial_dir: Optional[Path]
     build_dir: Optional[Path]
     source_path: Optional[Path]
@@ -67,7 +66,7 @@ class TrialPreparationResult:
             "povs_dir": str(self.povs_dir) if self.povs_dir else None,
             "metadata": self.metadata,
             "success": self.success,
-            "error": self.error
+            "error": self.error,
         }
 
 
@@ -79,7 +78,7 @@ class TrialDirectoryPreparer:
         experiment_dir: Path,
         benchmarks_root: Path,
         oss_fuzz_dir: Path,
-        config: Dict[str, Any]
+        config: Dict[str, Any],
     ):
         """
         Initialize trial directory preparer.
@@ -101,7 +100,7 @@ class TrialDirectoryPreparer:
         benchmark: str,
         harness: str,
         trial_num: int,
-        mode: str = "bug_finding"
+        mode: str = "bug_finding",
     ) -> TrialPreparationResult:
         """
         Prepare complete trial directory structure.
@@ -120,7 +119,7 @@ class TrialDirectoryPreparer:
 
         try:
             # Create trial root
-            trial_dir = self._create_trial_directory(crs, benchmark, trial_num)
+            trial_dir = self._create_trial_directory(trial_num)
 
             # Create directory structure
             build_dir = trial_dir / "crs-build"
@@ -132,7 +131,7 @@ class TrialDirectoryPreparer:
             source_path = self._prepare_source_code(benchmark, build_dir)
 
             # Prepare hints (if enabled)
-            hints_dir = self._prepare_hints(benchmark, harness, trial_dir)
+            hints_dir = self._prepare_hints(benchmark, trial_dir)
 
             # Prepare POVs (if patch generation mode)
             povs_dir = None
@@ -148,7 +147,7 @@ class TrialDirectoryPreparer:
                 mode=mode,
                 source_path=source_path,
                 hints_dir=hints_dir,
-                povs_dir=povs_dir
+                povs_dir=povs_dir,
             )
             self._write_metadata(trial_dir, metadata)
 
@@ -162,7 +161,7 @@ class TrialDirectoryPreparer:
                 hints_dir=hints_dir,
                 povs_dir=povs_dir,
                 metadata=metadata,
-                success=True
+                success=True,
             )
 
         except Exception as e:
@@ -176,7 +175,7 @@ class TrialDirectoryPreparer:
                 povs_dir=None,
                 metadata={},
                 success=False,
-                error=str(e)
+                error=str(e),
             )
 
     def prepare_trial_safe(
@@ -185,7 +184,7 @@ class TrialDirectoryPreparer:
         benchmark: str,
         harness: str,
         trial_num: int,
-        mode: str = "bug_finding"
+        mode: str = "bug_finding",
     ) -> TrialPreparationResult:
         """
         Safe version of prepare_trial that catches exceptions.
@@ -195,18 +194,11 @@ class TrialDirectoryPreparer:
         """
         return self.prepare_trial(crs, benchmark, harness, trial_num, mode)
 
-    def _create_trial_directory(
-        self,
-        crs: str,
-        benchmark: str,
-        trial_num: int
-    ) -> Path:
+    def _create_trial_directory(self, trial_num: int) -> Path:
         """
         Create trial root directory.
 
         Args:
-            crs: CRS name
-            benchmark: Benchmark name
             trial_num: Trial number
 
         Returns:
@@ -222,11 +214,7 @@ class TrialDirectoryPreparer:
         logger.info(f"Created trial directory: {trial_dir}")
         return trial_dir
 
-    def _prepare_source_code(
-        self,
-        benchmark: str,
-        build_dir: Path
-    ) -> Path:
+    def _prepare_source_code(self, benchmark: str, build_dir: Path) -> Path:
         """
         Clone source code at commit specified in meta.yaml.
 
@@ -254,7 +242,7 @@ class TrialDirectoryPreparer:
             source_path = ensure_project_repository(
                 benchmark_dir=str(benchmark_dir),
                 project_dir=str(source_dest),
-                verbose=self.config.get("verbose", False)
+                verbose=self.config.get("verbose", False),
             )
 
             if not source_path:
@@ -269,12 +257,7 @@ class TrialDirectoryPreparer:
         except Exception as e:
             raise SourceCloneError(f"Source preparation failed: {e}") from e
 
-    def _prepare_hints(
-        self,
-        benchmark: str,
-        harness: str,
-        trial_dir: Path
-    ) -> Optional[Path]:
+    def _prepare_hints(self, benchmark: str, trial_dir: Path) -> Optional[Path]:
         """
         Prepare hints directory by aggregating hints from all CPVs.
 
@@ -286,7 +269,6 @@ class TrialDirectoryPreparer:
 
         Args:
             benchmark: Benchmark name
-            harness: Harness name (currently IGNORED - aggregates from ALL harnesses)
             trial_dir: Trial directory
 
         Returns:
@@ -316,7 +298,7 @@ class TrialDirectoryPreparer:
             return None
 
         try:
-            with open(meta_yaml_path, 'r') as f:
+            with meta_yaml_path.open("r") as f:
                 meta = yaml.safe_load(f)
         except Exception as e:
             logger.error(f"Failed to load meta.yaml for {benchmark}: {e}")
@@ -333,28 +315,26 @@ class TrialDirectoryPreparer:
                 benchmark_dir=benchmark_dir,
                 meta=meta,
                 sarif_level=sarif_level,
-                hints_dir=hints_dir
+                hints_dir=hints_dir,
             )
 
-        # Aggregate corpus hints (PLACEHOLDER - not yet implemented)
+        # Aggregate corpus hints (not yet implemented)
         corpus_copied = False
         if corpus_level is not None:
-            logger.warning("Corpus hints not yet implemented (placeholder)")
-            # corpus_copied = self._aggregate_corpus_hints(...)
+            logger.warning("Corpus hints not yet implemented")
 
         if sarif_copied or corpus_copied:
             logger.info(f"Prepared hints at: {hints_dir}")
             return hints_dir
-        else:
-            logger.warning(f"No hints content aggregated for {benchmark}")
-            return None
+        logger.warning(f"No hints content aggregated for {benchmark}")
+        return None
 
     def _aggregate_sarif_hints(
         self,
         benchmark_dir: Path,
         meta: Dict[str, Any],
         sarif_level: int,
-        hints_dir: Path
+        hints_dir: Path,
     ) -> bool:
         """
         Aggregate SARIF hints from all CPVs across all harnesses.
@@ -385,11 +365,15 @@ class TrialDirectoryPreparer:
             for vuln in vulns:
                 cpv_keyword = vuln.get("vuln_keyword")
                 if not cpv_keyword:
-                    logger.warning(f"Vulnerability missing 'vuln_keyword' in {harness_name}, skipping")
+                    logger.warning(
+                        f"Vulnerability missing 'vuln_keyword' in {harness_name}, skipping"
+                    )
                     continue
 
                 # Construct path to CPV hints
-                cpv_hints_dir = benchmark_dir / ".aixcc" / harness_name / cpv_keyword / "hints"
+                cpv_hints_dir = (
+                    benchmark_dir / ".aixcc" / harness_name / cpv_keyword / "hints"
+                )
                 sarif_file = cpv_hints_dir / f"level_{sarif_level}.sarif"
 
                 if sarif_file.exists():
@@ -404,15 +388,11 @@ class TrialDirectoryPreparer:
         if sarif_index > 0:
             logger.info(f"Aggregated {sarif_index} SARIF hints at level {sarif_level}")
             return True
-        else:
-            logger.warning(f"No SARIF hints found at level {sarif_level}")
-            return False
+        logger.warning(f"No SARIF hints found at level {sarif_level}")
+        return False
 
     def _prepare_povs(
-        self,
-        benchmark: str,
-        harness: str,
-        trial_dir: Path
+        self, benchmark: str, harness: str, trial_dir: Path
     ) -> Optional[Path]:
         """
         Prepare POVs directory for patch generation.
@@ -455,9 +435,8 @@ class TrialDirectoryPreparer:
             if pov_count > 0:
                 logger.info(f"Prepared {pov_count} POVs at: {povs_dir}")
                 return povs_dir
-            else:
-                logger.warning(f"No POVs found for {benchmark}/{harness}")
-                return None
+            logger.warning(f"No POVs found for {benchmark}/{harness}")
+            return None
 
         except Exception as e:
             logger.error(f"POVs preparation failed: {e}", exc_info=True)
@@ -491,7 +470,7 @@ class TrialDirectoryPreparer:
         mode: str,
         source_path: Path,
         hints_dir: Optional[Path],
-        povs_dir: Optional[Path]
+        povs_dir: Optional[Path],
     ) -> Dict[str, Any]:
         """
         Create trial preparation metadata.
@@ -523,17 +502,14 @@ class TrialDirectoryPreparer:
             "benchmark": benchmark,
             "harness": harness,
             "mode": mode,
-            "source": {
-                "path": str(source_path),
-                "commit": source_commit
-            },
+            "source": {"path": str(source_path), "commit": source_commit},
             "hints": hints_stats,
             "povs": povs_stats,
             "config": {
                 "hints_enabled": self.config.get("hints_enabled", False),
                 "hints_corpus_level": self.config.get("hints_corpus_level"),
-                "target_povs": self.config.get("target_povs")
-            }
+                "target_povs": self.config.get("target_povs"),
+            },
         }
 
     def _get_git_commit(self, source_path: Path) -> Optional[str]:
@@ -544,7 +520,7 @@ class TrialDirectoryPreparer:
                 cwd=str(source_path),
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=10,
             )
             return result.stdout.strip()
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
@@ -563,20 +539,17 @@ class TrialDirectoryPreparer:
         return {
             "path": str(hints_dir),
             "sarif_count": sarif_count,
-            "corpus_count": corpus_count
+            "corpus_count": corpus_count,
         }
 
     def _get_povs_stats(self, povs_dir: Path) -> Dict[str, Any]:
         """Get statistics about prepared POVs."""
-        return {
-            "path": str(povs_dir),
-            "pov_count": len(list(povs_dir.iterdir()))
-        }
+        return {"path": str(povs_dir), "pov_count": len(list(povs_dir.iterdir()))}
 
     def _write_metadata(self, trial_dir: Path, metadata: Dict[str, Any]) -> None:
         """Write metadata to trial directory."""
         metadata_file = trial_dir / "metadata.json"
-        with open(metadata_file, "w") as f:
+        with metadata_file.open("w") as f:
             json.dump(metadata, f, indent=2)
 
         logger.debug(f"Wrote trial metadata to {metadata_file}")

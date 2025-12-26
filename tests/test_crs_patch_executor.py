@@ -4,11 +4,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
-from crsbench.evaluation.crs_executor import CRSResult
-from crsbench.validation.schemas import HarnessFile, POV, Vulnerability
 
 
 class TestCRSPatchExecutor(unittest.TestCase):
@@ -37,7 +35,7 @@ class TestCRSPatchExecutor(unittest.TestCase):
             litellm_base="https://api.test.com",
             litellm_key="test-key",
             benchmarks_root=self.benchmarks_root,
-            crs_configs_dir=self.crs_configs_dir
+            crs_configs_dir=self.crs_configs_dir,
         )
 
     def test_init(self):
@@ -70,8 +68,8 @@ class TestCRSPatchExecutor(unittest.TestCase):
         self.assertTrue(output_dir.exists())
         self.assertTrue(output_dir.is_dir())
 
-    @patch('crsbench.utils.repo_manager.ensure_project_repository')
-    @patch('subprocess.run')
+    @patch("crsbench.utils.repo_manager.ensure_project_repository")
+    @patch("subprocess.run")
     def test_build_crs_if_needed(self, mock_run, mock_ensure_repo):
         """Test CRS build with repository manager integration."""
         # Mock repository manager response
@@ -88,8 +86,7 @@ class TestCRSPatchExecutor(unittest.TestCase):
 
         # Verify repository manager was called
         mock_ensure_repo.assert_called_once_with(
-            benchmark_dir=str(benchmark_path),
-            verbose=False
+            benchmark_dir=str(benchmark_path), verbose=False
         )
 
         # Verify build command was called
@@ -109,8 +106,8 @@ class TestCRSPatchExecutor(unittest.TestCase):
         # Verify project is cached
         self.assertIn("test-crs:test-project", self.executor.built_projects)
 
-    @patch('crsbench.utils.repo_manager.ensure_project_repository')
-    @patch('subprocess.run')
+    @patch("crsbench.utils.repo_manager.ensure_project_repository")
+    @patch("subprocess.run")
     def test_build_crs_already_built(self, mock_run, mock_ensure_repo):
         """Test that CRS build is skipped if already built."""
         # Pre-populate cache
@@ -141,7 +138,9 @@ class TestCRSPatchExecutor(unittest.TestCase):
         trial_dir = Path(self.temp_dir) / "trial-1"
 
         # Prepare POVs
-        povs_path = self.executor._prepare_povs(benchmark_path, "test_harness", trial_dir)
+        povs_path = self.executor._prepare_povs(
+            benchmark_path, "test_harness", trial_dir
+        )
 
         # Verify directory created
         self.assertIsNotNone(povs_path)
@@ -160,7 +159,9 @@ class TestCRSPatchExecutor(unittest.TestCase):
         self.executor.configure_crs({"hints_enabled": False})
 
         # Prepare hints
-        hints_path = self.executor._prepare_hints(benchmark_path, "test_harness", trial_dir)
+        hints_path = self.executor._prepare_hints(
+            benchmark_path, "test_harness", trial_dir
+        )
 
         # Verify None returned
         self.assertIsNone(hints_path)
@@ -185,7 +186,9 @@ class TestCRSPatchExecutor(unittest.TestCase):
         self.executor.configure_crs({"hints_enabled": True, "hints_corpus_level": "1h"})
 
         # Prepare hints
-        hints_path = self.executor._prepare_hints(benchmark_path, "test_harness", trial_dir)
+        hints_path = self.executor._prepare_hints(
+            benchmark_path, "test_harness", trial_dir
+        )
 
         # Verify directory created
         self.assertIsNotNone(hints_path)
@@ -212,7 +215,7 @@ class TestCRSPatchExecutor(unittest.TestCase):
             hints_path=hints_path,
             povs_path=povs_path,
             execution_time=100.5,
-            returncode=0
+            returncode=0,
         )
 
         # Verify file created

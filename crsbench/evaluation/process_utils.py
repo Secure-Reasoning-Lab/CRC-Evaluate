@@ -2,7 +2,8 @@
 
 import subprocess
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Dict, Optional, Tuple
+
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -14,7 +15,7 @@ def run_with_graceful_timeout(
     grace_period: int = 60,
     cwd: Optional[Path] = None,
     env: Optional[Dict[str, str]] = None,
-    **kwargs
+    **kwargs,
 ) -> Tuple[str, str, int, bool]:
     """Run subprocess with graceful timeout handling.
 
@@ -45,7 +46,7 @@ def run_with_graceful_timeout(
         text=True,
         cwd=str(cwd) if cwd else None,
         env=env,
-        **kwargs
+        **kwargs,
     )
 
     timed_out = False
@@ -56,7 +57,9 @@ def run_with_graceful_timeout(
         returncode = process.returncode
     except subprocess.TimeoutExpired:
         timed_out = True
-        logger.info(f"Timeout reached after {timeout}s, sending SIGTERM for graceful shutdown...")
+        logger.info(
+            f"Timeout reached after {timeout}s, sending SIGTERM for graceful shutdown..."
+        )
 
         # Graceful shutdown: send SIGTERM
         process.terminate()
@@ -68,7 +71,9 @@ def run_with_graceful_timeout(
             logger.info(f"Process exited gracefully with code {returncode}")
         except subprocess.TimeoutExpired:
             # Force kill after grace period
-            logger.warning(f"Process did not exit after {grace_period}s grace period, sending SIGKILL...")
+            logger.warning(
+                f"Process did not exit after {grace_period}s grace period, sending SIGKILL..."
+            )
             process.kill()
             stdout, stderr = process.communicate()
             returncode = -9  # SIGKILL

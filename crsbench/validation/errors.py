@@ -1,12 +1,14 @@
 """Validation errors and result types."""
 
-from typing import List, Dict, Any, Optional
 from enum import Enum
+from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel
 
 
 class ValidationSeverity(str, Enum):
     """Severity levels for validation issues."""
+
     ERROR = "error"
     WARNING = "warning"
     INFO = "info"
@@ -39,12 +41,18 @@ class ValidationResult(BaseModel):
     @property
     def errors(self) -> List[ValidationIssue]:
         """Get only error-level issues."""
-        return [issue for issue in self.issues if issue.severity == ValidationSeverity.ERROR]
+        return [
+            issue for issue in self.issues if issue.severity == ValidationSeverity.ERROR
+        ]
 
     @property
     def warnings(self) -> List[ValidationIssue]:
         """Get only warning-level issues."""
-        return [issue for issue in self.issues if issue.severity == ValidationSeverity.WARNING]
+        return [
+            issue
+            for issue in self.issues
+            if issue.severity == ValidationSeverity.WARNING
+        ]
 
     @property
     def error_count(self) -> int:
@@ -56,42 +64,66 @@ class ValidationResult(BaseModel):
         """Number of warnings."""
         return len(self.warnings)
 
-    def add_error(self, code: str, message: str, field: Optional[str] = None,
-                  line: Optional[int] = None, context: Optional[Dict[str, Any]] = None):
+    def add_error(
+        self,
+        code: str,
+        message: str,
+        field: Optional[str] = None,
+        line: Optional[int] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ):
         """Add an error to the validation result."""
-        self.issues.append(ValidationIssue(
-            severity=ValidationSeverity.ERROR,
-            code=code,
-            message=message,
-            field=field,
-            line=line,
-            context=context
-        ))
+        self.issues.append(
+            ValidationIssue(
+                severity=ValidationSeverity.ERROR,
+                code=code,
+                message=message,
+                field=field,
+                line=line,
+                context=context,
+            )
+        )
         self.is_valid = False
 
-    def add_warning(self, code: str, message: str, field: Optional[str] = None,
-                    line: Optional[int] = None, context: Optional[Dict[str, Any]] = None):
+    def add_warning(
+        self,
+        code: str,
+        message: str,
+        field: Optional[str] = None,
+        line: Optional[int] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ):
         """Add a warning to the validation result."""
-        self.issues.append(ValidationIssue(
-            severity=ValidationSeverity.WARNING,
-            code=code,
-            message=message,
-            field=field,
-            line=line,
-            context=context
-        ))
+        self.issues.append(
+            ValidationIssue(
+                severity=ValidationSeverity.WARNING,
+                code=code,
+                message=message,
+                field=field,
+                line=line,
+                context=context,
+            )
+        )
 
-    def add_info(self, code: str, message: str, field: Optional[str] = None,
-                 line: Optional[int] = None, context: Optional[Dict[str, Any]] = None):
+    def add_info(
+        self,
+        code: str,
+        message: str,
+        field: Optional[str] = None,
+        line: Optional[int] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ):
         """Add an info message to the validation result."""
-        self.issues.append(ValidationIssue(
-            severity=ValidationSeverity.INFO,
-            code=code,
-            message=message,
-            field=field,
-            line=line,
-            context=context
-        ))
+        self.issues.append(
+            ValidationIssue(
+                severity=ValidationSeverity.INFO,
+                code=code,
+                message=message,
+                field=field,
+                line=line,
+                context=context,
+            )
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -106,11 +138,11 @@ class ValidationResult(BaseModel):
                     "message": issue.message,
                     "field": issue.field,
                     "line": issue.line,
-                    "context": issue.context
+                    "context": issue.context,
                 }
                 for issue in self.issues
             ],
-            "metadata": self.metadata
+            "metadata": self.metadata,
         }
 
     def summary(self) -> str:
@@ -128,14 +160,18 @@ class ValidationResult(BaseModel):
 
         if counts:
             return f"{status} - {', '.join(counts)}"
-        else:
-            return status
+        return status
 
 
 class ValidationError(Exception):
     """Exception raised during validation process (not validation failures)."""
 
-    def __init__(self, message: str, code: Optional[str] = None, context: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        message: str,
+        code: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ):
         self.message = message
         self.code = code or "VALIDATION_ERROR"
         self.context = context or {}
@@ -145,7 +181,12 @@ class ValidationError(Exception):
 class ValidationWarning(UserWarning):
     """Warning raised during validation process."""
 
-    def __init__(self, message: str, code: Optional[str] = None, context: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        message: str,
+        code: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ):
         self.message = message
         self.code = code or "VALIDATION_WARNING"
         self.context = context or {}

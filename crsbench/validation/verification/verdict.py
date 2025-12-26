@@ -20,7 +20,7 @@ DELTA Mode:
 """
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from crsbench.validation.variant.models import BenchmarkMode, BuildTag
 from crsbench.validation.verification.models import (
@@ -62,10 +62,9 @@ class VerdictResolver:
             return VerdictResolver._resolve_delta_mode(
                 crash_results, cpv_crash_map, benchmark_name, pov_id
             )
-        else:
-            return VerdictResolver._resolve_full_mode(
-                crash_results, cpv_crash_map, benchmark_name, pov_id
-            )
+        return VerdictResolver._resolve_full_mode(
+            crash_results, cpv_crash_map, benchmark_name, pov_id
+        )
 
     @staticmethod
     def _resolve_full_mode(

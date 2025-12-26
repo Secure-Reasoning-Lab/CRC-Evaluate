@@ -15,7 +15,7 @@ from typing import List, Optional
 
 import yaml
 
-from crsbench.utils.logger import get_logger, configure_logger
+from crsbench.utils.logger import configure_logger, get_logger
 
 logger = get_logger(__name__)
 
@@ -105,14 +105,13 @@ def detect_source(benchmark_name: str) -> str:
 
     if name_lower.startswith("atlanta-"):
         return "Team-Atlanta"
-    elif name_lower.startswith("afc-"):
+    if name_lower.startswith("afc-"):
         return "AFC"
-    elif name_lower.startswith("asc-"):
+    if name_lower.startswith("asc-"):
         return "ASC"
-    elif name_lower.startswith("sanity-"):
+    if name_lower.startswith("sanity-"):
         return "Sanity"
-    else:
-        return "Unknown"
+    return "Unknown"
 
 
 def detect_mode(meta_data: dict) -> str:
@@ -127,10 +126,9 @@ def detect_mode(meta_data: dict) -> str:
     # Check delta_mode first (takes priority if both exist)
     if meta_data.get("delta_mode"):
         return "delta"
-    elif meta_data.get("full_mode"):
+    if meta_data.get("full_mode"):
         return "full"
-    else:
-        return "unknown"
+    return "unknown"
 
 
 def count_files_in_dir(directory: Path, pattern: str) -> int:
@@ -170,7 +168,7 @@ def collect_benchmark_info(benchmark_dir: Path) -> Optional[BenchmarkInfo]:
     project_yaml = benchmark_dir / "project.yaml"
     if project_yaml.exists():
         try:
-            with open(project_yaml, "r") as f:
+            with project_yaml.open() as f:
                 project_data = yaml.safe_load(f) or {}
 
             info.repo_url = project_data.get("main_repo", "")
@@ -191,7 +189,7 @@ def collect_benchmark_info(benchmark_dir: Path) -> Optional[BenchmarkInfo]:
         return info
 
     try:
-        with open(meta_yaml, "r") as f:
+        with meta_yaml.open() as f:
             meta_data = yaml.safe_load(f) or {}
 
         # Detect mode
@@ -286,7 +284,10 @@ def collect_benchmark_stats(
 
 
 def export_benchmarks_csv(
-    benchmarks: List[BenchmarkInfo], output_path: Path, include_no_vulns: bool = False
+    benchmarks: List[BenchmarkInfo],
+    output_path: Path,
+    *,
+    include_no_vulns: bool = False,
 ) -> None:
     """Export benchmark information to CSV file.
 
@@ -297,7 +298,7 @@ def export_benchmarks_csv(
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_path, "w", newline="", encoding="utf-8") as f:
+    with output_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
 
         # Write header
@@ -373,9 +374,7 @@ def print_summary(benchmarks: List[BenchmarkInfo]) -> None:
 
     # Count test.sh and vuln.yaml
     benchmarks_with_test_sh = sum(1 for b in filtered if b.has_test_sh)
-    vulns_with_vuln_yaml = sum(
-        1 for b in filtered for v in b.vulns if v.has_vuln_yaml
-    )
+    vulns_with_vuln_yaml = sum(1 for b in filtered for v in b.vulns if v.has_vuln_yaml)
     total_povs = sum(v.num_povs for b in filtered for v in b.vulns)
     total_patches = sum(v.num_patches for b in filtered for v in b.vulns)
 
@@ -432,12 +431,12 @@ def print_summary(benchmarks: List[BenchmarkInfo]) -> None:
     print("By Source:")
     print("-" * 70)
     print(f"  {'Source':<15} {'# Projects':>12} {'# Vulns':>12}")
-    print(f"  {'-'*15} {'-'*12} {'-'*12}")
+    print(f"  {'-' * 15} {'-' * 12} {'-' * 12}")
     for source in ["AFC", "ASC", "Team-Atlanta"]:
         if source in by_source:
             stats = by_source[source]
             print(f"  {source:<15} {stats['benchmarks']:>12} {stats['vulns']:>12}")
-    print(f"  {'-'*15} {'-'*12} {'-'*12}")
+    print(f"  {'-' * 15} {'-' * 12} {'-' * 12}")
     print(f"  {'Total':<15} {total_benchmarks:>12} {total_vulns:>12}")
     print()
 
@@ -445,12 +444,12 @@ def print_summary(benchmarks: List[BenchmarkInfo]) -> None:
     print("By Mode:")
     print("-" * 70)
     print(f"  {'Mode':<15} {'# Projects':>12} {'# Vulns':>12}")
-    print(f"  {'-'*15} {'-'*12} {'-'*12}")
+    print(f"  {'-' * 15} {'-' * 12} {'-' * 12}")
     for mode in ["delta", "full"]:
         if mode in by_mode:
             stats = by_mode[mode]
             print(f"  {mode:<15} {stats['benchmarks']:>12} {stats['vulns']:>12}")
-    print(f"  {'-'*15} {'-'*12} {'-'*12}")
+    print(f"  {'-' * 15} {'-' * 12} {'-' * 12}")
     print(f"  {'Total':<15} {total_benchmarks:>12} {total_vulns:>12}")
     print()
 
@@ -458,10 +457,10 @@ def print_summary(benchmarks: List[BenchmarkInfo]) -> None:
     print("By Language:")
     print("-" * 70)
     print(f"  {'Language':<15} {'# Projects':>12} {'# Vulns':>12}")
-    print(f"  {'-'*15} {'-'*12} {'-'*12}")
+    print(f"  {'-' * 15} {'-' * 12} {'-' * 12}")
     for lang, stats in sorted(by_language.items()):
         print(f"  {lang:<15} {stats['benchmarks']:>12} {stats['vulns']:>12}")
-    print(f"  {'-'*15} {'-'*12} {'-'*12}")
+    print(f"  {'-' * 15} {'-' * 12} {'-' * 12}")
     print(f"  {'Total':<15} {total_benchmarks:>12} {total_vulns:>12}")
     print()
 
@@ -469,14 +468,16 @@ def print_summary(benchmarks: List[BenchmarkInfo]) -> None:
     print("By Source x Mode:")
     print("-" * 70)
     print(f"  {'Source':<15} {'Mode':<10} {'# Projects':>12} {'# Vulns':>12}")
-    print(f"  {'-'*15} {'-'*10} {'-'*12} {'-'*12}")
+    print(f"  {'-' * 15} {'-' * 10} {'-' * 12} {'-' * 12}")
     for source in ["AFC", "ASC", "Team-Atlanta"]:
         for mode in ["delta", "full"]:
             key = (source, mode)
             if key in source_mode:
                 stats = source_mode[key]
-                print(f"  {source:<15} {mode:<10} {stats['benchmarks']:>12} {stats['vulns']:>12}")
-    print(f"  {'-'*15} {'-'*10} {'-'*12} {'-'*12}")
+                print(
+                    f"  {source:<15} {mode:<10} {stats['benchmarks']:>12} {stats['vulns']:>12}"
+                )
+    print(f"  {'-' * 15} {'-' * 10} {'-' * 12} {'-' * 12}")
     print(f"  {'Total':<15} {'':<10} {total_benchmarks:>12} {total_vulns:>12}")
     print("=" * 70)
 
@@ -495,9 +496,7 @@ def export_summary_csv(benchmarks: List[BenchmarkInfo], output_path: Path) -> No
     total_vulns = sum(len(b.vulns) for b in filtered)
     total_harnesses = sum(len(b.harnesses) for b in filtered)
     benchmarks_with_test_sh = sum(1 for b in filtered if b.has_test_sh)
-    vulns_with_vuln_yaml = sum(
-        1 for b in filtered for v in b.vulns if v.has_vuln_yaml
-    )
+    vulns_with_vuln_yaml = sum(1 for b in filtered for v in b.vulns if v.has_vuln_yaml)
     total_povs = sum(v.num_povs for b in filtered for v in b.vulns)
     total_patches = sum(v.num_patches for b in filtered for v in b.vulns)
 
@@ -533,7 +532,7 @@ def export_summary_csv(benchmarks: List[BenchmarkInfo], output_path: Path) -> No
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_path, "w", newline="", encoding="utf-8") as f:
+    with output_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
 
         # Overall section
@@ -545,27 +544,49 @@ def export_summary_csv(benchmarks: List[BenchmarkInfo], output_path: Path) -> No
         writer.writerow([])
 
         # File completeness
-        writer.writerow(["File Completeness", "test.sh", "", benchmarks_with_test_sh, f"{benchmarks_with_test_sh}/{total_benchmarks}"])
-        writer.writerow(["File Completeness", "vuln.yaml", "", vulns_with_vuln_yaml, f"{vulns_with_vuln_yaml}/{total_vulns}"])
+        writer.writerow(
+            [
+                "File Completeness",
+                "test.sh",
+                "",
+                benchmarks_with_test_sh,
+                f"{benchmarks_with_test_sh}/{total_benchmarks}",
+            ]
+        )
+        writer.writerow(
+            [
+                "File Completeness",
+                "vuln.yaml",
+                "",
+                vulns_with_vuln_yaml,
+                f"{vulns_with_vuln_yaml}/{total_vulns}",
+            ]
+        )
         writer.writerow([])
 
         # By Source
         for source in ["AFC", "ASC", "Team-Atlanta"]:
             if source in by_source:
                 stats = by_source[source]
-                writer.writerow(["By Source", source, "", stats["benchmarks"], stats["vulns"]])
+                writer.writerow(
+                    ["By Source", source, "", stats["benchmarks"], stats["vulns"]]
+                )
         writer.writerow([])
 
         # By Mode
         for mode in ["delta", "full"]:
             if mode in by_mode:
                 stats = by_mode[mode]
-                writer.writerow(["By Mode", mode, "", stats["benchmarks"], stats["vulns"]])
+                writer.writerow(
+                    ["By Mode", mode, "", stats["benchmarks"], stats["vulns"]]
+                )
         writer.writerow([])
 
         # By Language
         for lang, stats in sorted(by_language.items()):
-            writer.writerow(["By Language", lang, "", stats["benchmarks"], stats["vulns"]])
+            writer.writerow(
+                ["By Language", lang, "", stats["benchmarks"], stats["vulns"]]
+            )
         writer.writerow([])
 
         # By Source x Mode
@@ -574,7 +595,15 @@ def export_summary_csv(benchmarks: List[BenchmarkInfo], output_path: Path) -> No
                 key = (source, mode)
                 if key in source_mode:
                     stats = source_mode[key]
-                    writer.writerow(["By Source x Mode", source, mode, stats["benchmarks"], stats["vulns"]])
+                    writer.writerow(
+                        [
+                            "By Source x Mode",
+                            source,
+                            mode,
+                            stats["benchmarks"],
+                            stats["vulns"],
+                        ]
+                    )
 
     logger.info(f"Exported summary statistics to: {output_path}")
 
@@ -668,11 +697,15 @@ Examples:
 
     # Export CSV
     if not args.summary_only:
-        export_benchmarks_csv(benchmarks, args.output, args.include_no_vulns)
+        export_benchmarks_csv(
+            benchmarks, args.output, include_no_vulns=args.include_no_vulns
+        )
         logger.info(f"CSV exported to: {args.output}")
 
         # Export summary CSV (auto-generate filename from output)
-        summary_path = args.output.parent / f"{args.output.stem}_summary{args.output.suffix}"
+        summary_path = (
+            args.output.parent / f"{args.output.stem}_summary{args.output.suffix}"
+        )
         export_summary_csv(benchmarks, summary_path)
         logger.info(f"Summary CSV exported to: {summary_path}")
 

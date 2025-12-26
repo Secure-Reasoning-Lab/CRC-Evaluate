@@ -8,9 +8,7 @@ issues when comparing source and target directories.
 import tempfile
 from pathlib import Path
 
-import pytest
 import yaml
-
 from crsbench.migration.migration_validator import (
     MigrationValidationResult,
     ValidationCodes,
@@ -28,7 +26,7 @@ class TestValidationIssue:
             level="error",
             code=ValidationCodes.SOURCE_NOT_FOUND,
             message="Source not found",
-            path="/test/path"
+            path="/test/path",
         )
         assert issue.level == "error"
         assert issue.code == ValidationCodes.SOURCE_NOT_FOUND
@@ -38,9 +36,7 @@ class TestValidationIssue:
     def test_create_warning(self):
         """Test creating a warning-level issue."""
         issue = ValidationIssue(
-            level="warning",
-            code=ValidationCodes.HASH_MISMATCH,
-            message="Hash mismatch"
+            level="warning", code=ValidationCodes.HASH_MISMATCH, message="Hash mismatch"
         )
         assert issue.level == "warning"
         assert issue.path is None
@@ -65,7 +61,7 @@ class TestMigrationValidationResult:
                 ValidationIssue(level="error", code="E1", message="Error 1"),
                 ValidationIssue(level="warning", code="W1", message="Warning 1"),
                 ValidationIssue(level="error", code="E2", message="Error 2"),
-            ]
+            ],
         )
         assert result.error_count == 2
         assert result.warning_count == 1
@@ -77,8 +73,10 @@ class TestMigrationValidationResult:
         result = MigrationValidationResult(
             is_valid=False,
             issues=[
-                ValidationIssue(level="error", code="E1", message="Error message", path="/path"),
-            ]
+                ValidationIssue(
+                    level="error", code="E1", message="Error message", path="/path"
+                ),
+            ],
         )
         summary = result.summary()
         assert "INVALID" in summary
@@ -100,7 +98,9 @@ class TestValidateSourceTarget:
             result = validate_source_target(source_dir, target_dir)
 
             assert result.is_valid is False
-            assert any(e.code == ValidationCodes.SOURCE_NOT_FOUND for e in result.errors)
+            assert any(
+                e.code == ValidationCodes.SOURCE_NOT_FOUND for e in result.errors
+            )
 
     def test_missing_source_config(self):
         """Test that missing source config.yaml returns error."""
@@ -114,7 +114,9 @@ class TestValidateSourceTarget:
             result = validate_source_target(source_dir, target_dir)
 
             assert result.is_valid is False
-            assert any(e.code == ValidationCodes.CONFIG_NOT_FOUND for e in result.errors)
+            assert any(
+                e.code == ValidationCodes.CONFIG_NOT_FOUND for e in result.errors
+            )
 
     def test_valid_source_target(self):
         """Test that valid migration passes validation."""
@@ -145,7 +147,9 @@ class TestValidateSourceTarget:
             result = validate_source_target(source_dir, target_dir)
 
             assert result.is_valid is False
-            assert any(e.code == ValidationCodes.MISSING_ROOT_FILE for e in result.errors)
+            assert any(
+                e.code == ValidationCodes.MISSING_ROOT_FILE for e in result.errors
+            )
 
     def test_missing_patch_file(self):
         """Test that missing patch file is detected."""
@@ -157,7 +161,14 @@ class TestValidateSourceTarget:
             _create_valid_target_from_source(source_dir, target_dir)
 
             # Remove patch from target
-            patch_file = target_dir / ".aixcc" / "test_harness" / "cpv_0" / "patches" / "patch_0.diff"
+            patch_file = (
+                target_dir
+                / ".aixcc"
+                / "test_harness"
+                / "cpv_0"
+                / "patches"
+                / "patch_0.diff"
+            )
             patch_file.unlink()
 
             result = validate_source_target(source_dir, target_dir)
@@ -175,13 +186,22 @@ class TestValidateSourceTarget:
             _create_valid_target_from_source(source_dir, target_dir)
 
             # Remove POV blob from target
-            blob_file = target_dir / ".aixcc" / "test_harness" / "cpv_0" / "blobs" / "pov_0.blob"
+            blob_file = (
+                target_dir
+                / ".aixcc"
+                / "test_harness"
+                / "cpv_0"
+                / "blobs"
+                / "pov_0.blob"
+            )
             blob_file.unlink()
 
             result = validate_source_target(source_dir, target_dir)
 
             assert result.is_valid is False
-            assert any(e.code == ValidationCodes.MISSING_POV_BLOB for e in result.errors)
+            assert any(
+                e.code == ValidationCodes.MISSING_POV_BLOB for e in result.errors
+            )
 
     def test_missing_crash_log(self):
         """Test that missing crash log is detected."""
@@ -193,13 +213,17 @@ class TestValidateSourceTarget:
             _create_valid_target_from_source(source_dir, target_dir)
 
             # Remove crash log from target
-            log_file = target_dir / ".aixcc" / "test_harness" / "cpv_0" / "logs" / "pov_0.log"
+            log_file = (
+                target_dir / ".aixcc" / "test_harness" / "cpv_0" / "logs" / "pov_0.log"
+            )
             log_file.unlink()
 
             result = validate_source_target(source_dir, target_dir)
 
             assert result.is_valid is False
-            assert any(e.code == ValidationCodes.MISSING_CRASH_LOG for e in result.errors)
+            assert any(
+                e.code == ValidationCodes.MISSING_CRASH_LOG for e in result.errors
+            )
 
     def test_hash_mismatch(self):
         """Test that hash mismatch is detected."""
@@ -211,7 +235,14 @@ class TestValidateSourceTarget:
             _create_valid_target_from_source(source_dir, target_dir)
 
             # Modify target file to have different content
-            patch_file = target_dir / ".aixcc" / "test_harness" / "cpv_0" / "patches" / "patch_0.diff"
+            patch_file = (
+                target_dir
+                / ".aixcc"
+                / "test_harness"
+                / "cpv_0"
+                / "patches"
+                / "patch_0.diff"
+            )
             patch_file.write_text("different content!")
 
             result = validate_source_target(source_dir, target_dir)
@@ -229,13 +260,17 @@ class TestValidateSourceTarget:
             _create_valid_target_from_source(source_dir, target_dir)
 
             # Remove source patch (target still has it)
-            source_patch = source_dir / ".aixcc" / "patches" / "test_harness" / "cpv_0.diff"
+            source_patch = (
+                source_dir / ".aixcc" / "patches" / "test_harness" / "cpv_0.diff"
+            )
             source_patch.unlink()
 
             result = validate_source_target(source_dir, target_dir)
 
             # Should have warning for missing source file
-            assert any(w.code == ValidationCodes.SOURCE_FILE_NOT_FOUND for w in result.warnings)
+            assert any(
+                w.code == ValidationCodes.SOURCE_FILE_NOT_FOUND for w in result.warnings
+            )
 
 
 # Helper function to create valid Team-Atlanta source structure
@@ -247,17 +282,21 @@ def _create_valid_source_structure(source_dir: Path) -> None:
 
     # Create config.yaml
     config_data = {
-        'harness_files': [{
-            'name': 'test_harness',
-            'path': '$REPO/test.c',
-            'cpvs': [{
-                'name': 'cpv_0',
-                'sanitizer': 'address',
-                'error_token': 'heap-buffer-overflow'
-            }]
-        }]
+        "harness_files": [
+            {
+                "name": "test_harness",
+                "path": "$REPO/test.c",
+                "cpvs": [
+                    {
+                        "name": "cpv_0",
+                        "sanitizer": "address",
+                        "error_token": "heap-buffer-overflow",
+                    }
+                ],
+            }
+        ]
     }
-    with open(aixcc_dir / "config.yaml", 'w') as f:
+    with open(aixcc_dir / "config.yaml", "w") as f:
         yaml.dump(config_data, f)
 
     # Create root files
@@ -288,23 +327,33 @@ def _create_valid_target_from_source(source_dir: Path, target_dir: Path) -> None
     aixcc_dir.mkdir()
 
     # Copy root files
-    for filename in ['build.sh', 'Dockerfile', 'project.yaml']:
+    for filename in ["build.sh", "Dockerfile", "project.yaml"]:
         src = source_dir / filename
         if src.exists():
             (target_dir / filename).write_bytes(src.read_bytes())
 
     # Create meta.yaml
     meta_config = {
-        'harness_files': [{
-            'name': 'test_harness',
-            'path': '$REPO/test.c',
-            'vulns': [{
-                'vuln_keyword': 'cpv_0',
-                'povs': [{'id': 'pov_0', 'sanitizer': 'address', 'error_token': 'heap-buffer-overflow'}]
-            }]
-        }]
+        "harness_files": [
+            {
+                "name": "test_harness",
+                "path": "$REPO/test.c",
+                "vulns": [
+                    {
+                        "vuln_keyword": "cpv_0",
+                        "povs": [
+                            {
+                                "id": "pov_0",
+                                "sanitizer": "address",
+                                "error_token": "heap-buffer-overflow",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
     }
-    with open(aixcc_dir / "meta.yaml", 'w') as f:
+    with open(aixcc_dir / "meta.yaml", "w") as f:
         yaml.dump(meta_config, f)
 
     # Create CPV directory structure
@@ -331,11 +380,11 @@ def _create_valid_target_from_source(source_dir: Path, target_dir: Path) -> None
 
     # Create vuln.yaml
     vuln_data = {
-        'id': 'cpv_0',
-        'name': 'Test Vulnerability',
-        'cwes': [],
-        'description': 'Test',
-        'locations': []
+        "id": "cpv_0",
+        "name": "Test Vulnerability",
+        "cwes": [],
+        "description": "Test",
+        "locations": [],
     }
-    with open(cpv_dir / "vuln.yaml", 'w') as f:
+    with open(cpv_dir / "vuln.yaml", "w") as f:
         yaml.dump(vuln_data, f)

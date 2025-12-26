@@ -7,16 +7,15 @@ for different hint levels.
 import json
 import tempfile
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
 
 import pytest
 import yaml
-
-from crsbench.hint_generation.cwe_mapping import get_general_class, get_cwe_name
+from crsbench.hint_generation.cwe_mapping import get_cwe_name, get_general_class
 from crsbench.hint_generation.sarif_generator_simple import (
-    VulnInfo,
-    SarifHintGenerator,
     HintLevel,
+    SarifHintGenerator,
+    VulnInfo,
     generate_hints_for_benchmark,
 )
 
@@ -54,9 +53,7 @@ def sample_vuln_data() -> Dict[str, Any]:
 @pytest.fixture
 def temp_vuln_yaml(sample_vuln_data) -> Path:
     """Create a temporary vuln.yaml file for testing."""
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", delete=False
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
         yaml.dump(sample_vuln_data, f)
         temp_path = Path(f.name)
 
@@ -506,7 +503,9 @@ class TestEdgeCases:
         sarif_json = generator.generate(HintLevel.WITH_LINES)
         sarif = json.loads(sarif_json)
 
-        region = sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"]
+        region = sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"][
+            "region"
+        ]
         assert "startLine" in region
         assert "endLine" in region
         # Column info should not be present if not in source data

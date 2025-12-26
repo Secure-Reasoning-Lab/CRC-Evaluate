@@ -5,26 +5,24 @@ oss-bugfind-crs CLI for bug finding CRS execution using pre-cloned source reposi
 """
 
 import json
-from crsbench.utils.logger import get_logger
 import shutil
 import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Set
+from typing import Any, Dict, List, Optional, Set
 
 from crsbench.evaluation.crs_executor import CRSExecutor, CRSResult
 from crsbench.evaluation.process_utils import run_with_graceful_timeout
-from crsbench.validation.schemas import HarnessFile
+from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import USE_GITCACHE
+from crsbench.validation.schemas import HarnessFile
 
 logger = get_logger(__name__)
 
 
 class ExecutorError(Exception):
     """Raised when executor encounters an error."""
-
-    pass
 
 
 class CRSBugFindingExecutor(CRSExecutor):
@@ -42,7 +40,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         registry_dir: Path,
         benchmarks_root: Path,
         crs_configs_dir: Path,
-        litellm_mode: Optional[str] = "passthrough"
+        litellm_mode: Optional[str] = "passthrough",
     ):
         """Initialize bug finding executor.
 
@@ -77,17 +75,13 @@ class CRSBugFindingExecutor(CRSExecutor):
 
         # Set defaults
         self.config.setdefault("build_timeout", 3600)  # 1 hour
-        self.config.setdefault("run_timeout", 7200)    # 2 hours
+        self.config.setdefault("run_timeout", 7200)  # 2 hours
         self.config.setdefault("hints_enabled", False)
         self.config.setdefault("hints_corpus_level", "1h")
 
         logger.info(f"Configured CRS Bug Finding executor with: {config}")
 
-    def build_crs(
-        self,
-        benchmark_path: Path,
-        trial_output_dir: Path
-    ) -> None:
+    def build_crs(self, benchmark_path: Path, trial_output_dir: Path) -> None:
         """Pre-build CRS Docker image before running.
 
         Call this before starting snapshots to ensure build time
@@ -109,10 +103,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         self._build_crs_if_needed(benchmark_path, project_name, trial_build_dir)
 
     def run_crs(
-        self,
-        benchmark_path: Path,
-        harness: HarnessFile,
-        trial_output_dir: Path
+        self, benchmark_path: Path, harness: HarnessFile, trial_output_dir: Path
     ) -> CRSResult:
         """Run CRS on a specific harness.
 
@@ -135,7 +126,9 @@ class CRSBugFindingExecutor(CRSExecutor):
         start_time = time.time()
         project_name = self._extract_project_name(benchmark_path)
 
-        logger.info(f"Running Bug Finding CRS for project '{project_name}', harness '{harness.name}'")
+        logger.info(
+            f"Running Bug Finding CRS for project '{project_name}', harness '{harness.name}'"
+        )
 
         try:
             # 1. Prepare trial-specific build directory
@@ -155,14 +148,16 @@ class CRSBugFindingExecutor(CRSExecutor):
 
             # 4. Prepare hints if enabled
             harness_name = Path(harness.name).stem
-            hints_path = self._prepare_hints(benchmark_path, harness_name, trial_output_dir)
+            hints_path = self._prepare_hints(
+                benchmark_path, harness_name, trial_output_dir
+            )
 
             # 5. Run CRS bug finding campaign
             cmd = self._construct_run_command(
                 project_name=project_name,
                 harness_name=harness_name,
                 trial_build_dir=trial_build_dir,
-                hints_path=hints_path
+                hints_path=hints_path,
             )
 
             logger.info(f"Run command: {' '.join(cmd)}")
@@ -170,19 +165,29 @@ class CRSBugFindingExecutor(CRSExecutor):
             logger.debug(f"Working directory: {trial_output_dir}")
 
             # Get expected output location
-            expected_output_dir = self._get_crs_output_dir(trial_build_dir, project_name)
+            expected_output_dir = self._get_crs_output_dir(
+                trial_build_dir, project_name
+            )
             logger.info(f"Expected output at: {expected_output_dir}")
 
             # Create relative symlink for easy access to output
             symlink_path = trial_output_dir / "output"
             if not symlink_path.exists():
                 # Compute relative path from symlink location to target
-                relative_target = Path("crs-build") / "artifacts" / self.crs_config_name / project_name
+                relative_target = (
+                    Path("crs-build")
+                    / "artifacts"
+                    / self.crs_config_name
+                    / project_name
+                )
                 symlink_path.symlink_to(relative_target)
-                logger.debug(f"Created output symlink: {symlink_path} -> {relative_target}")
+                logger.debug(
+                    f"Created output symlink: {symlink_path} -> {relative_target}"
+                )
 
             # Get LiteLLM environment variables
             import os
+
             litellm_env = self._get_litellm_env()
             env = os.environ.copy()
             env.update(litellm_env)
@@ -196,7 +201,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 timeout=timeout,
                 grace_period=grace_period,
                 cwd=trial_output_dir,
-                env=env
+                env=env,
             )
 
             execution_time = time.time() - start_time
@@ -210,13 +215,15 @@ class CRSBugFindingExecutor(CRSExecutor):
                 execution_time=execution_time,
                 returncode=returncode,
                 stdout=stdout,
-                stderr=stderr
+                stderr=stderr,
             )
 
             # 7. Return result
             success = returncode == 0 and not timed_out
             if timed_out:
-                logger.warning(f"CRS execution timeout after {execution_time}s (returncode: {returncode})")
+                logger.warning(
+                    f"CRS execution timeout after {execution_time}s (returncode: {returncode})"
+                )
             elif not success:
                 logger.warning(f"CRS execution returned non-zero code: {returncode}")
                 logger.debug(f"stdout: {stdout}")
@@ -227,7 +234,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 execution_time=execution_time,
                 success=success,
                 output=stdout,
-                error=stderr if not success or timed_out else None
+                error=stderr if not success or timed_out else None,
             )
 
         except Exception as e:
@@ -238,7 +245,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 execution_time=execution_time,
                 success=False,
                 output="",
-                error=str(e)
+                error=str(e),
             )
 
     def _get_litellm_env(self) -> Dict[str, str]:
@@ -260,39 +267,44 @@ class CRSBugFindingExecutor(CRSExecutor):
 
         if self.litellm_mode == "passthrough":
             # Use external LiteLLM with UPSTREAM_LITELLM_BASE_URL and LITELLM_API_KEY
-            url = os.environ.get('UPSTREAM_LITELLM_BASE_URL')
-            key = os.environ.get('LITELLM_API_KEY')
+            url = os.environ.get("UPSTREAM_LITELLM_BASE_URL")
+            key = os.environ.get("LITELLM_API_KEY")
 
             if not url:
-                raise ExecutorError("UPSTREAM_LITELLM_BASE_URL not set (required for passthrough mode)")
+                raise ExecutorError(
+                    "UPSTREAM_LITELLM_BASE_URL not set (required for passthrough mode)"
+                )
             if not key:
-                raise ExecutorError("LITELLM_API_KEY not set (required for passthrough mode)")
+                raise ExecutorError(
+                    "LITELLM_API_KEY not set (required for passthrough mode)"
+                )
 
-            env['LITELLM_URL'] = url
-            env['LITELLM_KEY'] = key
+            env["LITELLM_URL"] = url
+            env["LITELLM_KEY"] = key
             logger.info(f"Using passthrough LiteLLM mode with URL: {url}")
 
         elif self.litellm_mode == "proxy":
             # Use self-hosted LiteLLM proxy with LITELLM_BASE_URL and LITELLM_MASTER_KEY
-            url = os.environ.get('LITELLM_BASE_URL')
-            key = os.environ.get('LITELLM_MASTER_KEY')
+            url = os.environ.get("LITELLM_BASE_URL")
+            key = os.environ.get("LITELLM_MASTER_KEY")
 
             if not url:
-                raise ExecutorError("LITELLM_BASE_URL not set (required for proxy mode)")
+                raise ExecutorError(
+                    "LITELLM_BASE_URL not set (required for proxy mode)"
+                )
             if not key:
-                raise ExecutorError("LITELLM_MASTER_KEY not set (required for proxy mode)")
+                raise ExecutorError(
+                    "LITELLM_MASTER_KEY not set (required for proxy mode)"
+                )
 
-            env['LITELLM_URL'] = url
-            env['LITELLM_KEY'] = key
+            env["LITELLM_URL"] = url
+            env["LITELLM_KEY"] = key
             logger.info(f"Using proxy LiteLLM mode with URL: {url}")
 
         return env
 
     def _build_crs_if_needed(
-        self,
-        benchmark_path: Path,
-        project_name: str,
-        trial_build_dir: Path
+        self, benchmark_path: Path, project_name: str, trial_build_dir: Path
     ) -> None:
         """Build CRS Docker image if not already built.
 
@@ -318,7 +330,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         source_path = ensure_project_repository(
             benchmark_dir=str(benchmark_path),
             project_dir=str(source_dest),
-            verbose=self.config.get("verbose", False)
+            verbose=self.config.get("verbose", False),
         )
 
         if not source_path:
@@ -334,13 +346,21 @@ class CRSBugFindingExecutor(CRSExecutor):
 
         # Construct build command
         cmd = [
-            "oss-bugfind-crs", "build",
-            "--build-dir", str(trial_build_dir),
-            "--oss-fuzz-dir", str(self.oss_fuzz_path),
-            "--registry-dir", str(self.registry_dir),
-            "--project-path", str(benchmark_path),
-            "--project-image-prefix", self.config.get("project_image_prefix", "aixcc-afc"),
-            str(crs_config_dir), project_name, str(source_path)
+            "oss-bugfind-crs",
+            "build",
+            "--build-dir",
+            str(trial_build_dir),
+            "--oss-fuzz-dir",
+            str(self.oss_fuzz_path),
+            "--registry-dir",
+            str(self.registry_dir),
+            "--project-path",
+            str(benchmark_path),
+            "--project-image-prefix",
+            self.config.get("project_image_prefix", "aixcc-afc"),
+            str(crs_config_dir),
+            project_name,
+            str(source_path),
         ]
 
         # Add external LiteLLM flag if using external LiteLLM
@@ -357,6 +377,7 @@ class CRSBugFindingExecutor(CRSExecutor):
 
         # Get LiteLLM environment variables
         import os
+
         litellm_env = self._get_litellm_env()
         env = os.environ.copy()
         env.update(litellm_env)
@@ -371,7 +392,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 timeout=timeout,
                 check=False,
                 cwd=str(trial_build_dir),
-                env=env
+                env=env,
             )
 
             if result.returncode != 0:
@@ -392,7 +413,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         project_name: str,
         harness_name: str,
         trial_build_dir: Path,
-        hints_path: Optional[Path]
+        hints_path: Optional[Path],
     ) -> List[str]:
         """Construct oss-bugfind-crs run command.
 
@@ -412,11 +433,17 @@ class CRSBugFindingExecutor(CRSExecutor):
         crs_config_dir = self._resolve_crs_config_dir()
 
         cmd = [
-            "oss-bugfind-crs", "run",
-            "--build-dir", str(trial_build_dir),
-            "--oss-fuzz-dir", str(self.oss_fuzz_path),
-            "--registry-dir", str(self.registry_dir),
-            str(crs_config_dir), project_name, harness_name
+            "oss-bugfind-crs",
+            "run",
+            "--build-dir",
+            str(trial_build_dir),
+            "--oss-fuzz-dir",
+            str(self.oss_fuzz_path),
+            "--registry-dir",
+            str(self.registry_dir),
+            str(crs_config_dir),
+            project_name,
+            harness_name,
         ]
 
         # Add hints if available
@@ -468,7 +495,11 @@ class CRSBugFindingExecutor(CRSExecutor):
         crs_config_dir = configs_dir / self.crs_config_name
 
         if not crs_config_dir.exists():
-            available = [d.name for d in configs_dir.iterdir() if d.is_dir()] if configs_dir.exists() else []
+            available = (
+                [d.name for d in configs_dir.iterdir() if d.is_dir()]
+                if configs_dir.exists()
+                else []
+            )
             raise ExecutorError(
                 f"CRS config directory not found: {crs_config_dir}\n"
                 f"Available in {configs_dir}: {available}"
@@ -524,10 +555,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         return build_dir / "artifacts" / self.crs_config_name / benchmark_name
 
     def _prepare_hints(
-        self,
-        benchmark_path: Path,
-        harness_name: str,
-        trial_output_dir: Path
+        self, benchmark_path: Path, harness_name: str, trial_output_dir: Path
     ) -> Optional[Path]:
         """Prepare hints directory with filtered content from benchmark.
 
@@ -590,7 +618,9 @@ class CRSBugFindingExecutor(CRSExecutor):
             for corpus_file in corpus_files:
                 if corpus_file.is_file():
                     shutil.copy2(corpus_file, dest_corpus)
-            logger.info(f"Copied {len(corpus_files)} corpus files from {corpus_level} level")
+            logger.info(
+                f"Copied {len(corpus_files)} corpus files from {corpus_level} level"
+            )
         else:
             logger.warning(f"Corpus directory not found: {source_corpus}")
 
@@ -606,7 +636,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         execution_time: float,
         returncode: int,
         stdout: str,
-        stderr: str
+        stderr: str,
     ) -> None:
         """Store execution metadata to trial directory.
 
@@ -635,29 +665,35 @@ class CRSBugFindingExecutor(CRSExecutor):
             "execution": {
                 "returncode": returncode,
                 "success": returncode == 0,
-                "timeout": returncode == 124
+                "timeout": returncode == 124,
             },
             "hints": {
                 "enabled": hints_path is not None,
                 "path": str(hints_path) if hints_path else None,
-                "corpus_level": self.config.get("hints_corpus_level") if hints_path else None,
-                "sarif_count": len(list((hints_path / "sarif").glob("*.sarif"))) if hints_path and (hints_path / "sarif").exists() else 0,
-                "corpus_count": len(list((hints_path / "corpus").iterdir())) if hints_path and (hints_path / "corpus").exists() else 0,
+                "corpus_level": self.config.get("hints_corpus_level")
+                if hints_path
+                else None,
+                "sarif_count": len(list((hints_path / "sarif").glob("*.sarif")))
+                if hints_path and (hints_path / "sarif").exists()
+                else 0,
+                "corpus_count": len(list((hints_path / "corpus").iterdir()))
+                if hints_path and (hints_path / "corpus").exists()
+                else 0,
             },
             "outputs": {
                 "crs_output_dir": str(crs_output_dir),
                 "build_dir": str(build_dir),
-                "note": "CRS output is at {{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/"
+                "note": "CRS output is at {{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/",
             },
             "result": {
                 "stdout_length": len(stdout),
                 "stderr_length": len(stderr),
-                "has_output": bool(stdout or stderr)
-            }
+                "has_output": bool(stdout or stderr),
+            },
         }
 
         metadata_file = trial_output_dir / "execution.json"
-        with open(metadata_file, "w") as f:
+        with metadata_file.open("w") as f:
             json.dump(metadata, f, indent=2)
 
         logger.debug(f"Stored execution metadata to {metadata_file}")

@@ -1,8 +1,8 @@
 """Unit tests for analysis base module."""
 
-import pytest
 from pathlib import Path
 
+import pytest
 from crsbench.evaluation.analysis.base import AnalysisResult, AnalyzerInterface
 
 
@@ -16,7 +16,7 @@ class TestAnalysisResult:
             metrics={"metric1": 100, "metric2": 200},
             summary="Test summary",
             warnings=["warning1"],
-            metadata={"version": "1.0"}
+            metadata={"version": "1.0"},
         )
 
         assert result.crs_name == "test-crs"
@@ -42,46 +42,46 @@ class TestAnalysisResult:
             metrics={"count": 42},
             summary="Summary",
             warnings=["warn"],
-            metadata={"v": "1"}
+            metadata={"v": "1"},
         )
 
         data = result.to_dict()
 
         assert data == {
-            'crs_name': 'test-crs',
-            'metrics': {'count': 42},
-            'summary': 'Summary',
-            'warnings': ['warn'],
-            'metadata': {'v': '1'}
+            "crs_name": "test-crs",
+            "metrics": {"count": 42},
+            "summary": "Summary",
+            "warnings": ["warn"],
+            "metadata": {"v": "1"},
         }
 
     def test_from_dict(self):
         """Test creating AnalysisResult from dict."""
         data = {
-            'crs_name': 'test-crs',
-            'metrics': {'value': 123},
-            'summary': 'Test',
-            'warnings': ['w1', 'w2'],
-            'metadata': {'key': 'value'}
+            "crs_name": "test-crs",
+            "metrics": {"value": 123},
+            "summary": "Test",
+            "warnings": ["w1", "w2"],
+            "metadata": {"key": "value"},
         }
 
         result = AnalysisResult.from_dict(data)
 
-        assert result.crs_name == 'test-crs'
-        assert result.metrics == {'value': 123}
-        assert result.summary == 'Test'
-        assert result.warnings == ['w1', 'w2']
-        assert result.metadata == {'key': 'value'}
+        assert result.crs_name == "test-crs"
+        assert result.metrics == {"value": 123}
+        assert result.summary == "Test"
+        assert result.warnings == ["w1", "w2"]
+        assert result.metadata == {"key": "value"}
 
     def test_from_dict_partial(self):
         """Test from_dict with minimal data."""
-        data = {'crs_name': 'test-crs'}
+        data = {"crs_name": "test-crs"}
 
         result = AnalysisResult.from_dict(data)
 
-        assert result.crs_name == 'test-crs'
+        assert result.crs_name == "test-crs"
         assert result.metrics == {}
-        assert result.summary == ''
+        assert result.summary == ""
         assert result.warnings == []
         assert result.metadata == {}
 
@@ -92,7 +92,7 @@ class TestAnalysisResult:
             metrics={"x": 1, "y": 2},
             summary="Summary",
             warnings=["w"],
-            metadata={"m": "v"}
+            metadata={"m": "v"},
         )
 
         data = original.to_dict()
@@ -115,6 +115,7 @@ class TestAnalyzerInterface:
 
     def test_must_implement_crs_name(self):
         """Test that crs_name property must be implemented."""
+
         class IncompleteAnalyzer(AnalyzerInterface):
             def analyze_snapshot(self, snapshot_dir: Path):
                 pass
@@ -127,6 +128,7 @@ class TestAnalyzerInterface:
 
     def test_must_implement_analyze_snapshot(self):
         """Test that analyze_snapshot must be implemented."""
+
         class IncompleteAnalyzer(AnalyzerInterface):
             @property
             def crs_name(self) -> str:
@@ -140,6 +142,7 @@ class TestAnalyzerInterface:
 
     def test_must_implement_analyze_trial(self):
         """Test that analyze_trial must be implemented."""
+
         class IncompleteAnalyzer(AnalyzerInterface):
             @property
             def crs_name(self) -> str:
@@ -153,6 +156,7 @@ class TestAnalyzerInterface:
 
     def test_complete_implementation(self):
         """Test that a complete implementation can be instantiated."""
+
         class CompleteAnalyzer(AnalyzerInterface):
             @property
             def crs_name(self) -> str:
@@ -170,6 +174,7 @@ class TestAnalyzerInterface:
 
     def test_analyze_time_series_optional(self):
         """Test that analyze_time_series has default implementation."""
+
         class MinimalAnalyzer(AnalyzerInterface):
             @property
             def crs_name(self) -> str:
@@ -189,6 +194,7 @@ class TestAnalyzerInterface:
 
     def test_can_override_analyze_time_series(self):
         """Test that analyze_time_series can be overridden."""
+
         class TimeSeriesAnalyzer(AnalyzerInterface):
             @property
             def crs_name(self) -> str:

@@ -4,10 +4,8 @@ import shutil
 from pathlib import Path
 
 import pytest
-
 from crsbench.validation.verification.reproducer import (
     OSSFuzzReproducer,
-    EXIT_CODE_TIMEOUT,
 )
 
 
@@ -87,6 +85,7 @@ class TestCommandConstruction:
     def test_propagate_exit_codes_used(self, reproducer, caplog):
         """Command should include --propagate_exit_codes."""
         import logging
+
         caplog.set_level(logging.DEBUG)
 
         reproducer.reproduce(
@@ -100,6 +99,7 @@ class TestCommandConstruction:
     def test_timeout_flag_used(self, reproducer, caplog):
         """Command should include --timeout."""
         import logging
+
         caplog.set_level(logging.DEBUG)
 
         reproducer.reproduce(
@@ -115,6 +115,7 @@ class TestCommandConstruction:
     def test_detect_leaks_disabled(self, reproducer, caplog):
         """Command should include -detect_leaks=0."""
         import logging
+
         caplog.set_level(logging.DEBUG)
 
         reproducer.reproduce(

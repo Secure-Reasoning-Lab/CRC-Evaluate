@@ -138,7 +138,8 @@ Examples:
         help="Output format (default: json)",
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Enable verbose output",
     )
@@ -168,9 +169,11 @@ def run_validate(args: argparse.Namespace) -> int:
         return 1
 
     # Validate single POV mode requires harness
-    pov_file = getattr(args, 'pov', None)
+    pov_file = getattr(args, "pov", None)
     if pov_file and not args.harness:
-        logger.error("--harness is required when using --pov for single file validation")
+        logger.error(
+            "--harness is required when using --pov for single file validation"
+        )
         return 1
 
     if pov_file and not pov_file.exists():

@@ -9,10 +9,9 @@ This test verifies that:
 """
 
 import asyncio
-import os
+import inspect
 import sys
 from pathlib import Path
-import inspect
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -48,7 +47,7 @@ async def test_list_tools(mcp):
     try:
         # Get the registered tools from FastMCP
         # FastMCP stores tools in _tools dict
-        if hasattr(mcp, '_tools'):
+        if hasattr(mcp, "_tools"):
             tools = mcp._tools
             print(f"\n📋 Found {len(tools)} tools:")
             for i, (tool_name, tool_func) in enumerate(tools.items(), 1):
@@ -77,6 +76,7 @@ async def test_list_tools(mcp):
     except Exception as e:
         print(f"❌ Failed to list tools: {e}")
         import traceback
+
         traceback.print_exc()
         raise
 
@@ -113,6 +113,7 @@ async def test_call_get_build_logs():
     except Exception as e:
         print(f"❌ Failed to execute tool: {e}")
         import traceback
+
         traceback.print_exc()
         # Don't raise - this is expected if OSS-Fuzz is not set up
 
@@ -135,6 +136,7 @@ async def test_call_get_benchmark_info():
         print("\n📊 Tool execution result:")
         print(f"   Type: {type(result)}")
         import json
+
         print(f"   Result:\n{json.dumps(result, indent=2)}")
 
         print("\n✅ Tool executed successfully")
@@ -143,6 +145,7 @@ async def test_call_get_benchmark_info():
     except Exception as e:
         print(f"❌ Failed to execute tool: {e}")
         import traceback
+
         traceback.print_exc()
         raise
 
@@ -189,6 +192,7 @@ async def main():
         print("=" * 70)
         print(f"\nError: {e}")
         import traceback
+
         traceback.print_exc()
         return 1
 

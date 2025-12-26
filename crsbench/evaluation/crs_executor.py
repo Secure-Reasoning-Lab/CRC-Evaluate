@@ -42,19 +42,20 @@ See design-docs/evaluation/trial-directory-preparation.md for directory structur
 See design-docs/evaluation/crs-executors.md for executor implementation.
 """
 
-import time
 import random
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Any
-from crsbench.validation.schemas import BenchmarkConfig, HarnessFile, POV
-from crsbench.evaluation.results import HarnessResult
+from typing import Any, Dict, List, Optional
+
+from crsbench.validation.schemas import HarnessFile
 
 
 @dataclass
 class CRSResult:
     """Result from CRS execution."""
+
     harness_name: str
     execution_time: float
     success: bool
@@ -73,14 +74,10 @@ class CRSExecutor(ABC):
         Args:
             config: CRS configuration parameters
         """
-        pass
 
     @abstractmethod
     def run_crs(
-        self,
-        benchmark_path: Path,
-        harness: HarnessFile,
-        trial_output_dir: Path
+        self, benchmark_path: Path, harness: HarnessFile, trial_output_dir: Path
     ) -> CRSResult:
         """Run CRS on a specific harness.
 
@@ -97,7 +94,6 @@ class CRSExecutor(ABC):
             TrialDirectoryPreparer. The executor does not need commit
             information - it simply runs CRS on pre-prepared directories.
         """
-        pass
 
 
 class StubCRSExecutor(CRSExecutor):
@@ -113,16 +109,13 @@ class StubCRSExecutor(CRSExecutor):
         self.config = config.copy()
 
         # Extract configuration parameters if provided
-        if 'simulation_delay' in config:
-            self.simulation_delay = config['simulation_delay']
-        if 'success_rate' in config:
-            self.success_rate = config['success_rate']
+        if "simulation_delay" in config:
+            self.simulation_delay = config["simulation_delay"]
+        if "success_rate" in config:
+            self.success_rate = config["success_rate"]
 
     def run_crs(
-        self,
-        benchmark_path: Path,
-        harness: HarnessFile,
-        trial_output_dir: Path
+        self, benchmark_path: Path, harness: HarnessFile, trial_output_dir: Path
     ) -> CRSResult:
         """Run stub CRS execution."""
         start_time = time.time()
@@ -166,22 +159,21 @@ POVs analyzed: {len(harness.povs or [])}
                 execution_time=execution_time,
                 success=True,
                 output=output.strip(),
-                povs_detected=detected_povs
+                povs_detected=detected_povs,
             )
-        else:
-            # Simulate execution failure
-            error_messages = [
-                "Build failed: compilation error",
-                "Runtime error: harness crashed",
-                "Timeout: execution exceeded time limit",
-                "Configuration error: invalid parameters"
-            ]
-            error = random.choice(error_messages)
+        # Simulate execution failure
+        error_messages = [
+            "Build failed: compilation error",
+            "Runtime error: harness crashed",
+            "Timeout: execution exceeded time limit",
+            "Configuration error: invalid parameters",
+        ]
+        error = random.choice(error_messages)
 
-            return CRSResult(
-                harness_name=harness.name,
-                execution_time=execution_time,
-                success=False,
-                output=f"CRS execution failed for {harness.name}",
-                error=error
-            )
+        return CRSResult(
+            harness_name=harness.name,
+            execution_time=execution_time,
+            success=False,
+            output=f"CRS execution failed for {harness.name}",
+            error=error,
+        )

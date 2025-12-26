@@ -8,11 +8,16 @@ Tests cover:
 """
 
 import pytest
-
 from crsbench.validation.variant.models import (
     BenchmarkMode,
     BuildTag,
     BuildVersion,
+)
+from crsbench.validation.verification.dedup import (
+    NoOpDedup,
+    PatchBasedDedup,
+    StatusBasedDedup,
+    get_dedup_strategy,
 )
 from crsbench.validation.verification.models import (
     VerificationRequest,
@@ -20,12 +25,6 @@ from crsbench.validation.verification.models import (
     VerificationStatus,
 )
 from crsbench.validation.verification.verdict import VerdictResolver
-from crsbench.validation.verification.dedup import (
-    PatchBasedDedup,
-    NoOpDedup,
-    StatusBasedDedup,
-    get_dedup_strategy,
-)
 
 
 class TestBuildTag:

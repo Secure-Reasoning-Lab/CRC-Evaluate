@@ -1,13 +1,12 @@
 """Integration tests for snapshot system with BenchmarkRunner."""
 
-import pytest
-import time
 import threading
+import time
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
-from crsbench.evaluation.runner import BenchmarkRunner
+import pytest
 from crsbench.evaluation.crs_executor import StubCRSExecutor
+from crsbench.evaluation.runner import BenchmarkRunner
 from crsbench.evaluation.snapshot import list_snapshots, load_snapshot_metadata
 
 
@@ -52,9 +51,7 @@ full_mode:
 
         # Run benchmark without snapshots
         result = runner.run_benchmark(
-            benchmark_path=sample_benchmark,
-            mode='full',
-            trial_output_dir=trial_dir
+            benchmark_path=sample_benchmark, mode="full", trial_output_dir=trial_dir
         )
 
         # Should complete successfully
@@ -79,9 +76,7 @@ full_mode:
 
         # Run benchmark with snapshots (for a few seconds)
         result = runner.run_benchmark(
-            benchmark_path=sample_benchmark,
-            mode='full',
-            trial_output_dir=trial_dir
+            benchmark_path=sample_benchmark, mode="full", trial_output_dir=trial_dir
         )
 
         # Should complete successfully
@@ -102,9 +97,7 @@ full_mode:
         trial_dir.mkdir()
 
         result = runner.run_benchmark(
-            benchmark_path=sample_benchmark,
-            mode='full',
-            trial_output_dir=trial_dir
+            benchmark_path=sample_benchmark, mode="full", trial_output_dir=trial_dir
         )
 
         assert result.is_valid
@@ -122,8 +115,8 @@ full_mode:
         with pytest.raises(Exception, match="trial_output_dir"):
             runner.run_benchmark(
                 benchmark_path=sample_benchmark,
-                mode='full',
-                trial_output_dir=None  # Missing!
+                mode="full",
+                trial_output_dir=None,  # Missing!
             )
 
     def test_snapshot_with_nonexistent_trial_dir_fails(self, sample_benchmark):
@@ -136,8 +129,8 @@ full_mode:
         with pytest.raises(Exception, match="trial_output_dir does not exist"):
             runner.run_benchmark(
                 benchmark_path=sample_benchmark,
-                mode='full',
-                trial_output_dir=nonexistent_dir
+                mode="full",
+                trial_output_dir=nonexistent_dir,
             )
 
 

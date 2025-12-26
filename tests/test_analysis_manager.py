@@ -1,10 +1,8 @@
 """Unit tests for AnalysisManager."""
 
-import pytest
-from pathlib import Path
 from unittest.mock import Mock, patch
 
-from crsbench.evaluation.analysis.base import AnalyzerInterface, AnalysisResult
+from crsbench.evaluation.analysis.base import AnalyzerInterface
 from crsbench.evaluation.analysis.manager import AnalysisManager
 
 
@@ -139,7 +137,9 @@ class TestAnalysisManager:
             crs_data_dir = snapshot_dir / "crs-data"
             crs_data_dir.mkdir()
             metrics_file = crs_data_dir / "metrics.json"
-            metrics_file.write_text(f'{{"iterations": {(i+1)*100}, "discoveries": {i+1}}}')
+            metrics_file.write_text(
+                f'{{"iterations": {(i + 1) * 100}, "discoveries": {i + 1}}}'
+            )
             snapshots.append(snapshot_dir)
 
         manager = AnalysisManager()
@@ -181,7 +181,7 @@ class TestAutoDiscovery:
         analyzer = manager.analyzers["example-crs"]
         assert analyzer.__class__.__name__ == "ExampleAnalyzer"
 
-    @patch('crsbench.evaluation.analysis.manager.Path')
+    @patch("crsbench.evaluation.analysis.manager.Path")
     def test_handles_missing_analyzers_directory(self, mock_path):
         """Test handling of missing analyzers directory."""
         # Mock analyzers directory not existing

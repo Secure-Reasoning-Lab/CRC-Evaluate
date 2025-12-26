@@ -7,7 +7,7 @@ analysis of crs-data/ outputs from trials and snapshots.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -21,6 +21,7 @@ class AnalysisResult:
         warnings: List of warnings or issues encountered during analysis
         metadata: Additional metadata (e.g., analyzer version, timestamp)
     """
+
     crs_name: str
     metrics: Dict[str, Any] = field(default_factory=dict)
     summary: str = ""
@@ -30,22 +31,22 @@ class AnalysisResult:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
-            'crs_name': self.crs_name,
-            'metrics': self.metrics,
-            'summary': self.summary,
-            'warnings': self.warnings,
-            'metadata': self.metadata
+            "crs_name": self.crs_name,
+            "metrics": self.metrics,
+            "summary": self.summary,
+            "warnings": self.warnings,
+            "metadata": self.metadata,
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'AnalysisResult':
+    def from_dict(cls, data: Dict[str, Any]) -> "AnalysisResult":
         """Create AnalysisResult from dictionary."""
         return cls(
-            crs_name=data['crs_name'],
-            metrics=data.get('metrics', {}),
-            summary=data.get('summary', ''),
-            warnings=data.get('warnings', []),
-            metadata=data.get('metadata', {})
+            crs_name=data["crs_name"],
+            metrics=data.get("metrics", {}),
+            summary=data.get("summary", ""),
+            warnings=data.get("warnings", []),
+            metadata=data.get("metadata", {}),
         )
 
 
@@ -69,7 +70,6 @@ class AnalyzerInterface(ABC):
         This name is used to map the analyzer to CRS trials.
         Should match the CRS identifier used in experiment configs.
         """
-        pass
 
     @abstractmethod
     def analyze_snapshot(self, snapshot_dir: Path) -> Optional[AnalysisResult]:
@@ -94,7 +94,6 @@ class AnalyzerInterface(ABC):
             >>> if result:
             >>>     print(result.summary)
         """
-        pass
 
     @abstractmethod
     def analyze_trial(self, trial_dir: Path) -> Optional[AnalysisResult]:
@@ -117,9 +116,8 @@ class AnalyzerInterface(ABC):
             >>> if result:
             >>>     print(f"Final metrics: {result.metrics}")
         """
-        pass
 
-    def analyze_time_series(self, snapshots: List[Path]) -> Optional[Dict[str, Any]]:
+    def analyze_time_series(self, snapshots: List[Path]) -> Optional[Dict[str, Any]]:  # noqa: ARG002
         """Optional: Analyze time-series data across multiple snapshots.
 
         Args:

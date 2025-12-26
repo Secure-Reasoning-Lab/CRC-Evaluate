@@ -5,7 +5,6 @@ realistic-looking but invalid data.
 """
 
 import random
-from typing import List
 
 from crsbench.bench_snapgen.timeline import DiscoveryTimeline
 from crsbench.utils.logger import get_logger
@@ -71,7 +70,9 @@ class FaultInjector:
 
         return blob, metadata
 
-    def create_invalid_patch(self, fault_type: str = "syntax_error") -> tuple[str, dict]:
+    def create_invalid_patch(
+        self, fault_type: str = "syntax_error"
+    ) -> tuple[str, dict]:
         """Create invalid patch with specified fault type.
 
         Args:

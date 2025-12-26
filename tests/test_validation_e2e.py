@@ -14,10 +14,11 @@ These tests are slow (~20-30s) due to Docker builds.
 Mark with @pytest.mark.slow to skip in quick test runs.
 """
 
-import pytest
-import subprocess
 import json
+import subprocess
 from pathlib import Path
+
+import pytest
 
 
 # Skip all tests if Docker is not available
@@ -65,12 +66,19 @@ class TestPOVValidationE2E:
     ) -> dict:
         """Run crsbench validate and return parsed JSON output."""
         cmd = [
-            "uv", "run", "crsbench", "validate",
+            "uv",
+            "run",
+            "crsbench",
+            "validate",
             str(benchmark_path),
-            "--harness", harness,
-            "--pov-dir", str(pov_dir),
-            "--oss-fuzz", str(oss_fuzz_path),
-            "--format", "json",
+            "--harness",
+            harness,
+            "--pov-dir",
+            str(pov_dir),
+            "--oss-fuzz",
+            str(oss_fuzz_path),
+            "--format",
+            "json",
         ]
 
         result = subprocess.run(
@@ -84,7 +92,7 @@ class TestPOVValidationE2E:
 
     def _parse_json_output(self, stdout: str, stderr: str) -> list:
         """Parse JSON array from command output (handles pretty-printed JSON)."""
-        lines = stdout.split('\n')
+        lines = stdout.split("\n")
         json_lines = []
         in_json = False
 
@@ -94,17 +102,17 @@ class TestPOVValidationE2E:
             if stripped and stripped[0].isdigit():
                 continue
             # Start of JSON array
-            if stripped.startswith('['):
+            if stripped.startswith("["):
                 in_json = True
             if in_json:
                 json_lines.append(line)
             # End of JSON array
-            if stripped == ']':
+            if stripped == "]":
                 break
 
         if json_lines:
             try:
-                return json.loads('\n'.join(json_lines))
+                return json.loads("\n".join(json_lines))
             except json.JSONDecodeError:
                 pass
 
@@ -112,7 +120,9 @@ class TestPOVValidationE2E:
 
     def test_cpv0_pov_matches_cpv0(self, benchmark_path, oss_fuzz_path):
         """POV from cpv_0 should correctly match cpv_0."""
-        pov_dir = benchmark_path / ".aixcc" / "fuzz_process_input_header" / "cpv_0" / "blobs"
+        pov_dir = (
+            benchmark_path / ".aixcc" / "fuzz_process_input_header" / "cpv_0" / "blobs"
+        )
         if not pov_dir.exists():
             pytest.skip(f"POV directory not found: {pov_dir}")
 
@@ -129,7 +139,9 @@ class TestPOVValidationE2E:
 
     def test_cpv1_pov_matches_cpv1(self, benchmark_path, oss_fuzz_path):
         """POV from cpv_1 should correctly match cpv_1."""
-        pov_dir = benchmark_path / ".aixcc" / "fuzz_parse_buffer_section" / "cpv_1" / "blobs"
+        pov_dir = (
+            benchmark_path / ".aixcc" / "fuzz_parse_buffer_section" / "cpv_1" / "blobs"
+        )
         if not pov_dir.exists():
             pytest.skip(f"POV directory not found: {pov_dir}")
 
@@ -147,10 +159,15 @@ class TestPOVValidationE2E:
     def test_both_cpvs_validated(self, benchmark_path, oss_fuzz_path):
         """Validate all POVs from meta.yaml - should find both CPVs."""
         cmd = [
-            "uv", "run", "crsbench", "validate",
+            "uv",
+            "run",
+            "crsbench",
+            "validate",
             str(benchmark_path),
-            "--oss-fuzz", str(oss_fuzz_path),
-            "--format", "json",
+            "--oss-fuzz",
+            str(oss_fuzz_path),
+            "--format",
+            "json",
         ]
 
         result = subprocess.run(

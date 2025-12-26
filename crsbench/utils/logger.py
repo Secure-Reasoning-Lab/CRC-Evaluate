@@ -50,17 +50,19 @@ Configuration:
     - Format includes timestamp, level, module name, and message
 """
 
-import sys
 import os
+import sys
+from pathlib import Path
 from typing import Optional
-from loguru import logger as _loguru_logger
 
+from loguru import logger as _loguru_logger
 
 # Remove default handler to prevent duplicate logs
 _loguru_logger.remove()
 
 # Determine log level from environment variable or default to INFO
 _log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+
 
 def _format_module_path(record):
     """Format module path to show main category only.
@@ -101,7 +103,9 @@ _COLOR_SCHEME = {
 }
 
 # Format for non-TTY output (no colors)
-_PLAIN_FORMAT = "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {extra[module_path]: <15} | {message}"
+_PLAIN_FORMAT = (
+    "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {extra[module_path]: <15} | {message}"
+)
 
 
 def _custom_formatter(record):
@@ -112,6 +116,7 @@ def _custom_formatter(record):
     # Get the color scheme for this log level
     format_string = _COLOR_SCHEME.get(record["level"].name, _PLAIN_FORMAT)
     return format_string + "\n"
+
 
 # Auto-detect TTY and configure format accordingly
 _is_tty = sys.stdout.isatty()
@@ -338,7 +343,8 @@ def log_summary(
     title: str,
     stats: dict,
     level: str = "info",
-    show_percentage: bool = True
+    *,
+    show_percentage: bool = True,
 ):
     """Log a summary with statistics.
 
@@ -377,7 +383,7 @@ def log_results(
     failed_title: str = "Failed",
     success_symbol: str = "✓",
     failed_symbol: str = "✗",
-    level: str = "info"
+    level: str = "info",
 ):
     """Log success and failure lists with symbols.
 
@@ -428,10 +434,11 @@ def log_results(
 def log_list(
     items: list,
     title: Optional[str] = None,
-    numbered: bool = True,
     symbol: Optional[str] = None,
     level: str = "info",
-    indent: int = 0
+    indent: int = 0,
+    *,
+    numbered: bool = True,
 ):
     """Log a formatted list of items.
 
@@ -472,7 +479,8 @@ def log_progress(
     total: int,
     description: str = "Progress",
     level: str = "info",
-    show_percentage: bool = True
+    *,
+    show_percentage: bool = True,
 ):
     """Log progress information.
 
@@ -501,7 +509,7 @@ def log_table(
     rows: list,
     title: Optional[str] = None,
     level: str = "info",
-    min_col_width: int = 15
+    min_col_width: int = 15,
 ):
     """Log a simple table.
 
@@ -540,7 +548,9 @@ def log_table(
         log_func(f"\n{title}")
 
     # Log headers
-    header_line = "".join(str(h).ljust(col_widths[idx] + 2) for idx, h in enumerate(headers))
+    header_line = "".join(
+        str(h).ljust(col_widths[idx] + 2) for idx, h in enumerate(headers)
+    )
     log_func(header_line)
 
     # Log separator
@@ -549,15 +559,14 @@ def log_table(
 
     # Log rows
     for row in rows:
-        row_line = "".join(str(cell).ljust(col_widths[idx] + 2) for idx, cell in enumerate(row))
+        row_line = "".join(
+            str(cell).ljust(col_widths[idx] + 2) for idx, cell in enumerate(row)
+        )
         log_func(row_line)
 
 
 def log_key_value(
-    data: dict,
-    title: Optional[str] = None,
-    level: str = "info",
-    indent: int = 2
+    data: dict, title: Optional[str] = None, level: str = "info", indent: int = 2
 ):
     """Log key-value pairs in a formatted way.
 
@@ -591,9 +600,7 @@ def log_key_value(
 
 
 def log_file_info(
-    file_path: str,
-    description: Optional[str] = None,
-    level: str = "info"
+    file_path: str, description: Optional[str] = None, level: str = "info"
 ):
     """Log file path information with check if file exists.
 
@@ -606,10 +613,9 @@ def log_file_info(
         >>> log_file_info("/path/to/build_analysis.md", "Build analysis saved")
         ✓ Build analysis saved: /path/to/build_analysis.md
     """
-    import os
     log_func = getattr(_loguru_logger, level.lower())
 
-    exists = os.path.exists(file_path)
+    exists = Path(file_path).exists()
     symbol = "✓" if exists else "✗"
 
     if description:
@@ -622,7 +628,7 @@ def log_error_detail(
     error: Exception,
     context: Optional[str] = None,
     max_length: Optional[int] = None,
-    level: str = "error"
+    level: str = "error",
 ):
     """Log error with details, handling long error messages gracefully.
 
@@ -674,7 +680,7 @@ def log_error_detail(
             # Split long single line into chunks
             chunk_size = 200
             for i in range(0, min(len(error_msg), 2000), chunk_size):
-                log_func(f"  {error_msg[i:i+chunk_size]}")
+                log_func(f"  {error_msg[i : i + chunk_size]}")
             if len(error_msg) > 2000:
                 log_func(f"  ... ({len(error_msg) - 2000} more chars)")
     else:

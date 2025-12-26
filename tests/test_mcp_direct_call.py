@@ -28,6 +28,7 @@ async def test_get_benchmark_info():
 
     print("\nResult:")
     import json
+
     print(json.dumps(result, indent=2))
 
     if "error" in result:
@@ -55,9 +56,8 @@ async def test_build_benchmark():
     if result:
         print("\n✅ PASSED: Build succeeded")
         return True
-    else:
-        print("\n❌ FAILED: Build failed")
-        return False
+    print("\n❌ FAILED: Build failed")
+    return False
 
 
 async def test_check_test_sh():
@@ -85,7 +85,7 @@ async def test_check_test_sh():
     if "test.sh execution succeeded" in result:
         print("\n✅ PASSED: test.sh succeeded")
         return True
-    elif "test.sh failed" in result:
+    if "test.sh failed" in result:
         print("\n⚠️  WARNING: test.sh failed (expected if test.sh has issues)")
         return True  # Not a failure of the MCP tool itself
 
@@ -105,6 +105,7 @@ async def main():
     except Exception as e:
         print(f"\n❌ Exception: {e}")
         import traceback
+
         traceback.print_exc()
         results["get_benchmark_info"] = False
 
@@ -114,6 +115,7 @@ async def main():
     except Exception as e:
         print(f"\n❌ Exception: {e}")
         import traceback
+
         traceback.print_exc()
         results["build_benchmark"] = False
 
@@ -124,6 +126,7 @@ async def main():
         except Exception as e:
             print(f"\n❌ Exception: {e}")
             import traceback
+
             traceback.print_exc()
             results["check_test_sh"] = False
     else:
@@ -149,9 +152,8 @@ async def main():
     if failed:
         print(f"\n❌ {len(failed)} test(s) failed")
         return 1
-    else:
-        print("\n✅ All tests passed")
-        return 0
+    print("\n✅ All tests passed")
+    return 0
 
 
 if __name__ == "__main__":

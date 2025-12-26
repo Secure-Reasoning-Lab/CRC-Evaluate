@@ -1,11 +1,13 @@
 """Results collection and reporting for benchmark evaluations."""
 
 import json
-import yaml
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any, TYPE_CHECKING
-from dataclasses import dataclass, asdict
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+import yaml
+
 if TYPE_CHECKING:
     from crsbench.validation.verification.models import VerificationResult
 
@@ -13,6 +15,7 @@ if TYPE_CHECKING:
 @dataclass
 class HarnessResult:
     """Result for a single harness file."""
+
     name: str
     path: str
     execution_time: Optional[float] = None
@@ -23,6 +26,7 @@ class HarnessResult:
 @dataclass
 class EvaluationReport:
     """Complete evaluation report for a benchmark."""
+
     benchmark_path: str
     evaluation_mode: str  # "delta" or "full"
     start_time: datetime
@@ -60,8 +64,8 @@ class EvaluationReport:
         """Convert report to dictionary."""
         data = asdict(self)
         # Convert datetime objects to strings
-        data['start_time'] = self.start_time.isoformat()
-        data['end_time'] = self.end_time.isoformat()
+        data["start_time"] = self.start_time.isoformat()
+        data["end_time"] = self.end_time.isoformat()
         return data
 
     def to_json(self, indent: int = 2) -> str:
@@ -74,12 +78,12 @@ class EvaluationReport:
 
     def save_json(self, path: Path) -> None:
         """Save report as JSON file."""
-        with open(path, 'w', encoding='utf-8') as f:
+        with path.open("w", encoding="utf-8") as f:
             f.write(self.to_json())
 
     def save_yaml(self, path: Path) -> None:
         """Save report as YAML file."""
-        with open(path, 'w', encoding='utf-8') as f:
+        with path.open("w", encoding="utf-8") as f:
             f.write(self.to_yaml())
 
 
@@ -113,7 +117,7 @@ class ResultCollector:
         """Set CRS configuration."""
         self.crs_config = config
 
-    def set_pov_stats(self, verification_results: List['VerificationResult']) -> None:
+    def set_pov_stats(self, verification_results: List["VerificationResult"]) -> None:
         """Set POV statistics from verification results.
 
         Args:
@@ -129,16 +133,18 @@ class ResultCollector:
 
         self.total_povs = len(verification_results)
         self.povs_found = sum(
-            1 for r in verification_results
+            1
+            for r in verification_results
             if r.status in (VerificationStatus.CPV, VerificationStatus.ZERODAY)
         )
         self.povs_missed = sum(
-            1 for r in verification_results
-            if r.status in (VerificationStatus.NOT_VULNERABLE, VerificationStatus.UNINTENDED_CRASH)
+            1
+            for r in verification_results
+            if r.status
+            in (VerificationStatus.NOT_VULNERABLE, VerificationStatus.UNINTENDED_CRASH)
         )
         self.povs_error = sum(
-            1 for r in verification_results
-            if r.status == VerificationStatus.ERROR
+            1 for r in verification_results if r.status == VerificationStatus.ERROR
         )
 
     def finalize_report(self) -> EvaluationReport:
@@ -159,5 +165,5 @@ class ResultCollector:
             povs_error=self.povs_error,
             base_commit=self.base_commit,
             ref_commit=self.ref_commit,
-            crs_config=self.crs_config
+            crs_config=self.crs_config,
         )

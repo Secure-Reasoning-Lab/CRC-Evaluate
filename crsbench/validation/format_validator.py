@@ -5,15 +5,23 @@ benchmark configurations. Safe for use as tool calls by LLM agents.
 """
 
 import os
-import yaml
-from typing import Union, Dict, Any
 from pathlib import Path
+from typing import Any, Dict, Union
+
+import yaml
 from pydantic import ValidationError as PydanticValidationError
 
-from crsbench.validation.schemas import BenchmarkConfig, ValidationMetadata, HarnessFile, FullMode, ExperimentConfig, BenchmarkSuiteConfig
 from crsbench.validation.errors import (
-    ValidationResult, ValidationError, ValidationCodes,
-    ValidationSeverity
+    ValidationCodes,
+    ValidationError,
+    ValidationResult,
+)
+from crsbench.validation.schemas import (
+    BenchmarkConfig,
+    BenchmarkSuiteConfig,
+    ExperimentConfig,
+    FullMode,
+    HarnessFile,
 )
 
 
@@ -49,7 +57,7 @@ def validate_benchmark(path: Union[str, Path]) -> ValidationResult:
             result.add_error(
                 ValidationCodes.FILE_NOT_FOUND,
                 f"meta.yaml not found at expected location: {meta_yaml_path}",
-                context={"expected_path": str(meta_yaml_path)}
+                context={"expected_path": str(meta_yaml_path)},
             )
             return result
 
@@ -58,7 +66,7 @@ def validate_benchmark(path: Union[str, Path]) -> ValidationResult:
             result.add_error(
                 ValidationCodes.FILE_NOT_READABLE,
                 f"Cannot read file: {meta_yaml_path}",
-                context={"path": str(meta_yaml_path)}
+                context={"path": str(meta_yaml_path)},
             )
             return result
 
@@ -86,8 +94,8 @@ def validate_benchmark(path: Union[str, Path]) -> ValidationResult:
         raise ValidationError(
             f"Unexpected error during validation: {str(e)}",
             code="VALIDATION_PROCESS_ERROR",
-            context={"path": str(path), "error": str(e)}
-        )
+            context={"path": str(path), "error": str(e)},
+        ) from e
 
     return result
 
@@ -115,16 +123,13 @@ def validate_benchmark_from_string(yaml_content: str) -> ValidationResult:
             result.add_error(
                 ValidationCodes.YAML_SYNTAX_ERROR,
                 f"Invalid YAML syntax: {str(e)}",
-                context={"yaml_error": str(e)}
+                context={"yaml_error": str(e)},
             )
             return result
 
         # Check for empty content
         if data is None:
-            result.add_error(
-                ValidationCodes.EMPTY_FILE,
-                "YAML content is empty"
-            )
+            result.add_error(ValidationCodes.EMPTY_FILE, "YAML content is empty")
             return result
 
         # Validate against schema
@@ -145,8 +150,8 @@ def validate_benchmark_from_string(yaml_content: str) -> ValidationResult:
         raise ValidationError(
             f"Unexpected error during validation: {str(e)}",
             code="VALIDATION_PROCESS_ERROR",
-            context={"error": str(e)}
-        )
+            context={"error": str(e)},
+        ) from e
 
     return result
 
@@ -165,7 +170,7 @@ def _resolve_meta_yaml_path(path: Union[str, Path]) -> Path:
 
     if path.is_file() and path.name == "meta.yaml":
         return path
-    elif path.is_dir():
+    if path.is_dir():
         # Look for meta.yaml in .aixcc subdirectory
         aixcc_path = path / ".aixcc" / "meta.yaml"
         if aixcc_path.exists():
@@ -178,32 +183,25 @@ def _resolve_meta_yaml_path(path: Union[str, Path]) -> Path:
 
         # Return expected path even if it doesn't exist
         return aixcc_path
-    else:
-        # Assume it's meant to be meta.yaml file
-        return path
+    # Assume it's meant to be meta.yaml file
+    return path
 
 
 def _load_yaml_file(file_path: Path, result: ValidationResult) -> Dict[str, Any]:
     """Load and parse YAML file."""
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with file_path.open(encoding="utf-8") as f:
             content = f.read()
 
         if not content.strip():
-            result.add_error(
-                ValidationCodes.EMPTY_FILE,
-                "meta.yaml file is empty"
-            )
+            result.add_error(ValidationCodes.EMPTY_FILE, "meta.yaml file is empty")
             return {}
 
         data = yaml.safe_load(content)
         result.metadata["yaml_valid"] = True
 
         if data is None:
-            result.add_error(
-                ValidationCodes.EMPTY_FILE,
-                "meta.yaml contains no data"
-            )
+            result.add_error(ValidationCodes.EMPTY_FILE, "meta.yaml contains no data")
             return {}
 
         return data
@@ -212,14 +210,14 @@ def _load_yaml_file(file_path: Path, result: ValidationResult) -> Dict[str, Any]
         result.add_error(
             ValidationCodes.YAML_SYNTAX_ERROR,
             f"Invalid YAML syntax: {str(e)}",
-            context={"yaml_error": str(e)}
+            context={"yaml_error": str(e)},
         )
         return {}
     except Exception as e:
         result.add_error(
             ValidationCodes.FILE_NOT_READABLE,
             f"Error reading file: {str(e)}",
-            context={"error": str(e)}
+            context={"error": str(e)},
         )
         return {}
 
@@ -238,7 +236,7 @@ def _validate_schema(data: Dict[str, Any], result: ValidationResult) -> Benchmar
                 ValidationCodes.SCHEMA_VALIDATION_ERROR,
                 f"Schema validation error in '{field_path}': {error['msg']}",
                 field=field_path,
-                context={"validation_error": error}
+                context={"validation_error": error},
             )
         # Return a minimal config to continue validation
         dummy_harness = HarnessFile(name="dummy", path="/tmp/dummy.c")
@@ -248,7 +246,7 @@ def _validate_schema(data: Dict[str, Any], result: ValidationResult) -> Benchmar
         result.add_error(
             ValidationCodes.SCHEMA_VALIDATION_ERROR,
             f"Schema validation failed: {str(e)}",
-            context={"error": str(e)}
+            context={"error": str(e)},
         )
         dummy_harness = HarnessFile(name="dummy", path="/tmp/dummy.c")
         dummy_full_mode = FullMode(base_commit="abc123def456")
@@ -262,14 +260,14 @@ def _validate_configuration_logic(config: BenchmarkConfig, result: ValidationRes
     if not config.delta_mode and not config.full_mode:
         result.add_error(
             ValidationCodes.NO_EVALUATION_MODE,
-            "At least one evaluation mode (delta_mode or full_mode) must be specified"
+            "At least one evaluation mode (delta_mode or full_mode) must be specified",
         )
 
     # Validate harness files
     if not config.harness_files:
         result.add_error(
             ValidationCodes.NO_HARNESS_FILES,
-            "At least one harness file must be specified"
+            "At least one harness file must be specified",
         )
 
     # Check for harnesses with vulnerabilities
@@ -277,7 +275,7 @@ def _validate_configuration_logic(config: BenchmarkConfig, result: ValidationRes
     if not harnesses_with_vulns:
         result.add_warning(
             ValidationCodes.EMPTY_VULN_LIST,
-            "No harness files have vulnerability configurations"
+            "No harness files have vulnerability configurations",
         )
 
     # Validate commit hashes in delta mode
@@ -286,7 +284,7 @@ def _validate_configuration_logic(config: BenchmarkConfig, result: ValidationRes
             result.add_error(
                 ValidationCodes.INVALID_COMMIT_HASH,
                 "Delta mode base_commit and ref_commit cannot be the same",
-                field="delta_mode"
+                field="delta_mode",
             )
 
 
@@ -294,19 +292,19 @@ def _generate_metadata(config: BenchmarkConfig, result: ValidationResult):
     """Generate metadata about the configuration."""
     total_vulns = sum(len(h.vulns or []) for h in config.harness_files)
     total_povs = sum(
-        len(vuln.povs)
-        for h in config.harness_files
-        for vuln in (h.vulns or [])
+        len(vuln.povs) for h in config.harness_files for vuln in (h.vulns or [])
     )
 
-    result.metadata.update({
-        "total_harnesses": len(config.harness_files),
-        "total_vulns": total_vulns,
-        "total_povs": total_povs,
-        "has_delta_mode": config.delta_mode is not None,
-        "has_full_mode": config.full_mode is not None,
-        "patch_exclude_patterns": len(config.patch_exclude_list or [])
-    })
+    result.metadata.update(
+        {
+            "total_harnesses": len(config.harness_files),
+            "total_vulns": total_vulns,
+            "total_povs": total_povs,
+            "has_delta_mode": config.delta_mode is not None,
+            "has_full_mode": config.full_mode is not None,
+            "patch_exclude_patterns": len(config.patch_exclude_list or []),
+        }
+    )
 
 
 def _check_for_warnings(config: BenchmarkConfig, result: ValidationResult):
@@ -316,31 +314,33 @@ def _check_for_warnings(config: BenchmarkConfig, result: ValidationResult):
     if not config.patch_exclude_list:
         result.add_warning(
             ValidationCodes.NO_PATCH_EXCLUSIONS,
-            "No patch exclusion patterns specified. Consider adding common patterns like 'test/**', 'build.sh'"
+            "No patch exclusion patterns specified. Consider adding common patterns like 'test/**', 'build.sh'",
         )
 
     # Warn about many harnesses
     if len(config.harness_files) > 20:
         result.add_warning(
             ValidationCodes.MANY_HARNESSES,
-            f"Large number of harnesses ({len(config.harness_files)}). Consider grouping related harnesses."
+            f"Large number of harnesses ({len(config.harness_files)}). Consider grouping related harnesses.",
         )
 
     # Warn about complex path patterns
     complex_patterns = [
-        pattern for pattern in (config.patch_exclude_list or [])
+        pattern
+        for pattern in (config.patch_exclude_list or [])
         if "**" in pattern and len(pattern.split("**")) > 2
     ]
     if complex_patterns:
         result.add_warning(
             ValidationCodes.COMPLEX_PATHS,
-            f"Complex glob patterns detected: {', '.join(complex_patterns[:3])}{'...' if len(complex_patterns) > 3 else ''}. Ensure they work as expected."
+            f"Complex glob patterns detected: {', '.join(complex_patterns[:3])}{'...' if len(complex_patterns) > 3 else ''}. Ensure they work as expected.",
         )
 
 
 # ============================================================================
 # Experiment Config Validation
 # ============================================================================
+
 
 def validate_experiment_config(path: Union[str, Path]) -> ValidationResult:
     """
@@ -373,7 +373,7 @@ def validate_experiment_config(path: Union[str, Path]) -> ValidationResult:
             result.add_error(
                 ValidationCodes.FILE_NOT_FOUND,
                 f"Experiment config file not found: {config_path}",
-                context={"expected_path": str(config_path)}
+                context={"expected_path": str(config_path)},
             )
             return result
 
@@ -382,7 +382,7 @@ def validate_experiment_config(path: Union[str, Path]) -> ValidationResult:
             result.add_error(
                 ValidationCodes.FILE_NOT_READABLE,
                 f"Cannot read file: {config_path}",
-                context={"path": str(config_path)}
+                context={"path": str(config_path)},
             )
             return result
 
@@ -403,8 +403,8 @@ def validate_experiment_config(path: Union[str, Path]) -> ValidationResult:
         raise ValidationError(
             f"Unexpected error during experiment config validation: {str(e)}",
             code="VALIDATION_PROCESS_ERROR",
-            context={"path": str(path), "error": str(e)}
-        )
+            context={"path": str(path), "error": str(e)},
+        ) from e
 
     return result
 
@@ -432,16 +432,13 @@ def validate_experiment_config_from_string(yaml_content: str) -> ValidationResul
             result.add_error(
                 ValidationCodes.YAML_SYNTAX_ERROR,
                 f"Invalid YAML syntax: {str(e)}",
-                context={"yaml_error": str(e)}
+                context={"yaml_error": str(e)},
             )
             return result
 
         # Check for empty content
         if data is None:
-            result.add_error(
-                ValidationCodes.EMPTY_FILE,
-                "YAML content is empty"
-            )
+            result.add_error(ValidationCodes.EMPTY_FILE, "YAML content is empty")
             return result
 
         # Validate against schema
@@ -456,13 +453,15 @@ def validate_experiment_config_from_string(yaml_content: str) -> ValidationResul
         raise ValidationError(
             f"Unexpected error during experiment config validation: {str(e)}",
             code="VALIDATION_PROCESS_ERROR",
-            context={"error": str(e)}
-        )
+            context={"error": str(e)},
+        ) from e
 
     return result
 
 
-def _validate_experiment_schema(data: Dict[str, Any], result: ValidationResult) -> ExperimentConfig:
+def _validate_experiment_schema(
+    data: Dict[str, Any], result: ValidationResult
+) -> ExperimentConfig:
     """Validate data against ExperimentConfig schema."""
     try:
         config = ExperimentConfig(**data)
@@ -476,7 +475,7 @@ def _validate_experiment_schema(data: Dict[str, Any], result: ValidationResult) 
                 ValidationCodes.SCHEMA_VALIDATION_ERROR,
                 f"Schema validation error in '{field_path}': {error['msg']}",
                 field=field_path,
-                context={"validation_error": error}
+                context={"validation_error": error},
             )
         # Return a minimal config to avoid crashes
         return ExperimentConfig(
@@ -487,13 +486,13 @@ def _validate_experiment_schema(data: Dict[str, Any], result: ValidationResult) 
             experiment_filestore="/tmp",
             report_filestore="/tmp",
             crses=["dummy"],
-            benchmarks=["dummy"]
+            benchmarks=["dummy"],
         )
     except Exception as e:
         result.add_error(
             ValidationCodes.SCHEMA_VALIDATION_ERROR,
             f"Schema validation failed: {str(e)}",
-            context={"error": str(e)}
+            context={"error": str(e)},
         )
         return ExperimentConfig(
             experiment="dummy",
@@ -503,26 +502,29 @@ def _validate_experiment_schema(data: Dict[str, Any], result: ValidationResult) 
             experiment_filestore="/tmp",
             report_filestore="/tmp",
             crses=["dummy"],
-            benchmarks=["dummy"]
+            benchmarks=["dummy"],
         )
 
 
 def _generate_experiment_metadata(config: ExperimentConfig, result: ValidationResult):
     """Generate metadata about the experiment configuration."""
-    result.metadata.update({
-        "trials": config.trials,
-        "max_total_time": config.max_total_time,
-        "difficulty_level": config.difficulty_level,
-        "experiment_filestore": config.experiment_filestore,
-        "report_filestore": config.report_filestore,
-        "redis_host": config.redis_host,
-        "benchmarks_root": config.benchmarks_root
-    })
+    result.metadata.update(
+        {
+            "trials": config.trials,
+            "max_total_time": config.max_total_time,
+            "difficulty_level": config.difficulty_level,
+            "experiment_filestore": config.experiment_filestore,
+            "report_filestore": config.report_filestore,
+            "redis_host": config.redis_host,
+            "benchmarks_root": config.benchmarks_root,
+        }
+    )
 
 
 # ============================================================================
 # Benchmark Suite Config Validation
 # ============================================================================
+
 
 def validate_benchmark_suite(path: Union[str, Path]) -> ValidationResult:
     """
@@ -555,7 +557,7 @@ def validate_benchmark_suite(path: Union[str, Path]) -> ValidationResult:
             result.add_error(
                 ValidationCodes.FILE_NOT_FOUND,
                 f"Benchmark suite config file not found: {config_path}",
-                context={"expected_path": str(config_path)}
+                context={"expected_path": str(config_path)},
             )
             return result
 
@@ -564,7 +566,7 @@ def validate_benchmark_suite(path: Union[str, Path]) -> ValidationResult:
             result.add_error(
                 ValidationCodes.FILE_NOT_READABLE,
                 f"Cannot read file: {config_path}",
-                context={"path": str(config_path)}
+                context={"path": str(config_path)},
             )
             return result
 
@@ -585,8 +587,8 @@ def validate_benchmark_suite(path: Union[str, Path]) -> ValidationResult:
         raise ValidationError(
             f"Unexpected error during benchmark suite config validation: {str(e)}",
             code="VALIDATION_PROCESS_ERROR",
-            context={"path": str(path), "error": str(e)}
-        )
+            context={"path": str(path), "error": str(e)},
+        ) from e
 
     return result
 
@@ -614,16 +616,13 @@ def validate_benchmark_suite_from_string(yaml_content: str) -> ValidationResult:
             result.add_error(
                 ValidationCodes.YAML_SYNTAX_ERROR,
                 f"Invalid YAML syntax: {str(e)}",
-                context={"yaml_error": str(e)}
+                context={"yaml_error": str(e)},
             )
             return result
 
         # Check for empty content
         if data is None:
-            result.add_error(
-                ValidationCodes.EMPTY_FILE,
-                "YAML content is empty"
-            )
+            result.add_error(ValidationCodes.EMPTY_FILE, "YAML content is empty")
             return result
 
         # Validate against schema
@@ -638,13 +637,15 @@ def validate_benchmark_suite_from_string(yaml_content: str) -> ValidationResult:
         raise ValidationError(
             f"Unexpected error during benchmark suite config validation: {str(e)}",
             code="VALIDATION_PROCESS_ERROR",
-            context={"error": str(e)}
-        )
+            context={"error": str(e)},
+        ) from e
 
     return result
 
 
-def _validate_benchmark_suite_schema(data: Dict[str, Any], result: ValidationResult) -> BenchmarkSuiteConfig:
+def _validate_benchmark_suite_schema(
+    data: Dict[str, Any], result: ValidationResult
+) -> BenchmarkSuiteConfig:
     """Validate data against BenchmarkSuiteConfig schema."""
     try:
         config = BenchmarkSuiteConfig(**data)
@@ -658,35 +659,43 @@ def _validate_benchmark_suite_schema(data: Dict[str, Any], result: ValidationRes
                 ValidationCodes.SCHEMA_VALIDATION_ERROR,
                 f"Schema validation error in '{field_path}': {error['msg']}",
                 field=field_path,
-                context={"validation_error": error}
+                context={"validation_error": error},
             )
         # Return a minimal config to avoid crashes
-        return BenchmarkSuiteConfig.model_validate({
-            "Name": "dummy",
-            "Description": "dummy",
-            "benchmark_list": ["dummy"],
-            "Release date": "01.01.2025"
-        })
+        return BenchmarkSuiteConfig.model_validate(
+            {
+                "Name": "dummy",
+                "Description": "dummy",
+                "benchmark_list": ["dummy"],
+                "Release date": "01.01.2025",
+            }
+        )
     except Exception as e:
         result.add_error(
             ValidationCodes.SCHEMA_VALIDATION_ERROR,
             f"Schema validation failed: {str(e)}",
-            context={"error": str(e)}
+            context={"error": str(e)},
         )
-        return BenchmarkSuiteConfig.model_validate({
-            "Name": "dummy",
-            "Description": "dummy",
-            "benchmark_list": ["dummy"],
-            "Release date": "01.01.2025"
-        })
+        return BenchmarkSuiteConfig.model_validate(
+            {
+                "Name": "dummy",
+                "Description": "dummy",
+                "benchmark_list": ["dummy"],
+                "Release date": "01.01.2025",
+            }
+        )
 
 
-def _generate_benchmark_suite_metadata(config: BenchmarkSuiteConfig, result: ValidationResult):
+def _generate_benchmark_suite_metadata(
+    config: BenchmarkSuiteConfig, result: ValidationResult
+):
     """Generate metadata about the benchmark suite configuration."""
-    result.metadata.update({
-        "suite_name": config.Name,
-        "suite_description": config.Description,
-        "release_date": config.release_date,
-        "total_benchmarks": len(config.benchmark_list),
-        "benchmark_ids": config.benchmark_list
-    })
+    result.metadata.update(
+        {
+            "suite_name": config.Name,
+            "suite_description": config.Description,
+            "release_date": config.release_date,
+            "total_benchmarks": len(config.benchmark_list),
+            "benchmark_ids": config.benchmark_list,
+        }
+    )

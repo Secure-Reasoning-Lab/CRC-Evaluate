@@ -2,24 +2,34 @@
 
 import enum
 from dataclasses import dataclass, field
-from typing import Optional, List, Set
+from typing import List, Optional, Set
 
 
 class TaskMode(enum.Enum):
     """Execution mode for benchmark tasks."""
+
     DELTA = "delta"
     FULL = "full"
 
 
 class ExecJobType(enum.Enum):
     """Type of execution job for benchmark testing."""
-    DELTA_BASE_CHECK = "delta_base_check"  # Build and test at base commit (clean, delta mode)
-    DELTA_REF_CHECK = "delta_ref_check"    # Build and test at ref commit (vulnerable, delta mode)
-    FULL_BASE_CHECK = "full_base_check"    # Build and test at base commit (vulnerable, full mode)
-    POV_CHECK = "pov_check"                # Verify POV reproduction
-    PATCH_CHECK = "patch_check"            # Verify patch fixes the vulnerability
-    TEST_SH_CHECK = "test_sh_check"        # Verify test.sh execution
-    TEST_INC_BUILD = "test_inc_build"      # Test incremental build (oss-bugfix-crs test-inc-build)
+
+    DELTA_BASE_CHECK = (
+        "delta_base_check"  # Build and test at base commit (clean, delta mode)
+    )
+    DELTA_REF_CHECK = (
+        "delta_ref_check"  # Build and test at ref commit (vulnerable, delta mode)
+    )
+    FULL_BASE_CHECK = (
+        "full_base_check"  # Build and test at base commit (vulnerable, full mode)
+    )
+    POV_CHECK = "pov_check"  # Verify POV reproduction
+    PATCH_CHECK = "patch_check"  # Verify patch fixes the vulnerability
+    TEST_SH_CHECK = "test_sh_check"  # Verify test.sh execution
+    TEST_INC_BUILD = (
+        "test_inc_build"  # Test incremental build (oss-bugfix-crs test-inc-build)
+    )
 
 
 @dataclass
@@ -29,6 +39,7 @@ class Task:
     Delta mode: base_commit (clean) → ref_commit (vulnerable)
     Full mode: base_commit (vulnerable), no ref_commit
     """
+
     mode: TaskMode
     base_commit: str
     ref_commit: Optional[str] = None  # Only for delta mode (vulnerable version)
@@ -44,6 +55,7 @@ class Task:
 @dataclass
 class POV:
     """Represents a Proof of Vulnerability."""
+
     id: str
     sanitizer: str
     error_token: str
@@ -56,6 +68,7 @@ class POV:
 @dataclass
 class Vulnerability:
     """Represents a vulnerability (CPV in OSS-Fuzz terms)."""
+
     id: str  # e.g., "cpv_0"
     name: str
     cwes: List[str]
@@ -69,6 +82,7 @@ class Vulnerability:
 @dataclass
 class Harness:
     """Represents a fuzzing harness."""
+
     name: str
     path: str  # Path from meta.yaml
     vulnerabilities: List[Vulnerability] = field(default_factory=list)
@@ -80,6 +94,7 @@ class Harness:
 @dataclass
 class JobContext:
     """Context for a single test job."""
+
     job_type: ExecJobType
     task: Optional[Task]
     benchmark: str
@@ -125,7 +140,6 @@ class JobContext:
 
 def get_benchmarks_root() -> str:
     """Get the path to benchmarks directory."""
-    import os
     from pathlib import Path
 
     crsbench_root = Path(__file__).parent.parent.parent

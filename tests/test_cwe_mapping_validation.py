@@ -8,7 +8,6 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
-
 from crsbench.hint_generation.cwe_mapping import CWE_TO_GENERAL_CLASS
 
 
@@ -31,20 +30,20 @@ def parse_cwec_xml():
 
     # Find namespace from root tag
     # Format: {http://cwe.mitre.org/cwe-7}Weakness_Catalog
-    namespace = root.tag.split('}')[0].strip('{') if '}' in root.tag else ''
-    ns = {'cwe': namespace} if namespace else {}
+    namespace = root.tag.split("}")[0].strip("{") if "}" in root.tag else ""
+    ns = {"cwe": namespace} if namespace else {}
 
     cwe_mapping = {}
 
     # Find all Weakness elements
     if namespace:
-        weaknesses = root.findall('.//cwe:Weakness', ns)
+        weaknesses = root.findall(".//cwe:Weakness", ns)
     else:
-        weaknesses = root.findall('.//Weakness')
+        weaknesses = root.findall(".//Weakness")
 
     for weakness in weaknesses:
-        cwe_id = weakness.get('ID')
-        cwe_name = weakness.get('Name')
+        cwe_id = weakness.get("ID")
+        cwe_name = weakness.get("Name")
 
         if cwe_id and cwe_name:
             cwe_mapping[f"CWE-{cwe_id}"] = cwe_name
@@ -90,14 +89,18 @@ class TestCWEMappingValidation:
             # Check if they match (exact or description is contained in official name)
             if official_normalized != description_normalized:
                 # Allow partial match (description might be shortened)
-                if description_normalized not in official_normalized and \
-                   official_normalized not in description_normalized:
-                    mismatches.append({
-                        'cwe_id': cwe_id,
-                        'official': official_name,
-                        'mapped': description,
-                        'general_class': general_class
-                    })
+                if (
+                    description_normalized not in official_normalized
+                    and official_normalized not in description_normalized
+                ):
+                    mismatches.append(
+                        {
+                            "cwe_id": cwe_id,
+                            "official": official_name,
+                            "mapped": description,
+                            "general_class": general_class,
+                        }
+                    )
 
         if mismatches:
             print("\n" + "=" * 80)
@@ -130,7 +133,7 @@ class TestCWEMappingValidation:
             description_words = set(description.lower().split())
 
             # Remove common words that don't change meaning
-            stop_words = {'the', 'a', 'an', 'of', 'in', 'to', 'for', 'with', 'without'}
+            stop_words = {"the", "a", "an", "of", "in", "to", "for", "with", "without"}
             official_words -= stop_words
             description_words -= stop_words
 
@@ -143,13 +146,15 @@ class TestCWEMappingValidation:
 
                 # Flag if less than 30% similarity
                 if similarity < 0.3:
-                    significant_differences.append({
-                        'cwe_id': cwe_id,
-                        'official': official_name,
-                        'mapped': description,
-                        'similarity': f"{similarity:.2%}",
-                        'general_class': general_class
-                    })
+                    significant_differences.append(
+                        {
+                            "cwe_id": cwe_id,
+                            "official": official_name,
+                            "mapped": description,
+                            "similarity": f"{similarity:.2%}",
+                            "general_class": general_class,
+                        }
+                    )
 
         if significant_differences:
             print("\n" + "=" * 80)
@@ -170,11 +175,17 @@ class TestCWEMappingValidation:
         print("All CWE Mappings:")
         print("=" * 80)
 
-        for cwe_id, (general_class, description) in sorted(CWE_TO_GENERAL_CLASS.items()):
+        for cwe_id, (general_class, description) in sorted(
+            CWE_TO_GENERAL_CLASS.items()
+        ):
             official = cwec_mapping.get(cwe_id, "NOT FOUND IN CWEC")
 
-            match_status = "✓" if cwe_id in cwec_mapping and \
-                          official.lower().strip() == description.lower().strip() else "~"
+            match_status = (
+                "✓"
+                if cwe_id in cwec_mapping
+                and official.lower().strip() == description.lower().strip()
+                else "~"
+            )
 
             print(f"\n{match_status} {cwe_id} [{general_class}]")
             print(f"    Official: {official}")

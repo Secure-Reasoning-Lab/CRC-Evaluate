@@ -6,11 +6,11 @@ implementations and executes them with graceful error handling.
 
 import importlib
 import inspect
-from crsbench.utils.logger import get_logger
 from pathlib import Path
-from typing import Dict, Optional, List
+from typing import Dict, List, Optional
 
-from crsbench.evaluation.analysis.base import AnalyzerInterface, AnalysisResult
+from crsbench.evaluation.analysis.base import AnalysisResult, AnalyzerInterface
+from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -54,8 +54,7 @@ class AnalysisManager:
 
         # Find all Python files (except __init__.py)
         analyzer_files = [
-            f for f in analyzers_dir.glob("*.py")
-            if f.name != "__init__.py"
+            f for f in analyzers_dir.glob("*.py") if f.name != "__init__.py"
         ]
 
         logger.debug(f"Discovering analyzers in {analyzers_dir}")
@@ -64,16 +63,19 @@ class AnalysisManager:
         for analyzer_file in analyzer_files:
             try:
                 # Import module dynamically
-                module_name = f"crsbench.evaluation.analysis.analyzers.{analyzer_file.stem}"
+                module_name = (
+                    f"crsbench.evaluation.analysis.analyzers.{analyzer_file.stem}"
+                )
                 module = importlib.import_module(module_name)
 
                 # Find analyzer classes in module
                 for name, obj in inspect.getmembers(module, inspect.isclass):
                     # Check if it's an AnalyzerInterface subclass (but not the base class itself)
-                    if (issubclass(obj, AnalyzerInterface) and
-                        obj is not AnalyzerInterface and
-                        not inspect.isabstract(obj)):
-
+                    if (
+                        issubclass(obj, AnalyzerInterface)
+                        and obj is not AnalyzerInterface
+                        and not inspect.isabstract(obj)
+                    ):
                         try:
                             # Instantiate analyzer
                             analyzer = obj()
@@ -100,7 +102,9 @@ class AnalysisManager:
             except Exception as e:
                 logger.warning(f"Failed to import {analyzer_file.name}: {e}")
 
-        logger.info(f"Discovered {len(self.analyzers)} analyzers: {list(self.analyzers.keys())}")
+        logger.info(
+            f"Discovered {len(self.analyzers)} analyzers: {list(self.analyzers.keys())}"
+        )
 
     def get_analyzer(self, crs_name: str) -> Optional[AnalyzerInterface]:
         """Get analyzer for a CRS.
@@ -133,9 +137,7 @@ class AnalysisManager:
         return list(self.analyzers.keys())
 
     def analyze_snapshot(
-        self,
-        crs_name: str,
-        snapshot_dir: Path
+        self, crs_name: str, snapshot_dir: Path
     ) -> Optional[AnalysisResult]:
         """Analyze a snapshot for a specific CRS.
 
@@ -169,22 +171,18 @@ class AnalysisManager:
             if result:
                 logger.debug(f"Analysis complete: {result.summary}")
             else:
-                logger.debug(f"Analyzer returned None (no data or failed)")
+                logger.debug("Analyzer returned None (no data or failed)")
 
             return result
 
         except Exception as e:
             logger.warning(
                 f"Analyzer {crs_name} failed on snapshot {snapshot_dir}: {e}",
-                exc_info=True
+                exc_info=True,
             )
             return None
 
-    def analyze_trial(
-        self,
-        crs_name: str,
-        trial_dir: Path
-    ) -> Optional[AnalysisResult]:
+    def analyze_trial(self, crs_name: str, trial_dir: Path) -> Optional[AnalysisResult]:
         """Analyze final trial data for a specific CRS.
 
         Args:
@@ -212,21 +210,18 @@ class AnalysisManager:
             if result:
                 logger.debug(f"Trial analysis complete: {result.summary}")
             else:
-                logger.debug(f"Analyzer returned None (no data or failed)")
+                logger.debug("Analyzer returned None (no data or failed)")
 
             return result
 
         except Exception as e:
             logger.warning(
-                f"Analyzer {crs_name} failed on trial {trial_dir}: {e}",
-                exc_info=True
+                f"Analyzer {crs_name} failed on trial {trial_dir}: {e}", exc_info=True
             )
             return None
 
     def analyze_time_series(
-        self,
-        crs_name: str,
-        snapshots: List[Path]
+        self, crs_name: str, snapshots: List[Path]
     ) -> Optional[Dict]:
         """Analyze time-series data across multiple snapshots.
 
@@ -259,13 +254,12 @@ class AnalysisManager:
             if result:
                 logger.debug(f"Time-series analysis complete: {len(result)} metrics")
             else:
-                logger.debug(f"Time-series analysis not implemented or returned None")
+                logger.debug("Time-series analysis not implemented or returned None")
 
             return result
 
         except Exception as e:
             logger.warning(
-                f"Time-series analyzer {crs_name} failed: {e}",
-                exc_info=True
+                f"Time-series analyzer {crs_name} failed: {e}", exc_info=True
             )
             return None

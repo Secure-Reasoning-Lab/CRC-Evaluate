@@ -1,60 +1,77 @@
 """Pydantic schemas for benchmark configuration validation."""
 
-from typing import List, Optional, Dict, Any, Literal
-from pydantic import BaseModel, Field, field_validator, model_validator
 import re
+from typing import Any, Dict, List, Literal, Optional
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class POV(BaseModel):
     """Proof of Vulnerability configuration."""
 
     id: str = Field(..., description="POV variant ID (e.g., pov_0, pov_1)")
-    sanitizer: str = Field(..., description="Sanitizer type (address, memory, undefined, etc.)")
-    error_token: Optional[str] = Field(default=None, description="Expected error pattern from sanitizer (optional)")
+    sanitizer: str = Field(
+        ..., description="Sanitizer type (address, memory, undefined, etc.)"
+    )
+    error_token: Optional[str] = Field(
+        default=None, description="Expected error pattern from sanitizer (optional)"
+    )
 
-    @field_validator('id')
+    @field_validator("id")
     @classmethod
     def validate_id(cls, v):
         if not v or not v.strip():
             raise ValueError("POV id cannot be empty")
         return v.strip()
 
-    @field_validator('sanitizer')
+    @field_validator("sanitizer")
     @classmethod
     def validate_sanitizer(cls, v):
-        valid_sanitizers = {'address', 'memory', 'thread', 'undefined', 'leak'}
+        valid_sanitizers = {"address", "memory", "thread", "undefined", "leak"}
         if v not in valid_sanitizers:
-            raise ValueError(f"Invalid sanitizer: {v}. Must be one of: {', '.join(valid_sanitizers)}")
+            raise ValueError(
+                f"Invalid sanitizer: {v}. Must be one of: {', '.join(valid_sanitizers)}"
+            )
         return v
 
-    @field_validator('error_token')
+    @field_validator("error_token")
     @classmethod
     def validate_error_token(cls, v):
         # error_token is now optional
         if v is not None and not v.strip():
-            raise ValueError("Error token cannot be empty string (use None if not provided)")
+            raise ValueError(
+                "Error token cannot be empty string (use None if not provided)"
+            )
         return v.strip() if v else None
 
 
 class Vulnerability(BaseModel):
     """Vulnerability configuration grouping related POV variants."""
 
-    vuln_keyword: str = Field(..., description="Vulnerability keyword (maps to directory name)")
-    difficulty_level: Optional[int] = Field(default=None, ge=1, le=5, description="Intrinsic difficulty level (1-5)")
-    povs: List[POV] = Field(..., description="List of POV variants for this vulnerability")
+    vuln_keyword: str = Field(
+        ..., description="Vulnerability keyword (maps to directory name)"
+    )
+    difficulty_level: Optional[int] = Field(
+        default=None, ge=1, le=5, description="Intrinsic difficulty level (1-5)"
+    )
+    povs: List[POV] = Field(
+        ..., description="List of POV variants for this vulnerability"
+    )
 
-    @field_validator('vuln_keyword')
+    @field_validator("vuln_keyword")
     @classmethod
     def validate_vuln_keyword(cls, v):
         if not v or not v.strip():
             raise ValueError("Vulnerability keyword cannot be empty")
         return v.strip()
 
-    @field_validator('povs')
+    @field_validator("povs")
     @classmethod
     def validate_povs(cls, v):
         if not v:
-            raise ValueError("At least one POV variant must be specified for each vulnerability")
+            raise ValueError(
+                "At least one POV variant must be specified for each vulnerability"
+            )
 
         # Check for duplicate POV IDs
         pov_ids = [pov.id for pov in v]
@@ -69,17 +86,21 @@ class HarnessFile(BaseModel):
     """Harness file configuration."""
 
     name: str = Field(..., description="Name of the harness")
-    path: str = Field(..., description="Path to harness file (absolute path in container)")
-    vulns: Optional[List[Vulnerability]] = Field(default_factory=list, description="List of vulnerabilities for this harness")
+    path: str = Field(
+        ..., description="Path to harness file (absolute path in container)"
+    )
+    vulns: Optional[List[Vulnerability]] = Field(
+        default_factory=list, description="List of vulnerabilities for this harness"
+    )
 
-    @field_validator('name')
+    @field_validator("name")
     @classmethod
     def validate_name(cls, v):
         if not v or not v.strip():
             raise ValueError("Harness name cannot be empty")
         return v.strip()
 
-    @field_validator('path')
+    @field_validator("path")
     @classmethod
     def validate_path(cls, v):
         if not v or not v.strip():
@@ -90,13 +111,15 @@ class HarnessFile(BaseModel):
         # Accept path variable patterns
         # $REPO: The cloned repository directory (where source code lives)
         # $PROJECT: The OSS-Fuzz compatible project directory (containing project.yaml, build.sh, etc.)
-        if path.startswith('$REPO/') or path.startswith('$PROJECT/'):
+        if path.startswith(("$REPO/", "$PROJECT/")):
             return path
 
         # Accept absolute paths (most common in Docker containers)
         # or relative paths starting with ./
-        if not (path.startswith('/') or path.startswith('./')):
-            raise ValueError("Harness path should be one of: $REPO/..., $PROJECT/..., /absolute/path, or ./relative/path")
+        if not (path.startswith(("/", "./"))):
+            raise ValueError(
+                "Harness path should be one of: $REPO/..., $PROJECT/..., /absolute/path, or ./relative/path"
+            )
 
         return path
 
@@ -104,7 +127,7 @@ class HarnessFile(BaseModel):
     def povs(self) -> List[POV]:
         """Get flattened list of all POVs from all vulnerabilities."""
         all_povs = []
-        for vuln in (self.vulns or []):
+        for vuln in self.vulns or []:
             all_povs.extend(vuln.povs)
         return all_povs
 
@@ -115,7 +138,7 @@ class DeltaMode(BaseModel):
     base_commit: str = Field(..., description="Base commit hash")
     ref_commit: str = Field(..., description="Reference commit hash")
 
-    @field_validator('base_commit', 'ref_commit')
+    @field_validator("base_commit", "ref_commit")
     @classmethod
     def validate_commit_hash(cls, v):
         if not v or not v.strip():
@@ -123,7 +146,7 @@ class DeltaMode(BaseModel):
 
         # Basic git commit hash validation (7-40 hex characters)
         commit_hash = v.strip()
-        if not re.match(r'^[a-fA-F0-9]{7,40}$', commit_hash):
+        if not re.match(r"^[a-fA-F0-9]{7,40}$", commit_hash):
             raise ValueError(f"Invalid commit hash format: {commit_hash}")
 
         return commit_hash
@@ -134,7 +157,7 @@ class FullMode(BaseModel):
 
     base_commit: str = Field(..., description="Base commit hash")
 
-    @field_validator('base_commit')
+    @field_validator("base_commit")
     @classmethod
     def validate_commit_hash(cls, v):
         if not v or not v.strip():
@@ -142,7 +165,7 @@ class FullMode(BaseModel):
 
         # Basic git commit hash validation (7-40 hex characters)
         commit_hash = v.strip()
-        if not re.match(r'^[a-fA-F0-9]{7,40}$', commit_hash):
+        if not re.match(r"^[a-fA-F0-9]{7,40}$", commit_hash):
             raise ValueError(f"Invalid commit hash format: {commit_hash}")
 
         return commit_hash
@@ -151,12 +174,18 @@ class FullMode(BaseModel):
 class BenchmarkConfig(BaseModel):
     """Complete benchmark configuration schema."""
 
-    patch_exclude_list: Optional[List[str]] = Field(default_factory=list, description="Files that patches cannot modify")
-    delta_mode: Optional[DeltaMode] = Field(default=None, description="Delta mode configuration")
-    full_mode: Optional[FullMode] = Field(default=None, description="Full mode configuration")
+    patch_exclude_list: Optional[List[str]] = Field(
+        default_factory=list, description="Files that patches cannot modify"
+    )
+    delta_mode: Optional[DeltaMode] = Field(
+        default=None, description="Delta mode configuration"
+    )
+    full_mode: Optional[FullMode] = Field(
+        default=None, description="Full mode configuration"
+    )
     harness_files: List[HarnessFile] = Field(..., description="List of harness files")
 
-    @field_validator('harness_files')
+    @field_validator("harness_files")
     @classmethod
     def validate_harness_files(cls, v):
         if not v:
@@ -166,25 +195,28 @@ class BenchmarkConfig(BaseModel):
         names = [harness.name for harness in v]
         if len(names) != len(set(names)):
             duplicates = [name for name in names if names.count(name) > 1]
-            raise ValueError(f"Duplicate harness names found: {', '.join(set(duplicates))}")
+            raise ValueError(
+                f"Duplicate harness names found: {', '.join(set(duplicates))}"
+            )
 
         return v
 
-    @field_validator('patch_exclude_list')
+    @field_validator("patch_exclude_list")
     @classmethod
     def validate_patch_exclude_list(cls, v):
         if v is None:
             return []
 
         # Remove empty patterns
-        cleaned = [pattern.strip() for pattern in v if pattern and pattern.strip()]
-        return cleaned
+        return [pattern.strip() for pattern in v if pattern and pattern.strip()]
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def check_at_least_one_mode(self):
         """Validate that at least one mode is specified."""
         if not self.delta_mode and not self.full_mode:
-            raise ValueError("At least one evaluation mode (delta_mode or full_mode) must be specified")
+            raise ValueError(
+                "At least one evaluation mode (delta_mode or full_mode) must be specified"
+            )
         return self
 
 
@@ -195,7 +227,7 @@ class Hint(BaseModel):
     text: str = Field(..., description="Hint text content")
     category: Optional[str] = Field(default=None, description="Hint category")
 
-    @field_validator('text')
+    @field_validator("text")
     @classmethod
     def validate_text(cls, v):
         if not v or not v.strip():
@@ -208,85 +240,106 @@ class ValidationMetadata(BaseModel):
 
     file_path: Optional[str] = Field(default=None, description="Path to validated file")
     file_size: Optional[int] = Field(default=None, description="Size of validated file")
-    yaml_valid: bool = Field(default=False, description="Whether YAML is syntactically valid")
-    schema_valid: bool = Field(default=False, description="Whether content matches schema")
+    yaml_valid: bool = Field(
+        default=False, description="Whether YAML is syntactically valid"
+    )
+    schema_valid: bool = Field(
+        default=False, description="Whether content matches schema"
+    )
     total_harnesses: int = Field(default=0, description="Total number of harnesses")
     total_vulns: int = Field(default=0, description="Total number of vulnerabilities")
     total_povs: int = Field(default=0, description="Total number of POV variants")
-    has_delta_mode: bool = Field(default=False, description="Whether delta mode is configured")
-    has_full_mode: bool = Field(default=False, description="Whether full mode is configured")
-    patch_exclude_patterns: int = Field(default=0, description="Number of patch exclusion patterns")
+    has_delta_mode: bool = Field(
+        default=False, description="Whether delta mode is configured"
+    )
+    has_full_mode: bool = Field(
+        default=False, description="Whether full mode is configured"
+    )
+    patch_exclude_patterns: int = Field(
+        default=0, description="Number of patch exclusion patterns"
+    )
 
 
 class ExperimentConfig(BaseModel):
     """Experiment configuration schema."""
 
-    experiment: str = Field(..., description="Unique identifier for this experiment run")
+    experiment: str = Field(
+        ..., description="Unique identifier for this experiment run"
+    )
     trials: int = Field(..., ge=1, description="Number of trials (must be >= 1)")
-    max_total_time: int = Field(..., ge=1, description="Maximum time in seconds per trial (must be >= 1)")
-    difficulty_level: int = Field(..., ge=0, le=4, description="Difficulty level controlling assistance (0-4)")
-    experiment_filestore: str = Field(..., description="Directory path for experiment data storage")
-    report_filestore: str = Field(..., description="Directory path for HTML reports and summary data")
+    max_total_time: int = Field(
+        ..., ge=1, description="Maximum time in seconds per trial (must be >= 1)"
+    )
+    difficulty_level: int = Field(
+        ..., ge=0, le=4, description="Difficulty level controlling assistance (0-4)"
+    )
+    experiment_filestore: str = Field(
+        ..., description="Directory path for experiment data storage"
+    )
+    report_filestore: str = Field(
+        ..., description="Directory path for HTML reports and summary data"
+    )
     crses: List[str] = Field(..., description="List of CRS implementations to evaluate")
     redis_host: Optional[str] = Field(
         default=None,
-        description="Redis server hostname or IP (optional, omit or set to 'none' for local mode)"
+        description="Redis server hostname or IP (optional, omit or set to 'none' for local mode)",
     )
     benchmarks_root: Optional[str] = Field(
         default=None,
-        description="Root directory containing benchmark projects (defaults to ./benchmarks)"
+        description="Root directory containing benchmark projects (defaults to ./benchmarks)",
     )
     benchmarks: Optional[List[str]] = Field(
         default=None,
-        description="List of benchmark IDs to evaluate (mutually exclusive with benchmark_suite)"
+        description="List of benchmark IDs to evaluate (mutually exclusive with benchmark_suite)",
     )
     benchmark_suite: Optional[str] = Field(
         default=None,
-        description="Benchmark suite name to load from benchmark-suites/ (mutually exclusive with benchmarks)"
+        description="Benchmark suite name to load from benchmark-suites/ (mutually exclusive with benchmarks)",
     )
     snapshot_period: Optional[int] = Field(
         default=900,
         ge=0,
-        description="Snapshot interval in seconds (0 to disable, default 900 = 15 minutes)"
+        description="Snapshot interval in seconds (0 to disable, default 900 = 15 minutes)",
     )
     registry_dir: Optional[str] = Field(
         default=None,
-        description="Path to CRS registry directory (defaults to ./crses/registry)"
+        description="Path to CRS registry directory (defaults to ./crses/registry)",
     )
     crs_configs_dir: Optional[str] = Field(
         default=None,
-        description="Path to CRS configs directory (defaults to ./crses/configs)"
+        description="Path to CRS configs directory (defaults to ./crses/configs)",
     )
     hints_enabled: bool = Field(
-        default=False,
-        description="Enable hints for CRS evaluation"
+        default=False, description="Enable hints for CRS evaluation"
     )
     hint_sarif_level: Optional[int] = Field(
         default=None,
-        ge=1, le=5,
-        description="SARIF hint level (1=vague, 5=detailed). None disables SARIF hints."
+        ge=1,
+        le=5,
+        description="SARIF hint level (1=vague, 5=detailed). None disables SARIF hints.",
     )
     hint_corpus_level: Optional[int] = Field(
         default=None,
-        ge=1, le=5,
-        description="Pre-fuzz corpus level (1=minimal, 5=comprehensive). None disables corpus. [PLACEHOLDER - not yet implemented]"
+        ge=1,
+        le=5,
+        description="Pre-fuzz corpus level (1=minimal, 5=comprehensive). None disables corpus. [PLACEHOLDER - not yet implemented]",
     )
     litellm_mode: Optional[Literal["passthrough", "proxy"]] = Field(
         default="passthrough",
         description="LiteLLM mode: 'passthrough' uses external LiteLLM (UPSTREAM_LITELLM_BASE_URL, LITELLM_API_KEY), "
-                    "'proxy' uses self-hosted proxy (LITELLM_BASE_URL, LITELLM_MASTER_KEY). "
-                    "Default is 'passthrough'."
+        "'proxy' uses self-hosted proxy (LITELLM_BASE_URL, LITELLM_MASTER_KEY). "
+        "Default is 'passthrough'.",
     )
     project_image_prefix: str = Field(
         default="aixcc-afc",
-        description="Docker image prefix for custom project images (default: aixcc-afc)"
+        description="Docker image prefix for custom project images (default: aixcc-afc)",
     )
     skip_verification: bool = Field(
         default=False,
-        description="Skip POV verification after CRS execution (default: False, verification enabled)"
+        description="Skip POV verification after CRS execution (default: False, verification enabled)",
     )
 
-    @field_validator('experiment')
+    @field_validator("experiment")
     @classmethod
     def validate_experiment(cls, v):
         """Validate experiment name."""
@@ -294,7 +347,7 @@ class ExperimentConfig(BaseModel):
             raise ValueError("Experiment name cannot be empty")
         return v.strip()
 
-    @field_validator('crses')
+    @field_validator("crses")
     @classmethod
     def validate_crses(cls, v):
         """Validate CRS list."""
@@ -313,27 +366,28 @@ class ExperimentConfig(BaseModel):
 
         return cleaned
 
-    @field_validator('experiment_filestore', 'report_filestore')
+    @field_validator("experiment_filestore", "report_filestore")
     @classmethod
     def validate_filestore_path(cls, v):
         if not v or not v.strip():
             raise ValueError("Filestore path cannot be empty")
         return v.strip()
 
-    @field_validator('redis_host')
+    @field_validator("redis_host")
     @classmethod
     def validate_redis_host(cls, v):
         """Validate Redis host field."""
-        if v and v.strip() and v.strip().lower() != 'none':
+        if v and v.strip() and v.strip().lower() != "none":
             return v.strip()
         return None  # Treat empty or "none" as None (local mode)
 
-    @field_validator('benchmarks_root')
+    @field_validator("benchmarks_root")
     @classmethod
     def validate_benchmarks_root(cls, v):
         """Validate benchmarks root directory."""
         if v and v.strip():
             from pathlib import Path
+
             path = Path(v.strip())
             if not path.exists():
                 raise ValueError(f"Benchmarks root directory does not exist: {v}")
@@ -342,7 +396,7 @@ class ExperimentConfig(BaseModel):
             return str(path.absolute())
         return None  # Use default ./benchmarks if not specified
 
-    @field_validator('benchmarks')
+    @field_validator("benchmarks")
     @classmethod
     def validate_benchmarks(cls, v):
         """Validate benchmarks list."""
@@ -360,11 +414,13 @@ class ExperimentConfig(BaseModel):
         # Check for duplicates
         if len(cleaned) != len(set(cleaned)):
             duplicates = [bid for bid in cleaned if cleaned.count(bid) > 1]
-            raise ValueError(f"Duplicate benchmark IDs found: {', '.join(set(duplicates))}")
+            raise ValueError(
+                f"Duplicate benchmark IDs found: {', '.join(set(duplicates))}"
+            )
 
         return cleaned if cleaned else None
 
-    @field_validator('benchmark_suite')
+    @field_validator("benchmark_suite")
     @classmethod
     def validate_benchmark_suite(cls, v):
         """Validate benchmark_suite format."""
@@ -378,7 +434,7 @@ class ExperimentConfig(BaseModel):
 
         return suite_name
 
-    @field_validator('snapshot_period')
+    @field_validator("snapshot_period")
     @classmethod
     def validate_snapshot_period(cls, v):
         """Validate snapshot period."""
@@ -389,35 +445,45 @@ class ExperimentConfig(BaseModel):
             return 0  # Disabled
 
         if v < 60:
-            raise ValueError("snapshot_period must be at least 60 seconds (or 0 to disable)")
+            raise ValueError(
+                "snapshot_period must be at least 60 seconds (or 0 to disable)"
+            )
 
         if v > 86400:
-            raise ValueError(f"snapshot_period of {v}s (>{v/3600:.1f} hours) exceeds maximum of 24 hours")
+            raise ValueError(
+                f"snapshot_period of {v}s (>{v / 3600:.1f} hours) exceeds maximum of 24 hours"
+            )
 
         return v
 
-    @field_validator('litellm_mode')
+    @field_validator("litellm_mode")
     @classmethod
     def validate_litellm_mode(cls, v):
         """Validate LiteLLM mode."""
-        if v is not None and v not in ('passthrough', 'proxy'):
-            raise ValueError(f"Invalid litellm_mode: {v}. Must be 'passthrough' or 'proxy'")
+        if v is not None and v not in ("passthrough", "proxy"):
+            raise ValueError(
+                f"Invalid litellm_mode: {v}. Must be 'passthrough' or 'proxy'"
+            )
         return v
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def check_benchmarks_configuration(self):
         """Ensure benchmarks configuration is valid."""
         # Check mutual exclusivity
         if self.benchmarks is not None and self.benchmark_suite is not None:
-            raise ValueError("Cannot specify both 'benchmarks' and 'benchmark_suite'. Please use only one.")
+            raise ValueError(
+                "Cannot specify both 'benchmarks' and 'benchmark_suite'. Please use only one."
+            )
 
         # Ensure at least one is specified
         if self.benchmarks is None and self.benchmark_suite is None:
-            raise ValueError("Either 'benchmarks' or 'benchmark_suite' must be specified")
+            raise ValueError(
+                "Either 'benchmarks' or 'benchmark_suite' must be specified"
+            )
 
         return self
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def check_hints_configuration(self):
         """Validate hint configuration consistency."""
         if self.hints_enabled:
@@ -427,7 +493,9 @@ class ExperimentConfig(BaseModel):
                 )
         return self
 
-    def get_benchmark_list(self, benchmark_suites_dir: str = "benchmark-suites") -> List[str]:
+    def get_benchmark_list(
+        self, benchmark_suites_dir: str = "benchmark-suites"
+    ) -> List[str]:
         """Get the list of benchmarks, resolving benchmark_suite if necessary.
 
         Args:
@@ -444,6 +512,7 @@ class ExperimentConfig(BaseModel):
 
         if self.benchmark_suite is not None:
             from pathlib import Path
+
             import yaml
 
             # Construct path to suite file
@@ -453,7 +522,7 @@ class ExperimentConfig(BaseModel):
                 raise ValueError(f"Benchmark suite file not found: {suite_path}")
 
             # Load and validate suite file
-            with open(suite_path, 'r') as f:
+            with suite_path.open() as f:
                 suite_data = yaml.safe_load(f)
 
             # Validate using BenchmarkSuiteConfig schema
@@ -467,26 +536,26 @@ class ExperimentConfig(BaseModel):
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary for job serialization."""
         return {
-            'experiment': self.experiment,
-            'trials': self.trials,
-            'max_total_time': self.max_total_time,
-            'difficulty_level': self.difficulty_level,
-            'experiment_filestore': self.experiment_filestore,
-            'report_filestore': self.report_filestore,
-            'crses': self.crses,
-            'redis_host': self.redis_host,
-            'benchmarks_root': self.benchmarks_root,
-            'benchmarks': self.benchmarks,
-            'benchmark_suite': self.benchmark_suite,
-            'hints_enabled': self.hints_enabled,
-            'hint_sarif_level': self.hint_sarif_level,
-            'hint_corpus_level': self.hint_corpus_level,
-            'litellm_mode': self.litellm_mode,
-            'crs_configs_dir': self.crs_configs_dir,
-            'registry_dir': self.registry_dir,
-            'snapshot_period': self.snapshot_period,
-            'project_image_prefix': self.project_image_prefix,
-            'skip_verification': self.skip_verification,
+            "experiment": self.experiment,
+            "trials": self.trials,
+            "max_total_time": self.max_total_time,
+            "difficulty_level": self.difficulty_level,
+            "experiment_filestore": self.experiment_filestore,
+            "report_filestore": self.report_filestore,
+            "crses": self.crses,
+            "redis_host": self.redis_host,
+            "benchmarks_root": self.benchmarks_root,
+            "benchmarks": self.benchmarks,
+            "benchmark_suite": self.benchmark_suite,
+            "hints_enabled": self.hints_enabled,
+            "hint_sarif_level": self.hint_sarif_level,
+            "hint_corpus_level": self.hint_corpus_level,
+            "litellm_mode": self.litellm_mode,
+            "crs_configs_dir": self.crs_configs_dir,
+            "registry_dir": self.registry_dir,
+            "snapshot_period": self.snapshot_period,
+            "project_image_prefix": self.project_image_prefix,
+            "skip_verification": self.skip_verification,
         }
 
 
@@ -496,27 +565,33 @@ class BenchmarkSuiteConfig(BaseModel):
     model_config = {"populate_by_name": True}  # Pydantic V2 syntax
 
     Name: str = Field(..., description="Unique identifier for the benchmark suite")
-    Description: str = Field(..., description="Description of the benchmark suite purpose and scope")
-    benchmark_list: List[str] = Field(..., description="List of benchmark IDs included in the suite")
+    Description: str = Field(
+        ..., description="Description of the benchmark suite purpose and scope"
+    )
+    benchmark_list: List[str] = Field(
+        ..., description="List of benchmark IDs included in the suite"
+    )
 
     # Note: "Release date" field name has a space, handling with Field alias
-    release_date: str = Field(..., alias="Release date", description="Release date of the benchmark suite")
+    release_date: str = Field(
+        ..., alias="Release date", description="Release date of the benchmark suite"
+    )
 
-    @field_validator('Name')
+    @field_validator("Name")
     @classmethod
     def validate_name(cls, v):
         if not v or not v.strip():
             raise ValueError("Benchmark suite Name cannot be empty")
         return v.strip()
 
-    @field_validator('Description')
+    @field_validator("Description")
     @classmethod
     def validate_description(cls, v):
         if not v or not v.strip():
             raise ValueError("Benchmark suite Description cannot be empty")
         return v.strip()
 
-    @field_validator('release_date')
+    @field_validator("release_date")
     @classmethod
     def validate_release_date(cls, v):
         if not v or not v.strip():
@@ -524,12 +599,14 @@ class BenchmarkSuiteConfig(BaseModel):
 
         # Validate date format MM.DD.YYYY
         date_str = v.strip()
-        if not re.match(r'^\d{2}\.\d{2}\.\d{4}$', date_str):
-            raise ValueError(f"Invalid release date format: {date_str}. Expected format: MM.DD.YYYY (e.g., 09.23.2025)")
+        if not re.match(r"^\d{2}\.\d{2}\.\d{4}$", date_str):
+            raise ValueError(
+                f"Invalid release date format: {date_str}. Expected format: MM.DD.YYYY (e.g., 09.23.2025)"
+            )
 
         return date_str
 
-    @field_validator('benchmark_list')
+    @field_validator("benchmark_list")
     @classmethod
     def validate_benchmark_list(cls, v):
         if not v:
@@ -543,6 +620,8 @@ class BenchmarkSuiteConfig(BaseModel):
         # Check for duplicates
         if len(cleaned) != len(set(cleaned)):
             duplicates = [bid for bid in cleaned if cleaned.count(bid) > 1]
-            raise ValueError(f"Duplicate benchmark IDs found: {', '.join(set(duplicates))}")
+            raise ValueError(
+                f"Duplicate benchmark IDs found: {', '.join(set(duplicates))}"
+            )
 
         return cleaned

@@ -1,14 +1,13 @@
 """Unit tests for SnapshotManager."""
 
-import pytest
-import time
-import threading
 import tarfile
+import threading
+import time
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
+import pytest
+from crsbench.evaluation.snapshot import list_snapshots, load_snapshot_metadata
 from crsbench.evaluation.snapshot_manager import SnapshotManager
-from crsbench.evaluation.snapshot import load_snapshot_metadata, list_snapshots
 
 
 class TestSnapshotManagerInit:
@@ -26,7 +25,9 @@ class TestSnapshotManagerInit:
     def test_init_custom_start_time(self, tmp_path):
         """Test initializing with custom start time."""
         start_time = time.time() - 1000
-        manager = SnapshotManager(tmp_path, snapshot_period=60, trial_start_time=start_time)
+        manager = SnapshotManager(
+            tmp_path, snapshot_period=60, trial_start_time=start_time
+        )
 
         assert manager.trial_start_time == start_time
 
@@ -125,7 +126,7 @@ class TestSnapshotCapture:
         extract_dir = tmp_path / "extracted"
         extract_dir.mkdir()
 
-        with tarfile.open(archive_path, 'r:gz') as tar:
+        with tarfile.open(archive_path, "r:gz") as tar:
             tar.extractall(extract_dir)
 
         # Check required files
@@ -167,7 +168,7 @@ class TestSnapshotCapture:
         extract_dir = tmp_path / "extracted2"
         extract_dir.mkdir()
 
-        with tarfile.open(archive_path, 'r:gz') as tar:
+        with tarfile.open(archive_path, "r:gz") as tar:
             tar.extractall(extract_dir)
 
         # Should have all 3 POVs
@@ -199,7 +200,7 @@ class TestSnapshotCapture:
         extract_dir = tmp_path / "extracted2"
         extract_dir.mkdir()
 
-        with tarfile.open(archive_path, 'r:gz') as tar:
+        with tarfile.open(archive_path, "r:gz") as tar:
             tar.extractall(extract_dir)
 
         # Should have both patches
@@ -315,6 +316,7 @@ class TestSnapshotThread:
 
         # Delete trial_dir to cause errors
         import shutil
+
         shutil.rmtree(tmp_path)
 
         thread = threading.Thread(target=manager.run, daemon=True)

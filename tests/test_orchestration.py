@@ -13,26 +13,24 @@ Run with:
     pytest tests/test_orchestration.py --cov=crsbench.run_experiment
 """
 
-import pytest
-import yaml
 import json
 from pathlib import Path
-from unittest.mock import Mock
-from pydantic import ValidationError as PydanticValidationError
 
+import pytest
+import yaml
 from crsbench.run_experiment import (
+    Trial,
+    generate_trial_matrix,
     load_experiment_config,
     parse_list_argument,
-    generate_trial_matrix,
     should_use_distributed_mode,
-    Trial,
 )
 from crsbench.validation.schemas import ExperimentConfig
-
 
 # ============================================================================
 # 1. Config Loading Tests
 # ============================================================================
+
 
 class TestConfigLoading:
     """Test experiment configuration loading and validation."""
@@ -132,6 +130,7 @@ benchmarks: [bench1]
 # 2. Trial Matrix Generation Tests
 # ============================================================================
 
+
 class TestTrialMatrixGeneration:
     """Test trial matrix generation and job counting."""
 
@@ -145,7 +144,7 @@ class TestTrialMatrixGeneration:
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
             crses=["crs1", "crs2"],
-            benchmarks=["bench1", "bench2"]
+            benchmarks=["bench1", "bench2"],
         )
 
         benchmarks = ["bench1", "bench2"]
@@ -172,7 +171,7 @@ class TestTrialMatrixGeneration:
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
             crses=["crs1", "crs2"],
-            benchmarks=["bench1", "bench2"]
+            benchmarks=["bench1", "bench2"],
         )
 
         benchmarks = ["bench1", "bench2"]
@@ -182,10 +181,14 @@ class TestTrialMatrixGeneration:
 
         # Verify ordering: CRS outer loop, benchmark middle, trial inner
         expected = [
-            ("crs1", "bench1", 0), ("crs1", "bench1", 1),
-            ("crs1", "bench2", 0), ("crs1", "bench2", 1),
-            ("crs2", "bench1", 0), ("crs2", "bench1", 1),
-            ("crs2", "bench2", 0), ("crs2", "bench2", 1),
+            ("crs1", "bench1", 0),
+            ("crs1", "bench1", 1),
+            ("crs1", "bench2", 0),
+            ("crs1", "bench2", 1),
+            ("crs2", "bench1", 0),
+            ("crs2", "bench1", 1),
+            ("crs2", "bench2", 0),
+            ("crs2", "bench2", 1),
         ]
 
         actual = [(t.crs, t.benchmark, t.trial_num) for t in trials]
@@ -201,7 +204,7 @@ class TestTrialMatrixGeneration:
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
             crses=["crs1"],
-            benchmarks=["bench1"]
+            benchmarks=["bench1"],
         )
 
         benchmarks = ["bench1"]
@@ -234,18 +237,20 @@ class TestTrialMatrixGeneration:
                 experiment_filestore="/tmp/exp",
                 report_filestore="/tmp/rep",
                 crses=crses,
-                benchmarks=benchmarks
+                benchmarks=benchmarks,
             )
 
             trials = generate_trial_matrix(benchmarks, crses, config)
 
-            assert len(trials) == expected_total, \
+            assert len(trials) == expected_total, (
                 f"Expected {expected_total} trials for {len(crses)} CRS × {len(benchmarks)} bench × {trials_count} trials"
+            )
 
 
 # ============================================================================
 # 3. CLI Parsing and Override Tests
 # ============================================================================
+
 
 class TestCLIOverrides:
     """Test CLI argument parsing and override behavior."""
@@ -290,7 +295,9 @@ benchmarks: [bench1]
         cli_experiment_name = "overridden-name"
 
         # Resolution logic (what orchestrator does)
-        resolved_name = cli_experiment_name if cli_experiment_name else config.experiment
+        resolved_name = (
+            cli_experiment_name if cli_experiment_name else config.experiment
+        )
 
         # Verify CLI value takes precedence
         assert resolved_name == "overridden-name"
@@ -346,16 +353,23 @@ benchmarks:
         cli_benchmarks = "custom-bench1,custom-bench2,custom-bench3"
 
         # Resolution logic
-        resolved_benchmarks = parse_list_argument(cli_benchmarks) if cli_benchmarks else config.benchmarks
+        resolved_benchmarks = (
+            parse_list_argument(cli_benchmarks) if cli_benchmarks else config.benchmarks
+        )
 
         # Verify CLI override
-        assert resolved_benchmarks == ["custom-bench1", "custom-bench2", "custom-bench3"]
+        assert resolved_benchmarks == [
+            "custom-bench1",
+            "custom-bench2",
+            "custom-bench3",
+        ]
         assert config.benchmarks == ["bench1", "bench2"]  # Original unchanged
 
 
 # ============================================================================
 # 4. Config Storage in Trial Directory (CRITICAL for Reproducibility)
 # ============================================================================
+
 
 class TestConfigStorage:
     """Test that resolved config (with CLI overrides) is stored in trial directories."""
@@ -416,12 +430,17 @@ benchmarks:
             stored_config = yaml.safe_load(f)
 
         # CRITICAL ASSERTIONS: Stored config must have overridden values
-        assert stored_config["experiment"] == "overridden-experiment", \
+        assert stored_config["experiment"] == "overridden-experiment", (
             "Stored config should have CLI-overridden experiment name"
-        assert stored_config["crses"] == ["custom-crs1", "custom-crs2"], \
+        )
+        assert stored_config["crses"] == ["custom-crs1", "custom-crs2"], (
             "Stored config should have CLI-overridden CRS list"
-        assert stored_config["benchmarks"] == ["custom-bench1", "custom-bench2", "custom-bench3"], \
-            "Stored config should have CLI-overridden benchmark list"
+        )
+        assert stored_config["benchmarks"] == [
+            "custom-bench1",
+            "custom-bench2",
+            "custom-bench3",
+        ], "Stored config should have CLI-overridden benchmark list"
 
         # Verify original config values are NOT in stored config
         assert stored_config["experiment"] != "original-experiment"
@@ -438,7 +457,7 @@ benchmarks:
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
             crses=["atlantis-c"],
-            benchmarks=["curl-delta-02"]
+            benchmarks=["curl-delta-02"],
         )
 
         # Generate trial
@@ -533,6 +552,7 @@ benchmarks:
 # ============================================================================
 # 5. Integration Tests with Sample Configs
 # ============================================================================
+
 
 class TestIntegrationWithSampleConfigs:
     """Test integration with actual sample configs from experiment-configs/."""
@@ -664,11 +684,13 @@ class TestIntegrationWithSampleConfigs:
 # 6. Mode Selection Tests
 # ============================================================================
 
+
 class TestModeSelection:
     """Test execution mode selection (local vs distributed)."""
 
     def test_should_use_distributed_mode_single_job(self):
         """Test mode detection for single job (should use local)."""
+
         # Mock args
         class MockArgs:
             local_only = False
@@ -683,7 +705,7 @@ class TestModeSelection:
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
             crses=["crs1"],
-            benchmarks=["bench1"]
+            benchmarks=["bench1"],
         )
 
         total_jobs = 1
@@ -695,6 +717,7 @@ class TestModeSelection:
 
     def test_should_use_distributed_mode_no_redis(self):
         """Test mode detection without Redis configured."""
+
         class MockArgs:
             local_only = False
 
@@ -709,7 +732,7 @@ class TestModeSelection:
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
             crses=["crs1", "crs2"],
-            benchmarks=["bench1"]
+            benchmarks=["bench1"],
         )
 
         total_jobs = 4  # 2 CRS × 1 bench × 2 trials
@@ -721,6 +744,7 @@ class TestModeSelection:
 
     def test_should_use_distributed_mode_local_only_flag(self):
         """Test mode detection with --local-only flag."""
+
         class MockArgs:
             local_only = True
 
@@ -736,7 +760,7 @@ class TestModeSelection:
             report_filestore="/tmp/rep",
             crses=["crs1", "crs2"],
             benchmarks=["bench1"],
-            redis_host="localhost"
+            redis_host="localhost",
         )
 
         total_jobs = 4

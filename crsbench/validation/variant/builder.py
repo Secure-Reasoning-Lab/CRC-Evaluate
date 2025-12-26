@@ -49,6 +49,7 @@ class VariantBuilder:
     def build_all_variants(
         self,
         adapter: MetaYamlAdapter,
+        *,
         force_rebuild: bool = False,
     ) -> List[BuildVersion]:
         """Build all required variants for a benchmark.
@@ -83,9 +84,7 @@ class VariantBuilder:
         cpv_versions = self._build_cpv_versions(adapter, force_rebuild)
         versions.extend(cpv_versions)
 
-        logger.info(
-            f"Built {len(versions)} variants for {adapter.benchmark_name}"
-        )
+        logger.info(f"Built {len(versions)} variants for {adapter.benchmark_name}")
         return versions
 
     def _build_base_version(
@@ -192,6 +191,7 @@ class VariantBuilder:
         apply_patches: bool,
         exclude_cpv: Optional[int] = None,
         cpv_num: Optional[int] = None,
+        *,
         force_rebuild: bool = False,
     ) -> Optional[BuildVersion]:
         """Build a specific variant version.
@@ -237,7 +237,7 @@ class VariantBuilder:
                     commit=commit,
                     target_dir=str(repo_path),
                     repo_name=adapter.repo_name,
-                    verbose=True
+                    verbose=True,
                 )
                 if not repo_path_str:
                     return None
@@ -249,7 +249,9 @@ class VariantBuilder:
                     if adapter.benchmark_path and adapter.benchmark_path.exists():
                         aixcc_dir = adapter.benchmark_path / ".aixcc"
                     else:
-                        aixcc_dir = self.projects_base / adapter.benchmark_name / ".aixcc"
+                        aixcc_dir = (
+                            self.projects_base / adapter.benchmark_name / ".aixcc"
+                        )
 
                     self._apply_cpv_patches(
                         repo_path,
@@ -311,7 +313,7 @@ class VariantBuilder:
             logger.error(f"Failed to create variant project: {e}")
             return None
 
-    # FIXME: unused now
+    # TODO: unused now
     def _clone_and_checkout(
         self,
         repo_url: str,
@@ -402,7 +404,7 @@ class VariantBuilder:
         cpv_patches: Dict[int, List[Path]] = {}
 
         for harness_dir in aixcc_dir.iterdir():
-            if not harness_dir.is_dir() or harness_dir.name in ('tests', 'povs'):
+            if not harness_dir.is_dir() or harness_dir.name in ("tests", "povs"):
                 continue
 
             # Look for cpv_* directories in each harness
@@ -505,9 +507,8 @@ class VariantBuilder:
             if result.returncode == 0:
                 logger.debug(f"Applied patch: {patch_file.name}")
                 return True
-            else:
-                logger.warning(f"Patch apply failed: {result.stderr}")
-                return False
+            logger.warning(f"Patch apply failed: {result.stderr}")
+            return False
         except Exception as e:
             logger.error(f"Patch error: {e}")
             return False

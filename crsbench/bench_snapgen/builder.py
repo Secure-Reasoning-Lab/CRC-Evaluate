@@ -170,7 +170,9 @@ benchmark_suite: crsbench-simulated
         tokens_per_patch = 15000  # Patch generation
 
         total_tokens = (
-            base_tokens + (pov_count * tokens_per_pov) + (patch_count * tokens_per_patch)
+            base_tokens
+            + (pov_count * tokens_per_pov)
+            + (patch_count * tokens_per_patch)
         )
 
         llm_usage = {

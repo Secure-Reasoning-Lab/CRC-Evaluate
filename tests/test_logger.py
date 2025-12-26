@@ -1,19 +1,19 @@
 """Tests for the centralized loguru-based logger."""
 
-import sys
 import os
 from io import StringIO
+
 import pytest
 from crsbench.utils.logger import (
-    get_logger,
     configure_logger,
-    getLogger,
+    critical,
     debug,
+    error,
+    get_logger,
+    getLogger,
     info,
     success,
     warning,
-    error,
-    critical,
 )
 
 

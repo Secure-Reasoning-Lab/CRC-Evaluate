@@ -11,16 +11,15 @@ The snapshot thread is daemon=True, ensuring Python doesn't wait for it
 indefinitely if shutdown takes too long.
 """
 
-import json
-from crsbench.utils.logger import get_logger
 import shutil
 import tarfile
 import threading
 import time
 from pathlib import Path
-from typing import Set, Optional
+from typing import Optional
 
 from crsbench.evaluation.snapshot import Snapshot, SnapshotMetadata
+from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -37,7 +36,12 @@ class SnapshotManager:
         trial_start_time: Unix timestamp when trial started
     """
 
-    def __init__(self, trial_dir: Path, snapshot_period: int, trial_start_time: Optional[float] = None):
+    def __init__(
+        self,
+        trial_dir: Path,
+        snapshot_period: int,
+        trial_start_time: Optional[float] = None,
+    ):
         """Initialize snapshot manager.
 
         Args:
@@ -63,7 +67,9 @@ class SnapshotManager:
         self.running = False
         self.shutdown_event = threading.Event()
 
-        logger.info(f"SnapshotManager initialized: period={snapshot_period}s, trial_dir={trial_dir}")
+        logger.info(
+            f"SnapshotManager initialized: period={snapshot_period}s, trial_dir={trial_dir}"
+        )
 
     def run(self):
         """Main snapshot loop (runs in separate thread).
@@ -96,7 +102,9 @@ class SnapshotManager:
                     self.capture_snapshot()
                 except Exception as e:
                     # Log error but don't crash - continue to next snapshot
-                    logger.error(f"Snapshot {self.cycle + 1} failed: {e}", exc_info=True)
+                    logger.error(
+                        f"Snapshot {self.cycle + 1} failed: {e}", exc_info=True
+                    )
 
         finally:
             self.running = False
@@ -192,7 +200,7 @@ class SnapshotManager:
                 has_povs=has_povs,
                 has_patches=has_patches,
                 has_corpus=has_corpus,
-                has_crs_data=has_crs_data
+                has_crs_data=has_crs_data,
             )
 
         finally:
@@ -233,7 +241,7 @@ class SnapshotManager:
             cycle=self.cycle,
             timestamp=time.time(),
             elapsed_time=elapsed_time,
-            snapshot_period=self.snapshot_period
+            snapshot_period=self.snapshot_period,
         )
 
         metadata_path = temp_dir / "metadata.json"
@@ -391,8 +399,8 @@ class SnapshotManager:
             source_dir: Directory containing snapshot files
             archive_path: Path to output tar.gz file
         """
-        with tarfile.open(archive_path, 'w:gz') as tar:
-            for item in source_dir.rglob('*'):
+        with tarfile.open(archive_path, "w:gz") as tar:
+            for item in source_dir.rglob("*"):
                 if item.is_file():
                     arcname = item.relative_to(source_dir)
                     tar.add(item, arcname=arcname)
@@ -424,7 +432,9 @@ class SnapshotManager:
 
         # Only create symlink if the archive actually exists
         if not final_archive_path.exists():
-            logger.debug(f"Skipping final symlink - archive {final_archive_name} does not exist")
+            logger.debug(
+                f"Skipping final symlink - archive {final_archive_name} does not exist"
+            )
             return
 
         # Remove existing symlink if it exists

@@ -1,25 +1,21 @@
 """Tests for repository manager."""
 
-import os
-import pytest
-import tempfile
-import yaml
-from pathlib import Path
 from unittest import mock
 
+import pytest
 from crsbench.utils.repo_manager import (
-    get_repo_info_from_benchmark,
-    derive_repo_name_from_url,
     clone_repository,
+    derive_repo_name_from_url,
     ensure_project_repository,
     find_or_clone_project,
-    set_gitcache
+    get_repo_info_from_benchmark,
+    set_gitcache,
 )
-
 
 # ============================================================================
 # Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def temp_benchmark_dir(tmp_path):
@@ -54,6 +50,7 @@ harness_files:
 # ============================================================================
 # Test get_repo_info_from_benchmark
 # ============================================================================
+
 
 class TestGetRepoInfo:
     """Test get_repo_info_from_benchmark function."""
@@ -116,6 +113,7 @@ harness_files:
 # Test derive_repo_name_from_url
 # ============================================================================
 
+
 class TestDeriveRepoName:
     """Test derive_repo_name_from_url function."""
 
@@ -148,10 +146,11 @@ class TestDeriveRepoName:
 # Test clone_repository
 # ============================================================================
 
+
 class TestCloneRepository:
     """Test clone_repository function."""
 
-    @mock.patch('subprocess.run')
+    @mock.patch("subprocess.run")
     def test_clone_already_exists(self, mock_run, tmp_path):
         """Test when directory already exists and is a git repo."""
         repo_dir = tmp_path / "existing-repo"
@@ -162,9 +161,7 @@ class TestCloneRepository:
         mock_run.return_value = mock.Mock(returncode=0, stderr="")
 
         result = clone_repository(
-            "https://example.com/repo.git",
-            str(repo_dir),
-            verbose=False
+            "https://example.com/repo.git", str(repo_dir), verbose=False
         )
 
         assert result is True
@@ -174,7 +171,7 @@ class TestCloneRepository:
         assert "reset" in str(reset_call)
         assert "--hard" in str(reset_call)
 
-    @mock.patch('subprocess.run')
+    @mock.patch("subprocess.run")
     def test_clone_already_exists_reset_failure(self, mock_run, tmp_path):
         """Test when directory exists but git reset fails - should still succeed."""
         repo_dir = tmp_path / "existing-repo"
@@ -185,9 +182,7 @@ class TestCloneRepository:
         mock_run.return_value = mock.Mock(returncode=1, stderr="error resetting")
 
         result = clone_repository(
-            "https://example.com/repo.git",
-            str(repo_dir),
-            verbose=False
+            "https://example.com/repo.git", str(repo_dir), verbose=False
         )
 
         # Should still return True even if reset fails
@@ -200,14 +195,12 @@ class TestCloneRepository:
         repo_dir.mkdir()
 
         result = clone_repository(
-            "https://example.com/repo.git",
-            str(repo_dir),
-            verbose=False
+            "https://example.com/repo.git", str(repo_dir), verbose=False
         )
 
         assert result is False
 
-    @mock.patch('subprocess.run')
+    @mock.patch("subprocess.run")
     def test_clone_success(self, mock_run, tmp_path):
         """Test successful git clone."""
         mock_run.return_value = mock.Mock(returncode=0, stderr="")
@@ -215,9 +208,7 @@ class TestCloneRepository:
         repo_dir = tmp_path / "new-repo"
 
         result = clone_repository(
-            "https://example.com/repo.git",
-            str(repo_dir),
-            verbose=False
+            "https://example.com/repo.git", str(repo_dir), verbose=False
         )
 
         assert result is True
@@ -225,17 +216,17 @@ class TestCloneRepository:
         assert mock_run.call_count >= 1
         assert "clone" in str(mock_run.call_args_list[0])
 
-    @mock.patch('subprocess.run')
+    @mock.patch("subprocess.run")
     def test_clone_failure(self, mock_run, tmp_path):
         """Test failed git clone."""
-        mock_run.return_value = mock.Mock(returncode=1, stderr="fatal: repository not found")
+        mock_run.return_value = mock.Mock(
+            returncode=1, stderr="fatal: repository not found"
+        )
 
         repo_dir = tmp_path / "failed-repo"
 
         result = clone_repository(
-            "https://example.com/invalid.git",
-            str(repo_dir),
-            verbose=False
+            "https://example.com/invalid.git", str(repo_dir), verbose=False
         )
 
         assert result is False
@@ -245,10 +236,11 @@ class TestCloneRepository:
 # Test ensure_project_repository
 # ============================================================================
 
+
 class TestEnsureProjectRepository:
     """Test ensure_project_repository function."""
 
-    @mock.patch('subprocess.run')
+    @mock.patch("subprocess.run")
     def test_explicit_project_dir_exists(self, mock_run, temp_benchmark_dir, tmp_path):
         """Test with explicit project_dir that exists."""
         project_dir = tmp_path / "existing-project"
@@ -261,7 +253,7 @@ class TestEnsureProjectRepository:
         result = ensure_project_repository(
             benchmark_dir=str(temp_benchmark_dir),
             project_dir=str(project_dir),
-            verbose=False
+            verbose=False,
         )
 
         assert result == str(project_dir)
@@ -277,13 +269,13 @@ class TestEnsureProjectRepository:
         repos_dir.mkdir()
 
         # Mock the clone to avoid actual git operations
-        with mock.patch('crsbench.utils.repo_manager.clone_repository') as mock_clone:
+        with mock.patch("crsbench.utils.repo_manager.clone_repository") as mock_clone:
             mock_clone.return_value = True
 
             result = ensure_project_repository(
                 benchmark_dir=str(temp_benchmark_dir),
                 repos_dir=str(repos_dir),
-                verbose=False
+                verbose=False,
             )
 
             # Should derive name from URL with commit: cp-c-curl-abc123de
@@ -296,15 +288,14 @@ class TestEnsureProjectRepository:
 # Test find_or_clone_project
 # ============================================================================
 
+
 class TestFindOrCloneProject:
     """Test find_or_clone_project function."""
 
     def test_invalid_benchmark(self, tmp_path):
         """Test with non-existent benchmark."""
         result = find_or_clone_project(
-            benchmark_name="nonexistent",
-            benchmarks_root=str(tmp_path),
-            verbose=False
+            benchmark_name="nonexistent", benchmarks_root=str(tmp_path), verbose=False
         )
 
         assert result is None
@@ -337,7 +328,7 @@ harness_files:
             benchmark_name="test-bench",
             benchmarks_root=str(tmp_path / "benchmarks"),
             project_dir=str(project_dir),
-            verbose=False
+            verbose=False,
         )
 
         assert result == str(project_dir)
@@ -346,6 +337,7 @@ harness_files:
 # ============================================================================
 # Gitcache Tests
 # ============================================================================
+
 
 class TestSetGitcache:
     """Tests for set_gitcache function."""
@@ -357,7 +349,7 @@ class TestSetGitcache:
 
     def test_enable_gitcache_when_installed(self):
         """Test enabling gitcache when it's installed."""
-        with mock.patch('shutil.which', return_value='/usr/bin/gitcache'):
+        with mock.patch("shutil.which", return_value="/usr/bin/gitcache"):
             # Should not raise any exception
             set_gitcache(True)
             # Cleanup
@@ -365,7 +357,7 @@ class TestSetGitcache:
 
     def test_enable_gitcache_when_not_installed(self):
         """Test enabling gitcache when it's not installed."""
-        with mock.patch('shutil.which', return_value=None):
+        with mock.patch("shutil.which", return_value=None):
             with pytest.raises(RuntimeError) as exc_info:
                 set_gitcache(True)
 

@@ -5,7 +5,7 @@ This module defines the request/result data structures for POV verification.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
 
 class VerificationStatus(Enum):
@@ -17,6 +17,7 @@ class VerificationStatus(Enum):
     - UNINTENDED_CRASH: POV crashes even with all patches applied
     - ERROR: Verification failed due to an error
     """
+
     NOT_VULNERABLE = "not_vulnerable"
     CPV = "cpv"
     ZERODAY = "zeroday"
@@ -34,6 +35,7 @@ class VerificationRequest:
         benchmark: Optional specific benchmark to test against
         pov_id: Optional identifier for this POV
     """
+
     pov_data: bytes
     harness: str
     benchmark: Optional[str] = None
@@ -52,6 +54,7 @@ class VerificationResult:
         details: Optional additional details about the verification
         crash_info: Optional crash information (sanitizer output, etc.)
     """
+
     status: VerificationStatus
     benchmark: str
     cpv_matched: List[str] = field(default_factory=list)
@@ -81,5 +84,7 @@ class VerificationResult:
 
     def __str__(self) -> str:
         if self.status == VerificationStatus.CPV:
-            return f"{self.benchmark}: {self.status.value} ({', '.join(self.cpv_matched)})"
+            return (
+                f"{self.benchmark}: {self.status.value} ({', '.join(self.cpv_matched)})"
+            )
         return f"{self.benchmark}: {self.status.value}"

@@ -2,7 +2,7 @@
 
 import random
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from crsbench.bench_snapgen.generator import BenchmarkData
 from crsbench.utils.logger import get_logger
@@ -52,6 +52,7 @@ class DiscoveryTimeline:
         pov_id: str,
         sanitizer: str = "",
         error_token: str = "",
+        *,
         is_valid: bool = True,
     ):
         """Add POV discovery event to timeline.
@@ -89,6 +90,7 @@ class DiscoveryTimeline:
         harness: str,
         vuln: str,
         patch_id: str,
+        *,
         is_valid: bool = True,
     ):
         """Add patch generation event to timeline.
@@ -262,14 +264,12 @@ def _ensure_final_epoch_coverage(
     final_epoch_start = max_time - snapshot_period
 
     # Check if any valid POV is in final epoch
-    valid_povs = [e for e in timeline.events
-                  if e.event_type == 'pov' and e.is_valid]
+    valid_povs = [e for e in timeline.events if e.event_type == "pov" and e.is_valid]
 
     if not valid_povs:
         return  # No POVs to adjust
 
-    povs_in_final = [e for e in valid_povs
-                    if e.timestamp >= final_epoch_start]
+    povs_in_final = [e for e in valid_povs if e.timestamp >= final_epoch_start]
 
     if povs_in_final:
         return  # Already have POV in final epoch
@@ -340,7 +340,7 @@ def create_discovery_timeline(
 
         for vuln in h.vulns or []:
             # Get POVs for this vulnerability from ground truth
-            # key is (harness_name, vuln_keyword, pov_id)
+            # Each key is a tuple: (harness_name, vuln_keyword, pov_id)
             vuln_povs = [
                 (key[2], key)  # (pov_id, full_key)
                 for key, pov_data in benchmark_data.povs.items()
@@ -348,9 +348,7 @@ def create_discovery_timeline(
             ]
 
             if not vuln_povs:
-                logger.warning(
-                    f"No POVs found for {h.name}/{vuln.vuln_keyword}"
-                )
+                logger.warning(f"No POVs found for {h.name}/{vuln.vuln_keyword}")
                 continue
 
             # Generate discovery times for this vulnerability's POVs
@@ -360,7 +358,7 @@ def create_discovery_timeline(
             )
 
             # Add POV discoveries to timeline
-            for (pov_id, pov_key), time in zip(vuln_povs, discovery_times):
+            for (pov_id, pov_key), time in zip(vuln_povs, discovery_times, strict=True):
                 pov_data = benchmark_data.povs[pov_key]
 
                 timeline.add_pov(
@@ -414,9 +412,7 @@ def create_discovery_timeline(
                         is_valid=True,
                     )
                 else:
-                    logger.warning(
-                        f"No patch found for {h.name}/{vuln.vuln_keyword}"
-                    )
+                    logger.warning(f"No patch found for {h.name}/{vuln.vuln_keyword}")
 
     logger.info(
         f"Created timeline with {len(timeline.events)} events "
