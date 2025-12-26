@@ -41,6 +41,7 @@ class TestConfigLoading:
         config_path.write_text("""
 experiment: test-experiment
 trials: 3
+mode: delta
 max_total_time: 7200
 difficulty_level: 2
 experiment_filestore: /tmp/experiment-data
@@ -69,6 +70,7 @@ benchmarks:
         config_path.write_text("""
 experiment: suite-experiment
 trials: 2
+mode: full
 max_total_time: 3600
 difficulty_level: 1
 experiment_filestore: /tmp/experiment-data
@@ -92,6 +94,7 @@ benchmark_suite: crsbench-afc-c
         config_path.write_text("""
 experiment: redis-experiment
 trials: 2
+mode: delta
 max_total_time: 3600
 difficulty_level: 1
 experiment_filestore: /tmp/experiment-data
@@ -111,6 +114,7 @@ redis_host: localhost
         config_path.write_text("""
 experiment: minimal-experiment
 trials: 1
+mode: delta
 max_total_time: 3600
 difficulty_level: 0
 experiment_filestore: /tmp/exp
@@ -139,6 +143,7 @@ class TestTrialMatrixGeneration:
         config = ExperimentConfig(
             experiment="test",
             trials=2,
+            mode="delta",
             max_total_time=3600,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -181,6 +186,7 @@ class TestTrialMatrixGeneration:
         config = ExperimentConfig(
             experiment="test",
             trials=2,
+            mode="delta",
             max_total_time=3600,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -233,6 +239,7 @@ class TestTrialMatrixGeneration:
         config = ExperimentConfig(
             experiment="test",
             trials=1,
+            mode="delta",
             max_total_time=3600,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -288,6 +295,7 @@ class TestTrialMatrixGeneration:
             config = ExperimentConfig(
                 experiment="test",
                 trials=trials_count,
+                mode="delta",
                 max_total_time=3600,
                 difficulty_level=1,
                 experiment_filestore="/tmp/exp",
@@ -337,6 +345,7 @@ class TestCLIOverrides:
         config_path.write_text("""
 experiment: original-name
 trials: 1
+mode: delta
 max_total_time: 3600
 difficulty_level: 1
 experiment_filestore: /tmp/exp
@@ -365,6 +374,7 @@ benchmarks: [bench1]
         config_path.write_text("""
 experiment: test
 trials: 1
+mode: delta
 max_total_time: 3600
 difficulty_level: 1
 experiment_filestore: /tmp/exp
@@ -393,6 +403,7 @@ benchmarks: [bench1]
         config_path.write_text("""
 experiment: test
 trials: 1
+mode: delta
 max_total_time: 3600
 difficulty_level: 1
 experiment_filestore: /tmp/exp
@@ -441,6 +452,7 @@ class TestConfigStorage:
         config_path.write_text("""
 experiment: original-experiment
 trials: 1
+mode: delta
 max_total_time: 3600
 difficulty_level: 1
 experiment_filestore: /tmp/exp
@@ -508,6 +520,7 @@ benchmarks:
         config = ExperimentConfig(
             experiment="test-experiment",
             trials=2,
+            mode="delta",
             max_total_time=3600,
             difficulty_level=2,
             experiment_filestore="/tmp/exp",
@@ -790,6 +803,7 @@ class TestModeSelection:
         config = ExperimentConfig(
             experiment="test",
             trials=1,
+            mode="delta",
             max_total_time=3600,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -817,6 +831,7 @@ class TestModeSelection:
         config = ExperimentConfig(
             experiment="test",
             trials=2,
+            mode="delta",
             max_total_time=3600,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -844,6 +859,7 @@ class TestModeSelection:
         config = ExperimentConfig(
             experiment="test",
             trials=2,
+            mode="delta",
             max_total_time=3600,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",

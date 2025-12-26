@@ -117,6 +117,7 @@ def run_crs_trial(
     harness_path: str,
     trial_num: int,
     config: Dict[str, Any],
+    mode: str,
 ) -> Dict[str, Any]:
     """
     Execute a single CRS trial.
@@ -133,8 +134,9 @@ def run_crs_trial(
         benchmark: Benchmark identifier or path
         harness_name: Harness name to run
         harness_path: Path to harness file
-        trial_num: Trial number (0-indexed) for this execution
+        trial_num: Trial number (1-indexed) for this execution
         config: Experiment configuration dictionary
+        mode: Evaluation mode ('delta', 'full', or 'all')
 
     Returns:
         dict: Trial results including POVs found, success rate, and metadata
@@ -145,7 +147,7 @@ def run_crs_trial(
         ...     'max_total_time': 3600
         ... }
         >>> result = run_crs_trial(
-        ...     'test-crs', 'test-benchmark', 'fuzz_test', '/src/fuzz_test.c', 0, config
+        ...     'test-crs', 'test-benchmark', 'fuzz_test', '/src/fuzz_test.c', 1, config, 'delta'
         ... )
         >>> assert 'povs_found' in result
     """
@@ -236,6 +238,7 @@ def run_crs_trial(
             / crs
             / benchmark
             / harness_name
+            / mode
             / f"trial-{trial_num}"
         )
         trial_output_dir.mkdir(parents=True, exist_ok=True)
@@ -245,7 +248,7 @@ def run_crs_trial(
         # Note: CRS is already configured via executor.configure_crs() above
         result = runner.run_benchmark(
             benchmark_harness=benchmark_harness,
-            mode="auto",  # Auto-detect delta/full mode
+            mode=mode,  # Use mode from trial
             crs_config={},  # Empty config - executor already configured
             trial_output_dir=trial_output_dir,
             oss_fuzz_path=oss_fuzz_path,

@@ -19,6 +19,12 @@ experiment: afc-c-suite-evaluation
 # Fewer trials for suite evaluation due to large benchmark count
 trials: 2
 
+# Evaluation mode: 'delta', 'full', or 'all'
+# - delta: Only run delta mode (focus on diff-based analysis)
+# - full: Only run full mode (analyze entire codebase)
+# - all: Run all available modes for each benchmark
+mode: delta
+
 # Maximum time in seconds that each trial is allowed to run
 # Default: 24 hours (86400 seconds)
 # Consider increasing for comprehensive suite evaluations

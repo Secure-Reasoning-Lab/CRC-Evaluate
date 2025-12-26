@@ -18,6 +18,12 @@ experiment: multi-crs-baseline-eval
 # Each trial is an independent execution of CRS on benchmark
 trials: 3
 
+# Evaluation mode: 'delta', 'full', or 'all'
+# - delta: Only run delta mode (focus on diff-based analysis)
+# - full: Only run full mode (analyze entire codebase)
+# - all: Run all available modes for each benchmark
+mode: delta
+
 # Maximum time in seconds that each trial is allowed to run
 # Default: 24 hours (86400 seconds)
 max_total_time: 86400

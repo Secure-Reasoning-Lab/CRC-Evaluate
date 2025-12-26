@@ -39,7 +39,7 @@ load_dotenv()
 logger = get_logger(__name__)
 
 # Trial configuration
-Trial = namedtuple("Trial", ["crs", "benchmark_harness", "trial_num"])
+Trial = namedtuple("Trial", ["crs", "benchmark_harness", "trial_num", "mode"])
 
 
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
@@ -86,6 +86,16 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         required=False,
         metavar="SUITE_NAME",
         help="Benchmark suite name (overrides config file if specified, mutually exclusive with --benchmarks)",
+    )
+
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["delta", "full", "all"],
+        required=False,
+        metavar="MODE",
+        help="Evaluation mode: 'delta' (diff-based), 'full' (complete codebase), or 'all' (run all available modes). "
+        "Overrides config file if specified.",
     )
 
     parser.add_argument(
@@ -438,6 +448,38 @@ def resolve_benchmark_harnesses(
     return harness_pairs
 
 
+def get_available_modes_for_benchmark(benchmark_path: Path) -> List[str]:
+    """Get list of available evaluation modes (delta/full) for a benchmark.
+
+    Args:
+        benchmark_path: Path to benchmark directory
+
+    Returns:
+        List of available mode strings ('delta' and/or 'full')
+    """
+    import yaml
+
+    meta_yaml_path = benchmark_path / ".aixcc" / "meta.yaml"
+    if not meta_yaml_path.exists():
+        logger.warning(f"meta.yaml not found at {meta_yaml_path}")
+        return []
+
+    try:
+        with meta_yaml_path.open() as f:
+            meta_data = yaml.safe_load(f)
+
+        modes = []
+        if meta_data.get("delta_mode"):
+            modes.append("delta")
+        if meta_data.get("full_mode"):
+            modes.append("full")
+
+        return modes
+    except Exception as e:
+        logger.warning(f"Failed to read modes from {meta_yaml_path}: {e}")
+        return []
+
+
 def generate_trial_matrix(
     benchmark_harnesses: List["BenchmarkHarness"], crses: List[str], config
 ) -> List[Trial]:
@@ -446,19 +488,40 @@ def generate_trial_matrix(
     Args:
         benchmark_harnesses: List of BenchmarkHarness objects
         crses: List of CRS identifiers
-        config: Experiment configuration with trials count
+        config: Experiment configuration with trials count and mode
 
     Returns:
-        List of Trial namedtuples
+        List of Trial namedtuples with mode information
     """
     trials = []
+    config_mode = config.mode.value  # Get string value from enum
+
     for crs in crses:
         for benchmark_harness in benchmark_harnesses:
-            for trial_num in range(1, config.trials + 1):
-                trials.append(Trial(crs, benchmark_harness, trial_num))
+            # Determine which modes to run for this benchmark
+            if config_mode == "all":
+                available_modes = get_available_modes_for_benchmark(
+                    benchmark_harness.path
+                )
+                if not available_modes:
+                    logger.warning(
+                        f"No modes available for {benchmark_harness.name}, skipping"
+                    )
+                    continue
+                modes_to_run = available_modes
+            else:
+                # Single mode: delta or full
+                modes_to_run = [config_mode]
+
+            # Generate trials for each mode
+            for mode in modes_to_run:
+                for trial_num in range(1, config.trials + 1):
+                    trials.append(Trial(crs, benchmark_harness, trial_num, mode))
 
     logger.info(
-        f"Generated {len(trials)} trials: {len(crses)} CRSes × {len(benchmark_harnesses)} benchmark-harness pairs × {config.trials} trials"
+        f"Generated {len(trials)} trials: {len(crses)} CRSes × "
+        f"{len(benchmark_harnesses)} benchmark-harness pairs × "
+        f"{config.trials} trials × mode={config_mode}"
     )
     return trials
 
@@ -546,6 +609,11 @@ def enhance_config_with_cli_args(
         enhanced["benchmarks_root"] = args.benchmarks_root
         logger.info(f"Using benchmarks root from CLI: {args.benchmarks_root}")
 
+    # Mode override
+    if hasattr(args, "mode") and args.mode is not None:
+        enhanced["mode"] = args.mode
+        logger.info(f"Using evaluation mode from CLI: {args.mode}")
+
     # Hint configuration overrides
     if args.hints_enabled:
         enhanced["hints_enabled"] = True
@@ -624,6 +692,7 @@ def run_experiment_local(
             harness_path=bh.harness.path,
             trial_num=trial.trial_num,
             config=enhanced_config,
+            mode=trial.mode,
         )
 
         results.append(result)
@@ -845,6 +914,7 @@ def run_experiment_distributed(
             harness_path=bh.harness.path,
             trial_num=trial.trial_num,
             config=enhanced_config,
+            mode=trial.mode,
             job_timeout=config.max_total_time,
             result_ttl=-1,  # Persist results forever
         )

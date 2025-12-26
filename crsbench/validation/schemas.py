@@ -2,10 +2,19 @@
 
 import re
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+class EvaluationMode(str, Enum):
+    """Evaluation mode for benchmark execution."""
+
+    DELTA = "delta"
+    FULL = "full"
+    ALL = "all"
 
 
 @dataclass
@@ -301,6 +310,10 @@ class ExperimentConfig(BaseModel):
         ..., description="Unique identifier for this experiment run"
     )
     trials: int = Field(..., ge=1, description="Number of trials (must be >= 1)")
+    mode: EvaluationMode = Field(
+        ...,
+        description="Evaluation mode: 'delta', 'full', or 'all' (run all available)",
+    )
     max_total_time: int = Field(
         ..., ge=1, description="Maximum time in seconds per trial (must be >= 1)"
     )
@@ -667,6 +680,7 @@ class ExperimentConfig(BaseModel):
         return {
             "experiment": self.experiment,
             "trials": self.trials,
+            "mode": self.mode.value,  # Serialize enum to string value
             "max_total_time": self.max_total_time,
             "difficulty_level": self.difficulty_level,
             "experiment_filestore": self.experiment_filestore,

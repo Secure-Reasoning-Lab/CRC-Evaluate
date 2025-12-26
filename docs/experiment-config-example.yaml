@@ -14,6 +14,12 @@ description: "Test experiment evaluating CRS systems"
 # More trials provide better statistical significance.
 trials: 1
 
+# Evaluation mode: 'delta', 'full', or 'all'
+# - delta: Only run delta mode (focus on diff-based analysis)
+# - full: Only run full mode (analyze entire codebase)
+# - all: Run all available modes for each benchmark (multiplies trials)
+mode: delta
+
 # The amount of time in seconds that each trial is run for.
 # Default: 86400 (24 hours)
 max_total_time: 86400
