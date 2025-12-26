@@ -904,8 +904,14 @@ Description: A benchmark suite for evaluating C/C++ CRS.
 Release date: 09.23.2025
 # List of benchmarks included in the benchmark suite.
 benchmark_list:
+  # Simple format - runs all harnesses for this benchmark (default)
   - {benchmark_id_1}
-  - {benchmark_id_2}
+
+  # Extended format - runs only specified harnesses
+  - {benchmark_id_2}:
+      - {harness_name_1}
+      - {harness_name_2}
+
   - {benchmark_id_3}
 ```
 
@@ -914,7 +920,31 @@ benchmark_list:
 - **Name**: Unique identifier for the benchmark suite
 - **Description**: Purpose and scope of the benchmark collection
 - **Release date**: Version tracking for benchmark suite updates
-- **benchmark_list**: List of benchmark IDs included in the suite
+- **benchmark_list**: List of benchmarks with optional harness specification
+
+#### Benchmark List Format
+
+The `benchmark_list` supports two formats for each entry:
+
+1. **Simple format (string)**: Specifies only the benchmark ID. **All harnesses** for this benchmark will be run.
+   ```yaml
+   benchmark_list:
+     - afc-curl-delta-01  # Runs ALL harnesses
+   ```
+
+2. **Extended format (dict)**: Specifies both benchmark ID and a list of specific harnesses to include. **Only the listed harnesses** will be run.
+   ```yaml
+   benchmark_list:
+     - afc-curl-delta-01:  # Runs ONLY fuzz_url and fuzz_parser
+         - fuzz_url
+         - fuzz_parser
+   ```
+
+**Important**:
+- **Simple format** (no harnesses specified): Runs ALL available harnesses - this is the default behavior
+- **Extended format** (harnesses specified): Runs ONLY the specified harnesses - all other harnesses are excluded
+
+This design ensures backward compatibility while allowing fine-grained control over which harnesses to evaluate.
 
 Benchmark suites enable:
 - Language-specific evaluation (C/C++, Java, Rust, etc.)

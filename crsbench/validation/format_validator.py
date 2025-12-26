@@ -690,12 +690,13 @@ def _generate_benchmark_suite_metadata(
     config: BenchmarkSuiteConfig, result: ValidationResult
 ):
     """Generate metadata about the benchmark suite configuration."""
+    benchmark_names = config.get_benchmark_names()
     result.metadata.update(
         {
             "suite_name": config.Name,
             "suite_description": config.Description,
             "release_date": config.release_date,
-            "total_benchmarks": len(config.benchmark_list),
-            "benchmark_ids": config.benchmark_list,
+            "total_benchmarks": len(benchmark_names),
+            "benchmark_ids": benchmark_names,
         }
     )

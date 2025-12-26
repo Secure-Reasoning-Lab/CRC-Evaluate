@@ -13,6 +13,7 @@ from crsbench.validation import (
 from crsbench.validation.errors import ValidationCodes
 from crsbench.validation.schemas import (
     POV,
+    BenchmarkEntry,
     BenchmarkSuiteConfig,
     ExperimentConfig,
     HarnessFile,
@@ -1003,6 +1004,168 @@ class TestBenchmarkSuiteSchema:
                     "benchmark_list": ["bench1", "bench1"],  # Duplicate
                     "Release date": "01.01.2025",
                 }
+            )
+        assert "duplicate" in str(exc_info.value).lower()
+
+
+class TestBenchmarkListFormat:
+    """Test benchmark_list format with optional harness specification."""
+
+    def test_simple_format(self):
+        """Test simple string format (all harnesses)."""
+        config = BenchmarkSuiteConfig(
+            Name="test-suite",
+            Description="Test suite",
+            benchmark_list=["bench1", "bench2"],
+            release_date="01.01.2025",
+        )
+        assert len(config.benchmark_list) == 2
+        assert config.benchmark_list[0] == "bench1"
+        assert config.benchmark_list[1] == "bench2"
+
+    def test_extended_format(self):
+        """Test extended dict format (specific harnesses)."""
+        config = BenchmarkSuiteConfig(
+            Name="test-suite",
+            Description="Test suite",
+            benchmark_list=[{"bench1": ["harness1", "harness2"]}],
+            release_date="01.01.2025",
+        )
+        assert len(config.benchmark_list) == 1
+        assert isinstance(config.benchmark_list[0], dict)
+        assert "bench1" in config.benchmark_list[0]
+        assert config.benchmark_list[0]["bench1"] == ["harness1", "harness2"]
+
+    def test_mixed_format(self):
+        """Test mixed format (both simple and extended)."""
+        config = BenchmarkSuiteConfig(
+            Name="test-suite",
+            Description="Test suite",
+            benchmark_list=[
+                "bench1",  # Simple format
+                {"bench2": ["harness1", "harness2"]},  # Extended format
+                "bench3",  # Simple format
+            ],
+            release_date="01.01.2025",
+        )
+        assert len(config.benchmark_list) == 3
+        assert config.benchmark_list[0] == "bench1"
+        assert isinstance(config.benchmark_list[1], dict)
+        assert config.benchmark_list[2] == "bench3"
+
+    def test_get_benchmark_names(self):
+        """Test get_benchmark_names() extracts names correctly."""
+        config = BenchmarkSuiteConfig(
+            Name="test-suite",
+            Description="Test suite",
+            benchmark_list=[
+                "bench1",
+                {"bench2": ["harness1"]},
+                "bench3",
+            ],
+            release_date="01.01.2025",
+        )
+        names = config.get_benchmark_names()
+        assert names == ["bench1", "bench2", "bench3"]
+
+    def test_get_benchmark_entries_simple(self):
+        """Test get_benchmark_entries() with simple format."""
+        config = BenchmarkSuiteConfig(
+            Name="test-suite",
+            Description="Test suite",
+            benchmark_list=["bench1", "bench2"],
+            release_date="01.01.2025",
+        )
+        entries = config.get_benchmark_entries()
+        assert len(entries) == 2
+        assert all(isinstance(e, BenchmarkEntry) for e in entries)
+        assert entries[0].name == "bench1"
+        assert entries[0].harnesses is None  # All harnesses
+        assert entries[1].name == "bench2"
+        assert entries[1].harnesses is None  # All harnesses
+
+    def test_get_benchmark_entries_extended(self):
+        """Test get_benchmark_entries() with extended format."""
+        config = BenchmarkSuiteConfig(
+            Name="test-suite",
+            Description="Test suite",
+            benchmark_list=[{"bench1": ["harness1", "harness2"]}],
+            release_date="01.01.2025",
+        )
+        entries = config.get_benchmark_entries()
+        assert len(entries) == 1
+        assert isinstance(entries[0], BenchmarkEntry)
+        assert entries[0].name == "bench1"
+        assert entries[0].harnesses == ["harness1", "harness2"]
+
+    def test_get_benchmark_entries_mixed(self):
+        """Test get_benchmark_entries() with mixed format."""
+        config = BenchmarkSuiteConfig(
+            Name="test-suite",
+            Description="Test suite",
+            benchmark_list=[
+                "bench1",
+                {"bench2": ["harness1", "harness2"]},
+                "bench3",
+            ],
+            release_date="01.01.2025",
+        )
+        entries = config.get_benchmark_entries()
+        assert len(entries) == 3
+        # First entry: simple format
+        assert entries[0].name == "bench1"
+        assert entries[0].harnesses is None
+        # Second entry: extended format
+        assert entries[1].name == "bench2"
+        assert entries[1].harnesses == ["harness1", "harness2"]
+        # Third entry: simple format
+        assert entries[2].name == "bench3"
+        assert entries[2].harnesses is None
+
+    def test_empty_harness_list_rejected(self):
+        """Test that empty harness list is rejected."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            BenchmarkSuiteConfig(
+                Name="test-suite",
+                Description="Test suite",
+                benchmark_list=[{"bench1": []}],  # Empty harness list
+                release_date="01.01.2025",
+            )
+        assert "non-empty" in str(exc_info.value).lower()
+
+    def test_empty_harness_name_rejected(self):
+        """Test that empty harness names are rejected."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            BenchmarkSuiteConfig(
+                Name="test-suite",
+                Description="Test suite",
+                benchmark_list=[{"bench1": ["harness1", "", "harness2"]}],
+                release_date="01.01.2025",
+            )
+        assert "empty" in str(exc_info.value).lower()
+
+    def test_multiple_keys_in_dict_rejected(self):
+        """Test that dict with multiple keys is rejected."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            BenchmarkSuiteConfig(
+                Name="test-suite",
+                Description="Test suite",
+                benchmark_list=[{"bench1": ["harness1"], "bench2": ["harness2"]}],
+                release_date="01.01.2025",
+            )
+        assert "exactly one" in str(exc_info.value).lower()
+
+    def test_duplicate_benchmarks_mixed_format(self):
+        """Test that duplicate benchmarks are detected in mixed format."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            BenchmarkSuiteConfig(
+                Name="test-suite",
+                Description="Test suite",
+                benchmark_list=[
+                    "bench1",
+                    {"bench1": ["harness1"]},  # Duplicate
+                ],
+                release_date="01.01.2025",
             )
         assert "duplicate" in str(exc_info.value).lower()
 

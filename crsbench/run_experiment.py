@@ -875,7 +875,7 @@ def main() -> None:
             with suite_path.open() as f:
                 suite_data = yaml.safe_load(f)
             suite_config = BenchmarkSuiteConfig(**suite_data)
-            benchmarks = suite_config.benchmark_list
+            benchmarks = suite_config.get_benchmark_names()
             logger.info(f"Benchmark suite: {args.benchmark_suite}")
             logger.info(f"Benchmarks ({len(benchmarks)}): {', '.join(benchmarks)}")
             logger.info("  (overridden from CLI --benchmark-suite)")

@@ -1,9 +1,24 @@
 """Pydantic schemas for benchmark configuration validation."""
 
 import re
-from typing import Any, Dict, List, Literal, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+@dataclass
+class BenchmarkEntry:
+    """Represents a benchmark with optional harness specification.
+
+    Attributes:
+        name: Benchmark identifier (e.g., afc-curl-delta-01)
+        harnesses: Optional list of specific harnesses to run.
+                   If None, all harnesses for this benchmark will be used.
+    """
+
+    name: str
+    harnesses: Optional[List[str]] = None
 
 
 class POV(BaseModel):
@@ -528,7 +543,48 @@ class ExperimentConfig(BaseModel):
             # Validate using BenchmarkSuiteConfig schema
             suite_config = BenchmarkSuiteConfig(**suite_data)
 
-            return suite_config.benchmark_list
+            return suite_config.get_benchmark_names()
+
+        # Should never reach here due to __init__ validation
+        raise ValueError("No benchmark source specified")
+
+    def get_benchmark_entries(
+        self, benchmark_suites_dir: str = "benchmark-suites"
+    ) -> List[BenchmarkEntry]:
+        """Get the list of benchmark entries with harness information.
+
+        Args:
+            benchmark_suites_dir: Directory containing benchmark suite YAML files
+
+        Returns:
+            List of BenchmarkEntry objects with name and optional harnesses
+
+        Raises:
+            ValueError: If benchmark_suite file doesn't exist or is invalid
+        """
+        if self.benchmarks is not None:
+            # Convert simple list to BenchmarkEntry objects
+            return [BenchmarkEntry(name=b, harnesses=None) for b in self.benchmarks]
+
+        if self.benchmark_suite is not None:
+            from pathlib import Path
+
+            import yaml
+
+            # Construct path to suite file
+            suite_path = Path(benchmark_suites_dir) / f"{self.benchmark_suite}.yaml"
+
+            if not suite_path.exists():
+                raise ValueError(f"Benchmark suite file not found: {suite_path}")
+
+            # Load and validate suite file
+            with suite_path.open() as f:
+                suite_data = yaml.safe_load(f)
+
+            # Validate using BenchmarkSuiteConfig schema
+            suite_config = BenchmarkSuiteConfig(**suite_data)
+
+            return suite_config.get_benchmark_entries()
 
         # Should never reach here due to __init__ validation
         raise ValueError("No benchmark source specified")
@@ -568,8 +624,10 @@ class BenchmarkSuiteConfig(BaseModel):
     Description: str = Field(
         ..., description="Description of the benchmark suite purpose and scope"
     )
-    benchmark_list: List[str] = Field(
-        ..., description="List of benchmark IDs included in the suite"
+    benchmark_list: List[Union[str, Dict[str, List[str]]]] = Field(
+        ...,
+        description="List of benchmarks. Each entry can be either a string (benchmark name) "
+        "or a dict mapping benchmark name to list of harnesses",
     )
 
     # Note: "Release date" field name has a space, handling with Field alias
@@ -612,16 +670,83 @@ class BenchmarkSuiteConfig(BaseModel):
         if not v:
             raise ValueError("benchmark_list must contain at least one benchmark ID")
 
-        # Check for empty strings
-        cleaned = [bid.strip() for bid in v if bid and bid.strip()]
-        if len(cleaned) != len(v):
-            raise ValueError("benchmark_list contains empty benchmark IDs")
+        benchmark_names = []
+        cleaned_list = []
 
-        # Check for duplicates
-        if len(cleaned) != len(set(cleaned)):
-            duplicates = [bid for bid in cleaned if cleaned.count(bid) > 1]
+        for item in v:
+            if isinstance(item, str):
+                # Simple string format
+                name = item.strip()
+                if not name:
+                    raise ValueError("benchmark_list contains empty benchmark ID")
+                benchmark_names.append(name)
+                cleaned_list.append(name)
+            elif isinstance(item, dict):
+                # Dict format: {benchmark_name: [harness_list]}
+                if len(item) != 1:
+                    raise ValueError(
+                        "Each dict entry must have exactly one benchmark name as key"
+                    )
+                name = list(item.keys())[0].strip()
+                harnesses = item[name]
+
+                if not name:
+                    raise ValueError("Benchmark name cannot be empty")
+                if not isinstance(harnesses, list) or not harnesses:
+                    raise ValueError(
+                        f"Harness list for '{name}' must be a non-empty list"
+                    )
+                if any(not h or not str(h).strip() for h in harnesses):
+                    raise ValueError(
+                        f"Harness list for '{name}' contains empty harness names"
+                    )
+
+                benchmark_names.append(name)
+                # Store normalized format
+                cleaned_list.append({name: [str(h).strip() for h in harnesses]})
+            else:
+                raise ValueError(
+                    f"Invalid benchmark_list entry type: {type(item).__name__}. "
+                    "Expected str or dict"
+                )
+
+        # Check for duplicate benchmark names
+        if len(benchmark_names) != len(set(benchmark_names)):
+            duplicates = [
+                name for name in benchmark_names if benchmark_names.count(name) > 1
+            ]
             raise ValueError(
                 f"Duplicate benchmark IDs found: {', '.join(set(duplicates))}"
             )
 
-        return cleaned
+        return cleaned_list
+
+    def get_benchmark_names(self) -> List[str]:
+        """Get list of benchmark names only (backward compatible).
+
+        Returns:
+            List of benchmark IDs without harness information
+        """
+        names = []
+        for item in self.benchmark_list:
+            if isinstance(item, str):
+                names.append(item)
+            elif isinstance(item, dict):
+                names.append(list(item.keys())[0])
+        return names
+
+    def get_benchmark_entries(self) -> List[BenchmarkEntry]:
+        """Get list of benchmark entries with harness information.
+
+        Returns:
+            List of BenchmarkEntry objects with name and optional harnesses
+        """
+        entries = []
+        for item in self.benchmark_list:
+            if isinstance(item, str):
+                entries.append(BenchmarkEntry(name=item, harnesses=None))
+            elif isinstance(item, dict):
+                name = list(item.keys())[0]
+                harnesses = item[name]
+                entries.append(BenchmarkEntry(name=name, harnesses=harnesses))
+        return entries
