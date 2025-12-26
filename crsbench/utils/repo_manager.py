@@ -469,7 +469,25 @@ def clone_or_copy_cached_repo(
     success = clone_repository(
         repo_url=repo_url, target_dir=target_dir, commit=commit, verbose=verbose
     )
-    return target_dir if success else None
+
+    if not success:
+        return None
+
+    # Set up cache for future uses
+    if target_dir_abs != cache_dir_abs:
+        if verbose:
+            logger.info(f"📦 Setting up cache: {target_dir} -> {cache_dir}")
+        try:
+            shutil.copytree(
+                target_dir, cache_dir, symlinks=True, ignore_dangling_symlinks=True
+            )
+            if verbose:
+                logger.info(f"✅ Cache created at {cache_dir}")
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to create cache: {e}")
+            # Continue anyway - target_dir is still valid
+
+    return target_dir
 
 
 def ensure_project_repository(
