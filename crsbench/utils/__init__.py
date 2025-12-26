@@ -23,6 +23,7 @@ from crsbench.utils.logger import (
     warning,
 )
 from crsbench.utils.repo_manager import (
+    RepoInfo,
     clone_repository,
     derive_repo_name_from_url,
     ensure_project_repository,
@@ -105,7 +106,8 @@ __all__ = [
     "log_key_value",
     "log_file_info",
     "log_error_detail",
-    # Repository management functions
+    # Repository management
+    "RepoInfo",
     "ensure_project_repository",
     "find_or_clone_project",
     "get_repo_info_from_benchmark",

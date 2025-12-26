@@ -9,13 +9,24 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 import yaml
+from pydantic import BaseModel
 
 from crsbench.utils.logger import configure_logger, get_logger
 
 logger = get_logger(__name__)
+
+
+class RepoInfo(BaseModel):
+    """Repository information from benchmark configuration."""
+
+    repo_url: str
+    repo_name: Optional[str] = None
+    base_commit: Optional[str] = None
+    ref_commit: Optional[str] = None
+
 
 # Global gitcache setting
 USE_GITCACHE = False
@@ -70,7 +81,7 @@ def run_git(args: List[str], **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(["git"] + args, **kwargs)
 
 
-def get_repo_info_from_benchmark(benchmark_dir: str) -> Dict[str, Any]:
+def get_repo_info_from_benchmark(benchmark_dir: str) -> RepoInfo:
     """
     Get repository information from benchmark configuration.
 
@@ -78,7 +89,7 @@ def get_repo_info_from_benchmark(benchmark_dir: str) -> Dict[str, Any]:
         benchmark_dir: Path to benchmark directory
 
     Returns:
-        Dictionary with repo_url, repo_name (optional), base_commit, ref_commit
+        RepoInfo with repo_url, repo_name (optional), base_commit, ref_commit
 
     Raises:
         FileNotFoundError: If configuration files are not found
@@ -119,12 +130,12 @@ def get_repo_info_from_benchmark(benchmark_dir: str) -> Dict[str, Any]:
     elif "full_mode" in meta_config:
         base_commit = meta_config["full_mode"].get("base_commit")
 
-    return {
-        "repo_url": repo_url,
-        "repo_name": repo_name,
-        "base_commit": base_commit,
-        "ref_commit": ref_commit,
-    }
+    return RepoInfo(
+        repo_url=repo_url,
+        repo_name=repo_name,
+        base_commit=base_commit,
+        ref_commit=ref_commit,
+    )
 
 
 def derive_repo_name_from_url(repo_url: str) -> str:
@@ -302,7 +313,7 @@ def clone_repository(
 
 
 def get_commit_specific_cache_dir(
-    repo_info: Dict[str, Any],
+    repo_info: RepoInfo,
     target_commit: str,
     repos_dir: Optional[str] = None,
     *,
@@ -314,7 +325,7 @@ def get_commit_specific_cache_dir(
     This enables parallel execution safety and cache efficiency.
 
     Args:
-        repo_info: Repository info dict with 'repo_url' and optional 'repo_name'
+        repo_info: Repository info with repo_url and optional repo_name
         target_commit: Full commit hash to checkout
         repos_dir: Directory to store cloned repositories (default: PROJECT_REPOS_DIR env var or .crsbench-repos)
         verbose: Enable verbose logging
@@ -333,12 +344,12 @@ def get_commit_specific_cache_dir(
         repos_dir_path = Path(repos_dir)
 
     # Use explicit repo_name if provided, otherwise derive from URL
-    if repo_info.get("repo_name"):
-        repo_name = repo_info["repo_name"]
+    if repo_info.repo_name:
+        repo_name = repo_info.repo_name
         if verbose:
             logger.info(f"Using explicit repo_name from project.yaml: {repo_name}")
     else:
-        repo_name = derive_repo_name_from_url(repo_info["repo_url"])
+        repo_name = derive_repo_name_from_url(repo_info.repo_url)
         if verbose:
             logger.info(f"Derived repo_name from URL: {repo_name}")
 
@@ -380,10 +391,8 @@ def clone_or_copy_cached_repo(
     Returns:
         Path to repository directory, or None if failed
     """
-    # Build repo_info dict for cache directory calculation
-    repo_info = {"repo_url": repo_url}
-    if repo_name:
-        repo_info["repo_name"] = repo_name
+    # Build repo_info object for cache directory calculation
+    repo_info = RepoInfo(repo_url=repo_url, repo_name=repo_name)
 
     # Get cache directory path
     cache_dir = get_commit_specific_cache_dir(
@@ -520,6 +529,7 @@ def ensure_project_repository(
         3. If project_dir is not provided, use commit-specific directory in repos_dir
     """
     # Setup logging
+    verbose = True
     if verbose:
         configure_logger(level="INFO")
 
@@ -556,7 +566,7 @@ def ensure_project_repository(
             logger.info(f"Using explicit commit parameter: {target_commit[:8]}")
     else:
         # Default to base_commit from meta.yaml
-        target_commit = repo_info.get("base_commit")
+        target_commit = repo_info.base_commit
         if not target_commit:
             logger.error(f"❌ No base_commit found in meta.yaml for {benchmark_dir}")
             return None
@@ -577,11 +587,11 @@ def ensure_project_repository(
 
     # Delegate to clone_or_copy_cached_repo helper
     return clone_or_copy_cached_repo(
-        repo_url=repo_info["repo_url"],
+        repo_url=repo_info.repo_url,
         commit=target_commit,
         target_dir=target_dir,
         repos_dir=repos_dir,
-        repo_name=repo_info.get("repo_name"),
+        repo_name=repo_info.repo_name,
         verbose=verbose,
     )
 

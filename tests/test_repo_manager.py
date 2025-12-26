@@ -59,9 +59,9 @@ class TestGetRepoInfo:
         """Test successful extraction of repo info."""
         info = get_repo_info_from_benchmark(str(temp_benchmark_dir))
 
-        assert info["repo_url"] == "git@github.com:Team-Atlanta/cp-c-curl.git"
-        assert info["base_commit"] == "abc123def456"
-        assert info["ref_commit"] == "def789ghi012"
+        assert info.repo_url == "git@github.com:Team-Atlanta/cp-c-curl.git"
+        assert info.base_commit == "abc123def456"
+        assert info.ref_commit == "def789ghi012"
 
     def test_get_repo_info_missing_project_yaml(self, tmp_path):
         """Test error when project.yaml is missing."""
@@ -105,8 +105,8 @@ harness_files:
 
         info = get_repo_info_from_benchmark(str(benchmark_dir))
 
-        assert info["base_commit"] == "xyz789abc123"
-        assert info["ref_commit"] is None
+        assert info.base_commit == "xyz789abc123"
+        assert info.ref_commit is None
 
 
 # ============================================================================

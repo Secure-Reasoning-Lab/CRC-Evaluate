@@ -790,12 +790,12 @@ def get_project_source_dir(
             repo_info = get_repo_info_from_benchmark(str(benchmark_dir))
 
             # Delta mode: use ref_commit (vulnerable version)
-            if use_ref_commit_for_delta and repo_info.get("ref_commit"):
-                commit = repo_info["ref_commit"]
+            if use_ref_commit_for_delta and repo_info.ref_commit:
+                commit = repo_info.ref_commit
                 logger.debug(f"Delta mode: using ref_commit (vulnerable) {commit[:8]}")
             # Full mode: use base_commit (vulnerable version)
             else:
-                commit = repo_info.get("base_commit")
+                commit = repo_info.base_commit
                 logger.debug(
                     f"Full mode: using base_commit {commit[:8] if commit else 'default'}"
                 )

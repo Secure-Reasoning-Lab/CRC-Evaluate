@@ -56,11 +56,11 @@ def get_test_sh_commit(benchmark_dir: str) -> tuple[str | None, str]:
         repo_info = get_repo_info_from_benchmark(benchmark_dir)
 
         # Delta mode: use ref_commit (vulnerable version)
-        if repo_info.get("ref_commit"):
-            return repo_info["ref_commit"], "delta"
+        if repo_info.ref_commit:
+            return repo_info.ref_commit, "delta"
 
         # Full mode: use base_commit (vulnerable version)
-        return repo_info.get("base_commit"), "full"
+        return repo_info.base_commit, "full"
 
     except Exception as e:
         # Fallback to base_commit if unable to determine
