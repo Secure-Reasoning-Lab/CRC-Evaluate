@@ -405,6 +405,7 @@ if isinstance(obj, list):
 ### Testing
 - Follow TDD (Test-Driven Development) design when applicable
 - **MUST run corresponding tests when modifying a module**
+- **Run tests BEFORE type checking and linting** - ensure functionality works first
 - **ALL test code MUST be in `tests/` directory, NOT in module directories**
 - Test files are located in `tests/` directory
 - Test file naming: `test_<module_name>.py` (e.g., `test_validation.py`, `test_agent.py`)
@@ -439,9 +440,10 @@ if isinstance(obj, list):
 - All validators have been migrated to V2 style - no deprecation warnings
 
 ### Type Checking
-- **MUST run `just typecheck` after making code changes**
-  - This ensures type safety and catches type errors early
-  - Example: `just typecheck`
+- **MUST run tests first, then `just typecheck` after making code changes**
+  - Order: Run tests → Type check → Lint/format
+  - Tests ensure functionality works; type checking ensures type safety
+  - Example: `uv run pytest tests/test_<module>.py -v && just typecheck`
 - Use Python's `typing` module for type annotations
   - Use `Optional[T]` for optional types, not `T | None` (for consistency with existing code)
   - Import: `from typing import Optional`
@@ -500,7 +502,12 @@ if isinstance(obj, list):
   - Type errors in these files can be ignored unless actively working on them
 
 ### Linting and Formatting
-- **MUST run `just lint` after making code changes**
+- **Recommended workflow: Tests → Type check → Lint/Format**
+  - Run tests first to ensure functionality works
+  - Then run type checking to ensure type safety
+  - Finally run linting and formatting for code style
+  - Example: `uv run pytest tests/test_<module>.py -v && just typecheck && just lint`
+- **Use `just lint` to check for style issues**
   - This catches code style issues and potential bugs
   - Example: `just lint`
 - **Use `just lint-fix` to auto-fix issues**
@@ -508,7 +515,8 @@ if isinstance(obj, list):
 - **Use `just format` to format code**
   - Example: `just format`
 - **Use `just check` to run all checks (typecheck + lint + format)**
-  - Example: `just check`
+  - Note: Run tests separately before `just check`
+  - Example: `uv run pytest tests/test_<module>.py -v && just check`
 - Ruff is configured to check:
   - `E`, `W`: pycodestyle errors and warnings
   - `F`: Pyflakes
