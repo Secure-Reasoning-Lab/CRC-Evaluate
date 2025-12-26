@@ -36,7 +36,7 @@ load_dotenv()
 logger = get_logger(__name__)
 
 # Trial configuration
-Trial = namedtuple("Trial", ["crs", "benchmark", "trial_num"])
+Trial = namedtuple("Trial", ["crs", "benchmark", "harness", "trial_num"])
 
 
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
@@ -321,13 +321,85 @@ def load_experiment_config(config_path: Path):
     return config
 
 
-def generate_trial_matrix(
-    benchmarks: List[str], crses: List[str], config
-) -> List[Trial]:
-    """Generate all trial combinations from benchmarks, CRSes, and trials.
+def resolve_benchmark_harnesses(
+    benchmark_entries: List,
+    benchmarks_root: Path,
+) -> List[tuple]:
+    """Resolve (benchmark, harness) pairs from BenchmarkEntry list.
+
+    For entries with harnesses specified: use those harnesses
+    For entries without harnesses: load all harnesses from meta.yaml
 
     Args:
-        benchmarks: List of benchmark identifiers
+        benchmark_entries: List of BenchmarkEntry objects
+        benchmarks_root: Root directory containing benchmarks
+
+    Returns:
+        List of (benchmark_name, harness_name) tuples
+
+    Raises:
+        FileNotFoundError: If benchmark directory or meta.yaml not found
+        ValueError: If meta.yaml is invalid or has no harnesses
+    """
+    from crsbench.validation import validate_benchmark
+
+    pairs = []
+
+    for entry in benchmark_entries:
+        if entry.harnesses:
+            # Use specified harnesses
+            for harness in entry.harnesses:
+                pairs.append((entry.name, harness))
+        else:
+            # Load all harnesses from meta.yaml
+            benchmark_path = benchmarks_root / entry.name
+            if not benchmark_path.exists():
+                raise FileNotFoundError(
+                    f"Benchmark directory not found: {benchmark_path}"
+                )
+
+            # Validate and load benchmark config
+            validation_result = validate_benchmark(benchmark_path)
+            if not validation_result.is_valid:
+                raise ValueError(
+                    f"Invalid benchmark '{entry.name}': "
+                    + ", ".join(e.message for e in validation_result.errors)
+                )
+
+            # Load meta.yaml to get harnesses
+            import yaml
+
+            meta_yaml_path = benchmark_path / ".aixcc" / "meta.yaml"
+            if not meta_yaml_path.exists():
+                raise FileNotFoundError(f"meta.yaml not found: {meta_yaml_path}")
+
+            with meta_yaml_path.open() as f:
+                meta_data = yaml.safe_load(f)
+
+            harness_files = meta_data.get("harness_files", [])
+            if not harness_files:
+                raise ValueError(
+                    f"No harness_files found in meta.yaml for benchmark '{entry.name}'"
+                )
+
+            for harness in harness_files:
+                harness_name = harness.get("name")
+                if harness_name:
+                    pairs.append((entry.name, harness_name))
+
+    logger.info(
+        f"Resolved {len(pairs)} (benchmark, harness) pairs from {len(benchmark_entries)} benchmarks"
+    )
+    return pairs
+
+
+def generate_trial_matrix(
+    benchmark_harness_pairs: List[tuple], crses: List[str], config
+) -> List[Trial]:
+    """Generate all trial combinations from (benchmark, harness) pairs, CRSes, and trials.
+
+    Args:
+        benchmark_harness_pairs: List of (benchmark_name, harness_name) tuples
         crses: List of CRS identifiers
         config: Experiment configuration with trials count
 
@@ -336,12 +408,12 @@ def generate_trial_matrix(
     """
     trials = []
     for crs in crses:
-        for benchmark in benchmarks:
+        for benchmark, harness in benchmark_harness_pairs:
             for trial_num in range(config.trials):
-                trials.append(Trial(crs, benchmark, trial_num))
+                trials.append(Trial(crs, benchmark, harness, trial_num))
 
     logger.info(
-        f"Generated {len(trials)} trials: {len(crses)} CRSes × {len(benchmarks)} benchmarks × {config.trials} trials"
+        f"Generated {len(trials)} trials: {len(crses)} CRSes × {len(benchmark_harness_pairs)} (benchmark, harness) pairs × {config.trials} trials"
     )
     return trials
 
@@ -458,7 +530,7 @@ def enhance_config_with_cli_args(
 def run_experiment_local(
     experiment_name: str,
     config,
-    benchmarks: List[str],
+    benchmark_harness_pairs: List[tuple],
     crses: List[str],
     args: argparse.Namespace,
 ) -> None:
@@ -469,18 +541,18 @@ def run_experiment_local(
     Args:
         experiment_name: Experiment identifier
         config: Experiment configuration
-        benchmarks: List of benchmark identifiers
+        benchmark_harness_pairs: List of (benchmark_name, harness_name) tuples
         crses: List of CRS identifiers
         args: CLI arguments for config overrides
     """
     log_section("Running CRSBench in Local Mode (No Redis)", width=60)
 
     # Generate trial matrix
-    trials = generate_trial_matrix(benchmarks, crses, config)
+    trials = generate_trial_matrix(benchmark_harness_pairs, crses, config)
 
     logger.info(f"Total trials to execute: {len(trials)}")
     logger.info(f"CRSes: {', '.join(crses)}")
-    logger.info(f"Benchmarks: {', '.join(benchmarks)}")
+    logger.info(f"(Benchmark, Harness) pairs: {len(benchmark_harness_pairs)}")
     logger.info(f"Trials per combination: {config.trials}")
     logger.info("=" * 60)
 
@@ -490,6 +562,7 @@ def run_experiment_local(
         logger.info(f"\n[{idx}/{len(trials)}] Starting trial:")
         logger.info(f"  CRS: {trial.crs}")
         logger.info(f"  Benchmark: {trial.benchmark}")
+        logger.info(f"  Harness: {trial.harness}")
         logger.info(f"  Trial: {trial.trial_num}")
 
         # Import and execute job directly
@@ -501,6 +574,7 @@ def run_experiment_local(
         result = run_crs_trial(
             crs=trial.crs,
             benchmark=trial.benchmark,
+            harness=trial.harness,
             trial_num=trial.trial_num,
             config=enhanced_config,
         )
@@ -675,7 +749,7 @@ def _monitor_jobs_rich(
 def run_experiment_distributed(
     experiment_name: str,
     config,
-    benchmarks: List[str],
+    benchmark_harness_pairs: List[tuple],
     crses: List[str],
     args: argparse.Namespace,
 ) -> None:
@@ -684,7 +758,7 @@ def run_experiment_distributed(
     Args:
         experiment_name: Experiment identifier
         config: Experiment configuration
-        benchmarks: List of benchmark identifiers
+        benchmark_harness_pairs: List of (benchmark_name, harness_name) tuples
         crses: List of CRS identifiers
         args: CLI arguments for config overrides
     """
@@ -699,11 +773,11 @@ def run_experiment_distributed(
         raise RuntimeError(f"Failed to initialize Redis queue at {config.redis_host}")
 
     # Generate trial matrix
-    trials = generate_trial_matrix(benchmarks, crses, config)
+    trials = generate_trial_matrix(benchmark_harness_pairs, crses, config)
 
     logger.info(f"Total trials to enqueue: {len(trials)}")
     logger.info(f"CRSes: {', '.join(crses)}")
-    logger.info(f"Benchmarks: {', '.join(benchmarks)}")
+    logger.info(f"(Benchmark, Harness) pairs: {len(benchmark_harness_pairs)}")
     logger.info(f"Trials per combination: {config.trials}")
     logger.info("=" * 60)
 
@@ -719,6 +793,7 @@ def run_experiment_distributed(
             "crsbench.distributed.jobs.run_crs_trial",
             crs=trial.crs,
             benchmark=trial.benchmark,
+            harness=trial.harness,
             trial_num=trial.trial_num,
             config=enhanced_config,
             job_timeout=config.max_total_time,
@@ -860,8 +935,16 @@ def main() -> None:
 
         if args.benchmarks:
             # CLI --benchmarks has highest priority
-            benchmarks = parse_list_argument(args.benchmarks)
-            logger.info(f"Benchmarks ({len(benchmarks)}): {', '.join(benchmarks)}")
+            from crsbench.validation.schemas import BenchmarkEntry
+
+            benchmark_names = parse_list_argument(args.benchmarks)
+            # Convert to BenchmarkEntry objects (no harness specified = all harnesses)
+            benchmark_entries = [
+                BenchmarkEntry(name=name, harnesses=None) for name in benchmark_names
+            ]
+            logger.info(
+                f"Benchmarks ({len(benchmark_names)}): {', '.join(benchmark_names)}"
+            )
             logger.info("  (overridden from CLI --benchmarks)")
         elif args.benchmark_suite:
             # CLI --benchmark-suite has second priority
@@ -877,18 +960,26 @@ def main() -> None:
             with suite_path.open() as f:
                 suite_data = yaml.safe_load(f)
             suite_config = BenchmarkSuiteConfig(**suite_data)
-            benchmarks = suite_config.get_benchmark_names()
+            benchmark_entries = suite_config.get_benchmark_entries()
+            benchmark_names = suite_config.get_benchmark_names()
             logger.info(f"Benchmark suite: {args.benchmark_suite}")
-            logger.info(f"Benchmarks ({len(benchmarks)}): {', '.join(benchmarks)}")
+            logger.info(
+                f"Benchmarks ({len(benchmark_names)}): {', '.join(benchmark_names)}"
+            )
             logger.info("  (overridden from CLI --benchmark-suite)")
         else:
             # Use config (benchmarks or benchmark_suite)
-            benchmarks = config.get_benchmark_list()
+            benchmark_entries = config.get_benchmark_entries()
+            benchmark_names = config.get_benchmark_list()
             if config.benchmark_suite:
                 logger.info(f"Benchmark suite: {config.benchmark_suite}")
-                logger.info(f"Benchmarks ({len(benchmarks)}): {', '.join(benchmarks)}")
+                logger.info(
+                    f"Benchmarks ({len(benchmark_names)}): {', '.join(benchmark_names)}"
+                )
             else:
-                logger.info(f"Benchmarks ({len(benchmarks)}): {', '.join(benchmarks)}")
+                logger.info(
+                    f"Benchmarks ({len(benchmark_names)}): {', '.join(benchmark_names)}"
+                )
 
     except ValueError as e:
         logger.error(f"Failed to resolve benchmarks: {e}")
@@ -896,8 +987,21 @@ def main() -> None:
 
     logger.info("=" * 60)
 
+    # Resolve (benchmark, harness) pairs
+    try:
+        benchmarks_root = Path(config.benchmarks_root or "benchmarks")
+        benchmark_harness_pairs = resolve_benchmark_harnesses(
+            benchmark_entries, benchmarks_root
+        )
+        logger.info(
+            f"Resolved {len(benchmark_harness_pairs)} (benchmark, harness) pairs"
+        )
+    except Exception as e:
+        logger.error(f"Failed to resolve harnesses: {e}")
+        sys.exit(1)
+
     # Calculate total jobs
-    total_jobs = len(benchmarks) * len(crses) * config.trials
+    total_jobs = len(benchmark_harness_pairs) * len(crses) * config.trials
     logger.info(f"Total jobs to execute: {total_jobs}")
 
     # Determine execution mode
@@ -905,9 +1009,13 @@ def main() -> None:
 
     # Run experiment in appropriate mode
     if use_distributed:
-        run_experiment_distributed(experiment_name, config, benchmarks, crses, args)
+        run_experiment_distributed(
+            experiment_name, config, benchmark_harness_pairs, crses, args
+        )
     else:
-        run_experiment_local(experiment_name, config, benchmarks, crses, args)
+        run_experiment_local(
+            experiment_name, config, benchmark_harness_pairs, crses, args
+        )
 
 
 if __name__ == "__main__":

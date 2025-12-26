@@ -147,22 +147,27 @@ class TestTrialMatrixGeneration:
             benchmarks=["bench1", "bench2"],
         )
 
-        benchmarks = ["bench1", "bench2"]
+        # Create (benchmark, harness) pairs
+        benchmark_harness_pairs = [
+            ("bench1", "harness1"),
+            ("bench2", "harness2"),
+        ]
         crses = ["crs1", "crs2"]
 
-        trials = generate_trial_matrix(benchmarks, crses, config)
+        trials = generate_trial_matrix(benchmark_harness_pairs, crses, config)
 
-        # Expected: 2 CRSes × 2 benchmarks × 2 trials = 8 total
+        # Expected: 2 CRSes × 2 (benchmark,harness) pairs × 2 trials = 8 total
         assert len(trials) == 8
 
         # Verify structure
         assert all(isinstance(t, Trial) for t in trials)
         assert all(t.crs in crses for t in trials)
-        assert all(t.benchmark in benchmarks for t in trials)
+        assert all(t.benchmark in ["bench1", "bench2"] for t in trials)
+        assert all(t.harness in ["harness1", "harness2"] for t in trials)
         assert all(0 <= t.trial_num < config.trials for t in trials)
 
     def test_generate_trial_matrix_ordering(self):
-        """Test trial matrix ordering (CRS → Benchmark → Trial number)."""
+        """Test trial matrix ordering (CRS → Benchmark/Harness → Trial number)."""
         config = ExperimentConfig(
             experiment="test",
             trials=2,
@@ -174,24 +179,27 @@ class TestTrialMatrixGeneration:
             benchmarks=["bench1", "bench2"],
         )
 
-        benchmarks = ["bench1", "bench2"]
+        benchmark_harness_pairs = [
+            ("bench1", "harness1"),
+            ("bench2", "harness2"),
+        ]
         crses = ["crs1", "crs2"]
 
-        trials = generate_trial_matrix(benchmarks, crses, config)
+        trials = generate_trial_matrix(benchmark_harness_pairs, crses, config)
 
-        # Verify ordering: CRS outer loop, benchmark middle, trial inner
+        # Verify ordering: CRS outer loop, (benchmark,harness) middle, trial inner
         expected = [
-            ("crs1", "bench1", 0),
-            ("crs1", "bench1", 1),
-            ("crs1", "bench2", 0),
-            ("crs1", "bench2", 1),
-            ("crs2", "bench1", 0),
-            ("crs2", "bench1", 1),
-            ("crs2", "bench2", 0),
-            ("crs2", "bench2", 1),
+            ("crs1", "bench1", "harness1", 0),
+            ("crs1", "bench1", "harness1", 1),
+            ("crs1", "bench2", "harness2", 0),
+            ("crs1", "bench2", "harness2", 1),
+            ("crs2", "bench1", "harness1", 0),
+            ("crs2", "bench1", "harness1", 1),
+            ("crs2", "bench2", "harness2", 0),
+            ("crs2", "bench2", "harness2", 1),
         ]
 
-        actual = [(t.crs, t.benchmark, t.trial_num) for t in trials]
+        actual = [(t.crs, t.benchmark, t.harness, t.trial_num) for t in trials]
         assert actual == expected
 
     def test_generate_trial_matrix_single_trial(self):
@@ -207,28 +215,35 @@ class TestTrialMatrixGeneration:
             benchmarks=["bench1"],
         )
 
-        benchmarks = ["bench1"]
+        benchmark_harness_pairs = [("bench1", "harness1")]
         crses = ["crs1"]
 
-        trials = generate_trial_matrix(benchmarks, crses, config)
+        trials = generate_trial_matrix(benchmark_harness_pairs, crses, config)
 
-        # Expected: 1 CRS × 1 benchmark × 1 trial = 1 total
+        # Expected: 1 CRS × 1 (benchmark,harness) × 1 trial = 1 total
         assert len(trials) == 1
-        assert trials[0] == Trial(crs="crs1", benchmark="bench1", trial_num=0)
+        assert trials[0] == Trial(
+            crs="crs1", benchmark="bench1", harness="harness1", trial_num=0
+        )
 
     def test_trial_matrix_count_formula(self):
-        """Test that trial count follows formula: CRSes × Benchmarks × Trials."""
+        """Test that trial count follows formula: CRSes × (Benchmark,Harness) pairs × Trials."""
         test_cases = [
-            # (crses, benchmarks, trials_per_combo, expected_total)
-            (["crs1"], ["bench1"], 1, 1),
-            (["crs1"], ["bench1"], 3, 3),
-            (["crs1", "crs2"], ["bench1"], 2, 4),
-            (["crs1"], ["bench1", "bench2"], 2, 4),
-            (["crs1", "crs2"], ["bench1", "bench2"], 3, 12),
-            (["crs1", "crs2", "crs3"], ["b1", "b2", "b3", "b4"], 2, 24),
+            # (crses, benchmark_harness_pairs, trials_per_combo, expected_total)
+            (["crs1"], [("bench1", "h1")], 1, 1),
+            (["crs1"], [("bench1", "h1")], 3, 3),
+            (["crs1", "crs2"], [("bench1", "h1")], 2, 4),
+            (["crs1"], [("bench1", "h1"), ("bench2", "h2")], 2, 4),
+            (["crs1", "crs2"], [("bench1", "h1"), ("bench2", "h2")], 3, 12),
+            (
+                ["crs1", "crs2", "crs3"],
+                [("b1", "h1"), ("b2", "h2"), ("b3", "h3"), ("b4", "h4")],
+                2,
+                24,
+            ),
         ]
 
-        for crses, benchmarks, trials_count, expected_total in test_cases:
+        for crses, benchmark_harness_pairs, trials_count, expected_total in test_cases:
             config = ExperimentConfig(
                 experiment="test",
                 trials=trials_count,
@@ -237,13 +252,13 @@ class TestTrialMatrixGeneration:
                 experiment_filestore="/tmp/exp",
                 report_filestore="/tmp/rep",
                 crses=crses,
-                benchmarks=benchmarks,
+                benchmarks=["dummy"],  # Not used, but required for config
             )
 
-            trials = generate_trial_matrix(benchmarks, crses, config)
+            trials = generate_trial_matrix(benchmark_harness_pairs, crses, config)
 
             assert len(trials) == expected_total, (
-                f"Expected {expected_total} trials for {len(crses)} CRS × {len(benchmarks)} bench × {trials_count} trials"
+                f"Expected {expected_total} trials for {len(crses)} CRS × {len(benchmark_harness_pairs)} pairs × {trials_count} trials"
             )
 
 
@@ -460,8 +475,9 @@ benchmarks:
             benchmarks=["curl-delta-02"],
         )
 
-        # Generate trial
-        trials = generate_trial_matrix(config.benchmarks, config.crses, config)
+        # Generate trial with (benchmark, harness) pairs
+        benchmark_harness_pairs = [("curl-delta-02", "harness1")]
+        trials = generate_trial_matrix(benchmark_harness_pairs, config.crses, config)
         trial = trials[0]
 
         # Store config with trial-specific fields
@@ -478,6 +494,7 @@ benchmarks:
             # Trial-specific fields
             "trial_crs": trial.crs,
             "trial_benchmark": trial.benchmark,
+            "trial_harness": trial.harness,
             "trial_num": trial.trial_num,
         }
 
@@ -491,9 +508,11 @@ benchmarks:
 
         assert "trial_crs" in stored
         assert "trial_benchmark" in stored
+        assert "trial_harness" in stored
         assert "trial_num" in stored
         assert stored["trial_crs"] == "atlantis-c"
         assert stored["trial_benchmark"] == "curl-delta-02"
+        assert stored["trial_harness"] == "harness1"
         assert stored["trial_num"] == 0
 
     def test_config_and_execution_metadata_together(self, tmp_path):
@@ -573,10 +592,14 @@ class TestIntegrationWithSampleConfigs:
         assert len(config.crses) == 3  # atlantis-c, atlantis-multilang, ensemble-c
         assert len(config.benchmarks) == 6
 
-        # Generate trial matrix
-        trials = generate_trial_matrix(config.benchmarks, config.crses, config)
+        # Mock (benchmark, harness) pairs - in reality these would come from meta.yaml
+        # For this test, create one harness per benchmark
+        benchmark_harness_pairs = [(b, f"{b}_harness") for b in config.benchmarks]
 
-        # Expected: 3 CRSes × 6 benchmarks × 3 trials = 54 total
+        # Generate trial matrix
+        trials = generate_trial_matrix(benchmark_harness_pairs, config.crses, config)
+
+        # Expected: 3 CRSes × 6 (benchmark,harness) pairs × 3 trials = 54 total
         assert len(trials) == 54
 
         # Mock trial execution - store config in trial dirs
@@ -592,6 +615,7 @@ class TestIntegrationWithSampleConfigs:
                 "benchmarks": config.benchmarks,
                 "trial_crs": trial.crs,
                 "trial_benchmark": trial.benchmark,
+                "trial_harness": trial.harness,
                 "trial_num": trial.trial_num,
             }
 
@@ -604,6 +628,7 @@ class TestIntegrationWithSampleConfigs:
 
             assert stored["trial_crs"] == trial.crs
             assert stored["trial_benchmark"] == trial.benchmark
+            assert stored["trial_harness"] == trial.harness
             assert stored["experiment"] == "multi-crs-baseline-eval"
 
     def test_e2e_with_cli_overrides(self, tmp_path):
@@ -625,10 +650,13 @@ class TestIntegrationWithSampleConfigs:
         resolved_crses = parse_list_argument(cli_crses)
         resolved_benchmarks = parse_list_argument(cli_benchmarks)
 
-        # Generate trial matrix with resolved values
-        trials = generate_trial_matrix(resolved_benchmarks, resolved_crses, config)
+        # Mock (benchmark, harness) pairs - in reality these would come from meta.yaml
+        benchmark_harness_pairs = [(b, f"{b}_harness") for b in resolved_benchmarks]
 
-        # Expected: 2 CRSes × 2 benchmarks × 3 trials = 12 total
+        # Generate trial matrix with resolved values
+        trials = generate_trial_matrix(benchmark_harness_pairs, resolved_crses, config)
+
+        # Expected: 2 CRSes × 2 (benchmark,harness) pairs × 3 trials = 12 total
         assert len(trials) == 12
 
         # Store config in trial directory
@@ -644,6 +672,7 @@ class TestIntegrationWithSampleConfigs:
             "benchmarks": resolved_benchmarks,
             "trial_crs": trials[0].crs,
             "trial_benchmark": trials[0].benchmark,
+            "trial_harness": trials[0].harness,
             "trial_num": trials[0].trial_num,
         }
 
