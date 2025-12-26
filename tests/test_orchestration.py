@@ -174,7 +174,7 @@ class TestTrialMatrixGeneration:
         assert all(
             t.benchmark_harness.harness.name in ["harness1", "harness2"] for t in trials
         )
-        assert all(0 <= t.trial_num < config.trials for t in trials)
+        assert all(1 <= t.trial_num <= config.trials for t in trials)
 
     def test_generate_trial_matrix_ordering(self):
         """Test trial matrix ordering (CRS → Benchmark/Harness → Trial number)."""
@@ -207,14 +207,14 @@ class TestTrialMatrixGeneration:
 
         # Verify ordering: CRS outer loop, BenchmarkHarness middle, trial inner
         expected = [
-            ("crs1", "bench1", "harness1", 0),
             ("crs1", "bench1", "harness1", 1),
-            ("crs1", "bench2", "harness2", 0),
+            ("crs1", "bench1", "harness1", 2),
             ("crs1", "bench2", "harness2", 1),
-            ("crs2", "bench1", "harness1", 0),
+            ("crs1", "bench2", "harness2", 2),
             ("crs2", "bench1", "harness1", 1),
-            ("crs2", "bench2", "harness2", 0),
+            ("crs2", "bench1", "harness1", 2),
             ("crs2", "bench2", "harness2", 1),
+            ("crs2", "bench2", "harness2", 2),
         ]
 
         actual = [
@@ -255,7 +255,7 @@ class TestTrialMatrixGeneration:
         assert len(trials) == 1
         assert trials[0].crs == "crs1"
         assert trials[0].benchmark_harness == benchmark_harness
-        assert trials[0].trial_num == 0
+        assert trials[0].trial_num == 1
 
     def test_trial_matrix_count_formula(self):
         """Test that trial count follows formula: CRSes × BenchmarkHarness count × Trials."""
@@ -560,7 +560,7 @@ benchmarks:
         assert stored["trial_crs"] == "atlantis-c"
         assert stored["trial_benchmark"] == "curl-delta-02"
         assert stored["trial_harness"] == "harness1"
-        assert stored["trial_num"] == 0
+        assert stored["trial_num"] == 1
 
     def test_config_and_execution_metadata_together(self, tmp_path):
         """Test that config.yaml + execution.json provide complete reproducibility."""
@@ -577,7 +577,7 @@ benchmarks:
             "benchmarks": ["curl-delta-02"],
             "trial_crs": "atlantis-c",
             "trial_benchmark": "curl-delta-02",
-            "trial_num": 0,
+            "trial_num": 1,
         }
 
         config_yaml_path = trial_output_dir / "config.yaml"
@@ -609,7 +609,7 @@ benchmarks:
         # Verify we have complete reproducibility information
         assert config["trial_crs"] == "atlantis-c"
         assert config["trial_benchmark"] == "curl-delta-02"
-        assert config["trial_num"] == 0
+        assert config["trial_num"] == 1
         assert execution["command"][0] == "python3"
         assert execution["hints"]["enabled"] is True
         assert execution["execution"]["returncode"] == 0

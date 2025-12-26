@@ -454,7 +454,7 @@ def generate_trial_matrix(
     trials = []
     for crs in crses:
         for benchmark_harness in benchmark_harnesses:
-            for trial_num in range(config.trials):
+            for trial_num in range(1, config.trials + 1):
                 trials.append(Trial(crs, benchmark_harness, trial_num))
 
     logger.info(
