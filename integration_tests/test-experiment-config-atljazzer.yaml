@@ -1,0 +1,49 @@
+# Test Experiment Configuration for atljazzer Integration Tests
+#
+# This is a minimal configuration for testing CRSBench with crs-atljazzer CRS.
+# Designed for quick integration tests with atljazzer-based fuzzing.
+
+# Experiment identifier
+experiment: "integration-test-atljazzer"
+
+# Human-readable description
+description: "Integration test configuration for atljazzer CRS with minimal resources"
+
+# Execution Configuration
+trials: 1
+max_total_time: 300  # 5 minutes for quick testing
+
+# CRS Selection - using crs-atljazzer
+crses:
+  - atlantis-java-atljazzer
+
+# Benchmark Selection - using atlanta benchmark
+benchmarks:
+  - sanity-mock-java-spam-delta-01
+
+# Difficulty Control
+difficulty_level: 1
+
+# Monitoring & Snapshots - more frequent for testing
+snapshot_period: 60  # 1 minute
+
+# Storage Configuration - temporary directories for testing
+experiment_filestore: /tmp/crsbench-integration-test-atljazzer/experiment-data
+report_filestore: /tmp/crsbench-integration-test-atljazzer/report-data
+
+# LiteLLM Configuration - passthrough mode (default)
+litellm_mode: passthrough
+
+# CRS Paths - optional configuration (defaults: crses/registry, crses/configs)
+# registry_dir: crses/registry
+# crs_configs_dir: crses/configs
+
+# Build Configuration
+build_timeout: 600  # 10 minutes for building Docker images
+run_timeout: 300    # 5 minutes for CRS execution (matches max_total_time)
+
+# Hints Configuration - disabled for quick testing
+hints_enabled: false
+
+# Reproducibility
+git_hash: null
