@@ -111,7 +111,12 @@ def build_crs_environment(
 
 
 def run_crs_trial(
-    crs: str, benchmark: str, harness: str, trial_num: int, config: Dict[str, Any]
+    crs: str,
+    benchmark: str,
+    harness_name: str,
+    harness_path: str,
+    trial_num: int,
+    config: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
     Execute a single CRS trial.
@@ -126,7 +131,8 @@ def run_crs_trial(
     Args:
         crs: CRS implementation name
         benchmark: Benchmark identifier or path
-        harness: Harness name to run
+        harness_name: Harness name to run
+        harness_path: Path to harness file
         trial_num: Trial number (0-indexed) for this execution
         config: Experiment configuration dictionary
 
@@ -138,11 +144,13 @@ def run_crs_trial(
         ...     'experiment_filestore': '/tmp/exp',
         ...     'max_total_time': 3600
         ... }
-        >>> result = run_crs_trial('test-crs', 'test-benchmark', 'fuzz_test', 0, config)
+        >>> result = run_crs_trial(
+        ...     'test-crs', 'test-benchmark', 'fuzz_test', '/src/fuzz_test.c', 0, config
+        ... )
         >>> assert 'povs_found' in result
     """
     logger.info(
-        f"[Trial {trial_num}] Starting CRS '{crs}' on benchmark '{benchmark}' harness '{harness}'"
+        f"[Trial {trial_num}] Starting CRS '{crs}' on benchmark '{benchmark}' harness '{harness_name}'"
     )
     start_time = time.time()
 
@@ -208,6 +216,14 @@ def run_crs_trial(
         benchmark_path = _resolve_benchmark_path(benchmark, config)
         logger.debug(f"Resolved benchmark path: {benchmark_path}")
 
+        # Create BenchmarkHarness object
+        from crsbench.validation.schemas import BenchmarkHarness, HarnessFile
+
+        harness = HarnessFile(name=harness_name, path=harness_path)
+        benchmark_harness = BenchmarkHarness(
+            name=benchmark, path=benchmark_path, harness=harness
+        )
+
         # Create trial output directory with harness-specific structure
         experiment_filestore = Path(
             config.get("experiment_filestore", "/tmp/experiments")
@@ -219,7 +235,7 @@ def run_crs_trial(
             / experiment_name
             / crs
             / benchmark
-            / harness
+            / harness_name
             / f"trial-{trial_num}"
         )
         trial_output_dir.mkdir(parents=True, exist_ok=True)
@@ -228,8 +244,7 @@ def run_crs_trial(
         # Run benchmark evaluation for this specific harness
         # Note: CRS is already configured via executor.configure_crs() above
         result = runner.run_benchmark(
-            benchmark_path=benchmark_path,
-            harness_name=harness,  # Run only this harness
+            benchmark_harness=benchmark_harness,
             mode="auto",  # Auto-detect delta/full mode
             crs_config={},  # Empty config - executor already configured
             trial_output_dir=trial_output_dir,
@@ -242,7 +257,7 @@ def run_crs_trial(
         trial_result = {
             "crs": crs,
             "benchmark": benchmark,
-            "harness": harness,
+            "harness": harness_name,
             "trial_num": trial_num,
             "success": result.is_valid,
             "povs_found": result.povs_found,
@@ -260,7 +275,7 @@ def run_crs_trial(
         }
 
         logger.info(
-            f"[Trial {trial_num}] Completed {crs} on {benchmark}/{harness}: "
+            f"[Trial {trial_num}] Completed {crs} on {benchmark}/{harness_name}: "
             f"{result.povs_found}/{result.total_povs} POVs found "
             f"({result.success_rate:.1%}) in {execution_time:.1f}s"
         )

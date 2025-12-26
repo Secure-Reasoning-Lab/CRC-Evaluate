@@ -3,7 +3,7 @@
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
 from crsbench.evaluation.crs_executor import CRSExecutor, StubCRSExecutor
@@ -13,7 +13,7 @@ from crsbench.evaluation.snapshot_manager import SnapshotManager
 from crsbench.utils.logger import get_logger
 from crsbench.validation import ValidationResult, VerificationEngine, validate_benchmark
 from crsbench.validation import VerificationResult as VerifResult
-from crsbench.validation.schemas import BenchmarkConfig
+from crsbench.validation.schemas import BenchmarkConfig, BenchmarkHarness, HarnessFile
 
 # Set up logging
 logger = get_logger(__name__)
@@ -77,8 +77,7 @@ class BenchmarkRunner:
 
     def run_benchmark(
         self,
-        benchmark_path: Union[str, Path],
-        harness_name: str,
+        benchmark_harness: "BenchmarkHarness",
         mode: Optional[str] = None,
         crs_config: Optional[Dict[str, Any]] = None,
         trial_output_dir: Optional[Path] = None,
@@ -89,8 +88,7 @@ class BenchmarkRunner:
         """Run a complete benchmark evaluation for a specific harness.
 
         Args:
-            benchmark_path: Path to benchmark directory or meta.yaml
-            harness_name: Name of the harness to run (required - one harness per trial)
+            benchmark_harness: BenchmarkHarness object with benchmark path and harness info
             mode: Evaluation mode ('delta', 'full', or 'auto' to detect)
             crs_config: Configuration for CRS executor
             trial_output_dir: Trial output directory for snapshots (required if snapshots enabled)
@@ -103,7 +101,9 @@ class BenchmarkRunner:
         Raises:
             EvaluationError: If evaluation fails
         """
-        benchmark_path = Path(benchmark_path)
+        # Extract components from benchmark_harness
+        benchmark_path = benchmark_harness.path
+        harness = benchmark_harness.harness
 
         self.logger.info(f"Starting benchmark evaluation: {benchmark_path}")
 
@@ -167,10 +167,7 @@ class BenchmarkRunner:
                 self.logger.info("Pre-building CRS before snapshot period...")
                 self.crs_executor.build_crs(benchmark_path, trial_output_dir)
 
-            # Step 7: Find specified harness (validation already done upstream)
-            harness = next(h for h in config.harness_files if h.name == harness_name)
-
-            # Step 8: Run evaluation on harness
+            # Step 7: Run evaluation on harness
             harness_result, verification_results = self._run_harness_evaluation(
                 harness=harness,
                 benchmark_path=benchmark_path,
@@ -274,7 +271,7 @@ class BenchmarkRunner:
 
     def _run_harness_evaluation(
         self,
-        harness: Any,
+        harness: HarnessFile,
         benchmark_path: Path,
         trial_output_dir: Path,
         trial_start_time: float,

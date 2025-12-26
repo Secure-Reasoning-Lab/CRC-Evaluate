@@ -21,13 +21,16 @@ import sys
 import time
 from collections import namedtuple
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List
 
 import yaml
 from dotenv import load_dotenv
 
 from crsbench.utils import log_progress, log_section, log_summary, set_gitcache
 from crsbench.utils.logger import configure_logger, get_logger
+
+if TYPE_CHECKING:
+    from crsbench.validation.schemas import BenchmarkHarness
 
 # Load environment variables from .env file if present
 load_dotenv()
@@ -36,7 +39,7 @@ load_dotenv()
 logger = get_logger(__name__)
 
 # Trial configuration
-Trial = namedtuple("Trial", ["crs", "benchmark", "harness", "trial_num"])
+Trial = namedtuple("Trial", ["crs", "benchmark_harness", "trial_num"])
 
 
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
@@ -324,8 +327,8 @@ def load_experiment_config(config_path: Path):
 def resolve_benchmark_harnesses(
     benchmark_entries: List,
     benchmarks_root: Path,
-) -> List[tuple]:
-    """Resolve (benchmark, harness) pairs from BenchmarkEntry list.
+) -> List["BenchmarkHarness"]:
+    """Resolve BenchmarkHarness objects from BenchmarkEntry list.
 
     For entries with harnesses specified: use those harnesses
     For entries without harnesses: load all harnesses from meta.yaml
@@ -335,15 +338,16 @@ def resolve_benchmark_harnesses(
         benchmarks_root: Root directory containing benchmarks
 
     Returns:
-        List of (benchmark_name, harness_name) tuples
+        List of BenchmarkHarness objects with resolved paths and harnesses
 
     Raises:
         FileNotFoundError: If benchmark directory or meta.yaml not found
         ValueError: If meta.yaml is invalid or has no harnesses
     """
     from crsbench.validation import validate_benchmark
+    from crsbench.validation.schemas import BenchmarkHarness, HarnessFile
 
-    pairs = []
+    harness_pairs = []
 
     for entry in benchmark_entries:
         if entry.harnesses:
@@ -363,18 +367,27 @@ def resolve_benchmark_harnesses(
             with meta_yaml_path.open() as f:
                 meta_data = yaml.safe_load(f)
 
-            available_harnesses = {
-                h.get("name") for h in meta_data.get("harness_files", [])
+            # Parse harness files into dict for lookup
+            harness_files_dict = {
+                h.get("name"): h for h in meta_data.get("harness_files", [])
             }
 
-            # Validate each specified harness exists
-            for harness in entry.harnesses:
-                if harness not in available_harnesses:
+            # Validate each specified harness exists and create BenchmarkHarness
+            for harness_name in entry.harnesses:
+                if harness_name not in harness_files_dict:
                     raise ValueError(
-                        f"Harness '{harness}' not found in benchmark '{entry.name}'. "
-                        f"Available harnesses: {sorted(available_harnesses)}"
+                        f"Harness '{harness_name}' not found in benchmark '{entry.name}'. "
+                        f"Available harnesses: {sorted(harness_files_dict.keys())}"
                     )
-                pairs.append((entry.name, harness))
+                harness_data = harness_files_dict[harness_name]
+                harness_obj = HarnessFile(
+                    name=harness_name, path=harness_data.get("path", "")
+                )
+                harness_pairs.append(
+                    BenchmarkHarness(
+                        name=entry.name, path=benchmark_path, harness=harness_obj
+                    )
+                )
         else:
             # Load all harnesses from meta.yaml
             benchmark_path = benchmarks_root / entry.name
@@ -407,24 +420,31 @@ def resolve_benchmark_harnesses(
                     f"No harness_files found in meta.yaml for benchmark '{entry.name}'"
                 )
 
-            for harness in harness_files:
-                harness_name = harness.get("name")
+            # Create BenchmarkHarness for each harness
+            for harness_data in harness_files:
+                harness_name = harness_data.get("name")
+                harness_path = harness_data.get("path", "")
                 if harness_name:
-                    pairs.append((entry.name, harness_name))
+                    harness_obj = HarnessFile(name=harness_name, path=harness_path)
+                    harness_pairs.append(
+                        BenchmarkHarness(
+                            name=entry.name, path=benchmark_path, harness=harness_obj
+                        )
+                    )
 
     logger.info(
-        f"Resolved {len(pairs)} (benchmark, harness) pairs from {len(benchmark_entries)} benchmarks"
+        f"Resolved {len(harness_pairs)} BenchmarkHarness pairs from {len(benchmark_entries)} benchmarks"
     )
-    return pairs
+    return harness_pairs
 
 
 def generate_trial_matrix(
-    benchmark_harness_pairs: List[tuple], crses: List[str], config
+    benchmark_harnesses: List["BenchmarkHarness"], crses: List[str], config
 ) -> List[Trial]:
-    """Generate all trial combinations from (benchmark, harness) pairs, CRSes, and trials.
+    """Generate all trial combinations from BenchmarkHarness objects, CRSes, and trials.
 
     Args:
-        benchmark_harness_pairs: List of (benchmark_name, harness_name) tuples
+        benchmark_harnesses: List of BenchmarkHarness objects
         crses: List of CRS identifiers
         config: Experiment configuration with trials count
 
@@ -433,12 +453,12 @@ def generate_trial_matrix(
     """
     trials = []
     for crs in crses:
-        for benchmark, harness in benchmark_harness_pairs:
+        for benchmark_harness in benchmark_harnesses:
             for trial_num in range(config.trials):
-                trials.append(Trial(crs, benchmark, harness, trial_num))
+                trials.append(Trial(crs, benchmark_harness, trial_num))
 
     logger.info(
-        f"Generated {len(trials)} trials: {len(crses)} CRSes × {len(benchmark_harness_pairs)} (benchmark, harness) pairs × {config.trials} trials"
+        f"Generated {len(trials)} trials: {len(crses)} CRSes × {len(benchmark_harnesses)} benchmark-harness pairs × {config.trials} trials"
     )
     return trials
 
@@ -555,7 +575,7 @@ def enhance_config_with_cli_args(
 def run_experiment_local(
     experiment_name: str,
     config,
-    benchmark_harness_pairs: List[tuple],
+    benchmark_harnesses: List["BenchmarkHarness"],
     crses: List[str],
     args: argparse.Namespace,
 ) -> None:
@@ -566,28 +586,29 @@ def run_experiment_local(
     Args:
         experiment_name: Experiment identifier
         config: Experiment configuration
-        benchmark_harness_pairs: List of (benchmark_name, harness_name) tuples
+        benchmark_harnesses: List of BenchmarkHarness objects
         crses: List of CRS identifiers
         args: CLI arguments for config overrides
     """
     log_section("Running CRSBench in Local Mode (No Redis)", width=60)
 
     # Generate trial matrix
-    trials = generate_trial_matrix(benchmark_harness_pairs, crses, config)
+    trials = generate_trial_matrix(benchmark_harnesses, crses, config)
 
     logger.info(f"Total trials to execute: {len(trials)}")
     logger.info(f"CRSes: {', '.join(crses)}")
-    logger.info(f"(Benchmark, Harness) pairs: {len(benchmark_harness_pairs)}")
+    logger.info(f"Benchmark-harness pairs: {len(benchmark_harnesses)}")
     logger.info(f"Trials per combination: {config.trials}")
     logger.info("=" * 60)
 
     # Execute trials sequentially
     results = []
     for idx, trial in enumerate(trials, 1):
+        bh = trial.benchmark_harness
         logger.info(f"\n[{idx}/{len(trials)}] Starting trial:")
         logger.info(f"  CRS: {trial.crs}")
-        logger.info(f"  Benchmark: {trial.benchmark}")
-        logger.info(f"  Harness: {trial.harness}")
+        logger.info(f"  Benchmark: {bh.name}")
+        logger.info(f"  Harness: {bh.harness.name}")
         logger.info(f"  Trial: {trial.trial_num}")
 
         # Import and execute job directly
@@ -598,8 +619,9 @@ def run_experiment_local(
 
         result = run_crs_trial(
             crs=trial.crs,
-            benchmark=trial.benchmark,
-            harness=trial.harness,
+            benchmark=bh.name,
+            harness_name=bh.harness.name,
+            harness_path=bh.harness.path,
             trial_num=trial.trial_num,
             config=enhanced_config,
         )
@@ -774,7 +796,7 @@ def _monitor_jobs_rich(
 def run_experiment_distributed(
     experiment_name: str,
     config,
-    benchmark_harness_pairs: List[tuple],
+    benchmark_harnesses: List["BenchmarkHarness"],
     crses: List[str],
     args: argparse.Namespace,
 ) -> None:
@@ -783,7 +805,7 @@ def run_experiment_distributed(
     Args:
         experiment_name: Experiment identifier
         config: Experiment configuration
-        benchmark_harness_pairs: List of (benchmark_name, harness_name) tuples
+        benchmark_harnesses: List of BenchmarkHarness objects
         crses: List of CRS identifiers
         args: CLI arguments for config overrides
     """
@@ -798,11 +820,11 @@ def run_experiment_distributed(
         raise RuntimeError(f"Failed to initialize Redis queue at {config.redis_host}")
 
     # Generate trial matrix
-    trials = generate_trial_matrix(benchmark_harness_pairs, crses, config)
+    trials = generate_trial_matrix(benchmark_harnesses, crses, config)
 
     logger.info(f"Total trials to enqueue: {len(trials)}")
     logger.info(f"CRSes: {', '.join(crses)}")
-    logger.info(f"(Benchmark, Harness) pairs: {len(benchmark_harness_pairs)}")
+    logger.info(f"Benchmark-harness pairs: {len(benchmark_harnesses)}")
     logger.info(f"Trials per combination: {config.trials}")
     logger.info("=" * 60)
 
@@ -814,11 +836,13 @@ def run_experiment_distributed(
 
     jobs = []
     for trial in trials:
+        bh = trial.benchmark_harness
         job = queue.enqueue(
             "crsbench.distributed.jobs.run_crs_trial",
             crs=trial.crs,
-            benchmark=trial.benchmark,
-            harness=trial.harness,
+            benchmark=bh.name,
+            harness_name=bh.harness.name,
+            harness_path=bh.harness.path,
             trial_num=trial.trial_num,
             config=enhanced_config,
             job_timeout=config.max_total_time,
@@ -826,7 +850,7 @@ def run_experiment_distributed(
         )
         jobs.append(job)
         logger.debug(
-            f"Enqueued job {job.id} for {trial.crs} on {trial.benchmark} (trial {trial.trial_num})"
+            f"Enqueued job {job.id} for {trial.crs} on {bh.name}/{bh.harness.name} (trial {trial.trial_num})"
         )
 
     logger.info(f"✓ Enqueued {len(jobs)} jobs successfully")
@@ -1012,21 +1036,19 @@ def main() -> None:
 
     logger.info("=" * 60)
 
-    # Resolve (benchmark, harness) pairs
+    # Resolve BenchmarkHarness objects
     try:
         benchmarks_root = Path(config.benchmarks_root or "benchmarks")
-        benchmark_harness_pairs = resolve_benchmark_harnesses(
+        benchmark_harnesses = resolve_benchmark_harnesses(
             benchmark_entries, benchmarks_root
         )
-        logger.info(
-            f"Resolved {len(benchmark_harness_pairs)} (benchmark, harness) pairs"
-        )
+        logger.info(f"Resolved {len(benchmark_harnesses)} benchmark-harness pairs")
     except Exception as e:
         logger.error(f"Failed to resolve harnesses: {e}")
         sys.exit(1)
 
     # Calculate total jobs
-    total_jobs = len(benchmark_harness_pairs) * len(crses) * config.trials
+    total_jobs = len(benchmark_harnesses) * len(crses) * config.trials
     logger.info(f"Total jobs to execute: {total_jobs}")
 
     # Determine execution mode
@@ -1035,12 +1057,10 @@ def main() -> None:
     # Run experiment in appropriate mode
     if use_distributed:
         run_experiment_distributed(
-            experiment_name, config, benchmark_harness_pairs, crses, args
+            experiment_name, config, benchmark_harnesses, crses, args
         )
     else:
-        run_experiment_local(
-            experiment_name, config, benchmark_harness_pairs, crses, args
-        )
+        run_experiment_local(experiment_name, config, benchmark_harnesses, crses, args)
 
 
 if __name__ == "__main__":

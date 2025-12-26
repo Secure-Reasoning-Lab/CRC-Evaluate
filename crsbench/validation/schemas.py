@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -19,6 +20,24 @@ class BenchmarkEntry:
 
     name: str
     harnesses: Optional[List[str]] = None
+
+
+@dataclass
+class BenchmarkHarness:
+    """A resolved benchmark-harness pair for trial execution.
+
+    This represents a single harness within a benchmark, ready for trial execution.
+    Created by resolve_benchmark_harnesses() after validating harness exists.
+
+    Attributes:
+        name: Benchmark name (e.g., "afc-curl-delta-01")
+        path: Path to benchmark directory
+        harness: Parsed harness with name and path
+    """
+
+    name: str
+    path: Path
+    harness: "HarnessFile"  # Forward reference - HarnessFile defined later in this file
 
 
 class POV(BaseModel):
