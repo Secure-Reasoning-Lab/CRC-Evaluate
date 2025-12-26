@@ -291,12 +291,42 @@ CRSBench includes comprehensive LLM integration:
 - [ ] Performance benchmarking
 - [ ] Community benchmark submissions
 
+## Development
+
+### Code Quality Checks
+
+Run quality checks manually with:
+
+```bash
+just check        # Run all checks (typecheck + lint + format)
+just typecheck    # Type checking only
+just lint         # Linting only
+just format       # Auto-format code
+just lint-fix     # Auto-fix linting issues
+```
+
+### Pre-commit Hooks
+
+Set up pre-commit hooks to automatically run checks before each commit:
+
+```bash
+# Install pre-commit
+uv pip install pre-commit
+
+# Install the hooks
+pre-commit install
+
+# Run manually on all files
+pre-commit run --all-files
+```
+
 ## Contributing
 
 1. **Environment Setup**: Use `uv` as the package manager
 2. **Code Standards**: Follow existing patterns and conventions
-3. **Testing**: Validate all changes with the validation module
-4. **Documentation**: Update relevant README files
+3. **Pre-commit**: Install pre-commit hooks to ensure code quality
+4. **Testing**: Validate all changes with the validation module
+5. **Documentation**: Update relevant README files
 
 ## License
 
