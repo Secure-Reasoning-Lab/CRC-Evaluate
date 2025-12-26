@@ -37,14 +37,13 @@ class SnapshotManager:
         trial_start_time: Unix timestamp when trial started
     """
 
-    def __init__(self, trial_dir: Path, snapshot_period: int, trial_start_time: Optional[float] = None, crs_output_dir: Optional[Path] = None):
+    def __init__(self, trial_dir: Path, snapshot_period: int, trial_start_time: Optional[float] = None):
         """Initialize snapshot manager.
 
         Args:
             trial_dir: Trial output directory (must exist)
             snapshot_period: Snapshot interval in seconds (must be > 0)
             trial_start_time: Trial start timestamp (defaults to current time)
-            crs_output_dir: Optional CRS output directory (for oss-bugfind-crs workaround)
 
         Raises:
             ValueError: If snapshot_period <= 0 or trial_dir doesn't exist
@@ -58,14 +57,13 @@ class SnapshotManager:
         self.trial_dir = trial_dir
         self.snapshot_period = snapshot_period
         self.trial_start_time = trial_start_time or time.time()
-        self.crs_output_dir = crs_output_dir
 
         # State tracking
         self.cycle = 0
         self.running = False
         self.shutdown_event = threading.Event()
 
-        logger.info(f"SnapshotManager initialized: period={snapshot_period}s, trial_dir={trial_dir}, crs_output_dir={crs_output_dir}")
+        logger.info(f"SnapshotManager initialized: period={snapshot_period}s, trial_dir={trial_dir}")
 
     def run(self):
         """Main snapshot loop (runs in separate thread).
@@ -142,14 +140,14 @@ class SnapshotManager:
         temp_dir = self.trial_dir / f".snapshot-{self.cycle:04d}"
         temp_dir.mkdir(exist_ok=True)
 
-        # Track captured content for return value
-        povs: list[str] = []
-        patches: list[str] = []
-        corpus_files: list[str] = []
+        # Track captured content flags for return value
         has_config = False
         has_execution_metadata = False
         has_llm_usage = False
         has_crs_log = False
+        has_povs = False
+        has_patches = False
+        has_corpus = False
         has_crs_data = False
 
         try:
@@ -161,9 +159,9 @@ class SnapshotManager:
             has_llm_usage = self._capture_llm_usage(temp_dir)
             has_crs_log = self._capture_crs_log(temp_dir)
 
-            povs = self._capture_povs(temp_dir)
-            patches = self._capture_patches(temp_dir)
-            corpus_files = self._capture_corpus(temp_dir)
+            has_povs = self._capture_povs(temp_dir)
+            has_patches = self._capture_patches(temp_dir)
+            has_corpus = self._capture_corpus(temp_dir)
             has_crs_data = self._capture_crs_data(temp_dir)
 
             # Compress to tar.gz
@@ -185,15 +183,15 @@ class SnapshotManager:
                 timestamp=snapshot_timestamp,
                 elapsed_time=elapsed_time,
                 snapshot_period=self.snapshot_period,
-                povs=povs,
-                patches=patches,
-                corpus_files=corpus_files,
                 archive_path=archive_path,
                 is_complete=True,
                 has_config=has_config,
                 has_execution_metadata=has_execution_metadata,
                 has_llm_usage=has_llm_usage,
                 has_crs_log=has_crs_log,
+                has_povs=has_povs,
+                has_patches=has_patches,
+                has_corpus=has_corpus,
                 has_crs_data=has_crs_data
             )
 
@@ -224,14 +222,9 @@ class SnapshotManager:
     def _get_crs_output_dir(self) -> Path:
         """Get the CRS output directory.
 
-        Returns crs_output_dir if provided (for oss-bugfind-crs workaround),
-        otherwise falls back to trial_dir/output/ (canonical location for future).
-
         Returns:
-            Path to CRS output directory
+            Path to CRS output directory (trial_dir/output/)
         """
-        if self.crs_output_dir and self.crs_output_dir.exists():
-            return self.crs_output_dir
         return self.trial_dir / "output"
 
     def _capture_metadata(self, temp_dir: Path, elapsed_time: float):
@@ -302,84 +295,71 @@ class SnapshotManager:
                 return False
         return False
 
-    def _capture_povs(self, temp_dir: Path) -> list[str]:
+    def _capture_povs(self, temp_dir: Path) -> bool:
         """Capture all POVs (files and directories).
 
         Returns:
-            List of captured POV item names
+            True if POVs were captured, False otherwise
         """
         output_dir = self._get_crs_output_dir()
         pov_dir = output_dir / "povs"
 
         if not pov_dir.exists():
-            return []
+            return False
 
         # Copy entire POVs directory (both files and directories)
         snapshot_pov_dir = temp_dir / "povs"
 
         try:
             shutil.copytree(pov_dir, snapshot_pov_dir, dirs_exist_ok=True)
-
-            # Get list of all captured items (files and directories)
-            captured_items = [item.name for item in snapshot_pov_dir.iterdir()]
-            logger.debug(f"Captured {len(captured_items)} POV item(s)")
-            return captured_items
+            return True
         except Exception as e:
             logger.warning(f"Failed to capture POVs: {e}")
-            return []
+            return False
 
-    # FIXME: not right => change oss-patch to align with RFC
-    def _capture_patches(self, temp_dir: Path) -> list[str]:
+    def _capture_patches(self, temp_dir: Path) -> bool:
         """Capture all patches (organized by POV ID).
 
         Returns:
-            List of captured patch item names (e.g., "pov_0")
+            True if patches were captured, False otherwise
         """
         output_dir = self._get_crs_output_dir()
         patches_dir = output_dir / "patches"
 
         if not patches_dir.exists():
-            return []
+            return False
 
         # Copy entire patches directory (both files and directories)
         snapshot_patches_dir = temp_dir / "patches"
 
         try:
             shutil.copytree(patches_dir, snapshot_patches_dir, dirs_exist_ok=True)
-
-            # Get list of all captured items (subdirectories and files)
-            captured_items = [item.name for item in snapshot_patches_dir.iterdir()]
-            logger.debug(f"Captured {len(captured_items)} patch item(s)")
-            return captured_items
+            return True
         except Exception as e:
             logger.warning(f"Failed to capture patches: {e}")
-            return []
+            return False
 
-    def _capture_corpus(self, temp_dir: Path) -> list[str]:
+    def _capture_corpus(self, temp_dir: Path) -> bool:
         """Capture all corpus contents.
 
         Returns:
-            List of captured corpus item names
+            True if corpus was captured, False otherwise
         """
         output_dir = self._get_crs_output_dir()
         corpus_dir = output_dir / "corpus"
 
         if not corpus_dir.exists():
-            return []
+            return False
 
         # Copy entire corpus directory (both files and directories)
         snapshot_corpus_dir = temp_dir / "corpus"
 
         try:
             shutil.copytree(corpus_dir, snapshot_corpus_dir, dirs_exist_ok=True)
-
-            # Get list of all captured items (files and directories)
-            captured_items = [item.name for item in snapshot_corpus_dir.iterdir()]
-            logger.debug(f"Captured {len(captured_items)} corpus item(s)")
-            return captured_items
+            return True
         except Exception as e:
             logger.warning(f"Failed to capture corpus: {e}")
-            return []
+            return False
 
     def _capture_crs_data(self, temp_dir: Path) -> bool:
         """Capture CRS-specific data (incremental - by mtime, optional).

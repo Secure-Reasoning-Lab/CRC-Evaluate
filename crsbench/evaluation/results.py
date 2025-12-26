@@ -4,30 +4,10 @@ import json
 import yaml
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
 from dataclasses import dataclass, asdict
-from enum import Enum
-
-
-class POVStatus(Enum):
-    """Status of a POV detection."""
-    NOT_RUN = "not_run"
-    FOUND = "found"
-    MISSED = "missed"
-    ERROR = "error"
-
-
-@dataclass
-class POVResult:
-    """Result for a single POV."""
-    name: str
-    harness_name: str
-    sanitizer: str
-    error_token: Optional[str]
-    status: POVStatus
-    execution_time: Optional[float] = None
-    error_message: Optional[str] = None
-    crs_output: Optional[str] = None
+if TYPE_CHECKING:
+    from crsbench.validation.verification.models import VerificationResult
 
 
 @dataclass
@@ -35,7 +15,6 @@ class HarnessResult:
     """Result for a single harness file."""
     name: str
     path: str
-    pov_results: List[POVResult]
     execution_time: Optional[float] = None
     build_successful: bool = True
     build_output: Optional[str] = None
@@ -83,10 +62,6 @@ class EvaluationReport:
         # Convert datetime objects to strings
         data['start_time'] = self.start_time.isoformat()
         data['end_time'] = self.end_time.isoformat()
-        # Convert enums to strings
-        for harness_result in data['harness_results']:
-            for pov_result in harness_result['pov_results']:
-                pov_result['status'] = pov_result['status'].value
         return data
 
     def to_json(self, indent: int = 2) -> str:
@@ -119,6 +94,11 @@ class ResultCollector:
         self.base_commit: Optional[str] = None
         self.ref_commit: Optional[str] = None
         self.crs_config: Optional[Dict[str, Any]] = None
+        # POV statistics (set by verification)
+        self.total_povs = 0
+        self.povs_found = 0
+        self.povs_missed = 0
+        self.povs_error = 0
 
     def add_harness_result(self, harness_result: HarnessResult) -> None:
         """Add result for a harness."""
@@ -133,26 +113,38 @@ class ResultCollector:
         """Set CRS configuration."""
         self.crs_config = config
 
+    def set_pov_stats(self, verification_results: List['VerificationResult']) -> None:
+        """Set POV statistics from verification results.
+
+        Args:
+            verification_results: List of VerificationResult objects from validation module
+
+        Note:
+            Maps VerificationStatus to POV statistics:
+            - CPV, ZERODAY: POV found (triggers a vulnerability)
+            - NOT_VULNERABLE, UNINTENDED_CRASH: POV missed (doesn't trigger expected vuln)
+            - ERROR: Error during verification
+        """
+        from crsbench.validation.verification.models import VerificationStatus
+
+        self.total_povs = len(verification_results)
+        self.povs_found = sum(
+            1 for r in verification_results
+            if r.status in (VerificationStatus.CPV, VerificationStatus.ZERODAY)
+        )
+        self.povs_missed = sum(
+            1 for r in verification_results
+            if r.status in (VerificationStatus.NOT_VULNERABLE, VerificationStatus.UNINTENDED_CRASH)
+        )
+        self.povs_error = sum(
+            1 for r in verification_results
+            if r.status == VerificationStatus.ERROR
+        )
+
     def finalize_report(self) -> EvaluationReport:
         """Create final evaluation report."""
         end_time = datetime.now()
         total_execution_time = (end_time - self.start_time).total_seconds()
-
-        # Calculate summary statistics
-        total_povs = 0
-        povs_found = 0
-        povs_missed = 0
-        povs_error = 0
-
-        for harness_result in self.harness_results:
-            for pov_result in harness_result.pov_results:
-                total_povs += 1
-                if pov_result.status == POVStatus.FOUND:
-                    povs_found += 1
-                elif pov_result.status == POVStatus.MISSED:
-                    povs_missed += 1
-                elif pov_result.status == POVStatus.ERROR:
-                    povs_error += 1
 
         return EvaluationReport(
             benchmark_path=self.benchmark_path,
@@ -161,10 +153,10 @@ class ResultCollector:
             end_time=end_time,
             total_execution_time=total_execution_time,
             harness_results=self.harness_results,
-            total_povs=total_povs,
-            povs_found=povs_found,
-            povs_missed=povs_missed,
-            povs_error=povs_error,
+            total_povs=self.total_povs,
+            povs_found=self.povs_found,
+            povs_missed=self.povs_missed,
+            povs_error=self.povs_error,
             base_commit=self.base_commit,
             ref_commit=self.ref_commit,
             crs_config=self.crs_config

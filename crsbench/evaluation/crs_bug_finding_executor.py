@@ -15,7 +15,6 @@ from typing import Dict, List, Optional, Any, Set
 
 from crsbench.evaluation.crs_executor import CRSExecutor, CRSResult
 from crsbench.evaluation.process_utils import run_with_graceful_timeout
-from crsbench.evaluation.results import POVResult
 from crsbench.validation.schemas import HarnessFile
 from crsbench.utils.repo_manager import USE_GITCACHE
 
@@ -174,6 +173,14 @@ class CRSBugFindingExecutor(CRSExecutor):
             expected_output_dir = self._get_crs_output_dir(trial_build_dir, project_name)
             logger.info(f"Expected output at: {expected_output_dir}")
 
+            # Create relative symlink for easy access to output
+            symlink_path = trial_output_dir / "output"
+            if not symlink_path.exists():
+                # Compute relative path from symlink location to target
+                relative_target = Path("crs-build") / "artifacts" / self.crs_config_name / project_name
+                symlink_path.symlink_to(relative_target)
+                logger.debug(f"Created output symlink: {symlink_path} -> {relative_target}")
+
             # Get LiteLLM environment variables
             import os
             litellm_env = self._get_litellm_env()
@@ -233,31 +240,6 @@ class CRSBugFindingExecutor(CRSExecutor):
                 output="",
                 error=str(e)
             )
-
-    def process_pov_results(
-        self,
-        crs_result: CRSResult,
-        harness: HarnessFile,
-        trial_output_dir: Path
-    ) -> List[POVResult]:
-        """Process CRS results.
-
-        Note: For bug finding executor, this is a stub.
-        POV validation is handled by the snapshot module separately.
-
-        Args:
-            crs_result: CRS execution result
-            harness: Harness configuration
-            trial_output_dir: Trial directory
-
-        Returns:
-            Empty list (POV validation done by snapshot module)
-        """
-        logger.debug(
-            f"Bug finding executor does not process POV results. "
-            f"POV validation handled by snapshot module for {harness.name}"
-        )
-        return []
 
     def _get_litellm_env(self) -> Dict[str, str]:
         """Get LiteLLM environment variables based on configured mode.

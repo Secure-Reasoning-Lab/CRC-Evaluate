@@ -6,6 +6,7 @@ needed for test.sh generation.
 """
 
 import os
+import shutil
 import subprocess
 import yaml
 from pathlib import Path
@@ -31,7 +32,6 @@ def set_gitcache(enabled: bool):
 
     if enabled:
         # Sanity check: verify gitcache is installed
-        import shutil
         if not shutil.which('gitcache'):
             raise RuntimeError(
                 "gitcache is not installed or not in PATH. "
@@ -152,6 +152,57 @@ def derive_repo_name_from_url(repo_url: str) -> str:
     return name
 
 
+def reset_and_clean_repo(repo_dir: str, verbose: bool = False) -> bool:
+    """Reset repository to clean state and remove all untracked/ignored files.
+
+    This performs:
+    1. git reset --hard: Reset tracked files to HEAD
+    2. git clean -xdf: Remove untracked files, directories, and ignored files
+
+    Args:
+        repo_dir: Path to git repository
+        verbose: Enable verbose logging
+
+    Returns:
+        True if successful, False otherwise
+    """
+    if verbose:
+        logger.info(f"🔄 Resetting repository to pristine state...")
+
+    # First, reset tracked files
+    reset_result = run_git(
+        ["reset", "--hard"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False
+    )
+
+    if reset_result.returncode != 0:
+        logger.warning(f"⚠️  Failed to reset repository: {reset_result.stderr}")
+        return False
+
+    # Then, remove all untracked and ignored files
+    clean_result = run_git(
+        ["clean", "-xdf"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False
+    )
+
+    if clean_result.returncode != 0:
+        logger.warning(f"⚠️  Failed to clean repository: {clean_result.stderr}")
+        return False
+
+    if verbose:
+        logger.info(f"✅ Repository reset and cleaned to pristine state")
+
+    return True
+
+
 def clone_repository(
     repo_url: str,
     target_dir: str,
@@ -181,23 +232,7 @@ def clone_repository(
         if (target_path / ".git").exists():
             # Reset to clean state to remove any local changes from previous runs
             try:
-                if verbose:
-                    logger.info(f"🔄 Resetting repository to clean state...")
-
-                result = run_git(
-                    ["reset", "--hard"],
-                    cwd=target_dir,
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                    check=False
-                )
-
-                if result.returncode != 0:
-                    logger.warning(f"⚠️  Failed to reset repository: {result.stderr}")
-                elif verbose:
-                    logger.info(f"✅ Repository reset to clean state")
-
+                reset_and_clean_repo(target_dir, verbose=verbose)
             except Exception as e:
                 logger.warning(f"⚠️  Error resetting repository: {e}")
 
@@ -263,6 +298,176 @@ def clone_repository(
         return False
 
 
+def get_commit_specific_cache_dir(
+    repo_info: Dict[str, Any],
+    target_commit: str,
+    repos_dir: Optional[str] = None,
+    verbose: bool = False
+) -> str:
+    """Get commit-specific cache directory for repository.
+
+    Creates a cache directory path using the pattern: {repos_dir}/{repo_name}-{short_commit}
+    This enables parallel execution safety and cache efficiency.
+
+    Args:
+        repo_info: Repository info dict with 'repo_url' and optional 'repo_name'
+        target_commit: Full commit hash to checkout
+        repos_dir: Directory to store cloned repositories (default: PROJECT_REPOS_DIR env var or .crsbench-repos)
+        verbose: Enable verbose logging
+
+    Returns:
+        Path to commit-specific cache directory
+    """
+    # Determine repos_dir
+    if not repos_dir:
+        # Try PROJECT_REPOS_DIR env var first, then default to .crsbench-repos
+        crsbench_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        default_repos_dir = os.path.join(crsbench_root, '.crsbench-repos')
+        repos_dir = os.getenv("PROJECT_REPOS_DIR", default_repos_dir)
+
+    # Use explicit repo_name if provided, otherwise derive from URL
+    if repo_info.get("repo_name"):
+        repo_name = repo_info["repo_name"]
+        if verbose:
+            logger.info(f"Using explicit repo_name from project.yaml: {repo_name}")
+    else:
+        repo_name = derive_repo_name_from_url(repo_info["repo_url"])
+        if verbose:
+            logger.info(f"Derived repo_name from URL: {repo_name}")
+
+    # Create commit-specific directory: {repo_name}-{short_commit}
+    short_commit = target_commit[:8]
+    commit_specific_name = f"{repo_name}-{short_commit}"
+    target_dir = os.path.join(repos_dir, commit_specific_name)
+
+    if verbose:
+        logger.info(f"Using commit-specific directory: {target_dir}")
+
+    return target_dir
+
+
+def clone_or_copy_cached_repo(
+    repo_url: str,
+    commit: str,
+    target_dir: str,
+    repos_dir: Optional[str] = None,
+    repo_name: Optional[str] = None,
+    verbose: bool = False
+) -> Optional[str]:
+    """Clone repository or copy from cache if available.
+
+    This function implements smart caching:
+    - If target_dir is the cache directory and exists: reset and return
+    - If target_dir is NOT the cache directory and cache exists: copy from cache
+    - Otherwise: clone from remote
+
+    Args:
+        repo_url: Repository URL to clone from
+        commit: Commit hash to checkout
+        target_dir: Target directory for the repository
+        repos_dir: Directory for cache storage (default: PROJECT_REPOS_DIR or .crsbench-repos)
+        repo_name: Repository name for cache key (derived from URL if not provided)
+        verbose: Enable verbose logging
+
+    Returns:
+        Path to repository directory, or None if failed
+    """
+    # Build repo_info dict for cache directory calculation
+    repo_info = {"repo_url": repo_url}
+    if repo_name:
+        repo_info["repo_name"] = repo_name
+
+    # Get cache directory path
+    cache_dir = get_commit_specific_cache_dir(
+        repo_info=repo_info,
+        target_commit=commit,
+        repos_dir=repos_dir,
+        verbose=verbose
+    )
+
+    # Normalize paths for comparison
+    target_dir_abs = os.path.abspath(target_dir)
+    cache_dir_abs = os.path.abspath(cache_dir)
+
+    # Check and verify cache if it exists
+    cache_verified = False
+    if os.path.isdir(cache_dir):
+        try:
+            if (Path(cache_dir) / ".git").exists():
+                reset_and_clean_repo(cache_dir, verbose=verbose)
+
+                # Verify commit
+                result = run_git(
+                    ["rev-parse", "HEAD"],
+                    cwd=cache_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False
+                )
+                if result.returncode == 0:
+                    current_commit = result.stdout.strip()
+                    if current_commit.startswith(commit[:8]):
+                        cache_verified = True
+                        if verbose:
+                            logger.info(f"✅ Cache verified at correct commit: {cache_dir}")
+                    else:
+                        logger.warning(f"⚠️  Cache at wrong commit: {current_commit[:8]} != {commit[:8]}, removing")
+                        shutil.rmtree(cache_dir)
+        except Exception as e:
+            logger.warning(f"Failed to verify cache: {e}")
+            # Try to remove corrupted cache
+            try:
+                shutil.rmtree(cache_dir)
+            except Exception:
+                pass
+
+    if target_dir_abs == cache_dir_abs:
+        # Target is the cache directory itself
+        if cache_verified:
+            # Cache already verified and ready
+            return target_dir
+
+        # Cache doesn't exist or was removed - clone to it
+        if verbose:
+            logger.info(f"📦 Repository not found, cloning to cache...")
+
+        success = clone_repository(
+            repo_url=repo_url,
+            target_dir=target_dir,
+            commit=commit,
+            verbose=verbose
+        )
+        return target_dir if success else None
+
+    else:
+        # Target is NOT the cache directory
+        if cache_verified:
+            # Cache exists and verified - copy from it
+            if verbose:
+                logger.info(f"📦 Copying from cache: {cache_dir} -> {target_dir}")
+            try:
+                shutil.copytree(cache_dir, target_dir, symlinks=True, ignore_dangling_symlinks=True)
+                if verbose:
+                    logger.info(f"✅ Successfully copied from cache to {target_dir}")
+                return target_dir
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to copy from cache: {e}, will clone instead")
+                # Fall through to clone
+
+        # Cache doesn't exist or copy failed - clone directly to target
+        if verbose:
+            logger.info(f"📦 No cache available, cloning directly to {target_dir}...")
+
+        success = clone_repository(
+            repo_url=repo_url,
+            target_dir=target_dir,
+            commit=commit,
+            verbose=verbose
+        )
+        return target_dir if success else None
+
+
 def ensure_project_repository(
     benchmark_dir: str,
     repos_dir: Optional[str] = None,
@@ -302,23 +507,7 @@ def ensure_project_repository(
             project_path = Path(project_dir)
             if (project_path / ".git").exists():
                 try:
-                    if verbose:
-                        logger.info(f"🔄 Resetting project directory to clean state...")
-
-                    result = run_git(
-                        ["reset", "--hard"],
-                        cwd=project_dir,
-                        capture_output=True,
-                        text=True,
-                        timeout=60,
-                        check=False
-                    )
-
-                    if result.returncode != 0:
-                        logger.warning(f"⚠️  Failed to reset repository: {result.stderr}")
-                    elif verbose:
-                        logger.info(f"✅ Repository reset to clean state")
-
+                    reset_and_clean_repo(project_dir, verbose=verbose)
                 except Exception as e:
                     logger.warning(f"⚠️  Error resetting repository: {e}")
 
@@ -352,101 +541,27 @@ def ensure_project_repository(
         if verbose:
             logger.info(f"Using base_commit from meta.yaml: {target_commit[:8]}")
 
-    # Determine target directory for clone
+    # Determine target directory
     if project_dir:
-        # Use the specified project_dir
         target_dir = project_dir
     else:
         # Use commit-specific directory for cache efficiency and parallel safety
-        if not repos_dir:
-            # Try PROJECT_REPOS_DIR env var first, then default to .crsbench-repos
-            crsbench_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-            default_repos_dir = os.path.join(crsbench_root, '.crsbench-repos')
-            repos_dir = os.getenv("PROJECT_REPOS_DIR", default_repos_dir)
+        target_dir = get_commit_specific_cache_dir(
+            repo_info=repo_info,
+            target_commit=target_commit,
+            repos_dir=repos_dir,
+            verbose=verbose
+        )
 
-        # Use explicit repo_name if provided, otherwise derive from URL
-        if repo_info.get("repo_name"):
-            repo_name = repo_info["repo_name"]
-            if verbose:
-                logger.info(f"Using explicit repo_name from project.yaml: {repo_name}")
-        else:
-            repo_name = derive_repo_name_from_url(repo_info["repo_url"])
-            if verbose:
-                logger.info(f"Derived repo_name from URL: {repo_name}")
-
-        # Create commit-specific directory: {repo_name}-{short_commit}
-        short_commit = target_commit[:8]
-        commit_specific_name = f"{repo_name}-{short_commit}"
-        target_dir = os.path.join(repos_dir, commit_specific_name)
-
-        if verbose:
-            logger.info(f"Using commit-specific directory: {target_dir}")
-
-    # Check if directory already exists and has correct commit
-    if os.path.isdir(target_dir):
-        # Verify it's at the correct commit
-        try:
-            if (Path(target_dir) / ".git").exists():
-                # Reset to clean state first
-                if verbose:
-                    logger.info(f"🔄 Resetting repository to clean state...")
-
-                reset_result = run_git(
-                    ["reset", "--hard"],
-                    cwd=target_dir,
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                    check=False
-                )
-
-                if reset_result.returncode != 0:
-                    logger.warning(f"⚠️  Failed to reset repository: {reset_result.stderr}")
-                elif verbose:
-                    logger.info(f"✅ Repository reset to clean state")
-
-                # Check commit
-                result = run_git(
-                    ["rev-parse", "HEAD"],
-                    cwd=target_dir,
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    check=False
-                )
-                if result.returncode == 0:
-                    current_commit = result.stdout.strip()
-                    # Use target_commit (either from parameter or base_commit)
-                    if current_commit.startswith(target_commit[:8]):
-                        if verbose:
-                            logger.info(f"✅ Repository already exists at correct commit: {target_dir}")
-                        return target_dir
-                    else:
-                        logger.warning(f"⚠️  Repository exists but at wrong commit: {current_commit[:8]} != {target_commit[:8]}")
-        except Exception as e:
-            logger.warning(f"Failed to verify commit: {e}")
-
-        # If we reach here, directory exists but commit verification failed or mismatched
-        # Return existing directory anyway (assume it's usable)
-        if verbose:
-            logger.info(f"✅ Using existing repository: {target_dir}")
-        return target_dir
-
-    # Clone if needed
-    if verbose:
-        logger.info(f"📦 Repository not found, cloning...")
-
-    success = clone_repository(
+    # Delegate to clone_or_copy_cached_repo helper
+    return clone_or_copy_cached_repo(
         repo_url=repo_info["repo_url"],
-        target_dir=target_dir,
         commit=target_commit,
+        target_dir=target_dir,
+        repos_dir=repos_dir,
+        repo_name=repo_info.get("repo_name"),
         verbose=verbose
     )
-
-    if not success:
-        return None
-
-    return target_dir
 
 
 def find_or_clone_project(

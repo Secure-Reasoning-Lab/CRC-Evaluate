@@ -16,7 +16,6 @@ from typing import Dict, List, Optional, Any, Set
 
 from crsbench.evaluation.crs_executor import CRSExecutor, CRSResult
 from crsbench.evaluation.process_utils import run_with_graceful_timeout
-from crsbench.evaluation.results import POVResult, POVStatus
 from crsbench.validation.schemas import HarnessFile, POV
 from crsbench.utils.repo_manager import USE_GITCACHE
 
@@ -246,65 +245,6 @@ class CRSPatchExecutor(CRSExecutor):
                 output="",
                 error=str(e)
             )
-
-    def process_pov_results(
-        self,
-        crs_result: CRSResult,
-        harness: HarnessFile,
-        trial_output_dir: Path
-    ) -> List[POVResult]:
-        """Process patch generation results.
-
-        Args:
-            crs_result: CRS execution result
-            harness: Harness configuration
-            trial_output_dir: Directory containing CRS outputs
-
-        Returns:
-            List of POVResult objects for each expected POV
-        """
-        pov_results = []
-
-        if not harness.povs:
-            return pov_results
-
-        if not crs_result.success:
-            # Mark all POVs as ERROR if CRS execution failed
-            for pov in harness.povs:
-                pov_results.append(POVResult(
-                    name=pov.id,
-                    harness_name=harness.name,
-                    sanitizer=pov.sanitizer,
-                    error_token=pov.error_token,
-                    status=POVStatus.ERROR,
-                    error_message=crs_result.error,
-                    crs_output=crs_result.output
-                ))
-            return pov_results
-
-        # Collect generated patches from output directory
-        patches = self._collect_patches(trial_output_dir)
-
-        # For each POV, check if patch was generated
-        for pov in harness.povs:
-            # Check if patch exists for this POV
-            # Note: Full validation would require applying patch and re-testing
-            # For now, we check if patch file exists
-            has_patch = pov.id in patches
-
-            status = POVStatus.FOUND if has_patch else POVStatus.MISSED
-
-            pov_results.append(POVResult(
-                name=pov.id,
-                harness_name=harness.name,
-                sanitizer=pov.sanitizer,
-                error_token=pov.error_token,
-                status=status,
-                execution_time=crs_result.execution_time / len(harness.povs),
-                crs_output=crs_result.output
-            ))
-
-        return pov_results
 
     def _build_crs_if_needed(self, benchmark_path: Path, project_name: str, trial_build_dir: Path) -> None:
         """Build patch generation CRS if not already built.

@@ -1442,7 +1442,9 @@ version = "0.1.0"
 source = { editable = "oss-crs" }
 dependencies = [
     { name = "docker" },
+    { name = "gitpython" },
     { name = "jinja2" },
+    { name = "pygit" },
     { name = "pyright" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -1453,7 +1455,9 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "docker", specifier = ">=7.1.0" },
+    { name = "gitpython", specifier = ">=3.1.45" },
     { name = "jinja2", specifier = ">=3.1.6" },
+    { name = "pygit", specifier = ">=0.1" },
     { name = "pyright", specifier = ">=1.1.407" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
@@ -1657,6 +1661,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/43/4b/ac7e0aae120277480
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/60/5d4751ba3f4a40a6891f24eec885f51afd78d208498268c734e256fb13c4/pydantic_settings-2.12.0-py3-none-any.whl", hash = "sha256:fddb9fd99a5b18da837b29710391e945b1e30c135477f484084ee513adb93809", size = 51880, upload-time = "2025-11-10T14:25:45.546Z" },
 ]
+
+[[package]]
+name = "pygit"
+version = "0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cd/e8/839dacf13a5de30eff7e0815a3cfc051bd80532f83d862e0c14433b03286/pygit-0.1.tar.gz", hash = "sha256:fe02a667309e044069053313a1cb056012be10388e7ae284ebbd35480d7be58e", size = 6712, upload-time = "2008-06-25T19:38:27Z" }
 
 [[package]]
 name = "pygments"

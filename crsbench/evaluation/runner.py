@@ -13,7 +13,7 @@ from crsbench.validation import VerificationEngine, VerificationResult as VerifR
 from crsbench.evaluation.crs_executor import CRSExecutor, StubCRSExecutor
 from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
 from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
-from crsbench.evaluation.results import ResultCollector, EvaluationReport, HarnessResult, POVResult, POVStatus
+from crsbench.evaluation.results import ResultCollector, EvaluationReport, HarnessResult
 from crsbench.evaluation.snapshot_manager import SnapshotManager
 
 # Set up logging
@@ -72,7 +72,6 @@ class BenchmarkRunner:
                       mode: Optional[str] = None,
                       crs_config: Optional[Dict[str, Any]] = None,
                       trial_output_dir: Optional[Path] = None,
-                      crs_output_dir: Optional[Path] = None,
                       skip_verification: bool = False,
                       oss_fuzz_path: Optional[Path] = None) -> EvaluationResult:
         """Run a complete benchmark evaluation.
@@ -82,7 +81,6 @@ class BenchmarkRunner:
             mode: Evaluation mode ('delta', 'full', or 'auto' to detect)
             crs_config: Configuration for CRS executor
             trial_output_dir: Trial output directory for snapshots (required if snapshots enabled)
-            crs_output_dir: Optional CRS output directory (for oss-bugfind-crs workaround)
             skip_verification: Skip POV verification (default: False, verification enabled)
             oss_fuzz_path: Path to oss-fuzz directory (required for POV verification)
 
@@ -155,8 +153,7 @@ class BenchmarkRunner:
                 snapshot_manager = SnapshotManager(
                     trial_dir=trial_output_dir,
                     snapshot_period=self.snapshot_period,
-                    trial_start_time=trial_start_time,
-                    crs_output_dir=crs_output_dir
+                    trial_start_time=trial_start_time
                 )
                 snapshot_thread = threading.Thread(target=snapshot_manager.run, daemon=True)
                 snapshot_thread.start()
@@ -181,19 +178,13 @@ class BenchmarkRunner:
                         if snapshot_thread.is_alive():
                             self.logger.warning("Snapshot thread did not stop within timeout")
 
-            # Step 10: Generate final report
-            report = collector.finalize_report()
-
-            self.logger.info(f"Evaluation completed: {report.povs_found}/{report.total_povs} POVs detected "
-                           f"({report.success_rate:.1%} success rate)")
-
-            # Step 11: Verify generated POVs/patches (conditional on CRS type)
+            # Step 10: Verify generated POVs/patches (conditional on CRS type)
             verification_results = []
             if not skip_verification and isinstance(self.crs_executor, CRSBugFindingExecutor):
                 # POV verification for bug-finding CRS
-                if report.povs_found > 0 and oss_fuzz_path:
+                if oss_fuzz_path:
                     # Determine CRS output directory
-                    actual_crs_output_dir = crs_output_dir or (trial_output_dir / "output" if trial_output_dir else None)
+                    actual_crs_output_dir = trial_output_dir / "output" if trial_output_dir else None
 
                     if actual_crs_output_dir:
                         verification_results = self._verify_povs(
@@ -201,16 +192,22 @@ class BenchmarkRunner:
                             crs_output_dir=actual_crs_output_dir,
                             oss_fuzz_path=oss_fuzz_path
                         )
+                        # Set POV statistics from verification results
+                        collector.set_pov_stats(verification_results)
                     else:
                         self.logger.warning("Cannot verify POVs: crs_output_dir not available")
-                elif not oss_fuzz_path:
-                    self.logger.warning("Skipping POV verification: oss_fuzz_path not provided")
                 else:
-                    self.logger.info("No POVs to verify")
+                    self.logger.warning("Skipping POV verification: oss_fuzz_path not provided")
             # TODO: Add patch verification for CRSPatchExecutor when ready
             # elif not skip_verification and isinstance(self.crs_executor, CRSPatchExecutor):
             #     # Patch verification logic here
             #     pass
+
+            # Step 11: Generate final report
+            report = collector.finalize_report()
+
+            self.logger.info(f"Evaluation completed: {report.povs_found}/{report.total_povs} POVs detected "
+                           f"({report.success_rate:.1%} success rate)")
 
             return EvaluationResult(report, validation_result, verification_results)
 
@@ -308,22 +305,11 @@ class BenchmarkRunner:
                     trial_output_dir=trial_output_dir or Path(".")
                 )
 
-                # Process POV results
-                pov_results = []
-                if harness.povs:
-                    # Pass trial_output_dir if executor needs it (for new-style executors)
-                    # StubExecutor ignores it for backward compatibility
-                    pov_results = self.crs_executor.process_pov_results(
-                        crs_result, harness, trial_output_dir or Path(".")
-                    )
-                else:
-                    self.logger.warning(f"Harness '{harness.name}' has no POVs configured")
-
+                # POV processing now handled by _verify_povs() after all harness evaluations
                 # Create harness result
                 harness_result = HarnessResult(
                     name=harness.name,
                     path=harness.path,
-                    pov_results=pov_results,
                     execution_time=crs_result.execution_time,
                     build_successful=crs_result.success,
                     build_output=crs_result.output
@@ -331,31 +317,12 @@ class BenchmarkRunner:
 
                 collector.add_harness_result(harness_result)
 
-                # Log results for this harness
-                if pov_results:
-                    found_count = sum(1 for pov in pov_results if pov.status == POVStatus.FOUND)
-                    total_count = len(pov_results)
-                    self.logger.info(f"  {found_count}/{total_count} POVs detected in {harness.name}")
-
             except Exception as e:
                 self.logger.error(f"Failed to evaluate harness '{harness.name}': {str(e)}")
-                # Create error result for this harness
-                pov_results = []
-                if harness.povs:
-                    for pov in harness.povs:
-                        pov_results.append(POVResult(
-                            name=pov.id,
-                            harness_name=harness.name,
-                            sanitizer=pov.sanitizer,
-                            error_token=pov.error_token,
-                            status=POVStatus.ERROR,
-                            error_message=str(e)
-                        ))
-
+                # Create error result for this harness (POV verification happens later)
                 harness_result = HarnessResult(
                     name=harness.name,
                     path=harness.path,
-                    pov_results=pov_results,
                     execution_time=0.0,
                     build_successful=False,
                     build_output=f"Error: {str(e)}"
