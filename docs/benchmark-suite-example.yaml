@@ -6,6 +6,17 @@ Description: A benchmark suite for evaluating C/C++ CRS.
 Release date: 09.23.2025
 # List of benchmarks included in the benchmark suite.
 benchmark_list:
-  - {benchmark_id_1}
-  - {benchmark_id_2}
-  - {benchmark_id_3}
+  # Simple format - runs ALL harnesses for this benchmark
+  - afc-curl-delta-01
+
+  # Extended format - runs ONLY the specified harnesses
+  - afc-curl-delta-02:
+      - fuzz_url
+      - fuzz_parser
+
+  # Simple format - runs ALL harnesses
+  - afc-freerdp-delta-01
+
+  # Extended format - single harness only
+  - afc-libxml2-delta-01:
+      - fuzz_xml_parse
