@@ -225,6 +225,10 @@ CRS must write its outputs to `/artifacts/` in the container. CRSBench will snap
 
 **What CRS writes:**
 - **POVs** (`/artifacts/povs/`): Binary blob files that trigger vulnerabilities when run against the harness
+  - **Filename requirements**: POV files must NOT be hidden files (filenames must not start with `.`)
+  - Examples of valid filenames: `pov_001`, `crash-001.blob`, `input.bin`
+  - Examples of invalid filenames: `.gitkeep`, `.hidden`, `.DS_Store`
+  - CRSBench uses glob pattern `*` which excludes hidden files during POV discovery
 - **Corpus** (`/artifacts/corpus/`, optional): Generated test inputs from fuzzing
 - **CRS-specific data** (`/artifacts/crs-data/`, optional): Any additional outputs CRS wants to snapshot
 
@@ -537,6 +541,9 @@ Inside the container, CRS can access POV test case(s):
 **Usage notes:**
 
 - CRSBench generates the `povs/` directory based on experiment configuration
+  - **POV filename requirements**: CRSBench only processes non-hidden files (filenames not starting with `.`)
+  - Generated POV files will have names like `pov_0`, `pov_1`, etc. (no leading dot)
+  - Hidden files (e.g., `.gitkeep`, `.DS_Store`) are automatically excluded
 - **Single POV mode (`--pov`):**
   - Mount a single POV file to `/pov` in the container
   - Use when targeting a specific vulnerability or for focused patch generation
