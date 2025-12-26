@@ -507,13 +507,15 @@ def run_experiment_local(
 
         results.append(result)
 
-        # Log result
+        # Log result and raise exception on failure
         if result.get("success"):
             logger.info(
                 f"  ✓ Success: {result.get('povs_found', 0)}/{result.get('total_povs', 0)} POVs found"
             )
         else:
-            logger.error(f"  ✗ Failed: {result.get('error', 'Unknown error')}")
+            error_msg = result.get("error", "Unknown error")
+            logger.error(f"  ✗ Failed: {error_msg}")
+            raise RuntimeError(f"Trial failed: {error_msg}")
 
     # Generate final report
     log_section("Experiment Complete - Generating Report", width=60)
