@@ -398,11 +398,14 @@ class BenchmarkRunner:
                 timeout=120,
                 dedup_strategy="patch-based",  # TODO: make it configuralbe
             )
-            pov_dir = crs_output_dir / "povs"
+            pov_dir = (
+                crs_output_dir / "povs"
+            )  # TODO: crs_output_dir / "povs" / {harness_name}
             return engine.verify_benchmark(
                 benchmark_path=benchmark_path,
                 pov_dir=pov_dir,
                 deduplicate=True,  # TODO: configurable?
+                # TODO: harness_filter = harness_name
             )
         except Exception as e:
             self.logger.error(f"POV verification failed: {e}", exc_info=True)

@@ -131,7 +131,9 @@ class ResultCollector:
         """
         from crsbench.validation.verification.models import VerificationStatus
 
-        self.total_povs = len(verification_results)
+        self.total_povs = len(
+            verification_results
+        )  # TODO: check total_povs; should from ground truth
         self.povs_found = sum(
             1
             for r in verification_results
