@@ -8,6 +8,7 @@ import pytest
 from crsbench.evaluation.crs_executor import StubCRSExecutor
 from crsbench.evaluation.runner import BenchmarkRunner
 from crsbench.evaluation.snapshot import list_snapshots, load_snapshot_metadata
+from crsbench.validation.schemas import BenchmarkHarness, HarnessFile
 
 
 class TestSnapshotIntegration:
@@ -49,9 +50,15 @@ full_mode:
         trial_dir = tmp_path / "trial"
         trial_dir.mkdir()
 
+        # Create BenchmarkHarness
+        harness = HarnessFile(name="test_harness", path="/src/test/harness.c")
+        benchmark_harness = BenchmarkHarness(
+            name="test-benchmark", path=sample_benchmark, harness=harness
+        )
+
         # Run benchmark without snapshots
         result = runner.run_benchmark(
-            benchmark_path=sample_benchmark, mode="full", trial_output_dir=trial_dir
+            benchmark_harness=benchmark_harness, mode="full", trial_output_dir=trial_dir
         )
 
         # Should complete successfully
@@ -74,9 +81,15 @@ full_mode:
         output_dir = trial_dir / "output"
         output_dir.mkdir()
 
+        # Create BenchmarkHarness
+        harness = HarnessFile(name="test_harness", path="/src/test/harness.c")
+        benchmark_harness = BenchmarkHarness(
+            name="test-benchmark", path=sample_benchmark, harness=harness
+        )
+
         # Run benchmark with snapshots (for a few seconds)
         result = runner.run_benchmark(
-            benchmark_path=sample_benchmark, mode="full", trial_output_dir=trial_dir
+            benchmark_harness=benchmark_harness, mode="full", trial_output_dir=trial_dir
         )
 
         # Should complete successfully
@@ -96,8 +109,14 @@ full_mode:
         trial_dir = tmp_path / "trial"
         trial_dir.mkdir()
 
+        # Create BenchmarkHarness
+        harness = HarnessFile(name="test_harness", path="/src/test/harness.c")
+        benchmark_harness = BenchmarkHarness(
+            name="test-benchmark", path=sample_benchmark, harness=harness
+        )
+
         result = runner.run_benchmark(
-            benchmark_path=sample_benchmark, mode="full", trial_output_dir=trial_dir
+            benchmark_harness=benchmark_harness, mode="full", trial_output_dir=trial_dir
         )
 
         assert result.is_valid
@@ -111,10 +130,16 @@ full_mode:
         executor = StubCRSExecutor()
         runner = BenchmarkRunner(executor, snapshot_period=60)
 
+        # Create BenchmarkHarness
+        harness = HarnessFile(name="test_harness", path="/src/test/harness.c")
+        benchmark_harness = BenchmarkHarness(
+            name="test-benchmark", path=sample_benchmark, harness=harness
+        )
+
         # Should raise error when snapshots enabled but no trial_dir
         with pytest.raises(Exception, match="trial_output_dir"):
             runner.run_benchmark(
-                benchmark_path=sample_benchmark,
+                benchmark_harness=benchmark_harness,
                 mode="full",
                 trial_output_dir=None,  # Missing!
             )
@@ -126,9 +151,15 @@ full_mode:
 
         nonexistent_dir = Path("/nonexistent/trial/dir")
 
+        # Create BenchmarkHarness
+        harness = HarnessFile(name="test_harness", path="/src/test/harness.c")
+        benchmark_harness = BenchmarkHarness(
+            name="test-benchmark", path=sample_benchmark, harness=harness
+        )
+
         with pytest.raises(Exception, match="trial_output_dir does not exist"):
             runner.run_benchmark(
-                benchmark_path=sample_benchmark,
+                benchmark_harness=benchmark_harness,
                 mode="full",
                 trial_output_dir=nonexistent_dir,
             )
