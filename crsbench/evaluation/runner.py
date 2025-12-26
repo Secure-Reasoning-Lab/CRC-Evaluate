@@ -105,9 +105,7 @@ class BenchmarkRunner:
 
         self.logger.info(f"Starting benchmark evaluation: {benchmark_path}")
 
-        # Initialize snapshot management
-        snapshot_manager = None
-        snapshot_thread = None
+        # Record trial start time
         trial_start_time = time.time()
 
         # Validate snapshot configuration
@@ -167,75 +165,22 @@ class BenchmarkRunner:
                 self.logger.info("Pre-building CRS before snapshot period...")
                 self.crs_executor.build_crs(benchmark_path, trial_output_dir)
 
-            # Step 7: Start snapshot thread if enabled
-            if self.snapshot_period and self.snapshot_period > 0 and trial_output_dir:
-                self.logger.info(
-                    f"Starting snapshot manager (period={self.snapshot_period}s)"
-                )
-                snapshot_manager = SnapshotManager(
-                    trial_dir=trial_output_dir,
-                    snapshot_period=self.snapshot_period,
-                    trial_start_time=trial_start_time,
-                )
-                snapshot_thread = threading.Thread(
-                    target=snapshot_manager.run, daemon=True
-                )
-                snapshot_thread.start()
+            # Step 7: Run evaluation on each harness (with per-harness snapshots and verification)
+            verification_results = self._run_harness_evaluations(
+                config=config,
+                benchmark_path=benchmark_path,
+                collector=collector,
+                trial_output_dir=trial_output_dir or Path(),
+                trial_start_time=trial_start_time,
+                oss_fuzz_path=oss_fuzz_path,
+                skip_verification=skip_verification,
+            )
 
-            try:
-                # Step 8: Run evaluation on each harness
-                self._run_harness_evaluations(
-                    config, benchmark_path, collector, trial_output_dir
-                )
+            # Step 8: Set POV statistics from aggregated verification results
+            if verification_results:
+                collector.set_pov_stats(verification_results)
 
-            finally:
-                # Step 9: Capture final snapshot and stop snapshot thread
-                if snapshot_manager:
-                    self.logger.info("Capturing final snapshot...")
-                    try:
-                        snapshot_manager.capture_snapshot()
-                    except Exception as e:
-                        self.logger.warning(f"Failed to capture final snapshot: {e}")
-
-                    self.logger.info("Stopping snapshot manager...")
-                    snapshot_manager.stop()
-                    if snapshot_thread and snapshot_thread.is_alive():
-                        snapshot_thread.join(timeout=5.0)
-                        if snapshot_thread.is_alive():
-                            self.logger.warning(
-                                "Snapshot thread did not stop within timeout"
-                            )
-
-            # Step 10: Verify generated POVs/patches (conditional on CRS type)
-            verification_results = []
-            if not skip_verification and isinstance(
-                self.crs_executor, CRSBugFindingExecutor
-            ):
-                # POV verification for bug-finding CRS
-                if oss_fuzz_path:
-                    # Determine CRS output directory
-                    actual_crs_output_dir = (
-                        trial_output_dir / "output" if trial_output_dir else None
-                    )
-
-                    if actual_crs_output_dir:
-                        verification_results = self._verify_povs(
-                            benchmark_path=benchmark_path,
-                            crs_output_dir=actual_crs_output_dir,
-                            oss_fuzz_path=oss_fuzz_path,
-                        )
-                        # Set POV statistics from verification results
-                        collector.set_pov_stats(verification_results)
-                    else:
-                        self.logger.warning(
-                            "Cannot verify POVs: crs_output_dir not available"
-                        )
-                else:
-                    self.logger.warning(
-                        "Skipping POV verification: oss_fuzz_path not provided"
-                    )
-
-            # Step 11: Generate final report
+            # Step 9: Generate final report
             report = collector.finalize_report()
 
             self.logger.info(
@@ -327,86 +272,199 @@ class BenchmarkRunner:
         config: BenchmarkConfig,
         benchmark_path: Path,
         collector: ResultCollector,
-        trial_output_dir: Optional[Path] = None,
-    ) -> None:
-        """Run CRS evaluation on all harnesses.
+        trial_output_dir: Path,
+        trial_start_time: float,
+        oss_fuzz_path: Optional[Path] = None,
+        *,
+        skip_verification: bool = False,
+    ) -> List[VerifResult]:
+        """Run CRS evaluation on all harnesses with per-harness snapshots and verification.
 
         Note: Source code is already prepared at the correct commit by
         TrialDirectoryPreparer, so commit information is not passed to executors.
+
+        Args:
+            config: Benchmark configuration
+            benchmark_path: Path to benchmark directory
+            collector: Result collector
+            trial_output_dir: Trial output directory (required for snapshots)
+            trial_start_time: Unix timestamp when trial started
+            oss_fuzz_path: Path to oss-fuzz directory (for verification)
+            skip_verification: Skip POV verification
+
+        Returns:
+            Aggregated verification results from all harnesses
         """
         self.logger.info(
             f"Running evaluation on {len(config.harness_files)} harnesses..."
         )
 
+        all_verification_results: List[VerifResult] = []
+
         for harness in config.harness_files:
-            self.logger.info(f"Evaluating harness: {harness.name}")
+            # Run single harness evaluation with snapshot and verification
+            harness_result, verification_results = self._run_single_harness_evaluation(
+                harness=harness,
+                benchmark_path=benchmark_path,
+                trial_output_dir=trial_output_dir,
+                trial_start_time=trial_start_time,
+                oss_fuzz_path=oss_fuzz_path,
+                skip_verification=skip_verification,
+            )
 
-            try:
-                # Run CRS on this harness (path resolution handled internally in CRS)
-                # Note: commit information is not passed to executor - source code is
-                # already prepared at the correct commit by TrialDirectoryPreparer
-                crs_result = self.crs_executor.run_crs(
+            # Add harness result to collector
+            collector.add_harness_result(harness_result)
+
+            # Aggregate verification results
+            all_verification_results.extend(verification_results)
+
+        return all_verification_results
+
+    def _run_single_harness_evaluation(
+        self,
+        harness: Any,
+        benchmark_path: Path,
+        trial_output_dir: Path,
+        trial_start_time: float,
+        oss_fuzz_path: Optional[Path],
+        *,
+        skip_verification: bool,
+    ) -> tuple[HarnessResult, List[VerifResult]]:
+        """Run evaluation for a single harness with snapshot management and verification.
+
+        Args:
+            harness: Harness configuration
+            benchmark_path: Path to benchmark directory
+            trial_output_dir: Trial output directory
+            trial_start_time: Unix timestamp when trial started
+            oss_fuzz_path: Path to oss-fuzz directory (for verification)
+            skip_verification: Skip POV verification
+
+        Returns:
+            Tuple of (HarnessResult, List of verification results)
+        """
+        snapshot_manager = None
+        snapshot_thread = None
+        verification_results: List[VerifResult] = []
+
+        self.logger.info(f"Evaluating harness: {harness.name}")
+
+        try:
+            # Start snapshot thread for this harness
+            if self.snapshot_period and self.snapshot_period > 0:
+                self.logger.info(
+                    f"Starting snapshot manager for harness '{harness.name}' "
+                    f"(period={self.snapshot_period}s)"
+                )
+                snapshot_manager = SnapshotManager(
+                    trial_dir=trial_output_dir,
+                    snapshot_period=self.snapshot_period,
+                    trial_start_time=trial_start_time,
+                )
+                snapshot_thread = threading.Thread(
+                    target=snapshot_manager.run, daemon=True
+                )
+                snapshot_thread.start()
+
+            # Run CRS on this harness
+            crs_result = self.crs_executor.run_crs(
+                benchmark_path=benchmark_path,
+                harness=harness,
+                trial_output_dir=trial_output_dir,
+            )
+
+            # Create harness result
+            harness_result = HarnessResult(
+                name=harness.name,
+                path=harness.path,
+                execution_time=crs_result.execution_time,
+                build_successful=crs_result.success,
+                build_output=crs_result.output,
+            )
+
+            # Verify POVs for this harness
+            if (
+                not skip_verification
+                and isinstance(self.crs_executor, CRSBugFindingExecutor)
+                and oss_fuzz_path
+            ):
+                crs_output_dir = trial_output_dir / "output"
+                verification_results = self._verify_povs(
                     benchmark_path=benchmark_path,
-                    harness=harness,
-                    trial_output_dir=trial_output_dir or Path(),
+                    crs_output_dir=crs_output_dir,
+                    oss_fuzz_path=oss_fuzz_path,
+                    harness_name=harness.name,
                 )
 
-                # POV processing now handled by _verify_povs() after all harness evaluations
-                # Create harness result
-                harness_result = HarnessResult(
-                    name=harness.name,
-                    path=harness.path,
-                    execution_time=crs_result.execution_time,
-                    build_successful=crs_result.success,
-                    build_output=crs_result.output,
-                )
+            return harness_result, verification_results
 
-                collector.add_harness_result(harness_result)
+        except Exception as e:
+            self.logger.error(f"Failed to evaluate harness '{harness.name}': {str(e)}")
+            # Create error result
+            harness_result = HarnessResult(
+                name=harness.name,
+                path=harness.path,
+                execution_time=0.0,
+                build_successful=False,
+                build_output=f"Error: {str(e)}",
+            )
+            return harness_result, []
 
-            except Exception as e:
-                self.logger.error(
-                    f"Failed to evaluate harness '{harness.name}': {str(e)}"
+        finally:
+            # Capture final snapshot and stop snapshot thread
+            if snapshot_manager:
+                self.logger.info(
+                    f"Capturing final snapshot for harness '{harness.name}'..."
                 )
-                # Create error result for this harness (POV verification happens later)
-                harness_result = HarnessResult(
-                    name=harness.name,
-                    path=harness.path,
-                    execution_time=0.0,
-                    build_successful=False,
-                    build_output=f"Error: {str(e)}",
-                )
+                try:
+                    snapshot_manager.capture_snapshot()
+                except Exception as e:
+                    self.logger.warning(f"Failed to capture final snapshot: {e}")
 
-                collector.add_harness_result(harness_result)
+                self.logger.info("Stopping snapshot manager...")
+                snapshot_manager.stop()
+                if snapshot_thread and snapshot_thread.is_alive():
+                    snapshot_thread.join(timeout=5.0)
+                    if snapshot_thread.is_alive():
+                        self.logger.warning(
+                            "Snapshot thread did not stop within timeout"
+                        )
 
     def _verify_povs(
-        self, benchmark_path: Path, crs_output_dir: Path, oss_fuzz_path: Path
+        self,
+        benchmark_path: Path,
+        crs_output_dir: Path,
+        oss_fuzz_path: Path,
+        harness_name: str,
     ) -> List[VerifResult]:
-        """Verify CRS-generated POVs against benchmark variants.
+        """Verify CRS-generated POVs against benchmark variants for a specific harness.
 
         Args:
             benchmark_path: Path to benchmark directory
             crs_output_dir: Path to CRS output directory containing POVs
             oss_fuzz_path: Path to oss-fuzz directory
+            harness_name: Name of the harness to verify POVs for
 
         Returns:
-            List of verification results
+            List of verification results for this harness
         """
         try:
-            self.logger.info("Starting POV verification...")
+            self.logger.info(f"Starting POV verification for harness: {harness_name}")
             engine = VerificationEngine(
                 oss_fuzz_path=oss_fuzz_path,
                 timeout=120,
-                dedup_strategy="patch-based",  # TODO: make it configuralbe
+                dedup_strategy="patch-based",  # TODO: make it configurable
             )
-            pov_dir = (
-                crs_output_dir / "povs"
-            )  # TODO: crs_output_dir / "povs" / {harness_name}
+            pov_dir = crs_output_dir / "povs" / harness_name
             return engine.verify_benchmark(
                 benchmark_path=benchmark_path,
                 pov_dir=pov_dir,
                 deduplicate=True,  # TODO: configurable?
-                # TODO: harness_filter = harness_name
+                harness_filter=harness_name,
             )
         except Exception as e:
-            self.logger.error(f"POV verification failed: {e}", exc_info=True)
+            self.logger.error(
+                f"POV verification failed for harness '{harness_name}': {e}",
+                exc_info=True,
+            )
             return []
