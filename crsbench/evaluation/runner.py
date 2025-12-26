@@ -295,6 +295,7 @@ class BenchmarkRunner:
         snapshot_manager = None
         snapshot_thread = None
         verification_results: List[VerifResult] = []
+        harness_result = None
 
         self.logger.info(f"Evaluating harness: {harness.name}")
 
@@ -331,22 +332,6 @@ class BenchmarkRunner:
                 build_output=crs_result.output,
             )
 
-            # Verify POVs for this harness
-            if (
-                not skip_verification
-                and isinstance(self.crs_executor, CRSBugFindingExecutor)
-                and oss_fuzz_path
-            ):
-                crs_output_dir = trial_output_dir / "output"
-                verification_results = self._verify_povs(
-                    benchmark_path=benchmark_path,
-                    crs_output_dir=crs_output_dir,
-                    oss_fuzz_path=oss_fuzz_path,
-                    harness_name=harness.name,
-                )
-
-            return harness_result, verification_results
-
         except Exception as e:
             self.logger.error(f"Failed to evaluate harness '{harness.name}': {str(e)}")
             # Create error result
@@ -357,7 +342,6 @@ class BenchmarkRunner:
                 build_successful=False,
                 build_output=f"Error: {str(e)}",
             )
-            return harness_result, []
 
         finally:
             # Capture final snapshot and stop snapshot thread
@@ -378,6 +362,24 @@ class BenchmarkRunner:
                         self.logger.warning(
                             "Snapshot thread did not stop within timeout"
                         )
+
+        # Verify POVs AFTER snapshot thread has stopped and final snapshot captured
+        if (
+            harness_result
+            and harness_result.build_successful
+            and not skip_verification
+            and isinstance(self.crs_executor, CRSBugFindingExecutor)
+            and oss_fuzz_path
+        ):
+            crs_output_dir = trial_output_dir / "output"
+            verification_results = self._verify_povs(
+                benchmark_path=benchmark_path,
+                crs_output_dir=crs_output_dir,
+                oss_fuzz_path=oss_fuzz_path,
+                harness_name=harness.name,
+            )
+
+        return harness_result, verification_results
 
     def _verify_povs(
         self,
