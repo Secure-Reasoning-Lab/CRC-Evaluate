@@ -347,8 +347,33 @@ def resolve_benchmark_harnesses(
 
     for entry in benchmark_entries:
         if entry.harnesses:
-            # Use specified harnesses
+            # Validate specified harnesses exist in meta.yaml
+            benchmark_path = benchmarks_root / entry.name
+            if not benchmark_path.exists():
+                raise FileNotFoundError(
+                    f"Benchmark directory not found: {benchmark_path}"
+                )
+
+            meta_yaml_path = benchmark_path / ".aixcc" / "meta.yaml"
+            if not meta_yaml_path.exists():
+                raise FileNotFoundError(f"meta.yaml not found: {meta_yaml_path}")
+
+            import yaml
+
+            with meta_yaml_path.open() as f:
+                meta_data = yaml.safe_load(f)
+
+            available_harnesses = {
+                h.get("name") for h in meta_data.get("harness_files", [])
+            }
+
+            # Validate each specified harness exists
             for harness in entry.harnesses:
+                if harness not in available_harnesses:
+                    raise ValueError(
+                        f"Harness '{harness}' not found in benchmark '{entry.name}'. "
+                        f"Available harnesses: {sorted(available_harnesses)}"
+                    )
                 pairs.append((entry.name, harness))
         else:
             # Load all harnesses from meta.yaml

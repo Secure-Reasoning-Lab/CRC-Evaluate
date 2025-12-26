@@ -167,23 +167,25 @@ class BenchmarkRunner:
                 self.logger.info("Pre-building CRS before snapshot period...")
                 self.crs_executor.build_crs(benchmark_path, trial_output_dir)
 
-            # Step 7: Run evaluation on specific harness (with snapshots and verification)
-            verification_results = self._run_harness_evaluations(
-                config=config,
+            # Step 7: Find specified harness (validation already done upstream)
+            harness = next(h for h in config.harness_files if h.name == harness_name)
+
+            # Step 8: Run evaluation on harness
+            harness_result, verification_results = self._run_harness_evaluation(
+                harness=harness,
                 benchmark_path=benchmark_path,
-                harness_name=harness_name,
-                collector=collector,
                 trial_output_dir=trial_output_dir or Path(),
                 trial_start_time=trial_start_time,
                 oss_fuzz_path=oss_fuzz_path,
                 skip_verification=skip_verification,
             )
+            collector.add_harness_result(harness_result)
 
-            # Step 8: Set POV statistics from aggregated verification results
+            # Step 9: Set POV statistics from verification results
             if verification_results:
                 collector.set_pov_stats(verification_results)
 
-            # Step 9: Generate final report
+            # Step 10: Generate final report
             report = collector.finalize_report()
 
             self.logger.info(
@@ -270,74 +272,7 @@ class BenchmarkRunner:
             )
         raise EvaluationError(f"Invalid evaluation mode: {mode}")
 
-    def _run_harness_evaluations(
-        self,
-        config: BenchmarkConfig,
-        benchmark_path: Path,
-        harness_name: str,
-        collector: ResultCollector,
-        trial_output_dir: Path,
-        trial_start_time: float,
-        oss_fuzz_path: Optional[Path] = None,
-        *,
-        skip_verification: bool = False,
-    ) -> List[VerifResult]:
-        """Run CRS evaluation on a specific harness with snapshots and verification.
-
-        Note: Source code is already prepared at the correct commit by
-        TrialDirectoryPreparer, so commit information is not passed to executors.
-
-        Args:
-            config: Benchmark configuration
-            benchmark_path: Path to benchmark directory
-            harness_name: Name of the specific harness to run
-            collector: Result collector
-            trial_output_dir: Trial output directory (required for snapshots)
-            trial_start_time: Unix timestamp when trial started
-            oss_fuzz_path: Path to oss-fuzz directory (for verification)
-            skip_verification: Skip POV verification
-
-        Returns:
-            Verification results from the specified harness
-        """
-        # Filter to only the specified harness
-        matching_harnesses = [h for h in config.harness_files if h.name == harness_name]
-
-        if not matching_harnesses:
-            raise EvaluationError(
-                f"Harness '{harness_name}' not found in benchmark configuration. "
-                f"Available harnesses: {[h.name for h in config.harness_files]}"
-            )
-
-        if len(matching_harnesses) > 1:
-            self.logger.warning(
-                f"Multiple harnesses with name '{harness_name}' found, using first match"
-            )
-
-        harness = matching_harnesses[0]
-        self.logger.info(f"Running evaluation on harness: {harness_name}")
-
-        all_verification_results: List[VerifResult] = []
-
-        # Run single harness evaluation (changed from loop over all harnesses)
-        harness_result, verification_results = self._run_single_harness_evaluation(
-            harness=harness,
-            benchmark_path=benchmark_path,
-            trial_output_dir=trial_output_dir,
-            trial_start_time=trial_start_time,
-            oss_fuzz_path=oss_fuzz_path,
-            skip_verification=skip_verification,
-        )
-
-        # Add harness result to collector
-        collector.add_harness_result(harness_result)
-
-        # Aggregate verification results
-        all_verification_results.extend(verification_results)
-
-        return all_verification_results
-
-    def _run_single_harness_evaluation(
+    def _run_harness_evaluation(
         self,
         harness: Any,
         benchmark_path: Path,
