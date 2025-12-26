@@ -445,6 +445,46 @@ if isinstance(obj, list):
 - Use Python's `typing` module for type annotations
   - Use `Optional[T]` for optional types, not `T | None` (for consistency with existing code)
   - Import: `from typing import Optional`
+- **Avoid `Any` type - use specific types instead**
+  - `Any` defeats the purpose of type checking and should be avoided
+  - Only use `Any` as a last resort for truly complex nested structures (e.g., deeply nested dicts with heterogeneous types)
+  - Prefer specific types: `dict[str, str]`, `list[int]`, `Union[str, int]`, etc.
+  - For complex structures, consider defining TypedDict or dataclasses
+  ```python
+  # Bad - loses all type safety
+  def process_data(data: Any) -> Any:
+      return data
+
+  # Good - specific types
+  def process_data(data: dict[str, str]) -> list[str]:
+      return list(data.values())
+
+  # Acceptable only for truly complex nested structures
+  def parse_legacy_config(config: Any) -> dict[str, str]:
+      # Complex nested dict with varying types from external source
+      ...
+  ```
+- **Use type aliases to give meaning to types**
+  - Define type aliases using `type` keyword (PEP 695) for better readability
+  - Makes code self-documenting and easier to understand
+  - Especially useful for complex types that appear multiple times
+  ```python
+  # Bad - unclear what the types represent
+  def process_user(user_id: str, metadata: dict[str, str | int]) -> dict[str, Any]:
+      ...
+
+  # Good - type aliases make intent clear
+  type UserId = str
+  type UserMetadata = dict[str, str | int]
+  type ProcessingResult = dict[str, str | int | list[str]]
+
+  def process_user(user_id: UserId, metadata: UserMetadata) -> ProcessingResult:
+      ...
+
+  # Also good for Union types
+  type CrsOutput = str | dict[str, str]
+  type FilePath = str | Path
+  ```
 - When working with functions that have Union return types:
   - Use `cast()` from typing module to help the type checker
   - Example: When `run_cmd()` returns `Union[Tuple[str, str], Tuple[str, str, int]]`:
