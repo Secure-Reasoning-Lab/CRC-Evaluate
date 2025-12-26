@@ -1,22 +1,25 @@
+# Directories to check/format
+dirs := "crsbench/ tests/"
+
 # Run type checking with ty
 typecheck:
     uv run --all-extras ty check
 
 # Run linter with ruff
 lint:
-    uv run ruff check .
+    uv run ruff check {{dirs}}
 
 # Run linter and fix auto-fixable issues
 lint-fix:
-    uv run ruff check . --fix
+    uv run ruff check {{dirs}} --fix
 
 # Run formatter with ruff
 format:
-    uv run ruff format .
+    uv run ruff format {{dirs}}
 
 # Check formatting without modifying files
 format-check:
-    uv run ruff format . --check
+    uv run ruff format {{dirs}} --check
 
 # Run all checks (typecheck + lint + format check)
 check:

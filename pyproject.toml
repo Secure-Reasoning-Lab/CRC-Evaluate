@@ -81,7 +81,7 @@ include = [
 target-version = "py312"
 line-length = 88
 src = ["crsbench"]
-exclude = [
+extend-exclude = [
     "crsbench/hint_generation/sarif_model.py",
     "crsbench/migration/",
     "tests/",
@@ -91,6 +91,8 @@ exclude = [
     "oss-crs-registry/",
     "snapshot-examples/",
     "scripts/",
+    "integration_tests/",
+    "claude_reference_projects/",
 ]
 
 [tool.ruff.lint]

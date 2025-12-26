@@ -1468,6 +1468,9 @@ requires-dist = [
 ]
 provides-extras = ["dev"]
 
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = ">=0.0.4" }]
+
 [[package]]
 name = "packaging"
 version = "25.0"
