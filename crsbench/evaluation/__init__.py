@@ -10,7 +10,11 @@ from crsbench.evaluation.analysis import (
     AnalyzerInterface,
 )
 from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
-from crsbench.evaluation.crs_executor import CRSExecutor, CRSResult, StubCRSExecutor
+from crsbench.evaluation.crs_executor import (
+    CRSExecutionResult,
+    CRSExecutor,
+    StubCRSExecutor,
+)
 from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
 from crsbench.evaluation.results import EvaluationReport, ResultCollector
 from crsbench.evaluation.runner import (
@@ -37,7 +41,7 @@ __all__ = [
     "EvaluationResult",
     "EvaluationError",
     "CRSExecutor",
-    "CRSResult",
+    "CRSExecutionResult",
     "StubCRSExecutor",
     "CRSBugFindingExecutor",
     "CRSPatchExecutor",

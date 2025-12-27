@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from crsbench.evaluation.crs_executor import CRSExecutor, CRSResult
+from crsbench.evaluation.crs_executor import CRSExecutionResult, CRSExecutor
 from crsbench.evaluation.process_utils import run_with_graceful_timeout
 from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import USE_GITCACHE
@@ -146,7 +146,7 @@ class CRSPatchExecutor(CRSExecutor):
         trial_output_dir: Path,
         *,
         on_run_start: Optional[Callable[[], None]] = None,
-    ) -> CRSResult:
+    ) -> CRSExecutionResult:
         """Run patch generation CRS.
 
         Args:
@@ -156,7 +156,7 @@ class CRSPatchExecutor(CRSExecutor):
             on_run_start: Callback invoked when CRS run starts (after build)
 
         Returns:
-            CRSResult with execution details
+            CRSExecutionResult with execution details
         """
         project_name = self._extract_project_name(benchmark_path)
         logger.info(
@@ -247,7 +247,7 @@ class CRSPatchExecutor(CRSExecutor):
                     f"CRS execution timed out after {execution_time:.1f}s (returncode: {returncode})"
                 )
 
-            return CRSResult(
+            return CRSExecutionResult(
                 harness_name=harness.name,
                 execution_time=execution_time,
                 success=success,
@@ -259,7 +259,7 @@ class CRSPatchExecutor(CRSExecutor):
             execution_time = time.time() - start_time
             logger.error(f"CRS execution failed: {e}")
 
-            return CRSResult(
+            return CRSExecutionResult(
                 harness_name=harness.name,
                 execution_time=execution_time,
                 success=False,

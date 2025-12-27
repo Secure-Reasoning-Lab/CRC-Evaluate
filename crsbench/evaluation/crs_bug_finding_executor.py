@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from crsbench.evaluation.crs_executor import CRSExecutor, CRSResult
+from crsbench.evaluation.crs_executor import CRSExecutionResult, CRSExecutor
 from crsbench.evaluation.process_utils import run_with_graceful_timeout
 from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import USE_GITCACHE
@@ -110,7 +110,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         trial_output_dir: Path,
         *,
         on_run_start: Optional[Callable[[], None]] = None,
-    ) -> CRSResult:
+    ) -> CRSExecutionResult:
         """Run CRS on a specific harness.
 
         Args:
@@ -120,7 +120,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             on_run_start: Callback invoked when CRS run starts (after build)
 
         Returns:
-            CRSResult with execution details
+            CRSExecutionResult with execution details
 
         Note:
             Source code is already prepared at the correct commit by
@@ -243,7 +243,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 logger.debug(f"stdout: {stdout}")
                 logger.debug(f"stderr: {stderr}")
 
-            return CRSResult(
+            return CRSExecutionResult(
                 harness_name=harness.name,
                 execution_time=execution_time,
                 success=success,
@@ -254,7 +254,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         except Exception as e:
             execution_time = time.time() - start_time
             logger.error(f"CRS execution failed: {e}", exc_info=True)
-            return CRSResult(
+            return CRSExecutionResult(
                 harness_name=harness.name,
                 execution_time=execution_time,
                 success=False,

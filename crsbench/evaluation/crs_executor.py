@@ -48,13 +48,13 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from crsbench.validation.schemas import HarnessFile
 
 
 @dataclass
-class CRSResult:
+class CRSExecutionResult:
     """Result from CRS execution."""
 
     harness_name: str
@@ -62,7 +62,6 @@ class CRSResult:
     success: bool
     output: str
     error: Optional[str] = None
-    povs_detected: Optional[List[str]] = None
 
 
 class CRSExecutor(ABC):
@@ -84,7 +83,7 @@ class CRSExecutor(ABC):
         trial_output_dir: Path,
         *,
         on_run_start: Optional[Callable[[], None]] = None,
-    ) -> CRSResult:
+    ) -> CRSExecutionResult:
         """Run CRS on a specific harness.
 
         Args:
@@ -94,7 +93,7 @@ class CRSExecutor(ABC):
             on_run_start: Callback invoked when CRS run starts (after build)
 
         Returns:
-            CRSResult: Result of CRS execution
+            CRSExecutionResult: Result of CRS execution
 
         Note:
             Source code is already prepared at the correct commit by
@@ -128,7 +127,7 @@ class StubCRSExecutor(CRSExecutor):
         trial_output_dir: Path,
         *,
         on_run_start: Optional[Callable[[], None]] = None,
-    ) -> CRSResult:
+    ) -> CRSExecutionResult:
         """Run stub CRS execution."""
         start_time = time.time()
 
@@ -159,23 +158,11 @@ Collecting sanitizer outputs...
 POVs analyzed: {len(harness.povs or [])}
 """
 
-            # Simulate POV detection
-            detected_povs = []
-            if harness.povs:
-                for pov in harness.povs:
-                    if random.random() < self.success_rate:
-                        detected_povs.append(pov.id)
-                        output += f"✓ POV '{pov.id}' detected - {pov.sanitizer} sanitizer triggered\n"
-                        output += f"  Error pattern: {pov.error_token}\n"
-                    else:
-                        output += f"✗ POV '{pov.id}' not detected\n"
-
-            return CRSResult(
+            return CRSExecutionResult(
                 harness_name=harness.name,
                 execution_time=execution_time,
                 success=True,
                 output=output.strip(),
-                povs_detected=detected_povs,
             )
         # Simulate execution failure
         error_messages = [
@@ -186,7 +173,7 @@ POVs analyzed: {len(harness.povs or [])}
         ]
         error = random.choice(error_messages)
 
-        return CRSResult(
+        return CRSExecutionResult(
             harness_name=harness.name,
             execution_time=execution_time,
             success=False,
