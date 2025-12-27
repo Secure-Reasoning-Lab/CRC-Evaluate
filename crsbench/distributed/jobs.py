@@ -13,6 +13,7 @@ import yaml
 from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
 from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
 from crsbench.evaluation.runner import BenchmarkRunner
+from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -50,36 +51,6 @@ def _get_crs_type(crs_name: str, registry_dir: Path) -> str:
         )
 
     return crs_type
-
-
-def _get_registry_name_from_config(crs_config_name: str, crs_configs_dir: Path) -> str:
-    """Extract CRS registry name from config-resource.yaml.
-
-    Args:
-        crs_config_name: Name of the CRS config (e.g., 'atlantis-multilang-dind_given_fuzzer')
-        crs_configs_dir: Path to CRS configs directory
-
-    Returns:
-        Registry name (e.g., 'atlantis-multilang-dind')
-
-    Raises:
-        FileNotFoundError: If config-resource.yaml not found
-        ValueError: If crs section is missing
-    """
-    config_resource_path = crs_configs_dir / crs_config_name / "config-resource.yaml"
-
-    if not config_resource_path.exists():
-        raise FileNotFoundError(f"CRS config file not found: {config_resource_path}")
-
-    with config_resource_path.open() as f:
-        config_data = yaml.safe_load(f)
-
-    crs_section = config_data.get("crs", {})
-    if not crs_section:
-        raise ValueError(f"No 'crs' section in {config_resource_path}")
-
-    # Return the first CRS registry name
-    return next(iter(crs_section.keys()))
 
 
 def build_crs_environment(
@@ -204,7 +175,7 @@ def run_crs_trial(
         )
 
         # Resolve CRS config name to registry name
-        registry_name = _get_registry_name_from_config(crs, crs_configs_dir)
+        registry_name = get_crs_registry_name(crs, crs_configs_dir)
         logger.info(f"Resolved CRS config '{crs}' to registry '{registry_name}'")
 
         # Detect CRS type from registry

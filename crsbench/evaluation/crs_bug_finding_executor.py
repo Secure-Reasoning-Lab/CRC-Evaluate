@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from crsbench.evaluation.crs_executor import CRSExecutionResult, CRSExecutor
 from crsbench.evaluation.process_utils import run_with_graceful_timeout
+from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import USE_GITCACHE
 from crsbench.validation.schemas import HarnessFile
@@ -61,6 +62,15 @@ class CRSBugFindingExecutor(CRSExecutor):
         self.litellm_mode = litellm_mode
         self.config: Dict[str, Any] = {}
         self.built_projects: Set[str] = set()
+
+    @property
+    def actual_crs_name(self) -> str:
+        """Get actual CRS name from config-resource.yaml (cached)."""
+        if not hasattr(self, "_actual_crs_name"):
+            self._actual_crs_name = get_crs_registry_name(
+                self.crs_config_name, self.crs_configs_dir
+            )
+        return self._actual_crs_name
 
     def configure_crs(self, config: Dict[str, Any]) -> None:
         """Configure the CRS with given parameters.
@@ -188,7 +198,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 relative_target = (
                     Path("crs-build")
                     / "artifacts"
-                    / self.crs_config_name
+                    / self.actual_crs_name  # # TODO: ensemble settings
                     / project_name
                     / "run"
                     / harness_name
@@ -577,7 +587,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         return (
             build_dir
             / "artifacts"
-            / self.crs_config_name
+            / self.actual_crs_name  # TODO: ensemble settings
             / benchmark_name
             / "run"
             / harness_name

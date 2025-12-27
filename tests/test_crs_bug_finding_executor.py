@@ -32,6 +32,14 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         self.crs_configs_dir = Path(self.temp_dir) / "crses" / "configs"
         self.crs_configs_dir.mkdir(parents=True)
 
+        # Create test CRS config directory with config-resource.yaml
+        test_crs_config_dir = self.crs_configs_dir / "test-crs"
+        test_crs_config_dir.mkdir(parents=True)
+        config_resource_path = test_crs_config_dir / "config-resource.yaml"
+        config_resource_path.write_text(
+            "crs:\n  test-crs:\n    workers:\n      - local\n"
+        )
+
         self.executor = CRSBugFindingExecutor(
             crs_config_name="test-crs",
             oss_fuzz_path=self.oss_fuzz_path,
@@ -91,9 +99,18 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
     def test_get_crs_output_dir(self):
         """Test CRS output directory derivation."""
         build_dir = Path(self.temp_dir) / "crs-build"
-        output_dir = self.executor._get_crs_output_dir(build_dir, "test-project")
+        output_dir = self.executor._get_crs_output_dir(
+            build_dir, "test-project", "test_harness"
+        )
 
-        expected = build_dir / "artifacts" / "test-crs" / "test-project"
+        expected = (
+            build_dir
+            / "artifacts"
+            / "test-crs"
+            / "test-project"
+            / "run"
+            / "test_harness"
+        )
         self.assertEqual(output_dir, expected)
 
     def test_resolve_crs_config_dir_absolute(self):
@@ -139,6 +156,11 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         # Create temp test-crs config directory and use absolute path
         test_crs_dir = Path(self.temp_dir) / "test-crs-config"
         test_crs_dir.mkdir(parents=True)
+        # Create config-resource.yaml for the test
+        config_resource_path = test_crs_dir / "config-resource.yaml"
+        config_resource_path.write_text(
+            "crs:\n  test-crs-config:\n    workers:\n      - local\n"
+        )
 
         # Create executor with absolute path for config
         executor = CRSBugFindingExecutor(
@@ -160,6 +182,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         mock_ensure_repo.assert_called_once_with(
             benchmark_dir=str(benchmark_path),
             project_dir=str(expected_source_dest),
+            mode=None,
             verbose=False,
         )
 
@@ -206,6 +229,11 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         # Create test-crs config directory
         test_crs_dir = Path(self.temp_dir) / "test-crs-config"
         test_crs_dir.mkdir(parents=True)
+        # Create config-resource.yaml for the test
+        config_resource_path = test_crs_dir / "config-resource.yaml"
+        config_resource_path.write_text(
+            "crs:\n  test-crs-config:\n    workers:\n      - local\n"
+        )
 
         # Create executor with absolute path
         executor = CRSBugFindingExecutor(
@@ -240,6 +268,11 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         # Create test-crs config directory
         test_crs_dir = Path(self.temp_dir) / "test-crs-config"
         test_crs_dir.mkdir(parents=True)
+        # Create config-resource.yaml for the test
+        config_resource_path = test_crs_dir / "config-resource.yaml"
+        config_resource_path.write_text(
+            "crs:\n  test-crs-config:\n    workers:\n      - local\n"
+        )
 
         # Create executor with absolute path
         executor = CRSBugFindingExecutor(
@@ -332,6 +365,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
 
         self.executor._store_execution_metadata(
             trial_output_dir=trial_dir,
+            project_name="test-project",
             harness=harness,
             cmd=cmd,
             hints_path=hints_path,
@@ -374,6 +408,11 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         # Create test-crs config directory
         test_crs_dir = Path(self.temp_dir) / "test-crs-config"
         test_crs_dir.mkdir(parents=True)
+        # Create config-resource.yaml for the test
+        config_resource_path = test_crs_dir / "config-resource.yaml"
+        config_resource_path.write_text(
+            "crs:\n  test-crs-config:\n    workers:\n      - local\n"
+        )
 
         # Create executor with absolute path
         executor = CRSBugFindingExecutor(
@@ -429,6 +468,11 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         # Create test-crs config directory
         test_crs_dir = Path(self.temp_dir) / "test-crs-config"
         test_crs_dir.mkdir(parents=True)
+        # Create config-resource.yaml for the test
+        config_resource_path = test_crs_dir / "config-resource.yaml"
+        config_resource_path.write_text(
+            "crs:\n  test-crs-config:\n    workers:\n      - local\n"
+        )
 
         # Create executor with absolute path
         executor = CRSBugFindingExecutor(
@@ -458,8 +502,9 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         result = executor.run_crs(benchmark_path, harness, trial_dir)
 
         # Verify result
-        self.assertFalse(result.success)
-        # Timeout is indicated by timed_out flag, error contains partial output
+        # Timeout is considered success (CRS ran for full specified time)
+        self.assertTrue(result.success)
+        self.assertTrue(result.timed_out)
         self.assertEqual(result.output, "partial output")
 
 
