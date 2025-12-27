@@ -27,8 +27,7 @@ from typing import Optional
 import yaml
 
 from crsbench.evaluation.coverage.builder import CoverageBuilder
-from crsbench.evaluation.coverage.models import CoverageConfig, CoverageSummary
-from crsbench.evaluation.coverage.store import CoverageStore
+from crsbench.evaluation.coverage.models import CoverageSummary
 from crsbench.evaluation.coverage.strategy import (
     CoverageStrategyError,
     create_coverage_strategy,
@@ -173,7 +172,7 @@ def run_coverage(args: argparse.Namespace) -> int:
     project_name = args.benchmark_path.name
     language = benchmark_config.get("language", "c")
     main_repo = benchmark_config.get("main_repo", "")
-    commit = get_target_commit(args.benchmark_path, benchmark_config)
+    commit = get_target_commit(args.benchmark_path)
 
     if not commit:
         logger.error("Could not determine target commit from benchmark")
@@ -269,7 +268,7 @@ def load_benchmark_config(benchmark_path: Path) -> Optional[dict]:
         return None
 
 
-def get_target_commit(benchmark_path: Path, config: dict) -> Optional[str]:
+def get_target_commit(benchmark_path: Path) -> Optional[str]:
     """Get target commit for coverage collection.
 
     For delta mode, uses ref_commit (vulnerable version).
@@ -277,7 +276,6 @@ def get_target_commit(benchmark_path: Path, config: dict) -> Optional[str]:
 
     Args:
         benchmark_path: Path to benchmark directory
-        config: Project configuration dict
 
     Returns:
         Commit hash or None if not found

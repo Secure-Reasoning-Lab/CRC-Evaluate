@@ -248,6 +248,7 @@ class CoverageBuilder:
         Returns:
             True if build succeeded, False otherwise
         """
+        logger.debug(f"Building coverage for {variant_name} ({language})")
         uid = os.getuid()
         cmd = [
             "python3",
