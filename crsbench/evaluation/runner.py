@@ -316,11 +316,17 @@ class BenchmarkRunner:
                 )
                 snapshot_thread.start()
 
+            # Create callback to set CRS run start time
+            def on_run_start() -> None:
+                if snapshot_manager:
+                    snapshot_manager.set_crs_run_start_time(time.time())
+
             # Run CRS on this harness
             crs_result = self.crs_executor.run_crs(
                 benchmark_path=benchmark_path,
                 harness=harness,
                 trial_output_dir=trial_output_dir,
+                on_run_start=on_run_start,
             )
 
             # Create harness result

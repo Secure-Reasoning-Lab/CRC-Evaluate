@@ -8,6 +8,7 @@ import json
 import shutil
 import subprocess
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -103,7 +104,12 @@ class CRSBugFindingExecutor(CRSExecutor):
         self._build_crs_if_needed(benchmark_path, project_name, trial_build_dir)
 
     def run_crs(
-        self, benchmark_path: Path, harness: HarnessFile, trial_output_dir: Path
+        self,
+        benchmark_path: Path,
+        harness: HarnessFile,
+        trial_output_dir: Path,
+        *,
+        on_run_start: Optional[Callable[[], None]] = None,
     ) -> CRSResult:
         """Run CRS on a specific harness.
 
@@ -111,6 +117,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             benchmark_path: Path to benchmark directory
             harness: Harness configuration
             trial_output_dir: Trial directory (from TrialDirectoryPreparer)
+            on_run_start: Callback invoked when CRS run starts (after build)
 
         Returns:
             CRSResult with execution details
@@ -137,6 +144,10 @@ class CRSBugFindingExecutor(CRSExecutor):
 
             # 2. Build CRS Docker image (this also clones the repository)
             self._build_crs_if_needed(benchmark_path, project_name, trial_build_dir)
+
+            # Signal that CRS run is starting (after build)
+            if on_run_start:
+                on_run_start()
 
             # 3. Verify source path exists after build
             source_path = self._find_source_path(trial_build_dir, project_name)

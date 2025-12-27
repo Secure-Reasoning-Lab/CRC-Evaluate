@@ -45,6 +45,7 @@ See design-docs/evaluation/crs-executors.md for executor implementation.
 import random
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -77,7 +78,12 @@ class CRSExecutor(ABC):
 
     @abstractmethod
     def run_crs(
-        self, benchmark_path: Path, harness: HarnessFile, trial_output_dir: Path
+        self,
+        benchmark_path: Path,
+        harness: HarnessFile,
+        trial_output_dir: Path,
+        *,
+        on_run_start: Optional[Callable[[], None]] = None,
     ) -> CRSResult:
         """Run CRS on a specific harness.
 
@@ -85,6 +91,7 @@ class CRSExecutor(ABC):
             benchmark_path: Path to benchmark directory
             harness: Harness file configuration
             trial_output_dir: Directory for this trial's outputs
+            on_run_start: Callback invoked when CRS run starts (after build)
 
         Returns:
             CRSResult: Result of CRS execution
@@ -115,10 +122,19 @@ class StubCRSExecutor(CRSExecutor):
             self.success_rate = config["success_rate"]
 
     def run_crs(
-        self, benchmark_path: Path, harness: HarnessFile, trial_output_dir: Path
+        self,
+        benchmark_path: Path,
+        harness: HarnessFile,
+        trial_output_dir: Path,
+        *,
+        on_run_start: Optional[Callable[[], None]] = None,
     ) -> CRSResult:
         """Run stub CRS execution."""
         start_time = time.time()
+
+        # Signal that run is starting (stub has no build phase)
+        if on_run_start:
+            on_run_start()
 
         # Simulate execution time
         time.sleep(self.simulation_delay)

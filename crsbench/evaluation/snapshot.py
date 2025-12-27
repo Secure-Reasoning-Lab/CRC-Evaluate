@@ -34,6 +34,7 @@ class Snapshot(BaseModel):
         timestamp: Unix timestamp when snapshot was captured
         elapsed_time: Seconds elapsed since trial start
         snapshot_period: Configured snapshot interval in seconds
+        running_elapsed_time: Seconds elapsed since CRS run started (None if CRS hasn't started)
         archive_path: Path to snapshot tar.gz file (None if not archived)
         is_complete: Whether snapshot has completion marker
         has_config: Whether CRS configuration was captured
@@ -51,6 +52,7 @@ class Snapshot(BaseModel):
     timestamp: float
     elapsed_time: float
     snapshot_period: int
+    running_elapsed_time: Optional[float] = None
 
     # Archive info
     archive_path: Optional[Path] = None
@@ -78,12 +80,14 @@ class SnapshotMetadata:
         timestamp: Unix timestamp when snapshot was captured
         elapsed_time: Seconds elapsed since trial start
         snapshot_period: Configured snapshot interval in seconds
+        running_elapsed_time: Seconds elapsed since CRS run started (None if CRS hasn't started)
     """
 
     cycle: int
     timestamp: float
     elapsed_time: float
     snapshot_period: int
+    running_elapsed_time: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -97,6 +101,7 @@ class SnapshotMetadata:
             timestamp=data["timestamp"],
             elapsed_time=data["elapsed_time"],
             snapshot_period=data["snapshot_period"],
+            running_elapsed_time=data.get("running_elapsed_time"),
         )
 
     def to_json(self) -> str:

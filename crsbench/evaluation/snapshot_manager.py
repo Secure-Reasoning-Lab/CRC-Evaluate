@@ -61,6 +61,7 @@ class SnapshotManager:
         self.trial_dir = trial_dir
         self.snapshot_period = snapshot_period
         self.trial_start_time = trial_start_time or time.time()
+        self.crs_run_start_time: Optional[float] = None
 
         # State tracking
         self.cycle = 0
@@ -123,6 +124,15 @@ class SnapshotManager:
         self.running = False
         self.shutdown_event.set()
 
+    def set_crs_run_start_time(self, start_time: float) -> None:
+        """Set CRS run start time (called after build completes).
+
+        Args:
+            start_time: Unix timestamp when CRS run started
+        """
+        self.crs_run_start_time = start_time
+        logger.info(f"CRS run start time set: {start_time}")
+
     def capture_snapshot(self) -> Snapshot:
         """Capture a single snapshot.
 
@@ -141,6 +151,11 @@ class SnapshotManager:
         self.cycle += 1
         snapshot_timestamp = time.time()
         elapsed_time = snapshot_timestamp - self.trial_start_time
+        running_elapsed_time = (
+            snapshot_timestamp - self.crs_run_start_time
+            if self.crs_run_start_time
+            else None
+        )
 
         logger.info(f"Capturing snapshot {self.cycle} (elapsed: {elapsed_time:.1f}s)")
 
@@ -160,7 +175,7 @@ class SnapshotManager:
 
         try:
             # Capture all snapshot data (tracking what was captured)
-            self._capture_metadata(temp_dir, elapsed_time)
+            self._capture_metadata(temp_dir, elapsed_time, running_elapsed_time)
 
             has_config = self._capture_config(temp_dir)
             has_execution_metadata = self._capture_execution_metadata(temp_dir)
@@ -191,6 +206,7 @@ class SnapshotManager:
                 timestamp=snapshot_timestamp,
                 elapsed_time=elapsed_time,
                 snapshot_period=self.snapshot_period,
+                running_elapsed_time=running_elapsed_time,
                 archive_path=archive_path,
                 is_complete=True,
                 has_config=has_config,
@@ -235,13 +251,16 @@ class SnapshotManager:
         """
         return self.trial_dir / "output"
 
-    def _capture_metadata(self, temp_dir: Path, elapsed_time: float):
+    def _capture_metadata(
+        self, temp_dir: Path, elapsed_time: float, running_elapsed_time: Optional[float]
+    ):
         """Capture snapshot metadata."""
         metadata = SnapshotMetadata(
             cycle=self.cycle,
             timestamp=time.time(),
             elapsed_time=elapsed_time,
             snapshot_period=self.snapshot_period,
+            running_elapsed_time=running_elapsed_time,
         )
 
         metadata_path = temp_dir / "metadata.json"

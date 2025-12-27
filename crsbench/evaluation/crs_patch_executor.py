@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -139,7 +140,12 @@ class CRSPatchExecutor(CRSExecutor):
         self._build_crs_if_needed(benchmark_path, project_name, trial_build_dir)
 
     def run_crs(
-        self, benchmark_path: Path, harness: HarnessFile, trial_output_dir: Path
+        self,
+        benchmark_path: Path,
+        harness: HarnessFile,
+        trial_output_dir: Path,
+        *,
+        on_run_start: Optional[Callable[[], None]] = None,
     ) -> CRSResult:
         """Run patch generation CRS.
 
@@ -147,6 +153,7 @@ class CRSPatchExecutor(CRSExecutor):
             benchmark_path: Path to benchmark directory
             harness: Harness configuration
             trial_output_dir: Directory for this trial's outputs
+            on_run_start: Callback invoked when CRS run starts (after build)
 
         Returns:
             CRSResult with execution details
@@ -162,6 +169,10 @@ class CRSPatchExecutor(CRSExecutor):
 
         # Build if needed (pass benchmark_path for repo manager integration)
         self._build_crs_if_needed(benchmark_path, project_name, trial_build_dir)
+
+        # Signal that CRS run is starting (after build)
+        if on_run_start:
+            on_run_start()
 
         # Prepare base output directory (CRS creates subdirectories)
         self._prepare_output_directory(trial_output_dir)
