@@ -1,4 +1,4 @@
-crs-multilang:
+atlantis-multilang:
   models: []
   dependencies:
     # Uses host docker socket directly (no dind)

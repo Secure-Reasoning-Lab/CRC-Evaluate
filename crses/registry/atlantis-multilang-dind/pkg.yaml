@@ -1,4 +1,4 @@
-name: crs-multilang-dind
+name: atlantis-multilang-dind
 type: bug-finding
 source:
   url: https://github.com/Team-Atlanta/atlantis-multilang-snapshot

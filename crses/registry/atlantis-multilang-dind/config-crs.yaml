@@ -1,4 +1,4 @@
-crs-multilang-dind:
+atlantis-multilang-dind:
   models: []
   dependencies:
     # Uses Docker-in-Docker for complete isolation
