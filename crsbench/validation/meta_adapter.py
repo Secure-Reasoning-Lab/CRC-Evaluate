@@ -7,16 +7,16 @@ This adapter wraps BenchmarkConfig and provides methods for:
 4. Generating variant names
 """
 
-import logging
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 import yaml
 
+from crsbench.utils.logger import get_logger
 from crsbench.validation.schemas import POV, BenchmarkConfig, HarnessFile
 from crsbench.validation.variant.models import BenchmarkMode, BuildTag
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class MetaYamlAdapter:

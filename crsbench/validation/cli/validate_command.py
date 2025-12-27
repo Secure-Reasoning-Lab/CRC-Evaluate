@@ -29,10 +29,11 @@ from typing import List, Optional
 
 import yaml
 
+from crsbench.utils.logger import get_logger
 from crsbench.validation.verification.engine import VerificationEngine
 from crsbench.validation.verification.models import VerificationResult
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def add_validate_subparser(subparsers: argparse._SubParsersAction) -> None:

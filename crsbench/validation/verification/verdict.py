@@ -19,16 +19,16 @@ DELTA Mode:
 - Else: UNINTENDED_CRASH (crashes on ref but not fixed by any patch)
 """
 
-import logging
 from typing import Dict, Optional
 
+from crsbench.utils.logger import get_logger
 from crsbench.validation.variant.models import BenchmarkMode, BuildTag
 from crsbench.validation.verification.models import (
     VerificationResult,
     VerificationStatus,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class VerdictResolver:

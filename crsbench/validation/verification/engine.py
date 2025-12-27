@@ -11,11 +11,11 @@ This module provides the main orchestrator for POV verification:
 
 from __future__ import annotations
 
-import logging
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
 
+from crsbench.utils.logger import get_logger
 from crsbench.validation.variant.models import BuildTag, BuildVersion
 
 if TYPE_CHECKING:
@@ -31,7 +31,7 @@ from crsbench.validation.verification.models import (
 from crsbench.validation.verification.reproducer import OSSFuzzReproducer
 from crsbench.validation.verification.verdict import VerdictResolver
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class VerificationEngine:

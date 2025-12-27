@@ -12,14 +12,15 @@ Exit code handling (with --propagate_exit_codes):
 - Other non-zero: Other crash types (UBSAN, MSAN, etc.)
 """
 
-import logging
 import os
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from crsbench.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Exit code constants from helper.py
 EXIT_CODE_TIMEOUT = 124  # Subprocess timeout in helper.py

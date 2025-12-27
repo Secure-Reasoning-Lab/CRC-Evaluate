@@ -7,19 +7,19 @@ This module handles:
 4. Managing build cache
 """
 
-import logging
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import clone_or_copy_cached_repo, run_git
 from crsbench.validation.meta_adapter import MetaYamlAdapter
 from crsbench.validation.variant.models import BenchmarkMode, BuildTag, BuildVersion
 from crsbench.validation.verification.reproducer import OSSFuzzReproducer
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class VariantBuilder:
