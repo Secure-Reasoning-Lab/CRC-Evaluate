@@ -161,8 +161,12 @@ class VerificationEngine:
             logger.error(f"Failed to build variants for {adapter.benchmark_name}")
             return []
 
-        # Find all POV files
-        pov_files = list(pov_dir.glob("*.bin")) + list(pov_dir.glob("*.pov"))
+        # Find all POV files (exclude dotfiles)
+        pov_files = [
+            f
+            for f in list(pov_dir.glob("*.bin")) + list(pov_dir.glob("*.pov"))
+            if not f.name.startswith(".")
+        ]
         if not pov_files:
             logger.warning(f"No POV files found in {pov_dir}")
             return []
@@ -262,7 +266,11 @@ class VerificationEngine:
             )
 
             # Count total items for progress tracking
-            pov_files = [f for f in pov_dir.glob("*") if f.is_file()]
+            pov_files = [
+                f
+                for f in pov_dir.glob("*")
+                if f.is_file() and not f.name.startswith(".")
+            ]
             total_items = len(harness_names) * len(pov_files)
             completed = 0
             start_time = time.time()
