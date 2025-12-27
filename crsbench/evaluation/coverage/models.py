@@ -1,0 +1,153 @@
+"""Coverage data models for CRSBench.
+
+This module provides Pydantic models for coverage data structures used
+during CRS evaluation. Coverage tracking enables measurement of code
+coverage achieved by fuzzing corpus files.
+
+Data Formats:
+- CorpusCoverage: Per-corpus file coverage data (stored as .cov files)
+- CoverageSummary: Aggregated coverage statistics
+- CoverageSnapshot: Point-in-time coverage for a snapshot cycle
+- CoverageConfig: Configuration for coverage collection
+"""
+
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+
+class CoverageConfig(BaseModel):
+    """Configuration for coverage collection during CRS evaluation.
+
+    Controls whether coverage is collected and how saturation detection
+    is performed. When enabled, coverage data is collected for each
+    corpus file during snapshot cycles.
+
+    Attributes:
+        enabled: Whether coverage collection is enabled.
+        language: Programming language for coverage strategy ('c' or 'java').
+        metric: Coverage metric to use ('line', 'edge', or 'function').
+        saturation_time: Time in seconds without new coverage before saturation.
+            Default is 21600 seconds (6 hours). If no new lines are covered
+            for this duration, coverage is considered saturated.
+    """
+
+    enabled: bool = False
+    language: str = Field(default="c", pattern="^(c|cpp|java|jvm)$")
+    metric: str = Field(default="line", pattern="^(line|edge|function)$")
+    saturation_time: int = Field(default=21600, ge=0)  # 6 hours in seconds
+
+
+class FunctionCoverage(BaseModel):
+    """Coverage data for a single function.
+
+    Represents the coverage information for one function,
+    including its source file location and covered lines.
+
+    Attributes:
+        src: Path to the source file containing the function.
+        lines: List of line numbers covered within the function.
+    """
+
+    src: str
+    lines: list[int] = Field(default_factory=list)
+
+
+class CorpusCoverage(BaseModel):
+    """Coverage data for a single corpus file.
+
+    Tracks coverage contribution from a single fuzzing corpus file,
+    including metadata about when it was discovered and whether
+    it contributes unique coverage.
+
+    Attributes:
+        hash: SHA256 hash of corpus content (12 hex characters).
+        first_seen_ts: Unix timestamp when corpus was first observed.
+        file_size: Size of the corpus file in bytes.
+        contributes_unique: Whether this corpus contributes unique coverage.
+        coverage: Function-level coverage data.
+            Format: {function_name: {src: str, lines: list[int]}}
+    """
+
+    hash: str = Field(..., min_length=12, max_length=12)
+    first_seen_ts: float
+    file_size: int = Field(..., ge=0)
+    contributes_unique: bool = False
+    coverage: dict[str, FunctionCoverage] = Field(default_factory=dict)
+
+
+class CoverageSummary(BaseModel):
+    """Aggregated coverage summary statistics.
+
+    Provides summary statistics for coverage across all corpus files,
+    including line and function coverage metrics.
+
+    Attributes:
+        metric: Coverage metric type ('line', 'edge', or 'function').
+        corpus_total: Total number of corpus files processed.
+        corpus_contributing: Number of corpus files that contribute unique coverage.
+        lines_covered: Number of unique lines covered.
+        lines_total: Total number of coverable lines.
+        lines_percent: Percentage of lines covered (0.0 to 100.0).
+        functions_covered: Number of functions with at least one covered line.
+        functions_total: Total number of functions.
+        saturation_detected: Whether coverage saturation has been detected.
+    """
+
+    metric: str = Field(default="line", pattern="^(line|edge|function)$")
+    corpus_total: int = Field(default=0, ge=0)
+    corpus_contributing: int = Field(default=0, ge=0)
+    lines_covered: int = Field(default=0, ge=0)
+    lines_total: int = Field(default=0, ge=0)
+    lines_percent: float = Field(default=0.0, ge=0.0, le=100.0)
+    functions_covered: int = Field(default=0, ge=0)
+    functions_total: int = Field(default=0, ge=0)
+    saturation_detected: bool = False
+
+
+class CoverageSnapshot(BaseModel):
+    """Point-in-time coverage data for a snapshot cycle.
+
+    Captures the coverage state at a specific point during CRS execution,
+    enabling tracking of coverage progress over time.
+
+    Attributes:
+        cycle: Snapshot cycle number (1-indexed).
+        timestamp: Unix timestamp when snapshot was captured.
+        elapsed_time: Seconds elapsed since trial start.
+        harness_name: Name of the harness being fuzzed.
+        summary: Aggregated coverage summary for this snapshot.
+        saturation_detected: Whether saturation was detected at this cycle.
+        new_corpus_count: Number of new corpus files discovered since last cycle.
+        new_lines_count: Number of new lines covered since last cycle.
+    """
+
+    cycle: int = Field(..., ge=1)
+    timestamp: float
+    elapsed_time: float = Field(..., ge=0.0)
+    harness_name: str
+    summary: CoverageSummary
+    saturation_detected: bool = False
+    new_corpus_count: int = Field(default=0, ge=0)
+    new_lines_count: int = Field(default=0, ge=0)
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class CoverageReport(BaseModel):
+    """Complete coverage report for a trial.
+
+    Aggregates all coverage snapshots for a trial, providing
+    a complete view of coverage progression over time.
+
+    Attributes:
+        harness_name: Name of the harness being evaluated.
+        snapshots: List of coverage snapshots in chronological order.
+        final_summary: Final coverage summary at trial completion.
+        saturation_cycle: Cycle number when saturation was detected (None if not).
+    """
+
+    harness_name: str
+    snapshots: list[CoverageSnapshot] = Field(default_factory=list)
+    final_summary: Optional[CoverageSummary] = None
+    saturation_cycle: Optional[int] = None
