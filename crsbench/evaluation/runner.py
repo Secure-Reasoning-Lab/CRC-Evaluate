@@ -384,6 +384,18 @@ class BenchmarkRunner:
                 oss_fuzz_path=oss_fuzz_path,
                 harness_name=harness.name,
             )
+        else:
+            # Log why verification was skipped
+            if not harness_result or not harness_result.build_successful:
+                self.logger.info("POV verification skipped: build unsuccessful")
+            elif skip_verification:
+                self.logger.info("POV verification skipped: verification disabled")
+            elif not isinstance(self.crs_executor, CRSBugFindingExecutor):
+                self.logger.info("POV verification skipped: not a bug finding executor")
+            elif not oss_fuzz_path:
+                self.logger.info(
+                    "POV verification skipped: oss-fuzz path not available"
+                )
 
         return harness_result, verification_results
 
