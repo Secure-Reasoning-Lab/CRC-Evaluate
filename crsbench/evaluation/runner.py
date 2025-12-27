@@ -14,6 +14,7 @@ from crsbench.utils.logger import get_logger
 from crsbench.validation import ValidationResult, VerificationEngine, validate_benchmark
 from crsbench.validation import VerificationResult as VerifResult
 from crsbench.validation.schemas import BenchmarkConfig, BenchmarkHarness, HarnessFile
+from crsbench.validation.verification.dedup import PatchBasedDedup
 
 # Set up logging
 logger = get_logger(__name__)
@@ -422,7 +423,7 @@ class BenchmarkRunner:
             engine = VerificationEngine(
                 oss_fuzz_path=oss_fuzz_path,
                 timeout=120,
-                dedup_strategy="patch-based",  # TODO: make it configurable
+                dedup_strategy=PatchBasedDedup(),  # TODO: make it configurable
             )
             pov_dir = crs_output_dir / "povs"
             return engine.verify_benchmark(

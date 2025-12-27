@@ -21,7 +21,8 @@ from crsbench.validation.variant.models import BuildTag, BuildVersion
 if TYPE_CHECKING:
     from crsbench.validation.meta_adapter import MetaYamlAdapter
 from crsbench.validation.verification.dedup import (
-    get_dedup_strategy,
+    DeduplicationStrategy,
+    PatchBasedDedup,
 )
 from crsbench.validation.verification.models import (
     VerificationRequest,
@@ -57,14 +58,14 @@ class VerificationEngine:
         self,
         oss_fuzz_path: Path,
         timeout: int = 120,
-        dedup_strategy: str = "patch-based",
+        dedup_strategy: DeduplicationStrategy | None = None,
     ):
         """Initialize the verification engine.
 
         Args:
             oss_fuzz_path: Path to oss-fuzz directory
             timeout: Timeout for reproduce operations in seconds
-            dedup_strategy: Name of deduplication strategy to use
+            dedup_strategy: Deduplication strategy instance (defaults to PatchBasedDedup)
         """
         # Lazy import to avoid circular dependencies
         from crsbench.validation.variant.builder import VariantBuilder
@@ -73,7 +74,7 @@ class VerificationEngine:
         self.timeout = timeout
         self.builder = VariantBuilder(oss_fuzz_path)
         self.reproducer = OSSFuzzReproducer(oss_fuzz_path, timeout)
-        self.dedup_strategy = get_dedup_strategy(dedup_strategy)
+        self.dedup_strategy = dedup_strategy if dedup_strategy else PatchBasedDedup()
         self._built_versions: Dict[str, List[BuildVersion]] = {}
 
     def verify_pov(

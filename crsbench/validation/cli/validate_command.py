@@ -30,6 +30,11 @@ from typing import List, Optional
 import yaml
 
 from crsbench.utils.logger import get_logger
+from crsbench.validation.verification.dedup import (
+    NoOpDedup,
+    PatchBasedDedup,
+    StatusBasedDedup,
+)
 from crsbench.validation.verification.engine import VerificationEngine
 from crsbench.validation.verification.models import VerificationResult
 
@@ -188,7 +193,16 @@ def run_validate(args: argparse.Namespace) -> int:
         return 1
 
     # Create verification engine
-    dedup_strategy = "none" if args.no_dedup else args.dedup_strategy
+    # Convert string strategy to class instance
+    if args.no_dedup:
+        dedup_strategy = NoOpDedup()
+    elif args.dedup_strategy == "none":
+        dedup_strategy = NoOpDedup()
+    elif args.dedup_strategy == "status-based":
+        dedup_strategy = StatusBasedDedup()
+    else:  # "patch-based" (default)
+        dedup_strategy = PatchBasedDedup()
+
     engine = VerificationEngine(
         oss_fuzz_path=oss_fuzz_path,
         timeout=args.timeout,
