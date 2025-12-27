@@ -406,7 +406,7 @@ class BenchmarkRunner:
                 timeout=120,
                 dedup_strategy="patch-based",  # TODO: make it configurable
             )
-            pov_dir = crs_output_dir / "povs" / harness_name
+            pov_dir = crs_output_dir / "povs"
             return engine.verify_benchmark(
                 benchmark_path=benchmark_path,
                 pov_dir=pov_dir,
