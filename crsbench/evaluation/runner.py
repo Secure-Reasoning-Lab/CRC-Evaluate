@@ -334,8 +334,8 @@ class BenchmarkRunner:
                 name=harness.name,
                 path=harness.path,
                 execution_time=crs_result.execution_time,
-                build_successful=crs_result.success,
-                build_output=crs_result.output,
+                run_successful=crs_result.success,
+                run_output=crs_result.output,
             )
 
         except Exception as e:
@@ -345,8 +345,8 @@ class BenchmarkRunner:
                 name=harness.name,
                 path=harness.path,
                 execution_time=0.0,
-                build_successful=False,
-                build_output=f"Error: {str(e)}",
+                run_successful=False,
+                run_output=f"Error: {str(e)}",
             )
 
         finally:
@@ -372,7 +372,7 @@ class BenchmarkRunner:
         # Verify POVs AFTER snapshot thread has stopped and final snapshot captured
         if (
             harness_result
-            and harness_result.build_successful
+            and harness_result.run_successful
             and not skip_verification
             and isinstance(self.crs_executor, CRSBugFindingExecutor)
             and oss_fuzz_path
@@ -386,8 +386,8 @@ class BenchmarkRunner:
             )
         else:
             # Log why verification was skipped
-            if not harness_result or not harness_result.build_successful:
-                self.logger.info("POV verification skipped: build unsuccessful")
+            if not harness_result or not harness_result.run_successful:
+                self.logger.info("POV verification skipped: run unsuccessful")
             elif skip_verification:
                 self.logger.info("POV verification skipped: verification disabled")
             elif not isinstance(self.crs_executor, CRSBugFindingExecutor):

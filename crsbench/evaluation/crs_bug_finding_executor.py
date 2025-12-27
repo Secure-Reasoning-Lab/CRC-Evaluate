@@ -233,10 +233,12 @@ class CRSBugFindingExecutor(CRSExecutor):
             )
 
             # 7. Return result
-            success = returncode == 0 and not timed_out
+            # Timeout is considered success (CRS ran for full specified time)
+            # Only other errors count as failure
+            success = returncode == 0 or timed_out
             if timed_out:
-                logger.warning(
-                    f"CRS execution timeout after {execution_time}s (returncode: {returncode})"
+                logger.info(
+                    f"CRS execution completed full timeout period {execution_time}s (returncode: {returncode})"
                 )
             elif not success:
                 logger.warning(f"CRS execution returned non-zero code: {returncode}")
@@ -248,7 +250,8 @@ class CRSBugFindingExecutor(CRSExecutor):
                 execution_time=execution_time,
                 success=success,
                 output=stdout,
-                error=stderr if not success or timed_out else None,
+                error=stderr if not success else None,
+                timed_out=timed_out,
             )
 
         except Exception as e:
@@ -260,6 +263,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 success=False,
                 output="",
                 error=str(e),
+                timed_out=False,
             )
 
     def _get_litellm_env(self) -> Dict[str, str]:

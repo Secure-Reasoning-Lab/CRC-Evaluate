@@ -241,10 +241,12 @@ class CRSPatchExecutor(CRSExecutor):
                 returncode=returncode,
             )
 
-            success = returncode == 0 and not timed_out
+            # Timeout is considered success (CRS ran for full specified time)
+            # Only other errors count as failure
+            success = returncode == 0 or timed_out
             if timed_out:
-                logger.error(
-                    f"CRS execution timed out after {execution_time:.1f}s (returncode: {returncode})"
+                logger.info(
+                    f"CRS execution completed full timeout period {execution_time:.1f}s (returncode: {returncode})"
                 )
 
             return CRSExecutionResult(
@@ -252,7 +254,8 @@ class CRSPatchExecutor(CRSExecutor):
                 execution_time=execution_time,
                 success=success,
                 output=stdout,
-                error=stderr if not success or timed_out else None,
+                error=stderr if not success else None,
+                timed_out=timed_out,
             )
 
         except Exception as e:
@@ -265,6 +268,7 @@ class CRSPatchExecutor(CRSExecutor):
                 success=False,
                 output="",
                 error=str(e),
+                timed_out=False,
             )
 
     def _build_crs_if_needed(

@@ -19,8 +19,8 @@ class HarnessResult:
     name: str
     path: str
     execution_time: Optional[float] = None
-    build_successful: bool = True
-    build_output: Optional[str] = None
+    run_successful: bool = True
+    run_output: Optional[str] = None
 
 
 @dataclass

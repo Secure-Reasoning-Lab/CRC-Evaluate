@@ -62,6 +62,7 @@ class CRSExecutionResult:
     success: bool
     output: str
     error: Optional[str] = None
+    timed_out: bool = False
 
 
 class CRSExecutor(ABC):
