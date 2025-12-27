@@ -85,7 +85,10 @@ class VerdictResolver:
 
         # Check if POV triggers the vulnerability at all
         if not base_crashed:
-            logger.info(f"[{benchmark_name}] NOT_VULNERABLE - base did not crash")
+            pov_prefix = f"[{pov_id}] " if pov_id else ""
+            logger.debug(
+                f"{pov_prefix}[{benchmark_name}] NOT_VULNERABLE - base did not crash"
+            )
             return VerificationResult(
                 status=VerificationStatus.NOT_VULNERABLE,
                 benchmark=benchmark_name,
@@ -97,8 +100,9 @@ class VerdictResolver:
         # Check if allpatched still crashes (unintended crash)
         allpatched_crashed = crash_results.get(BuildTag.ALL_PATCHED, True)
         if allpatched_crashed:
-            logger.info(
-                f"[{benchmark_name}] UNINTENDED_CRASH - allpatched still crashes"
+            pov_prefix = f"[{pov_id}] " if pov_id else ""
+            logger.warning(
+                f"{pov_prefix}[{benchmark_name}] UNINTENDED_CRASH - allpatched still crashes"
             )
             return VerificationResult(
                 status=VerificationStatus.UNINTENDED_CRASH,
@@ -116,7 +120,8 @@ class VerdictResolver:
         ]
 
         if matched_cpvs:
-            logger.info(f"[{benchmark_name}] CPV - matched {matched_cpvs}")
+            pov_prefix = f"[{pov_id}] " if pov_id else ""
+            logger.info(f"{pov_prefix}[{benchmark_name}] CPV - matched {matched_cpvs}")
             return VerificationResult(
                 status=VerificationStatus.CPV,
                 benchmark=benchmark_name,
@@ -126,7 +131,10 @@ class VerdictResolver:
             )
 
         # Crashes base but no CPV variant crashes - this is a zeroday
-        logger.info(f"[{benchmark_name}] ZERODAY - crashes base but no CPV matched")
+        pov_prefix = f"[{pov_id}] " if pov_id else ""
+        logger.warning(
+            f"{pov_prefix}[{benchmark_name}] ZERODAY - crashes base but no CPV matched"
+        )
         return VerificationResult(
             status=VerificationStatus.ZERODAY,
             benchmark=benchmark_name,
@@ -155,8 +163,9 @@ class VerdictResolver:
 
         # If base crashes, the bug exists before the delta - it's a zeroday
         if base_crashed:
-            logger.info(
-                f"[{benchmark_name}] ZERODAY - crashed on DELTA_BASE (pre-existing bug)"
+            pov_prefix = f"[{pov_id}] " if pov_id else ""
+            logger.warning(
+                f"{pov_prefix}[{benchmark_name}] ZERODAY - crashed on DELTA_BASE (pre-existing bug)"
             )
             return VerificationResult(
                 status=VerificationStatus.ZERODAY,
@@ -169,8 +178,9 @@ class VerdictResolver:
         # Check if POV crashes on ref (the vulnerable version)
         ref_crashed = crash_results.get(BuildTag.DELTA_REF, False)
         if not ref_crashed:
-            logger.info(
-                f"[{benchmark_name}] NOT_VULNERABLE - did not crash on DELTA_REF"
+            pov_prefix = f"[{pov_id}] " if pov_id else ""
+            logger.debug(
+                f"{pov_prefix}[{benchmark_name}] NOT_VULNERABLE - did not crash on DELTA_REF"
             )
             return VerificationResult(
                 status=VerificationStatus.NOT_VULNERABLE,
@@ -183,8 +193,9 @@ class VerdictResolver:
         # Check if allpatched still crashes
         allpatched_crashed = crash_results.get(BuildTag.ALL_PATCHED, True)
         if allpatched_crashed:
-            logger.info(
-                f"[{benchmark_name}] UNINTENDED_CRASH - allpatched still crashes"
+            pov_prefix = f"[{pov_id}] " if pov_id else ""
+            logger.warning(
+                f"{pov_prefix}[{benchmark_name}] UNINTENDED_CRASH - allpatched still crashes"
             )
             return VerificationResult(
                 status=VerificationStatus.UNINTENDED_CRASH,
@@ -202,7 +213,8 @@ class VerdictResolver:
         ]
 
         if matched_cpvs:
-            logger.info(f"[{benchmark_name}] CPV - matched {matched_cpvs}")
+            pov_prefix = f"[{pov_id}] " if pov_id else ""
+            logger.info(f"{pov_prefix}[{benchmark_name}] CPV - matched {matched_cpvs}")
             return VerificationResult(
                 status=VerificationStatus.CPV,
                 benchmark=benchmark_name,
@@ -212,8 +224,9 @@ class VerdictResolver:
             )
 
         # Crashes ref but no CPV variant crashes - unintended crash
-        logger.info(
-            f"[{benchmark_name}] UNINTENDED_CRASH - crashes ref but no CPV matched"
+        pov_prefix = f"[{pov_id}] " if pov_id else ""
+        logger.warning(
+            f"{pov_prefix}[{benchmark_name}] UNINTENDED_CRASH - crashes ref but no CPV matched"
         )
         return VerificationResult(
             status=VerificationStatus.UNINTENDED_CRASH,
