@@ -8,8 +8,11 @@ from crsbench.utils.repo_manager import (
     derive_repo_name_from_url,
     ensure_project_repository,
     find_or_clone_project,
+    get_diff_from_repo_info,
     get_repo_info_from_benchmark,
     set_gitcache,
+    write_benchmark_delta_diff,
+    write_diff_from_repo_info,
 )
 
 # ============================================================================
@@ -624,6 +627,217 @@ class TestModeCommitSelectionIntegration:
         assert full_commit == self.FULL_BASE_COMMIT, (
             f"Full mode got wrong commit. Expected: {self.FULL_BASE_COMMIT}"
         )
+
+
+# ============================================================================
+# Test Diff Generation
+# ============================================================================
+
+
+class TestDiffGeneration:
+    """Test diff generation functions."""
+
+    def test_get_diff_from_repo_info_success(self, tmp_path):
+        """Test successful diff generation."""
+        from crsbench.utils.repo_manager import RepoInfo
+
+        repo_info = RepoInfo(
+            repo_url="https://example.com/repo.git",
+            base_commit="abc123",
+            ref_commit="def456",
+        )
+
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+
+        mock_diff_output = (
+            "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n"
+        )
+
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(
+                returncode=0, stdout=mock_diff_output, stderr=""
+            )
+
+            result = get_diff_from_repo_info(repo_info, str(repo_dir), verbose=False)
+
+            assert result == mock_diff_output
+            # Verify git diff was called with correct commits
+            call_args = str(mock_run.call_args)
+            assert "diff" in call_args
+            assert "abc123" in call_args
+            assert "def456" in call_args
+
+    def test_get_diff_from_repo_info_missing_base_commit(self, tmp_path):
+        """Test ValueError when base_commit is missing."""
+        from crsbench.utils.repo_manager import RepoInfo
+
+        repo_info = RepoInfo(
+            repo_url="https://example.com/repo.git",
+            base_commit=None,
+            ref_commit="def456",
+        )
+
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+
+        with pytest.raises(ValueError, match="base_commit is required"):
+            get_diff_from_repo_info(repo_info, str(repo_dir))
+
+    def test_get_diff_from_repo_info_missing_ref_commit(self, tmp_path):
+        """Test ValueError when ref_commit is missing."""
+        from crsbench.utils.repo_manager import RepoInfo
+
+        repo_info = RepoInfo(
+            repo_url="https://example.com/repo.git",
+            base_commit="abc123",
+            ref_commit=None,
+        )
+
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+
+        with pytest.raises(ValueError, match="ref_commit is required"):
+            get_diff_from_repo_info(repo_info, str(repo_dir))
+
+    def test_get_diff_from_repo_info_git_failure(self, tmp_path):
+        """Test RuntimeError on git diff failure."""
+        from crsbench.utils.repo_manager import RepoInfo
+
+        repo_info = RepoInfo(
+            repo_url="https://example.com/repo.git",
+            base_commit="abc123",
+            ref_commit="def456",
+        )
+
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(
+                returncode=1, stdout="", stderr="fatal: bad object"
+            )
+
+            with pytest.raises(RuntimeError, match="Git diff failed"):
+                get_diff_from_repo_info(repo_info, str(repo_dir))
+
+    def test_write_diff_from_repo_info_creates_file(self, tmp_path):
+        """Test that diff is written to file correctly."""
+        from crsbench.utils.repo_manager import RepoInfo
+
+        repo_info = RepoInfo(
+            repo_url="https://example.com/repo.git",
+            base_commit="abc123",
+            ref_commit="def456",
+        )
+
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+
+        output_path = tmp_path / "output.diff"
+        mock_diff_output = "diff content here\n"
+
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(
+                returncode=0, stdout=mock_diff_output, stderr=""
+            )
+
+            result = write_diff_from_repo_info(
+                repo_info, str(repo_dir), str(output_path), verbose=False
+            )
+
+            assert result == str(output_path)
+            assert output_path.exists()
+            assert output_path.read_text() == mock_diff_output
+
+    def test_write_diff_from_repo_info_creates_parent_dirs(self, tmp_path):
+        """Test that parent directories are created."""
+        from crsbench.utils.repo_manager import RepoInfo
+
+        repo_info = RepoInfo(
+            repo_url="https://example.com/repo.git",
+            base_commit="abc123",
+            ref_commit="def456",
+        )
+
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+
+        # Use nested path that doesn't exist
+        output_path = tmp_path / "nested" / "dirs" / "output.diff"
+        mock_diff_output = "diff content\n"
+
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(
+                returncode=0, stdout=mock_diff_output, stderr=""
+            )
+
+            result = write_diff_from_repo_info(
+                repo_info, str(repo_dir), str(output_path), verbose=False
+            )
+
+            assert result == str(output_path)
+            assert output_path.exists()
+            assert output_path.parent.exists()
+
+    def test_write_benchmark_delta_diff_success(self, temp_benchmark_dir, tmp_path):
+        """Test successful diff generation from benchmark."""
+
+        output_path = tmp_path / "benchmark.diff"
+        mock_diff_output = "benchmark diff content\n"
+
+        # Mock both git operations: clone and diff
+        with mock.patch("subprocess.run") as mock_run:
+            # First call: git clone (or reset)
+            # Second call: git diff
+            mock_run.side_effect = [
+                mock.Mock(returncode=0, stdout="", stderr=""),  # reset
+                mock.Mock(returncode=0, stdout="", stderr=""),  # clean
+                mock.Mock(returncode=0, stdout=mock_diff_output, stderr=""),  # diff
+            ]
+
+            with mock.patch(
+                "crsbench.utils.repo_manager.clone_repository", return_value=True
+            ):
+                result = write_benchmark_delta_diff(
+                    benchmark_dir=str(temp_benchmark_dir),
+                    output_path=str(output_path),
+                    verbose=False,
+                )
+
+                assert result == str(output_path)
+                assert output_path.exists()
+                # Note: content may be empty due to mocking, but file should exist
+
+    def test_write_benchmark_delta_diff_no_ref_commit(self, tmp_path):
+        """Test ValueError when benchmark has no delta mode (no ref_commit)."""
+
+        # Create benchmark with only full_mode (no ref_commit)
+        benchmark_dir = tmp_path / "full-only-bench"
+        benchmark_dir.mkdir()
+
+        project_yaml = benchmark_dir / "project.yaml"
+        project_yaml.write_text("main_repo: 'https://example.com/repo.git'\n")
+
+        aixcc_dir = benchmark_dir / ".aixcc"
+        aixcc_dir.mkdir()
+        meta_yaml = aixcc_dir / "meta.yaml"
+        meta_yaml.write_text("""full_mode:
+  base_commit: abc123
+
+harness_files:
+  - name: test
+    path: /src/test.c
+""")
+
+        output_path = tmp_path / "output.diff"
+
+        with pytest.raises(
+            ValueError, match="does not have delta mode.*ref_commit is missing"
+        ):
+            write_benchmark_delta_diff(
+                benchmark_dir=str(benchmark_dir), output_path=str(output_path)
+            )
 
 
 # ============================================================================

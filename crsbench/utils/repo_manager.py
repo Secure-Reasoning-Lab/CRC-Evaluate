@@ -227,6 +227,159 @@ def reset_and_clean_repo(repo_dir: str, *, verbose: bool = False) -> bool:
     return True
 
 
+def get_diff_from_repo_info(
+    repo_info: RepoInfo,
+    repo_dir: str,
+    *,
+    verbose: bool = False,
+) -> str:
+    """Get git diff between base_commit and ref_commit from RepoInfo.
+
+    Args:
+        repo_info: Repository info containing base_commit and ref_commit
+        repo_dir: Path to git repository
+        verbose: Enable verbose logging
+
+    Returns:
+        Diff content as string
+
+    Raises:
+        ValueError: If base_commit or ref_commit is missing from repo_info
+        RuntimeError: If git diff command fails
+    """
+    # Validate commits exist
+    if not repo_info.base_commit:
+        raise ValueError("base_commit is required in repo_info")
+    if not repo_info.ref_commit:
+        raise ValueError("ref_commit is required in repo_info")
+
+    if verbose:
+        logger.info(
+            f"🔄 Generating diff between {repo_info.base_commit[:8]} and {repo_info.ref_commit[:8]}..."
+        )
+
+    # Run git diff
+    result = run_git(
+        ["diff", repo_info.base_commit, repo_info.ref_commit],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Git diff failed with exit code {result.returncode}\n"
+            f"stderr: {result.stderr}"
+        )
+
+    if verbose:
+        logger.info("✅ Successfully generated diff")
+
+    return result.stdout
+
+
+def write_diff_from_repo_info(
+    repo_info: RepoInfo,
+    repo_dir: str,
+    output_path: str,
+    *,
+    verbose: bool = False,
+) -> str:
+    """Write git diff to file from RepoInfo.
+
+    Args:
+        repo_info: Repository info containing base_commit and ref_commit
+        repo_dir: Path to git repository
+        output_path: Path to write diff file
+        verbose: Enable verbose logging
+
+    Returns:
+        Path to the written diff file
+
+    Raises:
+        ValueError: If base_commit or ref_commit is missing from repo_info
+        RuntimeError: If git diff command fails
+    """
+    # Get diff content
+    diff_content = get_diff_from_repo_info(repo_info, repo_dir, verbose=verbose)
+
+    # Create parent directories if needed
+    output_file = Path(output_path)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write diff to file
+    output_file.write_text(diff_content, encoding="utf-8")
+
+    if verbose:
+        logger.info(f"✅ Diff written to {output_path}")
+
+    return output_path
+
+
+def write_benchmark_delta_diff(
+    benchmark_dir: str,
+    output_path: str,
+    repos_dir: Optional[str] = None,
+    *,
+    verbose: bool = False,
+) -> str:
+    """Write git diff from benchmark delta mode.
+
+    Args:
+        benchmark_dir: Path to benchmark directory
+        output_path: Path to write diff file
+        repos_dir: Directory for repository cache (optional)
+        verbose: Enable verbose logging
+
+    Returns:
+        Path to the written diff file
+
+    Raises:
+        ValueError: If benchmark doesn't have delta mode (no ref_commit or base_commit)
+        FileNotFoundError: If benchmark configuration files are not found
+        RuntimeError: If git operations fail
+    """
+    # Get repository info from benchmark (delta mode)
+    repo_info = get_repo_info_from_benchmark(benchmark_dir, mode="delta")
+
+    # Validate delta mode exists
+    if not repo_info.ref_commit:
+        raise ValueError(
+            f"Benchmark {benchmark_dir} does not have delta mode (ref_commit is missing)"
+        )
+    if not repo_info.base_commit:
+        raise ValueError(
+            f"Benchmark {benchmark_dir} does not have base_commit in delta mode"
+        )
+
+    if verbose:
+        logger.info(f"📦 Processing benchmark: {benchmark_dir}")
+        logger.info(f"   base_commit: {repo_info.base_commit[:8]}")
+        logger.info(f"   ref_commit: {repo_info.ref_commit[:8]}")
+
+    # Ensure repository is cloned (needed to generate diff)
+    # Use base_commit since we need the repo at that point to generate diff
+    project_dir = ensure_project_repository(
+        benchmark_dir=benchmark_dir,
+        repos_dir=repos_dir,
+        commit=repo_info.base_commit,
+        verbose=verbose,
+    )
+
+    if not project_dir:
+        raise RuntimeError(f"Failed to clone repository for {benchmark_dir}")
+
+    # Write diff using repo_info
+    return write_diff_from_repo_info(
+        repo_info=repo_info,
+        repo_dir=project_dir,
+        output_path=output_path,
+        verbose=verbose,
+    )
+
+
 def clone_repository(
     repo_url: str,
     target_dir: str,
