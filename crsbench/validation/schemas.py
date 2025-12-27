@@ -387,6 +387,20 @@ class ExperimentConfig(BaseModel):
         default=False,
         description="Skip POV verification after CRS execution (default: False, verification enabled)",
     )
+    oss_fuzz_path: Optional[str] = Field(
+        default=None,
+        description="Path to oss-fuzz directory (defaults to ./oss-fuzz)",
+    )
+    coverage_enabled: bool = Field(
+        default=False,
+        description="Enable coverage collection during trials (default: False). "
+        "Use 'crsbench coverage' CLI for post-analysis.",
+    )
+    coverage_saturation_time: int = Field(
+        default=21600,
+        ge=0,
+        description="Time in seconds without new coverage before saturation (default: 21600 = 6 hours)",
+    )
 
     @field_validator("experiment")
     @classmethod
