@@ -348,6 +348,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         source_path = ensure_project_repository(
             benchmark_dir=str(benchmark_path),
             project_dir=str(source_dest),
+            mode=self.config.get("mode"),
             verbose=self.config.get("verbose", False),
         )
 

@@ -81,12 +81,15 @@ def run_git(args: List[str], **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(["git"] + args, **kwargs)
 
 
-def get_repo_info_from_benchmark(benchmark_dir: str) -> RepoInfo:
+def get_repo_info_from_benchmark(
+    benchmark_dir: str, *, mode: Optional[str] = None
+) -> RepoInfo:
     """
     Get repository information from benchmark configuration.
 
     Args:
         benchmark_dir: Path to benchmark directory
+        mode: Evaluation mode ('delta' or 'full'). If None, auto-detects from meta.yaml.
 
     Returns:
         RepoInfo with repo_url, repo_name (optional), base_commit, ref_commit
@@ -120,15 +123,24 @@ def get_repo_info_from_benchmark(benchmark_dir: str) -> RepoInfo:
     with meta_yaml.open() as f:
         meta_config = yaml.safe_load(f)
 
-    # Get base_commit from delta_mode or full_mode
+    # Get commits based on specified mode or auto-detect
     base_commit = None
     ref_commit = None
 
-    if "delta_mode" in meta_config:
-        base_commit = meta_config["delta_mode"].get("base_commit")
-        ref_commit = meta_config["delta_mode"].get("ref_commit")
-    elif "full_mode" in meta_config:
-        base_commit = meta_config["full_mode"].get("base_commit")
+    if mode == "delta":
+        if "delta_mode" in meta_config:
+            base_commit = meta_config["delta_mode"].get("base_commit")
+            ref_commit = meta_config["delta_mode"].get("ref_commit")
+    elif mode == "full":
+        if "full_mode" in meta_config:
+            base_commit = meta_config["full_mode"].get("base_commit")
+    else:
+        # Auto-detect: prefer delta_mode if available
+        if "delta_mode" in meta_config:
+            base_commit = meta_config["delta_mode"].get("base_commit")
+            ref_commit = meta_config["delta_mode"].get("ref_commit")
+        elif "full_mode" in meta_config:
+            base_commit = meta_config["full_mode"].get("base_commit")
 
     return RepoInfo(
         repo_url=repo_url,
@@ -505,6 +517,7 @@ def ensure_project_repository(
     project_dir: Optional[str] = None,
     commit: Optional[str] = None,
     *,
+    mode: Optional[str] = None,
     verbose: bool = False,
 ) -> Optional[str]:
     """
@@ -518,6 +531,7 @@ def ensure_project_repository(
         repos_dir: Directory to store cloned repositories (default: PROJECT_REPOS_DIR env var or .crsbench-repos)
         project_dir: Explicit project directory path (if provided, this is used directly)
         commit: Specific commit to checkout (if None, uses base_commit from meta.yaml)
+        mode: Evaluation mode ('delta' or 'full') for selecting the correct commit
         verbose: Enable verbose logging
 
     Returns:
@@ -553,7 +567,7 @@ def ensure_project_repository(
 
     # Get repository info from benchmark
     try:
-        repo_info = get_repo_info_from_benchmark(benchmark_dir)
+        repo_info = get_repo_info_from_benchmark(benchmark_dir, mode=mode)
     except Exception as e:
         logger.error(f"❌ Failed to get repository info: {e}")
         return None
@@ -565,13 +579,20 @@ def ensure_project_repository(
         if verbose:
             logger.info(f"Using explicit commit parameter: {target_commit[:8]}")
     else:
-        # Default to base_commit from meta.yaml
-        target_commit = repo_info.base_commit
-        if not target_commit:
-            logger.error(f"❌ No base_commit found in meta.yaml for {benchmark_dir}")
+        # Use ref_commit for delta mode, base_commit for full mode
+        if repo_info.ref_commit:
+            # Delta mode: use ref_commit (patched version)
+            target_commit = repo_info.ref_commit
+            if verbose:
+                logger.info(f"Using ref_commit from meta.yaml: {target_commit[:8]}")
+        elif repo_info.base_commit:
+            # Full mode: use base_commit
+            target_commit = repo_info.base_commit
+            if verbose:
+                logger.info(f"Using base_commit from meta.yaml: {target_commit[:8]}")
+        else:
+            logger.error(f"❌ No commit found in meta.yaml for {benchmark_dir}")
             return None
-        if verbose:
-            logger.info(f"Using base_commit from meta.yaml: {target_commit[:8]}")
 
     # Determine target directory
     if project_dir:
