@@ -108,6 +108,85 @@ harness_files:
         assert info.base_commit == "xyz789abc123"
         assert info.ref_commit is None
 
+    def test_get_repo_info_with_mode_delta(self, temp_benchmark_dir):
+        """Test repo info extraction with explicit mode='delta'."""
+        info = get_repo_info_from_benchmark(str(temp_benchmark_dir), mode="delta")
+
+        # Should get delta_mode commits
+        assert info.base_commit == "abc123def456"
+        assert info.ref_commit == "def789ghi012"
+
+    def test_get_repo_info_with_mode_full(self, tmp_path):
+        """Test repo info extraction with explicit mode='full'."""
+        benchmark_dir = tmp_path / "both-modes-bench"
+        benchmark_dir.mkdir()
+
+        # project.yaml
+        project_yaml = benchmark_dir / "project.yaml"
+        project_yaml.write_text("main_repo: 'https://github.com/test/repo.git'\n")
+
+        # meta.yaml with both modes
+        aixcc_dir = benchmark_dir / ".aixcc"
+        aixcc_dir.mkdir()
+        meta_yaml = aixcc_dir / "meta.yaml"
+        meta_yaml.write_text("""delta_mode:
+  base_commit: delta_base_commit
+  ref_commit: delta_ref_commit
+
+full_mode:
+  base_commit: full_base_commit
+
+harness_files:
+  - name: test
+    path: /src/test.c
+""")
+
+        # With mode='full', should get full_mode commit
+        info = get_repo_info_from_benchmark(str(benchmark_dir), mode="full")
+
+        assert info.base_commit == "full_base_commit"
+        assert info.ref_commit is None
+
+    def test_get_repo_info_mode_delta_vs_full(self, tmp_path):
+        """Test that mode parameter correctly selects commits from different modes."""
+        benchmark_dir = tmp_path / "dual-mode-bench"
+        benchmark_dir.mkdir()
+
+        # project.yaml
+        project_yaml = benchmark_dir / "project.yaml"
+        project_yaml.write_text("main_repo: 'https://github.com/test/repo.git'\n")
+
+        # meta.yaml with different commits for delta and full modes
+        aixcc_dir = benchmark_dir / ".aixcc"
+        aixcc_dir.mkdir()
+        meta_yaml = aixcc_dir / "meta.yaml"
+        meta_yaml.write_text("""delta_mode:
+  base_commit: delta_base_aaa
+  ref_commit: delta_ref_bbb
+
+full_mode:
+  base_commit: full_base_ccc
+
+harness_files:
+  - name: test
+    path: /src/test.c
+""")
+
+        # mode='delta' should use delta_mode
+        info_delta = get_repo_info_from_benchmark(str(benchmark_dir), mode="delta")
+        assert info_delta.base_commit == "delta_base_aaa"
+        assert info_delta.ref_commit == "delta_ref_bbb"
+
+        # mode='full' should use full_mode
+        info_full = get_repo_info_from_benchmark(str(benchmark_dir), mode="full")
+        assert info_full.base_commit == "full_base_ccc"
+        assert info_full.ref_commit is None
+
+        # mode=None (auto-detect) should prefer delta_mode
+        info_auto = get_repo_info_from_benchmark(str(benchmark_dir), mode=None)
+        assert info_auto.base_commit == "delta_base_aaa"
+        assert info_auto.ref_commit == "delta_ref_bbb"
+
 
 # ============================================================================
 # Test derive_repo_name_from_url
@@ -278,8 +357,10 @@ class TestEnsureProjectRepository:
                 verbose=False,
             )
 
-            # Should derive name from URL with commit: cp-c-curl-abc123de
-            assert result == str(repos_dir / "cp-c-curl-abc123de")
+            # temp_benchmark_dir has delta_mode with ref_commit: def789ghi012
+            # Should derive name from URL with ref_commit: cp-c-curl-def789gh
+            # (delta mode uses ref_commit, not base_commit)
+            assert result == str(repos_dir / "cp-c-curl-def789gh")
             # Verify clone was called
             assert mock_clone.called
 
@@ -367,8 +448,193 @@ class TestSetGitcache:
 
 
 # ============================================================================
+# Integration Tests with Real Benchmark
+# ============================================================================
+
+
+@pytest.fixture
+def real_benchmark_dir():
+    """Get the real sanity-mock-c-delta-01 benchmark directory."""
+    from pathlib import Path
+
+    benchmark_path = (
+        Path(__file__).parent.parent / "benchmarks" / "sanity-mock-c-delta-01"
+    )
+    if not benchmark_path.exists():
+        pytest.skip("sanity-mock-c-delta-01 benchmark not found")
+    return benchmark_path
+
+
+class TestModeCommitSelectionIntegration:
+    """Integration tests for mode-based commit selection using real benchmark.
+
+    These tests verify that:
+    - mode='delta' selects ref_commit (patched version)
+    - mode='full' selects base_commit (vulnerable version)
+
+    Expected commits for sanity-mock-c-delta-01:
+    - delta_mode.base_commit: eee49074120dd09bf9487fbea8513367750712e2
+    - delta_mode.ref_commit: 602b58633e288ae320a3b24cc4779337dba18e57
+    - full_mode.base_commit: 602b58633e288ae320a3b24cc4779337dba18e57
+    """
+
+    # Expected commits from sanity-mock-c-delta-01/.aixcc/meta.yaml
+    DELTA_BASE_COMMIT = "eee49074120dd09bf9487fbea8513367750712e2"
+    DELTA_REF_COMMIT = "602b58633e288ae320a3b24cc4779337dba18e57"
+    FULL_BASE_COMMIT = "602b58633e288ae320a3b24cc4779337dba18e57"
+
+    def test_get_repo_info_delta_mode_real_benchmark(self, real_benchmark_dir):
+        """Test that mode='delta' returns correct commits from real benchmark."""
+        info = get_repo_info_from_benchmark(str(real_benchmark_dir), mode="delta")
+
+        assert info.base_commit == self.DELTA_BASE_COMMIT
+        assert info.ref_commit == self.DELTA_REF_COMMIT
+
+    def test_get_repo_info_full_mode_real_benchmark(self, real_benchmark_dir):
+        """Test that mode='full' returns correct commits from real benchmark."""
+        info = get_repo_info_from_benchmark(str(real_benchmark_dir), mode="full")
+
+        assert info.base_commit == self.FULL_BASE_COMMIT
+        assert info.ref_commit is None
+
+    @pytest.mark.slow
+    @pytest.mark.integration
+    def test_ensure_project_repository_delta_mode(self, real_benchmark_dir, tmp_path):
+        """Test that mode='delta' clones repo at ref_commit (patched version)."""
+        import subprocess
+
+        project_dir = tmp_path / "delta-mode-clone"
+
+        result = ensure_project_repository(
+            benchmark_dir=str(real_benchmark_dir),
+            project_dir=str(project_dir),
+            mode="delta",
+            verbose=True,
+        )
+
+        assert result is not None
+        assert project_dir.exists()
+
+        # Verify the cloned repo is at the correct commit (ref_commit for delta)
+        git_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        actual_commit = git_result.stdout.strip()
+
+        assert actual_commit == self.DELTA_REF_COMMIT, (
+            f"Delta mode should checkout ref_commit. "
+            f"Expected: {self.DELTA_REF_COMMIT}, Got: {actual_commit}"
+        )
+
+    @pytest.mark.slow
+    @pytest.mark.integration
+    def test_ensure_project_repository_full_mode(self, real_benchmark_dir, tmp_path):
+        """Test that mode='full' clones repo at base_commit (vulnerable version)."""
+        import subprocess
+
+        project_dir = tmp_path / "full-mode-clone"
+
+        result = ensure_project_repository(
+            benchmark_dir=str(real_benchmark_dir),
+            project_dir=str(project_dir),
+            mode="full",
+            verbose=True,
+        )
+
+        assert result is not None
+        assert project_dir.exists()
+
+        # Verify the cloned repo is at the correct commit (base_commit for full)
+        git_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        actual_commit = git_result.stdout.strip()
+
+        assert actual_commit == self.FULL_BASE_COMMIT, (
+            f"Full mode should checkout base_commit. "
+            f"Expected: {self.FULL_BASE_COMMIT}, Got: {actual_commit}"
+        )
+
+    @pytest.mark.slow
+    @pytest.mark.integration
+    def test_delta_and_full_modes_produce_different_commits(
+        self, real_benchmark_dir, tmp_path
+    ):
+        """Test that delta and full modes produce different commits when expected.
+
+        Note: For sanity-mock-c-delta-01:
+        - delta mode uses ref_commit (602b5863...) - the patched version
+        - full mode uses base_commit (602b5863...) - same commit in this case
+
+        In general benchmarks where delta_mode.ref_commit != full_mode.base_commit,
+        this test would verify they produce different commits.
+        """
+        import subprocess
+
+        delta_dir = tmp_path / "delta-clone"
+        full_dir = tmp_path / "full-clone"
+
+        # Clone with delta mode
+        ensure_project_repository(
+            benchmark_dir=str(real_benchmark_dir),
+            project_dir=str(delta_dir),
+            mode="delta",
+            verbose=True,
+        )
+
+        # Clone with full mode
+        ensure_project_repository(
+            benchmark_dir=str(real_benchmark_dir),
+            project_dir=str(full_dir),
+            mode="full",
+            verbose=True,
+        )
+
+        # Get commits
+        delta_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=delta_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        delta_commit = delta_result.stdout.strip()
+
+        full_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=full_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        full_commit = full_result.stdout.strip()
+
+        # Verify each mode got the expected commit
+        assert delta_commit == self.DELTA_REF_COMMIT, (
+            f"Delta mode got wrong commit. Expected: {self.DELTA_REF_COMMIT}"
+        )
+        assert full_commit == self.FULL_BASE_COMMIT, (
+            f"Full mode got wrong commit. Expected: {self.FULL_BASE_COMMIT}"
+        )
+
+
+# ============================================================================
 # Marker for running specific test groups
 # ============================================================================
 
 # Run tests:
 #   uv run pytest tests/test_repo_manager.py -v
+#
+# Run only unit tests (fast):
+#   uv run pytest tests/test_repo_manager.py -v -m "not slow"
+#
+# Run integration tests:
+#   uv run pytest tests/test_repo_manager.py -v -m integration
