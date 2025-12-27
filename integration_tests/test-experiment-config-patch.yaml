@@ -11,6 +11,7 @@ description: "Integration test configuration for patch generation CRS"
 
 # Execution Configuration
 trials: 1
+mode: delta  # Evaluation mode: delta, full, or all
 max_total_time: 600  # 10 minutes for patch generation testing
 
 # CRS Selection - using atlantis-vincent (bug-fixing type)

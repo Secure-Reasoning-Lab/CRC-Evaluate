@@ -79,8 +79,6 @@ echo ""
 
 crsbench \
    --experiment-config "$CONFIG_FILE" \
-   --experiment-name "$EXPERIMENT_NAME" \
-   --benchmarks atlanta-nasm-delta-01 \
    --crses crs-libfuzzer \
    --oss-fuzz-path "$OSS_FUZZ_PATH" \
    --registry-dir "$REGISTRY_DIR" \

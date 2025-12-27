@@ -17,9 +17,12 @@ max_total_time: 300  # 5 minutes for quick testing
 crses:
   - crs-libfuzzer
 
+mode: delta # for quick testing
 # Benchmark Selection - using atlanta benchmark
 benchmarks:
   - atlanta-nasm-delta-01
+  # - sanity-mock-c-delta-01:
+  #     - fuzz_process_input_header
 
 # Difficulty Control
 difficulty_level: 1

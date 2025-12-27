@@ -11,6 +11,7 @@ description: "Integration test configuration for LibAFL CRS with minimal resourc
 
 # Execution Configuration
 trials: 1
+mode: delta  # Evaluation mode: delta, full, or all
 max_total_time: 300  # 5 minutes for quick testing
 
 # CRS Selection - using atlantis-c-libafl
