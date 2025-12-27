@@ -12,6 +12,7 @@ This module provides the main orchestrator for POV verification:
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
 
@@ -173,6 +174,13 @@ class VerificationEngine:
             [harness_filter] if harness_filter else adapter.get_harness_names()
         )
 
+        # Progress tracking
+        start_time = time.time()
+        last_report_time = start_time
+        total_items = len(pov_files) * len(harness_names)
+        completed = 0
+        report_interval = 300  # 5 minutes in seconds
+
         for pov_file in pov_files:
             pov_data = pov_file.read_bytes()
 
@@ -186,6 +194,17 @@ class VerificationEngine:
 
                 result = self.verify_pov(request, adapter, versions)
                 results.append(result)
+
+                # Progress reporting every 5 minutes
+                completed += 1
+                current_time = time.time()
+                if current_time - last_report_time >= report_interval:
+                    elapsed_minutes = (current_time - start_time) / 60
+                    logger.info(
+                        f"Progress: {completed}/{total_items} POVs verified "
+                        f"({elapsed_minutes:.1f} min elapsed)"
+                    )
+                    last_report_time = current_time
 
         # Deduplicate if requested
         if deduplicate:
