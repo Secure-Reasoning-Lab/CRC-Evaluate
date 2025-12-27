@@ -287,6 +287,8 @@ class CRSPatchExecutor(CRSExecutor):
             logger.info(f"CRS already built for {build_key}")
             return
 
+        build_start_time = time.time()
+
         # Use repository manager to ensure source code exists
         from crsbench.utils.repo_manager import ensure_project_repository
 
@@ -343,8 +345,11 @@ class CRSPatchExecutor(CRSExecutor):
                 logger.error(f"CRS build failed: {result.stderr}")
                 raise RuntimeError(f"Patch CRS build failed: {result.stderr}")
 
+            build_time = time.time() - build_start_time
             self.built_projects.add(build_key)
-            logger.info(f"Successfully built CRS for {project_name}")
+            logger.info(
+                f"Successfully built CRS for {project_name} in {build_time:.1f}s"
+            )
 
         except subprocess.TimeoutExpired as e:
             logger.error("CRS build timed out")

@@ -347,6 +347,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             logger.info(f"CRS already built for {build_key}, skipping build")
             return
 
+        build_start_time = time.time()
         logger.info(f"Building CRS for {build_key}")
 
         # Use repository manager to ensure source code exists
@@ -430,7 +431,8 @@ class CRSBugFindingExecutor(CRSExecutor):
                 logger.error(f"Build stderr: {result.stderr}")
                 raise ExecutorError(f"CRS build failed: {result.stderr}")
 
-            logger.info(f"Successfully built CRS for {build_key}")
+            build_time = time.time() - build_start_time
+            logger.info(f"Successfully built CRS for {build_key} in {build_time:.1f}s")
             self.built_projects.add(build_key)
 
         except subprocess.TimeoutExpired as e:
