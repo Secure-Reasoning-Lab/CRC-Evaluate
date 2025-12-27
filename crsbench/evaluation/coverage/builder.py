@@ -64,7 +64,7 @@ class CoverageBuilder:
         Args:
             oss_fuzz_path: Path to oss-fuzz directory
         """
-        self.oss_fuzz_path = Path(oss_fuzz_path)
+        self.oss_fuzz_path = Path(oss_fuzz_path).resolve()
         self.projects_base = self.oss_fuzz_path / "projects"
         self._helper_script = self.oss_fuzz_path / "infra" / "helper.py"
 

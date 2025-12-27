@@ -290,8 +290,12 @@ def get_target_commit(benchmark_path: Path) -> Optional[str]:
             meta = yaml.safe_load(f)
 
         # Check for ref_commit (delta mode) or base_commit (full mode)
-        ref_commit = meta.get("ref_commit")
-        base_commit = meta.get("base_commit")
+        # Commits are nested inside delta_mode/full_mode sections
+        delta_mode = meta.get("delta_mode", {})
+        full_mode = meta.get("full_mode", {})
+
+        ref_commit = delta_mode.get("ref_commit")
+        base_commit = full_mode.get("base_commit") or delta_mode.get("base_commit")
 
         # Prefer ref_commit for delta mode (vulnerable version)
         return ref_commit or base_commit
@@ -318,7 +322,8 @@ def get_first_harness(benchmark_path: Path) -> Optional[str]:
         with meta_yaml.open() as f:
             meta = yaml.safe_load(f)
 
-        harnesses = meta.get("harnesses", [])
+        # Check both harness_files (new format) and harnesses (legacy)
+        harnesses = meta.get("harness_files", []) or meta.get("harnesses", [])
         if harnesses and isinstance(harnesses, list):
             first_harness = harnesses[0]
             if isinstance(first_harness, dict):

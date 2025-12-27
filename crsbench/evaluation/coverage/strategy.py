@@ -49,7 +49,7 @@ class CoverageStrategy(ABC):
             project_name: Name of the project.
             language: Programming language (default: "c").
         """
-        self.oss_fuzz_path = Path(oss_fuzz_path)
+        self.oss_fuzz_path = Path(oss_fuzz_path).resolve()
         self.project_name = project_name
         self.language = language.lower()
         self._helper_path = self.oss_fuzz_path / "infra" / "helper.py"
