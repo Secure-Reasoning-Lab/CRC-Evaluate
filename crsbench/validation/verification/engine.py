@@ -260,8 +260,20 @@ class VerificationEngine:
             harness_names = (
                 [harness_filter] if harness_filter else adapter.get_harness_names()
             )
+
+            # Count total items for progress tracking
+            pov_files = [f for f in pov_dir.glob("*") if f.is_file()]
+            total_items = len(harness_names) * len(pov_files)
+            completed = 0
+            start_time = time.time()
+            last_report_time = start_time
+            report_interval = 300  # 5 minutes in seconds
+
+            logger.info(
+                f"Verifying {total_items} POVs against {adapter.benchmark_name}"
+            )
+
             for harness_name in harness_names:
-                pov_files = [f for f in pov_dir.glob("*") if f.is_file()]
                 for pov_file in pov_files:
                     pov_data = pov_file.read_bytes()
                     request = VerificationRequest(
@@ -272,6 +284,17 @@ class VerificationEngine:
                     )
                     result = self.verify_pov(request, adapter, versions)
                     results.append(result)
+
+                    # Progress reporting every 5 minutes
+                    completed += 1
+                    current_time = time.time()
+                    if current_time - last_report_time >= report_interval:
+                        elapsed_minutes = (current_time - start_time) / 60
+                        logger.info(
+                            f"Progress: {completed}/{total_items} POVs verified "
+                            f"({elapsed_minutes:.1f} min elapsed)"
+                        )
+                        last_report_time = current_time
         else:
             # Discover POVs from meta.yaml via adapter
             all_povs = adapter.get_all_pov_paths()
@@ -286,6 +309,13 @@ class VerificationEngine:
 
             logger.info(f"Verifying {len(all_povs)} POVs from meta.yaml")
 
+            # Progress tracking
+            total_items = len(all_povs)
+            completed = 0
+            start_time = time.time()
+            last_report_time = start_time
+            report_interval = 300  # 5 minutes in seconds
+
             for harness_name, _vuln_keyword, pov_path in all_povs:
                 pov_data = pov_path.read_bytes()
                 request = VerificationRequest(
@@ -296,6 +326,17 @@ class VerificationEngine:
                 )
                 result = self.verify_pov(request, adapter, versions)
                 results.append(result)
+
+                # Progress reporting every 5 minutes
+                completed += 1
+                current_time = time.time()
+                if current_time - last_report_time >= report_interval:
+                    elapsed_minutes = (current_time - start_time) / 60
+                    logger.info(
+                        f"Progress: {completed}/{total_items} POVs verified "
+                        f"({elapsed_minutes:.1f} min elapsed)"
+                    )
+                    last_report_time = current_time
 
         # Deduplicate if requested
         if deduplicate and results:
