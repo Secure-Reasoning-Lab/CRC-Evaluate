@@ -157,7 +157,15 @@ class SnapshotManager:
             else None
         )
 
-        logger.info(f"Capturing snapshot {self.cycle} (elapsed: {elapsed_time:.1f}s)")
+        # Log running time if CRS has started, otherwise log total elapsed time
+        if running_elapsed_time is not None:
+            logger.info(
+                f"Capturing snapshot {self.cycle} (running: {running_elapsed_time:.1f}s)"
+            )
+        else:
+            logger.info(
+                f"Capturing snapshot {self.cycle} (elapsed: {elapsed_time:.1f}s)"
+            )
 
         # Create temp directory for snapshot contents
         temp_dir = self.trial_dir / f".snapshot-{self.cycle:04d}"
