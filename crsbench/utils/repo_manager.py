@@ -565,13 +565,20 @@ def ensure_project_repository(
         if verbose:
             logger.info(f"Using explicit commit parameter: {target_commit[:8]}")
     else:
-        # Default to base_commit from meta.yaml
-        target_commit = repo_info.base_commit
-        if not target_commit:
-            logger.error(f"❌ No base_commit found in meta.yaml for {benchmark_dir}")
+        # Use ref_commit for delta mode, base_commit for full mode
+        if repo_info.ref_commit:
+            # Delta mode: use ref_commit (patched version)
+            target_commit = repo_info.ref_commit
+            if verbose:
+                logger.info(f"Using ref_commit from meta.yaml: {target_commit[:8]}")
+        elif repo_info.base_commit:
+            # Full mode: use base_commit
+            target_commit = repo_info.base_commit
+            if verbose:
+                logger.info(f"Using base_commit from meta.yaml: {target_commit[:8]}")
+        else:
+            logger.error(f"❌ No commit found in meta.yaml for {benchmark_dir}")
             return None
-        if verbose:
-            logger.info(f"Using base_commit from meta.yaml: {target_commit[:8]}")
 
     # Determine target directory
     if project_dir:
