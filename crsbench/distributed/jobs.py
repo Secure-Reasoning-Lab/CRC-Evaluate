@@ -208,6 +208,7 @@ def run_crs_trial(
                 "hint_sarif_level": config.get("hint_sarif_level"),
                 "hint_corpus_level": config.get("hint_corpus_level"),
                 "project_image_prefix": config.get("project_image_prefix", "aixcc-afc"),
+                "mode": mode,
             }
         )
 
