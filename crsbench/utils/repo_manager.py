@@ -476,6 +476,9 @@ def clone_or_copy_cached_repo(
             shutil.copytree(
                 cache_dir, target_dir, symlinks=True, ignore_dangling_symlinks=True
             )
+            # Reset target to ensure clean state after copy
+            # This fixes stale git index/stat cache issues from shutil.copytree
+            reset_and_clean_repo(target_dir, verbose=verbose)
             if verbose:
                 logger.info(f"✅ Successfully copied from cache to {target_dir}")
             return target_dir
