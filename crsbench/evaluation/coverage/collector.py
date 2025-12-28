@@ -7,7 +7,7 @@ CoverageStore for deduplication and persistence.
 Usage:
     strategy = LLVMCovLineStrategy(oss_fuzz_path, project_name)
     store = CoverageStore(store_dir)
-    collector = CoverageCollector(strategy, store)
+    collector = CoverageCollector(strategy, store, harness_name="fuzz_target")
 
     # Process new corpus files
     new_count = collector.process_new_corpus(corpus_dir)
@@ -45,17 +45,25 @@ class CoverageCollector:
     Attributes:
         strategy: CoverageStrategy instance for collecting coverage.
         store: CoverageStore instance for tracking and deduplicating corpus.
+        harness_name: Name of the fuzz target/harness.
     """
 
-    def __init__(self, strategy: CoverageStrategy, store: CoverageStore):
+    def __init__(
+        self,
+        strategy: CoverageStrategy,
+        store: CoverageStore,
+        harness_name: str,
+    ):
         """Initialize coverage collector.
 
         Args:
             strategy: CoverageStrategy instance for collecting coverage.
             store: CoverageStore instance for tracking and deduplicating corpus.
+            harness_name: Name of the fuzz target/harness for coverage collection.
         """
         self.strategy = strategy
         self.store = store
+        self.harness_name = harness_name
         self._last_corpus_total = 0
         self._last_lines_covered = 0
         self._processed_hashes: set[str] = set()
@@ -84,24 +92,26 @@ class CoverageCollector:
             logger.debug(f"No corpus files found in {corpus_dir}")
             return 0
 
-        # Find new files (not already processed)
-        new_files = []
+        # Find new files (not already processed) and cache their hashes
+        new_files_with_hash: list[tuple[Path, str]] = []
         for corpus_file in corpus_files:
             file_hash = self._compute_hash(corpus_file)
             if file_hash not in self._processed_hashes:
-                new_files.append(corpus_file)
+                new_files_with_hash.append((corpus_file, file_hash))
                 self._corpus_hash_to_path[file_hash] = corpus_file
 
-        if not new_files:
+        if not new_files_with_hash:
             logger.debug("No new corpus files to process")
             return 0
 
-        logger.info(f"Processing {len(new_files)} new corpus files from {corpus_dir}")
+        logger.info(
+            f"Processing {len(new_files_with_hash)} new corpus files from {corpus_dir}"
+        )
 
         # Collect batch coverage for the corpus directory
         try:
             summary_path = self.strategy.collect_batch_coverage(
-                harness_path=Path(self.strategy.project_name),
+                harness_path=Path(self.harness_name),
                 corpus_dir=corpus_dir,
             )
             cov_data = self._parse_coverage_data(summary_path)
@@ -116,18 +126,17 @@ class CoverageCollector:
         new_unique_count = 0
         timestamp = time.time()
 
-        for corpus_file in new_files:
-            file_hash = self._compute_hash(corpus_file)
-            self._processed_hashes.add(file_hash)
-
+        for corpus_file, file_hash in new_files_with_hash:
             try:
-                # Use empty coverage data per-file since batch coverage
-                # doesn't give per-file breakdown
+                # Use batch coverage data - all files in batch share same coverage
+                # since we can't determine per-file breakdown
                 _, contributes_unique = self.store.add_corpus(
                     corpus_path=corpus_file,
                     cov_data=cov_data,
                     timestamp=timestamp,
                 )
+                # Mark as processed only after successful add
+                self._processed_hashes.add(file_hash)
                 if contributes_unique:
                     new_unique_count += 1
             except Exception as e:
@@ -145,7 +154,7 @@ class CoverageCollector:
             logger.warning(f"Failed to update totals from summary: {e}")
 
         logger.info(
-            f"Processed {len(new_files)} corpus files, "
+            f"Processed {len(new_files_with_hash)} corpus files, "
             f"{new_unique_count} contributed unique coverage"
         )
         return new_unique_count

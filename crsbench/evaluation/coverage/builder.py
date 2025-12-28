@@ -106,7 +106,14 @@ class CoverageBuilder:
         """
         variant_name = self.get_coverage_variant_name(project_name)
         build_path = self.get_build_output_path(variant_name)
-        return build_path.exists() and any(build_path.iterdir())
+        project_path = self.projects_base / variant_name
+
+        # Both project directory and build output must exist
+        if not build_path.exists() or not project_path.exists():
+            return False
+
+        # Check that build output has actual files (not just base tools)
+        return any(build_path.iterdir())
 
     def build(
         self,
@@ -161,6 +168,7 @@ class CoverageBuilder:
         # Clone and checkout source
         import tempfile
 
+        build_success = False
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
                 repo_path = Path(temp_dir) / "repo"
@@ -184,6 +192,7 @@ class CoverageBuilder:
                     logger.error(f"Failed to build coverage variant: {variant_name}")
                     return None
 
+                build_success = True
                 return CoverageBuild(
                     project_name=project_name,
                     variant_name=variant_name,
@@ -195,6 +204,18 @@ class CoverageBuilder:
             except Exception as e:
                 logger.error(f"Build failed for {variant_name}: {e}")
                 return None
+            finally:
+                # Clean up variant project directory on failure
+                if not build_success and variant_project_path.exists():
+                    try:
+                        shutil.rmtree(variant_project_path)
+                        logger.debug(
+                            f"Cleaned up failed variant project: {variant_project_path}"
+                        )
+                    except Exception as cleanup_err:
+                        logger.warning(
+                            f"Failed to clean up variant project: {cleanup_err}"
+                        )
 
     def _create_variant_project(
         self,

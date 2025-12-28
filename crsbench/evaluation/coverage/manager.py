@@ -90,6 +90,9 @@ class CoverageManager:
         self.running = False
         self.shutdown_event = threading.Event()
 
+        # Lock for thread-safe access to snapshots and saturation state
+        self._lock = threading.Lock()
+
         # Time-based saturation detection state
         self._last_new_coverage_time = self.trial_start_time
         self._last_lines_covered = 0
@@ -163,6 +166,8 @@ class CoverageManager:
         archive. It captures the current coverage state and checks for
         saturation using time-based detection.
 
+        Thread-safe: Uses internal lock to protect snapshot state.
+
         Args:
             cycle: Snapshot cycle number (1-indexed)
 
@@ -172,44 +177,46 @@ class CoverageManager:
         timestamp = time.time()
         elapsed_time = timestamp - self.trial_start_time
 
-        # Get current summary from collector
+        # Get current summary from collector (already thread-safe via store lock)
         try:
             summary = self.collector.get_summary()
         except Exception as e:
             logger.warning(f"Failed to get coverage summary: {e}")
             summary = CoverageSummary(metric=self.config.metric)
 
-        # Calculate new lines since last snapshot
-        new_lines_count = summary.lines_covered - self._last_lines_covered
+        # Thread-safe state update and snapshot creation
+        with self._lock:
+            # Calculate new lines since last snapshot
+            new_lines_count = summary.lines_covered - self._last_lines_covered
 
-        # Calculate new corpus since last snapshot
-        last_corpus_count = (
-            self.snapshots[-1].summary.corpus_total if self.snapshots else 0
-        )
-        new_corpus_count = summary.corpus_total - last_corpus_count
+            # Calculate new corpus since last snapshot
+            last_corpus_count = (
+                self.snapshots[-1].summary.corpus_total if self.snapshots else 0
+            )
+            new_corpus_count = summary.corpus_total - last_corpus_count
 
-        # Update time-based saturation tracking
-        if new_lines_count > 0:
-            self._last_new_coverage_time = timestamp
+            # Update time-based saturation tracking
+            if new_lines_count > 0:
+                self._last_new_coverage_time = timestamp
 
-        # Check for saturation using time-based detection
-        saturation_detected = self.check_saturation(timestamp)
+            # Check for saturation using time-based detection
+            saturation_detected = self._check_saturation_locked(timestamp)
 
-        # Create snapshot
-        snapshot = CoverageSnapshot(
-            cycle=cycle,
-            timestamp=timestamp,
-            elapsed_time=elapsed_time,
-            harness_name=self.harness_name,
-            summary=summary,
-            saturation_detected=saturation_detected,
-            new_corpus_count=max(0, new_corpus_count),
-            new_lines_count=max(0, new_lines_count),
-        )
+            # Create snapshot
+            snapshot = CoverageSnapshot(
+                cycle=cycle,
+                timestamp=timestamp,
+                elapsed_time=elapsed_time,
+                harness_name=self.harness_name,
+                summary=summary,
+                saturation_detected=saturation_detected,
+                new_corpus_count=max(0, new_corpus_count),
+                new_lines_count=max(0, new_lines_count),
+            )
 
-        # Update state
-        self._last_lines_covered = summary.lines_covered
-        self.snapshots.append(snapshot)
+            # Update state
+            self._last_lines_covered = summary.lines_covered
+            self.snapshots.append(snapshot)
 
         logger.info(
             f"Coverage snapshot {cycle}: "
@@ -224,6 +231,8 @@ class CoverageManager:
     def check_saturation(self, current_time: Optional[float] = None) -> bool:
         """Check if coverage has saturated based on time without new coverage.
 
+        Thread-safe: Uses internal lock to protect saturation state.
+
         Saturation is detected when no new lines have been covered
         for saturation_time seconds.
 
@@ -233,11 +242,23 @@ class CoverageManager:
         Returns:
             True if saturation is detected, False otherwise
         """
-        if self._saturation_detected:
-            return True
-
         if current_time is None:
             current_time = time.time()
+
+        with self._lock:
+            return self._check_saturation_locked(current_time)
+
+    def _check_saturation_locked(self, current_time: float) -> bool:
+        """Check saturation without acquiring lock (must be called with lock held).
+
+        Args:
+            current_time: Current timestamp
+
+        Returns:
+            True if saturation is detected, False otherwise
+        """
+        if self._saturation_detected:
+            return True
 
         # Calculate time since last new coverage
         time_since_new_coverage = current_time - self._last_new_coverage_time
@@ -268,10 +289,13 @@ class CoverageManager:
     def is_saturated(self) -> bool:
         """Check if coverage saturation has been detected.
 
+        Thread-safe: Uses internal lock.
+
         Returns:
             True if saturation was detected, False otherwise
         """
-        return self._saturation_detected
+        with self._lock:
+            return self._saturation_detected
 
     def _save_final_state(self):
         """Save final coverage state to disk."""
