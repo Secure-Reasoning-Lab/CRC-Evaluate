@@ -114,7 +114,17 @@ class CoverageCollector:
                 harness_path=Path(self.harness_name),
                 corpus_dir=corpus_dir,
             )
-            cov_data = self._parse_coverage_data(summary_path)
+
+            # Try to get detailed coverage with line-level data
+            cov_data = {}
+            detailed_path = self.strategy.export_detailed_coverage(self.harness_name)
+            if detailed_path:
+                cov_data = self._parse_coverage_data(detailed_path)
+                logger.debug(f"Parsed detailed coverage: {len(cov_data)} functions")
+
+            # Fall back to summary if detailed export failed
+            if not cov_data:
+                cov_data = self._parse_coverage_data(summary_path)
         except CoverageStrategyError as e:
             logger.error(f"Failed to collect coverage: {e}")
             return 0
@@ -308,26 +318,31 @@ class CoverageCollector:
         result: dict = {}
 
         # Parse llvm-cov export format
+        # Structure: data[].functions[] has regions at entry level
+        # (not inside files[] - files[] has segments for file-level data)
         if "data" in data and data["data"]:
             for entry in data["data"]:
-                files = entry.get("files", [])
-                for file_data in files:
-                    filename = file_data.get("filename", "")
-                    functions = file_data.get("functions", [])
-                    for func in functions:
-                        func_name = func.get("name", "")
-                        if not func_name:
-                            continue
+                # Functions are at entry level, not inside files
+                functions = entry.get("functions", [])
+                for func in functions:
+                    func_name = func.get("name", "")
+                    if not func_name:
+                        continue
 
-                        # Extract covered line numbers from regions
-                        lines = []
-                        for region in func.get("regions", []):
-                            if len(region) >= 5 and region[4] > 0:
-                                # Region format: [line_start, col_start, line_end, col_end, count, ...]
-                                start_line = region[0]
-                                end_line = region[2]
-                                lines.extend(range(start_line, end_line + 1))
+                    # Get filename from filenames array (first element)
+                    filenames = func.get("filenames", [])
+                    filename = filenames[0] if filenames else ""
 
+                    # Extract covered line numbers from regions
+                    lines = []
+                    for region in func.get("regions", []):
+                        if len(region) >= 5 and region[4] > 0:
+                            # Region format: [line_start, col_start, line_end, col_end, count, ...]
+                            start_line = region[0]
+                            end_line = region[2]
+                            lines.extend(range(start_line, end_line + 1))
+
+                    if lines:  # Only add if we have covered lines
                         result[func_name] = {
                             "src": filename,
                             "lines": sorted(set(lines)),

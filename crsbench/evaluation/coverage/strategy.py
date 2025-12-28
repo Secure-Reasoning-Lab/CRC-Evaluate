@@ -90,6 +90,20 @@ class CoverageStrategy(ABC):
             True if build succeeded, False otherwise.
         """
 
+    def export_detailed_coverage(self, harness_name: str) -> Optional[Path]:  # noqa: ARG002
+        """Export detailed line-level coverage data.
+
+        Optional method that subclasses can override to provide
+        detailed coverage with line-level information.
+
+        Args:
+            harness_name: Name of the fuzz target.
+
+        Returns:
+            Path to detailed coverage JSON file, or None if not supported.
+        """
+        return None
+
     def _run_helper_command(
         self,
         args: list[str],
@@ -286,6 +300,87 @@ class LLVMCovLineStrategy(CoverageStrategy):
             Path to the coverage output directory, or None if not yet collected.
         """
         return self._coverage_output_dir
+
+    def export_detailed_coverage(self, harness_name: str) -> Optional[Path]:
+        """Export detailed line-level coverage data.
+
+        Runs llvm-cov export WITHOUT -summary-only to get full coverage data
+        including line execution counts and regions.
+
+        Args:
+            harness_name: Name of the fuzz target (e.g., "fuzz_target").
+
+        Returns:
+            Path to detailed coverage JSON file, or None if export fails.
+        """
+        if not self._coverage_output_dir:
+            logger.warning("Coverage not yet collected, cannot export detailed data")
+            return None
+
+        # Find the profdata file
+        dumps_dir = self.oss_fuzz_path / "build" / "out" / self.project_name / "dumps"
+        profdata_file = dumps_dir / "merged.profdata"
+
+        if not profdata_file.exists():
+            # Try per-target profdata
+            profdata_file = dumps_dir / f"{harness_name}.profdata"
+
+        if not profdata_file.exists():
+            logger.warning(f"Profdata file not found: {profdata_file}")
+            return None
+
+        # Find the fuzz target binary
+        out_dir = self.oss_fuzz_path / "build" / "out" / self.project_name
+        target_binary = out_dir / harness_name
+
+        if not target_binary.exists():
+            logger.warning(f"Fuzz target binary not found: {target_binary}")
+            return None
+
+        # Output file for detailed coverage - use /tmp to avoid permission issues
+        # since Docker creates files with root ownership in build/out/
+        import tempfile
+
+        detailed_json = (
+            Path(tempfile.gettempdir()) / f"coverage_{self.project_name}_detailed.json"
+        )
+
+        # Build llvm-cov export command WITHOUT -summary-only
+        cmd = [
+            "llvm-cov",
+            "export",
+            "-instr-profile",
+            str(profdata_file),
+            str(target_binary),
+            f"-path-equivalence=/,{out_dir}",
+            "-ignore-filename-regex=.*src/libfuzzer/.*",
+        ]
+
+        logger.debug(f"Running llvm-cov export for detailed coverage: {' '.join(cmd)}")
+
+        stdout, stderr, returncode, timed_out = run_with_graceful_timeout(
+            cmd,
+            timeout=300,
+            grace_period=30,
+            cwd=self.oss_fuzz_path,
+        )
+
+        if timed_out:
+            logger.error("llvm-cov export timed out")
+            return None
+
+        if returncode != 0:
+            logger.error(
+                f"llvm-cov export failed. Exit code: {returncode}\n"
+                f"stderr: {stderr[:500]}"
+            )
+            return None
+
+        # Write the detailed JSON
+        detailed_json.write_text(stdout)
+
+        logger.info(f"Detailed coverage exported to: {detailed_json}")
+        return detailed_json
 
 
 class JaCoCoLineStrategy(CoverageStrategy):

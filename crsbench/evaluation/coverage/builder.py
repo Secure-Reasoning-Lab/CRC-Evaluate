@@ -271,6 +271,10 @@ class CoverageBuilder:
         """
         logger.debug(f"Building coverage for {variant_name} ({language})")
         uid = os.getuid()
+
+        # Map language to OSS-Fuzz FUZZING_LANGUAGE format
+        fuzzing_language = language if language != "c" else "c++"
+
         cmd = [
             "python3",
             str(self._helper_script),
@@ -279,6 +283,8 @@ class CoverageBuilder:
             "coverage",
             "-e",
             f"BUILD_UID={uid}",
+            "-e",
+            f"FUZZING_LANGUAGE={fuzzing_language}",
             variant_name,
             str(src_path),
         ]
