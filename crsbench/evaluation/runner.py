@@ -509,7 +509,10 @@ class BenchmarkRunner:
             return None
 
         try:
+            import yaml
+
             from crsbench.evaluation.coverage import CoverageManager
+            from crsbench.evaluation.coverage.builder import CoverageBuilder
             from crsbench.evaluation.coverage.collector import CoverageCollector
             from crsbench.evaluation.coverage.models import CoverageConfig
             from crsbench.evaluation.coverage.store import CoverageStore
@@ -520,8 +523,6 @@ class BenchmarkRunner:
             project_yaml = benchmark_path / "project.yaml"
             language = "c"  # default
             if project_yaml.exists():
-                import yaml
-
                 with project_yaml.open() as f:
                     project_config = yaml.safe_load(f)
                     language = project_config.get("language", "c")
@@ -529,6 +530,59 @@ class BenchmarkRunner:
             # Get project name for coverage variant
             project_name = benchmark_path.name
             coverage_variant = f"{project_name}-coverage"
+
+            # Build coverage variant if not already built
+            builder = CoverageBuilder(self.oss_fuzz_path)
+            if not builder.is_built(project_name):
+                self.logger.info(f"Building coverage variant: {coverage_variant}")
+
+                # Read project.yaml for main_repo (not meta.yaml!)
+                project_yaml = benchmark_path / "project.yaml"
+                if not project_yaml.exists():
+                    self.logger.error(f"project.yaml not found: {project_yaml}")
+                    return None
+
+                with project_yaml.open() as f:
+                    project_config = yaml.safe_load(f)
+
+                main_repo = project_config.get("main_repo")
+                repo_name = project_config.get("repo_name")
+
+                # Read meta.yaml for commit info
+                meta_yaml = benchmark_path / ".aixcc" / "meta.yaml"
+                if not meta_yaml.exists():
+                    self.logger.error(f"meta.yaml not found: {meta_yaml}")
+                    return None
+
+                with meta_yaml.open() as f:
+                    meta = yaml.safe_load(f)
+
+                # Get target commit (ref_commit for delta mode)
+                delta_mode = meta.get("delta_mode", {})
+                target_commit = delta_mode.get("ref_commit")
+                if not target_commit:
+                    full_mode = meta.get("full_mode", {})
+                    target_commit = full_mode.get("base_commit")
+
+                if not main_repo or not target_commit:
+                    self.logger.error(
+                        "main_repo not found in project.yaml or target_commit not found in meta.yaml"
+                    )
+                    return None
+
+                build_result = builder.build(
+                    project_name=project_name,
+                    benchmark_path=benchmark_path,
+                    main_repo=main_repo,
+                    commit=target_commit,
+                    language=language,
+                    repo_name=repo_name,
+                )
+                if not build_result:
+                    self.logger.error(
+                        f"Failed to build coverage variant: {coverage_variant}"
+                    )
+                    return None
 
             # Create coverage config
             coverage_config = CoverageConfig(
@@ -549,8 +603,8 @@ class BenchmarkRunner:
             coverage_store_dir = trial_output_dir / "coverage"
             store = CoverageStore(coverage_store_dir)
 
-            # Create collector
-            collector = CoverageCollector(strategy, store)
+            # Create collector with harness_name
+            collector = CoverageCollector(strategy, store, harness_name)
 
             # Corpus directory (where CRS puts corpus files)
             corpus_dir = trial_output_dir / "output" / "corpus"
