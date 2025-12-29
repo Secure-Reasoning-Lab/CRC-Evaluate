@@ -90,7 +90,12 @@ class CoverageStrategy(ABC):
             True if build succeeded, False otherwise.
         """
 
-    def export_detailed_coverage(self, harness_name: str) -> Optional[Path]:  # noqa: ARG002
+    def export_detailed_coverage(
+        self,
+        harness_name: str,  # noqa: ARG002
+        *,
+        output_dir: Optional[Path] = None,  # noqa: ARG002
+    ) -> Optional[Path]:
         """Export detailed line-level coverage data.
 
         Optional method that subclasses can override to provide
@@ -98,6 +103,8 @@ class CoverageStrategy(ABC):
 
         Args:
             harness_name: Name of the fuzz target.
+            output_dir: Directory to write detailed coverage file to.
+                        If None, uses a default temporary location.
 
         Returns:
             Path to detailed coverage JSON file, or None if not supported.
@@ -301,7 +308,9 @@ class LLVMCovLineStrategy(CoverageStrategy):
         """
         return self._coverage_output_dir
 
-    def export_detailed_coverage(self, harness_name: str) -> Optional[Path]:
+    def export_detailed_coverage(
+        self, harness_name: str, *, output_dir: Optional[Path] = None
+    ) -> Optional[Path]:
         """Export detailed line-level coverage data.
 
         Runs llvm-cov export WITHOUT -summary-only to get full coverage data
@@ -309,6 +318,8 @@ class LLVMCovLineStrategy(CoverageStrategy):
 
         Args:
             harness_name: Name of the fuzz target (e.g., "fuzz_target").
+            output_dir: Directory to write detailed coverage file to.
+                        If None, uses a default temporary location.
 
         Returns:
             Path to detailed coverage JSON file, or None if export fails.
@@ -337,13 +348,19 @@ class LLVMCovLineStrategy(CoverageStrategy):
             logger.warning(f"Fuzz target binary not found: {target_binary}")
             return None
 
-        # Output file for detailed coverage - use /tmp to avoid permission issues
-        # since Docker creates files with root ownership in build/out/
-        import tempfile
+        # Output file for detailed coverage
+        if output_dir:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            detailed_json = output_dir / f"coverage_{harness_name}_detailed.json"
+        else:
+            # Fallback to /tmp if no output_dir provided
+            import tempfile
 
-        detailed_json = (
-            Path(tempfile.gettempdir()) / f"coverage_{self.project_name}_detailed.json"
-        )
+            detailed_json = (
+                Path(tempfile.gettempdir())
+                / f"coverage_{self.project_name}_detailed.json"
+            )
 
         # Build llvm-cov export command WITHOUT -summary-only
         cmd = [

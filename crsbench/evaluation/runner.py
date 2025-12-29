@@ -617,7 +617,10 @@ class BenchmarkRunner:
             store = CoverageStore(coverage_store_dir)
 
             # Create collector with harness_name
-            collector = CoverageCollector(strategy, store, harness_name)
+            # Pass output_dir so coverage files are saved to trial-N/coverage/
+            collector = CoverageCollector(
+                strategy, store, harness_name, output_dir=coverage_store_dir
+            )
 
             # Corpus directory (where CRS puts corpus files)
             # Use symlink path - don't create directory as it blocks the symlink

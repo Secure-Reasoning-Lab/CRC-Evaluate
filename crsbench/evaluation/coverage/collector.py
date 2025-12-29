@@ -46,6 +46,7 @@ class CoverageCollector:
         strategy: CoverageStrategy instance for collecting coverage.
         store: CoverageStore instance for tracking and deduplicating corpus.
         harness_name: Name of the fuzz target/harness.
+        output_dir: Directory to save coverage files to (e.g., trial-N/coverage/).
     """
 
     def __init__(
@@ -53,6 +54,8 @@ class CoverageCollector:
         strategy: CoverageStrategy,
         store: CoverageStore,
         harness_name: str,
+        *,
+        output_dir: Path | None = None,
     ):
         """Initialize coverage collector.
 
@@ -60,10 +63,13 @@ class CoverageCollector:
             strategy: CoverageStrategy instance for collecting coverage.
             store: CoverageStore instance for tracking and deduplicating corpus.
             harness_name: Name of the fuzz target/harness for coverage collection.
+            output_dir: Directory to save coverage files (summary.json, detailed.json).
+                        If None, files remain in their default locations.
         """
         self.strategy = strategy
         self.store = store
         self.harness_name = harness_name
+        self.output_dir = Path(output_dir) if output_dir else None
         self._last_corpus_total = 0
         self._last_lines_covered = 0
         self._processed_hashes: set[str] = set()
@@ -115,9 +121,18 @@ class CoverageCollector:
                 corpus_dir=corpus_dir,
             )
 
+            # Copy summary.json to output directory if specified
+            if self.output_dir and summary_path.exists():
+                self.output_dir.mkdir(parents=True, exist_ok=True)
+                local_summary = self.output_dir / "summary.json"
+                shutil.copy2(summary_path, local_summary)
+                logger.debug(f"Copied summary.json to {local_summary}")
+
             # Try to get detailed coverage with line-level data
             cov_data = {}
-            detailed_path = self.strategy.export_detailed_coverage(self.harness_name)
+            detailed_path = self.strategy.export_detailed_coverage(
+                self.harness_name, output_dir=self.output_dir
+            )
             if detailed_path:
                 cov_data = self._parse_coverage_data(detailed_path)
                 logger.debug(f"Parsed detailed coverage: {len(cov_data)} functions")
