@@ -163,16 +163,19 @@ def run_crs_trial(
 
         # Initialize CRS executor
         # Get required paths from config or use defaults
-        oss_fuzz_path = Path(config.get("oss_fuzz_path") or (Path.cwd() / "oss-fuzz"))
+        # Resolve to absolute paths to avoid issues with relative paths
+        oss_fuzz_path = Path(
+            config.get("oss_fuzz_path") or (Path.cwd() / "oss-fuzz")
+        ).resolve()
         registry_dir = Path(
             config.get("registry_dir") or (Path.cwd() / "crses" / "registry")
-        )
+        ).resolve()
         benchmarks_root = Path(
             config.get("benchmarks_root") or (Path.cwd() / "benchmarks")
-        )
+        ).resolve()
         crs_configs_dir = Path(
             config.get("crs_configs_dir") or (Path.cwd() / "crses" / "configs")
-        )
+        ).resolve()
 
         # Resolve CRS config name to registry name
         registry_name = get_crs_registry_name(crs, crs_configs_dir)
