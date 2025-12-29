@@ -107,11 +107,16 @@ class CoverageCollector:
         """
         corpus_dir = Path(corpus_dir)
         if not corpus_dir.exists():
-            logger.warning(f"Corpus directory not found: {corpus_dir}")
+            # Debug level since corpus may not exist early in fuzzing run
+            logger.debug(f"Corpus directory not found: {corpus_dir}")
             return 0
 
-        # Find all files in corpus directory
-        corpus_files = [f for f in corpus_dir.iterdir() if f.is_file()]
+        # Find all files in corpus directory (filter hidden files like .gitkeep)
+        corpus_files = [
+            f
+            for f in corpus_dir.iterdir()
+            if f.is_file() and not f.name.startswith(".")
+        ]
         if not corpus_files:
             logger.debug(f"No corpus files found in {corpus_dir}")
             return 0

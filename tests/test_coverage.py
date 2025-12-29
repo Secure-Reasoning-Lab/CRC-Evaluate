@@ -499,7 +499,9 @@ class TestExportUniqueCorpus:
             cov_data_loaded = json.loads(cov_path.read_text())
 
             assert cov_data_loaded["hash"] == corpus_hash
-            assert cov_data_loaded["elapsed_time"] == 30.5  # seconds since CRS run start
+            assert (
+                cov_data_loaded["elapsed_time"] == 30.5
+            )  # seconds since CRS run start
             assert cov_data_loaded["file_size"] == len(b"unique content")
             assert cov_data_loaded["contributes_unique"] is True
             assert "main" in cov_data_loaded["coverage"]
@@ -599,3 +601,79 @@ class TestExportUniqueCorpus:
             assert len(corpus_files) == 1
             assert len(cov_files) == 1
             assert cov_files[0].name == f".{corpus_hash}.cov"
+
+
+class TestCollectorHiddenFiles:
+    """Tests for hidden file filtering in CoverageCollector."""
+
+    def test_process_new_corpus_ignores_hidden_files(self):
+        """Test that process_new_corpus ignores hidden files like .gitkeep."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            # Create corpus directory with hidden and regular files
+            corpus_dir = tmp_path / "corpus"
+            corpus_dir.mkdir()
+
+            # Regular files
+            (corpus_dir / "input1").write_bytes(b"test1")
+            (corpus_dir / "input2").write_bytes(b"test2")
+
+            # Hidden files to ignore
+            (corpus_dir / ".gitkeep").write_bytes(b"")
+            (corpus_dir / ".DS_Store").write_bytes(b"data")
+            (corpus_dir / ".hidden_file").write_bytes(b"hidden")
+
+            # Setup mocks
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.collector import CoverageCollector
+
+            store_dir = tmp_path / "store"
+            store = CoverageStore(store_dir)
+
+            mock_strategy = MagicMock()
+            # Make collect_batch_coverage return a valid path
+            summary_path = tmp_path / "summary.json"
+            summary_path.write_text(
+                json.dumps(
+                    {
+                        "data": [{"totals": {"lines": {"count": 10, "covered": 5}}}],
+                        "type": "llvm.coverage.json.export",
+                    }
+                )
+            )
+            mock_strategy.collect_batch_coverage.return_value = summary_path
+            mock_strategy.export_detailed_coverage.return_value = None
+
+            collector = CoverageCollector(mock_strategy, store, "test_harness")
+
+            # Process corpus
+            new_count = collector.process_new_corpus(corpus_dir)
+
+            # Should only process 2 regular files, not 3 hidden files
+            assert len(collector._processed_hashes) == 2
+
+    def test_process_new_corpus_counts_only_regular_files(self):
+        """Test that only non-hidden files are counted."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            corpus_dir = tmp_path / "corpus"
+            corpus_dir.mkdir()
+
+            # Only hidden files
+            (corpus_dir / ".gitkeep").write_bytes(b"")
+
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.collector import CoverageCollector
+
+            store = CoverageStore(tmp_path / "store")
+            mock_strategy = MagicMock()
+            collector = CoverageCollector(mock_strategy, store, "test_harness")
+
+            # Should return 0 since all files are hidden
+            new_count = collector.process_new_corpus(corpus_dir)
+            assert new_count == 0
+            assert len(collector._processed_hashes) == 0

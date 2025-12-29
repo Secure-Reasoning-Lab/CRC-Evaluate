@@ -595,7 +595,9 @@ class TrialDirectoryPreparer:
 
     def _get_povs_stats(self, povs_dir: Path) -> Dict[str, Any]:
         """Get statistics about prepared POVs."""
-        return {"path": str(povs_dir), "pov_count": len(list(povs_dir.iterdir()))}
+        # Filter out hidden files (e.g., .gitkeep, .DS_Store)
+        pov_count = len([f for f in povs_dir.iterdir() if not f.name.startswith(".")])
+        return {"path": str(povs_dir), "pov_count": pov_count}
 
     def _write_metadata(self, trial_dir: Path, metadata: Dict[str, Any]) -> None:
         """Write metadata to trial directory."""
