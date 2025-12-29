@@ -227,14 +227,14 @@ class CoverageManager:
             f"saturation={saturation_detected}"
         )
 
-        # Save coverage store after each snapshot (includes dedup info)
+        # Save this snapshot to individual file
+        self._save_snapshot_file(snapshot)
+
+        # Save coverage store after each snapshot
         self._save_coverage_store()
 
-        # Save snapshot history
+        # Save snapshot history (cumulative)
         self._save_snapshot_history()
-
-        # Export unique corpus incrementally (updates corpus_unique/ directory)
-        self._export_unique_corpus()
 
         return snapshot
 
@@ -361,17 +361,37 @@ class CoverageManager:
         """Save final coverage state to disk."""
         self._save_coverage_store()
         self._save_snapshot_history()
-        self._export_unique_corpus()
 
-    def _export_unique_corpus(self):
-        """Export unique corpus files with their coverage metadata.
+    def _save_snapshot_file(self, snapshot: CoverageSnapshot):
+        """Save individual snapshot to a separate file.
 
-        Creates corpus_unique/ directory containing only corpus files that
-        contribute unique coverage, plus their .cov metadata files.
+        Creates snapshot files like: coverage/snapshots/snapshot-001.json
+
+        Args:
+            snapshot: The coverage snapshot to save
         """
         try:
-            corpus_unique_dir = self.trial_dir / "coverage" / "corpus_unique"
-            self.collector.export_unique_corpus(corpus_unique_dir)
-            logger.debug(f"Exported unique corpus to {corpus_unique_dir}")
+            snapshots_dir = self.trial_dir / "coverage" / "snapshots"
+            snapshots_dir.mkdir(parents=True, exist_ok=True)
+
+            snapshot_file = snapshots_dir / f"snapshot-{snapshot.cycle:03d}.json"
+            snapshot_data = {
+                "cycle": snapshot.cycle,
+                "timestamp": snapshot.timestamp,
+                "elapsed_time": snapshot.elapsed_time,
+                "harness_name": snapshot.harness_name,
+                "lines_covered": snapshot.summary.lines_covered,
+                "lines_total": snapshot.summary.lines_total,
+                "lines_percent": snapshot.summary.lines_percent,
+                "functions_covered": snapshot.summary.functions_covered,
+                "functions_total": snapshot.summary.functions_total,
+                "corpus_total": snapshot.summary.corpus_total,
+                "new_corpus_count": snapshot.new_corpus_count,
+                "new_lines_count": snapshot.new_lines_count,
+                "saturation_detected": snapshot.saturation_detected,
+            }
+
+            snapshot_file.write_text(json.dumps(snapshot_data, indent=2))
+            logger.debug(f"Saved snapshot to {snapshot_file}")
         except Exception as e:
-            logger.warning(f"Failed to export unique corpus: {e}")
+            logger.warning(f"Failed to save snapshot file: {e}")

@@ -2,29 +2,36 @@
 
 This module provides CoverageCollector, which orchestrates coverage collection
 by delegating to a CoverageStrategy for actual coverage collection and using
-CoverageStore for deduplication and persistence.
+CoverageStore for tracking corpus and coverage stats.
+
+Note: Coverage is collected in batch mode (all corpus files together), so we
+cannot attribute specific lines to specific inputs. The collector tracks:
+- Total corpus count
+- Total lines/functions covered
+- Coverage progression over time via snapshots
 
 Usage:
     strategy = LLVMCovLineStrategy(oss_fuzz_path, project_name)
     store = CoverageStore(store_dir)
     collector = CoverageCollector(strategy, store, harness_name="fuzz_target")
 
-    # Process new corpus files
+    # Process new corpus files (batch coverage)
     new_count = collector.process_new_corpus(corpus_dir)
 
     # Collect snapshot for current state
     snapshot = collector.collect_snapshot(cycle=1, harness_name="fuzz_target", elapsed_time=60.0)
-
-    # Export deduplicated corpus
-    collector.export_deduped_corpus(output_dir)
 """
 
 import hashlib
+import json
 import shutil
 import time
 from pathlib import Path
 
-from crsbench.evaluation.coverage.models import CoverageSnapshot, CoverageSummary
+from crsbench.evaluation.coverage.models import (
+    CoverageSnapshot,
+    CoverageSummary,
+)
 from crsbench.evaluation.coverage.store import CoverageStore
 from crsbench.evaluation.coverage.strategy import (
     CoverageStrategy,
@@ -171,31 +178,23 @@ class CoverageCollector:
             return 0
 
         # Register new corpus files with the store
-        new_unique_count = 0
+        processed_count = 0
 
         for corpus_file, file_hash in new_files_with_hash:
             try:
                 # Use file mtime (modification time) as the corpus discovery timestamp.
-                # Rationale:
-                # - mtime reflects when the fuzzer actually wrote the file content
-                # - Using time.time() would give all batch-processed files the same
-                #   timestamp, losing temporal granularity
-                # - mtime is more accurate for analyzing fuzzer behavior over time
-                # - Note: mtime may be preserved if files are copied, but for in-place
-                #   fuzzing this accurately reflects corpus generation time
                 file_mtime = corpus_file.stat().st_mtime
 
                 # Use batch coverage data - all files in batch share same coverage
                 # since we can't determine per-file breakdown
-                _, contributes_unique = self.store.add_corpus(
+                self.store.add_corpus(
                     corpus_path=corpus_file,
                     cov_data=cov_data,
                     timestamp=file_mtime,
                 )
                 # Mark as processed only after successful add
                 self._processed_hashes.add(file_hash)
-                if contributes_unique:
-                    new_unique_count += 1
+                processed_count += 1
             except Exception as e:
                 logger.warning(f"Failed to add corpus {corpus_file}: {e}")
                 continue
@@ -210,11 +209,8 @@ class CoverageCollector:
         except Exception as e:
             logger.warning(f"Failed to update totals from summary: {e}")
 
-        logger.info(
-            f"Processed {len(new_files_with_hash)} corpus files, "
-            f"{new_unique_count} contributed unique coverage"
-        )
-        return new_unique_count
+        logger.info(f"Processed {processed_count} new corpus files")
+        return processed_count
 
     def collect_snapshot(
         self,
@@ -266,100 +262,6 @@ class CoverageCollector:
 
         return snapshot
 
-    def export_unique_corpus(self, output_dir: Path):
-        """Export only corpus that contributes unique coverage with coverage metadata.
-
-        Copies only the corpus files that added unique coverage to the output
-        directory and creates a `.{hash}.cov` file for each with coverage info.
-
-        Output structure:
-            corpus_unique/
-            ├── {hash1}           # corpus file content
-            ├── .{hash1}.cov      # JSON coverage metadata (elapsed_time, coverage info)
-            ├── {hash2}
-            ├── .{hash2}.cov
-            └── ...
-
-        The .cov file contains:
-            - hash: SHA256 hash of corpus content (12 hex chars)
-            - elapsed_time: Seconds since CRS run started when corpus was discovered
-                (None if run_start_time not set)
-            - file_size: Size of the corpus file in bytes
-            - contributes_unique: Always True for exported corpus
-            - coverage: Function-level coverage data
-
-        Args:
-            output_dir: Directory to export unique corpus to (corpus_unique/).
-        """
-        import json
-
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        contributing_hashes = self.store.get_contributing_corpus()
-        exported_count = 0
-
-        for corpus_hash in contributing_hashes:
-            # Find the original file path
-            if corpus_hash not in self._corpus_hash_to_path:
-                logger.debug(f"No path found for contributing corpus {corpus_hash}")
-                continue
-
-            src_path = self._corpus_hash_to_path[corpus_hash]
-            if not src_path.exists():
-                logger.debug(f"Source file not found: {src_path}")
-                continue
-
-            # Copy corpus file to output directory with hash as filename
-            dst_path = output_dir / corpus_hash
-            try:
-                shutil.copy2(src_path, dst_path)
-            except Exception as e:
-                logger.warning(f"Failed to export corpus {corpus_hash}: {e}")
-                continue
-
-            # Get corpus coverage info from store
-            corpus_cov = self.store.corpus.get(corpus_hash)
-            if corpus_cov:
-                # Calculate elapsed time from CRS run start (in seconds).
-                # This reflects fuzzing time, not build+fuzz time.
-                # Uses file mtime (when fuzzer wrote the file) minus run start time.
-                elapsed_time = None
-                if self.run_start_time is not None:
-                    elapsed_time = corpus_cov.first_seen_ts - self.run_start_time
-
-                # Write .{hash}.cov metadata file
-                cov_path = output_dir / f".{corpus_hash}.cov"
-                cov_data = {
-                    "hash": corpus_cov.hash,
-                    "elapsed_time": elapsed_time,
-                    "file_size": corpus_cov.file_size,
-                    "contributes_unique": corpus_cov.contributes_unique,
-                    "coverage": {
-                        func_name: {
-                            "src": func_cov.src,
-                            "lines": func_cov.lines,
-                        }
-                        for func_name, func_cov in corpus_cov.coverage.items()
-                    },
-                }
-                try:
-                    cov_path.write_text(json.dumps(cov_data, indent=2))
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to write coverage metadata for {corpus_hash}: {e}"
-                    )
-
-            exported_count += 1
-
-        logger.info(
-            f"Exported {exported_count}/{len(contributing_hashes)} "
-            f"unique corpus files to {output_dir}"
-        )
-
-    def export_deduped_corpus(self, output_dir: Path):
-        """Alias for export_unique_corpus for backwards compatibility."""
-        self.export_unique_corpus(output_dir)
 
     def get_summary(self) -> CoverageSummary:
         """Get current coverage summary.
@@ -397,21 +299,22 @@ class CoverageCollector:
         return sha256.hexdigest()[:12]
 
     def _parse_coverage_data(self, summary_path: Path) -> dict:
-        """Parse coverage data from summary.json.
+        """Parse coverage data from summary.json or detailed coverage JSON.
 
-        Extracts function-level coverage data from the LLVM cov
-        or JaCoCo summary.json file.
+        Extracts coverage data from LLVM cov export or JaCoCo detailed format.
+
+        Supported formats:
+        1. LLVM-cov export: {"data": [{"functions": [...]}]}
+        2. JaCoCo detailed: {"source_path": {"src": str, "lines": [int]}, ...}
 
         Args:
-            summary_path: Path to summary.json file.
+            summary_path: Path to coverage JSON file.
 
         Returns:
             Coverage data dictionary in format:
             {function_name: {"src": str, "lines": list[int]}, ...}
         """
         try:
-            import json
-
             with summary_path.open() as f:
                 data = json.load(f)
         except Exception as e:
@@ -419,6 +322,11 @@ class CoverageCollector:
             return {}
 
         result: dict = {}
+
+        # Check for JaCoCo detailed format (flat dict with src/lines)
+        # Format: {"source_path": {"src": str, "lines": [int]}, ...}
+        if self._is_jacoco_detailed_format(data):
+            return data
 
         # Parse llvm-cov export format
         # Structure: data[].functions[] has regions at entry level
@@ -452,3 +360,29 @@ class CoverageCollector:
                         }
 
         return result
+
+    def _is_jacoco_detailed_format(self, data: dict) -> bool:
+        """Check if data is in JaCoCo detailed coverage format.
+
+        JaCoCo detailed format has flat structure:
+        {"source_path": {"src": str, "lines": [int]}, ...}
+
+        Args:
+            data: Parsed JSON data.
+
+        Returns:
+            True if data matches JaCoCo detailed format.
+        """
+        if not isinstance(data, dict):
+            return False
+
+        # JaCoCo format shouldn't have "data" key (LLVM format uses that)
+        if "data" in data:
+            return False
+
+        # Check if any top-level value has the expected structure
+        for value in data.values():
+            if isinstance(value, dict) and "src" in value and "lines" in value:
+                return True
+
+        return False

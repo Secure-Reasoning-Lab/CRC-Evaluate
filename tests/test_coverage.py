@@ -413,196 +413,6 @@ class TestCoverageStrategy:
             assert result["functions_covered"] == 10
 
 
-class TestExportUniqueCorpus:
-    """Tests for export_unique_corpus functionality."""
-
-    def test_export_unique_corpus_creates_files(self):
-        """Test that export_unique_corpus creates corpus and .cov files."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-
-            # Create store and add corpus
-            store_dir = tmp_path / "store"
-            store = CoverageStore(store_dir)
-
-            corpus1 = tmp_path / "corpus1"
-            corpus1.write_bytes(b"content1")
-            corpus2 = tmp_path / "corpus2"
-            corpus2.write_bytes(b"content2")
-
-            # First corpus covers lines 1-3, second covers same lines (no new)
-            cov_data1 = {"func1": {"src": "test.c", "lines": [1, 2, 3]}}
-            cov_data2 = {"func1": {"src": "test.c", "lines": [1, 2]}}
-
-            hash1, _ = store.add_corpus(corpus1, cov_data1, timestamp=1000.0)
-            hash2, _ = store.add_corpus(corpus2, cov_data2, timestamp=2000.0)
-
-            # Create collector with store
-            from unittest.mock import MagicMock
-
-            from crsbench.evaluation.coverage.collector import CoverageCollector
-
-            mock_strategy = MagicMock()
-            collector = CoverageCollector(mock_strategy, store, "test_harness")
-
-            # Map hashes to paths
-            collector._corpus_hash_to_path[hash1] = corpus1
-            collector._corpus_hash_to_path[hash2] = corpus2
-
-            # Export unique corpus
-            output_dir = tmp_path / "corpus_unique"
-            collector.export_unique_corpus(output_dir)
-
-            # Only first corpus should be exported (contributes unique)
-            assert (output_dir / hash1).exists()
-            assert (output_dir / f".{hash1}.cov").exists()
-            # Second corpus doesn't contribute unique, shouldn't be exported
-            assert not (output_dir / hash2).exists()
-
-    def test_export_unique_corpus_cov_file_format(self):
-        """Test that .cov file contains correct fields including elapsed_time."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-
-            # Create store and add corpus
-            store_dir = tmp_path / "store"
-            store = CoverageStore(store_dir)
-
-            corpus1 = tmp_path / "corpus1"
-            corpus1.write_bytes(b"unique content")
-
-            cov_data = {"main": {"src": "main.c", "lines": [10, 20, 30]}}
-            trial_start_time = 1704067200.0  # 2024-01-01 00:00:00 UTC
-            corpus_timestamp = trial_start_time + 30.5  # 30.5 seconds after start
-
-            corpus_hash, _ = store.add_corpus(
-                corpus1, cov_data, timestamp=corpus_timestamp
-            )
-
-            # Create collector and set run_start_time
-            from unittest.mock import MagicMock
-
-            from crsbench.evaluation.coverage.collector import CoverageCollector
-
-            mock_strategy = MagicMock()
-            collector = CoverageCollector(mock_strategy, store, "test_harness")
-            # Set run_start_time after creation (simulating on_run_start callback)
-            collector.set_run_start_time(trial_start_time)
-            collector._corpus_hash_to_path[corpus_hash] = corpus1
-
-            # Export unique corpus
-            output_dir = tmp_path / "corpus_unique"
-            collector.export_unique_corpus(output_dir)
-
-            # Read and verify .cov file
-            cov_path = output_dir / f".{corpus_hash}.cov"
-            cov_data_loaded = json.loads(cov_path.read_text())
-
-            assert cov_data_loaded["hash"] == corpus_hash
-            assert (
-                cov_data_loaded["elapsed_time"] == 30.5
-            )  # seconds since CRS run start
-            assert cov_data_loaded["file_size"] == len(b"unique content")
-            assert cov_data_loaded["contributes_unique"] is True
-            assert "main" in cov_data_loaded["coverage"]
-            assert cov_data_loaded["coverage"]["main"]["lines"] == [10, 20, 30]
-            assert "seen_ts" not in cov_data_loaded  # removed, use elapsed_time instead
-
-    def test_export_unique_corpus_elapsed_time_none_without_start(self):
-        """Test that elapsed_time is None when trial_start_time not provided."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-
-            store_dir = tmp_path / "store"
-            store = CoverageStore(store_dir)
-
-            corpus1 = tmp_path / "corpus1"
-            corpus1.write_bytes(b"content")
-
-            cov_data = {"func": {"src": "test.c", "lines": [1]}}
-            corpus_hash, _ = store.add_corpus(corpus1, cov_data, timestamp=1000.0)
-
-            from unittest.mock import MagicMock
-
-            from crsbench.evaluation.coverage.collector import CoverageCollector
-
-            mock_strategy = MagicMock()
-            # No trial_start_time provided
-            collector = CoverageCollector(mock_strategy, store, "test_harness")
-            collector._corpus_hash_to_path[corpus_hash] = corpus1
-
-            output_dir = tmp_path / "corpus_unique"
-            collector.export_unique_corpus(output_dir)
-
-            cov_path = output_dir / f".{corpus_hash}.cov"
-            cov_data_loaded = json.loads(cov_path.read_text())
-
-            # elapsed_time should be None when trial_start_time not set
-            assert cov_data_loaded["elapsed_time"] is None
-
-    def test_export_unique_corpus_preserves_first_seen(self):
-        """Test that duplicate corpus keeps earliest timestamp."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-
-            store_dir = tmp_path / "store"
-            store = CoverageStore(store_dir)
-
-            # Create two files with same content (duplicate)
-            corpus1 = tmp_path / "corpus1"
-            corpus1.write_bytes(b"same content")
-            corpus2 = tmp_path / "corpus2"
-            corpus2.write_bytes(b"same content")
-
-            cov_data = {"func": {"src": "test.c", "lines": [1]}}
-
-            # Add second corpus first (later timestamp)
-            hash1, _ = store.add_corpus(corpus1, cov_data, timestamp=2000.0)
-            # Add first corpus second (earlier timestamp)
-            hash2, _ = store.add_corpus(corpus2, cov_data, timestamp=1000.0)
-
-            # Should be same hash
-            assert hash1 == hash2
-
-            # Check that store keeps earliest timestamp
-            stored_corpus = store.corpus[hash1]
-            assert stored_corpus.first_seen_ts == 1000.0
-
-    def test_export_unique_corpus_hidden_files(self):
-        """Test that .cov files are hidden (start with dot)."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-
-            store_dir = tmp_path / "store"
-            store = CoverageStore(store_dir)
-
-            corpus1 = tmp_path / "corpus1"
-            corpus1.write_bytes(b"test content")
-
-            cov_data = {"func": {"src": "test.c", "lines": [1, 2]}}
-            corpus_hash, _ = store.add_corpus(corpus1, cov_data, timestamp=1000.0)
-
-            from unittest.mock import MagicMock
-
-            from crsbench.evaluation.coverage.collector import CoverageCollector
-
-            mock_strategy = MagicMock()
-            collector = CoverageCollector(mock_strategy, store, "test_harness")
-            collector._corpus_hash_to_path[corpus_hash] = corpus1
-
-            output_dir = tmp_path / "corpus_unique"
-            collector.export_unique_corpus(output_dir)
-
-            # List all files
-            all_files = list(output_dir.iterdir())
-            corpus_files = [f for f in all_files if not f.name.startswith(".")]
-            cov_files = [f for f in all_files if f.name.startswith(".")]
-
-            assert len(corpus_files) == 1
-            assert len(cov_files) == 1
-            assert cov_files[0].name == f".{corpus_hash}.cov"
-
-
 class TestCollectorHiddenFiles:
     """Tests for hidden file filtering in CoverageCollector."""
 
@@ -649,9 +459,10 @@ class TestCollectorHiddenFiles:
             collector = CoverageCollector(mock_strategy, store, "test_harness")
 
             # Process corpus
-            new_count = collector.process_new_corpus(corpus_dir)
+            processed_count = collector.process_new_corpus(corpus_dir)
 
             # Should only process 2 regular files, not 3 hidden files
+            assert processed_count == 2
             assert len(collector._processed_hashes) == 2
 
     def test_process_new_corpus_counts_only_regular_files(self):
@@ -677,3 +488,318 @@ class TestCollectorHiddenFiles:
             new_count = collector.process_new_corpus(corpus_dir)
             assert new_count == 0
             assert len(collector._processed_hashes) == 0
+
+
+class TestJaCoCoXMLParsing:
+    """Tests for JaCoCo XML parsing in JaCoCoLineStrategy."""
+
+    SAMPLE_JACOCO_XML = """<?xml version="1.0" encoding="UTF-8"?>
+    <report name="JaCoCo Coverage Report">
+        <package name="">
+            <sourcefile name="OssFuzz1.java">
+                <line nr="7" mi="3" ci="0" mb="0" cb="0"/>
+                <line nr="9" mi="0" ci="3" mb="0" cb="0"/>
+                <line nr="10" mi="0" ci="3" mb="0" cb="0"/>
+                <line nr="11" mi="0" ci="2" mb="0" cb="2"/>
+            </sourcefile>
+        </package>
+        <package name="com/aixcc/mock_java">
+            <sourcefile name="App.java">
+                <line nr="10" mi="3" ci="0" mb="0" cb="0"/>
+                <line nr="15" mi="0" ci="6" mb="0" cb="0"/>
+                <line nr="16" mi="0" ci="9" mb="0" cb="0"/>
+                <line nr="19" mi="0" ci="1" mb="0" cb="0"/>
+            </sourcefile>
+            <sourcefile name="AppTest.java">
+                <line nr="20" mi="3" ci="0" mb="0" cb="0"/>
+                <line nr="28" mi="5" ci="0" mb="0" cb="0"/>
+            </sourcefile>
+        </package>
+    </report>
+    """
+
+    def test_parse_jacoco_xml_basic(self):
+        """Test parsing basic JaCoCo XML structure."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            # Create mock OSS-Fuzz structure
+            oss_fuzz_dir = tmp_path / "oss-fuzz"
+            (oss_fuzz_dir / "infra").mkdir(parents=True)
+            (oss_fuzz_dir / "infra" / "helper.py").write_text("# mock")
+
+            # Create report directory with jacoco.xml
+            report_dir = tmp_path / "coverage" / "linux"
+            report_dir.mkdir(parents=True)
+            (report_dir / "jacoco.xml").write_text(self.SAMPLE_JACOCO_XML)
+
+            from crsbench.evaluation.coverage.strategy import JaCoCoLineStrategy
+
+            strategy = JaCoCoLineStrategy(oss_fuzz_dir, "test-project")
+            # Manually set _coverage_output_dir to our test location
+            strategy._coverage_output_dir = tmp_path / "coverage"
+
+            result = strategy._parse_jacoco_xml(report_dir / "jacoco.xml")
+
+            # Should have entries for covered source files
+            assert len(result) == 2  # OssFuzz1.java and App.java have coverage
+
+            # Check OssFuzz1.java (root package, no package prefix)
+            assert "OssFuzz1.java" in result
+            assert result["OssFuzz1.java"]["lines"] == [9, 10, 11]
+
+            # Check App.java (with package prefix)
+            app_key = "com.aixcc.mock_java/App.java"
+            assert app_key in result
+            assert result[app_key]["lines"] == [15, 16, 19]
+
+    def test_parse_jacoco_xml_no_coverage(self):
+        """Test parsing JaCoCo XML where file has no covered lines."""
+        jacoco_xml = """<?xml version="1.0" encoding="UTF-8"?>
+        <report name="Test">
+            <package name="test">
+                <sourcefile name="Uncovered.java">
+                    <line nr="1" mi="5" ci="0" mb="0" cb="0"/>
+                    <line nr="2" mi="3" ci="0" mb="0" cb="0"/>
+                </sourcefile>
+            </package>
+        </report>
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            oss_fuzz_dir = tmp_path / "oss-fuzz"
+            (oss_fuzz_dir / "infra").mkdir(parents=True)
+            (oss_fuzz_dir / "infra" / "helper.py").write_text("# mock")
+
+            report_dir = tmp_path / "coverage" / "linux"
+            report_dir.mkdir(parents=True)
+            (report_dir / "jacoco.xml").write_text(jacoco_xml)
+
+            from crsbench.evaluation.coverage.strategy import JaCoCoLineStrategy
+
+            strategy = JaCoCoLineStrategy(oss_fuzz_dir, "test-project")
+            strategy._coverage_output_dir = tmp_path / "coverage"
+
+            result = strategy._parse_jacoco_xml(report_dir / "jacoco.xml")
+
+            # Should be empty since no lines are covered
+            assert len(result) == 0
+
+    def test_parse_jacoco_xml_empty_package(self):
+        """Test parsing JaCoCo XML with empty (default) package."""
+        jacoco_xml = """<?xml version="1.0" encoding="UTF-8"?>
+        <report name="Test">
+            <package name="">
+                <sourcefile name="Main.java">
+                    <line nr="5" mi="0" ci="2" mb="0" cb="0"/>
+                    <line nr="6" mi="0" ci="3" mb="0" cb="0"/>
+                </sourcefile>
+            </package>
+        </report>
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            oss_fuzz_dir = tmp_path / "oss-fuzz"
+            (oss_fuzz_dir / "infra").mkdir(parents=True)
+            (oss_fuzz_dir / "infra" / "helper.py").write_text("# mock")
+
+            report_dir = tmp_path / "coverage" / "linux"
+            report_dir.mkdir(parents=True)
+            (report_dir / "jacoco.xml").write_text(jacoco_xml)
+
+            from crsbench.evaluation.coverage.strategy import JaCoCoLineStrategy
+
+            strategy = JaCoCoLineStrategy(oss_fuzz_dir, "test-project")
+            strategy._coverage_output_dir = tmp_path / "coverage"
+
+            result = strategy._parse_jacoco_xml(report_dir / "jacoco.xml")
+
+            # Should use just filename when package is empty
+            assert "Main.java" in result
+            assert result["Main.java"]["lines"] == [5, 6]
+
+    def test_export_detailed_coverage_creates_json(self):
+        """Test that export_detailed_coverage creates JSON file."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            oss_fuzz_dir = tmp_path / "oss-fuzz"
+            (oss_fuzz_dir / "infra").mkdir(parents=True)
+            (oss_fuzz_dir / "infra" / "helper.py").write_text("# mock")
+
+            # Create jacoco.xml in expected location
+            report_dir = tmp_path / "coverage" / "linux"
+            report_dir.mkdir(parents=True)
+            (report_dir / "jacoco.xml").write_text(self.SAMPLE_JACOCO_XML)
+
+            from crsbench.evaluation.coverage.strategy import JaCoCoLineStrategy
+
+            strategy = JaCoCoLineStrategy(oss_fuzz_dir, "test-project")
+            strategy._coverage_output_dir = tmp_path / "coverage"
+
+            output_dir = tmp_path / "output"
+            result_path = strategy.export_detailed_coverage(
+                "OssFuzz1", output_dir=output_dir
+            )
+
+            assert result_path is not None
+            assert result_path.exists()
+            assert result_path.name == "coverage_OssFuzz1_detailed.json"
+
+            # Verify JSON content
+            cov_data = json.loads(result_path.read_text())
+            assert "OssFuzz1.java" in cov_data
+            assert cov_data["OssFuzz1.java"]["lines"] == [9, 10, 11]
+
+    def test_export_detailed_coverage_no_coverage_dir(self):
+        """Test that export_detailed_coverage returns None if no coverage collected."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            oss_fuzz_dir = tmp_path / "oss-fuzz"
+            (oss_fuzz_dir / "infra").mkdir(parents=True)
+            (oss_fuzz_dir / "infra" / "helper.py").write_text("# mock")
+
+            from crsbench.evaluation.coverage.strategy import JaCoCoLineStrategy
+
+            strategy = JaCoCoLineStrategy(oss_fuzz_dir, "test-project")
+            # _coverage_output_dir is None by default
+
+            result = strategy.export_detailed_coverage("OssFuzz1")
+            assert result is None
+
+
+class TestCollectorJaCoCoFormat:
+    """Tests for collector parsing JaCoCo detailed format."""
+
+    def test_parse_jacoco_detailed_format(self):
+        """Test that collector can parse JaCoCo detailed JSON format."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            # Create JaCoCo detailed JSON
+            jacoco_json = {
+                "OssFuzz1.java": {"src": "OssFuzz1.java", "lines": [9, 10, 11]},
+                "com.example/App.java": {
+                    "src": "com.example/App.java",
+                    "lines": [15, 16, 19],
+                },
+            }
+            json_path = tmp_path / "coverage_detailed.json"
+            json_path.write_text(json.dumps(jacoco_json))
+
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.collector import CoverageCollector
+
+            store = CoverageStore(tmp_path / "store")
+            mock_strategy = MagicMock()
+            collector = CoverageCollector(mock_strategy, store, "test_harness")
+
+            result = collector._parse_coverage_data(json_path)
+
+            assert len(result) == 2
+            assert "OssFuzz1.java" in result
+            assert result["OssFuzz1.java"]["lines"] == [9, 10, 11]
+            assert "com.example/App.java" in result
+
+    def test_is_jacoco_detailed_format_positive(self):
+        """Test _is_jacoco_detailed_format returns True for valid format."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.collector import CoverageCollector
+
+            store = CoverageStore(tmp_path / "store")
+            mock_strategy = MagicMock()
+            collector = CoverageCollector(mock_strategy, store, "test")
+
+            jacoco_data = {"File.java": {"src": "File.java", "lines": [1, 2, 3]}}
+            assert collector._is_jacoco_detailed_format(jacoco_data) is True
+
+    def test_is_jacoco_detailed_format_negative_llvm(self):
+        """Test _is_jacoco_detailed_format returns False for LLVM format."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.collector import CoverageCollector
+
+            store = CoverageStore(tmp_path / "store")
+            mock_strategy = MagicMock()
+            collector = CoverageCollector(mock_strategy, store, "test")
+
+            llvm_data = {"data": [{"functions": []}]}
+            assert collector._is_jacoco_detailed_format(llvm_data) is False
+
+    def test_is_jacoco_detailed_format_negative_empty(self):
+        """Test _is_jacoco_detailed_format returns False for empty dict."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.collector import CoverageCollector
+
+            store = CoverageStore(tmp_path / "store")
+            mock_strategy = MagicMock()
+            collector = CoverageCollector(mock_strategy, store, "test")
+
+            assert collector._is_jacoco_detailed_format({}) is False
+
+
+class TestBatchProcessing:
+    """Tests for batch corpus processing."""
+
+    def test_batch_processes_all_files(self):
+        """Test that batch processing handles all corpus files."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            # Create corpus directory with multiple files
+            corpus_dir = tmp_path / "corpus"
+            corpus_dir.mkdir()
+            (corpus_dir / "input1").write_bytes(b"content1")
+            (corpus_dir / "input2").write_bytes(b"content2")
+            (corpus_dir / "input3").write_bytes(b"content3")
+
+            # Setup mocks
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.collector import CoverageCollector
+
+            store_dir = tmp_path / "store"
+            store = CoverageStore(store_dir)
+
+            mock_strategy = MagicMock()
+            summary_path = tmp_path / "summary.json"
+            summary_path.write_text(
+                json.dumps(
+                    {
+                        "data": [{"totals": {"lines": {"count": 10, "covered": 5}}}],
+                        "type": "llvm.coverage.json.export",
+                    }
+                )
+            )
+            mock_strategy.collect_batch_coverage.return_value = summary_path
+
+            # Detailed coverage with actual lines
+            detailed_path = tmp_path / "detailed.json"
+            detailed_path.write_text(
+                json.dumps({"func1": {"src": "test.c", "lines": [1, 2, 3, 4, 5]}})
+            )
+            mock_strategy.export_detailed_coverage.return_value = detailed_path
+
+            collector = CoverageCollector(mock_strategy, store, "test_harness")
+
+            # Process corpus (batch of 3 files)
+            processed_count = collector.process_new_corpus(corpus_dir)
+
+            # All 3 files should be processed
+            assert processed_count == 3
+            assert len(collector._processed_hashes) == 3

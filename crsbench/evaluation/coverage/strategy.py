@@ -14,6 +14,7 @@ Usage:
 """
 
 import json
+import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -558,6 +559,123 @@ class JaCoCoLineStrategy(CoverageStrategy):
             Path to the coverage output directory, or None if not yet collected.
         """
         return self._coverage_output_dir
+
+    def export_detailed_coverage(
+        self, harness_name: str, *, output_dir: Optional[Path] = None
+    ) -> Optional[Path]:
+        """Export detailed line-level coverage data from JaCoCo XML.
+
+        Parses jacoco.xml to extract line-level coverage data since
+        summary.json only has file-level summaries.
+
+        Args:
+            harness_name: Name of the fuzz target (e.g., "OssFuzz1").
+            output_dir: Directory to write detailed coverage file to.
+                        If None, uses a default temporary location.
+
+        Returns:
+            Path to detailed coverage JSON file, or None if export fails.
+        """
+        if not self._coverage_output_dir:
+            logger.warning("Coverage not yet collected, cannot export detailed data")
+            return None
+
+        # Find jacoco.xml in the coverage output directory
+        jacoco_xml_path = self._coverage_output_dir / "linux" / "jacoco.xml"
+        if not jacoco_xml_path.exists():
+            logger.warning(f"JaCoCo XML not found at {jacoco_xml_path}")
+            return None
+
+        # Output file for detailed coverage
+        if output_dir:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            detailed_json = output_dir / f"coverage_{harness_name}_detailed.json"
+        else:
+            import tempfile
+
+            detailed_json = (
+                Path(tempfile.gettempdir())
+                / f"coverage_{self.project_name}_detailed.json"
+            )
+
+        try:
+            cov_data = self._parse_jacoco_xml(jacoco_xml_path)
+            if not cov_data:
+                logger.warning("No coverage data extracted from JaCoCo XML")
+                return None
+
+            # Write as JSON in format compatible with collector's _parse_coverage_data
+            # Format: {function_name: {"src": str, "lines": list[int]}, ...}
+            # For Java, we use source file path as the "function name"
+            detailed_json.write_text(json.dumps(cov_data, indent=2))
+            logger.info(f"Detailed JaCoCo coverage exported to: {detailed_json}")
+            return detailed_json
+        except Exception as e:
+            logger.error(f"Failed to export JaCoCo coverage: {e}")
+            return None
+
+    def _parse_jacoco_xml(self, jacoco_xml_path: Path) -> dict:
+        """Parse JaCoCo XML to extract line-level coverage.
+
+        JaCoCo XML structure:
+            <report>
+                <package name="com/example">
+                    <sourcefile name="Foo.java">
+                        <line nr="15" ci="6"/>  <!-- ci > 0 = covered -->
+                        <line nr="16" ci="9"/>
+                    </sourcefile>
+                </package>
+            </report>
+
+        Args:
+            jacoco_xml_path: Path to jacoco.xml file.
+
+        Returns:
+            Coverage data in format:
+            {source_path: {"src": source_path, "lines": [covered_lines]}, ...}
+        """
+        result: dict = {}
+
+        try:
+            tree = ET.parse(jacoco_xml_path)
+            root = tree.getroot()
+        except ET.ParseError as e:
+            logger.error(f"Failed to parse JaCoCo XML: {e}")
+            return result
+
+        # Iterate over packages
+        for package in root.findall(".//package"):
+            package_name = package.get("name", "")
+
+            # Iterate over source files in package
+            for sourcefile in package.findall("sourcefile"):
+                source_name = sourcefile.get("name", "")
+                if not source_name:
+                    continue
+
+                # Construct full source path
+                if package_name:
+                    source_path = f"{package_name.replace('/', '.')}/{source_name}"
+                else:
+                    source_path = source_name
+
+                # Extract covered lines (ci > 0 means covered)
+                covered_lines = []
+                for line in sourcefile.findall("line"):
+                    line_nr = line.get("nr")
+                    ci = line.get("ci", "0")
+                    if line_nr and int(ci) > 0:
+                        covered_lines.append(int(line_nr))
+
+                if covered_lines:
+                    result[source_path] = {
+                        "src": source_path,
+                        "lines": sorted(covered_lines),
+                    }
+
+        logger.debug(f"Parsed JaCoCo XML: {len(result)} source files with coverage")
+        return result
 
 
 def create_coverage_strategy(
