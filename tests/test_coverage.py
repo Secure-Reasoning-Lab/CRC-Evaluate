@@ -873,7 +873,58 @@ class TestPerInputProcessing:
             assert "meta" in cov_data
             assert "coverage" in cov_data
             assert cov_data["meta"]["language"] == "c"
+            # elapsed_time is None when run_start_time not set
+            assert "elapsed_time" in cov_data["meta"]
             assert cov_data["coverage"]["main"]["lines"] == [1, 2, 3]
+
+    def test_distinct_line_sets_are_saved(self):
+        """Test that corpus with distinct line sets are saved, even if subsets."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            corpus_dir = tmp_path / "corpus"
+            corpus_dir.mkdir()
+            # Create 3 corpus files
+            (corpus_dir / "input1").write_bytes(b"content1")
+            (corpus_dir / "input2").write_bytes(b"content2")
+            (corpus_dir / "input3").write_bytes(b"content3")
+
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.collector import CoverageCollector
+
+            store = CoverageStore(tmp_path / "store")
+            output_dir = tmp_path / "output"
+
+            mock_strategy = MagicMock()
+            mock_strategy.language = "c"
+
+            # Corpus 1: covers lines {1, 2, 3}
+            # Corpus 2: covers lines {1, 2} (subset of corpus 1)
+            # Corpus 3: covers lines {1, 2, 3} (same as corpus 1 - should be skipped)
+            call_count = [0]
+
+            def mock_single_coverage(_harness, _corpus_file):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    return {"main": {"src": "main.c", "lines": [1, 2, 3]}}
+                if call_count[0] == 2:
+                    return {"main": {"src": "main.c", "lines": [1, 2]}}  # Subset
+                return {"main": {"src": "main.c", "lines": [1, 2, 3]}}  # Duplicate
+
+            mock_strategy.collect_single_coverage.side_effect = mock_single_coverage
+
+            collector = CoverageCollector(
+                mock_strategy, store, "test_harness", output_dir=output_dir
+            )
+
+            unique_count = collector.process_new_corpus(corpus_dir)
+
+            # Should save 2: corpus 1 and corpus 2 (distinct line sets)
+            # Should NOT save corpus 3 (same line set as corpus 1)
+            assert unique_count == 2
+            assert len(list((output_dir / "corpus_unique").iterdir())) == 2
+            assert len(list((output_dir / "corpus_cov").glob("*.cov.json"))) == 2
 
     def test_get_merged_coverage(self):
         """Test get_merged_coverage merges all corpus_cov/ files."""
@@ -899,14 +950,14 @@ class TestPerInputProcessing:
 
             # First corpus covers lines 1, 2, 3
             cov1 = {
-                "meta": {"corpus_hash": "aaa111bbb222", "language": "c"},
+                "meta": {"corpus_hash": "aaa111bbb222", "elapsed_time": 1.0, "language": "c"},
                 "coverage": {"main": {"src": "main.c", "lines": [1, 2, 3]}},
             }
             (cov_dir / "aaa111bbb222.cov.json").write_text(json.dumps(cov1))
 
             # Second corpus covers lines 3, 4, 5 (overlapping line 3)
             cov2 = {
-                "meta": {"corpus_hash": "ccc333ddd444", "language": "c"},
+                "meta": {"corpus_hash": "ccc333ddd444", "elapsed_time": 2.0, "language": "c"},
                 "coverage": {"main": {"src": "main.c", "lines": [3, 4, 5]}},
             }
             (cov_dir / "ccc333ddd444.cov.json").write_text(json.dumps(cov2))
@@ -1065,7 +1116,9 @@ class TestManagerSnapshotCoverage:
 
             mock_collector = MagicMock()
             mock_collector.get_summary.return_value = CoverageSummary()
-            mock_collector.get_merged_coverage.return_value = {"f": {"src": "f.c", "lines": [1]}}
+            mock_collector.get_merged_coverage.return_value = {
+                "f": {"src": "f.c", "lines": [1]}
+            }
 
             config = CoverageConfig(enabled=True)
             store = CoverageStore(trial_dir / "coverage")

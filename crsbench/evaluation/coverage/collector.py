@@ -100,6 +100,10 @@ class CoverageCollector:
         # Global set of covered lines: (source_file, line_number) tuples
         self._covered_lines: set[tuple[str, int]] = set()
 
+        # Track distinct line sets (frozensets) to identify corpus with unique coverage profiles
+        # A corpus is saved if its line set hasn't been seen before (even if subset of existing)
+        self._seen_line_sets: set[frozenset[tuple[str, int]]] = set()
+
         # Create output directories for per-input coverage
         self._corpus_unique_dir: Path | None = None
         self._corpus_cov_dir: Path | None = None
@@ -125,15 +129,20 @@ class CoverageCollector:
 
         For each new corpus file:
         1. Run coverage collection for that single file
-        2. Find which lines are newly covered (delta)
-        3. If delta > 0: copy to corpus_unique/, save coverage to corpus_cov/
-        4. Update global covered lines and store
+        2. Check if its line set is distinct (not seen before)
+        3. If distinct: copy to corpus_unique/, save coverage to corpus_cov/
+        4. Update global covered lines and seen line sets
+
+        A corpus is saved if it has a distinct coverage profile (line set),
+        even if all its lines are subsets of existing coverage. This enables
+        proper corpus minimization. Among corpus with identical line sets,
+        only the first one (by mtime) is saved.
 
         Args:
             corpus_dir: Directory containing corpus files.
 
         Returns:
-            Count of corpus files that added unique coverage.
+            Count of corpus files with distinct coverage profiles.
         """
         corpus_dir = Path(corpus_dir)
         if not corpus_dir.exists():
@@ -150,17 +159,21 @@ class CoverageCollector:
             logger.debug(f"No corpus files found in {corpus_dir}")
             return 0
 
-        # Find new files (not already processed)
-        new_files_with_hash: list[tuple[Path, str]] = []
+        # Find new files (not already processed), sorted by mtime (oldest first)
+        new_files_with_hash: list[tuple[Path, str, float]] = []
         for corpus_file in corpus_files:
             file_hash = self._compute_hash(corpus_file)
             if file_hash not in self._processed_hashes:
-                new_files_with_hash.append((corpus_file, file_hash))
+                file_mtime = corpus_file.stat().st_mtime
+                new_files_with_hash.append((corpus_file, file_hash, file_mtime))
                 self._corpus_hash_to_path[file_hash] = corpus_file
 
         if not new_files_with_hash:
             logger.debug("No new corpus files to process")
             return 0
+
+        # Sort by mtime (oldest first) to ensure first corpus with same line set wins
+        new_files_with_hash.sort(key=lambda x: x[2])
 
         logger.info(
             f"Processing {len(new_files_with_hash)} new corpus files from {corpus_dir}"
@@ -168,31 +181,40 @@ class CoverageCollector:
 
         unique_count = 0
 
-        for corpus_file, file_hash in new_files_with_hash:
+        for corpus_file, file_hash, file_mtime in new_files_with_hash:
             try:
                 # Collect coverage for this single file
                 cov_data = self.strategy.collect_single_coverage(
                     self.harness_name, corpus_file
                 )
 
-                # Find new lines (not in global covered_lines)
-                new_lines = self._find_new_lines(cov_data)
-                contributes_unique = len(new_lines) > 0
+                # Extract line set for this corpus
+                line_set = self._extract_line_set(cov_data)
+                line_set_frozen = frozenset(line_set)
 
-                if contributes_unique:
+                # Check if this exact line set is distinct (not seen before)
+                is_distinct = line_set_frozen not in self._seen_line_sets
+
+                if is_distinct and len(line_set) > 0:
+                    # Calculate elapsed time from run start
+                    elapsed_time = None
+                    if self.run_start_time is not None:
+                        elapsed_time = file_mtime - self.run_start_time
+
                     # Copy to corpus_unique/
                     self._copy_to_unique(corpus_file, file_hash)
                     # Save coverage to corpus_cov/
-                    self._save_corpus_cov(file_hash, cov_data)
-                    # Update global covered lines
-                    self._covered_lines.update(new_lines)
+                    self._save_corpus_cov(file_hash, cov_data, elapsed_time=elapsed_time)
+                    # Track this line set as seen
+                    self._seen_line_sets.add(line_set_frozen)
+                    # Update global covered lines (for summary stats)
+                    self._covered_lines.update(line_set)
                     unique_count += 1
                     logger.debug(
-                        f"Corpus {file_hash} contributes {len(new_lines)} new lines"
+                        f"Corpus {file_hash} has distinct coverage ({len(line_set)} lines)"
                     )
 
                 # Register with store (metadata only)
-                file_mtime = corpus_file.stat().st_mtime
                 self.store.add_corpus(
                     corpus_path=corpus_file,
                     cov_data=cov_data,
@@ -211,9 +233,26 @@ class CoverageCollector:
 
         logger.info(
             f"Processed {len(new_files_with_hash)} corpus files, "
-            f"{unique_count} contributed unique coverage"
+            f"{unique_count} had distinct coverage"
         )
         return unique_count
+
+    def _extract_line_set(self, cov_data: dict) -> set[tuple[str, int]]:
+        """Extract all lines covered by this input as a set.
+
+        Args:
+            cov_data: Coverage data in format {func: {"src": str, "lines": [int]}}
+
+        Returns:
+            Set of (source_file, line_number) tuples
+        """
+        line_set: set[tuple[str, int]] = set()
+        for func_data in cov_data.values():
+            if isinstance(func_data, dict):
+                src = func_data.get("src", "")
+                for line in func_data.get("lines", []):
+                    line_set.add((src, line))
+        return line_set
 
     def _find_new_lines(self, cov_data: dict) -> set[tuple[str, int]]:
         """Find lines covered by this input that aren't already in global set.
@@ -247,18 +286,25 @@ class CoverageCollector:
         shutil.copy2(corpus_file, dst)
         logger.debug(f"Copied unique corpus to {dst}")
 
-    def _save_corpus_cov(self, file_hash: str, cov_data: dict) -> None:
+    def _save_corpus_cov(
+        self,
+        file_hash: str,
+        cov_data: dict,
+        *,
+        elapsed_time: float | None = None,
+    ) -> None:
         """Save coverage data to corpus_cov/ directory.
 
         Saves coverage in extended format with metadata:
         {
-            "meta": {"corpus_hash": str, "collected_at": float, "language": str},
+            "meta": {"corpus_hash": str, "elapsed_time": float, "language": str},
             "coverage": {func_name: {"src": str, "lines": [int]}, ...}
         }
 
         Args:
             file_hash: 12-character hash of corpus content
             cov_data: Coverage data dictionary
+            elapsed_time: Seconds since run start when corpus was discovered
         """
         if not self._corpus_cov_dir:
             return
@@ -267,7 +313,7 @@ class CoverageCollector:
         extended_data = {
             "meta": {
                 "corpus_hash": file_hash,
-                "collected_at": time.time(),
+                "elapsed_time": elapsed_time,
                 "language": self.strategy.language,
             },
             "coverage": cov_data,
