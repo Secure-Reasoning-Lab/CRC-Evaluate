@@ -758,3 +758,16 @@ class CRSBugFindingExecutor(CRSExecutor):
             json.dump(metadata, f, indent=2)
 
         logger.debug(f"Stored execution metadata to {metadata_file}")
+
+        # Always write stdout/stderr to files for debugging
+        if stdout:
+            stdout_file = trial_output_dir / "crs_stdout.log"
+            with stdout_file.open("w") as f:
+                f.write(stdout)
+            logger.debug(f"Stored CRS stdout to {stdout_file}")
+
+        if stderr:
+            stderr_file = trial_output_dir / "crs_stderr.log"
+            with stderr_file.open("w") as f:
+                f.write(stderr)
+            logger.debug(f"Stored CRS stderr to {stderr_file}")
