@@ -78,7 +78,7 @@ class BenchmarkRunner:
             snapshot_period: Snapshot interval in seconds (0 or None to disable)
             coverage_enabled: Enable coverage collection during trials
             coverage_saturation_time: Seconds without new coverage to detect saturation
-            coverage_early_stop: Terminate trial early on saturation (NOT YET IMPLEMENTED)
+            coverage_early_stop: Terminate trial early when coverage saturation is detected
             oss_fuzz_path: Path to oss-fuzz directory (required for coverage)
         """
         self.crs_executor = crs_executor or StubCRSExecutor()
@@ -90,10 +90,16 @@ class BenchmarkRunner:
         self.logger = get_logger(__name__)
 
         if coverage_early_stop:
-            self.logger.warning(
-                "coverage_early_stop=True but early termination is NOT YET IMPLEMENTED. "
-                "Trial will run until max_total_time."
-            )
+            if not coverage_enabled:
+                self.logger.warning(
+                    "coverage_early_stop=True requires coverage_enabled=True. "
+                    "Early stop will NOT be active."
+                )
+            else:
+                self.logger.info(
+                    f"Coverage early stop enabled: will terminate after "
+                    f"{coverage_saturation_time}s without new coverage"
+                )
 
     def run_benchmark(
         self,
@@ -316,6 +322,8 @@ class BenchmarkRunner:
         snapshot_thread = None
         coverage_manager = None
         coverage_thread = None
+        saturation_monitor_thread = None
+        stop_event: Optional[threading.Event] = None
         verification_results: list[VerifResult] = []
         harness_result = None
 
@@ -341,6 +349,17 @@ class BenchmarkRunner:
                     coverage_thread.start()
                     self.logger.info("Coverage manager thread started")
 
+                    # Set up early stop if enabled
+                    if self.coverage_early_stop:
+                        stop_event = threading.Event()
+                        saturation_monitor_thread = threading.Thread(
+                            target=self._monitor_saturation,
+                            args=(coverage_manager, stop_event),
+                            daemon=True,
+                        )
+                        saturation_monitor_thread.start()
+                        self.logger.info("Saturation monitor thread started")
+
             # Start snapshot thread for this harness
             if self.snapshot_period and self.snapshot_period > 0:
                 self.logger.info(
@@ -363,12 +382,13 @@ class BenchmarkRunner:
                 if snapshot_manager:
                     snapshot_manager.set_crs_run_start_time(time.time())
 
-            # Run CRS on this harness
+            # Run CRS on this harness (with optional early stop)
             crs_result = self.crs_executor.run_crs(
                 benchmark_path=benchmark_path,
                 harness=harness,
                 trial_output_dir=trial_output_dir,
                 on_run_start=on_run_start,
+                stop_event=stop_event,
             )
 
             # Create harness result
@@ -744,3 +764,36 @@ class BenchmarkRunner:
 
         except Exception as e:
             self.logger.error(f"Post-experiment coverage failed: {e}", exc_info=True)
+
+    def _monitor_saturation(
+        self,
+        coverage_manager,
+        stop_event: threading.Event,
+    ) -> None:
+        """Monitor coverage saturation and signal early stop when detected.
+
+        This method runs in a separate thread and periodically checks if
+        coverage has saturated. When saturation is detected, it signals
+        the stop_event to terminate the CRS process early.
+
+        Args:
+            coverage_manager: CoverageManager instance to monitor
+            stop_event: Event to signal when saturation is detected
+        """
+        check_interval = 5.0  # Check every 5 seconds
+
+        self.logger.debug("Saturation monitor: started")
+
+        while not stop_event.is_set():
+            # Check if saturation is detected
+            if coverage_manager.is_saturated():
+                self.logger.info(
+                    "Coverage saturation detected by monitor - signaling early stop"
+                )
+                stop_event.set()
+                break
+
+            # Wait briefly before next check
+            time.sleep(check_interval)
+
+        self.logger.debug("Saturation monitor: stopped")

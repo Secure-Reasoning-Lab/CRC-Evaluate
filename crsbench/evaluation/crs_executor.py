@@ -43,6 +43,7 @@ See design-docs/evaluation/crs-executors.md for executor implementation.
 """
 
 import random
+import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -84,6 +85,7 @@ class CRSExecutor(ABC):
         trial_output_dir: Path,
         *,
         on_run_start: Optional[Callable[[], None]] = None,
+        stop_event: Optional[threading.Event] = None,
     ) -> CRSExecutionResult:
         """Run CRS on a specific harness.
 
@@ -92,6 +94,7 @@ class CRSExecutor(ABC):
             harness: Harness file configuration
             trial_output_dir: Directory for this trial's outputs
             on_run_start: Callback invoked when CRS run starts (after build)
+            stop_event: Optional event to signal early termination
 
         Returns:
             CRSExecutionResult: Result of CRS execution
@@ -128,6 +131,7 @@ class StubCRSExecutor(CRSExecutor):
         trial_output_dir: Path,
         *,
         on_run_start: Optional[Callable[[], None]] = None,
+        stop_event: Optional[threading.Event] = None,
     ) -> CRSExecutionResult:
         """Run stub CRS execution."""
         start_time = time.time()
@@ -136,8 +140,17 @@ class StubCRSExecutor(CRSExecutor):
         if on_run_start:
             on_run_start()
 
-        # Simulate execution time
-        time.sleep(self.simulation_delay)
+        # Simulate execution time (check for early stop)
+        if stop_event:
+            # Poll-based wait to support early stop
+            elapsed = 0.0
+            while elapsed < self.simulation_delay:
+                if stop_event.is_set():
+                    break
+                time.sleep(min(0.1, self.simulation_delay - elapsed))
+                elapsed = time.time() - start_time
+        else:
+            time.sleep(self.simulation_delay)
 
         execution_time = time.time() - start_time
 

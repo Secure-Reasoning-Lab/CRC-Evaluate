@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -146,6 +147,7 @@ class CRSPatchExecutor(CRSExecutor):
         trial_output_dir: Path,
         *,
         on_run_start: Optional[Callable[[], None]] = None,
+        stop_event: Optional[threading.Event] = None,  # noqa: ARG002
     ) -> CRSExecutionResult:
         """Run patch generation CRS.
 
@@ -154,6 +156,7 @@ class CRSPatchExecutor(CRSExecutor):
             harness: Harness configuration
             trial_output_dir: Directory for this trial's outputs
             on_run_start: Callback invoked when CRS run starts (after build)
+            stop_event: Optional event to signal early termination (interface compat, unused)
 
         Returns:
             CRSExecutionResult with execution details
