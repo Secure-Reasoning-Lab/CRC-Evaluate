@@ -67,30 +67,31 @@ main_repo: https://github.com/test/test-repo.git
 
 @pytest.fixture
 def mock_benchmark_with_hints(mock_benchmark):
-    """Create mock benchmark with hints."""
-    harness_dir = mock_benchmark / ".aixcc" / "test_harness"
-    harness_dir.mkdir()
+    """Create mock benchmark with hints in new aggregated structure."""
+    # Update meta.yaml to include harness_files structure
+    meta_yaml = mock_benchmark / ".aixcc" / "meta.yaml"
+    meta_yaml.write_text("""
+delta_mode:
+  base_commit: "abc123def456"
+  ref_commit: "def456abc789"
 
-    hints_dir = harness_dir / "hints"
-    hints_dir.mkdir()
+harness_files:
+  - name: test_harness
+    vulns:
+      - vuln_keyword: cpv_0
+      - vuln_keyword: cpv_1
+""")
 
-    # Create SARIF directory with files
-    sarif_dir = hints_dir / "sarif"
-    sarif_dir.mkdir()
-    (sarif_dir / "codeql.sarif").write_text('{"version": "2.1.0"}')
-    (sarif_dir / "semgrep.sarif").write_text('{"version": "2.1.0"}')
+    # Create cpv_0 hints with SARIF
+    cpv_0_hints = mock_benchmark / ".aixcc" / "test_harness" / "cpv_0" / "hints"
+    cpv_0_hints.mkdir(parents=True)
+    (cpv_0_hints / "level_1.sarif").write_text('{"version": "2.1.0", "runs": []}')
+    (cpv_0_hints / "level_2.sarif").write_text('{"version": "2.1.0", "runs": []}')
 
-    # Create corpus directories
-    corpus_1h = hints_dir / "corpus" / "1h"
-    corpus_1h.mkdir(parents=True)
-    (corpus_1h / "input-001").write_bytes(b"test input 1")
-    (corpus_1h / "input-002").write_bytes(b"test input 2")
-
-    corpus_1d = hints_dir / "corpus" / "1d"
-    corpus_1d.mkdir(parents=True)
-    (corpus_1d / "input-001").write_bytes(b"test input 1")
-    (corpus_1d / "input-002").write_bytes(b"test input 2")
-    (corpus_1d / "input-003").write_bytes(b"test input 3")
+    # Create cpv_1 hints with SARIF
+    cpv_1_hints = mock_benchmark / ".aixcc" / "test_harness" / "cpv_1" / "hints"
+    cpv_1_hints.mkdir(parents=True)
+    (cpv_1_hints / "level_1.sarif").write_text('{"version": "2.1.0", "runs": []}')
 
     return mock_benchmark
 
@@ -215,7 +216,7 @@ class TestHintsPreparation:
         temp_oss_fuzz_dir,
     ):
         """Test hints preparation when enabled."""
-        config = {"hints_enabled": True, "hints_corpus_level": "1h"}
+        config = {"hints_enabled": True, "hint_sarif_level": 1}
         preparer = TrialDirectoryPreparer(
             experiment_dir=temp_experiment_dir,
             benchmarks_root=temp_benchmarks_dir,
@@ -230,18 +231,19 @@ class TestHintsPreparation:
 
         assert hints_dir is not None
         assert hints_dir.exists()
-        assert (hints_dir / "sarif").exists()
-        assert (hints_dir / "corpus").exists()
+        # New structure: SARIF files are aggregated directly in hints_dir
+        sarif_files = list(hints_dir.glob("*.sarif"))
+        assert len(sarif_files) == 2  # cpv_0 and cpv_1 both have level_1.sarif
 
-    def test_prepare_hints_corpus_level_1h(
+    def test_prepare_hints_sarif_level_2(
         self,
         mock_benchmark_with_hints,
         temp_experiment_dir,
         temp_benchmarks_dir,
         temp_oss_fuzz_dir,
     ):
-        """Test hints preparation with 1h corpus level."""
-        config = {"hints_enabled": True, "hints_corpus_level": "1h"}
+        """Test hints preparation with SARIF level 2."""
+        config = {"hints_enabled": True, "hint_sarif_level": 2}
         preparer = TrialDirectoryPreparer(
             experiment_dir=temp_experiment_dir,
             benchmarks_root=temp_benchmarks_dir,
@@ -254,59 +256,9 @@ class TestHintsPreparation:
 
         hints_dir = preparer._prepare_hints("test-bench", trial_dir)
 
-        corpus_files = list((hints_dir / "corpus").iterdir())
-        assert len(corpus_files) == 2  # 1h has 2 files
-
-    def test_prepare_hints_corpus_level_1d(
-        self,
-        mock_benchmark_with_hints,
-        temp_experiment_dir,
-        temp_benchmarks_dir,
-        temp_oss_fuzz_dir,
-    ):
-        """Test hints preparation with 1d corpus level."""
-        config = {"hints_enabled": True, "hints_corpus_level": "1d"}
-        preparer = TrialDirectoryPreparer(
-            experiment_dir=temp_experiment_dir,
-            benchmarks_root=temp_benchmarks_dir,
-            oss_fuzz_dir=temp_oss_fuzz_dir,
-            config=config,
-        )
-
-        trial_dir = temp_experiment_dir / "trial-0"
-        trial_dir.mkdir()
-
-        hints_dir = preparer._prepare_hints("test-bench", trial_dir)
-
-        corpus_files = list((hints_dir / "corpus").iterdir())
-        assert len(corpus_files) == 3  # 1d has 3 files
-
-    def test_copy_sarif_files(
-        self, preparer, mock_benchmark_with_hints, temp_experiment_dir
-    ):
-        """Test SARIF file copying."""
-        source_hints = mock_benchmark_with_hints / ".aixcc" / "test_harness" / "hints"
-        hints_dir = temp_experiment_dir / "hints"
-        hints_dir.mkdir()
-
-        copied = preparer._copy_sarif_files(source_hints, hints_dir)
-
-        assert copied is True
-        assert (hints_dir / "sarif" / "codeql.sarif").exists()
-        assert (hints_dir / "sarif" / "semgrep.sarif").exists()
-        assert len(list((hints_dir / "sarif").glob("*.sarif"))) == 2
-
-    def test_copy_sarif_files_no_sarif_dir(self, preparer, temp_experiment_dir):
-        """Test SARIF file copying when no SARIF directory exists."""
-        source_hints = temp_experiment_dir / "hints"
-        source_hints.mkdir()
-
-        hints_dir = temp_experiment_dir / "dest_hints"
-        hints_dir.mkdir()
-
-        copied = preparer._copy_sarif_files(source_hints, hints_dir)
-
-        assert copied is False
+        assert hints_dir is not None
+        sarif_files = list(hints_dir.glob("*.sarif"))
+        assert len(sarif_files) == 1  # Only cpv_0 has level_2.sarif
 
 
 class TestPOVsPreparation:
@@ -551,7 +503,7 @@ class TestCompleteTrialPreparation:
         temp_oss_fuzz_dir,
     ):
         """Test complete trial preparation with hints enabled."""
-        config = {"hints_enabled": True, "hints_corpus_level": "1h"}
+        config = {"hints_enabled": True, "hint_sarif_level": 1}
         preparer = TrialDirectoryPreparer(
             experiment_dir=temp_experiment_dir,
             benchmarks_root=temp_benchmarks_dir,
@@ -579,6 +531,9 @@ class TestCompleteTrialPreparation:
         assert result.success is True
         assert result.hints_dir is not None
         assert result.hints_dir.exists()
+        # Verify SARIF files were aggregated
+        sarif_files = list(result.hints_dir.glob("*.sarif"))
+        assert len(sarif_files) == 2  # cpv_0 and cpv_1 both have level_1.sarif
 
     def test_prepare_trial_failure_handling(
         self, temp_experiment_dir, temp_benchmarks_dir, temp_oss_fuzz_dir
