@@ -323,7 +323,13 @@ class TrialDirectoryPreparer:
         if corpus_level is not None:
             logger.warning("Corpus hints not yet implemented")
 
-        if sarif_copied or corpus_copied:
+        # Prepare ref.diff for delta mode
+        delta_copied = False
+        evaluation_mode = self.config.get("evaluation_mode")
+        if evaluation_mode == "delta":
+            delta_copied = self._prepare_delta_diff(benchmark, hints_dir)
+
+        if sarif_copied or corpus_copied or delta_copied:
             logger.info(f"Prepared hints at: {hints_dir}")
             return hints_dir
         logger.warning(f"No hints content aggregated for {benchmark}")
@@ -390,6 +396,47 @@ class TrialDirectoryPreparer:
             return True
         logger.warning(f"No SARIF hints found at level {sarif_level}")
         return False
+
+    def _prepare_delta_diff(self, benchmark: str, hints_dir: Path) -> bool:
+        """
+        Generate or copy ref.diff for delta mode benchmarks.
+
+        Strategy:
+        1. Check for pre-generated ref.diff in .aixcc/
+        2. If not found, generate dynamically using write_benchmark_delta_diff()
+
+        Args:
+            benchmark: Benchmark name
+            hints_dir: Destination hints directory
+
+        Returns:
+            True if ref.diff was successfully placed in hints_dir
+        """
+        benchmark_dir = self.benchmarks_root / benchmark
+
+        # Strategy 1: Check for pre-generated ref.diff
+        pregenerated = benchmark_dir / ".aixcc" / "ref.diff"
+        if pregenerated.exists():
+            shutil.copy2(pregenerated, hints_dir / "ref.diff")
+            logger.info(f"Copied pre-generated ref.diff from {pregenerated}")
+            return True
+
+        # Strategy 2: Generate dynamically
+        try:
+            from crsbench.utils.repo_manager import write_benchmark_delta_diff
+
+            output_path = hints_dir / "ref.diff"
+            write_benchmark_delta_diff(
+                str(benchmark_dir), str(output_path), verbose=True
+            )
+            logger.info(f"Generated ref.diff dynamically for {benchmark}")
+            return True
+        except ValueError as e:
+            logger.debug(f"Cannot generate ref.diff: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"Failed to generate ref.diff: {e}")
+            return False
 
     def _prepare_povs(
         self, benchmark: str, harness: str, trial_dir: Path
@@ -536,10 +583,14 @@ class TrialDirectoryPreparer:
         corpus_dir = hints_dir / "corpus"
         corpus_count = len(list(corpus_dir.iterdir())) if corpus_dir.exists() else 0
 
+        # Check for ref.diff (delta mode)
+        has_ref_diff = (hints_dir / "ref.diff").exists()
+
         return {
             "path": str(hints_dir),
             "sarif_count": sarif_count,
             "corpus_count": corpus_count,
+            "has_ref_diff": has_ref_diff,
         }
 
     def _get_povs_stats(self, povs_dir: Path) -> Dict[str, Any]:
