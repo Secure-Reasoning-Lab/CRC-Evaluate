@@ -713,6 +713,9 @@ class ExperimentConfig(BaseModel):
             "snapshot_period": self.snapshot_period,
             "project_image_prefix": self.project_image_prefix,
             "skip_verification": self.skip_verification,
+            "oss_fuzz_path": self.oss_fuzz_path,
+            "coverage_enabled": self.coverage_enabled,
+            "coverage_saturation_time": self.coverage_saturation_time,
         }
 
 

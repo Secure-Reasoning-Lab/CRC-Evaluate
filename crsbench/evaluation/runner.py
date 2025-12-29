@@ -311,6 +311,10 @@ class BenchmarkRunner:
         harness_result = None
 
         self.logger.info(f"Evaluating harness: {harness.name}")
+        self.logger.debug(
+            f"Coverage settings: enabled={self.coverage_enabled}, "
+            f"oss_fuzz_path={self.oss_fuzz_path}"
+        )
 
         try:
             # Set up coverage manager if enabled
@@ -607,8 +611,9 @@ class BenchmarkRunner:
             collector = CoverageCollector(strategy, store, harness_name)
 
             # Corpus directory (where CRS puts corpus files)
+            # Use symlink path - don't create directory as it blocks the symlink
+            # The "output" symlink is created by CRS run pointing to artifacts
             corpus_dir = trial_output_dir / "output" / "corpus"
-            corpus_dir.mkdir(parents=True, exist_ok=True)
 
             # Create manager
             manager = CoverageManager(

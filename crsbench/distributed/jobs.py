@@ -218,7 +218,23 @@ def run_crs_trial(
         )
 
         # Initialize benchmark runner with CRS executor and snapshot configuration
-        runner = BenchmarkRunner(crs_executor, snapshot_period=snapshot_period)
+        coverage_enabled = config.get("coverage_enabled", False)
+        coverage_saturation_time = config.get("coverage_saturation_time", 21600)
+        # Handle None from config (when key exists but value is None)
+        oss_fuzz_path_str = config.get("oss_fuzz_path") or "oss-fuzz"
+        oss_fuzz_path = Path(oss_fuzz_path_str)
+        logger.debug(
+            f"Coverage config: enabled={coverage_enabled}, "
+            f"saturation_time={coverage_saturation_time}, oss_fuzz_path={oss_fuzz_path}"
+        )
+
+        runner = BenchmarkRunner(
+            crs_executor,
+            snapshot_period=snapshot_period,
+            coverage_enabled=coverage_enabled,
+            coverage_saturation_time=coverage_saturation_time,
+            oss_fuzz_path=oss_fuzz_path if coverage_enabled else None,
+        )
 
         # Resolve benchmark path
         benchmark_path = _resolve_benchmark_path(benchmark, config)
