@@ -270,19 +270,19 @@ class CoverageBuilder:
             True if build succeeded, False otherwise
         """
         logger.debug(f"Building coverage for {variant_name} ({language})")
-        uid = os.getuid()
 
         # Map language to OSS-Fuzz FUZZING_LANGUAGE format
         fuzzing_language = language if language != "c" else "c++"
 
+        # Don't use BUILD_UID - it causes side effects in the container
+        # (e.g., su -c doesn't preserve PATH, breaking Java builds).
+        # Instead, run as root and chown the output after build.
         cmd = [
             "python3",
             str(self._helper_script),
             "build_fuzzers",
             "--sanitizer",
             "coverage",
-            "-e",
-            f"BUILD_UID={uid}",
             "-e",
             f"FUZZING_LANGUAGE={fuzzing_language}",
             variant_name,
@@ -303,6 +303,8 @@ class CoverageBuilder:
 
             if result.returncode == 0:
                 logger.info(f"Coverage build succeeded for {variant_name}")
+                # Fix file ownership (build runs as root, chown to current user)
+                self._fix_build_ownership(variant_name)
                 return True
 
             logger.error(
@@ -319,6 +321,32 @@ class CoverageBuilder:
         except Exception as e:
             logger.error(f"Coverage build error for {variant_name}: {e}")
             return False
+
+    def _fix_build_ownership(self, variant_name: str) -> None:
+        """Fix ownership of build output files.
+
+        Docker builds run as root, so we need to chown the output
+        to the current user to allow subsequent operations.
+
+        Args:
+            variant_name: Coverage variant name
+        """
+        build_path = self.get_build_output_path(variant_name)
+        if not build_path.exists():
+            return
+
+        try:
+            uid = os.getuid()
+            gid = os.getgid()
+            subprocess.run(
+                ["sudo", "chown", "-R", f"{uid}:{gid}", str(build_path)],
+                capture_output=True,
+                timeout=30,
+            )
+            logger.debug(f"Fixed ownership of {build_path}")
+        except Exception as e:
+            # Ignore permission fixing errors - not critical
+            logger.debug(f"Could not fix ownership of {build_path}: {e}")
 
     def cleanup(self, project_name: str) -> None:
         """Remove coverage variant project and build artifacts.

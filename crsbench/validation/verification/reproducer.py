@@ -92,13 +92,13 @@ class OSSFuzzReproducer:
         Returns:
             True if build succeeded, False otherwise
         """
-        uid = os.getuid()
+        # Don't use BUILD_UID - it causes side effects in the container
+        # (e.g., su -c doesn't preserve PATH, breaking Java builds).
+        # Instead, run as root and chown the output after build.
         cmd = [
             "python3",
             str(self._helper_script),
             "build_fuzzers",
-            "-e",
-            f"BUILD_UID={uid}",
             project_name,
         ]
 
@@ -119,6 +119,8 @@ class OSSFuzzReproducer:
 
             if result.returncode == 0:
                 logger.info(f"Successfully built fuzzers for {project_name}")
+                # Fix file ownership (build runs as root, chown to current user)
+                self._fix_build_ownership(project_name)
                 return True
             logger.error(f"Failed to build fuzzers for {project_name}: {result.stderr}")
             return False
@@ -129,6 +131,32 @@ class OSSFuzzReproducer:
         except Exception as e:
             logger.error(f"Build error for {project_name}: {e}")
             return False
+
+    def _fix_build_ownership(self, project_name: str) -> None:
+        """Fix ownership of build output files.
+
+        Docker builds run as root, so we need to chown the output
+        to the current user to allow subsequent operations.
+
+        Args:
+            project_name: Project name
+        """
+        build_path = self.oss_fuzz_path / "build" / "out" / project_name
+        if not build_path.exists():
+            return
+
+        try:
+            uid = os.getuid()
+            gid = os.getgid()
+            subprocess.run(
+                ["sudo", "chown", "-R", f"{uid}:{gid}", str(build_path)],
+                capture_output=True,
+                timeout=30,
+            )
+            logger.debug(f"Fixed ownership of {build_path}")
+        except Exception as e:
+            # Ignore permission fixing errors - not critical
+            logger.debug(f"Could not fix ownership of {build_path}: {e}")
 
     def reproduce(
         self,
