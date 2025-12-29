@@ -395,3 +395,89 @@ class TestVerdictResolverEdgeCases:
             pov_id="test_pov_123",
         )
         assert result.pov_id == "test_pov_123"
+
+
+class TestVerificationEngineForceRebuild:
+    """Tests for VerificationEngine force_rebuild behavior."""
+
+    def test_get_or_build_versions_skips_cache_with_force_rebuild(self):
+        """force_rebuild=True should skip in-memory cache."""
+        from unittest.mock import MagicMock, patch
+
+        with patch(
+            "crsbench.validation.verification.engine.VerificationEngine.__init__",
+            return_value=None,
+        ):
+            from crsbench.validation.verification.engine import VerificationEngine
+
+            engine = VerificationEngine.__new__(VerificationEngine)
+            engine._built_versions = {}
+            engine.builder = MagicMock()
+            engine.builder.build_all_variants.return_value = ["version1", "version2"]
+
+            adapter = MagicMock()
+            adapter.benchmark_name = "test-benchmark"
+
+            # First call - should build
+            result1 = engine._get_or_build_versions(adapter, force_rebuild=False)
+            assert engine.builder.build_all_variants.call_count == 1
+
+            # Second call without force_rebuild - should use cache
+            result2 = engine._get_or_build_versions(adapter, force_rebuild=False)
+            assert engine.builder.build_all_variants.call_count == 1  # No new call
+
+            # Third call with force_rebuild - should rebuild
+            result3 = engine._get_or_build_versions(adapter, force_rebuild=True)
+            assert engine.builder.build_all_variants.call_count == 2  # New call
+
+    def test_get_or_build_versions_passes_force_rebuild_to_builder(self):
+        """force_rebuild should be passed to builder.build_all_variants."""
+        from unittest.mock import MagicMock, patch
+
+        with patch(
+            "crsbench.validation.verification.engine.VerificationEngine.__init__",
+            return_value=None,
+        ):
+            from crsbench.validation.verification.engine import VerificationEngine
+
+            engine = VerificationEngine.__new__(VerificationEngine)
+            engine._built_versions = {}
+            engine.builder = MagicMock()
+            engine.builder.build_all_variants.return_value = []
+
+            adapter = MagicMock()
+            adapter.benchmark_name = "test-benchmark"
+
+            # Call with force_rebuild=True
+            engine._get_or_build_versions(adapter, force_rebuild=True)
+
+            # Verify force_rebuild=True was passed to builder
+            engine.builder.build_all_variants.assert_called_once_with(
+                adapter, force_rebuild=True
+            )
+
+    def test_get_or_build_versions_default_no_force_rebuild(self):
+        """Default should be force_rebuild=False."""
+        from unittest.mock import MagicMock, patch
+
+        with patch(
+            "crsbench.validation.verification.engine.VerificationEngine.__init__",
+            return_value=None,
+        ):
+            from crsbench.validation.verification.engine import VerificationEngine
+
+            engine = VerificationEngine.__new__(VerificationEngine)
+            engine._built_versions = {}
+            engine.builder = MagicMock()
+            engine.builder.build_all_variants.return_value = []
+
+            adapter = MagicMock()
+            adapter.benchmark_name = "test-benchmark"
+
+            # Call without force_rebuild (should default to False)
+            engine._get_or_build_versions(adapter)
+
+            # Verify force_rebuild=False was passed to builder
+            engine.builder.build_all_variants.assert_called_once_with(
+                adapter, force_rebuild=False
+            )
