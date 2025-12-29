@@ -411,3 +411,191 @@ class TestCoverageStrategy:
             assert result["lines_total"] == 200
             assert result["lines_percent"] == 50.0
             assert result["functions_covered"] == 10
+
+
+class TestExportUniqueCorpus:
+    """Tests for export_unique_corpus functionality."""
+
+    def test_export_unique_corpus_creates_files(self):
+        """Test that export_unique_corpus creates corpus and .cov files."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            # Create store and add corpus
+            store_dir = tmp_path / "store"
+            store = CoverageStore(store_dir)
+
+            corpus1 = tmp_path / "corpus1"
+            corpus1.write_bytes(b"content1")
+            corpus2 = tmp_path / "corpus2"
+            corpus2.write_bytes(b"content2")
+
+            # First corpus covers lines 1-3, second covers same lines (no new)
+            cov_data1 = {"func1": {"src": "test.c", "lines": [1, 2, 3]}}
+            cov_data2 = {"func1": {"src": "test.c", "lines": [1, 2]}}
+
+            hash1, _ = store.add_corpus(corpus1, cov_data1, timestamp=1000.0)
+            hash2, _ = store.add_corpus(corpus2, cov_data2, timestamp=2000.0)
+
+            # Create collector with store
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.collector import CoverageCollector
+
+            mock_strategy = MagicMock()
+            collector = CoverageCollector(mock_strategy, store, "test_harness")
+
+            # Map hashes to paths
+            collector._corpus_hash_to_path[hash1] = corpus1
+            collector._corpus_hash_to_path[hash2] = corpus2
+
+            # Export unique corpus
+            output_dir = tmp_path / "corpus_unique"
+            collector.export_unique_corpus(output_dir)
+
+            # Only first corpus should be exported (contributes unique)
+            assert (output_dir / hash1).exists()
+            assert (output_dir / f".{hash1}.cov").exists()
+            # Second corpus doesn't contribute unique, shouldn't be exported
+            assert not (output_dir / hash2).exists()
+
+    def test_export_unique_corpus_cov_file_format(self):
+        """Test that .cov file contains correct fields including elapsed_time."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            # Create store and add corpus
+            store_dir = tmp_path / "store"
+            store = CoverageStore(store_dir)
+
+            corpus1 = tmp_path / "corpus1"
+            corpus1.write_bytes(b"unique content")
+
+            cov_data = {"main": {"src": "main.c", "lines": [10, 20, 30]}}
+            trial_start_time = 1704067200.0  # 2024-01-01 00:00:00 UTC
+            corpus_timestamp = trial_start_time + 30.5  # 30.5 seconds after start
+
+            corpus_hash, _ = store.add_corpus(
+                corpus1, cov_data, timestamp=corpus_timestamp
+            )
+
+            # Create collector and set run_start_time
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.collector import CoverageCollector
+
+            mock_strategy = MagicMock()
+            collector = CoverageCollector(mock_strategy, store, "test_harness")
+            # Set run_start_time after creation (simulating on_run_start callback)
+            collector.set_run_start_time(trial_start_time)
+            collector._corpus_hash_to_path[corpus_hash] = corpus1
+
+            # Export unique corpus
+            output_dir = tmp_path / "corpus_unique"
+            collector.export_unique_corpus(output_dir)
+
+            # Read and verify .cov file
+            cov_path = output_dir / f".{corpus_hash}.cov"
+            cov_data_loaded = json.loads(cov_path.read_text())
+
+            assert cov_data_loaded["hash"] == corpus_hash
+            assert cov_data_loaded["seen_ts"] == corpus_timestamp
+            assert cov_data_loaded["elapsed_time"] == 30.5  # seconds since trial start
+            assert cov_data_loaded["file_size"] == len(b"unique content")
+            assert cov_data_loaded["contributes_unique"] is True
+            assert "main" in cov_data_loaded["coverage"]
+            assert cov_data_loaded["coverage"]["main"]["lines"] == [10, 20, 30]
+
+    def test_export_unique_corpus_elapsed_time_none_without_start(self):
+        """Test that elapsed_time is None when trial_start_time not provided."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            store_dir = tmp_path / "store"
+            store = CoverageStore(store_dir)
+
+            corpus1 = tmp_path / "corpus1"
+            corpus1.write_bytes(b"content")
+
+            cov_data = {"func": {"src": "test.c", "lines": [1]}}
+            corpus_hash, _ = store.add_corpus(corpus1, cov_data, timestamp=1000.0)
+
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.collector import CoverageCollector
+
+            mock_strategy = MagicMock()
+            # No trial_start_time provided
+            collector = CoverageCollector(mock_strategy, store, "test_harness")
+            collector._corpus_hash_to_path[corpus_hash] = corpus1
+
+            output_dir = tmp_path / "corpus_unique"
+            collector.export_unique_corpus(output_dir)
+
+            cov_path = output_dir / f".{corpus_hash}.cov"
+            cov_data_loaded = json.loads(cov_path.read_text())
+
+            # elapsed_time should be None when trial_start_time not set
+            assert cov_data_loaded["elapsed_time"] is None
+
+    def test_export_unique_corpus_preserves_first_seen(self):
+        """Test that duplicate corpus keeps earliest timestamp."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            store_dir = tmp_path / "store"
+            store = CoverageStore(store_dir)
+
+            # Create two files with same content (duplicate)
+            corpus1 = tmp_path / "corpus1"
+            corpus1.write_bytes(b"same content")
+            corpus2 = tmp_path / "corpus2"
+            corpus2.write_bytes(b"same content")
+
+            cov_data = {"func": {"src": "test.c", "lines": [1]}}
+
+            # Add second corpus first (later timestamp)
+            hash1, _ = store.add_corpus(corpus1, cov_data, timestamp=2000.0)
+            # Add first corpus second (earlier timestamp)
+            hash2, _ = store.add_corpus(corpus2, cov_data, timestamp=1000.0)
+
+            # Should be same hash
+            assert hash1 == hash2
+
+            # Check that store keeps earliest timestamp
+            stored_corpus = store.corpus[hash1]
+            assert stored_corpus.first_seen_ts == 1000.0
+
+    def test_export_unique_corpus_hidden_files(self):
+        """Test that .cov files are hidden (start with dot)."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            store_dir = tmp_path / "store"
+            store = CoverageStore(store_dir)
+
+            corpus1 = tmp_path / "corpus1"
+            corpus1.write_bytes(b"test content")
+
+            cov_data = {"func": {"src": "test.c", "lines": [1, 2]}}
+            corpus_hash, _ = store.add_corpus(corpus1, cov_data, timestamp=1000.0)
+
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.collector import CoverageCollector
+
+            mock_strategy = MagicMock()
+            collector = CoverageCollector(mock_strategy, store, "test_harness")
+            collector._corpus_hash_to_path[corpus_hash] = corpus1
+
+            output_dir = tmp_path / "corpus_unique"
+            collector.export_unique_corpus(output_dir)
+
+            # List all files
+            all_files = list(output_dir.iterdir())
+            corpus_files = [f for f in all_files if not f.name.startswith(".")]
+            cov_files = [f for f in all_files if f.name.startswith(".")]
+
+            assert len(corpus_files) == 1
+            assert len(cov_files) == 1
+            assert cov_files[0].name == f".{corpus_hash}.cov"

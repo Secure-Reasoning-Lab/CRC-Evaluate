@@ -377,10 +377,15 @@ class BenchmarkRunner:
                 )
                 snapshot_thread.start()
 
-            # Create callback to set CRS run start time
+            # Create callback to set CRS run start time (after build, before fuzzing)
             def on_run_start() -> None:
+                run_start = time.time()
                 if snapshot_manager:
-                    snapshot_manager.set_crs_run_start_time(time.time())
+                    snapshot_manager.set_crs_run_start_time(run_start)
+                if coverage_manager:
+                    # Update collector's run_start_time for accurate elapsed_time
+                    # in corpus_unique/.{hash}.cov files
+                    coverage_manager.collector.set_run_start_time(run_start)
 
             # Run CRS on this harness (with optional early stop)
             crs_result = self.crs_executor.run_crs(
@@ -639,8 +644,13 @@ class BenchmarkRunner:
 
             # Create collector with harness_name
             # Pass output_dir so coverage files are saved to trial-N/coverage/
+            # Pass trial_start_time so we can calculate elapsed_time for corpus files
             collector = CoverageCollector(
-                strategy, store, harness_name, output_dir=coverage_store_dir
+                strategy,
+                store,
+                harness_name,
+                output_dir=coverage_store_dir,
+                trial_start_time=trial_start_time,
             )
 
             # Corpus directory (where CRS puts corpus files)

@@ -358,3 +358,17 @@ class CoverageManager:
         """Save final coverage state to disk."""
         self._save_coverage_store()
         self._save_snapshot_history()
+        self._export_unique_corpus()
+
+    def _export_unique_corpus(self):
+        """Export unique corpus files with their coverage metadata.
+
+        Creates corpus_unique/ directory containing only corpus files that
+        contribute unique coverage, plus their .cov metadata files.
+        """
+        try:
+            corpus_unique_dir = self.trial_dir / "coverage" / "corpus_unique"
+            self.collector.export_unique_corpus(corpus_unique_dir)
+            logger.debug(f"Exported unique corpus to {corpus_unique_dir}")
+        except Exception as e:
+            logger.warning(f"Failed to export unique corpus: {e}")

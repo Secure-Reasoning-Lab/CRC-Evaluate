@@ -56,6 +56,7 @@ class CoverageCollector:
         harness_name: str,
         *,
         output_dir: Path | None = None,
+        trial_start_time: float | None = None,
     ):
         """Initialize coverage collector.
 
@@ -65,15 +66,32 @@ class CoverageCollector:
             harness_name: Name of the fuzz target/harness for coverage collection.
             output_dir: Directory to save coverage files (summary.json, detailed.json).
                         If None, files remain in their default locations.
+            trial_start_time: Unix timestamp when trial started. Used to calculate
+                elapsed_time for corpus files. If None, elapsed_time won't be available.
         """
         self.strategy = strategy
         self.store = store
         self.harness_name = harness_name
         self.output_dir = Path(output_dir) if output_dir else None
+        # run_start_time is when the CRS fuzzing run started (after build).
+        # Used to calculate elapsed_time for corpus files.
+        # Can be set later via set_run_start_time() when the actual start is known.
+        self.run_start_time = trial_start_time
         self._last_corpus_total = 0
         self._last_lines_covered = 0
         self._processed_hashes: set[str] = set()
         self._corpus_hash_to_path: dict[str, Path] = {}
+
+    def set_run_start_time(self, start_time: float) -> None:
+        """Set the CRS run start time for elapsed_time calculations.
+
+        This should be called when the CRS run actually starts (after build),
+        so elapsed_time reflects fuzzing time rather than build+fuzz time.
+
+        Args:
+            start_time: Unix timestamp when CRS run started
+        """
+        self.run_start_time = start_time
 
     def process_new_corpus(self, corpus_dir: Path) -> int:
         """Process new corpus files, update store.
@@ -149,16 +167,25 @@ class CoverageCollector:
 
         # Register new corpus files with the store
         new_unique_count = 0
-        timestamp = time.time()
 
         for corpus_file, file_hash in new_files_with_hash:
             try:
+                # Use file mtime (modification time) as the corpus discovery timestamp.
+                # Rationale:
+                # - mtime reflects when the fuzzer actually wrote the file content
+                # - Using time.time() would give all batch-processed files the same
+                #   timestamp, losing temporal granularity
+                # - mtime is more accurate for analyzing fuzzer behavior over time
+                # - Note: mtime may be preserved if files are copied, but for in-place
+                #   fuzzing this accurately reflects corpus generation time
+                file_mtime = corpus_file.stat().st_mtime
+
                 # Use batch coverage data - all files in batch share same coverage
                 # since we can't determine per-file breakdown
                 _, contributes_unique = self.store.add_corpus(
                     corpus_path=corpus_file,
                     cov_data=cov_data,
-                    timestamp=timestamp,
+                    timestamp=file_mtime,
                 )
                 # Mark as processed only after successful add
                 self._processed_hashes.add(file_hash)
@@ -234,15 +261,34 @@ class CoverageCollector:
 
         return snapshot
 
-    def export_deduped_corpus(self, output_dir: Path):
-        """Export only corpus that contributes unique coverage.
+    def export_unique_corpus(self, output_dir: Path):
+        """Export only corpus that contributes unique coverage with coverage metadata.
 
-        Copies only the corpus files that added unique coverage
-        to the output directory.
+        Copies only the corpus files that added unique coverage to the output
+        directory and creates a `.{hash}.cov` file for each with coverage info.
+
+        Output structure:
+            corpus_unique/
+            ├── {hash1}           # corpus file content
+            ├── .{hash1}.cov      # JSON coverage metadata (elapsed_time, coverage info)
+            ├── {hash2}
+            ├── .{hash2}.cov
+            └── ...
+
+        The .cov file contains:
+            - hash: SHA256 hash of corpus content (12 hex chars)
+            - seen_ts: Unix timestamp when corpus was first observed
+            - elapsed_time: Seconds since trial start when corpus was discovered
+                (None if trial_start_time not set)
+            - file_size: Size of the corpus file in bytes
+            - contributes_unique: Always True for exported corpus
+            - coverage: Function-level coverage data
 
         Args:
-            output_dir: Directory to export deduplicated corpus to.
+            output_dir: Directory to export unique corpus to (corpus_unique/).
         """
+        import json
+
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -260,18 +306,57 @@ class CoverageCollector:
                 logger.debug(f"Source file not found: {src_path}")
                 continue
 
-            # Copy to output directory with hash as filename
+            # Copy corpus file to output directory with hash as filename
             dst_path = output_dir / corpus_hash
             try:
                 shutil.copy2(src_path, dst_path)
-                exported_count += 1
             except Exception as e:
                 logger.warning(f"Failed to export corpus {corpus_hash}: {e}")
+                continue
+
+            # Get corpus coverage info from store
+            corpus_cov = self.store.corpus.get(corpus_hash)
+            if corpus_cov:
+                # Calculate elapsed time from CRS run start (in seconds).
+                # This reflects fuzzing time, not build+fuzz time.
+                # Uses file mtime (when fuzzer wrote the file) minus run start time.
+                elapsed_time = None
+                if self.run_start_time is not None:
+                    elapsed_time = corpus_cov.first_seen_ts - self.run_start_time
+
+                # Write .{hash}.cov metadata file
+                cov_path = output_dir / f".{corpus_hash}.cov"
+                cov_data = {
+                    "hash": corpus_cov.hash,
+                    "seen_ts": corpus_cov.first_seen_ts,
+                    "elapsed_time": elapsed_time,
+                    "file_size": corpus_cov.file_size,
+                    "contributes_unique": corpus_cov.contributes_unique,
+                    "coverage": {
+                        func_name: {
+                            "src": func_cov.src,
+                            "lines": func_cov.lines,
+                        }
+                        for func_name, func_cov in corpus_cov.coverage.items()
+                    },
+                }
+                try:
+                    cov_path.write_text(json.dumps(cov_data, indent=2))
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to write coverage metadata for {corpus_hash}: {e}"
+                    )
+
+            exported_count += 1
 
         logger.info(
             f"Exported {exported_count}/{len(contributing_hashes)} "
-            f"contributing corpus files to {output_dir}"
+            f"unique corpus files to {output_dir}"
         )
+
+    def export_deduped_corpus(self, output_dir: Path):
+        """Alias for export_unique_corpus for backwards compatibility."""
+        self.export_unique_corpus(output_dir)
 
     def get_summary(self) -> CoverageSummary:
         """Get current coverage summary.
