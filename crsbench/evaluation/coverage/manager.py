@@ -233,6 +233,9 @@ class CoverageManager:
         # Save snapshot history
         self._save_snapshot_history()
 
+        # Export unique corpus incrementally (updates corpus_unique/ directory)
+        self._export_unique_corpus()
+
         return snapshot
 
     def _save_snapshot_history(self):
