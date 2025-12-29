@@ -495,7 +495,7 @@ class LLVMCovLineStrategy(CoverageStrategy):
                     filename = filenames[0] if filenames else ""
 
                     # Extract covered line numbers from regions
-                    lines = []
+                    lines: list[int] = []
                     for region in func.get("regions", []):
                         if len(region) >= 5 and region[4] > 0:
                             # region[0]=line_start, [2]=line_end, [4]=count

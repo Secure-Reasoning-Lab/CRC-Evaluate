@@ -230,6 +230,9 @@ class CoverageManager:
         # Save this snapshot to individual file
         self._save_snapshot_file(snapshot)
 
+        # Save merged coverage data for this snapshot
+        self._save_snapshot_coverage(snapshot)
+
         # Save coverage store after each snapshot
         self._save_coverage_store()
 
@@ -363,9 +366,10 @@ class CoverageManager:
         self._save_snapshot_history()
 
     def _save_snapshot_file(self, snapshot: CoverageSnapshot):
-        """Save individual snapshot to a separate file.
+        """Save individual snapshot summary to a separate file.
 
         Creates snapshot files like: coverage/snapshots/snapshot-001.json
+        (summary only, not coverage data)
 
         Args:
             snapshot: The coverage snapshot to save
@@ -395,3 +399,27 @@ class CoverageManager:
             logger.debug(f"Saved snapshot to {snapshot_file}")
         except Exception as e:
             logger.warning(f"Failed to save snapshot file: {e}")
+
+    def _save_snapshot_coverage(self, snapshot: CoverageSnapshot):
+        """Save merged coverage data to snapshot-NNN.cov.json.
+
+        Creates merged coverage files with union of all corpus coverages,
+        using the same format as corpus_cov/*.cov.json for consistency:
+        {function_name: {"src": str, "lines": [int]}, ...}
+
+        Args:
+            snapshot: The coverage snapshot (used for cycle number)
+        """
+        try:
+            snapshots_dir = self.trial_dir / "coverage" / "snapshots"
+            snapshots_dir.mkdir(parents=True, exist_ok=True)
+
+            cov_file = snapshots_dir / f"snapshot-{snapshot.cycle:03d}.cov.json"
+
+            # Get merged coverage from collector (union of all corpus coverages)
+            merged_cov = self.collector.get_merged_coverage()
+
+            cov_file.write_text(json.dumps(merged_cov, indent=2))
+            logger.debug(f"Saved snapshot coverage to {cov_file}")
+        except Exception as e:
+            logger.warning(f"Failed to save snapshot coverage: {e}")

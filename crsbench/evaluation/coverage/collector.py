@@ -101,14 +101,13 @@ class CoverageCollector:
         self._covered_lines: set[tuple[str, int]] = set()
 
         # Create output directories for per-input coverage
+        self._corpus_unique_dir: Path | None = None
+        self._corpus_cov_dir: Path | None = None
         if self.output_dir:
             self._corpus_unique_dir = self.output_dir / "corpus_unique"
             self._corpus_cov_dir = self.output_dir / "corpus_cov"
             self._corpus_unique_dir.mkdir(parents=True, exist_ok=True)
             self._corpus_cov_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            self._corpus_unique_dir = None
-            self._corpus_cov_dir = None
 
     def set_run_start_time(self, start_time: float) -> None:
         """Set the CRS run start time for elapsed_time calculations.
@@ -447,7 +446,7 @@ class CoverageCollector:
                     filename = filenames[0] if filenames else ""
 
                     # Extract covered line numbers from regions
-                    lines = []
+                    lines: list[int] = []
                     for region in func.get("regions", []):
                         if len(region) >= 5 and region[4] > 0:
                             # Region format: [line_start, col_start, line_end, col_end, count, ...]
