@@ -68,6 +68,7 @@ class BenchmarkRunner:
         *,
         coverage_enabled: bool = False,
         coverage_saturation_time: int = 21600,
+        coverage_early_stop: bool = False,
         oss_fuzz_path: Optional[Path] = None,
     ):
         """Initialize benchmark runner.
@@ -77,14 +78,22 @@ class BenchmarkRunner:
             snapshot_period: Snapshot interval in seconds (0 or None to disable)
             coverage_enabled: Enable coverage collection during trials
             coverage_saturation_time: Seconds without new coverage to detect saturation
+            coverage_early_stop: Terminate trial early on saturation (NOT YET IMPLEMENTED)
             oss_fuzz_path: Path to oss-fuzz directory (required for coverage)
         """
         self.crs_executor = crs_executor or StubCRSExecutor()
         self.snapshot_period = snapshot_period
         self.coverage_enabled = coverage_enabled
         self.coverage_saturation_time = coverage_saturation_time
+        self.coverage_early_stop = coverage_early_stop
         self.oss_fuzz_path = oss_fuzz_path
         self.logger = get_logger(__name__)
+
+        if coverage_early_stop:
+            self.logger.warning(
+                "coverage_early_stop=True but early termination is NOT YET IMPLEMENTED. "
+                "Trial will run until max_total_time."
+            )
 
     def run_benchmark(
         self,

@@ -16,6 +16,7 @@ Integration:
 - Stores coverage data using CoverageStore
 """
 
+import json
 import threading
 import time
 from pathlib import Path
@@ -226,7 +227,63 @@ class CoverageManager:
             f"saturation={saturation_detected}"
         )
 
+        # Save coverage store after each snapshot (includes dedup info)
+        self._save_coverage_store()
+
+        # Save snapshot history
+        self._save_snapshot_history()
+
         return snapshot
+
+    def _save_snapshot_history(self):
+        """Save snapshot history to trial directory.
+
+        Saves coverage progression over time for analysis.
+        """
+        try:
+            history_file = self.trial_dir / "coverage" / "snapshot_history.json"
+            history_file.parent.mkdir(parents=True, exist_ok=True)
+
+            history_data = {
+                "harness_name": self.harness_name,
+                "saturation_time_threshold": self.config.saturation_time,
+                "saturation_detected": self._saturation_detected,
+                "snapshots": [
+                    {
+                        "cycle": s.cycle,
+                        "elapsed_time": s.elapsed_time,
+                        "lines_covered": s.summary.lines_covered,
+                        "lines_total": s.summary.lines_total,
+                        "lines_percent": s.summary.lines_percent,
+                        "corpus_total": s.summary.corpus_total,
+                        "corpus_unique": s.summary.corpus_unique,
+                        "new_corpus_count": s.new_corpus_count,
+                        "new_lines_count": s.new_lines_count,
+                        "saturation_detected": s.saturation_detected,
+                    }
+                    for s in self.snapshots
+                ],
+            }
+
+            history_file.write_text(json.dumps(history_data, indent=2))
+            logger.debug(f"Saved snapshot history to {history_file}")
+        except Exception as e:
+            logger.warning(f"Failed to save snapshot history: {e}")
+
+    def _save_coverage_store(self):
+        """Save coverage store to trial directory.
+
+        Saves current coverage state including:
+        - corpus: All corpus files with their coverage contribution
+        - covered_lines: Set of all covered lines
+        - line_to_first_corpus: Dedup info - which corpus file first covered each line
+        """
+        try:
+            coverage_file = self.trial_dir / "coverage" / "coverage_store.json"
+            self.store.save(coverage_file)
+            logger.debug(f"Saved coverage store to {coverage_file}")
+        except Exception as e:
+            logger.warning(f"Failed to save coverage store: {e}")
 
     def check_saturation(self, current_time: Optional[float] = None) -> bool:
         """Check if coverage has saturated based on time without new coverage.
@@ -299,9 +356,5 @@ class CoverageManager:
 
     def _save_final_state(self):
         """Save final coverage state to disk."""
-        try:
-            coverage_file = self.trial_dir / "coverage" / "coverage_store.json"
-            self.store.save(coverage_file)
-            logger.debug(f"Saved coverage store to {coverage_file}")
-        except Exception as e:
-            logger.warning(f"Failed to save coverage store: {e}")
+        self._save_coverage_store()
+        self._save_snapshot_history()

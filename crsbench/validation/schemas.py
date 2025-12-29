@@ -401,6 +401,11 @@ class ExperimentConfig(BaseModel):
         ge=0,
         description="Time in seconds without new coverage before saturation (default: 21600 = 6 hours)",
     )
+    coverage_early_stop: bool = Field(
+        default=False,
+        description="Terminate trial early when coverage saturation is detected (default: False). "
+        "NOT YET IMPLEMENTED - currently only detects and logs saturation.",
+    )
 
     @field_validator("experiment")
     @classmethod
@@ -716,6 +721,7 @@ class ExperimentConfig(BaseModel):
             "oss_fuzz_path": self.oss_fuzz_path,
             "coverage_enabled": self.coverage_enabled,
             "coverage_saturation_time": self.coverage_saturation_time,
+            "coverage_early_stop": self.coverage_early_stop,
         }
 
 
