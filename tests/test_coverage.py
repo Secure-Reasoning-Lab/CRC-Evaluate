@@ -443,18 +443,16 @@ class TestCollectorHiddenFiles:
             store = CoverageStore(store_dir)
 
             mock_strategy = MagicMock()
-            # Make collect_batch_coverage return a valid path
-            summary_path = tmp_path / "summary.json"
-            summary_path.write_text(
-                json.dumps(
-                    {
-                        "data": [{"totals": {"lines": {"count": 10, "covered": 5}}}],
-                        "type": "llvm.coverage.json.export",
-                    }
-                )
-            )
-            mock_strategy.collect_batch_coverage.return_value = summary_path
-            mock_strategy.export_detailed_coverage.return_value = None
+            mock_strategy.language = "c"
+            # Track call count to return different coverage for each file
+            call_count = [0]
+
+            def mock_single_coverage(_harness, _corpus_file):
+                call_count[0] += 1
+                # Return different coverage for each file so both contribute unique lines
+                return {"func1": {"src": "test.c", "lines": [call_count[0] * 10]}}
+
+            mock_strategy.collect_single_coverage.side_effect = mock_single_coverage
 
             collector = CoverageCollector(mock_strategy, store, "test_harness")
 
@@ -462,6 +460,7 @@ class TestCollectorHiddenFiles:
             processed_count = collector.process_new_corpus(corpus_dir)
 
             # Should only process 2 regular files, not 3 hidden files
+            # Both files contribute unique coverage (different lines)
             assert processed_count == 2
             assert len(collector._processed_hashes) == 2
 
@@ -753,11 +752,11 @@ class TestCollectorJaCoCoFormat:
             assert collector._is_jacoco_detailed_format({}) is False
 
 
-class TestBatchProcessing:
-    """Tests for batch corpus processing."""
+class TestPerInputProcessing:
+    """Tests for per-input corpus processing."""
 
-    def test_batch_processes_all_files(self):
-        """Test that batch processing handles all corpus files."""
+    def test_per_input_processes_all_files(self):
+        """Test that per-input processing handles all corpus files."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
 
@@ -777,29 +776,25 @@ class TestBatchProcessing:
             store = CoverageStore(store_dir)
 
             mock_strategy = MagicMock()
-            summary_path = tmp_path / "summary.json"
-            summary_path.write_text(
-                json.dumps(
-                    {
-                        "data": [{"totals": {"lines": {"count": 10, "covered": 5}}}],
-                        "type": "llvm.coverage.json.export",
-                    }
-                )
-            )
-            mock_strategy.collect_batch_coverage.return_value = summary_path
+            mock_strategy.language = "c"
 
-            # Detailed coverage with actual lines
-            detailed_path = tmp_path / "detailed.json"
-            detailed_path.write_text(
-                json.dumps({"func1": {"src": "test.c", "lines": [1, 2, 3, 4, 5]}})
-            )
-            mock_strategy.export_detailed_coverage.return_value = detailed_path
+            # Track call count to return different coverage for each file
+            call_count = [0]
+
+            def mock_single_coverage(_harness, _corpus_file):
+                call_count[0] += 1
+                # Each file covers different lines
+                return {"func1": {"src": "test.c", "lines": [call_count[0] * 10]}}
+
+            mock_strategy.collect_single_coverage.side_effect = mock_single_coverage
 
             collector = CoverageCollector(mock_strategy, store, "test_harness")
 
-            # Process corpus (batch of 3 files)
+            # Process corpus (3 files with unique coverage each)
             processed_count = collector.process_new_corpus(corpus_dir)
 
-            # All 3 files should be processed
+            # All 3 files contributed unique coverage
             assert processed_count == 3
             assert len(collector._processed_hashes) == 3
+            # collect_single_coverage called once per file
+            assert mock_strategy.collect_single_coverage.call_count == 3

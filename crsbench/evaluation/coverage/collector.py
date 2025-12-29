@@ -4,22 +4,31 @@ This module provides CoverageCollector, which orchestrates coverage collection
 by delegating to a CoverageStrategy for actual coverage collection and using
 CoverageStore for tracking corpus and coverage stats.
 
-Note: Coverage is collected in batch mode (all corpus files together), so we
-cannot attribute specific lines to specific inputs. The collector tracks:
-- Total corpus count
-- Total lines/functions covered
-- Coverage progression over time via snapshots
+Per-Input Coverage:
+    Coverage is collected per-corpus file, enabling true attribution of which
+    lines each corpus file covers. Corpus files that contribute unique coverage
+    are copied to corpus_unique/ and their coverage data saved to corpus_cov/.
+
+Directory Structure:
+    coverage/
+    ├── corpus_unique/              # Only corpus that added unique lines
+    │   ├── abc123def456            # Actual corpus file (copy)
+    │   └── 789xyz...
+    ├── corpus_cov/                 # Per-corpus coverage data
+    │   ├── abc123def456.cov.json   # Coverage from this input
+    │   └── 789xyz.cov.json
+    └── ...
 
 Usage:
     strategy = LLVMCovLineStrategy(oss_fuzz_path, project_name)
     store = CoverageStore(store_dir)
     collector = CoverageCollector(strategy, store, harness_name="fuzz_target")
 
-    # Process new corpus files (batch coverage)
-    new_count = collector.process_new_corpus(corpus_dir)
+    # Process new corpus files (per-input coverage)
+    unique_count = collector.process_new_corpus(corpus_dir)
 
-    # Collect snapshot for current state
-    snapshot = collector.collect_snapshot(cycle=1, harness_name="fuzz_target", elapsed_time=60.0)
+    # Get merged coverage from all corpus files
+    merged_cov = collector.get_merged_coverage()
 """
 
 import hashlib
@@ -36,7 +45,6 @@ from crsbench.evaluation.coverage.store import CoverageStore
 from crsbench.evaluation.coverage.strategy import (
     CoverageStrategy,
     CoverageStrategyError,
-    parse_llvm_cov_summary,
 )
 from crsbench.utils.logger import get_logger
 
@@ -71,8 +79,8 @@ class CoverageCollector:
             strategy: CoverageStrategy instance for collecting coverage.
             store: CoverageStore instance for tracking and deduplicating corpus.
             harness_name: Name of the fuzz target/harness for coverage collection.
-            output_dir: Directory to save coverage files (summary.json, detailed.json).
-                        If None, files remain in their default locations.
+            output_dir: Directory to save coverage files (corpus_unique/, corpus_cov/).
+                        If None, per-input coverage files won't be saved.
             trial_start_time: Unix timestamp when trial started. Used to calculate
                 elapsed_time for corpus files. If None, elapsed_time won't be available.
         """
@@ -89,6 +97,19 @@ class CoverageCollector:
         self._processed_hashes: set[str] = set()
         self._corpus_hash_to_path: dict[str, Path] = {}
 
+        # Global set of covered lines: (source_file, line_number) tuples
+        self._covered_lines: set[tuple[str, int]] = set()
+
+        # Create output directories for per-input coverage
+        if self.output_dir:
+            self._corpus_unique_dir = self.output_dir / "corpus_unique"
+            self._corpus_cov_dir = self.output_dir / "corpus_cov"
+            self._corpus_unique_dir.mkdir(parents=True, exist_ok=True)
+            self._corpus_cov_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            self._corpus_unique_dir = None
+            self._corpus_cov_dir = None
+
     def set_run_start_time(self, start_time: float) -> None:
         """Set the CRS run start time for elapsed_time calculations.
 
@@ -101,10 +122,13 @@ class CoverageCollector:
         self.run_start_time = start_time
 
     def process_new_corpus(self, corpus_dir: Path) -> int:
-        """Process new corpus files, update store.
+        """Process new corpus files with per-input coverage.
 
-        Finds all files in corpus_dir that haven't been processed yet,
-        collects batch coverage, and registers them with the store.
+        For each new corpus file:
+        1. Run coverage collection for that single file
+        2. Find which lines are newly covered (delta)
+        3. If delta > 0: copy to corpus_unique/, save coverage to corpus_cov/
+        4. Update global covered lines and store
 
         Args:
             corpus_dir: Directory containing corpus files.
@@ -114,11 +138,10 @@ class CoverageCollector:
         """
         corpus_dir = Path(corpus_dir)
         if not corpus_dir.exists():
-            # Debug level since corpus may not exist early in fuzzing run
             logger.debug(f"Corpus directory not found: {corpus_dir}")
             return 0
 
-        # Find all files in corpus directory (filter hidden files like .gitkeep)
+        # Find all files in corpus directory (filter hidden files)
         corpus_files = [
             f
             for f in corpus_dir.iterdir()
@@ -128,7 +151,7 @@ class CoverageCollector:
             logger.debug(f"No corpus files found in {corpus_dir}")
             return 0
 
-        # Find new files (not already processed) and cache their hashes
+        # Find new files (not already processed)
         new_files_with_hash: list[tuple[Path, str]] = []
         for corpus_file in corpus_files:
             file_hash = self._compute_hash(corpus_file)
@@ -144,73 +167,153 @@ class CoverageCollector:
             f"Processing {len(new_files_with_hash)} new corpus files from {corpus_dir}"
         )
 
-        # Collect batch coverage for the corpus directory
-        try:
-            summary_path = self.strategy.collect_batch_coverage(
-                harness_path=Path(self.harness_name),
-                corpus_dir=corpus_dir,
-            )
-
-            # Copy summary.json to output directory if specified
-            if self.output_dir and summary_path.exists():
-                self.output_dir.mkdir(parents=True, exist_ok=True)
-                local_summary = self.output_dir / "summary.json"
-                shutil.copy2(summary_path, local_summary)
-                logger.debug(f"Copied summary.json to {local_summary}")
-
-            # Try to get detailed coverage with line-level data
-            cov_data = {}
-            detailed_path = self.strategy.export_detailed_coverage(
-                self.harness_name, output_dir=self.output_dir
-            )
-            if detailed_path:
-                cov_data = self._parse_coverage_data(detailed_path)
-                logger.debug(f"Parsed detailed coverage: {len(cov_data)} functions")
-
-            # Fall back to summary if detailed export failed
-            if not cov_data:
-                cov_data = self._parse_coverage_data(summary_path)
-        except CoverageStrategyError as e:
-            logger.error(f"Failed to collect coverage: {e}")
-            return 0
-        except Exception as e:
-            logger.error(f"Unexpected error collecting coverage: {e}")
-            return 0
-
-        # Register new corpus files with the store
-        processed_count = 0
+        unique_count = 0
 
         for corpus_file, file_hash in new_files_with_hash:
             try:
-                # Use file mtime (modification time) as the corpus discovery timestamp.
-                file_mtime = corpus_file.stat().st_mtime
+                # Collect coverage for this single file
+                cov_data = self.strategy.collect_single_coverage(
+                    self.harness_name, corpus_file
+                )
 
-                # Use batch coverage data - all files in batch share same coverage
-                # since we can't determine per-file breakdown
+                # Find new lines (not in global covered_lines)
+                new_lines = self._find_new_lines(cov_data)
+                contributes_unique = len(new_lines) > 0
+
+                if contributes_unique:
+                    # Copy to corpus_unique/
+                    self._copy_to_unique(corpus_file, file_hash)
+                    # Save coverage to corpus_cov/
+                    self._save_corpus_cov(file_hash, cov_data)
+                    # Update global covered lines
+                    self._covered_lines.update(new_lines)
+                    unique_count += 1
+                    logger.debug(
+                        f"Corpus {file_hash} contributes {len(new_lines)} new lines"
+                    )
+
+                # Register with store (metadata only)
+                file_mtime = corpus_file.stat().st_mtime
                 self.store.add_corpus(
                     corpus_path=corpus_file,
                     cov_data=cov_data,
                     timestamp=file_mtime,
                 )
-                # Mark as processed only after successful add
+
+                # Mark as processed
                 self._processed_hashes.add(file_hash)
-                processed_count += 1
+
+            except CoverageStrategyError as e:
+                logger.warning(f"Failed to collect coverage for {corpus_file}: {e}")
+                continue
             except Exception as e:
-                logger.warning(f"Failed to add corpus {corpus_file}: {e}")
+                logger.warning(f"Error processing corpus {corpus_file}: {e}")
                 continue
 
-        # Update store totals from summary
-        try:
-            summary_stats = parse_llvm_cov_summary(summary_path)
-            self.store.set_totals(
-                lines_total=int(summary_stats.get("lines_total", 0)),
-                functions_total=int(summary_stats.get("functions_total", 0)),
-            )
-        except Exception as e:
-            logger.warning(f"Failed to update totals from summary: {e}")
+        logger.info(
+            f"Processed {len(new_files_with_hash)} corpus files, "
+            f"{unique_count} contributed unique coverage"
+        )
+        return unique_count
 
-        logger.info(f"Processed {processed_count} new corpus files")
-        return processed_count
+    def _find_new_lines(self, cov_data: dict) -> set[tuple[str, int]]:
+        """Find lines covered by this input that aren't already in global set.
+
+        Args:
+            cov_data: Coverage data in format {func: {"src": str, "lines": [int]}}
+
+        Returns:
+            Set of (source_file, line_number) tuples not in _covered_lines
+        """
+        input_lines: set[tuple[str, int]] = set()
+        for func_data in cov_data.values():
+            if isinstance(func_data, dict):
+                src = func_data.get("src", "")
+                for line in func_data.get("lines", []):
+                    input_lines.add((src, line))
+
+        return input_lines - self._covered_lines
+
+    def _copy_to_unique(self, corpus_file: Path, file_hash: str) -> None:
+        """Copy corpus file to corpus_unique/ directory.
+
+        Args:
+            corpus_file: Path to original corpus file
+            file_hash: 12-character hash of corpus content
+        """
+        if not self._corpus_unique_dir:
+            return
+
+        dst = self._corpus_unique_dir / file_hash
+        shutil.copy2(corpus_file, dst)
+        logger.debug(f"Copied unique corpus to {dst}")
+
+    def _save_corpus_cov(self, file_hash: str, cov_data: dict) -> None:
+        """Save coverage data to corpus_cov/ directory.
+
+        Saves coverage in extended format with metadata:
+        {
+            "meta": {"corpus_hash": str, "collected_at": float, "language": str},
+            "coverage": {func_name: {"src": str, "lines": [int]}, ...}
+        }
+
+        Args:
+            file_hash: 12-character hash of corpus content
+            cov_data: Coverage data dictionary
+        """
+        if not self._corpus_cov_dir:
+            return
+
+        cov_file = self._corpus_cov_dir / f"{file_hash}.cov.json"
+        extended_data = {
+            "meta": {
+                "corpus_hash": file_hash,
+                "collected_at": time.time(),
+                "language": self.strategy.language,
+            },
+            "coverage": cov_data,
+        }
+        cov_file.write_text(json.dumps(extended_data, indent=2))
+        logger.debug(f"Saved coverage to {cov_file}")
+
+    def get_merged_coverage(self) -> dict:
+        """Get union of all coverage data from corpus_cov/ files.
+
+        Merges coverage from all processed corpus files into a single
+        coverage dictionary with deduplicated lines per function.
+
+        Returns:
+            Merged coverage in format: {func_name: {"src": str, "lines": [int]}, ...}
+        """
+        if not self._corpus_cov_dir:
+            return {}
+
+        merged: dict[str, dict] = {}
+
+        for cov_file in self._corpus_cov_dir.glob("*.cov.json"):
+            try:
+                data = json.loads(cov_file.read_text())
+                # Handle extended format with "coverage" key
+                cov_data = data.get("coverage", data)
+
+                for func_name, func_data in cov_data.items():
+                    if func_name == "meta":
+                        continue
+                    if func_name not in merged:
+                        merged[func_name] = {
+                            "src": func_data.get("src", ""),
+                            "lines": set(),
+                        }
+                    merged[func_name]["lines"].update(func_data.get("lines", []))
+            except Exception as e:
+                logger.warning(f"Failed to parse {cov_file}: {e}")
+                continue
+
+        # Convert sets back to sorted lists
+        for func_data in merged.values():
+            func_data["lines"] = sorted(func_data["lines"])
+
+        return merged
 
     def collect_snapshot(
         self,
@@ -261,7 +364,6 @@ class CoverageCollector:
         )
 
         return snapshot
-
 
     def get_summary(self) -> CoverageSummary:
         """Get current coverage summary.
