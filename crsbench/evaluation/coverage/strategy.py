@@ -14,6 +14,8 @@ Usage:
 """
 
 import json
+import shutil
+import tempfile
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -111,6 +113,23 @@ class CoverageStrategy(ABC):
             Path to detailed coverage JSON file, or None if not supported.
         """
         return None
+
+    @abstractmethod
+    def collect_single_coverage(self, harness_name: str, corpus_file: Path) -> dict:
+        """Collect coverage for a single corpus file.
+
+        Runs coverage collection with a temp directory containing just this file.
+        Slower due to Docker overhead per file, but enables true per-input
+        coverage attribution.
+
+        Args:
+            harness_name: Name of the fuzz target.
+            corpus_file: Path to the single corpus file to collect coverage for.
+
+        Returns:
+            Coverage data in format: {func_name: {"src": str, "lines": [int]}, ...}
+            Returns empty dict if coverage collection fails.
+        """
 
     def _run_helper_command(
         self,
@@ -400,6 +419,98 @@ class LLVMCovLineStrategy(CoverageStrategy):
         logger.info(f"Detailed coverage exported to: {detailed_json}")
         return detailed_json
 
+    def collect_single_coverage(self, harness_name: str, corpus_file: Path) -> dict:
+        """Collect coverage for a single corpus file using helper.py.
+
+        Creates a temp directory with just this file, runs helper.py coverage,
+        then parses the resulting detailed coverage data.
+
+        Args:
+            harness_name: Name of the fuzz target.
+            corpus_file: Path to the single corpus file.
+
+        Returns:
+            Coverage data: {func_name: {"src": str, "lines": [int]}, ...}
+        """
+        corpus_file = Path(corpus_file)
+        if not corpus_file.exists():
+            logger.warning(f"Corpus file not found: {corpus_file}")
+            return {}
+
+        # Create temp dir with single corpus file
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_dir_path = Path(tmp_dir)
+            tmp_corpus = tmp_dir_path / corpus_file.name
+            shutil.copy(corpus_file, tmp_corpus)
+
+            try:
+                # Run helper.py coverage with temp dir
+                self.collect_batch_coverage(
+                    harness_path=Path(harness_name),
+                    corpus_dir=tmp_dir_path,
+                )
+
+                # Get detailed coverage (line-level)
+                detailed_path = self.export_detailed_coverage(harness_name)
+                if detailed_path and detailed_path.exists():
+                    return self._parse_llvm_detailed_coverage(detailed_path)
+
+            except CoverageStrategyError as e:
+                logger.warning(f"Failed to collect single coverage: {e}")
+            except Exception as e:
+                logger.error(f"Unexpected error in single coverage: {e}")
+
+        return {}
+
+    def _parse_llvm_detailed_coverage(self, detailed_path: Path) -> dict:
+        """Parse LLVM cov export JSON to unified format.
+
+        Args:
+            detailed_path: Path to llvm-cov export JSON file.
+
+        Returns:
+            Coverage data: {func_name: {"src": str, "lines": [int]}, ...}
+        """
+        try:
+            with detailed_path.open() as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to parse LLVM coverage: {e}")
+            return {}
+
+        result: dict = {}
+
+        # Parse llvm-cov export format
+        # Structure: data[].functions[] has regions at entry level
+        if "data" in data and data["data"]:
+            for entry in data["data"]:
+                functions = entry.get("functions", [])
+                for func in functions:
+                    func_name = func.get("name", "")
+                    if not func_name:
+                        continue
+
+                    # Get filename from filenames array
+                    filenames = func.get("filenames", [])
+                    filename = filenames[0] if filenames else ""
+
+                    # Extract covered line numbers from regions
+                    lines = []
+                    for region in func.get("regions", []):
+                        if len(region) >= 5 and region[4] > 0:
+                            # region[0]=line_start, [2]=line_end, [4]=count
+                            start_line = region[0]
+                            end_line = region[2]
+                            lines.extend(range(start_line, end_line + 1))
+
+                    if lines:
+                        result[func_name] = {
+                            "src": filename,
+                            "lines": sorted(set(lines)),
+                        }
+
+        return result
+
 
 class JaCoCoLineStrategy(CoverageStrategy):
     """Coverage strategy for Java/JVM using JaCoCo.
@@ -676,6 +787,51 @@ class JaCoCoLineStrategy(CoverageStrategy):
 
         logger.debug(f"Parsed JaCoCo XML: {len(result)} source files with coverage")
         return result
+
+    def collect_single_coverage(self, harness_name: str, corpus_file: Path) -> dict:
+        """Collect coverage for a single corpus file using helper.py.
+
+        Creates a temp directory with just this file, runs helper.py coverage,
+        then parses the resulting JaCoCo XML data.
+
+        Args:
+            harness_name: Name of the fuzz target.
+            corpus_file: Path to the single corpus file.
+
+        Returns:
+            Coverage data: {source_path: {"src": str, "lines": [int]}, ...}
+        """
+        corpus_file = Path(corpus_file)
+        if not corpus_file.exists():
+            logger.warning(f"Corpus file not found: {corpus_file}")
+            return {}
+
+        # Create temp dir with single corpus file
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_dir_path = Path(tmp_dir)
+            tmp_corpus = tmp_dir_path / corpus_file.name
+            shutil.copy(corpus_file, tmp_corpus)
+
+            try:
+                # Run helper.py coverage with temp dir
+                self.collect_batch_coverage(
+                    harness_path=Path(harness_name),
+                    corpus_dir=tmp_dir_path,
+                )
+
+                # Get detailed coverage from JaCoCo XML
+                detailed_path = self.export_detailed_coverage(harness_name)
+                if detailed_path and detailed_path.exists():
+                    # The detailed JSON already contains parsed JaCoCo data
+                    with detailed_path.open() as f:
+                        return json.load(f)
+
+            except CoverageStrategyError as e:
+                logger.warning(f"Failed to collect single coverage: {e}")
+            except Exception as e:
+                logger.error(f"Unexpected error in single coverage: {e}")
+
+        return {}
 
 
 def create_coverage_strategy(
