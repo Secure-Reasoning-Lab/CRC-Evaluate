@@ -54,26 +54,25 @@ class FunctionCoverage(BaseModel):
 
 
 class CorpusCoverage(BaseModel):
-    """Coverage data for a single corpus file.
+    """Metadata for a single corpus file.
 
-    Tracks coverage contribution from a single fuzzing corpus file,
-    including metadata about when it was discovered and whether
-    it contributes unique coverage.
+    Tracks metadata about a fuzzing corpus file, including when it was
+    discovered and whether it contributes unique coverage.
+
+    Note: Coverage data is stored separately in corpus_cov/{hash}.cov.json
+    files, not in this model. This enables per-input coverage attribution.
 
     Attributes:
         hash: SHA256 hash of corpus content (12 hex characters).
         first_seen_ts: Unix timestamp when corpus was first observed.
         file_size: Size of the corpus file in bytes.
         contributes_unique: Whether this corpus contributes unique coverage.
-        coverage: Function-level coverage data.
-            Format: {function_name: {src: str, lines: list[int]}}
     """
 
     hash: str = Field(..., min_length=12, max_length=12)
     first_seen_ts: float
     file_size: int = Field(..., ge=0)
     contributes_unique: bool = False
-    coverage: dict[str, FunctionCoverage] = Field(default_factory=dict)
 
 
 class CoverageSummary(BaseModel):

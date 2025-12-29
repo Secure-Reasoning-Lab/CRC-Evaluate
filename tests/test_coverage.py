@@ -47,21 +47,18 @@ class TestCoverageModels:
         assert func_cov.lines == [1, 2, 3, 5, 8]
 
     def test_corpus_coverage(self):
-        """Test CorpusCoverage model."""
+        """Test CorpusCoverage model (metadata only, no coverage data)."""
         corpus = CorpusCoverage(
             hash="abc123def456",
             first_seen_ts=1000.0,
             file_size=256,
             contributes_unique=True,
-            coverage={
-                "main": FunctionCoverage(src="main.c", lines=[1, 2, 3]),
-            },
         )
         assert corpus.hash == "abc123def456"
         assert corpus.first_seen_ts == 1000.0
         assert corpus.file_size == 256
         assert corpus.contributes_unique is True
-        assert "main" in corpus.coverage
+        # Note: coverage field removed - now stored in separate .cov.json files
 
     def test_coverage_summary_defaults(self):
         """Test CoverageSummary with defaults."""

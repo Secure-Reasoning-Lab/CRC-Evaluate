@@ -20,7 +20,6 @@ from typing import Optional
 from crsbench.evaluation.coverage.models import (
     CorpusCoverage,
     CoverageSummary,
-    FunctionCoverage,
 )
 from crsbench.utils.logger import get_logger
 
@@ -78,6 +77,10 @@ class CoverageStore:
         whether this corpus contributes unique coverage (lines not
         previously covered by any other corpus).
 
+        Note: Coverage data is used to determine unique lines but is NOT
+        stored in the model. Coverage files are stored separately in
+        corpus_cov/ directory by the collector.
+
         Args:
             corpus_path: Path to the corpus file
             cov_data: Coverage data dictionary with format:
@@ -97,15 +100,6 @@ class CoverageStore:
         # Extract line set from coverage data
         line_set = self._extract_lines(cov_data)
 
-        # Convert coverage data to FunctionCoverage models
-        coverage_dict: dict[str, FunctionCoverage] = {}
-        for func_name, func_data in cov_data.items():
-            if isinstance(func_data, dict):
-                coverage_dict[func_name] = FunctionCoverage(
-                    src=func_data.get("src", ""),
-                    lines=func_data.get("lines", []),
-                )
-
         with self._lock:
             # Check if corpus already exists
             if corpus_hash in self.corpus:
@@ -117,7 +111,6 @@ class CoverageStore:
                         first_seen_ts=ts,
                         file_size=file_size,
                         contributes_unique=existing.contributes_unique,
-                        coverage=coverage_dict,
                     )
                 return corpus_hash, existing.contributes_unique
 
@@ -130,13 +123,12 @@ class CoverageStore:
                 self.covered_lines.add(line_loc)
                 self.line_to_first_corpus[line_loc] = corpus_hash
 
-            # Store corpus coverage
+            # Store corpus metadata (not coverage data)
             self.corpus[corpus_hash] = CorpusCoverage(
                 hash=corpus_hash,
                 first_seen_ts=ts,
                 file_size=file_size,
                 contributes_unique=contributes_unique,
-                coverage=coverage_dict,
             )
 
             logger.debug(
@@ -164,7 +156,10 @@ class CoverageStore:
             CoverageSummary with aggregated statistics including:
                 - Total and contributing corpus counts
                 - Lines covered and percentage
-                - Functions covered (functions with at least one covered line)
+
+        Note: Function coverage is not tracked in this simplified store.
+        Use the merged coverage from collector.get_merged_coverage() for
+        function-level statistics.
         """
         with self._lock:
             corpus_total = len(self.corpus)
@@ -177,13 +172,6 @@ class CoverageStore:
                 (lines_covered / lines_total * 100.0) if lines_total > 0 else 0.0
             )
 
-            # Count functions with at least one covered line
-            functions_with_coverage: set[str] = set()
-            for cov in self.corpus.values():
-                for func_name, func_cov in cov.coverage.items():
-                    if func_cov.lines:
-                        functions_with_coverage.add(func_name)
-
             return CoverageSummary(
                 metric="line",
                 corpus_total=corpus_total,
@@ -191,7 +179,7 @@ class CoverageStore:
                 lines_covered=lines_covered,
                 lines_total=lines_total,
                 lines_percent=lines_percent,
-                functions_covered=len(functions_with_coverage),
+                functions_covered=0,  # Not tracked in simplified store
                 functions_total=self._functions_total,
                 saturation_detected=False,
             )
@@ -249,15 +237,11 @@ class CoverageStore:
         data = json.loads(path.read_text())
 
         with self._lock:
-            # Load corpus
+            # Load corpus metadata (ignore old coverage field if present)
             self.corpus = {}
             for h, c_data in data.get("corpus", {}).items():
-                # Convert coverage dict back to FunctionCoverage models
-                if "coverage" in c_data:
-                    coverage_dict: dict[str, FunctionCoverage] = {}
-                    for func_name, func_data in c_data["coverage"].items():
-                        coverage_dict[func_name] = FunctionCoverage(**func_data)
-                    c_data["coverage"] = coverage_dict
+                # Remove old coverage field if present (backward compatibility)
+                c_data.pop("coverage", None)
                 self.corpus[h] = CorpusCoverage(**c_data)
 
             # Load covered lines
