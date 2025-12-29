@@ -14,7 +14,7 @@ experiment: coverage-e2e-test
 
 trials: 1
 mode: delta
-max_total_time: 600  # 10 minutes
+max_total_time: 300  # 5 minutes
 difficulty_level: 1
 
 experiment_filestore: /tmp/crsbench/experiments/coverage-e2e-test
@@ -40,7 +40,7 @@ coverage_saturation_time: 120  # Saturated if no new coverage for 2 minutes
 # Early stop on saturation (not yet implemented - detection only for now)
 # When true: terminate trial early when coverage saturates
 # When false: continue running until max_total_time (default)
-coverage_early_stop: false
+coverage_early_stop: true
 
 # LiteLLM mode (use proxy for local testing)
 litellm_mode: null

@@ -204,7 +204,9 @@ class CoverageCollector:
                     # Copy to corpus_unique/
                     self._copy_to_unique(corpus_file, file_hash)
                     # Save coverage to corpus_cov/
-                    self._save_corpus_cov(file_hash, cov_data, elapsed_time=elapsed_time)
+                    self._save_corpus_cov(
+                        file_hash, cov_data, elapsed_time=elapsed_time
+                    )
                     # Track this line set as seen
                     self._seen_line_sets.add(line_set_frozen)
                     # Update global covered lines (for summary stats)

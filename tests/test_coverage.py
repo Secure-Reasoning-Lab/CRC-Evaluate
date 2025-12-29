@@ -926,6 +926,134 @@ class TestPerInputProcessing:
             assert len(list((output_dir / "corpus_unique").iterdir())) == 2
             assert len(list((output_dir / "corpus_cov").glob("*.cov.json"))) == 2
 
+    def test_distinct_coverage_with_mtime_ordering(self):
+        """Test realistic scenario: duplicate coverage keeps first by mtime.
+
+        Real-world scenario from uniafl coverage files:
+        - corpus1: covers lines [8, 9, 10, 12] (distinct, no line 11)
+        - corpus2: covers lines [8, 9, 10, 11, 12] (has line 11)
+        - corpus3: covers lines [8, 9, 10, 11, 12] (same as corpus2)
+
+        With mtimes: corpus1 < corpus2 < corpus3
+        Expected: Keep corpus1 and corpus2, skip corpus3 (duplicate of corpus2)
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            corpus_dir = tmp_path / "corpus"
+            corpus_dir.mkdir()
+
+            import hashlib
+            import os
+            import time
+
+            # Create corpus files with distinct contents and set mtimes
+            base_time = time.time() - 100  # 100 seconds ago
+
+            # Corpus 1: earliest mtime - covers lines [8, 9, 10, 12]
+            content1 = b"input1_content_unique"
+            f1 = corpus_dir / "corpus1"
+            f1.write_bytes(content1)
+            os.utime(f1, (base_time, base_time))  # mtime = t0
+            hash1 = hashlib.sha256(content1).hexdigest()[:12]
+
+            # Corpus 2: middle mtime - covers lines [8, 9, 10, 11, 12]
+            content2 = b"input2_content_unique"
+            f2 = corpus_dir / "corpus2"
+            f2.write_bytes(content2)
+            os.utime(f2, (base_time + 10, base_time + 10))  # mtime = t0 + 10s
+            hash2 = hashlib.sha256(content2).hexdigest()[:12]
+
+            # Corpus 3: latest mtime - same coverage as corpus 2
+            content3 = b"input3_content_unique"
+            f3 = corpus_dir / "corpus3"
+            f3.write_bytes(content3)
+            os.utime(f3, (base_time + 20, base_time + 20))  # mtime = t0 + 20s
+            hash3 = hashlib.sha256(content3).hexdigest()[:12]
+
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.collector import CoverageCollector
+
+            store = CoverageStore(tmp_path / "store")
+            output_dir = tmp_path / "output"
+
+            mock_strategy = MagicMock()
+            mock_strategy.language = "c"
+
+            # Coverage data matching real uniafl output
+            # Map filename to coverage (collector uses filename lookup)
+            coverage_map = {
+                "corpus1": {
+                    "LLVMFuzzerTestOneInput": {
+                        "src": "/src/fuzz/fuzz_process_input_header.c",
+                        "lines": [3, 4, 5, 6],
+                    },
+                    "process_input_header": {
+                        "src": "/src/repo/mock.c",
+                        "lines": [8, 9, 10, 12],  # No line 11
+                    },
+                },
+                "corpus2": {
+                    "LLVMFuzzerTestOneInput": {
+                        "src": "/src/fuzz/fuzz_process_input_header.c",
+                        "lines": [3, 4, 5, 6],
+                    },
+                    "process_input_header": {
+                        "src": "/src/repo/mock.c",
+                        "lines": [8, 9, 10, 11, 12],  # Has line 11
+                    },
+                },
+                "corpus3": {
+                    "LLVMFuzzerTestOneInput": {
+                        "src": "/src/fuzz/fuzz_process_input_header.c",
+                        "lines": [3, 4, 5, 6],
+                    },
+                    "process_input_header": {
+                        "src": "/src/repo/mock.c",
+                        "lines": [8, 9, 10, 11, 12],  # Same as corpus2
+                    },
+                },
+            }
+
+            def mock_single_coverage(_harness, corpus_file):
+                return coverage_map.get(corpus_file.name, {})
+
+            mock_strategy.collect_single_coverage.side_effect = mock_single_coverage
+
+            collector = CoverageCollector(
+                mock_strategy, store, "test_harness", output_dir=output_dir
+            )
+            collector.run_start_time = base_time - 10  # CRS started before first corpus
+
+            unique_count = collector.process_new_corpus(corpus_dir)
+
+            # Should save 2: corpus1 and corpus2 (distinct line sets)
+            # Should NOT save corpus3 (same line set as corpus2 but later mtime)
+            assert unique_count == 2
+
+            saved_files = list((output_dir / "corpus_unique").iterdir())
+            saved_hashes = {f.name for f in saved_files}
+
+            # Verify exactly 2 files saved
+            assert len(saved_hashes) == 2
+
+            # corpus1 should be saved (distinct coverage - no line 11)
+            assert hash1 in saved_hashes
+
+            # corpus2 should be saved (distinct coverage - has line 11, earlier mtime)
+            assert hash2 in saved_hashes
+
+            # corpus3 should NOT be saved (same coverage as corpus2, later mtime)
+            assert hash3 not in saved_hashes
+
+            # Verify corpus_cov files match
+            cov_files = list((output_dir / "corpus_cov").glob("*.cov.json"))
+            cov_hashes = {f.name.replace(".cov.json", "") for f in cov_files}
+            assert hash1 in cov_hashes
+            assert hash2 in cov_hashes
+            assert hash3 not in cov_hashes
+
     def test_get_merged_coverage(self):
         """Test get_merged_coverage merges all corpus_cov/ files."""
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -950,14 +1078,22 @@ class TestPerInputProcessing:
 
             # First corpus covers lines 1, 2, 3
             cov1 = {
-                "meta": {"corpus_hash": "aaa111bbb222", "elapsed_time": 1.0, "language": "c"},
+                "meta": {
+                    "corpus_hash": "aaa111bbb222",
+                    "elapsed_time": 1.0,
+                    "language": "c",
+                },
                 "coverage": {"main": {"src": "main.c", "lines": [1, 2, 3]}},
             }
             (cov_dir / "aaa111bbb222.cov.json").write_text(json.dumps(cov1))
 
             # Second corpus covers lines 3, 4, 5 (overlapping line 3)
             cov2 = {
-                "meta": {"corpus_hash": "ccc333ddd444", "elapsed_time": 2.0, "language": "c"},
+                "meta": {
+                    "corpus_hash": "ccc333ddd444",
+                    "elapsed_time": 2.0,
+                    "language": "c",
+                },
                 "coverage": {"main": {"src": "main.c", "lines": [3, 4, 5]}},
             }
             (cov_dir / "ccc333ddd444.cov.json").write_text(json.dumps(cov2))
