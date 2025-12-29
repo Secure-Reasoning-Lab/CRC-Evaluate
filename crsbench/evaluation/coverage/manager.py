@@ -256,7 +256,7 @@ class CoverageManager:
                         "lines_total": s.summary.lines_total,
                         "lines_percent": s.summary.lines_percent,
                         "corpus_total": s.summary.corpus_total,
-                        "corpus_unique": s.summary.corpus_unique,
+                        "corpus_contributing": s.summary.corpus_contributing,
                         "new_corpus_count": s.new_corpus_count,
                         "new_lines_count": s.new_lines_count,
                         "saturation_detected": s.saturation_detected,
