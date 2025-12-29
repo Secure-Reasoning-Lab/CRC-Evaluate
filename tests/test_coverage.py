@@ -795,3 +795,296 @@ class TestPerInputProcessing:
             assert len(collector._processed_hashes) == 3
             # collect_single_coverage called once per file
             assert mock_strategy.collect_single_coverage.call_count == 3
+
+    def test_per_input_creates_corpus_unique_dir(self):
+        """Test that unique corpus files are copied to corpus_unique/."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            corpus_dir = tmp_path / "corpus"
+            corpus_dir.mkdir()
+            (corpus_dir / "input1").write_bytes(b"content1")
+            (corpus_dir / "input2").write_bytes(b"content2")
+
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.collector import CoverageCollector
+
+            store = CoverageStore(tmp_path / "store")
+            output_dir = tmp_path / "output"
+
+            mock_strategy = MagicMock()
+            mock_strategy.language = "c"
+            call_count = [0]
+
+            def mock_single_coverage(_harness, _corpus_file):
+                call_count[0] += 1
+                return {"func1": {"src": "test.c", "lines": [call_count[0] * 10]}}
+
+            mock_strategy.collect_single_coverage.side_effect = mock_single_coverage
+
+            collector = CoverageCollector(
+                mock_strategy, store, "test_harness", output_dir=output_dir
+            )
+
+            collector.process_new_corpus(corpus_dir)
+
+            # corpus_unique/ should exist and have files
+            unique_dir = output_dir / "corpus_unique"
+            assert unique_dir.exists()
+            assert len(list(unique_dir.iterdir())) == 2
+
+    def test_per_input_creates_corpus_cov_files(self):
+        """Test that per-corpus coverage data is saved to corpus_cov/."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            corpus_dir = tmp_path / "corpus"
+            corpus_dir.mkdir()
+            (corpus_dir / "input1").write_bytes(b"content1")
+
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.collector import CoverageCollector
+
+            store = CoverageStore(tmp_path / "store")
+            output_dir = tmp_path / "output"
+
+            mock_strategy = MagicMock()
+            mock_strategy.language = "c"
+            mock_strategy.collect_single_coverage.return_value = {
+                "main": {"src": "main.c", "lines": [1, 2, 3]}
+            }
+
+            collector = CoverageCollector(
+                mock_strategy, store, "test_harness", output_dir=output_dir
+            )
+
+            collector.process_new_corpus(corpus_dir)
+
+            # corpus_cov/ should exist and have .cov.json file
+            cov_dir = output_dir / "corpus_cov"
+            assert cov_dir.exists()
+            cov_files = list(cov_dir.glob("*.cov.json"))
+            assert len(cov_files) == 1
+
+            # Check content of cov file
+            cov_data = json.loads(cov_files[0].read_text())
+            assert "meta" in cov_data
+            assert "coverage" in cov_data
+            assert cov_data["meta"]["language"] == "c"
+            assert cov_data["coverage"]["main"]["lines"] == [1, 2, 3]
+
+    def test_get_merged_coverage(self):
+        """Test get_merged_coverage merges all corpus_cov/ files."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.collector import CoverageCollector
+
+            store = CoverageStore(tmp_path / "store")
+            output_dir = tmp_path / "output"
+
+            mock_strategy = MagicMock()
+            mock_strategy.language = "c"
+
+            collector = CoverageCollector(
+                mock_strategy, store, "test_harness", output_dir=output_dir
+            )
+
+            # corpus_cov/ is already created by collector
+            cov_dir = output_dir / "corpus_cov"
+
+            # First corpus covers lines 1, 2, 3
+            cov1 = {
+                "meta": {"corpus_hash": "aaa111bbb222", "language": "c"},
+                "coverage": {"main": {"src": "main.c", "lines": [1, 2, 3]}},
+            }
+            (cov_dir / "aaa111bbb222.cov.json").write_text(json.dumps(cov1))
+
+            # Second corpus covers lines 3, 4, 5 (overlapping line 3)
+            cov2 = {
+                "meta": {"corpus_hash": "ccc333ddd444", "language": "c"},
+                "coverage": {"main": {"src": "main.c", "lines": [3, 4, 5]}},
+            }
+            (cov_dir / "ccc333ddd444.cov.json").write_text(json.dumps(cov2))
+
+            merged = collector.get_merged_coverage()
+
+            assert "main" in merged
+            # Lines should be merged and sorted: 1, 2, 3, 4, 5
+            assert merged["main"]["lines"] == [1, 2, 3, 4, 5]
+
+    def test_get_merged_coverage_multiple_functions(self):
+        """Test get_merged_coverage with multiple functions."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.collector import CoverageCollector
+
+            store = CoverageStore(tmp_path / "store")
+            output_dir = tmp_path / "output"
+
+            mock_strategy = MagicMock()
+            mock_strategy.language = "c"
+
+            collector = CoverageCollector(
+                mock_strategy, store, "test_harness", output_dir=output_dir
+            )
+
+            # corpus_cov/ is already created by collector
+            cov_dir = output_dir / "corpus_cov"
+
+            # Corpus 1 covers main and parse
+            cov1 = {
+                "coverage": {
+                    "main": {"src": "main.c", "lines": [1, 2]},
+                    "parse": {"src": "parse.c", "lines": [10, 11]},
+                }
+            }
+            (cov_dir / "corpus1.cov.json").write_text(json.dumps(cov1))
+
+            # Corpus 2 covers only parse (different lines)
+            cov2 = {"coverage": {"parse": {"src": "parse.c", "lines": [12, 13]}}}
+            (cov_dir / "corpus2.cov.json").write_text(json.dumps(cov2))
+
+            merged = collector.get_merged_coverage()
+
+            assert "main" in merged
+            assert "parse" in merged
+            assert merged["main"]["lines"] == [1, 2]
+            assert merged["parse"]["lines"] == [10, 11, 12, 13]
+
+
+class TestManagerSnapshotCoverage:
+    """Tests for CoverageManager snapshot coverage files."""
+
+    def test_on_snapshot_creates_cov_json_file(self):
+        """Test that on_snapshot creates snapshot-NNN.cov.json file."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            trial_dir = tmp_path / "trial-1"
+            trial_dir.mkdir()
+
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.manager import CoverageManager
+            from crsbench.evaluation.coverage.models import CoverageConfig
+
+            # Create mock collector
+            mock_collector = MagicMock()
+            mock_collector.get_summary.return_value = CoverageSummary(
+                lines_covered=10, lines_total=100
+            )
+            mock_collector.get_merged_coverage.return_value = {
+                "main": {"src": "main.c", "lines": [1, 2, 3]}
+            }
+
+            config = CoverageConfig(enabled=True)
+            store = CoverageStore(trial_dir / "coverage")
+
+            manager = CoverageManager(
+                trial_dir=trial_dir,
+                collector=mock_collector,
+                config=config,
+                harness_name="fuzz_test",
+                corpus_dir=tmp_path / "corpus",
+                store=store,
+            )
+
+            # Trigger snapshot
+            manager.on_snapshot(cycle=1)
+
+            # Check snapshot-001.cov.json was created
+            cov_file = trial_dir / "coverage" / "snapshots" / "snapshot-001.cov.json"
+            assert cov_file.exists()
+
+            cov_data = json.loads(cov_file.read_text())
+            assert "main" in cov_data
+            assert cov_data["main"]["lines"] == [1, 2, 3]
+
+    def test_on_snapshot_creates_summary_json_file(self):
+        """Test that on_snapshot creates snapshot-NNN.json summary file."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            trial_dir = tmp_path / "trial-1"
+            trial_dir.mkdir()
+
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.manager import CoverageManager
+            from crsbench.evaluation.coverage.models import CoverageConfig
+
+            mock_collector = MagicMock()
+            mock_collector.get_summary.return_value = CoverageSummary(
+                lines_covered=50, lines_total=100, lines_percent=50.0
+            )
+            mock_collector.get_merged_coverage.return_value = {}
+
+            config = CoverageConfig(enabled=True)
+            store = CoverageStore(trial_dir / "coverage")
+
+            manager = CoverageManager(
+                trial_dir=trial_dir,
+                collector=mock_collector,
+                config=config,
+                harness_name="fuzz_test",
+                corpus_dir=tmp_path / "corpus",
+                store=store,
+            )
+
+            manager.on_snapshot(cycle=2)
+
+            # Check snapshot-002.json summary was created
+            summary_file = trial_dir / "coverage" / "snapshots" / "snapshot-002.json"
+            assert summary_file.exists()
+
+            summary_data = json.loads(summary_file.read_text())
+            assert summary_data["cycle"] == 2
+            assert summary_data["lines_covered"] == 50
+            assert summary_data["lines_percent"] == 50.0
+
+    def test_multiple_snapshots_create_multiple_files(self):
+        """Test that multiple snapshots create multiple cov.json files."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            trial_dir = tmp_path / "trial-1"
+            trial_dir.mkdir()
+
+            from unittest.mock import MagicMock
+
+            from crsbench.evaluation.coverage.manager import CoverageManager
+            from crsbench.evaluation.coverage.models import CoverageConfig
+
+            mock_collector = MagicMock()
+            mock_collector.get_summary.return_value = CoverageSummary()
+            mock_collector.get_merged_coverage.return_value = {"f": {"src": "f.c", "lines": [1]}}
+
+            config = CoverageConfig(enabled=True)
+            store = CoverageStore(trial_dir / "coverage")
+
+            manager = CoverageManager(
+                trial_dir=trial_dir,
+                collector=mock_collector,
+                config=config,
+                harness_name="fuzz_test",
+                corpus_dir=tmp_path / "corpus",
+                store=store,
+            )
+
+            # Create 3 snapshots
+            manager.on_snapshot(cycle=1)
+            manager.on_snapshot(cycle=2)
+            manager.on_snapshot(cycle=3)
+
+            snapshots_dir = trial_dir / "coverage" / "snapshots"
+            assert (snapshots_dir / "snapshot-001.cov.json").exists()
+            assert (snapshots_dir / "snapshot-002.cov.json").exists()
+            assert (snapshots_dir / "snapshot-003.cov.json").exists()
