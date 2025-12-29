@@ -173,12 +173,18 @@ class CRSBugFindingExecutor(CRSExecutor):
                 benchmark_path, harness_name, trial_output_dir
             )
 
+            # Detect ref.diff for delta mode
+            diff_path = None
+            if hints_path and (hints_path / "ref.diff").exists():
+                diff_path = hints_path / "ref.diff"
+
             # 5. Run CRS bug finding campaign
             cmd = self._construct_run_command(
                 project_name=project_name,
                 harness_name=harness_name,
                 trial_build_dir=trial_build_dir,
                 hints_path=hints_path,
+                diff_path=diff_path,
             )
 
             logger.info(f"Run command: {' '.join(cmd)}")
@@ -236,6 +242,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 harness=harness,
                 cmd=cmd,
                 hints_path=hints_path,
+                diff_path=diff_path,
                 execution_time=execution_time,
                 returncode=returncode,
                 stdout=stdout,
@@ -445,6 +452,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         harness_name: str,
         trial_build_dir: Path,
         hints_path: Optional[Path],
+        diff_path: Optional[Path] = None,
     ) -> List[str]:
         """Construct oss-bugfind-crs run command.
 
@@ -453,6 +461,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             harness_name: Harness name
             trial_build_dir: Trial-specific build directory
             hints_path: Optional path to hints directory
+            diff_path: Optional path to diff file (delta mode)
 
         Returns:
             Command as list of strings
@@ -483,6 +492,11 @@ class CRSBugFindingExecutor(CRSExecutor):
             logger.info(f"Using hints from: {hints_path}")
         else:
             logger.info("Running without hints")
+
+        # Add diff path if available (delta mode)
+        if diff_path and diff_path.exists():
+            cmd.extend(["--diff", str(diff_path)])
+            logger.info(f"Using diff for delta mode: {diff_path}")
 
         # Add external LiteLLM flag if using external LiteLLM
         if self.litellm_mode is not None:
@@ -675,6 +689,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         harness: HarnessFile,
         cmd: List[str],
         hints_path: Optional[Path],
+        diff_path: Optional[Path],
         execution_time: float,
         returncode: int,
         stdout: str,
@@ -688,6 +703,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             harness: Harness configuration
             cmd: Command executed
             hints_path: Path to prepared hints (or None)
+            diff_path: Path to diff file (or None)
             execution_time: Total execution time
             returncode: Process exit code
             stdout: Process stdout
@@ -722,6 +738,8 @@ class CRSBugFindingExecutor(CRSExecutor):
                 "corpus_count": len(list((hints_path / "corpus").iterdir()))
                 if hints_path and (hints_path / "corpus").exists()
                 else 0,
+                "has_diff": diff_path is not None,
+                "diff_path": str(diff_path) if diff_path else None,
             },
             "outputs": {
                 "crs_output_dir": str(crs_output_dir),
