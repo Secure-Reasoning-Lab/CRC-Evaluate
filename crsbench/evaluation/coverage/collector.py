@@ -277,9 +277,8 @@ class CoverageCollector:
 
         The .cov file contains:
             - hash: SHA256 hash of corpus content (12 hex chars)
-            - seen_ts: Unix timestamp when corpus was first observed
-            - elapsed_time: Seconds since trial start when corpus was discovered
-                (None if trial_start_time not set)
+            - elapsed_time: Seconds since CRS run started when corpus was discovered
+                (None if run_start_time not set)
             - file_size: Size of the corpus file in bytes
             - contributes_unique: Always True for exported corpus
             - coverage: Function-level coverage data
@@ -328,7 +327,6 @@ class CoverageCollector:
                 cov_path = output_dir / f".{corpus_hash}.cov"
                 cov_data = {
                     "hash": corpus_cov.hash,
-                    "seen_ts": corpus_cov.first_seen_ts,
                     "elapsed_time": elapsed_time,
                     "file_size": corpus_cov.file_size,
                     "contributes_unique": corpus_cov.contributes_unique,

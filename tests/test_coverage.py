@@ -499,12 +499,12 @@ class TestExportUniqueCorpus:
             cov_data_loaded = json.loads(cov_path.read_text())
 
             assert cov_data_loaded["hash"] == corpus_hash
-            assert cov_data_loaded["seen_ts"] == corpus_timestamp
-            assert cov_data_loaded["elapsed_time"] == 30.5  # seconds since trial start
+            assert cov_data_loaded["elapsed_time"] == 30.5  # seconds since CRS run start
             assert cov_data_loaded["file_size"] == len(b"unique content")
             assert cov_data_loaded["contributes_unique"] is True
             assert "main" in cov_data_loaded["coverage"]
             assert cov_data_loaded["coverage"]["main"]["lines"] == [10, 20, 30]
+            assert "seen_ts" not in cov_data_loaded  # removed, use elapsed_time instead
 
     def test_export_unique_corpus_elapsed_time_none_without_start(self):
         """Test that elapsed_time is None when trial_start_time not provided."""
