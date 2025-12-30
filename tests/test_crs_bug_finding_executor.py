@@ -369,6 +369,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             harness=harness,
             cmd=cmd,
             hints_path=hints_path,
+            diff_path=None,
             execution_time=100.5,
             returncode=0,
             stdout="success",
