@@ -197,7 +197,10 @@ def docker_image_exists(image_tag: str) -> bool:
     """
     try:
         result = subprocess.run(
-            ["docker", "image", "inspect", image_tag], capture_output=True, text=True
+            ["docker", "image", "inspect", image_tag],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,  # Prevent terminal issues
         )
         return result.returncode == 0
     except Exception as e:
@@ -426,7 +429,7 @@ def run_cmd(
             process = subprocess.Popen(
                 cmd,
                 cwd=cwd,
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,  # Prevent terminal issues
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -508,6 +511,7 @@ def run_cmd_with_logging(
                 stdout=log_stdout,
                 stderr=subprocess.STDOUT,
                 timeout=timeout,
+                stdin=subprocess.DEVNULL,  # Prevent terminal issues
             )
             returncode = result.returncode
             if returncode == 0:
@@ -1648,7 +1652,11 @@ def run_command_in_container(
 
     try:
         result = subprocess.run(
-            docker_cmd_parts, capture_output=True, text=True, timeout=timeout
+            docker_cmd_parts,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,  # Prevent terminal issues
         )
 
         output = result.stdout + result.stderr

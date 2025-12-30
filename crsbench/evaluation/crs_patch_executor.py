@@ -345,6 +345,7 @@ class CRSPatchExecutor(CRSExecutor):
                 text=True,
                 timeout=self.config.get("build_timeout", 600),
                 cwd=str(trial_build_dir),
+                stdin=subprocess.DEVNULL,  # Prevent terminal issues
             )
 
             if result.returncode != 0:

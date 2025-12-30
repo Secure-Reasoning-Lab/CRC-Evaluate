@@ -189,6 +189,7 @@ class OSSFuzzInfrastructure:
                 capture_output=True,
                 text=True,
                 timeout=config.timeout,
+                stdin=subprocess.DEVNULL,  # Prevent terminal issues
             )
 
             if result.returncode == 0:
@@ -491,6 +492,7 @@ class OSSFuzzInfrastructure:
                 capture_output=True,
                 text=True,
                 timeout=timeout + 30,  # Grace period for helper.py
+                stdin=subprocess.DEVNULL,  # Prevent terminal issues
             )
 
             # Handle exit codes explicitly

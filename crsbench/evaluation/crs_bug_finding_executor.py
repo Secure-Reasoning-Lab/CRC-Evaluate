@@ -434,6 +434,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 check=False,
                 cwd=str(trial_build_dir),
                 env=env,
+                stdin=subprocess.DEVNULL,  # Prevent terminal issues
             )
 
             if result.returncode != 0:

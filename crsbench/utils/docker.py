@@ -51,6 +51,7 @@ def fix_docker_ownership(path: Path, *, timeout: int = 60) -> bool:
             capture_output=True,
             text=True,
             timeout=timeout,
+            stdin=subprocess.DEVNULL,  # Prevent terminal issues
         )
 
         if result.returncode == 0:
