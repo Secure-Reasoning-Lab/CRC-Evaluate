@@ -58,6 +58,7 @@ class BuildConfig:
         commit: Git commit hash to checkout
         main_repo: Main repository URL
         benchmark_path: Path to benchmark directory
+        mode: Benchmark mode (FULL or DELTA) - used in variant naming
         patches: List of patch files to apply (empty = no patches)
         output_dir: Output directory (None = shared oss-fuzz/build/, Path = per-trial)
         language: Programming language ("c", "cpp", "jvm")
@@ -73,6 +74,7 @@ class BuildConfig:
     commit: str
     main_repo: str
     benchmark_path: Path
+    mode: Optional["BenchmarkMode"] = None
     patches: list[Path] = field(default_factory=list)
     output_dir: Optional[Path] = None
     language: str = "c"
@@ -104,12 +106,29 @@ class BuildConfig:
     def variant_name(self) -> str:
         """Get the variant name for this build config.
 
+        Naming convention:
+        - Base variants include mode in type: {benchmark}-deltabase, {benchmark}-fullbase
+        - Ref variants are mode-specific: {benchmark}-deltaref
+        - Shared variants need mode prefix: {benchmark}-delta-allpatched, {benchmark}-full-cpv0
+
         Returns:
-            Variant name (e.g., "benchmark-deltabase", "benchmark-cpv0")
+            Variant name (e.g., "benchmark-deltabase", "benchmark-delta-cpv0")
         """
+        # Base and ref variants already have mode in type name
+        if self.variant_type in (
+            VariantType.FULL_BASE,
+            VariantType.DELTA_BASE,
+            VariantType.DELTA_REF,
+        ):
+            return f"{self.benchmark_name}-{self.variant_type.value}"
+
+        # Shared variants need mode prefix to avoid conflicts
+        mode_prefix = self.mode.value if self.mode else "delta"
+
         if self.variant_type == VariantType.CPV:
-            return f"{self.benchmark_name}-cpv{self.cpv_num}"
-        return f"{self.benchmark_name}-{self.variant_type.value}"
+            return f"{self.benchmark_name}-{mode_prefix}-cpv{self.cpv_num}"
+
+        return f"{self.benchmark_name}-{mode_prefix}-{self.variant_type.value}"
 
     @property
     def is_shared(self) -> bool:

@@ -52,16 +52,18 @@ class TestBuildConfig:
         assert config.variant_name == "test-benchmark-deltabase"
 
     def test_cpv_variant_name(self):
-        """Test CPV variant naming."""
+        """Test CPV variant naming (includes mode)."""
         config = BuildConfig(
             benchmark_name="test-benchmark",
             variant_type=VariantType.CPV,
             commit="abc123",
             main_repo="https://github.com/test/repo",
             benchmark_path=Path("/tmp/benchmark"),
+            mode=BenchmarkMode.DELTA,
             cpv_num=0,
         )
-        assert config.variant_name == "test-benchmark-cpv0"
+        # CPV variants include mode prefix: {benchmark}-{mode}-cpv{N}
+        assert config.variant_name == "test-benchmark-delta-cpv0"
 
     def test_cpv_requires_cpv_num(self):
         """Test that CPV variants require cpv_num."""
@@ -298,13 +300,14 @@ class TestOSSFuzzBuilder:
         )
 
         # Should have: deltabase, deltaref, allpatched, cpv0, cpv1
+        # Shared variants include mode prefix: delta-allpatched, delta-cpv0, etc.
         assert plan.total_count == 5
         variant_names = [c.variant_name for c in plan.configs]
         assert "test-delta-01-deltabase" in variant_names
         assert "test-delta-01-deltaref" in variant_names
-        assert "test-delta-01-allpatched" in variant_names
-        assert "test-delta-01-cpv0" in variant_names
-        assert "test-delta-01-cpv1" in variant_names
+        assert "test-delta-01-delta-allpatched" in variant_names
+        assert "test-delta-01-delta-cpv0" in variant_names
+        assert "test-delta-01-delta-cpv1" in variant_names
 
     def test_create_build_plan_full_mode(
         self, mock_oss_fuzz_path: Path, tmp_path: Path
@@ -326,11 +329,12 @@ class TestOSSFuzzBuilder:
         )
 
         # Should have: fullbase, allpatched, cpv0
+        # Shared variants include mode prefix: full-allpatched, full-cpv0, etc.
         assert plan.total_count == 3
         variant_names = [c.variant_name for c in plan.configs]
         assert "test-full-01-fullbase" in variant_names
-        assert "test-full-01-allpatched" in variant_names
-        assert "test-full-01-cpv0" in variant_names
+        assert "test-full-01-full-allpatched" in variant_names
+        assert "test-full-01-full-cpv0" in variant_names
 
     def test_create_build_plan_with_coverage(
         self, mock_oss_fuzz_path: Path, tmp_path: Path
@@ -351,8 +355,9 @@ class TestOSSFuzzBuilder:
             include_coverage=True,
         )
 
+        # Coverage variant includes mode prefix
         variant_names = [c.variant_name for c in plan.configs]
-        assert "test-coverage" in variant_names
+        assert "test-delta-coverage" in variant_names
 
     def test_is_variant_built(self, mock_oss_fuzz_path: Path):
         """Test checking if variant is built."""
@@ -370,25 +375,35 @@ class TestOSSFuzzBuilder:
 
 
 class TestBuildConfigVariantNames:
-    """Tests for variant name generation."""
+    """Tests for variant name generation.
+
+    Naming convention:
+    - Base/ref variants include mode in type name: {benchmark}-deltabase
+    - Shared variants need mode prefix: {benchmark}-delta-allpatched
+    """
 
     @pytest.mark.parametrize(
-        ("variant_type", "cpv_num", "expected_suffix"),
+        ("variant_type", "cpv_num", "mode", "expected_suffix"),
         [
-            (VariantType.FULL_BASE, None, "fullbase"),
-            (VariantType.DELTA_BASE, None, "deltabase"),
-            (VariantType.DELTA_REF, None, "deltaref"),
-            (VariantType.ALL_PATCHED, None, "allpatched"),
-            (VariantType.CPV, 0, "cpv0"),
-            (VariantType.CPV, 1, "cpv1"),
-            (VariantType.CPV, 10, "cpv10"),
-            (VariantType.COVERAGE, None, "coverage"),
+            # Base/ref variants: mode is in the type name
+            (VariantType.FULL_BASE, None, BenchmarkMode.FULL, "fullbase"),
+            (VariantType.DELTA_BASE, None, BenchmarkMode.DELTA, "deltabase"),
+            (VariantType.DELTA_REF, None, BenchmarkMode.DELTA, "deltaref"),
+            # Shared variants: mode prefix required
+            (VariantType.ALL_PATCHED, None, BenchmarkMode.DELTA, "delta-allpatched"),
+            (VariantType.ALL_PATCHED, None, BenchmarkMode.FULL, "full-allpatched"),
+            (VariantType.CPV, 0, BenchmarkMode.DELTA, "delta-cpv0"),
+            (VariantType.CPV, 1, BenchmarkMode.DELTA, "delta-cpv1"),
+            (VariantType.CPV, 10, BenchmarkMode.FULL, "full-cpv10"),
+            (VariantType.COVERAGE, None, BenchmarkMode.DELTA, "delta-coverage"),
+            (VariantType.COVERAGE, None, BenchmarkMode.FULL, "full-coverage"),
         ],
     )
     def test_variant_name_generation(
         self,
         variant_type: VariantType,
         cpv_num: int | None,
+        mode: BenchmarkMode,
         expected_suffix: str,
     ):
         """Test variant name generation for different types."""
@@ -398,6 +413,7 @@ class TestBuildConfigVariantNames:
             commit="abc",
             main_repo="https://example.com",
             benchmark_path=Path("/tmp"),
+            mode=mode,
             cpv_num=cpv_num,
         )
         assert config.variant_name == f"my-benchmark-{expected_suffix}"

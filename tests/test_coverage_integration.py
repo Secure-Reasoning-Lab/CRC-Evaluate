@@ -224,21 +224,32 @@ class TestOSSFuzzBuilderCoverageIntegration:
             (oss_fuzz / "projects").mkdir()
             (oss_fuzz / "build" / "out").mkdir(parents=True)
 
-            from crsbench.builder import BuildConfig, OSSFuzzBuilder, VariantType
+            from crsbench.builder import (
+                BenchmarkMode,
+                BuildConfig,
+                OSSFuzzBuilder,
+                VariantType,
+            )
 
             builder = OSSFuzzBuilder(oss_fuzz)
 
-            # Test variant name via BuildConfig
+            # Test variant name via BuildConfig (includes mode prefix)
             config = BuildConfig(
                 benchmark_name="mock-c-delta-01",
                 variant_type=VariantType.COVERAGE,
                 commit="abc123",
                 main_repo="https://example.com/repo",
                 benchmark_path=Path("/nonexistent"),
+                mode=BenchmarkMode.DELTA,
                 language="c",
             )
-            assert config.variant_name == "mock-c-delta-01-coverage"
+            assert config.variant_name == "mock-c-delta-01-delta-coverage"
 
             # Test build output path via infrastructure
-            build_path = builder.infra.get_build_output_path("mock-c-delta-01-coverage")
-            assert build_path == oss_fuzz / "build" / "out" / "mock-c-delta-01-coverage"
+            build_path = builder.infra.get_build_output_path(
+                "mock-c-delta-01-delta-coverage"
+            )
+            assert (
+                build_path
+                == oss_fuzz / "build" / "out" / "mock-c-delta-01-delta-coverage"
+            )

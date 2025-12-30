@@ -249,7 +249,7 @@ class TestOSSFuzzBuilderCoverage:
     """Tests for OSSFuzzBuilder coverage variant functionality."""
 
     def test_coverage_variant_name(self):
-        """Test coverage variant name generation."""
+        """Test coverage variant name generation (includes mode)."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Create minimal oss-fuzz structure
             oss_fuzz = Path(tmp_dir)
@@ -257,28 +257,32 @@ class TestOSSFuzzBuilderCoverage:
             (oss_fuzz / "infra" / "helper.py").touch()
             (oss_fuzz / "projects").mkdir()
 
-            from crsbench.builder import BuildConfig, VariantType
+            from crsbench.builder import BenchmarkMode, BuildConfig, VariantType
 
-            # Create BuildConfig for coverage variant
+            # Create BuildConfig for coverage variant - delta mode
             config = BuildConfig(
                 benchmark_name="mock-c",
                 variant_type=VariantType.COVERAGE,
                 commit="abc123",
                 main_repo="https://example.com/repo",
                 benchmark_path=Path("/nonexistent"),
+                mode=BenchmarkMode.DELTA,
                 language="c",
             )
-            assert config.variant_name == "mock-c-coverage"
+            # Coverage variants include mode prefix
+            assert config.variant_name == "mock-c-delta-coverage"
 
+            # Full mode variant
             config2 = BuildConfig(
                 benchmark_name="sanity-mock-c-delta-01",
                 variant_type=VariantType.COVERAGE,
                 commit="abc123",
                 main_repo="https://example.com/repo",
                 benchmark_path=Path("/nonexistent"),
+                mode=BenchmarkMode.FULL,
                 language="c",
             )
-            assert config2.variant_name == "sanity-mock-c-delta-01-coverage"
+            assert config2.variant_name == "sanity-mock-c-delta-01-full-coverage"
 
     def test_is_variant_built_returns_false_when_not_built(self):
         """Test is_variant_built returns False when no build exists."""
@@ -306,8 +310,8 @@ class TestOSSFuzzBuilderCoverage:
 
             builder = OSSFuzzBuilder(oss_fuzz)
 
-            # Create variant project directory
-            variant_name = "mock-c-coverage"
+            # Create variant project directory (includes mode prefix)
+            variant_name = "mock-c-delta-coverage"
             (oss_fuzz / "projects" / variant_name).mkdir()
 
             # Create build output with a file
@@ -326,24 +330,31 @@ class TestOSSFuzzBuilderCoverage:
             (oss_fuzz / "projects").mkdir()
             (oss_fuzz / "build" / "out").mkdir(parents=True)
 
-            from crsbench.builder import BuildConfig, OSSFuzzBuilder, VariantType
+            from crsbench.builder import (
+                BenchmarkMode,
+                BuildConfig,
+                OSSFuzzBuilder,
+                VariantType,
+            )
 
             builder = OSSFuzzBuilder(oss_fuzz)
 
             # Setup: create variant project and build output (simulating previous build)
-            variant_name = "mock-c-coverage"
+            # Variant name includes mode prefix
+            variant_name = "mock-c-delta-coverage"
             (oss_fuzz / "projects" / variant_name).mkdir()
             build_path = oss_fuzz / "build" / "out" / variant_name
             build_path.mkdir(parents=True)
             (build_path / "fuzz_target").touch()
 
-            # Create config
+            # Create config with mode
             config = BuildConfig(
                 benchmark_name="mock-c",
                 variant_type=VariantType.COVERAGE,
                 commit="abc123",
                 main_repo="https://example.com/repo",
                 benchmark_path=Path("/nonexistent"),  # Not used when cached
+                mode=BenchmarkMode.DELTA,
                 language="c",
             )
 
@@ -353,7 +364,7 @@ class TestOSSFuzzBuilderCoverage:
             assert result is not None
             assert result.success is True
             assert result.cached is True
-            assert result.variant_name == "mock-c-coverage"
+            assert result.variant_name == "mock-c-delta-coverage"
             assert result.build_path == build_path
 
 

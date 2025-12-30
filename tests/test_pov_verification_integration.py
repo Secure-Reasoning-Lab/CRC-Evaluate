@@ -259,6 +259,7 @@ class TestMetaYamlAdapterIntegration:
         )
 
         # Test variant naming
+        # Base/ref variants have mode in type name
         assert (
             adapter.get_variant_name(VariantType.DELTA_BASE)
             == "sanity-mock-c-delta-01-deltabase"
@@ -267,17 +268,18 @@ class TestMetaYamlAdapterIntegration:
             adapter.get_variant_name(VariantType.DELTA_REF)
             == "sanity-mock-c-delta-01-deltaref"
         )
+        # Shared variants include mode prefix (adapter is in delta mode)
         assert (
             adapter.get_variant_name(VariantType.ALL_PATCHED)
-            == "sanity-mock-c-delta-01-allpatched"
+            == "sanity-mock-c-delta-01-delta-allpatched"
         )
         assert (
             adapter.get_variant_name(VariantType.CPV, cpv_num=0)
-            == "sanity-mock-c-delta-01-cpv0"
+            == "sanity-mock-c-delta-01-delta-cpv0"
         )
         assert (
             adapter.get_variant_name(VariantType.CPV, cpv_num=1)
-            == "sanity-mock-c-delta-01-cpv1"
+            == "sanity-mock-c-delta-01-delta-cpv1"
         )
 
     def test_adapter_harness_names(self, meta_yaml_path):

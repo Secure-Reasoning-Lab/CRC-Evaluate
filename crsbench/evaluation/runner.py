@@ -578,65 +578,63 @@ class BenchmarkRunner:
             from crsbench.evaluation.coverage.models import CoverageConfig
             from crsbench.evaluation.coverage.store import CoverageStore
             from crsbench.evaluation.coverage.strategy import create_coverage_strategy
+            from crsbench.validation.meta_adapter import MetaYamlAdapter
 
-            # Determine language from benchmark config
-            # Look for language in project.yaml
+            # Load project.yaml for main_repo and language
             project_yaml = benchmark_path / "project.yaml"
-            language = "c"  # default
-            if project_yaml.exists():
-                with project_yaml.open() as f:
-                    project_config = yaml.safe_load(f)
-                    language = project_config.get("language", "c")
+            if not project_yaml.exists():
+                self.logger.error(f"project.yaml not found: {project_yaml}")
+                return None
 
-            # Get project name for coverage variant
-            project_name = benchmark_path.name
-            coverage_variant = f"{project_name}-coverage"
+            with project_yaml.open() as f:
+                project_config = yaml.safe_load(f)
+
+            main_repo = project_config.get("main_repo")
+            repo_name = project_config.get("repo_name")
+            language = project_config.get("language", "c")
+
+            if not main_repo:
+                self.logger.error(f"main_repo not found in {project_yaml}")
+                return None
+
+            # Load benchmark config via MetaYamlAdapter
+            meta_yaml = benchmark_path / ".aixcc" / "meta.yaml"
+            if not meta_yaml.exists():
+                self.logger.error(f"meta.yaml not found: {meta_yaml}")
+                return None
+
+            try:
+                adapter = MetaYamlAdapter.from_meta_yaml(
+                    meta_yaml_path=meta_yaml,
+                    benchmark_name=benchmark_path.name,
+                    lang=language,
+                    main_repo=main_repo,
+                    benchmark_path=benchmark_path,
+                    repo_name=repo_name,
+                )
+            except (FileNotFoundError, ValueError) as e:
+                self.logger.error(f"Failed to load meta.yaml: {e}")
+                return None
+
+            # Get mode and commit from adapter
+            mode = adapter.get_mode()
+            target_commit = adapter.get_ref_commit() or adapter.get_base_commit()
+
+            # Get coverage variant name (uses adapter's mode)
+            coverage_variant = adapter.get_variant_name(VariantType.COVERAGE)
 
             # Build coverage variant if not already built
             builder = OSSFuzzBuilder(self.oss_fuzz_path)
             if not builder.is_variant_built(coverage_variant):
                 self.logger.info(f"Building coverage variant: {coverage_variant}")
 
-                # Read project.yaml for main_repo (not meta.yaml!)
-                project_yaml = benchmark_path / "project.yaml"
-                if not project_yaml.exists():
-                    self.logger.error(f"project.yaml not found: {project_yaml}")
-                    return None
-
-                with project_yaml.open() as f:
-                    project_config = yaml.safe_load(f)
-
-                main_repo = project_config.get("main_repo")
-                repo_name = project_config.get("repo_name")
-
-                # Read meta.yaml for commit info
-                meta_yaml = benchmark_path / ".aixcc" / "meta.yaml"
-                if not meta_yaml.exists():
-                    self.logger.error(f"meta.yaml not found: {meta_yaml}")
-                    return None
-
-                with meta_yaml.open() as f:
-                    meta = yaml.safe_load(f)
-
-                # Get target commit (ref_commit for delta mode)
-                delta_mode = meta.get("delta_mode", {})
-                target_commit = delta_mode.get("ref_commit")
-                if not target_commit:
-                    full_mode = meta.get("full_mode", {})
-                    target_commit = full_mode.get("base_commit")
-
-                if not main_repo or not target_commit:
-                    self.logger.error(
-                        "main_repo not found in project.yaml or target_commit not found in meta.yaml"
-                    )
-                    return None
-
                 config = BuildConfig(
-                    benchmark_name=project_name,
+                    benchmark_name=benchmark_path.name,
                     variant_type=VariantType.COVERAGE,
                     commit=target_commit,
                     main_repo=main_repo,
                     benchmark_path=benchmark_path,
+                    mode=mode,
                     language=language,
                     repo_name=repo_name,
                 )
@@ -727,25 +725,49 @@ class BenchmarkRunner:
             return
 
         try:
+            import yaml
+
+            from crsbench.builder import VariantType
             from crsbench.evaluation.coverage.models import CoverageSummary
             from crsbench.evaluation.coverage.strategy import (
                 create_coverage_strategy,
                 parse_llvm_cov_summary,
             )
+            from crsbench.validation.meta_adapter import MetaYamlAdapter
 
-            # Determine language
+            # Load project.yaml for language and main_repo
             project_yaml = benchmark_path / "project.yaml"
             language = "c"
+            main_repo = ""
+            repo_name = None
             if project_yaml.exists():
-                import yaml
-
                 with project_yaml.open() as f:
                     project_config = yaml.safe_load(f)
                     language = project_config.get("language", "c")
+                    main_repo = project_config.get("main_repo", "")
+                    repo_name = project_config.get("repo_name")
 
-            # Get coverage variant name
-            project_name = benchmark_path.name
-            coverage_variant = f"{project_name}-coverage"
+            # Load benchmark config via MetaYamlAdapter
+            meta_yaml = benchmark_path / ".aixcc" / "meta.yaml"
+            if not meta_yaml.exists():
+                self.logger.error(f"meta.yaml not found: {meta_yaml}")
+                return
+
+            try:
+                adapter = MetaYamlAdapter.from_meta_yaml(
+                    meta_yaml_path=meta_yaml,
+                    benchmark_name=benchmark_path.name,
+                    lang=language,
+                    main_repo=main_repo,
+                    benchmark_path=benchmark_path,
+                    repo_name=repo_name,
+                )
+            except (FileNotFoundError, ValueError) as e:
+                self.logger.error(f"Failed to load meta.yaml: {e}")
+                return
+
+            # Get coverage variant name (uses adapter's mode)
+            coverage_variant = adapter.get_variant_name(VariantType.COVERAGE)
 
             self.logger.info(
                 f"Running post-experiment coverage on {corpus_dir} "

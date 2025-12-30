@@ -266,6 +266,7 @@ class OSSFuzzBuilder:
                 commit=base_commit,
                 main_repo=main_repo,
                 benchmark_path=benchmark_path,
+                mode=mode,
                 patches=[],  # Base: no patches
                 language=language,
                 repo_name=repo_name,
@@ -281,6 +282,7 @@ class OSSFuzzBuilder:
                     commit=ref_commit,
                     main_repo=main_repo,
                     benchmark_path=benchmark_path,
+                    mode=mode,
                     patches=[],  # Ref: no patches
                     language=language,
                     repo_name=repo_name,
@@ -297,6 +299,7 @@ class OSSFuzzBuilder:
                     commit=patched_commit,
                     main_repo=main_repo,
                     benchmark_path=benchmark_path,
+                    mode=mode,
                     patches=all_patches,  # All patches
                     language=language,
                     repo_name=repo_name,
@@ -313,6 +316,7 @@ class OSSFuzzBuilder:
                     commit=patched_commit or base_commit,
                     main_repo=main_repo,
                     benchmark_path=benchmark_path,
+                    mode=mode,
                     patches=cpv_patches,  # All patches except this CPV
                     language=language,
                     cpv_num=cpv_num,
@@ -329,6 +333,7 @@ class OSSFuzzBuilder:
                     commit=patched_commit or base_commit,
                     main_repo=main_repo,
                     benchmark_path=benchmark_path,
+                    mode=mode,
                     patches=[],  # Coverage: no patches
                     language=language,
                     repo_name=repo_name,
