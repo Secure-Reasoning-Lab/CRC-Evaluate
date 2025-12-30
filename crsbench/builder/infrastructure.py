@@ -286,9 +286,7 @@ class OSSFuzzInfrastructure:
             all_patches.extend(cpv_patches[cpv_num])
         return all_patches
 
-    def get_patches_except(
-        self, benchmark_path: Path, exclude_cpv: int
-    ) -> list[Path]:
+    def get_patches_except(self, benchmark_path: Path, exclude_cpv: int) -> list[Path]:
         """Get all CPV patches except for a specific CPV.
 
         Args:

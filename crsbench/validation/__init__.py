@@ -6,7 +6,6 @@ For POV verification, use crsbench.evaluation.verification.
 For building variants, use crsbench.builder.OSSFuzzBuilder.
 """
 
-# Format validation
 from crsbench.builder import BenchmarkMode, VariantType
 from crsbench.validation.errors import (
     ValidationError,
@@ -22,19 +21,6 @@ from crsbench.validation.format_validator import (
     validate_experiment_config_from_string,
 )
 from crsbench.validation.meta_adapter import MetaYamlAdapter
-
-# Re-export verification classes from new location for backward compatibility
-from crsbench.evaluation.verification import (
-    DeduplicationStrategy,
-    OSSFuzzReproducer,
-    PatchBasedDedup,
-    VerdictResolver,
-    VerificationEngine,
-    VerificationRequest,
-    VerificationResult,
-    VerificationStatus,
-    get_dedup_strategy,
-)
 
 __all__ = [
     # Format validation
@@ -52,14 +38,4 @@ __all__ = [
     # Types (from builder)
     "BenchmarkMode",
     "VariantType",
-    # Verification (re-exported from evaluation.verification)
-    "VerificationStatus",
-    "VerificationRequest",
-    "VerificationResult",
-    "VerificationEngine",
-    "VerdictResolver",
-    "OSSFuzzReproducer",
-    "DeduplicationStrategy",
-    "PatchBasedDedup",
-    "get_dedup_strategy",
 ]

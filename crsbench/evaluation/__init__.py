@@ -39,8 +39,6 @@ from crsbench.evaluation.snapshot import (
     validate_snapshot_structure,
 )
 from crsbench.evaluation.snapshot_manager import SnapshotManager
-
-# Re-export key verification classes for convenience
 from crsbench.evaluation.verification import (
     DeduplicationStrategy,
     OSSFuzzReproducer,

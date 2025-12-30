@@ -10,9 +10,9 @@ from crsbench.evaluation.crs_executor import CRSExecutor, StubCRSExecutor
 from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
 from crsbench.evaluation.results import EvaluationReport, HarnessResult, ResultCollector
 from crsbench.evaluation.snapshot_manager import SnapshotManager
-from crsbench.utils.logger import get_logger
 from crsbench.evaluation.verification import PatchBasedDedup, VerificationEngine
 from crsbench.evaluation.verification import VerificationResult as VerifResult
+from crsbench.utils.logger import get_logger
 from crsbench.validation import ValidationResult, validate_benchmark
 from crsbench.validation.schemas import BenchmarkConfig, BenchmarkHarness, HarnessFile
 
