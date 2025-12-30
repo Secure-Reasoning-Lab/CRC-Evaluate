@@ -8,6 +8,7 @@ needed for test.sh generation.
 import os
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from typing import List, Optional
 
@@ -17,6 +18,29 @@ from pydantic import BaseModel
 from crsbench.utils.logger import configure_logger, get_logger
 
 logger = get_logger(__name__)
+
+# Per-directory locks to prevent concurrent git operations on the same repo
+_repo_locks: dict[str, threading.Lock] = {}
+_repo_locks_lock = threading.Lock()
+
+
+def _get_repo_lock(repo_path: str) -> threading.Lock:
+    """Get or create a lock for a specific repository path.
+
+    This ensures that only one thread can operate on a given repository
+    at a time, preventing git lock conflicts.
+
+    Args:
+        repo_path: Path to the repository
+
+    Returns:
+        Lock for the repository
+    """
+    path_key = str(Path(repo_path).resolve())
+    with _repo_locks_lock:
+        if path_key not in _repo_locks:
+            _repo_locks[path_key] = threading.Lock()
+        return _repo_locks[path_key]
 
 
 class RepoInfo(BaseModel):
@@ -545,14 +569,15 @@ def clone_or_copy_cached_repo(
     """Clone repository or copy from cache if available.
 
     This function implements smart caching:
-    - If target_dir is the cache directory and exists: reset and return
-    - If target_dir is NOT the cache directory and cache exists: copy from cache
-    - Otherwise: clone from remote
+    - Cache stores pristine repos at specific commits (read-only)
+    - Always copies to target_dir (never operates on cache directly)
+    - If cache exists: copy to target_dir
+    - If no cache: clone to target_dir, then populate cache
 
     Args:
         repo_url: Repository URL to clone from
         commit: Commit hash to checkout
-        target_dir: Target directory for the repository
+        target_dir: Target directory for the repository (should be unique per operation)
         repos_dir: Directory for cache storage (default: PROJECT_REPOS_DIR or .crsbench-repos)
         repo_name: Repository name for cache key (derived from URL if not provided)
         verbose: Enable verbose logging
@@ -568,18 +593,15 @@ def clone_or_copy_cached_repo(
         repo_info=repo_info, target_commit=commit, repos_dir=repos_dir, verbose=verbose
     )
 
-    # Normalize paths for comparison
-    target_dir_abs = str(Path(target_dir).resolve())
-    cache_dir_abs = str(Path(cache_dir).resolve())
+    # Get lock for the cache directory to prevent concurrent access
+    cache_lock = _get_repo_lock(cache_dir)
 
-    # Check and verify cache if it exists
+    # Check if cache exists and is valid (read-only verification)
     cache_verified = False
-    if Path(cache_dir).is_dir():
-        try:
-            if (Path(cache_dir) / ".git").exists():
-                reset_and_clean_repo(cache_dir, verbose=verbose)
-
-                # Verify commit
+    with cache_lock:
+        if Path(cache_dir).is_dir() and (Path(cache_dir) / ".git").exists():
+            try:
+                # Just verify commit - cache is read-only, no reset
                 result = run_git(
                     ["rev-parse", "HEAD"],
                     cwd=cache_dir,
@@ -593,48 +615,29 @@ def clone_or_copy_cached_repo(
                     if current_commit.startswith(commit[:8]):
                         cache_verified = True
                         if verbose:
-                            logger.info(
-                                f"✅ Cache verified at correct commit: {cache_dir}"
-                            )
+                            logger.info(f"✅ Cache verified: {cache_dir}")
                     else:
                         logger.warning(
                             f"⚠️  Cache at wrong commit: {current_commit[:8]} != {commit[:8]}, removing"
                         )
                         shutil.rmtree(cache_dir)
-        except Exception as e:
-            logger.warning(f"Failed to verify cache: {e}")
-            # Try to remove corrupted cache
-            try:
-                shutil.rmtree(cache_dir)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to verify cache: {e}")
+                try:
+                    shutil.rmtree(cache_dir)
+                except Exception:
+                    pass
 
-    if target_dir_abs == cache_dir_abs:
-        # Target is the cache directory itself
-        if cache_verified:
-            # Cache already verified and ready
-            return target_dir
-
-        # Cache doesn't exist or was removed - clone to it
-        if verbose:
-            logger.info("📦 Repository not found, cloning to cache...")
-
-        success = clone_repository(
-            repo_url=repo_url, target_dir=target_dir, commit=commit, verbose=verbose
-        )
-        return target_dir if success else None
-
-    # Target is NOT the cache directory
+    # If cache verified, copy to target
     if cache_verified:
-        # Cache exists and verified - copy from it
         if verbose:
             logger.info(f"📦 Copying from cache: {cache_dir} -> {target_dir}")
         try:
-            shutil.copytree(
-                cache_dir, target_dir, symlinks=True, ignore_dangling_symlinks=True
-            )
-            # Reset target to ensure clean state after copy
-            # This fixes stale git index/stat cache issues from shutil.copytree
+            with cache_lock:
+                shutil.copytree(
+                    cache_dir, target_dir, symlinks=True, ignore_dangling_symlinks=True
+                )
+            # Reset target to fix stale git index from copytree
             reset_and_clean_repo(target_dir, verbose=verbose)
             if verbose:
                 logger.info(f"✅ Successfully copied from cache to {target_dir}")
@@ -643,9 +646,9 @@ def clone_or_copy_cached_repo(
             logger.warning(f"⚠️  Failed to copy from cache: {e}, will clone instead")
             # Fall through to clone
 
-    # Cache doesn't exist or copy failed - clone directly to target
+    # No cache - clone directly to target
     if verbose:
-        logger.info(f"📦 No cache available, cloning directly to {target_dir}...")
+        logger.info(f"📦 No cache available, cloning to {target_dir}...")
 
     success = clone_repository(
         repo_url=repo_url, target_dir=target_dir, commit=commit, verbose=verbose
@@ -654,19 +657,19 @@ def clone_or_copy_cached_repo(
     if not success:
         return None
 
-    # Set up cache for future uses
-    if target_dir_abs != cache_dir_abs:
-        if verbose:
-            logger.info(f"📦 Setting up cache: {target_dir} -> {cache_dir}")
-        try:
-            shutil.copytree(
-                target_dir, cache_dir, symlinks=True, ignore_dangling_symlinks=True
-            )
+    # Populate cache for future uses (protected by lock)
+    with cache_lock:
+        if not Path(cache_dir).is_dir():
             if verbose:
-                logger.info(f"✅ Cache created at {cache_dir}")
-        except Exception as e:
-            logger.warning(f"⚠️  Failed to create cache: {e}")
-            # Continue anyway - target_dir is still valid
+                logger.info(f"📦 Populating cache: {target_dir} -> {cache_dir}")
+            try:
+                shutil.copytree(
+                    target_dir, cache_dir, symlinks=True, ignore_dangling_symlinks=True
+                )
+                if verbose:
+                    logger.info(f"✅ Cache created at {cache_dir}")
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to create cache: {e}")
 
     return target_dir
 
