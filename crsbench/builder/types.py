@@ -49,12 +49,17 @@ class BenchmarkMode(Enum):
 class BuildConfig:
     """Configuration for building a single variant.
 
+    The core insight: patches are the primitive, not variant types.
+    All builds follow: clone repo → checkout commit → apply patches → build
+
     Attributes:
         benchmark_name: Name of the benchmark (e.g., "sanity-mock-c-delta-01")
-        variant_type: Type of variant to build
+        variant_type: Type of variant (for naming only)
         commit: Git commit hash to checkout
         main_repo: Main repository URL
         benchmark_path: Path to benchmark directory
+        patches: List of patch files to apply (empty = no patches)
+        output_dir: Output directory (None = shared oss-fuzz/build/, Path = per-trial)
         language: Programming language ("c", "cpp", "jvm")
         cpv_num: CPV number for CPV variants (None otherwise)
         sanitizer: Sanitizer to use (default: "address", coverage uses "coverage")
@@ -68,6 +73,8 @@ class BuildConfig:
     commit: str
     main_repo: str
     benchmark_path: Path
+    patches: list[Path] = field(default_factory=list)
+    output_dir: Optional[Path] = None
     language: str = "c"
     cpv_num: Optional[int] = None
     sanitizer: str = "address"
@@ -80,6 +87,10 @@ class BuildConfig:
         # Ensure benchmark_path is a Path
         if isinstance(self.benchmark_path, str):
             self.benchmark_path = Path(self.benchmark_path)
+
+        # Ensure output_dir is a Path if provided
+        if self.output_dir is not None and isinstance(self.output_dir, str):
+            self.output_dir = Path(self.output_dir)
 
         # CPV variants require cpv_num
         if self.variant_type == VariantType.CPV and self.cpv_num is None:
@@ -99,6 +110,15 @@ class BuildConfig:
         if self.variant_type == VariantType.CPV:
             return f"{self.benchmark_name}-cpv{self.cpv_num}"
         return f"{self.benchmark_name}-{self.variant_type.value}"
+
+    @property
+    def is_shared(self) -> bool:
+        """Check if this is a shared build (not per-trial).
+
+        Returns:
+            True if output goes to shared oss-fuzz/build/ location
+        """
+        return self.output_dir is None
 
 
 @dataclass

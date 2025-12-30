@@ -196,29 +196,23 @@ class OSSFuzzBuilder:
         config: BuildConfig,
         repo_path: Path,
     ) -> None:
-        """Apply patches based on variant type.
+        """Apply patches from config.patches.
+
+        The patches are pre-resolved in create_build_plan(), so this method
+        simply iterates over config.patches and applies each one.
 
         Args:
-            config: Build configuration
+            config: Build configuration (patches already resolved)
             repo_path: Path to cloned repository
         """
-        # Determine which CPV to exclude (if any)
-        exclude_cpv: Optional[int] = None
-
-        if config.variant_type == VariantType.CPV:
-            exclude_cpv = config.cpv_num
-        elif config.variant_type in (
-            VariantType.FULL_BASE,
-            VariantType.DELTA_BASE,
-            VariantType.DELTA_REF,
-        ):
-            # Base/ref variants don't apply any patches
+        if not config.patches:
+            logger.debug(f"No patches to apply for {config.variant_name}")
             return
 
-        # ALL_PATCHED applies all patches (exclude_cpv=None)
-
-        aixcc_dir = config.benchmark_path / ".aixcc"
-        self.infra.apply_patches(repo_path, aixcc_dir, exclude_cpv)
+        logger.debug(
+            f"Applying {len(config.patches)} patches for {config.variant_name}"
+        )
+        self.infra.apply_patches_from_list(repo_path, config.patches)
 
     def create_build_plan(
         self,
@@ -235,6 +229,9 @@ class OSSFuzzBuilder:
         include_coverage: bool = False,
     ) -> BuildPlan:
         """Create a build plan for a benchmark.
+
+        Patches are resolved upfront and stored in each BuildConfig.
+        This makes the builder logic simple: just apply config.patches.
 
         Args:
             benchmark_name: Name of the benchmark
@@ -253,7 +250,10 @@ class OSSFuzzBuilder:
         """
         plan = BuildPlan(benchmark_name=benchmark_name)
 
-        # Base version
+        # Get all CPV patches upfront
+        all_patches = self.infra.get_all_patches(benchmark_path)
+
+        # Base version (no patches)
         base_type = (
             VariantType.FULL_BASE
             if mode == BenchmarkMode.FULL
@@ -266,12 +266,13 @@ class OSSFuzzBuilder:
                 commit=base_commit,
                 main_repo=main_repo,
                 benchmark_path=benchmark_path,
+                patches=[],  # Base: no patches
                 language=language,
                 repo_name=repo_name,
             )
         )
 
-        # Reference version (delta mode only)
+        # Reference version (delta mode only, no patches)
         if mode == BenchmarkMode.DELTA and ref_commit:
             plan.add_config(
                 BuildConfig(
@@ -280,12 +281,13 @@ class OSSFuzzBuilder:
                     commit=ref_commit,
                     main_repo=main_repo,
                     benchmark_path=benchmark_path,
+                    patches=[],  # Ref: no patches
                     language=language,
                     repo_name=repo_name,
                 )
             )
 
-        # All-patched version
+        # All-patched version (all patches applied)
         patched_commit = ref_commit if mode == BenchmarkMode.DELTA else base_commit
         if patched_commit:
             plan.add_config(
@@ -295,13 +297,15 @@ class OSSFuzzBuilder:
                     commit=patched_commit,
                     main_repo=main_repo,
                     benchmark_path=benchmark_path,
+                    patches=all_patches,  # All patches
                     language=language,
                     repo_name=repo_name,
                 )
             )
 
-        # CPV variants
+        # CPV variants (all patches except one)
         for cpv_num in cpv_numbers:
+            cpv_patches = self.infra.get_patches_except(benchmark_path, cpv_num)
             plan.add_config(
                 BuildConfig(
                     benchmark_name=benchmark_name,
@@ -309,13 +313,14 @@ class OSSFuzzBuilder:
                     commit=patched_commit or base_commit,
                     main_repo=main_repo,
                     benchmark_path=benchmark_path,
+                    patches=cpv_patches,  # All patches except this CPV
                     language=language,
                     cpv_num=cpv_num,
                     repo_name=repo_name,
                 )
             )
 
-        # Coverage variant
+        # Coverage variant (no patches, different sanitizer)
         if include_coverage:
             plan.add_config(
                 BuildConfig(
@@ -324,6 +329,7 @@ class OSSFuzzBuilder:
                     commit=patched_commit or base_commit,
                     main_repo=main_repo,
                     benchmark_path=benchmark_path,
+                    patches=[],  # Coverage: no patches
                     language=language,
                     repo_name=repo_name,
                 )

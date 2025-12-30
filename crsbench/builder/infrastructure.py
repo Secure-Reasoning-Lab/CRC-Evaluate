@@ -231,6 +231,111 @@ class OSSFuzzInfrastructure:
         except Exception as e:
             logger.debug(f"Could not fix ownership of {build_path}: {e}")
 
+    def get_cpv_patches(self, benchmark_path: Path) -> dict[int, list[Path]]:
+        """Get all CPV patches from a benchmark's .aixcc directory.
+
+        CRSBench structure: .aixcc/{harness}/cpv_{N}/patches/patch_*.diff
+
+        Args:
+            benchmark_path: Path to benchmark directory
+
+        Returns:
+            Dict mapping CPV number to list of patch files
+        """
+        aixcc_dir = benchmark_path / ".aixcc"
+        if not aixcc_dir.exists():
+            logger.warning(f".aixcc directory not found: {aixcc_dir}")
+            return {}
+
+        cpv_patches: dict[int, list[Path]] = {}
+
+        for harness_dir in aixcc_dir.iterdir():
+            if not harness_dir.is_dir() or harness_dir.name in ("tests", "povs"):
+                continue
+
+            for cpv_dir in harness_dir.glob("cpv_*"):
+                if not cpv_dir.is_dir():
+                    continue
+
+                try:
+                    cpv_num = int(cpv_dir.name.split("_")[1])
+                except (IndexError, ValueError):
+                    continue
+
+                patches_dir = cpv_dir / "patches"
+                if patches_dir.exists():
+                    for patch_file in sorted(patches_dir.glob("*.diff")):
+                        if cpv_num not in cpv_patches:
+                            cpv_patches[cpv_num] = []
+                        cpv_patches[cpv_num].append(patch_file)
+
+        return cpv_patches
+
+    def get_all_patches(self, benchmark_path: Path) -> list[Path]:
+        """Get all CPV patches as a flat list.
+
+        Args:
+            benchmark_path: Path to benchmark directory
+
+        Returns:
+            Sorted list of all patch files
+        """
+        cpv_patches = self.get_cpv_patches(benchmark_path)
+        all_patches = []
+        for cpv_num in sorted(cpv_patches.keys()):
+            all_patches.extend(cpv_patches[cpv_num])
+        return all_patches
+
+    def get_patches_except(
+        self, benchmark_path: Path, exclude_cpv: int
+    ) -> list[Path]:
+        """Get all CPV patches except for a specific CPV.
+
+        Args:
+            benchmark_path: Path to benchmark directory
+            exclude_cpv: CPV number to exclude
+
+        Returns:
+            List of patch files excluding the specified CPV
+        """
+        cpv_patches = self.get_cpv_patches(benchmark_path)
+        patches = []
+        for cpv_num in sorted(cpv_patches.keys()):
+            if cpv_num != exclude_cpv:
+                patches.extend(cpv_patches[cpv_num])
+        return patches
+
+    def apply_patch(self, repo_path: Path, patch_file: Path) -> bool:
+        """Apply a single patch file to a repository.
+
+        Args:
+            repo_path: Path to repository
+            patch_file: Path to patch file
+
+        Returns:
+            True if patch applied successfully
+        """
+        return self._apply_single_patch(repo_path, patch_file)
+
+    def apply_patches_from_list(self, repo_path: Path, patches: list[Path]) -> bool:
+        """Apply a list of patches to a repository.
+
+        Args:
+            repo_path: Path to repository
+            patches: List of patch files to apply
+
+        Returns:
+            True if all patches applied successfully
+        """
+        success = True
+        for patch_file in patches:
+            if not self._apply_single_patch(repo_path, patch_file):
+                logger.warning(f"Failed to apply patch: {patch_file}")
+                success = False
+            else:
+                logger.debug(f"Applied patch: {patch_file.name}")
+        return success
+
     def apply_patches(
         self,
         repo_path: Path,
@@ -238,6 +343,9 @@ class OSSFuzzInfrastructure:
         exclude_cpv: Optional[int] = None,
     ) -> None:
         """Apply CPV patches from CRSBench structure.
+
+        DEPRECATED: Use apply_patches_from_list() with get_all_patches() or
+        get_patches_except() instead.
 
         CRSBench structure: .aixcc/{harness}/cpv_{N}/patches/patch_*.diff
 
