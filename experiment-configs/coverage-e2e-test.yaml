@@ -14,7 +14,7 @@ experiment: coverage-e2e-test
 
 trials: 1
 mode: delta
-max_total_time: 300  # 5 minutes
+max_total_time: 180  # 3 minutes
 difficulty_level: 1
 
 experiment_filestore: /tmp/crsbench/experiments/coverage-e2e-test
@@ -35,7 +35,7 @@ snapshot_period: 60
 
 # Enable coverage collection with saturation detection
 coverage_enabled: true
-coverage_saturation_time: 120  # Saturated if no new coverage for 2 minutes
+coverage_saturation_time: 60  # Saturated if no new coverage for 60 secs
 
 # Early stop on saturation (not yet implemented - detection only for now)
 # When true: terminate trial early when coverage saturates
