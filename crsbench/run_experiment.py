@@ -9,8 +9,8 @@ Usage:
     # Run experiments
     crsbench run --experiment-config experiment-config.yaml --benchmarks benchmark1
 
-    # Validate POVs
-    crsbench validate benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
+    # Verify POVs
+    crsbench verify benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
 
     # Collect coverage
     crsbench coverage benchmarks/sanity-mock-c-delta-01 --corpus-dir ./corpus/
@@ -219,17 +219,17 @@ def parse_arguments() -> argparse.Namespace:
 
     Supports both subcommands and legacy flat arguments for backward compatibility:
     - crsbench run --experiment-config ...  (new style)
-    - crsbench validate <benchmark> ...      (new subcommand)
+    - crsbench verify <benchmark> ...         (POV verification)
     - crsbench --experiment-config ...       (legacy, equivalent to 'run')
 
     Returns:
         Parsed arguments with experiment configuration.
     """
     # Check for legacy invocation (no subcommand, starts with --)
-    # or validate/coverage subcommand
+    # or verify/coverage subcommand
     if len(sys.argv) > 1 and sys.argv[1] not in [
         "run",
-        "validate",
+        "verify",
         "coverage",
         "-h",
         "--help",
@@ -247,8 +247,8 @@ Examples:
   # Run CRS experiments
   %(prog)s run --experiment-config config.yaml --benchmarks bench1 --crses crs1
 
-  # Validate POVs against benchmark variants
-  %(prog)s validate benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
+  # Verify POVs against benchmark variants
+  %(prog)s verify benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
 
   # Legacy style (equivalent to 'run')
   %(prog)s --experiment-config config.yaml --benchmarks bench1 --crses crs1
@@ -271,10 +271,10 @@ Examples:
     _add_run_arguments(run_parser)
     run_parser.set_defaults(command="run")
 
-    # 'validate' subcommand - POV validation
-    from crsbench.validation.cli.validate_command import add_validate_subparser
+    # 'verify' subcommand - POV verification
+    from crsbench.evaluation.verification.cli.verify_command import add_verify_subparser
 
-    add_validate_subparser(subparsers)
+    add_verify_subparser(subparsers)
 
     # 'coverage' subcommand - coverage collection
     from crsbench.evaluation.coverage.cli.coverage_command import (
@@ -1044,11 +1044,11 @@ def main() -> None:
     args = parse_arguments()
 
     # Dispatch to appropriate command handler
-    if args.command == "validate":
-        # Handle validate command
-        from crsbench.validation.cli.validate_command import run_validate
+    if args.command == "verify":
+        # Handle verify command
+        from crsbench.evaluation.verification.cli.verify_command import run_verify
 
-        sys.exit(run_validate(args))
+        sys.exit(run_verify(args))
 
     if args.command == "coverage":
         # Handle coverage command

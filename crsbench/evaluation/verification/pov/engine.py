@@ -183,13 +183,15 @@ class VerificationEngine:
 
         with ThreadPoolExecutor(max_workers=self.verify_workers) as executor:
             futures = {
-                executor.submit(self._execute_reproduce, task): task
-                for task in tasks
+                executor.submit(self._execute_reproduce, task): task for task in tasks
             }
 
             for future in as_completed(futures):
                 result = future.result()
-                if result.variant_type == VariantType.CPV and result.cpv_num is not None:
+                if (
+                    result.variant_type == VariantType.CPV
+                    and result.cpv_num is not None
+                ):
                     cpv_crash_map[result.cpv_num] = result.crashed
                 else:
                     crash_results[result.variant_type] = result.crashed
@@ -267,8 +269,7 @@ class VerificationEngine:
 
         with ThreadPoolExecutor(max_workers=self.verify_workers) as executor:
             futures = {
-                executor.submit(self._execute_reproduce, task): task
-                for task in tasks
+                executor.submit(self._execute_reproduce, task): task for task in tasks
             }
 
             for future in as_completed(futures):
@@ -276,7 +277,10 @@ class VerificationEngine:
                 key = (result.pov_id, result.harness)
                 crash_results, cpv_crash_map = results_by_pov_harness[key]
 
-                if result.variant_type == VariantType.CPV and result.cpv_num is not None:
+                if (
+                    result.variant_type == VariantType.CPV
+                    and result.cpv_num is not None
+                ):
                     cpv_crash_map[result.cpv_num] = result.crashed
                 else:
                     crash_results[result.variant_type] = result.crashed
@@ -300,7 +304,10 @@ class VerificationEngine:
 
         # Resolve verdicts for each (pov, harness) pair
         verification_results = []
-        for (pov_id, _harness), (crash_results, cpv_crash_map) in results_by_pov_harness.items():
+        for (pov_id, _harness), (
+            crash_results,
+            cpv_crash_map,
+        ) in results_by_pov_harness.items():
             verdict = VerdictResolver.resolve(
                 mode=mode,
                 crash_results=crash_results,
@@ -313,7 +320,7 @@ class VerificationEngine:
         elapsed = time.time() - start_time
         logger.info(
             f"Completed {len(tasks)} reproduce calls in {elapsed:.1f}s "
-            f"({len(tasks)/elapsed:.1f} calls/sec)"
+            f"({len(tasks) / elapsed:.1f} calls/sec)"
         )
 
         return verification_results

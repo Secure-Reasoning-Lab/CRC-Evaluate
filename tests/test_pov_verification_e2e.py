@@ -40,7 +40,7 @@ pytestmark = [
 ]
 
 
-class TestPOVValidationE2E:
+class TestPOVVerificationE2E:
     """True E2E tests using sanity-mock-c-delta-01 benchmark."""
 
     @pytest.fixture
@@ -57,19 +57,19 @@ class TestPOVValidationE2E:
             pytest.skip(f"oss-fuzz not found: {path}")
         return path
 
-    def run_validate(
+    def run_verify(
         self,
         benchmark_path: Path,
         harness: str,
         pov_dir: Path,
         oss_fuzz_path: Path,
     ) -> dict:
-        """Run crsbench validate and return parsed JSON output."""
+        """Run crsbench verify and return parsed JSON output."""
         cmd = [
             "uv",
             "run",
             "crsbench",
-            "validate",
+            "verify",
             str(benchmark_path),
             "--harness",
             harness,
@@ -126,7 +126,7 @@ class TestPOVValidationE2E:
         if not pov_dir.exists():
             pytest.skip(f"POV directory not found: {pov_dir}")
 
-        results = self.run_validate(
+        results = self.run_verify(
             benchmark_path=benchmark_path,
             harness="fuzz_process_input_header",
             pov_dir=pov_dir,
@@ -145,7 +145,7 @@ class TestPOVValidationE2E:
         if not pov_dir.exists():
             pytest.skip(f"POV directory not found: {pov_dir}")
 
-        results = self.run_validate(
+        results = self.run_verify(
             benchmark_path=benchmark_path,
             harness="fuzz_parse_buffer_section",
             pov_dir=pov_dir,
@@ -156,13 +156,13 @@ class TestPOVValidationE2E:
         assert results[0]["status"] == "cpv"
         assert results[0]["cpv_matched"] == ["cpv_1"]
 
-    def test_both_cpvs_validated(self, benchmark_path, oss_fuzz_path):
-        """Validate all POVs from meta.yaml - should find both CPVs."""
+    def test_both_cpvs_verified(self, benchmark_path, oss_fuzz_path):
+        """Verify all POVs from meta.yaml - should find both CPVs."""
         cmd = [
             "uv",
             "run",
             "crsbench",
-            "validate",
+            "verify",
             str(benchmark_path),
             "--oss-fuzz",
             str(oss_fuzz_path),
@@ -205,7 +205,7 @@ class TestBuildUIDOwnership:
 
         build_out = oss_fuzz_path / "build" / "out"
         if not build_out.exists():
-            pytest.skip("No build output exists - run validation first")
+            pytest.skip("No build output exists - run verification first")
 
         current_uid = os.getuid()
 
