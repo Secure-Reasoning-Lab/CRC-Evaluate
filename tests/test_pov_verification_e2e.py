@@ -1,6 +1,6 @@
-"""True E2E tests for POV validation with actual Docker builds.
+"""True E2E tests for POV verification with actual Docker builds.
 
-These tests run the full validation pipeline including:
+These tests run the full verification pipeline including:
 - Building variant projects with Docker
 - Running POVs against built fuzzers
 - Verifying correct CPV matching

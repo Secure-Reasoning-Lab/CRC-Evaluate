@@ -1,11 +1,12 @@
 """OSS-Fuzz infrastructure utilities for the builder module.
 
 This module provides OSSFuzzInfrastructure, which wraps OSS-Fuzz's helper.py
-for building fuzzers with different configurations.
+for building fuzzers and reproducing crashes.
 """
 
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +16,9 @@ from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import clone_or_copy_cached_repo
 
 logger = get_logger(__name__)
+
+# Exit code constants from helper.py
+EXIT_CODE_TIMEOUT = 124  # Subprocess timeout in helper.py
 
 
 class OSSFuzzInfrastructure:
@@ -429,3 +433,92 @@ class OSSFuzzInfrastructure:
                 logger.info(f"Removed build output: {build_path}")
             except Exception as e:
                 logger.error(f"Failed to remove build output: {e}")
+
+    def reproduce(
+        self,
+        project_name: str,
+        harness: str,
+        pov_data: bytes,
+        timeout: int = 120,
+        request_id: Optional[int] = None,
+    ) -> bool:
+        """Reproduce a crash using OSS-Fuzz helper.py.
+
+        Uses --propagate_exit_codes to get explicit exit codes:
+        - 0: No crash
+        - 77: ASAN crash
+        - 124: Timeout (treated as no crash)
+        - Other non-zero: Other crash types
+
+        Args:
+            project_name: Variant name (e.g., "benchmark-deltaref")
+            harness: Harness name to run
+            pov_data: Raw POV/testcase bytes
+            timeout: Timeout for reproduce operation in seconds
+            request_id: Optional request ID for logging
+
+        Returns:
+            True if the POV causes a crash, False otherwise
+        """
+        # Write POV data to temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".bin") as f:
+            f.write(pov_data)
+            testcase_path = Path(f.name)
+
+        req_prefix = f"[Request #{request_id}] " if request_id else ""
+
+        try:
+            cmd = [
+                "python3",
+                str(self._helper_script),
+                "reproduce",
+                "--propagate_exit_codes",
+                "--timeout",
+                str(timeout),
+                project_name,
+                harness,
+                str(testcase_path),
+                "--",
+                "-detect_leaks=0",
+            ]
+
+            logger.debug(f"{req_prefix}Reproducing: {' '.join(cmd)}")
+
+            # Use slightly longer subprocess timeout to let helper.py handle it
+            result = subprocess.run(
+                cmd,
+                cwd=self.oss_fuzz_path,
+                capture_output=True,
+                text=True,
+                timeout=timeout + 30,  # Grace period for helper.py
+            )
+
+            # Handle exit codes explicitly
+            if result.returncode == 0:
+                logger.info(f"{req_prefix}{project_name}/{harness} did not crash")
+                return False
+            if result.returncode == EXIT_CODE_TIMEOUT:
+                logger.info(
+                    f"{req_prefix}{project_name}/{harness} timed out (exit code 124)"
+                )
+                return False
+            logger.info(
+                f"{req_prefix}{project_name}/{harness} crashed "
+                f"(exit code {result.returncode})"
+            )
+            return True
+
+        except subprocess.TimeoutExpired:
+            # Our subprocess timeout (shouldn't happen with grace period)
+            logger.warning(
+                f"{req_prefix}Subprocess timeout for {project_name}/{harness}"
+            )
+            return False
+        except Exception as e:
+            logger.error(
+                f"{req_prefix}Reproduce error for {project_name}/{harness}: {e}"
+            )
+            return False
+        finally:
+            # Clean up temporary file
+            testcase_path.unlink(missing_ok=True)

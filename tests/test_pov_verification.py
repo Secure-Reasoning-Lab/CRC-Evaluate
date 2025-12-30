@@ -1,4 +1,4 @@
-"""Tests for POV validation modules.
+"""Tests for POV verification modules.
 
 Tests cover:
 - VerdictResolver (FULL and DELTA mode verdict logic)

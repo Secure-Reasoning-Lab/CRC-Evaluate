@@ -41,7 +41,6 @@ from crsbench.evaluation.snapshot import (
 from crsbench.evaluation.snapshot_manager import SnapshotManager
 from crsbench.evaluation.verification import (
     DeduplicationStrategy,
-    OSSFuzzReproducer,
     PatchBasedDedup,
     VerdictResolver,
     VerificationEngine,
@@ -87,7 +86,6 @@ __all__ = [
     "VerificationResult",
     "VerificationEngine",
     "VerdictResolver",
-    "OSSFuzzReproducer",
     "DeduplicationStrategy",
     "PatchBasedDedup",
     "get_dedup_strategy",

@@ -2,8 +2,10 @@
 
 This module provides the core verification infrastructure:
 - Models: VerificationStatus, VerificationRequest, VerificationResult
-- Shared components: OSSFuzzReproducer, deduplication strategies
+- Deduplication strategies: PatchBasedDedup, StatusBasedDedup, NoOpDedup
 - POV verification: VerificationEngine, VerdictResolver
+
+Note: Reproduction is handled by OSSFuzzInfrastructure (crsbench.builder).
 """
 
 from crsbench.evaluation.verification.dedup import (
@@ -22,15 +24,12 @@ from crsbench.evaluation.verification.pov import (
     VerdictResolver,
     VerificationEngine,
 )
-from crsbench.evaluation.verification.reproducer import OSSFuzzReproducer
 
 __all__ = [
     # Models
     "VerificationStatus",
     "VerificationRequest",
     "VerificationResult",
-    # Shared components
-    "OSSFuzzReproducer",
     # POV verification
     "VerificationEngine",
     "VerdictResolver",

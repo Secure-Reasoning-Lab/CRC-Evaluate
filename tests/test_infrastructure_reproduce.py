@@ -1,12 +1,10 @@
-"""Integration tests for OSSFuzzReproducer with mock helper.py."""
+"""Integration tests for OSSFuzzInfrastructure.reproduce() with mock helper.py."""
 
 import shutil
 from pathlib import Path
 
 import pytest
-from crsbench.evaluation.verification.reproducer import (
-    OSSFuzzReproducer,
-)
+from crsbench.builder.infrastructure import OSSFuzzInfrastructure
 
 
 @pytest.fixture
@@ -19,62 +17,69 @@ def mock_oss_fuzz(tmp_path):
     mock_helper_src = Path(__file__).parent / "fixtures" / "mock_helper.py"
     shutil.copy(mock_helper_src, infra_dir / "helper.py")
 
+    # Create projects directory (required by OSSFuzzInfrastructure)
+    (tmp_path / "projects").mkdir()
+
     return tmp_path
 
 
 @pytest.fixture
-def reproducer(mock_oss_fuzz):
-    """Create reproducer with mock oss-fuzz."""
-    return OSSFuzzReproducer(mock_oss_fuzz, timeout=5)
+def infra(mock_oss_fuzz):
+    """Create OSSFuzzInfrastructure with mock oss-fuzz."""
+    return OSSFuzzInfrastructure(mock_oss_fuzz)
 
 
 class TestExitCodeHandling:
     """Test exit code handling with mock helper.py."""
 
-    def test_no_crash_returns_false(self, reproducer):
+    def test_no_crash_returns_false(self, infra):
         """Exit code 0 → False."""
-        result = reproducer.reproduce(
+        result = infra.reproduce(
             project_name="test",
             harness="fuzz",
             pov_data=b"OK",
+            timeout=5,
         )
         assert result is False
 
-    def test_asan_crash_returns_true(self, reproducer):
+    def test_asan_crash_returns_true(self, infra):
         """Exit code 77 (ASAN) → True."""
-        result = reproducer.reproduce(
+        result = infra.reproduce(
             project_name="test",
             harness="fuzz",
             pov_data=b"ASAN",
+            timeout=5,
         )
         assert result is True
 
-    def test_generic_crash_returns_true(self, reproducer):
+    def test_generic_crash_returns_true(self, infra):
         """Exit code 1 → True."""
-        result = reproducer.reproduce(
+        result = infra.reproduce(
             project_name="test",
             harness="fuzz",
             pov_data=b"CRASH",
+            timeout=5,
         )
         assert result is True
 
-    def test_timeout_returns_false(self, reproducer):
+    def test_timeout_returns_false(self, infra):
         """Exit code 124 (timeout) → False."""
-        result = reproducer.reproduce(
+        result = infra.reproduce(
             project_name="test",
             harness="fuzz",
             pov_data=b"TIMEOUT",
+            timeout=5,
         )
         assert result is False
 
-    def test_subprocess_timeout_returns_false(self, mock_oss_fuzz):
+    def test_subprocess_timeout_returns_false(self, infra):
         """Subprocess timeout (HANG) → False."""
         # Use short timeout to trigger subprocess timeout
-        reproducer = OSSFuzzReproducer(mock_oss_fuzz, timeout=1)
-        result = reproducer.reproduce(
+        result = infra.reproduce(
             project_name="test",
             harness="fuzz",
             pov_data=b"HANG",
+            timeout=1,
         )
         assert result is False
 
@@ -86,14 +91,15 @@ class TestCommandConstruction:
         """Command should include --propagate_exit_codes."""
         from unittest.mock import MagicMock, patch
 
-        reproducer = OSSFuzzReproducer(mock_oss_fuzz, timeout=5)
+        infra = OSSFuzzInfrastructure(mock_oss_fuzz)
 
-        with patch("subprocess.run") as mock_run:
+        with patch("crsbench.builder.infrastructure.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
-            reproducer.reproduce(
+            infra.reproduce(
                 project_name="test",
                 harness="fuzz",
                 pov_data=b"OK",
+                timeout=5,
             )
 
             # Verify the command was called with --propagate_exit_codes
@@ -105,11 +111,11 @@ class TestCommandConstruction:
         """Command should include --timeout."""
         from unittest.mock import MagicMock, patch
 
-        reproducer = OSSFuzzReproducer(mock_oss_fuzz, timeout=5)
+        infra = OSSFuzzInfrastructure(mock_oss_fuzz)
 
-        with patch("subprocess.run") as mock_run:
+        with patch("crsbench.builder.infrastructure.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
-            reproducer.reproduce(
+            infra.reproduce(
                 project_name="test",
                 harness="fuzz",
                 pov_data=b"OK",
@@ -128,14 +134,15 @@ class TestCommandConstruction:
         """Command should include -detect_leaks=0."""
         from unittest.mock import MagicMock, patch
 
-        reproducer = OSSFuzzReproducer(mock_oss_fuzz, timeout=5)
+        infra = OSSFuzzInfrastructure(mock_oss_fuzz)
 
-        with patch("subprocess.run") as mock_run:
+        with patch("crsbench.builder.infrastructure.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
-            reproducer.reproduce(
+            infra.reproduce(
                 project_name="test",
                 harness="fuzz",
                 pov_data=b"OK",
+                timeout=5,
             )
 
             # Verify the command was called with -detect_leaks=0

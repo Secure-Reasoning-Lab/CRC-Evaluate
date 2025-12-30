@@ -1,6 +1,6 @@
-"""Integration tests for POV validation with real benchmark data.
+"""Integration tests for POV verification with real benchmark data.
 
-Tests validate:
+Tests verify:
 1. POV from cpv_0 should match only cpv_0
 2. POV from cpv_1 should match only cpv_1
 3. Cross-CPV POVs should not match wrong CPVs

@@ -26,7 +26,6 @@ from crsbench.evaluation.verification.models import (
     VerificationStatus,
 )
 from crsbench.evaluation.verification.pov.verdict import VerdictResolver
-from crsbench.evaluation.verification.reproducer import OSSFuzzReproducer
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -49,7 +48,6 @@ class VerificationEngine:
     Attributes:
         oss_fuzz_path: Path to oss-fuzz directory
         builder: OSSFuzzBuilder instance
-        reproducer: OSSFuzzReproducer instance
         dedup_strategy: Deduplication strategy to use
         timeout: Timeout for reproduce operations
     """
@@ -72,7 +70,6 @@ class VerificationEngine:
         self.oss_fuzz_path = Path(oss_fuzz_path)
         self.timeout = timeout
         self.builder = OSSFuzzBuilder(oss_fuzz_path, max_workers=max_workers)
-        self.reproducer = OSSFuzzReproducer(oss_fuzz_path, timeout)
         self.dedup_strategy = dedup_strategy if dedup_strategy else PatchBasedDedup()
         self._built_results: dict[str, dict[str, BuildResult]] = {}
 
@@ -116,7 +113,7 @@ class VerificationEngine:
             if not result.success:
                 continue
 
-            crashed = self.reproducer.reproduce(
+            crashed = self.builder.infra.reproduce(
                 project_name=variant_name,
                 harness=request.harness,
                 pov_data=request.pov_data,
