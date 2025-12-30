@@ -408,78 +408,82 @@ def print_summary(benchmarks: List[BenchmarkInfo]) -> None:
         source_mode[key]["benchmarks"] += 1
         source_mode[key]["vulns"] += len(b.vulns)
 
-    print("=" * 70)
-    print("BENCHMARK STATISTICS SUMMARY")
-    print(f"(Excluding {sanity_count} Sanity benchmarks)")
-    print("=" * 70)
-    print()
+    logger.info("=" * 70)
+    logger.info("BENCHMARK STATISTICS SUMMARY")
+    logger.info(f"(Excluding {sanity_count} Sanity benchmarks)")
+    logger.info("=" * 70)
+    logger.info("")
 
-    print("Overall:")
-    print(f"  # of Projects:  {total_benchmarks}")
-    print(f"  # of Vulns:     {total_vulns}")
-    print(f"  # of Harnesses: {total_harnesses}")
-    print(f"  # of POVs:      {total_povs}")
-    print(f"  # of Patches:   {total_patches}")
-    print()
+    logger.info("Overall:")
+    logger.info(f"  # of Projects:  {total_benchmarks}")
+    logger.info(f"  # of Vulns:     {total_vulns}")
+    logger.info(f"  # of Harnesses: {total_harnesses}")
+    logger.info(f"  # of POVs:      {total_povs}")
+    logger.info(f"  # of Patches:   {total_patches}")
+    logger.info("")
 
-    print("File Completeness:")
-    print(f"  Benchmarks with test.sh: {benchmarks_with_test_sh}/{total_benchmarks}")
-    print(f"  Vulns with vuln.yaml:    {vulns_with_vuln_yaml}/{total_vulns}")
-    print()
+    logger.info("File Completeness:")
+    logger.info(
+        f"  Benchmarks with test.sh: {benchmarks_with_test_sh}/{total_benchmarks}"
+    )
+    logger.info(f"  Vulns with vuln.yaml:    {vulns_with_vuln_yaml}/{total_vulns}")
+    logger.info("")
 
-    print("-" * 70)
-    print("By Source:")
-    print("-" * 70)
-    print(f"  {'Source':<15} {'# Projects':>12} {'# Vulns':>12}")
-    print(f"  {'-' * 15} {'-' * 12} {'-' * 12}")
+    logger.info("-" * 70)
+    logger.info("By Source:")
+    logger.info("-" * 70)
+    logger.info(f"  {'Source':<15} {'# Projects':>12} {'# Vulns':>12}")
+    logger.info(f"  {'-' * 15} {'-' * 12} {'-' * 12}")
     for source in ["AFC", "ASC", "Team-Atlanta"]:
         if source in by_source:
             stats = by_source[source]
-            print(f"  {source:<15} {stats['benchmarks']:>12} {stats['vulns']:>12}")
-    print(f"  {'-' * 15} {'-' * 12} {'-' * 12}")
-    print(f"  {'Total':<15} {total_benchmarks:>12} {total_vulns:>12}")
-    print()
+            logger.info(
+                f"  {source:<15} {stats['benchmarks']:>12} {stats['vulns']:>12}"
+            )
+    logger.info(f"  {'-' * 15} {'-' * 12} {'-' * 12}")
+    logger.info(f"  {'Total':<15} {total_benchmarks:>12} {total_vulns:>12}")
+    logger.info("")
 
-    print("-" * 70)
-    print("By Mode:")
-    print("-" * 70)
-    print(f"  {'Mode':<15} {'# Projects':>12} {'# Vulns':>12}")
-    print(f"  {'-' * 15} {'-' * 12} {'-' * 12}")
+    logger.info("-" * 70)
+    logger.info("By Mode:")
+    logger.info("-" * 70)
+    logger.info(f"  {'Mode':<15} {'# Projects':>12} {'# Vulns':>12}")
+    logger.info(f"  {'-' * 15} {'-' * 12} {'-' * 12}")
     for mode in ["delta", "full"]:
         if mode in by_mode:
             stats = by_mode[mode]
-            print(f"  {mode:<15} {stats['benchmarks']:>12} {stats['vulns']:>12}")
-    print(f"  {'-' * 15} {'-' * 12} {'-' * 12}")
-    print(f"  {'Total':<15} {total_benchmarks:>12} {total_vulns:>12}")
-    print()
+            logger.info(f"  {mode:<15} {stats['benchmarks']:>12} {stats['vulns']:>12}")
+    logger.info(f"  {'-' * 15} {'-' * 12} {'-' * 12}")
+    logger.info(f"  {'Total':<15} {total_benchmarks:>12} {total_vulns:>12}")
+    logger.info("")
 
-    print("-" * 70)
-    print("By Language:")
-    print("-" * 70)
-    print(f"  {'Language':<15} {'# Projects':>12} {'# Vulns':>12}")
-    print(f"  {'-' * 15} {'-' * 12} {'-' * 12}")
+    logger.info("-" * 70)
+    logger.info("By Language:")
+    logger.info("-" * 70)
+    logger.info(f"  {'Language':<15} {'# Projects':>12} {'# Vulns':>12}")
+    logger.info(f"  {'-' * 15} {'-' * 12} {'-' * 12}")
     for lang, stats in sorted(by_language.items()):
-        print(f"  {lang:<15} {stats['benchmarks']:>12} {stats['vulns']:>12}")
-    print(f"  {'-' * 15} {'-' * 12} {'-' * 12}")
-    print(f"  {'Total':<15} {total_benchmarks:>12} {total_vulns:>12}")
-    print()
+        logger.info(f"  {lang:<15} {stats['benchmarks']:>12} {stats['vulns']:>12}")
+    logger.info(f"  {'-' * 15} {'-' * 12} {'-' * 12}")
+    logger.info(f"  {'Total':<15} {total_benchmarks:>12} {total_vulns:>12}")
+    logger.info("")
 
-    print("-" * 70)
-    print("By Source x Mode:")
-    print("-" * 70)
-    print(f"  {'Source':<15} {'Mode':<10} {'# Projects':>12} {'# Vulns':>12}")
-    print(f"  {'-' * 15} {'-' * 10} {'-' * 12} {'-' * 12}")
+    logger.info("-" * 70)
+    logger.info("By Source x Mode:")
+    logger.info("-" * 70)
+    logger.info(f"  {'Source':<15} {'Mode':<10} {'# Projects':>12} {'# Vulns':>12}")
+    logger.info(f"  {'-' * 15} {'-' * 10} {'-' * 12} {'-' * 12}")
     for source in ["AFC", "ASC", "Team-Atlanta"]:
         for mode in ["delta", "full"]:
             key = (source, mode)
             if key in source_mode:
                 stats = source_mode[key]
-                print(
+                logger.info(
                     f"  {source:<15} {mode:<10} {stats['benchmarks']:>12} {stats['vulns']:>12}"
                 )
-    print(f"  {'-' * 15} {'-' * 10} {'-' * 12} {'-' * 12}")
-    print(f"  {'Total':<15} {'':<10} {total_benchmarks:>12} {total_vulns:>12}")
-    print("=" * 70)
+    logger.info(f"  {'-' * 15} {'-' * 10} {'-' * 12} {'-' * 12}")
+    logger.info(f"  {'Total':<15} {'':<10} {total_benchmarks:>12} {total_vulns:>12}")
+    logger.info("=" * 70)
 
 
 def export_summary_csv(benchmarks: List[BenchmarkInfo], output_path: Path) -> None:

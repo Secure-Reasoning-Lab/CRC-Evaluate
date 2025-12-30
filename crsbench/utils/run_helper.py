@@ -1768,8 +1768,8 @@ def run_with_rolling_output(command: str, n: int = 5) -> None:
             start_new_session=True,  # Ensures all child processes inherit I/O
         )
 
-        print(f"--- Executing: '{command}' ---")
-        print(
+        logger.info(f"--- Executing: '{command}' ---")
+        logger.info(
             "=============================== COMMAND OUTPUT ==============================="
         )
 
@@ -1808,19 +1808,19 @@ def run_with_rolling_output(command: str, n: int = 5) -> None:
             sys.stdout.write(os.linesep)
             sys.stdout.flush()
 
-        print(
+        logger.info(
             "=============================================================================="
         )
 
         if process.returncode != 0:
-            # Print final error state
-            print(f"--- Command FAILED (Exit Code: {process.returncode}) ---")
-            print(f"Error executing command: '{command}'")
-            print(f"\nLast {n} lines of output/error before exit:")
+            # Log final error state
+            logger.error(f"--- Command FAILED (Exit Code: {process.returncode}) ---")
+            logger.error(f"Error executing command: '{command}'")
+            logger.error(f"Last {n} lines of output/error before exit:")
             if recent_lines_buffer:
-                print(os.linesep.join(list(recent_lines_buffer)))
+                logger.error(os.linesep.join(list(recent_lines_buffer)))
             else:
-                print("[No output captured]")
+                logger.error("[No output captured]")
             # Re-raise the exception for caller to handle
             raise subprocess.CalledProcessError(process.returncode, command)
 
@@ -1829,5 +1829,5 @@ def run_with_rolling_output(command: str, n: int = 5) -> None:
         raise
 
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        logger.error(f"An unexpected error occurred: {e}")
         raise

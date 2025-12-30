@@ -19,7 +19,6 @@ Examples:
 
 import argparse
 import json
-import logging
 import sys
 from pathlib import Path
 from typing import Optional
@@ -134,11 +133,10 @@ def run_coverage(args: argparse.Namespace) -> int:
         Exit code (0 for success, non-zero for errors)
     """
     # Configure logging
-    log_level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    from crsbench.utils.logger import configure_logger
+
+    log_level = "DEBUG" if args.verbose else "INFO"
+    configure_logger(level=log_level)
 
     # Validate benchmark path
     if not args.benchmark_path.exists():
@@ -373,7 +371,7 @@ def output_results(
         output_path.write_text(output)
         logger.info(f"Results written to: {output_path}")
     else:
-        print(output)
+        logger.info(output)
 
 
 def print_summary(summary: CoverageSummary, harness_name: str) -> None:
@@ -383,17 +381,17 @@ def print_summary(summary: CoverageSummary, harness_name: str) -> None:
         summary: Coverage summary
         harness_name: Name of the harness
     """
-    print("\n" + "=" * 50)
-    print("COVERAGE SUMMARY")
-    print("=" * 50)
-    print(f"Harness: {harness_name}")
-    print(
+    logger.info("=" * 50)
+    logger.info("COVERAGE SUMMARY")
+    logger.info("=" * 50)
+    logger.info(f"Harness: {harness_name}")
+    logger.info(
         f"Lines: {summary.lines_covered}/{summary.lines_total} "
         f"({summary.lines_percent:.1f}%)"
     )
-    print(f"Functions: {summary.functions_covered}/{summary.functions_total}")
-    print(f"Corpus files: {summary.corpus_total}")
-    print("=" * 50)
+    logger.info(f"Functions: {summary.functions_covered}/{summary.functions_total}")
+    logger.info(f"Corpus files: {summary.corpus_total}")
+    logger.info("=" * 50)
 
 
 def main() -> None:

@@ -482,7 +482,7 @@ def _test_inc_build(job: JobContext, output_dir: Optional[Path] = None) -> None:
         if process.stdout is None:
             raise Exception("[Error] process.stdout is None")
         for line in process.stdout:
-            print(line, end="", flush=True)
+            logger.info(line.rstrip())
             output_lines.append(line)
 
         process.wait()

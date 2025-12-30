@@ -22,7 +22,6 @@ Examples:
 
 import argparse
 import json
-import logging
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -163,11 +162,10 @@ def run_validate(args: argparse.Namespace) -> int:
         Exit code (0 for success, non-zero for errors)
     """
     # Configure logging
-    log_level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    from crsbench.utils.logger import configure_logger
+
+    log_level = "DEBUG" if args.verbose else "INFO"
+    configure_logger(level=log_level)
 
     # Validate benchmark path
     if not args.benchmark_path.exists():
@@ -325,7 +323,7 @@ def output_results(
         output_path.write_text(output)
         logger.info(f"Results written to: {output_path}")
     else:
-        print(output)
+        logger.info(output)
 
 
 def print_summary(results: List[VerificationResult]) -> None:
@@ -341,16 +339,16 @@ def print_summary(results: List[VerificationResult]) -> None:
     for r in results:
         cpv_matches.update(r.cpv_matched)
 
-    print("\n" + "=" * 50)
-    print("VALIDATION SUMMARY")
-    print("=" * 50)
-    print(f"Total POVs verified: {len(results)}")
-    print("\nStatus breakdown:")
+    logger.info("=" * 50)
+    logger.info("VALIDATION SUMMARY")
+    logger.info("=" * 50)
+    logger.info(f"Total POVs verified: {len(results)}")
+    logger.info("Status breakdown:")
     for status, count in sorted(status_counts.items()):
-        print(f"  {status}: {count}")
+        logger.info(f"  {status}: {count}")
     if cpv_matches:
-        print(f"\nCPVs triggered: {', '.join(sorted(cpv_matches))}")
-    print("=" * 50)
+        logger.info(f"CPVs triggered: {', '.join(sorted(cpv_matches))}")
+    logger.info("=" * 50)
 
 
 def main() -> None:
