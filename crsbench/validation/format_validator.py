@@ -19,6 +19,7 @@ from crsbench.validation.errors import (
 from crsbench.validation.schemas import (
     BenchmarkConfig,
     BenchmarkSuiteConfig,
+    EvaluationMode,
     ExperimentConfig,
     FullMode,
     HarnessFile,
@@ -481,6 +482,7 @@ def _validate_experiment_schema(
         return ExperimentConfig(
             experiment="dummy",
             trials=1,
+            mode=EvaluationMode.DELTA,
             max_total_time=1,
             difficulty_level=0,
             experiment_filestore="/tmp",
@@ -497,6 +499,7 @@ def _validate_experiment_schema(
         return ExperimentConfig(
             experiment="dummy",
             trials=1,
+            mode=EvaluationMode.DELTA,
             max_total_time=1,
             difficulty_level=0,
             experiment_filestore="/tmp",

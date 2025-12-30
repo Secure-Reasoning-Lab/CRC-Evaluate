@@ -80,48 +80,65 @@ class TestExitCodeHandling:
 
 
 class TestCommandConstruction:
-    """Test that commands are constructed correctly."""
+    """Test that commands are constructed correctly by mocking subprocess.run."""
 
-    def test_propagate_exit_codes_used(self, reproducer, caplog):
+    def test_propagate_exit_codes_used(self, mock_oss_fuzz):
         """Command should include --propagate_exit_codes."""
-        import logging
+        from unittest.mock import MagicMock, patch
 
-        caplog.set_level(logging.DEBUG)
+        reproducer = OSSFuzzReproducer(mock_oss_fuzz, timeout=5)
 
-        reproducer.reproduce(
-            project_name="test",
-            harness="fuzz",
-            pov_data=b"OK",
-        )
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            reproducer.reproduce(
+                project_name="test",
+                harness="fuzz",
+                pov_data=b"OK",
+            )
 
-        assert "--propagate_exit_codes" in caplog.text
+            # Verify the command was called with --propagate_exit_codes
+            assert mock_run.called
+            cmd = mock_run.call_args[0][0]
+            assert "--propagate_exit_codes" in cmd
 
-    def test_timeout_flag_used(self, reproducer, caplog):
+    def test_timeout_flag_used(self, mock_oss_fuzz):
         """Command should include --timeout."""
-        import logging
+        from unittest.mock import MagicMock, patch
 
-        caplog.set_level(logging.DEBUG)
+        reproducer = OSSFuzzReproducer(mock_oss_fuzz, timeout=5)
 
-        reproducer.reproduce(
-            project_name="test",
-            harness="fuzz",
-            pov_data=b"OK",
-            timeout=120,
-        )
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            reproducer.reproduce(
+                project_name="test",
+                harness="fuzz",
+                pov_data=b"OK",
+                timeout=120,
+            )
 
-        assert "--timeout" in caplog.text
-        assert "120" in caplog.text
+            # Verify the command was called with --timeout
+            assert mock_run.called
+            cmd = mock_run.call_args[0][0]
+            assert "--timeout" in cmd
+            # Find the --timeout index and check the next arg is 120
+            timeout_idx = cmd.index("--timeout")
+            assert cmd[timeout_idx + 1] == "120"
 
-    def test_detect_leaks_disabled(self, reproducer, caplog):
+    def test_detect_leaks_disabled(self, mock_oss_fuzz):
         """Command should include -detect_leaks=0."""
-        import logging
+        from unittest.mock import MagicMock, patch
 
-        caplog.set_level(logging.DEBUG)
+        reproducer = OSSFuzzReproducer(mock_oss_fuzz, timeout=5)
 
-        reproducer.reproduce(
-            project_name="test",
-            harness="fuzz",
-            pov_data=b"OK",
-        )
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            reproducer.reproduce(
+                project_name="test",
+                harness="fuzz",
+                pov_data=b"OK",
+            )
 
-        assert "-detect_leaks=0" in caplog.text
+            # Verify the command was called with -detect_leaks=0
+            assert mock_run.called
+            cmd = mock_run.call_args[0][0]
+            assert "-detect_leaks=0" in cmd
