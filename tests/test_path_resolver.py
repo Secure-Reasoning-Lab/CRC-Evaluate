@@ -47,18 +47,39 @@ harness_files:
 def create_test_repository(tmp_path: Path, project_name: str = "json-c") -> Path:
     """Create a minimal test repository with harness file."""
     repo = tmp_path / "repos" / project_name
-    repo.mkdir(parents=True)
+    repo.mkdir(parents=True, exist_ok=True)
 
     # Create .git directory to mark as git repo
-    (repo / ".git").mkdir()
+    (repo / ".git").mkdir(exist_ok=True)
 
     # Create test harness file
     test_dir = repo / "test"
-    test_dir.mkdir()
+    test_dir.mkdir(exist_ok=True)
     harness_file = test_dir / "harness.c"
-    harness_file.write_text("// Test harness code\nint main() { return 0; }")
+    if not harness_file.exists():
+        harness_file.write_text("// Test harness code\nint main() { return 0; }")
 
     return repo
+
+
+# ============================================================================
+# Fixtures
+# ============================================================================
+
+
+@pytest.fixture
+def mock_ensure_repo(tmp_path):
+    """Fixture that mocks ensure_project_repository to return test repository.
+
+    Use this fixture for tests that call functions using $REPO paths.
+    The mock prevents real git operations and returns a pre-created test repo.
+    """
+    repo = create_test_repository(tmp_path)
+    with patch(
+        "crsbench.evaluation.path_resolver.ensure_project_repository"
+    ) as mock:
+        mock.return_value = str(repo)
+        yield repo
 
 
 # ============================================================================
@@ -69,11 +90,11 @@ def create_test_repository(tmp_path: Path, project_name: str = "json-c") -> Path
 class TestRepoVariableResolution:
     """Test resolution of $REPO variable in harness paths."""
 
-    def test_resolve_repo_variable_basic(self, tmp_path):
+    def test_resolve_repo_variable_basic(self, tmp_path, mock_ensure_repo):
         """Test basic $REPO variable resolution."""
         # Setup
         benchmark = create_test_benchmark(tmp_path)
-        repo = create_test_repository(tmp_path)
+        repo = mock_ensure_repo
         repos_dir = tmp_path / "repos"
 
         # Test
@@ -104,14 +125,13 @@ class TestRepoVariableResolution:
         assert resolved == custom_repo / "test" / "harness.c"
         assert resolved.exists()
 
-    def test_resolve_repo_variable_missing_file(self, tmp_path):
+    def test_resolve_repo_variable_missing_file(self, tmp_path, mock_ensure_repo):
         """Test error when $REPO file doesn't exist."""
         # Setup
         benchmark = create_test_benchmark(tmp_path)
-        repo = create_test_repository(tmp_path)
         repos_dir = tmp_path / "repos"
 
-        # Test
+        # Test - mock provides repo but nonexistent.c doesn't exist
         with pytest.raises(FileNotFoundError) as exc_info:
             resolve_harness_path(
                 "$REPO/test/nonexistent.c", benchmark_dir=benchmark, repos_dir=repos_dir
@@ -284,11 +304,11 @@ class TestRelativePathHandling:
 class TestHarnessSourcePathResolution:
     """Test harness source path resolution for CRS arguments."""
 
-    def test_get_harness_source_path_repo_variable(self, tmp_path):
+    def test_get_harness_source_path_repo_variable(self, tmp_path, mock_ensure_repo):
         """Test harness source path resolution for $REPO path."""
         # Setup
         benchmark = create_test_benchmark(tmp_path)
-        repo = create_test_repository(tmp_path)
+        repo = mock_ensure_repo
         repos_dir = tmp_path / "repos"
 
         harness = HarnessFile(name="ossfuzz", path="$REPO/test/harness.c")
@@ -473,11 +493,11 @@ class TestRepoManagerIntegration:
 class TestIntegration:
     """Integration tests with realistic scenarios."""
 
-    def test_end_to_end_repo_resolution(self, tmp_path):
+    def test_end_to_end_repo_resolution(self, tmp_path, mock_ensure_repo):
         """Test complete end-to-end workflow for $REPO resolution."""
         # Setup complete benchmark structure
         benchmark = create_test_benchmark(tmp_path, "libxml2")
-        repo = create_test_repository(tmp_path, "libxml2")
+        repo = mock_ensure_repo
         repos_dir = tmp_path / "repos"
 
         # Create harness object
@@ -498,11 +518,10 @@ class TestIntegration:
         assert cmd_arg[0] == "--harness-source"
         assert str(harness_path) in cmd_arg[1]
 
-    def test_multiple_harnesses_same_benchmark(self, tmp_path):
+    def test_multiple_harnesses_same_benchmark(self, tmp_path, mock_ensure_repo):
         """Test resolving multiple harnesses from same benchmark."""
         # Setup
         benchmark = create_test_benchmark(tmp_path)
-        repo = create_test_repository(tmp_path)
         repos_dir = tmp_path / "repos"
 
         # Create additional harness files
@@ -528,14 +547,14 @@ class TestIntegration:
         assert all(path is not None for path in resolved_paths)
         assert all(path.exists() for path in resolved_paths)
 
-    def test_harness_path_with_deeply_nested_structure(self, tmp_path):
+    def test_harness_path_with_deeply_nested_structure(self, tmp_path, mock_ensure_repo):
         """Test resolution with deeply nested directory structure."""
         # Setup
         benchmark = create_test_benchmark(tmp_path)
-        repo = create_test_repository(tmp_path)
+        repo = mock_ensure_repo
         repos_dir = tmp_path / "repos"
 
-        # Create deeply nested harness
+        # Create deeply nested harness in the mock repo
         nested_path = repo / "src" / "test" / "fuzzing" / "harnesses"
         nested_path.mkdir(parents=True)
         (nested_path / "deep_harness.c").write_text("// deep")

@@ -162,13 +162,14 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             "crs:\n  test-crs-config:\n    workers:\n      - local\n"
         )
 
-        # Create executor with absolute path for config
+        # Create executor with absolute path for config and no LiteLLM (for testing)
         executor = CRSBugFindingExecutor(
             crs_config_name=str(test_crs_dir),  # Use absolute path
             oss_fuzz_path=self.oss_fuzz_path,
             registry_dir=self.registry_dir,
             benchmarks_root=self.benchmarks_root,
             crs_configs_dir=self.crs_configs_dir,
+            litellm_mode=None,  # Disable LiteLLM for testing
         )
 
         trial_build_dir = Path(self.temp_dir) / "trial-0" / "crs-build"
@@ -422,6 +423,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             registry_dir=self.registry_dir,
             benchmarks_root=self.benchmarks_root,
             crs_configs_dir=self.crs_configs_dir,
+            litellm_mode=None,  # Disable LiteLLM for testing
         )
 
         harness = HarnessFile(
@@ -482,6 +484,7 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             registry_dir=self.registry_dir,
             benchmarks_root=self.benchmarks_root,
             crs_configs_dir=self.crs_configs_dir,
+            litellm_mode=None,  # Disable LiteLLM for testing
         )
 
         harness = HarnessFile(
