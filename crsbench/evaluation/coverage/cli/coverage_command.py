@@ -119,6 +119,12 @@ Examples:
         action="store_true",
         help="Enable verbose output",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of parallel workers for building variants (default: 4, or CRSBENCH_WORKERS env var)",
+    )
 
     parser.set_defaults(func=run_coverage)
 

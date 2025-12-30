@@ -406,6 +406,12 @@ class ExperimentConfig(BaseModel):
         description="Terminate trial early when coverage saturation is detected (default: False). "
         "NOT YET IMPLEMENTED - currently only detects and logs saturation.",
     )
+    workers: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Number of parallel workers for building variants (default: 4). "
+        "CLI --workers takes precedence, then CRSBENCH_WORKERS env var, then this config value.",
+    )
 
     @field_validator("experiment")
     @classmethod
@@ -722,6 +728,7 @@ class ExperimentConfig(BaseModel):
             "coverage_enabled": self.coverage_enabled,
             "coverage_saturation_time": self.coverage_saturation_time,
             "coverage_early_stop": self.coverage_early_stop,
+            "workers": self.workers,
         }
 
 

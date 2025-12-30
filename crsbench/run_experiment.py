@@ -190,6 +190,15 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--workers",
+        type=int,
+        required=False,
+        metavar="N",
+        help="Number of parallel workers for building variants (default: 4, or CRSBENCH_WORKERS env var). "
+        "Overrides config file if specified.",
+    )
+
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug logging (logs all commands executed with their working directories)",
@@ -652,6 +661,11 @@ def enhance_config_with_cli_args(
     if args.project_image_prefix is not None:
         enhanced["project_image_prefix"] = args.project_image_prefix
         logger.info(f"Using project image prefix from CLI: {args.project_image_prefix}")
+
+    # Workers override
+    if hasattr(args, "workers") and args.workers is not None:
+        enhanced["workers"] = args.workers
+        logger.info(f"Using workers from CLI: {args.workers}")
 
     return enhanced
 
