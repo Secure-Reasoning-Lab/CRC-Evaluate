@@ -25,7 +25,7 @@ from typing import Optional
 
 import yaml
 
-from crsbench.evaluation.coverage.builder import CoverageBuilder
+from crsbench.builder import BuildConfig, OSSFuzzBuilder, VariantType
 from crsbench.evaluation.coverage.models import CoverageSummary
 from crsbench.evaluation.coverage.strategy import (
     CoverageStrategyError,
@@ -193,25 +193,26 @@ def run_coverage(args: argparse.Namespace) -> int:
     logger.info(f"Commit: {commit[:12]}")
 
     # Build coverage variant
-    builder = CoverageBuilder(oss_fuzz_path)
-    coverage_build = builder.build(
-        project_name=project_name,
-        benchmark_path=args.benchmark_path,
-        main_repo=main_repo,
+    builder = OSSFuzzBuilder(oss_fuzz_path)
+    config = BuildConfig(
+        benchmark_name=project_name,
+        variant_type=VariantType.COVERAGE,
         commit=commit,
+        main_repo=main_repo,
+        benchmark_path=args.benchmark_path,
         language=language,
-        force_rebuild=args.force_rebuild,
     )
+    build_result = builder.build_single(config, force_rebuild=args.force_rebuild)
 
-    if not coverage_build:
-        logger.error("Failed to build coverage variant")
+    if not build_result.success:
+        logger.error(f"Failed to build coverage variant: {build_result.error}")
         return 1
 
     # Collect coverage
     try:
         strategy = create_coverage_strategy(
             oss_fuzz_path=oss_fuzz_path,
-            project_name=coverage_build.variant_name,
+            project_name=build_result.variant_name,
             language=language,
         )
 

@@ -13,7 +13,7 @@ Features:
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from crsbench.builder.executor import ParallelExecutor
 from crsbench.builder.infrastructure import OSSFuzzInfrastructure
@@ -25,6 +25,10 @@ from crsbench.builder.types import (
     VariantType,
 )
 from crsbench.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from crsbench.validation.meta_adapter import MetaYamlAdapter
+    from crsbench.validation.variant.models import BuildVersion
 
 logger = get_logger(__name__)
 
@@ -85,7 +89,9 @@ class OSSFuzzBuilder:
             if not force_rebuild and self.infra.is_variant_built(config.variant_name):
                 logger.info(f"Using cached build for {config.variant_name}")
                 build_path = self.infra.get_build_output_path(config.variant_name)
-                results[config.variant_name] = BuildResult.from_cache(config, build_path)
+                results[config.variant_name] = BuildResult.from_cache(
+                    config, build_path
+                )
             else:
                 configs_to_build.append(config)
 
@@ -253,7 +259,9 @@ class OSSFuzzBuilder:
 
         # Base version
         base_type = (
-            VariantType.FULL_BASE if mode == BenchmarkMode.FULL else VariantType.DELTA_BASE
+            VariantType.FULL_BASE
+            if mode == BenchmarkMode.FULL
+            else VariantType.DELTA_BASE
         )
         plan.add_config(
             BuildConfig(
@@ -376,3 +384,74 @@ class OSSFuzzBuilder:
             True if built
         """
         return self.infra.is_variant_built(variant_name)
+
+    def build_validation_variants_from_adapter(
+        self,
+        adapter: "MetaYamlAdapter",
+        *,
+        force_rebuild: bool = False,
+    ) -> list["BuildVersion"]:
+        """Build all validation variants for a benchmark using MetaYamlAdapter.
+
+        This is a convenience method for compatibility with the verification engine.
+        It provides the same interface as the old VariantBuilder.build_all_variants().
+
+        Args:
+            adapter: MetaYamlAdapter with benchmark configuration
+            force_rebuild: If True, rebuild even if cached
+
+        Returns:
+            List of successfully built BuildVersion instances
+        """
+        # Import here to avoid circular imports
+        from crsbench.validation.variant.models import (
+            BenchmarkMode as VariantBenchmarkMode,
+        )
+        from crsbench.validation.variant.models import BuildVersion
+
+        # Determine mode
+        mode_str = adapter.get_mode().value
+        mode = BenchmarkMode.FULL if mode_str == "full" else BenchmarkMode.DELTA
+        variant_mode = (
+            VariantBenchmarkMode.FULL
+            if mode_str == "full"
+            else VariantBenchmarkMode.DELTA
+        )
+
+        # Create build plan
+        plan = self.create_build_plan(
+            benchmark_name=adapter.benchmark_name,
+            benchmark_path=adapter.benchmark_path or Path(),
+            main_repo=adapter.main_repo,
+            mode=mode,
+            base_commit=adapter.get_base_commit(),
+            ref_commit=adapter.get_ref_commit(),
+            cpv_numbers=adapter.get_cpv_numbers(),
+            language=adapter.lang,
+            repo_name=adapter.repo_name,
+            include_coverage=False,  # Validation only, no coverage
+        )
+
+        # Execute build
+        results = self.execute_plan(plan, force_rebuild=force_rebuild)
+
+        # Convert to BuildVersion objects
+        versions: list[BuildVersion] = []
+        for result in results.values():
+            if result.success:
+                config = result.config
+                version = BuildVersion(
+                    benchmark_name=config.benchmark_name,
+                    lang=adapter.lang,
+                    mode=variant_mode,
+                    variant_type=config.variant_type,
+                    commit=config.commit,
+                    variant_project_name=config.variant_name,
+                    cpv_num=config.cpv_num,
+                )
+                versions.append(version)
+
+        logger.info(
+            f"Built {len(versions)} validation variants for {adapter.benchmark_name}"
+        )
+        return versions

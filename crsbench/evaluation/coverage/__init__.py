@@ -8,19 +8,19 @@ Components:
 - CoverageStrategy: Abstract strategy for coverage collection (LLVM/JaCoCo)
 - CoverageCollector: Orchestrates coverage collection
 - CoverageManager: Thread-based periodic coverage collection
-- CoverageBuilder: Builds coverage-instrumented variants ({project}-coverage)
+
+For building coverage-instrumented variants, use crsbench.builder.OSSFuzzBuilder
+with VariantType.COVERAGE.
 
 Usage:
     from crsbench.evaluation.coverage import (
         CoverageConfig,
         CoverageCollector,
         CoverageManager,
-        CoverageBuilder,
         create_coverage_strategy,
     )
 """
 
-from crsbench.evaluation.coverage.builder import CoverageBuild, CoverageBuilder
 from crsbench.evaluation.coverage.collector import CoverageCollector
 from crsbench.evaluation.coverage.manager import CoverageManager
 from crsbench.evaluation.coverage.models import (
@@ -53,9 +53,6 @@ __all__ = [
     "LLVMCovLineStrategy",
     "JaCoCoLineStrategy",
     "create_coverage_strategy",
-    # Builder
-    "CoverageBuild",
-    "CoverageBuilder",
     # Collector
     "CoverageCollector",
     # Manager

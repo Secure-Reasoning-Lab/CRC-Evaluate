@@ -3,6 +3,8 @@
 This module provides:
 1. Format validation of benchmark configurations
 2. POV (Proof of Vulnerability) verification against benchmark variants
+
+For building variants, use crsbench.builder.OSSFuzzBuilder.
 """
 
 # Format validation
@@ -24,10 +26,9 @@ from crsbench.validation.format_validator import (
 from crsbench.validation.meta_adapter import MetaYamlAdapter
 from crsbench.validation.variant import (
     BenchmarkMode,
-    BuildTag,
     BuildVersion,
+    VariantType,
 )
-from crsbench.validation.variant.builder import VariantBuilder
 from crsbench.validation.verification import (
     DeduplicationStrategy,
     OSSFuzzReproducer,
@@ -54,10 +55,9 @@ __all__ = [
     # POV verification - Adapter
     "MetaYamlAdapter",
     # POV verification - Variant
-    "BuildTag",
     "BenchmarkMode",
     "BuildVersion",
-    "VariantBuilder",
+    "VariantType",
     # POV verification - Verification
     "VerificationStatus",
     "VerificationRequest",

@@ -572,8 +572,8 @@ class BenchmarkRunner:
         try:
             import yaml
 
+            from crsbench.builder import BuildConfig, OSSFuzzBuilder, VariantType
             from crsbench.evaluation.coverage import CoverageManager
-            from crsbench.evaluation.coverage.builder import CoverageBuilder
             from crsbench.evaluation.coverage.collector import CoverageCollector
             from crsbench.evaluation.coverage.models import CoverageConfig
             from crsbench.evaluation.coverage.store import CoverageStore
@@ -593,8 +593,8 @@ class BenchmarkRunner:
             coverage_variant = f"{project_name}-coverage"
 
             # Build coverage variant if not already built
-            builder = CoverageBuilder(self.oss_fuzz_path)
-            if not builder.is_built(project_name):
+            builder = OSSFuzzBuilder(self.oss_fuzz_path)
+            if not builder.is_variant_built(coverage_variant):
                 self.logger.info(f"Building coverage variant: {coverage_variant}")
 
                 # Read project.yaml for main_repo (not meta.yaml!)
@@ -631,15 +631,17 @@ class BenchmarkRunner:
                     )
                     return None
 
-                build_result = builder.build(
-                    project_name=project_name,
-                    benchmark_path=benchmark_path,
-                    main_repo=main_repo,
+                config = BuildConfig(
+                    benchmark_name=project_name,
+                    variant_type=VariantType.COVERAGE,
                     commit=target_commit,
+                    main_repo=main_repo,
+                    benchmark_path=benchmark_path,
                     language=language,
                     repo_name=repo_name,
                 )
-                if not build_result:
+                build_result = builder.build_single(config)
+                if not build_result.success:
                     self.logger.error(
                         f"Failed to build coverage variant: {coverage_variant}"
                     )

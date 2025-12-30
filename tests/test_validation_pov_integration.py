@@ -9,8 +9,9 @@ Tests validate:
 from pathlib import Path
 
 import pytest
+from crsbench.builder.types import VariantType
 from crsbench.validation.meta_adapter import MetaYamlAdapter
-from crsbench.validation.variant.models import BenchmarkMode, BuildTag
+from crsbench.validation.variant.models import BenchmarkMode
 from crsbench.validation.verification.models import (
     VerificationStatus,
 )
@@ -95,9 +96,9 @@ class TestSanityMockCDeltaValidation:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                BuildTag.DELTA_BASE: False,  # Base doesn't crash
-                BuildTag.DELTA_REF: True,  # Ref crashes (has the bug)
-                BuildTag.ALL_PATCHED: False,  # All patched doesn't crash
+                VariantType.DELTA_BASE: False,  # Base doesn't crash
+                VariantType.DELTA_REF: True,  # Ref crashes (has the bug)
+                VariantType.ALL_PATCHED: False,  # All patched doesn't crash
             },
             cpv_crash_map={
                 0: True,  # CPV_0 variant crashes (missing cpv_0 patch)
@@ -124,9 +125,9 @@ class TestSanityMockCDeltaValidation:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                BuildTag.DELTA_BASE: False,
-                BuildTag.DELTA_REF: True,
-                BuildTag.ALL_PATCHED: False,
+                VariantType.DELTA_BASE: False,
+                VariantType.DELTA_REF: True,
+                VariantType.ALL_PATCHED: False,
             },
             cpv_crash_map={
                 0: False,  # CPV_0 variant doesn't crash (cpv_1 patch applied)
@@ -148,9 +149,9 @@ class TestSanityMockCDeltaValidation:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                BuildTag.DELTA_BASE: False,
-                BuildTag.DELTA_REF: True,
-                BuildTag.ALL_PATCHED: False,
+                VariantType.DELTA_BASE: False,
+                VariantType.DELTA_REF: True,
+                VariantType.ALL_PATCHED: False,
             },
             cpv_crash_map={
                 0: True,  # Both CPV variants crash
@@ -172,9 +173,9 @@ class TestSanityMockCDeltaValidation:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                BuildTag.DELTA_BASE: False,
-                BuildTag.DELTA_REF: True,
-                BuildTag.ALL_PATCHED: False,
+                VariantType.DELTA_BASE: False,
+                VariantType.DELTA_REF: True,
+                VariantType.ALL_PATCHED: False,
             },
             cpv_crash_map={
                 0: False,
@@ -194,9 +195,9 @@ class TestSanityMockCDeltaValidation:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                BuildTag.DELTA_BASE: False,
-                BuildTag.DELTA_REF: False,  # Ref doesn't crash
-                BuildTag.ALL_PATCHED: False,
+                VariantType.DELTA_BASE: False,
+                VariantType.DELTA_REF: False,  # Ref doesn't crash
+                VariantType.ALL_PATCHED: False,
             },
             cpv_crash_map={
                 0: False,
@@ -213,7 +214,7 @@ class TestSanityMockCDeltaValidation:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                BuildTag.DELTA_BASE: True,  # Base crashes (pre-existing bug)
+                VariantType.DELTA_BASE: True,  # Base crashes (pre-existing bug)
             },
             cpv_crash_map={},
             benchmark_name="sanity-mock-c-delta-01",
@@ -262,23 +263,23 @@ class TestMetaYamlAdapterIntegration:
 
         # Test variant naming
         assert (
-            adapter.get_variant_name(BuildTag.DELTA_BASE)
+            adapter.get_variant_name(VariantType.DELTA_BASE)
             == "sanity-mock-c-delta-01-deltabase"
         )
         assert (
-            adapter.get_variant_name(BuildTag.DELTA_REF)
+            adapter.get_variant_name(VariantType.DELTA_REF)
             == "sanity-mock-c-delta-01-deltaref"
         )
         assert (
-            adapter.get_variant_name(BuildTag.ALL_PATCHED)
+            adapter.get_variant_name(VariantType.ALL_PATCHED)
             == "sanity-mock-c-delta-01-allpatched"
         )
         assert (
-            adapter.get_variant_name(BuildTag.CPV, cpv_num=0)
+            adapter.get_variant_name(VariantType.CPV, cpv_num=0)
             == "sanity-mock-c-delta-01-cpv0"
         )
         assert (
-            adapter.get_variant_name(BuildTag.CPV, cpv_num=1)
+            adapter.get_variant_name(VariantType.CPV, cpv_num=1)
             == "sanity-mock-c-delta-01-cpv1"
         )
 

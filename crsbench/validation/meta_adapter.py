@@ -12,9 +12,10 @@ from typing import List, Optional, Tuple
 
 import yaml
 
+from crsbench.builder.types import VariantType
 from crsbench.utils.logger import get_logger
 from crsbench.validation.schemas import POV, BenchmarkConfig, HarnessFile
-from crsbench.validation.variant.models import BenchmarkMode, BuildTag
+from crsbench.validation.variant.models import BenchmarkMode
 
 logger = get_logger(__name__)
 
@@ -256,20 +257,20 @@ class MetaYamlAdapter:
         return sorted(cpvs)
 
     def get_variant_name(
-        self, build_tag: BuildTag, cpv_num: Optional[int] = None
+        self, variant_type: VariantType, cpv_num: Optional[int] = None
     ) -> str:
-        """Generate variant project name for a build tag.
+        """Generate variant project name for a variant type.
 
         Args:
-            build_tag: Type of variant (FULL_BASE, DELTA_REF, CPV, etc.)
-            cpv_num: CPV number if build_tag is CPV
+            variant_type: Type of variant (FULL_BASE, DELTA_REF, CPV, etc.)
+            cpv_num: CPV number if variant_type is CPV
 
         Returns:
             Variant project name (e.g., "afc-curl-delta-01-cpv0")
         """
-        if build_tag == BuildTag.CPV and cpv_num is not None:
+        if variant_type == VariantType.CPV and cpv_num is not None:
             return f"{self.benchmark_name}-cpv{cpv_num}"
-        return f"{self.benchmark_name}-{build_tag.value}"
+        return f"{self.benchmark_name}-{variant_type.value}"
 
     def get_patch_dir(self) -> Path:
         """Get the path to the patches directory.

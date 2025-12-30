@@ -212,11 +212,11 @@ class TestCoverageManagerIntegration:
             assert collector.harness_name == "fuzz_parse_input"
 
 
-class TestCoverageBuilderIntegration:
-    """Tests for CoverageBuilder integration."""
+class TestOSSFuzzBuilderCoverageIntegration:
+    """Tests for OSSFuzzBuilder coverage variant integration."""
 
     def test_builder_creates_variant_path(self):
-        """Test CoverageBuilder creates correct variant paths."""
+        """Test OSSFuzzBuilder creates correct variant paths for coverage."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             oss_fuzz = Path(tmp_dir)
             (oss_fuzz / "infra").mkdir()
@@ -224,16 +224,21 @@ class TestCoverageBuilderIntegration:
             (oss_fuzz / "projects").mkdir()
             (oss_fuzz / "build" / "out").mkdir(parents=True)
 
-            from crsbench.evaluation.coverage.builder import CoverageBuilder
+            from crsbench.builder import BuildConfig, OSSFuzzBuilder, VariantType
 
-            builder = CoverageBuilder(oss_fuzz)
+            builder = OSSFuzzBuilder(oss_fuzz)
 
-            # Test variant name
-            assert (
-                builder.get_coverage_variant_name("mock-c-delta-01")
-                == "mock-c-delta-01-coverage"
+            # Test variant name via BuildConfig
+            config = BuildConfig(
+                benchmark_name="mock-c-delta-01",
+                variant_type=VariantType.COVERAGE,
+                commit="abc123",
+                main_repo="https://example.com/repo",
+                benchmark_path=Path("/nonexistent"),
+                language="c",
             )
+            assert config.variant_name == "mock-c-delta-01-coverage"
 
-            # Test build output path
-            build_path = builder.get_build_output_path("mock-c-delta-01-coverage")
+            # Test build output path via infrastructure
+            build_path = builder.infra.get_build_output_path("mock-c-delta-01-coverage")
             assert build_path == oss_fuzz / "build" / "out" / "mock-c-delta-01-coverage"

@@ -245,10 +245,10 @@ class TestCoverageStore:
             assert summary.lines_total == 100
 
 
-class TestCoverageBuilder:
-    """Tests for CoverageBuilder."""
+class TestOSSFuzzBuilderCoverage:
+    """Tests for OSSFuzzBuilder coverage variant functionality."""
 
-    def test_get_coverage_variant_name(self):
+    def test_coverage_variant_name(self):
         """Test coverage variant name generation."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Create minimal oss-fuzz structure
@@ -257,30 +257,44 @@ class TestCoverageBuilder:
             (oss_fuzz / "infra" / "helper.py").touch()
             (oss_fuzz / "projects").mkdir()
 
-            from crsbench.evaluation.coverage.builder import CoverageBuilder
+            from crsbench.builder import BuildConfig, VariantType
 
-            builder = CoverageBuilder(oss_fuzz)
-            assert builder.get_coverage_variant_name("mock-c") == "mock-c-coverage"
-            assert (
-                builder.get_coverage_variant_name("sanity-mock-c-delta-01")
-                == "sanity-mock-c-delta-01-coverage"
+            # Create BuildConfig for coverage variant
+            config = BuildConfig(
+                benchmark_name="mock-c",
+                variant_type=VariantType.COVERAGE,
+                commit="abc123",
+                main_repo="https://example.com/repo",
+                benchmark_path=Path("/nonexistent"),
+                language="c",
             )
+            assert config.variant_name == "mock-c-coverage"
 
-    def test_is_built_returns_false_when_not_built(self):
-        """Test is_built returns False when no build exists."""
+            config2 = BuildConfig(
+                benchmark_name="sanity-mock-c-delta-01",
+                variant_type=VariantType.COVERAGE,
+                commit="abc123",
+                main_repo="https://example.com/repo",
+                benchmark_path=Path("/nonexistent"),
+                language="c",
+            )
+            assert config2.variant_name == "sanity-mock-c-delta-01-coverage"
+
+    def test_is_variant_built_returns_false_when_not_built(self):
+        """Test is_variant_built returns False when no build exists."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             oss_fuzz = Path(tmp_dir)
             (oss_fuzz / "infra").mkdir()
             (oss_fuzz / "infra" / "helper.py").touch()
             (oss_fuzz / "projects").mkdir()
 
-            from crsbench.evaluation.coverage.builder import CoverageBuilder
+            from crsbench.builder import OSSFuzzBuilder
 
-            builder = CoverageBuilder(oss_fuzz)
-            assert builder.is_built("nonexistent-project") is False
+            builder = OSSFuzzBuilder(oss_fuzz)
+            assert builder.is_variant_built("nonexistent-project-coverage") is False
 
-    def test_is_built_returns_true_when_built(self):
-        """Test is_built returns True when variant project and build output exist."""
+    def test_is_variant_built_returns_true_when_built(self):
+        """Test is_variant_built returns True when variant project and build output exist."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             oss_fuzz = Path(tmp_dir)
             (oss_fuzz / "infra").mkdir()
@@ -288,23 +302,23 @@ class TestCoverageBuilder:
             (oss_fuzz / "projects").mkdir()
             (oss_fuzz / "build" / "out").mkdir(parents=True)
 
-            from crsbench.evaluation.coverage.builder import CoverageBuilder
+            from crsbench.builder import OSSFuzzBuilder
 
-            builder = CoverageBuilder(oss_fuzz)
+            builder = OSSFuzzBuilder(oss_fuzz)
 
             # Create variant project directory
-            variant_name = builder.get_coverage_variant_name("mock-c")
+            variant_name = "mock-c-coverage"
             (oss_fuzz / "projects" / variant_name).mkdir()
 
             # Create build output with a file
-            build_path = builder.get_build_output_path(variant_name)
+            build_path = oss_fuzz / "build" / "out" / variant_name
             build_path.mkdir(parents=True)
             (build_path / "fuzz_target").touch()
 
-            assert builder.is_built("mock-c") is True
+            assert builder.is_variant_built(variant_name) is True
 
-    def test_build_returns_cached_when_already_built(self):
-        """Test build() returns cached CoverageBuild without rebuilding."""
+    def test_build_single_returns_cached_when_already_built(self):
+        """Test build_single() returns cached BuildResult without rebuilding."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             oss_fuzz = Path(tmp_dir)
             (oss_fuzz / "infra").mkdir()
@@ -312,31 +326,34 @@ class TestCoverageBuilder:
             (oss_fuzz / "projects").mkdir()
             (oss_fuzz / "build" / "out").mkdir(parents=True)
 
-            from crsbench.evaluation.coverage.builder import CoverageBuilder
+            from crsbench.builder import BuildConfig, OSSFuzzBuilder, VariantType
 
-            builder = CoverageBuilder(oss_fuzz)
+            builder = OSSFuzzBuilder(oss_fuzz)
 
             # Setup: create variant project and build output (simulating previous build)
-            variant_name = builder.get_coverage_variant_name("mock-c")
+            variant_name = "mock-c-coverage"
             (oss_fuzz / "projects" / variant_name).mkdir()
-            build_path = builder.get_build_output_path(variant_name)
+            build_path = oss_fuzz / "build" / "out" / variant_name
             build_path.mkdir(parents=True)
             (build_path / "fuzz_target").touch()
 
-            # Call build - should return cached without subprocess
-            result = builder.build(
-                project_name="mock-c",
-                benchmark_path=Path("/nonexistent"),  # Not used when cached
-                main_repo="https://example.com/repo",
+            # Create config
+            config = BuildConfig(
+                benchmark_name="mock-c",
+                variant_type=VariantType.COVERAGE,
                 commit="abc123",
+                main_repo="https://example.com/repo",
+                benchmark_path=Path("/nonexistent"),  # Not used when cached
                 language="c",
             )
 
+            # Call build_single - should return cached without subprocess
+            result = builder.build_single(config)
+
             assert result is not None
-            assert result.project_name == "mock-c"
+            assert result.success is True
+            assert result.cached is True
             assert result.variant_name == "mock-c-coverage"
-            assert result.language == "c"
-            assert result.commit == "abc123"
             assert result.build_path == build_path
 
 

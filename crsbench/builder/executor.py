@@ -81,7 +81,9 @@ class ParallelExecutor:
                 except Exception as e:
                     # Handle unexpected exceptions from build_fn
                     error_msg = f"Unexpected error: {e}"
-                    logger.error(f"[{completed}/{total}] {config.variant_name}: {error_msg}")
+                    logger.error(
+                        f"[{completed}/{total}] {config.variant_name}: {error_msg}"
+                    )
 
                     results[config.variant_name] = BuildResult.from_error(
                         config=config,

@@ -278,7 +278,9 @@ class TestOSSFuzzBuilder:
         builder = OSSFuzzBuilder(mock_oss_fuzz_path, max_workers=4)
         assert builder.max_workers == 4
 
-    def test_create_build_plan_delta_mode(self, mock_oss_fuzz_path: Path, tmp_path: Path):
+    def test_create_build_plan_delta_mode(
+        self, mock_oss_fuzz_path: Path, tmp_path: Path
+    ):
         """Test creating build plan for delta mode benchmark."""
         builder = OSSFuzzBuilder(mock_oss_fuzz_path)
         benchmark_path = tmp_path / "benchmark"
@@ -304,7 +306,9 @@ class TestOSSFuzzBuilder:
         assert "test-delta-01-cpv0" in variant_names
         assert "test-delta-01-cpv1" in variant_names
 
-    def test_create_build_plan_full_mode(self, mock_oss_fuzz_path: Path, tmp_path: Path):
+    def test_create_build_plan_full_mode(
+        self, mock_oss_fuzz_path: Path, tmp_path: Path
+    ):
         """Test creating build plan for full mode benchmark."""
         builder = OSSFuzzBuilder(mock_oss_fuzz_path)
         benchmark_path = tmp_path / "benchmark"

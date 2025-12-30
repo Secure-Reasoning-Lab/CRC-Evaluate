@@ -277,10 +277,10 @@ def run_single_pov_validation(
 
     # Build variants if needed
     if force_rebuild:
-        engine._built_versions.pop(adapter.benchmark_name, None)
+        engine._built_results.pop(adapter.benchmark_name, None)
 
-    versions = engine._get_or_build_versions(adapter)
-    if not versions:
+    build_results = engine._get_or_build_results(adapter)
+    if not build_results:
         logger.error(f"Failed to build variants for {adapter.benchmark_name}")
         return []
 
@@ -297,7 +297,7 @@ def run_single_pov_validation(
         pov_id=pov_file.name,
     )
 
-    result = engine.verify_pov(request, adapter, versions)
+    result = engine.verify_pov(request, adapter, build_results)
     return [result]
 
 

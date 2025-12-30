@@ -15,8 +15,8 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
 
+from crsbench.builder import BenchmarkMode, BuildResult, OSSFuzzBuilder, VariantType
 from crsbench.utils.logger import get_logger
-from crsbench.validation.variant.models import BuildTag, BuildVersion
 
 if TYPE_CHECKING:
     from crsbench.validation.meta_adapter import MetaYamlAdapter
@@ -48,7 +48,7 @@ class VerificationEngine:
 
     Attributes:
         oss_fuzz_path: Path to oss-fuzz directory
-        builder: VariantBuilder instance
+        builder: OSSFuzzBuilder instance
         reproducer: OSSFuzzReproducer instance
         dedup_strategy: Deduplication strategy to use
         timeout: Timeout for reproduce operations
@@ -59,6 +59,7 @@ class VerificationEngine:
         oss_fuzz_path: Path,
         timeout: int = 120,
         dedup_strategy: DeduplicationStrategy | None = None,
+        max_workers: int = 4,
     ):
         """Initialize the verification engine.
 
@@ -66,38 +67,36 @@ class VerificationEngine:
             oss_fuzz_path: Path to oss-fuzz directory
             timeout: Timeout for reproduce operations in seconds
             dedup_strategy: Deduplication strategy instance (defaults to PatchBasedDedup)
+            max_workers: Maximum number of parallel workers for building
         """
-        # Lazy import to avoid circular dependencies
-        from crsbench.validation.variant.builder import VariantBuilder
-
         self.oss_fuzz_path = Path(oss_fuzz_path)
         self.timeout = timeout
-        self.builder = VariantBuilder(oss_fuzz_path)
+        self.builder = OSSFuzzBuilder(oss_fuzz_path, max_workers=max_workers)
         self.reproducer = OSSFuzzReproducer(oss_fuzz_path, timeout)
         self.dedup_strategy = dedup_strategy if dedup_strategy else PatchBasedDedup()
-        self._built_versions: Dict[str, List[BuildVersion]] = {}
+        self._built_results: Dict[str, Dict[str, BuildResult]] = {}
 
     def verify_pov(
         self,
         request: VerificationRequest,
         adapter: MetaYamlAdapter,
-        versions: Optional[List[BuildVersion]] = None,
+        build_results: Optional[Dict[str, BuildResult]] = None,
     ) -> VerificationResult:
         """Verify a single POV against all variants.
 
         Args:
             request: Verification request with POV data
             adapter: MetaYamlAdapter for benchmark config
-            versions: Optional pre-built versions (for efficiency)
+            build_results: Optional pre-built results (for efficiency)
 
         Returns:
             VerificationResult with determined status
         """
         # Get or build variants
-        if versions is None:
-            versions = self._get_or_build_versions(adapter)
+        if build_results is None:
+            build_results = self._get_or_build_results(adapter)
 
-        if not versions:
+        if not build_results:
             return VerificationResult(
                 status=VerificationStatus.ERROR,
                 benchmark=adapter.benchmark_name,
@@ -105,30 +104,36 @@ class VerificationEngine:
                 details="No built versions available",
             )
 
-        # Run reproduce for each version
-        crash_results: Dict[BuildTag, bool] = {}
+        # Run reproduce for each variant
+        crash_results: Dict[VariantType, bool] = {}
         cpv_crash_map: Dict[int, bool] = {}
 
-        for version in versions:
+        # Determine mode for verdict resolution
+        mode_str = adapter.get_mode().value
+        mode = BenchmarkMode.FULL if mode_str == "full" else BenchmarkMode.DELTA
+
+        for variant_name, result in build_results.items():
+            if not result.success:
+                continue
+
             crashed = self.reproducer.reproduce(
-                project_name=version.project_path,
+                project_name=variant_name,
                 harness=request.harness,
                 pov_data=request.pov_data,
                 timeout=self.timeout,
             )
 
-            if version.build_tag == BuildTag.CPV and version.cpv_num is not None:
-                cpv_crash_map[version.cpv_num] = crashed
+            variant_type = result.config.variant_type
+            if variant_type == VariantType.CPV and result.config.cpv_num is not None:
+                cpv_crash_map[result.config.cpv_num] = crashed
             else:
-                crash_results[version.build_tag] = crashed
+                crash_results[variant_type] = crashed
 
-            logger.debug(
-                f"{version.variant_project_name}: {'crashed' if crashed else 'ok'}"
-            )
+            logger.debug(f"{variant_name}: {'crashed' if crashed else 'ok'}")
 
         # Resolve verdict
         return VerdictResolver.resolve(
-            mode=adapter.get_mode(),
+            mode=mode,
             crash_results=crash_results,
             cpv_crash_map=cpv_crash_map,
             benchmark_name=adapter.benchmark_name,
@@ -157,8 +162,8 @@ class VerificationEngine:
         results = []
 
         # Build variants once
-        versions = self._get_or_build_versions(adapter)
-        if not versions:
+        build_results = self._get_or_build_results(adapter)
+        if not build_results:
             logger.error(f"Failed to build variants for {adapter.benchmark_name}")
             return []
 
@@ -197,7 +202,7 @@ class VerificationEngine:
                     pov_id=pov_file.name,
                 )
 
-                result = self.verify_pov(request, adapter, versions)
+                result = self.verify_pov(request, adapter, build_results)
                 results.append(result)
 
                 # Progress reporting every 5 minutes
@@ -251,11 +256,11 @@ class VerificationEngine:
 
         # Build variants if needed
         if force_rebuild:
-            self._built_versions.pop(adapter.benchmark_name, None)
+            self._built_results.pop(adapter.benchmark_name, None)
 
         results = []
-        versions = self._get_or_build_versions(adapter, force_rebuild=force_rebuild)
-        if not versions:
+        build_results = self._get_or_build_results(adapter, force_rebuild=force_rebuild)
+        if not build_results:
             logger.error(f"Failed to build variants for {adapter.benchmark_name}")
             return []
 
@@ -291,7 +296,7 @@ class VerificationEngine:
                         benchmark=adapter.benchmark_name,
                         pov_id=pov_file.name,
                     )
-                    result = self.verify_pov(request, adapter, versions)
+                    result = self.verify_pov(request, adapter, build_results)
                     results.append(result)
 
                     # Progress reporting every 5 minutes
@@ -333,7 +338,7 @@ class VerificationEngine:
                     benchmark=adapter.benchmark_name,
                     pov_id=pov_path.name,
                 )
-                result = self.verify_pov(request, adapter, versions)
+                result = self.verify_pov(request, adapter, build_results)
                 results.append(result)
 
                 # Progress reporting every 5 minutes
@@ -359,27 +364,46 @@ class VerificationEngine:
 
         return results
 
-    def _get_or_build_versions(
+    def _get_or_build_results(
         self,
         adapter: MetaYamlAdapter,
         *,
         force_rebuild: bool = False,
-    ) -> List[BuildVersion]:
-        """Get cached versions or build new ones.
+    ) -> Dict[str, BuildResult]:
+        """Get cached build results or build new ones.
 
         Args:
             adapter: MetaYamlAdapter for benchmark config
             force_rebuild: Force rebuild even if cached
 
         Returns:
-            List of built versions
+            Dict mapping variant names to BuildResult
         """
-        if not force_rebuild and adapter.benchmark_name in self._built_versions:
-            return self._built_versions[adapter.benchmark_name]
+        if not force_rebuild and adapter.benchmark_name in self._built_results:
+            return self._built_results[adapter.benchmark_name]
 
-        versions = self.builder.build_all_variants(adapter, force_rebuild=force_rebuild)
-        self._built_versions[adapter.benchmark_name] = versions
-        return versions
+        # Determine mode
+        mode_str = adapter.get_mode().value
+        mode = BenchmarkMode.FULL if mode_str == "full" else BenchmarkMode.DELTA
+
+        # Create build plan
+        plan = self.builder.create_build_plan(
+            benchmark_name=adapter.benchmark_name,
+            benchmark_path=adapter.benchmark_path or Path(),
+            main_repo=adapter.main_repo,
+            mode=mode,
+            base_commit=adapter.get_base_commit(),
+            ref_commit=adapter.get_ref_commit(),
+            cpv_numbers=adapter.get_cpv_numbers(),
+            language=adapter.lang,
+            repo_name=adapter.repo_name,
+            include_coverage=False,
+        )
+
+        # Build variants
+        results = self.builder.execute_plan(plan, force_rebuild=force_rebuild)
+        self._built_results[adapter.benchmark_name] = results
+        return results
 
     def _load_adapter(self, benchmark_path: Path) -> Optional[MetaYamlAdapter]:
         """Load MetaYamlAdapter from benchmark path.
@@ -435,5 +459,5 @@ class VerificationEngine:
         Args:
             adapter: MetaYamlAdapter for benchmark config
         """
-        self.builder.cleanup_variants(adapter)
-        self._built_versions.pop(adapter.benchmark_name, None)
+        self.builder.cleanup_variants(adapter.benchmark_name)
+        self._built_results.pop(adapter.benchmark_name, None)
