@@ -1,0 +1,47 @@
+# Test Experiment Configuration for Patch CRS Integration Tests
+#
+# This is a minimal configuration for testing patch generation CRS functionality.
+# Designed for quick integration tests with atlantis-prism CRS.
+
+# Experiment identifier
+experiment: "integration-test-patch-prism"
+
+# Human-readable description
+description: "Integration test configuration for atlantis-prism patch generation CRS"
+
+# Execution Configuration
+trials: 1
+mode: delta  # Evaluation mode: delta, full, or all
+max_total_time: 600  # 10 minutes for patch generation testing
+
+# CRS Selection - using atlantis-prism (bug-fixing type)
+crses:
+  - atlantis-prism
+
+# Benchmark Selection - using atlanta-nasm benchmark
+benchmarks:
+  - atlanta-nasm-delta-01
+
+# Difficulty Control
+difficulty_level: 1
+
+# Monitoring & Snapshots - more frequent for testing
+snapshot_period: 60  # 1 minute
+
+# Storage Configuration - temporary directories for testing
+experiment_filestore: /tmp/crsbench-integration-test-patch-prism/experiment-data
+report_filestore: /tmp/crsbench-integration-test-patch-prism/report-data
+
+# LiteLLM Configuration - passthrough mode (default)
+# Requires UPSTREAM_LITELLM_BASE_URL and LITELLM_API_KEY environment variables
+litellm_mode: passthrough
+
+# Build Configuration
+build_timeout: 1200  # 20 minutes for patch CRS build
+run_timeout: 600     # 10 minutes for patch generation (matches max_total_time)
+
+# Hints Configuration - disabled for quick testing
+hints_enabled: false
+
+# Reproducibility
+git_hash: null

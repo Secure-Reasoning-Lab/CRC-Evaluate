@@ -1,22 +1,22 @@
 # Test Experiment Configuration for Patch CRS Integration Tests
 #
 # This is a minimal configuration for testing patch generation CRS functionality.
-# Designed for quick integration tests with atlantis-vincent CRS.
+# Designed for quick integration tests with atlantis-claude-code CRS.
 
 # Experiment identifier
-experiment: "integration-test-patch"
+experiment: "integration-test-patch-claude-code"
 
 # Human-readable description
-description: "Integration test configuration for patch generation CRS"
+description: "Integration test configuration for atlantis-claude-code patch generation CRS"
 
 # Execution Configuration
 trials: 1
 mode: delta  # Evaluation mode: delta, full, or all
 max_total_time: 600  # 10 minutes for patch generation testing
 
-# CRS Selection - using atlantis-vincent (bug-fixing type)
+# CRS Selection - using atlantis-claude-code (bug-fixing type)
 crses:
-  - atlantis-vincent
+  - atlantis-claude-code
 
 # Benchmark Selection - using atlanta-nasm benchmark
 benchmarks:
@@ -29,16 +29,12 @@ difficulty_level: 1
 snapshot_period: 60  # 1 minute
 
 # Storage Configuration - temporary directories for testing
-experiment_filestore: /tmp/crsbench-integration-test-patch/experiment-data
-report_filestore: /tmp/crsbench-integration-test-patch/report-data
+experiment_filestore: /tmp/crsbench-integration-test-patch-claude-code/experiment-data
+report_filestore: /tmp/crsbench-integration-test-patch-claude-code/report-data
 
 # LiteLLM Configuration - passthrough mode (default)
 # Requires UPSTREAM_LITELLM_BASE_URL and LITELLM_API_KEY environment variables
 litellm_mode: passthrough
-
-# CRS Paths - optional configuration (defaults: crses/registry, crses/configs)
-# registry_dir: crses/registry
-# crs_configs_dir: crses/configs
 
 # Build Configuration
 build_timeout: 1200  # 20 minutes for patch CRS build
