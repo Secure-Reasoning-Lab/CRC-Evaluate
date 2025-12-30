@@ -117,6 +117,8 @@ select = [
     "RET",    # flake8-return
     "PT",     # flake8-pytest-style
     "PIE",    # flake8-pie
+    "T20",    # flake8-print (no print statements)
+    "TID",    # flake8-tidy-imports (for banned imports)
 ]
 ignore = [
     "E501",   # line too long (handled by formatter)
@@ -125,7 +127,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"crsbench/utils/logger.py" = ["N802"]  # getLogger follows standard logging interface naming
+"crsbench/utils/logger.py" = [
+    "N802",    # getLogger follows standard logging interface naming
+    "TID251",  # logger.py is allowed to import logging module
+]
 # Test files have relaxed linting - allow unittest style, unused args in fixtures, etc.
 "tests/**/*.py" = [
     "ARG002",   # Unused method arguments (common in test fixtures)
@@ -142,8 +147,13 @@ ignore = [
     "F841",     # Unused variable (common in tests for side effects)
     "ERA001",   # Commented-out code (acceptable in tests for documentation)
     "B007",     # Loop variable not used (acceptable in tests)
+    "T201",     # print allowed in tests for debugging
+    "TID251",   # logging module allowed in tests
 ]
 "tests/fixtures/**/*.py" = ["PTH123"]  # Fixtures can use open()
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"logging".msg = "Use `from crsbench.utils.logger import get_logger` instead"
 
 [tool.ruff.format]
 quote-style = "double"

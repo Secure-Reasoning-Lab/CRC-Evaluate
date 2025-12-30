@@ -190,11 +190,14 @@ docs_reference_projects/
 - Moving files around for restructuring is straightforward without editing import statements
 
 #### Logging
+- **NEVER use `import logging`** - this is enforced by ruff (TID251)
 - Use centralized logger from `crsbench/utils/logger.py`
   ```python
   from crsbench.utils.logger import get_logger
   logger = get_logger(__name__)
   ```
+- **NEVER use `print()` for output** - use logger instead (enforced by ruff T201)
+  - Exception: CLI tools that intentionally output to stdout for user consumption
 
 #### Clean Code Principles
 
