@@ -7,11 +7,10 @@ for building fuzzers with different configurations.
 import os
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Optional
 
-from crsbench.builder.types import BuildConfig, VariantType
+from crsbench.builder.types import BuildConfig
 from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import clone_or_copy_cached_repo
 

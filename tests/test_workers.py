@@ -3,8 +3,6 @@
 import os
 from unittest.mock import patch
 
-import pytest
-
 from crsbench.utils.workers import (
     DEFAULT_WORKERS,
     WORKERS_ENV_VAR,

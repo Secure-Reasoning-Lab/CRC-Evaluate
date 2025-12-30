@@ -1,11 +1,8 @@
 """Tests for the OSSFuzzBuilder module."""
 
-import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
-
 from crsbench.builder import (
     BenchmarkMode,
     BuildConfig,
@@ -186,7 +183,7 @@ class TestParallelExecutor:
     def test_execute_empty_configs(self):
         """Test executing with empty config list."""
         executor = ParallelExecutor(max_workers=2)
-        results = executor.execute_builds([], lambda c: None)  # type: ignore
+        results = executor.execute_builds([], lambda _c: None)  # type: ignore  # noqa: ARG005
         assert results == {}
 
     def test_execute_single_success(self):
@@ -254,7 +251,7 @@ class TestParallelExecutor:
             benchmark_path=Path("/tmp"),
         )
 
-        def failing_build(c: BuildConfig) -> BuildResult:
+        def failing_build(_c: BuildConfig) -> BuildResult:  # noqa: ARG001
             raise RuntimeError("Build exploded")
 
         result = executor.execute_single(config, failing_build)
