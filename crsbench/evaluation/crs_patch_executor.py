@@ -198,6 +198,8 @@ class CRSPatchExecutor(CRSExecutor):
             str(povs_path),
             "--out",
             str(trial_output_dir / "output"),
+            "--work-dir",
+            str(trial_build_dir),
         ]
 
         # Prepare and add hints if enabled
@@ -208,7 +210,6 @@ class CRSPatchExecutor(CRSExecutor):
 
         logger.info(f"Run command: {' '.join(cmd)}")
         logger.debug(f"Command: {cmd}")
-        logger.debug(f"Working directory: {trial_output_dir}")
 
         # Set up environment with LiteLLM configuration
         env = os.environ.copy()
@@ -318,6 +319,8 @@ class CRSPatchExecutor(CRSExecutor):
             str(source_path),  # Pre-cloned source from repo manager
             "--registry",
             str(self.registry_dir),
+            "--work-dir",
+            str(trial_build_dir),
         ]
 
         # Add gitcache flag if enabled
