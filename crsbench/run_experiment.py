@@ -12,6 +12,9 @@ Usage:
     # Validate POVs
     crsbench validate benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
 
+    # Collect coverage
+    crsbench coverage benchmarks/sanity-mock-c-delta-01 --corpus-dir ./corpus/
+
     # Legacy (backward compatible - runs 'run' subcommand)
     crsbench --experiment-config experiment-config.yaml --benchmarks benchmark1
 """
@@ -205,8 +208,14 @@ def parse_arguments() -> argparse.Namespace:
         Parsed arguments with experiment configuration.
     """
     # Check for legacy invocation (no subcommand, starts with --)
-    # or validate subcommand
-    if len(sys.argv) > 1 and sys.argv[1] not in ["run", "validate", "-h", "--help"]:
+    # or validate/coverage subcommand
+    if len(sys.argv) > 1 and sys.argv[1] not in [
+        "run",
+        "validate",
+        "coverage",
+        "-h",
+        "--help",
+    ]:
         # Legacy mode: insert 'run' as default subcommand
         if sys.argv[1].startswith("-"):
             sys.argv.insert(1, "run")
@@ -248,6 +257,13 @@ Examples:
     from crsbench.validation.cli.validate_command import add_validate_subparser
 
     add_validate_subparser(subparsers)
+
+    # 'coverage' subcommand - coverage collection
+    from crsbench.evaluation.coverage.cli.coverage_command import (
+        add_coverage_subparser,
+    )
+
+    add_coverage_subparser(subparsers)
 
     args = parser.parse_args()
 
@@ -1005,6 +1021,12 @@ def main() -> None:
         from crsbench.validation.cli.validate_command import run_validate
 
         sys.exit(run_validate(args))
+
+    if args.command == "coverage":
+        # Handle coverage command
+        from crsbench.evaluation.coverage.cli.coverage_command import run_coverage
+
+        sys.exit(run_coverage(args))
 
     # Below is for 'run' command (experiment execution)
 

@@ -11,15 +11,21 @@ The snapshot thread is daemon=True, ensuring Python doesn't wait for it
 indefinitely if shutdown takes too long.
 """
 
+from __future__ import annotations
+
+import json
 import shutil
 import tarfile
 import threading
 import time
-from pathlib import Path
-from typing import Optional
+from pathlib import Path  # noqa: TC003 - used at runtime for file operations
+from typing import TYPE_CHECKING, Optional
 
 from crsbench.evaluation.snapshot import Snapshot, SnapshotMetadata
 from crsbench.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from crsbench.evaluation.coverage.manager import CoverageManager
 
 logger = get_logger(__name__)
 
@@ -41,6 +47,8 @@ class SnapshotManager:
         trial_dir: Path,
         snapshot_period: int,
         trial_start_time: Optional[float] = None,
+        *,
+        coverage_manager: Optional[CoverageManager] = None,
     ):
         """Initialize snapshot manager.
 
@@ -48,6 +56,7 @@ class SnapshotManager:
             trial_dir: Trial output directory (must exist)
             snapshot_period: Snapshot interval in seconds (must be > 0)
             trial_start_time: Trial start timestamp (defaults to current time)
+            coverage_manager: Optional CoverageManager for collecting coverage snapshots
 
         Raises:
             ValueError: If snapshot_period <= 0 or trial_dir doesn't exist
@@ -62,6 +71,7 @@ class SnapshotManager:
         self.snapshot_period = snapshot_period
         self.trial_start_time = trial_start_time or time.time()
         self.crs_run_start_time: Optional[float] = None
+        self.coverage_manager = coverage_manager
 
         # State tracking
         self.cycle = 0
@@ -194,6 +204,15 @@ class SnapshotManager:
             has_patches = self._capture_patches(temp_dir)
             has_corpus = self._capture_corpus(temp_dir)
             has_crs_data = self._capture_crs_data(temp_dir)
+
+            # Capture coverage snapshot if coverage manager is available
+            coverage_snapshot = None
+            if self.coverage_manager:
+                try:
+                    coverage_snapshot = self.coverage_manager.on_snapshot(self.cycle)
+                    self._capture_coverage(temp_dir, coverage_snapshot)
+                except Exception as e:
+                    logger.warning(f"Failed to capture coverage snapshot: {e}")
 
             # Compress to tar.gz
             archive_path = self.trial_dir / f"snapshot-{self.cycle:04d}.tar.gz"
@@ -471,3 +490,39 @@ class SnapshotManager:
         # Create symlink to final snapshot
         final_link.symlink_to(final_archive_name)
         logger.info(f"Created snapshot-final.tar.gz -> {final_archive_name}")
+
+    def _capture_coverage(self, temp_dir: Path, coverage_snapshot) -> bool:
+        """Capture coverage snapshot data.
+
+        Args:
+            temp_dir: Temporary directory for snapshot contents
+            coverage_snapshot: CoverageSnapshot from coverage manager
+
+        Returns:
+            True if coverage was captured, False otherwise
+        """
+        if coverage_snapshot is None:
+            return False
+
+        try:
+            coverage_data = {
+                "cycle": coverage_snapshot.cycle,
+                "timestamp": coverage_snapshot.timestamp,
+                "elapsed_time": coverage_snapshot.elapsed_time,
+                "harness_name": coverage_snapshot.harness_name,
+                "saturation_detected": coverage_snapshot.saturation_detected,
+                "new_corpus_count": coverage_snapshot.new_corpus_count,
+                "new_lines_count": coverage_snapshot.new_lines_count,
+                "summary": coverage_snapshot.summary.model_dump(),
+            }
+
+            coverage_path = temp_dir / "coverage.json"
+            coverage_path.write_text(json.dumps(coverage_data, indent=2))
+            logger.debug(
+                f"Captured coverage: lines={coverage_snapshot.summary.lines_covered}, "
+                f"saturation={coverage_snapshot.saturation_detected}"
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to write coverage.json: {e}")
+            return False

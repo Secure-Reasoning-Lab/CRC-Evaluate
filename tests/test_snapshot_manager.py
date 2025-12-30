@@ -42,7 +42,9 @@ class TestSnapshotManagerInit:
     def test_init_nonexistent_dir(self):
         """Test initializing with non-existent directory."""
         with pytest.raises(ValueError, match="trial_dir does not exist"):
-            SnapshotManager(Path("/nonexistent"), snapshot_period=60)
+            SnapshotManager(
+                Path("/does/not/exist/at/all/really/truly"), snapshot_period=60
+            )
 
 
 class TestSnapshotCapture:

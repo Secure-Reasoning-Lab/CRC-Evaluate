@@ -254,7 +254,7 @@ class VerificationEngine:
             self._built_versions.pop(adapter.benchmark_name, None)
 
         results = []
-        versions = self._get_or_build_versions(adapter)
+        versions = self._get_or_build_versions(adapter, force_rebuild=force_rebuild)
         if not versions:
             logger.error(f"Failed to build variants for {adapter.benchmark_name}")
             return []
@@ -362,19 +362,22 @@ class VerificationEngine:
     def _get_or_build_versions(
         self,
         adapter: MetaYamlAdapter,
+        *,
+        force_rebuild: bool = False,
     ) -> List[BuildVersion]:
         """Get cached versions or build new ones.
 
         Args:
             adapter: MetaYamlAdapter for benchmark config
+            force_rebuild: Force rebuild even if cached
 
         Returns:
             List of built versions
         """
-        if adapter.benchmark_name in self._built_versions:
+        if not force_rebuild and adapter.benchmark_name in self._built_versions:
             return self._built_versions[adapter.benchmark_name]
 
-        versions = self.builder.build_all_variants(adapter)
+        versions = self.builder.build_all_variants(adapter, force_rebuild=force_rebuild)
         self._built_versions[adapter.benchmark_name] = versions
         return versions
 

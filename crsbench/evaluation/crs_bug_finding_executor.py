@@ -7,6 +7,7 @@ oss-bugfind-crs CLI for bug finding CRS execution using pre-cloned source reposi
 import json
 import shutil
 import subprocess
+import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -120,6 +121,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         trial_output_dir: Path,
         *,
         on_run_start: Optional[Callable[[], None]] = None,
+        stop_event: Optional[threading.Event] = None,
     ) -> CRSExecutionResult:
         """Run CRS on a specific harness.
 
@@ -128,6 +130,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             harness: Harness configuration
             trial_output_dir: Trial directory (from TrialDirectoryPreparer)
             on_run_start: Callback invoked when CRS run starts (after build)
+            stop_event: Optional event to signal early termination (e.g., coverage saturation)
 
         Returns:
             CRSExecutionResult with execution details
@@ -231,6 +234,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 grace_period=grace_period,
                 cwd=trial_output_dir,
                 env=env,
+                stop_event=stop_event,
             )
 
             execution_time = time.time() - start_time
@@ -758,3 +762,16 @@ class CRSBugFindingExecutor(CRSExecutor):
             json.dump(metadata, f, indent=2)
 
         logger.debug(f"Stored execution metadata to {metadata_file}")
+
+        # Always write stdout/stderr to files for debugging
+        if stdout:
+            stdout_file = trial_output_dir / "crs_stdout.log"
+            with stdout_file.open("w") as f:
+                f.write(stdout)
+            logger.debug(f"Stored CRS stdout to {stdout_file}")
+
+        if stderr:
+            stderr_file = trial_output_dir / "crs_stderr.log"
+            with stderr_file.open("w") as f:
+                f.write(stderr)
+            logger.debug(f"Stored CRS stderr to {stderr_file}")
