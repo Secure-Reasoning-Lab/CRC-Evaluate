@@ -34,11 +34,15 @@ class EvaluationReport:
     total_execution_time: float
     harness_results: List[HarnessResult]
 
-    # Summary statistics
+    # Summary statistics (POV - for bug-finding CRS)
     total_povs: int
     povs_found: int
     povs_missed: int
     povs_error: int
+
+    # Summary statistics (Patch - for bug-fixing CRS)
+    total_input_povs: int = 0  # Number of POVs given to patch CRS
+    patches_generated: int = 0  # Number of patches generated
 
     # Configuration info
     base_commit: Optional[str] = None
@@ -98,11 +102,14 @@ class ResultCollector:
         self.base_commit: Optional[str] = None
         self.ref_commit: Optional[str] = None
         self.crs_config: Optional[Dict[str, Any]] = None
-        # POV statistics (set by verification)
+        # POV statistics (set by verification, for bug-finding CRS)
         self.total_povs = 0
         self.povs_found = 0
         self.povs_missed = 0
         self.povs_error = 0
+        # Patch statistics (for bug-fixing CRS)
+        self.total_input_povs = 0
+        self.patches_generated = 0
 
     def add_harness_result(self, harness_result: HarnessResult) -> None:
         """Add result for a harness."""
@@ -149,6 +156,16 @@ class ResultCollector:
             1 for r in verification_results if r.status == VerificationStatus.ERROR
         )
 
+    def set_patch_stats(self, total_input_povs: int, patches: Dict[str, str]) -> None:
+        """Set patch statistics from collected patches.
+
+        Args:
+            total_input_povs: Number of POVs provided to the patch CRS
+            patches: Dict mapping POV ID to patch content
+        """
+        self.total_input_povs = total_input_povs
+        self.patches_generated = len(patches)
+
     def finalize_report(self) -> EvaluationReport:
         """Create final evaluation report."""
         end_time = datetime.now()
@@ -165,6 +182,8 @@ class ResultCollector:
             povs_found=self.povs_found,
             povs_missed=self.povs_missed,
             povs_error=self.povs_error,
+            total_input_povs=self.total_input_povs,
+            patches_generated=self.patches_generated,
             base_commit=self.base_commit,
             ref_commit=self.ref_commit,
             crs_config=self.crs_config,

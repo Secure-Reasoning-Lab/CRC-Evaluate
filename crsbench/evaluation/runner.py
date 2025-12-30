@@ -204,17 +204,39 @@ class BenchmarkRunner:
             )
             collector.add_harness_result(harness_result)
 
-            # Step 9: Set POV statistics from verification results
+            # Step 9: Set statistics based on CRS type
             if verification_results:
+                # Bug-finding CRS: set POV verification stats
                 collector.set_pov_stats(verification_results)
+            elif isinstance(self.crs_executor, CRSPatchExecutor) and trial_output_dir:
+                # Bug-fixing CRS: collect patches and set patch stats
+                patches = self.crs_executor._collect_patches(trial_output_dir)
+                # Count input POVs from crs-input/povs directory
+                povs_dir = trial_output_dir / "crs-input" / "povs"
+                total_input_povs = (
+                    len(list(povs_dir.iterdir())) if povs_dir.exists() else 0
+                )
+                collector.set_patch_stats(total_input_povs, patches)
+                self.logger.info(
+                    f"Patch collection: {len(patches)} patches generated from {total_input_povs} input POVs"
+                )
+                # Save patch summary
+                self._save_patch_summary(trial_output_dir, patches, total_input_povs)
 
             # Step 10: Generate final report
             report = collector.finalize_report()
 
-            self.logger.info(
-                f"Evaluation completed: {report.povs_found}/{report.total_povs} POVs detected "
-                f"({report.success_rate:.1%} success rate)"
-            )
+            # Log based on CRS type
+            if isinstance(self.crs_executor, CRSPatchExecutor):
+                self.logger.info(
+                    f"Evaluation completed: {report.patches_generated} patches generated "
+                    f"from {report.total_input_povs} input POVs"
+                )
+            else:
+                self.logger.info(
+                    f"Evaluation completed: {report.povs_found}/{report.total_povs} POVs detected "
+                    f"({report.success_rate:.1%} success rate)"
+                )
 
             return EvaluationResult(report, validation_result, verification_results)
 
@@ -807,3 +829,30 @@ class BenchmarkRunner:
             time.sleep(check_interval)
 
         self.logger.debug("Saturation monitor: stopped")
+
+    def _save_patch_summary(
+        self,
+        trial_output_dir: Path,
+        patches: dict[str, str],
+        total_input_povs: int,
+    ) -> None:
+        """Save patch collection summary to trial output directory.
+
+        Args:
+            trial_output_dir: Trial output directory
+            patches: Dict mapping POV ID to patch content
+            total_input_povs: Number of input POVs
+        """
+        import json
+
+        summary = {
+            "total_input_povs": total_input_povs,
+            "patches_generated": len(patches),
+            "patch_ids": list(patches.keys()),
+        }
+
+        summary_path = trial_output_dir / "patch_summary.json"
+        with summary_path.open("w") as f:
+            json.dump(summary, f, indent=2)
+
+        self.logger.debug(f"Saved patch summary to {summary_path}")
