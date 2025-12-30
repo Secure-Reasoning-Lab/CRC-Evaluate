@@ -1,0 +1,13 @@
+# Resource Configuration for atlantis-prism CRS Deployment
+
+# Worker definitions
+workers:
+  local:
+    cpuset: "0-15"
+    memory: "64G"
+
+# CRS-specific configurations
+crs:
+  atlantis-prism:
+    workers:
+      - local
