@@ -12,10 +12,9 @@ from typing import List, Optional, Tuple
 
 import yaml
 
-from crsbench.builder.types import VariantType
+from crsbench.builder.types import BenchmarkMode, VariantType
 from crsbench.utils.logger import get_logger
 from crsbench.validation.schemas import POV, BenchmarkConfig, HarnessFile
-from crsbench.validation.variant.models import BenchmarkMode
 
 logger = get_logger(__name__)
 

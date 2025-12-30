@@ -3,16 +3,11 @@
 Tests cover:
 - VerdictResolver (FULL and DELTA mode verdict logic)
 - Deduplication strategies
-- Variant models
 - Verification models
 """
 
 import pytest
-from crsbench.builder.types import VariantType
-from crsbench.validation.variant.models import (
-    BenchmarkMode,
-    BuildVersion,
-)
+from crsbench.builder.types import BenchmarkMode, VariantType
 from crsbench.validation.verification.dedup import (
     NoOpDedup,
     PatchBasedDedup,
@@ -47,38 +42,6 @@ class TestBenchmarkMode:
         """Test BenchmarkMode enum values."""
         assert BenchmarkMode.FULL.value == "full"
         assert BenchmarkMode.DELTA.value == "delta"
-
-
-class TestBuildVersion:
-    """Tests for BuildVersion dataclass."""
-
-    def test_build_version_creation(self):
-        """Test BuildVersion creation."""
-        version = BuildVersion(
-            benchmark_name="test-bench",
-            lang="c",
-            mode=BenchmarkMode.DELTA,
-            variant_type=VariantType.DELTA_REF,
-            commit="abc123",
-            variant_project_name="test-bench-deltaref",
-        )
-        assert version.benchmark_name == "test-bench"
-        assert version.lang == "c"
-        assert version.project_path == "test-bench-deltaref"
-
-    def test_build_version_cpv(self):
-        """Test BuildVersion with CPV."""
-        version = BuildVersion(
-            benchmark_name="test-bench",
-            lang="c",
-            mode=BenchmarkMode.DELTA,
-            variant_type=VariantType.CPV,
-            commit="abc123",
-            variant_project_name="test-bench-cpv0",
-            cpv_num=0,
-        )
-        assert version.cpv_num == 0
-        assert str(version) == "test-bench:cpv0"
 
 
 class TestVerificationModels:

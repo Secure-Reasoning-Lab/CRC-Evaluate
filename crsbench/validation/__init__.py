@@ -8,6 +8,8 @@ For building variants, use crsbench.builder.OSSFuzzBuilder.
 """
 
 # Format validation
+# POV verification
+from crsbench.builder import BenchmarkMode, VariantType
 from crsbench.validation.errors import (
     ValidationError,
     ValidationResult,
@@ -21,14 +23,7 @@ from crsbench.validation.format_validator import (
     validate_experiment_config,
     validate_experiment_config_from_string,
 )
-
-# POV verification
 from crsbench.validation.meta_adapter import MetaYamlAdapter
-from crsbench.validation.variant import (
-    BenchmarkMode,
-    BuildVersion,
-    VariantType,
-)
 from crsbench.validation.verification import (
     DeduplicationStrategy,
     OSSFuzzReproducer,
@@ -54,9 +49,8 @@ __all__ = [
     "ValidationWarning",
     # POV verification - Adapter
     "MetaYamlAdapter",
-    # POV verification - Variant
+    # POV verification - Types (from builder)
     "BenchmarkMode",
-    "BuildVersion",
     "VariantType",
     # POV verification - Verification
     "VerificationStatus",
