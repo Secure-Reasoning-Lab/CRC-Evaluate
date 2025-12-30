@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+from crsbench.utils.docker import fix_docker_ownership
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -142,21 +143,7 @@ class OSSFuzzReproducer:
             project_name: Project name
         """
         build_path = self.oss_fuzz_path / "build" / "out" / project_name
-        if not build_path.exists():
-            return
-
-        try:
-            uid = os.getuid()
-            gid = os.getgid()
-            subprocess.run(
-                ["sudo", "chown", "-R", f"{uid}:{gid}", str(build_path)],
-                capture_output=True,
-                timeout=30,
-            )
-            logger.debug(f"Fixed ownership of {build_path}")
-        except Exception as e:
-            # Ignore permission fixing errors - not critical
-            logger.debug(f"Could not fix ownership of {build_path}: {e}")
+        fix_docker_ownership(build_path)
 
     def reproduce(
         self,
