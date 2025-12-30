@@ -22,21 +22,19 @@ Usage:
 import argparse
 import sys
 import time
-from collections import namedtuple
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import Any, Dict, List
 
 import yaml
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 from crsbench.builder import BuildResult, OSSFuzzBuilder
 from crsbench.builder.types import BenchmarkMode
 from crsbench.utils import log_progress, log_section, log_summary, set_gitcache
 from crsbench.utils.logger import configure_logger, get_logger
 from crsbench.utils.workers import resolve_build_workers
-
-if TYPE_CHECKING:
-    from crsbench.validation.schemas import BenchmarkHarness
+from crsbench.validation.schemas import BenchmarkHarness
 
 # Load environment variables from .env file if present
 load_dotenv()
@@ -44,8 +42,22 @@ load_dotenv()
 # Get logger instance
 logger = get_logger(__name__)
 
+
 # Trial configuration
-Trial = namedtuple("Trial", ["crs", "benchmark_harness", "trial_num", "mode"])
+class Trial(BaseModel):
+    """Trial configuration for CRS evaluation.
+
+    Attributes:
+        crs: CRS identifier
+        benchmark_harness: Resolved benchmark-harness pair
+        trial_num: Trial number (1-indexed)
+        mode: Evaluation mode ("delta" or "full")
+    """
+
+    crs: str
+    benchmark_harness: BenchmarkHarness
+    trial_num: int
+    mode: str
 
 
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
@@ -383,7 +395,7 @@ def load_experiment_config(config_path: Path):
 def resolve_benchmark_harnesses(
     benchmark_entries: List,
     benchmarks_root: Path,
-) -> List["BenchmarkHarness"]:
+) -> List[BenchmarkHarness]:
     """Resolve BenchmarkHarness objects from BenchmarkEntry list.
 
     For entries with harnesses specified: use those harnesses
@@ -527,7 +539,7 @@ def get_available_modes_for_benchmark(benchmark_path: Path) -> List[str]:
 
 
 def generate_trial_matrix(
-    benchmark_harnesses: List["BenchmarkHarness"], crses: List[str], config
+    benchmark_harnesses: List[BenchmarkHarness], crses: List[str], config
 ) -> List[Trial]:
     """Generate all trial combinations from BenchmarkHarness objects, CRSes, and trials.
 
@@ -562,7 +574,14 @@ def generate_trial_matrix(
             # Generate trials for each mode
             for mode in modes_to_run:
                 for trial_num in range(1, config.trials + 1):
-                    trials.append(Trial(crs, benchmark_harness, trial_num, mode))
+                    trials.append(
+                        Trial(
+                            crs=crs,
+                            benchmark_harness=benchmark_harness,
+                            trial_num=trial_num,
+                            mode=mode,
+                        )
+                    )
 
     logger.info(
         f"Generated {len(trials)} trials: {len(crses)} CRSes × "
@@ -864,7 +883,7 @@ def enhance_config_with_cli_args(
 def run_experiment_local(
     experiment_name: str,
     config,
-    benchmark_harnesses: List["BenchmarkHarness"],
+    benchmark_harnesses: List[BenchmarkHarness],
     crses: List[str],
     args: argparse.Namespace,
 ) -> None:
@@ -1101,7 +1120,7 @@ def _monitor_jobs_rich(
 def run_experiment_distributed(
     experiment_name: str,
     config,
-    benchmark_harnesses: List["BenchmarkHarness"],
+    benchmark_harnesses: List[BenchmarkHarness],
     crses: List[str],
     args: argparse.Namespace,
 ) -> None:
