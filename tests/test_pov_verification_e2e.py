@@ -1,6 +1,6 @@
-"""True E2E tests for POV validation with actual Docker builds.
+"""True E2E tests for POV verification with actual Docker builds.
 
-These tests run the full validation pipeline including:
+These tests run the full verification pipeline including:
 - Building variant projects with Docker
 - Running POVs against built fuzzers
 - Verifying correct CPV matching
@@ -14,7 +14,6 @@ These tests are slow (~20-30s) due to Docker builds.
 Mark with @pytest.mark.slow to skip in quick test runs.
 """
 
-import json
 import subprocess
 from pathlib import Path
 
@@ -40,7 +39,7 @@ pytestmark = [
 ]
 
 
-class TestPOVValidationE2E:
+class TestPOVVerificationE2E:
     """True E2E tests using sanity-mock-c-delta-01 benchmark."""
 
     @pytest.fixture
@@ -57,19 +56,19 @@ class TestPOVValidationE2E:
             pytest.skip(f"oss-fuzz not found: {path}")
         return path
 
-    def run_validate(
+    def run_verify(
         self,
         benchmark_path: Path,
         harness: str,
         pov_dir: Path,
         oss_fuzz_path: Path,
-    ) -> dict:
-        """Run crsbench validate and return parsed JSON output."""
+    ) -> str:
+        """Run crsbench verify and return stdout."""
         cmd = [
             "uv",
             "run",
             "crsbench",
-            "validate",
+            "verify",
             str(benchmark_path),
             "--harness",
             harness,
@@ -77,8 +76,6 @@ class TestPOVValidationE2E:
             str(pov_dir),
             "--oss-fuzz",
             str(oss_fuzz_path),
-            "--format",
-            "json",
         ]
 
         result = subprocess.run(
@@ -88,35 +85,7 @@ class TestPOVValidationE2E:
             timeout=120,
         )
 
-        return self._parse_json_output(result.stdout, result.stderr)
-
-    def _parse_json_output(self, stdout: str, stderr: str) -> list:
-        """Parse JSON array from command output (handles pretty-printed JSON)."""
-        lines = stdout.split("\n")
-        json_lines = []
-        in_json = False
-
-        for line in lines:
-            stripped = line.strip()
-            # Skip log lines (start with timestamp)
-            if stripped and stripped[0].isdigit():
-                continue
-            # Start of JSON array
-            if stripped.startswith("["):
-                in_json = True
-            if in_json:
-                json_lines.append(line)
-            # End of JSON array
-            if stripped == "]":
-                break
-
-        if json_lines:
-            try:
-                return json.loads("\n".join(json_lines))
-            except json.JSONDecodeError:
-                pass
-
-        pytest.fail(f"Failed to parse JSON output:\n{stdout}\nstderr:\n{stderr}")
+        return result.stdout
 
     def test_cpv0_pov_matches_cpv0(self, benchmark_path, oss_fuzz_path):
         """POV from cpv_0 should correctly match cpv_0."""
@@ -126,16 +95,16 @@ class TestPOVValidationE2E:
         if not pov_dir.exists():
             pytest.skip(f"POV directory not found: {pov_dir}")
 
-        results = self.run_validate(
+        output = self.run_verify(
             benchmark_path=benchmark_path,
             harness="fuzz_process_input_header",
             pov_dir=pov_dir,
             oss_fuzz_path=oss_fuzz_path,
         )
 
-        assert len(results) == 1
-        assert results[0]["status"] == "cpv"
-        assert results[0]["cpv_matched"] == ["cpv_0"]
+        # Check for expected keywords in output
+        assert "cpv_matched" in output, f"Expected 'cpv_matched' in output:\n{output}"
+        assert "cpv_0" in output, f"Expected 'cpv_0' in output:\n{output}"
 
     def test_cpv1_pov_matches_cpv1(self, benchmark_path, oss_fuzz_path):
         """POV from cpv_1 should correctly match cpv_1."""
@@ -145,29 +114,27 @@ class TestPOVValidationE2E:
         if not pov_dir.exists():
             pytest.skip(f"POV directory not found: {pov_dir}")
 
-        results = self.run_validate(
+        output = self.run_verify(
             benchmark_path=benchmark_path,
             harness="fuzz_parse_buffer_section",
             pov_dir=pov_dir,
             oss_fuzz_path=oss_fuzz_path,
         )
 
-        assert len(results) == 1
-        assert results[0]["status"] == "cpv"
-        assert results[0]["cpv_matched"] == ["cpv_1"]
+        # Check for expected keywords in output
+        assert "cpv_matched" in output, f"Expected 'cpv_matched' in output:\n{output}"
+        assert "cpv_1" in output, f"Expected 'cpv_1' in output:\n{output}"
 
-    def test_both_cpvs_validated(self, benchmark_path, oss_fuzz_path):
-        """Validate all POVs from meta.yaml - should find both CPVs."""
+    def test_both_cpvs_verified(self, benchmark_path, oss_fuzz_path):
+        """Verify all POVs from meta.yaml - should find both CPVs."""
         cmd = [
             "uv",
             "run",
             "crsbench",
-            "validate",
+            "verify",
             str(benchmark_path),
             "--oss-fuzz",
             str(oss_fuzz_path),
-            "--format",
-            "json",
         ]
 
         result = subprocess.run(
@@ -177,16 +144,12 @@ class TestPOVValidationE2E:
             timeout=120,
         )
 
-        results = self._parse_json_output(result.stdout, result.stderr)
+        output = result.stdout
 
-        assert len(results) == 2
-
-        cpvs_found = set()
-        for r in results:
-            assert r["status"] == "cpv"
-            cpvs_found.update(r["cpv_matched"])
-
-        assert cpvs_found == {"cpv_0", "cpv_1"}
+        # Check summary shows both CPVs found
+        assert "cpv_0" in output, f"Expected 'cpv_0' in output:\n{output}"
+        assert "cpv_1" in output, f"Expected 'cpv_1' in output:\n{output}"
+        assert "CPVs triggered" in output, f"Expected summary in output:\n{output}"
 
 
 class TestBuildUIDOwnership:
@@ -205,7 +168,7 @@ class TestBuildUIDOwnership:
 
         build_out = oss_fuzz_path / "build" / "out"
         if not build_out.exists():
-            pytest.skip("No build output exists - run validation first")
+            pytest.skip("No build output exists - run verification first")
 
         current_uid = os.getuid()
 

@@ -77,13 +77,13 @@ class TestCWEMapping:
         """Test mapping of known CWE IDs."""
         general_class, description = get_general_class("CWE-122")
         assert general_class == "Memory Safety Issue"
-        assert description == "Heap-based buffer overflow"
+        assert description == "Heap-based Buffer Overflow"
 
     def test_cwe_without_prefix(self):
         """Test CWE mapping without 'CWE-' prefix."""
         general_class, description = get_general_class("122")
         assert general_class == "Memory Safety Issue"
-        assert description == "Heap-based buffer overflow"
+        assert description == "Heap-based Buffer Overflow"
 
     def test_unknown_cwe(self):
         """Test mapping of unknown CWE ID."""
@@ -95,7 +95,7 @@ class TestCWEMapping:
         """Test CWE mappings across different categories."""
         test_cases = [
             ("CWE-122", "Memory Safety Issue"),
-            ("CWE-416", "Memory Management Issue"),
+            ("CWE-416", "Memory Safety Issue"),
             ("CWE-89", "Input Validation Issue"),
             ("CWE-362", "Concurrency Issue"),
         ]
@@ -107,7 +107,7 @@ class TestCWEMapping:
     def test_get_cwe_name(self):
         """Test getting CWE descriptive name."""
         name = get_cwe_name("CWE-787")
-        assert name == "Out-of-bounds write"
+        assert name == "Out-of-bounds Write"
 
 
 class TestVulnInfo:

@@ -12,9 +12,9 @@ from typing import List, Optional, Tuple
 
 import yaml
 
+from crsbench.builder.types import BenchmarkMode, VariantType
 from crsbench.utils.logger import get_logger
 from crsbench.validation.schemas import POV, BenchmarkConfig, HarnessFile
-from crsbench.validation.variant.models import BenchmarkMode, BuildTag
 
 logger = get_logger(__name__)
 
@@ -256,20 +256,37 @@ class MetaYamlAdapter:
         return sorted(cpvs)
 
     def get_variant_name(
-        self, build_tag: BuildTag, cpv_num: Optional[int] = None
+        self, variant_type: VariantType, cpv_num: Optional[int] = None
     ) -> str:
-        """Generate variant project name for a build tag.
+        """Generate variant project name for a variant type.
+
+        Naming convention:
+        - Base/ref variants include mode in type: {benchmark}-deltabase, {benchmark}-fullbase
+        - Shared variants need mode prefix: {benchmark}-delta-allpatched, {benchmark}-delta-cpv0
 
         Args:
-            build_tag: Type of variant (FULL_BASE, DELTA_REF, CPV, etc.)
-            cpv_num: CPV number if build_tag is CPV
+            variant_type: Type of variant (FULL_BASE, DELTA_REF, CPV, etc.)
+            cpv_num: CPV number if variant_type is CPV
 
         Returns:
-            Variant project name (e.g., "afc-curl-delta-01-cpv0")
+            Variant project name (e.g., "afc-curl-delta-01-delta-cpv0")
         """
-        if build_tag == BuildTag.CPV and cpv_num is not None:
-            return f"{self.benchmark_name}-cpv{cpv_num}"
-        return f"{self.benchmark_name}-{build_tag.value}"
+        # Base and ref variants already have mode in type name
+        if variant_type in (
+            VariantType.FULL_BASE,
+            VariantType.DELTA_BASE,
+            VariantType.DELTA_REF,
+        ):
+            return f"{self.benchmark_name}-{variant_type.value}"
+
+        # Shared variants need mode prefix to avoid conflicts
+        mode = self.get_mode()
+        mode_prefix = mode.value
+
+        if variant_type == VariantType.CPV and cpv_num is not None:
+            return f"{self.benchmark_name}-{mode_prefix}-cpv{cpv_num}"
+
+        return f"{self.benchmark_name}-{mode_prefix}-{variant_type.value}"
 
     def get_patch_dir(self) -> Path:
         """Get the path to the patches directory.

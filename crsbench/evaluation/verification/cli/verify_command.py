@@ -1,73 +1,73 @@
-"""CLI command for POV validation.
+"""CLI command for POV verification.
 
-This module provides the `crsbench validate` CLI command for validating
+This module provides the `crsbench verify` CLI command for verifying
 POVs against benchmark variants.
 
 Usage:
-    crsbench validate <benchmark_path> [options]
+    crsbench verify <benchmark_path> [options]
 
 Examples:
-    # Validate all POVs in a benchmark
-    crsbench validate benchmarks/aixcc/c/afc-curl-delta-01
+    # Verify all POVs in a benchmark
+    crsbench verify benchmarks/aixcc/c/afc-curl-delta-01
 
-    # Validate with specific harness
-    crsbench validate benchmarks/aixcc/c/afc-curl-delta-01 --harness curl_fuzzer_ws
+    # Verify with specific harness
+    crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --harness curl_fuzzer_ws
 
-    # Validate from specific POV directory
-    crsbench validate benchmarks/aixcc/c/afc-curl-delta-01 --pov-dir ./povs/
+    # Verify from specific POV directory
+    crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --pov-dir ./povs/
 
     # Output results to JSON file
-    crsbench validate benchmarks/aixcc/c/afc-curl-delta-01 --output results.json
+    crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --output results.json
 """
 
 import argparse
 import json
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 import yaml
 
-from crsbench.utils.logger import get_logger
-from crsbench.validation.verification.dedup import (
+from crsbench.evaluation.verification import (
     NoOpDedup,
     PatchBasedDedup,
     StatusBasedDedup,
+    VerificationEngine,
+    VerificationResult,
 )
-from crsbench.validation.verification.engine import VerificationEngine
-from crsbench.validation.verification.models import VerificationResult
+from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-def add_validate_subparser(subparsers: argparse._SubParsersAction) -> None:
-    """Add the validate subcommand to argparse.
+def add_verify_subparser(subparsers: argparse._SubParsersAction) -> None:
+    """Add the verify subcommand to argparse.
 
     Args:
         subparsers: Subparsers action from main argument parser
     """
     parser = subparsers.add_parser(
-        "validate",
-        help="Validate POVs against benchmark variants",
+        "verify",
+        help="Verify POVs against benchmark variants",
         description=(
-            "Validate Proof of Vulnerability (POV) files against benchmark variants. "
+            "Verify Proof of Vulnerability (POV) files against benchmark variants. "
             "Builds all required variant projects (base, ref, allpatched, cpvN) and "
             "runs each POV against them to determine which vulnerabilities are triggered."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Validate all POVs in a benchmark
-  crsbench validate benchmarks/aixcc/c/afc-curl-delta-01
+  # Verify all POVs in a benchmark
+  crsbench verify benchmarks/aixcc/c/afc-curl-delta-01
 
-  # Validate with specific harness filter
-  crsbench validate benchmarks/aixcc/c/afc-curl-delta-01 --harness curl_fuzzer_ws
+  # Verify with specific harness filter
+  crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --harness curl_fuzzer_ws
 
   # Force rebuild of all variants
-  crsbench validate benchmarks/aixcc/c/afc-curl-delta-01 --force-rebuild
+  crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --force-rebuild
 
   # Output results as JSON
-  crsbench validate benchmarks/aixcc/c/afc-curl-delta-01 --output results.json --format json
+  crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --output results.json --format json
         """,
     )
 
@@ -92,7 +92,7 @@ Examples:
         "--pov",
         type=Path,
         default=None,
-        help="Single POV file to validate (requires --harness)",
+        help="Single POV file to verify (requires --harness)",
     )
     pov_group.add_argument(
         "--pov-dir",
@@ -148,12 +148,26 @@ Examples:
         action="store_true",
         help="Enable verbose output",
     )
+    parser.add_argument(
+        "--build-workers",
+        type=int,
+        default=None,
+        help="Number of parallel workers for building variants (default: 4). "
+        "Priority: CLI > CRSBENCH_BUILD_WORKERS env.",
+    )
+    parser.add_argument(
+        "--verify-workers",
+        type=int,
+        default=None,
+        help="Number of parallel workers for POV verification (default: 4). "
+        "Priority: CLI > CRSBENCH_VERIFY_WORKERS env.",
+    )
 
-    parser.set_defaults(func=run_validate)
+    parser.set_defaults(func=run_verify)
 
 
-def run_validate(args: argparse.Namespace) -> int:
-    """Execute the validate command.
+def run_verify(args: argparse.Namespace) -> int:
+    """Execute the verify command.
 
     Args:
         args: Parsed command-line arguments
@@ -176,7 +190,7 @@ def run_validate(args: argparse.Namespace) -> int:
     pov_file = getattr(args, "pov", None)
     if pov_file and not args.harness:
         logger.error(
-            "--harness is required when using --pov for single file validation"
+            "--harness is required when using --pov for single file verification"
         )
         return 1
 
@@ -207,12 +221,12 @@ def run_validate(args: argparse.Namespace) -> int:
         dedup_strategy=dedup_strategy,
     )
 
-    logger.info(f"Validating benchmark: {args.benchmark_path}")
+    logger.info(f"Verifying benchmark: {args.benchmark_path}")
 
     # Handle single POV file vs directory
     if pov_file:
         # Single POV file mode
-        results = run_single_pov_validation(
+        results = run_single_pov_verification(
             engine=engine,
             benchmark_path=args.benchmark_path,
             pov_file=pov_file,
@@ -242,14 +256,15 @@ def run_validate(args: argparse.Namespace) -> int:
     return 0
 
 
-def run_single_pov_validation(
+def run_single_pov_verification(
     engine: VerificationEngine,
     benchmark_path: Path,
     pov_file: Path,
     harness: str,
+    *,
     force_rebuild: bool,
-) -> List[VerificationResult]:
-    """Run validation for a single POV file.
+) -> list[VerificationResult]:
+    """Run verification for a single POV file.
 
     Args:
         engine: VerificationEngine instance
@@ -261,7 +276,7 @@ def run_single_pov_validation(
     Returns:
         List containing single VerificationResult
     """
-    from crsbench.validation.verification.models import VerificationRequest
+    from crsbench.evaluation.verification.models import VerificationRequest
 
     # Load adapter
     adapter = engine._load_adapter(benchmark_path)
@@ -271,16 +286,16 @@ def run_single_pov_validation(
 
     # Build variants if needed
     if force_rebuild:
-        engine._built_versions.pop(adapter.benchmark_name, None)
+        engine._built_results.pop(adapter.benchmark_name, None)
 
-    versions = engine._get_or_build_versions(adapter)
-    if not versions:
+    build_results = engine._get_or_build_results(adapter)
+    if not build_results:
         logger.error(f"Failed to build variants for {adapter.benchmark_name}")
         return []
 
     # Read POV data
     pov_data = pov_file.read_bytes()
-    logger.info(f"Validating POV: {pov_file.name} ({len(pov_data)} bytes)")
+    logger.info(f"Verifying POV: {pov_file.name} ({len(pov_data)} bytes)")
     logger.info(f"Harness: {harness}")
 
     # Create request and verify
@@ -291,27 +306,27 @@ def run_single_pov_validation(
         pov_id=pov_file.name,
     )
 
-    result = engine.verify_pov(request, adapter, versions)
+    result = engine.verify_pov(request, adapter, build_results)
     return [result]
 
 
 def output_results(
-    results: List[VerificationResult],
+    results: list[VerificationResult],
     output_path: Optional[Path],
-    format: str,
+    output_format: str,
 ) -> None:
     """Output verification results.
 
     Args:
         results: List of verification results
         output_path: Optional output file path
-        format: Output format (json, yaml, text)
+        output_format: Output format (json, yaml, text)
     """
     result_dicts = [r.to_dict() for r in results]
 
-    if format == "json":
+    if output_format == "json":
         output = json.dumps(result_dicts, indent=2)
-    elif format == "yaml":
+    elif output_format == "yaml":
         output = yaml.dump(result_dicts, default_flow_style=False)
     else:  # text
         lines = []
@@ -326,7 +341,7 @@ def output_results(
         logger.info(output)
 
 
-def print_summary(results: List[VerificationResult]) -> None:
+def print_summary(results: list[VerificationResult]) -> None:
     """Print a summary of verification results.
 
     Args:
@@ -339,11 +354,11 @@ def print_summary(results: List[VerificationResult]) -> None:
     for r in results:
         cpv_matches.update(r.cpv_matched)
 
-    logger.info("=" * 50)
-    logger.info("VALIDATION SUMMARY")
+    logger.info("\n" + "=" * 50)
+    logger.info("VERIFICATION SUMMARY")
     logger.info("=" * 50)
     logger.info(f"Total POVs verified: {len(results)}")
-    logger.info("Status breakdown:")
+    logger.info("\nStatus breakdown:")
     for status, count in sorted(status_counts.items()):
         logger.info(f"  {status}: {count}")
     if cpv_matches:
@@ -354,11 +369,11 @@ def print_summary(results: List[VerificationResult]) -> None:
 def main() -> None:
     """Main entry point for standalone execution."""
     parser = argparse.ArgumentParser(
-        description="CRSBench POV Validation Tool",
+        description="CRSBench POV Verification Tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
-    add_validate_subparser(subparsers)
+    add_verify_subparser(subparsers)
 
     args = parser.parse_args()
 

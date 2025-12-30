@@ -9,8 +9,8 @@ Usage:
     # Run experiments
     crsbench run --experiment-config experiment-config.yaml --benchmarks benchmark1
 
-    # Validate POVs
-    crsbench validate benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
+    # Verify POVs
+    crsbench verify benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
 
     # Collect coverage
     crsbench coverage benchmarks/sanity-mock-c-delta-01 --corpus-dir ./corpus/
@@ -29,8 +29,11 @@ from typing import TYPE_CHECKING, Any, Dict, List
 import yaml
 from dotenv import load_dotenv
 
+from crsbench.builder import BuildResult, OSSFuzzBuilder
+from crsbench.builder.types import BenchmarkMode
 from crsbench.utils import log_progress, log_section, log_summary, set_gitcache
 from crsbench.utils.logger import configure_logger, get_logger
+from crsbench.utils.workers import resolve_build_workers
 
 if TYPE_CHECKING:
     from crsbench.validation.schemas import BenchmarkHarness
@@ -190,6 +193,24 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--build-workers",
+        type=int,
+        required=False,
+        metavar="N",
+        help="Number of parallel workers for building variants (default: 4). "
+        "Priority: CLI > CRSBENCH_BUILD_WORKERS env > config file.",
+    )
+
+    parser.add_argument(
+        "--verify-workers",
+        type=int,
+        required=False,
+        metavar="N",
+        help="Number of parallel workers for POV/patch verification (default: 4). "
+        "Priority: CLI > CRSBENCH_VERIFY_WORKERS env > config file.",
+    )
+
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug logging (logs all commands executed with their working directories)",
@@ -201,17 +222,17 @@ def parse_arguments() -> argparse.Namespace:
 
     Supports both subcommands and legacy flat arguments for backward compatibility:
     - crsbench run --experiment-config ...  (new style)
-    - crsbench validate <benchmark> ...      (new subcommand)
+    - crsbench verify <benchmark> ...         (POV verification)
     - crsbench --experiment-config ...       (legacy, equivalent to 'run')
 
     Returns:
         Parsed arguments with experiment configuration.
     """
     # Check for legacy invocation (no subcommand, starts with --)
-    # or validate/coverage subcommand
+    # or verify/coverage subcommand
     if len(sys.argv) > 1 and sys.argv[1] not in [
         "run",
-        "validate",
+        "verify",
         "coverage",
         "-h",
         "--help",
@@ -229,8 +250,8 @@ Examples:
   # Run CRS experiments
   %(prog)s run --experiment-config config.yaml --benchmarks bench1 --crses crs1
 
-  # Validate POVs against benchmark variants
-  %(prog)s validate benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
+  # Verify POVs against benchmark variants
+  %(prog)s verify benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
 
   # Legacy style (equivalent to 'run')
   %(prog)s --experiment-config config.yaml --benchmarks bench1 --crses crs1
@@ -253,10 +274,10 @@ Examples:
     _add_run_arguments(run_parser)
     run_parser.set_defaults(command="run")
 
-    # 'validate' subcommand - POV validation
-    from crsbench.validation.cli.validate_command import add_validate_subparser
+    # 'verify' subcommand - POV verification
+    from crsbench.evaluation.verification.cli.verify_command import add_verify_subparser
 
-    add_validate_subparser(subparsers)
+    add_verify_subparser(subparsers)
 
     # 'coverage' subcommand - coverage collection
     from crsbench.evaluation.coverage.cli.coverage_command import (
@@ -542,6 +563,171 @@ def generate_trial_matrix(
     return trials
 
 
+def build_variants_upfront(
+    trials: List[Trial],
+    config,
+    args: argparse.Namespace,
+) -> dict[str, BuildResult]:
+    """Build all required variants upfront before trial execution.
+
+    This function:
+    1. Collects all unique (benchmark, mode) combinations from trials
+    2. Creates build plans for each combination using MetaYamlAdapter
+    3. Deduplicates across benchmarks (same variant only built once)
+    4. Builds all variants in parallel using OSSFuzzBuilder
+
+    Args:
+        trials: List of Trial namedtuples
+        config: Experiment configuration
+        args: CLI arguments
+
+    Returns:
+        Dict mapping variant names to their build results
+    """
+    from crsbench.validation.meta_adapter import MetaYamlAdapter
+
+    log_section("Building Variants Upfront", width=60)
+
+    # Get oss-fuzz path
+    oss_fuzz_path = Path(
+        args.oss_fuzz_path or config.oss_fuzz_path or (Path.cwd() / "oss-fuzz")
+    ).resolve()
+
+    if not oss_fuzz_path.exists():
+        logger.error(f"oss-fuzz directory not found: {oss_fuzz_path}")
+        raise RuntimeError(f"oss-fuzz directory not found: {oss_fuzz_path}")
+
+    # Get worker count
+    build_workers = resolve_build_workers(
+        getattr(args, "build_workers", None),
+        config.build_workers,
+    )
+    logger.info(f"Using {build_workers} build workers")
+
+    # Check if coverage is enabled
+    coverage_enabled = config.coverage_enabled
+
+    # Collect unique (benchmark_path, mode) combinations
+    benchmark_modes: dict[tuple[Path, str], None] = {}
+    for trial in trials:
+        key = (trial.benchmark_harness.path, trial.mode)
+        benchmark_modes[key] = None
+
+    logger.info(f"Found {len(benchmark_modes)} unique (benchmark, mode) combinations")
+
+    # Create builder
+    builder = OSSFuzzBuilder(oss_fuzz_path, max_workers=build_workers)
+
+    # Collect all build configs
+    all_configs: list = []
+    seen_variants: set[str] = set()
+
+    for benchmark_path, mode in benchmark_modes:
+        # Load project.yaml for main_repo
+        project_yaml_path = benchmark_path / "project.yaml"
+        if not project_yaml_path.exists():
+            logger.warning(f"project.yaml not found: {project_yaml_path}, skipping")
+            continue
+
+        with project_yaml_path.open() as f:
+            project_data = yaml.safe_load(f)
+
+        main_repo = project_data.get("main_repo")
+        repo_name = project_data.get("repo_name")
+        language = project_data.get("language", "c")
+
+        if not main_repo:
+            logger.warning(f"main_repo not found in {project_yaml_path}, skipping")
+            continue
+
+        # Create adapter from meta.yaml
+        meta_yaml_path = benchmark_path / ".aixcc" / "meta.yaml"
+        if not meta_yaml_path.exists():
+            logger.warning(f"meta.yaml not found: {meta_yaml_path}, skipping")
+            continue
+
+        try:
+            adapter = MetaYamlAdapter.from_meta_yaml(
+                meta_yaml_path=meta_yaml_path,
+                benchmark_name=benchmark_path.name,
+                lang=language,
+                main_repo=main_repo,
+                benchmark_path=benchmark_path,
+                repo_name=repo_name,
+            )
+        except (FileNotFoundError, ValueError) as e:
+            logger.warning(f"Failed to load meta.yaml: {e}, skipping")
+            continue
+
+        # Determine mode and get commit info based on trial's mode (not adapter's default)
+        benchmark_mode = BenchmarkMode.DELTA if mode == "delta" else BenchmarkMode.FULL
+
+        if mode == "delta":
+            if not adapter.config.delta_mode:
+                logger.warning(
+                    f"Delta mode not configured for {benchmark_path}, skipping"
+                )
+                continue
+            base_commit = adapter.config.delta_mode.base_commit
+            ref_commit = adapter.config.delta_mode.ref_commit
+        else:
+            if not adapter.config.full_mode:
+                logger.warning(
+                    f"Full mode not configured for {benchmark_path}, skipping"
+                )
+                continue
+            base_commit = adapter.config.full_mode.base_commit
+            ref_commit = None
+
+        # Get CPV numbers from adapter
+        cpv_numbers = adapter.get_cpv_numbers()
+
+        # Create build plan
+        plan = builder.create_build_plan(
+            benchmark_name=benchmark_path.name,
+            benchmark_path=benchmark_path,
+            main_repo=main_repo,
+            mode=benchmark_mode,
+            base_commit=base_commit,
+            ref_commit=ref_commit,
+            cpv_numbers=cpv_numbers,
+            language=language,
+            repo_name=repo_name,
+            include_coverage=coverage_enabled,
+        )
+
+        # Add configs (deduplicate across benchmarks)
+        for cfg in plan.configs:
+            if cfg.variant_name not in seen_variants:
+                all_configs.append(cfg)
+                seen_variants.add(cfg.variant_name)
+
+    logger.info(f"Total unique variants to build: {len(all_configs)}")
+
+    # Build all variants
+    if not all_configs:
+        logger.warning("No variants to build")
+        return {}
+
+    results = builder.build_variants(all_configs)
+
+    # Report build results
+    successful = sum(1 for r in results.values() if r.success)
+    cached = sum(1 for r in results.values() if r.cached)
+    failed = sum(1 for r in results.values() if not r.success)
+
+    logger.info(
+        f"Build complete: {successful} succeeded ({cached} cached), {failed} failed"
+    )
+
+    if failed > 0:
+        for name, result in results.items():
+            if not result.success:
+                logger.error(f"  Failed: {name} - {result.error}")
+
+    return results
+
+
 def should_use_distributed_mode(
     args: argparse.Namespace, config, total_jobs: int
 ) -> bool:
@@ -653,6 +839,16 @@ def enhance_config_with_cli_args(
         enhanced["project_image_prefix"] = args.project_image_prefix
         logger.info(f"Using project image prefix from CLI: {args.project_image_prefix}")
 
+    # Build workers override
+    if hasattr(args, "build_workers") and args.build_workers is not None:
+        enhanced["build_workers"] = args.build_workers
+        logger.info(f"Using build_workers from CLI: {args.build_workers}")
+
+    # Verify workers override
+    if hasattr(args, "verify_workers") and args.verify_workers is not None:
+        enhanced["verify_workers"] = args.verify_workers
+        logger.info(f"Using verify_workers from CLI: {args.verify_workers}")
+
     return enhanced
 
 
@@ -684,6 +880,21 @@ def run_experiment_local(
     logger.info(f"Benchmark-harness pairs: {len(benchmark_harnesses)}")
     logger.info(f"Trials per combination: {config.trials}")
     logger.info("=" * 60)
+
+    # Build variants upfront
+    build_results = build_variants_upfront(trials, config, args)
+
+    # Check for critical build failures
+    failed_builds = [
+        name for name, result in build_results.items() if not result.success
+    ]
+    if failed_builds:
+        logger.warning(
+            f"{len(failed_builds)} variant builds failed. "
+            "Trials requiring these variants may fail."
+        )
+
+    log_section("Executing Trials", width=60)
 
     # Execute trials sequentially
     results = []
@@ -913,6 +1124,22 @@ def run_experiment_distributed(
     logger.info(f"Trials per combination: {config.trials}")
     logger.info("=" * 60)
 
+    # Build variants upfront (on coordinator machine)
+    # Workers will use the pre-built variants from oss-fuzz/build/out/
+    build_results = build_variants_upfront(trials, config, args)
+
+    # Check for critical build failures
+    failed_builds = [
+        name for name, result in build_results.items() if not result.success
+    ]
+    if failed_builds:
+        logger.warning(
+            f"{len(failed_builds)} variant builds failed. "
+            "Trials requiring these variants may fail."
+        )
+
+    log_section("Enqueuing Trial Jobs", width=60)
+
     # Enqueue jobs
     logger.info("\nEnqueuing jobs...")
 
@@ -1016,11 +1243,11 @@ def main() -> None:
     args = parse_arguments()
 
     # Dispatch to appropriate command handler
-    if args.command == "validate":
-        # Handle validate command
-        from crsbench.validation.cli.validate_command import run_validate
+    if args.command == "verify":
+        # Handle verify command
+        from crsbench.evaluation.verification.cli.verify_command import run_verify
 
-        sys.exit(run_validate(args))
+        sys.exit(run_verify(args))
 
     if args.command == "coverage":
         # Handle coverage command

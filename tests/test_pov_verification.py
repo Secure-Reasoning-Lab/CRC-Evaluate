@@ -1,42 +1,38 @@
-"""Tests for POV validation modules.
+"""Tests for POV verification modules.
 
 Tests cover:
 - VerdictResolver (FULL and DELTA mode verdict logic)
 - Deduplication strategies
-- Variant models
 - Verification models
 """
 
 import pytest
-from crsbench.validation.variant.models import (
-    BenchmarkMode,
-    BuildTag,
-    BuildVersion,
-)
-from crsbench.validation.verification.dedup import (
+from crsbench.builder.types import BenchmarkMode, VariantType
+from crsbench.evaluation.verification.dedup import (
     NoOpDedup,
     PatchBasedDedup,
     StatusBasedDedup,
     get_dedup_strategy,
 )
-from crsbench.validation.verification.models import (
+from crsbench.evaluation.verification.models import (
     VerificationRequest,
     VerificationResult,
     VerificationStatus,
 )
-from crsbench.validation.verification.verdict import VerdictResolver
+from crsbench.evaluation.verification.pov.verdict import VerdictResolver
 
 
-class TestBuildTag:
-    """Tests for BuildTag enum."""
+class TestVariantType:
+    """Tests for VariantType enum."""
 
-    def test_build_tag_values(self):
-        """Test BuildTag enum values."""
-        assert BuildTag.FULL_BASE.value == "fullbase"
-        assert BuildTag.DELTA_BASE.value == "deltabase"
-        assert BuildTag.DELTA_REF.value == "deltaref"
-        assert BuildTag.ALL_PATCHED.value == "allpatched"
-        assert BuildTag.CPV.value == "cpv"
+    def test_variant_type_values(self):
+        """Test VariantType enum values."""
+        assert VariantType.FULL_BASE.value == "fullbase"
+        assert VariantType.DELTA_BASE.value == "deltabase"
+        assert VariantType.DELTA_REF.value == "deltaref"
+        assert VariantType.ALL_PATCHED.value == "allpatched"
+        assert VariantType.CPV.value == "cpv"
+        assert VariantType.COVERAGE.value == "coverage"
 
 
 class TestBenchmarkMode:
@@ -46,38 +42,6 @@ class TestBenchmarkMode:
         """Test BenchmarkMode enum values."""
         assert BenchmarkMode.FULL.value == "full"
         assert BenchmarkMode.DELTA.value == "delta"
-
-
-class TestBuildVersion:
-    """Tests for BuildVersion dataclass."""
-
-    def test_build_version_creation(self):
-        """Test BuildVersion creation."""
-        version = BuildVersion(
-            benchmark_name="test-bench",
-            lang="c",
-            mode=BenchmarkMode.DELTA,
-            build_tag=BuildTag.DELTA_REF,
-            commit="abc123",
-            variant_project_name="test-bench-deltaref",
-        )
-        assert version.benchmark_name == "test-bench"
-        assert version.lang == "c"
-        assert version.project_path == "test-bench-deltaref"
-
-    def test_build_version_cpv(self):
-        """Test BuildVersion with CPV."""
-        version = BuildVersion(
-            benchmark_name="test-bench",
-            lang="c",
-            mode=BenchmarkMode.DELTA,
-            build_tag=BuildTag.CPV,
-            commit="abc123",
-            variant_project_name="test-bench-cpv0",
-            cpv_num=0,
-        )
-        assert version.cpv_num == 0
-        assert str(version) == "test-bench:cpv0"
 
 
 class TestVerificationModels:
@@ -123,7 +87,7 @@ class TestVerdictResolverFullMode:
         """Base doesn't crash -> NOT_VULNERABLE."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
-            crash_results={BuildTag.FULL_BASE: False},
+            crash_results={VariantType.FULL_BASE: False},
             cpv_crash_map={},
             benchmark_name="test",
         )
@@ -134,8 +98,8 @@ class TestVerdictResolverFullMode:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
             crash_results={
-                BuildTag.FULL_BASE: True,
-                BuildTag.ALL_PATCHED: True,
+                VariantType.FULL_BASE: True,
+                VariantType.ALL_PATCHED: True,
             },
             cpv_crash_map={},
             benchmark_name="test",
@@ -147,8 +111,8 @@ class TestVerdictResolverFullMode:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
             crash_results={
-                BuildTag.FULL_BASE: True,
-                BuildTag.ALL_PATCHED: False,
+                VariantType.FULL_BASE: True,
+                VariantType.ALL_PATCHED: False,
             },
             cpv_crash_map={0: True},
             benchmark_name="test",
@@ -161,8 +125,8 @@ class TestVerdictResolverFullMode:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
             crash_results={
-                BuildTag.FULL_BASE: True,
-                BuildTag.ALL_PATCHED: False,
+                VariantType.FULL_BASE: True,
+                VariantType.ALL_PATCHED: False,
             },
             cpv_crash_map={0: True, 1: False, 2: True},
             benchmark_name="test",
@@ -175,8 +139,8 @@ class TestVerdictResolverFullMode:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
             crash_results={
-                BuildTag.FULL_BASE: True,
-                BuildTag.ALL_PATCHED: False,
+                VariantType.FULL_BASE: True,
+                VariantType.ALL_PATCHED: False,
             },
             cpv_crash_map={0: False, 1: False},
             benchmark_name="test",
@@ -191,7 +155,7 @@ class TestVerdictResolverDeltaMode:
         """Base crashes in delta mode -> ZERODAY (pre-existing bug)."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
-            crash_results={BuildTag.DELTA_BASE: True},
+            crash_results={VariantType.DELTA_BASE: True},
             cpv_crash_map={},
             benchmark_name="test",
         )
@@ -202,8 +166,8 @@ class TestVerdictResolverDeltaMode:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                BuildTag.DELTA_BASE: False,
-                BuildTag.DELTA_REF: False,
+                VariantType.DELTA_BASE: False,
+                VariantType.DELTA_REF: False,
             },
             cpv_crash_map={},
             benchmark_name="test",
@@ -215,9 +179,9 @@ class TestVerdictResolverDeltaMode:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                BuildTag.DELTA_BASE: False,
-                BuildTag.DELTA_REF: True,
-                BuildTag.ALL_PATCHED: True,
+                VariantType.DELTA_BASE: False,
+                VariantType.DELTA_REF: True,
+                VariantType.ALL_PATCHED: True,
             },
             cpv_crash_map={},
             benchmark_name="test",
@@ -229,9 +193,9 @@ class TestVerdictResolverDeltaMode:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                BuildTag.DELTA_BASE: False,
-                BuildTag.DELTA_REF: True,
-                BuildTag.ALL_PATCHED: False,
+                VariantType.DELTA_BASE: False,
+                VariantType.DELTA_REF: True,
+                VariantType.ALL_PATCHED: False,
             },
             cpv_crash_map={0: True, 1: False},
             benchmark_name="test",
@@ -244,9 +208,9 @@ class TestVerdictResolverDeltaMode:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                BuildTag.DELTA_BASE: False,
-                BuildTag.DELTA_REF: True,
-                BuildTag.ALL_PATCHED: False,
+                VariantType.DELTA_BASE: False,
+                VariantType.DELTA_REF: True,
+                VariantType.ALL_PATCHED: False,
             },
             cpv_crash_map={0: False, 1: False},
             benchmark_name="test",
@@ -365,7 +329,7 @@ class TestVerdictResolverEdgeCases:
         """Missing ALL_PATCHED should default to True (crashed)."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
-            crash_results={BuildTag.FULL_BASE: True},  # No ALL_PATCHED
+            crash_results={VariantType.FULL_BASE: True},  # No ALL_PATCHED
             cpv_crash_map={0: True},
             benchmark_name="test",
         )
@@ -377,8 +341,8 @@ class TestVerdictResolverEdgeCases:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
             crash_results={
-                BuildTag.FULL_BASE: True,
-                BuildTag.ALL_PATCHED: False,
+                VariantType.FULL_BASE: True,
+                VariantType.ALL_PATCHED: False,
             },
             cpv_crash_map={},  # Empty
             benchmark_name="test",
@@ -389,7 +353,7 @@ class TestVerdictResolverEdgeCases:
         """POV ID should be preserved in result."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
-            crash_results={BuildTag.FULL_BASE: False},
+            crash_results={VariantType.FULL_BASE: False},
             cpv_crash_map={},
             benchmark_name="test",
             pov_id="test_pov_123",
@@ -400,84 +364,92 @@ class TestVerdictResolverEdgeCases:
 class TestVerificationEngineForceRebuild:
     """Tests for VerificationEngine force_rebuild behavior."""
 
-    def test_get_or_build_versions_skips_cache_with_force_rebuild(self):
+    def test_get_or_build_results_skips_cache_with_force_rebuild(self):
         """force_rebuild=True should skip in-memory cache."""
         from unittest.mock import MagicMock, patch
 
         with patch(
-            "crsbench.validation.verification.engine.VerificationEngine.__init__",
+            "crsbench.evaluation.verification.pov.engine.VerificationEngine.__init__",
             return_value=None,
         ):
-            from crsbench.validation.verification.engine import VerificationEngine
+            from crsbench.evaluation.verification.pov.engine import VerificationEngine
 
             engine = VerificationEngine.__new__(VerificationEngine)
-            engine._built_versions = {}
+            engine._built_results = {}
             engine.builder = MagicMock()
-            engine.builder.build_all_variants.return_value = ["version1", "version2"]
+            engine.builder.create_build_plan.return_value = MagicMock()
+            engine.builder.execute_plan.return_value = {"variant1": MagicMock()}
 
             adapter = MagicMock()
             adapter.benchmark_name = "test-benchmark"
+            adapter.get_mode.return_value.value = "delta"
 
             # First call - should build
-            result1 = engine._get_or_build_versions(adapter, force_rebuild=False)
-            assert engine.builder.build_all_variants.call_count == 1
+            engine._get_or_build_results(adapter, force_rebuild=False)
+            assert engine.builder.execute_plan.call_count == 1
 
             # Second call without force_rebuild - should use cache
-            result2 = engine._get_or_build_versions(adapter, force_rebuild=False)
-            assert engine.builder.build_all_variants.call_count == 1  # No new call
+            engine._get_or_build_results(adapter, force_rebuild=False)
+            assert engine.builder.execute_plan.call_count == 1  # No new call
 
             # Third call with force_rebuild - should rebuild
-            result3 = engine._get_or_build_versions(adapter, force_rebuild=True)
-            assert engine.builder.build_all_variants.call_count == 2  # New call
+            engine._get_or_build_results(adapter, force_rebuild=True)
+            assert engine.builder.execute_plan.call_count == 2  # New call
 
-    def test_get_or_build_versions_passes_force_rebuild_to_builder(self):
-        """force_rebuild should be passed to builder.build_all_variants."""
+    def test_get_or_build_results_passes_force_rebuild_to_builder(self):
+        """force_rebuild should be passed to execute_plan."""
         from unittest.mock import MagicMock, patch
 
         with patch(
-            "crsbench.validation.verification.engine.VerificationEngine.__init__",
+            "crsbench.evaluation.verification.pov.engine.VerificationEngine.__init__",
             return_value=None,
         ):
-            from crsbench.validation.verification.engine import VerificationEngine
+            from crsbench.evaluation.verification.pov.engine import VerificationEngine
 
             engine = VerificationEngine.__new__(VerificationEngine)
-            engine._built_versions = {}
+            engine._built_results = {}
             engine.builder = MagicMock()
-            engine.builder.build_all_variants.return_value = []
+            mock_plan = MagicMock()
+            engine.builder.create_build_plan.return_value = mock_plan
+            engine.builder.execute_plan.return_value = {}
 
             adapter = MagicMock()
             adapter.benchmark_name = "test-benchmark"
+            adapter.get_mode.return_value.value = "delta"
 
             # Call with force_rebuild=True
-            engine._get_or_build_versions(adapter, force_rebuild=True)
+            engine._get_or_build_results(adapter, force_rebuild=True)
 
-            # Verify force_rebuild=True was passed to builder
-            engine.builder.build_all_variants.assert_called_once_with(
-                adapter, force_rebuild=True
+            # Verify force_rebuild=True was passed to execute_plan
+            engine.builder.execute_plan.assert_called_once_with(
+                mock_plan, force_rebuild=True
             )
 
-    def test_get_or_build_versions_default_no_force_rebuild(self):
+    def test_get_or_build_results_default_no_force_rebuild(self):
         """Default should be force_rebuild=False."""
         from unittest.mock import MagicMock, patch
 
         with patch(
-            "crsbench.validation.verification.engine.VerificationEngine.__init__",
+            "crsbench.evaluation.verification.pov.engine.VerificationEngine.__init__",
             return_value=None,
         ):
-            from crsbench.validation.verification.engine import VerificationEngine
+            from crsbench.evaluation.verification.pov.engine import VerificationEngine
 
             engine = VerificationEngine.__new__(VerificationEngine)
-            engine._built_versions = {}
+            engine._built_results = {}
             engine.builder = MagicMock()
-            engine.builder.build_all_variants.return_value = []
+            mock_plan = MagicMock()
+            engine.builder.create_build_plan.return_value = mock_plan
+            engine.builder.execute_plan.return_value = {}
 
             adapter = MagicMock()
             adapter.benchmark_name = "test-benchmark"
+            adapter.get_mode.return_value.value = "delta"
 
             # Call without force_rebuild (should default to False)
-            engine._get_or_build_versions(adapter)
+            engine._get_or_build_results(adapter)
 
-            # Verify force_rebuild=False was passed to builder
-            engine.builder.build_all_variants.assert_called_once_with(
-                adapter, force_rebuild=False
+            # Verify force_rebuild=False was passed to execute_plan
+            engine.builder.execute_plan.assert_called_once_with(
+                mock_plan, force_rebuild=False
             )

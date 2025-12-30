@@ -246,6 +246,49 @@ Shared utilities for all components:
 - Logging and error handling
 - Common data structures
 
+### **Builder Module** (`crsbench.builder`)
+Unified OSS-Fuzz variant building:
+- Parallel variant builds with configurable workers
+- Support for all variant types (base, ref, allpatched, cpv, coverage)
+- Build caching and staleness detection
+- Patch application for CPV variants
+
+### **Evaluation Module** (`crsbench.evaluation`)
+Runtime evaluation and verification:
+- **Verification**: POV verification against benchmark variants
+- **Coverage**: Code coverage collection and analysis
+- **CRS Execution**: Run CRS implementations against benchmarks
+- Parallel verification with configurable workers
+
+## CLI Interface
+
+CRSBench provides a unified CLI for all operations:
+
+```bash
+# Run CRS experiments
+crsbench run --experiment-config config.yaml --benchmarks bench1 --crses crs1
+
+# Verify POVs against benchmark variants
+crsbench verify benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
+
+# Collect code coverage
+crsbench coverage benchmarks/sanity-mock-c-delta-01 --corpus-dir ./corpus/
+```
+
+### Verify Command
+Verify POVs against benchmark variants to determine which CPVs are triggered:
+
+```bash
+# Verify all POVs in a benchmark
+crsbench verify benchmarks/example-project
+
+# Verify with specific harness
+crsbench verify benchmarks/example-project --harness fuzz_parser
+
+# Parallel verification with custom worker counts
+crsbench verify benchmarks/example-project --build-workers 8 --verify-workers 16
+```
+
 ## AI Infrastructure
 
 CRSBench includes comprehensive LLM integration:
@@ -278,6 +321,9 @@ CRSBench includes comprehensive LLM integration:
 - [x] Comprehensive validation module
 - [x] LLM infrastructure setup
 - [x] Documentation framework
+- [x] CLI interface (`crsbench run/verify/coverage`)
+- [x] Builder module with parallel builds
+- [x] POV verification with parallel execution
 
 ### **In Progress**
 - [ ] Migration agent implementation
@@ -286,7 +332,6 @@ CRSBench includes comprehensive LLM integration:
 - [ ] Integration testing
 
 ### **Planned**
-- [ ] CLI interface
 - [ ] Web dashboard
 - [ ] Performance benchmarking
 - [ ] Community benchmark submissions

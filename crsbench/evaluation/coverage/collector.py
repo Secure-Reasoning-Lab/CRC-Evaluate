@@ -185,7 +185,7 @@ class CoverageCollector:
             try:
                 # Collect coverage for this single file
                 cov_data = self.strategy.collect_single_coverage(
-                    self.harness_name, corpus_file
+                    self.harness_name, corpus_file, output_dir=self.output_dir
                 )
 
                 # Extract line set for this corpus

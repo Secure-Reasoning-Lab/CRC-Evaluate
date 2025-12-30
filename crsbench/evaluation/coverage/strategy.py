@@ -13,6 +13,7 @@ Usage:
         summary_path = strategy.collect_batch_coverage(harness_path, corpus_dir)
 """
 
+import hashlib
 import json
 import shutil
 import tempfile
@@ -21,6 +22,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
 
+from crsbench.builder.infrastructure import OSSFuzzInfrastructure
 from crsbench.evaluation.process_utils import run_with_graceful_timeout
 from crsbench.utils.logger import get_logger
 
@@ -44,18 +46,34 @@ class CoverageStrategy(ABC):
         language: Programming language ("c", "c++", "jvm", etc.).
     """
 
-    def __init__(self, oss_fuzz_path: Path, project_name: str, language: str = "c"):
+    def __init__(
+        self,
+        oss_fuzz_path: Path,
+        project_name: str,
+        language: str = "c",
+        *,
+        work_dir: Optional[Path] = None,
+    ):
         """Initialize coverage strategy.
 
         Args:
             oss_fuzz_path: Path to OSS-Fuzz repository root.
             project_name: Name of the project.
             language: Programming language (default: "c").
+            work_dir: Working directory for coverage build/dumps/reports.
+                If None, uses oss_fuzz_path/build/out/project_name.
+                Set this for per-trial isolation.
         """
         self.oss_fuzz_path = Path(oss_fuzz_path).resolve()
         self.project_name = project_name
         self.language = language.lower()
         self._helper_path = self.oss_fuzz_path / "infra" / "helper.py"
+
+        # Work directory for coverage output (build, dumps, reports)
+        if work_dir:
+            self._work_dir = Path(work_dir).resolve()
+        else:
+            self._work_dir = self.oss_fuzz_path / "build" / "out" / project_name
 
         # Validate OSS-Fuzz path
         if not self._helper_path.exists():
@@ -63,6 +81,9 @@ class CoverageStrategy(ABC):
                 f"OSS-Fuzz helper.py not found at {self._helper_path}. "
                 f"Please ensure oss_fuzz_path points to a valid OSS-Fuzz repository."
             )
+
+        # Infrastructure for coverage collection
+        self._infra = OSSFuzzInfrastructure(self.oss_fuzz_path)
 
     @abstractmethod
     def collect_batch_coverage(self, harness_path: Path, corpus_dir: Path) -> Path:
@@ -115,7 +136,13 @@ class CoverageStrategy(ABC):
         return None
 
     @abstractmethod
-    def collect_single_coverage(self, harness_name: str, corpus_file: Path) -> dict:
+    def collect_single_coverage(
+        self,
+        harness_name: str,
+        corpus_file: Path,
+        *,
+        output_dir: Optional[Path] = None,
+    ) -> dict:
         """Collect coverage for a single corpus file.
 
         Runs coverage collection with a temp directory containing just this file.
@@ -125,6 +152,7 @@ class CoverageStrategy(ABC):
         Args:
             harness_name: Name of the fuzz target.
             corpus_file: Path to the single corpus file to collect coverage for.
+            output_dir: Directory to save detailed coverage files. If None, uses temp.
 
         Returns:
             Coverage data in format: {func_name: {"src": str, "lines": [int]}, ...}
@@ -169,15 +197,23 @@ class LLVMCovLineStrategy(CoverageStrategy):
     The coverage report is generated as summary.json in the output directory.
     """
 
-    def __init__(self, oss_fuzz_path: Path, project_name: str, language: str = "c"):
+    def __init__(
+        self,
+        oss_fuzz_path: Path,
+        project_name: str,
+        language: str = "c",
+        *,
+        work_dir: Optional[Path] = None,
+    ):
         """Initialize LLVM coverage strategy.
 
         Args:
             oss_fuzz_path: Path to OSS-Fuzz repository root.
             project_name: Name of the project.
             language: Programming language (default: "c").
+            work_dir: Working directory for coverage output. If None, uses default.
         """
-        super().__init__(oss_fuzz_path, project_name, language)
+        super().__init__(oss_fuzz_path, project_name, language, work_dir=work_dir)
         self._coverage_output_dir: Optional[Path] = None
 
     def build_with_coverage(self) -> bool:
@@ -419,15 +455,25 @@ class LLVMCovLineStrategy(CoverageStrategy):
         logger.info(f"Detailed coverage exported to: {detailed_json}")
         return detailed_json
 
-    def collect_single_coverage(self, harness_name: str, corpus_file: Path) -> dict:
-        """Collect coverage for a single corpus file using helper.py.
+    def collect_single_coverage(
+        self,
+        harness_name: str,
+        corpus_file: Path,
+        *,
+        output_dir: Optional[Path] = None,
+    ) -> dict:
+        """Collect coverage for a single corpus file.
 
-        Creates a temp directory with just this file, runs helper.py coverage,
-        then parses the resulting detailed coverage data.
+        Uses OSSFuzzInfrastructure.run_coverage() with --coverage-output-dir
+        to output coverage results to a unique directory per corpus file.
+        This allows using shared pre-built coverage binaries while maintaining
+        per-corpus isolation for parallel execution.
 
         Args:
             harness_name: Name of the fuzz target.
             corpus_file: Path to the single corpus file.
+            output_dir: Base directory for coverage output. If None, uses work_dir.
+                        Actual output goes to: output_dir/dumps/<hash>/
 
         Returns:
             Coverage data: {func_name: {"src": str, "lines": [int]}, ...}
@@ -437,30 +483,352 @@ class LLVMCovLineStrategy(CoverageStrategy):
             logger.warning(f"Corpus file not found: {corpus_file}")
             return {}
 
-        # Create temp dir with single corpus file
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_dir_path = Path(tmp_dir)
-            tmp_corpus = tmp_dir_path / corpus_file.name
-            shutil.copy(corpus_file, tmp_corpus)
+        # Use output_dir if provided, otherwise use work_dir
+        # output_dir is typically trial-N/coverage/
+        base_output = output_dir if output_dir else self._work_dir
 
-            try:
-                # Run helper.py coverage with temp dir
-                self.collect_batch_coverage(
-                    harness_path=Path(harness_name),
-                    corpus_dir=tmp_dir_path,
+        # Create unique output directory for this corpus file
+        # Structure: trial-N/coverage/dumps/<hash>/
+        corpus_hash = self._compute_corpus_hash(corpus_file)
+        corpus_output_dir = base_output / "dumps" / corpus_hash
+
+        try:
+            # Create temp directory with single corpus file
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_corpus = Path(tmp_dir) / corpus_file.name
+                shutil.copy(corpus_file, tmp_corpus)
+
+                # Run coverage using infrastructure
+                success, cov_output_dir = self._infra.run_coverage(
+                    project_name=self.project_name,
+                    harness=harness_name,
+                    corpus_dir=Path(tmp_dir),
+                    output_dir=corpus_output_dir,
+                    timeout=300,  # 5 minutes per corpus file
                 )
 
-                # Get detailed coverage (line-level)
-                detailed_path = self.export_detailed_coverage(harness_name)
-                if detailed_path and detailed_path.exists():
-                    return self._parse_llvm_detailed_coverage(detailed_path)
+                if not success:
+                    logger.warning(f"Coverage failed for {corpus_file.name}")
+                    return {}
 
-            except CoverageStrategyError as e:
-                logger.warning(f"Failed to collect single coverage: {e}")
-            except Exception as e:
-                logger.error(f"Unexpected error in single coverage: {e}")
+            # Parse LLVM coverage from .covreport (more efficient than summary.json)
+            # .covreport has line-level data while summary.json only has aggregates
+            covreport_dir = cov_output_dir / "textcov_reports"
+            if not covreport_dir.exists():
+                logger.warning(f"Textcov reports not found: {covreport_dir}")
+                return {}
 
-        return {}
+            # Find the .covreport file (should be one per harness)
+            covreport_files = list(covreport_dir.glob("*.covreport"))
+            if not covreport_files:
+                logger.warning(f"No .covreport files in {covreport_dir}")
+                return {}
+
+            return self._parse_covreport(covreport_files[0])
+
+        except Exception as e:
+            logger.error(f"Failed to collect single coverage: {e}")
+            return {}
+
+    def _compute_corpus_hash(self, corpus_file: Path) -> str:
+        """Compute hash of corpus file for unique directory naming."""
+        sha256 = hashlib.sha256()
+        with corpus_file.open("rb") as f:
+            while chunk := f.read(8192):
+                sha256.update(chunk)
+        return sha256.hexdigest()[:12]
+
+    def _parse_covreport(self, covreport_path: Path) -> dict:
+        """Parse llvm-cov show text output (.covreport) for line-level coverage.
+
+        The .covreport format is:
+            function_name:
+                <line>|<exec_count>|<code>
+            ...
+
+        Lines with exec_count > 0 are covered.
+
+        Args:
+            covreport_path: Path to the .covreport file.
+
+        Returns:
+            Coverage data: {func_name: {"src": str, "lines": [int]}, ...}
+        """
+        result: dict = {}
+
+        try:
+            content = covreport_path.read_text()
+        except Exception as e:
+            logger.warning(f"Failed to read covreport: {e}")
+            return {}
+
+        current_func = None
+        current_src = ""
+        covered_lines: list[int] = []
+
+        for line in content.split("\n"):
+            # Check for function header (ends with :)
+            stripped = line.strip()
+            if stripped and stripped.endswith(":") and "|" not in stripped:
+                # Save previous function if exists
+                if current_func and covered_lines:
+                    result[current_func] = {
+                        "src": current_src,
+                        "lines": sorted(set(covered_lines)),
+                    }
+
+                current_func = stripped[:-1]  # Remove trailing :
+                current_src = ""
+                covered_lines = []
+                continue
+
+            # Parse line coverage (e.g., "   14|      1|void func...")
+            if "|" in line and current_func:
+                parts = line.split("|")
+                if len(parts) >= 2:
+                    try:
+                        line_num_str = parts[0].strip()
+                        count_str = parts[1].strip()
+
+                        # Skip branch/separator lines
+                        if not line_num_str or line_num_str == "--":
+                            continue
+
+                        line_num = int(line_num_str)
+                        count = int(count_str) if count_str else 0
+
+                        if count > 0:
+                            covered_lines.append(line_num)
+
+                        # Extract source file from first covered line if not set
+                        if not current_src and len(parts) >= 3:
+                            # The source is typically in the path passed to llvm-cov
+                            current_src = f"function:{current_func}"
+                    except (ValueError, IndexError):
+                        continue
+
+        # Save last function
+        if current_func and covered_lines:
+            result[current_func] = {
+                "src": current_src,
+                "lines": sorted(set(covered_lines)),
+            }
+
+        return result
+
+    def _run_fuzz_target_direct(
+        self,
+        harness_name: str,
+        corpus_file: Path,
+        profraw_output: Path,
+    ) -> bool:
+        """Run fuzz target directly via Docker to generate profraw.
+
+        Args:
+            harness_name: Name of the fuzz target.
+            corpus_file: Path to the corpus file to run.
+            profraw_output: Path where profraw file should be written.
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        # Build output directory (where coverage binary lives)
+        build_out = self.oss_fuzz_path / "build" / "out" / self.project_name
+
+        # Docker image name
+        image_name = f"gcr.io/oss-fuzz/{self.project_name}"
+
+        # Ensure profraw output directory exists
+        profraw_output.parent.mkdir(parents=True, exist_ok=True)
+
+        # Docker command to run fuzz target with coverage
+        # Mount: build output, corpus file, and profraw output directory
+        cmd = [
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{build_out}:/out:ro",
+            "-v",
+            f"{corpus_file.parent}:/corpus:ro",
+            "-v",
+            f"{profraw_output.parent}:/profraw",
+            "-e",
+            f"LLVM_PROFILE_FILE=/profraw/{profraw_output.name}",
+            image_name,
+            f"/out/{harness_name}",
+            f"/corpus/{corpus_file.name}",
+        ]
+
+        logger.debug(f"Running fuzz target: {' '.join(cmd)}")
+
+        stdout, stderr, returncode, timed_out = run_with_graceful_timeout(
+            cmd,
+            timeout=60,  # 1 minute per corpus file
+            grace_period=10,
+        )
+
+        if timed_out:
+            logger.warning(f"Fuzz target timed out for {corpus_file.name}")
+            return False
+
+        # Return code from fuzzer can be non-zero even on success
+        # Check if profraw was generated
+        if profraw_output.exists():
+            logger.debug(f"Generated profraw: {profraw_output}")
+            return True
+
+        logger.warning(
+            f"Fuzz target did not generate profraw. "
+            f"returncode={returncode}, stderr={stderr[:500]}"
+        )
+        return False
+
+    def _merge_profdata(self, profraw_file: Path, profdata_output: Path) -> bool:
+        """Merge profraw file(s) into profdata.
+
+        Args:
+            profraw_file: Path to profraw file (or glob pattern).
+            profdata_output: Path for merged profdata output.
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        cmd = [
+            "llvm-profdata",
+            "merge",
+            "-sparse",
+            str(profraw_file),
+            "-o",
+            str(profdata_output),
+        ]
+
+        logger.debug(f"Merging profdata: {' '.join(cmd)}")
+
+        stdout, stderr, returncode, timed_out = run_with_graceful_timeout(
+            cmd,
+            timeout=60,
+            grace_period=10,
+        )
+
+        if timed_out or returncode != 0:
+            logger.warning(
+                f"llvm-profdata merge failed. "
+                f"returncode={returncode}, stderr={stderr[:500]}"
+            )
+            return False
+
+        if profdata_output.exists():
+            logger.debug(f"Generated profdata: {profdata_output}")
+            return True
+
+        return False
+
+    def _export_coverage_direct(
+        self,
+        harness_name: str,
+        profdata_file: Path,
+        *,
+        output_dir: Optional[Path] = None,
+    ) -> dict:
+        """Export coverage data using llvm-cov with custom profdata location.
+
+        Args:
+            harness_name: Name of the fuzz target.
+            profdata_file: Path to merged profdata file.
+            output_dir: Directory for output files.
+
+        Returns:
+            Coverage data: {func_name: {"src": str, "lines": [int]}, ...}
+        """
+        # Build output directory (where coverage binary lives)
+        build_out = self.oss_fuzz_path / "build" / "out" / self.project_name
+        target_binary = build_out / harness_name
+
+        if not target_binary.exists():
+            logger.warning(f"Fuzz target binary not found: {target_binary}")
+            return {}
+
+        if not profdata_file.exists():
+            logger.warning(f"Profdata file not found: {profdata_file}")
+            return {}
+
+        # Build llvm-cov export command
+        cmd = [
+            "llvm-cov",
+            "export",
+            "-instr-profile",
+            str(profdata_file),
+            str(target_binary),
+            f"-path-equivalence=/,{build_out}",
+            "-ignore-filename-regex=.*src/libfuzzer/.*",
+        ]
+
+        logger.debug(f"Exporting coverage: {' '.join(cmd)}")
+
+        stdout, stderr, returncode, timed_out = run_with_graceful_timeout(
+            cmd,
+            timeout=120,
+            grace_period=30,
+        )
+
+        if timed_out or returncode != 0:
+            logger.warning(
+                f"llvm-cov export failed. "
+                f"returncode={returncode}, stderr={stderr[:500]}"
+            )
+            return {}
+
+        # Save detailed coverage JSON if output_dir provided
+        if output_dir:
+            detailed_json = output_dir / f"coverage_{harness_name}_detailed.json"
+            detailed_json.write_text(stdout)
+            logger.info(f"Detailed coverage exported to: {detailed_json}")
+
+        # Parse and return coverage data
+        try:
+            data = json.loads(stdout)
+            return self._parse_llvm_detailed_coverage_data(data)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse llvm-cov output: {e}")
+            return {}
+
+    def _parse_llvm_detailed_coverage_data(self, data: dict) -> dict:
+        """Parse LLVM cov export data (already loaded) to unified format.
+
+        Args:
+            data: Parsed llvm-cov export JSON data.
+
+        Returns:
+            Coverage data: {func_name: {"src": str, "lines": [int]}, ...}
+        """
+        result: dict = {}
+
+        if "data" in data and data["data"]:
+            for entry in data["data"]:
+                functions = entry.get("functions", [])
+                for func in functions:
+                    func_name = func.get("name", "")
+                    if not func_name:
+                        continue
+
+                    filenames = func.get("filenames", [])
+                    filename = filenames[0] if filenames else ""
+
+                    lines: list[int] = []
+                    for region in func.get("regions", []):
+                        if len(region) >= 5 and region[4] > 0:
+                            start_line = region[0]
+                            end_line = region[2]
+                            lines.extend(range(start_line, end_line + 1))
+
+                    if lines:
+                        result[func_name] = {
+                            "src": filename,
+                            "lines": sorted(set(lines)),
+                        }
+
+        return result
 
     def _parse_llvm_detailed_coverage(self, detailed_path: Path) -> dict:
         """Parse LLVM cov export JSON to unified format.
@@ -523,15 +891,23 @@ class JaCoCoLineStrategy(CoverageStrategy):
     The coverage is converted to llvm-cov format using jacoco_report_converter.py.
     """
 
-    def __init__(self, oss_fuzz_path: Path, project_name: str, language: str = "jvm"):
+    def __init__(
+        self,
+        oss_fuzz_path: Path,
+        project_name: str,
+        language: str = "jvm",
+        *,
+        work_dir: Optional[Path] = None,
+    ):
         """Initialize JaCoCo coverage strategy.
 
         Args:
             oss_fuzz_path: Path to OSS-Fuzz repository root.
             project_name: Name of the project.
             language: Programming language (default: "jvm").
+            work_dir: Working directory for coverage output. If None, uses default.
         """
-        super().__init__(oss_fuzz_path, project_name, language)
+        super().__init__(oss_fuzz_path, project_name, language, work_dir=work_dir)
         self._coverage_output_dir: Optional[Path] = None
 
     def build_with_coverage(self) -> bool:
@@ -788,15 +1164,24 @@ class JaCoCoLineStrategy(CoverageStrategy):
         logger.debug(f"Parsed JaCoCo XML: {len(result)} source files with coverage")
         return result
 
-    def collect_single_coverage(self, harness_name: str, corpus_file: Path) -> dict:
-        """Collect coverage for a single corpus file using helper.py.
+    def collect_single_coverage(
+        self,
+        harness_name: str,
+        corpus_file: Path,
+        *,
+        output_dir: Optional[Path] = None,
+    ) -> dict:
+        """Collect coverage for a single corpus file.
 
-        Creates a temp directory with just this file, runs helper.py coverage,
-        then parses the resulting JaCoCo XML data.
+        Uses OSSFuzzInfrastructure.run_coverage() with --coverage-output-dir
+        to output coverage results to a unique directory per corpus file.
+        Parses JaCoCo XML for detailed line coverage.
 
         Args:
             harness_name: Name of the fuzz target.
             corpus_file: Path to the single corpus file.
+            output_dir: Base directory for coverage output. If None, uses work_dir.
+                        Actual output goes to: output_dir/dumps/<hash>/
 
         Returns:
             Coverage data: {source_path: {"src": str, "lines": [int]}, ...}
@@ -806,38 +1191,59 @@ class JaCoCoLineStrategy(CoverageStrategy):
             logger.warning(f"Corpus file not found: {corpus_file}")
             return {}
 
-        # Create temp dir with single corpus file
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_dir_path = Path(tmp_dir)
-            tmp_corpus = tmp_dir_path / corpus_file.name
-            shutil.copy(corpus_file, tmp_corpus)
+        # Use output_dir if provided, otherwise use work_dir
+        base_output = output_dir if output_dir else self._work_dir
 
-            try:
-                # Run helper.py coverage with temp dir
-                self.collect_batch_coverage(
-                    harness_path=Path(harness_name),
-                    corpus_dir=tmp_dir_path,
+        # Create unique output directory for this corpus file
+        corpus_hash = self._compute_corpus_hash(corpus_file)
+        corpus_output_dir = base_output / "dumps" / corpus_hash
+
+        try:
+            # Create temp directory with single corpus file
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_corpus = Path(tmp_dir) / corpus_file.name
+                shutil.copy(corpus_file, tmp_corpus)
+
+                # Run coverage using infrastructure
+                success, cov_output_dir = self._infra.run_coverage(
+                    project_name=self.project_name,
+                    harness=harness_name,
+                    corpus_dir=Path(tmp_dir),
+                    output_dir=corpus_output_dir,
+                    timeout=300,
                 )
 
-                # Get detailed coverage from JaCoCo XML
-                detailed_path = self.export_detailed_coverage(harness_name)
-                if detailed_path and detailed_path.exists():
-                    # The detailed JSON already contains parsed JaCoCo data
-                    with detailed_path.open() as f:
-                        return json.load(f)
+                if not success:
+                    logger.warning(f"Coverage failed for {corpus_file.name}")
+                    return {}
 
-            except CoverageStrategyError as e:
-                logger.warning(f"Failed to collect single coverage: {e}")
-            except Exception as e:
-                logger.error(f"Unexpected error in single coverage: {e}")
+            # Parse JaCoCo coverage from jacoco.xml
+            jacoco_xml_path = cov_output_dir / "report" / "linux" / "jacoco.xml"
+            if not jacoco_xml_path.exists():
+                logger.warning(f"JaCoCo XML not found: {jacoco_xml_path}")
+                return {}
 
-        return {}
+            return self._parse_jacoco_xml(jacoco_xml_path)
+
+        except Exception as e:
+            logger.error(f"Failed to collect single coverage: {e}")
+            return {}
+
+    def _compute_corpus_hash(self, corpus_file: Path) -> str:
+        """Compute hash of corpus file for unique directory naming."""
+        sha256 = hashlib.sha256()
+        with corpus_file.open("rb") as f:
+            while chunk := f.read(8192):
+                sha256.update(chunk)
+        return sha256.hexdigest()[:12]
 
 
 def create_coverage_strategy(
     oss_fuzz_path: Path,
     project_name: str,
     language: str,
+    *,
+    work_dir: Optional[Path] = None,
 ) -> CoverageStrategy:
     """Factory function to create appropriate coverage strategy.
 
@@ -845,6 +1251,9 @@ def create_coverage_strategy(
         oss_fuzz_path: Path to OSS-Fuzz repository root.
         project_name: Name of the project.
         language: Programming language (e.g., "c", "c++", "jvm", "java").
+        work_dir: Working directory for coverage output. If None, uses default.
+            Set this for per-trial isolation by copying the upfront-built
+            coverage binary to a trial-specific directory.
 
     Returns:
         Appropriate CoverageStrategy instance.
@@ -855,9 +1264,13 @@ def create_coverage_strategy(
     language = language.lower()
 
     if language in ("c", "c++", "cpp"):
-        return LLVMCovLineStrategy(oss_fuzz_path, project_name, language)
+        return LLVMCovLineStrategy(
+            oss_fuzz_path, project_name, language, work_dir=work_dir
+        )
     if language in ("jvm", "java"):
-        return JaCoCoLineStrategy(oss_fuzz_path, project_name, language)
+        return JaCoCoLineStrategy(
+            oss_fuzz_path, project_name, language, work_dir=work_dir
+        )
 
     raise CoverageStrategyError(
         f"Unsupported language for coverage: {language}. "

@@ -1090,13 +1090,15 @@ def _add_generation_header(
 
 """
 
-    # Remove original shebang if present
-    if script_content.startswith("#!/bin/bash"):
-        # Find the end of the first line
+    # Remove all shebangs from the beginning of the script
+    while script_content.startswith("#!/"):
         first_newline = script_content.find("\n")
         if first_newline != -1:
-            # Remove shebang and leading empty lines
             script_content = script_content[first_newline + 1:].lstrip("\n")
+        else:
+            # Single line with only shebang
+            script_content = ""
+            break
 
     # Combine header with script content
     return header + script_content

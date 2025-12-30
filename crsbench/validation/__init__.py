@@ -1,11 +1,12 @@
-"""Benchmark format validation and POV verification module.
+"""Benchmark format validation module.
 
-This module provides:
-1. Format validation of benchmark configurations
-2. POV (Proof of Vulnerability) verification against benchmark variants
+This module provides format validation of benchmark configurations.
+
+For POV verification, use crsbench.evaluation.verification.
+For building variants, use crsbench.builder.OSSFuzzBuilder.
 """
 
-# Format validation
+from crsbench.builder import BenchmarkMode, VariantType
 from crsbench.validation.errors import (
     ValidationError,
     ValidationResult,
@@ -19,26 +20,7 @@ from crsbench.validation.format_validator import (
     validate_experiment_config,
     validate_experiment_config_from_string,
 )
-
-# POV verification
 from crsbench.validation.meta_adapter import MetaYamlAdapter
-from crsbench.validation.variant import (
-    BenchmarkMode,
-    BuildTag,
-    BuildVersion,
-)
-from crsbench.validation.variant.builder import VariantBuilder
-from crsbench.validation.verification import (
-    DeduplicationStrategy,
-    OSSFuzzReproducer,
-    PatchBasedDedup,
-    VerdictResolver,
-    VerificationEngine,
-    VerificationRequest,
-    VerificationResult,
-    VerificationStatus,
-    get_dedup_strategy,
-)
 
 __all__ = [
     # Format validation
@@ -51,22 +33,9 @@ __all__ = [
     "ValidationResult",
     "ValidationError",
     "ValidationWarning",
-    # POV verification - Adapter
+    # Adapter
     "MetaYamlAdapter",
-    # POV verification - Variant
-    "BuildTag",
+    # Types (from builder)
     "BenchmarkMode",
-    "BuildVersion",
-    "VariantBuilder",
-    # POV verification - Verification
-    "VerificationStatus",
-    "VerificationRequest",
-    "VerificationResult",
-    "VerificationEngine",
-    "VerdictResolver",
-    "OSSFuzzReproducer",
-    # POV verification - Deduplication
-    "DeduplicationStrategy",
-    "PatchBasedDedup",
-    "get_dedup_strategy",
+    "VariantType",
 ]

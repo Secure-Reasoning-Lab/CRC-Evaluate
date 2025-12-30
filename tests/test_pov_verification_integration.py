@@ -1,6 +1,6 @@
-"""Integration tests for POV validation with real benchmark data.
+"""Integration tests for POV verification with real benchmark data.
 
-Tests validate:
+Tests verify:
 1. POV from cpv_0 should match only cpv_0
 2. POV from cpv_1 should match only cpv_1
 3. Cross-CPV POVs should not match wrong CPVs
@@ -9,12 +9,10 @@ Tests validate:
 from pathlib import Path
 
 import pytest
+from crsbench.builder.types import BenchmarkMode, VariantType
+from crsbench.evaluation.verification.models import VerificationStatus
+from crsbench.evaluation.verification.pov.verdict import VerdictResolver
 from crsbench.validation.meta_adapter import MetaYamlAdapter
-from crsbench.validation.variant.models import BenchmarkMode, BuildTag
-from crsbench.validation.verification.models import (
-    VerificationStatus,
-)
-from crsbench.validation.verification.verdict import VerdictResolver
 
 
 class TestSanityMockCDeltaValidation:
@@ -95,9 +93,9 @@ class TestSanityMockCDeltaValidation:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                BuildTag.DELTA_BASE: False,  # Base doesn't crash
-                BuildTag.DELTA_REF: True,  # Ref crashes (has the bug)
-                BuildTag.ALL_PATCHED: False,  # All patched doesn't crash
+                VariantType.DELTA_BASE: False,  # Base doesn't crash
+                VariantType.DELTA_REF: True,  # Ref crashes (has the bug)
+                VariantType.ALL_PATCHED: False,  # All patched doesn't crash
             },
             cpv_crash_map={
                 0: True,  # CPV_0 variant crashes (missing cpv_0 patch)
@@ -124,9 +122,9 @@ class TestSanityMockCDeltaValidation:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                BuildTag.DELTA_BASE: False,
-                BuildTag.DELTA_REF: True,
-                BuildTag.ALL_PATCHED: False,
+                VariantType.DELTA_BASE: False,
+                VariantType.DELTA_REF: True,
+                VariantType.ALL_PATCHED: False,
             },
             cpv_crash_map={
                 0: False,  # CPV_0 variant doesn't crash (cpv_1 patch applied)
@@ -148,9 +146,9 @@ class TestSanityMockCDeltaValidation:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                BuildTag.DELTA_BASE: False,
-                BuildTag.DELTA_REF: True,
-                BuildTag.ALL_PATCHED: False,
+                VariantType.DELTA_BASE: False,
+                VariantType.DELTA_REF: True,
+                VariantType.ALL_PATCHED: False,
             },
             cpv_crash_map={
                 0: True,  # Both CPV variants crash
@@ -172,9 +170,9 @@ class TestSanityMockCDeltaValidation:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                BuildTag.DELTA_BASE: False,
-                BuildTag.DELTA_REF: True,
-                BuildTag.ALL_PATCHED: False,
+                VariantType.DELTA_BASE: False,
+                VariantType.DELTA_REF: True,
+                VariantType.ALL_PATCHED: False,
             },
             cpv_crash_map={
                 0: False,
@@ -194,9 +192,9 @@ class TestSanityMockCDeltaValidation:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                BuildTag.DELTA_BASE: False,
-                BuildTag.DELTA_REF: False,  # Ref doesn't crash
-                BuildTag.ALL_PATCHED: False,
+                VariantType.DELTA_BASE: False,
+                VariantType.DELTA_REF: False,  # Ref doesn't crash
+                VariantType.ALL_PATCHED: False,
             },
             cpv_crash_map={
                 0: False,
@@ -213,7 +211,7 @@ class TestSanityMockCDeltaValidation:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                BuildTag.DELTA_BASE: True,  # Base crashes (pre-existing bug)
+                VariantType.DELTA_BASE: True,  # Base crashes (pre-existing bug)
             },
             cpv_crash_map={},
             benchmark_name="sanity-mock-c-delta-01",
@@ -261,25 +259,27 @@ class TestMetaYamlAdapterIntegration:
         )
 
         # Test variant naming
+        # Base/ref variants have mode in type name
         assert (
-            adapter.get_variant_name(BuildTag.DELTA_BASE)
+            adapter.get_variant_name(VariantType.DELTA_BASE)
             == "sanity-mock-c-delta-01-deltabase"
         )
         assert (
-            adapter.get_variant_name(BuildTag.DELTA_REF)
+            adapter.get_variant_name(VariantType.DELTA_REF)
             == "sanity-mock-c-delta-01-deltaref"
         )
+        # Shared variants include mode prefix (adapter is in delta mode)
         assert (
-            adapter.get_variant_name(BuildTag.ALL_PATCHED)
-            == "sanity-mock-c-delta-01-allpatched"
+            adapter.get_variant_name(VariantType.ALL_PATCHED)
+            == "sanity-mock-c-delta-01-delta-allpatched"
         )
         assert (
-            adapter.get_variant_name(BuildTag.CPV, cpv_num=0)
-            == "sanity-mock-c-delta-01-cpv0"
+            adapter.get_variant_name(VariantType.CPV, cpv_num=0)
+            == "sanity-mock-c-delta-01-delta-cpv0"
         )
         assert (
-            adapter.get_variant_name(BuildTag.CPV, cpv_num=1)
-            == "sanity-mock-c-delta-01-cpv1"
+            adapter.get_variant_name(VariantType.CPV, cpv_num=1)
+            == "sanity-mock-c-delta-01-delta-cpv1"
         )
 
     def test_adapter_harness_names(self, meta_yaml_path):

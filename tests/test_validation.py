@@ -15,6 +15,7 @@ from crsbench.validation.schemas import (
     POV,
     BenchmarkEntry,
     BenchmarkSuiteConfig,
+    EvaluationMode,
     ExperimentConfig,
     HarnessFile,
     Vulnerability,
@@ -558,6 +559,7 @@ class TestExperimentConfigSchema:
         config = ExperimentConfig(
             experiment="test",
             trials=3,
+            mode=EvaluationMode.DELTA,
             max_total_time=86400,
             difficulty_level=2,
             experiment_filestore="/tmp/experiment-data",
@@ -575,6 +577,7 @@ class TestExperimentConfigSchema:
             ExperimentConfig(
                 experiment="test",
                 trials=0,  # Invalid: must be >= 1
+                mode=EvaluationMode.DELTA,
                 max_total_time=86400,
                 difficulty_level=1,
                 experiment_filestore="/tmp/exp",
@@ -590,6 +593,7 @@ class TestExperimentConfigSchema:
             ExperimentConfig(
                 experiment="test",
                 trials=1,
+                mode=EvaluationMode.DELTA,
                 max_total_time=0,  # Invalid: must be >= 1
                 difficulty_level=1,
                 experiment_filestore="/tmp/exp",
@@ -605,6 +609,7 @@ class TestExperimentConfigSchema:
             ExperimentConfig(
                 experiment="test",
                 trials=1,
+                mode=EvaluationMode.DELTA,
                 max_total_time=86400,
                 difficulty_level=5,  # Invalid: must be 0-4
                 experiment_filestore="/tmp/exp",
@@ -620,6 +625,7 @@ class TestExperimentConfigSchema:
             ExperimentConfig(
                 experiment="test",
                 trials=1,
+                mode=EvaluationMode.DELTA,
                 max_total_time=86400,
                 difficulty_level=1,
                 experiment_filestore="",  # Empty
@@ -633,6 +639,7 @@ class TestExperimentConfigSchema:
         config = ExperimentConfig(
             experiment="test",
             trials=1,
+            mode=EvaluationMode.DELTA,
             max_total_time=86400,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -648,6 +655,7 @@ class TestExperimentConfigSchema:
         config = ExperimentConfig(
             experiment="test",
             trials=1,
+            mode=EvaluationMode.DELTA,
             max_total_time=86400,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -662,6 +670,7 @@ class TestExperimentConfigSchema:
         config = ExperimentConfig(
             experiment="test",
             trials=1,
+            mode=EvaluationMode.DELTA,
             max_total_time=86400,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -681,6 +690,7 @@ class TestExperimentConfigSchema:
             config = ExperimentConfig(
                 experiment="test",
                 trials=1,
+                mode=EvaluationMode.DELTA,
                 max_total_time=86400,
                 difficulty_level=1,
                 experiment_filestore="/tmp/exp",
@@ -698,6 +708,7 @@ class TestExperimentConfigSchema:
             ExperimentConfig(
                 experiment="test",
                 trials=1,
+                mode=EvaluationMode.DELTA,
                 max_total_time=86400,
                 difficulty_level=1,
                 experiment_filestore="/tmp/exp",
@@ -721,6 +732,7 @@ class TestExperimentConfigSchema:
                 ExperimentConfig(
                     experiment="test",
                     trials=1,
+                    mode=EvaluationMode.DELTA,
                     max_total_time=86400,
                     difficulty_level=1,
                     experiment_filestore="/tmp/exp",
@@ -738,6 +750,7 @@ class TestExperimentConfigSchema:
         config = ExperimentConfig(
             experiment="test",
             trials=3,
+            mode=EvaluationMode.DELTA,
             max_total_time=86400,
             difficulty_level=2,
             experiment_filestore="/tmp/exp",
@@ -750,6 +763,7 @@ class TestExperimentConfigSchema:
 
         assert isinstance(config_dict, dict)
         assert config_dict["trials"] == 3
+        assert config_dict["mode"] == "delta"
         assert config_dict["max_total_time"] == 86400
         assert config_dict["difficulty_level"] == 2
         assert config_dict["redis_host"] == "redis-server"
@@ -764,6 +778,7 @@ class TestExperimentConfigValidation:
         yaml_content = """
 experiment: test
 trials: 1
+mode: delta
 max_total_time: 86400
 difficulty_level: 1
 experiment_filestore: /tmp/experiment-data
@@ -786,6 +801,7 @@ benchmarks:
         yaml_content = """
 experiment: test
 trials: 1
+mode: delta
 max_total_time: 86400
 # Missing difficulty_level
 experiment_filestore: /tmp/experiment-data
@@ -806,6 +822,7 @@ benchmarks:
         yaml_content = """
 experiment: test
 trials: -1
+mode: delta
 max_total_time: 86400
 difficulty_level: 1
 experiment_filestore: /tmp/exp
@@ -825,6 +842,7 @@ benchmarks:
         yaml_content = """
 experiment: test
 trials: 1
+mode: delta
 max_total_time: 86400
 difficulty_level: 10
 experiment_filestore: /tmp/exp
@@ -859,6 +877,7 @@ benchmarks:
         yaml_content = """
 experiment: test
 trials: 1
+mode: delta
 max_total_time: 86400
 difficulty_level: 1
 experiment_filestore: /tmp/experiment-data
@@ -882,6 +901,7 @@ redis_host: queue-server
             yaml_content = f"""
 experiment: test
 trials: 1
+mode: delta
 max_total_time: 86400
 difficulty_level: 1
 experiment_filestore: /tmp/experiment-data
@@ -904,6 +924,7 @@ benchmarks_root: {tmpdir}
         yaml_content = """
 experiment: test
 trials: 1
+mode: delta
 max_total_time: 86400
 difficulty_level: 1
 experiment_filestore: /tmp/experiment-data
@@ -1322,11 +1343,17 @@ harness_files:
 
         # Experiment config
         experiment_yaml = """
+experiment: test
 trials: 1
+mode: delta
 max_total_time: 86400
 difficulty_level: 1
 experiment_filestore: /tmp/exp
 report_filestore: /tmp/rep
+crses:
+  - test-crs
+benchmarks:
+  - test-bench
 """
         experiment_result = validate_experiment_config_from_string(experiment_yaml)
         assert isinstance(experiment_result.to_dict(), dict)

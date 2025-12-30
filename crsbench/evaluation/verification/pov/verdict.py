@@ -19,16 +19,19 @@ DELTA Mode:
 - Else: UNINTENDED_CRASH (crashes on ref but not fixed by any patch)
 """
 
-from typing import Dict, Optional
+from typing import Optional, Union
 
-from crsbench.utils.logger import get_logger
-from crsbench.validation.variant.models import BenchmarkMode, BuildTag
-from crsbench.validation.verification.models import (
+from crsbench.builder.types import BenchmarkMode, VariantType
+from crsbench.evaluation.verification.models import (
     VerificationResult,
     VerificationStatus,
 )
+from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Type alias for variant identifiers (supports both new and legacy types)
+VariantKey = Union[VariantType, str]
 
 
 class VerdictResolver:
@@ -41,8 +44,8 @@ class VerdictResolver:
     @staticmethod
     def resolve(
         mode: BenchmarkMode,
-        crash_results: Dict[BuildTag, bool],
-        cpv_crash_map: Dict[int, bool],
+        crash_results: dict[VariantType, bool],
+        cpv_crash_map: dict[int, bool],
         benchmark_name: str,
         pov_id: Optional[str] = None,
     ) -> VerificationResult:
@@ -50,7 +53,7 @@ class VerdictResolver:
 
         Args:
             mode: FULL or DELTA benchmark mode
-            crash_results: Map of BuildTag -> crashed (True/False)
+            crash_results: Map of VariantType -> crashed (True/False)
             cpv_crash_map: Map of CPV number -> crashed (True/False)
             benchmark_name: Name of the benchmark
             pov_id: Optional POV identifier
@@ -68,20 +71,20 @@ class VerdictResolver:
 
     @staticmethod
     def _resolve_full_mode(
-        crash_results: Dict[BuildTag, bool],
-        cpv_crash_map: Dict[int, bool],
+        crash_results: dict[VariantType, bool],
+        cpv_crash_map: dict[int, bool],
         benchmark_name: str,
         pov_id: Optional[str] = None,
     ) -> VerificationResult:
         """Resolve verdict for FULL mode benchmarks.
 
         Logic:
-        1. If base doesn't crash → NOT_VULNERABLE
-        2. If allpatched crashes → UNINTENDED_CRASH
-        3. If any cpvN crashes → CPV
-        4. Else → ZERODAY
+        1. If base doesn't crash -> NOT_VULNERABLE
+        2. If allpatched crashes -> UNINTENDED_CRASH
+        3. If any cpvN crashes -> CPV
+        4. Else -> ZERODAY
         """
-        base_crashed = crash_results.get(BuildTag.FULL_BASE, False)
+        base_crashed = crash_results.get(VariantType.FULL_BASE, False)
 
         # Check if POV triggers the vulnerability at all
         if not base_crashed:
@@ -98,7 +101,7 @@ class VerdictResolver:
             )
 
         # Check if allpatched still crashes (unintended crash)
-        allpatched_crashed = crash_results.get(BuildTag.ALL_PATCHED, True)
+        allpatched_crashed = crash_results.get(VariantType.ALL_PATCHED, True)
         if allpatched_crashed:
             pov_prefix = f"[{pov_id}] " if pov_id else ""
             logger.warning(
@@ -145,21 +148,21 @@ class VerdictResolver:
 
     @staticmethod
     def _resolve_delta_mode(
-        crash_results: Dict[BuildTag, bool],
-        cpv_crash_map: Dict[int, bool],
+        crash_results: dict[VariantType, bool],
+        cpv_crash_map: dict[int, bool],
         benchmark_name: str,
         pov_id: Optional[str] = None,
     ) -> VerificationResult:
         """Resolve verdict for DELTA mode benchmarks.
 
         Logic:
-        1. If base crashes → ZERODAY (vulnerability exists before changes)
-        2. If ref doesn't crash → NOT_VULNERABLE
-        3. If allpatched crashes → UNINTENDED_CRASH
-        4. If any cpvN crashes → CPV
-        5. Else → UNINTENDED_CRASH
+        1. If base crashes -> ZERODAY (vulnerability exists before changes)
+        2. If ref doesn't crash -> NOT_VULNERABLE
+        3. If allpatched crashes -> UNINTENDED_CRASH
+        4. If any cpvN crashes -> CPV
+        5. Else -> UNINTENDED_CRASH
         """
-        base_crashed = crash_results.get(BuildTag.DELTA_BASE, False)
+        base_crashed = crash_results.get(VariantType.DELTA_BASE, False)
 
         # If base crashes, the bug exists before the delta - it's a zeroday
         if base_crashed:
@@ -176,7 +179,7 @@ class VerdictResolver:
             )
 
         # Check if POV crashes on ref (the vulnerable version)
-        ref_crashed = crash_results.get(BuildTag.DELTA_REF, False)
+        ref_crashed = crash_results.get(VariantType.DELTA_REF, False)
         if not ref_crashed:
             pov_prefix = f"[{pov_id}] " if pov_id else ""
             logger.debug(
@@ -191,7 +194,7 @@ class VerdictResolver:
             )
 
         # Check if allpatched still crashes
-        allpatched_crashed = crash_results.get(BuildTag.ALL_PATCHED, True)
+        allpatched_crashed = crash_results.get(VariantType.ALL_PATCHED, True)
         if allpatched_crashed:
             pov_prefix = f"[{pov_id}] " if pov_id else ""
             logger.warning(

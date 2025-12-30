@@ -1,11 +1,11 @@
-"""Verification models for POV validation.
+"""Verification models for POV and patch validation.
 
-This module defines the request/result data structures for POV verification.
+This module defines the request/result data structures for verification.
 """
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 
 class VerificationStatus(Enum):
@@ -57,14 +57,14 @@ class VerificationResult:
 
     status: VerificationStatus
     benchmark: str
-    cpv_matched: List[str] = field(default_factory=list)
+    cpv_matched: list[str] = field(default_factory=list)
     pov_id: Optional[str] = None
     details: Optional[str] = None
-    crash_info: Optional[Dict[str, Any]] = None
+    crash_info: Optional[dict[str, Any]] = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert result to dictionary for serialization."""
-        result = {
+        result: dict[str, Any] = {
             "status": self.status.value,
             "benchmark": self.benchmark,
             "cpv_matched": self.cpv_matched,

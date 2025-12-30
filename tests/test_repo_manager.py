@@ -1,9 +1,13 @@
 """Tests for repository manager."""
 
+import concurrent.futures
+import threading
+from pathlib import Path
 from unittest import mock
 
 import pytest
 from crsbench.utils.repo_manager import (
+    clone_or_copy_cached_repo,
     clone_repository,
     derive_repo_name_from_url,
     ensure_project_repository,
@@ -458,7 +462,6 @@ class TestSetGitcache:
 @pytest.fixture
 def real_benchmark_dir():
     """Get the real sanity-mock-c-delta-01 benchmark directory."""
-    from pathlib import Path
 
     benchmark_path = (
         Path(__file__).parent.parent / "benchmarks" / "sanity-mock-c-delta-01"
@@ -838,6 +841,149 @@ harness_files:
             write_benchmark_delta_diff(
                 benchmark_dir=str(benchmark_dir), output_path=str(output_path)
             )
+
+
+# ============================================================================
+# Test parallel cache access
+# ============================================================================
+
+
+class TestParallelCacheAccess:
+    """Test thread-safe cache operations in clone_or_copy_cached_repo."""
+
+    def test_parallel_cache_access_no_git_locks(self, tmp_path):
+        """Test that parallel access doesn't cause git lock conflicts.
+
+        This test verifies that:
+        1. Multiple threads can safely copy from the same cache
+        2. No git lock files are left behind
+        3. Each thread gets its own working directory
+        """
+        # Setup: Create a mock cached repo
+        cache_dir = tmp_path / "cache" / "test-repo-abc12345"
+        cache_dir.mkdir(parents=True)
+        (cache_dir / ".git").mkdir()
+        (cache_dir / ".git" / "HEAD").write_text("abc12345abcdef\n")
+        (cache_dir / "file.txt").write_text("content\n")
+
+        # Track results
+        results = []
+        errors = []
+        lock = threading.Lock()
+
+        def clone_to_target(thread_id: int) -> str:
+            """Clone from cache to unique target."""
+            target = tmp_path / "targets" / f"target-{thread_id}"
+            target.mkdir(parents=True, exist_ok=True)
+            try:
+                with mock.patch("subprocess.run") as mock_run:
+                    # Mock git rev-parse HEAD to return the expected commit
+                    mock_run.return_value = mock.Mock(
+                        returncode=0, stdout="abc12345abcdef\n", stderr=""
+                    )
+                    result = clone_or_copy_cached_repo(
+                        repo_url="https://example.com/test-repo.git",
+                        commit="abc12345",
+                        target_dir=str(target / "repo"),
+                        repos_dir=str(tmp_path / "cache"),
+                        verbose=False,
+                    )
+                with lock:
+                    results.append((thread_id, result))
+                return result
+            except Exception as e:
+                with lock:
+                    errors.append((thread_id, str(e)))
+                return None
+
+        # Run parallel clones
+        num_threads = 5
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+            futures = [executor.submit(clone_to_target, i) for i in range(num_threads)]
+            concurrent.futures.wait(futures)
+
+        # Verify no errors
+        assert len(errors) == 0, f"Errors occurred: {errors}"
+
+        # Verify all threads got results
+        assert len(results) == num_threads
+
+        # Verify no git lock files in cache
+        assert not (cache_dir / ".git" / "index.lock").exists()
+
+    def test_lock_prevents_concurrent_cache_modification(self, tmp_path):
+        """Test that cache lock prevents concurrent modifications.
+
+        Verifies that the per-repo lock mechanism works correctly
+        by checking that locks are properly acquired and released.
+        """
+        from crsbench.utils.repo_manager import _get_repo_lock
+
+        # Get lock for a cache directory
+        cache_path = str(tmp_path / "cache" / "test-repo")
+        lock1 = _get_repo_lock(cache_path)
+        lock2 = _get_repo_lock(cache_path)
+
+        # Same path should return same lock
+        assert lock1 is lock2
+
+        # Different paths should return different locks
+        other_path = str(tmp_path / "cache" / "other-repo")
+        lock3 = _get_repo_lock(other_path)
+        assert lock1 is not lock3
+
+        # Lock should be acquirable
+        acquired = lock1.acquire(blocking=False)
+        assert acquired is True
+
+        # Same lock should not be re-acquirable from same thread without release
+        # (actually it can in Python due to RLock-like behavior in some cases)
+        # Let's just release and verify no errors
+        lock1.release()
+
+        # Should be able to acquire again after release
+        acquired_again = lock1.acquire(blocking=False)
+        assert acquired_again is True
+        lock1.release()
+
+    def test_target_dir_isolated_from_cache(self, tmp_path):
+        """Test that operations on target_dir don't affect cache.
+
+        Each target directory should be completely independent.
+        Modifications to target shouldn't touch the cache.
+        """
+        # Setup cache
+        cache_dir = tmp_path / "cache" / "isolated-repo-abc12345"
+        cache_dir.mkdir(parents=True)
+        (cache_dir / ".git").mkdir()
+        (cache_dir / ".git" / "HEAD").write_text("abc12345abcdef\n")
+        original_content = "original content\n"
+        (cache_dir / "file.txt").write_text(original_content)
+
+        # Clone to target
+        target = tmp_path / "target" / "repo"
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(
+                returncode=0, stdout="abc12345abcdef\n", stderr=""
+            )
+            result = clone_or_copy_cached_repo(
+                repo_url="https://example.com/isolated-repo.git",
+                commit="abc12345",
+                target_dir=str(target),
+                repos_dir=str(tmp_path / "cache"),
+                verbose=False,
+            )
+
+        assert result is not None
+
+        # Modify target
+        if target.exists():
+            (target / "file.txt").write_text("modified content\n")
+
+        # Verify cache is unchanged
+        assert (cache_dir / "file.txt").read_text() == original_content
 
 
 # ============================================================================
