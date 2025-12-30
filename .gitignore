@@ -245,3 +245,6 @@ ci_results*
 
 # Lint cache
 .ruff_cache
+
+# oss-patch workdir
+.oss-patch-work
