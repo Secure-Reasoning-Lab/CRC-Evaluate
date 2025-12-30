@@ -13,24 +13,24 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Optional
 
 from crsbench.builder import BenchmarkMode, BuildResult, OSSFuzzBuilder, VariantType
-from crsbench.utils.logger import get_logger
-
-if TYPE_CHECKING:
-    from crsbench.validation.meta_adapter import MetaYamlAdapter
-from crsbench.validation.verification.dedup import (
+from crsbench.evaluation.verification.dedup import (
     DeduplicationStrategy,
     PatchBasedDedup,
 )
-from crsbench.validation.verification.models import (
+from crsbench.evaluation.verification.models import (
     VerificationRequest,
     VerificationResult,
     VerificationStatus,
 )
-from crsbench.validation.verification.reproducer import OSSFuzzReproducer
-from crsbench.validation.verification.verdict import VerdictResolver
+from crsbench.evaluation.verification.pov.verdict import VerdictResolver
+from crsbench.evaluation.verification.reproducer import OSSFuzzReproducer
+from crsbench.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from crsbench.validation.meta_adapter import MetaYamlAdapter
 
 logger = get_logger(__name__)
 
@@ -74,13 +74,13 @@ class VerificationEngine:
         self.builder = OSSFuzzBuilder(oss_fuzz_path, max_workers=max_workers)
         self.reproducer = OSSFuzzReproducer(oss_fuzz_path, timeout)
         self.dedup_strategy = dedup_strategy if dedup_strategy else PatchBasedDedup()
-        self._built_results: Dict[str, Dict[str, BuildResult]] = {}
+        self._built_results: dict[str, dict[str, BuildResult]] = {}
 
     def verify_pov(
         self,
         request: VerificationRequest,
         adapter: MetaYamlAdapter,
-        build_results: Optional[Dict[str, BuildResult]] = None,
+        build_results: Optional[dict[str, BuildResult]] = None,
     ) -> VerificationResult:
         """Verify a single POV against all variants.
 
@@ -105,8 +105,8 @@ class VerificationEngine:
             )
 
         # Run reproduce for each variant
-        crash_results: Dict[VariantType, bool] = {}
-        cpv_crash_map: Dict[int, bool] = {}
+        crash_results: dict[VariantType, bool] = {}
+        cpv_crash_map: dict[int, bool] = {}
 
         # Determine mode for verdict resolution
         mode_str = adapter.get_mode().value
@@ -147,7 +147,7 @@ class VerificationEngine:
         harness_filter: Optional[str] = None,
         *,
         deduplicate: bool = True,
-    ) -> List[VerificationResult]:
+    ) -> list[VerificationResult]:
         """Verify all POVs in a directory against a benchmark.
 
         Args:
@@ -236,7 +236,7 @@ class VerificationEngine:
         *,
         force_rebuild: bool = False,
         deduplicate: bool = True,
-    ) -> List[VerificationResult]:
+    ) -> list[VerificationResult]:
         """Verify POVs for a complete benchmark.
 
         Args:
@@ -369,7 +369,7 @@ class VerificationEngine:
         adapter: MetaYamlAdapter,
         *,
         force_rebuild: bool = False,
-    ) -> Dict[str, BuildResult]:
+    ) -> dict[str, BuildResult]:
         """Get cached build results or build new ones.
 
         Args:

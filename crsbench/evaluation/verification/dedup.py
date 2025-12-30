@@ -11,9 +11,8 @@ Future extensions can add:
 """
 
 from abc import ABC, abstractmethod
-from typing import List
 
-from crsbench.validation.verification.models import (
+from crsbench.evaluation.verification.models import (
     VerificationResult,
     VerificationStatus,
 )
@@ -28,8 +27,8 @@ class DeduplicationStrategy(ABC):
 
     @abstractmethod
     def deduplicate(
-        self, results: List[VerificationResult]
-    ) -> List[VerificationResult]:
+        self, results: list[VerificationResult]
+    ) -> list[VerificationResult]:
         """Remove duplicate POVs from results.
 
         Args:
@@ -64,8 +63,8 @@ class PatchBasedDedup(DeduplicationStrategy):
         return "patch-based"
 
     def deduplicate(
-        self, results: List[VerificationResult]
-    ) -> List[VerificationResult]:
+        self, results: list[VerificationResult]
+    ) -> list[VerificationResult]:
         """Deduplicate results by CPV match set.
 
         Only results with status CPV are deduplicated based on their
@@ -79,7 +78,7 @@ class PatchBasedDedup(DeduplicationStrategy):
             Deduplicated list, keeping first occurrence of each CPV set
         """
         unique_results = []
-        seen_cpv_sets = set()
+        seen_cpv_sets: set[tuple[str, ...]] = set()
 
         for result in results:
             # Only deduplicate CPV results
@@ -108,8 +107,8 @@ class NoOpDedup(DeduplicationStrategy):
         return "none"
 
     def deduplicate(
-        self, results: List[VerificationResult]
-    ) -> List[VerificationResult]:
+        self, results: list[VerificationResult]
+    ) -> list[VerificationResult]:
         """Return all results without modification."""
         return list(results)
 
@@ -127,15 +126,15 @@ class StatusBasedDedup(DeduplicationStrategy):
         return "status-based"
 
     def deduplicate(
-        self, results: List[VerificationResult]
-    ) -> List[VerificationResult]:
+        self, results: list[VerificationResult]
+    ) -> list[VerificationResult]:
         """Keep only one result per status type.
 
         For CPV status, further deduplicates by CPV set.
         """
         unique_results = []
-        seen_statuses = set()
-        seen_cpv_sets = set()
+        seen_statuses: set[VerificationStatus] = set()
+        seen_cpv_sets: set[tuple[str, ...]] = set()
 
         for result in results:
             if result.status == VerificationStatus.CPV:
@@ -165,7 +164,7 @@ def get_dedup_strategy(name: str) -> DeduplicationStrategy:
     Raises:
         ValueError: If strategy name is unknown
     """
-    strategies = {
+    strategies: dict[str, type[DeduplicationStrategy]] = {
         "patch-based": PatchBasedDedup,
         "none": NoOpDedup,
         "status-based": StatusBasedDedup,

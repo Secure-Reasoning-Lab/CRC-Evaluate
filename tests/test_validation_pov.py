@@ -8,18 +8,18 @@ Tests cover:
 
 import pytest
 from crsbench.builder.types import BenchmarkMode, VariantType
-from crsbench.validation.verification.dedup import (
+from crsbench.evaluation.verification.dedup import (
     NoOpDedup,
     PatchBasedDedup,
     StatusBasedDedup,
     get_dedup_strategy,
 )
-from crsbench.validation.verification.models import (
+from crsbench.evaluation.verification.models import (
     VerificationRequest,
     VerificationResult,
     VerificationStatus,
 )
-from crsbench.validation.verification.verdict import VerdictResolver
+from crsbench.evaluation.verification.pov.verdict import VerdictResolver
 
 
 class TestVariantType:
@@ -369,10 +369,10 @@ class TestVerificationEngineForceRebuild:
         from unittest.mock import MagicMock, patch
 
         with patch(
-            "crsbench.validation.verification.engine.VerificationEngine.__init__",
+            "crsbench.evaluation.verification.pov.engine.VerificationEngine.__init__",
             return_value=None,
         ):
-            from crsbench.validation.verification.engine import VerificationEngine
+            from crsbench.evaluation.verification.pov.engine import VerificationEngine
 
             engine = VerificationEngine.__new__(VerificationEngine)
             engine._built_results = {}
@@ -401,10 +401,10 @@ class TestVerificationEngineForceRebuild:
         from unittest.mock import MagicMock, patch
 
         with patch(
-            "crsbench.validation.verification.engine.VerificationEngine.__init__",
+            "crsbench.evaluation.verification.pov.engine.VerificationEngine.__init__",
             return_value=None,
         ):
-            from crsbench.validation.verification.engine import VerificationEngine
+            from crsbench.evaluation.verification.pov.engine import VerificationEngine
 
             engine = VerificationEngine.__new__(VerificationEngine)
             engine._built_results = {}
@@ -430,10 +430,10 @@ class TestVerificationEngineForceRebuild:
         from unittest.mock import MagicMock, patch
 
         with patch(
-            "crsbench.validation.verification.engine.VerificationEngine.__init__",
+            "crsbench.evaluation.verification.pov.engine.VerificationEngine.__init__",
             return_value=None,
         ):
-            from crsbench.validation.verification.engine import VerificationEngine
+            from crsbench.evaluation.verification.pov.engine import VerificationEngine
 
             engine = VerificationEngine.__new__(VerificationEngine)
             engine._built_results = {}

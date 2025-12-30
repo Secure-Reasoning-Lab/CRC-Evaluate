@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 import yaml
 
 if TYPE_CHECKING:
-    from crsbench.validation.verification.models import VerificationResult
+    from crsbench.evaluation.verification.models import VerificationResult
 
 
 @dataclass
@@ -136,7 +136,7 @@ class ResultCollector:
             - NOT_VULNERABLE, UNINTENDED_CRASH: POV missed (doesn't trigger expected vuln)
             - ERROR: Error during verification
         """
-        from crsbench.validation.verification.models import VerificationStatus
+        from crsbench.evaluation.verification.models import VerificationStatus
 
         self.total_povs = len(
             verification_results

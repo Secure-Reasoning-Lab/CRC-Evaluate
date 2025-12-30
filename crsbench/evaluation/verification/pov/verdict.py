@@ -19,14 +19,14 @@ DELTA Mode:
 - Else: UNINTENDED_CRASH (crashes on ref but not fixed by any patch)
 """
 
-from typing import Dict, Optional, Union
+from typing import Optional, Union
 
 from crsbench.builder.types import BenchmarkMode, VariantType
-from crsbench.utils.logger import get_logger
-from crsbench.validation.verification.models import (
+from crsbench.evaluation.verification.models import (
     VerificationResult,
     VerificationStatus,
 )
+from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -44,8 +44,8 @@ class VerdictResolver:
     @staticmethod
     def resolve(
         mode: BenchmarkMode,
-        crash_results: Dict[VariantType, bool],
-        cpv_crash_map: Dict[int, bool],
+        crash_results: dict[VariantType, bool],
+        cpv_crash_map: dict[int, bool],
         benchmark_name: str,
         pov_id: Optional[str] = None,
     ) -> VerificationResult:
@@ -71,18 +71,18 @@ class VerdictResolver:
 
     @staticmethod
     def _resolve_full_mode(
-        crash_results: Dict[VariantType, bool],
-        cpv_crash_map: Dict[int, bool],
+        crash_results: dict[VariantType, bool],
+        cpv_crash_map: dict[int, bool],
         benchmark_name: str,
         pov_id: Optional[str] = None,
     ) -> VerificationResult:
         """Resolve verdict for FULL mode benchmarks.
 
         Logic:
-        1. If base doesn't crash → NOT_VULNERABLE
-        2. If allpatched crashes → UNINTENDED_CRASH
-        3. If any cpvN crashes → CPV
-        4. Else → ZERODAY
+        1. If base doesn't crash -> NOT_VULNERABLE
+        2. If allpatched crashes -> UNINTENDED_CRASH
+        3. If any cpvN crashes -> CPV
+        4. Else -> ZERODAY
         """
         base_crashed = crash_results.get(VariantType.FULL_BASE, False)
 
@@ -148,19 +148,19 @@ class VerdictResolver:
 
     @staticmethod
     def _resolve_delta_mode(
-        crash_results: Dict[VariantType, bool],
-        cpv_crash_map: Dict[int, bool],
+        crash_results: dict[VariantType, bool],
+        cpv_crash_map: dict[int, bool],
         benchmark_name: str,
         pov_id: Optional[str] = None,
     ) -> VerificationResult:
         """Resolve verdict for DELTA mode benchmarks.
 
         Logic:
-        1. If base crashes → ZERODAY (vulnerability exists before changes)
-        2. If ref doesn't crash → NOT_VULNERABLE
-        3. If allpatched crashes → UNINTENDED_CRASH
-        4. If any cpvN crashes → CPV
-        5. Else → UNINTENDED_CRASH
+        1. If base crashes -> ZERODAY (vulnerability exists before changes)
+        2. If ref doesn't crash -> NOT_VULNERABLE
+        3. If allpatched crashes -> UNINTENDED_CRASH
+        4. If any cpvN crashes -> CPV
+        5. Else -> UNINTENDED_CRASH
         """
         base_crashed = crash_results.get(VariantType.DELTA_BASE, False)
 

@@ -2,6 +2,10 @@
 
 This module provides functionality to execute benchmarks against CRS systems,
 collect results, and report on POV detection performance.
+
+Submodules:
+- verification: POV and patch verification
+- coverage: Coverage collection and analysis
 """
 
 from crsbench.evaluation.analysis import (
@@ -36,17 +40,34 @@ from crsbench.evaluation.snapshot import (
 )
 from crsbench.evaluation.snapshot_manager import SnapshotManager
 
+# Re-export key verification classes for convenience
+from crsbench.evaluation.verification import (
+    DeduplicationStrategy,
+    OSSFuzzReproducer,
+    PatchBasedDedup,
+    VerdictResolver,
+    VerificationEngine,
+    VerificationRequest,
+    VerificationResult,
+    VerificationStatus,
+    get_dedup_strategy,
+)
+
 __all__ = [
+    # Runner
     "BenchmarkRunner",
     "EvaluationResult",
     "EvaluationError",
+    # Executors
     "CRSExecutor",
     "CRSExecutionResult",
     "StubCRSExecutor",
     "CRSBugFindingExecutor",
     "CRSPatchExecutor",
+    # Results
     "ResultCollector",
     "EvaluationReport",
+    # Snapshots
     "SnapshotMetadata",
     "SnapshotSummary",
     "SnapshotManager",
@@ -58,7 +79,18 @@ __all__ = [
     "inspect_snapshot",
     "extract_snapshot",
     "validate_snapshot_structure",
+    # Analysis
     "AnalyzerInterface",
     "AnalysisResult",
     "AnalysisManager",
+    # Verification
+    "VerificationStatus",
+    "VerificationRequest",
+    "VerificationResult",
+    "VerificationEngine",
+    "VerdictResolver",
+    "OSSFuzzReproducer",
+    "DeduplicationStrategy",
+    "PatchBasedDedup",
+    "get_dedup_strategy",
 ]

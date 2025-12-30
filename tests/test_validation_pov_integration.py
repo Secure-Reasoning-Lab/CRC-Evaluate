@@ -9,13 +9,10 @@ Tests validate:
 from pathlib import Path
 
 import pytest
-from crsbench.builder.types import VariantType
+from crsbench.builder.types import BenchmarkMode, VariantType
+from crsbench.evaluation.verification.models import VerificationStatus
+from crsbench.evaluation.verification.pov.verdict import VerdictResolver
 from crsbench.validation.meta_adapter import MetaYamlAdapter
-from crsbench.validation.variant.models import BenchmarkMode
-from crsbench.validation.verification.models import (
-    VerificationStatus,
-)
-from crsbench.validation.verification.verdict import VerdictResolver
 
 
 class TestSanityMockCDeltaValidation:

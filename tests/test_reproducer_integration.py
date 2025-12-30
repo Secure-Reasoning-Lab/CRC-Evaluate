@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from crsbench.validation.verification.reproducer import (
+from crsbench.evaluation.verification.reproducer import (
     OSSFuzzReproducer,
 )
 

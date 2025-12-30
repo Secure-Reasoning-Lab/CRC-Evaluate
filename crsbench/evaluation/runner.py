@@ -11,10 +11,10 @@ from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
 from crsbench.evaluation.results import EvaluationReport, HarnessResult, ResultCollector
 from crsbench.evaluation.snapshot_manager import SnapshotManager
 from crsbench.utils.logger import get_logger
-from crsbench.validation import ValidationResult, VerificationEngine, validate_benchmark
-from crsbench.validation import VerificationResult as VerifResult
+from crsbench.evaluation.verification import PatchBasedDedup, VerificationEngine
+from crsbench.evaluation.verification import VerificationResult as VerifResult
+from crsbench.validation import ValidationResult, validate_benchmark
 from crsbench.validation.schemas import BenchmarkConfig, BenchmarkHarness, HarnessFile
-from crsbench.validation.verification.dedup import PatchBasedDedup
 
 # Set up logging
 logger = get_logger(__name__)

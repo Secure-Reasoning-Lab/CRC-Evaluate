@@ -28,14 +28,14 @@ from typing import List, Optional
 
 import yaml
 
-from crsbench.utils.logger import get_logger
-from crsbench.validation.verification.dedup import (
+from crsbench.evaluation.verification import (
     NoOpDedup,
     PatchBasedDedup,
     StatusBasedDedup,
+    VerificationEngine,
+    VerificationResult,
 )
-from crsbench.validation.verification.engine import VerificationEngine
-from crsbench.validation.verification.models import VerificationResult
+from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -267,7 +267,7 @@ def run_single_pov_validation(
     Returns:
         List containing single VerificationResult
     """
-    from crsbench.validation.verification.models import VerificationRequest
+    from crsbench.evaluation.verification.models import VerificationRequest
 
     # Load adapter
     adapter = engine._load_adapter(benchmark_path)
