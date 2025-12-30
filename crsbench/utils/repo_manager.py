@@ -75,6 +75,10 @@ def run_git(args: List[str], **kwargs) -> subprocess.CompletedProcess:
     if "check" not in kwargs:
         kwargs["check"] = True
 
+    # Prevent git from thinking it's interactive (avoids terminal escape sequences)
+    if "stdin" not in kwargs:
+        kwargs["stdin"] = subprocess.DEVNULL
+
     if USE_GITCACHE:
         cmd = f"gitcache git {' '.join(args)}"
         return subprocess.run(cmd, shell=True, **kwargs)

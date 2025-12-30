@@ -409,6 +409,7 @@ class OSSFuzzInfrastructure:
                 capture_output=True,
                 text=True,
                 timeout=60,
+                stdin=subprocess.DEVNULL,  # Prevent interactive terminal issues
             )
             if result.returncode == 0:
                 return True
