@@ -120,10 +120,11 @@ Examples:
         help="Enable verbose output",
     )
     parser.add_argument(
-        "--workers",
+        "--build-workers",
         type=int,
         default=None,
-        help="Number of parallel workers for building variants (default: 4, or CRSBENCH_WORKERS env var)",
+        help="Number of parallel workers for building coverage variants (default: 4). "
+        "Priority: CLI > CRSBENCH_BUILD_WORKERS env.",
     )
 
     parser.set_defaults(func=run_coverage)

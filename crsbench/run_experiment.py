@@ -190,12 +190,21 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--workers",
+        "--build-workers",
         type=int,
         required=False,
         metavar="N",
-        help="Number of parallel workers for building variants (default: 4, or CRSBENCH_WORKERS env var). "
-        "Overrides config file if specified.",
+        help="Number of parallel workers for building variants (default: 4). "
+        "Priority: CLI > CRSBENCH_BUILD_WORKERS env > config file.",
+    )
+
+    parser.add_argument(
+        "--verify-workers",
+        type=int,
+        required=False,
+        metavar="N",
+        help="Number of parallel workers for POV/patch verification (default: 4). "
+        "Priority: CLI > CRSBENCH_VERIFY_WORKERS env > config file.",
     )
 
     parser.add_argument(
@@ -662,10 +671,15 @@ def enhance_config_with_cli_args(
         enhanced["project_image_prefix"] = args.project_image_prefix
         logger.info(f"Using project image prefix from CLI: {args.project_image_prefix}")
 
-    # Workers override
-    if hasattr(args, "workers") and args.workers is not None:
-        enhanced["workers"] = args.workers
-        logger.info(f"Using workers from CLI: {args.workers}")
+    # Build workers override
+    if hasattr(args, "build_workers") and args.build_workers is not None:
+        enhanced["build_workers"] = args.build_workers
+        logger.info(f"Using build_workers from CLI: {args.build_workers}")
+
+    # Verify workers override
+    if hasattr(args, "verify_workers") and args.verify_workers is not None:
+        enhanced["verify_workers"] = args.verify_workers
+        logger.info(f"Using verify_workers from CLI: {args.verify_workers}")
 
     return enhanced
 

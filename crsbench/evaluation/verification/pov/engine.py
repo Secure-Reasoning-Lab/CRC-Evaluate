@@ -2,8 +2,8 @@
 
 This module provides the main orchestrator for POV verification:
 1. Load benchmark configuration
-2. Build all required variants
-3. Run POVs against each variant
+2. Build all required variants (parallel)
+3. Run POVs against each variant (parallel)
 4. Collect crash results
 5. Resolve verdicts
 6. Deduplicate results
@@ -12,6 +12,9 @@ This module provides the main orchestrator for POV verification:
 from __future__ import annotations
 
 import time
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -33,14 +36,40 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+DEFAULT_WORKERS = 4
+
+
+@dataclass
+class ReproduceTask:
+    """Task for parallel reproduce execution."""
+
+    pov_id: str
+    pov_data: bytes
+    harness: str
+    variant_name: str
+    variant_type: VariantType
+    cpv_num: Optional[int]
+
+
+@dataclass
+class ReproduceResult:
+    """Result from a single reproduce call."""
+
+    pov_id: str
+    harness: str
+    variant_name: str
+    variant_type: VariantType
+    cpv_num: Optional[int]
+    crashed: bool
+
 
 class VerificationEngine:
     """Engine for orchestrating POV verification.
 
     Coordinates the entire verification workflow:
     1. Load and parse benchmark configuration
-    2. Build all required variant projects
-    3. Run POVs against each variant
+    2. Build all required variant projects (parallel with build_workers)
+    3. Run POVs against each variant (parallel with verify_workers)
     4. Collect and analyze crash results
     5. Determine final verdicts
     6. Apply deduplication
@@ -50,6 +79,7 @@ class VerificationEngine:
         builder: OSSFuzzBuilder instance
         dedup_strategy: Deduplication strategy to use
         timeout: Timeout for reproduce operations
+        verify_workers: Number of parallel workers for verification
     """
 
     def __init__(
@@ -57,7 +87,8 @@ class VerificationEngine:
         oss_fuzz_path: Path,
         timeout: int = 120,
         dedup_strategy: DeduplicationStrategy | None = None,
-        max_workers: int = 4,
+        build_workers: int = DEFAULT_WORKERS,
+        verify_workers: int = DEFAULT_WORKERS,
     ):
         """Initialize the verification engine.
 
@@ -65,13 +96,39 @@ class VerificationEngine:
             oss_fuzz_path: Path to oss-fuzz directory
             timeout: Timeout for reproduce operations in seconds
             dedup_strategy: Deduplication strategy instance (defaults to PatchBasedDedup)
-            max_workers: Maximum number of parallel workers for building
+            build_workers: Maximum number of parallel workers for building
+            verify_workers: Maximum number of parallel workers for verification
         """
         self.oss_fuzz_path = Path(oss_fuzz_path)
         self.timeout = timeout
-        self.builder = OSSFuzzBuilder(oss_fuzz_path, max_workers=max_workers)
+        self.verify_workers = verify_workers
+        self.builder = OSSFuzzBuilder(oss_fuzz_path, max_workers=build_workers)
         self.dedup_strategy = dedup_strategy if dedup_strategy else PatchBasedDedup()
         self._built_results: dict[str, dict[str, BuildResult]] = {}
+
+    def _execute_reproduce(self, task: ReproduceTask) -> ReproduceResult:
+        """Execute a single reproduce task.
+
+        Args:
+            task: ReproduceTask with POV and variant info
+
+        Returns:
+            ReproduceResult with crash status
+        """
+        crashed = self.builder.infra.reproduce(
+            project_name=task.variant_name,
+            harness=task.harness,
+            pov_data=task.pov_data,
+            timeout=self.timeout,
+        )
+        return ReproduceResult(
+            pov_id=task.pov_id,
+            harness=task.harness,
+            variant_name=task.variant_name,
+            variant_type=task.variant_type,
+            cpv_num=task.cpv_num,
+            crashed=crashed,
+        )
 
     def verify_pov(
         self,
@@ -80,6 +137,8 @@ class VerificationEngine:
         build_results: Optional[dict[str, BuildResult]] = None,
     ) -> VerificationResult:
         """Verify a single POV against all variants.
+
+        Runs reproduce() calls in parallel for all variants.
 
         Args:
             request: Verification request with POV data
@@ -101,32 +160,47 @@ class VerificationEngine:
                 details="No built versions available",
             )
 
-        # Run reproduce for each variant
+        # Create tasks for parallel execution
+        pov_id = request.pov_id or "unknown"
+        tasks = []
+        for variant_name, result in build_results.items():
+            if not result.success:
+                continue
+            tasks.append(
+                ReproduceTask(
+                    pov_id=pov_id,
+                    pov_data=request.pov_data,
+                    harness=request.harness,
+                    variant_name=variant_name,
+                    variant_type=result.config.variant_type,
+                    cpv_num=result.config.cpv_num,
+                )
+            )
+
+        # Execute reproduce calls in parallel
         crash_results: dict[VariantType, bool] = {}
         cpv_crash_map: dict[int, bool] = {}
+
+        with ThreadPoolExecutor(max_workers=self.verify_workers) as executor:
+            futures = {
+                executor.submit(self._execute_reproduce, task): task
+                for task in tasks
+            }
+
+            for future in as_completed(futures):
+                result = future.result()
+                if result.variant_type == VariantType.CPV and result.cpv_num is not None:
+                    cpv_crash_map[result.cpv_num] = result.crashed
+                else:
+                    crash_results[result.variant_type] = result.crashed
+
+                logger.debug(
+                    f"{result.variant_name}: {'crashed' if result.crashed else 'ok'}"
+                )
 
         # Determine mode for verdict resolution
         mode_str = adapter.get_mode().value
         mode = BenchmarkMode.FULL if mode_str == "full" else BenchmarkMode.DELTA
-
-        for variant_name, result in build_results.items():
-            if not result.success:
-                continue
-
-            crashed = self.builder.infra.reproduce(
-                project_name=variant_name,
-                harness=request.harness,
-                pov_data=request.pov_data,
-                timeout=self.timeout,
-            )
-
-            variant_type = result.config.variant_type
-            if variant_type == VariantType.CPV and result.config.cpv_num is not None:
-                cpv_crash_map[result.config.cpv_num] = crashed
-            else:
-                crash_results[variant_type] = crashed
-
-            logger.debug(f"{variant_name}: {'crashed' if crashed else 'ok'}")
 
         # Resolve verdict
         return VerdictResolver.resolve(
@@ -136,6 +210,113 @@ class VerificationEngine:
             benchmark_name=adapter.benchmark_name,
             pov_id=request.pov_id,
         )
+
+    def verify_povs_parallel(
+        self,
+        pov_harness_pairs: list[tuple[str, bytes, str]],  # (pov_id, pov_data, harness)
+        adapter: MetaYamlAdapter,
+        build_results: dict[str, BuildResult],
+    ) -> list[VerificationResult]:
+        """Verify multiple POVs in parallel.
+
+        Flattens all (pov, harness, variant) combinations and runs them in parallel,
+        then groups results to resolve verdicts.
+
+        Args:
+            pov_harness_pairs: List of (pov_id, pov_data, harness) tuples
+            adapter: MetaYamlAdapter for benchmark config
+            build_results: Pre-built variant results
+
+        Returns:
+            List of VerificationResult for each (pov, harness) pair
+        """
+        # Create all tasks (flattened)
+        tasks: list[ReproduceTask] = []
+        for pov_id, pov_data, harness in pov_harness_pairs:
+            for variant_name, result in build_results.items():
+                if not result.success:
+                    continue
+                tasks.append(
+                    ReproduceTask(
+                        pov_id=pov_id,
+                        pov_data=pov_data,
+                        harness=harness,
+                        variant_name=variant_name,
+                        variant_type=result.config.variant_type,
+                        cpv_num=result.config.cpv_num,
+                    )
+                )
+
+        if not tasks:
+            return []
+
+        logger.info(
+            f"Running {len(tasks)} reproduce tasks in parallel "
+            f"({len(pov_harness_pairs)} POVs × {len([r for r in build_results.values() if r.success])} variants)"
+        )
+
+        # Execute all reproduce calls in parallel
+        results_by_pov_harness: dict[
+            tuple[str, str], tuple[dict[VariantType, bool], dict[int, bool]]
+        ] = defaultdict(lambda: ({}, {}))
+
+        start_time = time.time()
+        completed = 0
+        last_report_time = start_time
+        report_interval = 60  # Report every minute for parallel execution
+
+        with ThreadPoolExecutor(max_workers=self.verify_workers) as executor:
+            futures = {
+                executor.submit(self._execute_reproduce, task): task
+                for task in tasks
+            }
+
+            for future in as_completed(futures):
+                result = future.result()
+                key = (result.pov_id, result.harness)
+                crash_results, cpv_crash_map = results_by_pov_harness[key]
+
+                if result.variant_type == VariantType.CPV and result.cpv_num is not None:
+                    cpv_crash_map[result.cpv_num] = result.crashed
+                else:
+                    crash_results[result.variant_type] = result.crashed
+
+                # Progress reporting
+                completed += 1
+                current_time = time.time()
+                if current_time - last_report_time >= report_interval:
+                    elapsed = current_time - start_time
+                    rate = completed / elapsed if elapsed > 0 else 0
+                    remaining = (len(tasks) - completed) / rate if rate > 0 else 0
+                    logger.info(
+                        f"Progress: {completed}/{len(tasks)} reproduce calls "
+                        f"({elapsed:.0f}s elapsed, ~{remaining:.0f}s remaining)"
+                    )
+                    last_report_time = current_time
+
+        # Determine mode for verdict resolution
+        mode_str = adapter.get_mode().value
+        mode = BenchmarkMode.FULL if mode_str == "full" else BenchmarkMode.DELTA
+
+        # Resolve verdicts for each (pov, harness) pair
+        verification_results = []
+        for (pov_id, _harness), (crash_results, cpv_crash_map) in results_by_pov_harness.items():
+            verdict = VerdictResolver.resolve(
+                mode=mode,
+                crash_results=crash_results,
+                cpv_crash_map=cpv_crash_map,
+                benchmark_name=adapter.benchmark_name,
+                pov_id=pov_id,
+            )
+            verification_results.append(verdict)
+
+        elapsed = time.time() - start_time
+        logger.info(
+            f"Completed {len(tasks)} reproduce calls in {elapsed:.1f}s "
+            f"({len(tasks)/elapsed:.1f} calls/sec)"
+        )
+
+        return verification_results
 
     def verify_all_povs(
         self,
@@ -147,6 +328,8 @@ class VerificationEngine:
     ) -> list[VerificationResult]:
         """Verify all POVs in a directory against a benchmark.
 
+        Uses parallel execution for all reproduce() calls.
+
         Args:
             adapter: MetaYamlAdapter for benchmark config
             pov_dir: Directory containing POV files
@@ -156,8 +339,6 @@ class VerificationEngine:
         Returns:
             List of verification results
         """
-        results = []
-
         # Build variants once
         build_results = self._get_or_build_results(adapter)
         if not build_results:
@@ -174,47 +355,28 @@ class VerificationEngine:
             logger.warning(f"No POV files found in {pov_dir}")
             return []
 
-        logger.info(f"Verifying {len(pov_files)} POVs against {adapter.benchmark_name}")
-
         # Get harness names to test
         harness_names = (
             [harness_filter] if harness_filter else adapter.get_harness_names()
         )
 
-        # Progress tracking
-        start_time = time.time()
-        last_report_time = start_time
-        total_items = len(pov_files) * len(harness_names)
-        completed = 0
-        report_interval = 300  # 5 minutes in seconds
+        logger.info(
+            f"Verifying {len(pov_files)} POVs × {len(harness_names)} harnesses "
+            f"against {adapter.benchmark_name}"
+        )
 
+        # Create (pov_id, pov_data, harness) tuples
+        pov_harness_pairs = []
         for pov_file in pov_files:
             pov_data = pov_file.read_bytes()
-
             for harness_name in harness_names:
-                request = VerificationRequest(
-                    pov_data=pov_data,
-                    harness=harness_name,
-                    benchmark=adapter.benchmark_name,
-                    pov_id=pov_file.name,
-                )
+                pov_harness_pairs.append((pov_file.name, pov_data, harness_name))
 
-                result = self.verify_pov(request, adapter, build_results)
-                results.append(result)
-
-                # Progress reporting every 5 minutes
-                completed += 1
-                current_time = time.time()
-                if current_time - last_report_time >= report_interval:
-                    elapsed_minutes = (current_time - start_time) / 60
-                    logger.info(
-                        f"Progress: {completed}/{total_items} POVs verified "
-                        f"({elapsed_minutes:.1f} min elapsed)"
-                    )
-                    last_report_time = current_time
+        # Run parallel verification
+        results = self.verify_povs_parallel(pov_harness_pairs, adapter, build_results)
 
         # Deduplicate if requested
-        if deduplicate:
+        if deduplicate and results:
             original_count = len(results)
             results = self.dedup_strategy.deduplicate(results)
             if len(results) < original_count:
@@ -236,6 +398,8 @@ class VerificationEngine:
     ) -> list[VerificationResult]:
         """Verify POVs for a complete benchmark.
 
+        Uses parallel execution for all reproduce() calls.
+
         Args:
             benchmark_path: Path to benchmark project directory
             pov_dir: Optional POV directory (overrides auto-discovery)
@@ -255,57 +419,30 @@ class VerificationEngine:
         if force_rebuild:
             self._built_results.pop(adapter.benchmark_name, None)
 
-        results = []
         build_results = self._get_or_build_results(adapter, force_rebuild=force_rebuild)
         if not build_results:
             logger.error(f"Failed to build variants for {adapter.benchmark_name}")
             return []
 
-        # Discover POVs using adapter (from meta.yaml)
+        # Collect (pov_id, pov_data, harness) tuples
+        pov_harness_pairs: list[tuple[str, bytes, str]] = []
+
         if pov_dir:
             # Use explicit POV directory (override)
             harness_names = (
                 [harness_filter] if harness_filter else adapter.get_harness_names()
             )
 
-            # Count total items for progress tracking
             pov_files = [
                 f
                 for f in pov_dir.glob("*")
                 if f.is_file() and not f.name.startswith(".")
             ]
-            total_items = len(harness_names) * len(pov_files)
-            completed = 0
-            start_time = time.time()
-            last_report_time = start_time
-            report_interval = 300  # 5 minutes in seconds
 
-            logger.info(
-                f"Verifying {total_items} POVs against {adapter.benchmark_name}"
-            )
-
-            for harness_name in harness_names:
-                for pov_file in pov_files:
-                    pov_data = pov_file.read_bytes()
-                    request = VerificationRequest(
-                        pov_data=pov_data,
-                        harness=harness_name,
-                        benchmark=adapter.benchmark_name,
-                        pov_id=pov_file.name,
-                    )
-                    result = self.verify_pov(request, adapter, build_results)
-                    results.append(result)
-
-                    # Progress reporting every 5 minutes
-                    completed += 1
-                    current_time = time.time()
-                    if current_time - last_report_time >= report_interval:
-                        elapsed_minutes = (current_time - start_time) / 60
-                        logger.info(
-                            f"Progress: {completed}/{total_items} POVs verified "
-                            f"({elapsed_minutes:.1f} min elapsed)"
-                        )
-                        last_report_time = current_time
+            for pov_file in pov_files:
+                pov_data = pov_file.read_bytes()
+                for harness_name in harness_names:
+                    pov_harness_pairs.append((pov_file.name, pov_data, harness_name))
         else:
             # Discover POVs from meta.yaml via adapter
             all_povs = adapter.get_all_pov_paths()
@@ -318,36 +455,21 @@ class VerificationEngine:
                 logger.warning("No POVs found in benchmark meta.yaml")
                 return []
 
-            logger.info(f"Verifying {len(all_povs)} POVs from meta.yaml")
-
-            # Progress tracking
-            total_items = len(all_povs)
-            completed = 0
-            start_time = time.time()
-            last_report_time = start_time
-            report_interval = 300  # 5 minutes in seconds
-
             for harness_name, _vuln_keyword, pov_path in all_povs:
                 pov_data = pov_path.read_bytes()
-                request = VerificationRequest(
-                    pov_data=pov_data,
-                    harness=harness_name,
-                    benchmark=adapter.benchmark_name,
-                    pov_id=pov_path.name,
-                )
-                result = self.verify_pov(request, adapter, build_results)
-                results.append(result)
+                pov_harness_pairs.append((pov_path.name, pov_data, harness_name))
 
-                # Progress reporting every 5 minutes
-                completed += 1
-                current_time = time.time()
-                if current_time - last_report_time >= report_interval:
-                    elapsed_minutes = (current_time - start_time) / 60
-                    logger.info(
-                        f"Progress: {completed}/{total_items} POVs verified "
-                        f"({elapsed_minutes:.1f} min elapsed)"
-                    )
-                    last_report_time = current_time
+        if not pov_harness_pairs:
+            logger.warning("No POVs to verify")
+            return []
+
+        logger.info(
+            f"Verifying {len(pov_harness_pairs)} POV-harness pairs "
+            f"against {adapter.benchmark_name}"
+        )
+
+        # Run parallel verification
+        results = self.verify_povs_parallel(pov_harness_pairs, adapter, build_results)
 
         # Deduplicate if requested
         if deduplicate and results:
