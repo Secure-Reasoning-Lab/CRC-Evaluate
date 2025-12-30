@@ -15,37 +15,35 @@ class TestCRSPatchExecutor(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         self.temp_dir = tempfile.mkdtemp()
-        self.crs_patch_path = Path(self.temp_dir) / "oss-patch"
         self.oss_fuzz_path = Path(self.temp_dir) / "oss-fuzz"
         self.benchmarks_root = Path(self.temp_dir) / "benchmarks"
+        self.registry_dir = Path(self.temp_dir) / "crses" / "registry"
+        self.crs_configs_dir = Path(self.temp_dir) / "crses" / "configs"
 
         # Create directory structure
-        self.crs_patch_path.mkdir(parents=True)
         self.oss_fuzz_path.mkdir(parents=True)
         self.benchmarks_root.mkdir(parents=True)
-
-        # Create executor
-        self.crs_configs_dir = Path(self.temp_dir) / "crses" / "configs"
+        self.registry_dir.mkdir(parents=True)
         self.crs_configs_dir.mkdir(parents=True)
 
+        # Create executor
         self.executor = CRSPatchExecutor(
             crs_config_name="test-crs",
-            crs_patch_path=self.crs_patch_path,
             oss_fuzz_path=self.oss_fuzz_path,
-            litellm_base="https://api.test.com",
-            litellm_key="test-key",
+            registry_dir=self.registry_dir,
             benchmarks_root=self.benchmarks_root,
             crs_configs_dir=self.crs_configs_dir,
+            litellm_mode="passthrough",
         )
 
     def test_init(self):
         """Test executor initialization."""
         self.assertEqual(self.executor.crs_config_name, "test-crs")
-        self.assertEqual(self.executor.crs_patch_path, self.crs_patch_path)
         self.assertEqual(self.executor.oss_fuzz_path, self.oss_fuzz_path)
-        self.assertEqual(self.executor.litellm_base, "https://api.test.com")
-        self.assertEqual(self.executor.litellm_key, "test-key")
+        self.assertEqual(self.executor.registry_dir, self.registry_dir)
         self.assertEqual(self.executor.benchmarks_root, self.benchmarks_root)
+        self.assertEqual(self.executor.crs_configs_dir, self.crs_configs_dir)
+        self.assertEqual(self.executor.litellm_mode, "passthrough")
 
     def test_configure_crs(self):
         """Test CRS configuration."""
@@ -81,8 +79,13 @@ class TestCRSPatchExecutor(unittest.TestCase):
         benchmark_path = self.benchmarks_root / "test-project"
         benchmark_path.mkdir()
 
+        trial_build_dir = Path(self.temp_dir) / "trial-build"
+        trial_build_dir.mkdir()
+
         # Build CRS
-        self.executor._build_crs_if_needed(benchmark_path, "test-project")
+        self.executor._build_crs_if_needed(
+            benchmark_path, "test-project", trial_build_dir
+        )
 
         # Verify repository manager was called
         mock_ensure_repo.assert_called_once_with(
@@ -116,8 +119,13 @@ class TestCRSPatchExecutor(unittest.TestCase):
         benchmark_path = self.benchmarks_root / "test-project"
         benchmark_path.mkdir()
 
+        trial_build_dir = Path(self.temp_dir) / "trial-build"
+        trial_build_dir.mkdir()
+
         # Attempt to build
-        self.executor._build_crs_if_needed(benchmark_path, "test-project")
+        self.executor._build_crs_if_needed(
+            benchmark_path, "test-project", trial_build_dir
+        )
 
         # Verify no calls were made
         mock_ensure_repo.assert_not_called()
@@ -144,11 +152,12 @@ class TestCRSPatchExecutor(unittest.TestCase):
 
         # Verify directory created
         self.assertIsNotNone(povs_path)
+        assert povs_path is not None  # for type checker
         self.assertTrue(povs_path.exists())
 
-        # Verify POVs copied
-        self.assertTrue((povs_path / "pov_0").exists())
-        self.assertTrue((povs_path / "pov_1").exists())
+        # Verify POVs copied (with original filenames)
+        self.assertTrue((povs_path / "pov_0.blob").exists())
+        self.assertTrue((povs_path / "pov_1.blob").exists())
 
     def test_prepare_hints_disabled(self):
         """Test that hints preparation is skipped when disabled."""
@@ -192,6 +201,7 @@ class TestCRSPatchExecutor(unittest.TestCase):
 
         # Verify directory created
         self.assertIsNotNone(hints_path)
+        assert hints_path is not None  # for type checker
         self.assertTrue(hints_path.exists())
 
         # Verify SARIF copied
