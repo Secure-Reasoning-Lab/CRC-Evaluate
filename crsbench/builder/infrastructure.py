@@ -524,3 +524,80 @@ class OSSFuzzInfrastructure:
         finally:
             # Clean up temporary file
             testcase_path.unlink(missing_ok=True)
+
+    def run_coverage(
+        self,
+        project_name: str,
+        harness: str,
+        corpus_dir: Path,
+        output_dir: Path,
+        timeout: int = 300,
+    ) -> tuple[bool, Path]:
+        """Run coverage collection using OSS-Fuzz helper.py.
+
+        Uses --coverage-output-dir to output results to a custom directory,
+        enabling parallel coverage collection with shared coverage binaries.
+
+        Args:
+            project_name: Coverage variant name (e.g., "benchmark-coverage")
+            harness: Harness/fuzz target name
+            corpus_dir: Directory containing corpus files
+            output_dir: Directory for coverage output (dumps, report, etc.)
+            timeout: Timeout in seconds
+
+        Returns:
+            Tuple of (success: bool, output_dir: Path)
+            The caller should parse the appropriate file based on language:
+            - C/C++: output_dir/report/linux/summary.json
+            - Java: output_dir/report/linux/jacoco.xml
+        """
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        cmd = [
+            "python3",
+            str(self._helper_script),
+            "coverage",
+            "--coverage-output-dir",
+            str(output_dir),
+            "--corpus-dir",
+            str(corpus_dir),
+            "--fuzz-target",
+            harness,
+            "--no-serve",
+            project_name,
+        ]
+
+        logger.debug(f"Running coverage: {' '.join(cmd)}")
+
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=self.oss_fuzz_path,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                stdin=subprocess.DEVNULL,  # Prevent terminal issues
+            )
+
+            if result.returncode != 0:
+                logger.warning(
+                    f"Coverage failed for {project_name}/{harness}: "
+                    f"{result.stderr[:500]}"
+                )
+                return False, output_dir
+
+            # Verify output was generated (check report dir exists)
+            report_dir = output_dir / "report" / "linux"
+            if not report_dir.exists():
+                logger.warning(f"Coverage report not found: {report_dir}")
+                return False, output_dir
+
+            return True, output_dir
+
+        except subprocess.TimeoutExpired:
+            logger.warning(f"Coverage timeout for {project_name}/{harness}")
+            return False, output_dir
+        except Exception as e:
+            logger.error(f"Coverage error for {project_name}/{harness}: {e}")
+            return False, output_dir
