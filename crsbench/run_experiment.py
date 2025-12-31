@@ -275,9 +275,18 @@ Examples:
     run_parser.set_defaults(command="run")
 
     # 'verify' subcommand - POV verification
-    from crsbench.evaluation.verification.cli.verify_command import add_verify_subparser
+    from crsbench.evaluation.verification.cli.pov_verify_command import (
+        add_verify_subparser,
+    )
 
     add_verify_subparser(subparsers)
+
+    # 'patch-verify' subcommand - patch verification
+    from crsbench.evaluation.verification.cli.patch_verify_command import (
+        add_patch_verify_subparser,
+    )
+
+    add_patch_verify_subparser(subparsers)
 
     # 'coverage' subcommand - coverage collection
     from crsbench.evaluation.coverage.cli.coverage_command import (
@@ -1245,7 +1254,7 @@ def main() -> None:
     # Dispatch to appropriate command handler
     if args.command == "verify":
         # Handle verify command
-        from crsbench.evaluation.verification.cli.verify_command import run_verify
+        from crsbench.evaluation.verification.cli.pov_verify_command import run_verify
 
         sys.exit(run_verify(args))
 
