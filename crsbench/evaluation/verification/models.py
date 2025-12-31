@@ -1,14 +1,20 @@
-"""Verification models for POV and patch validation.
+"""Verification models for POV and patch verification.
 
-This module defines the request/result data structures for verification.
+This module defines the request/result data structures for both
+POV verification (bug finding) and patch verification (bug fixing).
 """
 
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Optional
 
+# =============================================================================
+# POV Verification Models
+# =============================================================================
 
-class VerificationStatus(Enum):
+
+class PovVerificationStatus(Enum):
     """Result status of POV verification.
 
     - NOT_VULNERABLE: POV does not trigger any vulnerability
@@ -26,7 +32,7 @@ class VerificationStatus(Enum):
 
 
 @dataclass
-class VerificationRequest:
+class PovVerificationRequest:
     """Request to verify a POV against a benchmark.
 
     Attributes:
@@ -43,7 +49,7 @@ class VerificationRequest:
 
 
 @dataclass
-class VerificationResult:
+class PovVerificationResult:
     """Result of POV verification.
 
     Attributes:
@@ -55,7 +61,7 @@ class VerificationResult:
         crash_info: Optional crash information (sanitizer output, etc.)
     """
 
-    status: VerificationStatus
+    status: PovVerificationStatus
     benchmark: str
     cpv_matched: list[str] = field(default_factory=list)
     pov_id: Optional[str] = None
@@ -80,11 +86,124 @@ class VerificationResult:
     @property
     def is_vulnerability(self) -> bool:
         """Return True if the POV triggers any vulnerability."""
-        return self.status in (VerificationStatus.CPV, VerificationStatus.ZERODAY)
+        return self.status in (
+            PovVerificationStatus.CPV,
+            PovVerificationStatus.ZERODAY,
+        )
 
     def __str__(self) -> str:
-        if self.status == VerificationStatus.CPV:
+        if self.status == PovVerificationStatus.CPV:
             return (
                 f"{self.benchmark}: {self.status.value} ({', '.join(self.cpv_matched)})"
             )
         return f"{self.benchmark}: {self.status.value}"
+
+
+# =============================================================================
+# Patch Verification Models
+# =============================================================================
+
+
+class PatchVerificationStatus(Enum):
+    """Result status of patch verification.
+
+    - PENDING: Verification not yet started
+    - BUILD_FAILED: Patch could not be applied or build failed
+    - POV_STILL_TRIGGERS: Original POV still crashes after patch
+    - TEST_FAILED: Unit tests failed
+    - VALID: Patch is valid (fixes bug without breaking tests)
+    - ERROR: Verification failed due to an error
+    """
+
+    PENDING = "pending"
+    BUILD_FAILED = "build_failed"
+    POV_STILL_TRIGGERS = "pov_still_triggers"
+    TEST_FAILED = "test_failed"
+    VALID = "valid"
+    ERROR = "error"
+
+
+class TestMode(Enum):
+    """Unit test execution mode.
+
+    - FULL: Run complete test suite
+    - RTS: Run only patch-affected tests (Regression Test Selection)
+    """
+
+    FULL = "full"
+    RTS = "rts"
+
+
+@dataclass
+class PatchInfo:
+    """Information about a patch to verify.
+
+    Attributes:
+        pov_id: POV identifier this patch targets
+        patch_path: Path to the patch file
+        patch_content: Content of the patch (unified diff format)
+    """
+
+    pov_id: str
+    patch_path: Path
+    patch_content: str = ""
+
+    def __post_init__(self) -> None:
+        """Load patch content if not provided."""
+        if not self.patch_content and self.patch_path.exists():
+            self.patch_content = self.patch_path.read_text()
+
+
+@dataclass
+class PatchVerificationResult:
+    """Result of patch verification.
+
+    Attributes:
+        status: Verification status
+        pov_id: POV identifier this patch targets
+        patch_path: Path to the verified patch
+        details: Optional details about the verification
+        build_time: Time taken for build (seconds)
+        pov_test_passed: Whether the POV test passed (no crash)
+        unit_tests_passed: Whether unit tests passed (None if not run)
+        unit_tests_run: Number of unit tests run
+        unit_tests_failed: Number of unit tests failed
+        failed_tests: List of failed test names
+    """
+
+    status: PatchVerificationStatus
+    pov_id: str
+    patch_path: Path
+    details: Optional[str] = None
+    build_time: Optional[float] = None
+    pov_test_passed: bool = False
+    unit_tests_passed: Optional[bool] = None
+    unit_tests_run: int = 0
+    unit_tests_failed: int = 0
+    failed_tests: list[str] = field(default_factory=list)
+
+    @property
+    def is_valid(self) -> bool:
+        """Return True if the patch is valid."""
+        return self.status == PatchVerificationStatus.VALID
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert result to dictionary for serialization."""
+        return {
+            "status": self.status.value,
+            "pov_id": self.pov_id,
+            "patch_path": str(self.patch_path),
+            "details": self.details,
+            "build_time": self.build_time,
+            "pov_test_passed": self.pov_test_passed,
+            "unit_tests_passed": self.unit_tests_passed,
+            "unit_tests_run": self.unit_tests_run,
+            "unit_tests_failed": self.unit_tests_failed,
+            "failed_tests": self.failed_tests,
+        }
+
+    def __str__(self) -> str:
+        status_str = self.status.value.upper()
+        if self.is_valid:
+            return f"{self.pov_id}: {status_str}"
+        return f"{self.pov_id}: {status_str} - {self.details or 'Unknown error'}"
