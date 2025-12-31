@@ -463,12 +463,15 @@ class OSSFuzzInfrastructure:
         self,
         config: BuildConfig,
         src_path: Path,
+        *,
+        use_inc_image: bool = False,
     ) -> bool:
         """Build fuzzers for a variant.
 
         Args:
             config: Build configuration
             src_path: Path to source repository
+            use_inc_image: Use pre-built inc-build image for faster builds
 
         Returns:
             True if build succeeded
@@ -488,9 +491,19 @@ class OSSFuzzInfrastructure:
             config.sanitizer,
             "-e",
             f"FUZZING_LANGUAGE={fuzzing_language}",
-            variant_name,
-            str(src_path),
         ]
+
+        # Use inc-build image for faster incremental builds
+        if use_inc_image:
+            cmd.extend(
+                [
+                    "--docker_image_tag",
+                    f"inc-{config.sanitizer}",
+                    "--no-build-image",
+                ]
+            )
+
+        cmd.extend([variant_name, str(src_path)])
 
         logger.info(f"Building {variant_name} with {config.sanitizer} sanitizer...")
         logger.debug(f"Command: {' '.join(cmd)}")
@@ -1151,103 +1164,6 @@ class OSSFuzzInfrastructure:
             return False
 
         return self._retag_for_ossfuzz(src_image, dst_image)
-
-    def build_with_inc_image(
-        self,
-        project_name: str,
-        src_path: Path,
-        repo_name: str,
-        sanitizer: str = "address",
-        timeout: int = 1200,
-        registry: str = "ghcr.io/team-atlanta/crsbench",
-        variant_name: Optional[str] = None,
-    ) -> bool:
-        """Build fuzzers using inc-build image for faster incremental builds.
-
-        Args:
-            project_name: OSS-Fuzz project name
-            src_path: Path to source code
-            repo_name: Repository name for volume mount
-            sanitizer: Sanitizer type
-            timeout: Build timeout in seconds
-            registry: Docker registry
-            variant_name: Unique identifier for build isolation (default: project_name).
-                Use this for parallel builds to avoid race conditions.
-
-        Returns:
-            True if build succeeded
-        """
-        image_name = self.get_inc_build_image_name(project_name, sanitizer, registry)
-
-        # Use variant_name for path isolation (fixes race condition in parallel builds)
-        path_id = variant_name or project_name
-
-        # Use isolated paths if work_dir is set, otherwise use standard oss-fuzz paths
-        out_dir = self.get_isolated_build_path(path_id)
-        work_dir = self.get_isolated_work_path(path_id)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        work_dir.mkdir(parents=True, exist_ok=True)
-
-        # Run docker with inc-build image
-        cmd = [
-            "docker",
-            "run",
-            "--rm",
-            "--privileged",
-            "--shm-size=2g",
-            "--platform",
-            "linux/amd64",
-            "-e",
-            "FUZZING_ENGINE=libfuzzer",
-            "-e",
-            f"SANITIZER={sanitizer}",
-            "-e",
-            "ARCHITECTURE=x86_64",
-            "-e",
-            f"PROJECT_NAME={project_name}",
-            "-e",
-            "BUILD_UID=0",
-            "-v",
-            f"{src_path}:/src/{repo_name}:rw",
-            "-v",
-            f"{out_dir}:/out",
-            "-v",
-            f"{work_dir}:/work",
-            image_name,
-            "/bin/bash",
-            "-c",
-            "compile",
-        ]
-
-        logger.info(f"Building fuzzers with inc-build image: {image_name}")
-        logger.debug(f"Command: {' '.join(cmd)}")
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                stdin=subprocess.DEVNULL,
-            )
-
-            if result.returncode == 0:
-                logger.info(f"Successfully built fuzzers for {project_name}")
-                fix_docker_ownership(self.get_build_output_path(path_id))
-                # Set up symlink for helper.py compatibility if using isolated paths
-                if self.work_dir:
-                    self.setup_build_symlink(path_id)
-                return True
-
-            logger.error(f"Failed to build fuzzers: {result.stderr[:2000]}")
-            return False
-
-        except subprocess.TimeoutExpired:
-            logger.error(f"Build timeout for {project_name}")
-            return False
-        except Exception as e:
-            logger.error(f"Build error for {project_name}: {e}")
-            return False
 
     # =========================================================================
     # Unit test support for patch verification

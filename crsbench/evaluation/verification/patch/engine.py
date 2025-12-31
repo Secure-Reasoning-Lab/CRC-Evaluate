@@ -261,20 +261,11 @@ class PatchVerificationEngine:
             result.details = f"Failed to create variant project: {variant_name}"
             return result
 
-        if inc_available:
-            build_success = self.infra.build_with_inc_image(
-                project_name,
-                repo_path,
-                repo_name=repo_name or self._extract_repo_name(project_name),
-                sanitizer=self.sanitizer,
-                timeout=self.build_timeout,
-                variant_name=variant_name,
-            )
-            used_inc_build = True
-        else:
-            # Fallback: use standard OSS-Fuzz build process
-            build_success = self.infra.build_fuzzers(build_config, repo_path)
-            used_inc_build = False
+        # Build using helper.py build_fuzzers (with inc-build image if available)
+        build_success = self.infra.build_fuzzers(
+            build_config, repo_path, use_inc_image=inc_available
+        )
+        used_inc_build = inc_available
 
         # Record build time
         result.build_time = time.time() - start_time
