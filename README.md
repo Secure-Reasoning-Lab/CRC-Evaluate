@@ -255,8 +255,9 @@ Unified OSS-Fuzz variant building:
 
 ### **Evaluation Module** (`crsbench.evaluation`)
 Runtime evaluation and verification:
-- **Verification**: POV verification against benchmark variants
-- **Coverage**: Code coverage collection and analysis
+- **POV Verification**: Verify POVs against benchmark variants to identify CPVs
+- **Patch Verification**: Validate CRS-generated patches fix vulnerabilities without regressions
+- **Coverage**: Code coverage collection and analysis (LLVM for C/C++, JaCoCo for Java)
 - **CRS Execution**: Run CRS implementations against benchmarks
 - Parallel verification with configurable workers
 
@@ -289,6 +290,47 @@ crsbench verify benchmarks/example-project --harness fuzz_parser
 crsbench verify benchmarks/example-project --build-workers 8 --verify-workers 16
 ```
 
+### Patch Verify Command
+Verify CRS-generated patches against benchmark POVs:
+
+```bash
+# Verify patches in a directory
+crsbench patch-verify benchmarks/example-project \
+    --harness fuzz_parser \
+    --patch-dir ./patches \
+    --pov-dir ./povs
+
+# Use RTS (Regression Test Selection) mode for faster unit tests
+crsbench patch-verify benchmarks/example-project \
+    --harness fuzz_parser \
+    --patch-dir ./patches \
+    --pov-dir ./povs \
+    --test-mode rts
+
+# Output results as JSON
+crsbench patch-verify benchmarks/example-project \
+    --harness fuzz_parser \
+    --patch-dir ./patches \
+    --pov-dir ./povs \
+    --output results.json --format json
+```
+
+**Patch directory structure:**
+```
+patches/
+├── pov_0/
+│   └── patch.diff
+├── pov_1/
+│   └── patch.diff
+└── ...
+```
+
+**Verification pipeline:**
+1. Apply patch using incremental build
+2. Run POV test → must NOT crash (patch fixes the bug)
+3. Run POV variants (optional) → must NOT crash
+4. Result: VALID or INVALID
+
 ## AI Infrastructure
 
 CRSBench includes comprehensive LLM integration:
@@ -313,28 +355,9 @@ CRSBench includes comprehensive LLM integration:
 - **Full Mode**: Comprehensive evaluation of entire vulnerable codebase
 - **RFC**: The standardized specification document for CRS benchmarks
 
-## Development Status
+## Roadmap
 
-### **Completed**
-- [x] Unified YAML specification (RFC)
-- [x] Python package structure with uv
-- [x] Comprehensive validation module
-- [x] LLM infrastructure setup
-- [x] Documentation framework
-- [x] CLI interface (`crsbench run/verify/coverage`)
-- [x] Builder module with parallel builds
-- [x] POV verification with parallel execution
-
-### **In Progress**
-- [ ] Migration agent implementation
-- [ ] Hint generation agent implementation
-- [ ] Benchmark format migrations
-- [ ] Integration testing
-
-### **Planned**
-- [ ] Web dashboard
-- [ ] Performance benchmarking
-- [ ] Community benchmark submissions
+See [GitHub Issues](https://github.com/sslab-gatech/CRSBench/issues) for planned features and progress.
 
 ## Development
 
