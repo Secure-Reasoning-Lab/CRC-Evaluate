@@ -188,35 +188,34 @@ def _run_worker(redis_host: str, experiment_name: str):
         redis_connection.ping()
         logger.info("✓ Connected to Redis successfully")
 
-        # Set up RQ connection context
-        with rq.Connection(redis_connection):  # type: ignore[attr-defined]
-            queue_name = f"crsbench_{experiment_name}"
-            queue = rq.Queue(queue_name)  # type: ignore[attr-defined]
-            worker = rq.Worker([queue])  # type: ignore[attr-defined]
+        # Set up RQ queue and worker (RQ 2.x requires explicit connection)
+        queue_name = f"crsbench_{experiment_name}"
+        queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
+        worker = rq.Worker([queue], connection=redis_connection)  # type: ignore[attr-defined]
 
-            logger.info(f"Worker started, listening on queue: {queue_name}")
-            logger.info("Waiting for jobs...")
+        logger.info(f"Worker started, listening on queue: {queue_name}")
+        logger.info("Waiting for jobs...")
 
-            # Work in burst mode until queue is empty
-            # Burst mode: process available jobs then exit (vs. continuous polling)
-            while queue.count + queue.deferred_job_registry.count > 0:
-                logger.debug(
-                    f"Queue status: {queue.count} queued, "
-                    f"{queue.deferred_job_registry.count} deferred"
-                )
+        # Work in burst mode until queue is empty
+        # Burst mode: process available jobs then exit (vs. continuous polling)
+        while queue.count + queue.deferred_job_registry.count > 0:
+            logger.debug(
+                f"Queue status: {queue.count} queued, "
+                f"{queue.deferred_job_registry.count} deferred"
+            )
 
-                # Process jobs with timeout
-                worker.work(
-                    burst=True,  # Exit after processing available jobs
-                    max_jobs=1,  # Process one job at a time for better logging
-                )
+            # Process jobs with timeout
+            worker.work(
+                burst=True,  # Exit after processing available jobs
+                max_jobs=1,  # Process one job at a time for better logging
+            )
 
-                # Brief sleep to allow queue state to update
-                time.sleep(2)
+            # Brief sleep to allow queue state to update
+            time.sleep(2)
 
-            logger.info("=" * 60)
-            logger.info("Queue empty, worker shutting down")
-            logger.info("=" * 60)
+        logger.info("=" * 60)
+        logger.info("Queue empty, worker shutting down")
+        logger.info("=" * 60)
 
     except Exception:
         # Re-raise all exceptions to be handled by main()
@@ -250,17 +249,17 @@ def run_worker_continuous(redis_host: str, experiment_name: str, _timeout: int =
             redis_connection = redis.Redis(host=redis_host)
             redis_connection.ping()
 
-            with rq.Connection(redis_connection):  # type: ignore[attr-defined]
-                queue_name = f"crsbench_{experiment_name}"
-                queue = rq.Queue(queue_name)  # type: ignore[attr-defined]
-                worker = rq.Worker([queue])  # type: ignore[attr-defined]
+            # Set up RQ queue and worker (RQ 2.x requires explicit connection)
+            queue_name = f"crsbench_{experiment_name}"
+            queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
+            worker = rq.Worker([queue], connection=redis_connection)  # type: ignore[attr-defined]
 
-                logger.info(f"Worker running in continuous mode on queue: {queue_name}")
+            logger.info(f"Worker running in continuous mode on queue: {queue_name}")
 
-                # Run worker in continuous mode (never exits)
-                worker.work(
-                    burst=False  # Continuous mode
-                )
+            # Run worker in continuous mode (never exits)
+            worker.work(
+                burst=False  # Continuous mode
+            )
 
     except BlockingIOError:
         logger.error("Another worker is already running")
