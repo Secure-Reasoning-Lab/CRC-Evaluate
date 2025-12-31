@@ -261,6 +261,12 @@ class PatchVerificationEngine:
             result.details = f"Failed to create variant project: {variant_name}"
             return result
 
+        # Prepare variant inc-build image if using inc-build
+        if inc_available:
+            self.infra.prepare_inc_image_for_variant(
+                project_name, variant_name, self.sanitizer
+            )
+
         # Build using helper.py build_fuzzers (with inc-build image if available)
         build_success = self.infra.build_fuzzers(
             build_config, repo_path, use_inc_image=inc_available
