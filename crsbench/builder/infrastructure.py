@@ -601,3 +601,371 @@ class OSSFuzzInfrastructure:
         except Exception as e:
             logger.error(f"Coverage error for {project_name}/{harness}: {e}")
             return False, output_dir
+
+    # =========================================================================
+    # Inc-build image support for patch verification
+    # =========================================================================
+
+    def get_inc_build_image_name(
+        self,
+        project_name: str,
+        sanitizer: str = "address",
+        registry: str = "ghcr.io/team-atlanta/crsbench",
+    ) -> str:
+        """Get inc-build Docker image name.
+
+        Args:
+            project_name: OSS-Fuzz project name
+            sanitizer: Sanitizer type (address, undefined, memory)
+            registry: Docker registry
+
+        Returns:
+            Full Docker image name (e.g., ghcr.io/team-atlanta/crsbench/proj:inc-address)
+        """
+        return f"{registry}/{project_name}:inc-{sanitizer}"
+
+    def get_ossfuzz_image_name(
+        self,
+        project_name: str,
+        sanitizer: str = "address",
+    ) -> str:
+        """Get OSS-Fuzz compatible Docker image name.
+
+        OSS-Fuzz helper.py expects images in format: aixcc-afc/{project}:{tag}
+
+        Args:
+            project_name: OSS-Fuzz project name
+            sanitizer: Sanitizer type
+
+        Returns:
+            OSS-Fuzz compatible image name (e.g., aixcc-afc/proj:inc-address)
+        """
+        return f"aixcc-afc/{project_name}:inc-{sanitizer}"
+
+    def is_inc_image_available(
+        self,
+        project_name: str,
+        sanitizer: str = "address",
+        registry: str = "ghcr.io/team-atlanta/crsbench",
+    ) -> bool:
+        """Check if inc-build image exists locally and ensure OSS-Fuzz format.
+
+        If image exists in registry or nested format but not in OSS-Fuzz format,
+        automatically retags it for OSS-Fuzz compatibility.
+
+        Args:
+            project_name: OSS-Fuzz project name
+            sanitizer: Sanitizer type
+            registry: Docker registry
+
+        Returns:
+            True if image exists locally (in OSS-Fuzz format)
+        """
+        ossfuzz_image = self.get_ossfuzz_image_name(project_name, sanitizer)
+
+        # Check OSS-Fuzz compatible image first (already retagged)
+        if self._docker_image_exists(ossfuzz_image):
+            return True
+
+        # Check registry image and retag if found
+        inc_image = self.get_inc_build_image_name(project_name, sanitizer, registry)
+        if self._docker_image_exists(inc_image):
+            self._retag_for_ossfuzz(inc_image, ossfuzz_image)
+            return True
+
+        # Check nested format and retag if found
+        nested_image = self._get_nested_image_name(project_name, sanitizer)
+        if self._docker_image_exists(nested_image):
+            self._retag_for_ossfuzz(nested_image, ossfuzz_image)
+            return True
+
+        return False
+
+    def _docker_image_exists(self, image_name: str) -> bool:
+        """Check if a Docker image exists locally."""
+        try:
+            result = subprocess.run(
+                ["docker", "image", "inspect", image_name],
+                capture_output=True,
+                timeout=30,
+                stdin=subprocess.DEVNULL,
+            )
+            return result.returncode == 0
+        except Exception as e:
+            logger.debug(f"Error checking image {image_name}: {e}")
+            return False
+
+    def _get_nested_image_name(
+        self,
+        project_name: str,
+        sanitizer: str = "address",
+    ) -> str:
+        """Get nested format image name (legacy local builds).
+
+        Some local builds use nested path format: aixcc-afc/aixcc/c/{project}:inc-{sanitizer}
+
+        Args:
+            project_name: OSS-Fuzz project name
+            sanitizer: Sanitizer type
+
+        Returns:
+            Nested format image name
+        """
+        return f"aixcc-afc/aixcc/c/{project_name}:inc-{sanitizer}"
+
+    def pull_inc_build_image(
+        self,
+        project_name: str,
+        sanitizer: str = "address",
+        registry: str = "ghcr.io/team-atlanta/crsbench",
+    ) -> bool:
+        """Pull inc-build image from registry and retag for OSS-Fuzz.
+
+        Args:
+            project_name: OSS-Fuzz project name
+            sanitizer: Sanitizer type
+            registry: Docker registry
+
+        Returns:
+            True if pull succeeded
+        """
+        ossfuzz_image = self.get_ossfuzz_image_name(project_name, sanitizer)
+
+        # Check if already available
+        if self._docker_image_exists(ossfuzz_image):
+            logger.debug(f"OSS-Fuzz compatible image already exists: {ossfuzz_image}")
+            return True
+
+        inc_image = self.get_inc_build_image_name(project_name, sanitizer, registry)
+
+        # Check if source image exists locally
+        if self._docker_image_exists(inc_image):
+            logger.info(f"Inc-build image available locally: {inc_image}")
+            return self._retag_for_ossfuzz(inc_image, ossfuzz_image)
+
+        # Fallback: check nested format (legacy local builds)
+        nested_image = self._get_nested_image_name(project_name, sanitizer)
+        if self._docker_image_exists(nested_image):
+            logger.info(f"Found nested format image locally: {nested_image}")
+            return self._retag_for_ossfuzz(nested_image, ossfuzz_image)
+
+        # Pull from registry
+        logger.info(f"Pulling inc-build image: {inc_image}")
+        try:
+            result = subprocess.run(
+                ["docker", "pull", inc_image],
+                capture_output=True,
+                text=True,
+                timeout=600,  # 10 minutes for large images
+                stdin=subprocess.DEVNULL,
+            )
+
+            if result.returncode == 0:
+                logger.info(f"Successfully pulled: {inc_image}")
+                return self._retag_for_ossfuzz(inc_image, ossfuzz_image)
+
+            logger.error(f"Failed to pull {inc_image}: {result.stderr}")
+            return False
+
+        except subprocess.TimeoutExpired:
+            logger.error(f"Timeout pulling {inc_image}")
+            return False
+        except Exception as e:
+            logger.error(f"Error pulling {inc_image}: {e}")
+            return False
+
+    def _retag_for_ossfuzz(self, src_image: str, dst_image: str) -> bool:
+        """Retag an image for OSS-Fuzz compatibility."""
+        try:
+            result = subprocess.run(
+                ["docker", "tag", src_image, dst_image],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                stdin=subprocess.DEVNULL,
+            )
+            if result.returncode == 0:
+                logger.info(f"Retagged {src_image} -> {dst_image}")
+                return True
+            logger.error(f"Failed to retag: {result.stderr}")
+            return False
+        except Exception as e:
+            logger.error(f"Error retagging image: {e}")
+            return False
+
+    def build_with_inc_image(
+        self,
+        project_name: str,
+        src_path: Path,
+        repo_name: str,
+        sanitizer: str = "address",
+        timeout: int = 1200,
+        registry: str = "ghcr.io/team-atlanta/crsbench",
+    ) -> bool:
+        """Build fuzzers using inc-build image for faster incremental builds.
+
+        Args:
+            project_name: OSS-Fuzz project name
+            src_path: Path to source code
+            repo_name: Repository name for volume mount
+            sanitizer: Sanitizer type
+            timeout: Build timeout in seconds
+            registry: Docker registry
+
+        Returns:
+            True if build succeeded
+        """
+        image_name = self.get_inc_build_image_name(project_name, sanitizer, registry)
+
+        # Prepare output and work directories
+        out_dir = self.oss_fuzz_path / "build" / "out" / project_name
+        work_dir = self.oss_fuzz_path / "build" / "work" / project_name
+        out_dir.mkdir(parents=True, exist_ok=True)
+        work_dir.mkdir(parents=True, exist_ok=True)
+
+        # Run docker with inc-build image
+        cmd = [
+            "docker",
+            "run",
+            "--rm",
+            "--privileged",
+            "--shm-size=2g",
+            "--platform",
+            "linux/amd64",
+            "-e",
+            "FUZZING_ENGINE=libfuzzer",
+            "-e",
+            f"SANITIZER={sanitizer}",
+            "-e",
+            "ARCHITECTURE=x86_64",
+            "-e",
+            f"PROJECT_NAME={project_name}",
+            "-e",
+            "BUILD_UID=0",
+            "-v",
+            f"{src_path}:/src/{repo_name}:rw",
+            "-v",
+            f"{out_dir}:/out",
+            "-v",
+            f"{work_dir}:/work",
+            image_name,
+            "/bin/bash",
+            "-c",
+            "compile",
+        ]
+
+        logger.info(f"Building fuzzers with inc-build image: {image_name}")
+        logger.debug(f"Command: {' '.join(cmd)}")
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                stdin=subprocess.DEVNULL,
+            )
+
+            if result.returncode == 0:
+                logger.info(f"Successfully built fuzzers for {project_name}")
+                fix_docker_ownership(out_dir)
+                return True
+
+            logger.error(f"Failed to build fuzzers: {result.stderr[:2000]}")
+            return False
+
+        except subprocess.TimeoutExpired:
+            logger.error(f"Build timeout for {project_name}")
+            return False
+        except Exception as e:
+            logger.error(f"Build error for {project_name}: {e}")
+            return False
+
+    # =========================================================================
+    # Unit test support for patch verification
+    # =========================================================================
+
+    def run_tests(
+        self,
+        project_name: str,
+        src_path: Path,
+        sanitizer: str = "address",
+        timeout: int = 1800,
+        *,
+        rts_mode: bool = False,
+        docker_image_tag: Optional[str] = None,
+    ) -> tuple[bool, str, str]:
+        """Run unit tests via helper.py run_test.
+
+        Args:
+            project_name: OSS-Fuzz project name
+            src_path: Path to source code
+            sanitizer: Sanitizer type
+            timeout: Timeout in seconds
+            rts_mode: If True, run only patch-affected tests (RTS)
+            docker_image_tag: Optional Docker image tag (e.g., "inc-address")
+
+        Returns:
+            Tuple of (passed, stdout, stderr)
+        """
+        cmd = [
+            "python3",
+            str(self._helper_script),
+            "run_test",
+            "--sanitizer",
+            sanitizer,
+            project_name,
+            str(src_path),
+        ]
+
+        if rts_mode:
+            cmd.append("--rts")
+
+        if docker_image_tag:
+            cmd.extend(["--docker_image_tag", docker_image_tag])
+
+        logger.info(
+            f"Running unit tests for {project_name} "
+            f"(rts={rts_mode}, sanitizer={sanitizer})"
+        )
+        logger.debug(f"Command: {' '.join(cmd)}")
+
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=self.oss_fuzz_path,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                stdin=subprocess.DEVNULL,
+            )
+
+            passed = result.returncode == 0
+            if passed:
+                logger.info(f"Unit tests passed for {project_name}")
+            else:
+                logger.warning(
+                    f"Unit tests failed for {project_name} "
+                    f"(exit code: {result.returncode})"
+                )
+
+            return passed, result.stdout, result.stderr
+
+        except subprocess.TimeoutExpired:
+            logger.error(f"Test timeout for {project_name}")
+            return False, "", "Test execution timed out"
+        except Exception as e:
+            logger.error(f"Test execution error for {project_name}: {e}")
+            return False, "", str(e)
+
+    def is_tests_available(self, project_name: str) -> bool:
+        """Check if test.sh exists for the project.
+
+        Args:
+            project_name: OSS-Fuzz project name
+
+        Returns:
+            True if test.sh exists
+        """
+        test_script = self.projects_base / project_name / "test.sh"
+        return test_script.exists()

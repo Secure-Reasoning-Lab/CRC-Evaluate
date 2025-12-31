@@ -24,9 +24,9 @@ from crsbench.evaluation.verification.dedup import (
     PatchBasedDedup,
 )
 from crsbench.evaluation.verification.models import (
-    VerificationRequest,
-    VerificationResult,
-    VerificationStatus,
+    PovVerificationRequest,
+    PovVerificationResult,
+    PovVerificationStatus,
 )
 from crsbench.evaluation.verification.pov.verdict import VerdictResolver
 from crsbench.utils.logger import get_logger
@@ -132,10 +132,10 @@ class VerificationEngine:
 
     def verify_pov(
         self,
-        request: VerificationRequest,
+        request: PovVerificationRequest,
         adapter: MetaYamlAdapter,
         build_results: Optional[dict[str, BuildResult]] = None,
-    ) -> VerificationResult:
+    ) -> PovVerificationResult:
         """Verify a single POV against all variants.
 
         Runs reproduce() calls in parallel for all variants.
@@ -146,15 +146,15 @@ class VerificationEngine:
             build_results: Optional pre-built results (for efficiency)
 
         Returns:
-            VerificationResult with determined status
+            PovVerificationResult with determined status
         """
         # Get or build variants
         if build_results is None:
             build_results = self._get_or_build_results(adapter)
 
         if not build_results:
-            return VerificationResult(
-                status=VerificationStatus.ERROR,
+            return PovVerificationResult(
+                status=PovVerificationStatus.ERROR,
                 benchmark=adapter.benchmark_name,
                 pov_id=request.pov_id,
                 details="No built versions available",
@@ -218,7 +218,7 @@ class VerificationEngine:
         pov_harness_pairs: list[tuple[str, bytes, str]],  # (pov_id, pov_data, harness)
         adapter: MetaYamlAdapter,
         build_results: dict[str, BuildResult],
-    ) -> list[VerificationResult]:
+    ) -> list[PovVerificationResult]:
         """Verify multiple POVs in parallel.
 
         Flattens all (pov, harness, variant) combinations and runs them in parallel,
@@ -230,7 +230,7 @@ class VerificationEngine:
             build_results: Pre-built variant results
 
         Returns:
-            List of VerificationResult for each (pov, harness) pair
+            List of PovVerificationResult for each (pov, harness) pair
         """
         # Create all tasks (flattened)
         tasks: list[ReproduceTask] = []
@@ -332,7 +332,7 @@ class VerificationEngine:
         harness_filter: Optional[str] = None,
         *,
         deduplicate: bool = True,
-    ) -> list[VerificationResult]:
+    ) -> list[PovVerificationResult]:
         """Verify all POVs in a directory against a benchmark.
 
         Uses parallel execution for all reproduce() calls.
@@ -402,7 +402,7 @@ class VerificationEngine:
         *,
         force_rebuild: bool = False,
         deduplicate: bool = True,
-    ) -> list[VerificationResult]:
+    ) -> list[PovVerificationResult]:
         """Verify POVs for a complete benchmark.
 
         Uses parallel execution for all reproduce() calls.
