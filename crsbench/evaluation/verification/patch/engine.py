@@ -20,10 +20,12 @@ from typing import TYPE_CHECKING, Optional
 
 from crsbench.builder import OSSFuzzInfrastructure
 from crsbench.evaluation.verification.models import (
+    CpvStats,
     PatchInfo,
     PatchVerificationResult,
     PatchVerificationStatus,
     TestMode,
+    VerificationScores,
 )
 from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import clone_or_copy_cached_repo
@@ -196,47 +198,42 @@ class PatchVerificationEngine:
                 result.details = "Build failed"
             return result
 
-        # Step 4: Run POV test - patch should prevent crash
-        # Parse unique_id to get cpv_id for variant discovery
-        _, cpv_id, _ = self._parse_unique_id(patch.pov_id)
+        # Set harness in result
+        result.harness = harness
 
+        # Step 4: Run POV test against ALL CPVs in harness
         if self.verify_variants:
-            # Discover and test all POV variants
-            pov_variants = self._discover_pov_variants(benchmark_path, harness, cpv_id)
+            # Test patch against all CPVs and their variants
+            cpv_fixed, cpv_stats, scores = self._test_patch_against_all_cpvs(
+                project_name, harness, benchmark_path
+            )
 
-            if pov_variants:
-                all_passed, failed_povs = self._run_pov_variants_test(
-                    project_name, harness, pov_variants
+            result.cpv_fixed = cpv_fixed
+            result.cpv_stats = cpv_stats
+            result.scores = scores
+
+            # pov_test_passed is True if at least one CPV is fully fixed
+            result.pov_test_passed = len(cpv_fixed) > 0
+
+            if not result.pov_test_passed:
+                result.status = PatchVerificationStatus.POV_STILL_TRIGGERS
+                result.details = (
+                    f"No CPVs fully fixed. "
+                    f"Partial: {scores.cpvs_partial}, None: {scores.cpvs_none}"
                 )
-                result.pov_test_passed = all_passed
-
-                if not all_passed:
-                    result.status = PatchVerificationStatus.POV_STILL_TRIGGERS
-                    result.details = (
-                        f"POV variants still trigger crash: {', '.join(failed_povs)}"
-                    )
-                    return result
-            else:
-                # Fallback to single POV test if no variants found
-                logger.warning(
-                    f"No POV variants found for {harness}/{cpv_id}, "
-                    "falling back to single POV test"
-                )
-                pov_passed = self._run_pov_test(project_name, harness, pov_path)
-                result.pov_test_passed = pov_passed
-
-                if not pov_passed:
-                    result.status = PatchVerificationStatus.POV_STILL_TRIGGERS
-                    result.details = "POV still triggers vulnerability after patch"
-                    return result
+                result.security_verdict = "FAIL"
+                return result
         else:
-            # Single POV test only
+            # Single POV test only (legacy behavior)
+            # Parse unique_id to get cpv_id for single test
+            _, cpv_id, _ = self._parse_unique_id(patch.pov_id)
             pov_passed = self._run_pov_test(project_name, harness, pov_path)
             result.pov_test_passed = pov_passed
 
             if not pov_passed:
                 result.status = PatchVerificationStatus.POV_STILL_TRIGGERS
                 result.details = "POV still triggers vulnerability after patch"
+                result.security_verdict = "FAIL"
                 return result
 
         # Step 5: Run unit tests
@@ -246,11 +243,14 @@ class PatchVerificationEngine:
         if not test_passed:
             result.status = PatchVerificationStatus.TEST_FAILED
             result.details = test_details or "Unit tests failed"
+            result.security_verdict = "FAIL"
             return result
 
         # All checks passed
         result.status = PatchVerificationStatus.VALID
         result.details = "Patch is valid"
+        # security_verdict = PASS requires: at least 1 CPV complete + tests pass
+        result.security_verdict = "PASS"
         return result
 
     def verify_patches(
@@ -496,6 +496,146 @@ class PatchVerificationEngine:
         logger.debug(f"Found {len(pov_files)} POV variants for {harness}/{cpv_id}")
         return pov_files
 
+    def _discover_all_cpvs_in_harness(
+        self, benchmark_path: Path, harness: str
+    ) -> list[str]:
+        """Discover all CPVs from .aixcc/<harness>/cpv_*/
+
+        Args:
+            benchmark_path: Path to benchmark directory
+            harness: Harness name
+
+        Returns:
+            List of CPV IDs (e.g., ['cpv_0', 'cpv_1']), sorted numerically
+        """
+        harness_dir = benchmark_path / ".aixcc" / harness
+
+        if not harness_dir.exists():
+            logger.debug(f"Harness directory not found: {harness_dir}")
+            return []
+
+        cpv_dirs = [
+            d.name for d in harness_dir.iterdir() if d.is_dir() and d.name.startswith("cpv_")
+        ]
+
+        # Sort by CPV number (cpv_0, cpv_1, cpv_2, ...)
+        def extract_cpv_num(cpv_id: str) -> int:
+            try:
+                return int(cpv_id.split("_")[1])
+            except (IndexError, ValueError):
+                return 999
+
+        cpv_dirs.sort(key=extract_cpv_num)
+
+        logger.debug(f"Found {len(cpv_dirs)} CPVs in {harness}: {cpv_dirs}")
+        return cpv_dirs
+
+    def _test_patch_against_all_cpvs(
+        self, project_name: str, harness: str, benchmark_path: Path
+    ) -> tuple[list[str], dict[str, CpvStats], VerificationScores]:
+        """Test patch against ALL CPVs in harness.
+
+        For each CPV:
+        - Discover POV variants
+        - Test each variant
+        - Build CpvStats (variants_tested, variants_matched, variant_results)
+        - A CPV is in cpv_fixed ONLY if ALL variants pass (no crash)
+
+        Args:
+            project_name: OSS-Fuzz project name
+            harness: Harness name
+            benchmark_path: Path to benchmark directory
+
+        Returns:
+            Tuple of (cpv_fixed, cpv_stats, scores)
+        """
+        cpv_ids = self._discover_all_cpvs_in_harness(benchmark_path, harness)
+
+        cpv_fixed: list[str] = []
+        cpv_stats: dict[str, CpvStats] = {}
+        scores = VerificationScores()
+
+        if not cpv_ids:
+            logger.warning(f"No CPVs found in {harness}")
+            return cpv_fixed, cpv_stats, scores
+
+        logger.info(f"Testing patch against {len(cpv_ids)} CPVs in {harness}")
+
+        for cpv_id in cpv_ids:
+            # Discover POV variants for this CPV
+            pov_variants = self._discover_pov_variants(benchmark_path, harness, cpv_id)
+
+            if not pov_variants:
+                logger.warning(f"No POV variants found for {harness}/{cpv_id}")
+                cpv_stats[cpv_id] = CpvStats(
+                    cpv_id=cpv_id,
+                    variants_tested=0,
+                    variants_matched=0,
+                    variant_results={},
+                )
+                scores.cpvs_none += 1
+                continue
+
+            # Test each variant and collect results
+            variant_results: dict[str, bool] = {}
+            variants_matched = 0
+
+            # Run all variants in parallel
+            with ThreadPoolExecutor(max_workers=self.verify_workers) as executor:
+                futures = {
+                    executor.submit(
+                        self._verify_single_pov, project_name, harness, pov_path
+                    ): pov_path
+                    for pov_path in pov_variants
+                }
+
+                for future in as_completed(futures):
+                    pov_path = futures[future]
+                    pov_name, passed = future.result()
+                    # Use stem (pov_0) as variant key
+                    variant_id = pov_path.stem
+                    variant_results[variant_id] = passed
+                    if passed:
+                        variants_matched += 1
+
+            # Build CpvStats for this CPV
+            stats = CpvStats(
+                cpv_id=cpv_id,
+                variants_tested=len(pov_variants),
+                variants_matched=variants_matched,
+                variant_results=variant_results,
+            )
+            cpv_stats[cpv_id] = stats
+
+            # Update aggregate scores
+            scores.total_variants_tested += stats.variants_tested
+            scores.total_variants_matched += stats.variants_matched
+
+            # Determine if CPV is fully fixed
+            if stats.status == "complete":
+                cpv_fixed.append(cpv_id)
+                scores.cpvs_complete += 1
+                logger.info(
+                    f"  {cpv_id}: COMPLETE ({variants_matched}/{len(pov_variants)} variants)"
+                )
+            elif stats.status == "partial":
+                scores.cpvs_partial += 1
+                logger.info(
+                    f"  {cpv_id}: PARTIAL ({variants_matched}/{len(pov_variants)} variants)"
+                )
+            else:
+                scores.cpvs_none += 1
+                logger.info(
+                    f"  {cpv_id}: NONE ({variants_matched}/{len(pov_variants)} variants)"
+                )
+
+        logger.info(
+            f"CPV summary: {scores.cpvs_complete} complete, "
+            f"{scores.cpvs_partial} partial, {scores.cpvs_none} none"
+        )
+
+        return cpv_fixed, cpv_stats, scores
+
     def _parse_unique_id(self, unique_id: str) -> tuple[str, str, str]:
         """Parse unique_id into harness, cpv_id, pov_id.
 
@@ -610,6 +750,153 @@ class PatchVerificationEngine:
                 )
 
         return patches
+
+    def _discover_patches_from_benchmark(
+        self, benchmark_path: Path, harness_filter: Optional[str] = None
+    ) -> list[tuple[str, str, PatchInfo]]:
+        """Discover patches from .aixcc/<harness>/<cpv>/patches/
+
+        Structure: .aixcc/<harness>/<cpv>/patches/<unique_id>/patch.diff
+
+        Args:
+            benchmark_path: Path to benchmark directory
+            harness_filter: Optional harness to filter (None = all harnesses)
+
+        Returns:
+            List of (harness, cpv_id, PatchInfo) tuples
+        """
+        aixcc_dir = benchmark_path / ".aixcc"
+        if not aixcc_dir.exists():
+            logger.warning(f".aixcc directory not found: {aixcc_dir}")
+            return []
+
+        discovered: list[tuple[str, str, PatchInfo]] = []
+
+        # Iterate through harness directories
+        for harness_dir in aixcc_dir.iterdir():
+            if not harness_dir.is_dir():
+                continue
+
+            harness = harness_dir.name
+
+            # Skip meta.yaml and other non-harness entries
+            if harness.endswith(".yaml") or harness.startswith("."):
+                continue
+
+            # Apply harness filter if specified
+            if harness_filter and harness != harness_filter:
+                continue
+
+            # Iterate through CPV directories
+            for cpv_dir in harness_dir.iterdir():
+                if not cpv_dir.is_dir() or not cpv_dir.name.startswith("cpv_"):
+                    continue
+
+                cpv_id = cpv_dir.name
+                patches_dir = cpv_dir / "patches"
+
+                if not patches_dir.exists():
+                    continue
+
+                # Iterate through patch directories (unique_id)
+                for patch_subdir in patches_dir.iterdir():
+                    if not patch_subdir.is_dir():
+                        continue
+
+                    patch_file = patch_subdir / "patch.diff"
+                    if patch_file.exists():
+                        # unique_id is the subdirectory name
+                        unique_id = patch_subdir.name
+                        patch_info = PatchInfo(
+                            pov_id=unique_id,
+                            patch_path=patch_file,
+                        )
+                        discovered.append((harness, cpv_id, patch_info))
+
+        logger.info(f"Discovered {len(discovered)} patches in {benchmark_path}")
+        return discovered
+
+    def verify_benchmark(
+        self,
+        benchmark_path: Path,
+        harness: Optional[str] = None,
+        *,
+        parallel: bool = True,
+    ) -> list[PatchVerificationResult]:
+        """Verify all patches in a benchmark using auto-discovery.
+
+        Discovers patches from .aixcc/<harness>/<cpv>/patches/ and verifies each.
+
+        Args:
+            benchmark_path: Path to benchmark directory
+            harness: Optional harness filter (None = all harnesses)
+            parallel: Run in parallel
+
+        Returns:
+            List of PatchVerificationResult
+        """
+        # Discover all patches
+        discovered = self._discover_patches_from_benchmark(benchmark_path, harness)
+
+        if not discovered:
+            logger.warning(f"No patches found in {benchmark_path}")
+            return []
+
+        results: list[PatchVerificationResult] = []
+
+        # Group patches by harness for efficient processing
+        harness_patches: dict[str, list[tuple[str, PatchInfo]]] = {}
+        for h, cpv_id, patch in discovered:
+            if h not in harness_patches:
+                harness_patches[h] = []
+            harness_patches[h].append((cpv_id, patch))
+
+        logger.info(
+            f"Verifying patches across {len(harness_patches)} harnesses: "
+            f"{list(harness_patches.keys())}"
+        )
+
+        # Process each harness
+        for h, cpv_patches in harness_patches.items():
+            logger.info(f"Processing harness '{h}' with {len(cpv_patches)} patches")
+
+            if not parallel or len(cpv_patches) <= 1:
+                # Sequential verification
+                for cpv_id, patch in cpv_patches:
+                    # Find POV for this patch (first variant)
+                    pov_variants = self._discover_pov_variants(
+                        benchmark_path, h, cpv_id
+                    )
+                    pov_path = pov_variants[0] if pov_variants else Path("/dev/null")
+
+                    result = self.verify_patch(benchmark_path, patch, h, pov_path)
+                    results.append(result)
+            else:
+                # Parallel verification
+                with ThreadPoolExecutor(max_workers=self.verify_workers) as executor:
+                    futures = {}
+                    for cpv_id, patch in cpv_patches:
+                        pov_variants = self._discover_pov_variants(
+                            benchmark_path, h, cpv_id
+                        )
+                        pov_path = (
+                            pov_variants[0] if pov_variants else Path("/dev/null")
+                        )
+
+                        future = executor.submit(
+                            self.verify_patch,
+                            benchmark_path,
+                            patch,
+                            h,
+                            pov_path,
+                        )
+                        futures[future] = patch
+
+                    for future in as_completed(futures):
+                        result = future.result()
+                        results.append(result)
+
+        return results
 
     def _find_pov_for_patch(
         self,

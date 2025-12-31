@@ -741,3 +741,306 @@ class TestPatchVerificationE2E:
 
         finally:
             engine.cleanup()
+
+
+# =============================================================================
+# Phase 2: Per-CPV Testing Tests
+# =============================================================================
+
+
+class TestCpvDiscovery:
+    """Tests for CPV and POV variant discovery methods."""
+
+    def test_discover_all_cpvs_in_harness(self, benchmark_path: Path):
+        """Test discovering all CPVs for a harness."""
+        from unittest.mock import MagicMock
+
+        from crsbench.evaluation.verification.patch import PatchVerificationEngine
+
+        # Create a mock engine (we don't need full infrastructure for discovery)
+        engine = MagicMock(spec=PatchVerificationEngine)
+        engine._discover_all_cpvs_in_harness = (
+            PatchVerificationEngine._discover_all_cpvs_in_harness.__get__(
+                engine, PatchVerificationEngine
+            )
+        )
+
+        cpvs = engine._discover_all_cpvs_in_harness(benchmark_path, HARNESS_NAME)
+
+        # Should find at least one CPV
+        assert len(cpvs) >= 1, f"Should find at least one CPV in {HARNESS_NAME}"
+
+        # All should be cpv_* format
+        for cpv in cpvs:
+            assert cpv.startswith("cpv_"), f"CPV should start with cpv_: {cpv}"
+
+        # Should be sorted numerically
+        if len(cpvs) > 1:
+            cpv_nums = [int(c.split("_")[1]) for c in cpvs]
+            assert cpv_nums == sorted(cpv_nums), "CPVs should be sorted numerically"
+
+    def test_discover_all_cpvs_nonexistent_harness(self, benchmark_path: Path):
+        """Test CPV discovery for nonexistent harness returns empty list."""
+        from unittest.mock import MagicMock
+
+        from crsbench.evaluation.verification.patch import PatchVerificationEngine
+
+        engine = MagicMock(spec=PatchVerificationEngine)
+        engine._discover_all_cpvs_in_harness = (
+            PatchVerificationEngine._discover_all_cpvs_in_harness.__get__(
+                engine, PatchVerificationEngine
+            )
+        )
+
+        cpvs = engine._discover_all_cpvs_in_harness(
+            benchmark_path, "nonexistent_harness"
+        )
+        assert cpvs == [], "Should return empty list for nonexistent harness"
+
+
+class TestDiscoverPatchesFromBenchmark:
+    """Tests for _discover_patches_from_benchmark method."""
+
+    def test_discover_patches_structure(self, benchmark_path: Path):
+        """Test discovering patches from benchmark .aixcc structure."""
+        from unittest.mock import MagicMock
+
+        from crsbench.evaluation.verification.patch import PatchVerificationEngine
+
+        engine = MagicMock(spec=PatchVerificationEngine)
+        engine._discover_patches_from_benchmark = (
+            PatchVerificationEngine._discover_patches_from_benchmark.__get__(
+                engine, PatchVerificationEngine
+            )
+        )
+
+        # Create test structure with patches
+        test_dir = benchmark_path / ".aixcc" / HARNESS_NAME / CPV_ID / "patches"
+        if not test_dir.exists():
+            pytest.skip(f"Patches directory not found: {test_dir}")
+
+        discovered = engine._discover_patches_from_benchmark(benchmark_path)
+
+        # Should discover patches if any exist
+        # Note: The test benchmark may not have the patches/<unique_id>/patch.diff structure
+        # This tests the discovery logic works without error
+        assert isinstance(discovered, list), "Should return a list"
+
+    def test_discover_patches_with_harness_filter(self, benchmark_path: Path):
+        """Test discovering patches with harness filter."""
+        from unittest.mock import MagicMock
+
+        from crsbench.evaluation.verification.patch import PatchVerificationEngine
+
+        engine = MagicMock(spec=PatchVerificationEngine)
+        engine._discover_patches_from_benchmark = (
+            PatchVerificationEngine._discover_patches_from_benchmark.__get__(
+                engine, PatchVerificationEngine
+            )
+        )
+
+        # Filter by harness
+        discovered = engine._discover_patches_from_benchmark(
+            benchmark_path, harness_filter=HARNESS_NAME
+        )
+
+        # All discovered should be for the filtered harness
+        for harness, cpv_id, patch in discovered:
+            assert harness == HARNESS_NAME, (
+                f"Should only find patches for {HARNESS_NAME}"
+            )
+
+
+class TestCpvStatsAndScores:
+    """Tests for CpvStats and VerificationScores models used in per-CPV testing."""
+
+    def test_cpv_stats_status_complete(self):
+        """Test CpvStats status when all variants pass."""
+        from crsbench.evaluation.verification.models import CpvStats
+
+        stats = CpvStats(
+            cpv_id="cpv_0",
+            variants_tested=3,
+            variants_matched=3,
+            variant_results={"pov_0": True, "pov_1": True, "pov_2": True},
+        )
+
+        assert stats.status == "complete"
+        assert stats.variants_tested == 3
+        assert stats.variants_matched == 3
+
+    def test_cpv_stats_status_partial(self):
+        """Test CpvStats status when some variants pass."""
+        from crsbench.evaluation.verification.models import CpvStats
+
+        stats = CpvStats(
+            cpv_id="cpv_0",
+            variants_tested=3,
+            variants_matched=2,
+            variant_results={"pov_0": True, "pov_1": True, "pov_2": False},
+        )
+
+        assert stats.status == "partial"
+
+    def test_cpv_stats_status_none(self):
+        """Test CpvStats status when no variants pass."""
+        from crsbench.evaluation.verification.models import CpvStats
+
+        stats = CpvStats(
+            cpv_id="cpv_0",
+            variants_tested=3,
+            variants_matched=0,
+            variant_results={"pov_0": False, "pov_1": False, "pov_2": False},
+        )
+
+        assert stats.status == "none"
+
+    def test_cpv_stats_to_dict(self):
+        """Test CpvStats serialization."""
+        from crsbench.evaluation.verification.models import CpvStats
+
+        stats = CpvStats(
+            cpv_id="cpv_0",
+            variants_tested=2,
+            variants_matched=1,
+            variant_results={"pov_0": True, "pov_1": False},
+        )
+
+        d = stats.to_dict()
+        assert d["cpv_id"] == "cpv_0"
+        assert d["variants_tested"] == 2
+        assert d["variants_matched"] == 1
+        assert d["status"] == "partial"
+
+    def test_verification_scores_overall_fix_rate(self):
+        """Test VerificationScores fix rate calculation."""
+        from crsbench.evaluation.verification.models import VerificationScores
+
+        scores = VerificationScores(
+            cpvs_complete=2,
+            cpvs_partial=1,
+            cpvs_none=1,
+            total_variants_tested=10,
+            total_variants_matched=7,
+        )
+
+        assert scores.overall_fix_rate == 0.7
+        assert scores.cpvs_complete == 2
+
+    def test_verification_scores_zero_tested(self):
+        """Test VerificationScores with zero variants tested."""
+        from crsbench.evaluation.verification.models import VerificationScores
+
+        scores = VerificationScores()
+        assert scores.overall_fix_rate == 0.0
+
+
+class TestPatchVerificationResultPhase2:
+    """Tests for PatchVerificationResult with Phase 2 fields."""
+
+    def test_result_with_cpv_stats(self):
+        """Test PatchVerificationResult with per-CPV statistics."""
+        from crsbench.evaluation.verification.models import (
+            CpvStats,
+            PatchVerificationResult,
+            PatchVerificationStatus,
+            VerificationScores,
+        )
+
+        cpv_stats = {
+            "cpv_0": CpvStats(
+                cpv_id="cpv_0",
+                variants_tested=2,
+                variants_matched=2,
+                variant_results={"pov_0": True, "pov_1": True},
+            ),
+            "cpv_1": CpvStats(
+                cpv_id="cpv_1",
+                variants_tested=2,
+                variants_matched=1,
+                variant_results={"pov_0": True, "pov_1": False},
+            ),
+        }
+
+        scores = VerificationScores(
+            cpvs_complete=1,
+            cpvs_partial=1,
+            cpvs_none=0,
+            total_variants_tested=4,
+            total_variants_matched=3,
+        )
+
+        result = PatchVerificationResult(
+            status=PatchVerificationStatus.VALID,
+            pov_id="test_patch",
+            patch_path=Path("/test/patch.diff"),
+            harness="test_harness",
+            cpv_fixed=["cpv_0"],
+            cpv_stats=cpv_stats,
+            scores=scores,
+            security_verdict="PASS",
+        )
+
+        assert result.harness == "test_harness"
+        assert result.cpv_fixed == ["cpv_0"]
+        assert len(result.cpv_stats) == 2
+        assert result.scores.overall_fix_rate == 0.75
+        assert result.security_verdict == "PASS"
+
+    def test_result_to_dict_with_phase2_fields(self):
+        """Test PatchVerificationResult serialization with Phase 2 fields."""
+        from crsbench.evaluation.verification.models import (
+            CpvStats,
+            PatchVerificationResult,
+            PatchVerificationStatus,
+            VerificationScores,
+        )
+
+        result = PatchVerificationResult(
+            status=PatchVerificationStatus.VALID,
+            pov_id="test",
+            patch_path=Path("/test/patch.diff"),
+            harness="harness",
+            cpv_fixed=["cpv_0"],
+            cpv_stats={
+                "cpv_0": CpvStats(
+                    cpv_id="cpv_0",
+                    variants_tested=1,
+                    variants_matched=1,
+                    variant_results={"pov_0": True},
+                )
+            },
+            scores=VerificationScores(
+                cpvs_complete=1,
+                total_variants_tested=1,
+                total_variants_matched=1,
+            ),
+            security_verdict="PASS",
+        )
+
+        d = result.to_dict()
+
+        assert d["harness"] == "harness"
+        assert d["cpv_fixed"] == ["cpv_0"]
+        assert "cpv_0" in d["cpv_stats"]
+        assert d["cpv_stats"]["cpv_0"]["status"] == "complete"
+        assert d["scores"]["cpvs_complete"] == 1
+        assert d["security_verdict"] == "PASS"
+
+    def test_security_verdict_fail_no_cpvs_fixed(self):
+        """Test security_verdict is FAIL when no CPVs are fixed."""
+        from crsbench.evaluation.verification.models import (
+            PatchVerificationResult,
+            PatchVerificationStatus,
+        )
+
+        result = PatchVerificationResult(
+            status=PatchVerificationStatus.POV_STILL_TRIGGERS,
+            pov_id="test",
+            patch_path=Path("/test/patch.diff"),
+            cpv_fixed=[],  # No CPVs fixed
+            security_verdict="FAIL",
+        )
+
+        assert result.security_verdict == "FAIL"
+        assert not result.is_valid
