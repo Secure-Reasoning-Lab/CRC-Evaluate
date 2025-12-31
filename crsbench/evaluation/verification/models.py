@@ -280,6 +280,9 @@ class PatchVerificationResult:
     patch_path: Path
     harness: str = ""
     details: Optional[str] = None
+    build_time: float = 0.0
+    pov_test_time: float = 0.0
+    unit_test_time: float = 0.0
     elapsed_seconds: float = 0.0
     pov_test_passed: bool = False
     unit_tests_passed: Optional[bool] = None
@@ -306,6 +309,9 @@ class PatchVerificationResult:
             "patch_path": str(self.patch_path),
             "harness": self.harness,
             "details": self.details,
+            "build_time": self.build_time,
+            "pov_test_time": self.pov_test_time,
+            "unit_test_time": self.unit_test_time,
             "elapsed_seconds": self.elapsed_seconds,
             "pov_test_passed": self.pov_test_passed,
             "unit_tests_passed": self.unit_tests_passed,

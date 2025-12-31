@@ -129,6 +129,7 @@ class PatchVerificationEngine:
         self.force_rebuild = force_rebuild
         self.use_inc_build = use_inc_build
         self._inc_images_pulled: set[str] = set()
+        self._inc_images_unavailable: set[str] = set()  # Cache failed pulls
         self._temp_dirs: list[Path] = []
         self._built_variants: list[str] = []  # Track variants for cleanup
 
@@ -202,11 +203,13 @@ class PatchVerificationEngine:
             logger.info(f"Using cached build for {variant_name}")
             # Track variant (for _built_variants list)
             self._built_variants.append(variant_name)
-            # Skip to verification
+            # Skip to verification (build_time stays 0 for cached builds)
             result.harness = harness
-            return self._run_verification(
+            verified_result = self._run_verification(
                 result, variant_name, harness, benchmark_path, project_name
             )
+            verified_result.elapsed_seconds = time.time() - start_time
+            return verified_result
 
         # Step 1: Ensure inc-build image is available (if enabled)
         if self.use_inc_build:
@@ -273,7 +276,8 @@ class PatchVerificationEngine:
             build_success = self.infra.build_fuzzers(build_config, repo_path)
             used_inc_build = False
 
-        result.elapsed_seconds = time.time() - start_time
+        # Record build time
+        result.build_time = time.time() - start_time
 
         # Track variant for cleanup (even if build failed, we may have partial artifacts)
         self._built_variants.append(variant_name)
@@ -282,11 +286,12 @@ class PatchVerificationEngine:
             result.status = PatchVerificationStatus.BUILD_FAILED
             if not result.details:
                 result.details = "Build failed"
+            result.elapsed_seconds = time.time() - start_time
             return result
 
         # Run verification (POV tests + unit tests)
         result.harness = harness
-        return self._run_verification(
+        verified_result = self._run_verification(
             result,
             variant_name,
             harness,
@@ -296,6 +301,8 @@ class PatchVerificationEngine:
             repo_path=repo_path,
             pov_path=pov_path,
         )
+        verified_result.elapsed_seconds = time.time() - start_time
+        return verified_result
 
     def _run_verification(
         self,
@@ -344,6 +351,7 @@ class PatchVerificationEngine:
                 )
 
         # Step 4: Run POV test against ALL CPVs in harness
+        pov_start_time = time.time()
         if self.verify_variants:
             # Test patch against all CPVs and their variants
             # Use variant_name since fuzzers are built at build/out/{variant_name}/
@@ -357,6 +365,7 @@ class PatchVerificationEngine:
 
             # pov_test_passed is True if at least one CPV is fully fixed
             result.pov_test_passed = len(cpv_fixed) > 0
+            result.pov_test_time = time.time() - pov_start_time
 
             if not result.pov_test_passed:
                 result.status = PatchVerificationStatus.POV_STILL_TRIGGERS
@@ -381,10 +390,12 @@ class PatchVerificationEngine:
                 result.status = PatchVerificationStatus.ERROR
                 result.details = f"No POV found for {result.pov_id}"
                 result.security_verdict = "FAIL"
+                result.pov_test_time = time.time() - pov_start_time
                 return result
 
             pov_passed = self._run_pov_test(variant_name, harness, pov_path)
             result.pov_test_passed = pov_passed
+            result.pov_test_time = time.time() - pov_start_time
 
             if not pov_passed:
                 result.status = PatchVerificationStatus.POV_STILL_TRIGGERS
@@ -393,6 +404,7 @@ class PatchVerificationEngine:
                 return result
 
         # Step 5: Run unit tests (if source available)
+        unit_test_start_time = time.time()
         if repo_path is None:
             # Skip unit tests for cached builds without source
             logger.info(
@@ -416,6 +428,7 @@ class PatchVerificationEngine:
                     use_inc_image=True,
                 )
                 result.unit_tests_passed = test_passed
+                result.unit_test_time = time.time() - unit_test_start_time
 
                 if not test_passed:
                     result.status = PatchVerificationStatus.TEST_FAILED
@@ -430,6 +443,7 @@ class PatchVerificationEngine:
                 use_inc_image=False,
             )
             result.unit_tests_passed = test_passed
+            result.unit_test_time = time.time() - unit_test_start_time
 
             if not test_passed:
                 result.status = PatchVerificationStatus.TEST_FAILED
@@ -550,8 +564,14 @@ class PatchVerificationEngine:
             True if inc-build image is available
         """
         cache_key = f"{project_name}:{self.sanitizer}"
+
+        # Check if already known to be available
         if cache_key in self._inc_images_pulled:
             return True
+
+        # Check if already known to be unavailable (avoid retrying failed pulls)
+        if cache_key in self._inc_images_unavailable:
+            return False
 
         if self.infra.is_inc_image_available(project_name, self.sanitizer):
             self._inc_images_pulled.add(cache_key)
@@ -561,6 +581,8 @@ class PatchVerificationEngine:
             self._inc_images_pulled.add(cache_key)
             return True
 
+        # Cache the failure to avoid retrying
+        self._inc_images_unavailable.add(cache_key)
         logger.warning(
             f"Inc-build image not available for {project_name}, "
             "will use standard build (slower)"

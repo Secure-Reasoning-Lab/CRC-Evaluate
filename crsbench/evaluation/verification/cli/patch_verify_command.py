@@ -35,6 +35,7 @@ Examples:
 
 import argparse
 import json
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -365,6 +366,7 @@ def run_patch_verify(args: argparse.Namespace) -> int:
 
     try:
         results: list[PatchVerificationResult] = []
+        wall_clock_start = time.time()
 
         if mode == "auto":
             # Auto-discovery mode: discover patches from benchmark
@@ -417,15 +419,19 @@ def run_patch_verify(args: argparse.Namespace) -> int:
                 parallel=not args.no_parallel,
             )
 
+        wall_clock_time = time.time() - wall_clock_start
+
         if not results:
             logger.warning("No verification results generated")
             return 0
 
         # Output results
-        output_results(results, args.output, args.format)
+        output_results(
+            results, args.output, args.format, wall_clock_time=wall_clock_time
+        )
 
         # Print summary
-        print_summary(results)
+        print_summary(results, wall_clock_time=wall_clock_time)
 
         # Return non-zero if any patch failed
         valid_count = sum(
@@ -458,6 +464,8 @@ def output_results(
     results: list[PatchVerificationResult],
     output_path: Optional[Path],
     output_format: str,
+    *,
+    wall_clock_time: float = 0.0,
 ) -> None:
     """Output verification results.
 
@@ -465,13 +473,22 @@ def output_results(
         results: List of patch verification results
         output_path: Optional output file path
         output_format: Output format (json, yaml, text)
+        wall_clock_time: Total wall-clock time for the entire run
     """
     result_dicts = [r.to_dict() for r in results]
 
     if output_format == "json":
-        output = json.dumps(result_dicts, indent=2)
+        output_data = {
+            "results": result_dicts,
+            "wall_clock_time": wall_clock_time,
+        }
+        output = json.dumps(output_data, indent=2)
     elif output_format == "yaml":
-        output = yaml.dump(result_dicts, default_flow_style=False)
+        output_data = {
+            "results": result_dicts,
+            "wall_clock_time": wall_clock_time,
+        }
+        output = yaml.dump(output_data, default_flow_style=False)
     else:  # text
         lines = []
         for r in results:
@@ -497,8 +514,18 @@ def output_results(
 
             if r.details:
                 lines.append(f"    Details: {r.details}")
-            if r.elapsed_seconds > 0:
-                lines.append(f"    Elapsed: {r.elapsed_seconds:.2f}s")
+            # Print timing: build, pov, unit, total
+            if r.build_time > 0 or r.elapsed_seconds > 0:
+                timing_parts = []
+                if r.build_time > 0:
+                    timing_parts.append(f"build: {r.build_time:.2f}s")
+                if r.pov_test_time > 0:
+                    timing_parts.append(f"pov: {r.pov_test_time:.2f}s")
+                if r.unit_test_time > 0:
+                    timing_parts.append(f"unit: {r.unit_test_time:.2f}s")
+                if r.elapsed_seconds > 0:
+                    timing_parts.append(f"total: {r.elapsed_seconds:.2f}s")
+                lines.append(f"    Time: {', '.join(timing_parts)}")
         output = "\n".join(lines)
 
     if output_path:
@@ -508,11 +535,16 @@ def output_results(
         logger.info(output)
 
 
-def print_summary(results: list[PatchVerificationResult]) -> None:
+def print_summary(
+    results: list[PatchVerificationResult],
+    *,
+    wall_clock_time: float = 0.0,
+) -> None:
     """Print a summary of patch verification results.
 
     Args:
         results: List of patch verification results
+        wall_clock_time: Total wall-clock time for the entire run
     """
     from collections import Counter
 
@@ -572,6 +604,12 @@ def print_summary(results: list[PatchVerificationResult]) -> None:
                 f"  Overall fix rate: {overall_rate:.1%} "
                 f"({total_variants_matched}/{total_variants_tested} variants)"
             )
+
+    # Timing summary
+    if wall_clock_time > 0:
+        logger.info("")
+        logger.info("Timing:")
+        logger.info(f"  Wall-clock time: {wall_clock_time:.2f}s")
 
     logger.info("=" * 60)
 
