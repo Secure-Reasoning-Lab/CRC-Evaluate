@@ -284,25 +284,26 @@ class OSSFuzzBuilder:
                 if config.patches:
                     self._apply_patches_for_variant(config, repo_path)
 
-                # Resolve repo_name for the build
-                repo_name = config.repo_name
-                if not repo_name:
-                    # Extract from main_repo URL
-                    repo_name = config.main_repo.rstrip("/").split("/")[-1]
-                    if repo_name.endswith(".git"):
-                        repo_name = repo_name[:-4]
+                # Create variant project for build
+                variant_project_path = self.infra.create_variant_project(
+                    benchmark_path=config.benchmark_path,
+                    variant_name=variant_name,
+                )
+                if not variant_project_path:
+                    return BuildResult.from_error(
+                        config=config,
+                        error="Failed to create variant project directory",
+                        elapsed_seconds=time.time() - start_time,
+                    )
 
-                # Build using incremental image with isolated paths
-                project_name = config.benchmark_name.rsplit("-", 2)[
-                    0
-                ]  # Remove -delta-01
-                success = self.infra.build_with_inc_image(
-                    project_name=project_name,
-                    src_path=repo_path,
-                    repo_name=repo_name,
-                    sanitizer=config.sanitizer,
-                    timeout=config.timeout,
-                    variant_name=variant_name,  # Use variant_name for path isolation
+                # Prepare variant inc-build image (retag from project to variant)
+                self.infra.prepare_inc_image_for_variant(
+                    config.benchmark_name, variant_name, config.sanitizer
+                )
+
+                # Build using helper.py build_fuzzers with inc-build image
+                success = self.infra.build_fuzzers(
+                    config, repo_path, use_inc_image=True
                 )
 
                 if not success:
