@@ -1044,3 +1044,97 @@ class TestPatchVerificationResultPhase2:
 
         assert result.security_verdict == "FAIL"
         assert not result.is_valid
+
+
+# =============================================================================
+# CpvFixedDedup Tests
+# =============================================================================
+
+
+class TestCpvFixedDedup:
+    """Tests for CpvFixedDedup deduplication strategy."""
+
+    def test_deduplicate_by_cpv_fixed(self):
+        """Test that patches with same cpv_fixed are deduplicated."""
+        from crsbench.evaluation.verification.dedup import CpvFixedDedup
+        from crsbench.evaluation.verification.models import (
+            PatchVerificationResult,
+            PatchVerificationStatus,
+        )
+
+        dedup = CpvFixedDedup()
+
+        results = [
+            PatchVerificationResult(
+                status=PatchVerificationStatus.VALID,
+                pov_id="patch1",
+                patch_path=Path("/patch1.diff"),
+                cpv_fixed=["cpv_0", "cpv_1"],
+            ),
+            PatchVerificationResult(
+                status=PatchVerificationStatus.VALID,
+                pov_id="patch2",
+                patch_path=Path("/patch2.diff"),
+                cpv_fixed=["cpv_1", "cpv_0"],  # Same set, different order
+            ),
+            PatchVerificationResult(
+                status=PatchVerificationStatus.VALID,
+                pov_id="patch3",
+                patch_path=Path("/patch3.diff"),
+                cpv_fixed=["cpv_0"],  # Different set
+            ),
+        ]
+
+        unique = dedup.deduplicate(results)
+
+        assert len(unique) == 2
+        assert unique[0].pov_id == "patch1"
+        assert unique[1].pov_id == "patch3"
+
+    def test_keeps_non_valid_patches(self):
+        """Test that non-VALID patches are not deduplicated."""
+        from crsbench.evaluation.verification.dedup import CpvFixedDedup
+        from crsbench.evaluation.verification.models import (
+            PatchVerificationResult,
+            PatchVerificationStatus,
+        )
+
+        dedup = CpvFixedDedup()
+
+        results = [
+            PatchVerificationResult(
+                status=PatchVerificationStatus.BUILD_FAILED,
+                pov_id="patch1",
+                patch_path=Path("/patch1.diff"),
+            ),
+            PatchVerificationResult(
+                status=PatchVerificationStatus.BUILD_FAILED,
+                pov_id="patch2",
+                patch_path=Path("/patch2.diff"),
+            ),
+        ]
+
+        unique = dedup.deduplicate(results)
+
+        assert len(unique) == 2  # Both kept since they're not VALID
+
+    def test_strategy_name(self):
+        """Test dedup strategy name."""
+        from crsbench.evaluation.verification.dedup import CpvFixedDedup
+
+        dedup = CpvFixedDedup()
+        assert dedup.name == "cpv-fixed"
+
+    def test_get_patch_dedup_strategy(self):
+        """Test get_patch_dedup_strategy factory function."""
+        from crsbench.evaluation.verification.dedup import (
+            CpvFixedDedup,
+            NoOpPatchDedup,
+            get_patch_dedup_strategy,
+        )
+
+        cpv_dedup = get_patch_dedup_strategy("cpv-fixed")
+        assert isinstance(cpv_dedup, CpvFixedDedup)
+
+        noop_dedup = get_patch_dedup_strategy("none")
+        assert isinstance(noop_dedup, NoOpPatchDedup)
