@@ -42,11 +42,12 @@ from crsbench.evaluation.snapshot_manager import SnapshotManager
 from crsbench.evaluation.verification import (
     DeduplicationStrategy,
     PatchBasedDedup,
+    PatchVerificationEngine,
+    PovVerificationRequest,
+    PovVerificationResult,
+    PovVerificationStatus,
     VerdictResolver,
     VerificationEngine,
-    VerificationRequest,
-    VerificationResult,
-    VerificationStatus,
     get_dedup_strategy,
 )
 
@@ -80,13 +81,15 @@ __all__ = [
     "AnalyzerInterface",
     "AnalysisResult",
     "AnalysisManager",
-    # Verification
-    "VerificationStatus",
-    "VerificationRequest",
-    "VerificationResult",
+    # POV Verification
+    "PovVerificationStatus",
+    "PovVerificationRequest",
+    "PovVerificationResult",
     "VerificationEngine",
     "VerdictResolver",
     "DeduplicationStrategy",
     "PatchBasedDedup",
     "get_dedup_strategy",
+    # Patch Verification
+    "PatchVerificationEngine",
 ]

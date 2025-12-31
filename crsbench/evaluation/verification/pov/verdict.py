@@ -23,8 +23,8 @@ from typing import Optional, Union
 
 from crsbench.builder.types import BenchmarkMode, VariantType
 from crsbench.evaluation.verification.models import (
-    VerificationResult,
-    VerificationStatus,
+    PovVerificationResult,
+    PovVerificationStatus,
 )
 from crsbench.utils.logger import get_logger
 
@@ -48,7 +48,7 @@ class VerdictResolver:
         cpv_crash_map: dict[int, bool],
         benchmark_name: str,
         pov_id: Optional[str] = None,
-    ) -> VerificationResult:
+    ) -> PovVerificationResult:
         """Resolve the verification verdict based on crash results.
 
         Args:
@@ -59,7 +59,7 @@ class VerdictResolver:
             pov_id: Optional POV identifier
 
         Returns:
-            VerificationResult with the determined status
+            PovVerificationResult with the determined status
         """
         if mode == BenchmarkMode.DELTA:
             return VerdictResolver._resolve_delta_mode(
@@ -75,7 +75,7 @@ class VerdictResolver:
         cpv_crash_map: dict[int, bool],
         benchmark_name: str,
         pov_id: Optional[str] = None,
-    ) -> VerificationResult:
+    ) -> PovVerificationResult:
         """Resolve verdict for FULL mode benchmarks.
 
         Logic:
@@ -92,8 +92,8 @@ class VerdictResolver:
             logger.debug(
                 f"{pov_prefix}[{benchmark_name}] NOT_VULNERABLE - base did not crash"
             )
-            return VerificationResult(
-                status=VerificationStatus.NOT_VULNERABLE,
+            return PovVerificationResult(
+                status=PovVerificationStatus.NOT_VULNERABLE,
                 benchmark=benchmark_name,
                 cpv_matched=[],
                 pov_id=pov_id,
@@ -107,8 +107,8 @@ class VerdictResolver:
             logger.warning(
                 f"{pov_prefix}[{benchmark_name}] UNINTENDED_CRASH - allpatched still crashes"
             )
-            return VerificationResult(
-                status=VerificationStatus.UNINTENDED_CRASH,
+            return PovVerificationResult(
+                status=PovVerificationStatus.UNINTENDED_CRASH,
                 benchmark=benchmark_name,
                 cpv_matched=[],
                 pov_id=pov_id,
@@ -125,8 +125,8 @@ class VerdictResolver:
         if matched_cpvs:
             pov_prefix = f"[{pov_id}] " if pov_id else ""
             logger.info(f"{pov_prefix}[{benchmark_name}] CPV - matched {matched_cpvs}")
-            return VerificationResult(
-                status=VerificationStatus.CPV,
+            return PovVerificationResult(
+                status=PovVerificationStatus.CPV,
                 benchmark=benchmark_name,
                 cpv_matched=matched_cpvs,
                 pov_id=pov_id,
@@ -138,8 +138,8 @@ class VerdictResolver:
         logger.warning(
             f"{pov_prefix}[{benchmark_name}] ZERODAY - crashes base but no CPV matched"
         )
-        return VerificationResult(
-            status=VerificationStatus.ZERODAY,
+        return PovVerificationResult(
+            status=PovVerificationStatus.ZERODAY,
             benchmark=benchmark_name,
             cpv_matched=[],
             pov_id=pov_id,
@@ -152,7 +152,7 @@ class VerdictResolver:
         cpv_crash_map: dict[int, bool],
         benchmark_name: str,
         pov_id: Optional[str] = None,
-    ) -> VerificationResult:
+    ) -> PovVerificationResult:
         """Resolve verdict for DELTA mode benchmarks.
 
         Logic:
@@ -170,8 +170,8 @@ class VerdictResolver:
             logger.warning(
                 f"{pov_prefix}[{benchmark_name}] ZERODAY - crashed on DELTA_BASE (pre-existing bug)"
             )
-            return VerificationResult(
-                status=VerificationStatus.ZERODAY,
+            return PovVerificationResult(
+                status=PovVerificationStatus.ZERODAY,
                 benchmark=benchmark_name,
                 cpv_matched=[],
                 pov_id=pov_id,
@@ -185,8 +185,8 @@ class VerdictResolver:
             logger.debug(
                 f"{pov_prefix}[{benchmark_name}] NOT_VULNERABLE - did not crash on DELTA_REF"
             )
-            return VerificationResult(
-                status=VerificationStatus.NOT_VULNERABLE,
+            return PovVerificationResult(
+                status=PovVerificationStatus.NOT_VULNERABLE,
                 benchmark=benchmark_name,
                 cpv_matched=[],
                 pov_id=pov_id,
@@ -200,8 +200,8 @@ class VerdictResolver:
             logger.warning(
                 f"{pov_prefix}[{benchmark_name}] UNINTENDED_CRASH - allpatched still crashes"
             )
-            return VerificationResult(
-                status=VerificationStatus.UNINTENDED_CRASH,
+            return PovVerificationResult(
+                status=PovVerificationStatus.UNINTENDED_CRASH,
                 benchmark=benchmark_name,
                 cpv_matched=[],
                 pov_id=pov_id,
@@ -218,8 +218,8 @@ class VerdictResolver:
         if matched_cpvs:
             pov_prefix = f"[{pov_id}] " if pov_id else ""
             logger.info(f"{pov_prefix}[{benchmark_name}] CPV - matched {matched_cpvs}")
-            return VerificationResult(
-                status=VerificationStatus.CPV,
+            return PovVerificationResult(
+                status=PovVerificationStatus.CPV,
                 benchmark=benchmark_name,
                 cpv_matched=matched_cpvs,
                 pov_id=pov_id,
@@ -231,8 +231,8 @@ class VerdictResolver:
         logger.warning(
             f"{pov_prefix}[{benchmark_name}] UNINTENDED_CRASH - crashes ref but no CPV matched"
         )
-        return VerificationResult(
-            status=VerificationStatus.UNINTENDED_CRASH,
+        return PovVerificationResult(
+            status=PovVerificationStatus.UNINTENDED_CRASH,
             benchmark=benchmark_name,
             cpv_matched=[],
             pov_id=pov_id,

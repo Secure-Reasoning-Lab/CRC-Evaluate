@@ -31,9 +31,9 @@ import yaml
 from crsbench.evaluation.verification import (
     NoOpDedup,
     PatchBasedDedup,
+    PovVerificationResult,
     StatusBasedDedup,
     VerificationEngine,
-    VerificationResult,
 )
 from crsbench.utils.logger import get_logger
 
@@ -263,7 +263,7 @@ def run_single_pov_verification(
     harness: str,
     *,
     force_rebuild: bool,
-) -> list[VerificationResult]:
+) -> list[PovVerificationResult]:
     """Run verification for a single POV file.
 
     Args:
@@ -276,7 +276,7 @@ def run_single_pov_verification(
     Returns:
         List containing single VerificationResult
     """
-    from crsbench.evaluation.verification.models import VerificationRequest
+    from crsbench.evaluation.verification.models import PovVerificationRequest
 
     # Load adapter
     adapter = engine._load_adapter(benchmark_path)
@@ -299,7 +299,7 @@ def run_single_pov_verification(
     logger.info(f"Harness: {harness}")
 
     # Create request and verify
-    request = VerificationRequest(
+    request = PovVerificationRequest(
         pov_data=pov_data,
         harness=harness,
         benchmark=adapter.benchmark_name,
@@ -311,7 +311,7 @@ def run_single_pov_verification(
 
 
 def output_results(
-    results: list[VerificationResult],
+    results: list[PovVerificationResult],
     output_path: Optional[Path],
     output_format: str,
 ) -> None:
@@ -341,7 +341,7 @@ def output_results(
         logger.info(output)
 
 
-def print_summary(results: list[VerificationResult]) -> None:
+def print_summary(results: list[PovVerificationResult]) -> None:
     """Print a summary of verification results.
 
     Args:

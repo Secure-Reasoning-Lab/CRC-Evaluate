@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 import yaml
 
 if TYPE_CHECKING:
-    from crsbench.evaluation.verification.models import VerificationResult
+    from crsbench.evaluation.verification.models import PovVerificationResult
 
 
 @dataclass
@@ -124,19 +124,21 @@ class ResultCollector:
         """Set CRS configuration."""
         self.crs_config = config
 
-    def set_pov_stats(self, verification_results: List["VerificationResult"]) -> None:
+    def set_pov_stats(
+        self, verification_results: List["PovVerificationResult"]
+    ) -> None:
         """Set POV statistics from verification results.
 
         Args:
-            verification_results: List of VerificationResult objects from validation module
+            verification_results: List of PovVerificationResult objects from validation module
 
         Note:
-            Maps VerificationStatus to POV statistics:
+            Maps PovVerificationStatus to POV statistics:
             - CPV, ZERODAY: POV found (triggers a vulnerability)
             - NOT_VULNERABLE, UNINTENDED_CRASH: POV missed (doesn't trigger expected vuln)
             - ERROR: Error during verification
         """
-        from crsbench.evaluation.verification.models import VerificationStatus
+        from crsbench.evaluation.verification.models import PovVerificationStatus
 
         self.total_povs = len(
             verification_results
@@ -144,16 +146,19 @@ class ResultCollector:
         self.povs_found = sum(
             1
             for r in verification_results
-            if r.status in (VerificationStatus.CPV, VerificationStatus.ZERODAY)
+            if r.status in (PovVerificationStatus.CPV, PovVerificationStatus.ZERODAY)
         )
         self.povs_missed = sum(
             1
             for r in verification_results
             if r.status
-            in (VerificationStatus.NOT_VULNERABLE, VerificationStatus.UNINTENDED_CRASH)
+            in (
+                PovVerificationStatus.NOT_VULNERABLE,
+                PovVerificationStatus.UNINTENDED_CRASH,
+            )
         )
         self.povs_error = sum(
-            1 for r in verification_results if r.status == VerificationStatus.ERROR
+            1 for r in verification_results if r.status == PovVerificationStatus.ERROR
         )
 
     def set_patch_stats(self, total_input_povs: int, patches: Dict[str, str]) -> None:

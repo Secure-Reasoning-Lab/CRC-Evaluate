@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from crsbench.builder.types import BenchmarkMode, VariantType
-from crsbench.evaluation.verification.models import VerificationStatus
+from crsbench.evaluation.verification.models import PovVerificationStatus
 from crsbench.evaluation.verification.pov.verdict import VerdictResolver
 from crsbench.validation.meta_adapter import MetaYamlAdapter
 
@@ -105,7 +105,7 @@ class TestSanityMockCDeltaValidation:
             pov_id="cpv_0_pov_0",
         )
 
-        assert result.status == VerificationStatus.CPV
+        assert result.status == PovVerificationStatus.CPV
         assert result.cpv_matched == ["cpv_0"]
         assert "cpv_1" not in result.cpv_matched
 
@@ -134,7 +134,7 @@ class TestSanityMockCDeltaValidation:
             pov_id="cpv_1_pov_0",
         )
 
-        assert result.status == VerificationStatus.CPV
+        assert result.status == PovVerificationStatus.CPV
         assert result.cpv_matched == ["cpv_1"]
         assert "cpv_0" not in result.cpv_matched
 
@@ -158,7 +158,7 @@ class TestSanityMockCDeltaValidation:
             pov_id="multi_cpv_pov",
         )
 
-        assert result.status == VerificationStatus.CPV
+        assert result.status == PovVerificationStatus.CPV
         assert "cpv_0" in result.cpv_matched
         assert "cpv_1" in result.cpv_matched
 
@@ -182,7 +182,7 @@ class TestSanityMockCDeltaValidation:
             pov_id="unintended_pov",
         )
 
-        assert result.status == VerificationStatus.UNINTENDED_CRASH
+        assert result.status == PovVerificationStatus.UNINTENDED_CRASH
 
     def test_pov_not_crashing_ref_is_not_vulnerable(self, adapter):
         """POV that doesn't crash ref = NOT_VULNERABLE.
@@ -204,7 +204,7 @@ class TestSanityMockCDeltaValidation:
             pov_id="non_crashing_pov",
         )
 
-        assert result.status == VerificationStatus.NOT_VULNERABLE
+        assert result.status == PovVerificationStatus.NOT_VULNERABLE
 
     def test_pov_crashing_base_is_zeroday(self, adapter):
         """POV that crashes base = ZERODAY (pre-existing bug)."""
@@ -218,7 +218,7 @@ class TestSanityMockCDeltaValidation:
             pov_id="zeroday_pov",
         )
 
-        assert result.status == VerificationStatus.ZERODAY
+        assert result.status == PovVerificationStatus.ZERODAY
 
 
 class TestMetaYamlAdapterIntegration:

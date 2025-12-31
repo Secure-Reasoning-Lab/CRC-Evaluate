@@ -15,9 +15,9 @@ from crsbench.evaluation.verification.dedup import (
     get_dedup_strategy,
 )
 from crsbench.evaluation.verification.models import (
-    VerificationRequest,
-    VerificationResult,
-    VerificationStatus,
+    PovVerificationRequest,
+    PovVerificationResult,
+    PovVerificationStatus,
 )
 from crsbench.evaluation.verification.pov.verdict import VerdictResolver
 
@@ -48,8 +48,8 @@ class TestVerificationModels:
     """Tests for verification models."""
 
     def test_verification_request(self):
-        """Test VerificationRequest creation."""
-        request = VerificationRequest(
+        """Test PovVerificationRequest creation."""
+        request = PovVerificationRequest(
             pov_data=b"test data",
             harness="test_harness",
             benchmark="test-bench",
@@ -59,20 +59,20 @@ class TestVerificationModels:
         assert request.harness == "test_harness"
 
     def test_verification_result(self):
-        """Test VerificationResult creation."""
-        result = VerificationResult(
-            status=VerificationStatus.CPV,
+        """Test PovVerificationResult creation."""
+        result = PovVerificationResult(
+            status=PovVerificationStatus.CPV,
             benchmark="test-bench",
             cpv_matched=["cpv_0", "cpv_1"],
         )
-        assert result.status == VerificationStatus.CPV
+        assert result.status == PovVerificationStatus.CPV
         assert result.is_vulnerability
         assert "cpv_0" in str(result)
 
     def test_verification_result_to_dict(self):
-        """Test VerificationResult serialization."""
-        result = VerificationResult(
-            status=VerificationStatus.ZERODAY,
+        """Test PovVerificationResult serialization."""
+        result = PovVerificationResult(
+            status=PovVerificationStatus.ZERODAY,
             benchmark="test-bench",
         )
         d = result.to_dict()
@@ -91,7 +91,7 @@ class TestVerdictResolverFullMode:
             cpv_crash_map={},
             benchmark_name="test",
         )
-        assert result.status == VerificationStatus.NOT_VULNERABLE
+        assert result.status == PovVerificationStatus.NOT_VULNERABLE
 
     def test_full_mode_unintended_crash(self):
         """Base crashes, allpatched crashes -> UNINTENDED_CRASH."""
@@ -104,7 +104,7 @@ class TestVerdictResolverFullMode:
             cpv_crash_map={},
             benchmark_name="test",
         )
-        assert result.status == VerificationStatus.UNINTENDED_CRASH
+        assert result.status == PovVerificationStatus.UNINTENDED_CRASH
 
     def test_full_mode_cpv_single(self):
         """Base crashes, cpv0 crashes -> CPV with cpv_0."""
@@ -117,7 +117,7 @@ class TestVerdictResolverFullMode:
             cpv_crash_map={0: True},
             benchmark_name="test",
         )
-        assert result.status == VerificationStatus.CPV
+        assert result.status == PovVerificationStatus.CPV
         assert result.cpv_matched == ["cpv_0"]
 
     def test_full_mode_cpv_multiple(self):
@@ -131,7 +131,7 @@ class TestVerdictResolverFullMode:
             cpv_crash_map={0: True, 1: False, 2: True},
             benchmark_name="test",
         )
-        assert result.status == VerificationStatus.CPV
+        assert result.status == PovVerificationStatus.CPV
         assert result.cpv_matched == ["cpv_0", "cpv_2"]
 
     def test_full_mode_zeroday(self):
@@ -145,7 +145,7 @@ class TestVerdictResolverFullMode:
             cpv_crash_map={0: False, 1: False},
             benchmark_name="test",
         )
-        assert result.status == VerificationStatus.ZERODAY
+        assert result.status == PovVerificationStatus.ZERODAY
 
 
 class TestVerdictResolverDeltaMode:
@@ -159,7 +159,7 @@ class TestVerdictResolverDeltaMode:
             cpv_crash_map={},
             benchmark_name="test",
         )
-        assert result.status == VerificationStatus.ZERODAY
+        assert result.status == PovVerificationStatus.ZERODAY
 
     def test_delta_mode_not_vulnerable(self):
         """Base ok, ref doesn't crash -> NOT_VULNERABLE."""
@@ -172,7 +172,7 @@ class TestVerdictResolverDeltaMode:
             cpv_crash_map={},
             benchmark_name="test",
         )
-        assert result.status == VerificationStatus.NOT_VULNERABLE
+        assert result.status == PovVerificationStatus.NOT_VULNERABLE
 
     def test_delta_mode_unintended_crash_allpatched(self):
         """Base ok, ref crashes, allpatched crashes -> UNINTENDED_CRASH."""
@@ -186,7 +186,7 @@ class TestVerdictResolverDeltaMode:
             cpv_crash_map={},
             benchmark_name="test",
         )
-        assert result.status == VerificationStatus.UNINTENDED_CRASH
+        assert result.status == PovVerificationStatus.UNINTENDED_CRASH
 
     def test_delta_mode_cpv(self):
         """Base ok, ref crashes, cpv crashes -> CPV."""
@@ -200,7 +200,7 @@ class TestVerdictResolverDeltaMode:
             cpv_crash_map={0: True, 1: False},
             benchmark_name="test",
         )
-        assert result.status == VerificationStatus.CPV
+        assert result.status == PovVerificationStatus.CPV
         assert result.cpv_matched == ["cpv_0"]
 
     def test_delta_mode_unintended_no_cpv(self):
@@ -215,7 +215,7 @@ class TestVerdictResolverDeltaMode:
             cpv_crash_map={0: False, 1: False},
             benchmark_name="test",
         )
-        assert result.status == VerificationStatus.UNINTENDED_CRASH
+        assert result.status == PovVerificationStatus.UNINTENDED_CRASH
 
 
 class TestDeduplication:
@@ -225,20 +225,20 @@ class TestDeduplication:
         """Test PatchBasedDedup removes duplicates by CPV set."""
         dedup = PatchBasedDedup()
         results = [
-            VerificationResult(
-                status=VerificationStatus.CPV,
+            PovVerificationResult(
+                status=PovVerificationStatus.CPV,
                 benchmark="test",
                 cpv_matched=["cpv_0"],
                 pov_id="pov1",
             ),
-            VerificationResult(
-                status=VerificationStatus.CPV,
+            PovVerificationResult(
+                status=PovVerificationStatus.CPV,
                 benchmark="test",
                 cpv_matched=["cpv_0"],  # Duplicate
                 pov_id="pov2",
             ),
-            VerificationResult(
-                status=VerificationStatus.CPV,
+            PovVerificationResult(
+                status=PovVerificationStatus.CPV,
                 benchmark="test",
                 cpv_matched=["cpv_1"],
                 pov_id="pov3",
@@ -254,13 +254,13 @@ class TestDeduplication:
         """Test PatchBasedDedup keeps non-CPV results."""
         dedup = PatchBasedDedup()
         results = [
-            VerificationResult(
-                status=VerificationStatus.ZERODAY,
+            PovVerificationResult(
+                status=PovVerificationStatus.ZERODAY,
                 benchmark="test",
                 pov_id="pov1",
             ),
-            VerificationResult(
-                status=VerificationStatus.ZERODAY,
+            PovVerificationResult(
+                status=PovVerificationStatus.ZERODAY,
                 benchmark="test",
                 pov_id="pov2",
             ),
@@ -273,13 +273,13 @@ class TestDeduplication:
         """Test NoOpDedup keeps all results."""
         dedup = NoOpDedup()
         results = [
-            VerificationResult(
-                status=VerificationStatus.CPV,
+            PovVerificationResult(
+                status=PovVerificationStatus.CPV,
                 benchmark="test",
                 cpv_matched=["cpv_0"],
             ),
-            VerificationResult(
-                status=VerificationStatus.CPV,
+            PovVerificationResult(
+                status=PovVerificationStatus.CPV,
                 benchmark="test",
                 cpv_matched=["cpv_0"],
             ),
@@ -292,18 +292,18 @@ class TestDeduplication:
         """Test StatusBasedDedup keeps one per status."""
         dedup = StatusBasedDedup()
         results = [
-            VerificationResult(
-                status=VerificationStatus.ZERODAY,
+            PovVerificationResult(
+                status=PovVerificationStatus.ZERODAY,
                 benchmark="test",
                 pov_id="pov1",
             ),
-            VerificationResult(
-                status=VerificationStatus.ZERODAY,
+            PovVerificationResult(
+                status=PovVerificationStatus.ZERODAY,
                 benchmark="test",
                 pov_id="pov2",
             ),
-            VerificationResult(
-                status=VerificationStatus.NOT_VULNERABLE,
+            PovVerificationResult(
+                status=PovVerificationStatus.NOT_VULNERABLE,
                 benchmark="test",
                 pov_id="pov3",
             ),
@@ -334,7 +334,7 @@ class TestVerdictResolverEdgeCases:
             benchmark_name="test",
         )
         # Should be UNINTENDED_CRASH since allpatched defaults to True
-        assert result.status == VerificationStatus.UNINTENDED_CRASH
+        assert result.status == PovVerificationStatus.UNINTENDED_CRASH
 
     def test_empty_cpv_map(self):
         """Empty CPV map should result in appropriate status."""
@@ -347,7 +347,7 @@ class TestVerdictResolverEdgeCases:
             cpv_crash_map={},  # Empty
             benchmark_name="test",
         )
-        assert result.status == VerificationStatus.ZERODAY
+        assert result.status == PovVerificationStatus.ZERODAY
 
     def test_pov_id_preserved(self):
         """POV ID should be preserved in result."""
