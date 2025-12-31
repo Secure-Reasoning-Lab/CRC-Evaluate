@@ -9,24 +9,30 @@
 # - Minimal time limits for fast testing
 #
 # Usage:
-#   ./run_distributed_test-libfuzzer.sh [--tmux]
+#   ./run_distributed_test-libfuzzer.sh [--tmux] [--kill-pane]
 #
 # Options:
-#   --tmux    Launch worker in a new tmux vertical pane (requires tmux)
+#   --tmux       Launch worker in a new tmux vertical pane (requires tmux)
+#   --kill-pane  Kill the worker pane after test (only with --tmux)
 
 set -e  # Exit on error
 
 # Parse command line arguments
 USE_TMUX=false
+KILL_PANE=false
 for arg in "$@"; do
     case $arg in
         --tmux)
             USE_TMUX=true
             shift
             ;;
+        --kill-pane)
+            KILL_PANE=true
+            shift
+            ;;
         *)
             echo "Unknown argument: $arg"
-            echo "Usage: $0 [--tmux]"
+            echo "Usage: $0 [--tmux] [--kill-pane]"
             exit 1
             ;;
     esac
@@ -60,7 +66,7 @@ NC='\033[0m' # No Color
 
 # Cleanup function
 cleanup() {
-    if [ "$USE_TMUX" = true ] && [ -n "$TMUX_PANE_ID" ]; then
+    if [ "$USE_TMUX" = true ] && [ -n "$TMUX_PANE_ID" ] && [ "$KILL_PANE" = true ]; then
         echo -e "${YELLOW}Killing tmux pane (${TMUX_PANE_ID})...${NC}"
         tmux kill-pane -t "$TMUX_PANE_ID" 2>/dev/null || true
     elif [ -n "$WORKER_PID" ]; then
@@ -229,9 +235,14 @@ echo ""
 echo -e "${YELLOW}Stopping worker...${NC}"
 if [ "$USE_TMUX" = true ]; then
     if [ -n "$TMUX_PANE_ID" ]; then
-        tmux kill-pane -t "$TMUX_PANE_ID" 2>/dev/null || true
+        if [ "$KILL_PANE" = true ]; then
+            tmux kill-pane -t "$TMUX_PANE_ID" 2>/dev/null || true
+            echo -e "${GREEN}✓ Worker pane closed${NC}"
+        else
+            echo -e "${GREEN}✓ Worker pane preserved (${TMUX_PANE_ID})${NC}"
+            echo -e "${YELLOW}  Use 'tmux kill-pane -t ${TMUX_PANE_ID}' to close manually${NC}"
+        fi
         TMUX_PANE_ID=""  # Clear pane ID so cleanup doesn't try to kill it again
-        echo -e "${GREEN}✓ Worker pane closed${NC}"
     fi
 else
     if [ -n "$WORKER_PID" ] && kill -0 "$WORKER_PID" 2>/dev/null; then
