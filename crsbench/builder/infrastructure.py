@@ -30,21 +30,31 @@ class OSSFuzzInfrastructure:
     - Managing variant project directories
     - Caching and build detection
 
+    Supports two modes:
+    1. Shared mode (default): Uses oss_fuzz_path directly for everything
+    2. Isolated mode: Builds output to work_dir, with symlinks from oss_fuzz_path
+       so helper.py can find them
+
     Attributes:
         oss_fuzz_path: Path to oss-fuzz directory
         projects_base: Path to oss-fuzz/projects directory
+        work_dir: Working directory for isolated builds (None = shared mode)
     """
 
-    def __init__(self, oss_fuzz_path: Path):
+    def __init__(self, oss_fuzz_path: Path, work_dir: Optional[Path] = None):
         """Initialize the OSS-Fuzz infrastructure.
 
         Args:
             oss_fuzz_path: Path to oss-fuzz directory
+            work_dir: Optional working directory for isolated builds.
+                If provided, builds output to work_dir/{variant}/ with symlinks
+                from oss-fuzz/build/out/{variant} for helper.py compatibility.
 
         Raises:
             FileNotFoundError: If helper.py is not found
         """
         self.oss_fuzz_path = Path(oss_fuzz_path).resolve()
+        self.work_dir = Path(work_dir).resolve() if work_dir else None
         self.projects_base = self.oss_fuzz_path / "projects"
         self._helper_script = self.oss_fuzz_path / "infra" / "helper.py"
 
@@ -54,15 +64,146 @@ class OSSFuzzInfrastructure:
             )
 
     def get_build_output_path(self, variant_name: str) -> Path:
-        """Get the build output path for a variant.
+        """Get the build output path for a variant (in oss-fuzz).
+
+        This is the path helper.py expects to find builds.
+        In isolated mode, this is a symlink target.
 
         Args:
             variant_name: Variant name (e.g., "benchmark-deltabase")
 
         Returns:
-            Path to build output directory
+            Path to build output directory in oss-fuzz
         """
         return self.oss_fuzz_path / "build" / "out" / variant_name
+
+    def get_isolated_build_path(self, variant_name: str) -> Path:
+        """Get the actual build output path (isolated or shared).
+
+        In isolated mode, returns path in work_dir.
+        In shared mode, returns the oss-fuzz path.
+
+        Args:
+            variant_name: Variant name
+
+        Returns:
+            Path to actual build output directory
+        """
+        if self.work_dir:
+            return self.work_dir / variant_name / "build" / "out"
+        return self.get_build_output_path(variant_name)
+
+    def get_isolated_work_path(self, variant_name: str) -> Path:
+        """Get the work directory path (isolated or shared).
+
+        Args:
+            variant_name: Variant name
+
+        Returns:
+            Path to work directory
+        """
+        if self.work_dir:
+            return self.work_dir / variant_name / "build" / "work"
+        return self.oss_fuzz_path / "build" / "work" / variant_name
+
+    def get_isolated_src_path(self, variant_name: str) -> Path:
+        """Get the source directory path (isolated or shared).
+
+        Args:
+            variant_name: Variant name
+
+        Returns:
+            Path to source directory
+        """
+        if self.work_dir:
+            return self.work_dir / variant_name / "src"
+        return self.oss_fuzz_path / "build" / "src" / variant_name
+
+    def is_isolated(self) -> bool:
+        """Check if running in isolated mode.
+
+        Returns:
+            True if work_dir is set (isolated mode)
+        """
+        return self.work_dir is not None
+
+    def setup_build_symlink(self, variant_name: str) -> bool:
+        """Create symlink from oss-fuzz/build/out/{variant} to isolated build.
+
+        This allows helper.py to find builds in isolated directories.
+        Only needed in isolated mode.
+
+        Args:
+            variant_name: Variant name
+
+        Returns:
+            True if symlink created or not needed
+        """
+        if not self.work_dir:
+            return True  # Not needed in shared mode
+
+        isolated_path = self.get_isolated_build_path(variant_name)
+        ossfuzz_path = self.get_build_output_path(variant_name)
+
+        if not isolated_path.exists():
+            logger.warning(f"Isolated build path not found: {isolated_path}")
+            return False
+
+        # Check if correct symlink already exists
+        if ossfuzz_path.is_symlink():
+            if ossfuzz_path.resolve() == isolated_path.resolve():
+                logger.debug(f"Symlink already exists: {ossfuzz_path}")
+                return True
+            ossfuzz_path.unlink()
+        elif ossfuzz_path.exists():
+            logger.warning(f"Removing existing dir for symlink: {ossfuzz_path}")
+            shutil.rmtree(ossfuzz_path)
+
+        ossfuzz_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            ossfuzz_path.symlink_to(isolated_path)
+            logger.debug(f"Created symlink: {ossfuzz_path} -> {isolated_path}")
+            return True
+        except FileExistsError:
+            # Race condition: another worker created it
+            if (
+                ossfuzz_path.is_symlink()
+                and ossfuzz_path.resolve() == isolated_path.resolve()
+            ):
+                logger.debug(f"Symlink created by another worker: {ossfuzz_path}")
+                return True
+            logger.error(f"Symlink exists with wrong target: {ossfuzz_path}")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to create symlink: {e}")
+            return False
+
+    def cleanup_isolated_build(self, variant_name: str) -> None:
+        """Clean up isolated build for a variant.
+
+        Removes:
+        - Symlink from oss-fuzz/build/out/{variant}
+        - Isolated build directory in work_dir/{variant}/
+
+        Args:
+            variant_name: Variant name
+        """
+        # Remove symlink from oss-fuzz
+        ossfuzz_path = self.get_build_output_path(variant_name)
+        if ossfuzz_path.is_symlink():
+            ossfuzz_path.unlink()
+            logger.debug(f"Removed symlink: {ossfuzz_path}")
+
+        # Remove isolated directory
+        if self.work_dir:
+            isolated_dir = self.work_dir / variant_name
+            if isolated_dir.exists():
+                try:
+                    shutil.rmtree(isolated_dir)
+                    logger.debug(f"Removed isolated build: {isolated_dir}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove isolated build: {e}")
 
     def is_variant_built(self, variant_name: str) -> bool:
         """Check if a variant has been built.
@@ -83,23 +224,130 @@ class OSSFuzzInfrastructure:
         # Check that build output has actual files
         return any(build_path.iterdir())
 
+    # =========================================================================
+    # Cleanup methods (shared by POV, patch, coverage verification)
+    # =========================================================================
+
+    def cleanup_build_outputs(self, variant_name: str) -> None:
+        """Clean up build outputs only (for force rebuild).
+
+        Removes:
+        - Build output directory (or symlink) at oss-fuzz/build/out/{variant}
+        - Isolated build directory if work_dir is set
+        - Work directory at oss-fuzz/build/work/{variant}
+
+        Does NOT remove:
+        - Project symlink (read-only, reusable)
+
+        Args:
+            variant_name: Variant name
+        """
+        # Remove build output (symlink or directory)
+        build_path = self.get_build_output_path(variant_name)
+        if build_path.is_symlink():
+            build_path.unlink()
+            logger.debug(f"Removed build symlink: {build_path}")
+        elif build_path.exists():
+            # Fix Docker ownership before removal (files may be owned by root)
+            fix_docker_ownership(build_path)
+            try:
+                shutil.rmtree(build_path)
+                logger.debug(f"Removed build output: {build_path}")
+            except Exception as e:
+                logger.warning(f"Failed to remove build output: {e}")
+
+        # Remove isolated build directory if using work_dir
+        if self.work_dir:
+            isolated_build = self.get_isolated_build_path(variant_name)
+            if isolated_build.exists():
+                fix_docker_ownership(isolated_build)
+                try:
+                    shutil.rmtree(isolated_build)
+                    logger.debug(f"Removed isolated build: {isolated_build}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove isolated build: {e}")
+
+        # Remove work directory
+        work_path = self.get_isolated_work_path(variant_name)
+        if work_path.exists():
+            fix_docker_ownership(work_path)
+            try:
+                shutil.rmtree(work_path)
+                logger.debug(f"Removed work dir: {work_path}")
+            except Exception as e:
+                logger.warning(f"Failed to remove work dir: {e}")
+
+    def cleanup_project_symlink(self, variant_name: str) -> None:
+        """Clean up project symlink only.
+
+        Removes:
+        - Project symlink at oss-fuzz/projects/{variant}
+
+        Args:
+            variant_name: Variant name
+        """
+        variant_path = self.projects_base / variant_name
+        if variant_path.is_symlink():
+            variant_path.unlink()
+            logger.debug(f"Removed project symlink: {variant_path}")
+        elif variant_path.exists():
+            # Should not happen with symlink-based approach, but handle it
+            try:
+                shutil.rmtree(variant_path)
+                logger.debug(f"Removed project dir: {variant_path}")
+            except Exception as e:
+                logger.warning(f"Failed to remove project dir: {e}")
+
+    def cleanup_source(self, variant_name: str) -> None:
+        """Clean up source directory only.
+
+        Removes:
+        - Source directory at work_dir/{variant}/src or build/src/{variant}
+
+        Args:
+            variant_name: Variant name
+        """
+        src_path = self.get_isolated_src_path(variant_name)
+        if src_path.exists():
+            # Fix Docker ownership before removal (files may be owned by root)
+            fix_docker_ownership(src_path)
+            try:
+                shutil.rmtree(src_path)
+                logger.debug(f"Removed source dir: {src_path}")
+            except Exception as e:
+                logger.warning(f"Failed to remove source dir: {e}")
+
     def create_variant_project(
         self,
         benchmark_path: Path,
         variant_name: str,
     ) -> Optional[Path]:
-        """Create a variant project directory by copying the original.
+        """Create a variant project directory as symlink to benchmark.
+
+        The project directory (Dockerfile, build.sh, etc.) is read-only during
+        build/run, so we can safely symlink instead of copying.
+
+        Thread-safe: handles race conditions when multiple workers try to
+        create the same symlink simultaneously.
 
         Args:
             benchmark_path: Path to original benchmark directory
             variant_name: Name for the variant project
 
         Returns:
-            Path to variant project, or None on failure
+            Path to variant project symlink, or None on failure
         """
         variant_path = self.projects_base / variant_name
+        target_path = benchmark_path.resolve()
 
-        if variant_path.exists():
+        if variant_path.is_symlink():
+            # Already exists - verify it points to the right target
+            if variant_path.resolve() == target_path:
+                logger.debug(f"Variant project already exists: {variant_path}")
+                return variant_path
+            # Wrong target - remove and recreate
+            variant_path.unlink()
+        elif variant_path.exists():
             logger.debug(f"Variant project already exists: {variant_path}")
             return variant_path
 
@@ -109,11 +357,76 @@ class OSSFuzzInfrastructure:
 
         try:
             variant_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(benchmark_path, variant_path)
-            logger.info(f"Created variant project: {variant_name}")
+            variant_path.symlink_to(target_path)
+            logger.debug(f"Linked variant project: {variant_name} -> {benchmark_path}")
             return variant_path
+        except FileExistsError:
+            # Race condition: another worker created it first
+            # Check if it's correct and return success
+            if variant_path.is_symlink() and variant_path.resolve() == target_path:
+                logger.debug(
+                    f"Variant project created by another worker: {variant_path}"
+                )
+                return variant_path
+            logger.error(f"Variant project exists with wrong target: {variant_path}")
+            return None
         except Exception as e:
             logger.error(f"Failed to create variant project: {e}")
+            return None
+
+    def link_variant_project(
+        self,
+        source_project: str,
+        variant_name: str,
+    ) -> Optional[Path]:
+        """Create a variant project as symlink to existing project.
+
+        Use this when the variant shares the same project config (Dockerfile,
+        build.sh, etc.) as an existing project. Avoids duplicate copies.
+
+        Args:
+            source_project: Name of existing project in oss-fuzz/projects/
+            variant_name: Name for the variant project
+
+        Returns:
+            Path to variant project symlink, or None on failure
+        """
+        variant_path = self.projects_base / variant_name
+        source_path = self.projects_base / source_project
+
+        # Check if correct symlink already exists
+        if variant_path.is_symlink():
+            if variant_path.resolve() == source_path.resolve():
+                logger.debug(f"Variant project already exists: {variant_path}")
+                return variant_path
+            # Wrong target - remove and recreate
+            variant_path.unlink()
+        elif variant_path.exists():
+            logger.debug(f"Variant project already exists: {variant_path}")
+            return variant_path
+
+        if not source_path.exists():
+            logger.error(f"Source project not found: {source_path}")
+            return None
+
+        try:
+            variant_path.symlink_to(source_path)
+            logger.debug(f"Linked variant project: {variant_name} -> {source_project}")
+            return variant_path
+        except FileExistsError:
+            # Race condition: another worker created it
+            if (
+                variant_path.is_symlink()
+                and variant_path.resolve() == source_path.resolve()
+            ):
+                logger.debug(
+                    f"Variant project created by another worker: {variant_path}"
+                )
+                return variant_path
+            logger.error(f"Variant project exists with wrong target: {variant_path}")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to link variant project: {e}")
             return None
 
     def clone_source(
@@ -194,7 +507,7 @@ class OSSFuzzInfrastructure:
 
             if result.returncode == 0:
                 logger.info(f"Build succeeded for {variant_name}")
-                self._fix_build_ownership(variant_name)
+                fix_docker_ownership(self.get_build_output_path(variant_name))
                 return True
 
             logger.error(
@@ -211,17 +524,6 @@ class OSSFuzzInfrastructure:
         except Exception as e:
             logger.error(f"Build error for {variant_name}: {e}")
             return False
-
-    def _fix_build_ownership(self, variant_name: str) -> None:
-        """Fix ownership of build output files.
-
-        Docker builds run as root, so we chown the output to current user.
-
-        Args:
-            variant_name: Variant name
-        """
-        build_path = self.get_build_output_path(variant_name)
-        fix_docker_ownership(build_path)
 
     def get_cpv_patches(self, benchmark_path: Path) -> dict[int, list[Path]]:
         """Get all CPV patches from a benchmark's .aixcc directory.
@@ -412,28 +714,24 @@ class OSSFuzzInfrastructure:
             return False
 
     def cleanup_variant(self, variant_name: str) -> None:
-        """Remove variant project and build artifacts.
+        """Remove all variant artifacts (full cleanup).
+
+        Convenience method that removes everything:
+        - Project symlink
+        - Build outputs
+        - Source directory (if isolated)
+
+        For granular cleanup, use:
+        - cleanup_project_symlink() - project symlink only
+        - cleanup_build_outputs() - build outputs only
+        - cleanup_source() - source directory only
 
         Args:
             variant_name: Variant name
         """
-        # Remove project directory
-        variant_path = self.projects_base / variant_name
-        if variant_path.exists():
-            try:
-                shutil.rmtree(variant_path)
-                logger.info(f"Removed variant project: {variant_path}")
-            except Exception as e:
-                logger.error(f"Failed to remove variant project: {e}")
-
-        # Remove build output
-        build_path = self.get_build_output_path(variant_name)
-        if build_path.exists():
-            try:
-                shutil.rmtree(build_path)
-                logger.info(f"Removed build output: {build_path}")
-            except Exception as e:
-                logger.error(f"Failed to remove build output: {e}")
+        self.cleanup_project_symlink(variant_name)
+        self.cleanup_build_outputs(variant_name)
+        self.cleanup_source(variant_name)
 
     def reproduce(
         self,
@@ -624,6 +922,33 @@ class OSSFuzzInfrastructure:
         """
         return f"{registry}/{project_name}:inc-{sanitizer}"
 
+    def has_inc_build_image(
+        self,
+        project_name: str,
+        sanitizer: str = "address",
+        registry: str = "ghcr.io/team-atlanta/crsbench",
+    ) -> bool:
+        """Check if inc-build Docker image exists.
+
+        Args:
+            project_name: OSS-Fuzz project name
+            sanitizer: Sanitizer type
+            registry: Docker registry
+
+        Returns:
+            True if inc-build image exists
+        """
+        image_name = self.get_inc_build_image_name(project_name, sanitizer, registry)
+        try:
+            result = subprocess.run(
+                ["docker", "image", "inspect", image_name],
+                capture_output=True,
+                check=False,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
     def get_ossfuzz_image_name(
         self,
         project_name: str,
@@ -793,6 +1118,40 @@ class OSSFuzzInfrastructure:
             logger.error(f"Error retagging image: {e}")
             return False
 
+    def prepare_inc_image_for_variant(
+        self,
+        project_name: str,
+        variant_name: str,
+        sanitizer: str = "address",
+    ) -> bool:
+        """Prepare inc-build image for a variant by retagging.
+
+        This allows parallel test execution with proper path isolation.
+        The inc-build image is retagged from project name to variant name.
+
+        Args:
+            project_name: Original project name (source image)
+            variant_name: Variant name (target image)
+            sanitizer: Sanitizer type
+
+        Returns:
+            True if image is ready for use
+        """
+        # Source: inc-build image for the project
+        src_image = self.get_ossfuzz_image_name(project_name, sanitizer)
+        # Target: same image tagged with variant name
+        dst_image = f"aixcc-afc/{variant_name}:inc-{sanitizer}"
+
+        if self._docker_image_exists(dst_image):
+            logger.debug(f"Variant inc-build image already exists: {dst_image}")
+            return True
+
+        if not self._docker_image_exists(src_image):
+            logger.warning(f"Source inc-build image not found: {src_image}")
+            return False
+
+        return self._retag_for_ossfuzz(src_image, dst_image)
+
     def build_with_inc_image(
         self,
         project_name: str,
@@ -801,6 +1160,7 @@ class OSSFuzzInfrastructure:
         sanitizer: str = "address",
         timeout: int = 1200,
         registry: str = "ghcr.io/team-atlanta/crsbench",
+        variant_name: Optional[str] = None,
     ) -> bool:
         """Build fuzzers using inc-build image for faster incremental builds.
 
@@ -811,15 +1171,20 @@ class OSSFuzzInfrastructure:
             sanitizer: Sanitizer type
             timeout: Build timeout in seconds
             registry: Docker registry
+            variant_name: Unique identifier for build isolation (default: project_name).
+                Use this for parallel builds to avoid race conditions.
 
         Returns:
             True if build succeeded
         """
         image_name = self.get_inc_build_image_name(project_name, sanitizer, registry)
 
-        # Prepare output and work directories
-        out_dir = self.oss_fuzz_path / "build" / "out" / project_name
-        work_dir = self.oss_fuzz_path / "build" / "work" / project_name
+        # Use variant_name for path isolation (fixes race condition in parallel builds)
+        path_id = variant_name or project_name
+
+        # Use isolated paths if work_dir is set, otherwise use standard oss-fuzz paths
+        out_dir = self.get_isolated_build_path(path_id)
+        work_dir = self.get_isolated_work_path(path_id)
         out_dir.mkdir(parents=True, exist_ok=True)
         work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -868,7 +1233,10 @@ class OSSFuzzInfrastructure:
 
             if result.returncode == 0:
                 logger.info(f"Successfully built fuzzers for {project_name}")
-                fix_docker_ownership(out_dir)
+                fix_docker_ownership(self.get_build_output_path(path_id))
+                # Set up symlink for helper.py compatibility if using isolated paths
+                if self.work_dir:
+                    self.setup_build_symlink(path_id)
                 return True
 
             logger.error(f"Failed to build fuzzers: {result.stderr[:2000]}")

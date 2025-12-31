@@ -1264,6 +1264,14 @@ def main() -> None:
 
         sys.exit(run_coverage(args))
 
+    if args.command == "patch-verify":
+        # Handle patch-verify command
+        from crsbench.evaluation.verification.cli.patch_verify_command import (
+            run_patch_verify,
+        )
+
+        sys.exit(run_patch_verify(args))
+
     # Below is for 'run' command (experiment execution)
 
     # Set debug logging if requested

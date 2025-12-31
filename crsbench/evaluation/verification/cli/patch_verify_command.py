@@ -16,7 +16,13 @@ Examples:
         --patch-dir ./patches \
         --pov-dir ./povs
 
-    # Verify a single patch
+    # Verify a single patch with a single POV
+    crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01 \
+        --harness curl_fuzzer_ws \
+        --patch ./my-patch.diff \
+        --pov ./pov.blob
+
+    # Verify a single patch with POV directory
     crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01 \
         --harness curl_fuzzer_ws \
         --patch ./my-patch.diff \
@@ -81,7 +87,13 @@ Examples:
       --patch-dir ./patches \\
       --pov-dir ./povs
 
-  # Verify a single patch file
+  # Verify a single patch file with single POV
+  crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01 \\
+      --harness curl_fuzzer_ws \\
+      --patch ./my-patch.diff \\
+      --pov ./pov.blob
+
+  # Verify a single patch file with POV directory
   crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01 \\
       --harness curl_fuzzer_ws \\
       --patch ./my-patch.diff \\
@@ -89,6 +101,7 @@ Examples:
 
   # Use RTS (Regression Test Selection) mode for faster tests
   crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01 \\
+      --harness curl_fuzzer_ws \\
       --patch-dir ./patches \\
       --pov-dir ./povs \\
       --test-mode rts
@@ -129,12 +142,19 @@ Examples:
         help="Directory containing patches (structure: <pov_id>/patch.diff)",
     )
 
-    # POV directory (required for --patch and --patch-dir modes)
-    parser.add_argument(
+    # POV input options (mutually exclusive)
+    pov_group = parser.add_mutually_exclusive_group()
+    pov_group.add_argument(
+        "--pov",
+        type=Path,
+        default=None,
+        help="Single POV file (use with --patch for single patch mode)",
+    )
+    pov_group.add_argument(
         "--pov-dir",
         type=Path,
         default=None,
-        help="Directory containing POV files (required for --patch and --patch-dir)",
+        help="Directory containing POV files (use with --patch-dir)",
     )
 
     # OSS-Fuzz path
@@ -187,6 +207,14 @@ Examples:
 
     # Parallel execution
     parser.add_argument(
+        "--build-workers",
+        type=int,
+        default=None,
+        help="Number of parallel workers for patch builds (default: 4). "
+        "Priority: CLI > CRSBENCH_BUILD_WORKERS env.",
+    )
+
+    parser.add_argument(
         "--verify-workers",
         type=int,
         default=None,
@@ -211,6 +239,12 @@ Examples:
         "--force-rebuild",
         action="store_true",
         help="Force rebuild even if build cache exists",
+    )
+
+    parser.add_argument(
+        "--no-inc-build",
+        action="store_true",
+        help="Disable incremental builds, use full OSS-Fuzz build instead",
     )
 
     # Output options
@@ -270,10 +304,14 @@ def run_patch_verify(args: argparse.Namespace) -> int:
         if not args.patch.exists():
             logger.error(f"Patch file not found: {args.patch}")
             return 1
-        if args.pov_dir is None:
-            logger.error("--pov-dir is required when using --patch")
+        # Accept either --pov or --pov-dir for single patch mode
+        if args.pov is None and args.pov_dir is None:
+            logger.error("--pov or --pov-dir is required when using --patch")
             return 1
-        if not args.pov_dir.exists():
+        if args.pov is not None and not args.pov.exists():
+            logger.error(f"POV file not found: {args.pov}")
+            return 1
+        if args.pov_dir is not None and not args.pov_dir.exists():
             logger.error(f"POV directory not found: {args.pov_dir}")
             return 1
         if args.harness is None:
@@ -311,8 +349,11 @@ def run_patch_verify(args: argparse.Namespace) -> int:
         timeout=args.timeout,
         build_timeout=args.build_timeout,
         test_timeout=args.test_timeout,
+        build_workers=args.build_workers,
         verify_workers=args.verify_workers,
         verify_variants=not args.no_variants,
+        force_rebuild=args.force_rebuild,
+        use_inc_build=not args.no_inc_build,
     )
 
     logger.info(f"Verifying patches for benchmark: {args.benchmark_path}")
@@ -340,15 +381,19 @@ def run_patch_verify(args: argparse.Namespace) -> int:
 
             # Create PatchInfo from the patch file
             patch_info = PatchInfo(
-                pov_id=args.patch.stem,  # Use filename without extension as pov_id
+                patch_id=args.patch.stem,  # Use filename without extension as patch_id
+                pov_id="pov_0",  # Default pov_id for single patch mode
                 patch_path=args.patch,
             )
 
-            # Find POV file (use first matching file in pov_dir)
-            pov_path = _find_first_pov(args.pov_dir)
-            if pov_path is None:
-                logger.error(f"No POV files found in {args.pov_dir}")
-                return 1
+            # Get POV file: use --pov if provided, otherwise find first in --pov-dir
+            if args.pov is not None:
+                pov_path = args.pov
+            else:
+                pov_path = _find_first_pov(args.pov_dir)
+                if pov_path is None:
+                    logger.error(f"No POV files found in {args.pov_dir}")
+                    return 1
 
             result = engine.verify_patch(
                 benchmark_path=args.benchmark_path,
@@ -452,8 +497,8 @@ def output_results(
 
             if r.details:
                 lines.append(f"    Details: {r.details}")
-            if r.build_time is not None:
-                lines.append(f"    Build time: {r.build_time:.2f}s")
+            if r.elapsed_seconds > 0:
+                lines.append(f"    Elapsed: {r.elapsed_seconds:.2f}s")
         output = "\n".join(lines)
 
     if output_path:

@@ -294,28 +294,26 @@ crsbench verify benchmarks/example-project --build-workers 8 --verify-workers 16
 Verify CRS-generated patches against benchmark POVs:
 
 ```bash
+# Auto-discovery mode (discovers patches from .aixcc/<harness>/<cpv>/patches/)
+crsbench patch-verify benchmarks/example-project
+
 # Verify patches in a directory
 crsbench patch-verify benchmarks/example-project \
     --harness fuzz_parser \
     --patch-dir ./patches \
     --pov-dir ./povs
 
-# Use RTS (Regression Test Selection) mode for faster unit tests
+# Parallel builds with separate worker counts
 crsbench patch-verify benchmarks/example-project \
-    --harness fuzz_parser \
-    --patch-dir ./patches \
-    --pov-dir ./povs \
-    --test-mode rts
+    --build-workers 4 \
+    --verify-workers 8
 
 # Output results as JSON
 crsbench patch-verify benchmarks/example-project \
-    --harness fuzz_parser \
-    --patch-dir ./patches \
-    --pov-dir ./povs \
     --output results.json --format json
 ```
 
-**Patch directory structure:**
+**Patch directory structure (CRS output):**
 ```
 patches/
 ├── pov_0/
@@ -325,11 +323,20 @@ patches/
 └── ...
 ```
 
+**Ground truth patches (benchmark):**
+```
+.aixcc/<harness>/<cpv>/patches/
+├── patch_0.diff
+├── patch_1.diff
+└── ...
+```
+
 **Verification pipeline:**
-1. Apply patch using incremental build
-2. Run POV test → must NOT crash (patch fixes the bug)
-3. Run POV variants (optional) → must NOT crash
-4. Result: VALID or INVALID
+1. Clone source and apply patch
+2. Build with inc-build image (or fallback to standard build)
+3. Test against all CPV variants → must NOT crash
+4. Run unit tests (if available)
+5. Result: PASS (all CPVs fixed) or FAIL
 
 ## AI Infrastructure
 

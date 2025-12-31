@@ -232,11 +232,13 @@ class PatchInfo:
     """Information about a patch to verify.
 
     Attributes:
-        pov_id: POV identifier this patch targets
+        patch_id: Unique patch identifier (e.g., "patch_0")
+        pov_id: POV/CPV identifier this patch targets (e.g., "pov_0", "cpv_0")
         patch_path: Path to the patch file
         patch_content: Content of the patch (unified diff format)
     """
 
+    patch_id: str
     pov_id: str
     patch_path: Path
     patch_content: str = ""
@@ -253,11 +255,13 @@ class PatchVerificationResult:
 
     Attributes:
         status: Verification status
-        pov_id: POV identifier this patch targets
+        patch_id: Unique patch identifier (e.g., "patch_0")
+        pov_id: POV/CPV identifier this patch targets (e.g., "pov_0", "cpv_0")
+        benchmark: Benchmark name (e.g., "sanity-mock-c-delta-01")
         patch_path: Path to the verified patch
         harness: Name of the harness tested
         details: Optional details about the verification
-        build_time: Time taken for build (seconds)
+        elapsed_seconds: Time taken for build and verification (seconds)
         pov_test_passed: Whether the POV test passed (no crash)
         unit_tests_passed: Whether unit tests passed (None if not run)
         unit_tests_run: Number of unit tests run
@@ -270,11 +274,13 @@ class PatchVerificationResult:
     """
 
     status: PatchVerificationStatus
+    patch_id: str
     pov_id: str
+    benchmark: str
     patch_path: Path
     harness: str = ""
     details: Optional[str] = None
-    build_time: Optional[float] = None
+    elapsed_seconds: float = 0.0
     pov_test_passed: bool = False
     unit_tests_passed: Optional[bool] = None
     unit_tests_run: int = 0
@@ -294,11 +300,13 @@ class PatchVerificationResult:
         """Convert result to dictionary for serialization."""
         result: dict[str, Any] = {
             "status": self.status.value,
+            "patch_id": self.patch_id,
             "pov_id": self.pov_id,
+            "benchmark": self.benchmark,
             "patch_path": str(self.patch_path),
             "harness": self.harness,
             "details": self.details,
-            "build_time": self.build_time,
+            "elapsed_seconds": self.elapsed_seconds,
             "pov_test_passed": self.pov_test_passed,
             "unit_tests_passed": self.unit_tests_passed,
             "unit_tests_run": self.unit_tests_run,
@@ -317,5 +325,5 @@ class PatchVerificationResult:
     def __str__(self) -> str:
         status_str = self.status.value.upper()
         if self.is_valid:
-            return f"{self.pov_id}: {status_str}"
-        return f"{self.pov_id}: {status_str} - {self.details or 'Unknown error'}"
+            return f"{self.patch_id} ({self.pov_id}): {status_str}"
+        return f"{self.patch_id} ({self.pov_id}): {status_str} - {self.details or 'Unknown error'}"
