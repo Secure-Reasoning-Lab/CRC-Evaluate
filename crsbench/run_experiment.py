@@ -247,11 +247,12 @@ def parse_arguments() -> argparse.Namespace:
         Parsed arguments with experiment configuration.
     """
     # Check for legacy invocation (no subcommand, starts with --)
-    # or verify/coverage subcommand
+    # or verify/coverage/worker subcommand
     if len(sys.argv) > 1 and sys.argv[1] not in [
         "run",
         "verify",
         "coverage",
+        "worker",
         "-h",
         "--help",
     ]:
@@ -312,6 +313,11 @@ Examples:
     )
 
     add_coverage_subparser(subparsers)
+
+    # 'worker' subcommand - distributed worker
+    from crsbench.distributed.cli.worker_command import add_worker_subparser
+
+    add_worker_subparser(subparsers)
 
     args = parser.parse_args()
 
@@ -1329,6 +1335,12 @@ def main() -> None:
         )
 
         sys.exit(run_patch_verify(args))
+
+    if args.command == "worker":
+        # Handle worker command
+        from crsbench.distributed.cli.worker_command import run_worker
+
+        sys.exit(run_worker(args))
 
     # Below is for 'run' command (experiment execution)
 

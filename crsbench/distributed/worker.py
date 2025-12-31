@@ -14,6 +14,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -78,11 +79,20 @@ def worker_lock():
                 pass  # File might already be closed or deleted
 
 
-def main():
+def main(
+    redis_host: Optional[str] = None,
+    experiment_name: Optional[str] = None,
+    timeout: Optional[int] = None,
+) -> int:
     """
     Worker entry point - connects to Redis and processes jobs.
 
-    Environment Variables:
+    Args:
+        redis_host: Redis server hostname (overrides REDIS_HOST env var)
+        experiment_name: Experiment identifier (overrides EXPERIMENT_NAME env var)
+        timeout: Job timeout in seconds (overrides WORKER_TIMEOUT env var)
+
+    Environment Variables (used when CLI args not provided):
         REDIS_HOST: Redis server hostname (default: localhost)
         EXPERIMENT_NAME: Experiment identifier for queue naming (default: default)
         WORKER_TIMEOUT: Job timeout in seconds (default: 3600)
@@ -92,8 +102,14 @@ def main():
         # Run as module
         python -m crsbench.distributed.worker
 
+        # Run via CLI
+        crsbench worker --redis-host localhost --experiment-name my-exp
+
         # Run in Docker
         docker run -e REDIS_HOST=redis-server -e EXPERIMENT_NAME=exp1 crsbench-worker
+
+    Returns:
+        Exit code (0 for success, non-zero for errors)
 
     Exit Codes:
         0: Normal shutdown (queue empty)
@@ -102,7 +118,7 @@ def main():
         3: Worker error
         4: Another worker already running
     """
-    # Configure logging
+    # Configure logging (if not already configured by caller)
     log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
     configure_logger(level=log_level, sink=sys.stdout)
 
@@ -112,10 +128,10 @@ def main():
         logger.error("Install with: pip install redis rq")
         sys.exit(1)
 
-    # Get configuration from environment
-    redis_host = os.environ.get("REDIS_HOST", "localhost")
-    experiment_name = os.environ.get("EXPERIMENT_NAME", "default")
-    worker_timeout = int(os.environ.get("WORKER_TIMEOUT", "3600"))
+    # Get configuration: CLI args override environment variables
+    redis_host = redis_host or os.environ.get("REDIS_HOST", "localhost")
+    experiment_name = experiment_name or os.environ.get("EXPERIMENT_NAME", "default")
+    worker_timeout = timeout or int(os.environ.get("WORKER_TIMEOUT", "3600"))
 
     logger.info("=" * 60)
     logger.info("CRSBench Distributed Worker")
@@ -129,30 +145,31 @@ def main():
     try:
         with worker_lock():
             _run_worker(redis_host, experiment_name)
+        return 0  # Success
 
     except BlockingIOError:
         logger.error("=" * 60)
         logger.error("Another worker is already running")
         logger.error(f"Lock file: {WORKER_LOCK_FILE}")
         logger.error("=" * 60)
-        sys.exit(4)
+        return 4
 
     except redis.ConnectionError as e:
         logger.error(f"Cannot connect to Redis at {redis_host}: {e}")
         logger.error("Please check that Redis server is running and accessible")
-        sys.exit(2)
+        return 2
 
     except redis.TimeoutError as e:
         logger.error(f"Connection to Redis timed out: {e}")
-        sys.exit(2)
+        return 2
 
     except KeyboardInterrupt:
         logger.info("\nReceived interrupt signal, shutting down gracefully...")
-        sys.exit(0)
+        return 0
 
     except Exception as e:
         logger.error(f"Worker error: {e}", exc_info=True)
-        sys.exit(3)
+        return 3
 
 
 def _run_worker(redis_host: str, experiment_name: str):
@@ -258,4 +275,4 @@ def run_worker_continuous(redis_host: str, experiment_name: str, _timeout: int =
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
