@@ -123,6 +123,12 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--distributed",
+        action="store_true",
+        help="Force distributed execution mode with Redis (raises error if Redis unavailable)",
+    )
+
+    parser.add_argument(
         "--oss-fuzz-path",
         type=str,
         required=False,
@@ -767,6 +773,10 @@ def should_use_distributed_mode(
     - Redis not available (connection check)
     - User explicitly requests local mode via --local-only flag
 
+    Criteria for forced distributed mode:
+    - User explicitly requests via --distributed flag
+    - Raises error if Redis is not configured or unavailable
+
     Args:
         args: Parsed command line arguments
         config: Experiment configuration
@@ -774,8 +784,37 @@ def should_use_distributed_mode(
 
     Returns:
         bool: True if should use distributed mode, False for local mode
+
+    Raises:
+        RuntimeError: If --distributed is set but Redis is unavailable
     """
     from crsbench.distributed.queue import check_redis_available
+
+    # Check for conflicting flags
+    distributed = getattr(args, "distributed", False)
+    if args.local_only and distributed:
+        raise RuntimeError("Cannot specify both --local-only and --distributed flags")
+
+    # User explicitly forced distributed mode
+    if distributed:
+        logger.info("Distributed mode explicitly requested via --distributed flag")
+
+        # Validate Redis host is configured
+        if not config.redis_host or config.redis_host == "none":
+            raise RuntimeError(
+                "Cannot use distributed mode: No Redis host configured. "
+                "Please set 'redis_host' in experiment config or remove --distributed flag."
+            )
+
+        # Validate Redis is available
+        if not check_redis_available(config.redis_host):
+            raise RuntimeError(
+                f"Cannot use distributed mode: Redis not available at {config.redis_host}. "
+                "Please ensure Redis server is running or remove --distributed flag."
+            )
+
+        logger.info(f"Forcing distributed mode with Redis at {config.redis_host}")
+        return True
 
     # User explicitly disabled distributed mode
     if args.local_only:
