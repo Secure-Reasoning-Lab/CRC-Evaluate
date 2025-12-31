@@ -1138,3 +1138,709 @@ class TestCpvFixedDedup:
 
         noop_dedup = get_patch_dedup_strategy("none")
         assert isinstance(noop_dedup, NoOpPatchDedup)
+
+
+# =============================================================================
+# Core Test Cases - Security Verdict Determination
+# =============================================================================
+
+
+class TestSecurityVerdictDetermination:
+    """Core tests for security verdict logic."""
+
+    def test_verdict_pass_requires_cpv_fixed_and_tests_pass(self):
+        """Test PASS verdict requires both cpv_fixed non-empty AND tests pass."""
+        from crsbench.evaluation.verification.models import (
+            CpvStats,
+            PatchVerificationResult,
+            PatchVerificationStatus,
+            VerificationScores,
+        )
+
+        result = PatchVerificationResult(
+            status=PatchVerificationStatus.VALID,
+            pov_id="test",
+            patch_path=Path("/test/patch.diff"),
+            harness="test_harness",
+            cpv_fixed=["cpv_0"],
+            cpv_stats={
+                "cpv_0": CpvStats(
+                    cpv_id="cpv_0",
+                    variants_tested=2,
+                    variants_matched=2,
+                    variant_results={"pov_0": True, "pov_1": True},
+                )
+            },
+            scores=VerificationScores(
+                cpvs_complete=1,
+                total_variants_tested=2,
+                total_variants_matched=2,
+            ),
+            pov_test_passed=True,
+            unit_tests_passed=True,
+            security_verdict="PASS",
+        )
+
+        assert result.security_verdict == "PASS"
+        assert result.is_valid
+        assert len(result.cpv_fixed) == 1
+
+    def test_verdict_fail_when_no_cpvs_fixed(self):
+        """Test FAIL verdict when cpv_fixed is empty."""
+        from crsbench.evaluation.verification.models import (
+            CpvStats,
+            PatchVerificationResult,
+            PatchVerificationStatus,
+            VerificationScores,
+        )
+
+        result = PatchVerificationResult(
+            status=PatchVerificationStatus.POV_STILL_TRIGGERS,
+            pov_id="test",
+            patch_path=Path("/test/patch.diff"),
+            harness="test_harness",
+            cpv_fixed=[],  # No CPVs fixed
+            cpv_stats={
+                "cpv_0": CpvStats(
+                    cpv_id="cpv_0",
+                    variants_tested=2,
+                    variants_matched=0,  # None matched
+                    variant_results={"pov_0": False, "pov_1": False},
+                )
+            },
+            scores=VerificationScores(
+                cpvs_none=1,
+                total_variants_tested=2,
+                total_variants_matched=0,
+            ),
+            pov_test_passed=False,
+            security_verdict="FAIL",
+        )
+
+        assert result.security_verdict == "FAIL"
+        assert not result.is_valid
+        assert result.cpv_fixed == []
+
+    def test_verdict_fail_when_only_partial_fix(self):
+        """Test FAIL verdict when CPV is only partially fixed."""
+        from crsbench.evaluation.verification.models import (
+            CpvStats,
+            PatchVerificationResult,
+            PatchVerificationStatus,
+            VerificationScores,
+        )
+
+        result = PatchVerificationResult(
+            status=PatchVerificationStatus.POV_STILL_TRIGGERS,
+            pov_id="test",
+            patch_path=Path("/test/patch.diff"),
+            harness="test_harness",
+            cpv_fixed=[],  # Partial fix NOT in cpv_fixed
+            cpv_stats={
+                "cpv_0": CpvStats(
+                    cpv_id="cpv_0",
+                    variants_tested=3,
+                    variants_matched=2,  # Partial: 2/3
+                    variant_results={"pov_0": True, "pov_1": True, "pov_2": False},
+                )
+            },
+            scores=VerificationScores(
+                cpvs_partial=1,
+                total_variants_tested=3,
+                total_variants_matched=2,
+            ),
+            pov_test_passed=False,
+            security_verdict="FAIL",
+        )
+
+        assert result.security_verdict == "FAIL"
+        assert result.cpv_stats["cpv_0"].status == "partial"
+        assert "cpv_0" not in result.cpv_fixed
+
+    def test_verdict_fail_when_tests_fail_even_with_cpvs_fixed(self):
+        """Test FAIL verdict when unit tests fail even if CPVs fixed."""
+        from crsbench.evaluation.verification.models import (
+            CpvStats,
+            PatchVerificationResult,
+            PatchVerificationStatus,
+            VerificationScores,
+        )
+
+        result = PatchVerificationResult(
+            status=PatchVerificationStatus.TEST_FAILED,
+            pov_id="test",
+            patch_path=Path("/test/patch.diff"),
+            harness="test_harness",
+            cpv_fixed=["cpv_0"],  # CPV fixed but tests failed
+            cpv_stats={
+                "cpv_0": CpvStats(
+                    cpv_id="cpv_0",
+                    variants_tested=1,
+                    variants_matched=1,
+                    variant_results={"pov_0": True},
+                )
+            },
+            scores=VerificationScores(
+                cpvs_complete=1,
+                total_variants_tested=1,
+                total_variants_matched=1,
+            ),
+            pov_test_passed=True,
+            unit_tests_passed=False,  # Tests failed
+            security_verdict="FAIL",
+        )
+
+        assert result.security_verdict == "FAIL"
+        assert not result.is_valid  # TEST_FAILED is not VALID
+
+    def test_default_verdict_is_fail(self):
+        """Test that default security_verdict is FAIL."""
+        from crsbench.evaluation.verification.models import (
+            PatchVerificationResult,
+            PatchVerificationStatus,
+        )
+
+        result = PatchVerificationResult(
+            status=PatchVerificationStatus.PENDING,
+            pov_id="test",
+            patch_path=Path("/test/patch.diff"),
+        )
+
+        assert result.security_verdict == "FAIL"
+
+
+# =============================================================================
+# Core Test Cases - CpvStats Edge Cases
+# =============================================================================
+
+
+class TestCpvStatsEdgeCases:
+    """Core tests for CpvStats edge cases."""
+
+    def test_cpv_stats_status_zero_tested_zero_matched(self):
+        """Test status when variants_tested=0 and variants_matched=0."""
+        from crsbench.evaluation.verification.models import CpvStats
+
+        stats = CpvStats(
+            cpv_id="cpv_0",
+            variants_tested=0,
+            variants_matched=0,
+            variant_results={},
+        )
+
+        assert stats.status == "none"
+
+    def test_cpv_stats_status_one_tested_one_matched(self):
+        """Test status when only one variant exists and passes."""
+        from crsbench.evaluation.verification.models import CpvStats
+
+        stats = CpvStats(
+            cpv_id="cpv_0",
+            variants_tested=1,
+            variants_matched=1,
+            variant_results={"pov_0": True},
+        )
+
+        assert stats.status == "complete"
+
+    def test_cpv_stats_status_one_tested_zero_matched(self):
+        """Test status when only one variant exists and fails."""
+        from crsbench.evaluation.verification.models import CpvStats
+
+        stats = CpvStats(
+            cpv_id="cpv_0",
+            variants_tested=1,
+            variants_matched=0,
+            variant_results={"pov_0": False},
+        )
+
+        assert stats.status == "none"
+
+    def test_cpv_stats_status_many_tested_all_matched(self):
+        """Test status when many variants all pass."""
+        from crsbench.evaluation.verification.models import CpvStats
+
+        stats = CpvStats(
+            cpv_id="cpv_0",
+            variants_tested=5,
+            variants_matched=5,
+            variant_results={f"pov_{i}": True for i in range(5)},
+        )
+
+        assert stats.status == "complete"
+
+    def test_cpv_stats_status_many_tested_some_matched(self):
+        """Test status when many variants, only some pass."""
+        from crsbench.evaluation.verification.models import CpvStats
+
+        stats = CpvStats(
+            cpv_id="cpv_0",
+            variants_tested=5,
+            variants_matched=3,
+            variant_results={
+                "pov_0": True,
+                "pov_1": True,
+                "pov_2": True,
+                "pov_3": False,
+                "pov_4": False,
+            },
+        )
+
+        assert stats.status == "partial"
+
+    def test_cpv_stats_to_dict_includes_all_fields(self):
+        """Test to_dict includes all fields including computed status."""
+        from crsbench.evaluation.verification.models import CpvStats
+
+        stats = CpvStats(
+            cpv_id="cpv_0",
+            variants_tested=2,
+            variants_matched=1,
+            variant_results={"pov_0": True, "pov_1": False},
+        )
+
+        d = stats.to_dict()
+
+        assert d["cpv_id"] == "cpv_0"
+        assert d["variants_tested"] == 2
+        assert d["variants_matched"] == 1
+        assert d["variant_results"] == {"pov_0": True, "pov_1": False}
+        assert d["status"] == "partial"
+
+
+# =============================================================================
+# Core Test Cases - VerificationScores Edge Cases
+# =============================================================================
+
+
+class TestVerificationScoresEdgeCases:
+    """Core tests for VerificationScores edge cases."""
+
+    def test_overall_fix_rate_100_percent(self):
+        """Test fix rate when all variants matched."""
+        from crsbench.evaluation.verification.models import VerificationScores
+
+        scores = VerificationScores(
+            cpvs_complete=2,
+            cpvs_partial=0,
+            cpvs_none=0,
+            total_variants_tested=10,
+            total_variants_matched=10,
+        )
+
+        assert scores.overall_fix_rate == 1.0
+
+    def test_overall_fix_rate_0_percent(self):
+        """Test fix rate when no variants matched."""
+        from crsbench.evaluation.verification.models import VerificationScores
+
+        scores = VerificationScores(
+            cpvs_complete=0,
+            cpvs_partial=0,
+            cpvs_none=2,
+            total_variants_tested=10,
+            total_variants_matched=0,
+        )
+
+        assert scores.overall_fix_rate == 0.0
+
+    def test_overall_fix_rate_partial(self):
+        """Test fix rate with partial fixes."""
+        from crsbench.evaluation.verification.models import VerificationScores
+
+        scores = VerificationScores(
+            cpvs_complete=1,
+            cpvs_partial=1,
+            cpvs_none=0,
+            total_variants_tested=10,
+            total_variants_matched=7,
+        )
+
+        assert scores.overall_fix_rate == 0.7
+
+    def test_overall_fix_rate_zero_tested(self):
+        """Test fix rate when no variants tested (avoid division by zero)."""
+        from crsbench.evaluation.verification.models import VerificationScores
+
+        scores = VerificationScores(
+            cpvs_complete=0,
+            cpvs_partial=0,
+            cpvs_none=0,
+            total_variants_tested=0,
+            total_variants_matched=0,
+        )
+
+        assert scores.overall_fix_rate == 0.0
+
+    def test_scores_to_dict_includes_fix_rate(self):
+        """Test to_dict includes computed overall_fix_rate."""
+        from crsbench.evaluation.verification.models import VerificationScores
+
+        scores = VerificationScores(
+            cpvs_complete=1,
+            cpvs_partial=0,
+            cpvs_none=1,
+            total_variants_tested=4,
+            total_variants_matched=2,
+        )
+
+        d = scores.to_dict()
+
+        assert d["cpvs_complete"] == 1
+        assert d["cpvs_partial"] == 0
+        assert d["cpvs_none"] == 1
+        assert d["total_variants_tested"] == 4
+        assert d["total_variants_matched"] == 2
+        assert d["overall_fix_rate"] == 0.5
+
+
+# =============================================================================
+# Core Test Cases - CpvFixedDedup Edge Cases
+# =============================================================================
+
+
+class TestCpvFixedDedupEdgeCases:
+    """Core tests for CpvFixedDedup edge cases."""
+
+    def test_dedup_preserves_order(self):
+        """Test that deduplication preserves original order."""
+        from crsbench.evaluation.verification.dedup import CpvFixedDedup
+        from crsbench.evaluation.verification.models import (
+            PatchVerificationResult,
+            PatchVerificationStatus,
+        )
+
+        dedup = CpvFixedDedup()
+
+        results = [
+            PatchVerificationResult(
+                status=PatchVerificationStatus.VALID,
+                pov_id="third",
+                patch_path=Path("/patch3.diff"),
+                cpv_fixed=["cpv_2"],
+            ),
+            PatchVerificationResult(
+                status=PatchVerificationStatus.VALID,
+                pov_id="first",
+                patch_path=Path("/patch1.diff"),
+                cpv_fixed=["cpv_0"],
+            ),
+            PatchVerificationResult(
+                status=PatchVerificationStatus.VALID,
+                pov_id="second",
+                patch_path=Path("/patch2.diff"),
+                cpv_fixed=["cpv_1"],
+            ),
+        ]
+
+        unique = dedup.deduplicate(results)
+
+        assert len(unique) == 3
+        assert [r.pov_id for r in unique] == ["third", "first", "second"]
+
+    def test_single_cpv_fixed_list(self):
+        """Test deduplication with single-element cpv_fixed lists."""
+        from crsbench.evaluation.verification.dedup import CpvFixedDedup
+        from crsbench.evaluation.verification.models import (
+            PatchVerificationResult,
+            PatchVerificationStatus,
+        )
+
+        dedup = CpvFixedDedup()
+
+        results = [
+            PatchVerificationResult(
+                status=PatchVerificationStatus.VALID,
+                pov_id="patch1",
+                patch_path=Path("/patch1.diff"),
+                cpv_fixed=["cpv_0"],
+            ),
+            PatchVerificationResult(
+                status=PatchVerificationStatus.VALID,
+                pov_id="patch2",
+                patch_path=Path("/patch2.diff"),
+                cpv_fixed=["cpv_0"],  # Duplicate
+            ),
+        ]
+
+        unique = dedup.deduplicate(results)
+
+        assert len(unique) == 1
+        assert unique[0].pov_id == "patch1"
+
+    def test_mixed_valid_and_non_valid_results(self):
+        """Test deduplication with mix of VALID and non-VALID results."""
+        from crsbench.evaluation.verification.dedup import CpvFixedDedup
+        from crsbench.evaluation.verification.models import (
+            PatchVerificationResult,
+            PatchVerificationStatus,
+        )
+
+        dedup = CpvFixedDedup()
+
+        results = [
+            PatchVerificationResult(
+                status=PatchVerificationStatus.VALID,
+                pov_id="valid1",
+                patch_path=Path("/patch1.diff"),
+                cpv_fixed=["cpv_0"],
+            ),
+            PatchVerificationResult(
+                status=PatchVerificationStatus.BUILD_FAILED,
+                pov_id="failed1",
+                patch_path=Path("/patch2.diff"),
+            ),
+            PatchVerificationResult(
+                status=PatchVerificationStatus.VALID,
+                pov_id="valid2",
+                patch_path=Path("/patch3.diff"),
+                cpv_fixed=["cpv_0"],  # Duplicate of valid1
+            ),
+            PatchVerificationResult(
+                status=PatchVerificationStatus.TEST_FAILED,
+                pov_id="failed2",
+                patch_path=Path("/patch4.diff"),
+            ),
+        ]
+
+        unique = dedup.deduplicate(results)
+
+        # valid1 kept, valid2 deduplicated, both failed patches kept
+        assert len(unique) == 3
+        pov_ids = [r.pov_id for r in unique]
+        assert "valid1" in pov_ids
+        assert "valid2" not in pov_ids  # Deduplicated
+        assert "failed1" in pov_ids
+        assert "failed2" in pov_ids
+
+    def test_empty_cpv_fixed_not_deduplicated(self):
+        """Test that VALID patches with empty cpv_fixed are not deduplicated."""
+        from crsbench.evaluation.verification.dedup import CpvFixedDedup
+        from crsbench.evaluation.verification.models import (
+            PatchVerificationResult,
+            PatchVerificationStatus,
+        )
+
+        dedup = CpvFixedDedup()
+
+        results = [
+            PatchVerificationResult(
+                status=PatchVerificationStatus.VALID,
+                pov_id="patch1",
+                patch_path=Path("/patch1.diff"),
+                cpv_fixed=[],  # Empty - edge case
+            ),
+            PatchVerificationResult(
+                status=PatchVerificationStatus.VALID,
+                pov_id="patch2",
+                patch_path=Path("/patch2.diff"),
+                cpv_fixed=[],  # Also empty
+            ),
+        ]
+
+        unique = dedup.deduplicate(results)
+
+        # Both kept because empty cpv_fixed doesn't trigger dedup condition
+        assert len(unique) == 2
+
+
+# =============================================================================
+# Core Test Cases - Per-CPV Testing Logic
+# =============================================================================
+
+
+class TestPerCpvTestingLogicUnit:
+    """Unit tests for per-CPV testing logic."""
+
+    def test_cpv_fixed_only_includes_complete_cpvs(self):
+        """Test that cpv_fixed list only includes CPVs with status='complete'."""
+        from crsbench.evaluation.verification.models import (
+            CpvStats,
+            PatchVerificationResult,
+            PatchVerificationStatus,
+            VerificationScores,
+        )
+
+        # Simulate result with mix of complete, partial, none
+        cpv_stats = {
+            "cpv_0": CpvStats(
+                cpv_id="cpv_0",
+                variants_tested=2,
+                variants_matched=2,  # Complete
+                variant_results={"pov_0": True, "pov_1": True},
+            ),
+            "cpv_1": CpvStats(
+                cpv_id="cpv_1",
+                variants_tested=3,
+                variants_matched=1,  # Partial
+                variant_results={"pov_0": True, "pov_1": False, "pov_2": False},
+            ),
+            "cpv_2": CpvStats(
+                cpv_id="cpv_2",
+                variants_tested=2,
+                variants_matched=0,  # None
+                variant_results={"pov_0": False, "pov_1": False},
+            ),
+        }
+
+        # cpv_fixed should only include complete CPVs
+        cpv_fixed = [
+            cpv_id for cpv_id, stats in cpv_stats.items() if stats.status == "complete"
+        ]
+
+        result = PatchVerificationResult(
+            status=PatchVerificationStatus.VALID,
+            pov_id="test",
+            patch_path=Path("/test/patch.diff"),
+            harness="test_harness",
+            cpv_fixed=cpv_fixed,
+            cpv_stats=cpv_stats,
+            scores=VerificationScores(
+                cpvs_complete=1,
+                cpvs_partial=1,
+                cpvs_none=1,
+                total_variants_tested=7,
+                total_variants_matched=3,
+            ),
+            security_verdict="PASS",
+        )
+
+        assert result.cpv_fixed == ["cpv_0"]
+        assert "cpv_1" not in result.cpv_fixed  # Partial
+        assert "cpv_2" not in result.cpv_fixed  # None
+
+    def test_scores_aggregation_across_multiple_cpvs(self):
+        """Test scores correctly aggregate across multiple CPVs."""
+        from crsbench.evaluation.verification.models import (
+            CpvStats,
+            VerificationScores,
+        )
+
+        cpv_stats = {
+            "cpv_0": CpvStats(
+                cpv_id="cpv_0",
+                variants_tested=3,
+                variants_matched=3,  # Complete
+            ),
+            "cpv_1": CpvStats(
+                cpv_id="cpv_1",
+                variants_tested=2,
+                variants_matched=1,  # Partial
+            ),
+            "cpv_2": CpvStats(
+                cpv_id="cpv_2",
+                variants_tested=4,
+                variants_matched=0,  # None
+            ),
+        }
+
+        # Calculate expected scores
+        cpvs_complete = sum(1 for s in cpv_stats.values() if s.status == "complete")
+        cpvs_partial = sum(1 for s in cpv_stats.values() if s.status == "partial")
+        cpvs_none = sum(1 for s in cpv_stats.values() if s.status == "none")
+        total_tested = sum(s.variants_tested for s in cpv_stats.values())
+        total_matched = sum(s.variants_matched for s in cpv_stats.values())
+
+        scores = VerificationScores(
+            cpvs_complete=cpvs_complete,
+            cpvs_partial=cpvs_partial,
+            cpvs_none=cpvs_none,
+            total_variants_tested=total_tested,
+            total_variants_matched=total_matched,
+        )
+
+        assert scores.cpvs_complete == 1
+        assert scores.cpvs_partial == 1
+        assert scores.cpvs_none == 1
+        assert scores.total_variants_tested == 9
+        assert scores.total_variants_matched == 4
+        assert scores.overall_fix_rate == pytest.approx(4 / 9)
+
+
+# =============================================================================
+# Core Test Cases - Engine Discovery Functions
+# =============================================================================
+
+
+class TestEngineDiscoveryFunctions:
+    """Tests for engine discovery functions using fixtures."""
+
+    @pytest.fixture
+    def mock_oss_fuzz(self, tmp_path: Path) -> Path:
+        """Create a mock oss-fuzz directory with helper.py."""
+        oss_fuzz = tmp_path / "oss-fuzz"
+        infra = oss_fuzz / "infra"
+        infra.mkdir(parents=True)
+        (infra / "helper.py").write_text("# mock helper")
+        return oss_fuzz
+
+    def test_discover_all_cpvs_sorts_numerically(
+        self, tmp_path: Path, mock_oss_fuzz: Path
+    ):
+        """Test that CPVs are sorted numerically (cpv_0, cpv_1, cpv_10)."""
+        # Create .aixcc/harness/cpv_* structure
+        benchmark = tmp_path / "benchmark"
+        harness_dir = benchmark / ".aixcc" / "test_harness"
+        for i in [0, 1, 10, 2, 5]:
+            (harness_dir / f"cpv_{i}").mkdir(parents=True)
+
+        from crsbench.evaluation.verification.patch import PatchVerificationEngine
+
+        engine = PatchVerificationEngine(mock_oss_fuzz)
+        cpvs = engine._discover_all_cpvs_in_harness(benchmark, "test_harness")
+
+        # Should be sorted numerically, not lexicographically
+        assert cpvs == ["cpv_0", "cpv_1", "cpv_2", "cpv_5", "cpv_10"]
+
+    def test_discover_pov_variants_sorts_numerically(
+        self, tmp_path: Path, mock_oss_fuzz: Path
+    ):
+        """Test that POV variants are sorted numerically."""
+        # Create blobs directory with POV files
+        benchmark = tmp_path / "benchmark"
+        blobs_dir = benchmark / ".aixcc" / "test_harness" / "cpv_0" / "blobs"
+        blobs_dir.mkdir(parents=True)
+        for i in [0, 1, 10, 2, 5]:
+            (blobs_dir / f"pov_{i}.blob").write_bytes(b"test")
+
+        from crsbench.evaluation.verification.patch import PatchVerificationEngine
+
+        engine = PatchVerificationEngine(mock_oss_fuzz)
+        povs = engine._discover_pov_variants(benchmark, "test_harness", "cpv_0")
+
+        pov_names = [p.name for p in povs]
+        assert pov_names == [
+            "pov_0.blob",
+            "pov_1.blob",
+            "pov_2.blob",
+            "pov_5.blob",
+            "pov_10.blob",
+        ]
+
+    def test_discover_patches_from_benchmark_structure(
+        self, tmp_path: Path, mock_oss_fuzz: Path
+    ):
+        """Test patch discovery from benchmark .aixcc structure."""
+        # Create .aixcc/harness/cpv/patches/unique_id/patch.diff structure
+        benchmark = tmp_path / "benchmark"
+        patch_dir = (
+            benchmark
+            / ".aixcc"
+            / "test_harness"
+            / "cpv_0"
+            / "patches"
+            / "test_harness_cpv_0_pov_0"
+        )
+        patch_dir.mkdir(parents=True)
+        (patch_dir / "patch.diff").write_text("diff content")
+
+        from crsbench.evaluation.verification.patch import PatchVerificationEngine
+
+        engine = PatchVerificationEngine(mock_oss_fuzz)
+        patches = engine._discover_patches_from_benchmark(benchmark)
+
+        assert len(patches) == 1
+        harness, cpv_id, patch_info = patches[0]
+        assert harness == "test_harness"
+        assert cpv_id == "cpv_0"
+        assert patch_info.pov_id == "test_harness_cpv_0_pov_0"

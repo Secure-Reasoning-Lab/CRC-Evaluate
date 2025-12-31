@@ -515,7 +515,9 @@ class PatchVerificationEngine:
             return []
 
         cpv_dirs = [
-            d.name for d in harness_dir.iterdir() if d.is_dir() and d.name.startswith("cpv_")
+            d.name
+            for d in harness_dir.iterdir()
+            if d.is_dir() and d.name.startswith("cpv_")
         ]
 
         # Sort by CPV number (cpv_0, cpv_1, cpv_2, ...)
