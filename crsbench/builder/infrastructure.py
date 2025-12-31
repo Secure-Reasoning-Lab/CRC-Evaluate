@@ -753,6 +753,7 @@ class OSSFuzzInfrastructure:
         pov_data: bytes,
         timeout: int = 120,
         request_id: Optional[int] = None,
+        pov_id: Optional[str] = None,
     ) -> bool:
         """Reproduce a crash using OSS-Fuzz helper.py.
 
@@ -768,6 +769,7 @@ class OSSFuzzInfrastructure:
             pov_data: Raw POV/testcase bytes
             timeout: Timeout for reproduce operation in seconds
             request_id: Optional request ID for logging
+            pov_id: Optional POV identifier for logging
 
         Returns:
             True if the POV causes a crash, False otherwise
@@ -778,6 +780,7 @@ class OSSFuzzInfrastructure:
             testcase_path = Path(f.name)
 
         req_prefix = f"[Request #{request_id}] " if request_id else ""
+        pov_prefix = f"[{pov_id}] " if pov_id else ""
 
         try:
             cmd = [
@@ -808,15 +811,18 @@ class OSSFuzzInfrastructure:
 
             # Handle exit codes explicitly
             if result.returncode == 0:
-                logger.info(f"{req_prefix}{project_name}/{harness} did not crash")
+                logger.info(
+                    f"{req_prefix}{pov_prefix}{project_name}/{harness} did not crash"
+                )
                 return False
             if result.returncode == EXIT_CODE_TIMEOUT:
                 logger.info(
-                    f"{req_prefix}{project_name}/{harness} timed out (exit code 124)"
+                    f"{req_prefix}{pov_prefix}{project_name}/{harness} "
+                    "timed out (exit code 124)"
                 )
                 return False
             logger.info(
-                f"{req_prefix}{project_name}/{harness} crashed "
+                f"{req_prefix}{pov_prefix}{project_name}/{harness} crashed "
                 f"(exit code {result.returncode})"
             )
             return True

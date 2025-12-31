@@ -680,6 +680,7 @@ class PatchVerificationEngine:
             harness=harness,
             pov_data=pov_data,
             timeout=self.timeout,
+            pov_id=pov_name,
         )
 
         passed = not crashed
