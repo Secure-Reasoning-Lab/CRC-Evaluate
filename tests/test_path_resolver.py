@@ -75,9 +75,7 @@ def mock_ensure_repo(tmp_path):
     The mock prevents real git operations and returns a pre-created test repo.
     """
     repo = create_test_repository(tmp_path)
-    with patch(
-        "crsbench.evaluation.path_resolver.ensure_project_repository"
-    ) as mock:
+    with patch("crsbench.evaluation.path_resolver.ensure_project_repository") as mock:
         mock.return_value = str(repo)
         yield repo
 
@@ -547,7 +545,9 @@ class TestIntegration:
         assert all(path is not None for path in resolved_paths)
         assert all(path.exists() for path in resolved_paths)
 
-    def test_harness_path_with_deeply_nested_structure(self, tmp_path, mock_ensure_repo):
+    def test_harness_path_with_deeply_nested_structure(
+        self, tmp_path, mock_ensure_repo
+    ):
         """Test resolution with deeply nested directory structure."""
         # Setup
         benchmark = create_test_benchmark(tmp_path)
