@@ -4,11 +4,16 @@ This module implements the worker process that connects to the Redis queue,
 pulls jobs, executes them, and reports results back to the queue.
 
 Workers can be run locally or deployed in containers for horizontal scaling.
+
+A file-based lock ensures only one worker process runs at a time.
 """
 
+import fcntl
 import os
 import sys
 import time
+from contextlib import contextmanager
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -16,6 +21,10 @@ from crsbench.utils.logger import configure_logger, get_logger
 
 # Load environment variables from .env file if present
 load_dotenv()
+
+# Worker lock file configuration
+DEFAULT_LOCK_PATH = "/tmp/crsbench-worker.lock"
+WORKER_LOCK_FILE = Path(os.environ.get("CRSBENCH_WORKER_LOCK_PATH", DEFAULT_LOCK_PATH))
 
 try:
     import redis
@@ -26,6 +35,47 @@ except ImportError:
     REDIS_AVAILABLE = False
 
 logger = get_logger(__name__)
+
+
+@contextmanager
+def worker_lock():
+    """Acquire an exclusive lock to ensure only one worker process runs at a time.
+
+    This context manager uses file-based locking (fcntl) to prevent concurrent
+    worker processes from running simultaneously. The lock is non-blocking and
+    will raise BlockingIOError immediately if another worker is already running.
+
+    Raises:
+        BlockingIOError: If another worker process already holds the lock
+        OSError: If lock file cannot be created or accessed
+
+    Example:
+        with worker_lock():
+            # Only one worker process will execute this block at a time
+            worker.work()
+    """
+    lock_file = None
+    try:
+        # Ensure parent directory exists
+        WORKER_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+        # Open lock file
+        lock_file = WORKER_LOCK_FILE.open("w")
+
+        # Acquire exclusive lock (non-blocking)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        # Lock acquired successfully
+        yield
+
+    finally:
+        # Release lock and cleanup
+        if lock_file is not None:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                lock_file.close()
+            except (OSError, ValueError):
+                pass  # File might already be closed or deleted
 
 
 def main():
@@ -50,6 +100,7 @@ def main():
         1: Redis/RQ not installed
         2: Cannot connect to Redis
         3: Worker error
+        4: Another worker already running
     """
     # Configure logging
     log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
@@ -74,6 +125,43 @@ def main():
     logger.info(f"Worker timeout: {worker_timeout}s")
     logger.info("=" * 60)
 
+    # Acquire worker lock to ensure only one worker runs at a time
+    try:
+        with worker_lock():
+            _run_worker(redis_host, experiment_name)
+
+    except BlockingIOError:
+        logger.error("=" * 60)
+        logger.error("Another worker is already running")
+        logger.error(f"Lock file: {WORKER_LOCK_FILE}")
+        logger.error("=" * 60)
+        sys.exit(4)
+
+    except redis.ConnectionError as e:
+        logger.error(f"Cannot connect to Redis at {redis_host}: {e}")
+        logger.error("Please check that Redis server is running and accessible")
+        sys.exit(2)
+
+    except redis.TimeoutError as e:
+        logger.error(f"Connection to Redis timed out: {e}")
+        sys.exit(2)
+
+    except KeyboardInterrupt:
+        logger.info("\nReceived interrupt signal, shutting down gracefully...")
+        sys.exit(0)
+
+    except Exception as e:
+        logger.error(f"Worker error: {e}", exc_info=True)
+        sys.exit(3)
+
+
+def _run_worker(redis_host: str, experiment_name: str):
+    """Internal helper to run the worker (separated for lock management).
+
+    Args:
+        redis_host: Redis server hostname
+        experiment_name: Experiment identifier for queue naming
+    """
     try:
         # Connect to Redis
         logger.info(f"Connecting to Redis at {redis_host}...")
@@ -113,22 +201,9 @@ def main():
             logger.info("Queue empty, worker shutting down")
             logger.info("=" * 60)
 
-    except redis.ConnectionError as e:
-        logger.error(f"Cannot connect to Redis at {redis_host}: {e}")
-        logger.error("Please check that Redis server is running and accessible")
-        sys.exit(2)
-
-    except redis.TimeoutError as e:
-        logger.error(f"Connection to Redis timed out: {e}")
-        sys.exit(2)
-
-    except KeyboardInterrupt:
-        logger.info("\nReceived interrupt signal, shutting down gracefully...")
-        sys.exit(0)
-
-    except Exception as e:
-        logger.error(f"Worker error: {e}", exc_info=True)
-        sys.exit(3)
+    except Exception:
+        # Re-raise all exceptions to be handled by main()
+        raise
 
 
 def run_worker_continuous(redis_host: str, experiment_name: str, _timeout: int = 3600):
@@ -152,21 +227,28 @@ def run_worker_continuous(redis_host: str, experiment_name: str, _timeout: int =
 
     logger.info(f"Starting continuous worker for experiment: {experiment_name}")
 
+    # Acquire worker lock to ensure only one worker runs at a time
     try:
-        redis_connection = redis.Redis(host=redis_host)
-        redis_connection.ping()
+        with worker_lock():
+            redis_connection = redis.Redis(host=redis_host)
+            redis_connection.ping()
 
-        with rq.Connection(redis_connection):  # type: ignore[attr-defined]
-            queue_name = f"crsbench_{experiment_name}"
-            queue = rq.Queue(queue_name)  # type: ignore[attr-defined]
-            worker = rq.Worker([queue])  # type: ignore[attr-defined]
+            with rq.Connection(redis_connection):  # type: ignore[attr-defined]
+                queue_name = f"crsbench_{experiment_name}"
+                queue = rq.Queue(queue_name)  # type: ignore[attr-defined]
+                worker = rq.Worker([queue])  # type: ignore[attr-defined]
 
-            logger.info(f"Worker running in continuous mode on queue: {queue_name}")
+                logger.info(f"Worker running in continuous mode on queue: {queue_name}")
 
-            # Run worker in continuous mode (never exits)
-            worker.work(
-                burst=False  # Continuous mode
-            )
+                # Run worker in continuous mode (never exits)
+                worker.work(
+                    burst=False  # Continuous mode
+                )
+
+    except BlockingIOError:
+        logger.error("Another worker is already running")
+        logger.error(f"Lock file: {WORKER_LOCK_FILE}")
+        raise
 
     except KeyboardInterrupt:
         logger.info("Received interrupt, shutting down...")
