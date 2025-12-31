@@ -182,7 +182,12 @@ def _run_worker(redis_host: str, experiment_name: str):
     try:
         # Connect to Redis
         logger.info(f"Connecting to Redis at {redis_host}...")
-        redis_connection = redis.Redis(host=redis_host, socket_connect_timeout=5)
+        redis_password = os.environ.get("REDIS_PASSWORD") or None
+        redis_connection = redis.Redis(
+            host=redis_host,
+            password=redis_password,
+            socket_connect_timeout=5,
+        )
 
         # Test connection
         redis_connection.ping()
@@ -246,7 +251,8 @@ def run_worker_continuous(redis_host: str, experiment_name: str, _timeout: int =
     # Acquire worker lock to ensure only one worker runs at a time
     try:
         with worker_lock():
-            redis_connection = redis.Redis(host=redis_host)
+            redis_password = os.environ.get("REDIS_PASSWORD") or None
+            redis_connection = redis.Redis(host=redis_host, password=redis_password)
             redis_connection.ping()
 
             # Set up RQ queue and worker (RQ 2.x requires explicit connection)
