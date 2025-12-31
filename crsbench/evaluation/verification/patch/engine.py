@@ -81,6 +81,7 @@ class PatchVerificationEngine:
         build_timeout: int = 1200,
         test_timeout: int = 1800,
         verify_workers: Optional[int] = None,
+        verify_variants: bool = True,
     ):
         """Initialize the patch verification engine.
 
@@ -92,6 +93,7 @@ class PatchVerificationEngine:
             build_timeout: Timeout for build operations in seconds
             test_timeout: Timeout for unit test execution in seconds
             verify_workers: Number of parallel workers (None = use default)
+            verify_variants: If True, verify patch against all POV variants
         """
         self.oss_fuzz_path = Path(oss_fuzz_path)
         self.infra = OSSFuzzInfrastructure(oss_fuzz_path)
@@ -101,6 +103,7 @@ class PatchVerificationEngine:
         self.build_timeout = build_timeout
         self.test_timeout = test_timeout
         self.verify_workers = resolve_verify_workers(verify_workers)
+        self.verify_variants = verify_variants
         self._inc_images_pulled: set[str] = set()
         self._temp_dirs: list[Path] = []
 
@@ -194,13 +197,47 @@ class PatchVerificationEngine:
             return result
 
         # Step 4: Run POV test - patch should prevent crash
-        pov_passed = self._run_pov_test(project_name, harness, pov_path)
-        result.pov_test_passed = pov_passed
+        # Parse unique_id to get cpv_id for variant discovery
+        _, cpv_id, _ = self._parse_unique_id(patch.pov_id)
 
-        if not pov_passed:
-            result.status = PatchVerificationStatus.POV_STILL_TRIGGERS
-            result.details = "POV still triggers vulnerability after patch"
-            return result
+        if self.verify_variants:
+            # Discover and test all POV variants
+            pov_variants = self._discover_pov_variants(benchmark_path, harness, cpv_id)
+
+            if pov_variants:
+                all_passed, failed_povs = self._run_pov_variants_test(
+                    project_name, harness, pov_variants
+                )
+                result.pov_test_passed = all_passed
+
+                if not all_passed:
+                    result.status = PatchVerificationStatus.POV_STILL_TRIGGERS
+                    result.details = (
+                        f"POV variants still trigger crash: {', '.join(failed_povs)}"
+                    )
+                    return result
+            else:
+                # Fallback to single POV test if no variants found
+                logger.warning(
+                    f"No POV variants found for {harness}/{cpv_id}, "
+                    "falling back to single POV test"
+                )
+                pov_passed = self._run_pov_test(project_name, harness, pov_path)
+                result.pov_test_passed = pov_passed
+
+                if not pov_passed:
+                    result.status = PatchVerificationStatus.POV_STILL_TRIGGERS
+                    result.details = "POV still triggers vulnerability after patch"
+                    return result
+        else:
+            # Single POV test only
+            pov_passed = self._run_pov_test(project_name, harness, pov_path)
+            result.pov_test_passed = pov_passed
+
+            if not pov_passed:
+                result.status = PatchVerificationStatus.POV_STILL_TRIGGERS
+                result.details = "POV still triggers vulnerability after patch"
+                return result
 
         # Step 5: Run unit tests
         test_passed, test_details = self._run_unit_tests(project_name, repo_path)
@@ -348,14 +385,35 @@ class PatchVerificationEngine:
         Returns:
             True if POV does NOT crash (patch is valid)
         """
+        _, passed = self._verify_single_pov(project_name, harness, pov_path)
+        return passed
+
+    def _verify_single_pov(
+        self,
+        project_name: str,
+        harness: str,
+        pov_path: Path,
+    ) -> tuple[str, bool]:
+        """Verify a single POV against patched code.
+
+        Core POV verification logic used by both single POV test and variant tests.
+
+        Args:
+            project_name: OSS-Fuzz project name
+            harness: Harness name
+            pov_path: Path to POV blob file
+
+        Returns:
+            Tuple of (pov_name, passed) where passed=True if POV does NOT crash
+        """
+        pov_name = pov_path.name
+
         if not pov_path.exists():
             logger.error(f"POV file not found: {pov_path}")
-            return False
+            return pov_name, False
 
         pov_data = pov_path.read_bytes()
-        logger.info(
-            f"Running POV test: {pov_path.name} against {project_name}/{harness}"
-        )
+        logger.debug(f"Running POV: {pov_name} against {project_name}/{harness}")
 
         crashed = self.infra.reproduce(
             project_name=project_name,
@@ -364,11 +422,13 @@ class PatchVerificationEngine:
             timeout=self.timeout,
         )
 
-        if crashed:
-            logger.info("POV still triggers crash - patch did not fix the bug")
-            return False
-        logger.info("POV did not crash - patch may be valid")
-        return True
+        passed = not crashed
+        if not passed:
+            logger.debug(f"  ✗ {pov_name}: POV still triggers crash")
+        else:
+            logger.debug(f"  ✓ {pov_name}: passed")
+
+        return pov_name, passed
 
     def _run_unit_tests(
         self,
@@ -396,6 +456,129 @@ class PatchVerificationEngine:
         if passed:
             return True, ""
         return False, stderr or "Unit tests failed"
+
+    def _discover_pov_variants(
+        self,
+        benchmark_path: Path,
+        harness: str,
+        cpv_id: str,
+    ) -> list[Path]:
+        """Discover all POV variants for a CPV from the blobs directory.
+
+        POV variants are stored in: .aixcc/<harness>/<cpv_id>/blobs/pov_*.blob
+
+        Args:
+            benchmark_path: Path to benchmark directory
+            harness: Harness name
+            cpv_id: CPV identifier (e.g., cpv_0)
+
+        Returns:
+            List of paths to POV blob files, sorted by POV number
+        """
+        blobs_dir = benchmark_path / ".aixcc" / harness / cpv_id / "blobs"
+
+        if not blobs_dir.exists():
+            logger.debug(f"Blobs directory not found: {blobs_dir}")
+            return []
+
+        pov_files = list(blobs_dir.glob("pov_*.blob"))
+
+        # Sort by POV number (pov_0, pov_1, pov_2, ...)
+        def extract_pov_num(path: Path) -> int:
+            try:
+                # pov_0.blob -> 0
+                return int(path.stem.split("_")[1])
+            except (IndexError, ValueError):
+                return 999
+
+        pov_files.sort(key=extract_pov_num)
+
+        logger.debug(f"Found {len(pov_files)} POV variants for {harness}/{cpv_id}")
+        return pov_files
+
+    def _parse_unique_id(self, unique_id: str) -> tuple[str, str, str]:
+        """Parse unique_id into harness, cpv_id, pov_id.
+
+        Format: {harness}_{cpv_id}_{pov_id}
+        Example: html_cpv_0_pov_0 -> (html, cpv_0, pov_0)
+
+        Args:
+            unique_id: Unique identifier string
+
+        Returns:
+            Tuple of (harness, cpv_id, pov_id)
+        """
+        parts = unique_id.rsplit("_", 3)
+
+        if len(parts) >= 4 and parts[-3] == "cpv" and parts[-1].startswith("pov"):
+            # Expected format: harness_cpv_N_pov_M (e.g., html_cpv_0_pov_0)
+            harness = "_".join(parts[:-4]) if len(parts) > 4 else parts[0]
+            cpv_id = f"cpv_{parts[-2]}"
+            pov_id = (
+                f"pov_{parts[-1].split('_')[-1]}" if "_" in parts[-1] else parts[-1]
+            )
+            return harness, cpv_id, pov_id
+
+        # Fallback: try to find cpv_ and pov_ markers
+        if "_cpv_" in unique_id and "_pov_" in unique_id:
+            cpv_idx = unique_id.index("_cpv_")
+            pov_idx = unique_id.index("_pov_")
+            harness = unique_id[:cpv_idx]
+            cpv_id = unique_id[cpv_idx + 1 : pov_idx]
+            pov_id = unique_id[pov_idx + 1 :]
+            return harness, cpv_id, pov_id
+
+        raise ValueError(
+            f"Invalid unique_id format: '{unique_id}'. "
+            "Expected format: {{harness}}_cpv_{{N}}_pov_{{M}} (e.g., html_cpv_0_pov_0)"
+        )
+
+    def _run_pov_variants_test(
+        self,
+        project_name: str,
+        harness: str,
+        pov_paths: list[Path],
+    ) -> tuple[bool, list[str]]:
+        """Test patch against multiple POV variants in parallel.
+
+        Args:
+            project_name: OSS-Fuzz project name
+            harness: Harness name
+            pov_paths: List of POV file paths to test
+
+        Returns:
+            Tuple of (all_passed, list of failed POV names)
+        """
+        if not pov_paths:
+            return True, []
+
+        logger.info(
+            f"Testing {len(pov_paths)} POV variants against {project_name}/{harness}"
+        )
+
+        failed_povs: list[str] = []
+
+        # Run POV tests in parallel
+        with ThreadPoolExecutor(max_workers=self.verify_workers) as executor:
+            futures = {
+                executor.submit(
+                    self._verify_single_pov, project_name, harness, pov_path
+                ): pov_path
+                for pov_path in pov_paths
+            }
+
+            for future in as_completed(futures):
+                pov_name, passed = future.result()
+                if not passed:
+                    failed_povs.append(pov_name)
+
+        all_passed = len(failed_povs) == 0
+        if all_passed:
+            logger.info(f"All {len(pov_paths)} POV variants passed")
+        else:
+            logger.info(f"{len(failed_povs)}/{len(pov_paths)} POV variants failed")
+
+        return all_passed, failed_povs
 
     def _discover_patches(self, patch_dir: Path) -> list[PatchInfo]:
         """Discover patches in directory.

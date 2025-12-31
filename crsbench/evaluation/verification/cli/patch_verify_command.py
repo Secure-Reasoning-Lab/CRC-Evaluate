@@ -177,6 +177,12 @@ Examples:
         help="Disable parallel verification",
     )
 
+    parser.add_argument(
+        "--no-variants",
+        action="store_true",
+        help="Disable POV variant verification (only test original POV)",
+    )
+
     # Output options
     parser.add_argument(
         "--output",
@@ -249,6 +255,7 @@ def run_patch_verify(args: argparse.Namespace) -> int:
         build_timeout=args.build_timeout,
         test_timeout=args.test_timeout,
         verify_workers=args.verify_workers,
+        verify_variants=not args.no_variants,
     )
 
     logger.info(f"Verifying patches for benchmark: {args.benchmark_path}")
