@@ -164,7 +164,8 @@ echo -e "${YELLOW}Starting distributed worker in continuous mode...${NC}"
 
 if [ "$USE_TMUX" = true ]; then
     # Launch worker in a new tmux vertical pane with tee for logging
-    WORKER_CMD="cd '$PROJECT_ROOT' && source .venv/bin/activate && crsbench worker --redis-host localhost --experiment-name '$EXPERIMENT_NAME' --log-level INFO --continuous 2>&1 | tee '$WORKER_LOG'"
+    # Keep pane open after worker exits by starting a new bash shell
+    WORKER_CMD="cd '$PROJECT_ROOT' && source .venv/bin/activate && crsbench worker --redis-host localhost --experiment-name '$EXPERIMENT_NAME' --log-level INFO --continuous 2>&1 | tee '$WORKER_LOG'; exec bash"
 
     # Split window vertically and run worker in new pane
     tmux split-window -h "$WORKER_CMD"
