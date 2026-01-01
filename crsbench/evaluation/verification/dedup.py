@@ -13,6 +13,8 @@ Future extensions can add:
 from abc import ABC, abstractmethod
 
 from crsbench.evaluation.verification.models import (
+    PatchVerificationResult,
+    PatchVerificationStatus,
     PovVerificationResult,
     PovVerificationStatus,
 )
@@ -152,6 +154,100 @@ class StatusBasedDedup(DeduplicationStrategy):
         return unique_results
 
 
+# =============================================================================
+# Patch Verification Deduplication Strategies
+# =============================================================================
+
+
+class PatchDeduplicationStrategy(ABC):
+    """Abstract base class for patch verification deduplication strategies.
+
+    Implementations should define how to identify duplicate patches
+    based on their verification results.
+    """
+
+    @abstractmethod
+    def deduplicate(
+        self, results: list[PatchVerificationResult]
+    ) -> list[PatchVerificationResult]:
+        """Remove duplicate patches from results.
+
+        Args:
+            results: List of patch verification results to deduplicate
+
+        Returns:
+            List of unique patch verification results
+        """
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Return the name of this deduplication strategy."""
+
+
+class CpvFixedDedup(PatchDeduplicationStrategy):
+    """Deduplicate patches by cpv_fixed fingerprint.
+
+    Two patches are considered duplicates if they fix the exact same
+    set of CPVs. This allows identifying functionally equivalent patches.
+
+    Example:
+        - Patch1 fixes [cpv_0, cpv_1]
+        - Patch2 fixes [cpv_0, cpv_1]  <- duplicate of Patch1
+        - Patch3 fixes [cpv_0]          <- unique
+        - Patch4 fixes []               <- unique (fixes nothing)
+    """
+
+    @property
+    def name(self) -> str:
+        return "cpv-fixed"
+
+    def deduplicate(
+        self, results: list[PatchVerificationResult]
+    ) -> list[PatchVerificationResult]:
+        """Deduplicate patches by their cpv_fixed fingerprint.
+
+        Only VALID patches are deduplicated based on their cpv_fixed list.
+        Other statuses (BUILD_FAILED, TEST_FAILED, etc.) are kept as-is.
+
+        Args:
+            results: List of patch verification results
+
+        Returns:
+            Deduplicated list, keeping first occurrence of each cpv_fixed set
+        """
+        unique_results: list[PatchVerificationResult] = []
+        seen_cpv_sets: set[tuple[str, ...]] = set()
+
+        for result in results:
+            # Only deduplicate VALID patches with cpv_fixed
+            if result.status == PatchVerificationStatus.VALID and result.cpv_fixed:
+                cpv_key = tuple(sorted(result.cpv_fixed))
+
+                if cpv_key in seen_cpv_sets:
+                    continue  # Skip duplicate
+
+                seen_cpv_sets.add(cpv_key)
+
+            unique_results.append(result)
+
+        return unique_results
+
+
+class NoOpPatchDedup(PatchDeduplicationStrategy):
+    """No-op deduplication strategy that keeps all patch results."""
+
+    @property
+    def name(self) -> str:
+        return "none"
+
+    def deduplicate(
+        self, results: list[PatchVerificationResult]
+    ) -> list[PatchVerificationResult]:
+        """Return all results without modification."""
+        return list(results)
+
+
 def get_dedup_strategy(name: str) -> DeduplicationStrategy:
     """Get a deduplication strategy by name.
 
@@ -173,5 +269,31 @@ def get_dedup_strategy(name: str) -> DeduplicationStrategy:
     if name not in strategies:
         available = ", ".join(strategies.keys())
         raise ValueError(f"Unknown dedup strategy: {name}. Available: {available}")
+
+    return strategies[name]()
+
+
+def get_patch_dedup_strategy(name: str) -> PatchDeduplicationStrategy:
+    """Get a patch deduplication strategy by name.
+
+    Args:
+        name: Strategy name ("cpv-fixed", "none")
+
+    Returns:
+        PatchDeduplicationStrategy instance
+
+    Raises:
+        ValueError: If strategy name is unknown
+    """
+    strategies: dict[str, type[PatchDeduplicationStrategy]] = {
+        "cpv-fixed": CpvFixedDedup,
+        "none": NoOpPatchDedup,
+    }
+
+    if name not in strategies:
+        available = ", ".join(strategies.keys())
+        raise ValueError(
+            f"Unknown patch dedup strategy: {name}. Available: {available}"
+        )
 
     return strategies[name]()

@@ -867,3 +867,57 @@ oss-bugfind-crs run <config> <project> <harness> [--hints <dir>]
 oss-bugfix-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME
 oss-bugfix-crs run <config> <project> --harness <name> [--pov <file> | --povs <dir>] [--hints <dir>] [--output <dir>] --litellm-base <url> --litellm-key <key>
 ```
+
+## Patch Verification
+
+CRSBench provides the `crsbench patch-verify` command to verify CRS-generated patches.
+
+### Verification Modes
+
+1. **Auto-discovery mode** (default): Discovers patches from benchmark `.aixcc/<harness>/<cpv>/patches/`
+2. **Single patch mode**: `--patch <path>` verifies a single patch
+3. **Directory mode**: `--patch-dir <path>` verifies all patches in directory
+
+### Two-Layer Result Structure
+
+Patch verification produces a two-layer result:
+
+**Layer 1: Security Verdict (Binary)**
+- `PASS`: At least one CPV is fully fixed AND functional tests pass
+- `FAIL`: No CPVs fully fixed OR functional tests fail
+
+**Layer 2: Benchmark Statistics (Diagnostic)**
+- `cpv_fixed`: List of fully fixed CPVs
+- `cpv_stats`: Per-CPV breakdown with variant-level details
+- `scores`: Aggregate metrics (complete/partial/none counts, fix rate)
+
+### Partial Fix Policy
+
+A CPV is only considered "fixed" if ALL POV variants pass:
+
+| Variants Fixed | Status | In cpv_fixed? | Security Verdict |
+|----------------|--------|---------------|------------------|
+| All            | complete | Yes           | PASS (if tests pass) |
+| Some           | partial  | No            | FAIL             |
+| None           | none     | No            | FAIL             |
+
+Partial fixes are tracked in `cpv_stats` for diagnostic purposes but do not contribute to the security verdict.
+
+### Usage Examples
+
+```sh
+# Auto-discovery: verify all patches in benchmark
+crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01
+
+# Verify with specific harness filter
+crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01 --harness curl_fuzzer_ws
+
+# Verify patches in a directory
+crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01 \
+    --patch-dir ./crs-output/patches \
+    --harness curl_fuzzer_ws
+
+# Output results as JSON
+crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01 \
+    --output results.json --format json
+```

@@ -7,7 +7,7 @@ POV verification (bug finding) and patch verification (bug fixing).
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 # =============================================================================
 # POV Verification Models
@@ -123,6 +123,99 @@ class PatchVerificationStatus(Enum):
     ERROR = "error"
 
 
+type CpvStatus = Literal["complete", "partial", "none"]
+type SecurityVerdict = Literal["PASS", "FAIL"]
+
+
+@dataclass
+class CpvStats:
+    """Per-CPV statistics for verification results.
+
+    Tracks how many POV variants were tested and matched for a single CPV,
+    providing detailed breakdown of patch effectiveness.
+
+    Attributes:
+        cpv_id: CPV identifier (e.g., "cpv-1", "cpv-2")
+        variants_tested: Number of POV variants tested for this CPV
+        variants_matched: Number of variants fixed by the patch
+        variant_results: Map of variant_id -> whether it was fixed
+    """
+
+    cpv_id: str
+    variants_tested: int = 0
+    variants_matched: int = 0
+    variant_results: dict[str, bool] = field(default_factory=dict)
+
+    @property
+    def status(self) -> CpvStatus:
+        """Return the fix status for this CPV.
+
+        Returns:
+            "complete" if all variants fixed, "partial" if some, "none" if zero
+        """
+        if self.variants_tested == 0:
+            return "none"
+        if self.variants_matched == self.variants_tested:
+            return "complete"
+        if self.variants_matched > 0:
+            return "partial"
+        return "none"
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "cpv_id": self.cpv_id,
+            "variants_tested": self.variants_tested,
+            "variants_matched": self.variants_matched,
+            "variant_results": self.variant_results,
+            "status": self.status,
+        }
+
+
+@dataclass
+class VerificationScores:
+    """Aggregate benchmark scoring metrics for patch verification.
+
+    Provides summary statistics across all CPVs tested, useful for
+    comparing patch quality across different CRS implementations.
+
+    Attributes:
+        cpvs_complete: Number of CPVs fully fixed (all variants pass)
+        cpvs_partial: Number of CPVs partially fixed (some variants pass)
+        cpvs_none: Number of CPVs not fixed at all
+        total_variants_tested: Total POV variants tested across all CPVs
+        total_variants_matched: Total POV variants fixed across all CPVs
+    """
+
+    cpvs_complete: int = 0
+    cpvs_partial: int = 0
+    cpvs_none: int = 0
+    total_variants_tested: int = 0
+    total_variants_matched: int = 0
+
+    @property
+    def overall_fix_rate(self) -> float:
+        """Return the overall fix rate as a ratio.
+
+        Returns:
+            Ratio of variants_matched / variants_tested, or 0.0 if none tested
+        """
+        if self.total_variants_tested == 0:
+            return 0.0
+        return self.total_variants_matched / self.total_variants_tested
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "cpvs_complete": self.cpvs_complete,
+            "cpvs_partial": self.cpvs_partial,
+            "cpvs_none": self.cpvs_none,
+            "total_variants_tested": self.total_variants_tested,
+            "total_variants_matched": self.total_variants_matched,
+            "overall_fix_rate": self.overall_fix_rate,
+        }
+
+
 class TestMode(Enum):
     """Unit test execution mode.
 
@@ -139,11 +232,13 @@ class PatchInfo:
     """Information about a patch to verify.
 
     Attributes:
-        pov_id: POV identifier this patch targets
+        patch_id: Unique patch identifier (e.g., "patch_0")
+        pov_id: POV/CPV identifier this patch targets (e.g., "pov_0", "cpv_0")
         patch_path: Path to the patch file
         patch_content: Content of the patch (unified diff format)
     """
 
+    patch_id: str
     pov_id: str
     patch_path: Path
     patch_content: str = ""
@@ -160,27 +255,44 @@ class PatchVerificationResult:
 
     Attributes:
         status: Verification status
-        pov_id: POV identifier this patch targets
+        patch_id: Unique patch identifier (e.g., "patch_0")
+        pov_id: POV/CPV identifier this patch targets (e.g., "pov_0", "cpv_0")
+        benchmark: Benchmark name (e.g., "sanity-mock-c-delta-01")
         patch_path: Path to the verified patch
+        harness: Name of the harness tested
         details: Optional details about the verification
-        build_time: Time taken for build (seconds)
+        elapsed_seconds: Time taken for build and verification (seconds)
         pov_test_passed: Whether the POV test passed (no crash)
         unit_tests_passed: Whether unit tests passed (None if not run)
         unit_tests_run: Number of unit tests run
         unit_tests_failed: Number of unit tests failed
         failed_tests: List of failed test names
+        cpv_fixed: List of fully fixed CPV identifiers (all variants pass)
+        cpv_stats: Per-CPV breakdown of verification results
+        scores: Aggregate benchmark scoring metrics
+        security_verdict: Binary security verdict (PASS if all CPVs fixed)
     """
 
     status: PatchVerificationStatus
+    patch_id: str
     pov_id: str
+    benchmark: str
     patch_path: Path
+    harness: str = ""
     details: Optional[str] = None
-    build_time: Optional[float] = None
+    build_time: float = 0.0
+    pov_test_time: float = 0.0
+    unit_test_time: float = 0.0
+    elapsed_seconds: float = 0.0
     pov_test_passed: bool = False
     unit_tests_passed: Optional[bool] = None
     unit_tests_run: int = 0
     unit_tests_failed: int = 0
     failed_tests: list[str] = field(default_factory=list)
+    cpv_fixed: list[str] = field(default_factory=list)
+    cpv_stats: dict[str, CpvStats] = field(default_factory=dict)
+    scores: Optional[VerificationScores] = None
+    security_verdict: SecurityVerdict = "FAIL"
 
     @property
     def is_valid(self) -> bool:
@@ -189,21 +301,35 @@ class PatchVerificationResult:
 
     def to_dict(self) -> dict[str, Any]:
         """Convert result to dictionary for serialization."""
-        return {
+        result: dict[str, Any] = {
             "status": self.status.value,
+            "patch_id": self.patch_id,
             "pov_id": self.pov_id,
+            "benchmark": self.benchmark,
             "patch_path": str(self.patch_path),
+            "harness": self.harness,
             "details": self.details,
             "build_time": self.build_time,
+            "pov_test_time": self.pov_test_time,
+            "unit_test_time": self.unit_test_time,
+            "elapsed_seconds": self.elapsed_seconds,
             "pov_test_passed": self.pov_test_passed,
             "unit_tests_passed": self.unit_tests_passed,
             "unit_tests_run": self.unit_tests_run,
             "unit_tests_failed": self.unit_tests_failed,
             "failed_tests": self.failed_tests,
+            "cpv_fixed": self.cpv_fixed,
+            "cpv_stats": {
+                cpv_id: stats.to_dict() for cpv_id, stats in self.cpv_stats.items()
+            },
+            "security_verdict": self.security_verdict,
         }
+        if self.scores is not None:
+            result["scores"] = self.scores.to_dict()
+        return result
 
     def __str__(self) -> str:
         status_str = self.status.value.upper()
         if self.is_valid:
-            return f"{self.pov_id}: {status_str}"
-        return f"{self.pov_id}: {status_str} - {self.details or 'Unknown error'}"
+            return f"{self.patch_id} ({self.pov_id}): {status_str}"
+        return f"{self.patch_id} ({self.pov_id}): {status_str} - {self.details or 'Unknown error'}"

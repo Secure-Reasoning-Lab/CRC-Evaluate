@@ -120,6 +120,7 @@ class VerificationEngine:
             harness=task.harness,
             pov_data=task.pov_data,
             timeout=self.timeout,
+            pov_id=task.pov_id,
         )
         return ReproduceResult(
             pov_id=task.pov_id,

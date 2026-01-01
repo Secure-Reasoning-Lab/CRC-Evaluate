@@ -3,11 +3,13 @@
 This module provides OSSFuzzBuilder, which builds all types of variants:
 - Validation variants: deltabase, deltaref, allpatched, cpvN
 - Coverage variants: coverage-instrumented builds
+- Patch variants: CRS-generated patches for verification
 
 Features:
 - Parallel builds using ThreadPoolExecutor
 - Build caching with staleness detection
 - Support for both FULL and DELTA benchmark modes
+- Incremental builds using pre-built images (for patch verification)
 """
 
 import tempfile
@@ -25,6 +27,7 @@ from crsbench.builder.types import (
     VariantType,
 )
 from crsbench.utils.logger import get_logger
+from crsbench.utils.repo_manager import clone_or_copy_cached_repo
 
 logger = get_logger(__name__)
 
@@ -32,9 +35,10 @@ logger = get_logger(__name__)
 class OSSFuzzBuilder:
     """Unified builder for OSS-Fuzz project variants.
 
-    Builds validation and coverage variants for benchmarks:
+    Builds validation, coverage, and patch variants for benchmarks:
     - Validation variants (FULL_BASE, DELTA_BASE, DELTA_REF, ALL_PATCHED, CPV)
     - Coverage variant (COVERAGE)
+    - Patch variant (PATCHED) - CRS-generated patches for verification
 
     Supports parallel builds with configurable worker count.
 
@@ -93,6 +97,10 @@ class OSSFuzzBuilder:
 
         # Build remaining variants in parallel
         if configs_to_build:
+            # Pre-cache repositories before parallel execution
+            # This prevents multiple workers from cloning the same repo concurrently
+            self._ensure_repos_cached(configs_to_build)
+
             build_results = self.executor.execute_builds(
                 configs=configs_to_build,
                 build_fn=self._build_single,
@@ -100,6 +108,34 @@ class OSSFuzzBuilder:
             results.update(build_results)
 
         return results
+
+    def _ensure_repos_cached(self, configs: list[BuildConfig]) -> None:
+        """Ensure all unique repositories are cached before parallel builds.
+
+        Args:
+            configs: Build configurations to process
+        """
+        # Collect unique (main_repo, commit, repo_name) combinations
+        unique_repos: dict[str, BuildConfig] = {}
+        for config in configs:
+            cache_key = f"{config.main_repo}:{config.commit}"
+            if cache_key not in unique_repos:
+                unique_repos[cache_key] = config
+
+        if not unique_repos:
+            return
+
+        logger.info(f"Pre-caching {len(unique_repos)} unique repository(s)")
+        for config in unique_repos.values():
+            with tempfile.TemporaryDirectory(prefix="repo-cache-") as temp_dir:
+                target = str(Path(temp_dir) / "repo")
+                clone_or_copy_cached_repo(
+                    repo_url=config.main_repo,
+                    commit=config.commit,
+                    target_dir=target,
+                    repo_name=config.repo_name,
+                    verbose=True,
+                )
 
     def build_single(
         self,
@@ -130,6 +166,9 @@ class OSSFuzzBuilder:
     def _build_single(self, config: BuildConfig) -> BuildResult:
         """Internal method to build a single variant.
 
+        For PATCHED variants with use_inc_build=True, uses incremental builds
+        via pre-built Docker images for faster builds.
+
         Args:
             config: Build configuration
 
@@ -137,6 +176,24 @@ class OSSFuzzBuilder:
             Build result
         """
         start_time = time.time()
+
+        # PATCHED variants with inc-build use a different build path
+        if config.variant_type.is_patch_variant() and config.use_inc_build:
+            return self._build_with_inc_image(config, start_time)
+
+        # Standard build path for validation, coverage, and non-inc patch variants
+        return self._build_standard(config, start_time)
+
+    def _build_standard(self, config: BuildConfig, start_time: float) -> BuildResult:
+        """Build a variant using standard OSS-Fuzz build process.
+
+        Args:
+            config: Build configuration
+            start_time: Build start time
+
+        Returns:
+            Build result
+        """
         variant_name = config.variant_name
 
         # Create variant project directory
@@ -166,6 +223,10 @@ class OSSFuzzBuilder:
                 if config.variant_type.is_validation_variant():
                     self._apply_patches_for_variant(config, repo_path)
 
+                # Apply patches for patch verification variants
+                if config.variant_type.is_patch_variant():
+                    self._apply_patches_for_variant(config, repo_path)
+
                 # Build fuzzers
                 if not self.infra.build_fuzzers(config, repo_path):
                     return BuildResult.from_error(
@@ -176,6 +237,89 @@ class OSSFuzzBuilder:
 
                 # Success
                 build_path = self.infra.get_build_output_path(variant_name)
+                return BuildResult(
+                    config=config,
+                    success=True,
+                    variant_name=variant_name,
+                    build_path=build_path,
+                    elapsed_seconds=time.time() - start_time,
+                )
+
+            except Exception as e:
+                return BuildResult.from_error(
+                    config=config,
+                    error=str(e),
+                    elapsed_seconds=time.time() - start_time,
+                )
+
+    def _build_with_inc_image(
+        self, config: BuildConfig, start_time: float
+    ) -> BuildResult:
+        """Build a variant using incremental build image for faster builds.
+
+        Uses pre-built Docker images that contain compiled dependencies,
+        allowing faster incremental builds when only the source changes.
+
+        Args:
+            config: Build configuration
+            start_time: Build start time
+
+        Returns:
+            Build result
+        """
+        variant_name = config.variant_name
+
+        # Clone and checkout source to a persistent location for inc-build
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                repo_path = self.infra.clone_source(config, Path(temp_dir))
+                if not repo_path:
+                    return BuildResult.from_error(
+                        config=config,
+                        error="Failed to clone source repository",
+                        elapsed_seconds=time.time() - start_time,
+                    )
+
+                # Apply CRS-generated patches
+                if config.patches:
+                    self._apply_patches_for_variant(config, repo_path)
+
+                # Create variant project for build
+                variant_project_path = self.infra.create_variant_project(
+                    benchmark_path=config.benchmark_path,
+                    variant_name=variant_name,
+                )
+                if not variant_project_path:
+                    return BuildResult.from_error(
+                        config=config,
+                        error="Failed to create variant project directory",
+                        elapsed_seconds=time.time() - start_time,
+                    )
+
+                # Prepare variant inc-build image (retag from project to variant)
+                if not self.infra.prepare_inc_image_for_variant(
+                    config.benchmark_name, variant_name, config.sanitizer
+                ):
+                    return BuildResult.from_error(
+                        config=config,
+                        error="Failed to prepare inc-build image for variant",
+                        elapsed_seconds=time.time() - start_time,
+                    )
+
+                # Build using helper.py build_fuzzers with inc-build image
+                success = self.infra.build_fuzzers(
+                    config, repo_path, use_inc_image=True
+                )
+
+                if not success:
+                    return BuildResult.from_error(
+                        config=config,
+                        error="Incremental build failed",
+                        elapsed_seconds=time.time() - start_time,
+                    )
+
+                # Success - build output is in /build/out/{variant_name}/
+                build_path = self.oss_fuzz_path / "build" / "out" / variant_name
                 return BuildResult(
                     config=config,
                     success=True,
@@ -391,3 +535,93 @@ class OSSFuzzBuilder:
             True if built
         """
         return self.infra.is_variant_built(variant_name)
+
+    def create_patch_build_plan(
+        self,
+        benchmark_name: str,
+        benchmark_path: Path,
+        main_repo: str,
+        commit: str,
+        patches: list[tuple[str, str, Path]],
+        mode: BenchmarkMode,
+        language: str = "c",
+        repo_name: Optional[str] = None,
+        sanitizer: str = "address",
+        *,
+        use_inc_build: bool = True,
+    ) -> BuildPlan:
+        """Create a build plan for patch verification.
+
+        Each patch gets its own isolated build to enable parallel builds
+        without race conditions.
+
+        Args:
+            benchmark_name: Name of the benchmark
+            benchmark_path: Path to benchmark directory
+            main_repo: Main repository URL
+            commit: Git commit hash to checkout
+            patches: List of (pov_id, patch_id, patch_path) tuples
+            mode: FULL or DELTA mode
+            language: Programming language
+            repo_name: Optional repository name for caching
+            sanitizer: Sanitizer type (default: "address")
+            use_inc_build: Use incremental builds if available (default: True)
+
+        Returns:
+            BuildPlan with configurations for each patch
+        """
+        plan = BuildPlan(benchmark_name=benchmark_name)
+
+        if not patches:
+            logger.warning(f"No patches provided for {benchmark_name}")
+            return plan
+
+        for pov_id, patch_id, patch_path in patches:
+            config = BuildConfig(
+                benchmark_name=benchmark_name,
+                variant_type=VariantType.PATCHED,
+                commit=commit,
+                main_repo=main_repo,
+                benchmark_path=benchmark_path,
+                mode=mode,
+                patches=[patch_path],  # Single CRS-generated patch
+                language=language,
+                pov_id=pov_id,
+                patch_id=patch_id,
+                use_inc_build=use_inc_build,
+                sanitizer=sanitizer,
+                repo_name=repo_name,
+            )
+            plan.add_config(config)
+
+            # Check if already cached
+            if self.infra.is_variant_built(config.variant_name):
+                plan.mark_cached(config.variant_name)
+
+        logger.info(
+            f"Patch build plan for {benchmark_name}: "
+            f"{plan.total_count} patches, {plan.cached_count} cached, "
+            f"{plan.build_count} to build"
+        )
+
+        return plan
+
+    def has_inc_build_image(
+        self,
+        benchmark_name: str,
+        sanitizer: str = "address",
+        registry: str = "ghcr.io/team-atlanta/crsbench",
+    ) -> bool:
+        """Check if incremental build image exists for a benchmark.
+
+        Args:
+            benchmark_name: Name of the benchmark (e.g., "sanity-mock-c-delta-01")
+            sanitizer: Sanitizer type
+            registry: Docker registry
+
+        Returns:
+            True if inc-build image exists
+        """
+        # Extract project name from benchmark name (remove -delta-01 suffix)
+        project_name = benchmark_name.rsplit("-", 2)[0]
+        return self.infra.has_inc_build_image(project_name, sanitizer, registry)

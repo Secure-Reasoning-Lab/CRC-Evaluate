@@ -22,6 +22,9 @@ class VariantType(Enum):
     - ALL_PATCHED: All CPV patches applied (should not crash)
     - CPV: All patches except one CPV (crashes if POV triggers that CPV)
 
+    Patch verification variant:
+    - PATCHED: CRS-generated patch applied (for patch verification)
+
     Coverage variant:
     - COVERAGE: Coverage-instrumented build for coverage collection
     """
@@ -31,11 +34,16 @@ class VariantType(Enum):
     DELTA_REF = "deltaref"
     ALL_PATCHED = "allpatched"
     CPV = "cpv"
+    PATCHED = "patched"
     COVERAGE = "coverage"
 
     def is_validation_variant(self) -> bool:
-        """Check if this is a validation variant (not coverage)."""
-        return self != VariantType.COVERAGE
+        """Check if this is a POV validation variant."""
+        return self not in (VariantType.COVERAGE, VariantType.PATCHED)
+
+    def is_patch_variant(self) -> bool:
+        """Check if this is a patch verification variant."""
+        return self == VariantType.PATCHED
 
 
 class BenchmarkMode(Enum):
@@ -63,6 +71,9 @@ class BuildConfig:
         output_dir: Output directory (None = shared oss-fuzz/build/, Path = per-trial)
         language: Programming language ("c", "cpp", "jvm")
         cpv_num: CPV number for CPV variants (None otherwise)
+        patch_id: Patch identifier for PATCHED variants (e.g., "patch_0")
+        pov_id: Source POV/CPV identifier for PATCHED variants (e.g., "pov_0", "cpv_0")
+        use_inc_build: Whether to use incremental build (for patch verification)
         sanitizer: Sanitizer to use (default: "address", coverage uses "coverage")
         engine: Fuzzing engine (default: "libfuzzer")
         timeout: Build timeout in seconds (default: 3600)
@@ -79,6 +90,9 @@ class BuildConfig:
     output_dir: Optional[Path] = None
     language: str = "c"
     cpv_num: Optional[int] = None
+    patch_id: Optional[str] = None
+    pov_id: Optional[str] = None
+    use_inc_build: bool = False
     sanitizer: str = "address"
     engine: str = "libfuzzer"
     timeout: int = 3600
@@ -98,6 +112,13 @@ class BuildConfig:
         if self.variant_type == VariantType.CPV and self.cpv_num is None:
             raise ValueError("cpv_num is required for CPV variants")
 
+        # PATCHED variants require patch_id and pov_id
+        if self.variant_type == VariantType.PATCHED:
+            if self.patch_id is None:
+                raise ValueError("patch_id is required for PATCHED variants")
+            if self.pov_id is None:
+                raise ValueError("pov_id is required for PATCHED variants")
+
         # Coverage variants use coverage sanitizer
         if self.variant_type == VariantType.COVERAGE:
             self.sanitizer = "coverage"
@@ -110,6 +131,7 @@ class BuildConfig:
         - Base variants include mode in type: {benchmark}-deltabase, {benchmark}-fullbase
         - Ref variants are mode-specific: {benchmark}-deltaref
         - Shared variants need mode prefix: {benchmark}-delta-allpatched, {benchmark}-full-cpv0
+        - Patch variants: {benchmark}-{mode}-patched-{pov_id}-{patch_id}
 
         Returns:
             Variant name (e.g., "benchmark-deltabase", "benchmark-delta-cpv0")
@@ -127,6 +149,10 @@ class BuildConfig:
 
         if self.variant_type == VariantType.CPV:
             return f"{self.benchmark_name}-{mode_prefix}-cpv{self.cpv_num}"
+
+        # Patch variants include pov_id and patch_id for isolation
+        if self.variant_type == VariantType.PATCHED:
+            return f"{self.benchmark_name}-{mode_prefix}-patched-{self.pov_id}-{self.patch_id}"
 
         return f"{self.benchmark_name}-{mode_prefix}-{self.variant_type.value}"
 
