@@ -169,6 +169,10 @@ def run_crs_trial(
             job.meta["mode"] = mode
             job.meta["trial_num"] = trial_num
             job.meta["started_at"] = start_time
+            # Get worker name from the job's worker_name attribute (set by RQ)
+            job.meta["worker_name"] = (
+                job.worker_name if hasattr(job, "worker_name") else "unknown"
+            )
             job.save_meta()
             logger.debug(f"Updated job metadata for job {job.id}")
     except Exception as e:

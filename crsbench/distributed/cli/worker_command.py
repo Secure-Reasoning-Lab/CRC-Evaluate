@@ -73,6 +73,14 @@ Examples:
         help="Run in continuous mode (never exits, keeps processing jobs)",
     )
 
+    worker_parser.add_argument(
+        "--worker-name",
+        type=str,
+        default=None,
+        metavar="NAME",
+        help="Worker name for identification (default: hostname)",
+    )
+
     worker_parser.set_defaults(command="worker")
 
 
@@ -97,6 +105,7 @@ def run_worker(args: argparse.Namespace) -> int:
         "redis_host": args.redis_host,
         "experiment_name": args.experiment_name,
         "timeout": args.timeout,
+        "worker_name": args.worker_name,
     }
 
     try:
@@ -106,6 +115,7 @@ def run_worker(args: argparse.Namespace) -> int:
                 redis_host=args.redis_host,
                 experiment_name=args.experiment_name,
                 _timeout=args.timeout,
+                worker_name=args.worker_name,
             )
             return 0
         # Run in burst mode (default)

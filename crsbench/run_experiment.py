@@ -1064,6 +1064,7 @@ def _monitor_jobs_basic(
         for job in job_list:
             job.refresh()
             if job.get_status() == "started":
+                worker_name = job.meta.get("worker_name", "?")
                 crs = job.meta.get("crs", "?")
                 benchmark = job.meta.get("benchmark", "?")
                 harness = job.meta.get("harness", "?")
@@ -1076,7 +1077,7 @@ def _monitor_jobs_basic(
                     mins, secs = divmod(elapsed_sec, 60)
                     elapsed = f"{mins}m{secs}s"
                 running_jobs.append(
-                    f"  [{crs}] {benchmark}/{harness} mode={mode} trial={trial_num} ({elapsed})"
+                    f"  [{worker_name}] [{crs}] {benchmark}/{harness} mode={mode} trial={trial_num} ({elapsed})"
                 )
 
         if running_jobs:
@@ -1151,6 +1152,7 @@ def _monitor_jobs_rich(
 
         # Running jobs table
         running_table = Table(title="Running Jobs")
+        running_table.add_column("Worker", style="green")
         running_table.add_column("CRS", style="cyan")
         running_table.add_column("Benchmark", style="yellow")
         running_table.add_column("Harness", style="yellow")
@@ -1161,6 +1163,7 @@ def _monitor_jobs_rich(
         for job in job_list:
             job.refresh()
             if job.get_status() == "started":
+                worker_name = job.meta.get("worker_name", "?")
                 crs = job.meta.get("crs", "?")
                 benchmark = job.meta.get("benchmark", "?")
                 harness = job.meta.get("harness", "?")
@@ -1172,7 +1175,9 @@ def _monitor_jobs_rich(
                     elapsed_sec = int(time.time() - started_at)
                     mins, secs = divmod(elapsed_sec, 60)
                     elapsed = f"{mins}m {secs}s"
-                running_table.add_row(crs, benchmark, harness, mode, trial_num, elapsed)
+                running_table.add_row(
+                    worker_name, crs, benchmark, harness, mode, trial_num, elapsed
+                )
 
         return Group(table, running_table)
 

@@ -10,6 +10,7 @@ A file-based lock ensures only one worker process runs at a time.
 
 import fcntl
 import os
+import socket
 import sys
 import time
 from contextlib import contextmanager
@@ -83,6 +84,7 @@ def main(
     redis_host: Optional[str] = None,
     experiment_name: Optional[str] = None,
     timeout: Optional[int] = None,
+    worker_name: Optional[str] = None,
 ) -> int:
     """
     Worker entry point - connects to Redis and processes jobs.
@@ -132,10 +134,14 @@ def main(
     redis_host = redis_host or os.environ.get("REDIS_HOST", "localhost")
     experiment_name = experiment_name or os.environ.get("EXPERIMENT_NAME", "default")
     worker_timeout = timeout or int(os.environ.get("WORKER_TIMEOUT", "3600"))
+    worker_name = (
+        worker_name or os.environ.get("CRSBENCH_WORKER_NAME") or socket.gethostname()
+    )
 
     logger.info("=" * 60)
     logger.info("CRSBench Distributed Worker")
     logger.info("=" * 60)
+    logger.info(f"Worker name: {worker_name}")
     logger.info(f"Redis host: {redis_host}")
     logger.info(f"Experiment: {experiment_name}")
     logger.info(f"Worker timeout: {worker_timeout}s")
@@ -144,7 +150,7 @@ def main(
     # Acquire worker lock to ensure only one worker runs at a time
     try:
         with worker_lock():
-            _run_worker(redis_host, experiment_name)
+            _run_worker(redis_host, experiment_name, worker_name)
         return 0  # Success
 
     except BlockingIOError:
@@ -172,12 +178,13 @@ def main(
         return 3
 
 
-def _run_worker(redis_host: str, experiment_name: str):
+def _run_worker(redis_host: str, experiment_name: str, worker_name: str):
     """Internal helper to run the worker (separated for lock management).
 
     Args:
         redis_host: Redis server hostname
         experiment_name: Experiment identifier for queue naming
+        worker_name: Worker name for identification
     """
     try:
         # Connect to Redis
@@ -196,9 +203,11 @@ def _run_worker(redis_host: str, experiment_name: str):
         # Set up RQ queue and worker (RQ 2.x requires explicit connection)
         queue_name = f"crsbench_{experiment_name}"
         queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
-        worker = rq.Worker([queue], connection=redis_connection)  # type: ignore[attr-defined]
+        worker = rq.Worker(  # type: ignore[attr-defined]
+            [queue], connection=redis_connection, name=worker_name
+        )
 
-        logger.info(f"Worker started, listening on queue: {queue_name}")
+        logger.info(f"Worker '{worker_name}' started, listening on queue: {queue_name}")
         logger.info("Waiting for jobs...")
 
         # Work in burst mode until queue is empty
@@ -227,7 +236,12 @@ def _run_worker(redis_host: str, experiment_name: str):
         raise
 
 
-def run_worker_continuous(redis_host: str, experiment_name: str, _timeout: int = 3600):
+def run_worker_continuous(
+    redis_host: str,
+    experiment_name: str,
+    _timeout: int = 3600,
+    worker_name: Optional[str] = None,
+):
     """
     Run worker in continuous mode (polling indefinitely).
 
@@ -238,6 +252,7 @@ def run_worker_continuous(redis_host: str, experiment_name: str, _timeout: int =
         redis_host: Redis server hostname
         experiment_name: Experiment identifier for queue naming
         timeout: Job execution timeout in seconds
+        worker_name: Worker name for identification (default: hostname)
 
     Note:
         This mode is useful for long-running worker deployments where
@@ -246,7 +261,11 @@ def run_worker_continuous(redis_host: str, experiment_name: str, _timeout: int =
     if not REDIS_AVAILABLE:
         raise RuntimeError("Redis and RQ packages are required")
 
+    worker_name = (
+        worker_name or os.environ.get("CRSBENCH_WORKER_NAME") or socket.gethostname()
+    )
     logger.info(f"Starting continuous worker for experiment: {experiment_name}")
+    logger.info(f"Worker name: {worker_name}")
 
     # Acquire worker lock to ensure only one worker runs at a time
     try:
@@ -258,9 +277,13 @@ def run_worker_continuous(redis_host: str, experiment_name: str, _timeout: int =
             # Set up RQ queue and worker (RQ 2.x requires explicit connection)
             queue_name = f"crsbench_{experiment_name}"
             queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
-            worker = rq.Worker([queue], connection=redis_connection)  # type: ignore[attr-defined]
+            worker = rq.Worker(  # type: ignore[attr-defined]
+                [queue], connection=redis_connection, name=worker_name
+            )
 
-            logger.info(f"Worker running in continuous mode on queue: {queue_name}")
+            logger.info(
+                f"Worker '{worker_name}' running in continuous mode on queue: {queue_name}"
+            )
 
             # Run worker in continuous mode (never exits)
             worker.work(
