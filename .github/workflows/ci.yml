@@ -42,7 +42,7 @@ jobs:
         run: just format-check
 
       - name: Run unit tests
-        run: uv run pytest tests/ -v -n auto
+        run: uv run pytest tests/ -v -n auto -m "not integration and not slow"
 
   # Stage 2: Sanity check with mock-c and mock-java (required for merge)
   sanity:
