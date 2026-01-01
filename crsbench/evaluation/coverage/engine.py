@@ -40,6 +40,7 @@ from crsbench.evaluation.coverage.strategy import (
     CoverageStrategy,
     CoverageStrategyError,
     create_coverage_strategy,
+    parse_llvm_cov_summary,
 )
 from crsbench.utils.logger import get_logger
 from crsbench.utils.workers import resolve_build_workers, resolve_verify_workers
@@ -197,19 +198,22 @@ class CoverageEngine:
             f"with {self.verify_workers} workers"
         )
 
-        # Collect coverage in parallel
+        # Collect coverage in parallel (for per-file contribution tracking)
         merged_coverage, success_count = self._collect_coverage_parallel(
             corpus_files, strategy, harness_name
         )
 
-        # Compute summary
+        # Run batch coverage to get totals from summary.json
+        totals = self._get_coverage_totals(strategy, harness_name, corpus_dir)
+
+        # Compute summary with totals
         summary = self._compute_summary(
-            merged_coverage, len(corpus_files), success_count
+            merged_coverage, len(corpus_files), success_count, totals
         )
 
         logger.info(
-            f"Coverage collection complete: {summary.lines_covered} lines covered, "
-            f"{summary.functions_covered} functions, "
+            f"Coverage collection complete: {summary.lines_covered}/{summary.lines_total} lines, "
+            f"{summary.functions_covered}/{summary.functions_total} functions, "
             f"{success_count}/{len(corpus_files)} corpus processed"
         )
 
@@ -324,6 +328,32 @@ class CoverageEngine:
                 else:
                     merged[func_name]["lines"].update(lines)
 
+    def _get_coverage_totals(
+        self,
+        strategy: CoverageStrategy,
+        harness_name: str,
+        corpus_dir: Path,
+    ) -> dict:
+        """Get coverage totals by running batch coverage.
+
+        Runs batch coverage to generate summary.json which contains
+        accurate totals (lines_total, functions_total).
+
+        Args:
+            strategy: CoverageStrategy instance.
+            harness_name: Name of the harness.
+            corpus_dir: Directory containing corpus files.
+
+        Returns:
+            Dict with totals: {lines_total, functions_total, lines_percent, ...}
+        """
+        try:
+            summary_path = strategy.collect_batch_coverage(Path(harness_name), corpus_dir)
+            return parse_llvm_cov_summary(summary_path)
+        except CoverageStrategyError as e:
+            logger.warning(f"Failed to get coverage totals: {e}")
+            return {}
+
     def _build_coverage_variant(
         self,
         adapter: MetaYamlAdapter,
@@ -411,15 +441,18 @@ class CoverageEngine:
         merged_coverage: dict,
         corpus_count: int,
         success_count: int,
+        totals: dict,
     ) -> CoverageSummary:
-        """Compute coverage summary from merged data.
+        """Compute coverage summary from merged data and totals.
 
         Converts line sets to sorted lists and computes aggregate statistics.
+        Uses totals from batch coverage for accurate lines_total/functions_total.
 
         Args:
             merged_coverage: Merged coverage dict with line sets.
             corpus_count: Total number of corpus files.
             success_count: Number of successfully processed corpus files.
+            totals: Dict with totals from parse_llvm_cov_summary().
 
         Returns:
             CoverageSummary with aggregate statistics.
@@ -429,18 +462,22 @@ class CoverageEngine:
             if isinstance(func_data.get("lines"), set):
                 func_data["lines"] = sorted(func_data["lines"])
 
-        total_lines = sum(
-            len(func_data.get("lines", []))
-            for func_data in merged_coverage.values()
-            if isinstance(func_data, dict)
-        )
+        # Use totals from batch coverage (accurate)
+        lines_covered = int(totals.get("lines_covered", 0))
+        lines_total = int(totals.get("lines_total", 0))
+        lines_percent = float(totals.get("lines_percent", 0.0))
+        functions_covered = int(totals.get("functions_covered", 0))
+        functions_total = int(totals.get("functions_total", 0))
 
         return CoverageSummary(
             metric="line",
             corpus_total=corpus_count,
             corpus_contributing=success_count,
-            lines_covered=total_lines,
-            functions_covered=len(merged_coverage),
+            lines_covered=lines_covered,
+            lines_total=lines_total,
+            lines_percent=lines_percent,
+            functions_covered=functions_covered,
+            functions_total=functions_total,
         )
 
     def cleanup(self) -> None:

@@ -14,7 +14,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
-
 from crsbench.evaluation.coverage.engine import CoverageEngine
 
 
@@ -104,25 +103,39 @@ class TestCoverageEngine:
         merged: dict = {}
         engine._merge_coverage_safe(merged, {"func1": {"src": "a.c", "lines": [1, 2]}})
         engine._merge_coverage_safe(merged, {"func2": {"src": "b.c", "lines": [10]}})
-        assert "func1" in merged and "func2" in merged
+        assert "func1" in merged
+        assert "func2" in merged
 
     def test_compute_summary(self, engine: CoverageEngine):
-        """Test summary computation from merged coverage."""
+        """Test summary computation uses totals from batch coverage."""
         merged = {
             "func1": {"src": "a.c", "lines": {1, 2, 3}},
             "func2": {"src": "b.c", "lines": {10, 11}},
         }
-        summary = engine._compute_summary(merged, corpus_count=10, success_count=8)
+        totals = {
+            "lines_covered": 50,
+            "lines_total": 100,
+            "lines_percent": 50.0,
+            "functions_covered": 10,
+            "functions_total": 20,
+        }
+        summary = engine._compute_summary(merged, 10, 8, totals)
 
-        assert summary.lines_covered == 5
-        assert summary.functions_covered == 2
+        # Values come from totals dict, not merged_coverage
+        assert summary.lines_covered == 50
+        assert summary.lines_total == 100
+        assert summary.lines_percent == 50.0
+        assert summary.functions_covered == 10
+        assert summary.functions_total == 20
         assert summary.corpus_total == 10
         assert summary.corpus_contributing == 8
 
+    @patch("crsbench.evaluation.coverage.engine.parse_llvm_cov_summary")
     @patch("crsbench.evaluation.coverage.engine.create_coverage_strategy")
     def test_parallel_corpus_processing(
         self,
         mock_create_strategy,
+        mock_parse_summary,
         mock_oss_fuzz: Path,
         mock_benchmark: Path,
         mock_corpus: Path,
@@ -132,7 +145,17 @@ class TestCoverageEngine:
         mock_strategy.collect_single_coverage.return_value = {
             "main": {"src": "main.c", "lines": [1, 2, 3]}
         }
+        mock_strategy.collect_batch_coverage.return_value = Path("/tmp/summary.json")
         mock_create_strategy.return_value = mock_strategy
+
+        # Mock totals from batch coverage
+        mock_parse_summary.return_value = {
+            "lines_covered": 10,
+            "lines_total": 100,
+            "lines_percent": 10.0,
+            "functions_covered": 5,
+            "functions_total": 20,
+        }
 
         eng = CoverageEngine(mock_oss_fuzz, verify_workers=2)
 
@@ -148,6 +171,7 @@ class TestCoverageEngine:
         # All 3 corpus files should be processed
         assert mock_strategy.collect_single_coverage.call_count == 3
         assert report.final_summary.corpus_total == 3
+        assert report.final_summary.lines_total == 100
         assert report.harness_name == "fuzz_target"
 
     def test_build_variant_success(self, mock_benchmark: Path, engine: CoverageEngine):

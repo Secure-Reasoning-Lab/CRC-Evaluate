@@ -6,12 +6,10 @@ Tests:
 - MetaYamlAdapter.from_benchmark_path(): Load adapter from benchmark dir
 """
 
-import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from crsbench.builder.infrastructure import OSSFuzzInfrastructure
 from crsbench.validation.meta_adapter import MetaYamlAdapter
 
