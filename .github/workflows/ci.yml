@@ -136,19 +136,33 @@ jobs:
 
       - name: Coverage mock-c
         run: |
+          # Create temporary corpus directory with random seed input
+          CORPUS_DIR=$(mktemp -d)
+          head -c 64 /dev/urandom > "$CORPUS_DIR/seed_input"
+
           uv run crsbench coverage benchmarks/sanity-mock-c-delta-01 \
+            --corpus-dir "$CORPUS_DIR" \
             --force-rebuild \
             --output coverage-mock-c.json \
             --format json
+
+          rm -rf "$CORPUS_DIR"
           echo "=== Coverage mock-c Results ==="
           cat coverage-mock-c.json
 
       - name: Coverage mock-java
         run: |
+          # Create temporary corpus directory with random seed input
+          CORPUS_DIR=$(mktemp -d)
+          head -c 64 /dev/urandom > "$CORPUS_DIR/seed_input"
+
           uv run crsbench coverage benchmarks/sanity-mock-java-delta-01 \
+            --corpus-dir "$CORPUS_DIR" \
             --force-rebuild \
             --output coverage-mock-java.json \
             --format json
+
+          rm -rf "$CORPUS_DIR"
           echo "=== Coverage mock-java Results ==="
           cat coverage-mock-java.json
 

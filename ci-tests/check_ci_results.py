@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Check CI results for verify and patch-verify commands.
+"""Check CI results for verify, patch-verify, and coverage commands.
 
 Usage:
     python check_ci_results.py verify <benchmark_path> <results_json>
     python check_ci_results.py patch-verify <results_json>
+    python check_ci_results.py coverage <results_json>
 
 Examples:
     python check_ci_results.py verify benchmarks/sanity-mock-c-delta-01 verify-results.json
     python check_ci_results.py patch-verify patch-verify-results.json
+    python check_ci_results.py coverage coverage-results.json
 """
 
 import json
@@ -112,9 +114,36 @@ def check_patch_verify(results_file: Path) -> bool:
     return all_pass
 
 
+def check_coverage(results_file: Path) -> bool:
+    """Check coverage results - must have non-zero coverage."""
+    with open(results_file) as f:
+        data = json.load(f)
+
+    summary = data.get("summary", {})
+    harness = data.get("harness", "unknown")
+
+    lines_covered = summary.get("lines_covered", 0)
+    lines_total = summary.get("lines_total", 0)
+    lines_percent = summary.get("lines_percent", 0.0)
+
+    print(f"Harness: {harness}")
+    print(f"Lines covered: {lines_covered}/{lines_total} ({lines_percent:.1f}%)")
+
+    if lines_total == 0:
+        print("ERROR: No lines found in coverage report")
+        return False
+
+    if lines_covered == 0:
+        print("ERROR: No lines covered")
+        return False
+
+    print("Coverage check passed!")
+    return True
+
+
 def main() -> int:
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <verify|patch-verify> [args...]")
+        print(f"Usage: {sys.argv[0]} <verify|patch-verify|coverage> [args...]")
         return 1
 
     command = sys.argv[1]
@@ -143,9 +172,19 @@ def main() -> int:
             return 1
         return 0 if check_patch_verify(results_file) else 1
 
+    elif command == "coverage":
+        if len(sys.argv) != 3:
+            print(f"Usage: {sys.argv[0]} coverage <results_json>")
+            return 1
+        results_file = Path(sys.argv[2])
+        if not results_file.exists():
+            print(f"ERROR: Results file not found: {results_file}")
+            return 1
+        return 0 if check_coverage(results_file) else 1
+
     else:
         print(f"Unknown command: {command}")
-        print(f"Usage: {sys.argv[0]} <verify|patch-verify> [args...]")
+        print(f"Usage: {sys.argv[0]} <verify|patch-verify|coverage> [args...]")
         return 1
 
 

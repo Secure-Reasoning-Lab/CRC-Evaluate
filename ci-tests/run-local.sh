@@ -102,10 +102,19 @@ run_sanity() {
     echo -e "\n${YELLOW}--- Coverage ---${NC}"
     for benchmark in "${benchmarks[@]}"; do
         echo "Coverage $benchmark..."
+
+        # Create temporary corpus directory with a random blob
+        local corpus_dir
+        corpus_dir=$(mktemp -d)
+        head -c 64 /dev/urandom > "$corpus_dir/seed_input"
+
         uv run crsbench coverage "benchmarks/$benchmark" \
+            --corpus-dir "$corpus_dir" \
             --force-rebuild \
             --output "coverage-$benchmark.json" \
-            --format json || fail "Coverage failed for $benchmark"
+            --format json || { rm -rf "$corpus_dir"; fail "Coverage failed for $benchmark"; }
+
+        rm -rf "$corpus_dir"
         success "Coverage $benchmark passed"
         rm -f "coverage-$benchmark.json"
     done
