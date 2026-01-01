@@ -28,6 +28,7 @@ from crsbench.evaluation.verification.models import (
     TestMode,
     VerificationScores,
 )
+from crsbench.utils.docker import fix_docker_ownership
 from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import clone_or_copy_cached_repo
 from crsbench.utils.workers import resolve_build_workers, resolve_verify_workers
@@ -263,9 +264,12 @@ class PatchVerificationEngine:
 
         # Prepare variant inc-build image if using inc-build
         if inc_available:
-            self.infra.prepare_inc_image_for_variant(
+            if not self.infra.prepare_inc_image_for_variant(
                 project_name, variant_name, self.sanitizer
-            )
+            ):
+                result.status = PatchVerificationStatus.BUILD_FAILED
+                result.details = "Failed to prepare inc-build image for variant"
+                return result
 
         # Build using helper.py build_fuzzers (with inc-build image if available)
         build_success = self.infra.build_fuzzers(
@@ -298,6 +302,11 @@ class PatchVerificationEngine:
             repo_path=repo_path,
             pov_path=pov_path,
         )
+        # Fix ownership of build output (including files created by reproduce)
+        # Must run AFTER verification because reproduce() creates root-owned files
+        build_out = self.infra.get_build_output_path(variant_name)
+        fix_docker_ownership(build_out)
+
         verified_result.elapsed_seconds = time.time() - start_time
         return verified_result
 

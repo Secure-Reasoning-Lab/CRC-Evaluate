@@ -297,9 +297,14 @@ class OSSFuzzBuilder:
                     )
 
                 # Prepare variant inc-build image (retag from project to variant)
-                self.infra.prepare_inc_image_for_variant(
+                if not self.infra.prepare_inc_image_for_variant(
                     config.benchmark_name, variant_name, config.sanitizer
-                )
+                ):
+                    return BuildResult.from_error(
+                        config=config,
+                        error="Failed to prepare inc-build image for variant",
+                        elapsed_seconds=time.time() - start_time,
+                    )
 
                 # Build using helper.py build_fuzzers with inc-build image
                 success = self.infra.build_fuzzers(
