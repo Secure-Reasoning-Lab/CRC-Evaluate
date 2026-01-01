@@ -81,6 +81,15 @@ Examples:
         help="Worker name for identification (default: hostname)",
     )
 
+    worker_parser.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Number of parallel worker processes (default: 1)",
+    )
+
     worker_parser.set_defaults(command="worker")
 
 
@@ -106,6 +115,7 @@ def run_worker(args: argparse.Namespace) -> int:
         "experiment_name": args.experiment_name,
         "timeout": args.timeout,
         "worker_name": args.worker_name,
+        "num_workers": args.jobs,
     }
 
     try:
@@ -116,6 +126,7 @@ def run_worker(args: argparse.Namespace) -> int:
                 experiment_name=args.experiment_name,
                 _timeout=args.timeout,
                 worker_name=args.worker_name,
+                num_workers=args.jobs,
             )
             return 0
         # Run in burst mode (default)

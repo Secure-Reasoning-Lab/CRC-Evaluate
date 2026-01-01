@@ -9,6 +9,7 @@ A file-based lock ensures only one worker process runs at a time.
 """
 
 import fcntl
+import multiprocessing
 import os
 import socket
 import sys
@@ -85,6 +86,7 @@ def main(
     experiment_name: Optional[str] = None,
     timeout: Optional[int] = None,
     worker_name: Optional[str] = None,
+    num_workers: int = 1,
 ) -> int:
     """
     Worker entry point - connects to Redis and processes jobs.
@@ -142,40 +144,120 @@ def main(
     logger.info("CRSBench Distributed Worker")
     logger.info("=" * 60)
     logger.info(f"Worker name: {worker_name}")
+    logger.info(f"Parallel workers: {num_workers}")
     logger.info(f"Redis host: {redis_host}")
     logger.info(f"Experiment: {experiment_name}")
     logger.info(f"Worker timeout: {worker_timeout}s")
     logger.info("=" * 60)
 
-    # Acquire worker lock to ensure only one worker runs at a time
+    # Single worker mode (use lock)
+    if num_workers == 1:
+        try:
+            with worker_lock():
+                _run_worker(redis_host, experiment_name, worker_name)
+            return 0
+        except BlockingIOError:
+            logger.error("=" * 60)
+            logger.error("Another worker is already running")
+            logger.error(f"Lock file: {WORKER_LOCK_FILE}")
+            logger.error("=" * 60)
+            return 4
+
+    # Multi-worker mode (no lock, spawn multiple processes)
+    return _spawn_workers(
+        redis_host, experiment_name, worker_name, num_workers, continuous=False
+    )
+
+
+def _spawn_workers(
+    redis_host: str,
+    experiment_name: str,
+    worker_name: str,
+    num_workers: int,
+    *,
+    continuous: bool = False,
+) -> int:
+    """Spawn multiple worker processes.
+
+    Args:
+        redis_host: Redis server hostname
+        experiment_name: Experiment identifier
+        worker_name: Base worker name
+        num_workers: Number of worker processes to spawn
+        continuous: Run in continuous mode
+
+    Returns:
+        Exit code (0 for success)
+    """
+    logger.info(f"Spawning {num_workers} worker processes...")
+
+    processes = []
     try:
-        with worker_lock():
-            _run_worker(redis_host, experiment_name, worker_name)
-        return 0  # Success
+        for i in range(num_workers):
+            # Generate unique worker name
+            name = f"{worker_name}-{i}"
 
-    except BlockingIOError:
-        logger.error("=" * 60)
-        logger.error("Another worker is already running")
-        logger.error(f"Lock file: {WORKER_LOCK_FILE}")
-        logger.error("=" * 60)
-        return 4
+            # Create worker process
+            p = multiprocessing.Process(
+                target=_run_single_worker,
+                args=(redis_host, experiment_name, name),
+                kwargs={"continuous": continuous},
+                name=f"worker-{i}",
+            )
+            p.start()
+            processes.append(p)
+            logger.info(f"Started worker process '{name}' (PID: {p.pid})")
 
-    except redis.ConnectionError as e:
-        logger.error(f"Cannot connect to Redis at {redis_host}: {e}")
-        logger.error("Please check that Redis server is running and accessible")
-        return 2
+        # Wait for all workers
+        logger.info("Waiting for worker processes to complete...")
+        for p in processes:
+            p.join()
 
-    except redis.TimeoutError as e:
-        logger.error(f"Connection to Redis timed out: {e}")
-        return 2
+        # Check exit codes
+        failed = [p for p in processes if p.exitcode != 0]
+        if failed:
+            logger.error(f"{len(failed)}/{num_workers} worker processes failed")
+            return 3
 
-    except KeyboardInterrupt:
-        logger.info("\nReceived interrupt signal, shutting down gracefully...")
+        logger.info(f"All {num_workers} worker processes completed successfully")
         return 0
 
-    except Exception as e:
-        logger.error(f"Worker error: {e}", exc_info=True)
-        return 3
+    except KeyboardInterrupt:
+        logger.info("\nReceived interrupt signal, terminating workers...")
+        for p in processes:
+            if p.is_alive():
+                p.terminate()
+        for p in processes:
+            p.join(timeout=5)
+            if p.is_alive():
+                logger.warning(f"Force killing worker {p.name}")
+                p.kill()
+                p.join()
+        return 0
+
+
+def _run_single_worker(
+    redis_host: str, experiment_name: str, worker_name: str, *, continuous: bool = False
+):
+    """Run a single worker process (for multiprocessing).
+
+    Args:
+        redis_host: Redis server hostname
+        experiment_name: Experiment identifier
+        worker_name: Worker name
+        continuous: Run in continuous mode
+    """
+    # Note: This runs in a subprocess, so we need to reconfigure logging
+    configure_logger(level=os.environ.get("LOG_LEVEL", "INFO").upper(), sink=sys.stdout)
+
+    if continuous:
+        # Run continuous worker (without spawning more workers)
+        run_worker_continuous(
+            redis_host, experiment_name, worker_name=worker_name, num_workers=1
+        )
+    else:
+        # Run burst mode worker
+        _run_worker(redis_host, experiment_name, worker_name)
 
 
 def _run_worker(redis_host: str, experiment_name: str, worker_name: str):
@@ -241,6 +323,7 @@ def run_worker_continuous(
     experiment_name: str,
     _timeout: int = 3600,
     worker_name: Optional[str] = None,
+    num_workers: int = 1,
 ):
     """
     Run worker in continuous mode (polling indefinitely).
@@ -253,6 +336,7 @@ def run_worker_continuous(
         experiment_name: Experiment identifier for queue naming
         timeout: Job execution timeout in seconds
         worker_name: Worker name for identification (default: hostname)
+        num_workers: Number of worker processes to spawn (default: 1)
 
     Note:
         This mode is useful for long-running worker deployments where
@@ -264,42 +348,57 @@ def run_worker_continuous(
     worker_name = (
         worker_name or os.environ.get("CRSBENCH_WORKER_NAME") or socket.gethostname()
     )
-    logger.info(f"Starting continuous worker for experiment: {experiment_name}")
-    logger.info(f"Worker name: {worker_name}")
 
-    # Acquire worker lock to ensure only one worker runs at a time
-    try:
-        with worker_lock():
-            redis_password = os.environ.get("REDIS_PASSWORD") or None
-            redis_connection = redis.Redis(host=redis_host, password=redis_password)
-            redis_connection.ping()
+    # Single worker mode (use lock)
+    if num_workers == 1:
+        logger.info(f"Starting continuous worker for experiment: {experiment_name}")
+        logger.info(f"Worker name: {worker_name}")
 
-            # Set up RQ queue and worker (RQ 2.x requires explicit connection)
-            queue_name = f"crsbench_{experiment_name}"
-            queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
-            worker = rq.Worker(  # type: ignore[attr-defined]
-                [queue], connection=redis_connection, name=worker_name
-            )
+        # Acquire worker lock to ensure only one worker runs at a time
+        try:
+            with worker_lock():
+                redis_password = os.environ.get("REDIS_PASSWORD") or None
+                redis_connection = redis.Redis(host=redis_host, password=redis_password)
+                redis_connection.ping()
 
-            logger.info(
-                f"Worker '{worker_name}' running in continuous mode on queue: {queue_name}"
-            )
+                # Set up RQ queue and worker (RQ 2.x requires explicit connection)
+                queue_name = f"crsbench_{experiment_name}"
+                queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
+                worker = rq.Worker(  # type: ignore[attr-defined]
+                    [queue], connection=redis_connection, name=worker_name
+                )
 
-            # Run worker in continuous mode (never exits)
-            worker.work(
-                burst=False  # Continuous mode
-            )
+                logger.info(
+                    f"Worker '{worker_name}' running in continuous mode on queue: {queue_name}"
+                )
 
-    except BlockingIOError:
-        logger.error("Another worker is already running")
-        logger.error(f"Lock file: {WORKER_LOCK_FILE}")
-        raise
+                # Run worker in continuous mode (never exits)
+                worker.work(
+                    burst=False  # Continuous mode
+                )
 
-    except KeyboardInterrupt:
-        logger.info("Received interrupt, shutting down...")
-    except Exception as e:
-        logger.error(f"Worker error: {e}", exc_info=True)
-        raise
+        except BlockingIOError:
+            logger.error("Another worker is already running")
+            logger.error(f"Lock file: {WORKER_LOCK_FILE}")
+            raise
+
+        except KeyboardInterrupt:
+            logger.info("Received interrupt, shutting down...")
+        except Exception as e:
+            logger.error(f"Worker error: {e}", exc_info=True)
+            raise
+
+    # Multi-worker mode (no lock, spawn multiple processes)
+    else:
+        logger.info(
+            f"Starting {num_workers} continuous workers for experiment: {experiment_name}"
+        )
+        logger.info(f"Base worker name: {worker_name}")
+        exit_code = _spawn_workers(
+            redis_host, experiment_name, worker_name, num_workers, continuous=True
+        )
+        if exit_code != 0:
+            raise RuntimeError(f"Worker processes failed with exit code {exit_code}")
 
 
 if __name__ == "__main__":
