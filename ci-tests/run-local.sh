@@ -51,9 +51,9 @@ run_checks() {
     just format-check || fail "Format check failed"
     success "Format check passed"
 
-    echo "Running unit tests..."
-    uv run pytest tests/ -v -n auto -m "not integration and not slow" || fail "Unit tests failed"
-    success "Unit tests passed"
+    echo "Running all tests..."
+    uv run pytest tests/ -v -n auto || fail "Tests failed"
+    success "All tests passed"
 
     success "Stage 1 completed!"
 }

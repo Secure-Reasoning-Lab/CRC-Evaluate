@@ -42,12 +42,15 @@ jobs:
         run: just format-check
 
       - name: Run unit tests
-        run: uv run pytest tests/ -v -n auto -m "not integration and not slow"
+        run: uv run pytest tests/ -v -n auto -m "not integration"
 
   # Stage 2: Sanity checks with mock-c and mock-java (3 parallel jobs)
+  # TODO: Re-enable when Team-Atlanta repo access is resolved (fork to sslab-gatech or deploy keys)
+  # Currently disabled due to cross-org PAT limitations (see issue #16)
   sanity-verify:
     name: Sanity Verify
     needs: [checks]
+    if: false  # Disabled until Team-Atlanta repo access is resolved
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -87,6 +90,7 @@ jobs:
   sanity-patch-verify:
     name: Sanity Patch-Verify
     needs: [checks]
+    if: false  # Disabled until Team-Atlanta repo access is resolved
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -122,6 +126,7 @@ jobs:
   sanity-coverage:
     name: Sanity Coverage
     needs: [checks]
+    if: false  # Disabled until Team-Atlanta repo access is resolved
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -166,14 +171,12 @@ jobs:
           echo "=== Coverage mock-java Results ==="
           cat coverage-mock-java.json
 
-  # Stage 3: Integration tests with real projects (optional - auto after merge)
+  # Stage 3: Integration tests with real projects
+  # TODO: Re-enable when Team-Atlanta repo access is resolved
   integration:
     name: Integration ${{ matrix.benchmark }}
-    needs: [sanity-verify, sanity-patch-verify, sanity-coverage]
-    if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-integration')) ||
-      (github.event_name == 'workflow_dispatch' && inputs.run_integration)
+    needs: [checks]
+    if: false  # Disabled until Team-Atlanta repo access is resolved
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -214,14 +217,12 @@ jobs:
           cat patch-verify-results.json
           python3 ci-tests/check_ci_results.py patch-verify patch-verify-results.json
 
-  # Stage 4: Bug Finding E2E (optional - auto after merge)
+  # Stage 4: Bug Finding E2E
+  # TODO: Re-enable when Team-Atlanta repo access is resolved
   e2e-bugfinding:
     name: E2E Bug Finding
-    needs: [integration]
-    if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-integration')) ||
-      (github.event_name == 'workflow_dispatch' && inputs.run_integration)
+    needs: [checks]
+    if: false  # Disabled until Team-Atlanta repo access is resolved
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
