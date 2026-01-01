@@ -24,7 +24,7 @@ def mock_oss_fuzz(tmp_path: Path) -> Path:
 
     # Mock helper.py that validates --coverage-output-dir
     helper = oss_fuzz / "infra" / "helper.py"
-    helper.write_text('''#!/usr/bin/env python3
+    helper.write_text("""#!/usr/bin/env python3
 import argparse, json, sys
 from pathlib import Path
 
@@ -44,7 +44,7 @@ if args.cmd == "coverage":
     (out / "summary.json").write_text(json.dumps({"data": [{"totals": {}}]}))
     sys.exit(0)
 sys.exit(1)
-''')
+""")
     return oss_fuzz
 
 

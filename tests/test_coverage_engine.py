@@ -95,7 +95,9 @@ class TestCoverageEngine:
     def test_merge_overlapping_coverage(self, engine: CoverageEngine):
         """Test merging coverage deduplicates overlapping lines."""
         merged = {"main": {"src": "main.c", "lines": {1, 2, 3}}}
-        engine._merge_coverage_safe(merged, {"main": {"src": "main.c", "lines": [3, 4, 5]}})
+        engine._merge_coverage_safe(
+            merged, {"main": {"src": "main.c", "lines": [3, 4, 5]}}
+        )
         assert merged["main"]["lines"] == {1, 2, 3, 4, 5}
 
     def test_merge_multiple_functions(self, engine: CoverageEngine):

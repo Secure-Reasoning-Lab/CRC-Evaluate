@@ -348,7 +348,9 @@ class CoverageEngine:
             Dict with totals: {lines_total, functions_total, lines_percent, ...}
         """
         try:
-            summary_path = strategy.collect_batch_coverage(Path(harness_name), corpus_dir)
+            summary_path = strategy.collect_batch_coverage(
+                Path(harness_name), corpus_dir
+            )
             return parse_llvm_cov_summary(summary_path)
         except CoverageStrategyError as e:
             logger.warning(f"Failed to get coverage totals: {e}")
