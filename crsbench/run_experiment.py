@@ -1059,6 +1059,31 @@ def _monitor_jobs_basic(
             show_percentage=False,
         )
 
+        # Display currently running jobs with metadata
+        running_jobs = []
+        for job in job_list:
+            job.refresh()
+            if job.get_status() == "started":
+                crs = job.meta.get("crs", "?")
+                benchmark = job.meta.get("benchmark", "?")
+                harness = job.meta.get("harness", "?")
+                mode = job.meta.get("mode", "?")
+                trial_num = job.meta.get("trial_num", "?")
+                started_at = job.meta.get("started_at")
+                elapsed = ""
+                if started_at:
+                    elapsed_sec = int(time.time() - started_at)
+                    mins, secs = divmod(elapsed_sec, 60)
+                    elapsed = f"{mins}m{secs}s"
+                running_jobs.append(
+                    f"  [{crs}] {benchmark}/{harness} mode={mode} trial={trial_num} ({elapsed})"
+                )
+
+        if running_jobs:
+            logger.info("Currently Running:")
+            for line in running_jobs:
+                logger.info(line)
+
         # Check if all jobs completed
         completed = 0
         failed = 0
@@ -1102,7 +1127,7 @@ def _monitor_jobs_rich(
     queue, job_list: List, experiment_name: str
 ) -> List[Dict[str, Any]]:
     """Monitor jobs with Rich UI."""
-    from rich.console import Console
+    from rich.console import Console, Group
     from rich.live import Live
     from rich.table import Table
 
@@ -1113,6 +1138,7 @@ def _monitor_jobs_rich(
     def generate_status_table():
         stats = get_queue_stats(queue)
 
+        # Queue status table
         table = Table(title=f"Experiment: {experiment_name}")
         table.add_column("Status", style="cyan")
         table.add_column("Count", justify="right", style="magenta")
@@ -1123,7 +1149,32 @@ def _monitor_jobs_rich(
         table.add_row("Failed", str(stats["failed"]), style="red")
         table.add_row("Total", str(len(job_list)))
 
-        return table
+        # Running jobs table
+        running_table = Table(title="Running Jobs")
+        running_table.add_column("CRS", style="cyan")
+        running_table.add_column("Benchmark", style="yellow")
+        running_table.add_column("Harness", style="yellow")
+        running_table.add_column("Mode", style="blue")
+        running_table.add_column("Trial", justify="right")
+        running_table.add_column("Elapsed", justify="right", style="magenta")
+
+        for job in job_list:
+            job.refresh()
+            if job.get_status() == "started":
+                crs = job.meta.get("crs", "?")
+                benchmark = job.meta.get("benchmark", "?")
+                harness = job.meta.get("harness", "?")
+                mode = job.meta.get("mode", "?")
+                trial_num = str(job.meta.get("trial_num", "?"))
+                started_at = job.meta.get("started_at")
+                elapsed = "N/A"
+                if started_at:
+                    elapsed_sec = int(time.time() - started_at)
+                    mins, secs = divmod(elapsed_sec, 60)
+                    elapsed = f"{mins}m {secs}s"
+                running_table.add_row(crs, benchmark, harness, mode, trial_num, elapsed)
+
+        return Group(table, running_table)
 
     with Live(generate_status_table(), refresh_per_second=1, console=console) as live:
         while True:

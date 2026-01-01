@@ -157,6 +157,24 @@ def run_crs_trial(
     )
     start_time = time.time()
 
+    # Update job metadata for monitoring (RQ 2.x)
+    try:
+        import rq
+
+        job = rq.get_current_job()
+        if job:
+            job.meta["crs"] = crs
+            job.meta["benchmark"] = benchmark
+            job.meta["harness"] = harness_name
+            job.meta["mode"] = mode
+            job.meta["trial_num"] = trial_num
+            job.meta["started_at"] = start_time
+            job.save_meta()
+            logger.debug(f"Updated job metadata for job {job.id}")
+    except Exception as e:
+        # Don't fail the job if metadata update fails
+        logger.warning(f"Failed to update job metadata: {e}")
+
     try:
         # Get snapshot configuration
         snapshot_period = config.get("snapshot_period")
