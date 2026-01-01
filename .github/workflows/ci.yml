@@ -44,18 +44,12 @@ jobs:
       - name: Run unit tests
         run: uv run pytest tests/ -v -n auto -m "not integration and not slow"
 
-  # Stage 2: Sanity check with mock-c and mock-java (required for merge)
-  sanity:
-    name: Sanity ${{ matrix.benchmark }}
+  # Stage 2: Sanity checks with mock-c and mock-java (3 parallel jobs)
+  sanity-verify:
+    name: Sanity Verify
     needs: [checks]
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        benchmark:
-          - sanity-mock-c-delta-01
-          - sanity-mock-java-delta-01
     steps:
       - uses: actions/checkout@v5
         with:
@@ -66,38 +60,102 @@ jobs:
         with:
           require-docker: true
 
-      - name: Verify ${{ matrix.benchmark }}
+      - name: Verify mock-c
         run: |
-          uv run crsbench verify benchmarks/${{ matrix.benchmark }} \
+          uv run crsbench verify benchmarks/sanity-mock-c-delta-01 \
             --force-rebuild \
-            --output verify-results.json \
+            --output verify-mock-c.json \
             --format json
-
-      - name: Check verify results
-        run: |
-          echo "=== Verify Results ==="
-          cat verify-results.json
+          echo "=== Verify mock-c Results ==="
+          cat verify-mock-c.json
           python3 ci-tests/check_ci_results.py verify \
-            benchmarks/${{ matrix.benchmark }} \
-            verify-results.json
+            benchmarks/sanity-mock-c-delta-01 \
+            verify-mock-c.json
 
-      - name: Patch-verify ${{ matrix.benchmark }}
+      - name: Verify mock-java
         run: |
-          uv run crsbench patch-verify benchmarks/${{ matrix.benchmark }} \
+          uv run crsbench verify benchmarks/sanity-mock-java-delta-01 \
             --force-rebuild \
-            --output patch-verify-results.json \
+            --output verify-mock-java.json \
             --format json
+          echo "=== Verify mock-java Results ==="
+          cat verify-mock-java.json
+          python3 ci-tests/check_ci_results.py verify \
+            benchmarks/sanity-mock-java-delta-01 \
+            verify-mock-java.json
 
-      - name: Check patch-verify results
+  sanity-patch-verify:
+    name: Sanity Patch-Verify
+    needs: [checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - uses: ./.github/actions/setup
+        with:
+          require-docker: true
+
+      - name: Patch-verify mock-c
         run: |
-          echo "=== Patch Verify Results ==="
-          cat patch-verify-results.json
-          python3 ci-tests/check_ci_results.py patch-verify patch-verify-results.json
+          uv run crsbench patch-verify benchmarks/sanity-mock-c-delta-01 \
+            --force-rebuild \
+            --output patch-verify-mock-c.json \
+            --format json
+          echo "=== Patch-verify mock-c Results ==="
+          cat patch-verify-mock-c.json
+          python3 ci-tests/check_ci_results.py patch-verify patch-verify-mock-c.json
 
-  # Stage 3: Integration tests (optional - auto after merge to main)
+      - name: Patch-verify mock-java
+        run: |
+          uv run crsbench patch-verify benchmarks/sanity-mock-java-delta-01 \
+            --force-rebuild \
+            --output patch-verify-mock-java.json \
+            --format json
+          echo "=== Patch-verify mock-java Results ==="
+          cat patch-verify-mock-java.json
+          python3 ci-tests/check_ci_results.py patch-verify patch-verify-mock-java.json
+
+  sanity-coverage:
+    name: Sanity Coverage
+    needs: [checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - uses: ./.github/actions/setup
+        with:
+          require-docker: true
+
+      - name: Coverage mock-c
+        run: |
+          uv run crsbench coverage benchmarks/sanity-mock-c-delta-01 \
+            --force-rebuild \
+            --output coverage-mock-c.json \
+            --format json
+          echo "=== Coverage mock-c Results ==="
+          cat coverage-mock-c.json
+
+      - name: Coverage mock-java
+        run: |
+          uv run crsbench coverage benchmarks/sanity-mock-java-delta-01 \
+            --force-rebuild \
+            --output coverage-mock-java.json \
+            --format json
+          echo "=== Coverage mock-java Results ==="
+          cat coverage-mock-java.json
+
+  # Stage 3: Integration tests with real projects (optional - auto after merge)
   integration:
     name: Integration ${{ matrix.benchmark }}
-    needs: [sanity]
+    needs: [sanity-verify, sanity-patch-verify, sanity-coverage]
     if: |
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-integration')) ||
@@ -108,8 +166,8 @@ jobs:
       fail-fast: false
       matrix:
         benchmark:
-          - afc-libxml2-full-01
-          - afc-apache-commons-compress-delta-01
+          - afc-libxml2-full-01        # C project
+          - afc-apache-commons-compress-delta-01  # Java project
     steps:
       - uses: actions/checkout@v5
         with:
@@ -126,9 +184,6 @@ jobs:
             --force-rebuild \
             --output verify-results.json \
             --format json
-
-      - name: Check verify results
-        run: |
           echo "=== Verify Results ==="
           cat verify-results.json
           python3 ci-tests/check_ci_results.py verify \
@@ -141,23 +196,20 @@ jobs:
             --force-rebuild \
             --output patch-verify-results.json \
             --format json
-
-      - name: Check patch-verify results
-        run: |
-          echo "=== Patch Verify Results ==="
+          echo "=== Patch-verify Results ==="
           cat patch-verify-results.json
           python3 ci-tests/check_ci_results.py patch-verify patch-verify-results.json
 
-  # Stage 4: Bug Finding E2E (optional - auto after merge to main)
-  bugfinding-e2e:
-    name: Bug Finding E2E
+  # Stage 4: Bug Finding E2E (optional - auto after merge)
+  e2e-bugfinding:
+    name: E2E Bug Finding
     needs: [integration]
     if: |
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-integration')) ||
       (github.event_name == 'workflow_dispatch' && inputs.run_integration)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
@@ -168,7 +220,7 @@ jobs:
         with:
           require-docker: true
 
-      - name: Run bug finding E2E
+      - name: Run E2E experiment
         run: uv run crsbench --experiment-config experiment-configs/coverage-e2e-test.yaml
 
       - name: Check E2E results

@@ -5,8 +5,8 @@
 #   ./ci-tests/run-local.sh              # Run Stage 1-2 (auto checks)
 #   ./ci-tests/run-local.sh all          # Run all stages
 #   ./ci-tests/run-local.sh checks       # Stage 1: typecheck, lint, format, test
-#   ./ci-tests/run-local.sh sanity       # Stage 2: mock-c verify + patch-verify
-#   ./ci-tests/run-local.sh integration  # Stage 3: other projects
+#   ./ci-tests/run-local.sh sanity       # Stage 2: verify, patch-verify, coverage (mock-c + mock-java)
+#   ./ci-tests/run-local.sh integration  # Stage 3: real projects (libxml2, commons-compress)
 #   ./ci-tests/run-local.sh e2e          # Stage 4: bug finding E2E
 
 set -e
@@ -52,49 +52,72 @@ run_checks() {
     success "Format check passed"
 
     echo "Running unit tests..."
-    uv run pytest tests/ -v -n auto || fail "Unit tests failed"
+    uv run pytest tests/ -v -n auto -m "not integration and not slow" || fail "Unit tests failed"
     success "Unit tests passed"
 
     success "Stage 1 completed!"
 }
 
-# Stage 2: Sanity check (mock-c)
+# Stage 2: Sanity checks (mock-c + mock-java)
 run_sanity() {
-    run_stage "Stage 2: Sanity Check (mock-c)"
+    run_stage "Stage 2: Sanity Checks (mock-c + mock-java)"
 
-    local benchmark="sanity-mock-c-delta-01"
+    local benchmarks=(
+        "sanity-mock-c-delta-01"
+        "sanity-mock-java-delta-01"
+    )
 
-    echo "Verifying $benchmark..."
-    uv run crsbench verify "benchmarks/$benchmark" \
-        --force-rebuild \
-        --output "verify-results.json" \
-        --format json || fail "Verify failed"
+    # Verify
+    echo -e "\n${YELLOW}--- Verify ---${NC}"
+    for benchmark in "${benchmarks[@]}"; do
+        echo "Verifying $benchmark..."
+        uv run crsbench verify "benchmarks/$benchmark" \
+            --force-rebuild \
+            --output "verify-$benchmark.json" \
+            --format json || fail "Verify failed for $benchmark"
 
-    python3 ci-tests/check_ci_results.py verify \
-        "benchmarks/$benchmark" \
-        "verify-results.json" || fail "CPV check failed"
-    success "Verify passed"
+        python3 ci-tests/check_ci_results.py verify \
+            "benchmarks/$benchmark" \
+            "verify-$benchmark.json" || fail "Verify check failed for $benchmark"
+        success "Verify $benchmark passed"
+        rm -f "verify-$benchmark.json"
+    done
 
-    echo "Patch-verifying $benchmark..."
-    uv run crsbench patch-verify "benchmarks/$benchmark" \
-        --force-rebuild \
-        --output "patch-verify-results.json" \
-        --format json || fail "Patch-verify failed"
+    # Patch-verify
+    echo -e "\n${YELLOW}--- Patch-Verify ---${NC}"
+    for benchmark in "${benchmarks[@]}"; do
+        echo "Patch-verifying $benchmark..."
+        uv run crsbench patch-verify "benchmarks/$benchmark" \
+            --force-rebuild \
+            --output "patch-verify-$benchmark.json" \
+            --format json || fail "Patch-verify failed for $benchmark"
 
-    python3 ci-tests/check_ci_results.py patch-verify \
-        "patch-verify-results.json" || fail "Patch check failed"
-    success "Patch-verify passed"
+        python3 ci-tests/check_ci_results.py patch-verify \
+            "patch-verify-$benchmark.json" || fail "Patch-verify check failed for $benchmark"
+        success "Patch-verify $benchmark passed"
+        rm -f "patch-verify-$benchmark.json"
+    done
 
-    rm -f verify-results.json patch-verify-results.json
+    # Coverage
+    echo -e "\n${YELLOW}--- Coverage ---${NC}"
+    for benchmark in "${benchmarks[@]}"; do
+        echo "Coverage $benchmark..."
+        uv run crsbench coverage "benchmarks/$benchmark" \
+            --force-rebuild \
+            --output "coverage-$benchmark.json" \
+            --format json || fail "Coverage failed for $benchmark"
+        success "Coverage $benchmark passed"
+        rm -f "coverage-$benchmark.json"
+    done
+
     success "Stage 2 completed!"
 }
 
-# Stage 3: Integration tests
+# Stage 3: Integration tests (real projects)
 run_integration() {
-    run_stage "Stage 3: Integration Tests"
+    run_stage "Stage 3: Integration Tests (Real Projects)"
 
     local benchmarks=(
-        "sanity-mock-java-delta-01"
         "afc-libxml2-full-01"
         "afc-apache-commons-compress-delta-01"
     )
@@ -109,7 +132,7 @@ run_integration() {
 
         python3 ci-tests/check_ci_results.py verify \
             "benchmarks/$benchmark" \
-            "verify-results.json" || fail "CPV check failed for $benchmark"
+            "verify-results.json" || fail "Verify check failed for $benchmark"
 
         uv run crsbench patch-verify "benchmarks/$benchmark" \
             --force-rebuild \
@@ -117,7 +140,7 @@ run_integration() {
             --format json || fail "Patch-verify failed for $benchmark"
 
         python3 ci-tests/check_ci_results.py patch-verify \
-            "patch-verify-results.json" || fail "Patch check failed for $benchmark"
+            "patch-verify-results.json" || fail "Patch-verify check failed for $benchmark"
 
         success "$benchmark passed"
         rm -f verify-results.json patch-verify-results.json
@@ -185,8 +208,8 @@ main() {
             echo ""
             echo "  (default)    Run Stage 1-2 (auto checks)"
             echo "  checks       Stage 1: typecheck, lint, format, test"
-            echo "  sanity       Stage 2: mock-c verify + patch-verify"
-            echo "  integration  Stage 3: other projects"
+            echo "  sanity       Stage 2: verify, patch-verify, coverage (mock-c + mock-java)"
+            echo "  integration  Stage 3: real projects (libxml2, commons-compress)"
             echo "  e2e          Stage 4: bug finding E2E"
             echo "  all          Run all stages"
             exit 1
