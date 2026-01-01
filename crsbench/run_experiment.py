@@ -909,7 +909,7 @@ def run_experiment_local(
     results = []
     for idx, trial in enumerate(trials, 1):
         bh = trial.benchmark_harness
-        logger.info(f"\n[{idx}/{len(trials)}] Starting trial:")
+        logger.info(f"[{idx}/{len(trials)}] Starting trial:")
         logger.info(f"  CRS: {trial.crs}")
         logger.info(f"  Benchmark: {bh.name}")
         logger.info(f"  Harness: {bh.harness.name}")
