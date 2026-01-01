@@ -1,0 +1,195 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_integration:
+        description: 'Run full integration tests (Stage 3-4)'
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Stage 1: Basic checks (sequential in single job)
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - uses: ./.github/actions/setup
+        with:
+          all-extras: true
+
+      - name: Type check
+        run: just typecheck
+
+      - name: Lint
+        run: just lint
+
+      - name: Format check
+        run: just format-check
+
+      - name: Run unit tests
+        run: uv run pytest tests/ -v -n auto
+
+  # Stage 2: Sanity check with mock-c and mock-java (required for merge)
+  sanity:
+    name: Sanity ${{ matrix.benchmark }}
+    needs: [checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        benchmark:
+          - sanity-mock-c-delta-01
+          - sanity-mock-java-delta-01
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - uses: ./.github/actions/setup
+        with:
+          require-docker: true
+
+      - name: Verify ${{ matrix.benchmark }}
+        run: |
+          uv run crsbench verify benchmarks/${{ matrix.benchmark }} \
+            --force-rebuild \
+            --output verify-results.json \
+            --format json
+
+      - name: Check verify results
+        run: |
+          echo "=== Verify Results ==="
+          cat verify-results.json
+          python3 ci-tests/check_ci_results.py verify \
+            benchmarks/${{ matrix.benchmark }} \
+            verify-results.json
+
+      - name: Patch-verify ${{ matrix.benchmark }}
+        run: |
+          uv run crsbench patch-verify benchmarks/${{ matrix.benchmark }} \
+            --force-rebuild \
+            --output patch-verify-results.json \
+            --format json
+
+      - name: Check patch-verify results
+        run: |
+          echo "=== Patch Verify Results ==="
+          cat patch-verify-results.json
+          python3 ci-tests/check_ci_results.py patch-verify patch-verify-results.json
+
+  # Stage 3: Integration tests (optional - auto after merge to main)
+  integration:
+    name: Integration ${{ matrix.benchmark }}
+    needs: [sanity]
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-integration')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        benchmark:
+          - afc-libxml2-full-01
+          - afc-apache-commons-compress-delta-01
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - uses: ./.github/actions/setup
+        with:
+          require-docker: true
+
+      - name: Verify ${{ matrix.benchmark }}
+        run: |
+          uv run crsbench verify benchmarks/${{ matrix.benchmark }} \
+            --force-rebuild \
+            --output verify-results.json \
+            --format json
+
+      - name: Check verify results
+        run: |
+          echo "=== Verify Results ==="
+          cat verify-results.json
+          python3 ci-tests/check_ci_results.py verify \
+            benchmarks/${{ matrix.benchmark }} \
+            verify-results.json
+
+      - name: Patch-verify ${{ matrix.benchmark }}
+        run: |
+          uv run crsbench patch-verify benchmarks/${{ matrix.benchmark }} \
+            --force-rebuild \
+            --output patch-verify-results.json \
+            --format json
+
+      - name: Check patch-verify results
+        run: |
+          echo "=== Patch Verify Results ==="
+          cat patch-verify-results.json
+          python3 ci-tests/check_ci_results.py patch-verify patch-verify-results.json
+
+  # Stage 4: Bug Finding E2E (optional - auto after merge to main)
+  bugfinding-e2e:
+    name: Bug Finding E2E
+    needs: [integration]
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-integration')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - uses: ./.github/actions/setup
+        with:
+          require-docker: true
+
+      - name: Run bug finding E2E
+        run: uv run crsbench --experiment-config experiment-configs/coverage-e2e-test.yaml
+
+      - name: Check E2E results
+        run: |
+          echo "=== E2E Experiment Results ==="
+          RESULT_DIR="/tmp/crsbench/experiments/coverage-e2e-test"
+
+          if [ ! -d "$RESULT_DIR" ]; then
+            echo "ERROR: Experiment directory not found: $RESULT_DIR"
+            exit 1
+          fi
+
+          echo "Experiment directory structure:"
+          find "$RESULT_DIR" -type d | head -20
+
+          TRIAL_COUNT=$(find "$RESULT_DIR" -type d -name "trial-*" | wc -l)
+          echo "Trial directories found: $TRIAL_COUNT"
+
+          if [ "$TRIAL_COUNT" -eq 0 ]; then
+            echo "ERROR: No trial directories found"
+            exit 1
+          fi
+
+          echo "E2E test completed successfully"

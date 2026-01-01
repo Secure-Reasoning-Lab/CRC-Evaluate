@@ -67,6 +67,7 @@ dev = [
     "datamodel-code-generator>=0.35.0",
     "ty>=0.0.4",
     "ruff>=0.8.0",
+    "pytest-xdist>=3.8.0",
 ]
 
 [tool.ty.src]
