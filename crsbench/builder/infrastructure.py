@@ -224,6 +224,23 @@ class OSSFuzzInfrastructure:
         # Check that build output has actual files
         return any(build_path.iterdir())
 
+    def has_harness(self, variant_name: str, harness_name: str) -> bool:
+        """Check if a specific harness exists in the build output.
+
+        Args:
+            variant_name: Variant name
+            harness_name: Name of the harness executable
+
+        Returns:
+            True if the harness executable exists in build output
+        """
+        build_path = self.get_build_output_path(variant_name)
+        if not build_path.exists():
+            return False
+
+        harness_path = build_path / harness_name
+        return harness_path.exists() and harness_path.is_file()
+
     # =========================================================================
     # Cleanup methods (shared by POV, patch, coverage verification)
     # =========================================================================

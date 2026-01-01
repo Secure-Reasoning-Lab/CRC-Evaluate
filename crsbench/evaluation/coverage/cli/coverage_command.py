@@ -15,6 +15,10 @@ Examples:
 
     # Output results to JSON file
     crsbench coverage benchmarks/sanity-mock-c-delta-01 --corpus-dir ./corpus/ --output report.json
+
+    # Parallel execution with workers
+    crsbench coverage benchmarks/sanity-mock-c-delta-01 --corpus-dir ./corpus/ \
+        --build-workers 4 --verify-workers 8
 """
 
 import argparse
@@ -25,13 +29,8 @@ from typing import Optional
 
 import yaml
 
-from crsbench.builder import BuildConfig, OSSFuzzBuilder, VariantType
+from crsbench.evaluation.coverage.engine import CoverageEngine
 from crsbench.evaluation.coverage.models import CoverageSummary
-from crsbench.evaluation.coverage.strategy import (
-    CoverageStrategyError,
-    create_coverage_strategy,
-    parse_llvm_cov_summary,
-)
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -126,12 +125,23 @@ Examples:
         help="Number of parallel workers for building coverage variants (default: 4). "
         "Priority: CLI > CRSBENCH_BUILD_WORKERS env.",
     )
+    parser.add_argument(
+        "--verify-workers",
+        type=int,
+        default=None,
+        help="Number of parallel workers for coverage collection (default: 4). "
+        "Priority: CLI > CRSBENCH_VERIFY_WORKERS env.",
+    )
 
     parser.set_defaults(func=run_coverage)
 
 
 def run_coverage(args: argparse.Namespace) -> int:
     """Execute the coverage command.
+
+    Uses CoverageEngine for coverage collection, following the same patterns
+    as VerificationEngine (POV) and PatchVerificationEngine. Supports parallel
+    execution with build_workers and verify_workers.
 
     Args:
         args: Parsed command-line arguments
@@ -155,7 +165,7 @@ def run_coverage(args: argparse.Namespace) -> int:
         logger.error(f"Corpus directory not found: {args.corpus_dir}")
         return 1
 
-    corpus_files = list(args.corpus_dir.iterdir())
+    corpus_files = [f for f in args.corpus_dir.iterdir() if f.is_file()]
     if not corpus_files:
         logger.error(f"Corpus directory is empty: {args.corpus_dir}")
         return 1
@@ -169,191 +179,60 @@ def run_coverage(args: argparse.Namespace) -> int:
     logger.info(f"Collecting coverage for benchmark: {args.benchmark_path}")
     logger.info(f"Corpus directory: {args.corpus_dir} ({len(corpus_files)} files)")
 
-    # Load benchmark configuration
-    benchmark_config = load_benchmark_config(args.benchmark_path)
-    if not benchmark_config:
-        return 1
-
-    project_name = args.benchmark_path.name
-    language = benchmark_config.get("language", "c")
-    main_repo = benchmark_config.get("main_repo", "")
-    commit = get_target_commit(args.benchmark_path)
-
-    if not commit:
-        logger.error("Could not determine target commit from benchmark")
-        return 1
-
-    # Determine harness name
-    harness_name = args.harness or get_first_harness(args.benchmark_path)
-    if not harness_name:
-        logger.error("Could not determine harness name. Use --harness to specify.")
-        return 1
-
-    logger.info(f"Harness: {harness_name}")
-    logger.info(f"Language: {language}")
-    logger.info(f"Commit: {commit[:12]}")
-
-    # Build coverage variant
-    builder = OSSFuzzBuilder(oss_fuzz_path)
-    config = BuildConfig(
-        benchmark_name=project_name,
-        variant_type=VariantType.COVERAGE,
-        commit=commit,
-        main_repo=main_repo,
-        benchmark_path=args.benchmark_path,
-        language=language,
+    # Create engine and collect coverage
+    engine = CoverageEngine(
+        oss_fuzz_path=oss_fuzz_path,
+        build_workers=args.build_workers,
+        verify_workers=args.verify_workers,
     )
-    build_result = builder.build_single(config, force_rebuild=args.force_rebuild)
 
-    if not build_result.success:
-        logger.error(f"Failed to build coverage variant: {build_result.error}")
-        return 1
-
-    # Collect coverage
     try:
-        strategy = create_coverage_strategy(
-            oss_fuzz_path=oss_fuzz_path,
-            project_name=build_result.variant_name,
-            language=language,
-        )
-
-        logger.info(f"Running coverage collection for {harness_name}...")
-        summary_path = strategy.collect_batch_coverage(
-            harness_path=Path(harness_name),
+        report = engine.collect_coverage(
+            benchmark_path=args.benchmark_path,
             corpus_dir=args.corpus_dir,
+            harness_filter=args.harness,
+            force_rebuild=args.force_rebuild,
         )
 
-        # Parse coverage summary
-        cov_stats = parse_llvm_cov_summary(summary_path)
-        summary = CoverageSummary(
-            metric="line",
-            corpus_total=len(corpus_files),
-            corpus_contributing=len(corpus_files),  # All contribute in batch mode
-            lines_covered=int(cov_stats.get("lines_covered", 0)),
-            lines_total=int(cov_stats.get("lines_total", 0)),
-            lines_percent=float(cov_stats.get("lines_percent", 0.0)),
-            functions_covered=int(cov_stats.get("functions_covered", 0)),
-            functions_total=int(cov_stats.get("functions_total", 0)),
-        )
+        # Check for empty report (indicates failure)
+        if not report.harness_name:
+            logger.error("Coverage collection failed - no harness processed")
+            return 1
+
+        # Check for missing summary
+        if report.final_summary is None:
+            logger.error("Coverage collection failed - no coverage data")
+            return 1
 
         # Output results
-        output_results(summary, harness_name, args.output, args.format)
+        output_report(
+            report.harness_name, report.final_summary, args.output, args.format
+        )
 
         # Print summary
-        print_summary(summary, harness_name)
+        print_summary(report.final_summary, report.harness_name)
 
         return 0
 
-    except CoverageStrategyError as e:
-        logger.error(f"Coverage collection failed: {e}")
-        return 1
     except Exception as e:
-        logger.error(f"Unexpected error: {e}", exc_info=True)
+        logger.error(f"Coverage collection failed: {e}", exc_info=True)
         return 1
 
-
-def load_benchmark_config(benchmark_path: Path) -> Optional[dict]:
-    """Load benchmark configuration from project.yaml.
-
-    Args:
-        benchmark_path: Path to benchmark directory
-
-    Returns:
-        Configuration dict or None if loading fails
-    """
-    project_yaml = benchmark_path / "project.yaml"
-    if not project_yaml.exists():
-        logger.error(f"project.yaml not found: {project_yaml}")
-        return None
-
-    try:
-        with project_yaml.open() as f:
-            return yaml.safe_load(f)
-    except Exception as e:
-        logger.error(f"Failed to load project.yaml: {e}")
-        return None
+    finally:
+        engine.cleanup()
 
 
-def get_target_commit(benchmark_path: Path) -> Optional[str]:
-    """Get target commit for coverage collection.
-
-    For delta mode, uses ref_commit (vulnerable version).
-    For full mode, uses base_commit.
-
-    Args:
-        benchmark_path: Path to benchmark directory
-
-    Returns:
-        Commit hash or None if not found
-    """
-    meta_yaml = benchmark_path / ".aixcc" / "meta.yaml"
-    if not meta_yaml.exists():
-        logger.error(f"meta.yaml not found: {meta_yaml}")
-        return None
-
-    try:
-        with meta_yaml.open() as f:
-            meta = yaml.safe_load(f)
-
-        # Check for ref_commit (delta mode) or base_commit (full mode)
-        # Commits are nested inside delta_mode/full_mode sections
-        delta_mode = meta.get("delta_mode", {})
-        full_mode = meta.get("full_mode", {})
-
-        ref_commit = delta_mode.get("ref_commit")
-        base_commit = full_mode.get("base_commit") or delta_mode.get("base_commit")
-
-        # Prefer ref_commit for delta mode (vulnerable version)
-        return ref_commit or base_commit
-
-    except Exception as e:
-        logger.error(f"Failed to load meta.yaml: {e}")
-        return None
-
-
-def get_first_harness(benchmark_path: Path) -> Optional[str]:
-    """Get the first available harness name from benchmark.
-
-    Args:
-        benchmark_path: Path to benchmark directory
-
-    Returns:
-        Harness name or None if not found
-    """
-    meta_yaml = benchmark_path / ".aixcc" / "meta.yaml"
-    if not meta_yaml.exists():
-        return None
-
-    try:
-        with meta_yaml.open() as f:
-            meta = yaml.safe_load(f)
-
-        # Check both harness_files (new format) and harnesses (legacy)
-        harnesses = meta.get("harness_files", []) or meta.get("harnesses", [])
-        if harnesses and isinstance(harnesses, list):
-            first_harness = harnesses[0]
-            if isinstance(first_harness, dict):
-                return first_harness.get("name")
-            return str(first_harness)
-
-        return None
-
-    except Exception as e:
-        logger.warning(f"Failed to get harness from meta.yaml: {e}")
-        return None
-
-
-def output_results(
-    summary: CoverageSummary,
+def output_report(
     harness_name: str,
+    summary: CoverageSummary,
     output_path: Optional[Path],
     output_format: str,
 ) -> None:
-    """Output coverage results.
+    """Output coverage report.
 
     Args:
-        summary: Coverage summary
         harness_name: Name of the harness
+        summary: CoverageSummary with coverage statistics
         output_path: Optional output file path
         output_format: Output format (json, yaml, text)
     """
@@ -372,7 +251,7 @@ def output_results(
             f"Lines Covered: {summary.lines_covered}/{summary.lines_total} "
             f"({summary.lines_percent:.1f}%)\n"
             f"Functions Covered: {summary.functions_covered}/{summary.functions_total}\n"
-            f"Corpus Files: {summary.corpus_total}"
+            f"Corpus Files: {summary.corpus_total} (contributing: {summary.corpus_contributing})"
         )
 
     if output_path:
