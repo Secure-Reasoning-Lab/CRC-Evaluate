@@ -26,8 +26,8 @@ from crsbench.utils.logger import configure_logger, get_logger
 load_dotenv()
 
 # Worker lock file configuration
-DEFAULT_LOCK_PATH = "/tmp/crsbench-worker.lock"
-WORKER_LOCK_FILE = Path(os.environ.get("CRSBENCH_WORKER_LOCK_PATH", DEFAULT_LOCK_PATH))
+DEFAULT_LOCK_DIR = "/tmp"
+LOCK_DIR = Path(os.environ.get("CRSBENCH_WORKER_LOCK_DIR", DEFAULT_LOCK_DIR))
 
 try:
     import redis
@@ -41,29 +41,35 @@ logger = get_logger(__name__)
 
 
 @contextmanager
-def worker_lock():
+def worker_lock(worker_name: str):
     """Acquire an exclusive lock to ensure only one worker process runs at a time.
 
     This context manager uses file-based locking (fcntl) to prevent concurrent
     worker processes from running simultaneously. The lock is non-blocking and
     will raise BlockingIOError immediately if another worker is already running.
 
+    Args:
+        worker_name: Worker name used to generate unique lock file path
+
     Raises:
         BlockingIOError: If another worker process already holds the lock
         OSError: If lock file cannot be created or accessed
 
     Example:
-        with worker_lock():
-            # Only one worker process will execute this block at a time
+        with worker_lock("worker-0"):
+            # Only one worker process with this name will execute this block at a time
             worker.work()
     """
+    # Generate unique lock file path based on worker name
+    lock_file_path = LOCK_DIR / f"crsbench-worker-{worker_name}.lock"
+
     lock_file = None
     try:
         # Ensure parent directory exists
-        WORKER_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        lock_file_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Open lock file
-        lock_file = WORKER_LOCK_FILE.open("w")
+        lock_file = lock_file_path.open("w")
 
         # Acquire exclusive lock (non-blocking)
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -153,13 +159,14 @@ def main(
     # Single worker mode (use lock)
     if num_workers == 1:
         try:
-            with worker_lock():
+            with worker_lock(worker_name):
                 _run_worker(redis_host, experiment_name, worker_name)
             return 0
         except BlockingIOError:
+            lock_file_path = LOCK_DIR / f"crsbench-worker-{worker_name}.lock"
             logger.error("=" * 60)
             logger.error("Another worker is already running")
-            logger.error(f"Lock file: {WORKER_LOCK_FILE}")
+            logger.error(f"Lock file: {lock_file_path}")
             logger.error("=" * 60)
             return 4
 
@@ -359,7 +366,7 @@ def run_worker_continuous(
 
         # Acquire worker lock to ensure only one worker runs at a time
         try:
-            with worker_lock():
+            with worker_lock(worker_name):
                 redis_password = os.environ.get("REDIS_PASSWORD") or None
                 redis_connection = redis.Redis(host=redis_host, password=redis_password)
                 redis_connection.ping()
@@ -384,8 +391,9 @@ def run_worker_continuous(
                 )
 
         except BlockingIOError:
+            lock_file_path = LOCK_DIR / f"crsbench-worker-{worker_name}.lock"
             logger.error("Another worker is already running")
-            logger.error(f"Lock file: {WORKER_LOCK_FILE}")
+            logger.error(f"Lock file: {lock_file_path}")
             raise
 
         except KeyboardInterrupt:
