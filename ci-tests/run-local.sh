@@ -81,6 +81,8 @@ run_benchmark() {
         --format json || { rm -rf "$corpus_dir"; fail "Coverage failed for $benchmark"; }
 
     rm -rf "$corpus_dir"
+    uv run python3 ci-tests/check_ci_results.py coverage \
+        "coverage-$benchmark.json" || fail "Coverage check failed for $benchmark"
     success "Coverage passed"
     rm -f "coverage-$benchmark.json"
 
@@ -103,9 +105,9 @@ run_checks() {
     just format-check || fail "Format check failed"
     success "Format check passed"
 
-    echo "Running all tests..."
-    uv run pytest tests/ -v -n auto || fail "Tests failed"
-    success "All tests passed"
+    echo "Running unit tests (excluding integration)..."
+    uv run pytest tests/ -v -n auto -m "not integration" || fail "Tests failed"
+    success "Unit tests passed"
 
     success "Stage 1 completed!"
 }

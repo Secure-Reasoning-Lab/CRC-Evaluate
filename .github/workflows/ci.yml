@@ -67,8 +67,6 @@ jobs:
         run: |
           git config --global url."https://x-access-token:${{ secrets.TEAM_ATLANTA_PAT }}@github.com/Team-Atlanta/".insteadOf "git@github.com:Team-Atlanta/"
           # git config --global url."https://x-access-token:${{ secrets.TEAM_ATLANTA_PAT }}@github.com/Team-Atlanta/".insteadOf "https://github.com/Team-Atlanta/"
-          echo "=== Git config verification ==="
-          git config --global --list | grep -i insteadof | sed 's/x-access-token:[^@]*/x-access-token:***/'
 
       - uses: ./.github/actions/setup
         with:
@@ -76,10 +74,6 @@ jobs:
 
       - name: Verify ${{ matrix.project }}
         run: |
-          echo "=== Pre-verify git config check ==="
-          git config --global --list | grep -i insteadof | sed 's/x-access-token:[^@]*/x-access-token:***/' || echo "No insteadOf rules found!"
-          echo "HOME=$HOME"
-          cat ~/.gitconfig | sed 's/x-access-token:[^@]*/x-access-token:***/' || echo "No ~/.gitconfig"
           uv run crsbench verify benchmarks/${{ matrix.benchmark }} \
             --force-rebuild \
             --output verify-${{ matrix.project }}.json \
@@ -115,6 +109,8 @@ jobs:
           rm -rf "$CORPUS_DIR"
           echo "=== Coverage ${{ matrix.project }} Results ==="
           cat coverage-${{ matrix.project }}.json
+          uv run python3 ci-tests/check_ci_results.py coverage \
+            coverage-${{ matrix.project }}.json
 
   # Stage 3: E2E Bug Finding
   e2e-bugfinding:
@@ -133,8 +129,6 @@ jobs:
         run: |
           git config --global url."https://x-access-token:${{ secrets.TEAM_ATLANTA_PAT }}@github.com/Team-Atlanta/".insteadOf "git@github.com:Team-Atlanta/"
           # git config --global url."https://x-access-token:${{ secrets.TEAM_ATLANTA_PAT }}@github.com/Team-Atlanta/".insteadOf "https://github.com/Team-Atlanta/"
-          echo "=== Git config verification ==="
-          git config --global --list | grep -i insteadof | sed 's/x-access-token:[^@]*/x-access-token:***/'
 
       - uses: ./.github/actions/setup
         with:
