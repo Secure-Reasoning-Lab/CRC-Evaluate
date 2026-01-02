@@ -4,6 +4,7 @@ This module defines all job types that can be executed by workers in the distrib
 job queue system. Jobs are enqueued by the orchestrator and executed by workers.
 """
 
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict
@@ -169,9 +170,9 @@ def run_crs_trial(
             job.meta["mode"] = mode
             job.meta["trial_num"] = trial_num
             job.meta["started_at"] = start_time
-            # Get worker name from the job's worker_name attribute (set by RQ)
-            job.meta["worker_name"] = (
-                job.worker_name if hasattr(job, "worker_name") else "unknown"
+            # Get friendly worker name from environment (set by worker process)
+            job.meta["worker_name"] = os.environ.get(
+                "CRSBENCH_WORKER_DISPLAY_NAME", "unknown"
             )
             job.save_meta()
             logger.debug(f"Updated job metadata for job {job.id}")

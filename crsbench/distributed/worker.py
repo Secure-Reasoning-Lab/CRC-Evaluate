@@ -285,9 +285,12 @@ def _run_worker(redis_host: str, experiment_name: str, worker_name: str):
         # Set up RQ queue and worker (RQ 2.x requires explicit connection)
         queue_name = f"crsbench_{experiment_name}"
         queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
-        worker = rq.Worker(  # type: ignore[attr-defined]
-            [queue], connection=redis_connection, name=worker_name
-        )
+
+        # Store friendly worker name in environment for job metadata
+        os.environ["CRSBENCH_WORKER_DISPLAY_NAME"] = worker_name
+
+        # Let RQ generate unique worker name to avoid conflicts
+        worker = rq.Worker([queue], connection=redis_connection)  # type: ignore[attr-defined]
 
         logger.info(f"Worker '{worker_name}' started, listening on queue: {queue_name}")
         logger.info("Waiting for jobs...")
@@ -364,9 +367,12 @@ def run_worker_continuous(
                 # Set up RQ queue and worker (RQ 2.x requires explicit connection)
                 queue_name = f"crsbench_{experiment_name}"
                 queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
-                worker = rq.Worker(  # type: ignore[attr-defined]
-                    [queue], connection=redis_connection, name=worker_name
-                )
+
+                # Store friendly worker name in environment for job metadata
+                os.environ["CRSBENCH_WORKER_DISPLAY_NAME"] = worker_name
+
+                # Let RQ generate unique worker name to avoid conflicts
+                worker = rq.Worker([queue], connection=redis_connection)  # type: ignore[attr-defined]
 
                 logger.info(
                     f"Worker '{worker_name}' running in continuous mode on queue: {queue_name}"
