@@ -133,6 +133,17 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--queue-mode",
+        type=str,
+        choices=["fresh", "continue"],
+        required=False,
+        metavar="MODE",
+        help="Queue mode for distributed execution: 'fresh' purges existing jobs and starts from scratch, "
+        "'continue' resumes from existing state (skips existing trials, retries failed). "
+        "If not specified and stale jobs exist, you will be prompted interactively.",
+    )
+
+    parser.add_argument(
         "--oss-fuzz-path",
         type=str,
         required=False,
@@ -1379,6 +1390,50 @@ def _monitor_jobs_rich(
     return results
 
 
+def prompt_queue_mode(existing: dict[str, dict]) -> str:
+    """
+    Prompt user interactively for queue mode when stale jobs are detected.
+
+    Args:
+        existing: Dict of existing jobs by status (from get_existing_trials)
+
+    Returns:
+        str: User choice - "fresh", "continue", or "quit"
+    """
+    orphaned_count = 0
+    if existing["started"]:
+        # We'll check if there are workers later, for now just show the count
+        orphaned_count = len(existing["started"])
+
+    # Display existing jobs summary (interactive CLI output)
+    print("\n" + "=" * 60)  # noqa: T201
+    print("Existing jobs detected in queue:")  # noqa: T201
+    print(f"  Queued:   {len(existing['queued'])}")  # noqa: T201
+    if orphaned_count > 0:
+        print(f"  Started:  {len(existing['started'])} (may be orphaned)")  # noqa: T201
+    else:
+        print(f"  Started:  {len(existing['started'])}")  # noqa: T201
+    print(f"  Finished: {len(existing['finished'])}")  # noqa: T201
+    print(f"  Failed:   {len(existing['failed'])}")  # noqa: T201
+    print("=" * 60)  # noqa: T201
+    print("\nHow do you want to proceed?")  # noqa: T201
+    print("  [f] Fresh - purge all existing jobs and start from scratch")  # noqa: T201
+    print("  [c] Continue - skip existing, retry failed")  # noqa: T201
+    print("  [q] Quit - abort without changes")  # noqa: T201
+    print()  # noqa: T201
+
+    # Prompt for choice
+    while True:
+        choice = input("Choice [f/c/q]: ").strip().lower()
+        if choice == "f":
+            return "fresh"
+        if choice == "c":
+            return "continue"
+        if choice == "q":
+            return "quit"
+        print("Invalid choice. Please enter 'f', 'c', or 'q'.")  # noqa: T201
+
+
 def run_experiment_distributed(
     experiment_name: str,
     config,
@@ -1409,10 +1464,75 @@ def run_experiment_distributed(
     registry_dir = Path(config.registry_dir or "crses/registry").resolve()
     crs_configs_dir = Path(config.crs_configs_dir or "crses/configs").resolve()
 
+    # Check for existing jobs in queue (queue sanity check)
+    from crsbench.distributed.queue import (
+        clear_queue,
+        get_existing_trials,
+        handle_orphaned_jobs,
+        requeue_failed_jobs,
+    )
+
+    existing = get_existing_trials(queue)
+    has_existing = any(existing.values())
+
+    # Get queue mode from CLI args or prompt if stale jobs exist
+    queue_mode = args.queue_mode if hasattr(args, "queue_mode") else None
+
+    if has_existing and queue_mode is None:
+        # Stale jobs exist and no mode specified - prompt user
+        queue_mode = prompt_queue_mode(existing)
+        if queue_mode == "quit":
+            logger.info("Aborted by user")
+            return
+
+    # Default to fresh if no existing jobs and no mode specified
+    if queue_mode is None:
+        queue_mode = "fresh"
+
+    # Handle queue based on mode
+    if queue_mode == "fresh":
+        if has_existing:
+            total_existing = sum(len(v) for v in existing.values())
+            logger.warning(f"Purging {total_existing} existing jobs from queue")
+            clear_queue(queue)
+    elif queue_mode == "continue":
+        # Handle orphaned started jobs (move to failed + retry)
+        if existing["started"]:
+            orphaned_count = handle_orphaned_jobs(queue, existing["started"])
+            if orphaned_count > 0:
+                logger.info(f"Handled {orphaned_count} orphaned jobs")
+
+        # Requeue failed jobs (at end of queue - FIFO)
+        if existing["failed"]:
+            failed_count = requeue_failed_jobs(queue, list(existing["failed"].values()))
+            if failed_count > 0:
+                logger.info(f"Requeued {failed_count} failed jobs")
+
     # Generate trial matrix
     trials = generate_trial_matrix(
         benchmark_harnesses, crses, config, registry_dir, crs_configs_dir
     )
+
+    # Filter trials if in continue mode
+    if queue_mode == "continue" and has_existing:
+        # Build set of existing trial keys
+        existing_keys = set()
+        for status_dict in existing.values():
+            existing_keys.update(status_dict.keys())
+
+        # Filter out existing trials
+        original_count = len(trials)
+        trials = [
+            t
+            for t in trials
+            if f"{t.crs}:{t.benchmark_harness.name}:{t.benchmark_harness.harness.name}:{t.mode}:{t.trial_num}"
+            not in existing_keys
+        ]
+        skipped_count = original_count - len(trials)
+        if skipped_count > 0:
+            logger.info(
+                f"Skipping {skipped_count} existing trials, enqueueing {len(trials)} new trials"
+            )
 
     logger.info(f"Total trials to enqueue: {len(trials)}")
     logger.info(f"CRSes: {', '.join(crses)}")
