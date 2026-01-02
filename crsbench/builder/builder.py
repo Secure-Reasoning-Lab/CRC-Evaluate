@@ -81,12 +81,18 @@ class OSSFuzzBuilder:
         if not configs:
             return {}
 
-        # Filter out cached variants unless force_rebuild
+        # Clean up and filter cached variants
         configs_to_build = []
         results: dict[str, BuildResult] = {}
 
         for config in configs:
-            if not force_rebuild and self.infra.is_variant_built(config.variant_name):
+            if force_rebuild:
+                # Clean up existing build outputs for force rebuild
+                logger.info(f"Force rebuild: cleaning {config.variant_name}")
+                self.infra.cleanup_build_outputs(config.variant_name)
+                self.infra.cleanup_source(config.variant_name)
+                configs_to_build.append(config)
+            elif self.infra.is_variant_built(config.variant_name):
                 logger.info(f"Using cached build for {config.variant_name}")
                 build_path = self.infra.get_build_output_path(config.variant_name)
                 results[config.variant_name] = BuildResult.from_cache(
@@ -152,7 +158,14 @@ class OSSFuzzBuilder:
         Returns:
             Build result
         """
-        # Check cache
+        # Clean up existing build outputs if force rebuild
+        # This ensures stale data (coverage dumps, etc.) is removed
+        if force_rebuild:
+            logger.info(f"Force rebuild: cleaning {config.variant_name}")
+            self.infra.cleanup_build_outputs(config.variant_name)
+            self.infra.cleanup_source(config.variant_name)
+
+        # Check cache (skip if force_rebuild to ensure rebuild even if cleanup fails)
         if not force_rebuild and self.infra.is_variant_built(config.variant_name):
             logger.info(f"Using cached build for {config.variant_name}")
             build_path = self.infra.get_build_output_path(config.variant_name)
