@@ -35,6 +35,7 @@ def docker_available():
 
 pytestmark = [
     pytest.mark.integration,
+    pytest.mark.xdist_group("mock-c-build"),  # Run sequentially with other mock-c tests
     pytest.mark.skipif(not docker_available(), reason="Docker not available"),
 ]
 

@@ -242,6 +242,9 @@ def run_e2e_patch_verification(
 
 
 @pytest.mark.integration
+@pytest.mark.xdist_group(
+    "mock-c-build"
+)  # Run sequentially to avoid build cache conflicts
 class TestE2EPatchVerification:
     """E2E tests for patch verification across multiple projects."""
 

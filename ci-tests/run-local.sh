@@ -1,13 +1,16 @@
 #!/bin/bash
 # Run CI checks locally
 #
+# CI runs: checks → sanity (mock-c, mock-java in parallel) → e2e
+# Local adds: integration (libxml2, apache-commons-compress)
+#
 # Usage:
-#   ./ci-tests/run-local.sh              # Run Stage 1-2 (auto checks)
-#   ./ci-tests/run-local.sh all          # Run all stages
-#   ./ci-tests/run-local.sh checks       # Stage 1: typecheck, lint, format, test
+#   ./ci-tests/run-local.sh              # Run checks + sanity (matches CI)
+#   ./ci-tests/run-local.sh all          # Run all stages including integration
+#   ./ci-tests/run-local.sh checks       # Stage 1: typecheck, lint, format, unit tests
 #   ./ci-tests/run-local.sh sanity       # Stage 2: verify, patch-verify, coverage (mock-c + mock-java)
-#   ./ci-tests/run-local.sh integration  # Stage 3: real projects (libxml2, commons-compress)
-#   ./ci-tests/run-local.sh e2e          # Stage 4: bug finding E2E
+#   ./ci-tests/run-local.sh integration  # Local only: real projects (libxml2, commons-compress)
+#   ./ci-tests/run-local.sh e2e          # Stage 3: bug finding E2E
 
 set -e
 
@@ -33,6 +36,55 @@ success() {
 fail() {
     echo -e "${RED}$1${NC}"
     exit 1
+}
+
+# Run verify → patch-verify → coverage for a single benchmark
+run_benchmark() {
+    local benchmark=$1
+    echo -e "\n${YELLOW}--- $benchmark ---${NC}"
+
+    # Verify
+    echo "Verifying $benchmark..."
+    uv run crsbench verify "benchmarks/$benchmark" \
+        --force-rebuild \
+        --output "verify-$benchmark.json" \
+        --format json || fail "Verify failed for $benchmark"
+
+    uv run python3 ci-tests/check_ci_results.py verify \
+        "benchmarks/$benchmark" \
+        "verify-$benchmark.json" || fail "Verify check failed for $benchmark"
+    success "Verify passed"
+    rm -f "verify-$benchmark.json"
+
+    # Patch-verify
+    echo "Patch-verifying $benchmark..."
+    uv run crsbench patch-verify "benchmarks/$benchmark" \
+        --force-rebuild \
+        --output "patch-verify-$benchmark.json" \
+        --format json || fail "Patch-verify failed for $benchmark"
+
+    uv run python3 ci-tests/check_ci_results.py patch-verify \
+        "patch-verify-$benchmark.json" || fail "Patch-verify check failed for $benchmark"
+    success "Patch-verify passed"
+    rm -f "patch-verify-$benchmark.json"
+
+    # Coverage
+    echo "Coverage $benchmark..."
+    local corpus_dir
+    corpus_dir=$(mktemp -d)
+    head -c 64 /dev/urandom > "$corpus_dir/seed_input"
+
+    uv run crsbench coverage "benchmarks/$benchmark" \
+        --corpus-dir "$corpus_dir" \
+        --force-rebuild \
+        --output "coverage-$benchmark.json" \
+        --format json || { rm -rf "$corpus_dir"; fail "Coverage failed for $benchmark"; }
+
+    rm -rf "$corpus_dir"
+    success "Coverage passed"
+    rm -f "coverage-$benchmark.json"
+
+    success "$benchmark completed!"
 }
 
 # Stage 1: Basic checks
@@ -62,105 +114,25 @@ run_checks() {
 run_sanity() {
     run_stage "Stage 2: Sanity Checks (mock-c + mock-java)"
 
-    local benchmarks=(
-        "sanity-mock-c-delta-01"
-        "sanity-mock-java-delta-01"
-    )
-
-    # Verify
-    echo -e "\n${YELLOW}--- Verify ---${NC}"
-    for benchmark in "${benchmarks[@]}"; do
-        echo "Verifying $benchmark..."
-        uv run crsbench verify "benchmarks/$benchmark" \
-            --force-rebuild \
-            --output "verify-$benchmark.json" \
-            --format json || fail "Verify failed for $benchmark"
-
-        python3 ci-tests/check_ci_results.py verify \
-            "benchmarks/$benchmark" \
-            "verify-$benchmark.json" || fail "Verify check failed for $benchmark"
-        success "Verify $benchmark passed"
-        rm -f "verify-$benchmark.json"
-    done
-
-    # Patch-verify
-    echo -e "\n${YELLOW}--- Patch-Verify ---${NC}"
-    for benchmark in "${benchmarks[@]}"; do
-        echo "Patch-verifying $benchmark..."
-        uv run crsbench patch-verify "benchmarks/$benchmark" \
-            --force-rebuild \
-            --output "patch-verify-$benchmark.json" \
-            --format json || fail "Patch-verify failed for $benchmark"
-
-        python3 ci-tests/check_ci_results.py patch-verify \
-            "patch-verify-$benchmark.json" || fail "Patch-verify check failed for $benchmark"
-        success "Patch-verify $benchmark passed"
-        rm -f "patch-verify-$benchmark.json"
-    done
-
-    # Coverage
-    echo -e "\n${YELLOW}--- Coverage ---${NC}"
-    for benchmark in "${benchmarks[@]}"; do
-        echo "Coverage $benchmark..."
-
-        # Create temporary corpus directory with a random blob
-        local corpus_dir
-        corpus_dir=$(mktemp -d)
-        head -c 64 /dev/urandom > "$corpus_dir/seed_input"
-
-        uv run crsbench coverage "benchmarks/$benchmark" \
-            --corpus-dir "$corpus_dir" \
-            --force-rebuild \
-            --output "coverage-$benchmark.json" \
-            --format json || { rm -rf "$corpus_dir"; fail "Coverage failed for $benchmark"; }
-
-        rm -rf "$corpus_dir"
-        success "Coverage $benchmark passed"
-        rm -f "coverage-$benchmark.json"
-    done
+    run_benchmark "sanity-mock-c-delta-01"
+    run_benchmark "sanity-mock-java-delta-01"
 
     success "Stage 2 completed!"
 }
 
-# Stage 3: Integration tests (real projects)
+# Stage 3: Integration tests (real projects - local only, not in CI)
 run_integration() {
     run_stage "Stage 3: Integration Tests (Real Projects)"
 
-    local benchmarks=(
-        "afc-libxml2-full-01"
-        "afc-apache-commons-compress-delta-01"
-    )
-
-    for benchmark in "${benchmarks[@]}"; do
-        echo "Testing $benchmark..."
-
-        uv run crsbench verify "benchmarks/$benchmark" \
-            --force-rebuild \
-            --output "verify-results.json" \
-            --format json || fail "Verify failed for $benchmark"
-
-        python3 ci-tests/check_ci_results.py verify \
-            "benchmarks/$benchmark" \
-            "verify-results.json" || fail "Verify check failed for $benchmark"
-
-        uv run crsbench patch-verify "benchmarks/$benchmark" \
-            --force-rebuild \
-            --output "patch-verify-results.json" \
-            --format json || fail "Patch-verify failed for $benchmark"
-
-        python3 ci-tests/check_ci_results.py patch-verify \
-            "patch-verify-results.json" || fail "Patch-verify check failed for $benchmark"
-
-        success "$benchmark passed"
-        rm -f verify-results.json patch-verify-results.json
-    done
+    run_benchmark "afc-libxml2-full-01"
+    run_benchmark "afc-apache-commons-compress-delta-01"
 
     success "Stage 3 completed!"
 }
 
-# Stage 4: Bug finding E2E
+# Stage 3 (CI) / Stage 4 (local): Bug finding E2E
 run_e2e() {
-    run_stage "Stage 4: Bug Finding E2E"
+    run_stage "E2E Bug Finding"
 
     echo "Running E2E experiment..."
     uv run crsbench --experiment-config experiment-configs/coverage-e2e-test.yaml || fail "E2E failed"
@@ -178,7 +150,7 @@ run_e2e() {
         fail "No trial directories found"
     fi
 
-    success "Stage 4 completed!"
+    success "E2E completed!"
 }
 
 # Main
@@ -215,12 +187,12 @@ main() {
         *)
             echo "Usage: $0 [checks|sanity|integration|e2e|all]"
             echo ""
-            echo "  (default)    Run Stage 1-2 (auto checks)"
-            echo "  checks       Stage 1: typecheck, lint, format, test"
+            echo "  (default)    Run checks + sanity (matches CI)"
+            echo "  checks       Stage 1: typecheck, lint, format, unit tests"
             echo "  sanity       Stage 2: verify, patch-verify, coverage (mock-c + mock-java)"
-            echo "  integration  Stage 3: real projects (libxml2, commons-compress)"
-            echo "  e2e          Stage 4: bug finding E2E"
-            echo "  all          Run all stages"
+            echo "  integration  Local only: real projects (libxml2, commons-compress)"
+            echo "  e2e          Stage 3: bug finding E2E"
+            echo "  all          Run all stages including integration"
             exit 1
             ;;
     esac

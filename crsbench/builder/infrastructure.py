@@ -20,6 +20,35 @@ logger = get_logger(__name__)
 # Exit code constants from helper.py
 EXIT_CODE_TIMEOUT = 124  # Subprocess timeout in helper.py
 
+# Track initialized OSS-Fuzz paths to avoid redundant setup
+_initialized_oss_fuzz_paths: set[Path] = set()
+
+
+def ensure_oss_fuzz_ready(oss_fuzz_path: Path) -> None:
+    """Ensure OSS-Fuzz directory is ready for parallel builds.
+
+    Creates the build directory upfront to avoid race condition in helper.py
+    when multiple parallel builds try to create it simultaneously.
+
+    This function is idempotent. Concurrent calls are safe because
+    mkdir(exist_ok=True) handles races gracefully.
+
+    Note: Path tracking is per-process. With multiprocessing, each process
+    maintains its own cache, but this is harmless since mkdir is idempotent.
+
+    Args:
+        oss_fuzz_path: Path to oss-fuzz directory
+    """
+    path = Path(oss_fuzz_path).resolve()
+    if path in _initialized_oss_fuzz_paths:
+        return
+
+    # Create build directory to prevent TOCTOU race in helper.py
+    # where it checks existence then creates, causing FileExistsError
+    (path / "build").mkdir(exist_ok=True)
+    _initialized_oss_fuzz_paths.add(path)
+    logger.debug(f"Initialized OSS-Fuzz build directory: {path / 'build'}")
+
 
 class OSSFuzzInfrastructure:
     """Infrastructure for building OSS-Fuzz projects.
@@ -57,6 +86,9 @@ class OSSFuzzInfrastructure:
         self.work_dir = Path(work_dir).resolve() if work_dir else None
         self.projects_base = self.oss_fuzz_path / "projects"
         self._helper_script = self.oss_fuzz_path / "infra" / "helper.py"
+
+        # Ensure OSS-Fuzz is ready for parallel builds
+        ensure_oss_fuzz_ready(self.oss_fuzz_path)
 
         if not self._helper_script.exists():
             raise FileNotFoundError(
