@@ -101,8 +101,12 @@ class CoverageEngine:
         # Note: Strategy creation happens before parallel execution, so no lock needed
         self._strategies: dict[str, CoverageStrategy] = {}
 
-        # Thread safety for coverage merging
+        # Thread safety for coverage merging and line set tracking
         self._merge_lock = threading.Lock()
+
+        # Track distinct line sets for corpus_unique calculation
+        self._seen_line_sets: set[frozenset[tuple[str, int]]] = set()
+        self._covered_lines: set[tuple[str, int]] = set()
 
     def collect_coverage(
         self,
@@ -199,8 +203,8 @@ class CoverageEngine:
         )
 
         # Collect coverage in parallel (for per-file contribution tracking)
-        merged_coverage, success_count = self._collect_coverage_parallel(
-            corpus_files, strategy, harness_name
+        merged_coverage, success_count, contributing_count, unique_count = (
+            self._collect_coverage_parallel(corpus_files, strategy, harness_name)
         )
 
         # Run batch coverage to get totals from summary.json
@@ -208,13 +212,18 @@ class CoverageEngine:
 
         # Compute summary with totals
         summary = self._compute_summary(
-            merged_coverage, len(corpus_files), success_count, totals
+            merged_coverage,
+            len(corpus_files),
+            contributing_count,
+            unique_count,
+            totals,
         )
 
         logger.info(
             f"Coverage collection complete: {summary.lines_covered}/{summary.lines_total} lines, "
             f"{summary.functions_covered}/{summary.functions_total} functions, "
-            f"{success_count}/{len(corpus_files)} corpus processed"
+            f"{success_count}/{len(corpus_files)} corpus processed, "
+            f"{contributing_count} contributing, {unique_count} unique"
         )
 
         return CoverageReport(
@@ -227,7 +236,7 @@ class CoverageEngine:
         corpus_files: list[Path],
         strategy: CoverageStrategy,
         harness_name: str,
-    ) -> tuple[dict, int]:
+    ) -> tuple[dict, int, int, int]:
         """Collect coverage for multiple corpus files in parallel.
 
         Uses ThreadPoolExecutor with verify_workers to process corpus files
@@ -240,10 +249,16 @@ class CoverageEngine:
             harness_name: Name of the harness.
 
         Returns:
-            Tuple of (merged_coverage_dict, success_count).
+            Tuple of (merged_coverage_dict, success_count, contributing_count, unique_count).
         """
         merged: dict[str, dict] = {}
         success_count = 0
+        contributing_count = 0
+        unique_count = 0
+
+        # Reset tracking for this collection
+        self._seen_line_sets.clear()
+        self._covered_lines.clear()
 
         with ThreadPoolExecutor(max_workers=self.verify_workers) as executor:
             futures = {
@@ -262,6 +277,15 @@ class CoverageEngine:
                 try:
                     cov_data = future.result()
                     if cov_data:
+                        # Track contributing and unique corpus
+                        is_contributing, is_unique = self._track_corpus_coverage(
+                            cov_data
+                        )
+                        if is_contributing:
+                            contributing_count += 1
+                        if is_unique:
+                            unique_count += 1
+
                         self._merge_coverage_safe(merged, cov_data)
                         success_count += 1
                     completed += 1
@@ -273,7 +297,49 @@ class CoverageEngine:
                     logger.warning(f"Failed to collect coverage for {corpus_file}: {e}")
                     completed += 1
 
-        return merged, success_count
+        return merged, success_count, contributing_count, unique_count
+
+    def _track_corpus_coverage(self, cov_data: dict) -> tuple[bool, bool]:
+        """Track coverage for a corpus file and determine if it's contributing/unique.
+
+        Thread-safe method to track line sets and determine:
+        - is_contributing: Does this corpus add new lines?
+        - is_unique: Does this corpus have a distinct coverage profile?
+
+        Args:
+            cov_data: Coverage data for the corpus file.
+
+        Returns:
+            Tuple of (is_contributing, is_unique).
+        """
+        # Extract line set from coverage data
+        line_set: set[tuple[str, int]] = set()
+        for func_data in cov_data.values():
+            if isinstance(func_data, dict):
+                src = func_data.get("src", "")
+                for line in func_data.get("lines", []):
+                    line_set.add((src, line))
+
+        if not line_set:
+            return False, False
+
+        line_set_frozen = frozenset(line_set)
+
+        with self._merge_lock:
+            # Check if contributing (adds new lines)
+            new_lines = line_set - self._covered_lines
+            is_contributing = len(new_lines) > 0
+
+            # Check if unique (distinct profile)
+            is_unique = line_set_frozen not in self._seen_line_sets
+
+            # Update tracking
+            if is_contributing:
+                self._covered_lines.update(new_lines)
+            if is_unique:
+                self._seen_line_sets.add(line_set_frozen)
+
+        return is_contributing, is_unique
 
     def _collect_single_safe(
         self,
@@ -442,7 +508,8 @@ class CoverageEngine:
         self,
         merged_coverage: dict,
         corpus_count: int,
-        success_count: int,
+        contributing_count: int,
+        unique_count: int,
         totals: dict,
     ) -> CoverageSummary:
         """Compute coverage summary from merged data and totals.
@@ -453,7 +520,8 @@ class CoverageEngine:
         Args:
             merged_coverage: Merged coverage dict with line sets.
             corpus_count: Total number of corpus files.
-            success_count: Number of successfully processed corpus files.
+            contributing_count: Number of corpus files that add new lines.
+            unique_count: Number of corpus files with distinct coverage profiles.
             totals: Dict with totals from parse_llvm_cov_summary().
 
         Returns:
@@ -474,7 +542,8 @@ class CoverageEngine:
         return CoverageSummary(
             metric="line",
             corpus_total=corpus_count,
-            corpus_contributing=success_count,
+            corpus_contributing=contributing_count,
+            corpus_unique=unique_count,
             lines_covered=lines_covered,
             lines_total=lines_total,
             lines_percent=lines_percent,
