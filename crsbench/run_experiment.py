@@ -1289,6 +1289,13 @@ def run_experiment_distributed(
             mode=trial.mode,
             job_timeout=config.max_total_time,
             result_ttl=-1,  # Persist results forever
+            meta={
+                "crs": trial.crs,
+                "benchmark": bh.name,
+                "harness": bh.harness.name,
+                "mode": trial.mode,
+                "trial_num": trial.trial_num,
+            },
         )
         jobs.append(job)
         logger.debug(
