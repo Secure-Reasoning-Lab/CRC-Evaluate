@@ -121,7 +121,7 @@ class TestCoverageEngine:
             "functions_covered": 10,
             "functions_total": 20,
         }
-        summary = engine._compute_summary(merged, 10, 8, totals)
+        summary = engine._compute_summary(merged, 10, 8, 6, totals)
 
         # Values come from totals dict, not merged_coverage
         assert summary.lines_covered == 50
@@ -131,6 +131,7 @@ class TestCoverageEngine:
         assert summary.functions_total == 20
         assert summary.corpus_total == 10
         assert summary.corpus_contributing == 8
+        assert summary.corpus_unique == 6
 
     @patch("crsbench.evaluation.coverage.engine.parse_llvm_cov_summary")
     @patch("crsbench.evaluation.coverage.engine.create_coverage_strategy")
