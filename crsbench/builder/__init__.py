@@ -13,7 +13,7 @@ Main classes:
 
 from crsbench.builder.builder import OSSFuzzBuilder
 from crsbench.builder.executor import ParallelExecutor
-from crsbench.builder.infrastructure import OSSFuzzInfrastructure
+from crsbench.builder.infrastructure import OSSFuzzInfrastructure, ensure_oss_fuzz_ready
 from crsbench.builder.types import (
     BenchmarkMode,
     BuildConfig,
@@ -31,4 +31,5 @@ __all__ = [
     "OSSFuzzInfrastructure",
     "ParallelExecutor",
     "VariantType",
+    "ensure_oss_fuzz_ready",
 ]

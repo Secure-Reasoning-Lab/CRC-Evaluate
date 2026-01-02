@@ -216,7 +216,7 @@ class VerificationScores:
         }
 
 
-class TestMode(Enum):
+class UnitTestMode(Enum):
     """Unit test execution mode.
 
     - FULL: Run complete test suite

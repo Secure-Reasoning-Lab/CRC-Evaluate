@@ -788,7 +788,7 @@ class TestIntegrationWithSampleConfigs:
 # ============================================================================
 
 
-class TestModeSelection:
+class UnitTestModeSelection:
     """Test execution mode selection (local vs distributed)."""
 
     def test_should_use_distributed_mode_single_job(self):

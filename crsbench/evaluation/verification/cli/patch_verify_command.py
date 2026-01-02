@@ -45,7 +45,7 @@ from crsbench.evaluation.verification.models import (
     PatchInfo,
     PatchVerificationResult,
     PatchVerificationStatus,
-    TestMode,
+    UnitTestMode,
 )
 from crsbench.evaluation.verification.patch import PatchVerificationEngine
 from crsbench.utils.logger import get_logger
@@ -345,7 +345,7 @@ def run_patch_verify(args: argparse.Namespace) -> int:
     # Create patch verification engine
     engine = PatchVerificationEngine(
         oss_fuzz_path=oss_fuzz_path,
-        test_mode=TestMode(args.test_mode),
+        test_mode=UnitTestMode(args.test_mode),
         sanitizer=args.sanitizer,
         timeout=args.timeout,
         build_timeout=args.build_timeout,

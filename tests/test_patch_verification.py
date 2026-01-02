@@ -3,13 +3,12 @@
 Tests cover:
 - PatchVerificationStatus, PatchInfo, PatchVerificationResult models
 - GroundTruthConverter utility for converting benchmark patches to CRS format
-- PatchVerificationEngine (E2E tests require Docker)
+- PatchVerificationEngine unit tests (mocked)
 
-Test structure mirrors test_pov_verification.py for consistency.
+E2E tests are in test_patch_verification_integration.py.
 """
 
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Generator
 from dataclasses import dataclass
@@ -22,7 +21,7 @@ from crsbench.evaluation.verification.models import (
     PatchInfo,
     PatchVerificationResult,
     PatchVerificationStatus,
-    TestMode,
+    UnitTestMode,
 )
 from crsbench.utils.logger import get_logger
 
@@ -277,33 +276,6 @@ def get_benchmark_path() -> Path:
     return get_project_root() / "benchmarks" / BENCHMARK_NAME
 
 
-def is_docker_available() -> bool:
-    """Check if Docker daemon is running."""
-    try:
-        result = subprocess.run(
-            ["docker", "info"],
-            capture_output=True,
-            timeout=10,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
-
-
-def is_inc_build_image_available(project_name: str, sanitizer: str = "address") -> bool:
-    """Check if inc-build image is available locally."""
-    image_name = f"ghcr.io/team-atlanta/crsbench/{project_name}:inc-{sanitizer}"
-    try:
-        result = subprocess.run(
-            ["docker", "image", "inspect", image_name],
-            capture_output=True,
-            timeout=30,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
-
-
 # =============================================================================
 # Fixtures
 # =============================================================================
@@ -380,13 +352,13 @@ class TestPatchVerificationStatus:
         assert PatchVerificationStatus.ERROR.value == "error"
 
 
-class TestTestMode:
-    """Tests for TestMode enum."""
+class TestUnitTestMode:
+    """Tests for UnitTestMode enum."""
 
     def test_mode_values(self):
-        """Test TestMode enum values."""
-        assert TestMode.FULL.value == "full"
-        assert TestMode.RTS.value == "rts"
+        """Test UnitTestMode enum values."""
+        assert UnitTestMode.FULL.value == "full"
+        assert UnitTestMode.RTS.value == "rts"
 
 
 class TestPatchInfo:
@@ -660,114 +632,6 @@ class TestPatchDiscovery:
 
         assert len(discovered) == 1, "Should discover exactly one patch"
         assert discovered[0].pov_id == POV_ID
-
-
-# =============================================================================
-# E2E Tests (Require Docker)
-# =============================================================================
-
-
-class TestPatchVerificationE2E:
-    """E2E tests for patch verification.
-
-    These tests require Docker and inc-build images.
-    """
-
-    @pytest.mark.skipif(
-        not is_docker_available(),
-        reason="Docker daemon not available",
-    )
-    def test_ground_truth_patch_verification(
-        self,
-        benchmark_path: Path,
-        ground_truth_patch: Path,
-        pov_path: Path,
-    ):
-        """Test that ground truth patch passes verification.
-
-        This test validates that:
-        1. Patch can be applied successfully
-        2. Build succeeds after patching (using inc-build image)
-        3. POV no longer triggers the vulnerability
-
-        This is a sanity test - if this fails, the verification pipeline
-        or environment is broken.
-        """
-        import os
-
-        from crsbench.evaluation.verification.patch import PatchVerificationEngine
-
-        # Check if inc-build image is available
-        if not is_inc_build_image_available(BENCHMARK_NAME):
-            pytest.skip(
-                f"Inc-build image not available for {BENCHMARK_NAME}. "
-                "Pull with: docker pull ghcr.io/team-atlanta/crsbench/"
-                f"{BENCHMARK_NAME}:inc-address"
-            )
-
-        # Get oss-fuzz path
-        oss_fuzz_path = None
-        if os.environ.get("OSS_FUZZ_HOME"):
-            oss_fuzz_path = Path(os.environ["OSS_FUZZ_HOME"])
-        else:
-            candidates = [
-                get_project_root().parent / "oss-fuzz",
-                Path.home() / "oss-fuzz",
-                Path("/oss-fuzz"),
-            ]
-            for candidate in candidates:
-                if candidate.exists():
-                    oss_fuzz_path = candidate
-                    break
-
-        if not oss_fuzz_path or not oss_fuzz_path.exists():
-            pytest.skip("OSS-Fuzz directory not found. Set OSS_FUZZ_HOME env var.")
-
-        # Ensure project is symlinked to oss-fuzz/projects/
-        oss_fuzz_project_path = oss_fuzz_path / "projects" / BENCHMARK_NAME
-        if not oss_fuzz_project_path.exists():
-            pytest.skip(
-                f"Project not linked to oss-fuzz. Run: "
-                f"ln -s {benchmark_path} {oss_fuzz_project_path}"
-            )
-
-        # Create engine
-        engine = PatchVerificationEngine(
-            oss_fuzz_path=oss_fuzz_path,
-            test_mode=TestMode.FULL,
-            sanitizer="address",
-            timeout=120,
-            build_timeout=1200,
-        )
-
-        try:
-            # Create patch info from ground truth
-            patch = PatchInfo(
-                patch_id="patch_0",
-                pov_id=POV_ID,
-                patch_path=ground_truth_patch,
-            )
-
-            # Run verification
-            result = engine.verify_patch(
-                benchmark_path=benchmark_path,
-                patch=patch,
-                harness=HARNESS_NAME,
-                pov_path=pov_path,
-            )
-
-            # Assert verification passed
-            assert result.status == PatchVerificationStatus.VALID, (
-                f"Ground truth patch verification failed.\n"
-                f"Status: {result.status}\n"
-                f"Details: {result.details}"
-            )
-
-            # Additional assertions
-            assert result.pov_test_passed, "POV test should pass for ground truth patch"
-
-        finally:
-            engine.cleanup()
 
 
 # =============================================================================

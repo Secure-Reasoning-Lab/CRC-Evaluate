@@ -11,7 +11,7 @@ Requirements:
 - sanity-mock-c-delta-01 benchmark must be available
 
 These tests are slow (~20-30s) due to Docker builds.
-Mark with @pytest.mark.slow to skip in quick test runs.
+Mark with @pytest.mark.integration to skip in unit test runs.
 """
 
 import subprocess
@@ -34,7 +34,8 @@ def docker_available():
 
 
 pytestmark = [
-    pytest.mark.slow,
+    pytest.mark.integration,
+    pytest.mark.xdist_group("mock-c-build"),  # Run sequentially with other mock-c tests
     pytest.mark.skipif(not docker_available(), reason="Docker not available"),
 ]
 

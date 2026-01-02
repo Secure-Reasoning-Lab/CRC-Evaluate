@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Stage 1: Basic checks
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - uses: ./.github/actions/setup
+        with:
+          all-extras: true
+
+      - name: Type check
+        run: just typecheck
+
+      - name: Lint
+        run: just lint
+
+      - name: Format check
+        run: just format-check
+
+      - name: Run unit tests
+        run: uv run pytest tests/ -v -n auto -m "not integration"
+
+  # Stage 2: Sanity checks with mock-c and mock-java (matrix - parallel per project)
+  sanity:
+    name: Sanity ${{ matrix.project }}
+    needs: [checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        project:
+          - mock-c
+          - mock-java
+        include:
+          - project: mock-c
+            benchmark: sanity-mock-c-delta-01
+          - project: mock-java
+            benchmark: sanity-mock-java-delta-01
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          token: ${{ secrets.PAT_TOKEN }}
+          persist-credentials: false
+
+      - name: Configure Team-Atlanta access
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.TEAM_ATLANTA_PAT }}@github.com/Team-Atlanta/".insteadOf "git@github.com:Team-Atlanta/"
+          # git config --global url."https://x-access-token:${{ secrets.TEAM_ATLANTA_PAT }}@github.com/Team-Atlanta/".insteadOf "https://github.com/Team-Atlanta/"
+
+      - uses: ./.github/actions/setup
+        with:
+          require-docker: true
+
+      - name: Verify ${{ matrix.project }}
+        run: |
+          uv run crsbench verify benchmarks/${{ matrix.benchmark }} \
+            --force-rebuild \
+            --output verify-${{ matrix.project }}.json \
+            --format json
+          echo "=== Verify ${{ matrix.project }} Results ==="
+          cat verify-${{ matrix.project }}.json
+          uv run python3 ci-tests/check_ci_results.py verify \
+            benchmarks/${{ matrix.benchmark }} \
+            verify-${{ matrix.project }}.json
+
+      - name: Patch-verify ${{ matrix.project }}
+        run: |
+          uv run crsbench patch-verify benchmarks/${{ matrix.benchmark }} \
+            --force-rebuild \
+            --output patch-verify-${{ matrix.project }}.json \
+            --format json
+          echo "=== Patch-verify ${{ matrix.project }} Results ==="
+          cat patch-verify-${{ matrix.project }}.json
+          uv run python3 ci-tests/check_ci_results.py patch-verify \
+            patch-verify-${{ matrix.project }}.json
+
+      - name: Coverage ${{ matrix.project }}
+        run: |
+          CORPUS_DIR=$(mktemp -d)
+          head -c 64 /dev/urandom > "$CORPUS_DIR/seed_input"
+
+          uv run crsbench coverage benchmarks/${{ matrix.benchmark }} \
+            --corpus-dir "$CORPUS_DIR" \
+            --force-rebuild \
+            --output coverage-${{ matrix.project }}.json \
+            --format json
+
+          rm -rf "$CORPUS_DIR"
+          echo "=== Coverage ${{ matrix.project }} Results ==="
+          cat coverage-${{ matrix.project }}.json
+          uv run python3 ci-tests/check_ci_results.py coverage \
+            coverage-${{ matrix.project }}.json
+
+  # Stage 3: E2E Bug Finding
+  # NOTE: Disabled due to disk space limitations on GitHub Actions runners.
+  # LLVM checkout (~2GB) + build artifacts exceed available space.
+  # Run E2E locally with: ./ci-tests/run-local.sh e2e
+  # e2e-bugfinding:
+  #   name: E2E Bug Finding
+  #   needs: [sanity]
+  #   runs-on: ubuntu-latest
+  #   timeout-minutes: 30
+  #   steps:
+  #     - uses: actions/checkout@v5
+  #       with:
+  #         submodules: recursive
+  #         token: ${{ secrets.PAT_TOKEN }}
+  #         persist-credentials: false
+  #
+  #     - name: Configure Team-Atlanta access
+  #       run: |
+  #         git config --global url."https://x-access-token:${{ secrets.TEAM_ATLANTA_PAT }}@github.com/Team-Atlanta/".insteadOf "git@github.com:Team-Atlanta/"
+  #
+  #     - uses: ./.github/actions/setup
+  #       with:
+  #         require-docker: true
+  #
+  #     - name: Run E2E experiment
+  #       run: uv run crsbench --experiment-config experiment-configs/coverage-e2e-test.yaml
+  #
+  #     - name: Check E2E results
+  #       run: |
+  #         RESULT_DIR="/tmp/crsbench/experiments/coverage-e2e-test"
+  #         TRIAL_COUNT=$(find "$RESULT_DIR" -type d -name "trial-*" | wc -l)
+  #         if [ "$TRIAL_COUNT" -eq 0 ]; then exit 1; fi
