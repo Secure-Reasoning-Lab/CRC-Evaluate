@@ -72,15 +72,25 @@ class TestExitCodeHandling:
         )
         assert result is False
 
-    def test_subprocess_timeout_returns_false(self, infra):
-        """Subprocess timeout (HANG) → False."""
-        # Use short timeout to trigger subprocess timeout
-        result = infra.reproduce(
-            project_name="test",
-            harness="fuzz",
-            pov_data=b"HANG",
-            timeout=1,
-        )
+
+class TestTimeoutHandling:
+    """Test subprocess timeout handling (mocked to avoid 30s grace period wait)."""
+
+    def test_subprocess_timeout_returns_false(self, mock_oss_fuzz):
+        """Subprocess TimeoutExpired → False."""
+        import subprocess
+        from unittest.mock import patch
+
+        infra = OSSFuzzInfrastructure(mock_oss_fuzz)
+
+        with patch("crsbench.builder.infrastructure.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd="test", timeout=1)
+            result = infra.reproduce(
+                project_name="test",
+                harness="fuzz",
+                pov_data=b"HANG",
+                timeout=1,
+            )
         assert result is False
 
 
