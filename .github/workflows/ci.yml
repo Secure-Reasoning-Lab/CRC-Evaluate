@@ -45,12 +45,9 @@ jobs:
         run: uv run pytest tests/ -v -n auto -m "not integration"
 
   # Stage 2: Sanity checks with mock-c and mock-java (3 parallel jobs)
-  # TODO: Re-enable when Team-Atlanta repo access is resolved (fork to sslab-gatech or deploy keys)
-  # Currently disabled due to cross-org PAT limitations (see issue #16)
   sanity-verify:
     name: Sanity Verify
     needs: [checks]
-    if: false  # Disabled until Team-Atlanta repo access is resolved
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -58,6 +55,10 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Configure Team-Atlanta access
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.TEAM_ATLANTA_PAT }}@github.com/Team-Atlanta/".insteadOf "git@github.com:Team-Atlanta/"
 
       - uses: ./.github/actions/setup
         with:
@@ -90,7 +91,6 @@ jobs:
   sanity-patch-verify:
     name: Sanity Patch-Verify
     needs: [checks]
-    if: false  # Disabled until Team-Atlanta repo access is resolved
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -98,6 +98,10 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Configure Team-Atlanta access
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.TEAM_ATLANTA_PAT }}@github.com/Team-Atlanta/".insteadOf "git@github.com:Team-Atlanta/"
 
       - uses: ./.github/actions/setup
         with:
@@ -126,7 +130,6 @@ jobs:
   sanity-coverage:
     name: Sanity Coverage
     needs: [checks]
-    if: false  # Disabled until Team-Atlanta repo access is resolved
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -134,6 +137,10 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Configure Team-Atlanta access
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.TEAM_ATLANTA_PAT }}@github.com/Team-Atlanta/".insteadOf "git@github.com:Team-Atlanta/"
 
       - uses: ./.github/actions/setup
         with:
@@ -172,11 +179,9 @@ jobs:
           cat coverage-mock-java.json
 
   # Stage 3: Integration tests with real projects
-  # TODO: Re-enable when Team-Atlanta repo access is resolved
   integration:
     name: Integration ${{ matrix.benchmark }}
     needs: [checks]
-    if: false  # Disabled until Team-Atlanta repo access is resolved
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -190,6 +195,10 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Configure Team-Atlanta access
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.TEAM_ATLANTA_PAT }}@github.com/Team-Atlanta/".insteadOf "git@github.com:Team-Atlanta/"
 
       - uses: ./.github/actions/setup
         with:
@@ -218,11 +227,9 @@ jobs:
           python3 ci-tests/check_ci_results.py patch-verify patch-verify-results.json
 
   # Stage 4: Bug Finding E2E
-  # TODO: Re-enable when Team-Atlanta repo access is resolved
   e2e-bugfinding:
     name: E2E Bug Finding
     needs: [checks]
-    if: false  # Disabled until Team-Atlanta repo access is resolved
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -230,6 +237,10 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Configure Team-Atlanta access
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.TEAM_ATLANTA_PAT }}@github.com/Team-Atlanta/".insteadOf "git@github.com:Team-Atlanta/"
 
       - uses: ./.github/actions/setup
         with:
