@@ -420,6 +420,17 @@ class CoverageCollector:
         """
         return self.store.get_summary()
 
+    def get_unique_corpus_count(self) -> int:
+        """Get count of corpus files with distinct coverage profiles.
+
+        Returns the number of unique line sets seen, which corresponds
+        to the number of files saved in corpus_unique/.
+
+        Returns:
+            Count of distinct corpus files.
+        """
+        return len(self._seen_line_sets)
+
     def reset_snapshot_tracking(self):
         """Reset snapshot delta tracking.
 
