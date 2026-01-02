@@ -251,7 +251,8 @@ def output_report(
             f"Lines Covered: {summary.lines_covered}/{summary.lines_total} "
             f"({summary.lines_percent:.1f}%)\n"
             f"Functions Covered: {summary.functions_covered}/{summary.functions_total}\n"
-            f"Corpus Files: {summary.corpus_total} (contributing: {summary.corpus_contributing})"
+            f"Corpus Files: {summary.corpus_total} "
+            f"(contributing: {summary.corpus_contributing}, unique: {summary.corpus_unique})"
         )
 
     if output_path:
@@ -277,7 +278,11 @@ def print_summary(summary: CoverageSummary, harness_name: str) -> None:
         f"({summary.lines_percent:.1f}%)"
     )
     logger.info(f"Functions: {summary.functions_covered}/{summary.functions_total}")
-    logger.info(f"Corpus files: {summary.corpus_total}")
+    logger.info(
+        f"Corpus: {summary.corpus_total} total, "
+        f"{summary.corpus_contributing} contributing, "
+        f"{summary.corpus_unique} unique"
+    )
     logger.info("=" * 50)
 
 

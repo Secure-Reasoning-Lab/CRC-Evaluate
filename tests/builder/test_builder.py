@@ -1,6 +1,7 @@
 """Tests for the OSSFuzzBuilder module."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from crsbench.builder import (
@@ -372,6 +373,184 @@ class TestOSSFuzzBuilder:
 
         assert builder.is_variant_built(variant_name)
         assert not builder.is_variant_built("nonexistent-variant")
+
+
+class TestOSSFuzzBuilderForceRebuild:
+    """Tests for force_rebuild cleanup behavior in OSSFuzzBuilder."""
+
+    @pytest.fixture
+    def mock_oss_fuzz_path(self, tmp_path: Path) -> Path:
+        """Create a mock oss-fuzz directory."""
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+        (oss_fuzz / "infra").mkdir()
+        (oss_fuzz / "infra" / "helper.py").touch()
+        (oss_fuzz / "projects").mkdir()
+        (oss_fuzz / "build" / "out").mkdir(parents=True)
+        return oss_fuzz
+
+    @pytest.fixture
+    def builder(self, mock_oss_fuzz_path: Path) -> OSSFuzzBuilder:
+        """Create builder with mocked infrastructure."""
+        return OSSFuzzBuilder(mock_oss_fuzz_path, max_workers=1)
+
+    @pytest.fixture
+    def config(self, tmp_path: Path) -> BuildConfig:
+        """Create a sample build config."""
+        return BuildConfig(
+            benchmark_name="test",
+            variant_type=VariantType.DELTA_BASE,
+            commit="abc123",
+            main_repo="https://example.com",
+            benchmark_path=tmp_path / "benchmark",
+        )
+
+    def test_build_single_force_rebuild_calls_cleanup(
+        self, builder: OSSFuzzBuilder, config: BuildConfig
+    ):
+        """Test that build_single with force_rebuild=True calls cleanup methods."""
+        with (
+            patch.object(
+                builder.infra, "cleanup_build_outputs"
+            ) as mock_cleanup_outputs,
+            patch.object(builder.infra, "cleanup_source") as mock_cleanup_source,
+            patch.object(builder.infra, "is_variant_built", return_value=True),
+            patch.object(
+                builder.executor,
+                "execute_single",
+                return_value=BuildResult.from_cache(config, Path("/tmp/build")),
+            ),
+        ):
+            builder.build_single(config, force_rebuild=True)
+
+            # Cleanup should be called
+            mock_cleanup_outputs.assert_called_once_with(config.variant_name)
+            mock_cleanup_source.assert_called_once_with(config.variant_name)
+
+    def test_build_single_no_force_rebuild_skips_cleanup(
+        self, builder: OSSFuzzBuilder, config: BuildConfig
+    ):
+        """Test that build_single without force_rebuild does not call cleanup."""
+        with (
+            patch.object(
+                builder.infra, "cleanup_build_outputs"
+            ) as mock_cleanup_outputs,
+            patch.object(builder.infra, "cleanup_source") as mock_cleanup_source,
+            patch.object(builder.infra, "is_variant_built", return_value=True),
+            patch.object(
+                builder.infra, "get_build_output_path", return_value=Path("/tmp/build")
+            ),
+        ):
+            builder.build_single(config, force_rebuild=False)
+
+            # Cleanup should NOT be called
+            mock_cleanup_outputs.assert_not_called()
+            mock_cleanup_source.assert_not_called()
+
+    def test_build_single_force_rebuild_bypasses_cache(
+        self, builder: OSSFuzzBuilder, config: BuildConfig
+    ):
+        """Test that force_rebuild=True bypasses cache even if variant is built."""
+        with (
+            patch.object(builder.infra, "cleanup_build_outputs"),
+            patch.object(builder.infra, "cleanup_source"),
+            patch.object(builder.infra, "is_variant_built", return_value=True),
+            patch.object(
+                builder.executor,
+                "execute_single",
+                return_value=BuildResult(
+                    config=config,
+                    success=True,
+                    variant_name=config.variant_name,
+                    build_path=Path("/tmp/build"),
+                ),
+            ) as mock_execute,
+        ):
+            result = builder.build_single(config, force_rebuild=True)
+
+            # execute_single should be called (not cache)
+            mock_execute.assert_called_once()
+            assert result.success
+            assert not result.cached
+
+    def test_build_variants_force_rebuild_calls_cleanup_for_all(
+        self, builder: OSSFuzzBuilder, tmp_path: Path
+    ):
+        """Test that build_variants with force_rebuild=True calls cleanup for all."""
+        configs = [
+            BuildConfig(
+                benchmark_name="test",
+                variant_type=VariantType.DELTA_BASE,
+                commit="abc",
+                main_repo="https://example.com",
+                benchmark_path=tmp_path / "benchmark",
+            ),
+            BuildConfig(
+                benchmark_name="test",
+                variant_type=VariantType.DELTA_REF,
+                commit="def",
+                main_repo="https://example.com",
+                benchmark_path=tmp_path / "benchmark",
+            ),
+        ]
+
+        with (
+            patch.object(
+                builder.infra, "cleanup_build_outputs"
+            ) as mock_cleanup_outputs,
+            patch.object(builder.infra, "cleanup_source") as mock_cleanup_source,
+            patch.object(builder, "_ensure_repos_cached"),
+            patch.object(
+                builder.executor,
+                "execute_builds",
+                return_value={
+                    c.variant_name: BuildResult(
+                        config=c,
+                        success=True,
+                        variant_name=c.variant_name,
+                        build_path=Path("/tmp/build"),
+                    )
+                    for c in configs
+                },
+            ),
+        ):
+            builder.build_variants(configs, force_rebuild=True)
+
+            # Cleanup should be called for all configs
+            assert mock_cleanup_outputs.call_count == 2
+            assert mock_cleanup_source.call_count == 2
+
+    def test_build_variants_no_force_rebuild_uses_cache(
+        self, builder: OSSFuzzBuilder, tmp_path: Path
+    ):
+        """Test that build_variants without force_rebuild uses cached results."""
+        configs = [
+            BuildConfig(
+                benchmark_name="test",
+                variant_type=VariantType.DELTA_BASE,
+                commit="abc",
+                main_repo="https://example.com",
+                benchmark_path=tmp_path / "benchmark",
+            ),
+        ]
+
+        with (
+            patch.object(
+                builder.infra, "cleanup_build_outputs"
+            ) as mock_cleanup_outputs,
+            patch.object(builder.infra, "cleanup_source") as mock_cleanup_source,
+            patch.object(builder.infra, "is_variant_built", return_value=True),
+            patch.object(
+                builder.infra, "get_build_output_path", return_value=Path("/tmp/build")
+            ),
+        ):
+            results = builder.build_variants(configs, force_rebuild=False)
+
+            # Cleanup should NOT be called
+            mock_cleanup_outputs.assert_not_called()
+            mock_cleanup_source.assert_not_called()
+            # Should return cached result
+            assert results[configs[0].variant_name].cached
 
 
 class TestBuildConfigVariantNames:

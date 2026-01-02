@@ -260,8 +260,8 @@ class LLVMCovLineStrategy(CoverageStrategy):
     def collect_batch_coverage(self, harness_path: Path, corpus_dir: Path) -> Path:
         """Collect coverage for all corpus files.
 
-        Runs: python3 infra/helper.py coverage --corpus-dir=<dir>
-              --fuzz-target=<target> --no-serve <project>
+        Uses OSSFuzzInfrastructure.run_coverage() for unified coverage collection.
+        This ensures consistent ownership fixes and output handling.
 
         Args:
             harness_path: Path to the fuzz target (name only, e.g., "fuzz_target").
@@ -291,63 +291,29 @@ class LLVMCovLineStrategy(CoverageStrategy):
             f"Collecting coverage for {target_name} with corpus from {corpus_dir}..."
         )
 
-        args = [
-            "coverage",
-            "--corpus-dir",
-            str(corpus_dir.absolute()),
-            "--fuzz-target",
-            target_name,
-            "--no-serve",
-            self.project_name,
-        ]
+        # Use work_dir for batch coverage output
+        batch_output_dir = self._work_dir / "batch_coverage"
 
-        stdout, stderr, returncode, timed_out = self._run_helper_command(
-            args,
+        # Run coverage using unified infrastructure
+        success, output_dir = self._infra.run_coverage(
+            project_name=self.project_name,
+            harness=target_name,
+            corpus_dir=corpus_dir,
+            output_dir=batch_output_dir,
             timeout=7200,  # 2 hours for coverage collection
         )
 
-        if timed_out:
-            raise CoverageStrategyError(
-                f"Coverage collection timed out for {target_name}"
-            )
+        if not success:
+            raise CoverageStrategyError(f"Coverage collection failed for {target_name}")
 
-        if returncode != 0:
-            raise CoverageStrategyError(
-                f"Coverage collection failed for {target_name}. "
-                f"Exit code: {returncode}\n"
-                f"stdout: {stdout[:2000]}...\n"
-                f"stderr: {stderr[:2000]}..."
-            )
-
-        # Find summary.json in the output directory
-        # OSS-Fuzz puts it in: build/out/<project>/report/linux/summary.json
-        summary_path = (
-            self.oss_fuzz_path
-            / "build"
-            / "out"
-            / self.project_name
-            / "report"
-            / "linux"
-            / "summary.json"
-        )
-
-        if not summary_path.exists():
-            # Try alternative location for per-target reports
-            summary_path = (
-                self.oss_fuzz_path
-                / "build"
-                / "out"
-                / self.project_name
-                / "report_target"
-                / target_name
-                / "linux"
-                / "summary.json"
-            )
+        # Find summary.json in the custom output directory
+        # With --coverage-output-dir: output_dir/report/linux/summary.json
+        summary_path = output_dir / "report" / "linux" / "summary.json"
 
         if not summary_path.exists():
             raise CoverageStrategyError(
                 f"Coverage summary not found. Expected at:\n"
-                f"  {self.oss_fuzz_path / 'build' / 'out' / self.project_name / 'report' / 'linux' / 'summary.json'}\n"
+                f"  {summary_path}\n"
                 f"Check helper.py coverage output for errors."
             )
 
@@ -957,8 +923,8 @@ class JaCoCoLineStrategy(CoverageStrategy):
     def collect_batch_coverage(self, harness_path: Path, corpus_dir: Path) -> Path:
         """Collect coverage for all corpus files.
 
-        For Java projects, runs the fuzz target with JaCoCo agent,
-        generates .exec files, and converts to summary.json format.
+        Uses OSSFuzzInfrastructure.run_coverage() for unified coverage collection.
+        For Java projects, this runs the fuzz target with JaCoCo agent.
 
         Args:
             harness_path: Path to the fuzz target (name only, e.g., "FuzzTarget").
@@ -988,45 +954,24 @@ class JaCoCoLineStrategy(CoverageStrategy):
             f"with corpus from {corpus_dir}..."
         )
 
-        args = [
-            "coverage",
-            "--corpus-dir",
-            str(corpus_dir.absolute()),
-            "--fuzz-target",
-            target_name,
-            "--no-serve",
-            self.project_name,
-        ]
+        # Use work_dir for batch coverage output
+        batch_output_dir = self._work_dir / "batch_coverage"
 
-        stdout, stderr, returncode, timed_out = self._run_helper_command(
-            args,
+        # Run coverage using unified infrastructure
+        success, output_dir = self._infra.run_coverage(
+            project_name=self.project_name,
+            harness=target_name,
+            corpus_dir=corpus_dir,
+            output_dir=batch_output_dir,
             timeout=7200,  # 2 hours for coverage collection
         )
 
-        if timed_out:
-            raise CoverageStrategyError(
-                f"Coverage collection timed out for {target_name}"
-            )
+        if not success:
+            raise CoverageStrategyError(f"Coverage collection failed for {target_name}")
 
-        if returncode != 0:
-            raise CoverageStrategyError(
-                f"Coverage collection failed for {target_name}. "
-                f"Exit code: {returncode}\n"
-                f"stdout: {stdout[:2000]}...\n"
-                f"stderr: {stderr[:2000]}..."
-            )
-
-        # Find summary.json in the output directory
-        # For Java, OSS-Fuzz puts it in: build/out/<project>/report/linux/summary.json
-        summary_path = (
-            self.oss_fuzz_path
-            / "build"
-            / "out"
-            / self.project_name
-            / "report"
-            / "linux"
-            / "summary.json"
-        )
+        # Find summary.json in the custom output directory
+        # With --coverage-output-dir: output_dir/report/linux/summary.json
+        summary_path = output_dir / "report" / "linux" / "summary.json"
 
         if not summary_path.exists():
             raise CoverageStrategyError(

@@ -927,13 +927,19 @@ class OSSFuzzInfrastructure:
                 logger.warning(f"Coverage report not found: {report_dir}")
                 return False, output_dir
 
+            # Fix ownership of coverage output (Docker creates root-owned files)
+            # Note: build output ownership is already fixed at build time
+            fix_docker_ownership(output_dir)
+
             return True, output_dir
 
         except subprocess.TimeoutExpired:
             logger.warning(f"Coverage timeout for {project_name}/{harness}")
+            fix_docker_ownership(output_dir)
             return False, output_dir
         except Exception as e:
             logger.error(f"Coverage error for {project_name}/{harness}: {e}")
+            fix_docker_ownership(output_dir)
             return False, output_dir
 
     # =========================================================================

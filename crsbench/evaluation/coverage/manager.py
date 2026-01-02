@@ -95,8 +95,10 @@ class CoverageManager:
         self._lock = threading.Lock()
 
         # Time-based saturation detection state
+        # Saturation is based on unique corpus count (distinct coverage profiles)
         self._last_new_coverage_time = self.trial_start_time
-        self._last_lines_covered = 0
+        self._last_unique_corpus_count = 0
+        self._last_lines_covered = 0  # For snapshot stats only
         self._saturation_detected = False
 
         logger.info(
@@ -187,7 +189,7 @@ class CoverageManager:
 
         # Thread-safe state update and snapshot creation
         with self._lock:
-            # Calculate new lines since last snapshot
+            # Calculate new lines since last snapshot (for stats)
             new_lines_count = summary.lines_covered - self._last_lines_covered
 
             # Calculate new corpus since last snapshot
@@ -196,8 +198,13 @@ class CoverageManager:
             )
             new_corpus_count = summary.corpus_total - last_corpus_count
 
-            # Update time-based saturation tracking
-            if new_lines_count > 0:
+            # Get unique corpus count (distinct coverage profiles)
+            unique_corpus_count = self.collector.get_unique_corpus_count()
+            new_unique_corpus = unique_corpus_count - self._last_unique_corpus_count
+
+            # Update time-based saturation tracking based on unique corpus
+            # Reset timer when new distinct coverage profiles are found
+            if new_unique_corpus > 0:
                 self._last_new_coverage_time = timestamp
 
             # Check for saturation using time-based detection
@@ -216,6 +223,7 @@ class CoverageManager:
             )
 
             # Update state
+            self._last_unique_corpus_count = unique_corpus_count
             self._last_lines_covered = summary.lines_covered
             self.snapshots.append(snapshot)
 
@@ -223,7 +231,7 @@ class CoverageManager:
             f"Coverage snapshot {cycle}: "
             f"lines={summary.lines_covered}/{summary.lines_total} "
             f"({summary.lines_percent:.1f}%), "
-            f"new_lines={new_lines_count}, "
+            f"unique_corpus={unique_corpus_count} (+{new_unique_corpus}), "
             f"saturation={saturation_detected}"
         )
 
@@ -323,13 +331,13 @@ class CoverageManager:
         if self._saturation_detected:
             return True
 
-        # Calculate time since last new coverage
+        # Calculate time since last new unique corpus
         time_since_new_coverage = current_time - self._last_new_coverage_time
 
         if time_since_new_coverage >= self.config.saturation_time:
             logger.info(
                 f"Coverage saturation detected: "
-                f"no new coverage for {time_since_new_coverage:.0f}s "
+                f"no new unique corpus for {time_since_new_coverage:.0f}s "
                 f"(threshold={self.config.saturation_time}s)"
             )
             self._saturation_detected = True
