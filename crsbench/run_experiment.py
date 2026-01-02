@@ -1048,6 +1048,7 @@ def _monitor_jobs_basic(
 
         # Display stats
         log_section(f"Experiment: {experiment_name}", width=60)
+        logger.info(f"Workers connected: {stats.get('workers', 0)}")
         log_summary(
             "Queue Status",
             {
@@ -1070,14 +1071,15 @@ def _monitor_jobs_basic(
                 harness = job.meta.get("harness", "?")
                 mode = job.meta.get("mode", "?")
                 trial_num = job.meta.get("trial_num", "?")
-                started_at = job.meta.get("started_at")
+                phase = job.meta.get("phase", "queued")
+                phase_started_at = job.meta.get("phase_started_at")
                 elapsed = ""
-                if started_at:
-                    elapsed_sec = int(time.time() - started_at)
+                if phase_started_at:
+                    elapsed_sec = int(time.time() - phase_started_at)
                     mins, secs = divmod(elapsed_sec, 60)
                     elapsed = f"{mins}m{secs}s"
                 running_jobs.append(
-                    f"  [{worker_name}] [{crs}] {benchmark}/{harness} mode={mode} trial={trial_num} ({elapsed})"
+                    f"  [{worker_name}] [{crs}] {benchmark}/{harness} mode={mode} trial={trial_num} phase={phase} ({elapsed})"
                 )
 
         if running_jobs:
@@ -1139,6 +1141,9 @@ def _monitor_jobs_rich(
     def generate_status_table():
         stats = get_queue_stats(queue)
 
+        # Debug: log queue info
+        logger.info(f"Queue name: crsbench_{experiment_name}, stats: {stats}")
+
         # Queue status table
         table = Table(title=f"Experiment: {experiment_name}")
         table.add_column("Status", style="cyan")
@@ -1158,25 +1163,38 @@ def _monitor_jobs_rich(
         running_table.add_column("Harness", style="yellow")
         running_table.add_column("Mode", style="blue")
         running_table.add_column("Trial", justify="right")
+        running_table.add_column("Phase", style="magenta")
         running_table.add_column("Elapsed", justify="right", style="magenta")
 
         for job in job_list:
             job.refresh()
-            if job.get_status() == "started":
+            status = job.get_status()
+            logger.info(
+                f"Job {job.id[:8]}: status={status}, is_queued={job.is_queued}, is_started={job.is_started}, is_finished={job.is_finished}"
+            )
+            if status == "started":
                 worker_name = job.meta.get("worker_name", "?")
                 crs = job.meta.get("crs", "?")
                 benchmark = job.meta.get("benchmark", "?")
                 harness = job.meta.get("harness", "?")
                 mode = job.meta.get("mode", "?")
                 trial_num = str(job.meta.get("trial_num", "?"))
-                started_at = job.meta.get("started_at")
+                phase = job.meta.get("phase", "queued")
+                phase_started_at = job.meta.get("phase_started_at")
                 elapsed = "N/A"
-                if started_at:
-                    elapsed_sec = int(time.time() - started_at)
+                if phase_started_at:
+                    elapsed_sec = int(time.time() - phase_started_at)
                     mins, secs = divmod(elapsed_sec, 60)
                     elapsed = f"{mins}m {secs}s"
                 running_table.add_row(
-                    worker_name, crs, benchmark, harness, mode, trial_num, elapsed
+                    worker_name,
+                    crs,
+                    benchmark,
+                    harness,
+                    mode,
+                    trial_num,
+                    phase,
+                    elapsed,
                 )
 
         return Group(table, running_table)

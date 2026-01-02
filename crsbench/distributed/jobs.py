@@ -112,6 +112,46 @@ def build_crs_environment(
         }
 
 
+def _create_phase_callbacks():
+    """Create callbacks for updating job phase metadata in RQ.
+
+    Returns:
+        tuple: (on_build_start, on_run_start) callbacks
+    """
+
+    def on_build_start():
+        """Update job metadata when CRS build phase starts (idempotent)."""
+        try:
+            import rq
+
+            job = rq.get_current_job()
+            if job:
+                # Only set if not already in building phase (idempotent)
+                if job.meta.get("phase") != "building":
+                    job.meta["phase"] = "building"
+                    job.meta["phase_started_at"] = time.time()
+                    job.save_meta()
+                    logger.debug(f"Job {job.id[:8]} phase -> building")
+        except Exception as e:
+            logger.warning(f"Failed to update job metadata: {e}")
+
+    def on_run_start():
+        """Update job metadata when CRS run phase starts."""
+        try:
+            import rq
+
+            job = rq.get_current_job()
+            if job:
+                job.meta["phase"] = "running"
+                job.meta["phase_started_at"] = time.time()
+                job.save_meta()
+                logger.debug(f"Updated job metadata for job {job.id}")
+        except Exception as e:
+            logger.warning(f"Failed to update job metadata: {e}")
+
+    return on_build_start, on_run_start
+
+
 def run_crs_trial(
     crs: str,
     benchmark: str,
@@ -252,6 +292,9 @@ def run_crs_trial(
             f"early_stop={coverage_early_stop}, oss_fuzz_path={oss_fuzz_path}"
         )
 
+        # Create phase callbacks for job metadata tracking
+        on_build_start, on_run_start = _create_phase_callbacks()
+
         runner = BenchmarkRunner(
             crs_executor,
             snapshot_period=snapshot_period,
@@ -259,6 +302,8 @@ def run_crs_trial(
             coverage_saturation_time=coverage_saturation_time,
             coverage_early_stop=coverage_early_stop,
             oss_fuzz_path=oss_fuzz_path if coverage_enabled else None,
+            on_build_start=on_build_start,
+            on_run_start=on_run_start,
         )
 
         # Resolve benchmark path

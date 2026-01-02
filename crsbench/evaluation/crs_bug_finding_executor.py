@@ -120,6 +120,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         harness: HarnessFile,
         trial_output_dir: Path,
         *,
+        on_build_start: Optional[Callable[[], None]] = None,
         on_run_start: Optional[Callable[[], None]] = None,
         stop_event: Optional[threading.Event] = None,
     ) -> CRSExecutionResult:
@@ -129,6 +130,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             benchmark_path: Path to benchmark directory
             harness: Harness configuration
             trial_output_dir: Trial directory (from TrialDirectoryPreparer)
+            on_build_start: Callback invoked when CRS build starts
             on_run_start: Callback invoked when CRS run starts (after build)
             stop_event: Optional event to signal early termination (e.g., coverage saturation)
 
@@ -154,6 +156,10 @@ class CRSBugFindingExecutor(CRSExecutor):
             # 1. Prepare trial-specific build directory
             trial_build_dir = trial_output_dir / "crs-build"
             trial_build_dir.mkdir(parents=True, exist_ok=True)
+
+            # Signal that CRS build is starting
+            if on_build_start:
+                on_build_start()
 
             # 2. Build CRS Docker image (this also clones the repository)
             self._build_crs_if_needed(benchmark_path, project_name, trial_build_dir)

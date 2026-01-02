@@ -84,6 +84,7 @@ class CRSExecutor(ABC):
         harness: HarnessFile,
         trial_output_dir: Path,
         *,
+        on_build_start: Optional[Callable[[], None]] = None,
         on_run_start: Optional[Callable[[], None]] = None,
         stop_event: Optional[threading.Event] = None,
     ) -> CRSExecutionResult:
@@ -93,6 +94,7 @@ class CRSExecutor(ABC):
             benchmark_path: Path to benchmark directory
             harness: Harness file configuration
             trial_output_dir: Directory for this trial's outputs
+            on_build_start: Callback invoked when CRS build starts
             on_run_start: Callback invoked when CRS run starts (after build)
             stop_event: Optional event to signal early termination
 
@@ -130,11 +132,16 @@ class StubCRSExecutor(CRSExecutor):
         harness: HarnessFile,
         trial_output_dir: Path,
         *,
+        on_build_start: Optional[Callable[[], None]] = None,
         on_run_start: Optional[Callable[[], None]] = None,
         stop_event: Optional[threading.Event] = None,
     ) -> CRSExecutionResult:
         """Run stub CRS execution."""
         start_time = time.time()
+
+        # Signal build start (stub has no actual build phase)
+        if on_build_start:
+            on_build_start()
 
         # Signal that run is starting (stub has no build phase)
         if on_run_start:
