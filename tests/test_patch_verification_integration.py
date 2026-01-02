@@ -22,7 +22,7 @@ from crsbench.evaluation.verification.models import (
     PatchInfo,
     PatchVerificationResult,
     PatchVerificationStatus,
-    TestMode,
+    UnitTestMode,
 )
 from crsbench.evaluation.verification.patch import PatchVerificationEngine
 from crsbench.utils.logger import get_logger
@@ -61,6 +61,7 @@ def get_oss_fuzz_path() -> Optional[Path]:
         return Path(os.environ["OSS_FUZZ_HOME"])
 
     candidates = [
+        get_project_root() / "oss-fuzz",  # submodule in repo
         get_project_root().parent / "oss-fuzz",
         Path.home() / "oss-fuzz",
         Path("/oss-fuzz"),
@@ -152,7 +153,8 @@ def check_e2e_prerequisites(
 
     oss_fuzz_project = oss_fuzz / "projects" / project_name
     if not oss_fuzz_project.exists():
-        return f"Project not linked to oss-fuzz. Run: ln -s {benchmark_path} {oss_fuzz_project}"
+        # Auto-create symlink for test
+        oss_fuzz_project.symlink_to(benchmark_path.resolve())
 
     return None
 
@@ -161,7 +163,7 @@ def run_e2e_patch_verification(
     benchmark_path: Path,
     oss_fuzz_path: Path,
     harness: Optional[str] = None,
-    test_mode: TestMode = TestMode.FULL,
+    test_mode: UnitTestMode = UnitTestMode.FULL,
     sanitizer: str = DEFAULT_SANITIZER,
     timeout: int = 120,
     build_timeout: int = 1200,
@@ -212,6 +214,7 @@ def run_e2e_patch_verification(
 
                 for gt_patch in patches:
                     patch_info = PatchInfo(
+                        patch_id=gt_patch.unique_id,
                         pov_id=gt_patch.unique_id,
                         patch_path=patch_dir / gt_patch.unique_id / "patch.diff",
                     )
@@ -238,6 +241,7 @@ def run_e2e_patch_verification(
 # =============================================================================
 
 
+@pytest.mark.integration
 class TestE2EPatchVerification:
     """E2E tests for patch verification across multiple projects."""
 
@@ -269,7 +273,7 @@ class TestE2EPatchVerification:
             benchmark_path=benchmark_path,
             oss_fuzz_path=oss_fuzz,
             harness=None,
-            test_mode=TestMode.FULL,
+            test_mode=UnitTestMode.FULL,
             sanitizer=DEFAULT_SANITIZER,
         )
 

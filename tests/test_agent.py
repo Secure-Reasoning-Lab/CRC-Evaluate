@@ -383,7 +383,7 @@ class TestMCPIntegration:
     - Sufficient disk space for Docker images
     """
 
-    @pytest.mark.slow
+    @pytest.mark.integration
     @pytest.mark.parametrize(
         "benchmark_name,_language",
         [

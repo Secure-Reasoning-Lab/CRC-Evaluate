@@ -517,11 +517,13 @@ class TestRealWorldBenchmark:
     """Tests using actual benchmark data if available."""
 
     def test_libxml2_delta_03_if_exists(self):
-        """Test with actual libxml2-delta-03 benchmark if it exists."""
-        benchmark_path = Path("benchmarks/libxml2-delta-03/.aixcc/html/cpv_0/vuln.yaml")
+        """Test with actual afc-libxml2-delta-03 benchmark if it exists."""
+        benchmark_path = Path(
+            "benchmarks/afc-libxml2-delta-03/.aixcc/html/cpv_0/vuln.yaml"
+        )
 
         if not benchmark_path.exists():
-            pytest.skip("libxml2-delta-03 benchmark not found")
+            pytest.skip("afc-libxml2-delta-03 benchmark not found")
 
         vuln_info = VulnInfo.from_yaml(benchmark_path)
         generator = SarifHintGenerator(vuln_info)

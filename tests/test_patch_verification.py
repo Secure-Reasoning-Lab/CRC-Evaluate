@@ -22,7 +22,7 @@ from crsbench.evaluation.verification.models import (
     PatchInfo,
     PatchVerificationResult,
     PatchVerificationStatus,
-    TestMode,
+    UnitTestMode,
 )
 from crsbench.utils.logger import get_logger
 
@@ -380,13 +380,13 @@ class TestPatchVerificationStatus:
         assert PatchVerificationStatus.ERROR.value == "error"
 
 
-class TestTestMode:
-    """Tests for TestMode enum."""
+class TestUnitTestMode:
+    """Tests for UnitTestMode enum."""
 
     def test_mode_values(self):
-        """Test TestMode enum values."""
-        assert TestMode.FULL.value == "full"
-        assert TestMode.RTS.value == "rts"
+        """Test UnitTestMode enum values."""
+        assert UnitTestMode.FULL.value == "full"
+        assert UnitTestMode.RTS.value == "rts"
 
 
 class TestPatchInfo:
@@ -667,6 +667,7 @@ class TestPatchDiscovery:
 # =============================================================================
 
 
+@pytest.mark.integration
 class TestPatchVerificationE2E:
     """E2E tests for patch verification.
 
@@ -711,6 +712,7 @@ class TestPatchVerificationE2E:
             oss_fuzz_path = Path(os.environ["OSS_FUZZ_HOME"])
         else:
             candidates = [
+                get_project_root() / "oss-fuzz",  # submodule in repo
                 get_project_root().parent / "oss-fuzz",
                 Path.home() / "oss-fuzz",
                 Path("/oss-fuzz"),
@@ -726,15 +728,13 @@ class TestPatchVerificationE2E:
         # Ensure project is symlinked to oss-fuzz/projects/
         oss_fuzz_project_path = oss_fuzz_path / "projects" / BENCHMARK_NAME
         if not oss_fuzz_project_path.exists():
-            pytest.skip(
-                f"Project not linked to oss-fuzz. Run: "
-                f"ln -s {benchmark_path} {oss_fuzz_project_path}"
-            )
+            # Auto-create symlink for test
+            oss_fuzz_project_path.symlink_to(benchmark_path.resolve())
 
         # Create engine
         engine = PatchVerificationEngine(
             oss_fuzz_path=oss_fuzz_path,
-            test_mode=TestMode.FULL,
+            test_mode=UnitTestMode.FULL,
             sanitizer="address",
             timeout=120,
             build_timeout=1200,

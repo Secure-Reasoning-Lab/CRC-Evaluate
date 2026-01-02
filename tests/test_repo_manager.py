@@ -471,7 +471,7 @@ def real_benchmark_dir():
     return benchmark_path
 
 
-class TestModeCommitSelectionIntegration:
+class UnitTestModeCommitSelectionIntegration:
     """Integration tests for mode-based commit selection using real benchmark.
 
     These tests verify that:
@@ -503,7 +503,6 @@ class TestModeCommitSelectionIntegration:
         assert info.base_commit == self.FULL_BASE_COMMIT
         assert info.ref_commit is None
 
-    @pytest.mark.slow
     @pytest.mark.integration
     def test_ensure_project_repository_delta_mode(self, real_benchmark_dir, tmp_path):
         """Test that mode='delta' clones repo at ref_commit (patched version)."""
@@ -536,7 +535,6 @@ class TestModeCommitSelectionIntegration:
             f"Expected: {self.DELTA_REF_COMMIT}, Got: {actual_commit}"
         )
 
-    @pytest.mark.slow
     @pytest.mark.integration
     def test_ensure_project_repository_full_mode(self, real_benchmark_dir, tmp_path):
         """Test that mode='full' clones repo at base_commit (vulnerable version)."""
@@ -569,7 +567,6 @@ class TestModeCommitSelectionIntegration:
             f"Expected: {self.FULL_BASE_COMMIT}, Got: {actual_commit}"
         )
 
-    @pytest.mark.slow
     @pytest.mark.integration
     def test_delta_and_full_modes_produce_different_commits(
         self, real_benchmark_dir, tmp_path
@@ -994,7 +991,7 @@ class TestParallelCacheAccess:
 #   uv run pytest tests/test_repo_manager.py -v
 #
 # Run only unit tests (fast):
-#   uv run pytest tests/test_repo_manager.py -v -m "not slow"
+#   uv run pytest tests/test_repo_manager.py -v -m "not integration"
 #
 # Run integration tests:
 #   uv run pytest tests/test_repo_manager.py -v -m integration
