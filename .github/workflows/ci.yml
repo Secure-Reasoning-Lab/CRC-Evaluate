@@ -113,49 +113,34 @@ jobs:
             coverage-${{ matrix.project }}.json
 
   # Stage 3: E2E Bug Finding
-  e2e-bugfinding:
-    name: E2E Bug Finding
-    needs: [sanity]
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          submodules: recursive
-          token: ${{ secrets.PAT_TOKEN }}
-          persist-credentials: false
-
-      - name: Configure Team-Atlanta access
-        run: |
-          git config --global url."https://x-access-token:${{ secrets.TEAM_ATLANTA_PAT }}@github.com/Team-Atlanta/".insteadOf "git@github.com:Team-Atlanta/"
-          # git config --global url."https://x-access-token:${{ secrets.TEAM_ATLANTA_PAT }}@github.com/Team-Atlanta/".insteadOf "https://github.com/Team-Atlanta/"
-
-      - uses: ./.github/actions/setup
-        with:
-          require-docker: true
-
-      - name: Run E2E experiment
-        run: uv run crsbench --experiment-config experiment-configs/coverage-e2e-test.yaml
-
-      - name: Check E2E results
-        run: |
-          echo "=== E2E Experiment Results ==="
-          RESULT_DIR="/tmp/crsbench/experiments/coverage-e2e-test"
-
-          if [ ! -d "$RESULT_DIR" ]; then
-            echo "ERROR: Experiment directory not found: $RESULT_DIR"
-            exit 1
-          fi
-
-          echo "Experiment directory structure:"
-          find "$RESULT_DIR" -type d | head -20
-
-          TRIAL_COUNT=$(find "$RESULT_DIR" -type d -name "trial-*" | wc -l)
-          echo "Trial directories found: $TRIAL_COUNT"
-
-          if [ "$TRIAL_COUNT" -eq 0 ]; then
-            echo "ERROR: No trial directories found"
-            exit 1
-          fi
-
-          echo "E2E test completed successfully"
+  # NOTE: Disabled due to disk space limitations on GitHub Actions runners.
+  # LLVM checkout (~2GB) + build artifacts exceed available space.
+  # Run E2E locally with: ./ci-tests/run-local.sh e2e
+  # e2e-bugfinding:
+  #   name: E2E Bug Finding
+  #   needs: [sanity]
+  #   runs-on: ubuntu-latest
+  #   timeout-minutes: 30
+  #   steps:
+  #     - uses: actions/checkout@v5
+  #       with:
+  #         submodules: recursive
+  #         token: ${{ secrets.PAT_TOKEN }}
+  #         persist-credentials: false
+  #
+  #     - name: Configure Team-Atlanta access
+  #       run: |
+  #         git config --global url."https://x-access-token:${{ secrets.TEAM_ATLANTA_PAT }}@github.com/Team-Atlanta/".insteadOf "git@github.com:Team-Atlanta/"
+  #
+  #     - uses: ./.github/actions/setup
+  #       with:
+  #         require-docker: true
+  #
+  #     - name: Run E2E experiment
+  #       run: uv run crsbench --experiment-config experiment-configs/coverage-e2e-test.yaml
+  #
+  #     - name: Check E2E results
+  #       run: |
+  #         RESULT_DIR="/tmp/crsbench/experiments/coverage-e2e-test"
+  #         TRIAL_COUNT=$(find "$RESULT_DIR" -type d -name "trial-*" | wc -l)
+  #         if [ "$TRIAL_COUNT" -eq 0 ]; then exit 1; fi
