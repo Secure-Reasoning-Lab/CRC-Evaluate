@@ -12,6 +12,7 @@ import yaml
 
 from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
 from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
+from crsbench.evaluation.results import CRSType, TrialMetadata, TrialResult
 from crsbench.evaluation.runner import BenchmarkRunner
 from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.logger import get_logger
@@ -19,7 +20,7 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def _get_crs_type(crs_name: str, registry_dir: Path) -> str:
+def get_crs_type(crs_name: str, registry_dir: Path) -> str:
     """Read CRS type from pkg.yaml in registry.
 
     Args:
@@ -119,7 +120,7 @@ def run_crs_trial(
     trial_num: int,
     config: Dict[str, Any],
     mode: str,
-) -> Dict[str, Any]:
+) -> TrialResult:
     """
     Execute a single CRS trial.
 
@@ -140,7 +141,7 @@ def run_crs_trial(
         mode: Evaluation mode ('delta', 'full', or 'all')
 
     Returns:
-        dict: Trial results including POVs found, success rate, and metadata
+        TrialResult: Trial results including POVs found, success rate, and metadata
 
     Example:
         >>> config = {
@@ -150,12 +151,13 @@ def run_crs_trial(
         >>> result = run_crs_trial(
         ...     'test-crs', 'test-benchmark', 'fuzz_test', '/src/fuzz_test.c', 1, config, 'delta'
         ... )
-        >>> assert 'povs_found' in result
+        >>> assert result.povs_found >= 0
     """
     logger.info(
         f"[Trial {trial_num}] Starting CRS '{crs}' on benchmark '{benchmark}' harness '{harness_name}'"
     )
     start_time = time.time()
+    crs_type_enum = CRSType.BUG_FINDING  # Default, updated after detection
 
     try:
         # Get snapshot configuration
@@ -182,7 +184,10 @@ def run_crs_trial(
         logger.info(f"Resolved CRS config '{crs}' to registry '{registry_name}'")
 
         # Detect CRS type from registry
-        crs_type = _get_crs_type(registry_name, registry_dir)
+        crs_type = get_crs_type(registry_name, registry_dir)
+        crs_type_enum = (
+            CRSType.BUG_FIXING if crs_type == "bug-fixing" else CRSType.BUG_FINDING
+        )
         logger.info(f"Detected CRS type '{crs_type}' for CRS '{crs}'")
 
         # Create appropriate executor based on CRS type
@@ -246,6 +251,10 @@ def run_crs_trial(
         benchmark_path = _resolve_benchmark_path(benchmark, config)
         logger.debug(f"Resolved benchmark path: {benchmark_path}")
 
+        # Ensure original project symlink exists in oss-fuzz/projects/
+        # This allows tools like oss-bugfix-crs to find the project
+        _ensure_project_symlink(oss_fuzz_path, benchmark, benchmark_path)
+
         # Create BenchmarkHarness object
         from crsbench.validation.schemas import BenchmarkHarness, HarnessFile
 
@@ -284,68 +293,80 @@ def run_crs_trial(
 
         execution_time = time.time() - start_time
 
-        # Prepare trial result
-        trial_result = {
-            "crs": crs,
-            "benchmark": benchmark,
-            "harness": harness_name,
-            "trial_num": trial_num,
-            "success": result.is_valid,
-            "povs_found": result.povs_found,
-            "total_povs": result.total_povs,
-            "success_rate": result.success_rate,
-            "execution_time": execution_time,
-            "report": result.report.to_dict(),
-            "metadata": {
-                "experiment_filestore": config.get("experiment_filestore"),
-                "max_total_time": config.get("max_total_time"),
-                "difficulty_level": config.get("difficulty_level"),
-                "timestamp_start": start_time,
-                "timestamp_end": time.time(),
-            },
-        }
-
-        logger.info(
-            f"[Trial {trial_num}] Completed {crs} on {benchmark}/{harness_name}: "
-            f"{result.povs_found}/{result.total_povs} POVs found "
-            f"({result.success_rate:.1%}) in {execution_time:.1f}s"
+        # Create trial metadata
+        metadata = TrialMetadata(
+            experiment_filestore=config.get("experiment_filestore"),
+            max_total_time=config.get("max_total_time"),
+            difficulty_level=config.get("difficulty_level"),
+            timestamp_start=start_time,
+            timestamp_end=time.time(),
         )
+
+        # Create trial result using Pydantic model
+        trial_result = TrialResult(
+            crs=crs,
+            benchmark=benchmark,
+            harness=harness_name,
+            trial_num=trial_num,
+            crs_type=crs_type_enum,
+            success=result.is_valid,
+            execution_time=execution_time,
+            povs_found=result.povs_found,
+            total_povs=result.total_povs,
+            patches_generated=result.report.patches_generated,
+            patches_valid=result.report.patches_valid,
+            report=result.report.to_dict(),
+            metadata=metadata,
+        )
+
+        # Log completion message
+        logger.info(trial_result.log_summary())
 
         return trial_result
 
     except FileNotFoundError as e:
         execution_time = time.time() - start_time
         logger.error(f"[Trial {trial_num}] Benchmark not found: {e}")
-        return {
-            "crs": crs,
-            "benchmark": benchmark,
-            "trial_num": trial_num,
-            "success": False,
-            "error": f"Benchmark not found: {str(e)}",
-            "error_type": "FileNotFoundError",
-            "execution_time": execution_time,
-            "metadata": {
-                "timestamp_start": start_time,
-                "timestamp_end": time.time(),
-            },
-        }
+        return TrialResult(
+            crs=crs,
+            benchmark=benchmark,
+            harness=harness_name,
+            trial_num=trial_num,
+            crs_type=crs_type_enum,
+            success=False,
+            execution_time=execution_time,
+            error=f"Benchmark not found: {e!s}",
+            error_type="FileNotFoundError",
+            report={},
+            metadata=TrialMetadata(
+                timestamp_start=start_time,
+                timestamp_end=time.time(),
+            ),
+        )
 
     except Exception as e:
         execution_time = time.time() - start_time
-        logger.error(f"[Trial {trial_num}] Failed with error: {e}", exc_info=True)
-        return {
-            "crs": crs,
-            "benchmark": benchmark,
-            "trial_num": trial_num,
-            "success": False,
-            "error": str(e),
-            "error_type": type(e).__name__,
-            "execution_time": execution_time,
-            "metadata": {
-                "timestamp_start": start_time,
-                "timestamp_end": time.time(),
-            },
-        }
+        # Use str(e) to avoid loguru interpreting curly braces in error messages
+        error_msg = str(e).replace("{", "{{").replace("}", "}}")
+        logger.error(
+            f"[Trial {trial_num}] Failed with error: {error_msg}", exc_info=True
+        )
+        return TrialResult(
+            crs=crs,
+            benchmark=benchmark,
+            harness=harness_name,
+            trial_num=trial_num,
+            crs_type=crs_type_enum,
+            success=False,
+            execution_time=execution_time,
+            error=str(e),
+            error_type=type(e).__name__,
+            report={},
+            metadata=TrialMetadata(
+                timestamp_start=start_time,
+                timestamp_end=time.time(),
+            ),
+        )
 
 
 def evaluate_crs_trial(trial_id: str, trial_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -459,3 +480,50 @@ def _resolve_benchmark_path(benchmark: str, config: Dict[str, Any]) -> Path:
     error_msg += f"  - Default root: {default_benchmarks_root / benchmark}"
 
     raise FileNotFoundError(error_msg)
+
+
+def _ensure_project_symlink(
+    oss_fuzz_path: Path,
+    benchmark_name: str,
+    benchmark_path: Path,
+) -> None:
+    """
+    Ensure original project symlink exists in oss-fuzz/projects/.
+
+    Creates a symlink: oss-fuzz/projects/{benchmark_name} -> benchmark_path
+    This allows tools like oss-bugfix-crs to find the project.
+
+    Args:
+        oss_fuzz_path: Path to oss-fuzz directory
+        benchmark_name: Name of the benchmark
+        benchmark_path: Path to the benchmark directory
+    """
+    projects_dir = oss_fuzz_path / "projects"
+    symlink_path = projects_dir / benchmark_name
+    target_path = benchmark_path.resolve()
+
+    # Already exists and correct
+    if symlink_path.is_symlink():
+        if symlink_path.resolve() == target_path:
+            logger.debug(f"Project symlink already exists: {symlink_path}")
+            return
+        # Wrong target - remove and recreate
+        symlink_path.unlink()
+    elif symlink_path.exists():
+        # It's a real directory, not a symlink - leave it alone
+        logger.debug(f"Project directory exists (not symlink): {symlink_path}")
+        return
+
+    # Create symlink
+    try:
+        projects_dir.mkdir(parents=True, exist_ok=True)
+        symlink_path.symlink_to(target_path)
+        logger.debug(f"Created project symlink: {symlink_path} -> {target_path}")
+    except FileExistsError:
+        # Race condition - another process created it
+        if symlink_path.is_symlink() and symlink_path.resolve() == target_path:
+            logger.debug(f"Project symlink created by another process: {symlink_path}")
+        else:
+            logger.warning(f"Failed to create project symlink: {symlink_path}")
+    except Exception as e:
+        logger.warning(f"Error creating project symlink: {e}")
