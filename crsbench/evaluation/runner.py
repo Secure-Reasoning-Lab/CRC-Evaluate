@@ -12,6 +12,11 @@ from crsbench.evaluation.results import EvaluationReport, HarnessResult, ResultC
 from crsbench.evaluation.snapshot_manager import SnapshotManager
 from crsbench.evaluation.verification import PatchBasedDedup, VerificationEngine
 from crsbench.evaluation.verification import PovVerificationResult as VerifResult
+from crsbench.evaluation.verification.models import (
+    PatchVerificationOutput,
+    PatchVerificationResult,
+)
+from crsbench.evaluation.verification.patch import PatchVerificationEngine
 from crsbench.utils.logger import get_logger
 from crsbench.validation import ValidationResult, validate_benchmark
 from crsbench.validation.schemas import BenchmarkConfig, BenchmarkHarness, HarnessFile
@@ -111,32 +116,57 @@ class BenchmarkRunner:
         *,
         skip_verification: bool = False,
     ) -> EvaluationResult:
-        """Run a complete benchmark evaluation for a specific harness.
-
-        Args:
-            benchmark_harness: BenchmarkHarness object with benchmark path and harness info
-            mode: Evaluation mode ('delta', 'full', or 'auto' to detect)
-            crs_config: Configuration for CRS executor
-            trial_output_dir: Trial output directory for snapshots (required if snapshots enabled)
-            skip_verification: Skip POV verification (default: False, verification enabled)
-            oss_fuzz_path: Path to oss-fuzz directory (required for POV verification)
-
-        Returns:
-            EvaluationResult: Complete evaluation results
-
-        Raises:
-            EvaluationError: If evaluation fails
-        """
-        # Extract components from benchmark_harness
+        """Run a complete benchmark evaluation for a specific harness."""
         benchmark_path = benchmark_harness.path
         harness = benchmark_harness.harness
-
-        self.logger.info(f"Starting benchmark evaluation: {benchmark_path}")
-
-        # Record trial start time
         trial_start_time = time.time()
 
-        # Validate snapshot configuration
+        self.logger.info(f"Starting benchmark evaluation: {benchmark_path}")
+        self._validate_snapshot_config(trial_output_dir)
+
+        try:
+            # Setup phase
+            validation_result = self._validate_benchmark(benchmark_path)
+            config = self._load_benchmark_config(benchmark_path)
+            evaluation_mode = self._determine_evaluation_mode(config, mode)
+            collector = self._setup_result_collector(
+                benchmark_path, config, evaluation_mode, crs_config
+            )
+            self._pre_build_crs(benchmark_path, trial_output_dir)
+
+            # Execution phase
+            harness_result, pov_verification_results, patch_verification_results = (
+                self._run_harness_evaluation(
+                    harness=harness,
+                    benchmark_path=benchmark_path,
+                    trial_output_dir=trial_output_dir or Path(),
+                    trial_start_time=trial_start_time,
+                    oss_fuzz_path=oss_fuzz_path,
+                    skip_verification=skip_verification,
+                )
+            )
+            collector.add_harness_result(harness_result)
+
+            # Result collection phase
+            self._collect_crs_results(
+                collector=collector,
+                trial_output_dir=trial_output_dir,
+                pov_verification_results=pov_verification_results,
+                patch_verification_results=patch_verification_results,
+            )
+
+            # Finalize
+            report = collector.finalize_report()
+            self._log_evaluation_summary(report)
+
+            return EvaluationResult(report, validation_result, pov_verification_results)
+
+        except Exception as e:
+            self.logger.error(f"Benchmark evaluation failed: {str(e)}")
+            raise EvaluationError(f"Failed to evaluate benchmark: {str(e)}") from e
+
+    def _validate_snapshot_config(self, trial_output_dir: Optional[Path]) -> None:
+        """Validate snapshot configuration."""
         if self.snapshot_period and self.snapshot_period > 0:
             if not trial_output_dir:
                 raise EvaluationError(
@@ -147,102 +177,110 @@ class BenchmarkRunner:
                     f"trial_output_dir does not exist: {trial_output_dir}"
                 )
 
-        try:
-            # Step 1: Validate benchmark configuration
-            self.logger.info("Validating benchmark configuration...")
-            validation_result = validate_benchmark(benchmark_path)
+    def _validate_benchmark(self, benchmark_path: Path) -> ValidationResult:
+        """Validate benchmark configuration."""
+        self.logger.info("Validating benchmark configuration...")
+        validation_result = validate_benchmark(benchmark_path)
 
-            if not validation_result.is_valid:
-                self.logger.error("Benchmark configuration is invalid:")
-                for error in validation_result.errors:
-                    self.logger.error(f"  - {error.message}")
-                # Continue with evaluation but mark as invalid
-                # This allows for partial evaluation and debugging
+        if not validation_result.is_valid:
+            self.logger.error("Benchmark configuration is invalid:")
+            for error in validation_result.errors:
+                self.logger.error(f"  - {error.message}")
 
-            # Step 2: Parse configuration
-            config = self._load_benchmark_config(benchmark_path)
+        return validation_result
 
-            # Step 3: Determine evaluation mode
-            evaluation_mode = self._determine_evaluation_mode(config, mode)
-            self.logger.info(f"Evaluation mode: {evaluation_mode}")
+    def _setup_result_collector(
+        self,
+        benchmark_path: Path,
+        config: BenchmarkConfig,
+        evaluation_mode: str,
+        crs_config: Optional[dict[str, Any]],
+    ) -> ResultCollector:
+        """Set up result collector with configuration."""
+        self.logger.info(f"Evaluation mode: {evaluation_mode}")
 
-            # Step 4: Configure CRS
-            if crs_config:
-                self.logger.info("Configuring CRS...")
-                self.crs_executor.configure_crs(crs_config)
+        if crs_config:
+            self.logger.info("Configuring CRS...")
+            self.crs_executor.configure_crs(crs_config)
 
-            # Step 5: Set up result collector
-            collector = ResultCollector(str(benchmark_path), evaluation_mode)
+        collector = ResultCollector(str(benchmark_path), evaluation_mode)
 
-            # Step 6: Set commit information
-            if evaluation_mode == "delta" and config.delta_mode:
-                collector.set_commits(
-                    config.delta_mode.base_commit, config.delta_mode.ref_commit
-                )
-            elif evaluation_mode == "full" and config.full_mode:
-                collector.set_commits(config.full_mode.base_commit)
-
-            if crs_config:
-                collector.set_crs_config(crs_config)
-
-            # Step 6.5: Pre-build CRS (before snapshot starts)
-            if (
-                isinstance(self.crs_executor, (CRSBugFindingExecutor, CRSPatchExecutor))
-                and trial_output_dir
-            ):
-                self.logger.info("Pre-building CRS before snapshot period...")
-                self.crs_executor.build_crs(benchmark_path, trial_output_dir)
-
-            # Step 7: Run evaluation on harness
-            harness_result, verification_results = self._run_harness_evaluation(
-                harness=harness,
-                benchmark_path=benchmark_path,
-                trial_output_dir=trial_output_dir or Path(),
-                trial_start_time=trial_start_time,
-                oss_fuzz_path=oss_fuzz_path,
-                skip_verification=skip_verification,
+        if evaluation_mode == "delta" and config.delta_mode:
+            collector.set_commits(
+                config.delta_mode.base_commit, config.delta_mode.ref_commit
             )
-            collector.add_harness_result(harness_result)
+        elif evaluation_mode == "full" and config.full_mode:
+            collector.set_commits(config.full_mode.base_commit)
 
-            # Step 9: Set statistics based on CRS type
-            if verification_results:
-                # Bug-finding CRS: set POV verification stats
-                collector.set_pov_stats(verification_results)
-            elif isinstance(self.crs_executor, CRSPatchExecutor) and trial_output_dir:
-                # Bug-fixing CRS: collect patches and set patch stats
-                patches = self.crs_executor._collect_patches(trial_output_dir)
-                # Count input POVs from crs-input/povs directory
+        if crs_config:
+            collector.set_crs_config(crs_config)
+
+        return collector
+
+    def _pre_build_crs(
+        self, benchmark_path: Path, trial_output_dir: Optional[Path]
+    ) -> None:
+        """Pre-build CRS before snapshot starts."""
+        if (
+            isinstance(self.crs_executor, (CRSBugFindingExecutor, CRSPatchExecutor))
+            and trial_output_dir
+        ):
+            self.logger.info("Pre-building CRS before snapshot period...")
+            self.crs_executor.build_crs(benchmark_path, trial_output_dir)
+
+    def _collect_crs_results(
+        self,
+        collector: ResultCollector,
+        trial_output_dir: Optional[Path],
+        pov_verification_results: list[VerifResult],
+        patch_verification_results: list[PatchVerificationResult],
+    ) -> None:
+        """Collect results based on CRS type.
+
+        Similar to how POV stats are derived from verification results,
+        patch stats are also derived from verification results.
+        """
+        if isinstance(self.crs_executor, CRSBugFindingExecutor):
+            if pov_verification_results:
+                collector.set_pov_stats(pov_verification_results)
+
+        elif isinstance(self.crs_executor, CRSPatchExecutor) and trial_output_dir:
+            if patch_verification_results:
+                # Get total_input_povs from input directory
                 povs_dir = trial_output_dir / "crs-input" / "povs"
                 total_input_povs = (
                     len(list(povs_dir.iterdir())) if povs_dir.exists() else 0
                 )
-                collector.set_patch_stats(total_input_povs, patches)
+                # Set all patch stats from verification results (like POV)
+                collector.set_patch_stats(total_input_povs, patch_verification_results)
                 self.logger.info(
-                    f"Patch collection: {len(patches)} patches generated from {total_input_povs} input POVs"
+                    f"Patch verification: {len(patch_verification_results)} patches "
+                    f"from {total_input_povs} input POVs"
                 )
-                # Save patch summary
-                self._save_patch_summary(trial_output_dir, patches, total_input_povs)
-
-            # Step 10: Generate final report
-            report = collector.finalize_report()
-
-            # Log based on CRS type
-            if isinstance(self.crs_executor, CRSPatchExecutor):
-                self.logger.info(
-                    f"Evaluation completed: {report.patches_generated} patches generated "
-                    f"from {report.total_input_povs} input POVs"
-                )
-            else:
-                self.logger.info(
-                    f"Evaluation completed: {report.povs_found}/{report.total_povs} POVs detected "
-                    f"({report.success_rate:.1%} success rate)"
+                self._save_patch_verification_results(
+                    trial_output_dir, patch_verification_results, total_input_povs
                 )
 
-            return EvaluationResult(report, validation_result, verification_results)
-
-        except Exception as e:
-            self.logger.error(f"Benchmark evaluation failed: {str(e)}")
-            raise EvaluationError(f"Failed to evaluate benchmark: {str(e)}") from e
+    def _log_evaluation_summary(self, report: EvaluationReport) -> None:
+        """Log evaluation summary based on CRS type."""
+        if isinstance(self.crs_executor, CRSPatchExecutor):
+            verification_info = ""
+            if report.patches_valid > 0 or report.patches_build_failed > 0:
+                verification_info = (
+                    f", {report.patches_valid} valid patches "
+                    f"({report.patches_build_failed} build failed, "
+                    f"{report.patches_pov_triggers} POV still triggers, "
+                    f"{report.patches_test_failed} test failed)"
+                )
+            self.logger.info(
+                f"Evaluation completed: {report.patches_generated} patches generated "
+                f"from {report.total_input_povs} input POVs{verification_info}"
+            )
+        else:
+            self.logger.info(
+                f"Evaluation completed: {report.povs_found}/{report.total_povs} POVs detected "
+                f"({report.success_rate:.1%} success rate)"
+            )
 
     def _load_benchmark_config(self, benchmark_path: Path) -> BenchmarkConfig:
         """Load benchmark configuration from validation result or file."""
@@ -326,90 +364,86 @@ class BenchmarkRunner:
         oss_fuzz_path: Optional[Path],
         *,
         skip_verification: bool,
-    ) -> tuple[HarnessResult, list[VerifResult]]:
-        """Run evaluation for a single harness with snapshot management and verification.
+    ) -> tuple[HarnessResult, list[VerifResult], list[PatchVerificationResult]]:
+        """Run evaluation for a single harness with snapshot management and verification."""
+        self.logger.info(f"Evaluating harness: {harness.name}")
 
-        Args:
-            harness: Harness configuration
-            benchmark_path: Path to benchmark directory
-            trial_output_dir: Trial output directory
-            trial_start_time: Unix timestamp when trial started
-            oss_fuzz_path: Path to oss-fuzz directory (for verification)
-            skip_verification: Skip POV verification
+        # Execute CRS with managers
+        harness_result, _ = self._execute_crs_with_managers(
+            harness=harness,
+            benchmark_path=benchmark_path,
+            trial_output_dir=trial_output_dir,
+            trial_start_time=trial_start_time,
+        )
 
-        Returns:
-            Tuple of (HarnessResult, List of verification results)
-        """
+        # Run post-experiment coverage (only for bug-finding CRS with successful run)
+        if (
+            self.coverage_enabled
+            and self.oss_fuzz_path
+            and harness_result
+            and harness_result.run_successful
+            and isinstance(self.crs_executor, CRSBugFindingExecutor)
+        ):
+            self._run_post_experiment_coverage(
+                benchmark_path=benchmark_path,
+                trial_output_dir=trial_output_dir,
+                harness_name=harness.name,
+            )
+
+        # Run verification
+        pov_verification_results, patch_verification_results = self._run_verification(
+            harness_result=harness_result,
+            benchmark_path=benchmark_path,
+            trial_output_dir=trial_output_dir,
+            oss_fuzz_path=oss_fuzz_path,
+            harness_name=harness.name,
+            skip_verification=skip_verification,
+        )
+
+        return harness_result, pov_verification_results, patch_verification_results
+
+    def _execute_crs_with_managers(
+        self,
+        harness: HarnessFile,
+        benchmark_path: Path,
+        trial_output_dir: Path,
+        trial_start_time: float,
+    ) -> tuple[HarnessResult, Any]:
+        """Execute CRS with coverage and snapshot managers."""
         snapshot_manager = None
         snapshot_thread = None
         coverage_manager = None
         coverage_thread = None
-        saturation_monitor_thread = None
         stop_event: Optional[threading.Event] = None
-        verification_results: list[VerifResult] = []
         harness_result = None
 
-        self.logger.info(f"Evaluating harness: {harness.name}")
-        self.logger.debug(
-            f"Coverage settings: enabled={self.coverage_enabled}, "
-            f"oss_fuzz_path={self.oss_fuzz_path}"
-        )
-
         try:
-            # Set up coverage manager if enabled
-            if self.coverage_enabled and self.oss_fuzz_path:
-                coverage_manager = self._create_coverage_manager(
+            # Start managers
+            coverage_manager, coverage_thread, stop_event = (
+                self._start_coverage_manager(
                     benchmark_path=benchmark_path,
                     trial_output_dir=trial_output_dir,
                     trial_start_time=trial_start_time,
                     harness_name=harness.name,
                 )
-                if coverage_manager:
-                    coverage_thread = threading.Thread(
-                        target=coverage_manager.run, daemon=True
-                    )
-                    coverage_thread.start()
-                    self.logger.info("Coverage manager thread started")
+            )
 
-                    # Set up early stop if enabled
-                    if self.coverage_early_stop:
-                        stop_event = threading.Event()
-                        saturation_monitor_thread = threading.Thread(
-                            target=self._monitor_saturation,
-                            args=(coverage_manager, stop_event),
-                            daemon=True,
-                        )
-                        saturation_monitor_thread.start()
-                        self.logger.info("Saturation monitor thread started")
+            snapshot_manager, snapshot_thread = self._start_snapshot_manager(
+                harness_name=harness.name,
+                trial_output_dir=trial_output_dir,
+                trial_start_time=trial_start_time,
+                coverage_manager=coverage_manager,
+            )
 
-            # Start snapshot thread for this harness
-            if self.snapshot_period and self.snapshot_period > 0:
-                self.logger.info(
-                    f"Starting snapshot manager for harness '{harness.name}' "
-                    f"(period={self.snapshot_period}s)"
-                )
-                snapshot_manager = SnapshotManager(
-                    trial_dir=trial_output_dir,
-                    snapshot_period=self.snapshot_period,
-                    trial_start_time=trial_start_time,
-                    coverage_manager=coverage_manager,
-                )
-                snapshot_thread = threading.Thread(
-                    target=snapshot_manager.run, daemon=True
-                )
-                snapshot_thread.start()
-
-            # Create callback to set CRS run start time (after build, before fuzzing)
+            # Create callback for run start
             def on_run_start() -> None:
                 run_start = time.time()
                 if snapshot_manager:
                     snapshot_manager.set_crs_run_start_time(run_start)
                 if coverage_manager:
-                    # Update collector's run_start_time for accurate elapsed_time
-                    # in corpus_unique/.{hash}.cov files
                     coverage_manager.collector.set_run_start_time(run_start)
 
-            # Run CRS on this harness (with optional early stop)
+            # Run CRS
             crs_result = self.crs_executor.run_crs(
                 benchmark_path=benchmark_path,
                 harness=harness,
@@ -418,7 +452,6 @@ class BenchmarkRunner:
                 stop_event=stop_event,
             )
 
-            # Create harness result
             harness_result = HarnessResult(
                 name=harness.name,
                 path=harness.path,
@@ -429,7 +462,6 @@ class BenchmarkRunner:
 
         except Exception as e:
             self.logger.error(f"Failed to evaluate harness '{harness.name}': {str(e)}")
-            # Create error result
             harness_result = HarnessResult(
                 name=harness.name,
                 path=harness.path,
@@ -439,73 +471,161 @@ class BenchmarkRunner:
             )
 
         finally:
-            # Capture final snapshot and stop snapshot thread
-            if snapshot_manager:
-                self.logger.info(
-                    f"Capturing final snapshot for harness '{harness.name}'..."
+            self._stop_managers(
+                snapshot_manager=snapshot_manager,
+                snapshot_thread=snapshot_thread,
+                coverage_manager=coverage_manager,
+                coverage_thread=coverage_thread,
+                harness_name=harness.name,
+            )
+
+        return harness_result, coverage_manager
+
+    def _start_coverage_manager(
+        self,
+        benchmark_path: Path,
+        trial_output_dir: Path,
+        trial_start_time: float,
+        harness_name: str,
+    ) -> tuple[Any, Optional[threading.Thread], Optional[threading.Event]]:
+        """Start coverage manager if enabled."""
+        coverage_manager = None
+        coverage_thread = None
+        stop_event = None
+
+        if not (self.coverage_enabled and self.oss_fuzz_path):
+            return coverage_manager, coverage_thread, stop_event
+
+        coverage_manager = self._create_coverage_manager(
+            benchmark_path=benchmark_path,
+            trial_output_dir=trial_output_dir,
+            trial_start_time=trial_start_time,
+            harness_name=harness_name,
+        )
+
+        if coverage_manager:
+            coverage_thread = threading.Thread(target=coverage_manager.run, daemon=True)
+            coverage_thread.start()
+            self.logger.info("Coverage manager thread started")
+
+            if self.coverage_early_stop:
+                stop_event = threading.Event()
+                saturation_thread = threading.Thread(
+                    target=self._monitor_saturation,
+                    args=(coverage_manager, stop_event),
+                    daemon=True,
                 )
-                try:
-                    snapshot_manager.capture_snapshot()
-                except Exception as e:
-                    self.logger.warning(f"Failed to capture final snapshot: {e}")
+                saturation_thread.start()
+                self.logger.info("Saturation monitor thread started")
 
-                self.logger.info("Stopping snapshot manager...")
-                snapshot_manager.stop()
-                if snapshot_thread and snapshot_thread.is_alive():
-                    snapshot_thread.join(timeout=5.0)
-                    if snapshot_thread.is_alive():
-                        self.logger.warning(
-                            "Snapshot thread did not stop within timeout"
-                        )
+        return coverage_manager, coverage_thread, stop_event
 
-            # Stop coverage manager thread
-            if coverage_manager:
-                self.logger.info("Stopping coverage manager...")
-                coverage_manager.stop()
-                if coverage_thread and coverage_thread.is_alive():
-                    coverage_thread.join(timeout=5.0)
-                    if coverage_thread.is_alive():
-                        self.logger.warning(
-                            "Coverage thread did not stop within timeout"
-                        )
+    def _start_snapshot_manager(
+        self,
+        harness_name: str,
+        trial_output_dir: Path,
+        trial_start_time: float,
+        coverage_manager: Any,
+    ) -> tuple[Optional[SnapshotManager], Optional[threading.Thread]]:
+        """Start snapshot manager if enabled."""
+        if not (self.snapshot_period and self.snapshot_period > 0):
+            return None, None
 
-            # Run post-experiment coverage on final corpus
-            if self.coverage_enabled and self.oss_fuzz_path and harness_result:
-                self._run_post_experiment_coverage(
-                    benchmark_path=benchmark_path,
-                    trial_output_dir=trial_output_dir,
-                    harness_name=harness.name,
-                )
+        self.logger.info(
+            f"Starting snapshot manager for harness '{harness_name}' "
+            f"(period={self.snapshot_period}s)"
+        )
 
-        # Verify POVs AFTER snapshot thread has stopped and final snapshot captured
-        if (
-            harness_result
-            and harness_result.run_successful
-            and not skip_verification
-            and isinstance(self.crs_executor, CRSBugFindingExecutor)
-            and oss_fuzz_path
-        ):
+        snapshot_manager = SnapshotManager(
+            trial_dir=trial_output_dir,
+            snapshot_period=self.snapshot_period,
+            trial_start_time=trial_start_time,
+            coverage_manager=coverage_manager,
+        )
+        snapshot_thread = threading.Thread(target=snapshot_manager.run, daemon=True)
+        snapshot_thread.start()
+
+        return snapshot_manager, snapshot_thread
+
+    def _stop_managers(
+        self,
+        snapshot_manager: Optional[SnapshotManager],
+        snapshot_thread: Optional[threading.Thread],
+        coverage_manager: Any,
+        coverage_thread: Optional[threading.Thread],
+        harness_name: str,
+    ) -> None:
+        """Stop snapshot and coverage managers."""
+        if snapshot_manager:
+            self.logger.info(
+                f"Capturing final snapshot for harness '{harness_name}'..."
+            )
+            try:
+                snapshot_manager.capture_snapshot()
+            except Exception as e:
+                self.logger.warning(f"Failed to capture final snapshot: {e}")
+
+            self.logger.info("Stopping snapshot manager...")
+            snapshot_manager.stop()
+            if snapshot_thread and snapshot_thread.is_alive():
+                snapshot_thread.join(timeout=5.0)
+                if snapshot_thread.is_alive():
+                    self.logger.warning("Snapshot thread did not stop within timeout")
+
+        if coverage_manager:
+            self.logger.info("Stopping coverage manager...")
+            coverage_manager.stop()
+            if coverage_thread and coverage_thread.is_alive():
+                coverage_thread.join(timeout=5.0)
+                if coverage_thread.is_alive():
+                    self.logger.warning("Coverage thread did not stop within timeout")
+
+    def _run_verification(
+        self,
+        harness_result: Optional[HarnessResult],
+        benchmark_path: Path,
+        trial_output_dir: Path,
+        oss_fuzz_path: Optional[Path],
+        harness_name: str,
+        *,
+        skip_verification: bool,
+    ) -> tuple[list[VerifResult], list[PatchVerificationResult]]:
+        """Run verification based on CRS type."""
+        pov_verification_results: list[VerifResult] = []
+        patch_verification_results: list[PatchVerificationResult] = []
+
+        # Check if verification should run
+        if not harness_result or not harness_result.run_successful:
+            self.logger.info("Verification skipped: run unsuccessful")
+            return pov_verification_results, patch_verification_results
+
+        if skip_verification:
+            self.logger.info("Verification skipped: verification disabled")
+            return pov_verification_results, patch_verification_results
+
+        if not oss_fuzz_path:
+            self.logger.info("Verification skipped: oss-fuzz path not available")
+            return pov_verification_results, patch_verification_results
+
+        # Run verification based on CRS type
+        if isinstance(self.crs_executor, CRSBugFindingExecutor):
             crs_output_dir = trial_output_dir / "output"
-            verification_results = self._verify_povs(
+            pov_verification_results = self._verify_povs(
                 benchmark_path=benchmark_path,
                 crs_output_dir=crs_output_dir,
                 oss_fuzz_path=oss_fuzz_path,
-                harness_name=harness.name,
+                harness_name=harness_name,
             )
-        else:
-            # Log why verification was skipped
-            if not harness_result or not harness_result.run_successful:
-                self.logger.info("POV verification skipped: run unsuccessful")
-            elif skip_verification:
-                self.logger.info("POV verification skipped: verification disabled")
-            elif not isinstance(self.crs_executor, CRSBugFindingExecutor):
-                self.logger.info("POV verification skipped: not a bug finding executor")
-            elif not oss_fuzz_path:
-                self.logger.info(
-                    "POV verification skipped: oss-fuzz path not available"
-                )
 
-        return harness_result, verification_results
+        elif isinstance(self.crs_executor, CRSPatchExecutor):
+            patch_verification_results = self._verify_patches(
+                benchmark_path=benchmark_path,
+                trial_output_dir=trial_output_dir,
+                oss_fuzz_path=oss_fuzz_path,
+                harness_name=harness_name,
+            )
+
+        return pov_verification_results, patch_verification_results
 
     def _verify_povs(
         self,
@@ -543,6 +663,79 @@ class BenchmarkRunner:
         except Exception as e:
             self.logger.error(
                 f"POV verification failed for harness '{harness_name}': {e}",
+                exc_info=True,
+            )
+            return []
+
+    def _verify_patches(
+        self,
+        benchmark_path: Path,
+        trial_output_dir: Path,
+        oss_fuzz_path: Path,
+        harness_name: str,
+    ) -> list[PatchVerificationResult]:
+        """Verify CRS-generated patches for a specific harness.
+
+        Args:
+            benchmark_path: Path to benchmark directory
+            trial_output_dir: Path to trial output directory containing patches
+            oss_fuzz_path: Path to oss-fuzz directory
+            harness_name: Name of the harness
+
+        Returns:
+            List of patch verification results
+        """
+        try:
+            self.logger.info(f"Starting patch verification for harness: {harness_name}")
+
+            # Patches are in trial_output_dir/output/patches/
+            patch_dir = trial_output_dir / "output" / "patches"
+            if not patch_dir.exists():
+                self.logger.warning(f"No patches directory found: {patch_dir}")
+                return []
+
+            # POVs were prepared in trial_output_dir/crs-input/povs/
+            pov_dir = trial_output_dir / "crs-input" / "povs"
+            if not pov_dir.exists():
+                self.logger.warning(f"No POVs directory found: {pov_dir}")
+                return []
+
+            # Create verification engine with trial-specific work directory
+            work_dir = trial_output_dir / "patch-verify"
+            work_dir.mkdir(parents=True, exist_ok=True)
+
+            engine = PatchVerificationEngine(
+                oss_fuzz_path=oss_fuzz_path,
+                timeout=120,
+                build_timeout=1200,
+                test_timeout=1800,
+                work_dir=work_dir,
+                force_rebuild=True,  # Always rebuild for fresh verification
+            )
+
+            # Run verification
+            results = engine.verify_patches(
+                benchmark_path=benchmark_path,
+                patch_dir=patch_dir,
+                harness=harness_name,
+                pov_dir=pov_dir,
+                parallel=True,
+            )
+
+            # Log summary
+            valid_count = sum(1 for r in results if r.is_valid)
+            self.logger.info(
+                f"Patch verification completed: {valid_count}/{len(results)} patches valid"
+            )
+
+            # Cleanup temporary files
+            engine.cleanup()
+
+            return results
+
+        except Exception as e:
+            self.logger.error(
+                f"Patch verification failed for harness '{harness_name}': {e}",
                 exc_info=True,
             )
             return []
@@ -854,29 +1047,25 @@ class BenchmarkRunner:
 
         self.logger.debug("Saturation monitor: stopped")
 
-    def _save_patch_summary(
+    def _save_patch_verification_results(
         self,
         trial_output_dir: Path,
-        patches: dict[str, str],
+        results: list[PatchVerificationResult],
         total_input_povs: int,
     ) -> None:
-        """Save patch collection summary to trial output directory.
+        """Save patch verification results to trial output directory.
 
         Args:
             trial_output_dir: Trial output directory
-            patches: Dict mapping POV ID to patch content
+            results: List of patch verification results
             total_input_povs: Number of input POVs
         """
-        import json
+        output = PatchVerificationOutput.from_results(results, total_input_povs)
 
-        summary = {
-            "total_input_povs": total_input_povs,
-            "patches_generated": len(patches),
-            "patch_ids": list(patches.keys()),
-        }
+        results_path = trial_output_dir / "patch_verification_results.json"
+        results_path.write_text(output.model_dump_json(indent=2))
 
-        summary_path = trial_output_dir / "patch_summary.json"
-        with summary_path.open("w") as f:
-            json.dump(summary, f, indent=2)
-
-        self.logger.debug(f"Saved patch summary to {summary_path}")
+        self.logger.info(
+            f"Saved patch verification results to {results_path} "
+            f"({output.summary.valid}/{output.summary.patches_generated} valid)"
+        )
