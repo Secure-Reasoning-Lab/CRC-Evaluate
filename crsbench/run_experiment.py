@@ -31,9 +31,13 @@ from dotenv import load_dotenv
 
 from crsbench.builder import BuildResult, OSSFuzzBuilder
 from crsbench.builder.types import BenchmarkMode
+from crsbench.distributed.jobs import get_crs_type
+from crsbench.evaluation.results import CRSType, TrialResult
 from crsbench.utils import log_progress, log_section, log_summary, set_gitcache
+from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.logger import configure_logger, get_logger
 from crsbench.utils.workers import resolve_build_workers
+from crsbench.validation.meta_adapter import MetaYamlAdapter
 
 if TYPE_CHECKING:
     from crsbench.validation.schemas import BenchmarkHarness
@@ -527,7 +531,11 @@ def get_available_modes_for_benchmark(benchmark_path: Path) -> List[str]:
 
 
 def generate_trial_matrix(
-    benchmark_harnesses: List["BenchmarkHarness"], crses: List[str], config
+    benchmark_harnesses: List["BenchmarkHarness"],
+    crses: List[str],
+    config,
+    registry_dir: Path,
+    crs_configs_dir: Path,
 ) -> List[Trial]:
     """Generate all trial combinations from BenchmarkHarness objects, CRSes, and trials.
 
@@ -535,6 +543,8 @@ def generate_trial_matrix(
         benchmark_harnesses: List of BenchmarkHarness objects
         crses: List of CRS identifiers
         config: Experiment configuration with trials count and mode
+        registry_dir: Path to CRS registry directory
+        crs_configs_dir: Path to CRS configs directory
 
     Returns:
         List of Trial namedtuples with mode information
@@ -543,7 +553,28 @@ def generate_trial_matrix(
     config_mode = config.mode.value  # Get string value from enum
 
     for crs in crses:
+        # Detect CRS type
+        registry_name = get_crs_registry_name(crs, crs_configs_dir)
+        crs_type = get_crs_type(registry_name, registry_dir)
+        is_bug_fixing = crs_type == CRSType.BUG_FIXING.value
+
         for benchmark_harness in benchmark_harnesses:
+            # Bug-fixing CRS: skip harnesses without CPVs
+            if is_bug_fixing:
+                meta_path = Path(benchmark_harness.path) / ".aixcc" / "meta.yaml"
+                adapter = MetaYamlAdapter.from_meta_yaml(
+                    meta_path,
+                    benchmark_name=benchmark_harness.name,
+                    lang="",
+                    main_repo="",
+                )
+                harness = adapter.get_harness(benchmark_harness.harness.name)
+                if not harness or not harness.vulns:
+                    logger.info(
+                        f"Skipping {benchmark_harness.name}/{benchmark_harness.harness.name}: "
+                        f"no CPVs for bug-fixing CRS '{crs}'"
+                    )
+                    continue
             # Determine which modes to run for this benchmark
             if config_mode == "all":
                 available_modes = get_available_modes_for_benchmark(
@@ -570,6 +601,47 @@ def generate_trial_matrix(
         f"{config.trials} trials × mode={config_mode}"
     )
     return trials
+
+
+def _is_all_bug_fixing_crs(
+    trials: List[Trial],
+    registry_dir: Path,
+    crs_configs_dir: Path,
+) -> bool:
+    """Check if all trials use bug-fixing CRS only.
+
+    Bug-fixing CRS does not need upfront variant builds because:
+    - CRS execution only uses POVs, not variants
+    - Patch verification builds PATCHED variants on-demand
+
+    Args:
+        trials: List of trials to check
+        registry_dir: Path to CRS registry directory
+        crs_configs_dir: Path to CRS configs directory
+
+    Returns:
+        True if all trials are bug-fixing CRS
+    """
+    from crsbench.distributed.jobs import get_crs_type
+    from crsbench.utils.crs_helper import get_crs_registry_name
+
+    if not trials:
+        return False
+
+    # Get unique CRS names from trials
+    unique_crses = {trial.crs for trial in trials}
+
+    for crs in unique_crses:
+        try:
+            registry_name = get_crs_registry_name(crs, crs_configs_dir)
+            crs_type = get_crs_type(registry_name, registry_dir)
+            if crs_type != "bug-fixing":
+                return False
+        except (FileNotFoundError, ValueError) as e:
+            logger.warning(f"Could not determine CRS type for '{crs}': {e}")
+            return False  # Be conservative - build variants if unsure
+
+    return True
 
 
 def build_variants_upfront(
@@ -881,8 +953,14 @@ def run_experiment_local(
     """
     log_section("Running CRSBench in Local Mode (No Redis)", width=60)
 
+    # Resolve CRS paths with defaults
+    registry_dir = Path(config.registry_dir or "crses/registry").resolve()
+    crs_configs_dir = Path(config.crs_configs_dir or "crses/configs").resolve()
+
     # Generate trial matrix
-    trials = generate_trial_matrix(benchmark_harnesses, crses, config)
+    trials = generate_trial_matrix(
+        benchmark_harnesses, crses, config, registry_dir, crs_configs_dir
+    )
 
     logger.info(f"Total trials to execute: {len(trials)}")
     logger.info(f"CRSes: {', '.join(crses)}")
@@ -890,8 +968,15 @@ def run_experiment_local(
     logger.info(f"Trials per combination: {config.trials}")
     logger.info("=" * 60)
 
-    # Build variants upfront
-    build_results = build_variants_upfront(trials, config, args)
+    # Skip variant builds for bug-fixing CRS (built on-demand during patch verification)
+    if _is_all_bug_fixing_crs(trials, registry_dir, crs_configs_dir):
+        logger.info(
+            "Skipping upfront variant builds for bug-fixing CRS "
+            "(PATCHED variants built on-demand during patch verification)"
+        )
+        build_results = {}
+    else:
+        build_results = build_variants_upfront(trials, config, args)
 
     # Check for critical build failures
     failed_builds = [
@@ -934,12 +1019,18 @@ def run_experiment_local(
         results.append(result)
 
         # Log result and raise exception on failure
-        if result.get("success"):
-            logger.info(
-                f"  ✓ Success: {result.get('povs_found', 0)}/{result.get('total_povs', 0)} POVs found"
-            )
+        if result.success:
+            if result.crs_type == CRSType.BUG_FIXING:
+                logger.info(
+                    f"  ✓ Success: {result.patches_generated} patches generated, "
+                    f"{result.patches_valid} valid"
+                )
+            else:
+                logger.info(
+                    f"  ✓ Success: {result.povs_found}/{result.total_povs} POVs found"
+                )
         else:
-            error_msg = result.get("error", "Unknown error")
+            error_msg = result.error or "Unknown error"
             logger.error(f"  ✗ Failed: {error_msg}")
             raise RuntimeError(f"Trial failed: {error_msg}")
 
@@ -949,7 +1040,7 @@ def run_experiment_local(
     generate_final_report(results, experiment_name, config)
 
 
-def monitor_jobs(queue, job_list: List, experiment_name: str) -> List[Dict[str, Any]]:
+def monitor_jobs(queue, job_list: List, experiment_name: str) -> List[TrialResult]:
     """Monitor job progress and display status.
 
     Args:
@@ -958,7 +1049,7 @@ def monitor_jobs(queue, job_list: List, experiment_name: str) -> List[Dict[str, 
         experiment_name: Experiment identifier
 
     Returns:
-        List of job results
+        List of TrialResult objects
     """
     import importlib.util
 
@@ -973,9 +1064,10 @@ def monitor_jobs(queue, job_list: List, experiment_name: str) -> List[Dict[str, 
 
 def _monitor_jobs_basic(
     queue, job_list: List, experiment_name: str
-) -> List[Dict[str, Any]]:
+) -> List[TrialResult]:
     """Basic job monitoring without Rich UI."""
     from crsbench.distributed.queue import get_queue_stats
+    from crsbench.evaluation.results import TrialMetadata
 
     logger.info(f"\nMonitoring {len(job_list)} jobs for experiment: {experiment_name}")
 
@@ -1017,18 +1109,28 @@ def _monitor_jobs_basic(
         time.sleep(3)
 
     # Collect results
-    results = []
+    results: List[TrialResult] = []
     for job in job_list:
         job.refresh()
         if job.result:
             results.append(job.result)
         elif job.is_failed:
+            # Create TrialResult for failed jobs using job kwargs
+            kwargs = job.kwargs or {}
             results.append(
-                {
-                    "success": False,
-                    "error": f"Job failed: {job.exc_info}",
-                    "job_id": job.id,
-                }
+                TrialResult(
+                    crs=kwargs.get("crs", "unknown"),
+                    benchmark=kwargs.get("benchmark", "unknown"),
+                    harness=kwargs.get("harness_name", "unknown"),
+                    trial_num=kwargs.get("trial_num", 0),
+                    crs_type=CRSType.BUG_FINDING,
+                    success=False,
+                    execution_time=0.0,
+                    error=f"Job failed: {job.exc_info}",
+                    error_type="RQJobFailure",
+                    report={},
+                    metadata=TrialMetadata(timestamp_start=0.0, timestamp_end=0.0),
+                )
             )
 
     return results
@@ -1036,7 +1138,7 @@ def _monitor_jobs_basic(
 
 def _monitor_jobs_rich(
     queue, job_list: List, experiment_name: str
-) -> List[Dict[str, Any]]:
+) -> List[TrialResult]:
     """Monitor jobs with Rich UI."""
     from rich.console import Console
     from rich.live import Live
@@ -1080,18 +1182,30 @@ def _monitor_jobs_rich(
             time.sleep(1)
 
     # Collect results
-    results = []
+    from crsbench.evaluation.results import TrialMetadata
+
+    results: List[TrialResult] = []
     for job in job_list:
         job.refresh()
         if job.result:
             results.append(job.result)
         elif job.is_failed:
+            # Create TrialResult for failed jobs using job kwargs
+            kwargs = job.kwargs or {}
             results.append(
-                {
-                    "success": False,
-                    "error": f"Job failed: {job.exc_info}",
-                    "job_id": job.id,
-                }
+                TrialResult(
+                    crs=kwargs.get("crs", "unknown"),
+                    benchmark=kwargs.get("benchmark", "unknown"),
+                    harness=kwargs.get("harness_name", "unknown"),
+                    trial_num=kwargs.get("trial_num", 0),
+                    crs_type=CRSType.BUG_FINDING,
+                    success=False,
+                    execution_time=0.0,
+                    error=f"Job failed: {job.exc_info}",
+                    error_type="RQJobFailure",
+                    report={},
+                    metadata=TrialMetadata(timestamp_start=0.0, timestamp_end=0.0),
+                )
             )
 
     console.print("\n[green]✓[/green] All jobs completed!")
@@ -1124,8 +1238,14 @@ def run_experiment_distributed(
     if queue is None:
         raise RuntimeError(f"Failed to initialize Redis queue at {config.redis_host}")
 
+    # Resolve CRS paths with defaults
+    registry_dir = Path(config.registry_dir or "crses/registry").resolve()
+    crs_configs_dir = Path(config.crs_configs_dir or "crses/configs").resolve()
+
     # Generate trial matrix
-    trials = generate_trial_matrix(benchmark_harnesses, crses, config)
+    trials = generate_trial_matrix(
+        benchmark_harnesses, crses, config, registry_dir, crs_configs_dir
+    )
 
     logger.info(f"Total trials to enqueue: {len(trials)}")
     logger.info(f"CRSes: {', '.join(crses)}")
@@ -1133,9 +1253,17 @@ def run_experiment_distributed(
     logger.info(f"Trials per combination: {config.trials}")
     logger.info("=" * 60)
 
-    # Build variants upfront (on coordinator machine)
-    # Workers will use the pre-built variants from oss-fuzz/build/out/
-    build_results = build_variants_upfront(trials, config, args)
+    # Skip variant builds for bug-fixing CRS (built on-demand during patch verification)
+    if _is_all_bug_fixing_crs(trials, registry_dir, crs_configs_dir):
+        logger.info(
+            "Skipping upfront variant builds for bug-fixing CRS "
+            "(PATCHED variants built on-demand during patch verification)"
+        )
+        build_results = {}
+    else:
+        # Build variants upfront (on coordinator machine)
+        # Workers will use the pre-built variants from oss-fuzz/build/out/
+        build_results = build_variants_upfront(trials, config, args)
 
     # Check for critical build failures
     failed_builds = [
@@ -1188,7 +1316,7 @@ def run_experiment_distributed(
 
 
 def generate_final_report(
-    results: List[Dict[str, Any]], experiment_name: str, config
+    results: List[TrialResult], experiment_name: str, config
 ) -> None:
     """Generate and display final experiment report.
 
@@ -1202,7 +1330,7 @@ def generate_final_report(
 
     # Count successes and failures
     total_trials = len(results)
-    successful_trials = sum(1 for r in results if r.get("success", False))
+    successful_trials = sum(1 for r in results if r.success)
     failed_trials = total_trials - successful_trials
 
     logger.info(f"Total trials: {total_trials}")
@@ -1213,12 +1341,8 @@ def generate_final_report(
 
     # Aggregate POV statistics
     if successful_trials > 0:
-        total_povs_found = sum(
-            r.get("povs_found", 0) for r in results if r.get("success", False)
-        )
-        total_povs_available = sum(
-            r.get("total_povs", 0) for r in results if r.get("success", False)
-        )
+        total_povs_found = sum(r.povs_found for r in results if r.success)
+        total_povs_available = sum(r.total_povs for r in results if r.success)
 
         if total_povs_available > 0:
             overall_success_rate = total_povs_found / total_povs_available
@@ -1232,13 +1356,11 @@ def generate_final_report(
     if failed_trials > 0:
         logger.warning(f"\nFailed trials ({failed_trials}):")
         for idx, result in enumerate(results):
-            if not result.get("success", False):
-                error = result.get("error", "Unknown error")
-                crs = result.get("crs", "unknown")
-                benchmark = result.get("benchmark", "unknown")
-                trial_num = result.get("trial_num", "?")
+            if not result.success:
+                error = result.error or "Unknown error"
                 logger.warning(
-                    f"  [{idx + 1}] {crs} on {benchmark} (trial {trial_num}): {error}"
+                    f"  [{idx + 1}] {result.crs} on {result.benchmark} "
+                    f"(trial {result.trial_num}): {error}"
                 )
 
     log_section("Report generation complete", width=60)
