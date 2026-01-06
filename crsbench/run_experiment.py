@@ -1285,7 +1285,7 @@ def _monitor_jobs_rich(
         stats = get_queue_stats(queue)
 
         # Debug: log queue info
-        logger.info(f"Queue name: crsbench_{experiment_name}, stats: {stats}")
+        logger.debug(f"Queue name: crsbench_{experiment_name}, stats: {stats}")
 
         # Queue status table
         table = Table(title=f"Experiment: {experiment_name}")
