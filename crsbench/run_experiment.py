@@ -1311,7 +1311,7 @@ def _monitor_jobs_rich(
         for job in job_list:
             job.refresh()
             status = job.get_status()
-            logger.info(
+            logger.debug(
                 f"Job {job.id[:8]}: status={status}, is_queued={job.is_queued}, is_started={job.is_started}, is_finished={job.is_finished}"
             )
             if status == "started":
