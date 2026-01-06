@@ -88,6 +88,7 @@ crsbench \
    --registry-dir "$REGISTRY_DIR" \
    --crs-configs-dir "$CRS_CONFIGS_DIR" \
    --benchmarks-root "$BENCHMARKS_ROOT" \
+   --gitcache \
    --debug
 
 # Check exit status
