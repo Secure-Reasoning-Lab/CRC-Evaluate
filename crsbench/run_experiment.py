@@ -1550,6 +1550,7 @@ def run_experiment_distributed(
     else:
         # Build variants upfront (on coordinator machine)
         # Workers will use the pre-built variants from oss-fuzz/build/out/
+        # TODO: workers on different machines
         build_results = build_variants_upfront(trials, config, args)
 
     # Check for critical build failures
