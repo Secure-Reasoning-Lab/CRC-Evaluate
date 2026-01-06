@@ -273,20 +273,20 @@ class TestPOVsPreparation:
 
         assert povs_dir is not None
         assert povs_dir.exists()
-        assert len(list(povs_dir.iterdir())) == 3  # pov_0, pov_1, pov_2
+        # One POV per CPV: cpv_0 and cpv_1
+        assert len(list(povs_dir.iterdir())) == 2
 
     def test_prepare_povs_flattened_structure(self, preparer, mock_benchmark_with_povs):
-        """Test that POVs are flattened (no cpv_* subdirectories)."""
+        """Test that POVs use CPV ID as filename (no subdirectories)."""
         trial_dir = preparer.experiment_dir / "trial-0"
         trial_dir.mkdir()
 
         povs_dir = preparer._prepare_povs("test-bench", "test_harness", trial_dir)
 
-        # Check files are directly in povs_dir, not in subdirectories
+        # Check files are named with CPV IDs
         pov_files = [f.name for f in povs_dir.iterdir()]
-        assert "pov_0" in pov_files
-        assert "pov_1" in pov_files
-        assert "pov_2" in pov_files
+        assert "cpv_0" in pov_files
+        assert "cpv_1" in pov_files
 
         # Ensure no .blob extension
         assert not any(f.endswith(".blob") for f in pov_files)
@@ -298,9 +298,9 @@ class TestPOVsPreparation:
         temp_benchmarks_dir,
         temp_oss_fuzz_dir,
     ):
-        """Test POVs preparation with target_povs filter."""
+        """Test POVs preparation with target_cpvs filter."""
         config = {
-            "target_povs": ["pov_0", "pov_2"]  # Only include pov_0 and pov_2
+            "target_cpvs": ["cpv_0"]  # Only include cpv_0
         }
         preparer = TrialDirectoryPreparer(
             experiment_dir=temp_experiment_dir,
@@ -315,10 +315,9 @@ class TestPOVsPreparation:
         povs_dir = preparer._prepare_povs("test-bench", "test_harness", trial_dir)
 
         pov_files = [f.name for f in povs_dir.iterdir()]
-        assert len(pov_files) == 2
-        assert "pov_0" in pov_files
-        assert "pov_2" in pov_files
-        assert "pov_1" not in pov_files
+        assert len(pov_files) == 1
+        assert "cpv_0" in pov_files
+        assert "cpv_1" not in pov_files
 
     def test_prepare_povs_no_harness_dir(self, preparer, mock_benchmark):
         """Test POVs preparation when harness directory doesn't exist."""
@@ -331,17 +330,17 @@ class TestPOVsPreparation:
 
         assert povs_dir is None
 
-    def test_should_include_pov_no_filter(self, preparer):
-        """Test POV inclusion without filter."""
-        assert preparer._should_include_pov("pov_0") is True
-        assert preparer._should_include_pov("pov_1") is True
-        assert preparer._should_include_pov("any_pov") is True
+    def test_should_include_cpv_no_filter(self, preparer):
+        """Test CPV inclusion without filter."""
+        assert preparer._should_include_cpv("cpv_0") is True
+        assert preparer._should_include_cpv("cpv_1") is True
+        assert preparer._should_include_cpv("any_cpv") is True
 
-    def test_should_include_pov_with_filter(
+    def test_should_include_cpv_with_filter(
         self, temp_experiment_dir, temp_benchmarks_dir, temp_oss_fuzz_dir
     ):
-        """Test POV inclusion with filter."""
-        config = {"target_povs": ["pov_0", "pov_2"]}
+        """Test CPV inclusion with filter."""
+        config = {"target_cpvs": ["cpv_0", "cpv_2"]}
         preparer = TrialDirectoryPreparer(
             experiment_dir=temp_experiment_dir,
             benchmarks_root=temp_benchmarks_dir,
@@ -349,9 +348,9 @@ class TestPOVsPreparation:
             config=config,
         )
 
-        assert preparer._should_include_pov("pov_0") is True
-        assert preparer._should_include_pov("pov_1") is False
-        assert preparer._should_include_pov("pov_2") is True
+        assert preparer._should_include_cpv("cpv_0") is True
+        assert preparer._should_include_cpv("cpv_1") is False
+        assert preparer._should_include_cpv("cpv_2") is True
 
 
 class TestMetadataGeneration:
