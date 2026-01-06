@@ -156,27 +156,38 @@ class CRSBugFindingExecutor(CRSExecutor):
             shutil.copytree(original_config_dir, trial_crs_config_dir)
             logger.info(f"Copied CRS config to trial dir: {trial_crs_config_dir}")
 
-        # Copy registry entry to trial-local directory
-        # Get actual CRS name from config-resource.yaml
-        crs_name = self.actual_crs_name
-        original_registry_entry = self.registry_dir / crs_name
+        # Copy ALL registry entries for this config
+        # A config may reference multiple CRS entries in the registry
+        from crsbench.utils.crs_helper import get_all_crs_registry_names
+
+        crs_names = get_all_crs_registry_names(
+            self.crs_config_name, self.crs_configs_dir
+        )
+        logger.info(
+            f"Copying {len(crs_names)} CRS registry entries: {', '.join(crs_names)}"
+        )
 
         trial_registry_dir = trial_output_dir / "crs-registry"
-        trial_registry_entry = trial_registry_dir / crs_name
 
-        if trial_registry_entry.exists():
-            logger.debug(f"Trial registry entry already exists: {trial_registry_entry}")
-        else:
-            trial_registry_entry.parent.mkdir(parents=True, exist_ok=True)
-            if original_registry_entry.exists():
-                shutil.copytree(original_registry_entry, trial_registry_entry)
-                logger.info(
-                    f"Copied registry entry to trial dir: {trial_registry_entry}"
+        for crs_name in crs_names:
+            original_registry_entry = self.registry_dir / crs_name
+            trial_registry_entry = trial_registry_dir / crs_name
+
+            if trial_registry_entry.exists():
+                logger.debug(
+                    f"Trial registry entry already exists: {trial_registry_entry}"
                 )
             else:
-                logger.warning(
-                    f"Original registry entry not found: {original_registry_entry}"
-                )
+                trial_registry_entry.parent.mkdir(parents=True, exist_ok=True)
+                if original_registry_entry.exists():
+                    shutil.copytree(original_registry_entry, trial_registry_entry)
+                    logger.info(
+                        f"Copied registry entry to trial dir: {trial_registry_entry}"
+                    )
+                else:
+                    logger.warning(
+                        f"Original registry entry not found: {original_registry_entry}"
+                    )
 
         return trial_crs_config_dir, trial_registry_dir
 
