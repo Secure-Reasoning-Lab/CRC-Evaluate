@@ -10,17 +10,19 @@
 # - Minimal time limits for fast testing
 #
 # Usage:
-#   ./run_distributed_test-parallel.sh [--tmux] [--kill-pane]
+#   ./run_distributed_test-parallel.sh [--tmux] [--kill-pane] [--debug]
 #
 # Options:
 #   --tmux       Launch worker in a new tmux vertical pane (requires tmux)
 #   --kill-pane  Kill the worker pane after test (only with --tmux)
+#   --debug      Enable debug output from crsbench
 
 set -e  # Exit on error
 
 # Parse command line arguments
 USE_TMUX=false
 KILL_PANE=false
+DEBUG=false
 for arg in "$@"; do
     case $arg in
         --tmux)
@@ -31,9 +33,13 @@ for arg in "$@"; do
             KILL_PANE=true
             shift
             ;;
+        --debug)
+            DEBUG=true
+            shift
+            ;;
         *)
             echo "Unknown argument: $arg"
-            echo "Usage: $0 [--tmux] [--kill-pane]"
+            echo "Usage: $0 [--tmux] [--kill-pane] [--debug]"
             exit 1
             ;;
     esac
@@ -130,6 +136,7 @@ echo -e "${GREEN}Configuration:${NC}"
 echo "  Config file: $CONFIG_FILE"
 echo "  Experiment name: $EXPERIMENT_NAME"
 echo "  Mode: Distributed (Redis-based job queue)"
+echo "  Debug mode: $DEBUG"
 echo "  Parallel workers: $NUM_WORKERS"
 if [ "$USE_TMUX" = true ]; then
     echo "  Worker display: tmux vertical pane"
@@ -223,16 +230,23 @@ echo -e "${GREEN}Running CRSBench coordinator (enqueuing jobs)...${NC}"
 echo ""
 
 EXPERIMENT_EXIT_CODE=0
-crsbench run \
-    --experiment-config "$CONFIG_FILE" \
+
+# Build crsbench run command
+CRSBENCH_CMD="crsbench run \
+    --experiment-config \"$CONFIG_FILE\" \
     --crses crs-libfuzzer \
-    --oss-fuzz-path "$OSS_FUZZ_PATH" \
-    --registry-dir "$REGISTRY_DIR" \
-    --crs-configs-dir "$CRS_CONFIGS_DIR" \
-    --benchmarks-root "$BENCHMARKS_ROOT" \
+    --oss-fuzz-path \"$OSS_FUZZ_PATH\" \
+    --registry-dir \"$REGISTRY_DIR\" \
+    --crs-configs-dir \"$CRS_CONFIGS_DIR\" \
+    --benchmarks-root \"$BENCHMARKS_ROOT\" \
     --distributed \
-    --gitcache \
-    --debug || EXPERIMENT_EXIT_CODE=$?
+    --gitcache"
+
+if [ "$DEBUG" = true ]; then
+    CRSBENCH_CMD="$CRSBENCH_CMD --debug"
+fi
+
+eval $CRSBENCH_CMD || EXPERIMENT_EXIT_CODE=$?
 
 echo -e "${GREEN}✓ Coordinator finished${NC}"
 echo ""
