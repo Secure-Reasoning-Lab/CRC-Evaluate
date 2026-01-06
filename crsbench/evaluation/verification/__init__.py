@@ -2,7 +2,7 @@
 
 This module provides the core verification infrastructure:
 - POV Models: PovVerificationStatus, PovVerificationRequest, PovVerificationResult
-- Patch Models: PatchVerificationStatus, PatchInfo, PatchVerificationResult, TestMode
+- Patch Models: PatchVerificationStatus, PatchInfo, PatchVerificationResult, UnitTestMode
 - Deduplication strategies: PatchBasedDedup, StatusBasedDedup, NoOpDedup
 - POV verification: VerificationEngine, VerdictResolver
 - Patch verification: PatchVerificationEngine
@@ -26,7 +26,7 @@ from crsbench.evaluation.verification.models import (
     PovVerificationRequest,
     PovVerificationResult,
     PovVerificationStatus,
-    TestMode,
+    UnitTestMode,
 )
 from crsbench.evaluation.verification.patch import PatchVerificationEngine
 from crsbench.evaluation.verification.pov import (
@@ -43,7 +43,7 @@ __all__ = [
     "PatchVerificationStatus",
     "PatchInfo",
     "PatchVerificationResult",
-    "TestMode",
+    "UnitTestMode",
     # POV verification engine
     "VerificationEngine",
     "VerdictResolver",

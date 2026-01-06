@@ -84,7 +84,11 @@ class CoverageSummary(BaseModel):
     Attributes:
         metric: Coverage metric type ('line', 'edge', or 'function').
         corpus_total: Total number of corpus files processed.
-        corpus_contributing: Number of corpus files that contribute unique coverage.
+        corpus_contributing: Number of corpus files that contribute unique coverage
+            (add at least one new line not previously covered).
+        corpus_unique: Number of corpus files with distinct coverage profiles.
+            A corpus has a distinct profile if its exact set of covered lines
+            hasn't been seen before. This enables corpus minimization.
         lines_covered: Number of unique lines covered.
         lines_total: Total number of coverable lines.
         lines_percent: Percentage of lines covered (0.0 to 100.0).
@@ -96,6 +100,7 @@ class CoverageSummary(BaseModel):
     metric: str = Field(default="line", pattern="^(line|edge|function)$")
     corpus_total: int = Field(default=0, ge=0)
     corpus_contributing: int = Field(default=0, ge=0)
+    corpus_unique: int = Field(default=0, ge=0)
     lines_covered: int = Field(default=0, ge=0)
     lines_total: int = Field(default=0, ge=0)
     lines_percent: float = Field(default=0.0, ge=0.0, le=100.0)

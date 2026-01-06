@@ -788,7 +788,7 @@ class TestIntegrationWithSampleConfigs:
 # ============================================================================
 
 
-class TestModeSelection:
+class UnitTestModeSelection:
     """Test execution mode selection (local vs distributed)."""
 
     def test_should_use_distributed_mode_single_job(self):
@@ -797,6 +797,7 @@ class TestModeSelection:
         # Mock args
         class MockArgs:
             local_only = False
+            distributed = False
 
         args = MockArgs()
 
@@ -824,6 +825,7 @@ class TestModeSelection:
 
         class MockArgs:
             local_only = False
+            distributed = False
 
         args = MockArgs()
 
@@ -852,6 +854,7 @@ class TestModeSelection:
 
         class MockArgs:
             local_only = True
+            distributed = False
 
         args = MockArgs()
 
@@ -875,3 +878,64 @@ class TestModeSelection:
         result = should_use_distributed_mode(args, config, total_jobs)
 
         assert result is False, "--local-only flag should force local mode"
+
+    def test_should_use_distributed_mode_distributed_no_redis(self):
+        """Test --distributed flag without Redis configured (should raise error)."""
+
+        class MockArgs:
+            local_only = False
+            distributed = True
+
+        args = MockArgs()
+
+        # Config without Redis
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode="delta",
+            max_total_time=3600,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["crs1"],
+            benchmarks=["bench1"],
+        )
+
+        total_jobs = 1
+
+        # Should raise RuntimeError when forcing distributed mode without Redis
+        with pytest.raises(
+            RuntimeError, match="Cannot use distributed mode: No Redis host configured"
+        ):
+            should_use_distributed_mode(args, config, total_jobs)
+
+    def test_should_use_distributed_mode_conflicting_flags(self):
+        """Test conflicting --local-only and --distributed flags."""
+
+        class MockArgs:
+            local_only = True
+            distributed = True
+
+        args = MockArgs()
+
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode="delta",
+            max_total_time=3600,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["crs1"],
+            benchmarks=["bench1"],
+            redis_host="localhost",
+        )
+
+        total_jobs = 1
+
+        # Should raise RuntimeError when both flags are set
+        with pytest.raises(
+            RuntimeError,
+            match="Cannot specify both --local-only and --distributed flags",
+        ):
+            should_use_distributed_mode(args, config, total_jobs)

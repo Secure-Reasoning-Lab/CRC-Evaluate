@@ -22,12 +22,12 @@ Usage:
 import argparse
 import sys
 import time
-from collections import namedtuple
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import Any, Dict, List, TYPE_CHECKING
 
 import yaml
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 from crsbench.builder import BuildResult, OSSFuzzBuilder
 from crsbench.builder.types import BenchmarkMode
@@ -38,9 +38,7 @@ from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.logger import configure_logger, get_logger
 from crsbench.utils.workers import resolve_build_workers
 from crsbench.validation.meta_adapter import MetaYamlAdapter
-
-if TYPE_CHECKING:
-    from crsbench.validation.schemas import BenchmarkHarness
+from crsbench.validation.schemas import BenchmarkHarness
 
 # Load environment variables from .env file if present
 load_dotenv()
@@ -48,8 +46,22 @@ load_dotenv()
 # Get logger instance
 logger = get_logger(__name__)
 
+
 # Trial configuration
-Trial = namedtuple("Trial", ["crs", "benchmark_harness", "trial_num", "mode"])
+class Trial(BaseModel):
+    """Trial configuration for CRS evaluation.
+
+    Attributes:
+        crs: CRS identifier
+        benchmark_harness: Resolved benchmark-harness pair
+        trial_num: Trial number (1-indexed)
+        mode: Evaluation mode ("delta" or "full")
+    """
+
+    crs: str
+    benchmark_harness: BenchmarkHarness
+    trial_num: int
+    mode: str
 
 
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
@@ -112,6 +124,12 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         "--local-only",
         action="store_true",
         help="Force local execution mode without Redis (useful for single jobs or testing)",
+    )
+
+    parser.add_argument(
+        "--distributed",
+        action="store_true",
+        help="Force distributed execution mode with Redis (raises error if Redis unavailable)",
     )
 
     parser.add_argument(
@@ -233,11 +251,12 @@ def parse_arguments() -> argparse.Namespace:
         Parsed arguments with experiment configuration.
     """
     # Check for legacy invocation (no subcommand, starts with --)
-    # or verify/coverage subcommand
+    # or verify/coverage/worker subcommand
     if len(sys.argv) > 1 and sys.argv[1] not in [
         "run",
         "verify",
         "coverage",
+        "worker",
         "-h",
         "--help",
     ]:
@@ -298,6 +317,11 @@ Examples:
     )
 
     add_coverage_subparser(subparsers)
+
+    # 'worker' subcommand - distributed worker
+    from crsbench.distributed.cli.worker_command import add_worker_subparser
+
+    add_worker_subparser(subparsers)
 
     args = parser.parse_args()
 
@@ -387,7 +411,7 @@ def load_experiment_config(config_path: Path):
 def resolve_benchmark_harnesses(
     benchmark_entries: List,
     benchmarks_root: Path,
-) -> List["BenchmarkHarness"]:
+) -> List[BenchmarkHarness]:
     """Resolve BenchmarkHarness objects from BenchmarkEntry list.
 
     For entries with harnesses specified: use those harnesses
@@ -593,7 +617,14 @@ def generate_trial_matrix(
             # Generate trials for each mode
             for mode in modes_to_run:
                 for trial_num in range(1, config.trials + 1):
-                    trials.append(Trial(crs, benchmark_harness, trial_num, mode))
+                    trials.append(
+                        Trial(
+                            crs=crs,
+                            benchmark_harness=benchmark_harness,
+                            trial_num=trial_num,
+                            mode=mode,
+                        )
+                    )
 
     logger.info(
         f"Generated {len(trials)} trials: {len(crses)} CRSes × "
@@ -820,6 +851,10 @@ def should_use_distributed_mode(
     - Redis not available (connection check)
     - User explicitly requests local mode via --local-only flag
 
+    Criteria for forced distributed mode:
+    - User explicitly requests via --distributed flag
+    - Raises error if Redis is not configured or unavailable
+
     Args:
         args: Parsed command line arguments
         config: Experiment configuration
@@ -827,8 +862,37 @@ def should_use_distributed_mode(
 
     Returns:
         bool: True if should use distributed mode, False for local mode
+
+    Raises:
+        RuntimeError: If --distributed is set but Redis is unavailable
     """
     from crsbench.distributed.queue import check_redis_available
+
+    # Check for conflicting flags
+    distributed = getattr(args, "distributed", False)
+    if args.local_only and distributed:
+        raise RuntimeError("Cannot specify both --local-only and --distributed flags")
+
+    # User explicitly forced distributed mode
+    if distributed:
+        logger.info("Distributed mode explicitly requested via --distributed flag")
+
+        # Validate Redis host is configured
+        if not config.redis_host or config.redis_host == "none":
+            raise RuntimeError(
+                "Cannot use distributed mode: No Redis host configured. "
+                "Please set 'redis_host' in experiment config or remove --distributed flag."
+            )
+
+        # Validate Redis is available
+        if not check_redis_available(config.redis_host):
+            raise RuntimeError(
+                f"Cannot use distributed mode: Redis not available at {config.redis_host}. "
+                "Please ensure Redis server is running or remove --distributed flag."
+            )
+
+        logger.info(f"Forcing distributed mode with Redis at {config.redis_host}")
+        return True
 
     # User explicitly disabled distributed mode
     if args.local_only:
@@ -936,7 +1000,7 @@ def enhance_config_with_cli_args(
 def run_experiment_local(
     experiment_name: str,
     config,
-    benchmark_harnesses: List["BenchmarkHarness"],
+    benchmark_harnesses: List[BenchmarkHarness],
     crses: List[str],
     args: argparse.Namespace,
 ) -> None:
@@ -1076,6 +1140,7 @@ def _monitor_jobs_basic(
 
         # Display stats
         log_section(f"Experiment: {experiment_name}", width=60)
+        logger.info(f"Workers connected: {stats.get('workers', 0)}")
         log_summary(
             "Queue Status",
             {
@@ -1086,6 +1151,33 @@ def _monitor_jobs_basic(
             },
             show_percentage=False,
         )
+
+        # Display currently running jobs with metadata
+        running_jobs = []
+        for job in job_list:
+            job.refresh()
+            if job.get_status() == "started":
+                worker_name = job.meta.get("worker_name", "?")
+                crs = job.meta.get("crs", "?")
+                benchmark = job.meta.get("benchmark", "?")
+                harness = job.meta.get("harness", "?")
+                mode = job.meta.get("mode", "?")
+                trial_num = job.meta.get("trial_num", "?")
+                phase = job.meta.get("phase", "queued")
+                phase_started_at = job.meta.get("phase_started_at")
+                elapsed = ""
+                if phase_started_at:
+                    elapsed_sec = int(time.time() - phase_started_at)
+                    mins, secs = divmod(elapsed_sec, 60)
+                    elapsed = f"{mins}m{secs}s"
+                running_jobs.append(
+                    f"  [{worker_name}] [{crs}] {benchmark}/{harness} mode={mode} trial={trial_num} phase={phase} ({elapsed})"
+                )
+
+        if running_jobs:
+            logger.info("Currently Running:")
+            for line in running_jobs:
+                logger.info(line)
 
         # Check if all jobs completed
         completed = 0
@@ -1140,7 +1232,7 @@ def _monitor_jobs_rich(
     queue, job_list: List, experiment_name: str
 ) -> List[TrialResult]:
     """Monitor jobs with Rich UI."""
-    from rich.console import Console
+    from rich.console import Console, Group
     from rich.live import Live
     from rich.table import Table
 
@@ -1151,6 +1243,10 @@ def _monitor_jobs_rich(
     def generate_status_table():
         stats = get_queue_stats(queue)
 
+        # Debug: log queue info
+        logger.info(f"Queue name: crsbench_{experiment_name}, stats: {stats}")
+
+        # Queue status table
         table = Table(title=f"Experiment: {experiment_name}")
         table.add_column("Status", style="cyan")
         table.add_column("Count", justify="right", style="magenta")
@@ -1161,7 +1257,49 @@ def _monitor_jobs_rich(
         table.add_row("Failed", str(stats["failed"]), style="red")
         table.add_row("Total", str(len(job_list)))
 
-        return table
+        # Running jobs table
+        running_table = Table(title="Running Jobs")
+        running_table.add_column("Worker", style="green")
+        running_table.add_column("CRS", style="cyan")
+        running_table.add_column("Benchmark", style="yellow")
+        running_table.add_column("Harness", style="yellow")
+        running_table.add_column("Mode", style="blue")
+        running_table.add_column("Trial", justify="right")
+        running_table.add_column("Phase", style="magenta")
+        running_table.add_column("Elapsed", justify="right", style="magenta")
+
+        for job in job_list:
+            job.refresh()
+            status = job.get_status()
+            logger.info(
+                f"Job {job.id[:8]}: status={status}, is_queued={job.is_queued}, is_started={job.is_started}, is_finished={job.is_finished}"
+            )
+            if status == "started":
+                worker_name = job.meta.get("worker_name", "?")
+                crs = job.meta.get("crs", "?")
+                benchmark = job.meta.get("benchmark", "?")
+                harness = job.meta.get("harness", "?")
+                mode = job.meta.get("mode", "?")
+                trial_num = str(job.meta.get("trial_num", "?"))
+                phase = job.meta.get("phase", "queued")
+                phase_started_at = job.meta.get("phase_started_at")
+                elapsed = "N/A"
+                if phase_started_at:
+                    elapsed_sec = int(time.time() - phase_started_at)
+                    mins, secs = divmod(elapsed_sec, 60)
+                    elapsed = f"{mins}m {secs}s"
+                running_table.add_row(
+                    worker_name,
+                    crs,
+                    benchmark,
+                    harness,
+                    mode,
+                    trial_num,
+                    phase,
+                    elapsed,
+                )
+
+        return Group(table, running_table)
 
     with Live(generate_status_table(), refresh_per_second=1, console=console) as live:
         while True:
@@ -1215,7 +1353,7 @@ def _monitor_jobs_rich(
 def run_experiment_distributed(
     experiment_name: str,
     config,
-    benchmark_harnesses: List["BenchmarkHarness"],
+    benchmark_harnesses: List[BenchmarkHarness],
     crses: List[str],
     args: argparse.Namespace,
 ) -> None:
@@ -1297,6 +1435,13 @@ def run_experiment_distributed(
             mode=trial.mode,
             job_timeout=config.max_total_time,
             result_ttl=-1,  # Persist results forever
+            meta={
+                "crs": trial.crs,
+                "benchmark": bh.name,
+                "harness": bh.harness.name,
+                "mode": trial.mode,
+                "trial_num": trial.trial_num,
+            },
         )
         jobs.append(job)
         logger.debug(
@@ -1393,6 +1538,12 @@ def main() -> None:
         )
 
         sys.exit(run_patch_verify(args))
+
+    if args.command == "worker":
+        # Handle worker command
+        from crsbench.distributed.cli.worker_command import run_worker
+
+        sys.exit(run_worker(args))
 
     # Below is for 'run' command (experiment execution)
 

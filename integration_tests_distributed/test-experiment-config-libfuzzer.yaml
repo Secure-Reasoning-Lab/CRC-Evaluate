@@ -1,0 +1,50 @@
+# Test Experiment Configuration for Distributed libFuzzer Integration Tests
+#
+# This is a minimal configuration for testing CRSBench distributed execution
+# with Redis-based job queue and crs-libfuzzer CRS.
+
+# Experiment identifier
+experiment: "integration-test-distributed-libfuzzer"
+
+# Human-readable description
+description: "Distributed integration test configuration for libFuzzer CRS with Redis queue"
+
+# Execution Configuration
+trials: 1
+max_total_time: 300  # 5 minutes for quick testing
+
+# CRS Selection - using crs-libfuzzer
+crses:
+  - crs-libfuzzer
+
+mode: delta # for quick testing
+
+# Benchmark Selection - using atlanta benchmark
+benchmarks:
+  - atlanta-nasm-delta-01
+
+# Difficulty Control
+difficulty_level: 1
+
+# Monitoring & Snapshots - more frequent for testing
+snapshot_period: 60  # 1 minute
+
+# Storage Configuration - temporary directories for testing
+experiment_filestore: /tmp/crsbench-distributed-test-libfuzzer/experiment-data
+report_filestore: /tmp/crsbench-distributed-test-libfuzzer/report-data
+
+# LiteLLM Configuration - passthrough mode (default)
+litellm_mode: passthrough
+
+# Build Configuration
+build_timeout: 600  # 10 minutes for building Docker images
+run_timeout: 300    # 5 minutes for CRS execution (matches max_total_time)
+
+# Hints Configuration - disabled for quick testing
+hints_enabled: false
+
+# Distributed Execution Configuration
+redis_host: localhost  # Enable distributed mode with Redis
+
+# Reproducibility
+git_hash: null

@@ -72,15 +72,25 @@ class TestExitCodeHandling:
         )
         assert result is False
 
-    def test_subprocess_timeout_returns_false(self, infra):
-        """Subprocess timeout (HANG) → False."""
-        # Use short timeout to trigger subprocess timeout
-        result = infra.reproduce(
-            project_name="test",
-            harness="fuzz",
-            pov_data=b"HANG",
-            timeout=1,
-        )
+
+class TestTimeoutHandling:
+    """Test subprocess timeout handling (mocked to avoid 30s grace period wait)."""
+
+    def test_subprocess_timeout_returns_false(self, mock_oss_fuzz):
+        """Subprocess TimeoutExpired → False."""
+        import subprocess
+        from unittest.mock import patch
+
+        infra = OSSFuzzInfrastructure(mock_oss_fuzz)
+
+        with patch("crsbench.builder.infrastructure.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd="test", timeout=1)
+            result = infra.reproduce(
+                project_name="test",
+                harness="fuzz",
+                pov_data=b"HANG",
+                timeout=1,
+            )
         assert result is False
 
 
@@ -149,3 +159,78 @@ class TestCommandConstruction:
             assert mock_run.called
             cmd = mock_run.call_args[0][0]
             assert "-detect_leaks=0" in cmd
+
+
+class TestEnsureOssFuzzReady:
+    """Test race condition prevention in ensure_oss_fuzz_ready()."""
+
+    def test_creates_build_directory(self, tmp_path):
+        """Build directory is created on first call."""
+        from crsbench.builder.infrastructure import (
+            _initialized_oss_fuzz_paths,
+            ensure_oss_fuzz_ready,
+        )
+
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+
+        # Clear the cache for test isolation
+        _initialized_oss_fuzz_paths.discard(oss_fuzz.resolve())
+
+        ensure_oss_fuzz_ready(oss_fuzz)
+
+        assert (oss_fuzz / "build").exists()
+        assert (oss_fuzz / "build").is_dir()
+
+    def test_idempotent_multiple_calls(self, tmp_path):
+        """Multiple calls don't cause errors."""
+        from crsbench.builder.infrastructure import (
+            _initialized_oss_fuzz_paths,
+            ensure_oss_fuzz_ready,
+        )
+
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+        _initialized_oss_fuzz_paths.discard(oss_fuzz.resolve())
+
+        # Call multiple times - should not raise
+        ensure_oss_fuzz_ready(oss_fuzz)
+        ensure_oss_fuzz_ready(oss_fuzz)
+        ensure_oss_fuzz_ready(oss_fuzz)
+
+        assert (oss_fuzz / "build").exists()
+
+    def test_caches_initialized_paths(self, tmp_path):
+        """Initialized paths are cached to avoid redundant operations."""
+        from crsbench.builder.infrastructure import (
+            _initialized_oss_fuzz_paths,
+            ensure_oss_fuzz_ready,
+        )
+
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+        _initialized_oss_fuzz_paths.discard(oss_fuzz.resolve())
+
+        ensure_oss_fuzz_ready(oss_fuzz)
+
+        assert oss_fuzz.resolve() in _initialized_oss_fuzz_paths
+
+    def test_skips_if_already_initialized(self, tmp_path):
+        """Skips mkdir if path already in cache."""
+        from unittest.mock import patch
+
+        from crsbench.builder.infrastructure import (
+            _initialized_oss_fuzz_paths,
+            ensure_oss_fuzz_ready,
+        )
+
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+
+        # Pre-add to cache
+        _initialized_oss_fuzz_paths.add(oss_fuzz.resolve())
+
+        # mkdir should not be called since path is cached
+        with patch.object(Path, "mkdir") as mock_mkdir:
+            ensure_oss_fuzz_ready(oss_fuzz)
+            mock_mkdir.assert_not_called()

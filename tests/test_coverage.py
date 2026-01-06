@@ -1331,6 +1331,7 @@ class TestManagerSnapshotCoverage:
             mock_collector.get_merged_coverage.return_value = {
                 "main": {"src": "main.c", "lines": [1, 2, 3]}
             }
+            mock_collector.get_unique_corpus_count.return_value = 1
 
             config = CoverageConfig(enabled=True)
             store = CoverageStore(trial_dir / "coverage")
@@ -1373,6 +1374,7 @@ class TestManagerSnapshotCoverage:
                 lines_covered=50, lines_total=100, lines_percent=50.0
             )
             mock_collector.get_merged_coverage.return_value = {}
+            mock_collector.get_unique_corpus_count.return_value = 1
 
             config = CoverageConfig(enabled=True)
             store = CoverageStore(trial_dir / "coverage")
@@ -1415,6 +1417,7 @@ class TestManagerSnapshotCoverage:
             mock_collector.get_merged_coverage.return_value = {
                 "f": {"src": "f.c", "lines": [1]}
             }
+            mock_collector.get_unique_corpus_count.return_value = 1
 
             config = CoverageConfig(enabled=True)
             store = CoverageStore(trial_dir / "coverage")

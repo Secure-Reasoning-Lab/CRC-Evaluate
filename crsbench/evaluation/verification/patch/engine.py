@@ -25,7 +25,7 @@ from crsbench.evaluation.verification.models import (
     PatchInfo,
     PatchVerificationResult,
     PatchVerificationStatus,
-    TestMode,
+    UnitTestMode,
     VerificationScores,
 )
 from crsbench.utils.docker import fix_docker_ownership
@@ -81,7 +81,7 @@ class PatchVerificationEngine:
         self,
         oss_fuzz_path: Path,
         *,
-        test_mode: TestMode = TestMode.FULL,
+        test_mode: UnitTestMode = UnitTestMode.FULL,
         sanitizer: str = "address",
         timeout: int = 120,
         build_timeout: int = 1200,
@@ -733,7 +733,7 @@ class PatchVerificationEngine:
             src_path,
             sanitizer=self.sanitizer,
             timeout=self.test_timeout,
-            rts_mode=(self.test_mode == TestMode.RTS),
+            rts_mode=(self.test_mode == UnitTestMode.RTS),
             docker_image_tag=docker_tag,
         )
 

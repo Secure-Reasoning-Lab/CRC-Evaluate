@@ -36,19 +36,19 @@ def benchmark_vuln_yamls() -> list[Path]:
 
 @pytest.fixture
 def libxml2_delta_03_vuln_yaml() -> Path:
-    """Fixture for libxml2-delta-03 benchmark."""
-    vuln_yaml = Path("benchmarks/libxml2-delta-03/.aixcc/html/cpv_0/vuln.yaml")
+    """Fixture for afc-libxml2-delta-03 benchmark."""
+    vuln_yaml = Path("benchmarks/afc-libxml2-delta-03/.aixcc/html/cpv_0/vuln.yaml")
     if not vuln_yaml.exists():
-        pytest.skip("libxml2-delta-03 benchmark not found")
+        pytest.skip("afc-libxml2-delta-03 benchmark not found")
     return vuln_yaml
 
 
 @pytest.fixture
 def libxml2_delta_01_vuln_yaml() -> Path:
-    """Fixture for libxml2-delta-01 benchmark."""
-    vuln_yaml = Path("benchmarks/libxml2-delta-01/.aixcc/html/cpv_0/vuln.yaml")
+    """Fixture for afc-libxml2-delta-01 benchmark."""
+    vuln_yaml = Path("benchmarks/afc-libxml2-delta-01/.aixcc/html/cpv_0/vuln.yaml")
     if not vuln_yaml.exists():
-        pytest.skip("libxml2-delta-01 benchmark not found")
+        pytest.skip("afc-libxml2-delta-01 benchmark not found")
     return vuln_yaml
 
 
@@ -56,7 +56,7 @@ class TestRealBenchmarkHintGeneration:
     """Integration tests with real benchmark data."""
 
     def test_libxml2_delta_03_all_levels(self, libxml2_delta_03_vuln_yaml):
-        """Test hint generation for libxml2-delta-03 at all levels."""
+        """Test hint generation for afc-libxml2-delta-03 at all levels."""
         vuln_info = VulnInfo.from_yaml(libxml2_delta_03_vuln_yaml)
         generator = SarifHintGenerator(vuln_info)
 
@@ -105,7 +105,7 @@ class TestRealBenchmarkHintGeneration:
                     assert "startLine" in physical["region"]
 
     def test_libxml2_delta_01_all_levels(self, libxml2_delta_01_vuln_yaml):
-        """Test hint generation for libxml2-delta-01 at all levels."""
+        """Test hint generation for afc-libxml2-delta-01 at all levels."""
         vuln_info = VulnInfo.from_yaml(libxml2_delta_01_vuln_yaml)
         generator = SarifHintGenerator(vuln_info)
 
@@ -153,7 +153,7 @@ class TestBenchmarkFileGeneration:
     """Test generating hint files for benchmarks."""
 
     def test_generate_hint_files_libxml2_delta_03(self, libxml2_delta_03_vuln_yaml):
-        """Test generating hint files for libxml2-delta-03."""
+        """Test generating hint files for afc-libxml2-delta-03."""
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir) / "hints"
 

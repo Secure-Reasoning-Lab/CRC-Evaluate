@@ -3,7 +3,7 @@
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
 from crsbench.evaluation.crs_executor import CRSExecutor, StubCRSExecutor
@@ -75,6 +75,8 @@ class BenchmarkRunner:
         coverage_saturation_time: int = 21600,
         coverage_early_stop: bool = False,
         oss_fuzz_path: Optional[Path] = None,
+        on_build_start: Optional[Callable[[], None]] = None,
+        on_run_start: Optional[Callable[[], None]] = None,
     ):
         """Initialize benchmark runner.
 
@@ -85,6 +87,8 @@ class BenchmarkRunner:
             coverage_saturation_time: Seconds without new coverage to detect saturation
             coverage_early_stop: Terminate trial early when coverage saturation is detected
             oss_fuzz_path: Path to oss-fuzz directory (required for coverage)
+            on_build_start: Callback invoked when CRS build phase starts
+            on_run_start: Callback invoked when CRS run phase starts
         """
         self.crs_executor = crs_executor or StubCRSExecutor()
         self.snapshot_period = snapshot_period
@@ -92,6 +96,8 @@ class BenchmarkRunner:
         self.coverage_saturation_time = coverage_saturation_time
         self.coverage_early_stop = coverage_early_stop
         self.oss_fuzz_path = oss_fuzz_path
+        self.on_build_start = on_build_start
+        self.on_run_start = on_run_start
         self.logger = get_logger(__name__)
 
         if coverage_early_stop:
@@ -442,12 +448,16 @@ class BenchmarkRunner:
                     snapshot_manager.set_crs_run_start_time(run_start)
                 if coverage_manager:
                     coverage_manager.collector.set_run_start_time(run_start)
+                # Call external callback for job metadata tracking
+                if self.on_run_start:
+                    self.on_run_start()
 
             # Run CRS
             crs_result = self.crs_executor.run_crs(
                 benchmark_path=benchmark_path,
                 harness=harness,
                 trial_output_dir=trial_output_dir,
+                on_build_start=self.on_build_start,
                 on_run_start=on_run_start,
                 stop_event=stop_event,
             )

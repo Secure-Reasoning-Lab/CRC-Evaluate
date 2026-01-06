@@ -4,6 +4,7 @@ This module defines all job types that can be executed by workers in the distrib
 job queue system. Jobs are enqueued by the orchestrator and executed by workers.
 """
 
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict
@@ -112,6 +113,46 @@ def build_crs_environment(
         }
 
 
+def _create_phase_callbacks():
+    """Create callbacks for updating job phase metadata in RQ.
+
+    Returns:
+        tuple: (on_build_start, on_run_start) callbacks
+    """
+
+    def on_build_start():
+        """Update job metadata when CRS build phase starts (idempotent)."""
+        try:
+            import rq
+
+            job = rq.get_current_job()
+            if job:
+                # Only set if not already in building phase (idempotent)
+                if job.meta.get("phase") != "building":
+                    job.meta["phase"] = "building"
+                    job.meta["phase_started_at"] = time.time()
+                    job.save_meta()
+                    logger.debug(f"Job {job.id[:8]} phase -> building")
+        except Exception as e:
+            logger.warning(f"Failed to update job metadata: {e}")
+
+    def on_run_start():
+        """Update job metadata when CRS run phase starts."""
+        try:
+            import rq
+
+            job = rq.get_current_job()
+            if job:
+                job.meta["phase"] = "running"
+                job.meta["phase_started_at"] = time.time()
+                job.save_meta()
+                logger.debug(f"Updated job metadata for job {job.id}")
+        except Exception as e:
+            logger.warning(f"Failed to update job metadata: {e}")
+
+    return on_build_start, on_run_start
+
+
 def run_crs_trial(
     crs: str,
     benchmark: str,
@@ -158,6 +199,24 @@ def run_crs_trial(
     )
     start_time = time.time()
     crs_type_enum = CRSType.BUG_FINDING  # Default, updated after detection
+
+    # Update runtime job metadata for monitoring (RQ 2.x)
+    # Note: Static fields (crs, benchmark, harness, mode, trial_num) are set at enqueue time
+    try:
+        import rq
+
+        job = rq.get_current_job()
+        if job:
+            # Only set runtime fields (static fields already set at enqueue)
+            job.meta["started_at"] = start_time
+            job.meta["worker_name"] = os.environ.get(
+                "CRSBENCH_WORKER_DISPLAY_NAME", "unknown"
+            )
+            job.save_meta()
+            logger.debug(f"Updated runtime job metadata for job {job.id}")
+    except Exception as e:
+        # Don't fail the job if metadata update fails
+        logger.warning(f"Failed to update job metadata: {e}")
 
     try:
         # Get snapshot configuration
@@ -238,6 +297,9 @@ def run_crs_trial(
             f"early_stop={coverage_early_stop}, oss_fuzz_path={oss_fuzz_path}"
         )
 
+        # Create phase callbacks for job metadata tracking
+        on_build_start, on_run_start = _create_phase_callbacks()
+
         runner = BenchmarkRunner(
             crs_executor,
             snapshot_period=snapshot_period,
@@ -245,6 +307,8 @@ def run_crs_trial(
             coverage_saturation_time=coverage_saturation_time,
             coverage_early_stop=coverage_early_stop,
             oss_fuzz_path=oss_fuzz_path if coverage_enabled else None,
+            on_build_start=on_build_start,
+            on_run_start=on_run_start,
         )
 
         # Resolve benchmark path

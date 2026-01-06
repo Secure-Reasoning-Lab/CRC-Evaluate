@@ -19,6 +19,39 @@ from crsbench.validation.schemas import POV, BenchmarkConfig, HarnessFile
 logger = get_logger(__name__)
 
 
+def _load_project_config(project_yaml: Path) -> tuple[str, str, Optional[str]]:
+    """Load project configuration from project.yaml.
+
+    Extracts language, main_repo, and repo_name from a benchmark's
+    project.yaml file, with sensible defaults for missing values.
+
+    Args:
+        project_yaml: Path to project.yaml file.
+
+    Returns:
+        Tuple of (language, main_repo, repo_name).
+        - language defaults to "c"
+        - main_repo defaults to ""
+        - repo_name defaults to None
+    """
+    lang = "c"
+    main_repo = ""
+    repo_name = None
+
+    if project_yaml.exists():
+        try:
+            with project_yaml.open() as f:
+                project_data = yaml.safe_load(f)
+            if project_data:
+                lang = project_data.get("language", "c")
+                main_repo = project_data.get("main_repo", "")
+                repo_name = project_data.get("repo_name")
+        except Exception as e:
+            logger.warning(f"Failed to load project.yaml: {e}")
+
+    return lang, main_repo, repo_name
+
+
 class MetaYamlAdapter:
     """Adapter for meta.yaml benchmark configuration.
 
@@ -106,6 +139,56 @@ class MetaYamlAdapter:
             )  # .aixcc/meta.yaml -> benchmark_dir
 
         return cls(config, benchmark_name, lang, main_repo, benchmark_path, repo_name)
+
+    @classmethod
+    def from_benchmark_path(cls, benchmark_path: Path) -> Optional["MetaYamlAdapter"]:
+        """Create adapter from benchmark directory path.
+
+        Convenience method that loads both meta.yaml and project.yaml from
+        a benchmark directory. This is the recommended entry point for loading
+        a MetaYamlAdapter when you have just the benchmark path.
+
+        Used by:
+        - VerificationEngine (POV)
+        - PatchVerificationEngine
+        - CoverageEngine
+
+        Args:
+            benchmark_path: Path to benchmark directory containing .aixcc/meta.yaml.
+
+        Returns:
+            MetaYamlAdapter instance, or None if loading fails.
+
+        Example:
+            adapter = MetaYamlAdapter.from_benchmark_path(Path("benchmarks/my-project"))
+            if adapter:
+                harnesses = adapter.get_harness_names()
+        """
+        benchmark_path = Path(benchmark_path)
+        meta_yaml = benchmark_path / ".aixcc" / "meta.yaml"
+        project_yaml = benchmark_path / "project.yaml"
+
+        if not meta_yaml.exists():
+            logger.error(f"meta.yaml not found: {meta_yaml}")
+            return None
+
+        benchmark_name = benchmark_path.name
+
+        # Load project configuration
+        lang, main_repo, repo_name = _load_project_config(project_yaml)
+
+        try:
+            return cls.from_meta_yaml(
+                meta_yaml_path=meta_yaml,
+                benchmark_name=benchmark_name,
+                lang=lang,
+                main_repo=main_repo,
+                repo_name=repo_name,
+                benchmark_path=benchmark_path,
+            )
+        except Exception as e:
+            logger.error(f"Failed to load adapter: {e}")
+            return None
 
     # =========================================================================
     # Harness and POV Access Methods

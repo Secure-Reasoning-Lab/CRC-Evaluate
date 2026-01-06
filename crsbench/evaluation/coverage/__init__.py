@@ -3,6 +3,7 @@
 Provides coverage data collection and tracking during CRS evaluation:
 
 Components:
+- CoverageEngine: Main engine for coverage collection (parallel support)
 - CoverageConfig: Configuration for coverage collection
 - CoverageStore: In-memory store with JSON persistence
 - CoverageStrategy: Abstract strategy for coverage collection (LLVM/JaCoCo)
@@ -14,6 +15,7 @@ with VariantType.COVERAGE.
 
 Usage:
     from crsbench.evaluation.coverage import (
+        CoverageEngine,
         CoverageConfig,
         CoverageCollector,
         CoverageManager,
@@ -22,6 +24,7 @@ Usage:
 """
 
 from crsbench.evaluation.coverage.collector import CoverageCollector
+from crsbench.evaluation.coverage.engine import CoverageEngine
 from crsbench.evaluation.coverage.manager import CoverageManager
 from crsbench.evaluation.coverage.models import (
     CoverageConfig,
@@ -39,6 +42,8 @@ from crsbench.evaluation.coverage.strategy import (
 )
 
 __all__ = [
+    # Engine
+    "CoverageEngine",
     # Config
     "CoverageConfig",
     # Models

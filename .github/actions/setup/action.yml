@@ -1,0 +1,42 @@
+name: Setup CRSBench
+description: Set up Python, uv, and install dependencies
+
+inputs:
+  all-extras:
+    description: 'Install all extras (dev dependencies)'
+    required: false
+    default: 'false'
+  require-docker:
+    description: 'Verify Docker is available'
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        if [ "${{ inputs.all-extras }}" = "true" ]; then
+          uv sync --all-extras
+        else
+          uv sync
+        fi
+
+    - name: Install just
+      uses: extractions/setup-just@v3
+
+    - name: Verify Docker is available
+      if: inputs.require-docker == 'true'
+      shell: bash
+      run: |
+        docker --version
+        docker info

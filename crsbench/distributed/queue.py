@@ -147,6 +147,10 @@ def get_queue_stats(queue: "rq.Queue") -> dict:
         raise RuntimeError("Redis and RQ packages are required")
 
     try:
+        # Get worker count
+        workers = rq.Worker.all(connection=queue.connection)  # type: ignore[attr-defined]
+        worker_count = len(workers)
+
         return {
             "queued": queue.count,
             "started": queue.started_job_registry.count,
@@ -156,6 +160,7 @@ def get_queue_stats(queue: "rq.Queue") -> dict:
             "scheduled": queue.scheduled_job_registry.count
             if hasattr(queue, "scheduled_job_registry")
             else 0,
+            "workers": worker_count,
         }
     except Exception as e:
         logger.error(f"Failed to get queue stats: {e}")
