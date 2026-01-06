@@ -109,6 +109,7 @@ def run_worker(args: argparse.Namespace) -> int:
     # Configure logging
     configure_logger(level=args.log_level, sink=sys.stdout)
 
+    # TODO: fix timeout too short
     # Prepare worker arguments
     worker_args = {
         "redis_host": args.redis_host,

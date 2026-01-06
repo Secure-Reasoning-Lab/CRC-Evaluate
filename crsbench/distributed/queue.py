@@ -128,6 +128,7 @@ def get_all_jobs(queue: "rq.Queue") -> List["rq.job.Job"]:
         return []
 
 
+# TODO: make a pydantic mode for queue stats
 def get_queue_stats(queue: "rq.Queue") -> dict:
     """
     Get statistics about the current queue state.

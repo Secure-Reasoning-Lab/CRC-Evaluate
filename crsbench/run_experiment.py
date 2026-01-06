@@ -1490,6 +1490,7 @@ def run_experiment_distributed(
     if queue_mode is None:
         queue_mode = "fresh"
 
+    # TODO: too later to purge queue; as the old jobs are already taken by workers
     # Handle queue based on mode
     if queue_mode == "fresh":
         if has_existing:
