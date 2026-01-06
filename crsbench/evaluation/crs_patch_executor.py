@@ -195,6 +195,10 @@ class CRSPatchExecutor(CRSExecutor):
                 f"No POVs found for patch generation in harness {harness_name}"
             )
 
+        # Prepare log directory for CRS execution logs
+        log_dir = trial_output_dir / "crs-logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+
         # Build command
         cmd = [
             "oss-bugfix-crs",
@@ -209,6 +213,8 @@ class CRSPatchExecutor(CRSExecutor):
             str(trial_output_dir / "output"),
             "--work-dir",
             str(trial_build_dir),
+            "--log-dir",
+            str(log_dir),
         ]
 
         # Prepare and add hints if enabled
@@ -386,10 +392,9 @@ class CRSPatchExecutor(CRSExecutor):
     def _prepare_povs(
         self, benchmark_path: Path, harness_name: str, trial_output_dir: Path
     ) -> Optional[Path]:
-        """Prepare POVs directory with filtered POVs from benchmark.
+        """Prepare POVs directory with one POV per CPV from benchmark.
 
-        Creates trial-specific POVs directory and copies selected POV blobs
-        based on experiment configuration.
+        Copies one POV per CPV, using CPV ID as the filename.
 
         Args:
             benchmark_path: Path to benchmark directory
@@ -399,11 +404,16 @@ class CRSPatchExecutor(CRSExecutor):
         Returns:
             Path to prepared POVs directory, or None if no POVs available
 
+        Structure:
+            crs-input/povs/
+            ├── cpv_0      # First POV blob from cpv_0
+            └── cpv_1      # First POV blob from cpv_1
+
         Process:
-            1. Create trial_output_dir/povs/ directory
-            2. Find all POV blobs from benchmark .aixcc/<harness>/cpv_*/blobs/
-            3. Flatten structure (pov_0, pov_1, pov_2 directly in povs/)
-            4. Filter based on experiment config (target_povs list)
+            1. Create trial_output_dir/crs-input/povs/ directory
+            2. Find all CPV directories from benchmark .aixcc/<harness>/cpv_*/
+            3. Copy first POV blob per CPV with CPV ID as filename
+            4. Filter CPVs based on experiment config (target_cpvs list)
         """
         # Source POVs from benchmark
         source_harness_dir = benchmark_path / ".aixcc" / harness_name
@@ -415,31 +425,34 @@ class CRSPatchExecutor(CRSExecutor):
         povs_dir = trial_output_dir / "crs-input" / "povs"
         povs_dir.mkdir(parents=True, exist_ok=True)
 
-        # Collect POVs from directories containing blobs
-        pov_count = 0
-        for blobs_dir in sorted(source_harness_dir.glob("*/blobs")):
+        # Collect one POV per CPV
+        cpv_count = 0
+        for cpv_dir in sorted(source_harness_dir.glob("cpv_*")):
+            blobs_dir = cpv_dir / "blobs"
             if not blobs_dir.is_dir():
                 continue
 
-            # Get all files in blobs directory
-            for pov_file in sorted(blobs_dir.iterdir()):
-                if not pov_file.is_file():
+            cpv_id = cpv_dir.name  # e.g., "cpv_0"
+
+            # Filter CPV based on config if specified
+            if self.config.get("target_cpvs"):
+                if cpv_id not in self.config["target_cpvs"]:
                     continue
 
-                # Filter based on config if specified
-                if self.config.get("target_povs"):
-                    if pov_file.stem not in self.config["target_povs"]:
-                        continue
+            # Get first POV blob
+            pov_blobs = sorted(blobs_dir.glob("*.blob"))
+            if not pov_blobs:
+                continue
 
-                # Copy with original filename
-                shutil.copy2(pov_file, povs_dir / pov_file.name)
-                pov_count += 1
+            # Copy first POV blob with CPV ID as filename
+            shutil.copy2(pov_blobs[0], povs_dir / cpv_id)
+            cpv_count += 1
 
-        if pov_count == 0:
+        if cpv_count == 0:
             logger.warning(f"No POV blobs found for harness {harness_name}")
             return None
 
-        logger.info(f"Prepared {pov_count} POVs for {harness_name}")
+        logger.info(f"Prepared {cpv_count} CPV POVs for {harness_name}")
         return povs_dir
 
     def _prepare_hints(
