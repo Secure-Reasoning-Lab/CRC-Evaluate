@@ -232,6 +232,9 @@ class BenchmarkRunner:
             and trial_output_dir
         ):
             self.logger.info("Pre-building CRS before snapshot period...")
+            # Signal that CRS build is starting (idempotent)
+            if self.on_build_start:
+                self.on_build_start()
             self.crs_executor.build_crs(benchmark_path, trial_output_dir)
 
     def _collect_crs_results(
