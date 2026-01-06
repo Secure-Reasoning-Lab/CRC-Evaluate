@@ -1,30 +1,68 @@
 #!/bin/bash
-# Distributed integration test script for CRSBench (Parallel Workers)
+# Unified distributed integration test script for CRSBench
 #
 # This script runs a distributed integration test of CRSBench using:
 # - Distributed execution mode (Redis/Valkey required)
-# - Multiple parallel workers (-j2)
 # - crsbench worker command for background worker process
-# - crs-libfuzzer CRS
-# - atlanta-nasm-delta-01 benchmark
-# - Minimal time limits for fast testing
+# - Configurable CRS, benchmark, workers, and timeouts
 #
 # Usage:
-#   ./run_distributed_test-parallel.sh [--tmux] [--kill-pane] [--debug]
+#   ./run_distributed_test.sh [OPTIONS]
 #
 # Options:
-#   --tmux       Launch worker in a new tmux vertical pane (requires tmux)
-#   --kill-pane  Kill the worker pane after test (only with --tmux)
-#   --debug      Enable debug output from crsbench
+#   -j, --workers <n>       Number of parallel workers (default: 1)
+#   -c, --crs <name>        CRS name (default: crs-libfuzzer)
+#   -b, --benchmark <name>  Benchmark name (default: atlanta-nasm-delta-01)
+#   -t, --timeout <secs>    Max total time in seconds (default: 300)
+#   --trials <n>            Number of trials (default: 1)
+#   --tmux                  Launch worker in tmux vertical pane
+#   --kill-pane             Kill the worker pane after test (with --tmux)
+#   --debug                 Enable debug output from crsbench
+#   --skip-cleanup          Don't delete generated config file after test
+#   -h, --help              Show this help message
+#
+# Examples:
+#   ./run_distributed_test.sh
+#   ./run_distributed_test.sh -j 2 --tmux
+#   ./run_distributed_test.sh --crs crs-libfuzzer --benchmark afc-curl-delta-02 --timeout 600
+#   ./run_distributed_test.sh -j 4 --debug --skip-cleanup
 
 set -e  # Exit on error
 
-# Parse command line arguments
+# Default values
+NUM_WORKERS=1
+CRS_NAME="crs-libfuzzer"
+BENCHMARK="atlanta-nasm-delta-01"
+MAX_TOTAL_TIME=300
+TRIALS=1
 USE_TMUX=false
 KILL_PANE=false
 DEBUG=false
-for arg in "$@"; do
-    case $arg in
+SKIP_CLEANUP=false
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -j|--workers)
+            NUM_WORKERS="$2"
+            shift 2
+            ;;
+        -c|--crs)
+            CRS_NAME="$2"
+            shift 2
+            ;;
+        -b|--benchmark)
+            BENCHMARK="$2"
+            shift 2
+            ;;
+        -t|--timeout)
+            MAX_TOTAL_TIME="$2"
+            shift 2
+            ;;
+        --trials)
+            TRIALS="$2"
+            shift 2
+            ;;
         --tmux)
             USE_TMUX=true
             shift
@@ -37,9 +75,17 @@ for arg in "$@"; do
             DEBUG=true
             shift
             ;;
+        --skip-cleanup)
+            SKIP_CLEANUP=true
+            shift
+            ;;
+        -h|--help)
+            sed -n '2,30p' "$0"
+            exit 0
+            ;;
         *)
-            echo "Unknown argument: $arg"
-            echo "Usage: $0 [--tmux] [--kill-pane] [--debug]"
+            echo "Unknown option: $1"
+            echo "Use -h or --help for usage information"
             exit 1
             ;;
     esac
@@ -49,22 +95,29 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Configuration
-CONFIG_FILE="$SCRIPT_DIR/test-experiment-config-libfuzzer.yaml"
-EXPERIMENT_NAME="integration-test-distributed-parallel"
+# Dynamic experiment name based on worker count
+if [ "$NUM_WORKERS" -eq 1 ]; then
+    EXPERIMENT_NAME="integration-test-distributed-single"
+    TEST_DIR="/tmp/crsbench-distributed-test-single"
+else
+    EXPERIMENT_NAME="integration-test-distributed-parallel-${NUM_WORKERS}w"
+    TEST_DIR="/tmp/crsbench-distributed-test-parallel-${NUM_WORKERS}w"
+fi
 
-# Path overrides (CLI arguments have highest precedence)
+# Configuration
+CONFIG_DIR="$SCRIPT_DIR/.generated-configs"
+CONFIG_FILE="$CONFIG_DIR/test-experiment-config-distributed-${EXPERIMENT_NAME}.yaml"
+
+# Path overrides (environment variables or defaults)
 OSS_FUZZ_PATH="${OSS_FUZZ_PATH:-$PROJECT_ROOT/oss-fuzz}"
 REGISTRY_DIR="${REGISTRY_DIR:-$PROJECT_ROOT/crses/registry}"
 CRS_CONFIGS_DIR="${CRS_CONFIGS_DIR:-$PROJECT_ROOT/crses/configs}"
 BENCHMARKS_ROOT="${BENCHMARKS_ROOT:-$PROJECT_ROOT/benchmarks}"
 
 # Worker configuration
-TEST_DIR="/tmp/crsbench-distributed-test-parallel"
 WORKER_LOG="$TEST_DIR/worker.log"
 WORKER_PID=""
 TMUX_PANE_ID=""
-NUM_WORKERS=2  # Number of parallel workers
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -74,6 +127,7 @@ NC='\033[0m' # No Color
 
 # Cleanup function
 cleanup() {
+    # Stop worker
     if [ "$USE_TMUX" = true ] && [ -n "$TMUX_PANE_ID" ] && [ "$KILL_PANE" = true ]; then
         echo -e "${YELLOW}Killing tmux pane (${TMUX_PANE_ID})...${NC}"
         tmux kill-pane -t "$TMUX_PANE_ID" 2>/dev/null || true
@@ -82,19 +136,24 @@ cleanup() {
         kill "$WORKER_PID" 2>/dev/null || true
         wait "$WORKER_PID" 2>/dev/null || true
     fi
+
+    # Clean up config file
+    if [ "$SKIP_CLEANUP" = false ]; then
+        echo -e "${YELLOW}Cleaning up generated config file...${NC}"
+        rm -f "$CONFIG_FILE"
+        # Remove config dir if empty
+        rmdir "$CONFIG_DIR" 2>/dev/null || true
+    else
+        echo -e "${YELLOW}Skipping config cleanup (--skip-cleanup specified)${NC}"
+        echo "  Config file: $CONFIG_FILE"
+    fi
 }
 
 # Register cleanup on exit
 trap cleanup EXIT INT TERM
 
-echo -e "${GREEN}=== CRSBench Distributed Integration Test (Parallel Workers) ===${NC}"
+echo -e "${GREEN}=== CRSBench Distributed Integration Test ===${NC}"
 echo ""
-
-# Check if config file exists
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo -e "${RED}Error: Config file not found: $CONFIG_FILE${NC}"
-    exit 1
-fi
 
 # Check if Redis is running
 echo -e "${YELLOW}Checking Redis availability...${NC}"
@@ -125,7 +184,7 @@ if [ "$USE_TMUX" = true ]; then
         echo -e "${RED}Error: Not running inside a tmux session${NC}"
         echo "Please run this script from within tmux when using --tmux flag:"
         echo "  tmux"
-        echo "  ./run_distributed_test-libfuzzer.sh --tmux"
+        echo "  ./run_distributed_test.sh --tmux"
         exit 1
     fi
     echo -e "${GREEN}✓ tmux is available${NC}"
@@ -133,8 +192,11 @@ if [ "$USE_TMUX" = true ]; then
 fi
 
 echo -e "${GREEN}Configuration:${NC}"
-echo "  Config file: $CONFIG_FILE"
+echo "  CRS: $CRS_NAME"
+echo "  Benchmark: $BENCHMARK"
 echo "  Experiment name: $EXPERIMENT_NAME"
+echo "  Max total time: ${MAX_TOTAL_TIME}s"
+echo "  Trials: $TRIALS"
 echo "  Mode: Distributed (Redis-based job queue)"
 echo "  Debug mode: $DEBUG"
 echo "  Parallel workers: $NUM_WORKERS"
@@ -148,6 +210,60 @@ echo "  OSS-Fuzz path: $OSS_FUZZ_PATH"
 echo "  Registry directory: $REGISTRY_DIR"
 echo "  CRS configs directory: $CRS_CONFIGS_DIR"
 echo "  Benchmarks root: $BENCHMARKS_ROOT"
+echo ""
+
+# Create config directory if it doesn't exist
+mkdir -p "$CONFIG_DIR"
+
+# Generate config file
+echo -e "${YELLOW}Generating config file: $CONFIG_FILE${NC}"
+cat > "$CONFIG_FILE" << EOF
+# Auto-generated test configuration for distributed integration tests
+# Generated by: run_distributed_test.sh
+# CRS: $CRS_NAME
+# Benchmark: $BENCHMARK
+# Workers: $NUM_WORKERS
+
+experiment: "$EXPERIMENT_NAME"
+description: "Distributed integration test for $CRS_NAME with $NUM_WORKERS worker(s)"
+
+# Execution Configuration
+trials: $TRIALS
+mode: delta
+max_total_time: $MAX_TOTAL_TIME
+
+# CRS Selection
+crses:
+  - $CRS_NAME
+
+# Benchmark Selection
+benchmarks:
+  - $BENCHMARK
+
+# Difficulty Control
+difficulty_level: 1
+
+# Monitoring & Snapshots
+snapshot_period: 60
+
+# Storage Configuration
+experiment_filestore: $TEST_DIR/experiment-data
+report_filestore: $TEST_DIR/report-data
+
+# LiteLLM Configuration
+litellm_mode: passthrough
+
+# Build Configuration
+build_timeout: 600
+run_timeout: $MAX_TOTAL_TIME
+
+# Hints Configuration
+hints_enabled: false
+
+# Redis Configuration
+redis_host: localhost
+EOF
+
 echo ""
 
 # Set up virtual environment
@@ -178,10 +294,17 @@ echo ""
 # Start worker in continuous mode (waits for jobs)
 echo -e "${YELLOW}Starting distributed worker in continuous mode...${NC}"
 
+# Build worker command
+if [ "$NUM_WORKERS" -gt 1 ]; then
+    WORKER_BASE_CMD="crsbench worker -j$NUM_WORKERS --redis-host localhost --experiment-name '$EXPERIMENT_NAME' --log-level INFO --continuous"
+else
+    WORKER_BASE_CMD="crsbench worker --redis-host localhost --experiment-name '$EXPERIMENT_NAME' --log-level INFO --continuous"
+fi
+
 if [ "$USE_TMUX" = true ]; then
     # Launch worker in a new tmux vertical pane with tee for logging
     # Keep pane open after worker exits by starting a new bash shell
-    WORKER_CMD="cd '$PROJECT_ROOT' && source .venv/bin/activate && crsbench worker -j$NUM_WORKERS --redis-host localhost --experiment-name '$EXPERIMENT_NAME' --log-level INFO --continuous 2>&1 | tee '$WORKER_LOG'; exec bash"
+    WORKER_CMD="cd '$PROJECT_ROOT' && source .venv/bin/activate && $WORKER_BASE_CMD 2>&1 | tee '$WORKER_LOG'; exec bash"
 
     # Split window vertically and run worker in new pane
     tmux split-window -h "$WORKER_CMD"
@@ -189,7 +312,11 @@ if [ "$USE_TMUX" = true ]; then
     # Get the pane ID (the newly created pane)
     TMUX_PANE_ID=$(tmux list-panes -F '#{pane_id}' | tail -n 1)
 
-    echo -e "${GREEN}✓ Workers started in tmux pane: ${TMUX_PANE_ID}${NC}"
+    if [ "$NUM_WORKERS" -eq 1 ]; then
+        echo -e "${GREEN}✓ Worker started in tmux pane: ${TMUX_PANE_ID}${NC}"
+    else
+        echo -e "${GREEN}✓ Workers started in tmux pane: ${TMUX_PANE_ID}${NC}"
+    fi
     echo "  Parallel workers: $NUM_WORKERS"
     echo "  Mode: Continuous (will wait for jobs)"
     echo "  Worker output is visible in the right pane"
@@ -197,16 +324,14 @@ if [ "$USE_TMUX" = true ]; then
     echo ""
 else
     # Launch worker as background process
-    crsbench worker \
-        -j$NUM_WORKERS \
-        --redis-host localhost \
-        --experiment-name "$EXPERIMENT_NAME" \
-        --log-level INFO \
-        --continuous \
-        > "$WORKER_LOG" 2>&1 &
+    eval "$WORKER_BASE_CMD" > "$WORKER_LOG" 2>&1 &
     WORKER_PID=$!
 
-    echo -e "${GREEN}✓ Workers started (PID: $WORKER_PID)${NC}"
+    if [ "$NUM_WORKERS" -eq 1 ]; then
+        echo -e "${GREEN}✓ Worker started (PID: $WORKER_PID)${NC}"
+    else
+        echo -e "${GREEN}✓ Workers started (PID: $WORKER_PID)${NC}"
+    fi
     echo "  Parallel workers: $NUM_WORKERS"
     echo "  Worker log: $WORKER_LOG"
     echo "  Mode: Continuous (will wait for jobs)"
@@ -234,7 +359,7 @@ EXPERIMENT_EXIT_CODE=0
 # Build crsbench run command
 CRSBENCH_CMD="crsbench run \
     --experiment-config \"$CONFIG_FILE\" \
-    --crses crs-libfuzzer \
+    --crses \"$CRS_NAME\" \
     --oss-fuzz-path \"$OSS_FUZZ_PATH\" \
     --registry-dir \"$REGISTRY_DIR\" \
     --crs-configs-dir \"$CRS_CONFIGS_DIR\" \
@@ -257,9 +382,9 @@ if [ "$USE_TMUX" = true ]; then
     if [ -n "$TMUX_PANE_ID" ]; then
         if [ "$KILL_PANE" = true ]; then
             tmux kill-pane -t "$TMUX_PANE_ID" 2>/dev/null || true
-            echo -e "${GREEN}✓ Workers pane closed${NC}"
+            echo -e "${GREEN}✓ Worker pane closed${NC}"
         else
-            echo -e "${GREEN}✓ Workers pane preserved (${TMUX_PANE_ID})${NC}"
+            echo -e "${GREEN}✓ Worker pane preserved (${TMUX_PANE_ID})${NC}"
             echo -e "${YELLOW}  Use 'tmux kill-pane -t ${TMUX_PANE_ID}' to close manually${NC}"
         fi
         TMUX_PANE_ID=""  # Clear pane ID so cleanup doesn't try to kill it again
@@ -276,7 +401,7 @@ else
         wait "$WORKER_PID" 2>/dev/null || true
     fi
     WORKER_PID=""  # Clear PID so cleanup doesn't try to kill it again
-    echo -e "${GREEN}✓ Workers stopped${NC}"
+    echo -e "${GREEN}✓ Worker stopped${NC}"
 fi
 echo ""
 
