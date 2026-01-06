@@ -23,7 +23,7 @@ import argparse
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, TYPE_CHECKING
+from typing import Any, Dict, List
 
 import yaml
 from dotenv import load_dotenv
