@@ -1190,6 +1190,7 @@ def _monitor_jobs_basic(
                 "failed": stats["failed"],
             },
             show_percentage=False,
+            level="debug",
         )
 
         # Display currently running jobs with metadata
