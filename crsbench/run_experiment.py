@@ -238,6 +238,13 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         help="Enable debug logging (logs all commands executed with their working directories)",
     )
 
+    parser.add_argument(
+        "--only-cpv-harnesses",
+        action="store_true",
+        help="Skip harnesses without CPVs for bug-finding CRS (default: True, this flag is for explicit override). "
+        "Bug-fixing CRS always skips harnesses without CPVs regardless of this flag.",
+    )
+
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments with subcommand support.
@@ -594,8 +601,11 @@ def generate_trial_matrix(
         is_bug_fixing = crs_type == CRSType.BUG_FIXING.value
 
         for benchmark_harness in benchmark_harnesses:
-            # Bug-fixing CRS: skip harnesses without CPVs
-            if is_bug_fixing:
+            # Skip harnesses without CPVs:
+            # - Bug-fixing CRS: always skip (required for POV-based operation)
+            # - Bug-finding CRS: skip only when only_cpv_harnesses is enabled
+            should_check_cpvs = is_bug_fixing or config.only_cpv_harnesses
+            if should_check_cpvs:
                 meta_path = Path(benchmark_harness.path) / ".aixcc" / "meta.yaml"
                 adapter = MetaYamlAdapter.from_meta_yaml(
                     meta_path,
@@ -605,9 +615,12 @@ def generate_trial_matrix(
                 )
                 harness = adapter.get_harness(benchmark_harness.harness.name)
                 if not harness or not harness.vulns:
+                    skip_reason = (
+                        "bug-fixing CRS" if is_bug_fixing else "only_cpv_harnesses=True"
+                    )
                     logger.info(
                         f"Skipping {benchmark_harness.name}/{benchmark_harness.harness.name}: "
-                        f"no CPVs for bug-fixing CRS '{crs}'"
+                        f"no CPVs ({skip_reason})"
                     )
                     continue
             # Determine which modes to run for this benchmark
@@ -1004,6 +1017,11 @@ def enhance_config_with_cli_args(
     if hasattr(args, "verify_workers") and args.verify_workers is not None:
         enhanced["verify_workers"] = args.verify_workers
         logger.info(f"Using verify_workers from CLI: {args.verify_workers}")
+
+    # only_cpv_harnesses override
+    if hasattr(args, "only_cpv_harnesses") and args.only_cpv_harnesses:
+        enhanced["only_cpv_harnesses"] = True
+        logger.info("Using only_cpv_harnesses=True from CLI")
 
     return enhanced
 
