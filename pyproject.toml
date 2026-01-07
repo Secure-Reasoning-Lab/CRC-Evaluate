@@ -74,7 +74,6 @@ dev = [
 [tool.ty.src]
 exclude = [
     "crsbench/hint_generation/sarif_model.py",
-    "crsbench/migration/"
 ]
 include = [
     "crsbench",
@@ -86,7 +85,6 @@ line-length = 88
 src = ["crsbench"]
 extend-exclude = [
     "crsbench/hint_generation/sarif_model.py",
-    "crsbench/migration/",
     "tests/",
     "oss-fuzz/",
     "oss-patch/",
