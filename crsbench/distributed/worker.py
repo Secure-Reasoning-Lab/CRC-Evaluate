@@ -285,9 +285,9 @@ def _run_supervisor(
 
     cpu_pool = CPUPool() if use_cpuset else None
     workers: dict[
-        int, tuple[multiprocessing.Process, list[int], str]
-    ] = {}  # pid -> (process, cpus, job_id)
-    worker_counter = 0
+        int, tuple[multiprocessing.Process, list[int], str, int]
+    ] = {}  # pid -> (process, cpus, job_id, worker_num)
+    used_worker_nums: set[int] = set()  # Track which worker numbers are in use
 
     try:
         # Connect to Redis
@@ -309,7 +309,7 @@ def _run_supervisor(
         while True:
             # Cleanup finished workers
             for pid in list(workers.keys()):
-                proc, cpus, _job_id = workers[pid]
+                proc, cpus, _job_id, worker_num = workers[pid]
                 if not proc.is_alive():
                     proc.join()
                     if cpu_pool and cpus:
@@ -317,6 +317,8 @@ def _run_supervisor(
                         logger.info(
                             f"Worker (PID: {pid}) finished, released CPUs {cpus}"
                         )
+                    # Free up the worker number for reuse
+                    used_worker_nums.discard(worker_num)
                     del workers[pid]
 
             # Check if queue has jobs
@@ -349,18 +351,28 @@ def _run_supervisor(
                             job.meta["allocated_cpus"] = cpuset_str
                             job.save_meta()
 
-                        # Spawn worker
-                        name = f"{worker_name}-{worker_counter}"
-                        worker_counter += 1
+                        # Find lowest available worker number (like true worker pool)
+                        worker_num = None
+                        for i in range(1, max_workers + 1):
+                            if i not in used_worker_nums:
+                                worker_num = i
+                                break
+
+                        if worker_num is None:
+                            # Shouldn't happen since len(workers) < max_workers
+                            worker_num = len(workers) + 1
+
+                        used_worker_nums.add(worker_num)
+                        name = f"{worker_name}-{worker_num}"
 
                         p = multiprocessing.Process(
                             target=_run_single_job_worker,
                             args=(redis_host, experiment_name, name, job.id),
-                            name=f"worker-{worker_counter}",
+                            name=f"worker-{worker_num}",
                         )
                         p.start()
                         if p.pid is not None:
-                            workers[p.pid] = (p, cpus or [], job.id)
+                            workers[p.pid] = (p, cpus or [], job.id, worker_num)
 
                         if cpus:
                             logger.info(
@@ -386,10 +398,10 @@ def _run_supervisor(
 
     except KeyboardInterrupt:
         logger.info("\nReceived interrupt signal, terminating workers...")
-        for _pid, (p, _cpus, _job_id) in workers.items():
+        for _pid, (p, _cpus, _job_id, _worker_num) in workers.items():
             if p.is_alive():
                 p.terminate()
-        for pid, (p, cpus, _job_id) in workers.items():
+        for pid, (p, cpus, _job_id, _worker_num) in workers.items():
             p.join(timeout=5)
             if p.is_alive():
                 logger.warning(f"Force killing worker (PID: {pid})")
