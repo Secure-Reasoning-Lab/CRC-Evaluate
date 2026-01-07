@@ -248,3 +248,7 @@ ci_results*
 
 # oss-patch workdir
 .oss-patch-work
+
+# statistics
+benchmarks.csv
+benchmarks_summary.csv
