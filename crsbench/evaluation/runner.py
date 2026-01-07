@@ -77,6 +77,7 @@ class BenchmarkRunner:
         oss_fuzz_path: Optional[Path] = None,
         on_build_start: Optional[Callable[[], None]] = None,
         on_run_start: Optional[Callable[[], None]] = None,
+        on_verification_start: Optional[Callable[[], None]] = None,
     ):
         """Initialize benchmark runner.
 
@@ -89,6 +90,7 @@ class BenchmarkRunner:
             oss_fuzz_path: Path to oss-fuzz directory (required for coverage)
             on_build_start: Callback invoked when CRS build phase starts
             on_run_start: Callback invoked when CRS run phase starts
+            on_verification_start: Callback invoked when verification phase starts
         """
         self.crs_executor = crs_executor or StubCRSExecutor()
         self.snapshot_period = snapshot_period
@@ -98,6 +100,7 @@ class BenchmarkRunner:
         self.oss_fuzz_path = oss_fuzz_path
         self.on_build_start = on_build_start
         self.on_run_start = on_run_start
+        self.on_verification_start = on_verification_start
         self.logger = get_logger(__name__)
 
         if coverage_early_stop:
@@ -398,6 +401,10 @@ class BenchmarkRunner:
                 trial_output_dir=trial_output_dir,
                 harness_name=harness.name,
             )
+
+        # Call verification phase callback
+        if self.on_verification_start:
+            self.on_verification_start()
 
         # Run verification
         pov_verification_results, patch_verification_results = self._run_verification(

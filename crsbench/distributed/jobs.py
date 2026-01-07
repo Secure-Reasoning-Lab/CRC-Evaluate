@@ -117,7 +117,7 @@ def _create_phase_callbacks():
     """Create callbacks for updating job phase metadata in RQ.
 
     Returns:
-        tuple: (on_build_start, on_run_start) callbacks
+        tuple: (on_build_start, on_run_start, on_verification_start) callbacks
     """
 
     def on_build_start():
@@ -150,7 +150,21 @@ def _create_phase_callbacks():
         except Exception as e:
             logger.warning(f"Failed to update job metadata: {e}")
 
-    return on_build_start, on_run_start
+    def on_verification_start():
+        """Update job metadata when verification phase starts."""
+        try:
+            import rq
+
+            job = rq.get_current_job()
+            if job:
+                job.meta["phase"] = "verifying"
+                job.meta["phase_started_at"] = time.time()
+                job.save_meta()
+                logger.debug(f"Job {job.id[:8]} phase -> verifying")
+        except Exception as e:
+            logger.warning(f"Failed to update job metadata: {e}")
+
+    return on_build_start, on_run_start, on_verification_start
 
 
 def run_crs_trial(
@@ -312,7 +326,7 @@ def run_crs_trial(
         )
 
         # Create phase callbacks for job metadata tracking
-        on_build_start, on_run_start = _create_phase_callbacks()
+        on_build_start, on_run_start, on_verification_start = _create_phase_callbacks()
 
         runner = BenchmarkRunner(
             crs_executor,
@@ -323,6 +337,7 @@ def run_crs_trial(
             oss_fuzz_path=oss_fuzz_path if coverage_enabled else None,
             on_build_start=on_build_start,
             on_run_start=on_run_start,
+            on_verification_start=on_verification_start,
         )
 
         # Resolve benchmark path
