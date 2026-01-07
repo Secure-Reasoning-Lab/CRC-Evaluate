@@ -323,9 +323,8 @@ def _run_supervisor(
 
             # Check if queue has jobs
             queue_count = queue.count
-            if queue_count == 0 and not workers:
-                logger.info("Queue empty and all workers finished")
-                break
+            # Continuous mode: keep running and waiting for new jobs
+            # (don't exit when queue is empty)
 
             # Try to start new worker if jobs available and we have capacity
             if queue_count > 0 and len(workers) < max_workers:
