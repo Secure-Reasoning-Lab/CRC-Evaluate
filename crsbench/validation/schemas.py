@@ -426,6 +426,11 @@ class ExperimentConfig(BaseModel):
         description="Number of parallel workers for POV/patch verification (default: 4). "
         "CLI --verify-workers takes precedence, then CRSBENCH_VERIFY_WORKERS env var, then this config value.",
     )
+    only_cpv_harnesses: bool = Field(
+        default=True,
+        description="Skip harnesses without CPVs for bug-finding CRS (default: True). "
+        "Bug-fixing CRS always skips harnesses without CPVs regardless of this setting.",
+    )
 
     @field_validator("experiment")
     @classmethod
@@ -744,6 +749,7 @@ class ExperimentConfig(BaseModel):
             "coverage_early_stop": self.coverage_early_stop,
             "build_workers": self.build_workers,
             "verify_workers": self.verify_workers,
+            "only_cpv_harnesses": self.only_cpv_harnesses,
         }
 
 
