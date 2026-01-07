@@ -3,13 +3,19 @@
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import yaml
+from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
-    from crsbench.evaluation.verification.models import PovVerificationResult
+    from crsbench.evaluation.runner import EvaluationResult
+    from crsbench.evaluation.verification.models import (
+        PatchVerificationResult,
+        PovVerificationResult,
+    )
 
 
 @dataclass
@@ -43,6 +49,13 @@ class EvaluationReport:
     # Summary statistics (Patch - for bug-fixing CRS)
     total_input_povs: int = 0  # Number of POVs given to patch CRS
     patches_generated: int = 0  # Number of patches generated
+
+    # Patch verification results
+    patches_valid: int = 0  # VALID - patch fixes vulnerability and passes tests
+    patches_build_failed: int = 0  # BUILD_FAILED - patch failed to build
+    patches_pov_triggers: int = 0  # POV_STILL_TRIGGERS - vulnerability not fixed
+    patches_test_failed: int = 0  # TEST_FAILED - unit tests failed
+    patches_error: int = 0  # ERROR - verification error
 
     # Configuration info
     base_commit: Optional[str] = None
@@ -110,6 +123,12 @@ class ResultCollector:
         # Patch statistics (for bug-fixing CRS)
         self.total_input_povs = 0
         self.patches_generated = 0
+        # Patch verification statistics
+        self.patches_valid = 0
+        self.patches_build_failed = 0
+        self.patches_pov_triggers = 0
+        self.patches_test_failed = 0
+        self.patches_error = 0
 
     def add_harness_result(self, harness_result: HarnessResult) -> None:
         """Add result for a harness."""
@@ -161,15 +180,49 @@ class ResultCollector:
             1 for r in verification_results if r.status == PovVerificationStatus.ERROR
         )
 
-    def set_patch_stats(self, total_input_povs: int, patches: Dict[str, str]) -> None:
-        """Set patch statistics from collected patches.
+    def set_patch_stats(
+        self, total_input_povs: int, results: List["PatchVerificationResult"]
+    ) -> None:
+        """Set patch statistics from verification results.
+
+        Similar to set_pov_stats(), this derives all patch statistics from
+        verification results.
 
         Args:
             total_input_povs: Number of POVs provided to the patch CRS
-            patches: Dict mapping POV ID to patch content
+            results: List of PatchVerificationResult objects
+
+        Note:
+            Maps PatchVerificationStatus to statistics:
+            - VALID: Patch fixes vulnerability and passes tests
+            - BUILD_FAILED: Patch failed to build
+            - POV_STILL_TRIGGERS: Vulnerability not fixed by patch
+            - TEST_FAILED: Unit tests failed after patching
+            - ERROR, PENDING: Verification errors
         """
+        from crsbench.evaluation.verification.models import PatchVerificationStatus
+
         self.total_input_povs = total_input_povs
-        self.patches_generated = len(patches)
+        self.patches_generated = len(results)
+
+        self.patches_valid = sum(
+            1 for r in results if r.status == PatchVerificationStatus.VALID
+        )
+        self.patches_build_failed = sum(
+            1 for r in results if r.status == PatchVerificationStatus.BUILD_FAILED
+        )
+        self.patches_pov_triggers = sum(
+            1 for r in results if r.status == PatchVerificationStatus.POV_STILL_TRIGGERS
+        )
+        self.patches_test_failed = sum(
+            1 for r in results if r.status == PatchVerificationStatus.TEST_FAILED
+        )
+        self.patches_error = sum(
+            1
+            for r in results
+            if r.status
+            in (PatchVerificationStatus.ERROR, PatchVerificationStatus.PENDING)
+        )
 
     def finalize_report(self) -> EvaluationReport:
         """Create final evaluation report."""
@@ -189,7 +242,141 @@ class ResultCollector:
             povs_error=self.povs_error,
             total_input_povs=self.total_input_povs,
             patches_generated=self.patches_generated,
+            patches_valid=self.patches_valid,
+            patches_build_failed=self.patches_build_failed,
+            patches_pov_triggers=self.patches_pov_triggers,
+            patches_test_failed=self.patches_test_failed,
+            patches_error=self.patches_error,
             base_commit=self.base_commit,
             ref_commit=self.ref_commit,
             crs_config=self.crs_config,
+        )
+
+
+class CRSType(str, Enum):
+    """Type of CRS being evaluated."""
+
+    BUG_FINDING = "bug-finding"
+    BUG_FIXING = "bug-fixing"
+
+
+class TrialMetadata(BaseModel):
+    """Metadata for a trial execution."""
+
+    model_config = ConfigDict(extra="allow")
+
+    experiment_filestore: Optional[str] = None
+    max_total_time: Optional[int] = None
+    difficulty_level: Optional[int] = None
+    timestamp_start: float
+    timestamp_end: float
+
+
+class TrialResult(BaseModel):
+    """Result from a single trial execution.
+
+    This model captures the outcome of running a CRS on a benchmark/harness
+    combination for a single trial. Supports both bug-finding and bug-fixing CRS types.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    # Core identifiers
+    crs: str
+    benchmark: str
+    harness: str
+    trial_num: int
+    crs_type: CRSType
+
+    # Execution status
+    success: bool
+    execution_time: float
+    error: Optional[str] = None
+    error_type: Optional[str] = None
+
+    # Bug-finding CRS metrics
+    povs_found: int = 0
+    total_povs: int = 0
+
+    # Bug-fixing CRS metrics
+    patches_generated: int = 0
+    patches_valid: int = 0
+
+    # Full report (as dict for flexibility)
+    report: Dict[str, Any]
+
+    # Metadata
+    metadata: TrialMetadata
+
+    @property
+    def success_rate(self) -> float:
+        """POV detection success rate (for bug-finding CRS)."""
+        if self.total_povs == 0:
+            return 0.0
+        return self.povs_found / self.total_povs
+
+    @property
+    def patch_valid_rate(self) -> float:
+        """Patch validation rate (for bug-fixing CRS)."""
+        if self.patches_generated == 0:
+            return 0.0
+        return self.patches_valid / self.patches_generated
+
+    def log_summary(self) -> str:
+        """Generate a summary log message based on CRS type."""
+        base = (
+            f"[Trial {self.trial_num}] Completed {self.crs} on "
+            f"{self.benchmark}/{self.harness}: "
+        )
+        if self.crs_type == CRSType.BUG_FIXING:
+            return (
+                f"{base}{self.patches_generated} patches generated, "
+                f"{self.patches_valid} valid in {self.execution_time:.1f}s"
+            )
+        return (
+            f"{base}{self.povs_found}/{self.total_povs} POVs found "
+            f"({self.success_rate:.1%}) in {self.execution_time:.1f}s"
+        )
+
+    @classmethod
+    def from_evaluation(
+        cls,
+        crs: str,
+        benchmark: str,
+        harness: str,
+        trial_num: int,
+        crs_type: CRSType,
+        result: "EvaluationResult",
+        execution_time: float,
+        metadata: TrialMetadata,
+    ) -> "TrialResult":
+        """Create TrialResult from an EvaluationResult.
+
+        Args:
+            crs: CRS name
+            benchmark: Benchmark name
+            harness: Harness name
+            trial_num: Trial number
+            crs_type: Type of CRS (bug-finding or bug-fixing)
+            result: EvaluationResult from runner
+            execution_time: Total execution time in seconds
+            metadata: Trial metadata
+
+        Returns:
+            TrialResult instance
+        """
+        return cls(
+            crs=crs,
+            benchmark=benchmark,
+            harness=harness,
+            trial_num=trial_num,
+            crs_type=crs_type,
+            success=result.is_valid,
+            execution_time=execution_time,
+            povs_found=result.povs_found,
+            total_povs=result.total_povs,
+            patches_generated=result.report.patches_generated,
+            patches_valid=result.report.patches_valid,
+            report=result.report.to_dict(),
+            metadata=metadata,
         )

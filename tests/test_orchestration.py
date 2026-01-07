@@ -15,6 +15,7 @@ Run with:
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -26,6 +27,23 @@ from crsbench.run_experiment import (
     should_use_distributed_mode,
 )
 from crsbench.validation.schemas import BenchmarkHarness, ExperimentConfig, HarnessFile
+
+
+@pytest.fixture(autouse=True)
+def mock_crs_helpers():
+    """Mock CRS helper functions to avoid needing real CRS config files."""
+    with (
+        patch(
+            "crsbench.run_experiment.get_crs_registry_name",
+            side_effect=lambda crs, _: crs,  # Return the CRS name as the registry name
+        ),
+        patch(
+            "crsbench.run_experiment.get_crs_type",
+            return_value="patch",  # Return default CRS type
+        ),
+    ):
+        yield
+
 
 # ============================================================================
 # 1. Config Loading Tests
@@ -167,7 +185,13 @@ class TestTrialMatrixGeneration:
         ]
         crses = ["crs1", "crs2"]
 
-        trials = generate_trial_matrix(benchmark_harnesses, crses, config)
+        trials = generate_trial_matrix(
+            benchmark_harnesses,
+            crses,
+            config,
+            registry_dir=Path("/tmp/registry"),
+            crs_configs_dir=Path("/tmp/crs-configs"),
+        )
 
         # Expected: 2 CRSes × 2 benchmark_harnesses × 2 trials = 8 total
         assert len(trials) == 8
@@ -209,7 +233,13 @@ class TestTrialMatrixGeneration:
         ]
         crses = ["crs1", "crs2"]
 
-        trials = generate_trial_matrix(benchmark_harnesses, crses, config)
+        trials = generate_trial_matrix(
+            benchmark_harnesses,
+            crses,
+            config,
+            registry_dir=Path("/tmp/registry"),
+            crs_configs_dir=Path("/tmp/crs-configs"),
+        )
 
         # Verify ordering: CRS outer loop, BenchmarkHarness middle, trial inner
         expected = [
@@ -256,7 +286,13 @@ class TestTrialMatrixGeneration:
         benchmark_harnesses = [benchmark_harness]
         crses = ["crs1"]
 
-        trials = generate_trial_matrix(benchmark_harnesses, crses, config)
+        trials = generate_trial_matrix(
+            benchmark_harnesses,
+            crses,
+            config,
+            registry_dir=Path("/tmp/registry"),
+            crs_configs_dir=Path("/tmp/crs-configs"),
+        )
 
         # Expected: 1 CRS × 1 benchmark_harness × 1 trial = 1 total
         assert len(trials) == 1
@@ -304,7 +340,13 @@ class TestTrialMatrixGeneration:
                 benchmarks=["dummy"],  # Not used, but required for config
             )
 
-            trials = generate_trial_matrix(benchmark_harnesses, crses, config)
+            trials = generate_trial_matrix(
+                benchmark_harnesses,
+                crses,
+                config,
+                registry_dir=Path("/tmp/registry"),
+                crs_configs_dir=Path("/tmp/crs-configs"),
+            )
 
             assert len(trials) == expected_total, (
                 f"Expected {expected_total} trials for {len(crses)} CRS × {len(benchmark_harnesses)} harnesses × {trials_count} trials"
@@ -537,7 +579,13 @@ benchmarks:
                 harness=HarnessFile(name="harness1", path="/src/harness1.c"),
             )
         ]
-        trials = generate_trial_matrix(benchmark_harnesses, config.crses, config)
+        trials = generate_trial_matrix(
+            benchmark_harnesses,
+            config.crses,
+            config,
+            registry_dir=Path("/tmp/registry"),
+            crs_configs_dir=Path("/tmp/crs-configs"),
+        )
         trial = trials[0]
 
         # Store config with trial-specific fields
@@ -664,7 +712,13 @@ class TestIntegrationWithSampleConfigs:
         ]
 
         # Generate trial matrix
-        trials = generate_trial_matrix(benchmark_harnesses, config.crses, config)
+        trials = generate_trial_matrix(
+            benchmark_harnesses,
+            config.crses,
+            config,
+            registry_dir=Path("/tmp/registry"),
+            crs_configs_dir=Path("/tmp/crs-configs"),
+        )
 
         # Expected: 3 CRSes × 6 benchmark_harnesses × 3 trials = 54 total
         assert len(trials) == 54
@@ -728,7 +782,13 @@ class TestIntegrationWithSampleConfigs:
         ]
 
         # Generate trial matrix with resolved values
-        trials = generate_trial_matrix(benchmark_harnesses, resolved_crses, config)
+        trials = generate_trial_matrix(
+            benchmark_harnesses,
+            resolved_crses,
+            config,
+            registry_dir=Path("/tmp/registry"),
+            crs_configs_dir=Path("/tmp/crs-configs"),
+        )
 
         # Expected: 2 CRSes × 2 benchmark_harnesses × 3 trials = 12 total
         assert len(trials) == 12

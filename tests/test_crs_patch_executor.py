@@ -133,15 +133,19 @@ class TestCRSPatchExecutor(unittest.TestCase):
 
     def test_prepare_povs(self):
         """Test POVs directory preparation."""
-        # Create mock benchmark structure
+        # Create mock benchmark structure with multiple CPVs
         benchmark_path = self.benchmarks_root / "test-project"
         harness_dir = benchmark_path / ".aixcc" / "test_harness"
-        cpv_dir = harness_dir / "cpv_0" / "blobs"
-        cpv_dir.mkdir(parents=True)
 
-        # Create mock POV blobs
-        (cpv_dir / "pov_0.blob").write_text("mock pov 0")
-        (cpv_dir / "pov_1.blob").write_text("mock pov 1")
+        # Create cpv_0 with a POV blob
+        cpv_0_blobs = harness_dir / "cpv_0" / "blobs"
+        cpv_0_blobs.mkdir(parents=True)
+        (cpv_0_blobs / "pov_0.blob").write_text("mock pov 0")
+
+        # Create cpv_1 with a POV blob
+        cpv_1_blobs = harness_dir / "cpv_1" / "blobs"
+        cpv_1_blobs.mkdir(parents=True)
+        (cpv_1_blobs / "pov_1.blob").write_text("mock pov 1")
 
         trial_dir = Path(self.temp_dir) / "trial-1"
 
@@ -155,9 +159,9 @@ class TestCRSPatchExecutor(unittest.TestCase):
         assert povs_path is not None  # for type checker
         self.assertTrue(povs_path.exists())
 
-        # Verify POVs copied (with original filenames)
-        self.assertTrue((povs_path / "pov_0.blob").exists())
-        self.assertTrue((povs_path / "pov_1.blob").exists())
+        # Verify POVs copied with CPV ID as filename (one per CPV)
+        self.assertTrue((povs_path / "cpv_0").exists())
+        self.assertTrue((povs_path / "cpv_1").exists())
 
     def test_prepare_hints_disabled(self):
         """Test that hints preparation is skipped when disabled."""

@@ -9,6 +9,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, Optional
 
+from pydantic import BaseModel
+
 # =============================================================================
 # POV Verification Models
 # =============================================================================
@@ -333,3 +335,98 @@ class PatchVerificationResult:
         if self.is_valid:
             return f"{self.patch_id} ({self.pov_id}): {status_str}"
         return f"{self.patch_id} ({self.pov_id}): {status_str} - {self.details or 'Unknown error'}"
+
+
+class PatchVerificationSummary(BaseModel):
+    """Summary statistics for patch verification results.
+
+    Used for serialization to JSON with full type safety.
+    """
+
+    total_input_povs: int
+    patches_generated: int
+    patch_ids: list[str]
+    valid: int
+    build_failed: int
+    pov_still_triggers: int
+    test_failed: int
+    error: int
+
+    @classmethod
+    def from_results(
+        cls, results: list["PatchVerificationResult"], total_input_povs: int
+    ) -> "PatchVerificationSummary":
+        """Create summary from verification results."""
+        return cls(
+            total_input_povs=total_input_povs,
+            patches_generated=len(results),
+            patch_ids=[r.pov_id for r in results],
+            valid=sum(1 for r in results if r.status == PatchVerificationStatus.VALID),
+            build_failed=sum(
+                1 for r in results if r.status == PatchVerificationStatus.BUILD_FAILED
+            ),
+            pov_still_triggers=sum(
+                1
+                for r in results
+                if r.status == PatchVerificationStatus.POV_STILL_TRIGGERS
+            ),
+            test_failed=sum(
+                1 for r in results if r.status == PatchVerificationStatus.TEST_FAILED
+            ),
+            error=sum(
+                1
+                for r in results
+                if r.status
+                in (PatchVerificationStatus.ERROR, PatchVerificationStatus.PENDING)
+            ),
+        )
+
+
+class PatchVerificationDetailedResult(BaseModel):
+    """Detailed result for a single patch verification."""
+
+    patch_id: str
+    pov_id: str
+    status: str
+    is_valid: bool
+    security_verdict: str
+    build_time: float
+    pov_test_passed: bool
+    unit_tests_passed: Optional[bool]
+    details: Optional[str]
+    cpv_fixed: list[str]
+
+    @classmethod
+    def from_result(
+        cls, result: "PatchVerificationResult"
+    ) -> "PatchVerificationDetailedResult":
+        """Create from PatchVerificationResult dataclass."""
+        return cls(
+            patch_id=result.patch_id,
+            pov_id=result.pov_id,
+            status=result.status.value,
+            is_valid=result.is_valid,
+            security_verdict=result.security_verdict,
+            build_time=result.build_time,
+            pov_test_passed=result.pov_test_passed,
+            unit_tests_passed=result.unit_tests_passed,
+            details=result.details,
+            cpv_fixed=result.cpv_fixed,
+        )
+
+
+class PatchVerificationOutput(BaseModel):
+    """Complete patch verification output for serialization."""
+
+    summary: PatchVerificationSummary
+    results: list[PatchVerificationDetailedResult]
+
+    @classmethod
+    def from_results(
+        cls, results: list["PatchVerificationResult"], total_input_povs: int
+    ) -> "PatchVerificationOutput":
+        """Create output from verification results."""
+        return cls(
+            summary=PatchVerificationSummary.from_results(results, total_input_povs),
+            results=[PatchVerificationDetailedResult.from_result(r) for r in results],
+        )

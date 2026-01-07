@@ -444,6 +444,8 @@ class TrialDirectoryPreparer:
         """
         Prepare POVs directory for patch generation.
 
+        Copies one POV per CPV, using CPV ID as the filename.
+
         Args:
             benchmark: Benchmark name
             harness: Harness name
@@ -451,6 +453,11 @@ class TrialDirectoryPreparer:
 
         Returns:
             Path to prepared POVs directory, or None if no POVs
+
+        Structure:
+            povs/
+            ├── cpv_0      # First POV blob from cpv_0
+            └── cpv_1      # First POV blob from cpv_1
         """
         benchmark_dir = self.benchmarks_root / benchmark
         source_harness_dir = benchmark_dir / ".aixcc" / harness
@@ -464,23 +471,30 @@ class TrialDirectoryPreparer:
         povs_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            # Collect POVs from all cpv_* directories
-            pov_count = 0
+            # Collect one POV per CPV
+            cpv_count = 0
             for cpv_dir in sorted(source_harness_dir.glob("cpv_*")):
                 blobs_dir = cpv_dir / "blobs"
                 if not blobs_dir.exists():
                     continue
 
-                for pov_blob in sorted(blobs_dir.glob("*.blob")):
-                    # Filter based on config
-                    if self._should_include_pov(pov_blob.stem):
-                        # Copy and flatten: pov_0.blob -> povs/pov_0
-                        dest_name = pov_blob.stem  # Remove .blob extension
-                        shutil.copy2(pov_blob, povs_dir / dest_name)
-                        pov_count += 1
+                cpv_id = cpv_dir.name  # e.g., "cpv_0"
 
-            if pov_count > 0:
-                logger.info(f"Prepared {pov_count} POVs at: {povs_dir}")
+                # Filter CPV based on config
+                if not self._should_include_cpv(cpv_id):
+                    continue
+
+                # Get first POV blob
+                pov_blobs = sorted(blobs_dir.glob("*.blob"))
+                if not pov_blobs:
+                    continue
+
+                # Copy first POV blob with CPV ID as filename
+                shutil.copy2(pov_blobs[0], povs_dir / cpv_id)
+                cpv_count += 1
+
+            if cpv_count > 0:
+                logger.info(f"Prepared {cpv_count} CPV POVs at: {povs_dir}")
                 return povs_dir
             logger.warning(f"No POVs found for {benchmark}/{harness}")
             return None
@@ -489,24 +503,24 @@ class TrialDirectoryPreparer:
             logger.error(f"POVs preparation failed: {e}", exc_info=True)
             raise POVsPreparationError(f"Failed to prepare POVs: {e}") from e
 
-    def _should_include_pov(self, pov_name: str) -> bool:
+    def _should_include_cpv(self, cpv_id: str) -> bool:
         """
-        Check if POV should be included based on config.
+        Check if CPV should be included based on config.
 
         Args:
-            pov_name: POV name (e.g., "pov_0")
+            cpv_id: CPV identifier (e.g., "cpv_0")
 
         Returns:
-            True if POV should be included
+            True if CPV should be included
         """
-        target_povs = self.config.get("target_povs")
+        target_cpvs = self.config.get("target_cpvs")
 
-        if not target_povs:
-            # No filter, include all POVs
+        if not target_cpvs:
+            # No filter, include all CPVs
             return True
 
-        # Check if POV is in target list
-        return pov_name in target_povs
+        # Check if CPV is in target list
+        return cpv_id in target_cpvs
 
     def _create_metadata(
         self,

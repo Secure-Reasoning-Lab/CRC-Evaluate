@@ -18,6 +18,8 @@ from crsbench.validation.schemas import (
     EvaluationMode,
     ExperimentConfig,
     HarnessFile,
+    ProjectConfig,
+    RtsMode,
     Vulnerability,
 )
 from pydantic import ValidationError as PydanticValidationError
@@ -1368,3 +1370,97 @@ benchmark_list:
 """
         suite_result = validate_benchmark_suite_from_string(suite_yaml)
         assert isinstance(suite_result.to_dict(), dict)
+
+
+class TestProjectConfig:
+    """Tests for ProjectConfig schema."""
+
+    def test_project_config_minimal(self):
+        """Test minimal valid project config."""
+        config = ProjectConfig(language="c")
+
+        assert config.language == "c"
+        assert config.rts_mode is None
+        assert config.inc_build is True  # defaults to True
+        assert config.get_normalized_language() == "C/C++"
+
+    def test_project_config_full(self):
+        """Test full project config with all fields."""
+        config = ProjectConfig(
+            homepage="https://example.com",
+            language="jvm",
+            main_repo="git@github.com:example/repo.git",
+            sanitizers=["address", "undefined"],
+            fuzzing_engines=["libfuzzer"],
+            architectures=["x86_64"],
+            rts_mode=RtsMode.JCGEKS,
+            inc_build=True,
+        )
+
+        assert config.language == "jvm"
+        assert config.rts_mode == RtsMode.JCGEKS
+        assert config.inc_build is True
+        assert config.get_normalized_language() == "Java"
+
+    def test_project_config_rts_modes(self):
+        """Test all RTS mode values."""
+        for mode in [RtsMode.JCGEKS, RtsMode.OPENCLOVER, RtsMode.BINARY_RTS]:
+            config = ProjectConfig(language="jvm", rts_mode=mode)
+            assert config.rts_mode == mode
+            assert config.rts_mode.value in ["jcgeks", "openclover", "binary_rts"]
+
+    def test_project_config_language_normalization(self):
+        """Test language normalization."""
+        test_cases = [
+            ("c", "C/C++"),
+            ("c++", "C/C++"),
+            ("C", "C/C++"),
+            ("jvm", "Java"),
+            ("JVM", "Java"),
+            ("go", "Go"),
+            ("rust", "Rust"),
+        ]
+        for lang, expected in test_cases:
+            config = ProjectConfig(language=lang)
+            assert config.get_normalized_language() == expected
+
+    def test_project_config_invalid_sanitizer(self):
+        """Test invalid sanitizer is rejected."""
+        with pytest.raises(PydanticValidationError):
+            ProjectConfig(language="c", sanitizers=["invalid"])
+
+    def test_project_config_invalid_fuzzing_engine(self):
+        """Test invalid fuzzing engine is rejected."""
+        with pytest.raises(PydanticValidationError):
+            ProjectConfig(language="c", fuzzing_engines=["invalid"])
+
+    def test_project_config_extra_fields_ignored(self):
+        """Test that extra fields from standard OSS-Fuzz project.yaml are ignored."""
+        # Standard OSS-Fuzz fields that we don't model
+        config = ProjectConfig(
+            language="c",
+            homepage="https://example.com",
+            vendor="google",  # extra field
+            primary_contact="test@example.com",  # extra field
+            auto_ccs=["cc@example.com"],  # extra field
+        )
+
+        assert config.language == "c"
+        assert config.homepage == "https://example.com"
+        # Extra fields should be silently ignored, not cause errors
+
+    def test_project_config_without_crsbench_extensions(self):
+        """Test standard OSS-Fuzz project.yaml without CRSBench extensions."""
+        # Simulating a standard OSS-Fuzz project.yaml
+        config = ProjectConfig(
+            homepage="https://curl.haxx.se/",
+            language="c",
+            sanitizers=["address", "undefined", "memory"],
+            fuzzing_engines=["libfuzzer"],
+            architectures=["x86_64"],
+            main_repo="git@github.com:example/curl.git",
+        )
+
+        # CRSBench extensions should have defaults
+        assert config.rts_mode is None
+        assert config.inc_build is True  # defaults to True

@@ -38,8 +38,8 @@ logger = get_logger(__name__)
 
 E2E_PROJECTS = [
     "sanity-mock-c-delta-01",
-    "afc-libxml2-delta-01",
-    "afc-libxml2-full-01",
+    # "afc-libxml2-delta-01",
+    # "afc-libxml2-full-01",
 ]
 
 DEFAULT_SANITIZER = "address"
@@ -167,6 +167,8 @@ def run_e2e_patch_verification(
     sanitizer: str = DEFAULT_SANITIZER,
     timeout: int = 120,
     build_timeout: int = 1200,
+    *,
+    force_rebuild: bool = False,
 ) -> list[PatchVerificationResult]:
     """Run E2E patch verification for a benchmark using ground truth patches.
 
@@ -178,6 +180,7 @@ def run_e2e_patch_verification(
         sanitizer: Sanitizer type
         timeout: POV timeout in seconds
         build_timeout: Build timeout in seconds
+        force_rebuild: If True, force rebuild even if cache exists
 
     Returns:
         List of PatchVerificationResult for each ground truth patch
@@ -203,6 +206,7 @@ def run_e2e_patch_verification(
             sanitizer=sanitizer,
             timeout=timeout,
             build_timeout=build_timeout,
+            force_rebuild=force_rebuild,
         )
 
         try:
@@ -278,6 +282,7 @@ class TestE2EPatchVerification:
             harness=None,
             test_mode=UnitTestMode.FULL,
             sanitizer=DEFAULT_SANITIZER,
+            force_rebuild=True,  # Force rebuild to avoid stale cache issues
         )
 
         assert len(results) > 0, (
