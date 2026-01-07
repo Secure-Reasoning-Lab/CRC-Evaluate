@@ -91,7 +91,7 @@ export PROJECT_REPOS_DIR="/home/acorn421/work/team-atlanta/afc-repos"
 **Option 1: Auto-clone (simplest!)**
 ```bash
 # Repository is automatically cloned if not found
-python crsbench/migration/generate_test_sh.py \
+python -m crsbench.migration.cli.test_sh_command \
   --benchmark apache-commons-compress-delta-01 \
   --verbose
 
@@ -100,7 +100,7 @@ python crsbench/migration/generate_test_sh.py \
 
 **Option 2: Specify existing project directory**
 ```bash
-python crsbench/migration/generate_test_sh.py \
+python -m crsbench.migration.cli.test_sh_command \
   --benchmark apache-commons-compress-delta-01 \
   --project-dir /path/to/commons-compress \
   --verbose
@@ -141,7 +141,7 @@ Tests actual agent functionality including:
 ### Programmatic Usage
 
 ```python
-from crsbench.migration.test_sh_generator import generate_test_sh_for_benchmark
+from crsbench.migration.test_sh import generate_test_sh_for_benchmark
 
 result = generate_test_sh_for_benchmark(
     benchmark_name="apache-commons-compress-delta-01",
@@ -176,7 +176,7 @@ The MCP-enhanced generator adds Docker testing capabilities to the standard test
 ### Quick Start
 
 ```python
-from crsbench.migration.test_sh_generator import generate_test_sh_for_benchmark
+from crsbench.migration.test_sh import generate_test_sh_for_benchmark
 
 # Standard two-phase generation
 result = generate_test_sh_for_benchmark(
@@ -252,17 +252,17 @@ Automatically generates vuln.yaml files for CPVs by analyzing crash logs, POV fi
 
 ```bash
 # Generate vuln.yaml for ALL CPVs in a benchmark
-python crsbench/migration/generate_vuln_yaml.py \
+python -m crsbench.migration.cli.vuln_yaml_command \
   --benchmark atlanta-curl-delta-01
 
 # Generate vuln.yaml for a specific CPV
-python crsbench/migration/generate_vuln_yaml.py \
+python -m crsbench.migration.cli.vuln_yaml_command \
   --benchmark atlanta-curl-delta-01 \
   --harness curl_fuzzer_http \
   --cpv cpv_0
 
 # Force overwrite ALL existing vuln.yaml files
-python crsbench/migration/generate_vuln_yaml.py \
+python -m crsbench.migration.cli.vuln_yaml_command \
   --benchmark atlanta-curl-delta-01 \
   --force
 ```

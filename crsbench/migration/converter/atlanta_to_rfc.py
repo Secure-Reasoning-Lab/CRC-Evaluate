@@ -9,8 +9,7 @@ files, and organizing ground truth data according to the RFC specification.
 
 import argparse
 import csv
-from crsbench.utils.logger import get_logger
-from crsbench.utils import log_summary, log_section
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,14 +17,17 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from crsbench.migration.config_converter import ConfigConverter
-from crsbench.migration.file_migrator import FileMigrator
-from crsbench.migration.vuln_metadata_generator import VulnMetadataGenerator
+from crsbench.migration.converter.config import ConfigConverter
+from crsbench.migration.converter.files import FileMigrator
+from crsbench.migration.converter.vuln_metadata import VulnMetadataGenerator
+from crsbench.utils import log_summary
+from crsbench.utils.logger import get_logger
 
 
 @dataclass
 class VulnInfo:
     """Information about a vulnerability for CSV reporting."""
+
     project_name: str
     source: str
     repo_url: str
@@ -53,13 +55,22 @@ class MigrationContext:
     repo_url: str = ""  # Repository URL from project.yaml
     language: str = ""  # Programming language
     mode: str = ""  # delta or full
-    harness_info: Dict[str, Any] = field(default_factory=dict)  # Harness information for vulnerability migration
+    harness_info: Dict[str, Any] = field(
+        default_factory=dict
+    )  # Harness information for vulnerability migration
 
 
 class AtlantaToRFCMigrator:
     """Main migration orchestrator."""
 
-    def __init__(self, source_dir: Path, target_dir: Path, dry_run: bool = False, force: bool = False):
+    def __init__(
+        self,
+        source_dir: Path,
+        target_dir: Path,
+        *,
+        dry_run: bool = False,
+        force: bool = False,
+    ):
         """
         Initialize the migrator.
 
@@ -80,7 +91,9 @@ class AtlantaToRFCMigrator:
         self.vuln_generator = VulnMetadataGenerator()
         self.file_migrator = FileMigrator(dry_run=dry_run)
 
-    def discover_projects(self, specific_projects: Optional[List[str]] = None) -> List[Path]:
+    def discover_projects(
+        self, specific_projects: Optional[List[str]] = None
+    ) -> List[Path]:
         """
         Discover all Team-Atlanta projects to migrate.
 
@@ -97,7 +110,7 @@ class AtlantaToRFCMigrator:
             return []
 
         # Only process C and Java/JVM projects
-        allowed_languages = ['c', 'java', 'jvm']
+        allowed_languages = ["c", "java", "jvm"]
 
         projects = []
         for lang_dir in aixcc_dir.iterdir():
@@ -134,7 +147,9 @@ class AtlantaToRFCMigrator:
             MigrationContext with migration results
         """
         project_name = project_dir.name
-        self.logger.info(f"{'[DRY RUN] ' if self.dry_run else ''}Processing project: {project_name}")
+        self.logger.info(
+            f"{'[DRY RUN] ' if self.dry_run else ''}Processing project: {project_name}"
+        )
 
         # Extract language from project path (e.g., .../aixcc/c/project-name -> "C")
         language = self._extract_language(project_dir)
@@ -143,7 +158,7 @@ class AtlantaToRFCMigrator:
             source_dir=project_dir,
             target_dir=self.target_dir / project_name,
             dry_run=self.dry_run,
-            project_name=project_name
+            project_name=project_name,
         )
         ctx.language = language
 
@@ -151,8 +166,19 @@ class AtlantaToRFCMigrator:
         target_meta = ctx.target_dir / ".aixcc" / "meta.yaml"
         if target_meta.exists() and not self.force:
             ctx.skipped = True
-            self.logger.info(f"  Project already migrated, skipping (use --force to overwrite)")
+            self.logger.info(
+                "  Project already migrated, skipping (use --force to overwrite)"
+            )
             return ctx
+
+        # Clean up existing .aixcc directory when --force is used
+        target_aixcc = ctx.target_dir / ".aixcc"
+        if target_aixcc.exists() and self.force:
+            if not self.dry_run:
+                shutil.rmtree(target_aixcc)
+                self.logger.info("  Cleaned up existing .aixcc directory")
+            else:
+                self.logger.info("  [DRY RUN] Would clean up existing .aixcc directory")
 
         try:
             # Step 1: Validate source structure
@@ -202,8 +228,8 @@ class AtlantaToRFCMigrator:
         # Path structure: .../aixcc/{language}/{project-name}
         try:
             parts = project_dir.parts
-            if 'aixcc' in parts:
-                lang_index = parts.index('aixcc') + 1
+            if "aixcc" in parts:
+                lang_index = parts.index("aixcc") + 1
                 if lang_index < len(parts):
                     lang = parts[lang_index]
                     # Capitalize language name
@@ -241,11 +267,11 @@ class AtlantaToRFCMigrator:
             return
 
         try:
-            with open(project_yaml, 'r') as f:
+            with project_yaml.open("r") as f:
                 project_data = yaml.safe_load(f)
 
             # Extract main_repo field
-            ctx.repo_url = project_data.get('main_repo', '')
+            ctx.repo_url = project_data.get("main_repo", "")
 
             if not ctx.repo_url:
                 ctx.warnings.append("project.yaml missing 'main_repo' field")
@@ -256,7 +282,7 @@ class AtlantaToRFCMigrator:
 
     def _convert_config(self, ctx: MigrationContext) -> None:
         """Convert config.yaml to meta.yaml format."""
-        self.logger.info(f"  Converting config.yaml to meta.yaml")
+        self.logger.info("  Converting config.yaml to meta.yaml")
 
         source_config = ctx.source_dir / ".aixcc" / "config.yaml"
         target_meta = ctx.target_dir / ".aixcc" / "meta.yaml"
@@ -266,20 +292,22 @@ class AtlantaToRFCMigrator:
 
         # Store harness info in context for later use
         ctx.num_harnesses = len(harness_info)
-        ctx.num_vulns = sum(len(h.get('cpvs', [])) for h in harness_info.values())
+        ctx.num_vulns = sum(len(h.get("cpvs", [])) for h in harness_info.values())
 
         # Determine mode (delta or full)
         if meta_config.delta_mode:
-            ctx.mode = 'delta'
+            ctx.mode = "delta"
         elif meta_config.full_mode:
-            ctx.mode = 'full'
+            ctx.mode = "full"
         else:
-            ctx.mode = 'unknown'
+            ctx.mode = "unknown"
 
         # Write meta.yaml using Pydantic model
         if not self.dry_run:
             meta_config.to_yaml(target_meta)
-            self.logger.debug(f"Migrated from Team-Atlanta format to RFC format: {target_meta}")
+            self.logger.debug(
+                f"Migrated from Team-Atlanta format to RFC format: {target_meta}"
+            )
         else:
             self.logger.info(f"    [DRY RUN] Would write: {target_meta}")
 
@@ -288,7 +316,7 @@ class AtlantaToRFCMigrator:
 
     def _migrate_root_files(self, ctx: MigrationContext) -> None:
         """Copy root-level project files and directories, excluding .aixcc."""
-        self.logger.info(f"  Migrating root files")
+        self.logger.info("  Migrating root files")
 
         # Copy all files and directories in project root, excluding .aixcc
         for item in ctx.source_dir.iterdir():
@@ -305,15 +333,15 @@ class AtlantaToRFCMigrator:
 
     def _migrate_vulnerabilities(self, ctx: MigrationContext) -> None:
         """Migrate vulnerability data for each harness."""
-        self.logger.info(f"  Migrating vulnerabilities")
+        self.logger.info("  Migrating vulnerabilities")
 
-        harness_info = getattr(ctx, 'harness_info', {})
+        harness_info = getattr(ctx, "harness_info", {})
 
         for harness_name, harness_data in harness_info.items():
-            cpvs = harness_data.get('cpvs', [])
+            cpvs = harness_data.get("cpvs", [])
 
             for cpv in cpvs:
-                cpv_name = cpv['name']
+                cpv_name = cpv["name"]
                 self.logger.info(f"    Processing {harness_name}/{cpv_name}")
 
                 # Create vulnerability directory structure
@@ -332,52 +360,66 @@ class AtlantaToRFCMigrator:
                 self._migrate_crash_logs(ctx, harness_name, cpv_name, vuln_dir)
 
                 # Determine source based on project name
-                source = "Team-Atlanta" if "atlanta" in ctx.project_name.lower() else "AFC"
+                source = (
+                    "Team-Atlanta" if "atlanta" in ctx.project_name.lower() else "AFC"
+                )
 
                 # Record vulnerability info for CSV report
                 vuln_info = VulnInfo(
                     project_name=ctx.project_name,
                     source=source,
                     repo_url=ctx.repo_url,  # From project.yaml
-                    mode=getattr(ctx, 'mode', 'unknown'),
-                    language=getattr(ctx, 'language', 'Unknown'),
+                    mode=getattr(ctx, "mode", "unknown"),
+                    language=getattr(ctx, "language", "Unknown"),
                     harness_name=harness_name,
-                    vuln_id=cpv_name
+                    vuln_id=cpv_name,
                 )
                 ctx.vulns.append(vuln_info)
 
-    def _generate_vuln_metadata(self, ctx: MigrationContext, harness_name: str,
-                               cpv: dict, vuln_dir: Path) -> None:
+    def _generate_vuln_metadata(
+        self, ctx: MigrationContext, harness_name: str, cpv: dict, vuln_dir: Path
+    ) -> None:
         """Generate vulnerability metadata YAML file."""
-        cpv_name = cpv['name']
+        cpv_name = cpv["name"]
         vuln_yaml = vuln_dir / "vuln.yaml"
 
         # Try to find original vulnerability file
         # Path: {source_dir}/.aixcc/vulns/{harness_name}/{cpv_name}.yaml
-        source_vuln_file = ctx.source_dir / ".aixcc" / "vulns" / harness_name / f"{cpv_name}.yaml"
+        source_vuln_file = (
+            ctx.source_dir / ".aixcc" / "vulns" / harness_name / f"{cpv_name}.yaml"
+        )
 
         # Try to find crash log file for parsing function name
         # Path: {source_dir}/.aixcc/crash_logs/{harness_name}/{cpv_name}.log
-        crash_log_path = ctx.source_dir / ".aixcc" / "crash_logs" / harness_name / f"{cpv_name}.log"
+        crash_log_path = (
+            ctx.source_dir / ".aixcc" / "crash_logs" / harness_name / f"{cpv_name}.log"
+        )
 
         # Get language from context (defaults to "C")
-        language = getattr(ctx, 'language', 'C')
+        language = getattr(ctx, "language", "C")
 
-        metadata = self.vuln_generator.generate(cpv, harness_name, source_vuln_file, crash_log_path, language)
+        metadata = self.vuln_generator.generate(
+            cpv, harness_name, source_vuln_file, crash_log_path, language
+        )
 
         if not self.dry_run:
             metadata.to_yaml(vuln_yaml)
             if source_vuln_file.exists():
-                self.logger.debug(f"Migrated vulnerability metadata from {source_vuln_file} to {vuln_yaml}")
+                self.logger.debug(
+                    f"Migrated vulnerability metadata from {source_vuln_file} to {vuln_yaml}"
+                )
             else:
                 self.logger.debug(f"Generated MOCK vulnerability metadata: {vuln_yaml}")
         else:
             self.logger.info(f"      [DRY RUN] Would write: {vuln_yaml}")
 
-    def _migrate_patches(self, ctx: MigrationContext, harness_name: str,
-                        cpv_name: str, vuln_dir: Path) -> None:
+    def _migrate_patches(
+        self, ctx: MigrationContext, harness_name: str, cpv_name: str, vuln_dir: Path
+    ) -> None:
         """Migrate patch files."""
-        source_patch = ctx.source_dir / ".aixcc" / "patches" / harness_name / f"{cpv_name}.diff"
+        source_patch = (
+            ctx.source_dir / ".aixcc" / "patches" / harness_name / f"{cpv_name}.diff"
+        )
 
         if not source_patch.exists():
             ctx.warnings.append(f"Missing patch for {harness_name}/{cpv_name}")
@@ -386,8 +428,9 @@ class AtlantaToRFCMigrator:
         target_patch = vuln_dir / "patches" / "patch_0.diff"
         self.file_migrator.copy_file(source_patch, target_patch, ctx)
 
-    def _migrate_pov_blobs(self, ctx: MigrationContext, harness_name: str,
-                          cpv_name: str, vuln_dir: Path) -> None:
+    def _migrate_pov_blobs(
+        self, ctx: MigrationContext, harness_name: str, cpv_name: str, vuln_dir: Path
+    ) -> None:
         """Migrate POV blob files."""
         # Primary POV blob (from povs directory)
         source_pov = ctx.source_dir / ".aixcc" / "povs" / harness_name / cpv_name
@@ -398,7 +441,9 @@ class AtlantaToRFCMigrator:
             self.file_migrator.copy_file(source_pov, target_blob, ctx)
             blob_index += 1
         else:
-            ctx.warnings.append(f"Missing primary POV blob for {harness_name}/{cpv_name}")
+            ctx.warnings.append(
+                f"Missing primary POV blob for {harness_name}/{cpv_name}"
+            )
 
         # Variant POV blobs (from variants directory)
         variants_dir = ctx.source_dir / ".aixcc" / "variants" / cpv_name / harness_name
@@ -408,11 +453,14 @@ class AtlantaToRFCMigrator:
                 self.file_migrator.copy_file(variant_file, target_blob, ctx)
                 blob_index += 1
 
-    def _migrate_crash_logs(self, ctx: MigrationContext, harness_name: str,
-                           cpv_name: str, vuln_dir: Path) -> None:
+    def _migrate_crash_logs(
+        self, ctx: MigrationContext, harness_name: str, cpv_name: str, vuln_dir: Path
+    ) -> None:
         """Migrate crash log files."""
         # Primary crash log
-        source_log = ctx.source_dir / ".aixcc" / "crash_logs" / harness_name / f"{cpv_name}.log"
+        source_log = (
+            ctx.source_dir / ".aixcc" / "crash_logs" / harness_name / f"{cpv_name}.log"
+        )
 
         log_index = 0
         if source_log.exists():
@@ -440,12 +488,12 @@ class AtlantaToRFCMigrator:
         source_tests = ctx.source_dir / ".aixcc" / "tests"
 
         if not source_tests.exists():
-            self.logger.debug(f"  No tests directory found, skipping")
+            self.logger.debug("  No tests directory found, skipping")
             return
 
         target_tests = ctx.target_dir / ".aixcc" / "tests"
 
-        self.logger.info(f"  Migrating tests directory")
+        self.logger.info("  Migrating tests directory")
         self.file_migrator.copy_directory(source_tests, target_tests, ctx)
 
     def _validate_target(self, ctx: MigrationContext) -> None:
@@ -476,7 +524,7 @@ class AtlantaToRFCMigrator:
             source_dir=project_dir,
             target_dir=self.target_dir / project_name,
             dry_run=True,  # Report-only doesn't do actual operations
-            project_name=project_name
+            project_name=project_name,
         )
         ctx.language = language
 
@@ -488,33 +536,37 @@ class AtlantaToRFCMigrator:
             source_config = ctx.source_dir / ".aixcc" / "config.yaml"
             if not source_config.exists():
                 ctx.successful = False
-                ctx.errors.append(f"Missing config.yaml")
+                ctx.errors.append("Missing config.yaml")
                 return ctx
 
             # Parse config to get harness and vulnerability info
-            with open(source_config, 'r') as f:
+            with source_config.open("r") as f:
                 config_data = yaml.safe_load(f)
 
             # Determine mode
-            if 'delta_mode' in config_data and config_data['delta_mode']:
-                ctx.mode = 'delta'
-            elif 'full_mode' in config_data and config_data['full_mode']:
-                ctx.mode = 'full'
+            if "delta_mode" in config_data and config_data["delta_mode"]:
+                ctx.mode = "delta"
+            elif "full_mode" in config_data and config_data["full_mode"]:
+                ctx.mode = "full"
             else:
-                ctx.mode = 'unknown'
+                ctx.mode = "unknown"
 
             # Extract harness and vulnerability information
-            harness_files = config_data.get('harness_files', [])
+            harness_files = config_data.get("harness_files", [])
             for harness in harness_files:
-                harness_name = harness.get('name', 'unknown')
-                cpvs = harness.get('cpvs', [])
+                harness_name = harness.get("name", "unknown")
+                cpvs = harness.get("cpvs", [])
 
                 for cpv in cpvs:
                     # Use 'name' key, same as migration code
-                    cpv_id = cpv.get('name', 'unknown')
+                    cpv_id = cpv.get("name", "unknown")
 
                     # Determine source based on project name
-                    source = "Team-Atlanta" if "atlanta" in ctx.project_name.lower() else "AFC"
+                    source = (
+                        "Team-Atlanta"
+                        if "atlanta" in ctx.project_name.lower()
+                        else "AFC"
+                    )
 
                     # Create VulnInfo for CSV report
                     vuln_info = VulnInfo(
@@ -524,12 +576,14 @@ class AtlantaToRFCMigrator:
                         mode=ctx.mode,
                         language=language,
                         harness_name=harness_name,
-                        vuln_id=cpv_id
+                        vuln_id=cpv_id,
                     )
                     ctx.vulns.append(vuln_info)
 
             ctx.successful = True
-            self.logger.debug(f"  Found {len(ctx.vulns)} vulnerabilities in {project_name}")
+            self.logger.debug(
+                f"  Found {len(ctx.vulns)} vulnerabilities in {project_name}"
+            )
 
         except Exception as e:
             ctx.successful = False
@@ -538,7 +592,9 @@ class AtlantaToRFCMigrator:
 
         return ctx
 
-    def collect_all_info(self, specific_projects: Optional[List[str]] = None) -> List[MigrationContext]:
+    def collect_all_info(
+        self, specific_projects: Optional[List[str]] = None
+    ) -> List[MigrationContext]:
         """
         Collect information from all projects for reporting without migration.
 
@@ -563,7 +619,9 @@ class AtlantaToRFCMigrator:
 
         return results
 
-    def migrate_all(self, specific_projects: Optional[List[str]] = None) -> List[MigrationContext]:
+    def migrate_all(
+        self, specific_projects: Optional[List[str]] = None
+    ) -> List[MigrationContext]:
         """
         Migrate all discovered projects.
 
@@ -591,17 +649,19 @@ class AtlantaToRFCMigrator:
 
 def write_csv_report(results: List[MigrationContext], output_file: Path) -> None:
     """Write migration results to CSV file."""
-    with open(output_file, 'w', newline='') as f:
+    with output_file.open("w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow([
-            'Project Name',
-            'Source',
-            'Vuln. Repo URL',
-            'Mode',
-            'Language',
-            'Harness Name',
-            'Vuln. ID'
-        ])
+        writer.writerow(
+            [
+                "Project Name",
+                "Source",
+                "Vuln. Repo URL",
+                "Mode",
+                "Language",
+                "Harness Name",
+                "Vuln. ID",
+            ]
+        )
 
         for ctx in results:
             # Determine source based on project name
@@ -609,44 +669,50 @@ def write_csv_report(results: List[MigrationContext], output_file: Path) -> None
 
             if ctx.skipped:
                 # For skipped migrations, write a single row indicating it was skipped
-                writer.writerow([
-                    ctx.project_name,
-                    source,
-                    'N/A (Already Migrated - Skipped)',
-                    'N/A',
-                    getattr(ctx, 'language', 'Unknown'),
-                    'N/A',
-                    'N/A'
-                ])
+                writer.writerow(
+                    [
+                        ctx.project_name,
+                        source,
+                        "N/A (Already Migrated - Skipped)",
+                        "N/A",
+                        getattr(ctx, "language", "Unknown"),
+                        "N/A",
+                        "N/A",
+                    ]
+                )
             elif not ctx.successful:
                 # For failed migrations, write a single row with error info
-                writer.writerow([
-                    ctx.project_name,
-                    source,
-                    'N/A (Migration Failed)',
-                    'N/A',
-                    getattr(ctx, 'language', 'Unknown'),
-                    'N/A',
-                    'N/A'
-                ])
+                writer.writerow(
+                    [
+                        ctx.project_name,
+                        source,
+                        "N/A (Migration Failed)",
+                        "N/A",
+                        getattr(ctx, "language", "Unknown"),
+                        "N/A",
+                        "N/A",
+                    ]
+                )
             else:
                 # For successful migrations, write one row per vulnerability
                 for vuln in ctx.vulns:
-                    writer.writerow([
-                        vuln.project_name,
-                        vuln.source,
-                        vuln.repo_url,
-                        vuln.mode,
-                        vuln.language,
-                        vuln.harness_name,
-                        vuln.vuln_id
-                    ])
+                    writer.writerow(
+                        [
+                            vuln.project_name,
+                            vuln.source,
+                            vuln.repo_url,
+                            vuln.mode,
+                            vuln.language,
+                            vuln.harness_name,
+                            vuln.vuln_id,
+                        ]
+                    )
 
 
-
-def setup_logging(verbose: bool = False) -> None:
+def setup_logging(*, verbose: bool = False) -> None:
     """Configure logging for the migration script."""
     from crsbench.utils.logger import configure_logger
+
     level = "DEBUG" if verbose else "INFO"
     configure_logger(level=level)
 
@@ -654,7 +720,7 @@ def setup_logging(verbose: bool = False) -> None:
 def main():
     """Main entry point for the migration script."""
     parser = argparse.ArgumentParser(
-        description='Migrate Team-Atlanta benchmarks to CRSBench RFC format',
+        description="Migrate Team-Atlanta benchmarks to CRSBench RFC format",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -672,64 +738,60 @@ Examples:
 
   # Migrate specific projects
   python atlanta_to_rfc.py --source-dir /path/to/oss-fuzz/projects --target-dir /path/to/CRSBench/benchmarks --projects curl-delta-04,libxml2-delta-03
-        """
+        """,
     )
 
     parser.add_argument(
-        '--source-dir',
+        "--source-dir",
         type=Path,
         required=True,
-        help='Team-Atlanta projects directory (contains aixcc/)'
+        help="Team-Atlanta projects directory (contains aixcc/)",
     )
 
     parser.add_argument(
-        '--target-dir',
+        "--target-dir",
         type=Path,
         required=True,
-        help='CRSBench benchmarks directory (target for conversion)'
+        help="CRSBench benchmarks directory (target for conversion)",
     )
 
     parser.add_argument(
-        '--projects',
+        "--projects",
         type=str,
-        help='Comma-separated list of specific projects to migrate'
+        help="Comma-separated list of specific projects to migrate",
     )
 
     parser.add_argument(
-        '--output-csv',
+        "--output-csv",
         type=Path,
-        default='migration_report.csv',
-        help='Output CSV file for migration report (default: migration_report.csv)'
+        default="migration_report.csv",
+        help="Output CSV file for migration report (default: migration_report.csv)",
     )
 
     parser.add_argument(
-        '--dry-run',
-        action='store_true',
-        help='Perform validation without actual file operations'
+        "--dry-run",
+        action="store_true",
+        help="Perform validation without actual file operations",
     )
 
     parser.add_argument(
-        '--report-only',
-        action='store_true',
-        help='Generate CSV report only without migration or validation (fast)'
+        "--report-only",
+        action="store_true",
+        help="Generate CSV report only without migration or validation (fast)",
     )
 
-    parser.add_argument(
-        '--verbose',
-        action='store_true',
-        help='Enable verbose logging'
-    )
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
 
     parser.add_argument(
-        '--force',
-        action='store_true',
-        help='Force migration even if project already exists (default: skip existing)'
+        "--force",
+        action="store_true",
+        help="Force migration even if project already exists (default: skip existing)",
     )
 
     args = parser.parse_args()
 
     # Setup logging
-    setup_logging(args.verbose)
+    setup_logging(verbose=args.verbose)
     logger = get_logger(__name__)
 
     # Validate directories
@@ -743,14 +805,14 @@ Examples:
     # Parse projects list
     specific_projects = None
     if args.projects:
-        specific_projects = [p.strip() for p in args.projects.split(',')]
+        specific_projects = [p.strip() for p in args.projects.split(",")]
 
     # Create migrator
     migrator = AtlantaToRFCMigrator(
         source_dir=args.source_dir,
         target_dir=args.target_dir,
         dry_run=args.dry_run,
-        force=args.force
+        force=args.force,
     )
 
     # Run in appropriate mode
@@ -764,12 +826,16 @@ Examples:
         failed = sum(1 for r in results if not r.successful)
         total_vulns = sum(len(r.vulns) for r in results)
 
-        log_summary("Report Collection", {
-            "total_projects": len(results),
-            "successful": successful,
-            "failed": failed,
-            "total_vulnerabilities": total_vulns
-        }, show_percentage=False)
+        log_summary(
+            "Report Collection",
+            {
+                "total_projects": len(results),
+                "successful": successful,
+                "failed": failed,
+                "total_vulnerabilities": total_vulns,
+            },
+            show_percentage=False,
+        )
     else:
         # Normal migration mode
         results = migrator.migrate_all(specific_projects)
@@ -780,12 +846,16 @@ Examples:
         failed = sum(1 for r in results if not r.successful and not r.skipped)
 
         dry_run_prefix = "DRY RUN " if args.dry_run else ""
-        log_summary(f"Migration {dry_run_prefix}", {
-            "total_projects": len(results),
-            "successful": successful,
-            "skipped": skipped,
-            "failed": failed
-        }, show_percentage=False)
+        log_summary(
+            f"Migration {dry_run_prefix}",
+            {
+                "total_projects": len(results),
+                "successful": successful,
+                "skipped": skipped,
+                "failed": failed,
+            },
+            show_percentage=False,
+        )
 
     # Write CSV report
     if results:
@@ -797,5 +867,5 @@ Examples:
     sys.exit(0 if failed == 0 else 1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

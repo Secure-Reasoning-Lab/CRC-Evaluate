@@ -19,38 +19,35 @@ This module provides MCP tools for Docker build and test operations,
 using the shared run_helper utilities from crsbench.utils.
 """
 
-import os
 import sys
+from pathlib import Path
+
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 # Load environment variables from .env file
 load_dotenv()
 
-from crsbench.migration import mcp_config
-from crsbench.utils.run_helper import (
-    # Configuration
-    get_benchmark_dir,
-    get_workdir_from_dockerfile,
-    detect_language,
-    get_project_config,
-    # Source code management
-    get_project_source_dir,
-    prepare_benchmark_for_oss_fuzz,
+from crsbench.migration.mcp import config as mcp_config  # noqa: E402
+from crsbench.utils.logger import get_logger  # noqa: E402
+from crsbench.utils.run_helper import (  # noqa: E402
     # Build functions
     build_benchmark_with_logging,
+    get_benchmark_dir,
+    # Benchmark info
+    get_benchmark_info,
+    get_project_source_dir,
+    get_workdir_from_dockerfile,
+    prepare_benchmark_for_oss_fuzz,
+    # Container commands
+    run_command_in_container,
     # Test execution
     run_test_sh,
     # Patch management
     verify_bad_patch,
-    # Container commands
-    run_command_in_container,
-    # Benchmark info
-    get_benchmark_info,
 )
-from crsbench.utils.logger import get_logger
 
-TARGET_BENCHMARK = ''
+TARGET_BENCHMARK = ""
 
 # Get logger instance
 logger = get_logger(__name__)
@@ -76,7 +73,7 @@ async def build_benchmark(benchmark_name: str) -> dict:
         benchmark_name=benchmark_name,
         oss_fuzz_root=mcp_config.OSS_FUZZ_DIR,
         log_dir=mcp_config.BASE_TMP_LOGS,
-        timeout=60 * 20
+        timeout=60 * 20,
     )
 
     return result.to_dict()
@@ -129,29 +126,33 @@ async def check_replay_build_sh(benchmark_name: str) -> str:
     if not benchmark_dir.is_dir():
         return f"Error: Benchmark directory not found: {benchmark_dir}"
 
-    replay_build_path = benchmark_dir / 'replay-build.sh'
+    replay_build_path = benchmark_dir / "replay-build.sh"
     if not replay_build_path.exists():
         return f"Error: replay-build.sh not found for benchmark: {benchmark_name}"
 
     logger.info("Testing replay-build.sh for benchmark '%s'...", benchmark_name)
 
     # Prepare benchmark in oss-fuzz/projects/aixcc/
-    oss_fuzz_project = prepare_benchmark_for_oss_fuzz(benchmark_name, mcp_config.OSS_FUZZ_DIR)
+    oss_fuzz_project = prepare_benchmark_for_oss_fuzz(
+        benchmark_name, mcp_config.OSS_FUZZ_DIR
+    )
     if not oss_fuzz_project:
         return f"Error: Failed to prepare benchmark {benchmark_name}"
 
     # Get the base builder image
     image_tag = "gcr.io/oss-fuzz-base/base-builder"
 
-    os.makedirs(mcp_config.BASE_TMP_LOGS, exist_ok=True)
-    target_logs = os.path.join(mcp_config.BASE_TMP_LOGS, f'replay-build-log-{benchmark_name}.txt')
+    Path(mcp_config.BASE_TMP_LOGS).mkdir(parents=True, exist_ok=True)
+    target_logs = (
+        Path(mcp_config.BASE_TMP_LOGS) / f"replay-build-log-{benchmark_name}.txt"
+    )
 
-    if os.path.isfile(target_logs):
-        os.remove(target_logs)
+    if target_logs.is_file():
+        target_logs.unlink()
 
     # Get project source directory
     project_src_dir = get_project_source_dir(benchmark_name)
-    if not project_src_dir or not os.path.isdir(project_src_dir):
+    if not project_src_dir or not Path(project_src_dir).is_dir():
         return f"Error: Project source directory not found for {benchmark_name}"
 
     # Get WORKDIR from Dockerfile
@@ -159,38 +160,54 @@ async def check_replay_build_sh(benchmark_name: str) -> str:
 
     # Prepare Docker run command
     docker_cmd_parts = [
-        "docker", "run", "--rm",
-        "-v", f"{replay_build_path}:/src/replay-build.sh:ro",
-        "-v", f"{project_src_dir}:{workdir}:rw",
-        "-e", "SRC=/src",
-        "-e", "OUT=/tmp/out",
-        "-e", "CC=clang",
-        "-e", "CXX=clang++",
-        "-e", "CFLAGS=-O1 -fno-omit-frame-pointer -g",
-        "-e", "CXXFLAGS=-O1 -fno-omit-frame-pointer -g",
-        "-w", "/src",
+        "docker",
+        "run",
+        "--rm",
+        "-v",
+        f"{replay_build_path}:/src/replay-build.sh:ro",
+        "-v",
+        f"{project_src_dir}:{workdir}:rw",  # noqa: E501
+        "-e",
+        "SRC=/src",
+        "-e",
+        "OUT=/tmp/out",
+        "-e",
+        "CC=clang",
+        "-e",
+        "CXX=clang++",
+        "-e",
+        "CFLAGS=-O1 -fno-omit-frame-pointer -g",
+        "-e",
+        "CXXFLAGS=-O1 -fno-omit-frame-pointer -g",
+        "-w",
+        "/src",
         image_tag,
-        "bash", "/src/replay-build.sh"
+        "bash",
+        "/src/replay-build.sh",
     ]
 
     # Run replay-build.sh inside the container
-    with open(target_logs, 'w', encoding='utf-8') as log_stdout:
+    with target_logs.open("w", encoding="utf-8") as log_stdout:
         try:
             subprocess.check_call(
                 docker_cmd_parts,
                 stdout=log_stdout,
                 stderr=subprocess.STDOUT,
-                timeout=60 * 20
+                timeout=60 * 20,
             )
             log_stdout.write("\n\nreplay-build.sh execution succeeded.\n")
         except subprocess.CalledProcessError as e:
-            logger.info("replay-build.sh failed for benchmark '%s': %s", benchmark_name, str(e))
-            log_stdout.write(f"\n\nreplay-build.sh failed with exit code {e.returncode}\n")
+            logger.info(
+                "replay-build.sh failed for benchmark '%s': %s", benchmark_name, str(e)
+            )
+            log_stdout.write(
+                f"\n\nreplay-build.sh failed with exit code {e.returncode}\n"
+            )
         except subprocess.TimeoutExpired:
             logger.info("replay-build.sh timed out for benchmark '%s'", benchmark_name)
             log_stdout.write("\n\nreplay-build.sh execution timed out.\n")
 
-    with open(target_logs, 'r', encoding='utf-8') as f:
+    with target_logs.open("r", encoding="utf-8") as f:
         logs = f.read()
 
     logger.info("replay-build.sh logs retrieved for benchmark '%s'", benchmark_name)
@@ -215,7 +232,7 @@ async def mcp_run_command_in_container(benchmark_name: str, command: str) -> str
         benchmark_name=benchmark_name,
         command=command,
         timeout=60,
-        oss_fuzz_root=mcp_config.OSS_FUZZ_DIR
+        oss_fuzz_root=mcp_config.OSS_FUZZ_DIR,
     )
 
 
@@ -244,7 +261,7 @@ async def mcp_verify_bad_patch(benchmark_name: str, bad_patch_path: str) -> dict
     result = verify_bad_patch(
         benchmark_name=benchmark_name,
         bad_patch_path=bad_patch_path,
-        oss_fuzz_root=mcp_config.OSS_FUZZ_DIR
+        oss_fuzz_root=mcp_config.OSS_FUZZ_DIR,
     )
 
     return result.to_dict()
@@ -276,19 +293,19 @@ def start_mcp_server():
     TARGET_BENCHMARK = benchmark_name
 
     # Ensure directories exist
-    os.makedirs(mcp_config.BASE_DIR, exist_ok=True)
-    os.makedirs(mcp_config.BASE_PROJECTS_DIR, exist_ok=True)
-    os.makedirs(mcp_config.BASE_BENCHMARKS_DIR, exist_ok=True)
-    os.makedirs(mcp_config.BASE_TMP_LOGS, exist_ok=True)
+    Path(mcp_config.BASE_DIR).mkdir(parents=True, exist_ok=True)
+    Path(mcp_config.BASE_PROJECTS_DIR).mkdir(parents=True, exist_ok=True)
+    Path(mcp_config.BASE_BENCHMARKS_DIR).mkdir(parents=True, exist_ok=True)
+    Path(mcp_config.BASE_TMP_LOGS).mkdir(parents=True, exist_ok=True)
 
-    logger.info('CRSBench MCP server target: %s', benchmark_name)
+    logger.info("CRSBench MCP server target: %s", benchmark_name)
 
     try:
         logger.info("Starting MCP server.")
         mcp.run(transport="stdio")
     except KeyboardInterrupt:
         logger.info("Caught KeyboardInterrupt.")
-    logger.info('Server shut down.')
+    logger.info("Server shut down.")
 
 
 if __name__ == "__main__":
