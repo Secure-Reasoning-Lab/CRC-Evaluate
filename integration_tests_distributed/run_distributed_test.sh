@@ -20,6 +20,7 @@
 #   --tmux                  Launch worker in tmux vertical pane
 #   --kill-pane             Kill the worker pane after test (with --tmux)
 #   --cpuset                Enable CPU affinity (divide available CPUs among workers)
+#   --verify                Enable verification (default: skip verification)
 #   --debug                 Enable debug output from crsbench
 #   --skip-cleanup          Don't delete generated config file after test
 #   -h, --help              Show this help message
@@ -30,6 +31,7 @@
 #   ./run_distributed_test.sh -b atlanta-nasm-delta-01 -b afc-curl-delta-02
 #   ./run_distributed_test.sh --crs crs-libfuzzer --timeout 600
 #   ./run_distributed_test.sh -j 4 --cpuset --debug
+#   ./run_distributed_test.sh -j 4 --verify --debug
 #   ./run_distributed_test.sh -j 4 --debug --skip-cleanup
 
 set -e  # Exit on error
@@ -46,6 +48,7 @@ KILL_PANE=false
 CPUSET=false
 DEBUG=false
 SKIP_CLEANUP=false
+SKIP_VERIFICATION=true
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -92,6 +95,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-cleanup)
             SKIP_CLEANUP=true
+            shift
+            ;;
+        --verify)
+            SKIP_VERIFICATION=false
             shift
             ;;
         -h|--help)
@@ -226,6 +233,7 @@ echo "  Mode: Distributed (Redis-based job queue)"
 echo "  Debug mode: $DEBUG"
 echo "  Parallel workers: $NUM_WORKERS"
 echo "  CPU affinity (cpuset): $CPUSET"
+echo "  Skip verification: $SKIP_VERIFICATION"
 if [ "$USE_TMUX" = true ]; then
     echo "  Worker display: tmux vertical pane"
 else
@@ -292,6 +300,9 @@ run_timeout: $MAX_TOTAL_TIME
 
 # Hints Configuration
 hints_enabled: false
+
+# Verification Configuration
+skip_verification: $SKIP_VERIFICATION
 
 # Redis Configuration
 redis_host: localhost
