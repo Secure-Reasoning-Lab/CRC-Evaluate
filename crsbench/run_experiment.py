@@ -251,12 +251,13 @@ def parse_arguments() -> argparse.Namespace:
         Parsed arguments with experiment configuration.
     """
     # Check for legacy invocation (no subcommand, starts with --)
-    # or verify/coverage/worker subcommand
+    # or verify/coverage/worker/stats subcommand
     if len(sys.argv) > 1 and sys.argv[1] not in [
         "run",
         "verify",
         "coverage",
         "worker",
+        "stats",
         "-h",
         "--help",
     ]:
@@ -322,6 +323,11 @@ Examples:
     from crsbench.distributed.cli.worker_command import add_worker_subparser
 
     add_worker_subparser(subparsers)
+
+    # 'stats' subcommand - benchmark statistics
+    from crsbench.statistics.cli import add_stats_subparser
+
+    add_stats_subparser(subparsers)
 
     args = parser.parse_args()
 
@@ -1544,6 +1550,12 @@ def main() -> None:
         from crsbench.distributed.cli.worker_command import run_worker
 
         sys.exit(run_worker(args))
+
+    if args.command == "stats":
+        # Handle stats command
+        from crsbench.statistics.cli import run_stats
+
+        sys.exit(run_stats(args))
 
     # Below is for 'run' command (experiment execution)
 

@@ -17,6 +17,14 @@ class EvaluationMode(str, Enum):
     ALL = "all"
 
 
+class RtsMode(str, Enum):
+    """Regression Test Selection mode for Java projects."""
+
+    JCGEKS = "jcgeks"
+    OPENCLOVER = "openclover"
+    BINARY_RTS = "binary_rts"
+
+
 @dataclass
 class BenchmarkEntry:
     """Represents a benchmark with optional harness specification.
@@ -874,3 +882,88 @@ class BenchmarkSuiteConfig(BaseModel):
                 harnesses = item[name]
                 entries.append(BenchmarkEntry(name=name, harnesses=harnesses))
         return entries
+
+
+class ProjectConfig(BaseModel):
+    """OSS-Fuzz compatible project.yaml configuration schema.
+
+    This schema validates project.yaml files used in CRSBench benchmarks.
+    Compatible with OSS-Fuzz project configuration format with CRSBench extensions.
+
+    Note: Uses extra="ignore" to allow unknown fields from standard OSS-Fuzz
+    project.yaml files that we don't model (e.g., vendor, primary_contact).
+    """
+
+    model_config = {"extra": "ignore"}
+
+    homepage: Optional[str] = Field(default=None, description="Project homepage URL")
+    language: str = Field(
+        ..., description="Programming language (c, c++, jvm, go, rust, python, etc.)"
+    )
+    main_repo: Optional[str] = Field(default=None, description="Main repository URL")
+    sanitizers: List[str] = Field(
+        default_factory=list,
+        description="List of sanitizers (address, memory, undefined, thread, leak)",
+    )
+    fuzzing_engines: List[str] = Field(
+        default_factory=list,
+        description="List of fuzzing engines (libfuzzer, afl, honggfuzz)",
+    )
+    architectures: List[str] = Field(
+        default_factory=lambda: ["x86_64"],
+        description="Target architectures (default: x86_64)",
+    )
+
+    # CRSBench extensions
+    rts_mode: Optional[RtsMode] = Field(
+        default=None,
+        description="Regression Test Selection mode for Java projects (jcgeks, openclover, binary_rts)",
+    )
+    inc_build: bool = Field(
+        default=True,
+        description="Whether incremental build is supported",
+    )
+
+    @field_validator("language")
+    @classmethod
+    def validate_language(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Language cannot be empty")
+        return v.strip().lower()
+
+    @field_validator("sanitizers")
+    @classmethod
+    def validate_sanitizers(cls, v):
+        valid_sanitizers = {"address", "memory", "undefined", "thread", "leak"}
+        for sanitizer in v:
+            if sanitizer not in valid_sanitizers:
+                raise ValueError(
+                    f"Invalid sanitizer: {sanitizer}. "
+                    f"Must be one of: {', '.join(sorted(valid_sanitizers))}"
+                )
+        return v
+
+    @field_validator("fuzzing_engines")
+    @classmethod
+    def validate_fuzzing_engines(cls, v):
+        valid_engines = {"libfuzzer", "afl", "honggfuzz", "centipede", "jazzer"}
+        for engine in v:
+            if engine not in valid_engines:
+                raise ValueError(
+                    f"Invalid fuzzing engine: {engine}. "
+                    f"Must be one of: {', '.join(sorted(valid_engines))}"
+                )
+        return v
+
+    def get_normalized_language(self) -> str:
+        """Get normalized language name for display.
+
+        Returns:
+            Normalized language (C/C++, Java, Go, Rust, Python, etc.)
+        """
+        lang = self.language.upper()
+        if lang in ("C", "C++"):
+            return "C/C++"
+        if lang == "JVM":
+            return "Java"
+        return lang.capitalize()
