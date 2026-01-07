@@ -7,8 +7,6 @@ This module validates that migration was successful by comparing source
 
 import argparse
 import hashlib
-from crsbench.utils.logger import get_logger
-from crsbench.utils import log_summary
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,14 +14,16 @@ from typing import List, Optional
 
 import yaml
 
-logger = get_logger(__name__)
+from crsbench.utils import log_summary
+from crsbench.utils.logger import get_logger
 
+logger = get_logger(__name__)
 
 
 def _compute_file_hash(file_path: Path) -> str:
     """Compute SHA256 hash of a file."""
     sha256_hash = hashlib.sha256()
-    with open(file_path, "rb") as f:
+    with file_path.open("rb") as f:
         for byte_block in iter(lambda: f.read(4096), b""):
             sha256_hash.update(byte_block)
     return sha256_hash.hexdigest()
@@ -32,6 +32,7 @@ def _compute_file_hash(file_path: Path) -> str:
 # =============================================================================
 # Validation Codes
 # =============================================================================
+
 
 class ValidationCodes:
     """Validation error/warning codes."""
@@ -54,13 +55,14 @@ class ValidationCodes:
 # Data Structures
 # =============================================================================
 
+
 @dataclass
 class ValidationIssue:
     """A single validation issue (error or warning)."""
 
-    level: str           # "error" or "warning"
-    code: str            # Validation code from ValidationCodes
-    message: str         # Human-readable description
+    level: str  # "error" or "warning"
+    code: str  # Validation code from ValidationCodes
+    message: str  # Human-readable description
     path: Optional[str] = None  # Related file/directory path
 
 
@@ -119,7 +121,10 @@ class MigrationValidationResult:
 # Source-Target Comparison Validation
 # =============================================================================
 
-def validate_source_target(source_dir: Path, target_dir: Path) -> MigrationValidationResult:
+
+def validate_source_target(
+    source_dir: Path, target_dir: Path
+) -> MigrationValidationResult:
     """
     Validate migration by comparing source (Team-Atlanta) with target (RFC format).
 
@@ -134,38 +139,44 @@ def validate_source_target(source_dir: Path, target_dir: Path) -> MigrationValid
 
     # Check source exists
     if not source_dir.exists():
-        result.issues.append(ValidationIssue(
-            level="error",
-            code=ValidationCodes.SOURCE_NOT_FOUND,
-            message=f"Source directory not found: {source_dir}",
-            path=str(source_dir)
-        ))
+        result.issues.append(
+            ValidationIssue(
+                level="error",
+                code=ValidationCodes.SOURCE_NOT_FOUND,
+                message=f"Source directory not found: {source_dir}",
+                path=str(source_dir),
+            )
+        )
         result.is_valid = False
         return result
 
     # Check source config.yaml exists
     source_config = source_dir / ".aixcc" / "config.yaml"
     if not source_config.exists():
-        result.issues.append(ValidationIssue(
-            level="error",
-            code=ValidationCodes.CONFIG_NOT_FOUND,
-            message="Source config.yaml not found",
-            path=str(source_config)
-        ))
+        result.issues.append(
+            ValidationIssue(
+                level="error",
+                code=ValidationCodes.CONFIG_NOT_FOUND,
+                message="Source config.yaml not found",
+                path=str(source_config),
+            )
+        )
         result.is_valid = False
         return result
 
     # Load source config to get harness/cpv info
     try:
-        with open(source_config, 'r') as f:
+        with source_config.open("r") as f:
             config_data = yaml.safe_load(f)
     except Exception as e:
-        result.issues.append(ValidationIssue(
-            level="error",
-            code=ValidationCodes.META_PARSE_ERROR,
-            message=f"Failed to parse source config.yaml: {e}",
-            path=str(source_config)
-        ))
+        result.issues.append(
+            ValidationIssue(
+                level="error",
+                code=ValidationCodes.META_PARSE_ERROR,
+                message=f"Failed to parse source config.yaml: {e}",
+                path=str(source_config),
+            )
+        )
         result.is_valid = False
         return result
 
@@ -173,16 +184,16 @@ def validate_source_target(source_dir: Path, target_dir: Path) -> MigrationValid
     result.issues.extend(_validate_root_files(source_dir, target_dir))
 
     # Validate artifacts for each harness/cpv
-    harness_files = config_data.get('harness_files', [])
+    harness_files = config_data.get("harness_files", [])
     for harness in harness_files:
-        harness_name = harness.get('name', '')
-        cpvs = harness.get('cpvs', [])
+        harness_name = harness.get("name", "")
+        cpvs = harness.get("cpvs", [])
 
         for cpv in cpvs:
-            cpv_name = cpv.get('name', '')
-            result.issues.extend(_validate_cpv_artifacts(
-                source_dir, target_dir, harness_name, cpv_name
-            ))
+            cpv_name = cpv.get("name", "")
+            result.issues.extend(
+                _validate_cpv_artifacts(source_dir, target_dir, harness_name, cpv_name)
+            )
 
     # Determine overall validity
     result.is_valid = len(result.errors) == 0
@@ -204,7 +215,7 @@ def _validate_root_files(source_dir: Path, target_dir: Path) -> List[ValidationI
     issues = []
 
     # List of important root files to check
-    important_files = ['build.sh', 'Dockerfile', 'project.yaml']
+    important_files = ["build.sh", "Dockerfile", "project.yaml"]
 
     for filename in important_files:
         source_file = source_dir / filename
@@ -212,36 +223,43 @@ def _validate_root_files(source_dir: Path, target_dir: Path) -> List[ValidationI
 
         if source_file.exists():
             if not target_file.exists():
-                issues.append(ValidationIssue(
-                    level="error",
-                    code=ValidationCodes.MISSING_ROOT_FILE,
-                    message=f"Root file {filename} not migrated",
-                    path=str(target_file)
-                ))
+                issues.append(
+                    ValidationIssue(
+                        level="error",
+                        code=ValidationCodes.MISSING_ROOT_FILE,
+                        message=f"Root file {filename} not migrated",
+                        path=str(target_file),
+                    )
+                )
             elif _compute_file_hash(source_file) != _compute_file_hash(target_file):
-                issues.append(ValidationIssue(
-                    level="warning",
-                    code=ValidationCodes.HASH_MISMATCH,
-                    message=f"Hash mismatch for {filename}",
-                    path=str(target_file)
-                ))
+                issues.append(
+                    ValidationIssue(
+                        level="warning",
+                        code=ValidationCodes.HASH_MISMATCH,
+                        message=f"Hash mismatch for {filename}",
+                        path=str(target_file),
+                    )
+                )
 
     # Check .options files
     for options_file in source_dir.glob("*.options"):
         target_options = target_dir / options_file.name
         if not target_options.exists():
-            issues.append(ValidationIssue(
-                level="error",
-                code=ValidationCodes.MISSING_ROOT_FILE,
-                message=f"Options file {options_file.name} not migrated",
-                path=str(target_options)
-            ))
+            issues.append(
+                ValidationIssue(
+                    level="error",
+                    code=ValidationCodes.MISSING_ROOT_FILE,
+                    message=f"Options file {options_file.name} not migrated",
+                    path=str(target_options),
+                )
+            )
 
     return issues
 
 
-def _validate_cpv_artifacts(source_dir: Path, target_dir: Path,
-                            harness_name: str, cpv_name: str) -> List[ValidationIssue]:
+def _validate_cpv_artifacts(
+    source_dir: Path, target_dir: Path, harness_name: str, cpv_name: str
+) -> List[ValidationIssue]:
     """
     Validate that CPV artifacts from source exist in target.
 
@@ -264,26 +282,32 @@ def _validate_cpv_artifacts(source_dir: Path, target_dir: Path,
 
     if source_patch.exists():
         if not target_patch.exists():
-            issues.append(ValidationIssue(
-                level="error",
-                code=ValidationCodes.MISSING_PATCH,
-                message=f"Patch not migrated for {harness_name}/{cpv_name}",
-                path=str(target_patch)
-            ))
+            issues.append(
+                ValidationIssue(
+                    level="error",
+                    code=ValidationCodes.MISSING_PATCH,
+                    message=f"Patch not migrated for {harness_name}/{cpv_name}",
+                    path=str(target_patch),
+                )
+            )
         elif _compute_file_hash(source_patch) != _compute_file_hash(target_patch):
-            issues.append(ValidationIssue(
-                level="warning",
-                code=ValidationCodes.HASH_MISMATCH,
-                message=f"Patch hash mismatch for {harness_name}/{cpv_name}",
-                path=str(target_patch)
-            ))
+            issues.append(
+                ValidationIssue(
+                    level="warning",
+                    code=ValidationCodes.HASH_MISMATCH,
+                    message=f"Patch hash mismatch for {harness_name}/{cpv_name}",
+                    path=str(target_patch),
+                )
+            )
     else:
-        issues.append(ValidationIssue(
-            level="warning",
-            code=ValidationCodes.SOURCE_FILE_NOT_FOUND,
-            message=f"Source patch not found for {harness_name}/{cpv_name}",
-            path=str(source_patch)
-        ))
+        issues.append(
+            ValidationIssue(
+                level="warning",
+                code=ValidationCodes.SOURCE_FILE_NOT_FOUND,
+                message=f"Source patch not found for {harness_name}/{cpv_name}",
+                path=str(source_patch),
+            )
+        )
 
     # Check POV blob
     source_pov = source_aixcc / "povs" / harness_name / cpv_name
@@ -291,26 +315,32 @@ def _validate_cpv_artifacts(source_dir: Path, target_dir: Path,
 
     if source_pov.exists():
         if not target_pov.exists():
-            issues.append(ValidationIssue(
-                level="error",
-                code=ValidationCodes.MISSING_POV_BLOB,
-                message=f"POV blob not migrated for {harness_name}/{cpv_name}",
-                path=str(target_pov)
-            ))
+            issues.append(
+                ValidationIssue(
+                    level="error",
+                    code=ValidationCodes.MISSING_POV_BLOB,
+                    message=f"POV blob not migrated for {harness_name}/{cpv_name}",
+                    path=str(target_pov),
+                )
+            )
         elif _compute_file_hash(source_pov) != _compute_file_hash(target_pov):
-            issues.append(ValidationIssue(
-                level="warning",
-                code=ValidationCodes.HASH_MISMATCH,
-                message=f"POV blob hash mismatch for {harness_name}/{cpv_name}",
-                path=str(target_pov)
-            ))
+            issues.append(
+                ValidationIssue(
+                    level="warning",
+                    code=ValidationCodes.HASH_MISMATCH,
+                    message=f"POV blob hash mismatch for {harness_name}/{cpv_name}",
+                    path=str(target_pov),
+                )
+            )
     else:
-        issues.append(ValidationIssue(
-            level="warning",
-            code=ValidationCodes.SOURCE_FILE_NOT_FOUND,
-            message=f"Source POV blob not found for {harness_name}/{cpv_name}",
-            path=str(source_pov)
-        ))
+        issues.append(
+            ValidationIssue(
+                level="warning",
+                code=ValidationCodes.SOURCE_FILE_NOT_FOUND,
+                message=f"Source POV blob not found for {harness_name}/{cpv_name}",
+                path=str(source_pov),
+            )
+        )
 
     # Check crash log
     source_log = source_aixcc / "crash_logs" / harness_name / f"{cpv_name}.log"
@@ -318,26 +348,32 @@ def _validate_cpv_artifacts(source_dir: Path, target_dir: Path,
 
     if source_log.exists():
         if not target_log.exists():
-            issues.append(ValidationIssue(
-                level="error",
-                code=ValidationCodes.MISSING_CRASH_LOG,
-                message=f"Crash log not migrated for {harness_name}/{cpv_name}",
-                path=str(target_log)
-            ))
+            issues.append(
+                ValidationIssue(
+                    level="error",
+                    code=ValidationCodes.MISSING_CRASH_LOG,
+                    message=f"Crash log not migrated for {harness_name}/{cpv_name}",
+                    path=str(target_log),
+                )
+            )
         elif _compute_file_hash(source_log) != _compute_file_hash(target_log):
-            issues.append(ValidationIssue(
-                level="warning",
-                code=ValidationCodes.HASH_MISMATCH,
-                message=f"Crash log hash mismatch for {harness_name}/{cpv_name}",
-                path=str(target_log)
-            ))
+            issues.append(
+                ValidationIssue(
+                    level="warning",
+                    code=ValidationCodes.HASH_MISMATCH,
+                    message=f"Crash log hash mismatch for {harness_name}/{cpv_name}",
+                    path=str(target_log),
+                )
+            )
     else:
-        issues.append(ValidationIssue(
-            level="warning",
-            code=ValidationCodes.SOURCE_FILE_NOT_FOUND,
-            message=f"Source crash log not found for {harness_name}/{cpv_name}",
-            path=str(source_log)
-        ))
+        issues.append(
+            ValidationIssue(
+                level="warning",
+                code=ValidationCodes.SOURCE_FILE_NOT_FOUND,
+                message=f"Source crash log not found for {harness_name}/{cpv_name}",
+                path=str(source_log),
+            )
+        )
 
     return issues
 
@@ -345,6 +381,7 @@ def _validate_cpv_artifacts(source_dir: Path, target_dir: Path,
 # =============================================================================
 # CLI Support
 # =============================================================================
+
 
 def main():
     """CLI entry point for migration validation."""
@@ -355,29 +392,26 @@ def main():
         "--source-dir",
         type=Path,
         required=True,
-        help="Path to Team-Atlanta source projects directory (contains aixcc/)"
+        help="Path to Team-Atlanta source projects directory (contains aixcc/)",
     )
     parser.add_argument(
         "--target-dir",
         type=Path,
         required=True,
-        help="Path to migrated benchmarks directory"
+        help="Path to migrated benchmarks directory",
     )
     parser.add_argument(
         "--projects",
         type=str,
-        help="Comma-separated list of specific projects to validate"
+        help="Comma-separated list of specific projects to validate",
     )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable verbose output"
-    )
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
     args = parser.parse_args()
 
     # Setup logging
     from crsbench.utils.logger import configure_logger
+
     log_level = "DEBUG" if args.verbose else "INFO"
     configure_logger(level=log_level)
 
@@ -398,11 +432,11 @@ def main():
     # Parse specific projects if provided
     specific_projects = None
     if args.projects:
-        specific_projects = {p.strip() for p in args.projects.split(',')}
+        specific_projects = {p.strip() for p in args.projects.split(",")}
 
     # Discover source projects
     source_projects = []
-    allowed_languages = ['c', 'java', 'jvm']
+    allowed_languages = ["c", "java", "jvm"]
 
     for lang_dir in aixcc_dir.iterdir():
         if not lang_dir.is_dir() or lang_dir.name.lower() not in allowed_languages:
@@ -456,11 +490,11 @@ def main():
             logger.warning(f"    [{issue.code}] {issue.message}")
 
     # Summary
-    log_summary("Validation", {
-        "total": total,
-        "valid": valid,
-        "invalid": invalid
-    }, show_percentage=False)
+    log_summary(
+        "Validation",
+        {"total": total, "valid": valid, "invalid": invalid},
+        show_percentage=False,
+    )
 
     sys.exit(0 if invalid == 0 else 1)
 

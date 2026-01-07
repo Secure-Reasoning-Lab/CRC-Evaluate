@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 import yaml
-from crsbench.migration.migration_validator import (
+from crsbench.migration.validator import (
     MigrationValidationResult,
     ValidationCodes,
     ValidationIssue,

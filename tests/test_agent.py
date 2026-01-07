@@ -8,7 +8,7 @@ import pytest
 # Try to import claude_agent_sdk, skip tests if not available
 pytest.importorskip("claude_agent_sdk")
 
-from crsbench.migration.test_sh_generator import (
+from crsbench.migration.test_sh import (
     ShTestGenerator,
     generate_test_sh_for_benchmark,
 )
@@ -478,7 +478,7 @@ class TestMCPIntegration:
         This is a lighter test that just checks if MCP tools can be invoked
         without doing full build/test cycle.
         """
-        from crsbench.migration.test_sh_generator import ShTestGenerator
+        from crsbench.migration.test_sh import ShTestGenerator
 
         generator = ShTestGenerator(
             litellm_base_url=litellm_config["base_url"],

@@ -4,7 +4,7 @@ Tests for test.sh generator module.
 Tests the test.sh generation functionality including header comment addition.
 """
 
-from crsbench.migration.test_sh_generator import _add_generation_header
+from crsbench.migration.test_sh import add_generation_header as _add_generation_header
 
 
 class TestAddGenerationHeader:

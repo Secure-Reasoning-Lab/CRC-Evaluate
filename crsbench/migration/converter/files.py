@@ -1,22 +1,27 @@
 """
 File migration utilities for converting benchmark file structure.
 
-Handles copying and organizing files from Team-Atlanta format to RFC format.
+Handles copying and organizing files between Atlanta and RFC formats.
 """
 
-from crsbench.utils.logger import get_logger
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import List, Protocol
 
-if TYPE_CHECKING:
-    from crsbench.migration.atlanta_to_rfc import MigrationContext
+from crsbench.utils.logger import get_logger
+
+
+class ConversionContext(Protocol):
+    """Protocol for migration/conversion context objects."""
+
+    warnings: List[str]
+    errors: List[str]
 
 
 class FileMigrator:
     """Handles file copying and directory structure creation."""
 
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, *, dry_run: bool = False):
         """
         Initialize the file migrator.
 
@@ -26,7 +31,7 @@ class FileMigrator:
         self.dry_run = dry_run
         self.logger = get_logger(__name__)
 
-    def copy_file(self, source: Path, target: Path, ctx: 'MigrationContext') -> bool:
+    def copy_file(self, source: Path, target: Path, ctx: ConversionContext) -> bool:
         """
         Copy a file from source to target location.
 
@@ -48,7 +53,9 @@ class FileMigrator:
 
         try:
             if self.dry_run:
-                self.logger.info(f"      [DRY RUN] Would copy: {source.name} -> {target}")
+                self.logger.info(
+                    f"      [DRY RUN] Would copy: {source.name} -> {target}"
+                )
                 return True
 
             # Create parent directory
@@ -66,7 +73,9 @@ class FileMigrator:
             self.logger.error(error_msg)
             return False
 
-    def copy_directory(self, source: Path, target: Path, ctx: 'MigrationContext') -> bool:
+    def copy_directory(
+        self, source: Path, target: Path, ctx: ConversionContext
+    ) -> bool:
         """
         Recursively copy a directory from source to target location.
 
@@ -88,7 +97,9 @@ class FileMigrator:
 
         try:
             if self.dry_run:
-                self.logger.info(f"      [DRY RUN] Would copy directory: {source.name} -> {target}")
+                self.logger.info(
+                    f"      [DRY RUN] Would copy directory: {source.name} -> {target}"
+                )
                 return True
 
             # Copy entire directory tree
@@ -103,7 +114,7 @@ class FileMigrator:
             self.logger.error(error_msg)
             return False
 
-    def ensure_directory(self, path: Path, ctx: 'MigrationContext') -> bool:
+    def ensure_directory(self, path: Path, ctx: ConversionContext) -> bool:
         """
         Ensure a directory exists, creating it if necessary.
 
