@@ -319,6 +319,11 @@ Examples:
 
     add_worker_subparser(subparsers)
 
+    # 'migrate' subcommand - migration and generation tools
+    from crsbench.migration.cli.converter_command import add_migrate_subparser
+
+    add_migrate_subparser(subparsers)
+
     args = parser.parse_args()
 
     # Default to 'run' if no command specified (shouldn't happen due to legacy handling)
@@ -1422,6 +1427,12 @@ def main() -> None:
         from crsbench.distributed.cli.worker_command import run_worker
 
         sys.exit(run_worker(args))
+
+    if args.command == "migrate":
+        # Handle migrate command (conversion and generation tools)
+        from crsbench.migration.cli.converter_command import run_migrate
+
+        sys.exit(run_migrate(args))
 
     # Below is for 'run' command (experiment execution)
 
