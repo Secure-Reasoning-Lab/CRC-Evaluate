@@ -6,6 +6,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
+import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
@@ -175,6 +176,110 @@ class HarnessFile(BaseModel):
         return all_povs
 
 
+# ============================================================================
+# Vulnerability Metadata Models (for vuln.yaml files)
+# ============================================================================
+
+
+class VulnerabilityLocation(BaseModel):
+    """Location of vulnerable code in the repository."""
+
+    path_from_root: str = Field(description="Path to the file from repository root")
+    function_name: Optional[str] = Field(
+        default=None, description="Name of the function containing the vulnerability"
+    )
+    startLine: int = Field(  # noqa: N815 - RFC schema compatibility
+        description="Starting line number of the vulnerable code"
+    )
+    startColumn: int = Field(  # noqa: N815 - RFC schema compatibility
+        description="Starting column number of the vulnerable code"
+    )
+    endLine: int = Field(  # noqa: N815 - RFC schema compatibility
+        description="Ending line number of the vulnerable code"
+    )
+    endColumn: int = Field(  # noqa: N815 - RFC schema compatibility
+        description="Ending column number of the vulnerable code"
+    )
+
+    model_config = {"extra": "allow"}
+
+
+class VulnerabilityMetadata(BaseModel):
+    """Complete vulnerability metadata in RFC format (for vuln.yaml files)."""
+
+    id: str = Field(description="Vulnerability identifier (e.g., cpv_0, cpv_1)")
+    name: str = Field(description="Human-readable name for the vulnerability")
+    cwes: List[str] = Field(
+        default_factory=list,
+        description="List of CWE identifiers associated with this vulnerability",
+    )
+    description: str = Field(description="Detailed description of the vulnerability")
+    locations: List[VulnerabilityLocation] = Field(
+        default_factory=list,
+        description="Code locations where the vulnerability exists",
+    )
+
+    model_config = {"extra": "allow"}
+
+    def to_yaml(self, output_path: Path) -> None:
+        """Write vulnerability metadata to YAML file with proper formatting."""
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        data = self.model_dump(exclude_none=False)
+
+        yaml.add_representer(
+            type(None),
+            lambda dumper, _value: dumper.represent_scalar(
+                "tag:yaml.org,2002:null", "null"
+            ),
+        )
+
+        yaml_str = yaml.dump(
+            data,
+            default_flow_style=False,
+            allow_unicode=True,
+            sort_keys=False,
+            indent=2,
+            width=120,
+        )
+        yaml_str = self._add_section_breaks(yaml_str)
+
+        with output_path.open("w") as f:
+            f.write(yaml_str)
+
+    def _add_section_breaks(self, yaml_str: str) -> str:
+        """Add line breaks between major sections for better readability."""
+        lines = yaml_str.split("\n")
+        result = []
+        prev_line = ""
+
+        for line in lines:
+            if (
+                line
+                and not line.startswith(" ")
+                and not line.startswith("-")
+                and result
+                and prev_line
+            ):
+                if prev_line.strip():
+                    result.append("")
+            result.append(line)
+            prev_line = line
+
+        return "\n".join(result)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "VulnerabilityMetadata":
+        """Create VulnerabilityMetadata from dictionary."""
+        return cls(**data)
+
+    @classmethod
+    def from_yaml(cls, input_path: Path) -> "VulnerabilityMetadata":
+        """Load vulnerability metadata from YAML file."""
+        with input_path.open("r") as f:
+            data = yaml.safe_load(f)
+        return cls.from_dict(data)
+
+
 class DeltaMode(BaseModel):
     """Delta mode configuration with base and ref commits."""
 
@@ -261,6 +366,23 @@ class BenchmarkConfig(BaseModel):
                 "At least one evaluation mode (delta_mode or full_mode) must be specified"
             )
         return self
+
+    def to_yaml(self, output_path: Path) -> None:
+        """Write benchmark configuration to YAML file (meta.yaml format)."""
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        data = self.model_dump(exclude_none=True)
+
+        yaml_str = yaml.dump(
+            data,
+            default_flow_style=False,
+            allow_unicode=True,
+            sort_keys=False,
+            indent=2,
+            width=120,
+        )
+
+        with output_path.open("w") as f:
+            f.write(yaml_str)
 
 
 class Hint(BaseModel):
