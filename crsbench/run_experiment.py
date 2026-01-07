@@ -20,6 +20,7 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -1508,6 +1509,9 @@ def run_experiment_distributed(
 
     log_section("Running CRSBench in Distributed Mode (Redis)", width=60)
     logger.info(f"Redis host: {config.redis_host}")
+
+    # Mark this process as orchestrator for logging
+    os.environ["CRSBENCH_ORCHESTRATOR"] = "1"
 
     # Initialize queue
     queue = initialize_queue(config.redis_host, experiment_name)

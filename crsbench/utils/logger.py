@@ -70,25 +70,40 @@ def _format_module_path(record):
     Converts 'crsbench.distributed.worker' to '[distributed]'
     Converts 'crsbench.evaluation.runner' to '[evaluation]'
     Converts '__main__' to '[cli]'
+
+    For distributed mode, prepends role:
+    - Worker subprocess: "ramhorn-1 | [distributed]"
+    - Orchestrator: "orchestrator | [distributed]"
     """
     name = record.get("name", "")
 
     # Handle __main__ specially - use generic CLI category
     if name == "__main__":
-        return "[cli]"
-
-    # Remove 'crsbench.' prefix if present
-    if name.startswith("crsbench."):
-        name = name[9:]  # len("crsbench.") = 9
-
-    # Extract only the first component (main category)
-    parts = name.split(".")
-    if parts and parts[0]:
-        category = parts[0]
+        module_category = "[cli]"
     else:
-        category = "root"
+        # Remove 'crsbench.' prefix if present
+        if name.startswith("crsbench."):
+            name = name[9:]  # len("crsbench.") = 9
 
-    return f"[{category}]"
+        # Extract only the first component (main category)
+        parts = name.split(".")
+        if parts and parts[0]:
+            category = parts[0]
+        else:
+            category = "root"
+
+        module_category = f"[{category}]"
+
+    # Prepend worker name if running as a worker subprocess
+    worker_name = os.environ.get("CRSBENCH_WORKER_DISPLAY_NAME")
+    if worker_name:
+        return f"{worker_name} | {module_category}"
+
+    # Prepend orchestrator if running as orchestrator
+    if os.environ.get("CRSBENCH_ORCHESTRATOR"):
+        return f"orchestrator | {module_category}"
+
+    return module_category
 
 
 # Color scheme for different log levels with enhanced module display
