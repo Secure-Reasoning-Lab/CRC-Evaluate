@@ -327,18 +327,15 @@ def _run_supervisor(
 
             # Try to start new worker if jobs available and we have capacity
             if queue_count > 0 and len(workers) < max_workers:
-                # Fetch next job from queue (doesn't remove yet - RQ will do that when worker claims it)
-                job_ids = queue.job_ids
-                if job_ids:
-                    job_id = job_ids[0]
-                    job = rq.job.Job.fetch(job_id, connection=redis_conn)  # type: ignore[attr-defined]
+                # Properly dequeue job from queue (atomically removes it)
+                result = rq.Queue.dequeue_any(
+                    [queue],
+                    timeout=None,  # Non-blocking check
+                    connection=redis_conn,
+                )
 
-                    # Check if already claimed by checking if in workers
-                    if any(job_id == jid for (_, _, jid) in workers.values()):
-                        # Already being processed, skip
-                        time.sleep(0.1)
-                        continue
-
+                if result:
+                    job, _ = result
                     cpu_count = job.meta.get("cpu_count", 4)
 
                     # Try to allocate CPUs
@@ -374,9 +371,11 @@ def _run_supervisor(
                                 f"Started worker {name} (PID: {p.pid}) for job {job.id[:8]}"
                             )
                     else:
-                        # Not enough CPUs - wait for resources
+                        # Not enough CPUs - re-enqueue the job at the front
+                        # Important: we dequeued it, so must put it back if we can't run it
+                        queue.enqueue_job(job, at_front=True)
                         logger.debug(
-                            f"Job {job.id[:8]} needs {cpu_count} CPUs, only {cpu_pool.available_count()} available. Waiting..."
+                            f"Job {job.id[:8]} needs {cpu_count} CPUs, only {cpu_pool.available_count()} available. Re-enqueued for later."
                         )
 
             # Brief sleep to avoid busy-waiting
@@ -410,7 +409,7 @@ def _run_single_job_worker(
     worker_name: str,
     job_id: str,
 ):
-    """Worker that executes a single specific job.
+    """Worker that executes a single specific job with proper status tracking.
 
     CPU affinity is handled by the job itself via allocated_cpus in job metadata.
 
@@ -420,19 +419,28 @@ def _run_single_job_worker(
         worker_name: Worker name for identification
         job_id: RQ job ID to execute
     """
+    from rq.executions import Execution
+    from rq.job import JobStatus
+    from rq.registry import FailedJobRegistry, FinishedJobRegistry
+
     # Reconfigure logging in subprocess
     configure_logger(level=os.environ.get("LOG_LEVEL", "INFO").upper(), sink=sys.stdout)
+
+    # Connect to Redis
+    redis_password = os.environ.get("REDIS_PASSWORD") or None
+    redis_conn = redis.Redis(host=redis_host, password=redis_password)
 
     try:
         # Store friendly worker name in environment for job metadata
         os.environ["CRSBENCH_WORKER_DISPLAY_NAME"] = worker_name
 
-        # Connect to Redis
-        redis_password = os.environ.get("REDIS_PASSWORD") or None
-        redis_conn = redis.Redis(host=redis_host, password=redis_password)
-
-        # Fetch and execute the specific job
+        # Fetch job and get queue
         job = rq.job.Job.fetch(job_id, connection=redis_conn)  # type: ignore[attr-defined]
+        queue = rq.Queue(job.origin, connection=redis_conn)  # type: ignore[attr-defined]
+
+        # Get registries for status tracking
+        finished_registry = FinishedJobRegistry(queue=queue)
+        failed_registry = FailedJobRegistry(queue=queue)
 
         logger.info(f"Worker {worker_name} executing job {job_id}")
 
@@ -441,10 +449,70 @@ def _run_single_job_worker(
         if allocated_cpus:
             logger.info(f"Job {job_id} assigned CPUs: {allocated_cpus}")
 
-        # Execute the job directly
-        job.perform()
+        # Create execution and mark job as STARTED
+        execution = None
+        with redis_conn.pipeline() as pipeline:
+            # Prepare job for execution (sets status to STARTED)
+            job.prepare_for_execution(worker_name, pipeline=pipeline)
+            # Create execution object (automatically adds to StartedJobRegistry)
+            execution = Execution.create(job, ttl=-1, pipeline=pipeline)
+            pipeline.execute()
 
-        logger.info(f"Worker {worker_name} finished job {job_id}")
+        try:
+            # Execute the job
+            result = job.perform()
+
+            # Mark job as FINISHED and cleanup
+            with redis_conn.pipeline() as pipeline:
+                job._status = JobStatus.FINISHED
+                job.ended_at = rq.utils.now()  # type: ignore[attr-defined]
+                job._result = result
+                job.save_meta()
+                pipeline.hset(
+                    job.key,
+                    mapping={
+                        "status": JobStatus.FINISHED,
+                        "ended_at": rq.utils.utcformat(job.ended_at),  # type: ignore[attr-defined]
+                    },
+                )
+                # Remove from started registry and add to finished registry
+                if execution:
+                    execution.delete(job, pipeline=pipeline)
+                finished_registry.add(job, ttl=-1, pipeline=pipeline)
+                pipeline.execute()
+
+            logger.info(f"Worker {worker_name} finished job {job_id}")
+
+        except Exception as e:
+            # Mark job as FAILED and cleanup
+            import traceback
+
+            exc_string = "".join(
+                traceback.format_exception(type(e), e, e.__traceback__)
+            )
+
+            with redis_conn.pipeline() as pipeline:
+                job._status = JobStatus.FAILED
+                job.ended_at = rq.utils.now()  # type: ignore[attr-defined]
+                pipeline.hset(
+                    job.key,
+                    mapping={
+                        "status": JobStatus.FAILED,
+                        "ended_at": rq.utils.utcformat(job.ended_at),  # type: ignore[attr-defined]
+                    },
+                )
+                # Remove from started registry and add to failed registry
+                if execution:
+                    execution.delete(job, pipeline=pipeline)
+                failed_registry.add(
+                    job, ttl=-1, exc_string=exc_string, pipeline=pipeline
+                )
+                pipeline.execute()
+
+            logger.error(
+                f"Worker {worker_name} failed job {job_id}: {e}", exc_info=True
+            )
+            raise
 
     except Exception as e:
         logger.error(f"Worker {worker_name} error: {e}", exc_info=True)
