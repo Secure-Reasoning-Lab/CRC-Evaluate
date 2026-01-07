@@ -1435,6 +1435,59 @@ def prompt_queue_mode(existing: dict[str, dict]) -> str:
         print("Invalid choice. Please enter 'f', 'c', or 'q'.")  # noqa: T201
 
 
+def get_crs_cpu_count(crs_name: str, crs_configs_dir: Path) -> int:
+    """Get CPU count for a CRS from its resource config.
+
+    Reads the CRS resource configuration file and parses the cpuset
+    string to determine the number of CPUs required.
+
+    Args:
+        crs_name: CRS name (e.g., "crs-libfuzzer")
+        crs_configs_dir: Path to CRS configs directory
+
+    Returns:
+        Number of CPUs (default: 4 if config not found)
+
+    Examples:
+        >>> get_crs_cpu_count("crs-libfuzzer", Path("/crses/configs"))
+        16  # If cpuset is "0-15"
+    """
+    from crsbench.utils.cpu_pool import cpuset_count
+
+    resource_config_path = crs_configs_dir / crs_name / "config-resource.yaml"
+    if not resource_config_path.exists():
+        logger.debug(
+            f"No resource config found for {crs_name}, using default cpu_count=4"
+        )
+        return 4  # Default
+
+    try:
+        with resource_config_path.open() as f:
+            config_data = yaml.safe_load(f)
+
+        # Get cpuset from first worker (or specific worker)
+        workers = config_data.get("workers", {})
+        if workers:
+            first_worker = list(workers.values())[0]
+            cpuset_str = first_worker.get("cpuset", "0-3")
+            cpu_count = cpuset_count(cpuset_str)
+            logger.debug(
+                f"CRS {crs_name}: parsed cpuset '{cpuset_str}' → {cpu_count} CPUs"
+            )
+            return cpu_count
+
+        logger.debug(
+            f"No workers section in resource config for {crs_name}, using default cpu_count=4"
+        )
+        return 4  # Default
+
+    except Exception as e:
+        logger.warning(
+            f"Error reading resource config for {crs_name}: {e}, using default cpu_count=4"
+        )
+        return 4  # Default on error
+
+
 def run_experiment_distributed(
     experiment_name: str,
     config,
@@ -1573,9 +1626,18 @@ def run_experiment_distributed(
     # Enhance config with CLI arguments (highest precedence)
     enhanced_config = enhance_config_with_cli_args(config.to_dict(), args)
 
+    # Get CPU counts for each CRS from resource configs
+    # Note: crs_configs_dir already resolved at line 1490
+    crs_cpu_counts = {}
+    for crs in crses:
+        crs_cpu_counts[crs] = get_crs_cpu_count(crs, crs_configs_dir)
+        logger.debug(f"CRS {crs} requires {crs_cpu_counts[crs]} CPUs")
+
     jobs = []
     for trial in trials:
         bh = trial.benchmark_harness
+        cpu_count = crs_cpu_counts.get(trial.crs, 4)
+
         job = queue.enqueue(
             "crsbench.distributed.jobs.run_crs_trial",
             crs=trial.crs,
@@ -1593,6 +1655,7 @@ def run_experiment_distributed(
                 "harness": bh.harness.name,
                 "mode": trial.mode,
                 "trial_num": trial.trial_num,
+                "cpu_count": cpu_count,  # Add CPU count from resource config
             },
         )
         jobs.append(job)

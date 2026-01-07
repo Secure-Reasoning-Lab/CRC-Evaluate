@@ -90,6 +90,12 @@ Examples:
         help="Number of parallel worker processes (default: 1)",
     )
 
+    worker_parser.add_argument(
+        "--cpuset",
+        action="store_true",
+        help="Enable CPU affinity (divide available CPUs among workers)",
+    )
+
     worker_parser.set_defaults(command="worker")
 
 
@@ -117,6 +123,7 @@ def run_worker(args: argparse.Namespace) -> int:
         "timeout": args.timeout,
         "worker_name": args.worker_name,
         "num_workers": args.jobs,
+        "use_cpuset": args.cpuset,
     }
 
     try:
@@ -128,6 +135,7 @@ def run_worker(args: argparse.Namespace) -> int:
                 _timeout=args.timeout,
                 worker_name=args.worker_name,
                 num_workers=args.jobs,
+                use_cpuset=args.cpuset,
             )
             return 0
         # Run in burst mode (default)

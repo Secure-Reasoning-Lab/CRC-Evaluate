@@ -222,6 +222,19 @@ def run_crs_trial(
         # Get snapshot configuration
         snapshot_period = config.get("snapshot_period")
 
+        # Get allocated_cpus from job metadata
+        allocated_cpus = None
+        try:
+            import rq
+
+            job = rq.get_current_job()
+            if job:
+                allocated_cpus = job.meta.get("allocated_cpus")
+                if allocated_cpus:
+                    logger.info(f"Job assigned CPUs: {allocated_cpus}")
+        except Exception as e:
+            logger.warning(f"Failed to get allocated_cpus from job metadata: {e}")
+
         # Initialize CRS executor
         # Get required paths from config or use defaults
         # Resolve to absolute paths to avoid issues with relative paths
@@ -281,6 +294,7 @@ def run_crs_trial(
                 "hint_corpus_level": config.get("hint_corpus_level"),
                 "project_image_prefix": config.get("project_image_prefix", "aixcc-afc"),
                 "mode": mode,
+                "allocated_cpus": allocated_cpus,
             }
         )
 
