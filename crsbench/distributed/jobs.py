@@ -254,14 +254,14 @@ def run_crs_trial(
         # Initialize CRS executor
         # Get required paths from config
         # Resolve to absolute paths to avoid issues with relative paths
-        oss_fuzz_path = Path(config.oss_fuzz_path).resolve()
-        registry_dir = Path(
+        oss_fuzz_path = config.oss_fuzz_path.resolve()
+        registry_dir = (
             config.registry_dir or (Path.cwd() / "crses" / "registry")
         ).resolve()
-        benchmarks_root = Path(
+        benchmarks_root = (
             config.benchmarks_root or (Path.cwd() / "benchmarks")
         ).resolve()
-        crs_configs_dir = Path(
+        crs_configs_dir = (
             config.crs_configs_dir or (Path.cwd() / "crses" / "configs")
         ).resolve()
 
@@ -316,8 +316,6 @@ def run_crs_trial(
         coverage_enabled = config.coverage_enabled
         coverage_saturation_time = config.coverage_saturation_time
         coverage_early_stop = config.coverage_early_stop
-        # Use oss_fuzz_path from config
-        oss_fuzz_path = Path(config.oss_fuzz_path)
         logger.debug(
             f"Coverage config: enabled={coverage_enabled}, "
             f"saturation_time={coverage_saturation_time}, "
@@ -356,7 +354,7 @@ def run_crs_trial(
         )
 
         # Create trial output directory with harness-specific structure
-        experiment_filestore = Path(config.experiment_filestore).resolve()
+        experiment_filestore = config.experiment_filestore.resolve()
         experiment_name = config.experiment
         # TODO: decide a better orgnization
         trial_output_dir = (
@@ -386,7 +384,7 @@ def run_crs_trial(
 
         # Create trial metadata
         metadata = TrialMetadata(
-            experiment_filestore=config.experiment_filestore,
+            experiment_filestore=str(config.experiment_filestore),
             max_total_time=config.max_total_time,
             difficulty_level=config.difficulty_level,
             timestamp_start=start_time,

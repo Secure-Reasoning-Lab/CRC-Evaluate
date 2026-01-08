@@ -460,10 +460,10 @@ class ExperimentConfig(BaseModel):
     difficulty_level: int = Field(
         ..., ge=0, le=4, description="Difficulty level controlling assistance (0-4)"
     )
-    experiment_filestore: str = Field(
+    experiment_filestore: Path = Field(
         ..., description="Directory path for experiment data storage"
     )
-    report_filestore: str = Field(
+    report_filestore: Path = Field(
         ..., description="Directory path for HTML reports and summary data"
     )
     crses: List[str] = Field(..., description="List of CRS implementations to evaluate")
@@ -471,7 +471,7 @@ class ExperimentConfig(BaseModel):
         default=None,
         description="Redis server hostname or IP (optional, omit or set to 'none' for local mode)",
     )
-    benchmarks_root: Optional[str] = Field(
+    benchmarks_root: Optional[Path] = Field(
         default=None,
         description="Root directory containing benchmark projects (defaults to ./benchmarks)",
     )
@@ -490,11 +490,11 @@ class ExperimentConfig(BaseModel):
         ge=0,
         description="Snapshot interval in seconds (0 to disable, default 900 = 15 minutes)",
     )
-    registry_dir: Optional[str] = Field(
+    registry_dir: Optional[Path] = Field(
         default=None,
         description="Path to CRS registry directory (defaults to ./crses/registry)",
     )
-    crs_configs_dir: Optional[str] = Field(
+    crs_configs_dir: Optional[Path] = Field(
         default=None,
         description="Path to CRS configs directory (defaults to ./crses/configs)",
     )
@@ -527,8 +527,8 @@ class ExperimentConfig(BaseModel):
         default=False,
         description="Skip POV verification after CRS execution (default: False, verification enabled)",
     )
-    oss_fuzz_path: str = Field(
-        default="oss-fuzz",
+    oss_fuzz_path: Path = Field(
+        default=Path("oss-fuzz"),
         description="Path to oss-fuzz directory (default: oss-fuzz)",
     )
     coverage_enabled: bool = Field(
@@ -594,9 +594,12 @@ class ExperimentConfig(BaseModel):
     @field_validator("experiment_filestore", "report_filestore")
     @classmethod
     def validate_filestore_path(cls, v):
-        if not v or not v.strip():
+        # Pydantic converts str to Path automatically
+        # Check that the path is not empty
+        path_str = str(v).strip()
+        if not path_str or path_str == "" or path_str == ".":
             raise ValueError("Filestore path cannot be empty")
-        return v.strip()
+        return v
 
     @field_validator("redis_host")
     @classmethod
@@ -610,15 +613,13 @@ class ExperimentConfig(BaseModel):
     @classmethod
     def validate_benchmarks_root(cls, v):
         """Validate benchmarks root directory."""
-        if v and v.strip():
-            from pathlib import Path
-
-            path = Path(v.strip())
-            if not path.exists():
+        if v:
+            # Pydantic already converts str to Path
+            if not v.exists():
                 raise ValueError(f"Benchmarks root directory does not exist: {v}")
-            if not path.is_dir():
+            if not v.is_dir():
                 raise ValueError(f"Benchmarks root must be a directory: {v}")
-            return str(path.absolute())
+            return v.absolute()
         return None  # Use default ./benchmarks if not specified
 
     @field_validator("benchmarks")
