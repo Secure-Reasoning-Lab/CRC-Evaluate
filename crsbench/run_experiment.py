@@ -669,6 +669,50 @@ def generate_trial_matrix(
     return trials
 
 
+def dump_trial_matrix(
+    trials: List[Trial],
+    config,
+) -> None:
+    """Dump trial matrix to JSON file in experiment filestore.
+
+    Args:
+        trials: List of Trial objects
+        config: Experiment configuration
+    """
+    import json
+
+    output_dir = config.experiment_filestore.resolve() / config.experiment
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "trial_matrix.json"
+
+    # Convert trials to serializable format
+    trial_data = []
+    for trial in trials:
+        bh = trial.benchmark_harness
+        trial_data.append(
+            {
+                "crs": trial.crs,
+                "benchmark": bh.name,
+                "benchmark_path": str(bh.path),
+                "harness": bh.harness.name,
+                "harness_path": bh.harness.path,
+                "trial_num": trial.trial_num,
+                "mode": trial.mode,
+            }
+        )
+
+    matrix = {
+        "experiment": config.experiment,
+        "total_trials": len(trials),
+        "trials": trial_data,
+    }
+
+    with output_path.open("w") as f:
+        json.dump(matrix, f, indent=2)
+
+    logger.info(f"Trial matrix saved to {output_path}")
+
+
 def _is_all_bug_fixing_crs(
     trials: List[Trial],
     registry_dir: Path,
@@ -1066,6 +1110,9 @@ def run_experiment_local(
     trials = generate_trial_matrix(
         benchmark_harnesses, crses, config, registry_dir, crs_configs_dir
     )
+
+    # Dump trial matrix to JSON
+    dump_trial_matrix(trials, config)
 
     logger.info(f"Total trials to execute: {len(trials)}")
     logger.info(f"CRSes: {', '.join(crses)}")
@@ -1597,6 +1644,9 @@ def run_experiment_distributed(
             logger.info(
                 f"Skipping {skipped_count} existing trials, enqueueing {len(trials)} new trials"
             )
+
+    # Dump trial matrix to JSON
+    dump_trial_matrix(trials, config)
 
     logger.info(f"Total trials to enqueue: {len(trials)}")
     logger.info(f"CRSes: {', '.join(crses)}")
