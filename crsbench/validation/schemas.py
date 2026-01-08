@@ -457,6 +457,11 @@ class ExperimentConfig(BaseModel):
         ge=1,
         description="Maximum time in seconds for CRS run phase (default: 7200 = 2 hours)",
     )
+    verify_timeout: int = Field(
+        default=7200,
+        ge=1,
+        description="Maximum time in seconds for POV verification phase (default: 7200 = 2 hours)",
+    )
     difficulty_level: int = Field(
         ..., ge=0, le=4, description="Difficulty level controlling assistance (0-4)"
     )
@@ -754,6 +759,18 @@ class ExperimentConfig(BaseModel):
                 raise ValueError(
                     "hints_enabled=True requires at least one of hint_sarif_level or hint_corpus_level to be set"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def check_max_total_time_sufficient(self):
+        """Validate that max_total_time is sufficient for all phases."""
+        min_required = self.build_timeout + self.run_timeout + self.verify_timeout
+        if self.max_total_time <= min_required:
+            raise ValueError(
+                f"max_total_time ({self.max_total_time}s) must be greater than "
+                f"build_timeout + run_timeout + verify_timeout ({min_required}s = "
+                f"{self.build_timeout} + {self.run_timeout} + {self.verify_timeout})"
+            )
         return self
 
     def get_benchmark_list(

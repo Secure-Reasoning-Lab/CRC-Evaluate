@@ -777,7 +777,7 @@ class TestExperimentConfigSchema:
             experiment="test",
             trials=1,
             mode=EvaluationMode.DELTA,
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -792,7 +792,7 @@ class TestExperimentConfigSchema:
             experiment="test",
             trials=1,
             mode=EvaluationMode.DELTA,
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -808,7 +808,7 @@ class TestExperimentConfigSchema:
             experiment="test",
             trials=1,
             mode=EvaluationMode.DELTA,
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -824,7 +824,7 @@ class TestExperimentConfigSchema:
             experiment="test",
             trials=1,
             mode=EvaluationMode.DELTA,
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -835,6 +835,41 @@ class TestExperimentConfigSchema:
         config_dict = config.to_dict()
         assert "only_cpv_harnesses" in config_dict
         assert config_dict["only_cpv_harnesses"] is False
+
+    def test_max_total_time_validation_success(self):
+        """Test that max_total_time > sum of timeouts passes validation."""
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode=EvaluationMode.DELTA,
+            max_total_time=20000,  # Greater than 3600 + 7200 + 7200 = 18000
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["test-crs"],
+            benchmarks=["test-bench"],
+        )
+        # Should not raise validation error
+        assert config.max_total_time == 20000
+
+    def test_max_total_time_validation_failure(self):
+        """Test that max_total_time <= sum of timeouts fails validation."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            ExperimentConfig(
+                experiment="test",
+                trials=1,
+                mode=EvaluationMode.DELTA,
+                max_total_time=18000,  # Equal to 3600 + 7200 + 7200
+                difficulty_level=1,
+                experiment_filestore="/tmp/exp",
+                report_filestore="/tmp/rep",
+                crses=["test-crs"],
+                benchmarks=["test-bench"],
+            )
+        # Check that the error message mentions the validation
+        error_msg = str(exc_info.value)
+        assert "max_total_time" in error_msg
+        assert "build_timeout + run_timeout + verify_timeout" in error_msg
 
 
 class TestExperimentConfigValidation:

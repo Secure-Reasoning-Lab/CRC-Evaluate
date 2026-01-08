@@ -483,7 +483,7 @@ def _validate_experiment_schema(
             experiment="dummy",
             trials=1,
             mode=EvaluationMode.DELTA,
-            max_total_time=1,
+            max_total_time=20000,
             difficulty_level=0,
             experiment_filestore=Path("/tmp"),
             report_filestore=Path("/tmp"),
