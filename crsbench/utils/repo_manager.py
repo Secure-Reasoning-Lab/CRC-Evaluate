@@ -682,6 +682,7 @@ def ensure_project_repository(
     *,
     mode: Optional[str] = None,
     verbose: bool = False,
+    remove_aixcc: bool = False,
 ) -> Optional[str]:
     """
     Ensure project repository exists at commit-specific directory, cloning if necessary.
@@ -696,6 +697,7 @@ def ensure_project_repository(
         commit: Specific commit to checkout (if None, uses base_commit from meta.yaml)
         mode: Evaluation mode ('delta' or 'full') for selecting the correct commit
         verbose: Enable verbose logging
+        remove_aixcc: Remove .aixcc directory from cloned source (prevents CRS accessing ground truth)
 
     Returns:
         Path to project directory, or None if failed
@@ -770,7 +772,7 @@ def ensure_project_repository(
         )
 
     # Delegate to clone_or_copy_cached_repo helper
-    return clone_or_copy_cached_repo(
+    result = clone_or_copy_cached_repo(
         repo_url=repo_info.repo_url,
         commit=target_commit,
         target_dir=target_dir,
@@ -778,6 +780,15 @@ def ensure_project_repository(
         repo_name=repo_info.repo_name,
         verbose=verbose,
     )
+
+    # Remove .aixcc directory if requested
+    if result and remove_aixcc:
+        aixcc_dir = Path(result) / ".aixcc"
+        if aixcc_dir.exists():
+            logger.warning(f"Removing .aixcc directory from source: {aixcc_dir}")
+            shutil.rmtree(aixcc_dir)
+
+    return result
 
 
 def find_or_clone_project(
