@@ -747,8 +747,8 @@ class TestExperimentConfigSchema:
         finally:
             Path(tmpfile_path).unlink()
 
-    def test_experiment_config_to_dict(self):
-        """Test experiment config to_dict() method."""
+    def test_experiment_config_model_dump(self):
+        """Test experiment config model_dump() method (Pydantic V2)."""
         config = ExperimentConfig(
             experiment="test",
             trials=3,
@@ -761,7 +761,7 @@ class TestExperimentConfigSchema:
             benchmarks=["test-bench"],
             redis_host="redis-server",
         )
-        config_dict = config.to_dict()
+        config_dict = config.model_dump()
 
         assert isinstance(config_dict, dict)
         assert config_dict["trials"] == 3
@@ -770,6 +770,10 @@ class TestExperimentConfigSchema:
         assert config_dict["difficulty_level"] == 2
         assert config_dict["redis_host"] == "redis-server"
         assert config_dict["benchmarks_root"] is None
+        # Verify new timeout fields are included
+        assert "build_timeout" in config_dict
+        assert "run_timeout" in config_dict
+        assert "verify_timeout" in config_dict
 
     def test_experiment_config_only_cpv_harnesses_default(self):
         """Test that only_cpv_harnesses defaults to True."""
@@ -818,8 +822,8 @@ class TestExperimentConfigSchema:
         )
         assert config.only_cpv_harnesses is True
 
-    def test_experiment_config_only_cpv_harnesses_in_to_dict(self):
-        """Test that only_cpv_harnesses is included in to_dict()."""
+    def test_experiment_config_only_cpv_harnesses_in_model_dump(self):
+        """Test that only_cpv_harnesses is included in model_dump()."""
         config = ExperimentConfig(
             experiment="test",
             trials=1,
@@ -832,7 +836,7 @@ class TestExperimentConfigSchema:
             benchmarks=["test-bench"],
             only_cpv_harnesses=False,
         )
-        config_dict = config.to_dict()
+        config_dict = config.model_dump()
         assert "only_cpv_harnesses" in config_dict
         assert config_dict["only_cpv_harnesses"] is False
 

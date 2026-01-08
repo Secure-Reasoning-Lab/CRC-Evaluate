@@ -869,39 +869,6 @@ class ExperimentConfig(BaseModel):
         # Should never reach here due to __init__ validation
         raise ValueError("No benchmark source specified")
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert configuration to dictionary for job serialization."""
-        return {
-            "experiment": self.experiment,
-            "trials": self.trials,
-            "mode": self.mode.value,  # Serialize enum to string value
-            "max_total_time": self.max_total_time,
-            "difficulty_level": self.difficulty_level,
-            "experiment_filestore": self.experiment_filestore,
-            "report_filestore": self.report_filestore,
-            "crses": self.crses,
-            "redis_host": self.redis_host,
-            "benchmarks_root": self.benchmarks_root,
-            "benchmarks": self.benchmarks,
-            "benchmark_suite": self.benchmark_suite,
-            "hints_enabled": self.hints_enabled,
-            "hint_sarif_level": self.hint_sarif_level,
-            "hint_corpus_level": self.hint_corpus_level,
-            "litellm_mode": self.litellm_mode,
-            "crs_configs_dir": self.crs_configs_dir,
-            "registry_dir": self.registry_dir,
-            "snapshot_period": self.snapshot_period,
-            "project_image_prefix": self.project_image_prefix,
-            "skip_verification": self.skip_verification,
-            "oss_fuzz_path": self.oss_fuzz_path,
-            "coverage_enabled": self.coverage_enabled,
-            "coverage_saturation_time": self.coverage_saturation_time,
-            "coverage_early_stop": self.coverage_early_stop,
-            "build_workers": self.build_workers,
-            "verify_workers": self.verify_workers,
-            "only_cpv_harnesses": self.only_cpv_harnesses,
-        }
-
 
 class BenchmarkSuiteConfig(BaseModel):
     """Benchmark suite configuration schema."""
