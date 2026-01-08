@@ -735,8 +735,8 @@ benchmarks:
             "trials": config.trials,
             "max_total_time": config.max_total_time,
             "difficulty_level": config.difficulty_level,
-            "experiment_filestore": config.experiment_filestore,
-            "report_filestore": config.report_filestore,
+            "experiment_filestore": str(config.experiment_filestore),
+            "report_filestore": str(config.report_filestore),
             "crses": parse_list_argument(cli_crses),
             "benchmarks": parse_list_argument(cli_benchmarks),
         }

@@ -701,8 +701,8 @@ class TestExperimentConfigSchema:
                 benchmarks=["test-bench"],
                 benchmarks_root=tmpdir,
             )
-            # Should return absolute path
-            assert config.benchmarks_root == str(Path(tmpdir).absolute())
+            # Should return absolute path as Path object
+            assert config.benchmarks_root == Path(tmpdir).absolute()
 
     def test_experiment_config_invalid_benchmarks_root(self):
         """Test experiment config with non-existent benchmarks_root."""
@@ -982,9 +982,7 @@ benchmarks_root: {tmpdir}
             result = validate_experiment_config_from_string(yaml_content)
 
             assert result.is_valid is True
-            assert result.metadata.get("benchmarks_root") == str(
-                Path(tmpdir).absolute()
-            )
+            assert result.metadata.get("benchmarks_root") == Path(tmpdir).absolute()
 
     def test_validate_experiment_redis_none_for_local_mode(self):
         """Test validation with redis_host set to 'none' for local mode."""
