@@ -884,7 +884,7 @@ class BenchmarkRunner:
                 pov_dir=pov_dir,
                 deduplicate=True,  # TODO: configurable?
                 harness_filter=harness_name,
-                force_rebuild=True,  # Always rebuild to ensure correct patches
+                force_rebuild=False,  # Variants are pre-built at experiment start
             )
             return results
         except Exception as e:
