@@ -5,8 +5,6 @@ Tests verdict logic for FULL and DELTA modes:
 - DELTA mode: base crash → ref crash → allpatched crash → CPV matches → UNINTENDED
 """
 
-import pytest
-
 from crsbench.builder.types import BenchmarkMode, VariantType
 from crsbench.evaluation.verification.models import PovVerificationStatus
 from crsbench.evaluation.verification.pov.verdict import VerdictResolver
@@ -87,7 +85,9 @@ class TestVerdictResolverFullMode:
         )
         assert result.status == PovVerificationStatus.ZERODAY
         assert result.cpv_matched == []
-        assert "zeroday" in result.details.lower() or "unknown" in result.details.lower()
+        assert (
+            "zeroday" in result.details.lower() or "unknown" in result.details.lower()
+        )
 
 
 class TestVerdictResolverDeltaMode:
@@ -103,7 +103,10 @@ class TestVerdictResolverDeltaMode:
             pov_id="pov_1",
         )
         assert result.status == PovVerificationStatus.ZERODAY
-        assert "before delta" in result.details.lower() or "pre-existing" in result.details.lower()
+        assert (
+            "before delta" in result.details.lower()
+            or "pre-existing" in result.details.lower()
+        )
 
     def test_delta_ref_no_crash_returns_not_vulnerable(self):
         """In DELTA mode, if ref doesn't crash, POV is not vulnerable."""

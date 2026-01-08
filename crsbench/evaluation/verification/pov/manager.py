@@ -61,7 +61,7 @@ class POVVerificationManager:
         harness_name: Name of the harness being evaluated
         benchmark_id: Benchmark identifier
         store: POV store for persistence
-        total_expected_cpvs: Total expected CPVs for this harness
+        expected_cpv_ids: Set of expected CPV IDs for this harness (e.g., {"cpv_0", "cpv_1"})
     """
 
     def __init__(
@@ -71,7 +71,7 @@ class POVVerificationManager:
         config: POVVerificationConfig,
         harness_name: str,
         benchmark_id: str,
-        total_expected_cpvs: int,
+        expected_cpv_ids: list[str],
         *,
         trial_start_time: Optional[float] = None,
         store: Optional[POVStore] = None,
@@ -87,7 +87,7 @@ class POVVerificationManager:
             config: POV verification configuration
             harness_name: Name of the harness being evaluated
             benchmark_id: Benchmark identifier
-            total_expected_cpvs: Total number of expected CPVs for this harness
+            expected_cpv_ids: List of expected CPV IDs for this harness (e.g., ["cpv_0", "cpv_1"])
             trial_start_time: Trial start timestamp (defaults to current time)
             store: Optional POVStore for persistence (creates new if None)
             engine: Optional VerificationEngine (creates new if None)
@@ -105,7 +105,7 @@ class POVVerificationManager:
         self.config = config
         self.harness_name = harness_name
         self.benchmark_id = benchmark_id
-        self.total_expected_cpvs = total_expected_cpvs
+        self.expected_cpv_ids = set(expected_cpv_ids)
         self.trial_start_time = trial_start_time or time.time()
         self._adapter = adapter
 
@@ -122,8 +122,9 @@ class POVVerificationManager:
         # Thread-safe access to state
         self._lock = threading.Lock()
 
-        # Snapshot tracking (like CoverageManager.snapshots)
-        self.snapshots: list[POVSnapshot] = []
+        # Snapshot tracking: only keep count and latest (written to disk)
+        self._snapshot_count = 0
+        self._latest_snapshot: Optional[POVSnapshot] = None
 
         # Counter tracking (derived from store on demand for stats)
         self._duplicates_count = 0
@@ -137,7 +138,7 @@ class POVVerificationManager:
         logger.info(
             f"POVVerificationManager initialized: trial_dir={trial_dir}, "
             f"harness={harness_name}, benchmark={benchmark_id}, "
-            f"expected_cpvs={total_expected_cpvs}"
+            f"expected_cpvs={len(expected_cpv_ids)}"
         )
 
     @property
@@ -146,18 +147,22 @@ class POVVerificationManager:
         return self.store.get_cpvs_found()
 
     @property
+    def total_expected_cpvs(self) -> int:
+        """Get total number of expected CPVs (for backward compatibility)."""
+        return len(self.expected_cpv_ids)
+
+    @property
     def all_cpvs_found(self) -> bool:
         """Check if all expected CPVs have been found."""
-        return len(self.found_cpvs) >= self.total_expected_cpvs
+        return self.expected_cpv_ids <= self.found_cpvs
 
     def _get_remaining_cpvs(self) -> list[str]:
         """Get list of CPV IDs not yet found.
 
         Returns:
-            List of CPV identifiers that haven't been discovered yet.
+            List of CPV identifiers that haven't been discovered yet, sorted.
         """
-        all_cpv_ids = [f"cpv_{i}" for i in range(self.total_expected_cpvs)]
-        return [cpv for cpv in all_cpv_ids if cpv not in self.found_cpvs]
+        return sorted(self.expected_cpv_ids - self.found_cpvs)
 
     def _discover_new_povs(self) -> list[tuple[Path, str]]:
         """Discover new POV files in the output directory.
@@ -249,7 +254,9 @@ class POVVerificationManager:
             return
 
         # Add to store with the verification status directly (no mapping needed)
-        self.store.add_pov(pov_path, result.status, result.cpv_matched, pov_hash=pov_hash)
+        self.store.add_pov(
+            pov_path, result.status, result.cpv_matched, pov_hash=pov_hash
+        )
 
         # Update counters based on result
         if result.status == PovVerificationStatus.CPV:
@@ -340,7 +347,8 @@ class POVVerificationManager:
                 zerodays_count=self._zerodays_count,
                 early_stop_triggered=self._early_stop_triggered,
             )
-            self.snapshots.append(snapshot)
+            self._snapshot_count += 1
+            self._latest_snapshot = snapshot
 
         # Save snapshot to file
         self._save_snapshot_file(snapshot)
@@ -435,31 +443,37 @@ class POVVerificationManager:
             logger.warning(f"Failed to save POV snapshot file: {e}")
 
     def _save_snapshot_history(self) -> None:
-        """Save snapshot history to trial directory."""
+        """Save snapshot summary to trial directory.
+
+        Note: Individual snapshots are saved in snapshot-{NNN}.json files.
+        This file contains overall summary stats.
+        """
         try:
             history_file = self.trial_dir / "povs" / "snapshot_history.json"
             history_file.parent.mkdir(parents=True, exist_ok=True)
 
-            history_data = {
-                "harness_name": self.harness_name,
-                "total_expected_cpvs": self.total_expected_cpvs,
-                "early_stop_enabled": self.config.early_stop_enabled,
-                "early_stop_triggered": self._early_stop_triggered,
-                "snapshots": [
-                    {
-                        "cycle": s.cycle,
-                        "elapsed_time": s.elapsed_time,
-                        "cpvs_found": s.cpvs_found,
-                        "cpvs_remaining": s.cpvs_remaining,
-                        "povs_total": s.povs_total,
-                        "povs_new": s.povs_new,
-                        "duplicates_skipped": s.duplicates_skipped,
-                        "zerodays_count": s.zerodays_count,
-                        "early_stop_triggered": s.early_stop_triggered,
+            with self._lock:
+                latest = self._latest_snapshot
+                history_data = {
+                    "harness_name": self.harness_name,
+                    "total_expected_cpvs": self.total_expected_cpvs,
+                    "expected_cpv_ids": sorted(self.expected_cpv_ids),
+                    "early_stop_enabled": self.config.early_stop_enabled,
+                    "early_stop_triggered": self._early_stop_triggered,
+                    "snapshot_count": self._snapshot_count,
+                    "latest_snapshot": {
+                        "cycle": latest.cycle,
+                        "elapsed_time": latest.elapsed_time,
+                        "cpvs_found": latest.cpvs_found,
+                        "cpvs_remaining": latest.cpvs_remaining,
+                        "povs_total": latest.povs_total,
+                        "povs_new": latest.povs_new,
+                        "zerodays_count": latest.zerodays_count,
+                        "early_stop_triggered": latest.early_stop_triggered,
                     }
-                    for s in self.snapshots
-                ],
-            }
+                    if latest
+                    else None,
+                }
 
             history_file.write_text(json.dumps(history_data, indent=2))
             logger.debug(f"Saved POV snapshot history to {history_file}")

@@ -700,7 +700,8 @@ class BenchmarkRunner:
                 )
                 return None
 
-            total_expected_cpvs = len(harness.vulns)
+            # Extract actual CPV IDs from harness vulnerabilities
+            expected_cpv_ids = [vuln.vuln_keyword for vuln in harness.vulns]
 
             # Create POV verification config
             config = POVVerificationConfig(
@@ -724,7 +725,7 @@ class BenchmarkRunner:
                 config=config,
                 harness_name=harness_name,
                 benchmark_id=benchmark_path.name,
-                total_expected_cpvs=total_expected_cpvs,
+                expected_cpv_ids=expected_cpv_ids,
                 trial_start_time=trial_start_time,
                 engine=engine,
                 adapter=adapter,
@@ -732,7 +733,7 @@ class BenchmarkRunner:
 
             self.logger.info(
                 f"POV verification manager created: harness={harness_name}, "
-                f"expected_cpvs={total_expected_cpvs}, early_stop={self.pov_early_stop}"
+                f"expected_cpvs={len(expected_cpv_ids)}, early_stop={self.pov_early_stop}"
             )
 
             return manager

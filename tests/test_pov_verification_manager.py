@@ -32,7 +32,7 @@ class TestPOVVerificationManagerInit:
             config=config,
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=3,
+            expected_cpv_ids=["cpv_0", "cpv_1", "cpv_2"],
         )
 
         assert manager.config == config
@@ -60,7 +60,7 @@ class TestPOVVerificationManagerInit:
             config=config,
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=3,
+            expected_cpv_ids=["cpv_0", "cpv_1", "cpv_2"],
             store=store,
         )
 
@@ -88,7 +88,7 @@ class TestDiscoverNewPovs:
             config=config,
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=3,
+            expected_cpv_ids=["cpv_0", "cpv_1", "cpv_2"],
         )
 
         new_povs = manager._discover_new_povs()
@@ -116,7 +116,7 @@ class TestDiscoverNewPovs:
             config=config,
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=3,
+            expected_cpv_ids=["cpv_0", "cpv_1", "cpv_2"],
         )
 
         new_povs = manager._discover_new_povs()
@@ -144,7 +144,7 @@ class TestDiscoverNewPovs:
             config=config,
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=3,
+            expected_cpv_ids=["cpv_0", "cpv_1", "cpv_2"],
         )
 
         # First discovery
@@ -187,7 +187,7 @@ class TestVerifyPovMatchesCpv:
             config=config,
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=3,
+            expected_cpv_ids=["cpv_0", "cpv_1", "cpv_2"],
         )
 
         # Mock the verification engine and adapter
@@ -234,7 +234,7 @@ class TestVerifyPovMatchesCpv:
             config=config,
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=3,
+            expected_cpv_ids=["cpv_0", "cpv_1", "cpv_2"],
         )
 
         # Mock the verification engine and adapter
@@ -285,7 +285,7 @@ class TestVerifyPovZeroday:
             config=config,
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=3,
+            expected_cpv_ids=["cpv_0", "cpv_1", "cpv_2"],
         )
 
         # Mock the verification engine returning zeroday
@@ -331,7 +331,7 @@ class TestVerifyPovZeroday:
             config=config,
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=3,
+            expected_cpv_ids=["cpv_0", "cpv_1", "cpv_2"],
         )
 
         mock_result = PovVerificationResult(
@@ -373,7 +373,7 @@ class TestEarlyStopCondition:
             config=config,
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=2,
+            expected_cpv_ids=["cpv_0", "cpv_1"],
         )
 
         # Initially should not terminate
@@ -408,7 +408,7 @@ class TestEarlyStopCondition:
             config=config,
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=2,
+            expected_cpv_ids=["cpv_0", "cpv_1"],
         )
 
         # Add found CPVs via store
@@ -447,7 +447,7 @@ class TestDuplicateDetection:
             config=config,
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=3,
+            expected_cpv_ids=["cpv_0", "cpv_1", "cpv_2"],
         )
 
         # Not tested yet
@@ -480,7 +480,7 @@ class TestDuplicateDetection:
             config=config,
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=3,
+            expected_cpv_ids=["cpv_0", "cpv_1", "cpv_2"],
         )
 
         # Add POV to store to populate tested hashes
@@ -513,7 +513,7 @@ class TestOnSnapshot:
             config=config,
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=3,
+            expected_cpv_ids=["cpv_0", "cpv_1", "cpv_2"],
         )
 
         snapshot = manager.on_snapshot(cycle=1)
@@ -541,7 +541,7 @@ class TestOnSnapshot:
             config=config,
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=3,
+            expected_cpv_ids=["cpv_0", "cpv_1", "cpv_2"],
         )
 
         # Add some found CPVs via store
@@ -578,7 +578,7 @@ class TestGetState:
             config=config,
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=3,
+            expected_cpv_ids=["cpv_0", "cpv_1", "cpv_2"],
         )
 
         # Add found CPV via store
@@ -616,7 +616,7 @@ class TestGetReport:
             config=config,
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=3,
+            expected_cpv_ids=["cpv_0", "cpv_1", "cpv_2"],
         )
 
         # Add found CPVs via store

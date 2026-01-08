@@ -54,7 +54,7 @@ class TestEarlyStopSignaling:
             config=config,
             harness_name="test-harness",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=1,
+            expected_cpv_ids=["cpv_0"],
             stop_event=stop_event,
         )
 
@@ -102,7 +102,7 @@ class TestEarlyStopSignaling:
             config=config,
             harness_name="test-harness",
             benchmark_id="test-benchmark",
-            total_expected_cpvs=1,
+            expected_cpv_ids=["cpv_0"],
             stop_event=stop_event,
         )
 
