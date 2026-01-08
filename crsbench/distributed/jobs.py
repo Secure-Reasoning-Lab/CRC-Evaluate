@@ -252,11 +252,9 @@ def run_crs_trial(
             logger.warning(f"Failed to get allocated_cpus from job metadata: {e}")
 
         # Initialize CRS executor
-        # Get required paths from config or use defaults
+        # Get required paths from config
         # Resolve to absolute paths to avoid issues with relative paths
-        oss_fuzz_path = Path(
-            config.oss_fuzz_path or (Path.cwd() / "oss-fuzz")
-        ).resolve()
+        oss_fuzz_path = Path(config.oss_fuzz_path).resolve()
         registry_dir = Path(
             config.registry_dir or (Path.cwd() / "crses" / "registry")
         ).resolve()
@@ -303,24 +301,23 @@ def run_crs_trial(
         # Configure executor
         crs_executor.configure_crs(
             {
-                "build_timeout": 3600,  # Default build timeout
-                "run_timeout": config.max_total_time or 7200,
-                "hints_enabled": config.hints_enabled or False,
+                "build_timeout": config.build_timeout,
+                "run_timeout": config.run_timeout,
+                "hints_enabled": config.hints_enabled,
                 "hint_sarif_level": config.hint_sarif_level,
                 "hint_corpus_level": config.hint_corpus_level,
-                "project_image_prefix": config.project_image_prefix or "aixcc-afc",
+                "project_image_prefix": config.project_image_prefix,
                 "mode": mode,
                 "allocated_cpus": allocated_cpus,
             }
         )
 
         # Initialize benchmark runner with CRS executor and snapshot configuration
-        coverage_enabled = config.coverage_enabled or False
-        coverage_saturation_time = config.coverage_saturation_time or 21600
-        coverage_early_stop = config.coverage_early_stop or False
-        # Handle None from config (when key exists but value is None)
-        oss_fuzz_path_str = config.oss_fuzz_path or "oss-fuzz"
-        oss_fuzz_path = Path(oss_fuzz_path_str)
+        coverage_enabled = config.coverage_enabled
+        coverage_saturation_time = config.coverage_saturation_time
+        coverage_early_stop = config.coverage_early_stop
+        # Use oss_fuzz_path from config
+        oss_fuzz_path = Path(config.oss_fuzz_path)
         logger.debug(
             f"Coverage config: enabled={coverage_enabled}, "
             f"saturation_time={coverage_saturation_time}, "
@@ -381,10 +378,10 @@ def run_crs_trial(
         result = runner.run_benchmark(
             benchmark_harness=benchmark_harness,
             mode=mode,  # Use mode from trial
-            crs_config={},  # Empty config - executor already configured # TODO: needed?
+            crs_config={},  # Empty config - executor already configured
             trial_output_dir=trial_output_dir,
             oss_fuzz_path=oss_fuzz_path,
-            skip_verification=config.skip_verification or False,
+            skip_verification=config.skip_verification,
         )
 
         execution_time = time.time() - start_time

@@ -447,6 +447,16 @@ class ExperimentConfig(BaseModel):
     max_total_time: int = Field(
         ..., ge=1, description="Maximum time in seconds per trial (must be >= 1)"
     )
+    build_timeout: int = Field(
+        default=3600,
+        ge=1,
+        description="Maximum time in seconds for CRS build phase (default: 3600 = 1 hour)",
+    )
+    run_timeout: int = Field(
+        default=7200,
+        ge=1,
+        description="Maximum time in seconds for CRS run phase (default: 7200 = 2 hours)",
+    )
     difficulty_level: int = Field(
         ..., ge=0, le=4, description="Difficulty level controlling assistance (0-4)"
     )
@@ -517,9 +527,9 @@ class ExperimentConfig(BaseModel):
         default=False,
         description="Skip POV verification after CRS execution (default: False, verification enabled)",
     )
-    oss_fuzz_path: Optional[str] = Field(
-        default=None,
-        description="Path to oss-fuzz directory (defaults to ./oss-fuzz)",
+    oss_fuzz_path: str = Field(
+        default="oss-fuzz",
+        description="Path to oss-fuzz directory (default: oss-fuzz)",
     )
     coverage_enabled: bool = Field(
         default=False,
