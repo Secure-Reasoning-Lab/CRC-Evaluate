@@ -15,7 +15,10 @@
 #   -b, --benchmark <name>  Benchmark name(s), can be specified multiple times
 #                           (default: atlanta-nasm-delta-01, afc-curl-delta-02,
 #                            afc-freerdp-delta-02, afc-lcms-full-01)
-#   -t, --timeout <secs>    Max total time in seconds (default: 300)
+#   --build-timeout <secs>  Build timeout in seconds (default: 600)
+#   --run-timeout <secs>    Run timeout in seconds (default: 600)
+#   --verify-timeout <secs> Verify timeout in seconds (default: 600)
+#   --max-total-time <secs> Max total time (default: auto-calculated as sum + 1000)
 #   --trials <n>            Number of trials (default: 1)
 #   --tmux                  Launch worker in tmux vertical pane
 #   --kill-pane             Kill the worker pane after test (with --tmux)
@@ -29,7 +32,9 @@
 #   ./run_distributed_test.sh
 #   ./run_distributed_test.sh -j 2 --tmux
 #   ./run_distributed_test.sh -b atlanta-nasm-delta-01 -b afc-curl-delta-02
-#   ./run_distributed_test.sh --crs crs-libfuzzer --timeout 600
+#   ./run_distributed_test.sh --crs crs-libfuzzer --build-timeout 1200
+#   ./run_distributed_test.sh --run-timeout 900 --verify-timeout 900
+#   ./run_distributed_test.sh --max-total-time 3000
 #   ./run_distributed_test.sh -j 4 --debug
 #   ./run_distributed_test.sh -j 4 --skip-verify --debug
 #   ./run_distributed_test.sh -j 4 --debug --skip-cleanup
@@ -41,7 +46,11 @@ NUM_WORKERS=1
 CRS_NAME="crs-libfuzzer"
 BENCHMARKS=()
 BENCHMARKS_SET=false
-MAX_TOTAL_TIME=300
+BUILD_TIMEOUT=600
+RUN_TIMEOUT=600
+VERIFY_TIMEOUT=600
+# MAX_TOTAL_TIME will be calculated as sum of timeouts + 1000 buffer
+MAX_TOTAL_TIME=""
 TRIALS=1
 USE_TMUX=false
 KILL_PANE=false
@@ -69,7 +78,19 @@ while [[ $# -gt 0 ]]; do
             BENCHMARKS+=("$2")
             shift 2
             ;;
-        -t|--timeout)
+        --build-timeout)
+            BUILD_TIMEOUT="$2"
+            shift 2
+            ;;
+        --run-timeout)
+            RUN_TIMEOUT="$2"
+            shift 2
+            ;;
+        --verify-timeout)
+            VERIFY_TIMEOUT="$2"
+            shift 2
+            ;;
+        --max-total-time)
             MAX_TOTAL_TIME="$2"
             shift 2
             ;;
@@ -121,6 +142,11 @@ if [ "$BENCHMARKS_SET" = false ]; then
         "afc-freerdp-delta-02"
         "afc-lcms-full-01"
     )
+fi
+
+# Calculate MAX_TOTAL_TIME if not explicitly set
+if [ -z "$MAX_TOTAL_TIME" ]; then
+    MAX_TOTAL_TIME=$((BUILD_TIMEOUT + RUN_TIMEOUT + VERIFY_TIMEOUT + 1000))
 fi
 
 # Get the script directory
@@ -227,7 +253,11 @@ echo -e "${GREEN}Configuration:${NC}"
 echo "  CRS: $CRS_NAME"
 echo "  Benchmarks: ${BENCHMARKS[*]}"
 echo "  Experiment name: $EXPERIMENT_NAME"
-echo "  Max total time: ${MAX_TOTAL_TIME}s"
+echo "  Timeouts:"
+echo "    Build: ${BUILD_TIMEOUT}s"
+echo "    Run: ${RUN_TIMEOUT}s"
+echo "    Verify: ${VERIFY_TIMEOUT}s"
+echo "    Max total: ${MAX_TOTAL_TIME}s"
 echo "  Trials: $TRIALS"
 echo "  Mode: Distributed (Redis-based job queue)"
 echo "  Debug mode: $DEBUG"
@@ -264,7 +294,6 @@ description: "Distributed integration test for $CRS_NAME with $NUM_WORKERS worke
 # Execution Configuration
 trials: $TRIALS
 mode: delta
-max_total_time: $MAX_TOTAL_TIME
 
 # CRS Selection
 crses:
@@ -295,8 +324,10 @@ report_filestore: $TEST_DIR/report-data
 litellm_mode: passthrough
 
 # Build Configuration
-build_timeout: 600
-run_timeout: $MAX_TOTAL_TIME
+build_timeout: $BUILD_TIMEOUT
+run_timeout: $RUN_TIMEOUT
+verify_timeout: $VERIFY_TIMEOUT
+max_total_time: $MAX_TOTAL_TIME
 
 # Hints Configuration
 hints_enabled: false
