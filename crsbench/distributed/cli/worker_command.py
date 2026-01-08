@@ -91,9 +91,9 @@ Examples:
     )
 
     worker_parser.add_argument(
-        "--cpuset",
+        "--no-cpuset",
         action="store_true",
-        help="Enable CPU affinity (divide available CPUs among workers)",
+        help="Disable CPU affinity (not supported with -j > 1)",
     )
 
     worker_parser.set_defaults(command="worker")
@@ -115,6 +115,13 @@ def run_worker(args: argparse.Namespace) -> int:
     # Configure logging
     configure_logger(level=args.log_level, sink=sys.stdout)
 
+    # Validate --no-cpuset with multiple workers
+    if getattr(args, "no_cpuset", False) and args.jobs > 1:
+        raise ValueError("--no-cpuset is not supported with multiple workers (-j > 1)")
+
+    # cpuset is enabled by default, disabled with --no-cpuset
+    use_cpuset = not getattr(args, "no_cpuset", False)
+
     # TODO: fix timeout too short
     # Prepare worker arguments
     worker_args = {
@@ -123,7 +130,6 @@ def run_worker(args: argparse.Namespace) -> int:
         "timeout": args.timeout,
         "worker_name": args.worker_name,
         "num_workers": args.jobs,
-        "use_cpuset": args.cpuset,
     }
 
     try:
@@ -135,11 +141,11 @@ def run_worker(args: argparse.Namespace) -> int:
                 _timeout=args.timeout,
                 worker_name=args.worker_name,
                 num_workers=args.jobs,
-                use_cpuset=args.cpuset,
+                use_cpuset=use_cpuset,
             )
             return 0
         # Run in burst mode (default)
-        return worker_main(**worker_args)
+        return worker_main(**worker_args, use_cpuset=use_cpuset)
 
     except KeyboardInterrupt:
         from crsbench.utils.logger import get_logger

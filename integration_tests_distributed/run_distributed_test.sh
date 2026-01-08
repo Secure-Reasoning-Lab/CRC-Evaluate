@@ -19,7 +19,7 @@
 #   --trials <n>            Number of trials (default: 1)
 #   --tmux                  Launch worker in tmux vertical pane
 #   --kill-pane             Kill the worker pane after test (with --tmux)
-#   --cpuset                Enable CPU affinity (divide available CPUs among workers)
+#   --no-cpuset             Disable CPU affinity (default: enabled, not supported with -j 1)
 #   --verify                Enable verification (default: skip verification)
 #   --debug                 Enable debug output from crsbench
 #   --skip-cleanup          Don't delete generated config file after test
@@ -30,7 +30,7 @@
 #   ./run_distributed_test.sh -j 2 --tmux
 #   ./run_distributed_test.sh -b atlanta-nasm-delta-01 -b afc-curl-delta-02
 #   ./run_distributed_test.sh --crs crs-libfuzzer --timeout 600
-#   ./run_distributed_test.sh -j 4 --cpuset --debug
+#   ./run_distributed_test.sh -j 4 --debug
 #   ./run_distributed_test.sh -j 4 --verify --debug
 #   ./run_distributed_test.sh -j 4 --debug --skip-cleanup
 
@@ -45,7 +45,7 @@ MAX_TOTAL_TIME=300
 TRIALS=1
 USE_TMUX=false
 KILL_PANE=false
-CPUSET=false
+CPUSET=true
 DEBUG=false
 SKIP_CLEANUP=false
 SKIP_VERIFICATION=true
@@ -85,8 +85,8 @@ while [[ $# -gt 0 ]]; do
             KILL_PANE=true
             shift
             ;;
-        --cpuset)
-            CPUSET=true
+        --no-cpuset)
+            CPUSET=false
             shift
             ;;
         --debug)
@@ -345,9 +345,9 @@ else
     WORKER_BASE_CMD="crsbench worker --redis-host localhost --experiment-name '$EXPERIMENT_NAME' --log-level INFO --continuous"
 fi
 
-# Add --cpuset flag if enabled
-if [ "$CPUSET" = true ]; then
-    WORKER_BASE_CMD="$WORKER_BASE_CMD --cpuset"
+# Add --no-cpuset flag if disabled
+if [ "$CPUSET" = false ]; then
+    WORKER_BASE_CMD="$WORKER_BASE_CMD --no-cpuset"
 fi
 
 if [ "$USE_TMUX" = true ]; then
