@@ -147,7 +147,6 @@ class CRSPatchExecutor(CRSExecutor):
             benchmark_path,
             project_name,
             trial_build_dir,
-            trial_crs_config_dir,
             trial_registry_dir,
         )
 
@@ -296,7 +295,6 @@ class CRSPatchExecutor(CRSExecutor):
             benchmark_path,
             project_name,
             trial_build_dir,
-            trial_crs_config_dir,
             trial_registry_dir,
         )
 
@@ -320,13 +318,18 @@ class CRSPatchExecutor(CRSExecutor):
         log_dir = trial_output_dir / "crs-logs"
         log_dir.mkdir(parents=True, exist_ok=True)
 
-        # Build command
-        # Build command
-        # Build command using trial-local config
+        # Get registry name for the CRS
+        from crsbench.utils.crs_helper import get_crs_registry_name
+
+        registry_name = get_crs_registry_name(
+            self.crs_config_name, self.crs_configs_dir
+        )
+
+        # Build command using CRS name (not path)
         cmd = [
             "oss-bugfix-crs",
             "run",
-            str(trial_crs_config_dir),  # Use trial-local config
+            registry_name,  # CRS name (not path)
             project_name,
             "--harness",
             harness_name,
@@ -415,7 +418,6 @@ class CRSPatchExecutor(CRSExecutor):
         benchmark_path: Path,
         project_name: str,
         trial_build_dir: Path,
-        trial_crs_config_dir: Path,
         trial_registry_dir: Path,
     ) -> None:
         """Build patch generation CRS if not already built.
@@ -424,7 +426,6 @@ class CRSPatchExecutor(CRSExecutor):
             benchmark_path: Path to benchmark directory (contains project.yaml)
             project_name: Project name for caching
             trial_build_dir: Trial-specific build directory
-            trial_crs_config_dir: Trial-local CRS config directory
             trial_registry_dir: Trial-local registry directory
         """
         build_key = f"{self.crs_config_name}:{project_name}"
@@ -451,11 +452,20 @@ class CRSPatchExecutor(CRSExecutor):
 
         logger.info(f"Using source from: {source_path}")
 
+        # Get registry name for the CRS
+        from crsbench.utils.crs_helper import get_crs_registry_name
+
+        registry_name = get_crs_registry_name(
+            self.crs_config_name, self.crs_configs_dir
+        )
+        logger.info(f"Using CRS registry name: {registry_name}")
+
         # Build command using trial-local paths
+        # Note: oss-bugfix-crs expects CRS name (not path) and --registry for registry dir
         cmd = [
             "oss-bugfix-crs",
             "build",
-            str(trial_crs_config_dir),  # Use trial-local config
+            registry_name,  # CRS name (not path)
             project_name,
             "--oss-fuzz",
             str(self.oss_fuzz_path),
