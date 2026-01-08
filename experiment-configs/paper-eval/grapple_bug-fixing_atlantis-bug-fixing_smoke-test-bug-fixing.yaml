@@ -1,0 +1,48 @@
+# Test Experiment Configuration for Smoke Testing of Bug Fixing CRSes
+#
+# This is a minimal configuration for testing CRSBench distributed execution
+# with Redis-based job queue and crs-libfuzzer CRS.
+
+# Experiment identifier
+experiment: "grapple-bug-fixing-smoke-testing"
+
+# Human-readable description
+description: "Smoke testing for distributed bug fixing"
+
+# Execution Configuration
+trials: 1
+max_total_time: 1800
+
+# CRS Selection
+crses:
+  - atlantis-vincent
+  - atlantis-prism
+  - atlantis-claude-code
+
+mode: all
+
+benchmark_suite: smoke-test-bug-fixing
+
+# Difficulty Control
+difficulty_level: 1
+
+# Monitoring & Snapshots - more frequent for testing
+snapshot_period: 300  # 5 minutes
+
+# Storage Configuration - temporary directories for testing
+experiment_filestore: /tmp/grapple-bug-fixing-smoke-testing/experiment-data
+report_filestore: /tmp/grapple-bug-fixing-smoke-testing/report-data
+
+# LiteLLM Configuration - passthrough mode (default)
+litellm_mode: passthrough
+
+# Build Configuration
+build_timeout: 600
+
+hints_enabled: false
+
+# Distributed Execution Configuration
+redis_host: localhost
+
+# Reproducibility
+git_hash: null
