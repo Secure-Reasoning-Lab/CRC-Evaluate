@@ -82,9 +82,19 @@ class TestCRSPatchExecutor(unittest.TestCase):
         trial_build_dir = Path(self.temp_dir) / "trial-build"
         trial_build_dir.mkdir()
 
+        trial_crs_config_dir = Path(self.temp_dir) / "trial-crs-config"
+        trial_crs_config_dir.mkdir()
+
+        trial_registry_dir = Path(self.temp_dir) / "trial-registry"
+        trial_registry_dir.mkdir()
+
         # Build CRS
         self.executor._build_crs_if_needed(
-            benchmark_path, "test-project", trial_build_dir
+            benchmark_path,
+            "test-project",
+            trial_build_dir,
+            trial_crs_config_dir,
+            trial_registry_dir,
         )
 
         # Verify repository manager was called
@@ -122,9 +132,19 @@ class TestCRSPatchExecutor(unittest.TestCase):
         trial_build_dir = Path(self.temp_dir) / "trial-build"
         trial_build_dir.mkdir()
 
+        trial_crs_config_dir = Path(self.temp_dir) / "trial-crs-config"
+        trial_crs_config_dir.mkdir()
+
+        trial_registry_dir = Path(self.temp_dir) / "trial-registry"
+        trial_registry_dir.mkdir()
+
         # Attempt to build
         self.executor._build_crs_if_needed(
-            benchmark_path, "test-project", trial_build_dir
+            benchmark_path,
+            "test-project",
+            trial_build_dir,
+            trial_crs_config_dir,
+            trial_registry_dir,
         )
 
         # Verify no calls were made
