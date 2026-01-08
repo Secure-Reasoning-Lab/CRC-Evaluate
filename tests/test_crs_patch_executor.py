@@ -66,10 +66,16 @@ class TestCRSPatchExecutor(unittest.TestCase):
         self.assertTrue(output_dir.exists())
         self.assertTrue(output_dir.is_dir())
 
+    @patch("crsbench.utils.crs_helper.get_crs_registry_name")
     @patch("crsbench.utils.repo_manager.ensure_project_repository")
     @patch("subprocess.run")
-    def test_build_crs_if_needed(self, mock_run, mock_ensure_repo):
+    def test_build_crs_if_needed(
+        self, mock_run, mock_ensure_repo, mock_get_registry_name
+    ):
         """Test CRS build with repository manager integration."""
+        # Mock CRS registry name lookup
+        mock_get_registry_name.return_value = "test-crs-registry"
+
         # Mock repository manager response
         mock_ensure_repo.return_value = "/path/to/source"
 
@@ -82,9 +88,6 @@ class TestCRSPatchExecutor(unittest.TestCase):
         trial_build_dir = Path(self.temp_dir) / "trial-build"
         trial_build_dir.mkdir()
 
-        trial_crs_config_dir = Path(self.temp_dir) / "trial-crs-config"
-        trial_crs_config_dir.mkdir()
-
         trial_registry_dir = Path(self.temp_dir) / "trial-registry"
         trial_registry_dir.mkdir()
 
@@ -93,7 +96,6 @@ class TestCRSPatchExecutor(unittest.TestCase):
             benchmark_path,
             "test-project",
             trial_build_dir,
-            trial_crs_config_dir,
             trial_registry_dir,
         )
 
@@ -110,7 +112,7 @@ class TestCRSPatchExecutor(unittest.TestCase):
         # Check command structure
         self.assertEqual(cmd[0], "oss-bugfix-crs")
         self.assertEqual(cmd[1], "build")
-        self.assertEqual(cmd[2], str(trial_crs_config_dir))
+        self.assertEqual(cmd[2], "test-crs-registry")  # Registry name from mock
         self.assertEqual(cmd[3], "test-project")
         self.assertIn("--oss-fuzz", cmd)
         self.assertIn("--project-path", cmd)
@@ -134,9 +136,6 @@ class TestCRSPatchExecutor(unittest.TestCase):
         trial_build_dir = Path(self.temp_dir) / "trial-build"
         trial_build_dir.mkdir()
 
-        trial_crs_config_dir = Path(self.temp_dir) / "trial-crs-config"
-        trial_crs_config_dir.mkdir()
-
         trial_registry_dir = Path(self.temp_dir) / "trial-registry"
         trial_registry_dir.mkdir()
 
@@ -145,7 +144,6 @@ class TestCRSPatchExecutor(unittest.TestCase):
             benchmark_path,
             "test-project",
             trial_build_dir,
-            trial_crs_config_dir,
             trial_registry_dir,
         )
 
