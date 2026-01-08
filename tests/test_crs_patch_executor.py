@@ -110,11 +110,13 @@ class TestCRSPatchExecutor(unittest.TestCase):
         # Check command structure
         self.assertEqual(cmd[0], "oss-bugfix-crs")
         self.assertEqual(cmd[1], "build")
-        self.assertEqual(cmd[2], "test-crs")
+        self.assertEqual(cmd[2], str(trial_crs_config_dir))
         self.assertEqual(cmd[3], "test-project")
         self.assertIn("--oss-fuzz", cmd)
         self.assertIn("--project-path", cmd)
         self.assertIn("--source-path", cmd)
+        self.assertIn("--registry", cmd)
+        self.assertIn("--work-dir", cmd)
 
         # Verify project is cached
         self.assertIn("test-crs:test-project", self.executor.built_projects)
