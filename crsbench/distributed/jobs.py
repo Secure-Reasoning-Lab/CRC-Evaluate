@@ -174,7 +174,7 @@ def run_crs_trial(
     harness_name: str,
     harness_path: str,
     trial_num: int,
-    config: ExperimentConfig,
+    config_dict: Dict[str, Any],
     mode: str,
 ) -> TrialResult:
     """
@@ -193,7 +193,7 @@ def run_crs_trial(
         harness_name: Harness name to run
         harness_path: Path to harness file
         trial_num: Trial number (1-indexed) for this execution
-        config: Experiment configuration
+        config_dict: Experiment configuration as dict (deserialized by RQ)
         mode: Evaluation mode ('delta', 'full', or 'all')
 
     Returns:
@@ -206,10 +206,14 @@ def run_crs_trial(
         ...     max_total_time=3600
         ... )
         >>> result = run_crs_trial(
-        ...     'test-crs', 'test-benchmark', 'fuzz_test', '/src/fuzz_test.c', 1, config, 'delta'
+        ...     'test-crs', 'test-benchmark', 'fuzz_test', '/src/fuzz_test.c', 1,
+        ...     config.model_dump(), 'delta'
         ... )
         >>> assert result.povs_found >= 0
     """
+    # Reconstruct ExperimentConfig from dict - Pydantic will convert strings to Paths
+    config = ExperimentConfig(**config_dict)
+
     logger.info(
         f"[Trial {trial_num}] Starting CRS '{crs}' on benchmark '{benchmark}' harness '{harness_name}'"
     )

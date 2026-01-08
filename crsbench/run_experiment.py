@@ -1117,7 +1117,7 @@ def run_experiment_local(
             harness_name=bh.harness.name,
             harness_path=bh.harness.path,
             trial_num=trial.trial_num,
-            config=enhanced_config,
+            config_dict=enhanced_config.model_dump(),
             mode=trial.mode,
         )
 
@@ -1654,7 +1654,7 @@ def run_experiment_distributed(
             harness_name=bh.harness.name,
             harness_path=bh.harness.path,
             trial_num=trial.trial_num,
-            config=enhanced_config,
+            config_dict=enhanced_config.model_dump(),
             mode=trial.mode,
             job_timeout=config.max_total_time,
             result_ttl=-1,  # Persist results forever
