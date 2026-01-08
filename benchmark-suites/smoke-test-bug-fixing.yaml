@@ -3,7 +3,6 @@ Description: A benchmark suite for smoke testing bug fixing
 Release date: 01.07.2026
 benchmark_list:
   - afc-curl-delta-01
-  - afc-dav1d-full-01
   - afc-freerdp-delta-01
   - afc-lcms-full-01
   - afc-libavif-delta-02
