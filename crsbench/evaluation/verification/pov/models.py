@@ -19,7 +19,7 @@ from crsbench.evaluation.verification.models import PovVerificationStatus
 class POVEntry(BaseModel):
     """Metadata for a single POV file."""
 
-    hash: str = Field(description="SHA256 hash (first 12 hex chars) of POV content")
+    hash: str = Field(description="SHA256 hash (first 16 hex chars) of POV content")
     first_seen_ts: float = Field(description="Timestamp when POV was first discovered")
     file_size: int = Field(description="Size of POV file in bytes")
     status: PovVerificationStatus = Field(description="Verification outcome")
@@ -91,21 +91,8 @@ class POVVerificationReport(BaseModel):
     )
 
     def to_dict(self) -> dict:
-        """Convert report to dictionary for JSON serialization."""
-        return {
-            "benchmark_id": self.benchmark_id,
-            "harness_name": self.harness_name,
-            "total_expected_cpvs": self.total_expected_cpvs,
-            "cpvs_found": self.cpvs_found,
-            "cpvs_remaining": self.cpvs_remaining,
-            "total_povs_processed": self.total_povs_processed,
-            "duplicates_skipped": self.duplicates_skipped,
-            "zerodays_detected": self.zerodays_detected,
-            "verification_errors": self.verification_errors,
-            "verification_timeouts": self.verification_timeouts,
-            "early_stopped": self.early_stopped,
-            "early_stop_time": (
-                self.early_stop_time.isoformat() if self.early_stop_time else None
-            ),
-            "total_duration_seconds": self.total_duration_seconds,
-        }
+        """Convert report to dictionary for JSON serialization.
+
+        Uses Pydantic's model_dump with JSON mode for proper datetime handling.
+        """
+        return self.model_dump(mode="json")

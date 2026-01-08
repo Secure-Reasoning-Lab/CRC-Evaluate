@@ -58,7 +58,7 @@ class TestPOVStoreAddPov:
         )
 
         assert is_new is True
-        assert len(pov_hash) == 12
+        assert len(pov_hash) == 16
         assert pov_hash in store.povs
         assert store.povs[pov_hash].status == PovVerificationStatus.CPV
         assert store.povs[pov_hash].cpv_matched == ["cpv_0"]

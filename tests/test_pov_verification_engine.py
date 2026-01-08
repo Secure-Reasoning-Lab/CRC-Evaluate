@@ -36,8 +36,8 @@ class TestSkipHashesFiltering:
         hash1 = compute_content_hash(pov1)
         hash2 = compute_content_hash(pov2)
 
-        assert len(hash1) == 12
-        assert len(hash2) == 12
+        assert len(hash1) == 16
+        assert len(hash2) == 16
         assert hash1 != hash2
 
     def test_duplicate_content_same_hash(self, pov_dir: Path) -> None:

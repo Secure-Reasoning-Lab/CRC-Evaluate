@@ -34,7 +34,7 @@ class POVStore:
         store_dir/
         ├── pov_store.json               # Hash-to-POV mapping, CPV matches
         ├── povs_unique/                 # Deduplicated POV files
-        │   └── {hash}.blob              # Named by 12-char SHA256 hash
+        │   └── {hash}.blob              # Named by 16-char SHA256 hash
         ├── crash_logs/                  # Crash logs for verified POVs
         │   └── {hash}.log               # Named by POV hash
         └── snapshots/                   # Per-snapshot summaries
@@ -79,6 +79,7 @@ class POVStore:
         verification_duration: float = 0.0,
         *,
         timestamp: Optional[float] = None,
+        pov_hash: Optional[str] = None,
     ) -> tuple[str, bool]:
         """Add a POV with its verification result.
 
@@ -88,13 +89,15 @@ class POVStore:
             cpv_matched: List of CPV identifiers matched
             verification_duration: Time taken to verify (seconds)
             timestamp: Optional timestamp for first_seen_ts (defaults to now)
+            pov_hash: Optional pre-computed hash (avoids recomputation)
 
         Returns:
             Tuple of (hash, is_new) where:
-                - hash: 12-character hex SHA256 hash of POV content
+                - hash: 16-character hex SHA256 hash of POV content
                 - is_new: True if this POV was not previously seen
         """
-        pov_hash = compute_content_hash(pov_path)
+        if pov_hash is None:
+            pov_hash = compute_content_hash(pov_path)
         file_size = pov_path.stat().st_size if pov_path.exists() else 0
         ts = timestamp if timestamp is not None else time.time()
 
@@ -225,9 +228,26 @@ class POVStore:
         Returns:
             True if the POV hash is already in the store
         """
+        _, is_tested = self.check_pov_hash(pov_path)
+        return is_tested
+
+    def check_pov_hash(self, pov_path: Path) -> tuple[str, bool]:
+        """Compute hash and check if POV has already been tested.
+
+        This method combines hash computation with the existence check
+        to avoid computing the hash twice.
+
+        Args:
+            pov_path: Path to the POV file
+
+        Returns:
+            Tuple of (pov_hash, is_already_tested) where:
+                - pov_hash: Content hash of the POV file
+                - is_already_tested: True if POV is already in store
+        """
         pov_hash = compute_content_hash(pov_path)
         with self._lock:
-            return pov_hash in self.povs
+            return pov_hash, pov_hash in self.povs
 
     def get_stats(self) -> dict:
         """Get store statistics.

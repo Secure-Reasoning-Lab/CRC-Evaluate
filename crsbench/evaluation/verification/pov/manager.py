@@ -159,30 +159,35 @@ class POVVerificationManager:
         all_cpv_ids = [f"cpv_{i}" for i in range(self.total_expected_cpvs)]
         return [cpv for cpv in all_cpv_ids if cpv not in self.found_cpvs]
 
-    def _discover_new_povs(self) -> list[Path]:
+    def _discover_new_povs(self) -> list[tuple[Path, str]]:
         """Discover new POV files in the output directory.
 
         POV files can have various formats:
         - No extension (hex hash like '47107064ecc2b03b')
         - .blob, .bin, .pov extensions
 
-        Excludes hidden files (starting with '.') and directories.
+        Excludes hidden files (starting with '.'), directories, and symlinks.
 
         Returns:
-            List of paths to new POV files (not yet tested)
+            List of (path, hash) tuples for new POV files not yet tested
         """
         if not self.pov_output_dir.exists():
             return []
 
-        # Match all files, exclude hidden files and directories
+        # Match all files, exclude hidden files, directories, and symlinks
         pov_files = [
             f
             for f in self.pov_output_dir.glob("*")
-            if f.is_file() and not f.name.startswith(".")
+            if f.is_file() and not f.name.startswith(".") and not f.is_symlink()
         ]
 
-        # Filter out already tested POVs
-        return [p for p in pov_files if not self.store.is_already_tested(p)]
+        # Filter out already tested POVs and return with hashes
+        new_povs = []
+        for pov_path in pov_files:
+            pov_hash, is_tested = self.store.check_pov_hash(pov_path)
+            if not is_tested:
+                new_povs.append((pov_path, pov_hash))
+        return new_povs
 
     def _verify_pov(self, pov_path: Path) -> Optional[PovVerificationResult]:
         """Verify a single POV against ground truth CPVs.
@@ -220,24 +225,31 @@ class POVVerificationManager:
             return None
 
     def _update_state(
-        self, pov_path: Path, result: Optional[PovVerificationResult]
+        self,
+        pov_path: Path,
+        result: Optional[PovVerificationResult],
+        *,
+        pov_hash: Optional[str] = None,
     ) -> None:
         """Update state after POV verification.
 
         Args:
             pov_path: Path to the verified POV
             result: Verification result (None if verification failed)
+            pov_hash: Optional pre-computed hash (avoids recomputation)
         """
         if result is None:
             # Verification failed
-            self.store.add_pov(pov_path, PovVerificationStatus.ERROR, [])
+            self.store.add_pov(
+                pov_path, PovVerificationStatus.ERROR, [], pov_hash=pov_hash
+            )
             with self._lock:
                 self._errors_count += 1
             logger.warning(f"POV verification error: pov={pov_path.name}")
             return
 
         # Add to store with the verification status directly (no mapping needed)
-        self.store.add_pov(pov_path, result.status, result.cpv_matched)
+        self.store.add_pov(pov_path, result.status, result.cpv_matched, pov_hash=pov_hash)
 
         # Update counters based on result
         if result.status == PovVerificationStatus.CPV:
@@ -286,21 +298,13 @@ class POVVerificationManager:
         timestamp = time.time()
         elapsed_time = timestamp - self.trial_start_time
 
-        # Discover and verify new POVs
+        # Discover and verify new POVs (returns tuples of path, hash)
         new_povs = self._discover_new_povs()
         povs_new = 0
-        duplicates_skipped = 0
 
-        for pov_path in new_povs:
-            if self.store.is_already_tested(pov_path):
-                duplicates_skipped += 1
-                with self._lock:
-                    self._duplicates_count += 1
-                logger.debug(f"Duplicate skipped: pov={pov_path.name}")
-                continue
-
+        for pov_path, pov_hash in new_povs:
             result = self._verify_pov(pov_path)
-            self._update_state(pov_path, result)
+            self._update_state(pov_path, result, pov_hash=pov_hash)
             povs_new += 1
 
         # Check for early termination
@@ -332,7 +336,7 @@ class POVVerificationManager:
                 cpvs_remaining=cpvs_remaining,
                 povs_total=len(self.store.povs),
                 povs_new=povs_new,
-                duplicates_skipped=duplicates_skipped,
+                duplicates_skipped=0,  # Duplicates filtered in _discover_new_povs
                 zerodays_count=self._zerodays_count,
                 early_stop_triggered=self._early_stop_triggered,
             )
