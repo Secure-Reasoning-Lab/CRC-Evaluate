@@ -684,7 +684,7 @@ class PatchVerificationEngine:
         pov_data = pov_path.read_bytes()
         logger.debug(f"Running POV: {pov_name} against {variant_name}/{harness}")
 
-        crashed = self.infra.reproduce(
+        output = self.infra.reproduce(
             project_name=variant_name,
             harness=harness,
             pov_data=pov_data,
@@ -692,7 +692,7 @@ class PatchVerificationEngine:
             pov_id=pov_name,
         )
 
-        passed = not crashed
+        passed = not output.crashed
         if not passed:
             logger.debug(f"  ✗ {pov_name}: POV still triggers crash")
         else:

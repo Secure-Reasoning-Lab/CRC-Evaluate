@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from crsbench.builder.types import BuildConfig
+from crsbench.builder.types import BuildConfig, ReproduceOutput
 from crsbench.utils.docker import fix_docker_ownership
 from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import clone_or_copy_cached_repo
@@ -803,7 +803,7 @@ class OSSFuzzInfrastructure:
         timeout: int = 120,
         request_id: Optional[int] = None,
         pov_id: Optional[str] = None,
-    ) -> bool:
+    ) -> "ReproduceOutput":
         """Reproduce a crash using OSS-Fuzz helper.py.
 
         Uses --propagate_exit_codes to get explicit exit codes:
@@ -821,8 +821,10 @@ class OSSFuzzInfrastructure:
             pov_id: Optional POV identifier for logging
 
         Returns:
-            True if the POV causes a crash, False otherwise
+            ReproduceOutput with crashed status and stdout/stderr
         """
+        from crsbench.builder.types import ReproduceOutput
+
         # Write POV data to temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".bin") as f:
             f.write(pov_data)
@@ -863,30 +865,36 @@ class OSSFuzzInfrastructure:
                 logger.info(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} did not crash"
                 )
-                return False
+                return ReproduceOutput(
+                    crashed=False, stdout=result.stdout, stderr=result.stderr
+                )
             if result.returncode == EXIT_CODE_TIMEOUT:
                 logger.info(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} "
                     "timed out (exit code 124)"
                 )
-                return False
+                return ReproduceOutput(
+                    crashed=False, stdout=result.stdout, stderr=result.stderr
+                )
             logger.info(
                 f"{req_prefix}{pov_prefix}{project_name}/{harness} crashed "
                 f"(exit code {result.returncode})"
             )
-            return True
+            return ReproduceOutput(
+                crashed=True, stdout=result.stdout, stderr=result.stderr
+            )
 
         except subprocess.TimeoutExpired:
             # Our subprocess timeout (shouldn't happen with grace period)
             logger.warning(
                 f"{req_prefix}Subprocess timeout for {project_name}/{harness}"
             )
-            return False
+            return ReproduceOutput(crashed=False)
         except Exception as e:
             logger.error(
                 f"{req_prefix}Reproduce error for {project_name}/{harness}: {e}"
             )
-            return False
+            return ReproduceOutput(crashed=False)
         finally:
             # Clean up temporary file
             testcase_path.unlink(missing_ok=True)

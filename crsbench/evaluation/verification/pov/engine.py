@@ -62,6 +62,7 @@ class ReproduceResult:
     variant_type: VariantType
     cpv_num: Optional[int]
     crashed: bool
+    crash_log: str = ""
 
 
 class VerificationEngine:
@@ -114,9 +115,9 @@ class VerificationEngine:
             task: ReproduceTask with POV and variant info
 
         Returns:
-            ReproduceResult with crash status
+            ReproduceResult with crash status and crash log
         """
-        crashed = self.builder.infra.reproduce(
+        output = self.builder.infra.reproduce(
             project_name=task.variant_name,
             harness=task.harness,
             pov_data=task.pov_data,
@@ -129,7 +130,8 @@ class VerificationEngine:
             variant_name=task.variant_name,
             variant_type=task.variant_type,
             cpv_num=task.cpv_num,
-            crashed=crashed,
+            crashed=output.crashed,
+            crash_log=output.stdout if output.crashed else "",
         )
 
     def verify_pov(
@@ -182,6 +184,7 @@ class VerificationEngine:
         # Execute reproduce calls in parallel
         crash_results: dict[VariantType, bool] = {}
         cpv_crash_map: dict[int, bool] = {}
+        crash_logs: dict[str, str] = {}  # variant_name -> crash_log
 
         with ThreadPoolExecutor(max_workers=self.verify_workers) as executor:
             futures = {
@@ -198,6 +201,10 @@ class VerificationEngine:
                 else:
                     crash_results[result.variant_type] = result.crashed
 
+                # Collect crash log if crashed
+                if result.crashed and result.crash_log:
+                    crash_logs[result.variant_name] = result.crash_log
+
                 logger.debug(
                     f"{result.variant_name}: {'crashed' if result.crashed else 'ok'}"
                 )
@@ -207,13 +214,19 @@ class VerificationEngine:
         mode = BenchmarkMode.FULL if mode_str == "full" else BenchmarkMode.DELTA
 
         # Resolve verdict
-        return VerdictResolver.resolve(
+        verdict = VerdictResolver.resolve(
             mode=mode,
             crash_results=crash_results,
             cpv_crash_map=cpv_crash_map,
             benchmark_name=adapter.benchmark_name,
             pov_id=request.pov_id,
         )
+
+        # Attach crash logs to result
+        if crash_logs:
+            verdict.crash_info = {"logs": crash_logs}
+
+        return verdict
 
     def verify_povs_parallel(
         self,
@@ -260,9 +273,11 @@ class VerificationEngine:
         )
 
         # Execute all reproduce calls in parallel
+        # Track crash results, cpv crash map, and crash logs per (pov, harness)
         results_by_pov_harness: dict[
-            tuple[str, str], tuple[dict[VariantType, bool], dict[int, bool]]
-        ] = defaultdict(lambda: ({}, {}))
+            tuple[str, str],
+            tuple[dict[VariantType, bool], dict[int, bool], dict[str, str]],
+        ] = defaultdict(lambda: ({}, {}, {}))
 
         start_time = time.time()
         completed = 0
@@ -277,7 +292,7 @@ class VerificationEngine:
             for future in as_completed(futures):
                 result = future.result()
                 key = (result.pov_id, result.harness)
-                crash_results, cpv_crash_map = results_by_pov_harness[key]
+                crash_results, cpv_crash_map, crash_logs = results_by_pov_harness[key]
 
                 if (
                     result.variant_type == VariantType.CPV
@@ -286,6 +301,10 @@ class VerificationEngine:
                     cpv_crash_map[result.cpv_num] = result.crashed
                 else:
                     crash_results[result.variant_type] = result.crashed
+
+                # Collect crash log if crashed
+                if result.crashed and result.crash_log:
+                    crash_logs[result.variant_name] = result.crash_log
 
                 # Progress reporting
                 completed += 1
@@ -309,6 +328,7 @@ class VerificationEngine:
         for (pov_id, _harness), (
             crash_results,
             cpv_crash_map,
+            crash_logs,
         ) in results_by_pov_harness.items():
             verdict = VerdictResolver.resolve(
                 mode=mode,
@@ -317,6 +337,9 @@ class VerificationEngine:
                 benchmark_name=adapter.benchmark_name,
                 pov_id=pov_id,
             )
+            # Attach crash logs to result
+            if crash_logs:
+                verdict.crash_info = {"logs": crash_logs}
             verification_results.append(verdict)
 
         elapsed = time.time() - start_time

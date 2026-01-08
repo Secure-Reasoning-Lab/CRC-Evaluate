@@ -156,32 +156,42 @@ class POVStore:
             logger.debug(f"Stored unique POV: {dest_path}")
         return dest_path
 
-    def store_crash_log(self, pov_hash: str, crash_log: str) -> Path:
-        """Save crash log to crash_logs/{hash}.log.
+    def store_crash_log(
+        self, pov_hash: str, crash_log: str, *, variant_name: Optional[str] = None
+    ) -> Path:
+        """Save crash log to crash_logs/{hash}[-{variant}].log.
 
         Args:
             pov_hash: Hash of the POV content
             crash_log: Crash log content
+            variant_name: Optional variant name for per-variant logs
 
         Returns:
             Path to stored crash log file
         """
-        dest_path = self.store_dir / "crash_logs" / f"{pov_hash}.log"
+        # Include variant name in filename if provided
+        if variant_name:
+            filename = f"{pov_hash}-{variant_name}.log"
+        else:
+            filename = f"{pov_hash}.log"
+
+        dest_path = self.store_dir / "crash_logs" / filename
         dest_path.write_text(crash_log)
 
-        # Update POV entry with crash log path
-        with self._lock:
-            if pov_hash in self.povs:
-                entry = self.povs[pov_hash]
-                self.povs[pov_hash] = POVEntry(
-                    hash=entry.hash,
-                    first_seen_ts=entry.first_seen_ts,
-                    file_size=entry.file_size,
-                    status=entry.status,
-                    cpv_matched=entry.cpv_matched,
-                    crash_log_path=f"crash_logs/{pov_hash}.log",
-                    verification_duration=entry.verification_duration,
-                )
+        # Update POV entry with crash log path (only for main log without variant)
+        if not variant_name:
+            with self._lock:
+                if pov_hash in self.povs:
+                    entry = self.povs[pov_hash]
+                    self.povs[pov_hash] = POVEntry(
+                        hash=entry.hash,
+                        first_seen_ts=entry.first_seen_ts,
+                        file_size=entry.file_size,
+                        status=entry.status,
+                        cpv_matched=entry.cpv_matched,
+                        crash_log_path=f"crash_logs/{filename}",
+                        verification_duration=entry.verification_duration,
+                    )
 
         logger.debug(f"Stored crash log: {dest_path}")
         return dest_path

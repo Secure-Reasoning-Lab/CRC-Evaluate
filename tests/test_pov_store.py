@@ -195,6 +195,43 @@ class TestPOVStoreCrashLog:
         assert entry is not None
         assert entry.crash_log_path == f"crash_logs/{pov_hash}.log"
 
+    def test_store_crash_log_with_variant_name(
+        self, store: POVStore, tmp_path: Path
+    ) -> None:
+        """Test storing crash log with variant name suffix."""
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"test content")
+        pov_hash, _ = store.add_pov(pov, PovVerificationStatus.CPV, ["cpv_0"])
+
+        crash_log = "ASAN: heap-buffer-overflow\n"
+        log_path = store.store_crash_log(pov_hash, crash_log, variant_name="patched")
+
+        assert log_path.exists()
+        assert log_path.name == f"{pov_hash}-patched.log"
+        assert log_path.read_text() == crash_log
+
+    def test_store_crash_log_with_variant_does_not_update_entry(
+        self, store: POVStore, tmp_path: Path
+    ) -> None:
+        """Test that per-variant crash log does not update main POV entry."""
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"test content")
+        pov_hash, _ = store.add_pov(pov, PovVerificationStatus.CPV, ["cpv_0"])
+
+        # Store main crash log first
+        store.store_crash_log(pov_hash, "main crash log")
+        entry = store.get_pov(pov_hash)
+        assert entry is not None
+        main_log_path = entry.crash_log_path
+
+        # Store variant crash log
+        store.store_crash_log(pov_hash, "variant crash log", variant_name="vuln")
+
+        # Main entry should not be changed
+        entry = store.get_pov(pov_hash)
+        assert entry is not None
+        assert entry.crash_log_path == main_log_path
+
 
 class TestPOVStoreQueries:
     """Tests for POVStore query methods."""

@@ -264,7 +264,7 @@ class POVVerificationManager:
             pov_path, result.status, result.cpv_matched, pov_hash=pov_hash
         )
 
-        # Store POV file and crash log for successful verifications (CPV or ZERODAY)
+        # Store POV file and crash logs for successful verifications (CPV or ZERODAY)
         if result.status in (
             PovVerificationStatus.CPV,
             PovVerificationStatus.ZERODAY,
@@ -272,9 +272,13 @@ class POVVerificationManager:
             # Copy POV file to povs_unique/
             self.store.store_unique_pov(pov_path, pov_hash)
 
-            # Store crash log if available
-            if result.crash_info and "log" in result.crash_info:
-                self.store.store_crash_log(pov_hash, result.crash_info["log"])
+            # Store per-variant crash logs if available
+            if result.crash_info and "logs" in result.crash_info:
+                crash_logs = result.crash_info["logs"]
+                for variant_name, crash_log in crash_logs.items():
+                    self.store.store_crash_log(
+                        pov_hash, crash_log, variant_name=variant_name
+                    )
 
         # Update counters based on result
         if result.status == PovVerificationStatus.CPV:
