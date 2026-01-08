@@ -17,6 +17,7 @@ from crsbench.evaluation.results import CRSType, TrialMetadata, TrialResult
 from crsbench.evaluation.runner import BenchmarkRunner
 from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.logger import get_logger
+from crsbench.validation.schemas import ExperimentConfig
 
 logger = get_logger(__name__)
 
@@ -173,7 +174,7 @@ def run_crs_trial(
     harness_name: str,
     harness_path: str,
     trial_num: int,
-    config: Dict[str, Any],
+    config: ExperimentConfig,
     mode: str,
 ) -> TrialResult:
     """
@@ -192,17 +193,18 @@ def run_crs_trial(
         harness_name: Harness name to run
         harness_path: Path to harness file
         trial_num: Trial number (1-indexed) for this execution
-        config: Experiment configuration dictionary
+        config: Experiment configuration
         mode: Evaluation mode ('delta', 'full', or 'all')
 
     Returns:
         TrialResult: Trial results including POVs found, success rate, and metadata
 
     Example:
-        >>> config = {
-        ...     'experiment_filestore': '/tmp/exp',
-        ...     'max_total_time': 3600
-        ... }
+        >>> from crsbench.validation.schemas import ExperimentConfig
+        >>> config = ExperimentConfig(
+        ...     experiment_filestore='/tmp/exp',
+        ...     max_total_time=3600
+        ... )
         >>> result = run_crs_trial(
         ...     'test-crs', 'test-benchmark', 'fuzz_test', '/src/fuzz_test.c', 1, config, 'delta'
         ... )
@@ -234,7 +236,7 @@ def run_crs_trial(
 
     try:
         # Get snapshot configuration
-        snapshot_period = config.get("snapshot_period")
+        snapshot_period = config.snapshot_period
 
         # Get allocated_cpus from job metadata
         allocated_cpus = None
@@ -253,16 +255,16 @@ def run_crs_trial(
         # Get required paths from config or use defaults
         # Resolve to absolute paths to avoid issues with relative paths
         oss_fuzz_path = Path(
-            config.get("oss_fuzz_path") or (Path.cwd() / "oss-fuzz")
+            config.oss_fuzz_path or (Path.cwd() / "oss-fuzz")
         ).resolve()
         registry_dir = Path(
-            config.get("registry_dir") or (Path.cwd() / "crses" / "registry")
+            config.registry_dir or (Path.cwd() / "crses" / "registry")
         ).resolve()
         benchmarks_root = Path(
-            config.get("benchmarks_root") or (Path.cwd() / "benchmarks")
+            config.benchmarks_root or (Path.cwd() / "benchmarks")
         ).resolve()
         crs_configs_dir = Path(
-            config.get("crs_configs_dir") or (Path.cwd() / "crses" / "configs")
+            config.crs_configs_dir or (Path.cwd() / "crses" / "configs")
         ).resolve()
 
         # Resolve CRS config name to registry name
@@ -285,7 +287,7 @@ def run_crs_trial(
                 registry_dir=registry_dir,
                 benchmarks_root=benchmarks_root,
                 crs_configs_dir=crs_configs_dir,
-                litellm_mode=config.get("litellm_mode", "passthrough"),
+                litellm_mode=config.litellm_mode or "passthrough",
             )
         else:
             # Bug finding CRS
@@ -295,29 +297,29 @@ def run_crs_trial(
                 registry_dir=registry_dir,
                 benchmarks_root=benchmarks_root,
                 crs_configs_dir=crs_configs_dir,
-                litellm_mode=config.get("litellm_mode", "passthrough"),
+                litellm_mode=config.litellm_mode or "passthrough",
             )
 
         # Configure executor
         crs_executor.configure_crs(
             {
-                "build_timeout": config.get("build_timeout", 3600),
-                "run_timeout": config.get("max_total_time", 7200),
-                "hints_enabled": config.get("hints_enabled", False),
-                "hint_sarif_level": config.get("hint_sarif_level"),
-                "hint_corpus_level": config.get("hint_corpus_level"),
-                "project_image_prefix": config.get("project_image_prefix", "aixcc-afc"),
+                "build_timeout": 3600,  # Default build timeout
+                "run_timeout": config.max_total_time or 7200,
+                "hints_enabled": config.hints_enabled or False,
+                "hint_sarif_level": config.hint_sarif_level,
+                "hint_corpus_level": config.hint_corpus_level,
+                "project_image_prefix": config.project_image_prefix or "aixcc-afc",
                 "mode": mode,
                 "allocated_cpus": allocated_cpus,
             }
         )
 
         # Initialize benchmark runner with CRS executor and snapshot configuration
-        coverage_enabled = config.get("coverage_enabled", False)
-        coverage_saturation_time = config.get("coverage_saturation_time", 21600)
-        coverage_early_stop = config.get("coverage_early_stop", False)
+        coverage_enabled = config.coverage_enabled or False
+        coverage_saturation_time = config.coverage_saturation_time or 21600
+        coverage_early_stop = config.coverage_early_stop or False
         # Handle None from config (when key exists but value is None)
-        oss_fuzz_path_str = config.get("oss_fuzz_path") or "oss-fuzz"
+        oss_fuzz_path_str = config.oss_fuzz_path or "oss-fuzz"
         oss_fuzz_path = Path(oss_fuzz_path_str)
         logger.debug(
             f"Coverage config: enabled={coverage_enabled}, "
@@ -358,9 +360,9 @@ def run_crs_trial(
 
         # Create trial output directory with harness-specific structure
         experiment_filestore = Path(
-            config.get("experiment_filestore", "/tmp/experiments")
+            config.experiment_filestore or "/tmp/experiments"
         ).resolve()
-        experiment_name = config.get("experiment", "unknown")
+        experiment_name = config.experiment or "unknown"
         # TODO: decide a better orgnization
         trial_output_dir = (
             experiment_filestore
@@ -382,16 +384,16 @@ def run_crs_trial(
             crs_config={},  # Empty config - executor already configured # TODO: needed?
             trial_output_dir=trial_output_dir,
             oss_fuzz_path=oss_fuzz_path,
-            skip_verification=config.get("skip_verification", False),
+            skip_verification=config.skip_verification or False,
         )
 
         execution_time = time.time() - start_time
 
         # Create trial metadata
         metadata = TrialMetadata(
-            experiment_filestore=config.get("experiment_filestore"),
-            max_total_time=config.get("max_total_time"),
-            difficulty_level=config.get("difficulty_level"),
+            experiment_filestore=config.experiment_filestore,
+            max_total_time=config.max_total_time,
+            difficulty_level=config.difficulty_level,
             timestamp_start=start_time,
             timestamp_end=time.time(),
         )
@@ -516,7 +518,7 @@ def evaluate_crs_trial(trial_id: str, trial_data: Dict[str, Any]) -> Dict[str, A
         }
 
 
-def _resolve_benchmark_path(benchmark: str, config: Dict[str, Any]) -> Path:
+def _resolve_benchmark_path(benchmark: str, config: ExperimentConfig) -> Path:
     """
     Resolve benchmark identifier to filesystem path.
 
@@ -525,7 +527,7 @@ def _resolve_benchmark_path(benchmark: str, config: Dict[str, Any]) -> Path:
 
     Args:
         benchmark: Benchmark identifier or absolute path
-        config: Experiment configuration (may contain benchmarks root)
+        config: Experiment configuration
 
     Returns:
         Path: Resolved benchmark directory path
@@ -534,10 +536,12 @@ def _resolve_benchmark_path(benchmark: str, config: Dict[str, Any]) -> Path:
         FileNotFoundError: If benchmark cannot be found
 
     Example:
-        >>> path = _resolve_benchmark_path('/abs/path/to/bench', {})
+        >>> from crsbench.validation.schemas import ExperimentConfig
+        >>> config = ExperimentConfig()
+        >>> path = _resolve_benchmark_path('/abs/path/to/bench', config)
         >>> assert path.exists()
 
-        >>> path = _resolve_benchmark_path('test-benchmark', {})
+        >>> path = _resolve_benchmark_path('test-benchmark', config)
         >>> assert path.name == 'test-benchmark'
     """
     # If it's already an absolute path and exists, use it
@@ -547,7 +551,7 @@ def _resolve_benchmark_path(benchmark: str, config: Dict[str, Any]) -> Path:
         return benchmark_path
 
     # Try to get benchmarks root from config
-    benchmarks_root = config.get("benchmarks_root")
+    benchmarks_root = config.benchmarks_root
     if benchmarks_root:
         benchmark_path = Path(benchmarks_root) / benchmark
         if benchmark_path.exists():

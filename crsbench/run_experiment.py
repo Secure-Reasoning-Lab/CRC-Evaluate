@@ -24,7 +24,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import List
 
 import yaml
 from dotenv import load_dotenv
@@ -39,7 +39,7 @@ from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.logger import configure_logger, get_logger
 from crsbench.utils.workers import resolve_build_workers
 from crsbench.validation.meta_adapter import MetaYamlAdapter
-from crsbench.validation.schemas import BenchmarkHarness
+from crsbench.validation.schemas import BenchmarkHarness, ExperimentConfig
 
 # Load environment variables from .env file if present
 load_dotenv()
@@ -403,7 +403,7 @@ def parse_list_argument(arg_value: str) -> List[str]:
     return [item.strip() for item in arg_value.split(",") if item.strip()]
 
 
-def load_experiment_config(config_path: Path):
+def load_experiment_config(config_path: Path) -> ExperimentConfig:
     """Load and validate experiment configuration from YAML file.
 
     Args:
@@ -416,7 +416,6 @@ def load_experiment_config(config_path: Path):
         SystemExit: If configuration is invalid
     """
     from crsbench.validation import validate_experiment_config
-    from crsbench.validation.schemas import ExperimentConfig
 
     # Validate the configuration file
     result = validate_experiment_config(config_path)
@@ -960,82 +959,83 @@ def should_use_distributed_mode(
 
 
 def enhance_config_with_cli_args(
-    config_dict: Dict[str, Any], args: argparse.Namespace
-) -> Dict[str, Any]:
-    """Enhance config dictionary with CLI arguments (highest precedence).
+    config: ExperimentConfig, args: argparse.Namespace
+) -> ExperimentConfig:
+    """Enhance config with CLI arguments (highest precedence).
 
     CLI arguments override config file values.
 
     Args:
-        config_dict: Config dictionary from config file
+        config: Experiment configuration
         args: Parsed CLI arguments
 
     Returns:
-        Enhanced config dictionary
+        Enhanced experiment configuration
     """
-    enhanced = config_dict.copy()
+    # Collect overrides
+    overrides = {}
 
     # Override with CLI arguments (highest precedence)
     if args.oss_fuzz_path:
-        enhanced["oss_fuzz_path"] = args.oss_fuzz_path
+        overrides["oss_fuzz_path"] = args.oss_fuzz_path
         logger.info(f"Using oss-fuzz path from CLI: {args.oss_fuzz_path}")
 
     if args.registry_dir:
-        enhanced["registry_dir"] = args.registry_dir
+        overrides["registry_dir"] = args.registry_dir
         logger.info(f"Using registry directory from CLI: {args.registry_dir}")
 
     if args.crs_configs_dir:
-        enhanced["crs_configs_dir"] = args.crs_configs_dir
+        overrides["crs_configs_dir"] = args.crs_configs_dir
         logger.info(f"Using CRS configs directory from CLI: {args.crs_configs_dir}")
 
     if args.benchmarks_root:
-        enhanced["benchmarks_root"] = args.benchmarks_root
+        overrides["benchmarks_root"] = args.benchmarks_root
         logger.info(f"Using benchmarks root from CLI: {args.benchmarks_root}")
 
     # Mode override
     if hasattr(args, "mode") and args.mode is not None:
-        enhanced["mode"] = args.mode
+        overrides["mode"] = args.mode
         logger.info(f"Using evaluation mode from CLI: {args.mode}")
 
     # Hint configuration overrides
     if args.hints_enabled:
-        enhanced["hints_enabled"] = True
+        overrides["hints_enabled"] = True
         logger.info("Hints enabled via CLI")
 
     if args.hint_sarif_level is not None:
-        enhanced["hint_sarif_level"] = args.hint_sarif_level
+        overrides["hint_sarif_level"] = args.hint_sarif_level
         logger.info(f"Using SARIF hint level from CLI: {args.hint_sarif_level}")
 
     if args.hint_corpus_level is not None:
-        enhanced["hint_corpus_level"] = args.hint_corpus_level
+        overrides["hint_corpus_level"] = args.hint_corpus_level
         logger.info(f"Using corpus hint level from CLI: {args.hint_corpus_level}")
 
     # LiteLLM mode override
     if args.litellm_mode is not None:
-        enhanced["litellm_mode"] = args.litellm_mode
+        overrides["litellm_mode"] = args.litellm_mode
         logger.info(f"Using LiteLLM mode from CLI: {args.litellm_mode}")
 
     # Project image prefix override
     if args.project_image_prefix is not None:
-        enhanced["project_image_prefix"] = args.project_image_prefix
+        overrides["project_image_prefix"] = args.project_image_prefix
         logger.info(f"Using project image prefix from CLI: {args.project_image_prefix}")
 
     # Build workers override
     if hasattr(args, "build_workers") and args.build_workers is not None:
-        enhanced["build_workers"] = args.build_workers
+        overrides["build_workers"] = args.build_workers
         logger.info(f"Using build_workers from CLI: {args.build_workers}")
 
     # Verify workers override
     if hasattr(args, "verify_workers") and args.verify_workers is not None:
-        enhanced["verify_workers"] = args.verify_workers
+        overrides["verify_workers"] = args.verify_workers
         logger.info(f"Using verify_workers from CLI: {args.verify_workers}")
 
     # only_cpv_harnesses override
     if hasattr(args, "only_cpv_harnesses") and args.only_cpv_harnesses:
-        enhanced["only_cpv_harnesses"] = True
+        overrides["only_cpv_harnesses"] = True
         logger.info("Using only_cpv_harnesses=True from CLI")
 
-    return enhanced
+    return config.model_copy(update=overrides)
 
 
 def run_experiment_local(
@@ -1109,7 +1109,7 @@ def run_experiment_local(
         from crsbench.distributed.jobs import run_crs_trial
 
         # Enhance config with CLI arguments (highest precedence)
-        enhanced_config = enhance_config_with_cli_args(config.to_dict(), args)
+        enhanced_config = enhance_config_with_cli_args(config, args)
 
         result = run_crs_trial(
             crs=trial.crs,
@@ -1491,7 +1491,7 @@ def get_crs_cpu_count(crs_name: str, crs_configs_dir: Path) -> int:
 
 def run_experiment_distributed(
     experiment_name: str,
-    config,
+    config: ExperimentConfig,
     benchmark_harnesses: List[BenchmarkHarness],
     crses: List[str],
     args: argparse.Namespace,
@@ -1508,6 +1508,11 @@ def run_experiment_distributed(
     from crsbench.distributed.queue import initialize_queue
 
     log_section("Running CRSBench in Distributed Mode (Redis)", width=60)
+
+    # Validate redis_host is provided
+    if not config.redis_host:
+        raise ValueError("redis_host is required for distributed mode")
+
     logger.info(f"Redis host: {config.redis_host}")
 
     # Mark this process as orchestrator for logging
@@ -1628,7 +1633,7 @@ def run_experiment_distributed(
     logger.info("\nEnqueuing jobs...")
 
     # Enhance config with CLI arguments (highest precedence)
-    enhanced_config = enhance_config_with_cli_args(config.to_dict(), args)
+    enhanced_config = enhance_config_with_cli_args(config, args)
 
     # Get CPU counts for each CRS from resource configs
     # Note: crs_configs_dir already resolved at line 1490
