@@ -21,8 +21,11 @@ class TestPOVStoreInit:
         POVStore(store_dir)
 
         assert store_dir.exists()
-        assert (store_dir / "povs_unique").exists()
-        assert (store_dir / "crash_logs").exists()
+        assert (store_dir / "cpvs").exists()
+        assert (store_dir / "zerodays" / "blobs").exists()
+        assert (store_dir / "zerodays" / "crash_logs").exists()
+        assert (store_dir / "unintended" / "blobs").exists()
+        assert (store_dir / "unintended" / "crash_logs").exists()
         assert (store_dir / "snapshots").exists()
 
     def test_initial_state_empty(self, tmp_path: Path) -> None:
@@ -136,17 +139,35 @@ class TestPOVStoreUniquePov:
         """Create a store instance."""
         return POVStore(tmp_path / "povs")
 
-    def test_store_unique_pov(self, store: POVStore, tmp_path: Path) -> None:
-        """Test storing unique POV file."""
+    def test_store_unique_pov_cpv(self, store: POVStore, tmp_path: Path) -> None:
+        """Test storing unique POV file for CPV status."""
         pov = tmp_path / "test.pov"
         pov.write_bytes(b"test content")
         pov_hash = compute_content_hash(pov)
 
-        stored_path = store.store_unique_pov(pov, pov_hash)
+        stored_path = store.store_unique_pov(
+            pov, pov_hash, PovVerificationStatus.CPV, ["cpv_0"]
+        )
 
         assert stored_path.exists()
         assert stored_path.name == f"{pov_hash}.blob"
         assert stored_path.read_bytes() == b"test content"
+        # Should be under cpvs/cpv_0/blobs/
+        assert "cpvs" in str(stored_path)
+        assert "cpv_0" in str(stored_path)
+
+    def test_store_unique_pov_zeroday(self, store: POVStore, tmp_path: Path) -> None:
+        """Test storing unique POV file for ZERODAY status."""
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"zeroday content")
+        pov_hash = compute_content_hash(pov)
+
+        stored_path = store.store_unique_pov(
+            pov, pov_hash, PovVerificationStatus.ZERODAY, []
+        )
+
+        assert stored_path.exists()
+        assert "zerodays" in str(stored_path)
 
     def test_store_unique_pov_idempotent(self, store: POVStore, tmp_path: Path) -> None:
         """Test storing same POV twice doesn't duplicate."""
@@ -154,8 +175,12 @@ class TestPOVStoreUniquePov:
         pov.write_bytes(b"test content")
         pov_hash = compute_content_hash(pov)
 
-        path1 = store.store_unique_pov(pov, pov_hash)
-        path2 = store.store_unique_pov(pov, pov_hash)
+        path1 = store.store_unique_pov(
+            pov, pov_hash, PovVerificationStatus.CPV, ["cpv_0"]
+        )
+        path2 = store.store_unique_pov(
+            pov, pov_hash, PovVerificationStatus.CPV, ["cpv_0"]
+        )
 
         assert path1 == path2
 
@@ -168,18 +193,37 @@ class TestPOVStoreCrashLog:
         """Create a store instance."""
         return POVStore(tmp_path / "povs")
 
-    def test_store_crash_log(self, store: POVStore, tmp_path: Path) -> None:
-        """Test storing crash log."""
+    def test_store_crash_log_cpv(self, store: POVStore, tmp_path: Path) -> None:
+        """Test storing crash log for CPV status."""
         pov = tmp_path / "test.pov"
         pov.write_bytes(b"test content")
         pov_hash, _ = store.add_pov(pov, PovVerificationStatus.CPV, ["cpv_0"])
 
         crash_log = "ASAN: heap-buffer-overflow\n"
-        log_path = store.store_crash_log(pov_hash, crash_log)
+        log_path = store.store_crash_log(
+            pov_hash, crash_log, PovVerificationStatus.CPV, ["cpv_0"]
+        )
 
         assert log_path.exists()
         assert log_path.name == f"{pov_hash}.log"
         assert log_path.read_text() == crash_log
+        # Should be under cpvs/cpv_0/crash_logs/
+        assert "cpvs" in str(log_path)
+        assert "cpv_0" in str(log_path)
+
+    def test_store_crash_log_zeroday(self, store: POVStore, tmp_path: Path) -> None:
+        """Test storing crash log for ZERODAY status."""
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"zeroday content")
+        pov_hash, _ = store.add_pov(pov, PovVerificationStatus.ZERODAY, [])
+
+        crash_log = "ASAN: use-after-free\n"
+        log_path = store.store_crash_log(
+            pov_hash, crash_log, PovVerificationStatus.ZERODAY, []
+        )
+
+        assert log_path.exists()
+        assert "zerodays" in str(log_path)
 
     def test_store_crash_log_updates_entry(
         self, store: POVStore, tmp_path: Path
@@ -189,11 +233,13 @@ class TestPOVStoreCrashLog:
         pov.write_bytes(b"test content")
         pov_hash, _ = store.add_pov(pov, PovVerificationStatus.CPV, ["cpv_0"])
 
-        store.store_crash_log(pov_hash, "crash log content")
+        store.store_crash_log(
+            pov_hash, "crash log content", PovVerificationStatus.CPV, ["cpv_0"]
+        )
 
         entry = store.get_pov(pov_hash)
         assert entry is not None
-        assert entry.crash_log_path == f"crash_logs/{pov_hash}.log"
+        assert entry.crash_log_path == f"cpvs/cpv_0/crash_logs/{pov_hash}.log"
 
     def test_store_crash_log_with_variant_name(
         self, store: POVStore, tmp_path: Path
@@ -204,7 +250,13 @@ class TestPOVStoreCrashLog:
         pov_hash, _ = store.add_pov(pov, PovVerificationStatus.CPV, ["cpv_0"])
 
         crash_log = "ASAN: heap-buffer-overflow\n"
-        log_path = store.store_crash_log(pov_hash, crash_log, variant_name="patched")
+        log_path = store.store_crash_log(
+            pov_hash,
+            crash_log,
+            PovVerificationStatus.CPV,
+            ["cpv_0"],
+            variant_name="patched",
+        )
 
         assert log_path.exists()
         assert log_path.name == f"{pov_hash}-patched.log"
@@ -219,13 +271,21 @@ class TestPOVStoreCrashLog:
         pov_hash, _ = store.add_pov(pov, PovVerificationStatus.CPV, ["cpv_0"])
 
         # Store main crash log first
-        store.store_crash_log(pov_hash, "main crash log")
+        store.store_crash_log(
+            pov_hash, "main crash log", PovVerificationStatus.CPV, ["cpv_0"]
+        )
         entry = store.get_pov(pov_hash)
         assert entry is not None
         main_log_path = entry.crash_log_path
 
         # Store variant crash log
-        store.store_crash_log(pov_hash, "variant crash log", variant_name="vuln")
+        store.store_crash_log(
+            pov_hash,
+            "variant crash log",
+            PovVerificationStatus.CPV,
+            ["cpv_0"],
+            variant_name="vuln",
+        )
 
         # Main entry should not be changed
         entry = store.get_pov(pov_hash)

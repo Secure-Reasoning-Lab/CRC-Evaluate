@@ -269,15 +269,21 @@ class POVVerificationManager:
             PovVerificationStatus.CPV,
             PovVerificationStatus.ZERODAY,
         ):
-            # Copy POV file to povs_unique/
-            self.store.store_unique_pov(pov_path, pov_hash)
+            # Copy POV file to category-specific blobs directory
+            self.store.store_unique_pov(
+                pov_path, pov_hash, result.status, result.cpv_matched
+            )
 
             # Store per-variant crash logs if available
             if result.crash_info and "logs" in result.crash_info:
                 crash_logs = result.crash_info["logs"]
                 for variant_name, crash_log in crash_logs.items():
                     self.store.store_crash_log(
-                        pov_hash, crash_log, variant_name=variant_name
+                        pov_hash,
+                        crash_log,
+                        result.status,
+                        result.cpv_matched,
+                        variant_name=variant_name,
                     )
 
         # Update counters based on result

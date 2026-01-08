@@ -33,10 +33,16 @@ class POVStore:
     Directory Structure:
         store_dir/
         ├── pov_store.json               # Hash-to-POV mapping, CPV matches
-        ├── povs_unique/                 # Deduplicated POV files
-        │   └── {hash}.blob              # Named by 16-char SHA256 hash
-        ├── crash_logs/                  # Crash logs for verified POVs
-        │   └── {hash}.log               # Named by POV hash
+        ├── cpvs/                        # Parent dir for CPV-specific POVs
+        │   └── {cpv_id}/                # Per-CPV POV storage
+        │       ├── blobs/{hash}.blob    # POV files that trigger this CPV
+        │       └── crash_logs/{hash}-{variant}.log
+        ├── zerodays/                    # Zero-day POVs (unknown vulnerabilities)
+        │   ├── blobs/{hash}.blob
+        │   └── crash_logs/{hash}-{variant}.log
+        ├── unintended/                  # Unintended crashes (NOT_VULNERABLE)
+        │   ├── blobs/{hash}.blob
+        │   └── crash_logs/{hash}-{variant}.log
         └── snapshots/                   # Per-snapshot summaries
             └── snapshot-{NNN}.json
 
@@ -67,9 +73,40 @@ class POVStore:
     def _create_directories(self) -> None:
         """Create store directory structure."""
         self.store_dir.mkdir(parents=True, exist_ok=True)
-        (self.store_dir / "povs_unique").mkdir(exist_ok=True)
-        (self.store_dir / "crash_logs").mkdir(exist_ok=True)
+        # Create base directories
+        (self.store_dir / "cpvs").mkdir(exist_ok=True)
+        (self.store_dir / "zerodays" / "blobs").mkdir(parents=True, exist_ok=True)
+        (self.store_dir / "zerodays" / "crash_logs").mkdir(exist_ok=True)
+        (self.store_dir / "unintended" / "blobs").mkdir(parents=True, exist_ok=True)
+        (self.store_dir / "unintended" / "crash_logs").mkdir(exist_ok=True)
         (self.store_dir / "snapshots").mkdir(exist_ok=True)
+
+    def _get_category_dir(
+        self, status: PovVerificationStatus, cpv_matched: list[str]
+    ) -> Path:
+        """Get the directory for storing POV files based on status.
+
+        Args:
+            status: Verification status
+            cpv_matched: List of matched CPV IDs (used for CPV status)
+
+        Returns:
+            Path to the category directory (e.g., cpvs/cpv_0, zerodays, unintended)
+        """
+        if status == PovVerificationStatus.CPV and cpv_matched:
+            # Store under first matched CPV
+            cpv_id = cpv_matched[0]
+            cpv_dir = self.store_dir / "cpvs" / cpv_id
+            # Create CPV subdirectories if they don't exist
+            (cpv_dir / "blobs").mkdir(parents=True, exist_ok=True)
+            (cpv_dir / "crash_logs").mkdir(exist_ok=True)
+            return cpv_dir
+
+        if status == PovVerificationStatus.ZERODAY:
+            return self.store_dir / "zerodays"
+
+        # NOT_VULNERABLE, ERROR, or other -> unintended
+        return self.store_dir / "unintended"
 
     def add_pov(
         self,
@@ -140,46 +177,67 @@ class POVStore:
 
             return pov_hash, True
 
-    def store_unique_pov(self, pov_path: Path, pov_hash: str) -> Path:
-        """Copy POV file to povs_unique/{hash}.blob.
+    def store_unique_pov(
+        self,
+        pov_path: Path,
+        pov_hash: str,
+        status: PovVerificationStatus,
+        cpv_matched: list[str],
+    ) -> Path:
+        """Copy POV file to category-specific blobs directory.
 
         Args:
             pov_path: Path to source POV file
             pov_hash: Hash of the POV content
+            status: Verification status (determines category)
+            cpv_matched: List of matched CPV IDs
 
         Returns:
             Path to stored POV file
         """
-        dest_path = self.store_dir / "povs_unique" / f"{pov_hash}.blob"
+        category_dir = self._get_category_dir(status, cpv_matched)
+        dest_path = category_dir / "blobs" / f"{pov_hash}.blob"
         if not dest_path.exists():
             shutil.copy2(pov_path, dest_path)
             logger.debug(f"Stored unique POV: {dest_path}")
         return dest_path
 
     def store_crash_log(
-        self, pov_hash: str, crash_log: str, *, variant_name: Optional[str] = None
+        self,
+        pov_hash: str,
+        crash_log: str,
+        status: PovVerificationStatus,
+        cpv_matched: list[str],
+        *,
+        variant_name: Optional[str] = None,
     ) -> Path:
-        """Save crash log to crash_logs/{hash}[-{variant}].log.
+        """Save crash log to category-specific crash_logs directory.
 
         Args:
             pov_hash: Hash of the POV content
             crash_log: Crash log content
+            status: Verification status (determines category)
+            cpv_matched: List of matched CPV IDs
             variant_name: Optional variant name for per-variant logs
 
         Returns:
             Path to stored crash log file
         """
+        category_dir = self._get_category_dir(status, cpv_matched)
+
         # Include variant name in filename if provided
         if variant_name:
             filename = f"{pov_hash}-{variant_name}.log"
         else:
             filename = f"{pov_hash}.log"
 
-        dest_path = self.store_dir / "crash_logs" / filename
+        dest_path = category_dir / "crash_logs" / filename
         dest_path.write_text(crash_log)
 
         # Update POV entry with crash log path (only for main log without variant)
         if not variant_name:
+            # Compute relative path from store_dir
+            rel_path = dest_path.relative_to(self.store_dir)
             with self._lock:
                 if pov_hash in self.povs:
                     entry = self.povs[pov_hash]
@@ -189,7 +247,7 @@ class POVStore:
                         file_size=entry.file_size,
                         status=entry.status,
                         cpv_matched=entry.cpv_matched,
-                        crash_log_path=f"crash_logs/{filename}",
+                        crash_log_path=str(rel_path),
                         verification_duration=entry.verification_duration,
                     )
 

@@ -256,8 +256,8 @@ class TestVerifyPovMatchesCpv:
         # found_cpvs is derived from store
         assert "cpv_0" in manager.found_cpvs
 
-    def test_cpv_pov_stored_to_povs_unique(self, tmp_path: Path) -> None:
-        """Test that verified CPV POV files are stored to povs_unique/."""
+    def test_cpv_pov_stored_to_cpvs_dir(self, tmp_path: Path) -> None:
+        """Test that verified CPV POV files are stored to cpvs/{cpv_id}/blobs/."""
         from crsbench.evaluation.verification.models import (
             PovVerificationResult,
             PovVerificationStatus,
@@ -299,9 +299,9 @@ class TestVerifyPovMatchesCpv:
         # Update state with the result
         manager._update_state(pov_file, mock_result)
 
-        # Verify POV file was stored to povs_unique/
-        povs_unique_dir = trial_dir / "povs" / "povs_unique"
-        stored_files = list(povs_unique_dir.glob("*.blob"))
+        # Verify POV file was stored to cpvs/cpv_0/blobs/
+        cpv_blobs_dir = trial_dir / "povs" / "cpvs" / "cpv_0" / "blobs"
+        stored_files = list(cpv_blobs_dir.glob("*.blob"))
         assert len(stored_files) == 1
 
         # Verify content matches
