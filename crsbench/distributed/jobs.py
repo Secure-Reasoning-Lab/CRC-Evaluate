@@ -285,7 +285,7 @@ def run_crs_trial(
                 registry_dir=registry_dir,
                 benchmarks_root=benchmarks_root,
                 crs_configs_dir=crs_configs_dir,
-                litellm_mode=config.litellm_mode or "passthrough",
+                litellm_mode=config.litellm_mode,
             )
         else:
             # Bug finding CRS
@@ -295,7 +295,7 @@ def run_crs_trial(
                 registry_dir=registry_dir,
                 benchmarks_root=benchmarks_root,
                 crs_configs_dir=crs_configs_dir,
-                litellm_mode=config.litellm_mode or "passthrough",
+                litellm_mode=config.litellm_mode,
             )
 
         # Configure executor
@@ -356,10 +356,8 @@ def run_crs_trial(
         )
 
         # Create trial output directory with harness-specific structure
-        experiment_filestore = Path(
-            config.experiment_filestore or "/tmp/experiments"
-        ).resolve()
-        experiment_name = config.experiment or "unknown"
+        experiment_filestore = Path(config.experiment_filestore).resolve()
+        experiment_name = config.experiment
         # TODO: decide a better orgnization
         trial_output_dir = (
             experiment_filestore
