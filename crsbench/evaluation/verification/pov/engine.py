@@ -30,6 +30,7 @@ from crsbench.evaluation.verification.models import (
 )
 from crsbench.evaluation.verification.pov.verdict import VerdictResolver
 from crsbench.evaluation.verification.utils import compute_content_hash
+from crsbench.utils import strip_ansi
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -124,6 +125,9 @@ class VerificationEngine:
             timeout=self.timeout,
             pov_id=task.pov_id,
         )
+        # Strip ANSI escape codes from crash log for cleaner storage
+        crash_log = strip_ansi(output.stdout) if output.crashed else ""
+
         return ReproduceResult(
             pov_id=task.pov_id,
             harness=task.harness,
@@ -131,7 +135,7 @@ class VerificationEngine:
             variant_type=task.variant_type,
             cpv_num=task.cpv_num,
             crashed=output.crashed,
-            crash_log=output.stdout if output.crashed else "",
+            crash_log=crash_log,
         )
 
     def verify_pov(
