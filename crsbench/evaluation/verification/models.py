@@ -70,8 +70,12 @@ class PovVerificationResult:
     details: Optional[str] = None
     crash_info: Optional[dict[str, Any]] = None
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert result to dictionary for serialization."""
+    def to_dict(self, *, include_logs: bool = True) -> dict[str, Any]:
+        """Convert result to dictionary for serialization.
+
+        Args:
+            include_logs: If False, omit crash_info.logs to reduce output size
+        """
         result: dict[str, Any] = {
             "status": self.status.value,
             "benchmark": self.benchmark,
@@ -82,7 +86,17 @@ class PovVerificationResult:
         if self.details:
             result["details"] = self.details
         if self.crash_info:
-            result["crash_info"] = self.crash_info
+            if include_logs:
+                result["crash_info"] = self.crash_info
+            else:
+                # Omit logs for summary output
+                crash_info_summary = {
+                    k: v for k, v in self.crash_info.items() if k != "logs"
+                }
+                if "logs" in self.crash_info:
+                    crash_info_summary["logs_count"] = len(self.crash_info["logs"])
+                if crash_info_summary:
+                    result["crash_info"] = crash_info_summary
         return result
 
     @property
