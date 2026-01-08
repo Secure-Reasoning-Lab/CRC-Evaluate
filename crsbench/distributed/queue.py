@@ -128,6 +128,7 @@ def get_all_jobs(queue: "rq.Queue") -> List["rq.job.Job"]:
         return []
 
 
+# TODO: make a pydantic mode for queue stats
 def get_queue_stats(queue: "rq.Queue") -> dict:
     """
     Get statistics about the current queue state.
@@ -212,3 +213,171 @@ def clear_queue(queue: "rq.Queue") -> int:
     except Exception as e:
         logger.error(f"Failed to clear queue: {e}")
         return 0
+
+
+def get_trial_key(job: "rq.job.Job") -> str:
+    """
+    Generate unique trial key from job metadata.
+
+    Args:
+        job: RQ job instance
+
+    Returns:
+        str: Unique trial key in format "crs:benchmark:harness:mode:trial_num"
+
+    Example:
+        >>> key = get_trial_key(job)
+        >>> print(key)  # "atlantis-c:libxml2:fuzz_test:delta:1"
+    """
+    meta = job.meta
+    return f"{meta['crs']}:{meta['benchmark']}:{meta['harness']}:{meta['mode']}:{meta['trial_num']}"
+
+
+def get_existing_trials(queue: "rq.Queue") -> dict[str, dict[str, "rq.job.Job"]]:
+    """
+    Get all existing jobs grouped by status with trial keys.
+
+    Args:
+        queue: RQ queue instance
+
+    Returns:
+        dict: Jobs grouped by status:
+            {
+                "queued": {trial_key: job, ...},
+                "started": {trial_key: job, ...},
+                "finished": {trial_key: job, ...},
+                "failed": {trial_key: job, ...},
+            }
+
+    Example:
+        >>> queue = initialize_queue('localhost', 'test-exp')
+        >>> existing = get_existing_trials(queue)
+        >>> print(f"Queued: {len(existing['queued'])}")
+    """
+    if not REDIS_AVAILABLE:
+        raise RuntimeError("Redis and RQ packages are required")
+
+    result = {
+        "queued": {},
+        "started": {},
+        "finished": {},
+        "failed": {},
+    }
+
+    try:
+        # Get queued jobs
+        for job in get_all_jobs(queue):
+            if job.is_queued:
+                result["queued"][get_trial_key(job)] = job
+
+        # Get started jobs
+        for job_id in queue.started_job_registry.get_job_ids():
+            try:
+                job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
+                if job:
+                    result["started"][get_trial_key(job)] = job
+            except Exception as e:
+                logger.warning(f"Failed to fetch started job {job_id}: {e}")
+
+        # Get finished jobs
+        for job_id in queue.finished_job_registry.get_job_ids():
+            try:
+                job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
+                if job:
+                    result["finished"][get_trial_key(job)] = job
+            except Exception as e:
+                logger.warning(f"Failed to fetch finished job {job_id}: {e}")
+
+        # Get failed jobs
+        for job_id in queue.failed_job_registry.get_job_ids():
+            try:
+                job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
+                if job:
+                    result["failed"][get_trial_key(job)] = job
+            except Exception as e:
+                logger.warning(f"Failed to fetch failed job {job_id}: {e}")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Failed to get existing trials: {e}")
+        return result
+
+
+def requeue_failed_jobs(queue: "rq.Queue", failed_jobs: list["rq.job.Job"]) -> int:
+    """
+    Requeue failed jobs for retry (at end of queue - FIFO).
+
+    Args:
+        queue: RQ queue instance
+        failed_jobs: List of failed Job instances
+
+    Returns:
+        int: Number of jobs requeued
+
+    Example:
+        >>> existing = get_existing_trials(queue)
+        >>> count = requeue_failed_jobs(queue, list(existing['failed'].values()))
+        >>> print(f"Requeued {count} failed jobs")
+    """
+    if not REDIS_AVAILABLE:
+        raise RuntimeError("Redis and RQ packages are required")
+
+    count = 0
+    for job in failed_jobs:
+        try:
+            queue.enqueue_job(job)
+            count += 1
+            logger.debug(f"Requeued failed job {job.id[:8]}")
+        except Exception as e:
+            logger.warning(f"Failed to requeue job {job.id[:8]}: {e}")
+
+    if count > 0:
+        logger.info(f"Requeued {count} failed jobs")
+    return count
+
+
+def handle_orphaned_jobs(
+    queue: "rq.Queue", started_jobs: dict[str, "rq.job.Job"]
+) -> int:
+    """
+    Move orphaned started jobs to failed and requeue for retry.
+
+    Orphaned jobs are started jobs with no workers connected (workers died mid-execution).
+
+    Args:
+        queue: RQ queue instance
+        started_jobs: Dict of trial_key -> Job for started jobs
+
+    Returns:
+        int: Number of orphaned jobs handled
+
+    Example:
+        >>> existing = get_existing_trials(queue)
+        >>> count = handle_orphaned_jobs(queue, existing['started'])
+        >>> print(f"Handled {count} orphaned jobs")
+    """
+    if not REDIS_AVAILABLE:
+        raise RuntimeError("Redis and RQ packages are required")
+
+    # Check if any workers are connected
+    stats = get_queue_stats(queue)
+    if stats.get("workers", 0) > 0:
+        logger.debug("Workers exist - not handling started jobs as orphaned")
+        return 0
+
+    count = 0
+    for job in started_jobs.values():
+        try:
+            # Move to failed registry
+            job.set_status(rq.job.JobStatus.FAILED)  # type: ignore[attr-defined]
+            # Requeue for retry
+            queue.enqueue_job(job)
+            count += 1
+            logger.debug(f"Handled orphaned job {job.id[:8]}")
+        except Exception as e:
+            logger.warning(f"Failed to handle orphaned job {job.id[:8]}: {e}")
+
+    if count > 0:
+        logger.info(f"Handled {count} orphaned jobs (moved to failed + requeued)")
+    return count

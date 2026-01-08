@@ -26,8 +26,8 @@ from crsbench.utils.logger import configure_logger, get_logger
 load_dotenv()
 
 # Worker lock file configuration
-DEFAULT_LOCK_PATH = "/tmp/crsbench-worker.lock"
-WORKER_LOCK_FILE = Path(os.environ.get("CRSBENCH_WORKER_LOCK_PATH", DEFAULT_LOCK_PATH))
+DEFAULT_LOCK_DIR = "/tmp"
+LOCK_DIR = Path(os.environ.get("CRSBENCH_WORKER_LOCK_DIR", DEFAULT_LOCK_DIR))
 
 try:
     import redis
@@ -41,29 +41,35 @@ logger = get_logger(__name__)
 
 
 @contextmanager
-def worker_lock():
+def worker_lock(worker_name: str):
     """Acquire an exclusive lock to ensure only one worker process runs at a time.
 
     This context manager uses file-based locking (fcntl) to prevent concurrent
     worker processes from running simultaneously. The lock is non-blocking and
     will raise BlockingIOError immediately if another worker is already running.
 
+    Args:
+        worker_name: Worker name used to generate unique lock file path
+
     Raises:
         BlockingIOError: If another worker process already holds the lock
         OSError: If lock file cannot be created or accessed
 
     Example:
-        with worker_lock():
-            # Only one worker process will execute this block at a time
+        with worker_lock("worker-0"):
+            # Only one worker process with this name will execute this block at a time
             worker.work()
     """
+    # Generate unique lock file path based on worker name
+    lock_file_path = LOCK_DIR / f"crsbench-worker-{worker_name}.lock"
+
     lock_file = None
     try:
         # Ensure parent directory exists
-        WORKER_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        lock_file_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Open lock file
-        lock_file = WORKER_LOCK_FILE.open("w")
+        lock_file = lock_file_path.open("w")
 
         # Acquire exclusive lock (non-blocking)
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -87,6 +93,8 @@ def main(
     timeout: Optional[int] = None,
     worker_name: Optional[str] = None,
     num_workers: int = 1,
+    *,
+    use_cpuset: bool = False,
 ) -> int:
     """
     Worker entry point - connects to Redis and processes jobs.
@@ -153,17 +161,25 @@ def main(
     # Single worker mode (use lock)
     if num_workers == 1:
         try:
-            with worker_lock():
+            with worker_lock(worker_name):
                 _run_worker(redis_host, experiment_name, worker_name)
             return 0
         except BlockingIOError:
+            lock_file_path = LOCK_DIR / f"crsbench-worker-{worker_name}.lock"
             logger.error("=" * 60)
             logger.error("Another worker is already running")
-            logger.error(f"Lock file: {WORKER_LOCK_FILE}")
+            logger.error(f"Lock file: {lock_file_path}")
             logger.error("=" * 60)
             return 4
 
     # Multi-worker mode (no lock, spawn multiple processes)
+    if use_cpuset:
+        # Use supervisor mode for CPU affinity
+        return _run_supervisor(
+            redis_host, experiment_name, worker_name, num_workers, use_cpuset=True
+        )
+
+    # Standard parallel workers
     return _spawn_workers(
         redis_host, experiment_name, worker_name, num_workers, continuous=False
     )
@@ -234,6 +250,286 @@ def _spawn_workers(
                 p.kill()
                 p.join()
         return 0
+
+
+def _run_supervisor(
+    redis_host: str,
+    experiment_name: str,
+    worker_name: str,
+    max_workers: int,
+    *,
+    use_cpuset: bool = False,
+) -> int:
+    """Supervisor that spawns workers based on job CPU requirements.
+
+    Instead of spawning a fixed number of workers upfront, the supervisor:
+    1. Peeks at next job in queue
+    2. Reads cpu_count from job metadata
+    3. Allocates CPUs from pool
+    4. Spawns worker with CPU affinity
+    5. Cleans up and releases CPUs when worker finishes
+
+    Args:
+        redis_host: Redis server hostname
+        experiment_name: Experiment identifier
+        worker_name: Base worker name
+        max_workers: Maximum number of concurrent workers
+        use_cpuset: Enable CPU affinity (default: False)
+
+    Returns:
+        Exit code (0 for success)
+    """
+    from crsbench.utils.cpu_pool import CPUPool, format_cpuset
+
+    # Set supervisor environment variable for logger
+    os.environ["CRSBENCH_SUPERVISOR"] = "1"
+    logger.info("Starting supervisor mode for dynamic CPU allocation...")
+
+    cpu_pool = CPUPool() if use_cpuset else None
+    workers: dict[
+        int, tuple[multiprocessing.Process, list[int], str, int]
+    ] = {}  # pid -> (process, cpus, job_id, worker_num)
+    used_worker_nums: set[int] = set()  # Track which worker numbers are in use
+
+    try:
+        # Connect to Redis
+        redis_password = os.environ.get("REDIS_PASSWORD") or None
+        redis_conn = redis.Redis(
+            host=redis_host,
+            password=redis_password,
+            socket_connect_timeout=5,
+        )
+        redis_conn.ping()
+
+        queue_name = f"crsbench_{experiment_name}"
+        queue = rq.Queue(queue_name, connection=redis_conn)  # type: ignore[attr-defined]
+
+        logger.info(f"Supervisor connected to queue: {queue_name}")
+        if cpu_pool:
+            logger.info(f"CPU pool initialized with {cpu_pool.total_cpus} CPUs")
+
+        while True:
+            # Cleanup finished workers
+            for pid in list(workers.keys()):
+                proc, cpus, _job_id, worker_num = workers[pid]
+                if not proc.is_alive():
+                    proc.join()
+                    if cpu_pool and cpus:
+                        cpu_pool.release(cpus)
+                        logger.info(
+                            f"Worker (PID: {pid}) finished, released CPUs {cpus}"
+                        )
+                    # Free up the worker number for reuse
+                    used_worker_nums.discard(worker_num)
+                    del workers[pid]
+
+            # Check if queue has jobs
+            queue_count = queue.count
+            # Continuous mode: keep running and waiting for new jobs
+            # (don't exit when queue is empty)
+
+            # Try to start new worker if jobs available and we have capacity
+            if queue_count > 0 and len(workers) < max_workers:
+                # Properly dequeue job from queue (atomically removes it)
+                result = rq.Queue.dequeue_any(
+                    [queue],
+                    timeout=None,  # Non-blocking check
+                    connection=redis_conn,
+                )
+
+                if result:
+                    job, _ = result
+                    cpu_count = job.meta.get("cpu_count", 4)
+
+                    # Try to allocate CPUs
+                    cpus = cpu_pool.allocate(cpu_count) if cpu_pool else None
+
+                    if cpu_pool is None or cpus is not None:
+                        # Update job metadata with allocated CPUs (as cpuset string)
+                        if cpus:
+                            # Convert CPU list to cpuset string format (e.g., [0,1,2,3] -> "0-3")
+                            cpuset_str = format_cpuset(cpus)
+                            job.meta["allocated_cpus"] = cpuset_str
+                            job.save_meta()
+
+                        # Find lowest available worker number (like true worker pool)
+                        worker_num = None
+                        for i in range(1, max_workers + 1):
+                            if i not in used_worker_nums:
+                                worker_num = i
+                                break
+
+                        if worker_num is None:
+                            # Shouldn't happen since len(workers) < max_workers
+                            worker_num = len(workers) + 1
+
+                        used_worker_nums.add(worker_num)
+                        name = f"{worker_name}-{worker_num}"
+
+                        p = multiprocessing.Process(
+                            target=_run_single_job_worker,
+                            args=(redis_host, experiment_name, name, job.id),
+                            name=f"worker-{worker_num}",
+                        )
+                        p.start()
+                        if p.pid is not None:
+                            workers[p.pid] = (p, cpus or [], job.id, worker_num)
+
+                        if cpus:
+                            logger.info(
+                                f"Started worker {name} (PID: {p.pid}) for job {job.id[:8]} with {len(cpus)} CPUs: {cpus}"
+                            )
+                        else:
+                            logger.info(
+                                f"Started worker {name} (PID: {p.pid}) for job {job.id[:8]}"
+                            )
+                    else:
+                        # Not enough CPUs - re-enqueue the job at the front
+                        # Important: we dequeued it, so must put it back if we can't run it
+                        queue.enqueue_job(job, at_front=True)
+                        logger.debug(
+                            f"Job {job.id[:8]} needs {cpu_count} CPUs, only {cpu_pool.available_count()} available. Re-enqueued for later."
+                        )
+
+            # Brief sleep to avoid busy-waiting
+            time.sleep(0.5)
+
+        logger.info("Supervisor shutting down")
+        return 0
+
+    except KeyboardInterrupt:
+        logger.info("\nReceived interrupt signal, terminating workers...")
+        for _pid, (p, _cpus, _job_id, _worker_num) in workers.items():
+            if p.is_alive():
+                p.terminate()
+        for pid, (p, cpus, _job_id, _worker_num) in workers.items():
+            p.join(timeout=5)
+            if p.is_alive():
+                logger.warning(f"Force killing worker (PID: {pid})")
+                p.kill()
+                p.join()
+            if cpu_pool and cpus:
+                cpu_pool.release(cpus)
+        return 0
+    except Exception as e:
+        logger.error(f"Supervisor error: {e}", exc_info=True)
+        return 3
+
+
+def _run_single_job_worker(
+    redis_host: str,
+    _experiment_name: str,
+    worker_name: str,
+    job_id: str,
+):
+    """Worker that executes a single specific job with proper status tracking.
+
+    CPU affinity is handled by the job itself via allocated_cpus in job metadata.
+
+    Args:
+        redis_host: Redis server hostname
+        _experiment_name: Experiment identifier (unused, kept for consistency)
+        worker_name: Worker name for identification
+        job_id: RQ job ID to execute
+    """
+    from rq.executions import Execution
+    from rq.job import JobStatus
+    from rq.registry import FailedJobRegistry, FinishedJobRegistry
+
+    # Reconfigure logging in subprocess
+    configure_logger(level=os.environ.get("LOG_LEVEL", "INFO").upper(), sink=sys.stdout)
+
+    # Connect to Redis
+    redis_password = os.environ.get("REDIS_PASSWORD") or None
+    redis_conn = redis.Redis(host=redis_host, password=redis_password)
+
+    try:
+        # Store friendly worker name in environment for job metadata
+        os.environ["CRSBENCH_WORKER_DISPLAY_NAME"] = worker_name
+
+        # Fetch job and get queue
+        job = rq.job.Job.fetch(job_id, connection=redis_conn)  # type: ignore[attr-defined]
+        queue = rq.Queue(job.origin, connection=redis_conn)  # type: ignore[attr-defined]
+
+        # Get registries for status tracking
+        finished_registry = FinishedJobRegistry(queue=queue)
+        failed_registry = FailedJobRegistry(queue=queue)
+
+        logger.info(f"Worker {worker_name} executing job {job_id}")
+
+        # Log allocated CPUs if present
+        allocated_cpus = job.meta.get("allocated_cpus")
+        if allocated_cpus:
+            logger.info(f"Job {job_id} assigned CPUs: {allocated_cpus}")
+
+        # Create execution and mark job as STARTED
+        execution = None
+        with redis_conn.pipeline() as pipeline:
+            # Prepare job for execution (sets status to STARTED)
+            job.prepare_for_execution(worker_name, pipeline=pipeline)
+            # Create execution object (automatically adds to StartedJobRegistry)
+            execution = Execution.create(job, ttl=-1, pipeline=pipeline)
+            pipeline.execute()
+
+        try:
+            # Execute the job
+            result = job.perform()
+
+            # Mark job as FINISHED and cleanup
+            with redis_conn.pipeline() as pipeline:
+                job._status = JobStatus.FINISHED
+                job.ended_at = rq.utils.now()  # type: ignore[attr-defined]
+                job._result = result
+                job.save_meta()
+                pipeline.hset(
+                    job.key,
+                    mapping={
+                        "status": JobStatus.FINISHED,
+                        "ended_at": rq.utils.utcformat(job.ended_at),  # type: ignore[attr-defined]
+                    },
+                )
+                # Remove from started registry and add to finished registry
+                if execution:
+                    execution.delete(job, pipeline=pipeline)
+                finished_registry.add(job, ttl=-1, pipeline=pipeline)
+                pipeline.execute()
+
+            logger.info(f"Worker {worker_name} finished job {job_id}")
+
+        except Exception as e:
+            # Mark job as FAILED and cleanup
+            import traceback
+
+            exc_string = "".join(
+                traceback.format_exception(type(e), e, e.__traceback__)
+            )
+
+            with redis_conn.pipeline() as pipeline:
+                job._status = JobStatus.FAILED
+                job.ended_at = rq.utils.now()  # type: ignore[attr-defined]
+                pipeline.hset(
+                    job.key,
+                    mapping={
+                        "status": JobStatus.FAILED,
+                        "ended_at": rq.utils.utcformat(job.ended_at),  # type: ignore[attr-defined]
+                    },
+                )
+                # Remove from started registry and add to failed registry
+                if execution:
+                    execution.delete(job, pipeline=pipeline)
+                failed_registry.add(
+                    job, ttl=-1, exc_string=exc_string, pipeline=pipeline
+                )
+                pipeline.execute()
+
+            logger.error(
+                f"Worker {worker_name} failed job {job_id}: {e}", exc_info=True
+            )
+            raise
+
+    except Exception as e:
+        logger.error(f"Worker {worker_name} error: {e}", exc_info=True)
+        raise
 
 
 def _run_single_worker(
@@ -327,6 +623,8 @@ def run_worker_continuous(
     _timeout: int = 3600,
     worker_name: Optional[str] = None,
     num_workers: int = 1,
+    *,
+    use_cpuset: bool = False,
 ):
     """
     Run worker in continuous mode (polling indefinitely).
@@ -359,7 +657,7 @@ def run_worker_continuous(
 
         # Acquire worker lock to ensure only one worker runs at a time
         try:
-            with worker_lock():
+            with worker_lock(worker_name):
                 redis_password = os.environ.get("REDIS_PASSWORD") or None
                 redis_connection = redis.Redis(host=redis_host, password=redis_password)
                 redis_connection.ping()
@@ -384,8 +682,9 @@ def run_worker_continuous(
                 )
 
         except BlockingIOError:
+            lock_file_path = LOCK_DIR / f"crsbench-worker-{worker_name}.lock"
             logger.error("Another worker is already running")
-            logger.error(f"Lock file: {WORKER_LOCK_FILE}")
+            logger.error(f"Lock file: {lock_file_path}")
             raise
 
         except KeyboardInterrupt:
@@ -395,6 +694,14 @@ def run_worker_continuous(
             raise
 
     # Multi-worker mode (no lock, spawn multiple processes)
+    if use_cpuset:
+        # Use supervisor mode for CPU affinity
+        logger.info(
+            f"Starting supervisor with {num_workers} workers and CPU affinity for: {experiment_name}"
+        )
+        exit_code = _run_supervisor(
+            redis_host, experiment_name, worker_name, num_workers, use_cpuset=True
+        )
     else:
         logger.info(
             f"Starting {num_workers} continuous workers for experiment: {experiment_name}"
@@ -403,8 +710,9 @@ def run_worker_continuous(
         exit_code = _spawn_workers(
             redis_host, experiment_name, worker_name, num_workers, continuous=True
         )
-        if exit_code != 0:
-            raise RuntimeError(f"Worker processes failed with exit code {exit_code}")
+
+    if exit_code != 0:
+        raise RuntimeError(f"Worker processes failed with exit code {exit_code}")
 
 
 if __name__ == "__main__":

@@ -701,8 +701,8 @@ class TestExperimentConfigSchema:
                 benchmarks=["test-bench"],
                 benchmarks_root=tmpdir,
             )
-            # Should return absolute path
-            assert config.benchmarks_root == str(Path(tmpdir).absolute())
+            # Should return absolute path as Path object
+            assert config.benchmarks_root == Path(tmpdir).absolute()
 
     def test_experiment_config_invalid_benchmarks_root(self):
         """Test experiment config with non-existent benchmarks_root."""
@@ -747,8 +747,8 @@ class TestExperimentConfigSchema:
         finally:
             Path(tmpfile_path).unlink()
 
-    def test_experiment_config_to_dict(self):
-        """Test experiment config to_dict() method."""
+    def test_experiment_config_model_dump(self):
+        """Test experiment config model_dump() method (Pydantic V2)."""
         config = ExperimentConfig(
             experiment="test",
             trials=3,
@@ -761,7 +761,7 @@ class TestExperimentConfigSchema:
             benchmarks=["test-bench"],
             redis_host="redis-server",
         )
-        config_dict = config.to_dict()
+        config_dict = config.model_dump()
 
         assert isinstance(config_dict, dict)
         assert config_dict["trials"] == 3
@@ -770,6 +770,10 @@ class TestExperimentConfigSchema:
         assert config_dict["difficulty_level"] == 2
         assert config_dict["redis_host"] == "redis-server"
         assert config_dict["benchmarks_root"] is None
+        # Verify new timeout fields are included
+        assert "build_timeout" in config_dict
+        assert "run_timeout" in config_dict
+        assert "verify_timeout" in config_dict
 
     def test_experiment_config_only_cpv_harnesses_default(self):
         """Test that only_cpv_harnesses defaults to True."""
@@ -777,7 +781,7 @@ class TestExperimentConfigSchema:
             experiment="test",
             trials=1,
             mode=EvaluationMode.DELTA,
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -792,7 +796,7 @@ class TestExperimentConfigSchema:
             experiment="test",
             trials=1,
             mode=EvaluationMode.DELTA,
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -808,7 +812,7 @@ class TestExperimentConfigSchema:
             experiment="test",
             trials=1,
             mode=EvaluationMode.DELTA,
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -818,13 +822,13 @@ class TestExperimentConfigSchema:
         )
         assert config.only_cpv_harnesses is True
 
-    def test_experiment_config_only_cpv_harnesses_in_to_dict(self):
-        """Test that only_cpv_harnesses is included in to_dict()."""
+    def test_experiment_config_only_cpv_harnesses_in_model_dump(self):
+        """Test that only_cpv_harnesses is included in model_dump()."""
         config = ExperimentConfig(
             experiment="test",
             trials=1,
             mode=EvaluationMode.DELTA,
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -832,9 +836,44 @@ class TestExperimentConfigSchema:
             benchmarks=["test-bench"],
             only_cpv_harnesses=False,
         )
-        config_dict = config.to_dict()
+        config_dict = config.model_dump()
         assert "only_cpv_harnesses" in config_dict
         assert config_dict["only_cpv_harnesses"] is False
+
+    def test_max_total_time_validation_success(self):
+        """Test that max_total_time > sum of timeouts passes validation."""
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode=EvaluationMode.DELTA,
+            max_total_time=20000,  # Greater than 3600 + 7200 + 7200 = 18000
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["test-crs"],
+            benchmarks=["test-bench"],
+        )
+        # Should not raise validation error
+        assert config.max_total_time == 20000
+
+    def test_max_total_time_validation_failure(self):
+        """Test that max_total_time <= sum of timeouts fails validation."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            ExperimentConfig(
+                experiment="test",
+                trials=1,
+                mode=EvaluationMode.DELTA,
+                max_total_time=18000,  # Equal to 3600 + 7200 + 7200
+                difficulty_level=1,
+                experiment_filestore="/tmp/exp",
+                report_filestore="/tmp/rep",
+                crses=["test-crs"],
+                benchmarks=["test-bench"],
+            )
+        # Check that the error message mentions the validation
+        error_msg = str(exc_info.value)
+        assert "max_total_time" in error_msg
+        assert "build_timeout + run_timeout + verify_timeout" in error_msg
 
 
 class TestExperimentConfigValidation:
@@ -982,9 +1021,7 @@ benchmarks_root: {tmpdir}
             result = validate_experiment_config_from_string(yaml_content)
 
             assert result.is_valid is True
-            assert result.metadata.get("benchmarks_root") == str(
-                Path(tmpdir).absolute()
-            )
+            assert result.metadata.get("benchmarks_root") == Path(tmpdir).absolute()
 
     def test_validate_experiment_redis_none_for_local_mode(self):
         """Test validation with redis_host set to 'none' for local mode."""

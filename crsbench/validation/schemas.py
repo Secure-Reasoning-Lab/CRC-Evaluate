@@ -447,13 +447,28 @@ class ExperimentConfig(BaseModel):
     max_total_time: int = Field(
         ..., ge=1, description="Maximum time in seconds per trial (must be >= 1)"
     )
+    build_timeout: int = Field(
+        default=3600,
+        ge=1,
+        description="Maximum time in seconds for CRS build phase (default: 3600 = 1 hour)",
+    )
+    run_timeout: int = Field(
+        default=7200,
+        ge=1,
+        description="Maximum time in seconds for CRS run phase (default: 7200 = 2 hours)",
+    )
+    verify_timeout: int = Field(
+        default=7200,
+        ge=1,
+        description="Maximum time in seconds for POV verification phase (default: 7200 = 2 hours)",
+    )
     difficulty_level: int = Field(
         ..., ge=0, le=4, description="Difficulty level controlling assistance (0-4)"
     )
-    experiment_filestore: str = Field(
+    experiment_filestore: Path = Field(
         ..., description="Directory path for experiment data storage"
     )
-    report_filestore: str = Field(
+    report_filestore: Path = Field(
         ..., description="Directory path for HTML reports and summary data"
     )
     crses: List[str] = Field(..., description="List of CRS implementations to evaluate")
@@ -461,7 +476,7 @@ class ExperimentConfig(BaseModel):
         default=None,
         description="Redis server hostname or IP (optional, omit or set to 'none' for local mode)",
     )
-    benchmarks_root: Optional[str] = Field(
+    benchmarks_root: Optional[Path] = Field(
         default=None,
         description="Root directory containing benchmark projects (defaults to ./benchmarks)",
     )
@@ -480,11 +495,11 @@ class ExperimentConfig(BaseModel):
         ge=0,
         description="Snapshot interval in seconds (0 to disable, default 900 = 15 minutes)",
     )
-    registry_dir: Optional[str] = Field(
+    registry_dir: Optional[Path] = Field(
         default=None,
         description="Path to CRS registry directory (defaults to ./crses/registry)",
     )
-    crs_configs_dir: Optional[str] = Field(
+    crs_configs_dir: Optional[Path] = Field(
         default=None,
         description="Path to CRS configs directory (defaults to ./crses/configs)",
     )
@@ -517,9 +532,9 @@ class ExperimentConfig(BaseModel):
         default=False,
         description="Skip POV verification after CRS execution (default: False, verification enabled)",
     )
-    oss_fuzz_path: Optional[str] = Field(
-        default=None,
-        description="Path to oss-fuzz directory (defaults to ./oss-fuzz)",
+    oss_fuzz_path: Path = Field(
+        default=Path("oss-fuzz"),
+        description="Path to oss-fuzz directory (default: oss-fuzz)",
     )
     coverage_enabled: bool = Field(
         default=False,
@@ -584,9 +599,12 @@ class ExperimentConfig(BaseModel):
     @field_validator("experiment_filestore", "report_filestore")
     @classmethod
     def validate_filestore_path(cls, v):
-        if not v or not v.strip():
+        # Pydantic converts str to Path automatically
+        # Check that the path is not empty
+        path_str = str(v).strip()
+        if not path_str or path_str == "" or path_str == ".":
             raise ValueError("Filestore path cannot be empty")
-        return v.strip()
+        return v
 
     @field_validator("redis_host")
     @classmethod
@@ -600,15 +618,13 @@ class ExperimentConfig(BaseModel):
     @classmethod
     def validate_benchmarks_root(cls, v):
         """Validate benchmarks root directory."""
-        if v and v.strip():
-            from pathlib import Path
-
-            path = Path(v.strip())
-            if not path.exists():
+        if v:
+            # Pydantic already converts str to Path
+            if not v.exists():
                 raise ValueError(f"Benchmarks root directory does not exist: {v}")
-            if not path.is_dir():
+            if not v.is_dir():
                 raise ValueError(f"Benchmarks root must be a directory: {v}")
-            return str(path.absolute())
+            return v.absolute()
         return None  # Use default ./benchmarks if not specified
 
     @field_validator("benchmarks")
@@ -745,6 +761,18 @@ class ExperimentConfig(BaseModel):
                 )
         return self
 
+    @model_validator(mode="after")
+    def check_max_total_time_sufficient(self):
+        """Validate that max_total_time is sufficient for all phases."""
+        min_required = self.build_timeout + self.run_timeout + self.verify_timeout
+        if self.max_total_time <= min_required:
+            raise ValueError(
+                f"max_total_time ({self.max_total_time}s) must be greater than "
+                f"build_timeout + run_timeout + verify_timeout ({min_required}s = "
+                f"{self.build_timeout} + {self.run_timeout} + {self.verify_timeout})"
+            )
+        return self
+
     def get_benchmark_list(
         self, benchmark_suites_dir: str = "benchmark-suites"
     ) -> List[str]:
@@ -840,39 +868,6 @@ class ExperimentConfig(BaseModel):
 
         # Should never reach here due to __init__ validation
         raise ValueError("No benchmark source specified")
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert configuration to dictionary for job serialization."""
-        return {
-            "experiment": self.experiment,
-            "trials": self.trials,
-            "mode": self.mode.value,  # Serialize enum to string value
-            "max_total_time": self.max_total_time,
-            "difficulty_level": self.difficulty_level,
-            "experiment_filestore": self.experiment_filestore,
-            "report_filestore": self.report_filestore,
-            "crses": self.crses,
-            "redis_host": self.redis_host,
-            "benchmarks_root": self.benchmarks_root,
-            "benchmarks": self.benchmarks,
-            "benchmark_suite": self.benchmark_suite,
-            "hints_enabled": self.hints_enabled,
-            "hint_sarif_level": self.hint_sarif_level,
-            "hint_corpus_level": self.hint_corpus_level,
-            "litellm_mode": self.litellm_mode,
-            "crs_configs_dir": self.crs_configs_dir,
-            "registry_dir": self.registry_dir,
-            "snapshot_period": self.snapshot_period,
-            "project_image_prefix": self.project_image_prefix,
-            "skip_verification": self.skip_verification,
-            "oss_fuzz_path": self.oss_fuzz_path,
-            "coverage_enabled": self.coverage_enabled,
-            "coverage_saturation_time": self.coverage_saturation_time,
-            "coverage_early_stop": self.coverage_early_stop,
-            "build_workers": self.build_workers,
-            "verify_workers": self.verify_workers,
-            "only_cpv_harnesses": self.only_cpv_harnesses,
-        }
 
 
 class BenchmarkSuiteConfig(BaseModel):

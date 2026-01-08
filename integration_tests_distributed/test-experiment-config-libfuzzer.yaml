@@ -22,6 +22,9 @@ mode: delta # for quick testing
 # Benchmark Selection - using atlanta benchmark
 benchmarks:
   - atlanta-nasm-delta-01
+  - afc-curl-delta-02
+  - afc-freerdp-delta-02
+  - afc-lcms-full-01
 
 # Difficulty Control
 difficulty_level: 1

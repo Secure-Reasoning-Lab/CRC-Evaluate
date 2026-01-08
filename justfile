@@ -21,6 +21,10 @@ format:
 format-check:
     uv run ruff format {{dirs}} --check
 
+# Run tests (excluding integration tests)
+test:
+    uv run pytest tests/ -v -n auto -m "not integration"
+
 # Run all checks (typecheck + lint + format check)
 check:
     just typecheck

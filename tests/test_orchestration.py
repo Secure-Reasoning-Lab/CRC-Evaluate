@@ -72,7 +72,7 @@ class TestConfigLoading:
 experiment: test-experiment
 trials: 3
 mode: delta
-max_total_time: 7200
+max_total_time: 20000
 difficulty_level: 2
 experiment_filestore: /tmp/experiment-data
 report_filestore: /tmp/report-data
@@ -88,7 +88,7 @@ benchmarks:
 
         assert config.experiment == "test-experiment"
         assert config.trials == 3
-        assert config.max_total_time == 7200
+        assert config.max_total_time == 20000
         assert config.difficulty_level == 2
         assert config.crses == ["atlantis-c", "ensemble-c"]
         assert config.benchmarks == ["curl-delta-02", "libxml2-delta-03"]
@@ -101,7 +101,7 @@ benchmarks:
 experiment: suite-experiment
 trials: 2
 mode: full
-max_total_time: 3600
+max_total_time: 20000
 difficulty_level: 1
 experiment_filestore: /tmp/experiment-data
 report_filestore: /tmp/report-data
@@ -125,7 +125,7 @@ benchmark_suite: crsbench-afc-c
 experiment: redis-experiment
 trials: 2
 mode: delta
-max_total_time: 3600
+max_total_time: 20000
 difficulty_level: 1
 experiment_filestore: /tmp/experiment-data
 report_filestore: /tmp/report-data
@@ -145,7 +145,7 @@ redis_host: localhost
 experiment: minimal-experiment
 trials: 1
 mode: delta
-max_total_time: 3600
+max_total_time: 20000
 difficulty_level: 0
 experiment_filestore: /tmp/exp
 report_filestore: /tmp/rep
@@ -174,7 +174,7 @@ class TestTrialMatrixGeneration:
             experiment="test",
             trials=2,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -223,7 +223,7 @@ class TestTrialMatrixGeneration:
             experiment="test",
             trials=2,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -282,7 +282,7 @@ class TestTrialMatrixGeneration:
             experiment="test",
             trials=1,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -344,7 +344,7 @@ class TestTrialMatrixGeneration:
                 experiment="test",
                 trials=trials_count,
                 mode="delta",
-                max_total_time=3600,
+                max_total_time=20000,
                 difficulty_level=1,
                 experiment_filestore="/tmp/exp",
                 report_filestore="/tmp/rep",
@@ -377,7 +377,7 @@ class TestOnlyCpvHarnesses:
             experiment="test",
             trials=1,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -448,7 +448,7 @@ class TestOnlyCpvHarnesses:
             experiment="test",
             trials=1,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -503,7 +503,7 @@ class TestOnlyCpvHarnesses:
             experiment="test",
             trials=1,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -602,7 +602,7 @@ class TestCLIOverrides:
 experiment: original-name
 trials: 1
 mode: delta
-max_total_time: 3600
+max_total_time: 20000
 difficulty_level: 1
 experiment_filestore: /tmp/exp
 report_filestore: /tmp/rep
@@ -631,7 +631,7 @@ benchmarks: [bench1]
 experiment: test
 trials: 1
 mode: delta
-max_total_time: 3600
+max_total_time: 20000
 difficulty_level: 1
 experiment_filestore: /tmp/exp
 report_filestore: /tmp/rep
@@ -660,7 +660,7 @@ benchmarks: [bench1]
 experiment: test
 trials: 1
 mode: delta
-max_total_time: 3600
+max_total_time: 20000
 difficulty_level: 1
 experiment_filestore: /tmp/exp
 report_filestore: /tmp/rep
@@ -709,7 +709,7 @@ class TestConfigStorage:
 experiment: original-experiment
 trials: 1
 mode: delta
-max_total_time: 3600
+max_total_time: 20000
 difficulty_level: 1
 experiment_filestore: /tmp/exp
 report_filestore: /tmp/rep
@@ -735,8 +735,8 @@ benchmarks:
             "trials": config.trials,
             "max_total_time": config.max_total_time,
             "difficulty_level": config.difficulty_level,
-            "experiment_filestore": config.experiment_filestore,
-            "report_filestore": config.report_filestore,
+            "experiment_filestore": str(config.experiment_filestore),
+            "report_filestore": str(config.report_filestore),
             "crses": parse_list_argument(cli_crses),
             "benchmarks": parse_list_argument(cli_benchmarks),
         }
@@ -777,7 +777,7 @@ benchmarks:
             experiment="test-experiment",
             trials=2,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=2,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -846,7 +846,7 @@ benchmarks:
         resolved_config = {
             "experiment": "test-experiment",
             "trials": 2,
-            "max_total_time": 3600,
+            "max_total_time": 20000,
             "difficulty_level": 2,
             "crses": ["atlantis-c"],
             "benchmarks": ["curl-delta-02"],
@@ -1079,7 +1079,7 @@ class UnitTestModeSelection:
             experiment="test",
             trials=1,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -1108,7 +1108,7 @@ class UnitTestModeSelection:
             experiment="test",
             trials=2,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -1137,7 +1137,7 @@ class UnitTestModeSelection:
             experiment="test",
             trials=2,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -1167,7 +1167,7 @@ class UnitTestModeSelection:
             experiment="test",
             trials=1,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -1196,7 +1196,7 @@ class UnitTestModeSelection:
             experiment="test",
             trials=1,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",

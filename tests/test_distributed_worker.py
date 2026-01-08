@@ -17,67 +17,69 @@ class TestWorkerLock:
     def test_lock_can_be_acquired_once(self):
         """Lock should be successfully acquired when not held."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            lock_path = Path(tmpdir) / "test.lock"
-            with patch("crsbench.distributed.worker.WORKER_LOCK_FILE", lock_path):
-                with worker_lock():
+            lock_dir = Path(tmpdir)
+            with patch("crsbench.distributed.worker.LOCK_DIR", lock_dir):
+                with worker_lock("test-worker"):
                     # Lock acquired successfully
-                    assert lock_path.exists()
+                    expected_lock_path = lock_dir / "crsbench-worker-test-worker.lock"
+                    assert expected_lock_path.exists()
 
     def test_lock_prevents_concurrent_acquisition(self):
         """Lock should prevent concurrent acquisition in the same process."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            lock_path = Path(tmpdir) / "test.lock"
-            with patch("crsbench.distributed.worker.WORKER_LOCK_FILE", lock_path):
-                with worker_lock():
+            lock_dir = Path(tmpdir)
+            with patch("crsbench.distributed.worker.LOCK_DIR", lock_dir):
+                with worker_lock("test-worker"):
                     # Try to acquire lock again - should fail
                     with pytest.raises(BlockingIOError):
-                        with worker_lock():
+                        with worker_lock("test-worker"):
                             pass  # Should never reach here
 
     def test_lock_released_after_context_exit(self):
         """Lock should be released when context manager exits."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            lock_path = Path(tmpdir) / "test.lock"
-            with patch("crsbench.distributed.worker.WORKER_LOCK_FILE", lock_path):
-                with worker_lock():
+            lock_dir = Path(tmpdir)
+            with patch("crsbench.distributed.worker.LOCK_DIR", lock_dir):
+                with worker_lock("test-worker"):
                     pass  # Lock held here
 
                 # Lock should be released now
-                with worker_lock():
+                with worker_lock("test-worker"):
                     pass  # Should succeed
 
     def test_lock_released_on_exception(self):
         """Lock should be released even if exception occurs."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            lock_path = Path(tmpdir) / "test.lock"
-            with patch("crsbench.distributed.worker.WORKER_LOCK_FILE", lock_path):
+            lock_dir = Path(tmpdir)
+            with patch("crsbench.distributed.worker.LOCK_DIR", lock_dir):
                 try:
-                    with worker_lock():
+                    with worker_lock("test-worker"):
                         raise ValueError("Test exception")
                 except ValueError:
                     pass
 
                 # Lock should be released despite exception
-                with worker_lock():
+                with worker_lock("test-worker"):
                     pass  # Should succeed
 
     def test_lock_file_location_from_env_var(self):
         """Lock file location should be configurable via environment variable."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            custom_lock_path = str(Path(tmpdir) / "custom.lock")
+            custom_lock_dir = str(Path(tmpdir))
 
             # Reload the module to pick up the env var
-            with patch.dict(
-                os.environ, {"CRSBENCH_WORKER_LOCK_PATH": custom_lock_path}
-            ):
+            with patch.dict(os.environ, {"CRSBENCH_WORKER_LOCK_DIR": custom_lock_dir}):
                 from importlib import reload
 
                 from crsbench.distributed import worker as worker_module
 
                 reload(worker_module)
 
-                with worker_module.worker_lock():
-                    assert Path(custom_lock_path).exists()
+                with worker_module.worker_lock("test-worker"):
+                    expected_lock_path = (
+                        Path(custom_lock_dir) / "crsbench-worker-test-worker.lock"
+                    )
+                    assert expected_lock_path.exists()
 
     def test_concurrent_processes_cannot_both_acquire_lock(self):
         """Two separate processes should not be able to hold the lock simultaneously."""
@@ -149,8 +151,27 @@ class TestWorkerLock:
     def test_lock_creates_parent_directory(self):
         """Lock should create parent directory if it doesn't exist."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            nested_path = Path(tmpdir) / "nested" / "dirs" / "test.lock"
-            with patch("crsbench.distributed.worker.WORKER_LOCK_FILE", nested_path):
-                with worker_lock():
-                    assert nested_path.exists()
-                    assert nested_path.parent.exists()
+            nested_dir = Path(tmpdir) / "nested" / "dirs"
+            with patch("crsbench.distributed.worker.LOCK_DIR", nested_dir):
+                with worker_lock("test-worker"):
+                    expected_lock_path = nested_dir / "crsbench-worker-test-worker.lock"
+                    assert expected_lock_path.exists()
+                    assert expected_lock_path.parent.exists()
+
+    def test_multiple_workers_different_names_can_run_concurrently(self):
+        """Workers with different names should be able to run concurrently."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock_dir = Path(tmpdir)
+            with patch("crsbench.distributed.worker.LOCK_DIR", lock_dir):
+                # Both locks should be acquirable simultaneously
+                with worker_lock("worker-0"):
+                    lock_0 = lock_dir / "crsbench-worker-worker-0.lock"
+                    assert lock_0.exists()
+
+                    # Different worker name should not conflict
+                    with worker_lock("worker-1"):
+                        lock_1 = lock_dir / "crsbench-worker-worker-1.lock"
+                        assert lock_1.exists()
+                        # Both locks should exist simultaneously
+                        assert lock_0.exists()
+                        assert lock_1.exists()

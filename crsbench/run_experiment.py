@@ -20,10 +20,11 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import List
 
 import yaml
 from dotenv import load_dotenv
@@ -38,7 +39,7 @@ from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.logger import configure_logger, get_logger
 from crsbench.utils.workers import resolve_build_workers
 from crsbench.validation.meta_adapter import MetaYamlAdapter
-from crsbench.validation.schemas import BenchmarkHarness
+from crsbench.validation.schemas import BenchmarkHarness, ExperimentConfig
 
 # Load environment variables from .env file if present
 load_dotenv()
@@ -130,6 +131,17 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         "--distributed",
         action="store_true",
         help="Force distributed execution mode with Redis (raises error if Redis unavailable)",
+    )
+
+    parser.add_argument(
+        "--queue-mode",
+        type=str,
+        choices=["fresh", "continue"],
+        required=False,
+        metavar="MODE",
+        help="Queue mode for distributed execution: 'fresh' purges existing jobs and starts from scratch, "
+        "'continue' resumes from existing state (skips existing trials, retries failed). "
+        "If not specified and stale jobs exist, you will be prompted interactively.",
     )
 
     parser.add_argument(
@@ -391,7 +403,7 @@ def parse_list_argument(arg_value: str) -> List[str]:
     return [item.strip() for item in arg_value.split(",") if item.strip()]
 
 
-def load_experiment_config(config_path: Path):
+def load_experiment_config(config_path: Path) -> ExperimentConfig:
     """Load and validate experiment configuration from YAML file.
 
     Args:
@@ -404,7 +416,6 @@ def load_experiment_config(config_path: Path):
         SystemExit: If configuration is invalid
     """
     from crsbench.validation import validate_experiment_config
-    from crsbench.validation.schemas import ExperimentConfig
 
     # Validate the configuration file
     result = validate_experiment_config(config_path)
@@ -656,6 +667,50 @@ def generate_trial_matrix(
         f"{config.trials} trials × mode={config_mode}"
     )
     return trials
+
+
+def dump_trial_matrix(
+    trials: List[Trial],
+    config,
+) -> None:
+    """Dump trial matrix to JSON file in experiment filestore.
+
+    Args:
+        trials: List of Trial objects
+        config: Experiment configuration
+    """
+    import json
+
+    output_dir = config.experiment_filestore.resolve() / config.experiment
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "trial_matrix.json"
+
+    # Convert trials to serializable format
+    trial_data = []
+    for trial in trials:
+        bh = trial.benchmark_harness
+        trial_data.append(
+            {
+                "crs": trial.crs,
+                "benchmark": bh.name,
+                "benchmark_path": str(bh.path),
+                "harness": bh.harness.name,
+                "harness_path": bh.harness.path,
+                "trial_num": trial.trial_num,
+                "mode": trial.mode,
+            }
+        )
+
+    matrix = {
+        "experiment": config.experiment,
+        "total_trials": len(trials),
+        "trials": trial_data,
+    }
+
+    with output_path.open("w") as f:
+        json.dump(matrix, f, indent=2)
+
+    logger.info(f"Trial matrix saved to {output_path}")
 
 
 def _is_all_bug_fixing_crs(
@@ -948,82 +1003,83 @@ def should_use_distributed_mode(
 
 
 def enhance_config_with_cli_args(
-    config_dict: Dict[str, Any], args: argparse.Namespace
-) -> Dict[str, Any]:
-    """Enhance config dictionary with CLI arguments (highest precedence).
+    config: ExperimentConfig, args: argparse.Namespace
+) -> ExperimentConfig:
+    """Enhance config with CLI arguments (highest precedence).
 
     CLI arguments override config file values.
 
     Args:
-        config_dict: Config dictionary from config file
+        config: Experiment configuration
         args: Parsed CLI arguments
 
     Returns:
-        Enhanced config dictionary
+        Enhanced experiment configuration
     """
-    enhanced = config_dict.copy()
+    # Collect overrides
+    overrides = {}
 
     # Override with CLI arguments (highest precedence)
     if args.oss_fuzz_path:
-        enhanced["oss_fuzz_path"] = args.oss_fuzz_path
+        overrides["oss_fuzz_path"] = args.oss_fuzz_path
         logger.info(f"Using oss-fuzz path from CLI: {args.oss_fuzz_path}")
 
     if args.registry_dir:
-        enhanced["registry_dir"] = args.registry_dir
+        overrides["registry_dir"] = args.registry_dir
         logger.info(f"Using registry directory from CLI: {args.registry_dir}")
 
     if args.crs_configs_dir:
-        enhanced["crs_configs_dir"] = args.crs_configs_dir
+        overrides["crs_configs_dir"] = args.crs_configs_dir
         logger.info(f"Using CRS configs directory from CLI: {args.crs_configs_dir}")
 
     if args.benchmarks_root:
-        enhanced["benchmarks_root"] = args.benchmarks_root
+        overrides["benchmarks_root"] = args.benchmarks_root
         logger.info(f"Using benchmarks root from CLI: {args.benchmarks_root}")
 
     # Mode override
     if hasattr(args, "mode") and args.mode is not None:
-        enhanced["mode"] = args.mode
+        overrides["mode"] = args.mode
         logger.info(f"Using evaluation mode from CLI: {args.mode}")
 
     # Hint configuration overrides
     if args.hints_enabled:
-        enhanced["hints_enabled"] = True
+        overrides["hints_enabled"] = True
         logger.info("Hints enabled via CLI")
 
     if args.hint_sarif_level is not None:
-        enhanced["hint_sarif_level"] = args.hint_sarif_level
+        overrides["hint_sarif_level"] = args.hint_sarif_level
         logger.info(f"Using SARIF hint level from CLI: {args.hint_sarif_level}")
 
     if args.hint_corpus_level is not None:
-        enhanced["hint_corpus_level"] = args.hint_corpus_level
+        overrides["hint_corpus_level"] = args.hint_corpus_level
         logger.info(f"Using corpus hint level from CLI: {args.hint_corpus_level}")
 
     # LiteLLM mode override
     if args.litellm_mode is not None:
-        enhanced["litellm_mode"] = args.litellm_mode
+        overrides["litellm_mode"] = args.litellm_mode
         logger.info(f"Using LiteLLM mode from CLI: {args.litellm_mode}")
 
     # Project image prefix override
     if args.project_image_prefix is not None:
-        enhanced["project_image_prefix"] = args.project_image_prefix
+        overrides["project_image_prefix"] = args.project_image_prefix
         logger.info(f"Using project image prefix from CLI: {args.project_image_prefix}")
 
     # Build workers override
     if hasattr(args, "build_workers") and args.build_workers is not None:
-        enhanced["build_workers"] = args.build_workers
+        overrides["build_workers"] = args.build_workers
         logger.info(f"Using build_workers from CLI: {args.build_workers}")
 
     # Verify workers override
     if hasattr(args, "verify_workers") and args.verify_workers is not None:
-        enhanced["verify_workers"] = args.verify_workers
+        overrides["verify_workers"] = args.verify_workers
         logger.info(f"Using verify_workers from CLI: {args.verify_workers}")
 
     # only_cpv_harnesses override
     if hasattr(args, "only_cpv_harnesses") and args.only_cpv_harnesses:
-        enhanced["only_cpv_harnesses"] = True
+        overrides["only_cpv_harnesses"] = True
         logger.info("Using only_cpv_harnesses=True from CLI")
 
-    return enhanced
+    return config.model_copy(update=overrides)
 
 
 def run_experiment_local(
@@ -1054,6 +1110,9 @@ def run_experiment_local(
     trials = generate_trial_matrix(
         benchmark_harnesses, crses, config, registry_dir, crs_configs_dir
     )
+
+    # Dump trial matrix to JSON
+    dump_trial_matrix(trials, config)
 
     logger.info(f"Total trials to execute: {len(trials)}")
     logger.info(f"CRSes: {', '.join(crses)}")
@@ -1097,7 +1156,7 @@ def run_experiment_local(
         from crsbench.distributed.jobs import run_crs_trial
 
         # Enhance config with CLI arguments (highest precedence)
-        enhanced_config = enhance_config_with_cli_args(config.to_dict(), args)
+        enhanced_config = enhance_config_with_cli_args(config, args)
 
         result = run_crs_trial(
             crs=trial.crs,
@@ -1105,7 +1164,7 @@ def run_experiment_local(
             harness_name=bh.harness.name,
             harness_path=bh.harness.path,
             trial_num=trial.trial_num,
-            config=enhanced_config,
+            config_dict=enhanced_config.model_dump(),
             mode=trial.mode,
         )
 
@@ -1179,6 +1238,7 @@ def _monitor_jobs_basic(
                 "failed": stats["failed"],
             },
             show_percentage=False,
+            level="debug",
         )
 
         # Display currently running jobs with metadata
@@ -1273,7 +1333,7 @@ def _monitor_jobs_rich(
         stats = get_queue_stats(queue)
 
         # Debug: log queue info
-        logger.info(f"Queue name: crsbench_{experiment_name}, stats: {stats}")
+        logger.debug(f"Queue name: crsbench_{experiment_name}, stats: {stats}")
 
         # Queue status table
         table = Table(title=f"Experiment: {experiment_name}")
@@ -1300,7 +1360,7 @@ def _monitor_jobs_rich(
         for job in job_list:
             job.refresh()
             status = job.get_status()
-            logger.info(
+            logger.debug(
                 f"Job {job.id[:8]}: status={status}, is_queued={job.is_queued}, is_started={job.is_started}, is_finished={job.is_finished}"
             )
             if status == "started":
@@ -1379,9 +1439,106 @@ def _monitor_jobs_rich(
     return results
 
 
+def prompt_queue_mode(existing: dict[str, dict]) -> str:
+    """
+    Prompt user interactively for queue mode when stale jobs are detected.
+
+    Args:
+        existing: Dict of existing jobs by status (from get_existing_trials)
+
+    Returns:
+        str: User choice - "fresh", "continue", or "quit"
+    """
+    orphaned_count = 0
+    if existing["started"]:
+        # We'll check if there are workers later, for now just show the count
+        orphaned_count = len(existing["started"])
+
+    # Display existing jobs summary (interactive CLI output)
+    print("\n" + "=" * 60)  # noqa: T201
+    print("Existing jobs detected in queue:")  # noqa: T201
+    print(f"  Queued:   {len(existing['queued'])}")  # noqa: T201
+    if orphaned_count > 0:
+        print(f"  Started:  {len(existing['started'])} (may be orphaned)")  # noqa: T201
+    else:
+        print(f"  Started:  {len(existing['started'])}")  # noqa: T201
+    print(f"  Finished: {len(existing['finished'])}")  # noqa: T201
+    print(f"  Failed:   {len(existing['failed'])}")  # noqa: T201
+    print("=" * 60)  # noqa: T201
+    print("\nHow do you want to proceed?")  # noqa: T201
+    print("  [f] Fresh - purge all existing jobs and start from scratch")  # noqa: T201
+    print("  [c] Continue - skip existing, retry failed")  # noqa: T201
+    print("  [q] Quit - abort without changes")  # noqa: T201
+    print()  # noqa: T201
+
+    # Prompt for choice
+    while True:
+        choice = input("Choice [f/c/q]: ").strip().lower()
+        if choice == "f":
+            return "fresh"
+        if choice == "c":
+            return "continue"
+        if choice == "q":
+            return "quit"
+        print("Invalid choice. Please enter 'f', 'c', or 'q'.")  # noqa: T201
+
+
+def get_crs_cpu_count(crs_name: str, crs_configs_dir: Path) -> int:
+    """Get CPU count for a CRS from its resource config.
+
+    Reads the CRS resource configuration file and parses the cpuset
+    string to determine the number of CPUs required.
+
+    Args:
+        crs_name: CRS name (e.g., "crs-libfuzzer")
+        crs_configs_dir: Path to CRS configs directory
+
+    Returns:
+        Number of CPUs (default: 4 if config not found)
+
+    Examples:
+        >>> get_crs_cpu_count("crs-libfuzzer", Path("/crses/configs"))
+        16  # If cpuset is "0-15"
+    """
+    from crsbench.utils.cpu_pool import cpuset_count
+
+    resource_config_path = crs_configs_dir / crs_name / "config-resource.yaml"
+    if not resource_config_path.exists():
+        logger.debug(
+            f"No resource config found for {crs_name}, using default cpu_count=4"
+        )
+        return 4  # Default
+
+    try:
+        with resource_config_path.open() as f:
+            config_data = yaml.safe_load(f)
+
+        # Get cpuset from first worker (or specific worker)
+        workers = config_data.get("workers", {})
+        if workers:
+            first_worker = list(workers.values())[0]
+            cpuset_str = first_worker.get("cpuset", "0-3")
+            cpu_count = cpuset_count(cpuset_str)
+            logger.debug(
+                f"CRS {crs_name}: parsed cpuset '{cpuset_str}' → {cpu_count} CPUs"
+            )
+            return cpu_count
+
+        logger.debug(
+            f"No workers section in resource config for {crs_name}, using default cpu_count=4"
+        )
+        return 4  # Default
+
+    except Exception as e:
+        logger.warning(
+            f"Error reading resource config for {crs_name}: {e}, using default cpu_count=4"
+        )
+        return 4  # Default on error
+
+
 def run_experiment_distributed(
     experiment_name: str,
-    config,
+    config: ExperimentConfig,
     benchmark_harnesses: List[BenchmarkHarness],
     crses: List[str],
     args: argparse.Namespace,
@@ -1398,7 +1555,15 @@ def run_experiment_distributed(
     from crsbench.distributed.queue import initialize_queue
 
     log_section("Running CRSBench in Distributed Mode (Redis)", width=60)
+
+    # Validate redis_host is provided
+    if not config.redis_host:
+        raise ValueError("redis_host is required for distributed mode")
+
     logger.info(f"Redis host: {config.redis_host}")
+
+    # Mark this process as orchestrator for logging
+    os.environ["CRSBENCH_ORCHESTRATOR"] = "1"
 
     # Initialize queue
     queue = initialize_queue(config.redis_host, experiment_name)
@@ -1409,10 +1574,79 @@ def run_experiment_distributed(
     registry_dir = Path(config.registry_dir or "crses/registry").resolve()
     crs_configs_dir = Path(config.crs_configs_dir or "crses/configs").resolve()
 
+    # Check for existing jobs in queue (queue sanity check)
+    from crsbench.distributed.queue import (
+        clear_queue,
+        get_existing_trials,
+        handle_orphaned_jobs,
+        requeue_failed_jobs,
+    )
+
+    existing = get_existing_trials(queue)
+    has_existing = any(existing.values())
+
+    # Get queue mode from CLI args or prompt if stale jobs exist
+    queue_mode = args.queue_mode if hasattr(args, "queue_mode") else None
+
+    if has_existing and queue_mode is None:
+        # Stale jobs exist and no mode specified - prompt user
+        queue_mode = prompt_queue_mode(existing)
+        if queue_mode == "quit":
+            logger.info("Aborted by user")
+            return
+
+    # Default to fresh if no existing jobs and no mode specified
+    if queue_mode is None:
+        queue_mode = "fresh"
+
+    # TODO: too later to purge queue; as the old jobs are already taken by workers
+    # Handle queue based on mode
+    if queue_mode == "fresh":
+        if has_existing:
+            total_existing = sum(len(v) for v in existing.values())
+            logger.warning(f"Purging {total_existing} existing jobs from queue")
+            clear_queue(queue)
+    elif queue_mode == "continue":
+        # Handle orphaned started jobs (move to failed + retry)
+        if existing["started"]:
+            orphaned_count = handle_orphaned_jobs(queue, existing["started"])
+            if orphaned_count > 0:
+                logger.info(f"Handled {orphaned_count} orphaned jobs")
+
+        # Requeue failed jobs (at end of queue - FIFO)
+        if existing["failed"]:
+            failed_count = requeue_failed_jobs(queue, list(existing["failed"].values()))
+            if failed_count > 0:
+                logger.info(f"Requeued {failed_count} failed jobs")
+
     # Generate trial matrix
     trials = generate_trial_matrix(
         benchmark_harnesses, crses, config, registry_dir, crs_configs_dir
     )
+
+    # Filter trials if in continue mode
+    if queue_mode == "continue" and has_existing:
+        # Build set of existing trial keys
+        existing_keys = set()
+        for status_dict in existing.values():
+            existing_keys.update(status_dict.keys())
+
+        # Filter out existing trials
+        original_count = len(trials)
+        trials = [
+            t
+            for t in trials
+            if f"{t.crs}:{t.benchmark_harness.name}:{t.benchmark_harness.harness.name}:{t.mode}:{t.trial_num}"
+            not in existing_keys
+        ]
+        skipped_count = original_count - len(trials)
+        if skipped_count > 0:
+            logger.info(
+                f"Skipping {skipped_count} existing trials, enqueueing {len(trials)} new trials"
+            )
+
+    # Dump trial matrix to JSON
+    dump_trial_matrix(trials, config)
 
     logger.info(f"Total trials to enqueue: {len(trials)}")
     logger.info(f"CRSes: {', '.join(crses)}")
@@ -1430,6 +1664,7 @@ def run_experiment_distributed(
     else:
         # Build variants upfront (on coordinator machine)
         # Workers will use the pre-built variants from oss-fuzz/build/out/
+        # TODO: workers on different machines
         build_results = build_variants_upfront(trials, config, args)
 
     # Check for critical build failures
@@ -1448,11 +1683,20 @@ def run_experiment_distributed(
     logger.info("\nEnqueuing jobs...")
 
     # Enhance config with CLI arguments (highest precedence)
-    enhanced_config = enhance_config_with_cli_args(config.to_dict(), args)
+    enhanced_config = enhance_config_with_cli_args(config, args)
+
+    # Get CPU counts for each CRS from resource configs
+    # Note: crs_configs_dir already resolved at line 1490
+    crs_cpu_counts = {}
+    for crs in crses:
+        crs_cpu_counts[crs] = get_crs_cpu_count(crs, crs_configs_dir)
+        logger.debug(f"CRS {crs} requires {crs_cpu_counts[crs]} CPUs")
 
     jobs = []
     for trial in trials:
         bh = trial.benchmark_harness
+        cpu_count = crs_cpu_counts.get(trial.crs, 4)
+
         job = queue.enqueue(
             "crsbench.distributed.jobs.run_crs_trial",
             crs=trial.crs,
@@ -1460,7 +1704,7 @@ def run_experiment_distributed(
             harness_name=bh.harness.name,
             harness_path=bh.harness.path,
             trial_num=trial.trial_num,
-            config=enhanced_config,
+            config_dict=enhanced_config.model_dump(),
             mode=trial.mode,
             job_timeout=config.max_total_time,
             result_ttl=-1,  # Persist results forever
@@ -1470,6 +1714,7 @@ def run_experiment_distributed(
                 "harness": bh.harness.name,
                 "mode": trial.mode,
                 "trial_num": trial.trial_num,
+                "cpu_count": cpu_count,  # Add CPU count from resource config
             },
         )
         jobs.append(job)
