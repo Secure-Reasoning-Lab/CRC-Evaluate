@@ -4,7 +4,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from crsbench.utils.crs_helper import get_all_crs_registry_names, get_crs_registry_name
+from crsbench.utils.crs_helper import (
+    get_all_crs_registry_names,
+    get_crs_registry_name,
+    get_crs_worker_resources,
+)
 
 
 class TestCRSHelper(unittest.TestCase):
@@ -131,6 +135,54 @@ crs:
         name = get_crs_registry_name("multi-crs-2", self.crs_configs_dir)
 
         self.assertEqual(name, "first-crs")
+
+    def test_get_crs_worker_resources_with_resources(self):
+        """Test getting worker resources from config."""
+        config_dir = self.crs_configs_dir / "with-resources"
+        config_dir.mkdir()
+
+        config_resource_path = config_dir / "config-resource.yaml"
+        config_resource_path.write_text(
+            """
+workers:
+  local:
+    cpuset: "0-15"
+    memory: "64G"
+
+crs:
+  test-crs:
+    workers: [local]
+"""
+        )
+
+        resources = get_crs_worker_resources("with-resources", self.crs_configs_dir)
+
+        self.assertEqual(resources["cpuset"], "0-15")
+        self.assertEqual(resources["memory"], "64G")
+
+    def test_get_crs_worker_resources_no_workers(self):
+        """Test getting resources when no workers defined."""
+        config_dir = self.crs_configs_dir / "no-workers"
+        config_dir.mkdir()
+
+        config_resource_path = config_dir / "config-resource.yaml"
+        config_resource_path.write_text(
+            """
+crs:
+  test-crs:
+    workers: [local]
+"""
+        )
+
+        resources = get_crs_worker_resources("no-workers", self.crs_configs_dir)
+
+        self.assertIsNone(resources["cpuset"])
+        self.assertIsNone(resources["memory"])
+
+    def test_get_crs_worker_resources_missing_file(self):
+        """Test error when config file doesn't exist."""
+        with self.assertRaises(FileNotFoundError):
+            get_crs_worker_resources("nonexistent", self.crs_configs_dir)
 
 
 if __name__ == "__main__":
