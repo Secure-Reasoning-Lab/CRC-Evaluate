@@ -379,9 +379,10 @@ def run_crs_trial(
         result = runner.run_benchmark(
             benchmark_harness=benchmark_harness,
             mode=mode,  # Use mode from trial
-            crs_config={},  # Empty config - executor already configured
+            crs_config={},  # Empty config - executor already configured # TODO: needed?
             trial_output_dir=trial_output_dir,
             oss_fuzz_path=oss_fuzz_path,
+            skip_verification=config.get("skip_verification", False),
         )
 
         execution_time = time.time() - start_time
