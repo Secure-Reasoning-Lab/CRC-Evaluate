@@ -1,0 +1,336 @@
+"""Unit tests for POVStore.
+
+Tests for crsbench/evaluation/verification/pov/store.py.
+"""
+
+import json
+from pathlib import Path
+
+import pytest
+from crsbench.evaluation.verification.models import PovVerificationStatus
+from crsbench.evaluation.verification.pov.store import POVStore
+from crsbench.evaluation.verification.utils import compute_content_hash
+
+
+class TestPOVStoreInit:
+    """Tests for POVStore initialization."""
+
+    def test_creates_directories(self, tmp_path: Path) -> None:
+        """Test that store creates required directory structure."""
+        store_dir = tmp_path / "povs"
+        POVStore(store_dir)
+
+        assert store_dir.exists()
+        assert (store_dir / "povs_unique").exists()
+        assert (store_dir / "crash_logs").exists()
+        assert (store_dir / "snapshots").exists()
+
+    def test_initial_state_empty(self, tmp_path: Path) -> None:
+        """Test that store initializes with empty state."""
+        store = POVStore(tmp_path / "povs")
+
+        assert len(store.povs) == 0
+        assert len(store.cpv_to_first_pov) == 0
+
+
+class TestPOVStoreAddPov:
+    """Tests for POVStore.add_pov method."""
+
+    @pytest.fixture
+    def store(self, tmp_path: Path) -> POVStore:
+        """Create a store instance."""
+        return POVStore(tmp_path / "povs")
+
+    @pytest.fixture
+    def pov_file(self, tmp_path: Path) -> Path:
+        """Create a test POV file."""
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"test pov content")
+        return pov
+
+    def test_add_new_pov(self, store: POVStore, pov_file: Path) -> None:
+        """Test adding a new POV."""
+        pov_hash, is_new = store.add_pov(
+            pov_file,
+            PovVerificationStatus.CPV,
+            ["cpv_0"],
+            verification_duration=45.0,
+        )
+
+        assert is_new is True
+        assert len(pov_hash) == 12
+        assert pov_hash in store.povs
+        assert store.povs[pov_hash].status == PovVerificationStatus.CPV
+        assert store.povs[pov_hash].cpv_matched == ["cpv_0"]
+        assert store.povs[pov_hash].verification_duration == 45.0
+
+    def test_add_duplicate_pov_returns_false(
+        self, store: POVStore, pov_file: Path
+    ) -> None:
+        """Test adding duplicate POV returns is_new=False."""
+        hash1, is_new1 = store.add_pov(pov_file, PovVerificationStatus.CPV, ["cpv_0"])
+        hash2, is_new2 = store.add_pov(pov_file, PovVerificationStatus.CPV, ["cpv_0"])
+
+        assert hash1 == hash2
+        assert is_new1 is True
+        assert is_new2 is False
+
+    def test_add_pov_tracks_cpv_first_pov(
+        self, store: POVStore, pov_file: Path
+    ) -> None:
+        """Test that first POV for each CPV is tracked."""
+        pov_hash, _ = store.add_pov(
+            pov_file, PovVerificationStatus.CPV, ["cpv_0", "cpv_1"]
+        )
+
+        assert store.cpv_to_first_pov["cpv_0"] == pov_hash
+        assert store.cpv_to_first_pov["cpv_1"] == pov_hash
+
+    def test_add_pov_keeps_first_cpv_mapping(
+        self, store: POVStore, tmp_path: Path
+    ) -> None:
+        """Test that first POV mapping isn't overwritten by later POVs."""
+        pov1 = tmp_path / "pov1.bin"
+        pov2 = tmp_path / "pov2.bin"
+        pov1.write_bytes(b"content_a")
+        pov2.write_bytes(b"content_b")
+
+        hash1, _ = store.add_pov(pov1, PovVerificationStatus.CPV, ["cpv_0"])
+        hash2, _ = store.add_pov(pov2, PovVerificationStatus.CPV, ["cpv_0"])
+
+        # First POV should still be mapped
+        assert store.cpv_to_first_pov["cpv_0"] == hash1
+        assert hash1 != hash2
+
+    def test_add_pov_with_custom_timestamp(
+        self, store: POVStore, pov_file: Path
+    ) -> None:
+        """Test adding POV with custom timestamp."""
+        custom_ts = 1704672000.0
+        store.add_pov(
+            pov_file,
+            PovVerificationStatus.CPV,
+            ["cpv_0"],
+            timestamp=custom_ts,
+        )
+
+        pov_hash = compute_content_hash(pov_file)
+        assert store.povs[pov_hash].first_seen_ts == custom_ts
+
+    def test_add_pov_keeps_earliest_timestamp(
+        self, store: POVStore, pov_file: Path
+    ) -> None:
+        """Test that duplicate POV keeps earliest timestamp."""
+        store.add_pov(pov_file, PovVerificationStatus.CPV, ["cpv_0"], timestamp=1000.0)
+        store.add_pov(pov_file, PovVerificationStatus.CPV, ["cpv_0"], timestamp=500.0)
+
+        pov_hash = compute_content_hash(pov_file)
+        assert store.povs[pov_hash].first_seen_ts == 500.0
+
+
+class TestPOVStoreUniquePov:
+    """Tests for POVStore.store_unique_pov method."""
+
+    @pytest.fixture
+    def store(self, tmp_path: Path) -> POVStore:
+        """Create a store instance."""
+        return POVStore(tmp_path / "povs")
+
+    def test_store_unique_pov(self, store: POVStore, tmp_path: Path) -> None:
+        """Test storing unique POV file."""
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"test content")
+        pov_hash = compute_content_hash(pov)
+
+        stored_path = store.store_unique_pov(pov, pov_hash)
+
+        assert stored_path.exists()
+        assert stored_path.name == f"{pov_hash}.blob"
+        assert stored_path.read_bytes() == b"test content"
+
+    def test_store_unique_pov_idempotent(self, store: POVStore, tmp_path: Path) -> None:
+        """Test storing same POV twice doesn't duplicate."""
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"test content")
+        pov_hash = compute_content_hash(pov)
+
+        path1 = store.store_unique_pov(pov, pov_hash)
+        path2 = store.store_unique_pov(pov, pov_hash)
+
+        assert path1 == path2
+
+
+class TestPOVStoreCrashLog:
+    """Tests for POVStore.store_crash_log method."""
+
+    @pytest.fixture
+    def store(self, tmp_path: Path) -> POVStore:
+        """Create a store instance."""
+        return POVStore(tmp_path / "povs")
+
+    def test_store_crash_log(self, store: POVStore, tmp_path: Path) -> None:
+        """Test storing crash log."""
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"test content")
+        pov_hash, _ = store.add_pov(pov, PovVerificationStatus.CPV, ["cpv_0"])
+
+        crash_log = "ASAN: heap-buffer-overflow\n"
+        log_path = store.store_crash_log(pov_hash, crash_log)
+
+        assert log_path.exists()
+        assert log_path.name == f"{pov_hash}.log"
+        assert log_path.read_text() == crash_log
+
+    def test_store_crash_log_updates_entry(
+        self, store: POVStore, tmp_path: Path
+    ) -> None:
+        """Test that storing crash log updates POV entry."""
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"test content")
+        pov_hash, _ = store.add_pov(pov, PovVerificationStatus.CPV, ["cpv_0"])
+
+        store.store_crash_log(pov_hash, "crash log content")
+
+        entry = store.get_pov(pov_hash)
+        assert entry is not None
+        assert entry.crash_log_path == f"crash_logs/{pov_hash}.log"
+
+
+class TestPOVStoreQueries:
+    """Tests for POVStore query methods."""
+
+    @pytest.fixture
+    def store_with_data(self, tmp_path: Path) -> POVStore:
+        """Create a store with test data."""
+        store = POVStore(tmp_path / "povs")
+
+        # Add POVs
+        pov1 = tmp_path / "pov1.bin"
+        pov2 = tmp_path / "pov2.bin"
+        pov3 = tmp_path / "pov3.bin"
+        pov1.write_bytes(b"content_a")
+        pov2.write_bytes(b"content_b")
+        pov3.write_bytes(b"content_c")
+
+        store.add_pov(pov1, PovVerificationStatus.CPV, ["cpv_0"])
+        store.add_pov(pov2, PovVerificationStatus.ZERODAY, [])
+        store.add_pov(pov3, PovVerificationStatus.NOT_VULNERABLE, [])
+
+        return store
+
+    def test_get_pov(self, store_with_data: POVStore, tmp_path: Path) -> None:
+        """Test getting POV entry by hash."""
+        pov1 = tmp_path / "pov1.bin"
+        pov_hash = compute_content_hash(pov1)
+
+        entry = store_with_data.get_pov(pov_hash)
+
+        assert entry is not None
+        assert entry.status == PovVerificationStatus.CPV
+        assert entry.cpv_matched == ["cpv_0"]
+
+    def test_get_pov_not_found(self, store_with_data: POVStore) -> None:
+        """Test getting non-existent POV returns None."""
+        entry = store_with_data.get_pov("nonexistent")
+        assert entry is None
+
+    def test_get_cpvs_found(self, store_with_data: POVStore, tmp_path: Path) -> None:
+        """Test getting discovered CPVs."""
+        cpvs = store_with_data.get_cpvs_found()
+        assert cpvs == {"cpv_0"}
+
+    def test_get_tested_hashes(self, store_with_data: POVStore, tmp_path: Path) -> None:
+        """Test getting tested POV hashes."""
+        hashes = store_with_data.get_tested_hashes()
+
+        pov1_hash = compute_content_hash(tmp_path / "pov1.bin")
+        pov2_hash = compute_content_hash(tmp_path / "pov2.bin")
+        pov3_hash = compute_content_hash(tmp_path / "pov3.bin")
+
+        assert pov1_hash in hashes
+        assert pov2_hash in hashes
+        assert pov3_hash in hashes
+        assert len(hashes) == 3
+
+    def test_is_already_tested(self, store_with_data: POVStore, tmp_path: Path) -> None:
+        """Test checking if POV is already tested."""
+        pov1 = tmp_path / "pov1.bin"
+        new_pov = tmp_path / "new.bin"
+        new_pov.write_bytes(b"new content")
+
+        assert store_with_data.is_already_tested(pov1) is True
+        assert store_with_data.is_already_tested(new_pov) is False
+
+    def test_get_stats(self, store_with_data: POVStore) -> None:
+        """Test getting store statistics."""
+        stats = store_with_data.get_stats()
+
+        assert stats["total_povs"] == 3
+        assert stats["cpvs_found"] == 1
+        assert stats["zerodays"] == 1
+        assert stats["errors"] == 0
+
+
+class TestPOVStorePersistence:
+    """Tests for POVStore save/load methods."""
+
+    @pytest.fixture
+    def store_with_data(self, tmp_path: Path) -> POVStore:
+        """Create a store with test data."""
+        store = POVStore(tmp_path / "povs")
+
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"test content")
+        store.add_pov(pov, PovVerificationStatus.CPV, ["cpv_0", "cpv_1"])
+
+        return store
+
+    def test_save_and_load(self, store_with_data: POVStore, tmp_path: Path) -> None:
+        """Test saving and loading store state."""
+        # Save
+        store_with_data.save()
+
+        # Create new store and load
+        new_store = POVStore(tmp_path / "povs")
+        new_store.load()
+
+        # Verify data
+        assert len(new_store.povs) == len(store_with_data.povs)
+        assert new_store.cpv_to_first_pov == store_with_data.cpv_to_first_pov
+
+        pov_hash = compute_content_hash(tmp_path / "test.pov")
+        assert new_store.povs[pov_hash].status == PovVerificationStatus.CPV
+        assert new_store.povs[pov_hash].cpv_matched == ["cpv_0", "cpv_1"]
+
+    def test_save_to_custom_path(
+        self, store_with_data: POVStore, tmp_path: Path
+    ) -> None:
+        """Test saving to custom path."""
+        custom_path = tmp_path / "custom" / "store.json"
+        store_with_data.save(custom_path)
+
+        assert custom_path.exists()
+
+        # Verify JSON structure
+        data = json.loads(custom_path.read_text())
+        assert "povs" in data
+        assert "cpv_to_first_pov" in data
+
+    def test_load_from_custom_path(
+        self, store_with_data: POVStore, tmp_path: Path
+    ) -> None:
+        """Test loading from custom path."""
+        custom_path = tmp_path / "custom" / "store.json"
+        store_with_data.save(custom_path)
+
+        new_store = POVStore(tmp_path / "new_store")
+        new_store.load(custom_path)
+
+        assert len(new_store.povs) == len(store_with_data.povs)
+
+    def test_load_nonexistent_raises(self, tmp_path: Path) -> None:
+        """Test loading non-existent file raises FileNotFoundError."""
+        store = POVStore(tmp_path / "povs")
+
+        with pytest.raises(FileNotFoundError):
+            store.load(tmp_path / "nonexistent.json")

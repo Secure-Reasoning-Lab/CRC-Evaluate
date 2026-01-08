@@ -235,7 +235,7 @@ def run_verify(args: argparse.Namespace) -> int:
         )
     else:
         # Directory mode (original behavior)
-        results = engine.verify_benchmark(
+        results, _skipped = engine.verify_benchmark(
             benchmark_path=args.benchmark_path,
             pov_dir=args.pov_dir,
             harness_filter=args.harness,

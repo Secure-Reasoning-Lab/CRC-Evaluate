@@ -1,0 +1,300 @@
+"""In-memory POV store with JSON persistence.
+
+This module provides POVStore, which tracks POV verification data,
+supports deduplication based on content hash, and provides JSON persistence.
+
+Thread Safety:
+    All mutations are protected by a threading.Lock to ensure safe
+    concurrent access from multiple threads (e.g., snapshot thread
+    and main thread).
+"""
+
+import json
+import shutil
+import threading
+import time
+from pathlib import Path
+from typing import Optional
+
+from crsbench.evaluation.verification.models import PovVerificationStatus
+from crsbench.evaluation.verification.pov.models import POVEntry
+from crsbench.evaluation.verification.utils import compute_content_hash
+from crsbench.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+class POVStore:
+    """In-memory POV store with JSON persistence.
+
+    Tracks POV verification data, determines which POVs are duplicates,
+    and provides JSON persistence for saving/loading state.
+
+    Directory Structure:
+        store_dir/
+        ├── pov_store.json               # Hash-to-POV mapping, CPV matches
+        ├── povs_unique/                 # Deduplicated POV files
+        │   └── {hash}.blob              # Named by 12-char SHA256 hash
+        ├── crash_logs/                  # Crash logs for verified POVs
+        │   └── {hash}.log               # Named by POV hash
+        └── snapshots/                   # Per-snapshot summaries
+            └── snapshot-{NNN}.json
+
+    Thread Safety:
+        All mutations are protected by threading.Lock.
+
+    Attributes:
+        store_dir: Directory for storing POV data (trial-N/povs/)
+        povs: Hash-to-POVEntry mapping
+        cpv_to_first_pov: Maps each CPV to the hash of first POV that triggered it
+    """
+
+    def __init__(self, store_dir: Path):
+        """Initialize POV store.
+
+        Args:
+            store_dir: Directory for storing POV data.
+                Will create subdirectories if they don't exist.
+        """
+        self.store_dir = store_dir
+        self.povs: dict[str, POVEntry] = {}
+        self.cpv_to_first_pov: dict[str, str] = {}
+        self._lock = threading.Lock()
+
+        # Create directory structure
+        self._create_directories()
+
+    def _create_directories(self) -> None:
+        """Create store directory structure."""
+        self.store_dir.mkdir(parents=True, exist_ok=True)
+        (self.store_dir / "povs_unique").mkdir(exist_ok=True)
+        (self.store_dir / "crash_logs").mkdir(exist_ok=True)
+        (self.store_dir / "snapshots").mkdir(exist_ok=True)
+
+    def add_pov(
+        self,
+        pov_path: Path,
+        status: PovVerificationStatus,
+        cpv_matched: list[str],
+        verification_duration: float = 0.0,
+        *,
+        timestamp: Optional[float] = None,
+    ) -> tuple[str, bool]:
+        """Add a POV with its verification result.
+
+        Args:
+            pov_path: Path to the POV file
+            status: Verification result status
+            cpv_matched: List of CPV identifiers matched
+            verification_duration: Time taken to verify (seconds)
+            timestamp: Optional timestamp for first_seen_ts (defaults to now)
+
+        Returns:
+            Tuple of (hash, is_new) where:
+                - hash: 12-character hex SHA256 hash of POV content
+                - is_new: True if this POV was not previously seen
+        """
+        pov_hash = compute_content_hash(pov_path)
+        file_size = pov_path.stat().st_size if pov_path.exists() else 0
+        ts = timestamp if timestamp is not None else time.time()
+
+        with self._lock:
+            # Check if POV already exists
+            if pov_hash in self.povs:
+                existing = self.povs[pov_hash]
+                # Keep earliest timestamp
+                if ts < existing.first_seen_ts:
+                    self.povs[pov_hash] = POVEntry(
+                        hash=pov_hash,
+                        first_seen_ts=ts,
+                        file_size=file_size,
+                        status=existing.status,
+                        cpv_matched=existing.cpv_matched,
+                        crash_log_path=existing.crash_log_path,
+                        verification_duration=existing.verification_duration,
+                    )
+                return pov_hash, False
+
+            # Store POV entry
+            self.povs[pov_hash] = POVEntry(
+                hash=pov_hash,
+                first_seen_ts=ts,
+                file_size=file_size,
+                status=status,
+                cpv_matched=cpv_matched,
+                verification_duration=verification_duration,
+            )
+
+            # Track first POV for each CPV
+            for cpv_id in cpv_matched:
+                if cpv_id not in self.cpv_to_first_pov:
+                    self.cpv_to_first_pov[cpv_id] = pov_hash
+
+            logger.debug(
+                f"Added POV {pov_hash}: status={status.value}, "
+                f"cpv_matched={cpv_matched}"
+            )
+
+            return pov_hash, True
+
+    def store_unique_pov(self, pov_path: Path, pov_hash: str) -> Path:
+        """Copy POV file to povs_unique/{hash}.blob.
+
+        Args:
+            pov_path: Path to source POV file
+            pov_hash: Hash of the POV content
+
+        Returns:
+            Path to stored POV file
+        """
+        dest_path = self.store_dir / "povs_unique" / f"{pov_hash}.blob"
+        if not dest_path.exists():
+            shutil.copy2(pov_path, dest_path)
+            logger.debug(f"Stored unique POV: {dest_path}")
+        return dest_path
+
+    def store_crash_log(self, pov_hash: str, crash_log: str) -> Path:
+        """Save crash log to crash_logs/{hash}.log.
+
+        Args:
+            pov_hash: Hash of the POV content
+            crash_log: Crash log content
+
+        Returns:
+            Path to stored crash log file
+        """
+        dest_path = self.store_dir / "crash_logs" / f"{pov_hash}.log"
+        dest_path.write_text(crash_log)
+
+        # Update POV entry with crash log path
+        with self._lock:
+            if pov_hash in self.povs:
+                entry = self.povs[pov_hash]
+                self.povs[pov_hash] = POVEntry(
+                    hash=entry.hash,
+                    first_seen_ts=entry.first_seen_ts,
+                    file_size=entry.file_size,
+                    status=entry.status,
+                    cpv_matched=entry.cpv_matched,
+                    crash_log_path=f"crash_logs/{pov_hash}.log",
+                    verification_duration=entry.verification_duration,
+                )
+
+        logger.debug(f"Stored crash log: {dest_path}")
+        return dest_path
+
+    def get_pov(self, pov_hash: str) -> Optional[POVEntry]:
+        """Get POV entry by hash.
+
+        Args:
+            pov_hash: Hash of the POV content
+
+        Returns:
+            POVEntry or None if not found
+        """
+        with self._lock:
+            return self.povs.get(pov_hash)
+
+    def get_cpvs_found(self) -> set[str]:
+        """Get set of CPV identifiers that have been discovered.
+
+        Returns:
+            Set of CPV identifiers
+        """
+        with self._lock:
+            return set(self.cpv_to_first_pov.keys())
+
+    def get_tested_hashes(self) -> set[str]:
+        """Get set of POV hashes that have been tested.
+
+        This is used for pre-verification deduplication via VerificationEngine's
+        skip_hashes parameter.
+
+        Returns:
+            Set of POV content hashes
+        """
+        with self._lock:
+            return set(self.povs.keys())
+
+    def is_already_tested(self, pov_path: Path) -> bool:
+        """Check if a POV has already been tested.
+
+        Args:
+            pov_path: Path to the POV file
+
+        Returns:
+            True if the POV hash is already in the store
+        """
+        pov_hash = compute_content_hash(pov_path)
+        with self._lock:
+            return pov_hash in self.povs
+
+    def get_stats(self) -> dict:
+        """Get store statistics.
+
+        Returns:
+            Dictionary with statistics:
+                - total_povs: Total unique POVs
+                - cpvs_found: Number of CPVs discovered
+                - zerodays: Number of zeroday POVs
+                - errors: Number of error status POVs
+        """
+        with self._lock:
+            stats = {
+                "total_povs": len(self.povs),
+                "cpvs_found": len(self.cpv_to_first_pov),
+                "zerodays": 0,
+                "errors": 0,
+            }
+            for entry in self.povs.values():
+                if entry.status == PovVerificationStatus.ZERODAY:
+                    stats["zerodays"] += 1
+                elif entry.status == PovVerificationStatus.ERROR:
+                    stats["errors"] += 1
+            return stats
+
+    def save(self, path: Optional[Path] = None) -> None:
+        """Persist store state to JSON file.
+
+        Args:
+            path: Path to output JSON file. If None, uses default location.
+        """
+        if path is None:
+            path = self.store_dir / "pov_store.json"
+
+        with self._lock:
+            data = {
+                "povs": {h: p.model_dump(mode="json") for h, p in self.povs.items()},
+                "cpv_to_first_pov": dict(self.cpv_to_first_pov),
+            }
+
+        # Write outside lock to minimize lock duration
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2))
+        logger.debug(f"Saved POV store to {path}")
+
+    def load(self, path: Optional[Path] = None) -> None:
+        """Load store state from JSON file.
+
+        Args:
+            path: Path to input JSON file. If None, uses default location.
+
+        Raises:
+            FileNotFoundError: If the file doesn't exist
+            json.JSONDecodeError: If the file contains invalid JSON
+        """
+        if path is None:
+            path = self.store_dir / "pov_store.json"
+
+        data = json.loads(path.read_text())
+
+        with self._lock:
+            # Load POV entries
+            self.povs = {}
+            for h, p_data in data.get("povs", {}).items():
+                self.povs[h] = POVEntry(**p_data)
+
+            # Load CPV to first POV mapping
+            self.cpv_to_first_pov = dict(data.get("cpv_to_first_pov", {}))
+
+        logger.debug(f"Loaded POV store from {path}")
