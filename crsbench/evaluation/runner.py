@@ -17,6 +17,10 @@ from crsbench.evaluation.verification.models import (
     PatchVerificationResult,
 )
 from crsbench.evaluation.verification.patch import PatchVerificationEngine
+from crsbench.evaluation.verification.pov import (
+    POVVerificationConfig,
+    POVVerificationManager,
+)
 from crsbench.utils.logger import get_logger
 from crsbench.validation import ValidationResult, validate_benchmark
 from crsbench.validation.schemas import BenchmarkConfig, BenchmarkHarness, HarnessFile
@@ -74,6 +78,7 @@ class BenchmarkRunner:
         coverage_enabled: bool = False,
         coverage_saturation_time: int = 21600,
         coverage_early_stop: bool = False,
+        pov_early_stop: bool = False,
         oss_fuzz_path: Optional[Path] = None,
         on_build_start: Optional[Callable[[], None]] = None,
         on_run_start: Optional[Callable[[], None]] = None,
@@ -87,7 +92,8 @@ class BenchmarkRunner:
             coverage_enabled: Enable coverage collection during trials
             coverage_saturation_time: Seconds without new coverage to detect saturation
             coverage_early_stop: Terminate trial early when coverage saturation is detected
-            oss_fuzz_path: Path to oss-fuzz directory (required for coverage)
+            pov_early_stop: Terminate trial early when all CPVs for harness are found
+            oss_fuzz_path: Path to oss-fuzz directory (required for coverage and POV verification)
             on_build_start: Callback invoked when CRS build phase starts
             on_run_start: Callback invoked when CRS run phase starts
             on_verification_start: Callback invoked when verification phase starts
@@ -97,6 +103,7 @@ class BenchmarkRunner:
         self.coverage_enabled = coverage_enabled
         self.coverage_saturation_time = coverage_saturation_time
         self.coverage_early_stop = coverage_early_stop
+        self.pov_early_stop = pov_early_stop
         self.oss_fuzz_path = oss_fuzz_path
         self.on_build_start = on_build_start
         self.on_run_start = on_run_start
@@ -113,6 +120,17 @@ class BenchmarkRunner:
                 self.logger.info(
                     f"Coverage early stop enabled: will terminate after "
                     f"{coverage_saturation_time}s without new coverage"
+                )
+
+        if pov_early_stop:
+            if not oss_fuzz_path:
+                self.logger.warning(
+                    "pov_early_stop=True requires oss_fuzz_path to be set. "
+                    "Early stop will NOT be active."
+                )
+            else:
+                self.logger.info(
+                    "POV early stop enabled: will terminate when all CPVs for harness are found"
                 )
 
     def run_benchmark(
@@ -381,12 +399,23 @@ class BenchmarkRunner:
         self.logger.info(f"Evaluating harness: {harness.name}")
 
         # Execute CRS with managers
-        harness_result, _ = self._execute_crs_with_managers(
+        harness_result, _, pov_verification_manager = self._execute_crs_with_managers(
             harness=harness,
             benchmark_path=benchmark_path,
             trial_output_dir=trial_output_dir,
             trial_start_time=trial_start_time,
         )
+
+        # Log POV verification manager final report if available
+        if pov_verification_manager:
+            report = pov_verification_manager.get_report()
+            self.logger.info(
+                f"POV verification report: "
+                f"cpvs={len(report.cpvs_found)}/{report.total_expected_cpvs}, "
+                f"povs={report.total_povs_processed}, "
+                f"zerodays={report.zerodays_detected}, "
+                f"early_stopped={report.early_stopped}"
+            )
 
         # Run post-experiment coverage (only for bug-finding CRS with successful run)
         if (
@@ -424,12 +453,13 @@ class BenchmarkRunner:
         benchmark_path: Path,
         trial_output_dir: Path,
         trial_start_time: float,
-    ) -> tuple[HarnessResult, Any]:
-        """Execute CRS with coverage and snapshot managers."""
+    ) -> tuple[HarnessResult, Any, Optional[POVVerificationManager]]:
+        """Execute CRS with coverage, snapshot, and POV verification managers."""
         snapshot_manager = None
         snapshot_thread = None
         coverage_manager = None
         coverage_thread = None
+        pov_verification_manager = None
         stop_event: Optional[threading.Event] = None
         harness_result = None
 
@@ -444,11 +474,33 @@ class BenchmarkRunner:
                 )
             )
 
+            # Start POV verification manager if enabled
+            pov_verification_manager, pov_stop_event = (
+                self._start_pov_verification_manager(
+                    benchmark_path=benchmark_path,
+                    trial_output_dir=trial_output_dir,
+                    trial_start_time=trial_start_time,
+                    harness_name=harness.name,
+                )
+            )
+
+            # Combine stop events: either coverage saturation OR all CPVs found can stop CRS
+            if pov_stop_event and stop_event:
+                # Both enabled: use POV stop event (it's more definitive)
+                combined_stop_event = pov_stop_event
+            elif pov_stop_event:
+                combined_stop_event = pov_stop_event
+            elif stop_event:
+                combined_stop_event = stop_event
+            else:
+                combined_stop_event = None
+
             snapshot_manager, snapshot_thread = self._start_snapshot_manager(
                 harness_name=harness.name,
                 trial_output_dir=trial_output_dir,
                 trial_start_time=trial_start_time,
                 coverage_manager=coverage_manager,
+                pov_verification_manager=pov_verification_manager,
             )
 
             # Create callback for run start
@@ -469,7 +521,7 @@ class BenchmarkRunner:
                 trial_output_dir=trial_output_dir,
                 on_build_start=self.on_build_start,
                 on_run_start=on_run_start,
-                stop_event=stop_event,
+                stop_event=combined_stop_event,
             )
 
             harness_result = HarnessResult(
@@ -499,7 +551,7 @@ class BenchmarkRunner:
                 harness_name=harness.name,
             )
 
-        return harness_result, coverage_manager
+        return harness_result, coverage_manager, pov_verification_manager
 
     def _start_coverage_manager(
         self,
@@ -540,12 +592,165 @@ class BenchmarkRunner:
 
         return coverage_manager, coverage_thread, stop_event
 
+    def _start_pov_verification_manager(
+        self,
+        benchmark_path: Path,
+        trial_output_dir: Path,
+        trial_start_time: float,
+        harness_name: str,
+    ) -> tuple[Optional[POVVerificationManager], Optional[threading.Event]]:
+        """Start POV verification manager if enabled.
+
+        Args:
+            benchmark_path: Path to benchmark directory
+            trial_output_dir: Trial output directory
+            trial_start_time: Trial start timestamp
+            harness_name: Name of the harness
+
+        Returns:
+            Tuple of (POVVerificationManager, stop_event) or (None, None) if oss_fuzz_path not set
+        """
+        if not self.oss_fuzz_path:
+            return None, None
+
+        pov_verification_manager = self._create_pov_verification_manager(
+            benchmark_path=benchmark_path,
+            trial_output_dir=trial_output_dir,
+            trial_start_time=trial_start_time,
+            harness_name=harness_name,
+        )
+
+        stop_event = None
+        if pov_verification_manager and self.pov_early_stop:
+            stop_event = threading.Event()
+            pov_verification_manager._stop_event = stop_event
+            self.logger.info("POV verification early stop enabled")
+
+        return pov_verification_manager, stop_event
+
+    def _create_pov_verification_manager(
+        self,
+        benchmark_path: Path,
+        trial_output_dir: Path,
+        trial_start_time: float,
+        harness_name: str,
+    ) -> Optional[POVVerificationManager]:
+        """Create POVVerificationManager for real-time POV verification during trial.
+
+        Args:
+            benchmark_path: Path to benchmark directory
+            trial_output_dir: Trial output directory
+            trial_start_time: Trial start timestamp
+            harness_name: Name of the harness
+
+        Returns:
+            POVVerificationManager instance or None if creation fails
+        """
+        if not self.oss_fuzz_path:
+            self.logger.warning("POV verification enabled but oss_fuzz_path not set")
+            return None
+
+        try:
+            import yaml
+
+            from crsbench.validation.meta_adapter import MetaYamlAdapter
+
+            # Load project.yaml for main_repo and language
+            project_yaml = benchmark_path / "project.yaml"
+            if not project_yaml.exists():
+                self.logger.error(f"project.yaml not found: {project_yaml}")
+                return None
+
+            with project_yaml.open() as f:
+                project_config = yaml.safe_load(f)
+
+            main_repo = project_config.get("main_repo")
+            repo_name = project_config.get("repo_name")
+            language = project_config.get("language", "c")
+
+            if not main_repo:
+                self.logger.error(f"main_repo not found in {project_yaml}")
+                return None
+
+            # Load benchmark config via MetaYamlAdapter
+            meta_yaml = benchmark_path / ".aixcc" / "meta.yaml"
+            if not meta_yaml.exists():
+                self.logger.error(f"meta.yaml not found: {meta_yaml}")
+                return None
+
+            try:
+                adapter = MetaYamlAdapter.from_meta_yaml(
+                    meta_yaml_path=meta_yaml,
+                    benchmark_name=benchmark_path.name,
+                    lang=language,
+                    main_repo=main_repo,
+                    benchmark_path=benchmark_path,
+                    repo_name=repo_name,
+                )
+            except (FileNotFoundError, ValueError) as e:
+                self.logger.error(f"Failed to load meta.yaml: {e}")
+                return None
+
+            # Get total expected CPVs for this harness
+            harness = adapter.get_harness(harness_name)
+            if not harness or not harness.vulns:
+                self.logger.warning(
+                    f"No vulnerabilities found for harness '{harness_name}', "
+                    "POV verification manager not created"
+                )
+                return None
+
+            # Extract actual CPV IDs from harness vulnerabilities
+            expected_cpv_ids = [vuln.vuln_keyword for vuln in harness.vulns]
+
+            # Create POV verification config
+            config = POVVerificationConfig(
+                early_stop_enabled=self.pov_early_stop,
+            )
+
+            # Create verification engine
+            engine = VerificationEngine(
+                oss_fuzz_path=self.oss_fuzz_path,
+                timeout=120,
+                dedup_strategy=PatchBasedDedup(),
+            )
+
+            # POV output directory (where CRS writes discovered POVs)
+            pov_output_dir = trial_output_dir / "output" / "povs"
+
+            # Create POV verification manager
+            manager = POVVerificationManager(
+                trial_dir=trial_output_dir,
+                pov_output_dir=pov_output_dir,
+                config=config,
+                harness_name=harness_name,
+                benchmark_id=benchmark_path.name,
+                expected_cpv_ids=expected_cpv_ids,
+                trial_start_time=trial_start_time,
+                engine=engine,
+                adapter=adapter,
+            )
+
+            self.logger.info(
+                f"POV verification manager created: harness={harness_name}, "
+                f"expected_cpvs={len(expected_cpv_ids)}, early_stop={self.pov_early_stop}"
+            )
+
+            return manager
+
+        except Exception as e:
+            self.logger.error(
+                f"Failed to create POV verification manager: {e}", exc_info=True
+            )
+            return None
+
     def _start_snapshot_manager(
         self,
         harness_name: str,
         trial_output_dir: Path,
         trial_start_time: float,
         coverage_manager: Any,
+        pov_verification_manager: Optional[POVVerificationManager] = None,
     ) -> tuple[Optional[SnapshotManager], Optional[threading.Thread]]:
         """Start snapshot manager if enabled."""
         if not (self.snapshot_period and self.snapshot_period > 0):
@@ -561,6 +766,7 @@ class BenchmarkRunner:
             snapshot_period=self.snapshot_period,
             trial_start_time=trial_start_time,
             coverage_manager=coverage_manager,
+            pov_verification_manager=pov_verification_manager,
         )
         snapshot_thread = threading.Thread(target=snapshot_manager.run, daemon=True)
         snapshot_thread.start()
@@ -673,13 +879,14 @@ class BenchmarkRunner:
                 dedup_strategy=PatchBasedDedup(),  # TODO: make it configurable
             )
             pov_dir = crs_output_dir / "povs"
-            return engine.verify_benchmark(
+            results, _skipped = engine.verify_benchmark(
                 benchmark_path=benchmark_path,
                 pov_dir=pov_dir,
                 deduplicate=True,  # TODO: configurable?
                 harness_filter=harness_name,
-                force_rebuild=True,  # Always rebuild to ensure correct patches
+                force_rebuild=False,  # Variants are pre-built at experiment start
             )
+            return results
         except Exception as e:
             self.logger.error(
                 f"POV verification failed for harness '{harness_name}': {e}",

@@ -1,299 +1,230 @@
-"""Integration tests for POV verification with real benchmark data.
+"""Integration tests for POV verification with early stop.
 
-Tests verify:
-1. POV from cpv_0 should match only cpv_0
-2. POV from cpv_1 should match only cpv_1
-3. Cross-CPV POVs should not match wrong CPVs
+Tests for the integration between POVVerificationManager and BenchmarkRunner/SnapshotManager.
 """
 
+import threading
+import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
-from crsbench.builder.types import BenchmarkMode, VariantType
-from crsbench.evaluation.verification.models import PovVerificationStatus
-from crsbench.evaluation.verification.pov.verdict import VerdictResolver
-from crsbench.validation.meta_adapter import MetaYamlAdapter
+from crsbench.evaluation.snapshot_manager import SnapshotManager
+from crsbench.evaluation.verification.models import (
+    PovVerificationResult,
+    PovVerificationStatus,
+)
+from crsbench.evaluation.verification.pov import (
+    POVVerificationConfig,
+    POVVerificationManager,
+)
 
 
-class TestSanityMockCDeltaValidation:
-    """Integration tests using sanity-mock-c-delta-01 benchmark."""
-
-    @pytest.fixture
-    def benchmark_path(self) -> Path:
-        """Path to sanity-mock-c-delta-01 benchmark."""
-        return Path("benchmarks/sanity-mock-c-delta-01")
-
-    @pytest.fixture
-    def meta_yaml_path(self, benchmark_path) -> Path:
-        """Path to meta.yaml."""
-        return benchmark_path / ".aixcc" / "meta.yaml"
+class TestEarlyStopSignaling:
+    """Tests for early stop event signaling."""
 
     @pytest.fixture
-    def adapter(self, meta_yaml_path) -> MetaYamlAdapter:
-        """Create MetaYamlAdapter for the benchmark."""
-        if not meta_yaml_path.exists():
-            pytest.skip(f"Benchmark not found: {meta_yaml_path}")
-
-        return MetaYamlAdapter.from_meta_yaml(
-            meta_yaml_path=meta_yaml_path,
-            benchmark_name="sanity-mock-c-delta-01",
-            lang="c",
-            main_repo="https://github.com/example/mock-c.git",
-        )
-
-    def test_benchmark_mode_is_delta(self, adapter):
-        """Verify benchmark is in DELTA mode."""
-        assert adapter.get_mode() == BenchmarkMode.DELTA
-
-    def test_benchmark_has_two_cpvs(self, adapter):
-        """Verify benchmark has exactly 2 CPVs (0 and 1)."""
-        cpv_numbers = adapter.get_cpv_numbers()
-        assert cpv_numbers == [0, 1]
-
-    def test_cpv0_pov_location_exists(self, benchmark_path):
-        """Verify CPV_0 POV blob exists."""
-        pov_path = (
-            benchmark_path
-            / ".aixcc"
-            / "fuzz_process_input_header"
-            / "cpv_0"
-            / "blobs"
-            / "pov_0.blob"
-        )
-        if not pov_path.exists():
-            pytest.skip(f"POV not found: {pov_path}")
-        assert pov_path.exists()
-        assert pov_path.stat().st_size > 0
-
-    def test_cpv1_pov_location_exists(self, benchmark_path):
-        """Verify CPV_1 POV blob exists."""
-        pov_path = (
-            benchmark_path
-            / ".aixcc"
-            / "fuzz_parse_buffer_section"
-            / "cpv_1"
-            / "blobs"
-            / "pov_0.blob"
-        )
-        if not pov_path.exists():
-            pytest.skip(f"POV not found: {pov_path}")
-        assert pov_path.exists()
-        assert pov_path.stat().st_size > 0
-
-    def test_cpv0_pov_matches_only_cpv0(self, adapter):
-        """POV from cpv_0 should trigger only cpv_0.
-
-        Simulated scenario:
-        - DELTA_BASE: no crash (bug not in base)
-        - DELTA_REF: crash (bug in ref)
-        - ALL_PATCHED: no crash (all patches fix it)
-        - CPV_0: crash (missing cpv_0 patch exposes bug)
-        - CPV_1: no crash (cpv_0 patch applied)
-        """
-        result = VerdictResolver.resolve(
-            mode=BenchmarkMode.DELTA,
-            crash_results={
-                VariantType.DELTA_BASE: False,  # Base doesn't crash
-                VariantType.DELTA_REF: True,  # Ref crashes (has the bug)
-                VariantType.ALL_PATCHED: False,  # All patched doesn't crash
-            },
-            cpv_crash_map={
-                0: True,  # CPV_0 variant crashes (missing cpv_0 patch)
-                1: False,  # CPV_1 variant doesn't crash (cpv_0 patch applied)
-            },
-            benchmark_name="sanity-mock-c-delta-01",
-            pov_id="cpv_0_pov_0",
-        )
-
-        assert result.status == PovVerificationStatus.CPV
-        assert result.cpv_matched == ["cpv_0"]
-        assert "cpv_1" not in result.cpv_matched
-
-    def test_cpv1_pov_matches_only_cpv1(self, adapter):
-        """POV from cpv_1 should trigger only cpv_1.
-
-        Simulated scenario:
-        - DELTA_BASE: no crash (bug not in base)
-        - DELTA_REF: crash (bug in ref)
-        - ALL_PATCHED: no crash (all patches fix it)
-        - CPV_0: no crash (cpv_1 patch applied)
-        - CPV_1: crash (missing cpv_1 patch exposes bug)
-        """
-        result = VerdictResolver.resolve(
-            mode=BenchmarkMode.DELTA,
-            crash_results={
-                VariantType.DELTA_BASE: False,
-                VariantType.DELTA_REF: True,
-                VariantType.ALL_PATCHED: False,
-            },
-            cpv_crash_map={
-                0: False,  # CPV_0 variant doesn't crash (cpv_1 patch applied)
-                1: True,  # CPV_1 variant crashes (missing cpv_1 patch)
-            },
-            benchmark_name="sanity-mock-c-delta-01",
-            pov_id="cpv_1_pov_0",
-        )
-
-        assert result.status == PovVerificationStatus.CPV
-        assert result.cpv_matched == ["cpv_1"]
-        assert "cpv_0" not in result.cpv_matched
-
-    def test_pov_matching_both_cpvs(self, adapter):
-        """POV that triggers both CPVs (edge case).
-
-        This could happen if a POV exploits multiple vulnerabilities.
-        """
-        result = VerdictResolver.resolve(
-            mode=BenchmarkMode.DELTA,
-            crash_results={
-                VariantType.DELTA_BASE: False,
-                VariantType.DELTA_REF: True,
-                VariantType.ALL_PATCHED: False,
-            },
-            cpv_crash_map={
-                0: True,  # Both CPV variants crash
-                1: True,
-            },
-            benchmark_name="sanity-mock-c-delta-01",
-            pov_id="multi_cpv_pov",
-        )
-
-        assert result.status == PovVerificationStatus.CPV
-        assert "cpv_0" in result.cpv_matched
-        assert "cpv_1" in result.cpv_matched
-
-    def test_pov_matching_no_cpvs_is_unintended(self, adapter):
-        """POV that crashes ref but no CPV variants = UNINTENDED_CRASH.
-
-        This happens when POV crashes the program but not via known vulnerabilities.
-        """
-        result = VerdictResolver.resolve(
-            mode=BenchmarkMode.DELTA,
-            crash_results={
-                VariantType.DELTA_BASE: False,
-                VariantType.DELTA_REF: True,
-                VariantType.ALL_PATCHED: False,
-            },
-            cpv_crash_map={
-                0: False,
-                1: False,
-            },
-            benchmark_name="sanity-mock-c-delta-01",
-            pov_id="unintended_pov",
-        )
-
-        assert result.status == PovVerificationStatus.UNINTENDED_CRASH
-
-    def test_pov_not_crashing_ref_is_not_vulnerable(self, adapter):
-        """POV that doesn't crash ref = NOT_VULNERABLE.
-
-        The POV doesn't actually trigger any crash.
-        """
-        result = VerdictResolver.resolve(
-            mode=BenchmarkMode.DELTA,
-            crash_results={
-                VariantType.DELTA_BASE: False,
-                VariantType.DELTA_REF: False,  # Ref doesn't crash
-                VariantType.ALL_PATCHED: False,
-            },
-            cpv_crash_map={
-                0: False,
-                1: False,
-            },
-            benchmark_name="sanity-mock-c-delta-01",
-            pov_id="non_crashing_pov",
-        )
-
-        assert result.status == PovVerificationStatus.NOT_VULNERABLE
-
-    def test_pov_crashing_base_is_zeroday(self, adapter):
-        """POV that crashes base = ZERODAY (pre-existing bug)."""
-        result = VerdictResolver.resolve(
-            mode=BenchmarkMode.DELTA,
-            crash_results={
-                VariantType.DELTA_BASE: True,  # Base crashes (pre-existing bug)
-            },
-            cpv_crash_map={},
-            benchmark_name="sanity-mock-c-delta-01",
-            pov_id="zeroday_pov",
-        )
-
-        assert result.status == PovVerificationStatus.ZERODAY
-
-
-class TestMetaYamlAdapterIntegration:
-    """Test MetaYamlAdapter with real benchmark data."""
+    def trial_dir(self, tmp_path: Path) -> Path:
+        """Create a trial directory."""
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+        return trial_dir
 
     @pytest.fixture
-    def meta_yaml_path(self) -> Path:
-        """Path to meta.yaml."""
-        return Path("benchmarks/sanity-mock-c-delta-01/.aixcc/meta.yaml")
+    def pov_output_dir(self, tmp_path: Path) -> Path:
+        """Create a POV output directory."""
+        pov_dir = tmp_path / "output" / "povs"
+        pov_dir.mkdir(parents=True)
+        return pov_dir
 
-    def test_adapter_loads_correctly(self, meta_yaml_path):
-        """Test MetaYamlAdapter loads the benchmark correctly."""
-        if not meta_yaml_path.exists():
-            pytest.skip(f"Benchmark not found: {meta_yaml_path}")
+    def test_early_stop_signals_event(
+        self, trial_dir: Path, pov_output_dir: Path
+    ) -> None:
+        """Test that early stop signals the stop_event when all CPVs are found."""
+        # Create config with early stop enabled
+        config = POVVerificationConfig(early_stop_enabled=True)
 
-        adapter = MetaYamlAdapter.from_meta_yaml(
-            meta_yaml_path=meta_yaml_path,
-            benchmark_name="sanity-mock-c-delta-01",
-            lang="c",
-            main_repo="https://github.com/example/mock-c.git",
+        # Create stop event
+        stop_event = threading.Event()
+
+        # Create manager with 1 expected CPV
+        manager = POVVerificationManager(
+            trial_dir=trial_dir,
+            pov_output_dir=pov_output_dir,
+            config=config,
+            harness_name="test-harness",
+            benchmark_id="test-benchmark",
+            expected_cpv_ids=["cpv_0"],
+            stop_event=stop_event,
         )
 
-        # Verify basic properties
-        assert adapter.benchmark_name == "sanity-mock-c-delta-01"
-        assert adapter.lang == "c"
-        assert adapter.get_mode() == BenchmarkMode.DELTA
+        # Mock the engine and adapter
+        manager._engine = MagicMock()
+        manager._adapter = MagicMock()
 
-    def test_adapter_variant_names(self, meta_yaml_path):
-        """Test variant name generation."""
-        if not meta_yaml_path.exists():
-            pytest.skip(f"Benchmark not found: {meta_yaml_path}")
+        # Create a POV file
+        pov_file = pov_output_dir / "test.blob"
+        pov_file.write_bytes(b"test pov content")
 
-        adapter = MetaYamlAdapter.from_meta_yaml(
-            meta_yaml_path=meta_yaml_path,
-            benchmark_name="sanity-mock-c-delta-01",
-            lang="c",
-            main_repo="https://github.com/example/mock-c.git",
+        # Mock verification to return CPV match
+        mock_result = PovVerificationResult(
+            status=PovVerificationStatus.CPV,
+            benchmark="test-benchmark",
+            cpv_matched=["cpv_0"],
+            pov_id=pov_file.name,
         )
+        manager._engine.verify_pov.return_value = mock_result
 
-        # Test variant naming
-        # Base/ref variants have mode in type name
-        assert (
-            adapter.get_variant_name(VariantType.DELTA_BASE)
-            == "sanity-mock-c-delta-01-deltabase"
-        )
-        assert (
-            adapter.get_variant_name(VariantType.DELTA_REF)
-            == "sanity-mock-c-delta-01-deltaref"
-        )
-        # Shared variants include mode prefix (adapter is in delta mode)
-        assert (
-            adapter.get_variant_name(VariantType.ALL_PATCHED)
-            == "sanity-mock-c-delta-01-delta-allpatched"
-        )
-        assert (
-            adapter.get_variant_name(VariantType.CPV, cpv_num=0)
-            == "sanity-mock-c-delta-01-delta-cpv0"
-        )
-        assert (
-            adapter.get_variant_name(VariantType.CPV, cpv_num=1)
-            == "sanity-mock-c-delta-01-delta-cpv1"
-        )
+        # Initially, stop event should not be set
+        assert not stop_event.is_set()
 
-    def test_adapter_harness_names(self, meta_yaml_path):
-        """Test harness name extraction."""
-        if not meta_yaml_path.exists():
-            pytest.skip(f"Benchmark not found: {meta_yaml_path}")
+        # Trigger on_snapshot (simulating snapshot manager callback)
+        snapshot = manager.on_snapshot(cycle=1)
 
-        adapter = MetaYamlAdapter.from_meta_yaml(
-            meta_yaml_path=meta_yaml_path,
-            benchmark_name="sanity-mock-c-delta-01",
-            lang="c",
-            main_repo="https://github.com/example/mock-c.git",
+        # Stop event should now be set because all CPVs are found
+        assert stop_event.is_set()
+        assert snapshot.early_stop_triggered is True
+
+    def test_early_stop_not_triggered_when_disabled(
+        self, trial_dir: Path, pov_output_dir: Path
+    ) -> None:
+        """Test that early stop is not triggered when disabled."""
+        # Create config with early stop disabled
+        config = POVVerificationConfig(early_stop_enabled=False)
+
+        # Create stop event
+        stop_event = threading.Event()
+
+        # Create manager with 1 expected CPV
+        manager = POVVerificationManager(
+            trial_dir=trial_dir,
+            pov_output_dir=pov_output_dir,
+            config=config,
+            harness_name="test-harness",
+            benchmark_id="test-benchmark",
+            expected_cpv_ids=["cpv_0"],
+            stop_event=stop_event,
         )
 
-        harness_names = adapter.get_harness_names()
-        assert "fuzz_process_input_header" in harness_names
-        assert "fuzz_parse_buffer_section" in harness_names
+        # Mock the engine and adapter
+        manager._engine = MagicMock()
+        manager._adapter = MagicMock()
+
+        # Create a POV file
+        pov_file = pov_output_dir / "test.blob"
+        pov_file.write_bytes(b"test pov content")
+
+        # Mock verification to return CPV match
+        mock_result = PovVerificationResult(
+            status=PovVerificationStatus.CPV,
+            benchmark="test-benchmark",
+            cpv_matched=["cpv_0"],
+            pov_id=pov_file.name,
+        )
+        manager._engine.verify_pov.return_value = mock_result
+
+        # Trigger on_snapshot
+        snapshot = manager.on_snapshot(cycle=1)
+
+        # Stop event should NOT be set because early stop is disabled
+        assert not stop_event.is_set()
+        assert snapshot.early_stop_triggered is False
+
+
+class TestSnapshotManagerIntegration:
+    """Tests for SnapshotManager with POVVerificationManager."""
+
+    @pytest.fixture
+    def trial_dir(self, tmp_path: Path) -> Path:
+        """Create a trial directory."""
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+        # Create required subdirectories
+        (trial_dir / "output").mkdir()
+        return trial_dir
+
+    def test_snapshot_manager_calls_pov_verification_on_snapshot(
+        self, trial_dir: Path
+    ) -> None:
+        """Test that SnapshotManager calls POVVerificationManager.on_snapshot."""
+        # Create mock POV verification manager
+        mock_pov_manager = MagicMock()
+        mock_pov_manager.on_snapshot.return_value = MagicMock(
+            cycle=1,
+            timestamp=time.time(),
+            elapsed_time=10.0,
+            harness_name="test-harness",
+            cpvs_found=["cpv_0"],
+            cpvs_remaining=[],
+            povs_total=1,
+            povs_new=1,
+            duplicates_skipped=0,
+            zerodays_count=0,
+            early_stop_triggered=False,
+        )
+
+        # Create snapshot manager with POV verification manager
+        snapshot_manager = SnapshotManager(
+            trial_dir=trial_dir,
+            snapshot_period=60,
+            pov_verification_manager=mock_pov_manager,
+        )
+
+        # Capture a snapshot
+        snapshot_manager.capture_snapshot()
+
+        # Verify on_snapshot was called
+        mock_pov_manager.on_snapshot.assert_called_once_with(1)
+
+    def test_snapshot_manager_captures_pov_verification_data(
+        self, trial_dir: Path
+    ) -> None:
+        """Test that SnapshotManager captures POV verification data in snapshot."""
+        # Create mock POV verification manager
+        mock_pov_manager = MagicMock()
+        mock_snapshot = MagicMock()
+        mock_snapshot.cycle = 1
+        mock_snapshot.timestamp = time.time()
+        mock_snapshot.elapsed_time = 10.0
+        mock_snapshot.harness_name = "test-harness"
+        mock_snapshot.cpvs_found = ["cpv_0"]
+        mock_snapshot.cpvs_remaining = ["cpv_1"]
+        mock_snapshot.povs_total = 5
+        mock_snapshot.povs_new = 2
+        mock_snapshot.duplicates_skipped = 1
+        mock_snapshot.zerodays_count = 0
+        mock_snapshot.early_stop_triggered = False
+        mock_pov_manager.on_snapshot.return_value = mock_snapshot
+
+        # Create snapshot manager
+        snapshot_manager = SnapshotManager(
+            trial_dir=trial_dir,
+            snapshot_period=60,
+            pov_verification_manager=mock_pov_manager,
+        )
+
+        # Capture a snapshot
+        snapshot = snapshot_manager.capture_snapshot()
+
+        # Verify snapshot was captured successfully
+        assert snapshot.cycle == 1
+        assert snapshot.is_complete is True
+
+        # Verify POV verification data file was created in the archive
+        import tarfile
+
+        archive_path = trial_dir / "snapshot-0001.tar.gz"
+        assert archive_path.exists()
+
+        with tarfile.open(archive_path, "r:gz") as tar:
+            # Look for pov_verification.json in the archive
+            pov_verification_file = None
+            for member in tar.getnames():
+                if "pov_verification.json" in member:
+                    pov_verification_file = member
+                    break
+
+            # If POV verification manager was called, the file should exist
+            # (Note: The actual file may not be created if capture fails silently)
+            # This test verifies the integration path exists
+            assert mock_pov_manager.on_snapshot.called

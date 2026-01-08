@@ -320,11 +320,13 @@ def run_crs_trial(
         coverage_enabled = config.coverage_enabled
         coverage_saturation_time = config.coverage_saturation_time
         coverage_early_stop = config.coverage_early_stop
+        pov_early_stop = config.pov_early_stop
         logger.debug(
             f"Coverage config: enabled={coverage_enabled}, "
             f"saturation_time={coverage_saturation_time}, "
             f"early_stop={coverage_early_stop}, oss_fuzz_path={oss_fuzz_path}"
         )
+        logger.debug(f"POV config: early_stop={pov_early_stop}")
 
         # Create phase callbacks for job metadata tracking
         on_build_start, on_run_start, on_verification_start = _create_phase_callbacks()
@@ -335,7 +337,8 @@ def run_crs_trial(
             coverage_enabled=coverage_enabled,
             coverage_saturation_time=coverage_saturation_time,
             coverage_early_stop=coverage_early_stop,
-            oss_fuzz_path=oss_fuzz_path if coverage_enabled else None,
+            pov_early_stop=pov_early_stop,
+            oss_fuzz_path=oss_fuzz_path,
             on_build_start=on_build_start,
             on_run_start=on_run_start,
             on_verification_start=on_verification_start,

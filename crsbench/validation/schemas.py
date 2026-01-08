@@ -551,6 +551,10 @@ class ExperimentConfig(BaseModel):
         description="Terminate trial early when coverage saturation is detected (default: False). "
         "NOT YET IMPLEMENTED - currently only detects and logs saturation.",
     )
+    pov_early_stop: bool = Field(
+        default=False,
+        description="Terminate trial early when all CPVs for harness are found (default: False).",
+    )
     build_workers: Optional[int] = Field(
         default=None,
         ge=1,

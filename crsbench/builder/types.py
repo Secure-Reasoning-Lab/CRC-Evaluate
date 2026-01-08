@@ -276,3 +276,18 @@ class BuildPlan:
     def build_count(self) -> int:
         """Number of variants that need to be built."""
         return len(self.configs_to_build)
+
+
+@dataclass
+class ReproduceOutput:
+    """Output from reproduce operation.
+
+    Attributes:
+        crashed: True if the POV caused a crash
+        stdout: Standard output from reproduce (contains crash log if crashed)
+        stderr: Standard error from reproduce
+    """
+
+    crashed: bool
+    stdout: str = ""
+    stderr: str = ""

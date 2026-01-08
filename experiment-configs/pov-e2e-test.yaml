@@ -1,0 +1,43 @@
+# POV Verification E2E Test - mock-c and mock-java with multilang CRS
+#
+# Tests: Build, Run, POV Verification, Early Stop, Snapshots
+#
+# Usage:
+#   uv run crsbench --experiment-config experiment-configs/pov-e2e-test.yaml
+#
+# Expected Results:
+#   - Real-time POV verification during CRS evaluation
+#   - Early termination when all CPVs for harness are found
+#   - POV verification snapshots captured every 60 seconds
+
+experiment: pov-e2e-test
+
+trials: 1
+mode: delta
+max_total_time: 180  # 3 minutes
+difficulty_level: 1
+
+experiment_filestore: /tmp/crsbench/experiments/pov-e2e-test
+report_filestore: /tmp/crsbench/reports/pov-e2e-test
+
+# Use oss-crs registry and temp config dir (atlantis-multilang -> given_fuzzer)
+registry_dir: ./oss-crs/crs_registry
+crs_configs_dir: ./oss-crs/example_configs/
+
+crses:
+  - atlantis-multilang-given_fuzzer
+benchmarks:
+  - sanity-mock-c-delta-01
+  - sanity-mock-java-delta-01
+
+# Snapshot every 60 seconds
+snapshot_period: 60
+
+# Disable coverage for this test (focus on POV verification)
+coverage_enabled: false
+
+# Enable POV early stop: terminate when all CPVs for harness are found
+pov_early_stop: true
+
+# LiteLLM mode (use proxy for local testing)
+litellm_mode: null
