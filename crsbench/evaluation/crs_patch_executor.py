@@ -318,8 +318,11 @@ class CRSPatchExecutor(CRSExecutor):
         log_dir = trial_output_dir / "crs-logs"
         log_dir.mkdir(parents=True, exist_ok=True)
 
-        # Get registry name for the CRS
-        from crsbench.utils.crs_helper import get_crs_registry_name
+        # Get registry name and resources for the CRS
+        from crsbench.utils.crs_helper import (
+            get_crs_registry_name,
+            get_crs_worker_resources,
+        )
 
         registry_name = get_crs_registry_name(
             self.crs_config_name, self.crs_configs_dir
@@ -348,6 +351,17 @@ class CRSPatchExecutor(CRSExecutor):
         if hints_path:
             cmd.extend(["--hints", str(hints_path)])
             logger.info(f"Using prepared hints from {hints_path}")
+
+        # Add resource limits (CPU: allocated_cpus > config, Memory: config only)
+        resources = get_crs_worker_resources(self.crs_config_name, self.crs_configs_dir)
+        allocated_cpus = self.config.get("allocated_cpus")
+        cpuset = allocated_cpus if allocated_cpus else resources.get("cpuset")
+        memory = resources.get("memory")
+
+        if cpuset:
+            cmd.extend(["--cpuset", cpuset])
+        if memory:
+            cmd.extend(["--memory", memory])
 
         logger.info(f"Run command: {' '.join(cmd)}")
         logger.debug(f"Command: {cmd}")
