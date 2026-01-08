@@ -20,7 +20,7 @@
 #   --tmux                  Launch worker in tmux vertical pane
 #   --kill-pane             Kill the worker pane after test (with --tmux)
 #   --no-cpuset             Disable CPU affinity (default: enabled, not supported with -j 1)
-#   --verify                Enable verification (default: skip verification)
+#   --skip-verify           Skip verification (default: enabled)
 #   --debug                 Enable debug output from crsbench
 #   --skip-cleanup          Don't delete generated config file after test
 #   -h, --help              Show this help message
@@ -31,7 +31,7 @@
 #   ./run_distributed_test.sh -b atlanta-nasm-delta-01 -b afc-curl-delta-02
 #   ./run_distributed_test.sh --crs crs-libfuzzer --timeout 600
 #   ./run_distributed_test.sh -j 4 --debug
-#   ./run_distributed_test.sh -j 4 --verify --debug
+#   ./run_distributed_test.sh -j 4 --skip-verify --debug
 #   ./run_distributed_test.sh -j 4 --debug --skip-cleanup
 
 set -e  # Exit on error
@@ -48,7 +48,7 @@ KILL_PANE=false
 CPUSET=true
 DEBUG=false
 SKIP_CLEANUP=false
-SKIP_VERIFICATION=true
+SKIP_VERIFICATION=false
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -97,8 +97,8 @@ while [[ $# -gt 0 ]]; do
             SKIP_CLEANUP=true
             shift
             ;;
-        --verify)
-            SKIP_VERIFICATION=false
+        --skip-verify)
+            SKIP_VERIFICATION=true
             shift
             ;;
         -h|--help)
