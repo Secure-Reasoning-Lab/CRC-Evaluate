@@ -256,6 +256,58 @@ class TestVerifyPovMatchesCpv:
         # found_cpvs is derived from store
         assert "cpv_0" in manager.found_cpvs
 
+    def test_cpv_pov_stored_to_povs_unique(self, tmp_path: Path) -> None:
+        """Test that verified CPV POV files are stored to povs_unique/."""
+        from crsbench.evaluation.verification.models import (
+            PovVerificationResult,
+            PovVerificationStatus,
+        )
+        from crsbench.evaluation.verification.pov.manager import (
+            POVVerificationManager,
+        )
+
+        trial_dir = tmp_path / "trial-1"
+        trial_dir.mkdir()
+        pov_output_dir = trial_dir / "pov_output"
+        pov_output_dir.mkdir()
+
+        # Create a POV file with specific content
+        pov_content = b"pov_content_for_cpv_match"
+        pov_file = pov_output_dir / "pov_cpv.blob"
+        pov_file.write_bytes(pov_content)
+
+        config = POVVerificationConfig()
+        manager = POVVerificationManager(
+            trial_dir=trial_dir,
+            pov_output_dir=pov_output_dir,
+            config=config,
+            harness_name="fuzz_parser",
+            benchmark_id="test-benchmark",
+            expected_cpv_ids=["cpv_0"],
+        )
+
+        # Mock verification result with CPV match
+        mock_result = PovVerificationResult(
+            status=PovVerificationStatus.CPV,
+            benchmark="test-benchmark",
+            pov_id="pov_cpv",
+            cpv_matched=["cpv_0"],
+        )
+        manager._engine = MagicMock()
+        manager._adapter = MagicMock()
+
+        # Update state with the result
+        manager._update_state(pov_file, mock_result)
+
+        # Verify POV file was stored to povs_unique/
+        povs_unique_dir = trial_dir / "povs" / "povs_unique"
+        stored_files = list(povs_unique_dir.glob("*.blob"))
+        assert len(stored_files) == 1
+
+        # Verify content matches
+        stored_content = stored_files[0].read_bytes()
+        assert stored_content == pov_content
+
 
 class TestVerifyPovZeroday:
     """Tests for zeroday detection (T025)."""

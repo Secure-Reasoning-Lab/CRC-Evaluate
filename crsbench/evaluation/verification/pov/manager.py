@@ -253,10 +253,28 @@ class POVVerificationManager:
             logger.warning(f"POV verification error: pov={pov_path.name}")
             return
 
+        # Compute hash if not provided (needed for storing files)
+        if pov_hash is None:
+            from crsbench.evaluation.verification.utils import compute_content_hash
+
+            pov_hash = compute_content_hash(pov_path)
+
         # Add to store with the verification status directly (no mapping needed)
         self.store.add_pov(
             pov_path, result.status, result.cpv_matched, pov_hash=pov_hash
         )
+
+        # Store POV file and crash log for successful verifications (CPV or ZERODAY)
+        if result.status in (
+            PovVerificationStatus.CPV,
+            PovVerificationStatus.ZERODAY,
+        ):
+            # Copy POV file to povs_unique/
+            self.store.store_unique_pov(pov_path, pov_hash)
+
+            # Store crash log if available
+            if result.crash_info and "log" in result.crash_info:
+                self.store.store_crash_log(pov_hash, result.crash_info["log"])
 
         # Update counters based on result
         if result.status == PovVerificationStatus.CPV:
