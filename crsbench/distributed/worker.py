@@ -281,6 +281,8 @@ def _run_supervisor(
     """
     from crsbench.utils.cpu_pool import CPUPool, format_cpuset
 
+    # Set supervisor environment variable for logger
+    os.environ["CRSBENCH_SUPERVISOR"] = "1"
     logger.info("Starting supervisor mode for dynamic CPU allocation...")
 
     cpu_pool = CPUPool() if use_cpuset else None

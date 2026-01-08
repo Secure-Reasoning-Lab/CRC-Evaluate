@@ -99,6 +99,10 @@ def _format_module_path(record):
     if worker_name:
         return f"{worker_name} | {module_category}"
 
+    # Prepend supervisor if running as supervisor
+    if os.environ.get("CRSBENCH_SUPERVISOR"):
+        return f"supervisor | {module_category}"
+
     # Prepend orchestrator if running as orchestrator
     if os.environ.get("CRSBENCH_ORCHESTRATOR"):
         return f"orchestrator | {module_category}"
