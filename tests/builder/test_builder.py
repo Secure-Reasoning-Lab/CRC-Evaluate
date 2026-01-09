@@ -34,6 +34,24 @@ class TestVariantType:
         assert VariantType.CPV.is_validation_variant()
         assert not VariantType.COVERAGE.is_validation_variant()
 
+    def test_supports_inc_build(self):
+        """Test supports_inc_build method.
+
+        All variant types except COVERAGE support incremental builds.
+        """
+        # Validation variants support inc-build
+        assert VariantType.FULL_BASE.supports_inc_build()
+        assert VariantType.DELTA_BASE.supports_inc_build()
+        assert VariantType.DELTA_REF.supports_inc_build()
+        assert VariantType.ALL_PATCHED.supports_inc_build()
+        assert VariantType.CPV.supports_inc_build()
+
+        # Patch variant supports inc-build
+        assert VariantType.PATCHED.supports_inc_build()
+
+        # Coverage does NOT support inc-build (different instrumentation)
+        assert not VariantType.COVERAGE.supports_inc_build()
+
 
 class TestBuildConfig:
     """Tests for BuildConfig dataclass."""
@@ -596,3 +614,208 @@ class TestBuildConfigVariantNames:
             cpv_num=cpv_num,
         )
         assert config.variant_name == f"my-benchmark-{expected_suffix}"
+
+
+class TestIncBuildSupport:
+    """Tests for incremental build support in validation variants."""
+
+    @pytest.fixture
+    def mock_oss_fuzz_path(self, tmp_path: Path) -> Path:
+        """Create a mock oss-fuzz directory."""
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+        (oss_fuzz / "infra").mkdir()
+        (oss_fuzz / "infra" / "helper.py").touch()
+        (oss_fuzz / "projects").mkdir()
+        (oss_fuzz / "build" / "out").mkdir(parents=True)
+        return oss_fuzz
+
+    @pytest.fixture
+    def builder(self, mock_oss_fuzz_path: Path) -> OSSFuzzBuilder:
+        """Create builder with mocked infrastructure."""
+        return OSSFuzzBuilder(mock_oss_fuzz_path, max_workers=1)
+
+    def test_create_build_plan_with_use_inc_build(
+        self, builder: OSSFuzzBuilder, tmp_path: Path
+    ):
+        """Test that use_inc_build flag is passed to all validation configs."""
+        benchmark_path = tmp_path / "benchmark"
+        benchmark_path.mkdir()
+
+        plan = builder.create_build_plan(
+            benchmark_name="test-delta-01",
+            benchmark_path=benchmark_path,
+            main_repo="https://github.com/test/repo",
+            mode=BenchmarkMode.DELTA,
+            base_commit="base123",
+            ref_commit="ref456",
+            cpv_numbers=[0, 1],
+            language="c",
+            use_inc_build=True,
+        )
+
+        # All configs should have use_inc_build=True
+        for config in plan.configs:
+            assert config.use_inc_build is True
+
+    def test_create_build_plan_default_uses_inc_build(
+        self, builder: OSSFuzzBuilder, tmp_path: Path
+    ):
+        """Test that use_inc_build defaults to True."""
+        benchmark_path = tmp_path / "benchmark"
+        benchmark_path.mkdir()
+
+        plan = builder.create_build_plan(
+            benchmark_name="test-delta-01",
+            benchmark_path=benchmark_path,
+            main_repo="https://github.com/test/repo",
+            mode=BenchmarkMode.DELTA,
+            base_commit="base123",
+            ref_commit="ref456",
+            cpv_numbers=[0],
+            language="c",
+        )
+
+        # All configs should have use_inc_build=True (default)
+        for config in plan.configs:
+            assert config.use_inc_build is True
+
+    def test_build_single_uses_inc_build_when_image_available(
+        self, builder: OSSFuzzBuilder, tmp_path: Path
+    ):
+        """Test that _build_single uses inc-build path when image is available."""
+        config = BuildConfig(
+            benchmark_name="test-benchmark",
+            variant_type=VariantType.DELTA_BASE,
+            commit="abc123",
+            main_repo="https://example.com",
+            benchmark_path=tmp_path / "benchmark",
+            use_inc_build=True,
+        )
+
+        with (
+            patch.object(
+                builder.infra, "ensure_inc_image", return_value=True
+            ) as mock_ensure,
+            patch.object(
+                builder,
+                "_build_with_inc_image",
+                return_value=BuildResult(
+                    config=config,
+                    success=True,
+                    variant_name=config.variant_name,
+                    build_path=Path("/tmp/build"),
+                ),
+            ) as mock_inc_build,
+            patch.object(builder, "_build_standard") as mock_standard,
+        ):
+            builder._build_single(config)
+
+            # Should call ensure_inc_image and _build_with_inc_image
+            mock_ensure.assert_called_once_with("test-benchmark", "address")
+            mock_inc_build.assert_called_once()
+            mock_standard.assert_not_called()
+
+    def test_build_single_falls_back_when_image_unavailable(
+        self, builder: OSSFuzzBuilder, tmp_path: Path
+    ):
+        """Test that _build_single falls back to standard build when no image."""
+        config = BuildConfig(
+            benchmark_name="test-benchmark",
+            variant_type=VariantType.DELTA_BASE,
+            commit="abc123",
+            main_repo="https://example.com",
+            benchmark_path=tmp_path / "benchmark",
+            use_inc_build=True,
+        )
+
+        with (
+            patch.object(
+                builder.infra, "ensure_inc_image", return_value=False
+            ) as mock_ensure,
+            patch.object(builder, "_build_with_inc_image") as mock_inc_build,
+            patch.object(
+                builder,
+                "_build_standard",
+                return_value=BuildResult(
+                    config=config,
+                    success=True,
+                    variant_name=config.variant_name,
+                    build_path=Path("/tmp/build"),
+                ),
+            ) as mock_standard,
+        ):
+            builder._build_single(config)
+
+            # Should fall back to standard build
+            mock_ensure.assert_called_once()
+            mock_inc_build.assert_not_called()
+            mock_standard.assert_called_once()
+
+    def test_build_single_skips_inc_build_for_coverage(
+        self, builder: OSSFuzzBuilder, tmp_path: Path
+    ):
+        """Test that coverage variant always uses standard build."""
+        config = BuildConfig(
+            benchmark_name="test-benchmark",
+            variant_type=VariantType.COVERAGE,
+            commit="abc123",
+            main_repo="https://example.com",
+            benchmark_path=tmp_path / "benchmark",
+            use_inc_build=True,  # Even if set, should not use inc-build
+        )
+
+        with (
+            patch.object(builder.infra, "ensure_inc_image") as mock_ensure,
+            patch.object(builder, "_build_with_inc_image") as mock_inc_build,
+            patch.object(
+                builder,
+                "_build_standard",
+                return_value=BuildResult(
+                    config=config,
+                    success=True,
+                    variant_name=config.variant_name,
+                    build_path=Path("/tmp/build"),
+                ),
+            ) as mock_standard,
+        ):
+            builder._build_single(config)
+
+            # Should use standard build (coverage doesn't support inc-build)
+            mock_ensure.assert_not_called()
+            mock_inc_build.assert_not_called()
+            mock_standard.assert_called_once()
+
+    def test_build_single_skips_inc_build_when_disabled(
+        self, builder: OSSFuzzBuilder, tmp_path: Path
+    ):
+        """Test that use_inc_build=False skips inc-build check."""
+        config = BuildConfig(
+            benchmark_name="test-benchmark",
+            variant_type=VariantType.DELTA_BASE,
+            commit="abc123",
+            main_repo="https://example.com",
+            benchmark_path=tmp_path / "benchmark",
+            use_inc_build=False,  # Disabled
+        )
+
+        with (
+            patch.object(builder.infra, "ensure_inc_image") as mock_ensure,
+            patch.object(builder, "_build_with_inc_image") as mock_inc_build,
+            patch.object(
+                builder,
+                "_build_standard",
+                return_value=BuildResult(
+                    config=config,
+                    success=True,
+                    variant_name=config.variant_name,
+                    build_path=Path("/tmp/build"),
+                ),
+            ) as mock_standard,
+        ):
+            builder._build_single(config)
+
+            # Should use standard build (inc-build disabled)
+            mock_ensure.assert_not_called()
+            mock_inc_build.assert_not_called()
+            mock_standard.assert_called_once()
