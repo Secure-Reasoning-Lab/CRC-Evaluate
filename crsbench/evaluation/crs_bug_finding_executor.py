@@ -111,8 +111,118 @@ class CRSBugFindingExecutor(CRSExecutor):
         trial_build_dir = trial_output_dir / "crs-build"
         trial_build_dir.mkdir(parents=True, exist_ok=True)
 
+        # Prepare trial-local CRS directories
+        trial_crs_config_dir, trial_registry_dir = self._prepare_trial_crs_dirs(
+            trial_output_dir
+        )
+
         logger.info(f"Pre-building CRS for project '{project_name}'")
-        self._build_crs_if_needed(benchmark_path, project_name, trial_build_dir)
+        self._build_crs_if_needed(
+            benchmark_path,
+            project_name,
+            trial_build_dir,
+            trial_crs_config_dir,
+            trial_registry_dir,
+        )
+
+    def _prepare_trial_crs_dirs(self, trial_output_dir: Path) -> tuple[Path, Path]:
+        """Copy CRS config and registry entry to trial directory.
+
+        This method copies the CRS configuration directory and registry entry
+        to trial-local directories, enabling per-trial modifications without
+        affecting the original files.
+
+        Args:
+            trial_output_dir: Trial directory (from TrialDirectoryPreparer)
+
+        Returns:
+            Tuple of (trial_crs_config_dir, trial_registry_dir)
+
+        Process:
+            1. Resolve original CRS config directory
+            2. Copy to trial_output_dir/crs-config/<config-name>/
+            3. Copy registry entry to trial_output_dir/crs-registry/<crs-name>/
+        """
+        # Resolve original CRS config directory
+        original_config_dir = self._resolve_crs_config_dir()
+        config_name = original_config_dir.name
+
+        # Copy config to trial-local directory
+        trial_crs_config_dir = trial_output_dir / "crs-config" / config_name
+        if trial_crs_config_dir.exists():
+            logger.debug(f"Trial CRS config already exists: {trial_crs_config_dir}")
+        else:
+            trial_crs_config_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(original_config_dir, trial_crs_config_dir)
+            logger.info(f"Copied CRS config to trial dir: {trial_crs_config_dir}")
+
+        # Update trial's config-resource.yaml with allocated CPUs
+        allocated_cpus = self.config.get("allocated_cpus")
+        if allocated_cpus:
+            self._update_trial_cpuset(trial_crs_config_dir, allocated_cpus)
+
+        # Copy ALL registry entries for this config
+        # A config may reference multiple CRS entries in the registry
+        from crsbench.utils.crs_helper import get_all_crs_registry_names
+
+        crs_names = get_all_crs_registry_names(
+            self.crs_config_name, self.crs_configs_dir
+        )
+        logger.info(
+            f"Copying {len(crs_names)} CRS registry entries: {', '.join(crs_names)}"
+        )
+
+        trial_registry_dir = trial_output_dir / "crs-registry"
+
+        for crs_name in crs_names:
+            original_registry_entry = self.registry_dir / crs_name
+            trial_registry_entry = trial_registry_dir / crs_name
+
+            if trial_registry_entry.exists():
+                logger.debug(
+                    f"Trial registry entry already exists: {trial_registry_entry}"
+                )
+            else:
+                trial_registry_entry.parent.mkdir(parents=True, exist_ok=True)
+                if original_registry_entry.exists():
+                    shutil.copytree(original_registry_entry, trial_registry_entry)
+                    logger.info(
+                        f"Copied registry entry to trial dir: {trial_registry_entry}"
+                    )
+                else:
+                    logger.warning(
+                        f"Original registry entry not found: {original_registry_entry}"
+                    )
+
+        return trial_crs_config_dir, trial_registry_dir
+
+    def _update_trial_cpuset(self, trial_crs_config_dir: Path, cpuset_str: str) -> None:
+        """Update trial's config-resource.yaml with allocated CPUs.
+
+        Args:
+            trial_crs_config_dir: Path to trial's CRS config directory
+            cpuset_str: Cpuset string (e.g., "0-3")
+        """
+        import yaml
+
+        resource_config_path = trial_crs_config_dir / "config-resource.yaml"
+        if not resource_config_path.exists():
+            logger.warning(f"Resource config not found: {resource_config_path}")
+            return
+
+        with resource_config_path.open() as f:
+            resource_config = yaml.safe_load(f)
+
+        if "workers" in resource_config and resource_config["workers"]:
+            for worker_name in resource_config["workers"]:
+                resource_config["workers"][worker_name]["cpuset"] = cpuset_str
+
+            with resource_config_path.open("w") as f:
+                yaml.dump(resource_config, f)
+
+            logger.info(f"Updated trial config-resource.yaml with cpuset: {cpuset_str}")
+        else:
+            logger.warning(f"No workers section in {resource_config_path}")
 
     def run_crs(
         self,
@@ -157,12 +267,23 @@ class CRSBugFindingExecutor(CRSExecutor):
             trial_build_dir = trial_output_dir / "crs-build"
             trial_build_dir.mkdir(parents=True, exist_ok=True)
 
+            # 2. Prepare trial-local CRS directories
+            trial_crs_config_dir, trial_registry_dir = self._prepare_trial_crs_dirs(
+                trial_output_dir
+            )
+
             # Signal that CRS build is starting
             if on_build_start:
                 on_build_start()
 
-            # 2. Build CRS Docker image (this also clones the repository)
-            self._build_crs_if_needed(benchmark_path, project_name, trial_build_dir)
+            # 3. Build CRS Docker image (this also clones the repository)
+            self._build_crs_if_needed(
+                benchmark_path,
+                project_name,
+                trial_build_dir,
+                trial_crs_config_dir,
+                trial_registry_dir,
+            )
 
             # Signal that CRS run is starting (after build)
             if on_run_start:
@@ -192,6 +313,8 @@ class CRSBugFindingExecutor(CRSExecutor):
                 project_name=project_name,
                 harness_name=harness_name,
                 trial_build_dir=trial_build_dir,
+                trial_crs_config_dir=trial_crs_config_dir,
+                trial_registry_dir=trial_registry_dir,
                 hints_path=hints_path,
                 diff_path=diff_path,
             )
@@ -349,7 +472,12 @@ class CRSBugFindingExecutor(CRSExecutor):
         return env
 
     def _build_crs_if_needed(
-        self, benchmark_path: Path, project_name: str, trial_build_dir: Path
+        self,
+        benchmark_path: Path,
+        project_name: str,
+        trial_build_dir: Path,
+        trial_crs_config_dir: Path,
+        trial_registry_dir: Path,
     ) -> None:
         """Build CRS Docker image if not already built.
 
@@ -357,6 +485,8 @@ class CRSBugFindingExecutor(CRSExecutor):
             benchmark_path: Path to benchmark directory
             project_name: Project name for caching
             trial_build_dir: Trial-specific build directory
+            trial_crs_config_dir: Trial-local CRS config directory
+            trial_registry_dir: Trial-local registry directory
         """
         build_key = f"{self.crs_config_name}:{project_name}"
 
@@ -388,10 +518,7 @@ class CRSBugFindingExecutor(CRSExecutor):
 
         logger.info(f"Using source from: {source_path}")
 
-        # Resolve CRS config directory
-        crs_config_dir = self._resolve_crs_config_dir()
-
-        # Construct build command
+        # Construct build command using trial-local paths
         cmd = [
             "oss-bugfind-crs",
             "build",
@@ -400,12 +527,12 @@ class CRSBugFindingExecutor(CRSExecutor):
             "--oss-fuzz-dir",
             str(self.oss_fuzz_path),
             "--registry-dir",
-            str(self.registry_dir),
+            str(trial_registry_dir),  # Use trial-local registry
             "--project-path",
             str(benchmark_path),
             "--project-image-prefix",
             self.config.get("project_image_prefix", "aixcc-afc"),
-            str(crs_config_dir),
+            str(trial_crs_config_dir),  # Use trial-local config
             project_name,
             str(source_path),
         ]
@@ -462,6 +589,8 @@ class CRSBugFindingExecutor(CRSExecutor):
         project_name: str,
         harness_name: str,
         trial_build_dir: Path,
+        trial_crs_config_dir: Path,
+        trial_registry_dir: Path,
         hints_path: Optional[Path],
         diff_path: Optional[Path] = None,
     ) -> List[str]:
@@ -471,6 +600,8 @@ class CRSBugFindingExecutor(CRSExecutor):
             project_name: Project name
             harness_name: Harness name
             trial_build_dir: Trial-specific build directory
+            trial_crs_config_dir: Trial-local CRS config directory
+            trial_registry_dir: Trial-local registry directory
             hints_path: Optional path to hints directory
             diff_path: Optional path to diff file (delta mode)
 
@@ -481,8 +612,6 @@ class CRSBugFindingExecutor(CRSExecutor):
             NO --output parameter. Output location is auto-determined by oss-bugfind-crs as:
             {{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/run/{{ harness_name }}/
         """
-        crs_config_dir = self._resolve_crs_config_dir()
-
         cmd = [
             "oss-bugfind-crs",
             "run",
@@ -491,8 +620,8 @@ class CRSBugFindingExecutor(CRSExecutor):
             "--oss-fuzz-dir",
             str(self.oss_fuzz_path),
             "--registry-dir",
-            str(self.registry_dir),
-            str(crs_config_dir),
+            str(trial_registry_dir),  # Use trial-local registry
+            str(trial_crs_config_dir),  # Use trial-local config
             project_name,
             harness_name,
         ]
@@ -782,3 +911,20 @@ class CRSBugFindingExecutor(CRSExecutor):
             with stderr_file.open("w") as f:
                 f.write(stderr)
             logger.debug(f"Stored CRS stderr to {stderr_file}")
+
+        # Store combined log in crs-logs/ directory for consistency with bug-fixing CRS
+        if stdout or stderr:
+            log_dir = trial_output_dir / "crs-logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+
+            timestamp = datetime.now().strftime("%y%m%d%H%M%S")
+            safe_name = project_name.replace("/", "_")
+            log_file = log_dir / f"crs_run_{safe_name}_{timestamp}.log"
+
+            with log_file.open("w") as f:
+                if stdout:
+                    f.write(stdout)
+                if stderr:
+                    f.write(stderr)
+
+            logger.debug(f"Stored combined CRS log to {log_file}")

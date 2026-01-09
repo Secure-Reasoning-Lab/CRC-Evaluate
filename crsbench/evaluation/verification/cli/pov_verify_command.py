@@ -235,7 +235,7 @@ def run_verify(args: argparse.Namespace) -> int:
         )
     else:
         # Directory mode (original behavior)
-        results = engine.verify_benchmark(
+        results, _skipped = engine.verify_benchmark(
             benchmark_path=args.benchmark_path,
             pov_dir=args.pov_dir,
             harness_filter=args.harness,
@@ -322,7 +322,9 @@ def output_results(
         output_path: Optional output file path
         output_format: Output format (json, yaml, text)
     """
-    result_dicts = [r.to_dict() for r in results]
+    # Include full logs in file output, omit for console
+    include_logs = output_path is not None
+    result_dicts = [r.to_dict(include_logs=include_logs) for r in results]
 
     if output_format == "json":
         output = json.dumps(result_dicts, indent=2)

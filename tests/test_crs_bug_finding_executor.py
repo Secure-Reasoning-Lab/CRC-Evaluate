@@ -175,8 +175,18 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         trial_build_dir = Path(self.temp_dir) / "trial-0" / "crs-build"
         trial_build_dir.mkdir(parents=True)
 
+        # Create mock trial-local directories (just paths, don't need to exist for this test)
+        trial_crs_config_dir = test_crs_dir  # Use the actual config dir
+        trial_registry_dir = self.registry_dir  # Use the actual registry dir
+
         # Build CRS
-        executor._build_crs_if_needed(benchmark_path, "test-project", trial_build_dir)
+        executor._build_crs_if_needed(
+            benchmark_path,
+            "test-project",
+            trial_build_dir,
+            trial_crs_config_dir,
+            trial_registry_dir,
+        )
 
         # Verify repository manager was called with project_dir
         expected_source_dest = trial_build_dir / "src" / "test-project"
@@ -216,9 +226,19 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
 
         trial_build_dir = Path(self.temp_dir) / "trial-0" / "crs-build"
 
+        # Create mock trial-local directories
+        trial_crs_config_dir = (
+            Path(self.temp_dir) / "trial-0" / "crs-config" / "test-crs"
+        )
+        trial_registry_dir = Path(self.temp_dir) / "trial-0" / "crs-registry"
+
         # Attempt to build
         self.executor._build_crs_if_needed(
-            benchmark_path, "test-project", trial_build_dir
+            benchmark_path,
+            "test-project",
+            trial_build_dir,
+            trial_crs_config_dir,
+            trial_registry_dir,
         )
 
         # Verify no calls were made
@@ -247,10 +267,16 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
 
         trial_build_dir = Path(self.temp_dir) / "trial-0" / "crs-build"
 
+        # Create mock trial-local directories
+        trial_crs_config_dir = test_crs_dir
+        trial_registry_dir = self.registry_dir
+
         cmd = executor._construct_run_command(
             project_name="test-project",
             harness_name="test_harness",
             trial_build_dir=trial_build_dir,
+            trial_crs_config_dir=trial_crs_config_dir,
+            trial_registry_dir=trial_registry_dir,
             hints_path=None,
         )
 
@@ -288,10 +314,16 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         hints_path = Path(self.temp_dir) / "hints"
         hints_path.mkdir()
 
+        # Create mock trial-local directories
+        trial_crs_config_dir = test_crs_dir
+        trial_registry_dir = self.registry_dir
+
         cmd = executor._construct_run_command(
             project_name="test-project",
             harness_name="test_harness",
             trial_build_dir=trial_build_dir,
+            trial_crs_config_dir=trial_crs_config_dir,
+            trial_registry_dir=trial_registry_dir,
             hints_path=hints_path,
         )
 

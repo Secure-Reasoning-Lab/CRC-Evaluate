@@ -22,7 +22,7 @@ set -e  # Exit on error
 # Default values
 CRS_NAME="vincent"
 BENCHMARK="afc-libexif-delta-01"
-MAX_TOTAL_TIME=600
+MAX_TOTAL_TIME=3000  # Must be > build_timeout + run_timeout + verify_timeout
 TRIALS=1
 SKIP_CLEANUP=false
 
@@ -146,8 +146,9 @@ report_filestore: /tmp/crsbench-$EXPERIMENT_NAME/report-data
 litellm_mode: passthrough
 
 # Build Configuration
-build_timeout: 1200
-run_timeout: $MAX_TOTAL_TIME
+build_timeout: 1200   # 20 minutes for patch CRS build
+run_timeout: 1200     # 20 minutes for patch generation
+verify_timeout: 600   # 10 minutes for patch verification
 
 # Hints Configuration
 hints_enabled: false

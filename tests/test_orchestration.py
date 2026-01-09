@@ -32,6 +32,14 @@ from crsbench.validation.schemas import BenchmarkHarness, ExperimentConfig, Harn
 @pytest.fixture(autouse=True)
 def mock_crs_helpers():
     """Mock CRS helper functions to avoid needing real CRS config files."""
+    from unittest.mock import MagicMock
+
+    # Mock MetaYamlAdapter to return harness with CPVs (for only_cpv_harnesses checks)
+    mock_adapter = MagicMock()
+    mock_harness = MagicMock()
+    mock_harness.vulns = [{"id": "mock-cpv"}]  # Has CPVs so tests pass
+    mock_adapter.get_harness.return_value = mock_harness
+
     with (
         patch(
             "crsbench.run_experiment.get_crs_registry_name",
@@ -40,6 +48,10 @@ def mock_crs_helpers():
         patch(
             "crsbench.run_experiment.get_crs_type",
             return_value="patch",  # Return default CRS type
+        ),
+        patch(
+            "crsbench.run_experiment.MetaYamlAdapter.from_meta_yaml",
+            return_value=mock_adapter,
         ),
     ):
         yield
@@ -60,7 +72,7 @@ class TestConfigLoading:
 experiment: test-experiment
 trials: 3
 mode: delta
-max_total_time: 7200
+max_total_time: 20000
 difficulty_level: 2
 experiment_filestore: /tmp/experiment-data
 report_filestore: /tmp/report-data
@@ -76,7 +88,7 @@ benchmarks:
 
         assert config.experiment == "test-experiment"
         assert config.trials == 3
-        assert config.max_total_time == 7200
+        assert config.max_total_time == 20000
         assert config.difficulty_level == 2
         assert config.crses == ["atlantis-c", "ensemble-c"]
         assert config.benchmarks == ["curl-delta-02", "libxml2-delta-03"]
@@ -89,7 +101,7 @@ benchmarks:
 experiment: suite-experiment
 trials: 2
 mode: full
-max_total_time: 3600
+max_total_time: 20000
 difficulty_level: 1
 experiment_filestore: /tmp/experiment-data
 report_filestore: /tmp/report-data
@@ -113,7 +125,7 @@ benchmark_suite: crsbench-afc-c
 experiment: redis-experiment
 trials: 2
 mode: delta
-max_total_time: 3600
+max_total_time: 20000
 difficulty_level: 1
 experiment_filestore: /tmp/experiment-data
 report_filestore: /tmp/report-data
@@ -133,7 +145,7 @@ redis_host: localhost
 experiment: minimal-experiment
 trials: 1
 mode: delta
-max_total_time: 3600
+max_total_time: 20000
 difficulty_level: 0
 experiment_filestore: /tmp/exp
 report_filestore: /tmp/rep
@@ -162,7 +174,7 @@ class TestTrialMatrixGeneration:
             experiment="test",
             trials=2,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -211,7 +223,7 @@ class TestTrialMatrixGeneration:
             experiment="test",
             trials=2,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -270,7 +282,7 @@ class TestTrialMatrixGeneration:
             experiment="test",
             trials=1,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -332,7 +344,7 @@ class TestTrialMatrixGeneration:
                 experiment="test",
                 trials=trials_count,
                 mode="delta",
-                max_total_time=3600,
+                max_total_time=20000,
                 difficulty_level=1,
                 experiment_filestore="/tmp/exp",
                 report_filestore="/tmp/rep",
@@ -351,6 +363,208 @@ class TestTrialMatrixGeneration:
             assert len(trials) == expected_total, (
                 f"Expected {expected_total} trials for {len(crses)} CRS × {len(benchmark_harnesses)} harnesses × {trials_count} trials"
             )
+
+
+class TestOnlyCpvHarnesses:
+    """Test only_cpv_harnesses option for filtering harnesses without CPVs."""
+
+    def test_bug_finding_crs_skips_harness_without_cpvs_when_enabled(self):
+        """Test that bug-finding CRS skips harnesses without CPVs when only_cpv_harnesses=True."""
+        from unittest.mock import MagicMock
+
+        # Create config with only_cpv_harnesses=True (default)
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode="delta",
+            max_total_time=20000,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["bug-finder"],
+            benchmarks=["bench1"],
+            only_cpv_harnesses=True,
+        )
+
+        # Create benchmark harnesses (one with CPV, one without)
+        benchmark_harnesses = [
+            BenchmarkHarness(
+                name="bench1",
+                path=Path("/tmp/bench1"),
+                harness=HarnessFile(name="harness_with_cpv", path="/src/h1.c"),
+            ),
+            BenchmarkHarness(
+                name="bench2",
+                path=Path("/tmp/bench2"),
+                harness=HarnessFile(name="harness_without_cpv", path="/src/h2.c"),
+            ),
+        ]
+
+        # Mock get_crs_type to return bug_finding
+        # Mock MetaYamlAdapter to return harness with/without CPVs
+        mock_adapter = MagicMock()
+        mock_harness_with_cpv = MagicMock()
+        mock_harness_with_cpv.vulns = [{"id": "cpv-1"}]  # Has CPVs
+        mock_harness_without_cpv = MagicMock()
+        mock_harness_without_cpv.vulns = []  # No CPVs
+
+        def mock_get_harness(harness_name):
+            if harness_name == "harness_with_cpv":
+                return mock_harness_with_cpv
+            return mock_harness_without_cpv
+
+        mock_adapter.get_harness = mock_get_harness
+
+        with (
+            patch(
+                "crsbench.run_experiment.get_crs_registry_name",
+                return_value="bug-finder",
+            ),
+            patch(
+                "crsbench.run_experiment.get_crs_type",
+                return_value="bug_finding",
+            ),
+            patch(
+                "crsbench.run_experiment.MetaYamlAdapter.from_meta_yaml",
+                return_value=mock_adapter,
+            ),
+        ):
+            trials = generate_trial_matrix(
+                benchmark_harnesses,
+                ["bug-finder"],
+                config,
+                registry_dir=Path("/tmp/registry"),
+                crs_configs_dir=Path("/tmp/crs-configs"),
+            )
+
+        # Only harness_with_cpv should be included
+        assert len(trials) == 1
+        assert trials[0].benchmark_harness.harness.name == "harness_with_cpv"
+
+    def test_bug_finding_crs_includes_all_harnesses_when_disabled(self):
+        """Test that bug-finding CRS includes all harnesses when only_cpv_harnesses=False."""
+        # Create config with only_cpv_harnesses=False
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode="delta",
+            max_total_time=20000,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["bug-finder"],
+            benchmarks=["bench1"],
+            only_cpv_harnesses=False,
+        )
+
+        # Create benchmark harnesses
+        benchmark_harnesses = [
+            BenchmarkHarness(
+                name="bench1",
+                path=Path("/tmp/bench1"),
+                harness=HarnessFile(name="harness1", path="/src/h1.c"),
+            ),
+            BenchmarkHarness(
+                name="bench2",
+                path=Path("/tmp/bench2"),
+                harness=HarnessFile(name="harness2", path="/src/h2.c"),
+            ),
+        ]
+
+        with (
+            patch(
+                "crsbench.run_experiment.get_crs_registry_name",
+                return_value="bug-finder",
+            ),
+            patch(
+                "crsbench.run_experiment.get_crs_type",
+                return_value="bug_finding",
+            ),
+        ):
+            trials = generate_trial_matrix(
+                benchmark_harnesses,
+                ["bug-finder"],
+                config,
+                registry_dir=Path("/tmp/registry"),
+                crs_configs_dir=Path("/tmp/crs-configs"),
+            )
+
+        # All harnesses should be included (no CPV check performed)
+        assert len(trials) == 2
+        harness_names = {t.benchmark_harness.harness.name for t in trials}
+        assert harness_names == {"harness1", "harness2"}
+
+    def test_bug_fixing_crs_always_skips_harness_without_cpvs(self):
+        """Test that bug-fixing CRS always skips harnesses without CPVs regardless of setting."""
+        from unittest.mock import MagicMock
+
+        # Create config with only_cpv_harnesses=False (should still skip for bug-fixing)
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode="delta",
+            max_total_time=20000,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["bug-fixer"],
+            benchmarks=["bench1"],
+            only_cpv_harnesses=False,  # Even with False, bug-fixing should skip
+        )
+
+        # Create benchmark harnesses
+        benchmark_harnesses = [
+            BenchmarkHarness(
+                name="bench1",
+                path=Path("/tmp/bench1"),
+                harness=HarnessFile(name="harness_with_cpv", path="/src/h1.c"),
+            ),
+            BenchmarkHarness(
+                name="bench2",
+                path=Path("/tmp/bench2"),
+                harness=HarnessFile(name="harness_without_cpv", path="/src/h2.c"),
+            ),
+        ]
+
+        # Mock MetaYamlAdapter
+        mock_adapter = MagicMock()
+        mock_harness_with_cpv = MagicMock()
+        mock_harness_with_cpv.vulns = [{"id": "cpv-1"}]
+        mock_harness_without_cpv = MagicMock()
+        mock_harness_without_cpv.vulns = []
+
+        def mock_get_harness(harness_name):
+            if harness_name == "harness_with_cpv":
+                return mock_harness_with_cpv
+            return mock_harness_without_cpv
+
+        mock_adapter.get_harness = mock_get_harness
+
+        with (
+            patch(
+                "crsbench.run_experiment.get_crs_registry_name",
+                return_value="bug-fixer",
+            ),
+            patch(
+                "crsbench.run_experiment.get_crs_type",
+                return_value="bug-fixing",  # bug-fixing CRS type
+            ),
+            patch(
+                "crsbench.run_experiment.MetaYamlAdapter.from_meta_yaml",
+                return_value=mock_adapter,
+            ),
+        ):
+            trials = generate_trial_matrix(
+                benchmark_harnesses,
+                ["bug-fixer"],
+                config,
+                registry_dir=Path("/tmp/registry"),
+                crs_configs_dir=Path("/tmp/crs-configs"),
+            )
+
+        # Bug-fixing CRS should skip harnesses without CPVs regardless of only_cpv_harnesses
+        assert len(trials) == 1
+        assert trials[0].benchmark_harness.harness.name == "harness_with_cpv"
 
 
 # ============================================================================
@@ -388,7 +602,7 @@ class TestCLIOverrides:
 experiment: original-name
 trials: 1
 mode: delta
-max_total_time: 3600
+max_total_time: 20000
 difficulty_level: 1
 experiment_filestore: /tmp/exp
 report_filestore: /tmp/rep
@@ -417,7 +631,7 @@ benchmarks: [bench1]
 experiment: test
 trials: 1
 mode: delta
-max_total_time: 3600
+max_total_time: 20000
 difficulty_level: 1
 experiment_filestore: /tmp/exp
 report_filestore: /tmp/rep
@@ -446,7 +660,7 @@ benchmarks: [bench1]
 experiment: test
 trials: 1
 mode: delta
-max_total_time: 3600
+max_total_time: 20000
 difficulty_level: 1
 experiment_filestore: /tmp/exp
 report_filestore: /tmp/rep
@@ -495,7 +709,7 @@ class TestConfigStorage:
 experiment: original-experiment
 trials: 1
 mode: delta
-max_total_time: 3600
+max_total_time: 20000
 difficulty_level: 1
 experiment_filestore: /tmp/exp
 report_filestore: /tmp/rep
@@ -521,8 +735,8 @@ benchmarks:
             "trials": config.trials,
             "max_total_time": config.max_total_time,
             "difficulty_level": config.difficulty_level,
-            "experiment_filestore": config.experiment_filestore,
-            "report_filestore": config.report_filestore,
+            "experiment_filestore": str(config.experiment_filestore),
+            "report_filestore": str(config.report_filestore),
             "crses": parse_list_argument(cli_crses),
             "benchmarks": parse_list_argument(cli_benchmarks),
         }
@@ -563,7 +777,7 @@ benchmarks:
             experiment="test-experiment",
             trials=2,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=2,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -632,7 +846,7 @@ benchmarks:
         resolved_config = {
             "experiment": "test-experiment",
             "trials": 2,
-            "max_total_time": 3600,
+            "max_total_time": 20000,
             "difficulty_level": 2,
             "crses": ["atlantis-c"],
             "benchmarks": ["curl-delta-02"],
@@ -865,7 +1079,7 @@ class UnitTestModeSelection:
             experiment="test",
             trials=1,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -894,7 +1108,7 @@ class UnitTestModeSelection:
             experiment="test",
             trials=2,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -923,7 +1137,7 @@ class UnitTestModeSelection:
             experiment="test",
             trials=2,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -953,7 +1167,7 @@ class UnitTestModeSelection:
             experiment="test",
             trials=1,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
@@ -982,7 +1196,7 @@ class UnitTestModeSelection:
             experiment="test",
             trials=1,
             mode="delta",
-            max_total_time=3600,
+            max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",

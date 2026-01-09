@@ -1,27 +1,43 @@
 #!/bin/bash
-# Distributed integration test script for CRSBench
+# Bug-finding smoke test for CRSBench distributed execution
 #
-# This script runs a distributed integration test of CRSBench using:
-# - Distributed execution mode (Redis/Valkey required)
-# - crsbench worker command for background worker process
-# - crs-libfuzzer CRS
-# - atlanta-nasm-delta-01 benchmark
-# - Minimal time limits for fast testing
+# This script runs the bug-finding smoke test using:
+# - atlantis-multilang-given_fuzzer CRS
+# - smoke-test-bug-finding benchmark suite
+# - 8 CPU cores, 32GB RAM per CRS
+# - Distributed execution mode (Redis required)
 #
 # Usage:
-#   ./run_distributed_test-libfuzzer.sh [--tmux] [--kill-pane]
+#   ./run_bugfinding_smoke_test.sh [OPTIONS]
 #
 # Options:
-#   --tmux       Launch worker in a new tmux vertical pane (requires tmux)
-#   --kill-pane  Kill the worker pane after test (only with --tmux)
+#   -j, --workers <n>       Number of parallel workers (default: 1)
+#   --tmux                  Launch worker in tmux vertical pane
+#   --kill-pane             Kill the worker pane after test (with --tmux)
+#   --debug                 Enable debug output from crsbench
+#   --skip-cleanup          Don't restore original resource configs after test
+#   -h, --help              Show this help message
 
-set -e  # Exit on error
+set -e
 
-# Parse command line arguments
+# Default values
+NUM_WORKERS=1
 USE_TMUX=false
 KILL_PANE=false
-for arg in "$@"; do
-    case $arg in
+DEBUG=false
+SKIP_CLEANUP=false
+
+# Resource constraints
+CPU_CORES="0-7"  # 8 cores
+MEMORY="32G"     # 32GB RAM
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -j|--workers)
+            NUM_WORKERS="$2"
+            shift 2
+            ;;
         --tmux)
             USE_TMUX=true
             shift
@@ -30,9 +46,21 @@ for arg in "$@"; do
             KILL_PANE=true
             shift
             ;;
+        --debug)
+            DEBUG=true
+            shift
+            ;;
+        --skip-cleanup)
+            SKIP_CLEANUP=true
+            shift
+            ;;
+        -h|--help)
+            sed -n '2,18p' "$0"
+            exit 0
+            ;;
         *)
-            echo "Unknown argument: $arg"
-            echo "Usage: $0 [--tmux] [--kill-pane]"
+            echo "Unknown option: $1"
+            echo "Use -h or --help for usage information"
             exit 1
             ;;
     esac
@@ -43,20 +71,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Configuration
-CONFIG_FILE="$SCRIPT_DIR/test-experiment-config-libfuzzer.yaml"
-EXPERIMENT_NAME="integration-test-distributed-libfuzzer"
+EXPERIMENT_NAME="ramjet-bug-finding-smoke-testing"
+TEST_DIR="/tmp/ramjet-bug-finding-smoke-testing"
+EXPERIMENT_CONFIG="$PROJECT_ROOT/experiment-configs/paper-eval/ramjet_bug-finding_atlantis-multilang-given-fuzzer_smoke-test-bug-finding.yaml"
 
-# Path overrides (CLI arguments have highest precedence)
+# CRS list and their config directories (bug-finding CRSes)
+CRSES=("atlantis-multilang-given_fuzzer")
+CRS_CONFIGS_DIR="$PROJECT_ROOT/crses/configs"
+
+# Path overrides (environment variables or defaults)
 OSS_FUZZ_PATH="${OSS_FUZZ_PATH:-$PROJECT_ROOT/oss-fuzz}"
 REGISTRY_DIR="${REGISTRY_DIR:-$PROJECT_ROOT/crses/registry}"
-CRS_CONFIGS_DIR="${CRS_CONFIGS_DIR:-$PROJECT_ROOT/crses/configs}"
 BENCHMARKS_ROOT="${BENCHMARKS_ROOT:-$PROJECT_ROOT/benchmarks}"
 
 # Worker configuration
-TEST_DIR="/tmp/crsbench-distributed-test-libfuzzer"
 WORKER_LOG="$TEST_DIR/worker.log"
 WORKER_PID=""
 TMUX_PANE_ID=""
+
+# Track backed up configs
+BACKED_UP_CONFIGS=()
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -64,8 +98,55 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
+# Function to update resource config for a CRS
+update_resource_config() {
+    local crs_name="$1"
+    local config_file="$CRS_CONFIGS_DIR/$crs_name/config-resource.yaml"
+    local backup_file="$CRS_CONFIGS_DIR/$crs_name/config-resource.yaml.backup"
+
+    if [ -f "$config_file" ]; then
+        # Backup original config
+        cp "$config_file" "$backup_file"
+        BACKED_UP_CONFIGS+=("$config_file")
+        echo -e "  ${YELLOW}Backed up: $config_file${NC}"
+
+        # Create new resource config
+        cat > "$config_file" << EOF
+# Resource Configuration for $crs_name CRS Deployment
+# Modified by run_bugfinding_smoke_test.sh
+
+# Worker definitions
+workers:
+  local:
+    cpuset: "$CPU_CORES"
+    memory: "$MEMORY"
+
+# CRS-specific configurations
+crs:
+  $crs_name:
+    workers:
+      - local
+EOF
+        echo -e "  ${GREEN}Updated: $config_file (cpuset: $CPU_CORES, memory: $MEMORY)${NC}"
+    else
+        echo -e "  ${RED}Warning: Config not found: $config_file${NC}"
+    fi
+}
+
+# Function to restore resource configs
+restore_resource_configs() {
+    for config_file in "${BACKED_UP_CONFIGS[@]}"; do
+        local backup_file="${config_file}.backup"
+        if [ -f "$backup_file" ]; then
+            mv "$backup_file" "$config_file"
+            echo -e "  ${GREEN}Restored: $config_file${NC}"
+        fi
+    done
+}
+
 # Cleanup function
 cleanup() {
+    # Stop worker
     if [ "$USE_TMUX" = true ] && [ -n "$TMUX_PANE_ID" ] && [ "$KILL_PANE" = true ]; then
         echo -e "${YELLOW}Killing tmux pane (${TMUX_PANE_ID})...${NC}"
         tmux kill-pane -t "$TMUX_PANE_ID" 2>/dev/null || true
@@ -74,19 +155,40 @@ cleanup() {
         kill "$WORKER_PID" 2>/dev/null || true
         wait "$WORKER_PID" 2>/dev/null || true
     fi
+
+    # Restore resource configs
+    if [ "$SKIP_CLEANUP" = false ]; then
+        echo -e "${YELLOW}Restoring original resource configs...${NC}"
+        restore_resource_configs
+    else
+        echo -e "${YELLOW}Skipping config cleanup (--skip-cleanup specified)${NC}"
+    fi
 }
 
 # Register cleanup on exit
 trap cleanup EXIT INT TERM
 
-echo -e "${GREEN}=== CRSBench Distributed Integration Test (libFuzzer) ===${NC}"
+echo -e "${GREEN}=== CRSBench Bug-Finding Smoke Test ===${NC}"
 echo ""
 
-# Check if config file exists
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo -e "${RED}Error: Config file not found: $CONFIG_FILE${NC}"
+# Load .env file if exists
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    echo -e "${YELLOW}Loading .env file...${NC}"
+    set -a  # automatically export all variables
+    source "$PROJECT_ROOT/.env"
+    set +a
+    echo -e "${GREEN}✓ Loaded .env${NC}"
+    echo ""
+fi
+
+# Check that experiment config exists
+echo -e "${YELLOW}Checking experiment config...${NC}"
+if [ ! -f "$EXPERIMENT_CONFIG" ]; then
+    echo -e "${RED}Error: Experiment config not found: $EXPERIMENT_CONFIG${NC}"
     exit 1
 fi
+echo -e "${GREEN}✓ Experiment config found: $EXPERIMENT_CONFIG${NC}"
+echo ""
 
 # Check if Redis is running
 echo -e "${YELLOW}Checking Redis availability...${NC}"
@@ -106,18 +208,11 @@ if [ "$USE_TMUX" = true ]; then
     echo -e "${YELLOW}Checking tmux availability...${NC}"
     if ! command -v tmux &> /dev/null; then
         echo -e "${RED}Error: tmux is not installed${NC}"
-        echo "Please install tmux or run without --tmux flag:"
-        echo "  sudo apt-get install tmux  # Debian/Ubuntu"
-        echo "  sudo yum install tmux      # RHEL/CentOS"
         exit 1
     fi
-
-    # Check if we're inside a tmux session
     if [ -z "$TMUX" ]; then
         echo -e "${RED}Error: Not running inside a tmux session${NC}"
-        echo "Please run this script from within tmux when using --tmux flag:"
-        echo "  tmux"
-        echo "  ./run_distributed_test-libfuzzer.sh --tmux"
+        echo "Please run this script from within tmux when using --tmux flag"
         exit 1
     fi
     echo -e "${GREEN}✓ tmux is available${NC}"
@@ -125,19 +220,27 @@ if [ "$USE_TMUX" = true ]; then
 fi
 
 echo -e "${GREEN}Configuration:${NC}"
-echo "  Config file: $CONFIG_FILE"
-echo "  Experiment name: $EXPERIMENT_NAME"
+echo "  Experiment config: $EXPERIMENT_CONFIG"
+echo "  Benchmark suite: smoke-test-bug-finding"
+echo "  CRSes: ${CRSES[*]}"
+echo "  CPU cores: $CPU_CORES (8 cores)"
+echo "  Memory: $MEMORY"
 echo "  Mode: Distributed (Redis-based job queue)"
+echo "  Parallel workers: $NUM_WORKERS"
+echo "  Debug mode: $DEBUG"
 if [ "$USE_TMUX" = true ]; then
     echo "  Worker display: tmux vertical pane"
 else
     echo "  Worker display: background process"
     echo "  Worker log: $WORKER_LOG"
 fi
-echo "  OSS-Fuzz path: $OSS_FUZZ_PATH"
-echo "  Registry directory: $REGISTRY_DIR"
-echo "  CRS configs directory: $CRS_CONFIGS_DIR"
-echo "  Benchmarks root: $BENCHMARKS_ROOT"
+echo ""
+
+# Update resource configs for each CRS
+echo -e "${YELLOW}Updating resource configs for CRSes...${NC}"
+for crs in "${CRSES[@]}"; do
+    update_resource_config "$crs"
+done
 echo ""
 
 # Set up virtual environment
@@ -165,44 +268,31 @@ echo -e "${YELLOW}Activating virtual environment...${NC}"
 source "$PROJECT_ROOT/.venv/bin/activate"
 echo ""
 
-# Start worker in continuous mode (waits for jobs)
+# Start worker in continuous mode
 echo -e "${YELLOW}Starting distributed worker in continuous mode...${NC}"
 
+# Build worker command
+if [ "$NUM_WORKERS" -gt 1 ]; then
+    WORKER_BASE_CMD="crsbench worker -j$NUM_WORKERS --redis-host localhost --experiment-name '$EXPERIMENT_NAME' --log-level INFO --continuous"
+else
+    WORKER_BASE_CMD="crsbench worker --redis-host localhost --experiment-name '$EXPERIMENT_NAME' --log-level INFO --continuous"
+fi
+
 if [ "$USE_TMUX" = true ]; then
-    # Launch worker in a new tmux vertical pane with tee for logging
-    # Keep pane open after worker exits by starting a new bash shell
-    WORKER_CMD="cd '$PROJECT_ROOT' && source .venv/bin/activate && crsbench worker --redis-host localhost --experiment-name '$EXPERIMENT_NAME' --log-level INFO --continuous 2>&1 | tee '$WORKER_LOG'; exec bash"
-
-    # Split window vertically and run worker in new pane
+    WORKER_CMD="cd '$PROJECT_ROOT' && source .venv/bin/activate && $WORKER_BASE_CMD 2>&1 | tee '$WORKER_LOG'; exec bash"
     tmux split-window -h "$WORKER_CMD"
-
-    # Get the pane ID (the newly created pane)
     TMUX_PANE_ID=$(tmux list-panes -F '#{pane_id}' | tail -n 1)
-
     echo -e "${GREEN}✓ Worker started in tmux pane: ${TMUX_PANE_ID}${NC}"
-    echo "  Mode: Continuous (will wait for jobs)"
     echo "  Worker output is visible in the right pane"
-    echo "  Worker log: $WORKER_LOG"
     echo ""
 else
-    # Launch worker as background process
-    crsbench worker \
-        --redis-host localhost \
-        --experiment-name "$EXPERIMENT_NAME" \
-        --log-level INFO \
-        --continuous \
-        > "$WORKER_LOG" 2>&1 &
+    eval "$WORKER_BASE_CMD" > "$WORKER_LOG" 2>&1 &
     WORKER_PID=$!
-
     echo -e "${GREEN}✓ Worker started (PID: $WORKER_PID)${NC}"
     echo "  Worker log: $WORKER_LOG"
-    echo "  Mode: Continuous (will wait for jobs)"
     echo ""
 
-    # Give worker a moment to connect
     sleep 2
-
-    # Check if worker is still running
     if ! kill -0 "$WORKER_PID" 2>/dev/null; then
         echo -e "${RED}Error: Worker process died immediately${NC}"
         echo ""
@@ -212,26 +302,31 @@ else
     fi
 fi
 
-# Run the experiment in distributed mode (enqueues jobs)
+# Run the experiment in distributed mode
 echo -e "${GREEN}Running CRSBench coordinator (enqueuing jobs)...${NC}"
 echo ""
 
 EXPERIMENT_EXIT_CODE=0
-crsbench run \
-    --experiment-config "$CONFIG_FILE" \
-    --crses crs-libfuzzer \
-    --oss-fuzz-path "$OSS_FUZZ_PATH" \
-    --registry-dir "$REGISTRY_DIR" \
-    --crs-configs-dir "$CRS_CONFIGS_DIR" \
-    --benchmarks-root "$BENCHMARKS_ROOT" \
+
+CRSBENCH_CMD="crsbench run \
+    --experiment-config \"$EXPERIMENT_CONFIG\" \
+    --oss-fuzz-path \"$OSS_FUZZ_PATH\" \
+    --registry-dir \"$REGISTRY_DIR\" \
+    --crs-configs-dir \"$CRS_CONFIGS_DIR\" \
+    --benchmarks-root \"$BENCHMARKS_ROOT\" \
     --distributed \
-    --gitcache \
-    --debug || EXPERIMENT_EXIT_CODE=$?
+    --gitcache"
+
+if [ "$DEBUG" = true ]; then
+    CRSBENCH_CMD="$CRSBENCH_CMD --debug"
+fi
+
+eval $CRSBENCH_CMD || EXPERIMENT_EXIT_CODE=$?
 
 echo -e "${GREEN}✓ Coordinator finished${NC}"
 echo ""
 
-# Stop the worker (continuous mode doesn't exit on its own)
+# Stop the worker
 echo -e "${YELLOW}Stopping worker...${NC}"
 if [ "$USE_TMUX" = true ]; then
     if [ -n "$TMUX_PANE_ID" ]; then
@@ -242,20 +337,18 @@ if [ "$USE_TMUX" = true ]; then
             echo -e "${GREEN}✓ Worker pane preserved (${TMUX_PANE_ID})${NC}"
             echo -e "${YELLOW}  Use 'tmux kill-pane -t ${TMUX_PANE_ID}' to close manually${NC}"
         fi
-        TMUX_PANE_ID=""  # Clear pane ID so cleanup doesn't try to kill it again
+        TMUX_PANE_ID=""
     fi
 else
     if [ -n "$WORKER_PID" ] && kill -0 "$WORKER_PID" 2>/dev/null; then
         kill "$WORKER_PID" 2>/dev/null || true
-        # Give it a moment to shutdown gracefully
         sleep 2
-        # Force kill if still running
         if kill -0 "$WORKER_PID" 2>/dev/null; then
             kill -9 "$WORKER_PID" 2>/dev/null || true
         fi
         wait "$WORKER_PID" 2>/dev/null || true
     fi
-    WORKER_PID=""  # Clear PID so cleanup doesn't try to kill it again
+    WORKER_PID=""
     echo -e "${GREEN}✓ Worker stopped${NC}"
 fi
 echo ""
@@ -263,7 +356,7 @@ echo ""
 # Check results
 if [ $EXPERIMENT_EXIT_CODE -eq 0 ]; then
     echo ""
-    echo -e "${GREEN}=== Integration test completed successfully ===${NC}"
+    echo -e "${GREEN}=== Bug-finding smoke test completed successfully ===${NC}"
     echo ""
     echo "Results stored in:"
     echo "  Experiment data: $TEST_DIR/experiment-data"
@@ -281,11 +374,10 @@ if [ $EXPERIMENT_EXIT_CODE -eq 0 ]; then
     exit 0
 else
     echo ""
-    echo -e "${RED}=== Integration test failed ===${NC}"
+    echo -e "${RED}=== Bug-finding smoke test failed ===${NC}"
     echo "  Exit code: $EXPERIMENT_EXIT_CODE"
     echo ""
 
-    # Display worker log on failure
     echo -e "${YELLOW}Worker log:${NC}"
     if [ -f "$WORKER_LOG" ]; then
         tail -n 50 "$WORKER_LOG"
@@ -294,7 +386,6 @@ else
     fi
     echo ""
 
-    # Display directory structure
     if [ -d "$TEST_DIR" ]; then
         echo -e "${YELLOW}Directory structure:${NC}"
         tree -L 4 "$TEST_DIR" 2>/dev/null || ls -R "$TEST_DIR"

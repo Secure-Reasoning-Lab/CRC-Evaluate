@@ -33,51 +33,51 @@ class TestExitCodeHandling:
     """Test exit code handling with mock helper.py."""
 
     def test_no_crash_returns_false(self, infra):
-        """Exit code 0 → False."""
+        """Exit code 0 → crashed=False."""
         result = infra.reproduce(
             project_name="test",
             harness="fuzz",
             pov_data=b"OK",
             timeout=5,
         )
-        assert result is False
+        assert result.crashed is False
 
     def test_asan_crash_returns_true(self, infra):
-        """Exit code 77 (ASAN) → True."""
+        """Exit code 77 (ASAN) → crashed=True."""
         result = infra.reproduce(
             project_name="test",
             harness="fuzz",
             pov_data=b"ASAN",
             timeout=5,
         )
-        assert result is True
+        assert result.crashed is True
 
     def test_generic_crash_returns_true(self, infra):
-        """Exit code 1 → True."""
+        """Exit code 1 → crashed=True."""
         result = infra.reproduce(
             project_name="test",
             harness="fuzz",
             pov_data=b"CRASH",
             timeout=5,
         )
-        assert result is True
+        assert result.crashed is True
 
     def test_timeout_returns_false(self, infra):
-        """Exit code 124 (timeout) → False."""
+        """Exit code 124 (timeout) → crashed=False."""
         result = infra.reproduce(
             project_name="test",
             harness="fuzz",
             pov_data=b"TIMEOUT",
             timeout=5,
         )
-        assert result is False
+        assert result.crashed is False
 
 
 class TestTimeoutHandling:
     """Test subprocess timeout handling (mocked to avoid 30s grace period wait)."""
 
     def test_subprocess_timeout_returns_false(self, mock_oss_fuzz):
-        """Subprocess TimeoutExpired → False."""
+        """Subprocess TimeoutExpired → crashed=False."""
         import subprocess
         from unittest.mock import patch
 
@@ -91,7 +91,7 @@ class TestTimeoutHandling:
                 pov_data=b"HANG",
                 timeout=1,
             )
-        assert result is False
+        assert result.crashed is False
 
 
 class TestCommandConstruction:

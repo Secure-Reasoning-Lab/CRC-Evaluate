@@ -252,3 +252,6 @@ ci_results*
 # statistics
 benchmarks.csv
 benchmarks_summary.csv
+
+# for integration scripts
+.generated-configs

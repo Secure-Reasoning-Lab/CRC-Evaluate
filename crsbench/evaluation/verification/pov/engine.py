@@ -29,6 +29,8 @@ from crsbench.evaluation.verification.models import (
     PovVerificationStatus,
 )
 from crsbench.evaluation.verification.pov.verdict import VerdictResolver
+from crsbench.evaluation.verification.utils import compute_content_hash
+from crsbench.utils import strip_ansi
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -61,6 +63,7 @@ class ReproduceResult:
     variant_type: VariantType
     cpv_num: Optional[int]
     crashed: bool
+    crash_log: str = ""
 
 
 class VerificationEngine:
@@ -113,22 +116,26 @@ class VerificationEngine:
             task: ReproduceTask with POV and variant info
 
         Returns:
-            ReproduceResult with crash status
+            ReproduceResult with crash status and crash log
         """
-        crashed = self.builder.infra.reproduce(
+        output = self.builder.infra.reproduce(
             project_name=task.variant_name,
             harness=task.harness,
             pov_data=task.pov_data,
             timeout=self.timeout,
             pov_id=task.pov_id,
         )
+        # Strip ANSI escape codes from crash log for cleaner storage
+        crash_log = strip_ansi(output.stdout) if output.crashed else ""
+
         return ReproduceResult(
             pov_id=task.pov_id,
             harness=task.harness,
             variant_name=task.variant_name,
             variant_type=task.variant_type,
             cpv_num=task.cpv_num,
-            crashed=crashed,
+            crashed=output.crashed,
+            crash_log=crash_log,
         )
 
     def verify_pov(
@@ -181,6 +188,7 @@ class VerificationEngine:
         # Execute reproduce calls in parallel
         crash_results: dict[VariantType, bool] = {}
         cpv_crash_map: dict[int, bool] = {}
+        crash_logs: dict[str, str] = {}  # variant_name -> crash_log
 
         with ThreadPoolExecutor(max_workers=self.verify_workers) as executor:
             futures = {
@@ -197,6 +205,10 @@ class VerificationEngine:
                 else:
                     crash_results[result.variant_type] = result.crashed
 
+                # Collect crash log if crashed
+                if result.crashed and result.crash_log:
+                    crash_logs[result.variant_name] = result.crash_log
+
                 logger.debug(
                     f"{result.variant_name}: {'crashed' if result.crashed else 'ok'}"
                 )
@@ -206,13 +218,19 @@ class VerificationEngine:
         mode = BenchmarkMode.FULL if mode_str == "full" else BenchmarkMode.DELTA
 
         # Resolve verdict
-        return VerdictResolver.resolve(
+        verdict = VerdictResolver.resolve(
             mode=mode,
             crash_results=crash_results,
             cpv_crash_map=cpv_crash_map,
             benchmark_name=adapter.benchmark_name,
             pov_id=request.pov_id,
         )
+
+        # Attach crash logs to result
+        if crash_logs:
+            verdict.crash_info = {"logs": crash_logs}
+
+        return verdict
 
     def verify_povs_parallel(
         self,
@@ -259,9 +277,11 @@ class VerificationEngine:
         )
 
         # Execute all reproduce calls in parallel
+        # Track crash results, cpv crash map, and crash logs per (pov, harness)
         results_by_pov_harness: dict[
-            tuple[str, str], tuple[dict[VariantType, bool], dict[int, bool]]
-        ] = defaultdict(lambda: ({}, {}))
+            tuple[str, str],
+            tuple[dict[VariantType, bool], dict[int, bool], dict[str, str]],
+        ] = defaultdict(lambda: ({}, {}, {}))
 
         start_time = time.time()
         completed = 0
@@ -276,7 +296,7 @@ class VerificationEngine:
             for future in as_completed(futures):
                 result = future.result()
                 key = (result.pov_id, result.harness)
-                crash_results, cpv_crash_map = results_by_pov_harness[key]
+                crash_results, cpv_crash_map, crash_logs = results_by_pov_harness[key]
 
                 if (
                     result.variant_type == VariantType.CPV
@@ -285,6 +305,10 @@ class VerificationEngine:
                     cpv_crash_map[result.cpv_num] = result.crashed
                 else:
                     crash_results[result.variant_type] = result.crashed
+
+                # Collect crash log if crashed
+                if result.crashed and result.crash_log:
+                    crash_logs[result.variant_name] = result.crash_log
 
                 # Progress reporting
                 completed += 1
@@ -308,6 +332,7 @@ class VerificationEngine:
         for (pov_id, _harness), (
             crash_results,
             cpv_crash_map,
+            crash_logs,
         ) in results_by_pov_harness.items():
             verdict = VerdictResolver.resolve(
                 mode=mode,
@@ -316,6 +341,9 @@ class VerificationEngine:
                 benchmark_name=adapter.benchmark_name,
                 pov_id=pov_id,
             )
+            # Attach crash logs to result
+            if crash_logs:
+                verdict.crash_info = {"logs": crash_logs}
             verification_results.append(verdict)
 
         elapsed = time.time() - start_time
@@ -333,7 +361,8 @@ class VerificationEngine:
         harness_filter: Optional[str] = None,
         *,
         deduplicate: bool = True,
-    ) -> list[PovVerificationResult]:
+        skip_hashes: set[str] | None = None,
+    ) -> tuple[list[PovVerificationResult], int]:
         """Verify all POVs in a directory against a benchmark.
 
         Uses parallel execution for all reproduce() calls.
@@ -343,15 +372,16 @@ class VerificationEngine:
             pov_dir: Directory containing POV files
             harness_filter: Optional harness name to filter
             deduplicate: Whether to deduplicate results
+            skip_hashes: Optional set of content hashes to skip (pre-verification dedup)
 
         Returns:
-            List of verification results
+            Tuple of (list of verification results, number of POVs skipped due to hash)
         """
         # Build variants once
         build_results = self._get_or_build_results(adapter)
         if not build_results:
             logger.error(f"Failed to build variants for {adapter.benchmark_name}")
-            return []
+            return [], 0
 
         # Find all POV files (exclude dotfiles)
         pov_files = [
@@ -361,16 +391,43 @@ class VerificationEngine:
         ]
         if not pov_files:
             logger.warning(f"No POV files found in {pov_dir}")
-            return []
+            return [], 0
 
         # Get harness names to test
         harness_names = (
             [harness_filter] if harness_filter else adapter.get_harness_names()
         )
 
+        # Filter out POVs with hashes in skip_hashes (pre-verification dedup)
+        skipped_count = 0
+        if skip_hashes:
+            filtered_pov_files = []
+            for pov_file in pov_files:
+                pov_hash = compute_content_hash(pov_file)
+                if pov_hash in skip_hashes:
+                    logger.debug(
+                        f"Skipping POV {pov_file.name} (hash {pov_hash} already tested)"
+                    )
+                    skipped_count += 1
+                else:
+                    filtered_pov_files.append(pov_file)
+            pov_files = filtered_pov_files
+
+        if not pov_files:
+            if skipped_count > 0:
+                logger.info(f"All {skipped_count} POVs skipped (already tested)")
+            else:
+                logger.warning(f"No POV files found in {pov_dir}")
+            return [], skipped_count
+
         logger.info(
             f"Verifying {len(pov_files)} POVs × {len(harness_names)} harnesses "
             f"against {adapter.benchmark_name}"
+            + (
+                f" (skipped {skipped_count} already tested)"
+                if skipped_count > 0
+                else ""
+            )
         )
 
         # Create (pov_id, pov_data, harness) tuples
@@ -393,7 +450,7 @@ class VerificationEngine:
                     f"(using {self.dedup_strategy.name})"
                 )
 
-        return results
+        return results, skipped_count
 
     def verify_benchmark(
         self,
@@ -403,7 +460,8 @@ class VerificationEngine:
         *,
         force_rebuild: bool = False,
         deduplicate: bool = True,
-    ) -> list[PovVerificationResult]:
+        skip_hashes: set[str] | None = None,
+    ) -> tuple[list[PovVerificationResult], int]:
         """Verify POVs for a complete benchmark.
 
         Uses parallel execution for all reproduce() calls.
@@ -414,14 +472,15 @@ class VerificationEngine:
             harness_filter: Optional harness name to filter
             force_rebuild: Force rebuild of variants
             deduplicate: Whether to deduplicate results
+            skip_hashes: Optional set of content hashes to skip (pre-verification dedup)
 
         Returns:
-            List of verification results
+            Tuple of (list of verification results, number of POVs skipped due to hash)
         """
         # Load benchmark configuration
         adapter = self._load_adapter(benchmark_path)
         if not adapter:
-            return []
+            return [], 0
 
         # Build variants if needed
         if force_rebuild:
@@ -430,10 +489,11 @@ class VerificationEngine:
         build_results = self._get_or_build_results(adapter, force_rebuild=force_rebuild)
         if not build_results:
             logger.error(f"Failed to build variants for {adapter.benchmark_name}")
-            return []
+            return [], 0
 
         # Collect (pov_id, pov_data, harness) tuples
         pov_harness_pairs: list[tuple[str, bytes, str]] = []
+        skipped_count = 0
 
         if pov_dir:
             # Use explicit POV directory (override)
@@ -446,6 +506,21 @@ class VerificationEngine:
                 for f in pov_dir.glob("*")
                 if f.is_file() and not f.name.startswith(".")
             ]
+
+            # Filter out POVs with hashes in skip_hashes (pre-verification dedup)
+            if skip_hashes:
+                filtered_pov_files = []
+                for pov_file in pov_files:
+                    pov_hash = compute_content_hash(pov_file)
+                    if pov_hash in skip_hashes:
+                        logger.debug(
+                            f"Skipping POV {pov_file.name} "
+                            f"(hash {pov_hash} already tested)"
+                        )
+                        skipped_count += 1
+                    else:
+                        filtered_pov_files.append(pov_file)
+                pov_files = filtered_pov_files
 
             for pov_file in pov_files:
                 pov_data = pov_file.read_bytes()
@@ -461,19 +536,37 @@ class VerificationEngine:
 
             if not all_povs:
                 logger.warning("No POVs found in benchmark meta.yaml")
-                return []
+                return [], 0
 
+            # Filter out POVs with hashes in skip_hashes (pre-verification dedup)
             for harness_name, _vuln_keyword, pov_path in all_povs:
+                if skip_hashes:
+                    pov_hash = compute_content_hash(pov_path)
+                    if pov_hash in skip_hashes:
+                        logger.debug(
+                            f"Skipping POV {pov_path.name} "
+                            f"(hash {pov_hash} already tested)"
+                        )
+                        skipped_count += 1
+                        continue
                 pov_data = pov_path.read_bytes()
                 pov_harness_pairs.append((pov_path.name, pov_data, harness_name))
 
         if not pov_harness_pairs:
-            logger.warning("No POVs to verify")
-            return []
+            if skipped_count > 0:
+                logger.info(f"All {skipped_count} POVs skipped (already tested)")
+            else:
+                logger.warning("No POVs to verify")
+            return [], skipped_count
 
         logger.info(
             f"Verifying {len(pov_harness_pairs)} POV-harness pairs "
             f"against {adapter.benchmark_name}"
+            + (
+                f" (skipped {skipped_count} already tested)"
+                if skipped_count > 0
+                else ""
+            )
         )
 
         # Run parallel verification
@@ -489,7 +582,7 @@ class VerificationEngine:
                     f"(using {self.dedup_strategy.name})"
                 )
 
-        return results
+        return results, skipped_count
 
     def _get_or_build_results(
         self,

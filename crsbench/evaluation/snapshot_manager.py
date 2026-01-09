@@ -26,6 +26,7 @@ from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from crsbench.evaluation.coverage.manager import CoverageManager
+    from crsbench.evaluation.verification.pov.manager import POVVerificationManager
 
 logger = get_logger(__name__)
 
@@ -48,7 +49,8 @@ class SnapshotManager:
         snapshot_period: int,
         trial_start_time: Optional[float] = None,
         *,
-        coverage_manager: Optional[CoverageManager] = None,
+        coverage_manager: Optional["CoverageManager"] = None,
+        pov_verification_manager: Optional["POVVerificationManager"] = None,
     ):
         """Initialize snapshot manager.
 
@@ -57,6 +59,7 @@ class SnapshotManager:
             snapshot_period: Snapshot interval in seconds (must be > 0)
             trial_start_time: Trial start timestamp (defaults to current time)
             coverage_manager: Optional CoverageManager for collecting coverage snapshots
+            pov_verification_manager: Optional POVVerificationManager for POV verification
 
         Raises:
             ValueError: If snapshot_period <= 0 or trial_dir doesn't exist
@@ -72,6 +75,7 @@ class SnapshotManager:
         self.trial_start_time = trial_start_time or time.time()
         self.crs_run_start_time: Optional[float] = None
         self.coverage_manager = coverage_manager
+        self.pov_verification_manager = pov_verification_manager
 
         # State tracking
         self.cycle = 0
@@ -213,6 +217,14 @@ class SnapshotManager:
                     self._capture_coverage(temp_dir, coverage_snapshot)
                 except Exception as e:
                     logger.warning(f"Failed to capture coverage snapshot: {e}")
+
+            # Capture POV verification snapshot if POV verification manager is available
+            if self.pov_verification_manager:
+                try:
+                    pov_snapshot = self.pov_verification_manager.on_snapshot(self.cycle)
+                    self._capture_pov_verification(temp_dir, pov_snapshot)
+                except Exception as e:
+                    logger.warning(f"Failed to capture POV verification snapshot: {e}")
 
             # Compress to tar.gz
             archive_path = self.trial_dir / f"snapshot-{self.cycle:04d}.tar.gz"
@@ -525,4 +537,44 @@ class SnapshotManager:
             return True
         except Exception as e:
             logger.warning(f"Failed to write coverage.json: {e}")
+            return False
+
+    def _capture_pov_verification(self, temp_dir: Path, pov_snapshot) -> bool:
+        """Capture POV verification snapshot data.
+
+        Args:
+            temp_dir: Temporary directory for snapshot contents
+            pov_snapshot: POVSnapshot from POV verification manager
+
+        Returns:
+            True if POV verification data was captured, False otherwise
+        """
+        if pov_snapshot is None:
+            return False
+
+        try:
+            pov_data = {
+                "cycle": pov_snapshot.cycle,
+                "timestamp": pov_snapshot.timestamp,
+                "elapsed_time": pov_snapshot.elapsed_time,
+                "harness_name": pov_snapshot.harness_name,
+                "cpvs_found": pov_snapshot.cpvs_found,
+                "cpvs_remaining": pov_snapshot.cpvs_remaining,
+                "povs_total": pov_snapshot.povs_total,
+                "povs_new": pov_snapshot.povs_new,
+                "duplicates_skipped": pov_snapshot.duplicates_skipped,
+                "zerodays_count": pov_snapshot.zerodays_count,
+                "early_stop_triggered": pov_snapshot.early_stop_triggered,
+            }
+
+            pov_path = temp_dir / "pov_verification.json"
+            pov_path.write_text(json.dumps(pov_data, indent=2))
+            logger.debug(
+                f"Captured POV verification: cpvs={len(pov_snapshot.cpvs_found)}, "
+                f"povs={pov_snapshot.povs_total}, "
+                f"early_stop={pov_snapshot.early_stop_triggered}"
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to write pov_verification.json: {e}")
             return False

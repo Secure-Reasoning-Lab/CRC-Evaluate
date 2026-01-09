@@ -243,6 +243,7 @@ class TrialDirectoryPreparer:
                 benchmark_dir=str(benchmark_dir),
                 project_dir=str(source_dest),
                 verbose=self.config.get("verbose", False),
+                remove_aixcc=True,
             )
 
             if not source_path:

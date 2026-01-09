@@ -20,9 +20,24 @@ trials: 1
 # - all: Run all available modes for each benchmark (multiplies trials)
 mode: delta
 
-# The amount of time in seconds that each trial is run for.
+# The maximum time in seconds for the entire trial.
+# IMPORTANT: Must be greater than build_timeout + run_timeout + verify_timeout
 # Default: 86400 (24 hours)
 max_total_time: 86400
+
+# ===== Timeout Configuration =====
+
+# Maximum time in seconds for CRS build phase
+# Default: 3600 (1 hour)
+build_timeout: 3600
+
+# Maximum time in seconds for CRS run phase (fuzzing/analysis)
+# Default: 7200 (2 hours)
+run_timeout: 7200
+
+# Maximum time in seconds for POV verification phase
+# Default: 7200 (2 hours)
+verify_timeout: 7200
 
 # ===== CRS and Benchmark Selection =====
 
