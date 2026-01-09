@@ -4,10 +4,6 @@
 # Used for organizing results and generating reports.
 experiment: "test-experiment"
 
-# Human-readable description of the experiment's purpose.
-# Helps document what is being tested and why.
-description: "Test experiment evaluating CRS systems"
-
 # ===== Execution Configuration =====
 
 # The number of trials to run for each CRS-benchmark combination.
@@ -110,8 +106,66 @@ snapshot_period: 900
 
 # ===== Resource Management =====
 
-## TODO: overwrite config-resource.yaml?
-### litellm
+# OPTIONAL: Resource allocation configuration for trials
+# This section controls compute resources and API rate limits.
+# If omitted, trials will use system defaults.
+#
+# resources:
+#   # Number of CPU cores allocated per trial
+#   # Default: 4
+#   # Higher values allow more parallelism within each trial
+#   cores_per_trial: 8
+#
+#   # Memory allocation per trial (e.g., "8G", "16G", "32G")
+#   # Default: "8G"
+#   # Supports standard memory notation (K, M, G, T)
+#   memory_per_trial: "16G"
+#
+#   # OPTIONAL: LiteLLM-specific resource configuration
+#   # Controls rate limiting and cost management for LLM API calls
+#   litellm:
+#     # Maximum concurrent requests to LiteLLM service
+#     # Default: 10
+#     # Prevents overwhelming the LLM API with too many parallel requests
+#     max_concurrent_requests: 20
+#
+#     # Cost budget in USD for LLM API usage
+#     # Default: 100.0
+#     # Experiment will halt if this budget is exceeded (if cost tracking is enabled)
+#     cost_budget: 200.0
+
+# ===== Distributed Worker Configuration =====
+
+# OPTIONAL: Configuration for distributed worker nodes
+# This section is only relevant when running CRSBench in distributed mode.
+# If omitted, workers will use default settings or environment variables.
+#
+# worker:
+#   # Number of parallel jobs each worker should handle
+#   # Default: 4
+#   # Higher values increase worker throughput but require more resources
+#   jobs: 8
+#
+#   # Redis server hostname or IP address for distributed job coordination
+#   # Default: "localhost"
+#   # All workers must connect to the same Redis instance
+#   redis_host: "redis.example.com"
+#
+#   # Whether workers should run continuously or exit after completing one job
+#   # Default: true
+#   # Set to false for one-shot execution (useful for testing or batch processing)
+#   continuous: true
+#
+#   # OPTIONAL: Override experiment filestore path for workers on different machines
+#   # Default: null (uses main experiment_filestore setting)
+#   # Useful when workers have different filesystem layouts or use local storage
+#   # Example: Workers on remote machines might mount shared storage at different paths
+#   # experiment_filestore: /mnt/worker/experiment-data
+#
+#   # OPTIONAL: Override report filestore path for workers on different machines
+#   # Default: null (uses main report_filestore setting)
+#   # Similar to experiment_filestore override, for report output paths
+#   # report_filestore: /mnt/worker/reports
 
 # ===== Storage Configuration =====
 
@@ -123,18 +177,3 @@ experiment_filestore: /tmp/crsbench/experiment-data
 # The folder where HTML reports and summary data will be stored.
 # Can be local path or cloud storage (gs://, s3://, etc.)
 report_filestore: /tmp/crsbench/report-data
-
-# ===== Reproducibility =====
-
-# Git commit hash for reproducibility tracking.
-# If null, will be auto-detected from current repository state.
-# Useful for ensuring experiment results can be reproduced.
-git_hash: null
-
-# ===== Advanced Options (Optional) =====
-
-# Docker registry for custom images (if not using default).
-# docker_registry: gcr.io/my-project
-
-# Timeout multiplier for adjusting all timeouts (e.g., for slow CRS).
-# timeout_multiplier: 1.5
