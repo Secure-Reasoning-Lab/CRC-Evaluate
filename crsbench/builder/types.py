@@ -45,6 +45,20 @@ class VariantType(Enum):
         """Check if this is a patch verification variant."""
         return self == VariantType.PATCHED
 
+    def supports_inc_build(self) -> bool:
+        """Check if this variant type supports incremental builds.
+
+        Inc-build uses pre-built Docker images with cached dependencies,
+        enabling faster builds by skipping dependency downloads.
+
+        Supported: All validation variants + PATCHED
+        Not supported: COVERAGE (requires different instrumentation)
+
+        Returns:
+            True if inc-build is supported for this variant type.
+        """
+        return self != VariantType.COVERAGE
+
 
 class BenchmarkMode(Enum):
     """Benchmark testing mode."""
