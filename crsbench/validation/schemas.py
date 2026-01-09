@@ -587,6 +587,27 @@ class ResourceConfig(BaseModel):
     )
 
 
+class WorkerConfig(BaseModel):
+    """Distributed worker configuration."""
+
+    jobs: int = Field(default=4, ge=1, description="Number of parallel jobs per worker")
+    redis_host: str = Field(
+        default="localhost", description="Redis server hostname or IP for workers"
+    )
+    continuous: bool = Field(
+        default=True,
+        description="Whether workers should run continuously or exit after one job",
+    )
+    experiment_filestore: Optional[Path] = Field(
+        default=None,
+        description="Override experiment data storage path for workers on different machines",
+    )
+    report_filestore: Optional[Path] = Field(
+        default=None,
+        description="Override report storage path for workers on different machines",
+    )
+
+
 class ExperimentConfig(BaseModel):
     """Experiment configuration schema."""
 
@@ -735,6 +756,9 @@ class ExperimentConfig(BaseModel):
     )
     resources: Optional[ResourceConfig] = Field(
         default=None, description="Resource allocation configuration for trials"
+    )
+    worker: Optional[WorkerConfig] = Field(
+        default=None, description="Distributed worker configuration"
     )
 
     @field_validator("experiment")
