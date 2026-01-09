@@ -334,6 +334,16 @@ Examples:
 
     add_stats_subparser(subparsers)
 
+    # 'report' subcommand - report generation
+    from crsbench.reporting.cli import add_report_subparser
+
+    add_report_subparser(subparsers)
+
+    # 'dashboard' subcommand - web dashboard
+    from crsbench.reporting.cli import add_dashboard_subparser
+
+    add_dashboard_subparser(subparsers)
+
     args = parser.parse_args()
 
     # Default to 'run' if no command specified (shouldn't happen due to legacy handling)
@@ -1476,6 +1486,8 @@ def generate_final_report(
 ) -> None:
     """Generate and display final experiment report.
 
+    Generates both console summary and HTML/JSON reports.
+
     Args:
         results: List of trial results
         experiment_name: Experiment identifier
@@ -1490,10 +1502,13 @@ def generate_final_report(
     failed_trials = total_trials - successful_trials
 
     logger.info(f"Total trials: {total_trials}")
-    logger.info(
-        f"Successful: {successful_trials} ({successful_trials / total_trials * 100:.1f}%)"
-    )
-    logger.info(f"Failed: {failed_trials} ({failed_trials / total_trials * 100:.1f}%)")
+    if total_trials > 0:
+        logger.info(
+            f"Successful: {successful_trials} ({successful_trials / total_trials * 100:.1f}%)"
+        )
+        logger.info(
+            f"Failed: {failed_trials} ({failed_trials / total_trials * 100:.1f}%)"
+        )
 
     # Aggregate POV statistics
     if successful_trials > 0:
@@ -1519,9 +1534,56 @@ def generate_final_report(
                     f"(trial {result.trial_num}): {error}"
                 )
 
+    # Generate HTML/JSON reports from snapshots
+    _generate_html_json_reports(experiment_name, config)
+
     log_section("Report generation complete", width=60)
     logger.info(f"Experiment filestore: {config.experiment_filestore}")
     logger.info(f"Report filestore: {config.report_filestore}")
+
+
+def _generate_html_json_reports(experiment_name: str, config) -> None:
+    """Generate HTML and JSON reports from trial snapshots.
+
+    Args:
+        experiment_name: Experiment identifier
+        config: Experiment configuration
+    """
+    from crsbench.reporting import ReportGenerator
+
+    experiment_dir = Path(config.experiment_filestore) / experiment_name
+    report_dir = Path(config.report_filestore) / experiment_name
+
+    # Check if experiment directory exists
+    if not experiment_dir.exists():
+        logger.warning(
+            f"Experiment directory not found: {experiment_dir}. "
+            "Skipping HTML/JSON report generation."
+        )
+        return
+
+    try:
+        logger.info("\nGenerating HTML/JSON reports from snapshots...")
+
+        generator = ReportGenerator(output_dir=report_dir)
+        report_paths = generator.generate_experiment_report(
+            experiment_dir=experiment_dir,
+            format="both",
+            skip_incomplete=True,
+        )
+
+        if "html" in report_paths:
+            logger.info(f"HTML report: {report_paths['html']}")
+        if "json" in report_paths:
+            logger.info(f"JSON report: {report_paths['json']}")
+
+    except Exception as e:
+        # Don't fail the experiment if report generation fails
+        logger.warning(f"Failed to generate HTML/JSON reports: {e}")
+        logger.warning(
+            "This may happen if snapshots are disabled (snapshot_period=0) "
+            "or no complete snapshots were captured."
+        )
 
 
 def main() -> None:
@@ -1567,6 +1629,18 @@ def main() -> None:
         from crsbench.statistics.cli import run_stats
 
         sys.exit(run_stats(args))
+
+    if args.command == "report":
+        # Handle report command
+        from crsbench.reporting.cli import run_report
+
+        sys.exit(run_report(args))
+
+    if args.command == "dashboard":
+        # Handle dashboard command
+        from crsbench.reporting.cli import run_dashboard
+
+        sys.exit(run_dashboard(args))
 
     # Below is for 'run' command (experiment execution)
 
