@@ -564,6 +564,29 @@ class ValidationMetadata(BaseModel):
     )
 
 
+class LitellmResourceConfig(BaseModel):
+    """LiteLLM resource configuration."""
+
+    max_concurrent_requests: int = Field(
+        default=10, ge=1, description="Maximum concurrent requests to LiteLLM"
+    )
+    cost_budget: float = Field(default=100.0, ge=0, description="Cost budget in USD")
+
+
+class ResourceConfig(BaseModel):
+    """Resource allocation configuration for trials."""
+
+    cores_per_trial: int = Field(
+        default=4, ge=1, description="Number of CPU cores allocated per trial"
+    )
+    memory_per_trial: str = Field(
+        default="8G", description="Memory allocation per trial (e.g., '8G', '16G')"
+    )
+    litellm: Optional[LitellmResourceConfig] = Field(
+        default=None, description="LiteLLM resource configuration"
+    )
+
+
 class ExperimentConfig(BaseModel):
     """Experiment configuration schema."""
 
@@ -709,6 +732,9 @@ class ExperimentConfig(BaseModel):
         default=True,
         description="Skip harnesses without CPVs for bug-finding CRS (default: True). "
         "Bug-fixing CRS always skips harnesses without CPVs regardless of this setting.",
+    )
+    resources: Optional[ResourceConfig] = Field(
+        default=None, description="Resource allocation configuration for trials"
     )
 
     @field_validator("experiment")
