@@ -380,11 +380,12 @@ class CRSPatchExecutor(CRSExecutor):
             cmd.extend(["--hints", str(hints_path)])
             logger.info(f"Using prepared hints from {hints_path}")
 
-        # Add resource limits (CPU: allocated_cpus > config, Memory: config only)
+        # Add resource limits (CPU: allocated > config, Memory: allocated > config)
         resources = get_crs_worker_resources(self.crs_config_name, self.crs_configs_dir)
         allocated_cpus = self.config.get("allocated_cpus")
+        allocated_memory = self.config.get("allocated_memory")
         cpuset = allocated_cpus if allocated_cpus else resources.get("cpuset")
-        memory = resources.get("memory")
+        memory = allocated_memory if allocated_memory else resources.get("memory")
 
         if cpuset:
             cmd.extend(["--cpuset", cpuset])

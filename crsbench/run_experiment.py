@@ -1546,6 +1546,35 @@ def get_crs_cpu_count(crs_name: str, crs_configs_dir: Path) -> int:
         return 4  # Default on error
 
 
+def get_crs_memory(crs_name: str, crs_configs_dir: Path) -> str | None:
+    """Get memory limit for a CRS from its resource config.
+
+    Reads the CRS resource configuration file and returns the memory setting.
+
+    Args:
+        crs_name: CRS name (e.g., "crs-libfuzzer")
+        crs_configs_dir: Path to CRS configs directory
+
+    Returns:
+        Memory string (e.g., "16G") or None if not found
+
+    Examples:
+        >>> get_crs_memory("crs-libfuzzer", Path("/crses/configs"))
+        "16G"
+    """
+    from crsbench.utils.crs_helper import get_crs_worker_resources
+
+    try:
+        resources = get_crs_worker_resources(crs_name, crs_configs_dir)
+        return resources.get("memory")
+    except FileNotFoundError:
+        logger.debug(f"No resource config found for {crs_name}, memory not specified")
+        return None
+    except Exception as e:
+        logger.warning(f"Error reading resource config for {crs_name}: {e}")
+        return None
+
+
 def run_experiment_distributed(
     experiment_name: str,
     config: ExperimentConfig,
@@ -1712,10 +1741,32 @@ def run_experiment_distributed(
             crs_cpu_counts[crs] = get_crs_cpu_count(crs, crs_configs_dir)
             logger.debug(f"CRS {crs} using CRS config: {crs_cpu_counts[crs]} CPUs")
 
+    # Get memory limits for each CRS
+    # Priority: experiment config > CRS resource config > None
+    crs_memory_limits = {}
+    if config.resources and config.resources.memory_per_trial:
+        # Use experiment-level resource config (highest priority)
+        for crs in crses:
+            crs_memory_limits[crs] = config.resources.memory_per_trial
+            logger.debug(
+                f"CRS {crs} using experiment config: {crs_memory_limits[crs]} memory"
+            )
+    else:
+        # Fall back to CRS-specific resource configs
+        for crs in crses:
+            crs_memory_limits[crs] = get_crs_memory(crs, crs_configs_dir)
+            if crs_memory_limits[crs]:
+                logger.debug(
+                    f"CRS {crs} using CRS config: {crs_memory_limits[crs]} memory"
+                )
+            else:
+                logger.debug(f"CRS {crs} has no memory limit configured")
+
     jobs = []
     for trial in trials:
         bh = trial.benchmark_harness
         cpu_count = crs_cpu_counts.get(trial.crs, 4)
+        memory_limit = crs_memory_limits.get(trial.crs)
 
         job = queue.enqueue(
             "crsbench.distributed.jobs.run_crs_trial",
@@ -1734,7 +1785,8 @@ def run_experiment_distributed(
                 "harness": bh.harness.name,
                 "mode": trial.mode,
                 "trial_num": trial.trial_num,
-                "cpu_count": cpu_count,  # Add CPU count from resource config
+                "cpu_count": cpu_count,  # CPU count from resource config
+                "memory_limit": memory_limit,  # Memory limit from resource config
             },
         )
         jobs.append(job)

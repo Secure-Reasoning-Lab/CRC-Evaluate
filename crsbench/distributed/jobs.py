@@ -347,18 +347,22 @@ def run_crs_trial(
         # Get snapshot configuration
         snapshot_period = config.snapshot_period
 
-        # Get allocated_cpus from job metadata
+        # Get allocated_cpus and memory_limit from job metadata
         allocated_cpus = None
+        allocated_memory = None
         try:
             import rq
 
             job = rq.get_current_job()
             if job:
                 allocated_cpus = job.meta.get("allocated_cpus")
+                allocated_memory = job.meta.get("memory_limit")
                 if allocated_cpus:
                     logger.info(f"Job assigned CPUs: {allocated_cpus}")
+                if allocated_memory:
+                    logger.info(f"Job assigned memory: {allocated_memory}")
         except Exception as e:
-            logger.warning(f"Failed to get allocated_cpus from job metadata: {e}")
+            logger.warning(f"Failed to get allocated resources from job metadata: {e}")
 
         # Initialize CRS executor
         # Get required paths from config
@@ -418,6 +422,7 @@ def run_crs_trial(
                 "project_image_prefix": config.project_image_prefix,
                 "mode": mode,
                 "allocated_cpus": allocated_cpus,
+                "allocated_memory": allocated_memory,
             }
         )
 
