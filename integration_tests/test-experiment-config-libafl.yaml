@@ -12,7 +12,7 @@ description: "Integration test configuration for LibAFL CRS with minimal resourc
 # Execution Configuration
 trials: 1
 mode: delta  # Evaluation mode: delta, full, or all
-max_total_time: 300  # 5 minutes for quick testing
+max_total_time: 1800  # 30 minutes total (must be > build + run + verify timeouts)
 
 # CRS Selection - using atlantis-c-libafl
 crses:
@@ -40,8 +40,9 @@ litellm_mode: passthrough
 # crs_configs_dir: crses/configs
 
 # Build Configuration
-build_timeout: 600  # 10 minutes for building Docker images
-run_timeout: 300    # 5 minutes for CRS execution (matches max_total_time)
+build_timeout: 600   # 10 minutes for building Docker images
+run_timeout: 300     # 5 minutes for CRS execution
+verify_timeout: 300  # 5 minutes for POV verification
 
 # Hints Configuration - disabled for quick testing
 hints_enabled: false

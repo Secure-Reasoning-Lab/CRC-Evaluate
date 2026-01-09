@@ -228,7 +228,7 @@ description: "Bug-fixing smoke test with specific benchmarks"
 
 # Execution Configuration
 trials: 1
-max_total_time: 1800
+max_total_time: 2400  # 40 minutes total (must be > build + run + verify timeouts)
 
 # CRS Selection
 crses:
@@ -269,6 +269,8 @@ litellm_mode: passthrough
 
 # Build Configuration
 build_timeout: 600
+run_timeout: 600
+verify_timeout: 600
 
 hints_enabled: false
 

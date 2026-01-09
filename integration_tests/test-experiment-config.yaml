@@ -12,7 +12,12 @@ description: "Integration test configuration with minimal resources"
 # Execution Configuration
 trials: 1
 mode: delta  # Evaluation mode: delta, full, or all
-max_total_time: 300  # 5 minutes for quick testing
+max_total_time: 1800  # 30 minutes total (must be > build + run + verify timeouts)
+
+# Build Configuration
+build_timeout: 600   # 10 minutes for building Docker images
+run_timeout: 300     # 5 minutes for CRS execution
+verify_timeout: 300  # 5 minutes for POV verification
 
 # CRS Selection - using mock-crs for testing
 crses:
