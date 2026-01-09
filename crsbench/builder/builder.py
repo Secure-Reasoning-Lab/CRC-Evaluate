@@ -179,8 +179,15 @@ class OSSFuzzBuilder:
     def _build_single(self, config: BuildConfig) -> BuildResult:
         """Internal method to build a single variant.
 
-        For PATCHED variants with use_inc_build=True, uses incremental builds
-        via pre-built Docker images for faster builds.
+        For variants with use_inc_build=True (and that support inc-build),
+        uses incremental builds via pre-built Docker images for faster builds.
+
+        Supported variant types for inc-build:
+        - PATCHED: CRS-generated patches for verification
+        - Validation variants: DELTA_BASE, DELTA_REF, ALL_PATCHED, CPV
+        - NOT supported: COVERAGE (requires different instrumentation)
+
+        Falls back to standard build if inc-build image is not available.
 
         Args:
             config: Build configuration
@@ -190,11 +197,18 @@ class OSSFuzzBuilder:
         """
         start_time = time.time()
 
-        # PATCHED variants with inc-build use a different build path
-        if config.variant_type.is_patch_variant() and config.use_inc_build:
-            return self._build_with_inc_image(config, start_time)
+        # Use inc-build path for supported variants when enabled and image available
+        if config.variant_type.supports_inc_build() and config.use_inc_build:
+            # Check if inc-build image is available (pull if needed)
+            if self.infra.ensure_inc_image(config.benchmark_name, config.sanitizer):
+                return self._build_with_inc_image(config, start_time)
+            # Fall back to standard build if inc-build image not available
+            logger.info(
+                f"Inc-build image not available for {config.benchmark_name}, "
+                f"falling back to standard build for {config.variant_name}"
+            )
 
-        # Standard build path for validation, coverage, and non-inc patch variants
+        # Standard build path for coverage, non-inc variants, and fallback
         return self._build_standard(config, start_time)
 
     def _build_standard(self, config: BuildConfig, start_time: float) -> BuildResult:
@@ -384,6 +398,7 @@ class OSSFuzzBuilder:
         repo_name: Optional[str] = None,
         *,
         include_coverage: bool = False,
+        use_inc_build: bool = True,
     ) -> BuildPlan:
         """Create a build plan for a benchmark.
 
@@ -401,6 +416,10 @@ class OSSFuzzBuilder:
             language: Programming language
             repo_name: Optional repository name for caching
             include_coverage: Whether to include coverage variant
+            use_inc_build: Use incremental builds if available (default: True).
+                When True, validation variants use pre-built Docker images
+                with cached dependencies for faster builds. Falls back to
+                standard build if inc-build image is not available.
 
         Returns:
             BuildPlan with all required configurations
@@ -427,6 +446,7 @@ class OSSFuzzBuilder:
                 patches=[],  # Base: no patches
                 language=language,
                 repo_name=repo_name,
+                use_inc_build=use_inc_build,
             )
         )
 
@@ -443,6 +463,7 @@ class OSSFuzzBuilder:
                     patches=[],  # Ref: no patches
                     language=language,
                     repo_name=repo_name,
+                    use_inc_build=use_inc_build,
                 )
             )
 
@@ -460,6 +481,7 @@ class OSSFuzzBuilder:
                     patches=all_patches,  # All patches
                     language=language,
                     repo_name=repo_name,
+                    use_inc_build=use_inc_build,
                 )
             )
 
@@ -478,6 +500,7 @@ class OSSFuzzBuilder:
                     language=language,
                     cpv_num=cpv_num,
                     repo_name=repo_name,
+                    use_inc_build=use_inc_build,
                 )
             )
 
