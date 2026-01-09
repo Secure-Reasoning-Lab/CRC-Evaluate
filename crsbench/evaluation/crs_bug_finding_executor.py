@@ -911,3 +911,20 @@ class CRSBugFindingExecutor(CRSExecutor):
             with stderr_file.open("w") as f:
                 f.write(stderr)
             logger.debug(f"Stored CRS stderr to {stderr_file}")
+
+        # Store combined log in crs-logs/ directory for consistency with bug-fixing CRS
+        if stdout or stderr:
+            log_dir = trial_output_dir / "crs-logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+
+            timestamp = datetime.now().strftime("%y%m%d%H%M%S")
+            safe_name = project_name.replace("/", "_")
+            log_file = log_dir / f"crs_run_{safe_name}_{timestamp}.log"
+
+            with log_file.open("w") as f:
+                if stdout:
+                    f.write(stdout)
+                if stderr:
+                    f.write(stderr)
+
+            logger.debug(f"Stored combined CRS log to {log_file}")
