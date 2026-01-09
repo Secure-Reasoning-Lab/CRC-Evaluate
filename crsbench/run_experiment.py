@@ -1695,12 +1695,22 @@ def run_experiment_distributed(
     # Enhance config with CLI arguments (highest precedence)
     enhanced_config = enhance_config_with_cli_args(config, args)
 
-    # Get CPU counts for each CRS from resource configs
+    # Get CPU counts for each CRS
+    # Priority: experiment config > CRS resource config > default (4)
     # Note: crs_configs_dir already resolved at line 1490
     crs_cpu_counts = {}
-    for crs in crses:
-        crs_cpu_counts[crs] = get_crs_cpu_count(crs, crs_configs_dir)
-        logger.debug(f"CRS {crs} requires {crs_cpu_counts[crs]} CPUs")
+    if config.resources and config.resources.cores_per_trial:
+        # Use experiment-level resource config (highest priority)
+        for crs in crses:
+            crs_cpu_counts[crs] = config.resources.cores_per_trial
+            logger.debug(
+                f"CRS {crs} using experiment config: {crs_cpu_counts[crs]} CPUs"
+            )
+    else:
+        # Fall back to CRS-specific resource configs
+        for crs in crses:
+            crs_cpu_counts[crs] = get_crs_cpu_count(crs, crs_configs_dir)
+            logger.debug(f"CRS {crs} using CRS config: {crs_cpu_counts[crs]} CPUs")
 
     jobs = []
     for trial in trials:
