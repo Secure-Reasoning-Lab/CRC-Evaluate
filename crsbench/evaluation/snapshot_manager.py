@@ -291,7 +291,7 @@ class SnapshotManager:
         )
 
         metadata_path = temp_dir / "metadata.json"
-        metadata_path.write_text(metadata.to_json())
+        metadata_path.write_text(metadata.model_dump_json())
 
     def _capture_config(self, temp_dir: Path) -> bool:
         """Capture experiment config (full - static).

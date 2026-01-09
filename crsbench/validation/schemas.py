@@ -1,4 +1,9 @@
-"""Pydantic schemas for benchmark configuration validation."""
+"""Pydantic schemas for CRSBench.
+
+This module contains:
+1. Shared schemas for cross-module data contracts (evaluation -> reporting)
+2. Benchmark configuration validation schemas
+"""
 
 import re
 from dataclasses import dataclass
@@ -7,7 +12,133 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+# =============================================================================
+# Shared Schemas (used across evaluation and reporting modules)
+# =============================================================================
+
+
+class TrialMode(str, Enum):
+    """Trial execution mode.
+
+    - bug_finding: CRS discovers vulnerabilities (POVs)
+    - patch_generation: CRS generates patches for known vulnerabilities
+    - unknown: Mode not specified (metadata missing)
+    """
+
+    bug_finding = "bug_finding"
+    patch_generation = "patch_generation"
+    unknown = "unknown"
+
+
+class SourceInfo(BaseModel):
+    """Source code information in trial metadata."""
+
+    model_config = ConfigDict(extra="allow")
+
+    path: str
+    commit: str | None = None
+
+
+class HintsStats(BaseModel):
+    """Statistics about prepared hints."""
+
+    model_config = ConfigDict(extra="allow")
+
+    path: str
+    sarif_count: int = 0
+    corpus_count: int = 0
+    has_ref_diff: bool = False
+
+
+class PovsStats(BaseModel):
+    """Statistics about prepared POVs."""
+
+    model_config = ConfigDict(extra="allow")
+
+    path: str
+    pov_count: int = 0
+
+
+class TrialConfig(BaseModel):
+    """Trial configuration settings."""
+
+    model_config = ConfigDict(extra="allow")
+
+    hints_enabled: bool = False
+    hints_corpus_level: int | None = None
+    target_povs: int | None = None
+
+
+class TrialMetadata(BaseModel):
+    """Trial metadata from metadata.json file.
+
+    This is the schema for metadata.json in trial directories.
+    Written by: evaluation/trial_preparation.py
+    Read by: reporting/snapshot_loader.py
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    timestamp: str
+    trial_num: int
+    crs: str
+    benchmark: str
+    harness: str
+    mode: TrialMode
+    source: SourceInfo
+    hints: HintsStats | None = None
+    povs: PovsStats | None = None
+    config: TrialConfig = Field(default_factory=TrialConfig)
+
+
+class SnapshotMetadata(BaseModel):
+    """Snapshot metadata from metadata.json inside tar.gz archive.
+
+    This is the schema for metadata.json inside snapshot-XXXX.tar.gz.
+    Written by: evaluation/snapshot_manager.py
+    Read by: reporting/snapshot_loader.py
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    cycle: int
+    timestamp: float
+    elapsed_time: float
+    snapshot_period: int
+    running_elapsed_time: float | None = None
+
+
+class ModelUsage(BaseModel):
+    """Usage statistics for a single LLM model."""
+
+    model_config = ConfigDict(extra="allow")
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+
+
+class LLMUsage(BaseModel):
+    """LLM usage data from llm-usage.json file.
+
+    Written by: CRS during execution
+    Read by: reporting/snapshot_loader.py
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_cached_tokens: int = 0
+    total_cost_usd: float = 0.0
+    by_model: dict[str, ModelUsage] = Field(default_factory=dict)
+
+
+# =============================================================================
+# Benchmark Configuration Schemas
+# =============================================================================
 
 
 class EvaluationMode(str, Enum):

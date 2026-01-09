@@ -122,7 +122,7 @@ class SnapshotBuilder:
         )
 
         metadata_path = temp_dir / "metadata.json"
-        metadata_path.write_text(metadata.to_json())
+        metadata_path.write_text(metadata.model_dump_json())
 
     def _write_config(self, temp_dir: Path):
         """Write experiment config.yaml (simulated)."""
