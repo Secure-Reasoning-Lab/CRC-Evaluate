@@ -255,3 +255,8 @@ benchmarks_summary.csv
 
 # for integration scripts
 .generated-configs
+
+# dashboard build
+.next
+node_modules
+next-env.d.ts
