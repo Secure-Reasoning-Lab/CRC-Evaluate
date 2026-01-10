@@ -19,7 +19,7 @@ crses:
 
 mode: all
 
-benchmark_suite: smoke-test-bug-finding
+benchmark_suite: smoke-test-bug-finding-2
 
 # Difficulty Control
 difficulty_level: 1
