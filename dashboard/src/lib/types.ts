@@ -57,7 +57,12 @@ export interface ExperimentReport {
 }
 
 export interface ExperimentListItem {
+  /** Outer directory name (used for URL routing) */
+  id: string;
+  /** Experiment name from report */
   name: string;
+  /** Experiment mode (bug_finding or patch_generation) */
+  mode: 'bug_finding' | 'patch_generation' | 'mixed' | null;
   summary: ExperimentSummary | null;
   crs_list: string[];
   benchmark_list: string[];
@@ -143,4 +148,130 @@ export interface TrialReport {
 export interface TrialFileInfo {
   trial_num: number;
   file_path: string;
+}
+
+// LLM Logs types
+export interface LLMMessage {
+  role: string;
+  content: string;
+}
+
+export interface LLMResponseChoice {
+  index: number;
+  message: {
+    role: string;
+    content: string;
+    images?: unknown[];
+  };
+  finish_reason?: string;
+}
+
+export interface LLMResponse {
+  id: string;
+  model: string;
+  object: string;
+  choices: LLMResponseChoice[];
+  usage?: {
+    total_tokens: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+  };
+}
+
+export interface ProxyServerRequest {
+  model: string;
+  messages: LLMMessage[];
+  temperature?: number;
+}
+
+export interface LLMLogEntry {
+  request_id: string;
+  call_type: string;
+  api_key: string;
+  spend: number;
+  total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  startTime: string;
+  endTime: string;
+  completionStartTime: string;
+  model: string;
+  model_id: string;
+  model_group: string;
+  custom_llm_provider?: string;
+  api_base: string;
+  user: string;
+  metadata: Record<string, unknown>;
+  cache_hit: string;
+  cache_key: string;
+  request_tags: unknown;
+  team_id: string | null;
+  end_user: string | null;
+  requester_ip_address: string | null;
+  // messages field (may be empty)
+  messages: Record<string, unknown> | LLMMessage[];
+  // response is OpenAI ChatCompletion format
+  response: LLMResponse;
+  // proxy_server_request contains the full conversation history
+  proxy_server_request?: ProxyServerRequest;
+  session_id?: string;
+  status?: string;
+}
+
+export interface LLMLogsFile {
+  trial_id: string;
+  timestamp: string;
+  total_requests: number;
+  logs: LLMLogEntry[];
+}
+
+export interface CRSLogsResponse {
+  type: 'crs';
+  content: string | null;
+  error?: string;
+}
+
+export interface LLMLogsResponse {
+  type: 'llm';
+  content: LLMLogsFile | null;
+  error?: string;
+}
+
+// Execution info from execution.json
+export interface ExecutionInfo {
+  timestamp: string;
+  command: string[];
+  crs_config: {
+    build_timeout: number;
+    run_timeout: number;
+    hints_enabled: boolean;
+    hint_sarif_level: string | null;
+    hint_corpus_level: string | null;
+    project_image_prefix: string;
+    mode: string;
+    allocated_cpus: number | null;
+  };
+  hints: {
+    enabled: boolean;
+    path: string | null;
+    corpus_level: string | null;
+    sarif_count: number;
+    corpus_count: number;
+  };
+  povs: {
+    provided: boolean;
+    path: string;
+    count: number;
+  };
+  execution: {
+    duration_seconds: number;
+    returncode: number;
+    success: boolean;
+  };
+}
+
+export interface ExecutionResponse {
+  type: 'execution';
+  content: ExecutionInfo | null;
+  error?: string;
 }

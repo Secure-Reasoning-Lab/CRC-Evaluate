@@ -2,6 +2,7 @@ import { readdir, readFile } from 'fs/promises';
 import path from 'path';
 
 import type { TrialFileInfo, TrialReport } from '@/lib/types';
+import { findExperimentName, getReportDataDir } from './experiments';
 
 // Re-export types for convenience
 export type {
@@ -15,22 +16,30 @@ export type {
   TimelineData,
   TrialReport,
   TrialFileInfo,
+  LLMLogsFile,
+  LLMLogEntry,
+  LLMMessage,
+  LLMResponse,
+  LLMResponseChoice,
+  ProxyServerRequest,
+  CRSLogsResponse,
+  LLMLogsResponse,
+  ExecutionInfo,
+  ExecutionResponse,
 } from '@/lib/types';
 
-function getReportDir(): string {
-  const reportDir = process.env.REPORT_DIR;
-  if (!reportDir) {
-    console.warn('REPORT_DIR environment variable not set, using default ./reports');
-    return './reports';
-  }
-  return reportDir;
-}
-
 export async function listTrialReports(
-  _experimentName: string
+  outerDir: string,
+  experimentName?: string
 ): Promise<TrialFileInfo[]> {
-  const reportDir = getReportDir();
-  const trialReportsDir = path.join(reportDir, 'trial-reports');
+  const expName = experimentName ?? (await findExperimentName(outerDir));
+  if (!expName) {
+    console.error(`No experiment found in ${outerDir}`);
+    return [];
+  }
+
+  const reportDataDir = getReportDataDir(outerDir, expName);
+  const trialReportsDir = path.join(reportDataDir, 'trial-reports');
 
   try {
     const files = await readdir(trialReportsDir);
@@ -60,11 +69,18 @@ export async function listTrialReports(
 }
 
 export async function loadTrialReport(
-  _experimentName: string,
-  trialNum: number
+  outerDir: string,
+  trialNum: number,
+  experimentName?: string
 ): Promise<TrialReport | null> {
-  const reportDir = getReportDir();
-  const filePath = path.join(reportDir, 'trial-reports', `trial-${trialNum}.json`);
+  const expName = experimentName ?? (await findExperimentName(outerDir));
+  if (!expName) {
+    console.error(`No experiment found in ${outerDir}`);
+    return null;
+  }
+
+  const reportDataDir = getReportDataDir(outerDir, expName);
+  const filePath = path.join(reportDataDir, 'trial-reports', `trial-${trialNum}.json`);
 
   try {
     const content = await readFile(filePath, 'utf-8');
