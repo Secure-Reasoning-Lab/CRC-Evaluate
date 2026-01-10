@@ -28,8 +28,8 @@ experiment: test-experiment
 trials: 3
 max_total_time: 7200
 difficulty_level: 2
-experiment_filestore: /tmp/experiment-data
-report_filestore: /tmp/report-data
+experiment_filestore: /tmp/crsbench/experiment-data
+report_filestore: /tmp/crsbench/report-data
 crses:
   - atlantis-c
   - ensemble-c
@@ -61,8 +61,8 @@ experiment: suite-experiment
 trials: 2
 max_total_time: 3600
 difficulty_level: 1
-experiment_filestore: /tmp/experiment-data
-report_filestore: /tmp/report-data
+experiment_filestore: /tmp/crsbench/experiment-data
+report_filestore: /tmp/crsbench/report-data
 crses:
   - atlantis-c
 benchmark_suite: crsbench-afc-c
@@ -194,8 +194,8 @@ experiment: original-name
 trials: 1
 max_total_time: 3600
 difficulty_level: 1
-experiment_filestore: /tmp/exp
-report_filestore: /tmp/rep
+experiment_filestore: /tmp/crsbench/exp
+report_filestore: /tmp/crsbench/rep
 crses: [crs1]
 benchmarks: [bench1]
 """)
@@ -225,8 +225,8 @@ experiment: test
 trials: 1
 max_total_time: 3600
 difficulty_level: 1
-experiment_filestore: /tmp/exp
-report_filestore: /tmp/rep
+experiment_filestore: /tmp/crsbench/exp
+report_filestore: /tmp/crsbench/rep
 crses:
   - atlantis-c
   - ensemble-c
@@ -258,8 +258,8 @@ experiment: test
 trials: 1
 max_total_time: 3600
 difficulty_level: 1
-experiment_filestore: /tmp/exp
-report_filestore: /tmp/rep
+experiment_filestore: /tmp/crsbench/exp
+report_filestore: /tmp/crsbench/rep
 crses: [crs1]
 benchmarks:
   - bench1
@@ -291,8 +291,8 @@ experiment: test
 trials: 1
 max_total_time: 3600
 difficulty_level: 1
-experiment_filestore: /tmp/exp
-report_filestore: /tmp/rep
+experiment_filestore: /tmp/crsbench/exp
+report_filestore: /tmp/crsbench/rep
 crses: [crs1]
 benchmarks:
   - bench1
@@ -353,8 +353,8 @@ experiment: original-experiment
 trials: 1
 max_total_time: 3600
 difficulty_level: 1
-experiment_filestore: /tmp/exp
-report_filestore: /tmp/rep
+experiment_filestore: /tmp/crsbench/exp
+report_filestore: /tmp/crsbench/rep
 crses:
   - atlantis-c
   - ensemble-c

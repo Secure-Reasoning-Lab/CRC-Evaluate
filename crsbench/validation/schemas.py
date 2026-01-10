@@ -655,6 +655,13 @@ class ExperimentConfig(BaseModel):
         "'proxy' uses self-hosted proxy (LITELLM_BASE_URL, LITELLM_MASTER_KEY). "
         "Default is 'passthrough'.",
     )
+    llm_tracking_enabled: bool = Field(
+        default=True,
+        description="Enable LLM usage tracking via LiteLLM Virtual Keys. "
+        "Automatically enabled when LITELLM_BASE_URL and LITELLM_MASTER_KEY env vars are set. "
+        "Set to false to explicitly disable. "
+        "Generates llm-usage.json with per-trial cost and token metrics.",
+    )
     project_image_prefix: str = Field(
         default="aixcc-afc",
         description="Docker image prefix for custom project images (default: aixcc-afc)",

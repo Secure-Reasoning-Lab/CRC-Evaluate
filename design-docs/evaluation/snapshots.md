@@ -374,8 +374,8 @@ trials: 3
 max_total_time: 7200  # 2 hours
 snapshot_period: 600   # Take snapshot every 10 minutes
 difficulty_level: 1
-experiment_filestore: /tmp/experiments
-report_filestore: /tmp/reports
+experiment_filestore: /tmp/crsbench/experiments
+report_filestore: /tmp/crsbench/reports
 crses:
   - atlantis-c
 benchmark_suite: crsbench-afc-c

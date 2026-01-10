@@ -35,8 +35,8 @@ difficulty_level: 1
 snapshot_period: 60  # 1 minute
 
 # Storage Configuration - temporary directories for testing
-experiment_filestore: /tmp/crsbench-integration-test/experiment-data
-report_filestore: /tmp/crsbench-integration-test/report-data
+experiment_filestore: /tmp/crsbench/crsbench-integration-test/experiment-data
+report_filestore: /tmp/crsbench/crsbench-integration-test/report-data
 
 # CRS Paths - optional configuration (defaults: crses/registry, crses/configs)
 # registry_dir: crses/registry

@@ -1,9 +1,11 @@
 """Unit tests for SnapshotManager."""
 
+import json
 import tarfile
 import threading
 import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from crsbench.evaluation.snapshot import list_snapshots, load_snapshot_metadata
@@ -393,3 +395,151 @@ class TestEdgeCases:
 
         # Should create snapshot without errors
         assert (trial_dir / "snapshot-0001.tar.gz").exists()
+
+
+class TestLLMTrackingIntegration:
+    """Test LLM tracking integration with SnapshotManager."""
+
+    def test_init_with_llm_tracking(self, tmp_path):
+        """Test SnapshotManager initialization with LLM tracking parameters."""
+        mock_tracker = MagicMock()
+
+        manager = SnapshotManager(
+            trial_dir=tmp_path,
+            snapshot_period=60,
+            llm_tracker=mock_tracker,
+            llm_api_key="test-api-key",
+            llm_trial_id="test-trial-id",
+        )
+
+        assert manager.llm_tracker is mock_tracker
+        assert manager.llm_api_key == "test-api-key"
+        assert manager.llm_trial_id == "test-trial-id"
+
+    def test_init_without_llm_tracking(self, tmp_path):
+        """Test SnapshotManager initialization without LLM tracking."""
+        manager = SnapshotManager(tmp_path, snapshot_period=60)
+
+        assert manager.llm_tracker is None
+        assert manager.llm_api_key is None
+        assert manager.llm_trial_id is None
+
+    def test_capture_llm_usage_from_api(self, tmp_path):
+        """Test _capture_llm_usage queries LiteLLM API when tracker is available."""
+        # Create output dir
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        # Create mock tracker
+        mock_tracker = MagicMock()
+
+        manager = SnapshotManager(
+            trial_dir=tmp_path,
+            snapshot_period=60,
+            llm_tracker=mock_tracker,
+            llm_api_key="test-api-key",
+            llm_trial_id="test-trial-id",
+        )
+
+        # Test _capture_llm_usage
+        temp_dir = tmp_path / "temp_snapshot"
+        temp_dir.mkdir()
+
+        result = manager._capture_llm_usage(temp_dir)
+
+        # Should have called write_llm_usage_file
+        assert result is True
+        mock_tracker.write_llm_usage_file.assert_called_once_with(
+            api_key="test-api-key",
+            trial_id="test-trial-id",
+            output_path=temp_dir / "llm-usage.json",
+        )
+
+    def test_capture_llm_usage_fallback_to_file(self, tmp_path):
+        """Test _capture_llm_usage falls back to file when API fails."""
+        # Create output dir
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        # Create mock tracker that raises an exception
+        mock_tracker = MagicMock()
+        mock_tracker.write_llm_usage_file.side_effect = Exception("API error")
+
+        # Create existing llm-usage.json file for fallback
+        llm_usage_data = {"total_api_calls": 10, "total_tokens": 1000}
+        (tmp_path / "llm-usage.json").write_text(json.dumps(llm_usage_data))
+
+        manager = SnapshotManager(
+            trial_dir=tmp_path,
+            snapshot_period=60,
+            llm_tracker=mock_tracker,
+            llm_api_key="test-api-key",
+            llm_trial_id="test-trial-id",
+        )
+
+        # Test _capture_llm_usage
+        temp_dir = tmp_path / "temp_snapshot"
+        temp_dir.mkdir()
+
+        result = manager._capture_llm_usage(temp_dir)
+
+        # Should succeed via file-based fallback
+        assert result is True
+        assert (temp_dir / "llm-usage.json").exists()
+
+        # Verify content was copied from fallback file
+        captured_data = json.loads((temp_dir / "llm-usage.json").read_text())
+        assert captured_data["total_api_calls"] == 10
+
+    def test_capture_llm_usage_no_tracker_uses_file(self, tmp_path):
+        """Test _capture_llm_usage uses file when no tracker is configured."""
+        # Create existing llm-usage.json file
+        llm_usage_data = {"total_api_calls": 5}
+        (tmp_path / "llm-usage.json").write_text(json.dumps(llm_usage_data))
+
+        manager = SnapshotManager(tmp_path, snapshot_period=60)
+
+        temp_dir = tmp_path / "temp_snapshot"
+        temp_dir.mkdir()
+
+        result = manager._capture_llm_usage(temp_dir)
+
+        # Should succeed via file copy
+        assert result is True
+        assert (temp_dir / "llm-usage.json").exists()
+
+    def test_capture_llm_usage_returns_false_when_nothing_available(self, tmp_path):
+        """Test _capture_llm_usage returns False when no tracker and no file."""
+        manager = SnapshotManager(tmp_path, snapshot_period=60)
+
+        temp_dir = tmp_path / "temp_snapshot"
+        temp_dir.mkdir()
+
+        result = manager._capture_llm_usage(temp_dir)
+
+        # Should return False - no data available
+        assert result is False
+        assert not (temp_dir / "llm-usage.json").exists()
+
+    def test_snapshot_capture_with_llm_tracking(self, tmp_path):
+        """Test full snapshot capture includes LLM usage from API."""
+        # Create output dir
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        # Create mock tracker
+        mock_tracker = MagicMock()
+
+        manager = SnapshotManager(
+            trial_dir=tmp_path,
+            snapshot_period=60,
+            llm_tracker=mock_tracker,
+            llm_api_key="test-api-key",
+            llm_trial_id="test-trial-id",
+        )
+
+        snapshot = manager.capture_snapshot()
+
+        # Should have captured LLM usage
+        assert snapshot.has_llm_usage is True
+        mock_tracker.write_llm_usage_file.assert_called_once()

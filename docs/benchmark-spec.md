@@ -855,10 +855,10 @@ max_total_time: 86400
 difficulty_level: 1
 
 # The folder that will store most of the experiment data.
-experiment_filestore: /tmp/experiment-data
+experiment_filestore: /tmp/crsbench/experiment-data
 
 # The folder where HTML reports and summary data will be stored.
-report_filestore: /tmp/report-data
+report_filestore: /tmp/crsbench/report-data
 ```
 
 Configuration parameters:

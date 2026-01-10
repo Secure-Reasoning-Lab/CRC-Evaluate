@@ -17,8 +17,8 @@ mode: delta
 max_total_time: 180  # 3 minutes
 difficulty_level: 1
 
-experiment_filestore: /tmp/crsbench/experiments/coverage-e2e-test
-report_filestore: /tmp/crsbench/reports/coverage-e2e-test
+experiment_filestore: /tmp/crsbench/crsbench/experiments/coverage-e2e-test
+report_filestore: /tmp/crsbench/crsbench/reports/coverage-e2e-test
 
 # Use oss-crs registry and temp config dir (atlantis-multilang -> given_fuzzer)
 registry_dir: ./oss-crs/crs_registry
