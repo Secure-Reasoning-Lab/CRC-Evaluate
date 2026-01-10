@@ -28,8 +28,8 @@ difficulty_level: 1
 snapshot_period: 300  # 5 minutes
 
 # Storage Configuration - temporary directories for testing
-experiment_filestore: /tmp/ramjet-bug-finding-smoke-testing/experiment-data
-report_filestore: /tmp/ramjet-bug-finding-smoke-testing/report-data
+experiment_filestore: /tmp/crsbench/ramjet-bug-finding-smoke-testing/experiment-data
+report_filestore: /tmp/crsbench/ramjet-bug-finding-smoke-testing/report-data
 
 # Build Configuration
 build_timeout: 600

@@ -36,11 +36,11 @@ difficulty_level: 2
 
 # Directory where experiment data will be stored
 # Contains trial outputs, POVs, patches, logs, and execution metadata
-experiment_filestore: /tmp/crsbench/experiment-data
+experiment_filestore: /tmp/crsbench/crsbench/experiment-data
 
 # Directory where HTML reports and summary data will be stored
 # Contains aggregated results, statistics, and visualizations
-report_filestore: /tmp/crsbench/report-data
+report_filestore: /tmp/crsbench/crsbench/report-data
 
 # List of CRS implementations to evaluate
 # Each CRS must have configuration in crses/{crs-name}/

@@ -29,8 +29,8 @@ difficulty_level: 1
 snapshot_period: 60  # 1 minute
 
 # Storage Configuration - temporary directories for testing
-experiment_filestore: /tmp/crsbench-integration-test-libfuzzer-sanity/experiment-data
-report_filestore: /tmp/crsbench-integration-test-libfuzzer-sanity/report-data
+experiment_filestore: /tmp/crsbench/crsbench-integration-test-libfuzzer-sanity/experiment-data
+report_filestore: /tmp/crsbench/crsbench-integration-test-libfuzzer-sanity/report-data
 
 # LiteLLM Configuration - passthrough mode (default)
 litellm_mode: passthrough

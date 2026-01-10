@@ -29,8 +29,8 @@ difficulty_level: 1
 snapshot_period: 60  # 1 minute
 
 # Storage Configuration - temporary directories for testing
-experiment_filestore: /tmp/crsbench-integration-test-libafl/experiment-data
-report_filestore: /tmp/crsbench-integration-test-libafl/report-data
+experiment_filestore: /tmp/crsbench/crsbench-integration-test-libafl/experiment-data
+report_filestore: /tmp/crsbench/crsbench-integration-test-libafl/report-data
 
 # LiteLLM Configuration - passthrough mode (default)
 litellm_mode: passthrough

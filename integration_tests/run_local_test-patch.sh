@@ -139,8 +139,8 @@ difficulty_level: 1
 snapshot_period: 60
 
 # Storage Configuration
-experiment_filestore: /tmp/crsbench-$EXPERIMENT_NAME/experiment-data
-report_filestore: /tmp/crsbench-$EXPERIMENT_NAME/report-data
+experiment_filestore: /tmp/crsbench/crsbench-$EXPERIMENT_NAME/experiment-data
+report_filestore: /tmp/crsbench/crsbench-$EXPERIMENT_NAME/report-data
 
 # LiteLLM Configuration
 litellm_mode: passthrough

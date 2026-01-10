@@ -510,8 +510,8 @@ The `benchmarks_root` field specifies where to find benchmark directories. Path 
 trials: 1
 max_total_time: 86400
 difficulty_level: 1
-experiment_filestore: /tmp/experiment-data
-report_filestore: /tmp/report-data
+experiment_filestore: /tmp/crsbench/experiment-data
+report_filestore: /tmp/crsbench/report-data
 redis_host: queue-server
 
 # Example 2: Custom benchmarks directory
@@ -519,8 +519,8 @@ redis_host: queue-server
 trials: 1
 max_total_time: 86400
 difficulty_level: 1
-experiment_filestore: /tmp/experiment-data
-report_filestore: /tmp/report-data
+experiment_filestore: /tmp/crsbench/experiment-data
+report_filestore: /tmp/crsbench/report-data
 redis_host: queue-server
 benchmarks_root: /custom/path/to/benchmarks
 
@@ -529,8 +529,8 @@ benchmarks_root: /custom/path/to/benchmarks
 trials: 1
 max_total_time: 3600
 difficulty_level: 0
-experiment_filestore: /tmp/experiment-data
-report_filestore: /tmp/report-data
+experiment_filestore: /tmp/crsbench/experiment-data
+report_filestore: /tmp/crsbench/report-data
 # redis_host: none  # Omit for local mode
 
 # Example 4: CI/CD configuration with absolute paths
@@ -1137,16 +1137,16 @@ Make `redis_host` optional in experiment config:
 trials: 3
 max_total_time: 86400
 difficulty_level: 1
-experiment_filestore: /tmp/experiment-data
-report_filestore: /tmp/report-data
+experiment_filestore: /tmp/crsbench/experiment-data
+report_filestore: /tmp/crsbench/report-data
 redis_host: queue-server  # OPTIONAL: Omit or set to "none" for local mode
 
 # For local execution (single job)
 trials: 1
 max_total_time: 86400
 difficulty_level: 1
-experiment_filestore: /tmp/experiment-data
-report_filestore: /tmp/report-data
+experiment_filestore: /tmp/crsbench/experiment-data
+report_filestore: /tmp/crsbench/report-data
 # redis_host: none  # Explicit local mode, or simply omit this field
 ```
 

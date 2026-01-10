@@ -33,8 +33,8 @@ difficulty_level: 1
 snapshot_period: 60  # 1 minute
 
 # Storage Configuration - temporary directories for testing
-experiment_filestore: /tmp/crsbench-distributed-test-libfuzzer/experiment-data
-report_filestore: /tmp/crsbench-distributed-test-libfuzzer/report-data
+experiment_filestore: /tmp/crsbench/crsbench-distributed-test-libfuzzer/experiment-data
+report_filestore: /tmp/crsbench/crsbench-distributed-test-libfuzzer/report-data
 
 # LiteLLM Configuration - passthrough mode (default)
 litellm_mode: passthrough

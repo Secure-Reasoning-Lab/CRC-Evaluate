@@ -22,8 +22,8 @@ trials: 3
 max_total_time: 7200  # 2 hours
 snapshot_period: 600   # Snapshot every 10 minutes
 difficulty_level: 1
-experiment_filestore: /tmp/experiments
-report_filestore: /tmp/reports
+experiment_filestore: /tmp/crsbench/experiments
+report_filestore: /tmp/crsbench/reports
 crses:
   - atlantis-c
 benchmark_suite: crsbench-afc-c
@@ -143,8 +143,8 @@ trials: 1
 max_total_time: 1800  # 30 minutes
 snapshot_period: 300   # Every 5 minutes (6 snapshots)
 difficulty_level: 0
-experiment_filestore: /tmp/test-exp
-report_filestore: /tmp/test-reports
+experiment_filestore: /tmp/crsbench/test-exp
+report_filestore: /tmp/crsbench/test-reports
 crses:
   - test-crs
 benchmarks:
@@ -186,8 +186,8 @@ trials: 1
 max_total_time: 600
 snapshot_period: 0  # Disabled
 difficulty_level: 0
-experiment_filestore: /tmp/exp
-report_filestore: /tmp/reports
+experiment_filestore: /tmp/crsbench/exp
+report_filestore: /tmp/crsbench/reports
 crses:
   - test-crs
 benchmarks:
