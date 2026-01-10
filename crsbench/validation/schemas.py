@@ -71,6 +71,18 @@ class TrialConfig(BaseModel):
     target_povs: int | None = None
 
 
+class FrameworkInfo(BaseModel):
+    """Framework version and commit information."""
+
+    model_config = ConfigDict(extra="allow")
+
+    version: str = Field(description="CRSBench version")
+    crsbench_commit: str = Field(description="CRSBench git commit")
+    oss_crs_commit: str = Field(description="oss-crs submodule commit")
+    oss_fuzz_commit: str = Field(description="oss-fuzz submodule commit")
+    build_timestamp: str | None = Field(default=None, description="Build timestamp")
+
+
 class TrialMetadata(BaseModel):
     """Trial metadata from metadata.json file.
 
@@ -91,6 +103,9 @@ class TrialMetadata(BaseModel):
     hints: HintsStats | None = None
     povs: PovsStats | None = None
     config: TrialConfig = Field(default_factory=TrialConfig)
+    framework: FrameworkInfo | None = Field(
+        default=None, description="CRSBench framework version and commit info"
+    )
 
 
 class SnapshotMetadata(BaseModel):

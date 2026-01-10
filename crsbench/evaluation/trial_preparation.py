@@ -550,12 +550,17 @@ class TrialDirectoryPreparer:
         Returns:
             Metadata dictionary
         """
+        from crsbench import get_version_info
+
         # Get source commit from git
         source_commit = self._get_git_commit(source_path)
 
         # Count files in hints/povs
         hints_stats = self._get_hints_stats(hints_dir) if hints_dir else None
         povs_stats = self._get_povs_stats(povs_dir) if povs_dir else None
+
+        # Get framework info
+        version_info = get_version_info()
 
         return {
             "timestamp": datetime.now().isoformat(),
@@ -571,6 +576,13 @@ class TrialDirectoryPreparer:
                 "hints_enabled": self.config.get("hints_enabled", False),
                 "hints_corpus_level": self.config.get("hints_corpus_level"),
                 "target_povs": self.config.get("target_povs"),
+            },
+            "framework": {
+                "version": version_info["version"],
+                "crsbench_commit": version_info["crsbench"]["commit"],
+                "oss_crs_commit": version_info["oss_crs"]["commit"],
+                "oss_fuzz_commit": version_info["oss_fuzz"]["commit"],
+                "build_timestamp": version_info["build_timestamp"],
             },
         }
 
