@@ -260,3 +260,7 @@ benchmarks_summary.csv
 .next
 node_modules
 next-env.d.ts
+
+# auto generated version tracking files
+crsbench/_version.py
+crsbench/_submodule_commits.py
