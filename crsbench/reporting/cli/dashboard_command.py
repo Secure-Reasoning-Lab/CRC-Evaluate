@@ -23,33 +23,41 @@ def add_dashboard_subparser(subparsers: argparse._SubParsersAction) -> None:
         description="""
 Start an interactive web dashboard to visualize CRS experiment results.
 
-The dashboard reads pre-generated JSON reports from the report filestore.
+The dashboard reads from a base directory containing experiment directories.
+Each experiment directory should have experiment-data/ and report-data/ subdirectories.
 Use 'crsbench report' to generate reports first.
 
 The dashboard provides:
 - Experiment overview with metrics and charts
 - CRS comparison and benchmark analysis
 - Trial-level details with time-series data
+- CRS logs and LLM conversation viewer
         """,
         epilog="""
 Examples:
   # Start dashboard with default settings
-  %(prog)s --report-dir ./report_filestore
+  %(prog)s --base-dir ./experiments
 
   # Start dashboard on a specific port
-  %(prog)s --report-dir ./report_filestore --port 3001
+  %(prog)s --base-dir ./experiments --port 3001
 
   # Start in production mode
-  %(prog)s --report-dir ./report_filestore --production
+  %(prog)s --base-dir ./experiments --production
+
+Directory structure expected:
+  <base-dir>/
+    <experiment-name>/
+      experiment-data/   # Trial execution data (crs-logs/, llm-logs.json, etc.)
+      report-data/       # Generated reports (experiment-*.json, trial-reports/)
         """,
     )
 
     dashboard_parser.add_argument(
-        "--report-dir",
+        "--base-dir",
         type=str,
         required=True,
         metavar="PATH",
-        help="Path to the report filestore directory containing generated JSON reports",
+        help="Path to base directory containing experiment directories",
     )
 
     dashboard_parser.add_argument(
@@ -78,18 +86,18 @@ def run_dashboard(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success, 1 for error)
     """
-    report_dir = Path(args.report_dir).resolve()
+    base_dir = Path(args.base_dir).resolve()
     port = args.port
     production = args.production
 
-    # Validate report directory exists
-    if not report_dir.exists():
-        logger.error(f"Report directory not found: {report_dir}")
+    # Validate base directory exists
+    if not base_dir.exists():
+        logger.error(f"Base directory not found: {base_dir}")
         logger.error("Use 'crsbench report' to generate reports first.")
         return 1
 
-    if not report_dir.is_dir():
-        logger.error(f"Path is not a directory: {report_dir}")
+    if not base_dir.is_dir():
+        logger.error(f"Path is not a directory: {base_dir}")
         return 1
 
     # Find the dashboard directory relative to this file
@@ -117,11 +125,11 @@ def run_dashboard(args: argparse.Namespace) -> int:
 
     # Set up environment
     env = os.environ.copy()
-    env["REPORT_DIR"] = str(report_dir)
+    env["BASE_DIR"] = str(base_dir)
     env["PORT"] = str(port)
 
     logger.info("Starting dashboard server...")
-    logger.info(f"  Report directory: {report_dir}")
+    logger.info(f"  Base directory: {base_dir}")
     logger.info(f"  Port: {port}")
     logger.info(f"  Mode: {'production' if production else 'development'}")
 
