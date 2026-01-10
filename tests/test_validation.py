@@ -887,8 +887,8 @@ trials: 1
 mode: delta
 max_total_time: 86400
 difficulty_level: 1
-experiment_filestore: /tmp/experiment-data
-report_filestore: /tmp/report-data
+experiment_filestore: /tmp/crsbench/experiment-data
+report_filestore: /tmp/crsbench/report-data
 crses:
   - test-crs
 benchmarks:
@@ -910,8 +910,8 @@ trials: 1
 mode: delta
 max_total_time: 86400
 # Missing difficulty_level
-experiment_filestore: /tmp/experiment-data
-report_filestore: /tmp/report-data
+experiment_filestore: /tmp/crsbench/experiment-data
+report_filestore: /tmp/crsbench/report-data
 crses:
   - test-crs
 benchmarks:
@@ -931,8 +931,8 @@ trials: -1
 mode: delta
 max_total_time: 86400
 difficulty_level: 1
-experiment_filestore: /tmp/exp
-report_filestore: /tmp/rep
+experiment_filestore: /tmp/crsbench/exp
+report_filestore: /tmp/crsbench/rep
 crses:
   - test-crs
 benchmarks:
@@ -951,8 +951,8 @@ trials: 1
 mode: delta
 max_total_time: 86400
 difficulty_level: 10
-experiment_filestore: /tmp/exp
-report_filestore: /tmp/rep
+experiment_filestore: /tmp/crsbench/exp
+report_filestore: /tmp/crsbench/rep
 crses:
   - test-crs
 benchmarks:
@@ -986,8 +986,8 @@ trials: 1
 mode: delta
 max_total_time: 86400
 difficulty_level: 1
-experiment_filestore: /tmp/experiment-data
-report_filestore: /tmp/report-data
+experiment_filestore: /tmp/crsbench/experiment-data
+report_filestore: /tmp/crsbench/report-data
 crses:
   - test-crs
 benchmarks:
@@ -1010,8 +1010,8 @@ trials: 1
 mode: delta
 max_total_time: 86400
 difficulty_level: 1
-experiment_filestore: /tmp/experiment-data
-report_filestore: /tmp/report-data
+experiment_filestore: /tmp/crsbench/experiment-data
+report_filestore: /tmp/crsbench/report-data
 crses:
   - test-crs
 benchmarks:
@@ -1031,8 +1031,8 @@ trials: 1
 mode: delta
 max_total_time: 86400
 difficulty_level: 1
-experiment_filestore: /tmp/experiment-data
-report_filestore: /tmp/report-data
+experiment_filestore: /tmp/crsbench/experiment-data
+report_filestore: /tmp/crsbench/report-data
 crses:
   - test-crs
 benchmarks:
@@ -1452,8 +1452,8 @@ trials: 1
 mode: delta
 max_total_time: 86400
 difficulty_level: 1
-experiment_filestore: /tmp/exp
-report_filestore: /tmp/rep
+experiment_filestore: /tmp/crsbench/exp
+report_filestore: /tmp/crsbench/rep
 crses:
   - test-crs
 benchmarks:
