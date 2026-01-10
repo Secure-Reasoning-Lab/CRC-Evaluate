@@ -1234,6 +1234,49 @@ class OSSFuzzInfrastructure:
 
         return self._retag_for_ossfuzz(src_image, dst_image)
 
+    def ensure_inc_image(
+        self,
+        project_name: str,
+        sanitizer: str = "address",
+        registry: str = "ghcr.io/team-atlanta/crsbench",
+    ) -> bool:
+        """Ensure inc-build image is available for use.
+
+        This is a convenience method that:
+        1. Checks if inc-build image exists locally (in OSS-Fuzz format)
+        2. If not found locally, tries to pull from registry
+        3. Returns True if image is available, False otherwise
+
+        Use this method to prepare inc-build images before building variants.
+        If this method returns False, callers should fall back to standard builds.
+
+        Args:
+            project_name: OSS-Fuzz project name
+            sanitizer: Sanitizer type (default: "address")
+            registry: Docker registry (default: ghcr.io/team-atlanta/crsbench)
+
+        Returns:
+            True if inc-build image is available and ready for use
+        """
+        # Check if already available locally
+        if self.is_inc_image_available(project_name, sanitizer, registry):
+            logger.debug(f"Inc-build image available for {project_name}")
+            return True
+
+        # Try to pull from registry
+        logger.info(
+            f"Inc-build image not found locally, trying to pull: {project_name}"
+        )
+        if self.pull_inc_build_image(project_name, sanitizer, registry):
+            logger.info(f"Successfully pulled inc-build image for {project_name}")
+            return True
+
+        logger.debug(
+            f"Inc-build image not available for {project_name}, "
+            "will fall back to standard build"
+        )
+        return False
+
     # =========================================================================
     # Unit test support for patch verification
     # =========================================================================
