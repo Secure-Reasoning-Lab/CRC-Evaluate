@@ -27,6 +27,7 @@ from crsbench.utils.logger import get_logger
 if TYPE_CHECKING:
     from crsbench.evaluation.coverage.manager import CoverageManager
     from crsbench.evaluation.litellm_tracker import LiteLLMTracker
+    from crsbench.evaluation.verification.patch.manager import PatchVerificationManager
     from crsbench.evaluation.verification.pov.manager import POVVerificationManager
 
 logger = get_logger(__name__)
@@ -52,6 +53,7 @@ class SnapshotManager:
         *,
         coverage_manager: Optional["CoverageManager"] = None,
         pov_verification_manager: Optional["POVVerificationManager"] = None,
+        patch_verification_manager: Optional["PatchVerificationManager"] = None,
         llm_tracker: Optional["LiteLLMTracker"] = None,
         llm_api_key: Optional[str] = None,
         llm_trial_id: Optional[str] = None,
@@ -64,6 +66,9 @@ class SnapshotManager:
             trial_start_time: Trial start timestamp (defaults to current time)
             coverage_manager: Optional CoverageManager for collecting coverage snapshots
             pov_verification_manager: Optional POVVerificationManager for POV verification
+                (bug-finding CRS)
+            patch_verification_manager: Optional PatchVerificationManager for patch tracking
+                (bug-fixing CRS)
             llm_tracker: Optional LiteLLMTracker for querying LLM usage
             llm_api_key: Optional trial-specific API key for LLM tracking
             llm_trial_id: Optional trial identifier for LLM usage file
@@ -83,6 +88,7 @@ class SnapshotManager:
         self.crs_run_start_time: Optional[float] = None
         self.coverage_manager = coverage_manager
         self.pov_verification_manager = pov_verification_manager
+        self.patch_verification_manager = patch_verification_manager
 
         # LLM tracking
         self.llm_tracker = llm_tracker
@@ -102,6 +108,8 @@ class SnapshotManager:
 
     def run(self):
         """Main snapshot loop (runs in separate thread).
+
+
 
         This method should be called in a separate thread via:
             thread = threading.Thread(target=manager.run, daemon=True)
@@ -239,6 +247,18 @@ class SnapshotManager:
                     self._capture_pov_verification(temp_dir, pov_snapshot)
                 except Exception as e:
                     logger.warning(f"Failed to capture POV verification snapshot: {e}")
+
+            # Capture patch verification snapshot if patch verification manager is available
+            if self.patch_verification_manager:
+                try:
+                    patch_snapshot = self.patch_verification_manager.on_snapshot(
+                        self.cycle
+                    )
+                    self._capture_patch_verification(temp_dir, patch_snapshot)
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to capture patch verification snapshot: {e}"
+                    )
 
             # Compress to tar.gz
             archive_path = self.trial_dir / f"snapshot-{self.cycle:04d}.tar.gz"
@@ -635,4 +655,40 @@ class SnapshotManager:
             return True
         except Exception as e:
             logger.warning(f"Failed to write pov_verification.json: {e}")
+            return False
+
+    def _capture_patch_verification(self, temp_dir: Path, patch_snapshot) -> bool:
+        """Capture patch verification snapshot data.
+
+        Args:
+            temp_dir: Temporary directory for snapshot contents
+            patch_snapshot: PatchSnapshot from patch verification manager
+
+        Returns:
+            True if patch verification data was captured, False otherwise
+        """
+        if patch_snapshot is None:
+            return False
+
+        try:
+            patch_data = {
+                "cycle": patch_snapshot.cycle,
+                "timestamp": patch_snapshot.timestamp,
+                "elapsed_time": patch_snapshot.elapsed_time,
+                "harness_name": patch_snapshot.harness_name,
+                "cpvs_with_patches": patch_snapshot.cpvs_with_patches,
+                "patches_total": patch_snapshot.patches_total,
+                "patches_new": patch_snapshot.patches_new,
+                "input_cpvs_total": patch_snapshot.input_cpvs_total,
+            }
+
+            patch_path = temp_dir / "patch_verification.json"
+            patch_path.write_text(json.dumps(patch_data, indent=2))
+            logger.debug(
+                f"Captured patch verification: patches={patch_snapshot.patches_total}, "
+                f"new={patch_snapshot.patches_new}"
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to write patch_verification.json: {e}")
             return False

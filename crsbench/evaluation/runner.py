@@ -19,7 +19,10 @@ from crsbench.evaluation.verification.models import (
     PatchVerificationOutput,
     PatchVerificationResult,
 )
-from crsbench.evaluation.verification.patch import PatchVerificationEngine
+from crsbench.evaluation.verification.patch import (
+    PatchVerificationEngine,
+    PatchVerificationManager,
+)
 from crsbench.evaluation.verification.pov import (
     POVVerificationConfig,
     POVVerificationManager,
@@ -411,14 +414,19 @@ class BenchmarkRunner:
         self.logger.info(f"Evaluating harness: {harness.name}")
 
         # Execute CRS with managers
-        harness_result, _, pov_verification_manager = self._execute_crs_with_managers(
+        (
+            harness_result,
+            _,
+            pov_verification_manager,
+            patch_verification_manager,
+        ) = self._execute_crs_with_managers(
             harness=harness,
             benchmark_path=benchmark_path,
             trial_output_dir=trial_output_dir,
             trial_start_time=trial_start_time,
         )
 
-        # Log POV verification manager final report if available
+        # Log POV verification manager final report if available (bug-finding CRS)
         if pov_verification_manager:
             report = pov_verification_manager.get_report()
             self.logger.info(
@@ -427,6 +435,15 @@ class BenchmarkRunner:
                 f"povs={report.total_povs_processed}, "
                 f"zerodays={report.zerodays_detected}, "
                 f"early_stopped={report.early_stopped}"
+            )
+
+        # Log patch verification manager final report if available (bug-fixing CRS)
+        if patch_verification_manager:
+            report = patch_verification_manager.get_report()
+            self.logger.info(
+                f"Patch discovery report: "
+                f"patches={report.patches_total}/{report.input_cpvs_total}, "
+                f"cpv_ids={report.cpvs_with_patches}"
             )
 
         # Run post-experiment coverage (only for bug-finding CRS with successful run)
@@ -465,13 +482,24 @@ class BenchmarkRunner:
         benchmark_path: Path,
         trial_output_dir: Path,
         trial_start_time: float,
-    ) -> tuple[HarnessResult, Any, Optional[POVVerificationManager]]:
-        """Execute CRS with coverage, snapshot, and POV verification managers."""
+    ) -> tuple[
+        HarnessResult,
+        Any,
+        Optional[POVVerificationManager],
+        Optional[PatchVerificationManager],
+    ]:
+        """Execute CRS with coverage, snapshot, and verification managers.
+
+        Returns:
+            Tuple of (harness_result, coverage_manager, pov_verification_manager,
+                     patch_verification_manager)
+        """
         snapshot_manager = None
         snapshot_thread = None
         coverage_manager = None
         coverage_thread = None
         pov_verification_manager = None
+        patch_verification_manager = None
         stop_event: Optional[threading.Event] = None
         harness_result = None
 
@@ -486,7 +514,7 @@ class BenchmarkRunner:
                 )
             )
 
-            # Start POV verification manager if enabled
+            # Start POV verification manager for bug-finding CRS
             pov_verification_manager, pov_stop_event = (
                 self._start_pov_verification_manager(
                     benchmark_path=benchmark_path,
@@ -494,6 +522,14 @@ class BenchmarkRunner:
                     trial_start_time=trial_start_time,
                     harness_name=harness.name,
                 )
+            )
+
+            # Start patch verification manager for bug-fixing CRS
+            patch_verification_manager = self._start_patch_verification_manager(
+                trial_output_dir=trial_output_dir,
+                trial_start_time=trial_start_time,
+                harness_name=harness.name,
+                benchmark_id=benchmark_path.name,
             )
 
             # Combine stop events: either coverage saturation OR all CPVs found can stop CRS
@@ -513,6 +549,7 @@ class BenchmarkRunner:
                 trial_start_time=trial_start_time,
                 coverage_manager=coverage_manager,
                 pov_verification_manager=pov_verification_manager,
+                patch_verification_manager=patch_verification_manager,
             )
 
             # Create callback for run start
@@ -563,7 +600,12 @@ class BenchmarkRunner:
                 harness_name=harness.name,
             )
 
-        return harness_result, coverage_manager, pov_verification_manager
+        return (
+            harness_result,
+            coverage_manager,
+            pov_verification_manager,
+            patch_verification_manager,
+        )
 
     def _start_coverage_manager(
         self,
@@ -613,6 +655,9 @@ class BenchmarkRunner:
     ) -> tuple[Optional[POVVerificationManager], Optional[threading.Event]]:
         """Start POV verification manager if enabled.
 
+        Only creates manager for bug-finding CRS (CRSBugFindingExecutor).
+        Bug-fixing CRS uses POVs as input, not output.
+
         Args:
             benchmark_path: Path to benchmark directory
             trial_output_dir: Trial output directory
@@ -620,8 +665,12 @@ class BenchmarkRunner:
             harness_name: Name of the harness
 
         Returns:
-            Tuple of (POVVerificationManager, stop_event) or (None, None) if oss_fuzz_path not set
+            Tuple of (POVVerificationManager, stop_event) or (None, None) if not applicable
         """
+        # Only create POV verification manager for bug-finding CRS
+        if not isinstance(self.crs_executor, CRSBugFindingExecutor):
+            return None, None
+
         if not self.oss_fuzz_path:
             return None, None
 
@@ -756,6 +805,62 @@ class BenchmarkRunner:
             )
             return None
 
+    def _start_patch_verification_manager(
+        self,
+        trial_output_dir: Path,
+        trial_start_time: float,
+        harness_name: str,
+        benchmark_id: str,
+    ) -> Optional[PatchVerificationManager]:
+        """Start patch verification manager for bug-fixing CRS.
+
+        Only creates manager for bug-fixing CRS (CRSPatchExecutor).
+        Bug-finding CRS uses POVVerificationManager instead.
+
+        Args:
+            trial_output_dir: Trial output directory
+            trial_start_time: Trial start timestamp
+            harness_name: Name of the harness
+            benchmark_id: Benchmark identifier
+
+        Returns:
+            PatchVerificationManager or None if not applicable
+        """
+        # Only create patch verification manager for bug-fixing CRS
+        if not isinstance(self.crs_executor, CRSPatchExecutor):
+            return None
+
+        try:
+            # Patch output directory (where CRS writes patches)
+            patch_output_dir = trial_output_dir / "output" / "patches"
+
+            # Get input CPVs count (patches are generated per CPV, not per POV)
+            # CPVs are provided as input to bug-fixing CRS
+            cpvs_dir = trial_output_dir / "crs-input" / "cpvs"
+            input_cpvs_total = len(list(cpvs_dir.iterdir())) if cpvs_dir.exists() else 0
+
+            manager = PatchVerificationManager(
+                trial_dir=trial_output_dir,
+                patch_output_dir=patch_output_dir,
+                harness_name=harness_name,
+                benchmark_id=benchmark_id,
+                input_cpvs_total=input_cpvs_total,
+                trial_start_time=trial_start_time,
+            )
+
+            self.logger.info(
+                f"Patch verification manager created: harness={harness_name}, "
+                f"input_cpvs={input_cpvs_total}"
+            )
+
+            return manager
+
+        except Exception as e:
+            self.logger.error(
+                f"Failed to create patch verification manager: {e}", exc_info=True
+            )
+            return None
+
     def _start_snapshot_manager(
         self,
         harness_name: str,
@@ -763,6 +868,7 @@ class BenchmarkRunner:
         trial_start_time: float,
         coverage_manager: Any,
         pov_verification_manager: Optional[POVVerificationManager] = None,
+        patch_verification_manager: Optional[PatchVerificationManager] = None,
     ) -> tuple[Optional[SnapshotManager], Optional[threading.Thread]]:
         """Start snapshot manager if enabled."""
         if not (self.snapshot_period and self.snapshot_period > 0):
@@ -779,6 +885,7 @@ class BenchmarkRunner:
             trial_start_time=trial_start_time,
             coverage_manager=coverage_manager,
             pov_verification_manager=pov_verification_manager,
+            patch_verification_manager=patch_verification_manager,
             llm_tracker=self.llm_tracker,
             llm_api_key=self.llm_api_key,
             llm_trial_id=self.llm_trial_id,
