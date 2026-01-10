@@ -26,8 +26,8 @@ from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from crsbench.evaluation.coverage.manager import CoverageManager
-    from crsbench.evaluation.verification.patch.manager import PatchVerificationManager
     from crsbench.evaluation.litellm_tracker import LiteLLMTracker
+    from crsbench.evaluation.verification.patch.manager import PatchVerificationManager
     from crsbench.evaluation.verification.pov.manager import POVVerificationManager
 
 logger = get_logger(__name__)
