@@ -48,6 +48,17 @@ difficulty_level: 3
 hints_enabled: true
 hint_sarif_level: 3  # Function-level hints
 
+# ===== LiteLLM Configuration =====
+
+# LiteLLM mode: 'passthrough' or 'proxy'
+# - passthrough: Uses external LiteLLM service
+# - proxy: Uses self-hosted LiteLLM proxy
+litellm_mode: passthrough
+
+# Enable LLM usage tracking via LiteLLM Virtual Keys
+# Generates llm-usage.json with per-trial cost and token metrics
+llm_tracking_enabled: true
+
 # ===== Monitoring & Snapshots =====
 
 snapshot_period: 600  # 10 minutes for more frequent progress tracking

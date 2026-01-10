@@ -97,6 +97,21 @@ hint_sarif_level: 3
 # Set to null to disable corpus hints
 # hint_corpus_level: null
 
+# ===== LiteLLM Configuration =====
+
+# LiteLLM mode: 'passthrough' or 'proxy'
+# - passthrough: Uses external LiteLLM service (UPSTREAM_LITELLM_BASE_URL, LITELLM_API_KEY)
+# - proxy: Uses self-hosted LiteLLM proxy (LITELLM_BASE_URL, LITELLM_MASTER_KEY)
+# Default: passthrough
+litellm_mode: passthrough
+
+# Enable LLM usage tracking via LiteLLM Virtual Keys
+# When enabled, generates llm-usage.json with per-trial cost and token metrics.
+# Automatically enabled when LITELLM_BASE_URL and LITELLM_MASTER_KEY env vars are set.
+# Set to false to explicitly disable tracking.
+# Default: true
+llm_tracking_enabled: true
+
 # ===== Monitoring & Snapshots =====
 
 # Interval in seconds for taking snapshots of CRS progress.
