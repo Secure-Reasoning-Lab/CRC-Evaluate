@@ -3,9 +3,12 @@
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
+
+if TYPE_CHECKING:
+    from crsbench.evaluation.litellm_tracker import LiteLLMTracker
 from crsbench.evaluation.crs_executor import CRSExecutor, StubCRSExecutor
 from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
 from crsbench.evaluation.results import EvaluationReport, HarnessResult, ResultCollector
@@ -86,6 +89,9 @@ class BenchmarkRunner:
         on_build_start: Optional[Callable[[], None]] = None,
         on_run_start: Optional[Callable[[], None]] = None,
         on_verification_start: Optional[Callable[[], None]] = None,
+        llm_tracker: Optional["LiteLLMTracker"] = None,
+        llm_api_key: Optional[str] = None,
+        llm_trial_id: Optional[str] = None,
     ):
         """Initialize benchmark runner.
 
@@ -100,6 +106,9 @@ class BenchmarkRunner:
             on_build_start: Callback invoked when CRS build phase starts
             on_run_start: Callback invoked when CRS run phase starts
             on_verification_start: Callback invoked when verification phase starts
+            llm_tracker: Optional LiteLLMTracker for querying LLM usage during snapshots
+            llm_api_key: Optional trial-specific API key for LLM tracking
+            llm_trial_id: Optional trial identifier for LLM usage files
         """
         self.crs_executor = crs_executor or StubCRSExecutor()
         self.snapshot_period = snapshot_period
@@ -111,6 +120,9 @@ class BenchmarkRunner:
         self.on_build_start = on_build_start
         self.on_run_start = on_run_start
         self.on_verification_start = on_verification_start
+        self.llm_tracker = llm_tracker
+        self.llm_api_key = llm_api_key
+        self.llm_trial_id = llm_trial_id
         self.logger = get_logger(__name__)
 
         if coverage_early_stop:
@@ -874,6 +886,9 @@ class BenchmarkRunner:
             coverage_manager=coverage_manager,
             pov_verification_manager=pov_verification_manager,
             patch_verification_manager=patch_verification_manager,
+            llm_tracker=self.llm_tracker,
+            llm_api_key=self.llm_api_key,
+            llm_trial_id=self.llm_trial_id,
         )
         snapshot_thread = threading.Thread(target=snapshot_manager.run, daemon=True)
         snapshot_thread.start()

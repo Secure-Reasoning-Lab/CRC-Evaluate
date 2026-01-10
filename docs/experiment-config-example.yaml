@@ -118,11 +118,11 @@ snapshot_period: 900
 # The folder that will store most of the experiment data.
 # Includes trial logs, POVs, patches, and intermediate results.
 # Can be local path or cloud storage (gs://, s3://, etc.)
-experiment_filestore: /tmp/experiment-data
+experiment_filestore: /tmp/crsbench/experiment-data
 
 # The folder where HTML reports and summary data will be stored.
 # Can be local path or cloud storage (gs://, s3://, etc.)
-report_filestore: /tmp/report-data
+report_filestore: /tmp/crsbench/report-data
 
 # ===== Reproducibility =====
 

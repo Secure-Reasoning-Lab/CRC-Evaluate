@@ -9,12 +9,17 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import yaml
 
 from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
 from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
+from crsbench.evaluation.litellm_tracker import (
+    LiteLLMTracker,
+    LiteLLMTrackerError,
+    is_tracking_available,
+)
 from crsbench.evaluation.results import CRSType, TrialMetadata, TrialResult
 from crsbench.evaluation.runner import BenchmarkRunner
 from crsbench.utils.crs_helper import get_crs_registry_name
@@ -30,6 +35,96 @@ from crsbench.validation.schemas import (
 from crsbench.validation.schemas import TrialMetadata as TrialMetadataFile
 
 logger = get_logger(__name__)
+
+
+def _setup_llm_tracking(
+    config: ExperimentConfig,
+    crs: str,
+    benchmark: str,
+    harness_name: str,
+    trial_num: int,
+) -> tuple[Optional[LiteLLMTracker], Optional[str]]:
+    """Set up LLM tracking if enabled.
+
+    Args:
+        config: Experiment configuration
+        crs: CRS name
+        benchmark: Benchmark name
+        harness_name: Harness name
+        trial_num: Trial number
+
+    Returns:
+        Tuple of (tracker, api_key) if tracking enabled, (None, None) otherwise
+    """
+    if not config.llm_tracking_enabled:
+        return None, None
+
+    if not is_tracking_available():
+        logger.warning(
+            "LLM tracking enabled but required env vars not set. "
+            "Need (LITELLM_BASE_URL or UPSTREAM_LITELLM_BASE_URL) and LITELLM_MASTER_KEY. "
+            "Skipping tracking."
+        )
+        return None, None
+
+    try:
+        tracker = LiteLLMTracker()
+        api_key = tracker.generate_key(
+            experiment=config.experiment,
+            crs=crs,
+            benchmark=benchmark,
+            harness=harness_name,
+            trial_num=trial_num,
+        )
+        logger.info(f"Generated LLM tracking key for trial {trial_num}")
+        return tracker, api_key
+    except LiteLLMTrackerError as e:
+        logger.error(f"Failed to set up LLM tracking: {e}")
+        return None, None
+
+
+def _cleanup_llm_tracking(
+    tracker: Optional[LiteLLMTracker],
+    api_key: Optional[str],
+    trial_output_dir: Path,
+    trial_id: str,
+) -> None:
+    """Clean up LLM tracking after trial.
+
+    Args:
+        tracker: LiteLLMTracker instance (or None)
+        api_key: Trial API key (or None)
+        trial_output_dir: Trial output directory
+        trial_id: Trial identifier
+    """
+    if not tracker or not api_key:
+        return
+
+    try:
+        # Write final usage file (cost/token summary)
+        tracker.write_llm_usage_file(
+            api_key=api_key,
+            trial_id=trial_id,
+            output_path=trial_output_dir / "llm-usage.json",
+        )
+    except LiteLLMTrackerError as e:
+        logger.error(f"Failed to write LLM usage file: {e}")
+
+    try:
+        # Write detailed LLM logs (all request/response data)
+        tracker.write_llm_logs_file(
+            api_key=api_key,
+            trial_id=trial_id,
+            output_path=trial_output_dir / "llm-logs.json",
+        )
+    except LiteLLMTrackerError as e:
+        logger.error(f"Failed to write LLM logs file: {e}")
+
+    try:
+        # Delete the key
+        tracker.delete_key(api_key)
+    except LiteLLMTrackerError as e:
+        logger.error(f"Failed to delete LLM tracking key: {e}")
 
 
 def get_crs_type(crs_name: str, registry_dir: Path) -> str:
@@ -341,6 +436,26 @@ def run_crs_trial(
         # Create phase callbacks for job metadata tracking
         on_build_start, on_run_start, on_verification_start = _create_phase_callbacks()
 
+        # Build trial_id for LLM tracking
+        experiment_name = config.experiment
+        trial_id = (
+            f"{experiment_name}-{crs}-{benchmark}-{harness_name}-trial{trial_num}"
+        )
+
+        # Set up LLM tracking if enabled (must be before BenchmarkRunner creation)
+        llm_tracker, llm_api_key = _setup_llm_tracking(
+            config=config,
+            crs=crs,
+            benchmark=benchmark,
+            harness_name=harness_name,
+            trial_num=trial_num,
+        )
+
+        # If tracking is enabled, pass the trial-specific API key to executor
+        if llm_api_key:
+            crs_executor.set_llm_api_key(llm_api_key)
+            logger.info("Configured executor with trial-specific LLM API key")
+
         runner = BenchmarkRunner(
             crs_executor,
             snapshot_period=snapshot_period,
@@ -352,6 +467,9 @@ def run_crs_trial(
             on_build_start=on_build_start,
             on_run_start=on_run_start,
             on_verification_start=on_verification_start,
+            llm_tracker=llm_tracker,
+            llm_api_key=llm_api_key,
+            llm_trial_id=trial_id,
         )
 
         # Resolve benchmark path
@@ -412,14 +530,23 @@ def run_crs_trial(
 
         # Run benchmark evaluation for this specific harness
         # Note: CRS is already configured via executor.configure_crs() above
-        result = runner.run_benchmark(
-            benchmark_harness=benchmark_harness,
-            mode=mode,  # Use mode from trial
-            crs_config={},  # Empty config - executor already configured
-            trial_output_dir=trial_output_dir,
-            oss_fuzz_path=oss_fuzz_path,
-            skip_verification=config.skip_verification,
-        )
+        try:
+            result = runner.run_benchmark(
+                benchmark_harness=benchmark_harness,
+                mode=mode,  # Use mode from trial
+                crs_config={},  # Empty config - executor already configured
+                trial_output_dir=trial_output_dir,
+                oss_fuzz_path=oss_fuzz_path,
+                skip_verification=config.skip_verification,
+            )
+        finally:
+            # Clean up LLM tracking (write usage file and delete key)
+            _cleanup_llm_tracking(
+                tracker=llm_tracker,
+                api_key=llm_api_key,
+                trial_output_dir=trial_output_dir,
+                trial_id=trial_id,
+            )
 
         execution_time = time.time() - start_time
 

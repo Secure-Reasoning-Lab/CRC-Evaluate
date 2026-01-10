@@ -185,8 +185,8 @@ experiment: my-distributed-exp
 trials: 3
 max_total_time: 7200
 difficulty_level: 1
-experiment_filestore: /tmp/experiments
-report_filestore: /tmp/reports
+experiment_filestore: /tmp/crsbench/experiments
+report_filestore: /tmp/crsbench/reports
 
 # Distributed execution configuration
 redis_host: localhost  # Redis server hostname

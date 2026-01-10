@@ -27,6 +27,7 @@ from crsbench.utils.logger import get_logger
 if TYPE_CHECKING:
     from crsbench.evaluation.coverage.manager import CoverageManager
     from crsbench.evaluation.verification.patch.manager import PatchVerificationManager
+    from crsbench.evaluation.litellm_tracker import LiteLLMTracker
     from crsbench.evaluation.verification.pov.manager import POVVerificationManager
 
 logger = get_logger(__name__)
@@ -53,6 +54,9 @@ class SnapshotManager:
         coverage_manager: Optional["CoverageManager"] = None,
         pov_verification_manager: Optional["POVVerificationManager"] = None,
         patch_verification_manager: Optional["PatchVerificationManager"] = None,
+        llm_tracker: Optional["LiteLLMTracker"] = None,
+        llm_api_key: Optional[str] = None,
+        llm_trial_id: Optional[str] = None,
     ):
         """Initialize snapshot manager.
 
@@ -65,6 +69,9 @@ class SnapshotManager:
                 (bug-finding CRS)
             patch_verification_manager: Optional PatchVerificationManager for patch tracking
                 (bug-fixing CRS)
+            llm_tracker: Optional LiteLLMTracker for querying LLM usage
+            llm_api_key: Optional trial-specific API key for LLM tracking
+            llm_trial_id: Optional trial identifier for LLM usage file
 
         Raises:
             ValueError: If snapshot_period <= 0 or trial_dir doesn't exist
@@ -83,6 +90,11 @@ class SnapshotManager:
         self.pov_verification_manager = pov_verification_manager
         self.patch_verification_manager = patch_verification_manager
 
+        # LLM tracking
+        self.llm_tracker = llm_tracker
+        self.llm_api_key = llm_api_key
+        self.llm_trial_id = llm_trial_id
+
         # State tracking
         self.cycle = 0
         self.running = False
@@ -91,9 +103,13 @@ class SnapshotManager:
         logger.info(
             f"SnapshotManager initialized: period={snapshot_period}s, trial_dir={trial_dir}"
         )
+        if llm_tracker and llm_api_key:
+            logger.info("LLM tracking enabled for snapshots")
 
     def run(self):
         """Main snapshot loop (runs in separate thread).
+
+
 
         This method should be called in a separate thread via:
             thread = threading.Thread(target=manager.run, daemon=True)
@@ -255,6 +271,9 @@ class SnapshotManager:
             marker_path = self.trial_dir / f"snapshot-{self.cycle:04d}.complete"
             marker_path.touch()
 
+            # Update LLM logs file in trial directory (not in snapshot)
+            self._update_llm_logs()
+
             logger.info(f"Snapshot {self.cycle} completed: {archive_path.name}")
 
             # Create and return Snapshot object
@@ -350,9 +369,28 @@ class SnapshotManager:
     def _capture_llm_usage(self, temp_dir: Path) -> bool:
         """Capture LLM usage log (full - cumulative).
 
+        If LLM tracker is configured, queries the LiteLLM API directly to get
+        real-time usage data. Otherwise, falls back to copying existing file.
+
         Returns:
             True if LLM usage was captured, False otherwise
         """
+        # If LLM tracker is available, query API directly
+        if self.llm_tracker and self.llm_api_key and self.llm_trial_id:
+            try:
+                output_path = temp_dir / "llm-usage.json"
+                self.llm_tracker.write_llm_usage_file(
+                    api_key=self.llm_api_key,
+                    trial_id=self.llm_trial_id,
+                    output_path=output_path,
+                )
+                logger.debug("Captured LLM usage from API")
+                return True
+            except Exception as e:
+                logger.warning(f"Failed to capture LLM usage from API: {e}")
+                # Fall through to try file-based capture
+
+        # Fall back to copying existing file
         llm_path = self.trial_dir / "llm-usage.json"
         if llm_path.exists():
             try:
@@ -362,6 +400,28 @@ class SnapshotManager:
                 logger.warning(f"Failed to capture llm-usage.json: {e}")
                 return False
         return False
+
+    def _update_llm_logs(self) -> None:
+        """Update LLM logs file in trial directory.
+
+        This writes all LLM request/response logs to a single file in the
+        trial directory. Called on each snapshot to keep logs up-to-date.
+        Unlike llm-usage.json which is included in snapshots, this file
+        is maintained separately for dashboard viewing.
+        """
+        if not (self.llm_tracker and self.llm_api_key and self.llm_trial_id):
+            return
+
+        try:
+            output_path = self.trial_dir / "llm-logs.json"
+            self.llm_tracker.write_llm_logs_file(
+                api_key=self.llm_api_key,
+                trial_id=self.llm_trial_id,
+                output_path=output_path,
+            )
+            logger.debug("Updated LLM logs file")
+        except Exception as e:
+            logger.warning(f"Failed to update LLM logs: {e}")
 
     def _capture_crs_log(self, temp_dir: Path) -> bool:
         """Capture CRS output log (full - complete log).

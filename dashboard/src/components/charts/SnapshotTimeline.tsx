@@ -32,17 +32,17 @@ export function SnapshotTimeline({
   const povCounts = data.map((d) => d.pov_count);
   const patchCounts = data.map((d) => d.patch_count);
 
-  // Calculate cumulative counts
-  let cumPovs = 0;
-  let cumPatches = 0;
-  const cumulativePovs = povCounts.map((c) => {
-    cumPovs += c;
-    return cumPovs;
-  });
-  const cumulativePatches = patchCounts.map((c) => {
-    cumPatches += c;
-    return cumPatches;
-  });
+  // Calculate cumulative counts using reduce
+  const cumulativePovs = povCounts.reduce<number[]>((acc, c) => {
+    const prev = acc.length > 0 ? acc[acc.length - 1] : 0;
+    acc.push(prev + c);
+    return acc;
+  }, []);
+  const cumulativePatches = patchCounts.reduce<number[]>((acc, c) => {
+    const prev = acc.length > 0 ? acc[acc.length - 1] : 0;
+    acc.push(prev + c);
+    return acc;
+  }, []);
 
   return (
     <PlotlyChart

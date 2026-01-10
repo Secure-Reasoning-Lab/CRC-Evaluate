@@ -74,8 +74,8 @@ trials: 3
 mode: delta
 max_total_time: 20000
 difficulty_level: 2
-experiment_filestore: /tmp/experiment-data
-report_filestore: /tmp/report-data
+experiment_filestore: /tmp/crsbench/experiment-data
+report_filestore: /tmp/crsbench/report-data
 crses:
   - atlantis-c
   - ensemble-c
@@ -103,8 +103,8 @@ trials: 2
 mode: full
 max_total_time: 20000
 difficulty_level: 1
-experiment_filestore: /tmp/experiment-data
-report_filestore: /tmp/report-data
+experiment_filestore: /tmp/crsbench/experiment-data
+report_filestore: /tmp/crsbench/report-data
 crses:
   - atlantis-c
 benchmark_suite: crsbench-afc-c
@@ -127,8 +127,8 @@ trials: 2
 mode: delta
 max_total_time: 20000
 difficulty_level: 1
-experiment_filestore: /tmp/experiment-data
-report_filestore: /tmp/report-data
+experiment_filestore: /tmp/crsbench/experiment-data
+report_filestore: /tmp/crsbench/report-data
 crses: [crs1]
 benchmarks: [bench1]
 redis_host: localhost
@@ -147,8 +147,8 @@ trials: 1
 mode: delta
 max_total_time: 20000
 difficulty_level: 0
-experiment_filestore: /tmp/exp
-report_filestore: /tmp/rep
+experiment_filestore: /tmp/crsbench/exp
+report_filestore: /tmp/crsbench/rep
 crses: [crs1]
 benchmarks: [bench1]
 """)
@@ -604,8 +604,8 @@ trials: 1
 mode: delta
 max_total_time: 20000
 difficulty_level: 1
-experiment_filestore: /tmp/exp
-report_filestore: /tmp/rep
+experiment_filestore: /tmp/crsbench/exp
+report_filestore: /tmp/crsbench/rep
 crses: [crs1]
 benchmarks: [bench1]
 """)
@@ -633,8 +633,8 @@ trials: 1
 mode: delta
 max_total_time: 20000
 difficulty_level: 1
-experiment_filestore: /tmp/exp
-report_filestore: /tmp/rep
+experiment_filestore: /tmp/crsbench/exp
+report_filestore: /tmp/crsbench/rep
 crses:
   - atlantis-c
   - ensemble-c
@@ -662,8 +662,8 @@ trials: 1
 mode: delta
 max_total_time: 20000
 difficulty_level: 1
-experiment_filestore: /tmp/exp
-report_filestore: /tmp/rep
+experiment_filestore: /tmp/crsbench/exp
+report_filestore: /tmp/crsbench/rep
 crses: [crs1]
 benchmarks:
   - bench1
@@ -711,8 +711,8 @@ trials: 1
 mode: delta
 max_total_time: 20000
 difficulty_level: 1
-experiment_filestore: /tmp/exp
-report_filestore: /tmp/rep
+experiment_filestore: /tmp/crsbench/exp
+report_filestore: /tmp/crsbench/rep
 crses:
   - atlantis-c
   - ensemble-c
