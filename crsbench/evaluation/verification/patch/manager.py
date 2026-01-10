@@ -1,0 +1,289 @@
+"""Patch verification manager for real-time patch tracking during CRS evaluation.
+
+This module provides PatchVerificationManager, which monitors patch output during
+bug-fixing CRS evaluation and tracks patch discovery progress.
+
+Threading Model:
+- Main thread: Runs CRS subprocess
+- Manager: Event-based patch tracking via on_snapshot callback
+
+Integration:
+- Works with SnapshotManager for synchronized patch tracking snapshots
+- Tracks patches in output/patches/{cpv_id}/patch.diff structure
+
+Note: Follows POVVerificationManager pattern. Unlike POVVerificationManager,
+this manager only tracks patch discovery - full verification (build, POV test,
+unit test) is done post-evaluation by PatchVerificationEngine.
+"""
+
+import json
+import threading
+import time
+from pathlib import Path
+from typing import Optional
+
+from crsbench.evaluation.verification.patch.models import (
+    PatchDiscoveryReport,
+    PatchSnapshot,
+)
+from crsbench.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+class PatchVerificationManager:
+    """Manages real-time patch tracking during bug-fixing CRS evaluation.
+
+    This class monitors patch output directories and tracks patch discovery
+    progress. Unlike POVVerificationManager, it does not perform real-time
+    verification - that is done post-evaluation by PatchVerificationEngine.
+
+    Follows POVVerificationManager pattern for consistency.
+
+    TODO: Currently this manager only counts patch files without verification.
+    Consider whether real-time patch verification (build, POV test) should be
+    added here, similar to how POVVerificationManager verifies POVs in real-time.
+    This would enable early-stop conditions (e.g., stop when valid patch found).
+
+    Attributes:
+        trial_dir: Trial output directory containing CRS outputs
+        patch_output_dir: Directory where CRS writes patches (output/patches/)
+        harness_name: Name of the harness being evaluated
+        benchmark_id: Benchmark identifier
+        input_cpvs_total: Number of input CPVs to generate patches for
+    """
+
+    def __init__(
+        self,
+        trial_dir: Path,
+        patch_output_dir: Path,
+        harness_name: str,
+        benchmark_id: str,
+        input_cpvs_total: int,
+        *,
+        trial_start_time: Optional[float] = None,
+    ):
+        """Initialize patch verification manager.
+
+        Args:
+            trial_dir: Trial output directory (must exist)
+            patch_output_dir: Directory where CRS writes patches
+            harness_name: Name of the harness being evaluated
+            benchmark_id: Benchmark identifier
+            input_cpvs_total: Number of input CPVs to generate patches for
+            trial_start_time: Trial start timestamp (defaults to current time)
+
+        Raises:
+            ValueError: If trial_dir doesn't exist
+        """
+        if not trial_dir.exists():
+            raise ValueError(f"trial_dir does not exist: {trial_dir}")
+
+        self.trial_dir = trial_dir
+        self.patch_output_dir = patch_output_dir
+        self.harness_name = harness_name
+        self.benchmark_id = benchmark_id
+        self.input_cpvs_total = input_cpvs_total
+        self.trial_start_time = trial_start_time or time.time()
+
+        # Thread-safe access to state
+        self._lock = threading.Lock()
+
+        # Tracking state
+        self._discovered_cpv_ids: set[str] = set()  # CPV IDs with patches
+        self._patches_total = 0
+        self._snapshot_count = 0
+        self._latest_snapshot: Optional[PatchSnapshot] = None
+
+        logger.info(
+            f"PatchVerificationManager initialized: trial_dir={trial_dir}, "
+            f"harness={harness_name}, benchmark={benchmark_id}, "
+            f"input_cpvs={input_cpvs_total}"
+        )
+
+    @property
+    def cpvs_with_patches(self) -> list[str]:
+        """Get list of CPV IDs with patches discovered."""
+        with self._lock:
+            return sorted(self._discovered_cpv_ids)
+
+    @property
+    def patches_total(self) -> int:
+        """Get total number of patches discovered."""
+        with self._lock:
+            return self._patches_total
+
+    def _discover_new_patches(self) -> tuple[list[str], int]:
+        """Discover new patches in the output directory.
+
+        Patches are organized as:
+        output/patches/{cpv_id}/patch.diff
+
+        Returns:
+            Tuple of (new_cpv_ids, new_patches_count)
+        """
+        if not self.patch_output_dir.exists():
+            return [], 0
+
+        new_cpv_ids = []
+        new_patches_count = 0
+
+        # Iterate through cpv_id directories
+        for cpv_dir in self.patch_output_dir.iterdir():
+            if not cpv_dir.is_dir():
+                continue
+
+            cpv_id = cpv_dir.name
+            patch_file = cpv_dir / "patch.diff"
+
+            if patch_file.exists():
+                with self._lock:
+                    if cpv_id not in self._discovered_cpv_ids:
+                        self._discovered_cpv_ids.add(cpv_id)
+                        self._patches_total += 1
+                        new_cpv_ids.append(cpv_id)
+                        new_patches_count += 1
+
+        return new_cpv_ids, new_patches_count
+
+    def on_snapshot(self, cycle: int) -> PatchSnapshot:
+        """Create patch tracking snapshot for a given cycle.
+
+        This method is called by SnapshotManager before creating a snapshot
+        archive. It captures the current patch discovery state.
+
+        Thread-safe: Uses internal lock to protect snapshot state.
+
+        Args:
+            cycle: Snapshot cycle number (1-indexed)
+
+        Returns:
+            PatchSnapshot with current discovery state
+        """
+        timestamp = time.time()
+        elapsed_time = timestamp - self.trial_start_time
+
+        # Discover new patches
+        new_cpv_ids, patches_new = self._discover_new_patches()
+
+        # Log new discoveries
+        for cpv_id in new_cpv_ids:
+            logger.info(f"Patch discovered: cpv_id={cpv_id}")
+
+        # Create snapshot
+        with self._lock:
+            snapshot = PatchSnapshot(
+                cycle=cycle,
+                timestamp=timestamp,
+                elapsed_time=elapsed_time,
+                harness_name=self.harness_name,
+                cpvs_with_patches=sorted(self._discovered_cpv_ids),
+                patches_total=self._patches_total,
+                patches_new=patches_new,
+                input_cpvs_total=self.input_cpvs_total,
+            )
+            self._snapshot_count += 1
+            self._latest_snapshot = snapshot
+
+        # Save snapshot to file
+        self._save_snapshot_file(snapshot)
+        self._save_snapshot_history()
+
+        logger.info(
+            f"Patch snapshot {cycle}: "
+            f"patches={self._patches_total}/{self.input_cpvs_total} "
+            f"(+{patches_new})"
+        )
+
+        return snapshot
+
+    def get_state(self) -> dict:
+        """Get thread-safe snapshot of current state.
+
+        Returns:
+            Dictionary with current state data
+        """
+        with self._lock:
+            return {
+                "benchmark_id": self.benchmark_id,
+                "harness_name": self.harness_name,
+                "input_cpvs_total": self.input_cpvs_total,
+                "cpvs_with_patches": sorted(self._discovered_cpv_ids),
+                "patches_total": self._patches_total,
+                "snapshot_count": self._snapshot_count,
+            }
+
+    def get_report(self) -> PatchDiscoveryReport:
+        """Generate final patch discovery report.
+
+        Returns:
+            PatchDiscoveryReport with final discovery results
+        """
+        total_duration = time.time() - self.trial_start_time
+
+        with self._lock:
+            return PatchDiscoveryReport(
+                benchmark_id=self.benchmark_id,
+                harness_name=self.harness_name,
+                input_cpvs_total=self.input_cpvs_total,
+                cpvs_with_patches=sorted(self._discovered_cpv_ids),
+                patches_total=self._patches_total,
+                total_duration_seconds=total_duration,
+                snapshot_count=self._snapshot_count,
+                latest_snapshot=self._latest_snapshot,
+            )
+
+    def _save_snapshot_file(self, snapshot: PatchSnapshot) -> None:
+        """Save individual snapshot to file.
+
+        Args:
+            snapshot: PatchSnapshot to save
+        """
+        try:
+            snapshots_dir = self.trial_dir / "patches" / "snapshots"
+            snapshots_dir.mkdir(parents=True, exist_ok=True)
+
+            snapshot_file = snapshots_dir / f"snapshot-{snapshot.cycle:03d}.json"
+            snapshot_data = {
+                "cycle": snapshot.cycle,
+                "timestamp": snapshot.timestamp,
+                "elapsed_time": snapshot.elapsed_time,
+                "harness_name": snapshot.harness_name,
+                "cpvs_with_patches": snapshot.cpvs_with_patches,
+                "patches_total": snapshot.patches_total,
+                "patches_new": snapshot.patches_new,
+                "input_cpvs_total": snapshot.input_cpvs_total,
+            }
+
+            snapshot_file.write_text(json.dumps(snapshot_data, indent=2))
+            logger.debug(f"Saved patch snapshot to {snapshot_file}")
+        except Exception as e:
+            logger.warning(f"Failed to save patch snapshot file: {e}")
+
+    def _save_snapshot_history(self) -> None:
+        """Save snapshot summary to trial directory."""
+        try:
+            history_file = self.trial_dir / "patches" / "snapshot_history.json"
+            history_file.parent.mkdir(parents=True, exist_ok=True)
+
+            with self._lock:
+                latest = self._latest_snapshot
+                history_data = {
+                    "harness_name": self.harness_name,
+                    "input_cpvs_total": self.input_cpvs_total,
+                    "snapshot_count": self._snapshot_count,
+                    "latest_snapshot": {
+                        "cycle": latest.cycle,
+                        "elapsed_time": latest.elapsed_time,
+                        "cpvs_with_patches": latest.cpvs_with_patches,
+                        "patches_total": latest.patches_total,
+                        "patches_new": latest.patches_new,
+                    }
+                    if latest
+                    else None,
+                }
+
+            history_file.write_text(json.dumps(history_data, indent=2))
+            logger.debug(f"Saved patch snapshot history to {history_file}")
+        except Exception as e:
+            logger.warning(f"Failed to save patch snapshot history: {e}")
