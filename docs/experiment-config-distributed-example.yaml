@@ -168,6 +168,20 @@ build_workers: 8   # Parallel workers for building variants
 verify_workers: 8  # Parallel workers for POV verification
 
 # =============================================================================
+# ===== Advanced Configuration (Optional) =====
+# =============================================================================
+
+# Custom root directory for benchmark projects
+# Default: ./benchmarks
+# Uncomment if benchmarks are stored in a non-standard location
+# benchmarks_root: /custom/path/to/benchmarks
+
+# Custom root directory for benchmark suite YAML files
+# Default: ./benchmark-suites
+# Uncomment if benchmark suites are stored in a non-standard location
+# benchmark_suites_root: /custom/path/to/benchmark-suites
+
+# =============================================================================
 # Deployment Notes:
 # =============================================================================
 #

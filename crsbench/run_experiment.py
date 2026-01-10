@@ -177,6 +177,14 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--benchmark-suites-root",
+        type=str,
+        required=False,
+        metavar="BENCHMARK_SUITES_ROOT",
+        help="Path to benchmark suites root directory (highest precedence, overrides config file)",
+    )
+
+    parser.add_argument(
         "--hints-enabled",
         action="store_true",
         help="Enable hints for CRS evaluation (overrides config file)",
@@ -1045,6 +1053,12 @@ def enhance_config_with_cli_args(
     if args.benchmarks_root:
         overrides["benchmarks_root"] = args.benchmarks_root
         logger.info(f"Using benchmarks root from CLI: {args.benchmarks_root}")
+
+    if args.benchmark_suites_root:
+        overrides["benchmark_suites_root"] = args.benchmark_suites_root
+        logger.info(
+            f"Using benchmark suites root from CLI: {args.benchmark_suites_root}"
+        )
 
     # Mode override
     if hasattr(args, "mode") and args.mode is not None:
@@ -2032,7 +2046,11 @@ def main() -> None:
 
             from crsbench.validation.schemas import BenchmarkSuiteConfig
 
-            suite_path = Path("benchmark-suites") / f"{args.benchmark_suite}.yaml"
+            # Use configured benchmark suites root or default
+            benchmark_suites_root = Path(
+                config.benchmark_suites_root or "benchmark-suites"
+            )
+            suite_path = benchmark_suites_root / f"{args.benchmark_suite}.yaml"
             if not suite_path.exists():
                 logger.error(f"Benchmark suite file not found: {suite_path}")
                 sys.exit(1)

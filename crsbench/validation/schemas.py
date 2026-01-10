@@ -663,7 +663,11 @@ class ExperimentConfig(BaseModel):
     )
     benchmark_suite: Optional[str] = Field(
         default=None,
-        description="Benchmark suite name to load from benchmark-suites/ (mutually exclusive with benchmarks)",
+        description="Benchmark suite name to load (mutually exclusive with benchmarks)",
+    )
+    benchmark_suites_root: Optional[Path] = Field(
+        default=None,
+        description="Root directory containing benchmark suite YAML files (defaults to ./benchmark-suites)",
     )
     snapshot_period: Optional[int] = Field(
         default=900,
@@ -819,6 +823,19 @@ class ExperimentConfig(BaseModel):
             return v.absolute()
         return None  # Use default ./benchmarks if not specified
 
+    @field_validator("benchmark_suites_root")
+    @classmethod
+    def validate_benchmark_suites_root(cls, v):
+        """Validate benchmark suites root directory."""
+        if v:
+            # Pydantic already converts str to Path
+            if not v.exists():
+                raise ValueError(f"Benchmark suites root directory does not exist: {v}")
+            if not v.is_dir():
+                raise ValueError(f"Benchmark suites root must be a directory: {v}")
+            return v.absolute()
+        return None  # Use default ./benchmark-suites if not specified
+
     @field_validator("benchmarks")
     @classmethod
     def validate_benchmarks(cls, v):
@@ -965,13 +982,8 @@ class ExperimentConfig(BaseModel):
             )
         return self
 
-    def get_benchmark_list(
-        self, benchmark_suites_dir: str = "benchmark-suites"
-    ) -> List[str]:
+    def get_benchmark_list(self) -> List[str]:
         """Get the list of benchmarks, resolving benchmark_suite if necessary.
-
-        Args:
-            benchmark_suites_dir: Directory containing benchmark suite YAML files
 
         Returns:
             List of benchmark IDs
@@ -994,8 +1006,13 @@ class ExperimentConfig(BaseModel):
 
             import yaml
 
+            # Use configured benchmark suites root or default
+            benchmark_suites_root = Path(
+                self.benchmark_suites_root or "benchmark-suites"
+            )
+
             # Construct path to suite file
-            suite_path = Path(benchmark_suites_dir) / f"{self.benchmark_suite}.yaml"
+            suite_path = benchmark_suites_root / f"{self.benchmark_suite}.yaml"
 
             if not suite_path.exists():
                 raise ValueError(f"Benchmark suite file not found: {suite_path}")
@@ -1012,13 +1029,8 @@ class ExperimentConfig(BaseModel):
         # Should never reach here due to __init__ validation
         raise ValueError("No benchmark source specified")
 
-    def get_benchmark_entries(
-        self, benchmark_suites_dir: str = "benchmark-suites"
-    ) -> List[BenchmarkEntry]:
+    def get_benchmark_entries(self) -> List[BenchmarkEntry]:
         """Get the list of benchmark entries with harness information.
-
-        Args:
-            benchmark_suites_dir: Directory containing benchmark suite YAML files
 
         Returns:
             List of BenchmarkEntry objects with name and optional harnesses
@@ -1043,8 +1055,13 @@ class ExperimentConfig(BaseModel):
 
             import yaml
 
+            # Use configured benchmark suites root or default
+            benchmark_suites_root = Path(
+                self.benchmark_suites_root or "benchmark-suites"
+            )
+
             # Construct path to suite file
-            suite_path = Path(benchmark_suites_dir) / f"{self.benchmark_suite}.yaml"
+            suite_path = benchmark_suites_root / f"{self.benchmark_suite}.yaml"
 
             if not suite_path.exists():
                 raise ValueError(f"Benchmark suite file not found: {suite_path}")
