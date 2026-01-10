@@ -209,6 +209,82 @@ benchmarks:
 | `redis_host: 10.0.1.5` | Remote Redis IP address | Cloud/cluster |
 | `redis_host: none` or omit | Disable distributed mode | Local execution |
 
+### Resource Allocation
+
+Control compute resources allocated to each trial:
+
+```yaml
+# Resource management section in experiment config
+resources:
+  # CPU cores allocated per trial
+  # Recommended: Match to parallel fuzzing processes in your CRS
+  cores_per_trial: 8
+
+  # Memory limit per trial (Docker memory limit format)
+  memory_per_trial: "16G"
+
+  # LiteLLM resource configuration (for LLM-based CRS)
+  litellm:
+    # Maximum concurrent LLM API requests
+    max_concurrent_requests: 50
+    # Cost budget in USD
+    cost_budget: 500.0
+```
+
+**Priority order for resources**:
+1. Experiment config `resources` section (highest priority)
+2. CRS-specific `config-resource.yaml` (if no experiment config)
+3. Default values (4 cores, 8G memory)
+
+### Worker Configuration
+
+Configure distributed workers via experiment config:
+
+```yaml
+# Worker configuration section
+worker:
+  # Number of parallel jobs per worker process
+  jobs: 4
+
+  # Redis server hostname
+  redis_host: "redis.example.com"
+
+  # Run continuously (keep processing jobs)
+  continuous: true
+
+  # Optional: Override paths for workers on different machines
+  # Use when workers have different filesystem layouts than orchestrator
+
+  # Storage paths
+  experiment_filestore: /mnt/nfs/experiment-data
+  report_filestore: /mnt/nfs/reports
+
+  # CRS and benchmark paths
+  oss_fuzz_path: /worker/oss-fuzz
+  registry_dir: /worker/crses/registry
+  crs_configs_dir: /worker/crses/configs
+  benchmarks_root: /worker/benchmarks
+  benchmark_suites_root: /worker/benchmark-suites
+```
+
+**Worker path overrides**: When workers run on different machines with different filesystem layouts, use the worker section to override paths. This is common when:
+- Workers mount shared storage at different paths than the orchestrator
+- Workers use local SSDs instead of network storage
+- Workers are in different environments (e.g., containers vs host machines)
+
+**Available path overrides**:
+- `experiment_filestore` - Experiment data storage location
+- `report_filestore` - Report output location
+- `oss_fuzz_path` - OSS-Fuzz installation directory
+- `registry_dir` - CRS registry directory (for CRS type detection)
+- `crs_configs_dir` - CRS configuration directory
+- `benchmarks_root` - Benchmark projects root directory
+- `benchmark_suites_root` - Benchmark suite YAML files directory
+
+All overrides are optional. If not specified, workers use the main experiment config values.
+
+See [experiment-config-distributed-example.yaml](experiment-config-distributed-example.yaml) for a complete production configuration.
+
 ## Valkey Cleanup (Important!)
 
 **Before running a new experiment**, it's recommended to clean up Valkey to avoid conflicts with previous experiments.
@@ -379,35 +455,59 @@ This binds Valkey to `localhost:6379` (127.0.0.1 only) - secure for local develo
 
 ### Step 3: Start Workers
 
-Open **multiple terminal windows** (or use `tmux`/`screen`) and start workers:
+Start workers using the `crsbench worker` command. Workers can be configured via experiment config file or CLI arguments.
 
-#### Terminal 1: Worker 1
+#### Option A: Using Experiment Config (Recommended)
+
+Use the same experiment config file for both orchestrator and workers:
+
 ```bash
-# Set environment variables
-export REDIS_HOST=localhost
-export EXPERIMENT_NAME=my-distributed-exp
+# Start worker with experiment config (uses worker section settings)
+crsbench worker --experiment-config experiment-config.yaml
 
-# Start worker
-python -m crsbench.distributed.worker
+# Start with multiple parallel jobs per worker
+crsbench worker --experiment-config experiment-config.yaml --jobs 4
+
+# Run in continuous mode (keeps running, waiting for new jobs)
+crsbench worker --experiment-config experiment-config.yaml --continuous
 ```
 
-#### Terminal 2: Worker 2
-```bash
-export REDIS_HOST=localhost
-export EXPERIMENT_NAME=my-distributed-exp
+The worker command reads settings from the `worker` section of the config file:
+- `redis_host`: Redis server hostname
+- `jobs`: Number of parallel worker processes
+- `continuous`: Whether to run continuously or exit when queue is empty
 
-python -m crsbench.distributed.worker
+**Priority order**: CLI arguments > experiment config > defaults
+
+#### Option B: Using CLI Arguments Only
+
+```bash
+# Start worker with CLI arguments
+crsbench worker \
+  --redis-host localhost \
+  --experiment-name my-distributed-exp \
+  --jobs 2 \
+  --continuous
+
+# Start multiple workers in separate terminals
+crsbench worker --redis-host localhost --experiment-name my-exp --jobs 1
 ```
 
-#### Terminal 3: Worker 3
-```bash
-export REDIS_HOST=localhost
-export EXPERIMENT_NAME=my-distributed-exp
+#### Worker CLI Arguments
 
-python -m crsbench.distributed.worker
-```
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--experiment-config` | Path to experiment config YAML | None |
+| `--redis-host` | Redis server hostname | `localhost` |
+| `--experiment-name` | Experiment identifier (queue name) | `default` |
+| `--jobs`, `-j` | Number of parallel worker processes | `1` |
+| `--timeout` | Job execution timeout (seconds) | `3600` |
+| `--continuous` | Run continuously (never exit) | False |
+| `--worker-name` | Worker name for identification | hostname |
+| `--log-level` | Logging level (DEBUG/INFO/WARNING/ERROR) | `INFO` |
+| `--no-cpuset` | Disable CPU affinity | False |
 
-**Note**: Start as many workers as you want for parallelism. Each worker will execute one trial at a time.
+**Note**: Start as many workers as you want for parallelism. Each worker process executes one trial at a time.
 
 ### Step 4: Run Experiment (Orchestrator)
 
@@ -500,16 +600,18 @@ services:
     depends_on:
       - valkey
       - orchestrator
-    environment:
-      - REDIS_HOST=valkey
-      - EXPERIMENT_NAME=${EXPERIMENT_NAME:-experiment}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock  # For CRS Docker execution
       - ./experiments:/tmp/experiments
       - ./reports:/tmp/reports
-    command: python -m crsbench.distributed.worker
+      - ./experiment-config.yaml:/config/experiment-config.yaml
+    command: >
+      crsbench worker
+      --experiment-config /config/experiment-config.yaml
+      --jobs 2
+      --continuous
     deploy:
-      replicas: 4  # Run 4 workers in parallel
+      replicas: 4  # Run 4 worker containers in parallel
 ```
 
 Run with:
@@ -527,7 +629,25 @@ docker-compose up
 docker-compose up --scale worker=8
 ```
 
-### Worker Environment Variables
+### Worker Configuration Priority
+
+When using `crsbench worker --experiment-config`, settings are resolved in this order:
+
+1. **CLI arguments** (highest priority) - e.g., `--jobs 8` overrides config
+2. **Experiment config `worker` section** - values from YAML file
+3. **Default values** (lowest priority)
+
+Example:
+```bash
+# Config has jobs: 4, but CLI overrides to 8
+crsbench worker --experiment-config config.yaml --jobs 8
+```
+
+**How path overrides work**: When a worker starts with an experiment config containing path overrides (e.g., `worker.oss_fuzz_path`), the worker command sets internal environment variables (e.g., `CRSBENCH_WORKER_OSS_FUZZ_PATH`). Jobs read these environment variables at execution time and use the overridden paths instead of the orchestrator's paths. This allows workers on different machines to use different filesystem layouts transparently.
+
+### Legacy Environment Variables (Deprecated)
+
+For backward compatibility, workers also support environment variables:
 
 | Variable | Description | Default | Example |
 |----------|-------------|---------|---------|
@@ -535,6 +655,8 @@ docker-compose up --scale worker=8
 | `EXPERIMENT_NAME` | Experiment identifier (for queue naming) | `default` | `my-exp` |
 | `WORKER_TIMEOUT` | Job execution timeout (seconds) | `3600` | `7200` |
 | `LOG_LEVEL` | Logging verbosity | `INFO` | `DEBUG`, `WARNING` |
+
+**Recommended**: Use `--experiment-config` instead of environment variables for better reproducibility.
 
 ### Running Workers on Multiple Machines
 
@@ -555,28 +677,60 @@ crsbench \
 
 **Machine 2 (Workers):**
 ```bash
-# Point to Machine 1's Valkey
-export REDIS_HOST=10.0.1.100  # IP of Machine 1
-export EXPERIMENT_NAME=cluster-exp
+# Copy experiment config to worker machine
+scp experiment-config.yaml worker2:/path/to/config.yaml
 
-# Start 4 workers
-for i in {1..4}; do
-  python -m crsbench.distributed.worker &
-done
+# Start workers with config (redis_host and experiment from config)
+crsbench worker \
+  --experiment-config /path/to/config.yaml \
+  --redis-host 10.0.1.100 \
+  --jobs 4 \
+  --continuous
 ```
 
 **Machine 3 (Workers):**
 ```bash
-export REDIS_HOST=10.0.1.100
-export EXPERIMENT_NAME=cluster-exp
-
-# Start 4 more workers
-for i in {1..4}; do
-  python -m crsbench.distributed.worker &
-done
+# Start workers pointing to Machine 1's Valkey
+crsbench worker \
+  --experiment-config /path/to/config.yaml \
+  --redis-host 10.0.1.100 \
+  --jobs 4 \
+  --continuous
 ```
 
-Now you have 8 workers across 2 machines processing trials in parallel!
+Now you have 8 worker processes across 2 machines processing trials in parallel!
+
+### Worker Path Overrides Example
+
+When workers have different filesystem layouts than the orchestrator:
+
+**Orchestrator config (experiment-config.yaml):**
+```yaml
+experiment: multi-machine-exp
+trials: 5
+
+# Orchestrator paths (main config)
+oss_fuzz_path: /home/orchestrator/oss-fuzz
+benchmarks_root: /home/orchestrator/benchmarks
+experiment_filestore: /shared/nfs/experiments
+report_filestore: /shared/nfs/reports
+
+# Worker overrides (different paths on worker machines)
+worker:
+  jobs: 4
+  redis_host: "10.0.1.100"
+  continuous: true
+
+  # Workers have different local paths
+  oss_fuzz_path: /opt/oss-fuzz
+  benchmarks_root: /data/benchmarks
+
+  # Workers access shared storage via different mount points
+  experiment_filestore: /mnt/shared/experiments
+  report_filestore: /mnt/shared/reports
+```
+
+Workers automatically use their configured paths while the orchestrator uses its own paths. No manual environment variable management needed!
 
 ## Choosing Number of Workers
 
@@ -804,9 +958,12 @@ crsbench \
 # Start Valkey with Docker
 docker run -d --name crsbench-valkey -p 6379:6379 valkey/valkey:8.0-alpine
 
-# Start 2 workers
-python -m crsbench.distributed.worker &
-python -m crsbench.distributed.worker &
+# Start 2 workers using config (in separate terminals or background)
+crsbench worker --experiment-config config.yaml --jobs 1 --continuous &
+crsbench worker --experiment-config config.yaml --jobs 1 --continuous &
+
+# Or start a single worker with 2 parallel jobs
+crsbench worker --experiment-config config.yaml --jobs 2 --continuous &
 
 # Run experiment (6 trials = 2 CRS × 1 benchmark × 3 trials)
 crsbench \

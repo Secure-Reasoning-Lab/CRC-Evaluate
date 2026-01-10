@@ -347,32 +347,83 @@ def run_crs_trial(
         # Get snapshot configuration
         snapshot_period = config.snapshot_period
 
-        # Get allocated_cpus from job metadata
+        # Get allocated_cpus and memory_limit from job metadata
         allocated_cpus = None
+        allocated_memory = None
         try:
             import rq
 
             job = rq.get_current_job()
             if job:
                 allocated_cpus = job.meta.get("allocated_cpus")
+                allocated_memory = job.meta.get("memory_limit")
                 if allocated_cpus:
                     logger.info(f"Job assigned CPUs: {allocated_cpus}")
+                if allocated_memory:
+                    logger.info(f"Job assigned memory: {allocated_memory}")
         except Exception as e:
-            logger.warning(f"Failed to get allocated_cpus from job metadata: {e}")
+            logger.warning(f"Failed to get allocated resources from job metadata: {e}")
+
+        # Helper function to get worker override from environment variable
+        def get_worker_override(field: str) -> Optional[str]:
+            """Get worker override from environment variable."""
+            return os.environ.get(f"CRSBENCH_WORKER_{field.upper()}")
 
         # Initialize CRS executor
         # Get required paths from config
         # Resolve to absolute paths to avoid issues with relative paths
-        oss_fuzz_path = config.oss_fuzz_path.resolve()
+        # Apply worker overrides if available (via environment variables)
+        oss_fuzz_override = get_worker_override("oss_fuzz_path")
+        oss_fuzz_path = (
+            Path(oss_fuzz_override).resolve()
+            if oss_fuzz_override
+            else config.oss_fuzz_path.resolve()
+        )
+
+        registry_override = get_worker_override("registry_dir")
         registry_dir = (
-            config.registry_dir or (Path.cwd() / "crses" / "registry")
-        ).resolve()
+            Path(registry_override).resolve()
+            if registry_override
+            else (config.registry_dir or (Path.cwd() / "crses" / "registry")).resolve()
+        )
+
+        benchmarks_override = get_worker_override("benchmarks_root")
         benchmarks_root = (
-            config.benchmarks_root or (Path.cwd() / "benchmarks")
-        ).resolve()
+            Path(benchmarks_override).resolve()
+            if benchmarks_override
+            else (config.benchmarks_root or (Path.cwd() / "benchmarks")).resolve()
+        )
+
+        crs_configs_override = get_worker_override("crs_configs_dir")
         crs_configs_dir = (
-            config.crs_configs_dir or (Path.cwd() / "crses" / "configs")
-        ).resolve()
+            Path(crs_configs_override).resolve()
+            if crs_configs_override
+            else (
+                config.crs_configs_dir or (Path.cwd() / "crses" / "configs")
+            ).resolve()
+        )
+
+        # Also apply overrides to filestore paths (used throughout config)
+        experiment_filestore_override = get_worker_override("experiment_filestore")
+        if experiment_filestore_override:
+            config.experiment_filestore = Path(experiment_filestore_override).resolve()
+            logger.info(
+                f"Worker override applied: experiment_filestore = {config.experiment_filestore}"
+            )
+
+        report_filestore_override = get_worker_override("report_filestore")
+        if report_filestore_override:
+            config.report_filestore = Path(report_filestore_override).resolve()
+            logger.info(
+                f"Worker override applied: report_filestore = {config.report_filestore}"
+            )
+
+        benchmark_suites_override = get_worker_override("benchmark_suites_root")
+        if benchmark_suites_override:
+            config.benchmark_suites_root = Path(benchmark_suites_override).resolve()
+            logger.info(
+                f"Worker override applied: benchmark_suites_root = {config.benchmark_suites_root}"
+            )
 
         # Resolve CRS config name to registry name
         registry_name = get_crs_registry_name(crs, crs_configs_dir)
@@ -418,6 +469,7 @@ def run_crs_trial(
                 "project_image_prefix": config.project_image_prefix,
                 "mode": mode,
                 "allocated_cpus": allocated_cpus,
+                "allocated_memory": allocated_memory,
             }
         )
 

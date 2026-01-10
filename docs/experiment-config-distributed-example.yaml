@@ -1,0 +1,225 @@
+# =============================================================================
+# CRSBench Experiment Configuration with Resources and Distributed Workers
+# =============================================================================
+#
+# This example demonstrates advanced resource management and distributed
+# worker configuration for running CRSBench experiments at scale.
+#
+# Use this configuration when:
+#   - Running experiments on multiple machines
+#   - Need to control resource allocation per trial
+#   - Using LLM-based CRS systems with API rate limits
+#   - Managing cloud costs for LLM API usage
+#
+# =============================================================================
+
+# ===== Experiment Identity =====
+
+experiment: "distributed-experiment"
+
+# ===== Execution Configuration =====
+
+trials: 3
+mode: all  # Run both delta and full modes
+max_total_time: 86400  # 24 hours
+
+# ===== Timeout Configuration =====
+
+build_timeout: 3600    # 1 hour for building CRS
+run_timeout: 14400     # 4 hours for CRS execution
+verify_timeout: 7200   # 2 hours for verification
+
+# ===== CRS and Benchmark Selection =====
+
+crses:
+  - atlantis-c
+  - atlantis-multilang
+  - ensemble-c
+
+# Using benchmark suite for consistent evaluation
+benchmark_suite: crsbench-afc-c
+
+# ===== Difficulty Control =====
+
+difficulty_level: 3
+
+# ===== Hints Configuration =====
+
+hints_enabled: true
+hint_sarif_level: 3  # Function-level hints
+
+# ===== LiteLLM Configuration =====
+
+# LiteLLM mode: 'passthrough' or 'proxy'
+# - passthrough: Uses external LiteLLM service
+# - proxy: Uses self-hosted LiteLLM proxy
+litellm_mode: passthrough
+
+# Enable LLM usage tracking via LiteLLM Virtual Keys
+# Generates llm-usage.json with per-trial cost and token metrics
+llm_tracking_enabled: true
+
+# ===== Monitoring & Snapshots =====
+
+snapshot_period: 600  # 10 minutes for more frequent progress tracking
+
+# =============================================================================
+# ===== Resource Management =====
+# =============================================================================
+#
+# This section controls compute resources allocated to each trial and manages
+# API rate limits for LLM-based CRS systems.
+
+resources:
+  # Allocate 8 CPU cores per trial
+  # Recommended: Match to the number of parallel fuzzing processes in your CRS
+  cores_per_trial: 8
+
+  # Allocate 16GB memory per trial
+  # Recommended: At least 2GB per core for fuzzing workloads
+  memory_per_trial: "16G"
+
+  # LiteLLM resource configuration
+  # Essential for managing costs and avoiding API rate limits
+  litellm:
+    # Allow up to 50 concurrent LLM API requests
+    # Prevents overwhelming the LLM service with parallel requests
+    # Recommended: Start conservative (10-20) and increase if needed
+    max_concurrent_requests: 50
+
+    # Set cost budget to $500 USD
+    # Experiment will be monitored against this budget
+    # Recommended: Monitor costs closely in initial runs
+    cost_budget: 500.0
+
+# =============================================================================
+# ===== Distributed Worker Configuration =====
+# =============================================================================
+#
+# This section configures worker nodes in a distributed CRSBench deployment.
+# Workers pull jobs from Redis queue and execute trials in parallel.
+#
+# Architecture:
+#   - Main orchestrator: Pushes jobs to Redis queue, monitors progress
+#   - Worker nodes: Pull jobs from Redis, execute trials, report results
+#   - Redis server: Coordinates job distribution and result aggregation
+
+worker:
+  # Number of parallel jobs each worker handles
+  # Recommended: Set to number of CPU cores on worker machine divided by cores_per_trial
+  # Example: 32-core machine with 8 cores per trial = 4 jobs
+  jobs: 4
+
+  # Redis server hostname for distributed coordination
+  # All workers and the orchestrator must connect to this Redis instance
+  # Ensure Redis is accessible from all worker machines
+  redis_host: "redis.distributed.example.com"
+
+  # Run workers continuously
+  # Workers will keep pulling jobs from the queue until manually stopped
+  # Set to false for one-shot execution (process one job then exit)
+  continuous: true
+
+  # OPTIONAL: Worker-specific filestore paths
+  # Uncomment if workers mount shared storage at different paths than orchestrator
+  # Common scenario: Workers use local SSDs while orchestrator uses network storage
+  #
+  # Example 1: Workers use NFS mount at different path
+  # experiment_filestore: /mnt/nfs/shared/experiment-data
+  # report_filestore: /mnt/nfs/shared/reports
+  #
+  # Example 2: Workers use local SSD for performance
+  # experiment_filestore: /local/ssd/experiment-data
+  # report_filestore: /local/ssd/reports
+  #
+  # Example 3: Workers in cloud with different mount points
+  # experiment_filestore: /mnt/gcs-fuse/experiment-data
+  # report_filestore: /mnt/gcs-fuse/reports
+  #
+  # OPTIONAL: Worker-specific path overrides
+  # Uncomment if workers have different paths for these directories
+  #
+  # Override oss-fuzz path (if workers have oss-fuzz at different location)
+  # oss_fuzz_path: /worker/oss-fuzz
+  #
+  # Override registry directory (for CRS type detection)
+  # registry_dir: /worker/crses/registry
+  #
+  # Override CRS configs directory (for CRS configurations)
+  # crs_configs_dir: /worker/crses/configs
+  #
+  # Override benchmarks root (if workers have benchmarks at different location)
+  # benchmarks_root: /worker/benchmarks
+  #
+  # Override benchmark suites root (for benchmark suite YAML files)
+  # benchmark_suites_root: /worker/benchmark-suites
+
+# =============================================================================
+# ===== Storage Configuration =====
+# =============================================================================
+#
+# Main storage paths (used by orchestrator and workers if not overridden)
+
+# Shared storage accessible by all workers
+# Can be network storage (NFS, GCS, S3) or local path if workers use overrides
+experiment_filestore: /shared/experiment-data
+
+# Report output location
+# Typically on network storage for centralized access
+report_filestore: /shared/reports
+
+# =============================================================================
+# ===== Additional Configuration =====
+# =============================================================================
+
+# Coverage collection and early stopping
+coverage_enabled: true
+coverage_saturation_time: 21600  # 6 hours
+coverage_early_stop: false  # Detect saturation but don't stop
+
+# POV early stopping
+# Stop trial early if all known vulnerabilities are found
+pov_early_stop: true
+
+# Worker parallelism
+build_workers: 8   # Parallel workers for building variants
+verify_workers: 8  # Parallel workers for POV verification
+
+# =============================================================================
+# ===== Advanced Configuration (Optional) =====
+# =============================================================================
+
+# Custom root directory for benchmark projects
+# Default: ./benchmarks
+# Uncomment if benchmarks are stored in a non-standard location
+# benchmarks_root: /custom/path/to/benchmarks
+
+# Custom root directory for benchmark suite YAML files
+# Default: ./benchmark-suites
+# Uncomment if benchmark suites are stored in a non-standard location
+# benchmark_suites_root: /custom/path/to/benchmark-suites
+
+# =============================================================================
+# Deployment Notes:
+# =============================================================================
+#
+# 1. Setup Redis server:
+#    docker run -d -p 6379:6379 redis:latest
+#
+# 2. Start orchestrator (dispatches jobs):
+#    crsbench --config this-file.yaml
+#
+# 3. Start workers on each machine:
+#    crsbench worker --config this-file.yaml --workers 4
+#
+# 4. Monitor progress:
+#    - Check Redis queue: redis-cli LLEN crsbench:experiment-name:queue
+#    - View worker logs: tail -f /var/log/crsbench-worker.log
+#    - Track costs: Monitor litellm.cost_budget in real-time
+#
+# 5. Scale workers dynamically:
+#    - Add more worker machines as needed
+#    - Workers auto-register and pull jobs from queue
+#    - No configuration changes needed on orchestrator
+#
+# =============================================================================

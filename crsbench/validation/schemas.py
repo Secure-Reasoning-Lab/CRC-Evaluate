@@ -564,6 +564,70 @@ class ValidationMetadata(BaseModel):
     )
 
 
+class LitellmResourceConfig(BaseModel):
+    """LiteLLM resource configuration."""
+
+    max_concurrent_requests: int = Field(
+        default=10, ge=1, description="Maximum concurrent requests to LiteLLM"
+    )
+    cost_budget: float = Field(default=100.0, ge=0, description="Cost budget in USD")
+
+
+class ResourceConfig(BaseModel):
+    """Resource allocation configuration for trials."""
+
+    cores_per_trial: int = Field(
+        default=4, ge=1, description="Number of CPU cores allocated per trial"
+    )
+    memory_per_trial: str = Field(
+        default="8G", description="Memory allocation per trial (e.g., '8G', '16G')"
+    )
+    litellm: Optional[LitellmResourceConfig] = Field(
+        default=None, description="LiteLLM resource configuration"
+    )
+
+
+class WorkerConfig(BaseModel):
+    """Distributed worker configuration."""
+
+    jobs: int = Field(default=4, ge=1, description="Number of parallel jobs per worker")
+    redis_host: str = Field(
+        default="localhost", description="Redis server hostname or IP for workers"
+    )
+    continuous: bool = Field(
+        default=True,
+        description="Whether workers should run continuously or exit after one job",
+    )
+    experiment_filestore: Optional[Path] = Field(
+        default=None,
+        description="Override experiment data storage path for workers on different machines",
+    )
+    report_filestore: Optional[Path] = Field(
+        default=None,
+        description="Override report storage path for workers on different machines",
+    )
+    oss_fuzz_path: Optional[Path] = Field(
+        default=None,
+        description="Override oss-fuzz path for workers on different machines",
+    )
+    registry_dir: Optional[Path] = Field(
+        default=None,
+        description="Override registry directory for workers on different machines",
+    )
+    crs_configs_dir: Optional[Path] = Field(
+        default=None,
+        description="Override CRS configs directory for workers on different machines",
+    )
+    benchmarks_root: Optional[Path] = Field(
+        default=None,
+        description="Override benchmarks root directory for workers on different machines",
+    )
+    benchmark_suites_root: Optional[Path] = Field(
+        default=None,
+        description="Override benchmark suites root directory for workers on different machines",
+    )
+
+
 class ExperimentConfig(BaseModel):
     """Experiment configuration schema."""
 
@@ -619,7 +683,11 @@ class ExperimentConfig(BaseModel):
     )
     benchmark_suite: Optional[str] = Field(
         default=None,
-        description="Benchmark suite name to load from benchmark-suites/ (mutually exclusive with benchmarks)",
+        description="Benchmark suite name to load (mutually exclusive with benchmarks)",
+    )
+    benchmark_suites_root: Optional[Path] = Field(
+        default=None,
+        description="Root directory containing benchmark suite YAML files (defaults to ./benchmark-suites)",
     )
     snapshot_period: Optional[int] = Field(
         default=900,
@@ -710,6 +778,12 @@ class ExperimentConfig(BaseModel):
         description="Skip harnesses without CPVs for bug-finding CRS (default: True). "
         "Bug-fixing CRS always skips harnesses without CPVs regardless of this setting.",
     )
+    resources: Optional[ResourceConfig] = Field(
+        default=None, description="Resource allocation configuration for trials"
+    )
+    worker: Optional[WorkerConfig] = Field(
+        default=None, description="Distributed worker configuration"
+    )
 
     @field_validator("experiment")
     @classmethod
@@ -768,6 +842,19 @@ class ExperimentConfig(BaseModel):
                 raise ValueError(f"Benchmarks root must be a directory: {v}")
             return v.absolute()
         return None  # Use default ./benchmarks if not specified
+
+    @field_validator("benchmark_suites_root")
+    @classmethod
+    def validate_benchmark_suites_root(cls, v):
+        """Validate benchmark suites root directory."""
+        if v:
+            # Pydantic already converts str to Path
+            if not v.exists():
+                raise ValueError(f"Benchmark suites root directory does not exist: {v}")
+            if not v.is_dir():
+                raise ValueError(f"Benchmark suites root must be a directory: {v}")
+            return v.absolute()
+        return None  # Use default ./benchmark-suites if not specified
 
     @field_validator("benchmarks")
     @classmethod
@@ -915,13 +1002,8 @@ class ExperimentConfig(BaseModel):
             )
         return self
 
-    def get_benchmark_list(
-        self, benchmark_suites_dir: str = "benchmark-suites"
-    ) -> List[str]:
+    def get_benchmark_list(self) -> List[str]:
         """Get the list of benchmarks, resolving benchmark_suite if necessary.
-
-        Args:
-            benchmark_suites_dir: Directory containing benchmark suite YAML files
 
         Returns:
             List of benchmark IDs
@@ -944,8 +1026,13 @@ class ExperimentConfig(BaseModel):
 
             import yaml
 
+            # Use configured benchmark suites root or default
+            benchmark_suites_root = Path(
+                self.benchmark_suites_root or "benchmark-suites"
+            )
+
             # Construct path to suite file
-            suite_path = Path(benchmark_suites_dir) / f"{self.benchmark_suite}.yaml"
+            suite_path = benchmark_suites_root / f"{self.benchmark_suite}.yaml"
 
             if not suite_path.exists():
                 raise ValueError(f"Benchmark suite file not found: {suite_path}")
@@ -962,13 +1049,8 @@ class ExperimentConfig(BaseModel):
         # Should never reach here due to __init__ validation
         raise ValueError("No benchmark source specified")
 
-    def get_benchmark_entries(
-        self, benchmark_suites_dir: str = "benchmark-suites"
-    ) -> List[BenchmarkEntry]:
+    def get_benchmark_entries(self) -> List[BenchmarkEntry]:
         """Get the list of benchmark entries with harness information.
-
-        Args:
-            benchmark_suites_dir: Directory containing benchmark suite YAML files
 
         Returns:
             List of BenchmarkEntry objects with name and optional harnesses
@@ -993,8 +1075,13 @@ class ExperimentConfig(BaseModel):
 
             import yaml
 
+            # Use configured benchmark suites root or default
+            benchmark_suites_root = Path(
+                self.benchmark_suites_root or "benchmark-suites"
+            )
+
             # Construct path to suite file
-            suite_path = Path(benchmark_suites_dir) / f"{self.benchmark_suite}.yaml"
+            suite_path = benchmark_suites_root / f"{self.benchmark_suite}.yaml"
 
             if not suite_path.exists():
                 raise ValueError(f"Benchmark suite file not found: {suite_path}")

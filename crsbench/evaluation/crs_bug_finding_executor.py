@@ -174,6 +174,11 @@ class CRSBugFindingExecutor(CRSExecutor):
         if allocated_cpus:
             self._update_trial_cpuset(trial_crs_config_dir, allocated_cpus)
 
+        # Update trial's config-resource.yaml with allocated memory
+        allocated_memory = self.config.get("allocated_memory")
+        if allocated_memory:
+            self._update_trial_memory(trial_crs_config_dir, allocated_memory)
+
         # Copy ALL registry entries for this config
         # A config may reference multiple CRS entries in the registry
         from crsbench.utils.crs_helper import get_all_crs_registry_names
@@ -234,6 +239,34 @@ class CRSBugFindingExecutor(CRSExecutor):
                 yaml.dump(resource_config, f)
 
             logger.info(f"Updated trial config-resource.yaml with cpuset: {cpuset_str}")
+        else:
+            logger.warning(f"No workers section in {resource_config_path}")
+
+    def _update_trial_memory(self, trial_crs_config_dir: Path, memory: str) -> None:
+        """Update trial's config-resource.yaml with allocated memory.
+
+        Args:
+            trial_crs_config_dir: Path to trial's CRS config directory
+            memory: Memory string (e.g., "16G")
+        """
+        import yaml
+
+        resource_config_path = trial_crs_config_dir / "config-resource.yaml"
+        if not resource_config_path.exists():
+            logger.warning(f"Resource config not found: {resource_config_path}")
+            return
+
+        with resource_config_path.open() as f:
+            resource_config = yaml.safe_load(f)
+
+        if "workers" in resource_config and resource_config["workers"]:
+            for worker_name in resource_config["workers"]:
+                resource_config["workers"][worker_name]["memory"] = memory
+
+            with resource_config_path.open("w") as f:
+                yaml.dump(resource_config, f)
+
+            logger.info(f"Updated trial config-resource.yaml with memory: {memory}")
         else:
             logger.warning(f"No workers section in {resource_config_path}")
 

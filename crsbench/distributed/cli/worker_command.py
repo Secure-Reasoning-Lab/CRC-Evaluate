@@ -5,6 +5,7 @@ distributed workers that process jobs from the Redis queue.
 """
 
 import argparse
+import os
 import sys
 
 
@@ -32,6 +33,14 @@ Examples:
   # Run worker with custom timeout
   %(prog)s --timeout 7200 --experiment-name long-running-exp
         """,
+    )
+
+    worker_parser.add_argument(
+        "--experiment-config",
+        type=str,
+        default=None,
+        metavar="CONFIG_FILE",
+        help="Path to experiment configuration YAML file (optional, provides defaults from 'worker' section)",
     )
 
     worker_parser.add_argument(
@@ -108,6 +117,8 @@ def run_worker(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success, non-zero for failure)
     """
+    from pathlib import Path
+
     from crsbench.distributed.worker import main as worker_main
     from crsbench.distributed.worker import run_worker_continuous
     from crsbench.utils.logger import configure_logger
@@ -115,32 +126,89 @@ def run_worker(args: argparse.Namespace) -> int:
     # Configure logging
     configure_logger(level=args.log_level, sink=sys.stdout)
 
+    # Load experiment config if provided
+    worker_config = None
+    experiment_name_from_config = None
+    if args.experiment_config:
+        from crsbench.run_experiment import load_experiment_config
+        from crsbench.utils.logger import get_logger
+
+        logger = get_logger(__name__)
+        config_path = Path(args.experiment_config)
+        logger.info(f"Loading experiment config from: {config_path}")
+        config = load_experiment_config(config_path)
+        worker_config = config.worker
+        experiment_name_from_config = config.experiment
+        if worker_config:
+            logger.info("Using worker configuration from experiment config")
+
+    # Resolve settings: CLI > config > defaults
+    # Helper to get value with priority
+    def resolve(cli_val, config_val, cli_default):
+        """Resolve value with priority: CLI > config > default."""
+        if cli_val != cli_default:  # CLI was explicitly set
+            return cli_val
+        if config_val is not None:
+            return config_val
+        return cli_val  # Use CLI default
+
+    redis_host = resolve(
+        args.redis_host,
+        worker_config.redis_host if worker_config else None,
+        "localhost",
+    )
+    num_workers = resolve(args.jobs, worker_config.jobs if worker_config else None, 1)
+    continuous = args.continuous or (
+        worker_config.continuous if worker_config else False
+    )
+    experiment_name = resolve(
+        args.experiment_name, experiment_name_from_config, "default"
+    )
+
+    # Set worker override environment variables
+    if worker_config:
+        override_fields = [
+            "oss_fuzz_path",
+            "registry_dir",
+            "crs_configs_dir",
+            "benchmarks_root",
+            "benchmark_suites_root",
+            "experiment_filestore",
+            "report_filestore",
+        ]
+        for field in override_fields:
+            value = getattr(worker_config, field, None)
+            if value is not None:
+                env_var = f"CRSBENCH_WORKER_{field.upper()}"
+                os.environ[env_var] = str(value)
+                logger.info(f"Worker override: {field} = {value}")
+
     # Validate --no-cpuset with multiple workers
-    if getattr(args, "no_cpuset", False) and args.jobs > 1:
+    if getattr(args, "no_cpuset", False) and num_workers > 1:
         raise ValueError("--no-cpuset is not supported with multiple workers (-j > 1)")
 
     # cpuset is enabled by default, disabled with --no-cpuset
     use_cpuset = not getattr(args, "no_cpuset", False)
 
     # TODO: fix timeout too short
-    # Prepare worker arguments
+    # Prepare worker arguments with resolved values
     worker_args = {
-        "redis_host": args.redis_host,
-        "experiment_name": args.experiment_name,
+        "redis_host": redis_host,
+        "experiment_name": experiment_name,
         "timeout": args.timeout,
         "worker_name": args.worker_name,
-        "num_workers": args.jobs,
+        "num_workers": num_workers,
     }
 
     try:
-        if args.continuous:
-            # Run in continuous mode
+        if continuous:
+            # Run in continuous mode (use resolved values)
             run_worker_continuous(
-                redis_host=args.redis_host,
-                experiment_name=args.experiment_name,
+                redis_host=redis_host,
+                experiment_name=experiment_name,
                 _timeout=args.timeout,
                 worker_name=args.worker_name,
-                num_workers=args.jobs,
+                num_workers=num_workers,
                 use_cpuset=use_cpuset,
             )
             return 0
