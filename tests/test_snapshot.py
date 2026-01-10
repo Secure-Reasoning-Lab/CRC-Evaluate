@@ -33,12 +33,12 @@ class TestSnapshotMetadata:
         assert metadata.snapshot_period == 900
 
     def test_to_dict(self):
-        """Test converting metadata to dict."""
+        """Test converting metadata to dict using Pydantic model_dump."""
         metadata = SnapshotMetadata(
             cycle=2, timestamp=1234567890.0, elapsed_time=1800.0, snapshot_period=600
         )
 
-        data = metadata.to_dict()
+        data = metadata.model_dump()
 
         assert data["cycle"] == 2
         assert data["timestamp"] == 1234567890.0
@@ -46,7 +46,7 @@ class TestSnapshotMetadata:
         assert data["snapshot_period"] == 600
 
     def test_from_dict(self):
-        """Test creating metadata from dict."""
+        """Test creating metadata from dict using Pydantic model_validate."""
         data = {
             "cycle": 3,
             "timestamp": 1234567890.0,
@@ -54,7 +54,7 @@ class TestSnapshotMetadata:
             "snapshot_period": 900,
         }
 
-        metadata = SnapshotMetadata.from_dict(data)
+        metadata = SnapshotMetadata.model_validate(data)
 
         assert metadata.cycle == 3
         assert metadata.timestamp == 1234567890.0
@@ -62,22 +62,22 @@ class TestSnapshotMetadata:
         assert metadata.snapshot_period == 900
 
     def test_to_json(self):
-        """Test JSON serialization."""
+        """Test JSON serialization using Pydantic model_dump_json."""
         metadata = SnapshotMetadata(
             cycle=1, timestamp=1234567890.0, elapsed_time=900.0, snapshot_period=900
         )
 
-        json_str = metadata.to_json()
+        json_str = metadata.model_dump_json()
         data = json.loads(json_str)
 
         assert data["cycle"] == 1
         assert data["timestamp"] == 1234567890.0
 
     def test_from_json(self):
-        """Test JSON deserialization."""
+        """Test JSON deserialization using Pydantic model_validate_json."""
         json_str = '{"cycle": 4, "timestamp": 1234567890.0, "elapsed_time": 3600.0, "snapshot_period": 900}'
 
-        metadata = SnapshotMetadata.from_json(json_str)
+        metadata = SnapshotMetadata.model_validate_json(json_str)
 
         assert metadata.cycle == 4
         assert metadata.elapsed_time == 3600.0
@@ -166,7 +166,7 @@ class TestSnapshotArchive:
             elapsed_time=cycle * 900.0,
             snapshot_period=900,
         )
-        (content_dir / "metadata.json").write_text(metadata.to_json())
+        (content_dir / "metadata.json").write_text(metadata.model_dump_json())
 
         # Create some test files
         (content_dir / "config.yaml").write_text("experiment: test\n")

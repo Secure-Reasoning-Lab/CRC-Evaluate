@@ -10,15 +10,18 @@ Snapshots enable:
 - Partial result recovery from interrupted trials
 """
 
-import json
 import tarfile
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from pydantic import BaseModel
 
 from crsbench.utils.logger import get_logger
+from crsbench.validation.schemas import SnapshotMetadata
+
+# Re-export SnapshotMetadata for backward compatibility
+__all__ = ["Snapshot", "SnapshotMetadata", "SnapshotSummary"]
 
 logger = get_logger(__name__)
 
@@ -71,47 +74,8 @@ class Snapshot(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
 
-@dataclass
-class SnapshotMetadata:
-    """Metadata for a single snapshot.
-
-    Attributes:
-        cycle: Snapshot cycle number (1-indexed)
-        timestamp: Unix timestamp when snapshot was captured
-        elapsed_time: Seconds elapsed since trial start
-        snapshot_period: Configured snapshot interval in seconds
-        running_elapsed_time: Seconds elapsed since CRS run started (None if CRS hasn't started)
-    """
-
-    cycle: int
-    timestamp: float
-    elapsed_time: float
-    snapshot_period: int
-    running_elapsed_time: Optional[float] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "SnapshotMetadata":
-        """Create from dictionary loaded from JSON."""
-        return cls(
-            cycle=data["cycle"],
-            timestamp=data["timestamp"],
-            elapsed_time=data["elapsed_time"],
-            snapshot_period=data["snapshot_period"],
-            running_elapsed_time=data.get("running_elapsed_time"),
-        )
-
-    def to_json(self) -> str:
-        """Serialize to JSON string."""
-        return json.dumps(self.to_dict(), indent=2)
-
-    @classmethod
-    def from_json(cls, json_str: str) -> "SnapshotMetadata":
-        """Deserialize from JSON string."""
-        return cls.from_dict(json.loads(json_str))
+# SnapshotMetadata is imported from crsbench.schemas
+# It's a Pydantic model shared between evaluation and reporting modules
 
 
 @dataclass
@@ -239,7 +203,7 @@ def load_snapshot_metadata(archive_path: Path) -> Optional[SnapshotMetadata]:
                 metadata_file = tar.extractfile(metadata_member)
                 if metadata_file:
                     metadata_json = metadata_file.read().decode("utf-8")
-                    return SnapshotMetadata.from_json(metadata_json)
+                    return SnapshotMetadata.model_validate_json(metadata_json)
             except KeyError:
                 logger.warning(f"No metadata.json in snapshot: {archive_path}")
                 return None
