@@ -19,10 +19,14 @@ from crsbench.evaluation.results import CRSType, TrialMetadata, TrialResult
 from crsbench.evaluation.runner import BenchmarkRunner
 from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.logger import get_logger
-from crsbench.validation.schemas import ExperimentConfig
 
 # Import file-based metadata schema (distinct from evaluation.results.TrialMetadata)
-from crsbench.validation.schemas import SourceInfo, TrialConfig, TrialMode
+from crsbench.validation.schemas import (
+    ExperimentConfig,
+    SourceInfo,
+    TrialConfig,
+    TrialMode,
+)
 from crsbench.validation.schemas import TrialMetadata as TrialMetadataFile
 
 logger = get_logger(__name__)
@@ -397,8 +401,8 @@ def run_crs_trial(
             mode=trial_mode,
             source=SourceInfo(path=str(benchmark_path)),
             config=TrialConfig(
-                hints_enabled=config.get("hints_enabled", False),
-                hints_corpus_level=config.get("hint_corpus_level"),
+                hints_enabled=config.hints_enabled,
+                hints_corpus_level=config.hint_corpus_level,
             ),
         )
         metadata_file = trial_output_dir / "metadata.json"
