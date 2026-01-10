@@ -1,6 +1,6 @@
 workers:
   local:
-    cpuset: "0-16"
+    cpuset: "0-15"
     memory: "32G"
 
 llm:
