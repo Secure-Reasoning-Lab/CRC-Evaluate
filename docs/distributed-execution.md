@@ -252,13 +252,36 @@ worker:
   # Run continuously (keep processing jobs)
   continuous: true
 
-  # Optional: Override filestore paths for workers
-  # Use when workers mount shared storage at different paths
+  # Optional: Override paths for workers on different machines
+  # Use when workers have different filesystem layouts than orchestrator
+
+  # Storage paths
   experiment_filestore: /mnt/nfs/experiment-data
   report_filestore: /mnt/nfs/reports
+
+  # CRS and benchmark paths
+  oss_fuzz_path: /worker/oss-fuzz
+  registry_dir: /worker/crses/registry
+  crs_configs_dir: /worker/crses/configs
+  benchmarks_root: /worker/benchmarks
+  benchmark_suites_root: /worker/benchmark-suites
 ```
 
-**Worker filestore overrides**: When workers run on different machines with different mount points, use `experiment_filestore` and `report_filestore` in the worker section to specify worker-specific paths.
+**Worker path overrides**: When workers run on different machines with different filesystem layouts, use the worker section to override paths. This is common when:
+- Workers mount shared storage at different paths than the orchestrator
+- Workers use local SSDs instead of network storage
+- Workers are in different environments (e.g., containers vs host machines)
+
+**Available path overrides**:
+- `experiment_filestore` - Experiment data storage location
+- `report_filestore` - Report output location
+- `oss_fuzz_path` - OSS-Fuzz installation directory
+- `registry_dir` - CRS registry directory (for CRS type detection)
+- `crs_configs_dir` - CRS configuration directory
+- `benchmarks_root` - Benchmark projects root directory
+- `benchmark_suites_root` - Benchmark suite YAML files directory
+
+All overrides are optional. If not specified, workers use the main experiment config values.
 
 See [experiment-config-distributed-example.yaml](experiment-config-distributed-example.yaml) for a complete production configuration.
 
@@ -620,6 +643,8 @@ Example:
 crsbench worker --experiment-config config.yaml --jobs 8
 ```
 
+**How path overrides work**: When a worker starts with an experiment config containing path overrides (e.g., `worker.oss_fuzz_path`), the worker command sets internal environment variables (e.g., `CRSBENCH_WORKER_OSS_FUZZ_PATH`). Jobs read these environment variables at execution time and use the overridden paths instead of the orchestrator's paths. This allows workers on different machines to use different filesystem layouts transparently.
+
 ### Legacy Environment Variables (Deprecated)
 
 For backward compatibility, workers also support environment variables:
@@ -674,6 +699,38 @@ crsbench worker \
 ```
 
 Now you have 8 worker processes across 2 machines processing trials in parallel!
+
+### Worker Path Overrides Example
+
+When workers have different filesystem layouts than the orchestrator:
+
+**Orchestrator config (experiment-config.yaml):**
+```yaml
+experiment: multi-machine-exp
+trials: 5
+
+# Orchestrator paths (main config)
+oss_fuzz_path: /home/orchestrator/oss-fuzz
+benchmarks_root: /home/orchestrator/benchmarks
+experiment_filestore: /shared/nfs/experiments
+report_filestore: /shared/nfs/reports
+
+# Worker overrides (different paths on worker machines)
+worker:
+  jobs: 4
+  redis_host: "10.0.1.100"
+  continuous: true
+
+  # Workers have different local paths
+  oss_fuzz_path: /opt/oss-fuzz
+  benchmarks_root: /data/benchmarks
+
+  # Workers access shared storage via different mount points
+  experiment_filestore: /mnt/shared/experiments
+  report_filestore: /mnt/shared/reports
+```
+
+Workers automatically use their configured paths while the orchestrator uses its own paths. No manual environment variable management needed!
 
 ## Choosing Number of Workers
 

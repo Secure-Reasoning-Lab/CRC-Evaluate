@@ -5,6 +5,7 @@ distributed workers that process jobs from the Redis queue.
 """
 
 import argparse
+import os
 import sys
 
 
@@ -163,6 +164,24 @@ def run_worker(args: argparse.Namespace) -> int:
     experiment_name = resolve(
         args.experiment_name, experiment_name_from_config, "default"
     )
+
+    # Set worker override environment variables
+    if worker_config:
+        override_fields = [
+            "oss_fuzz_path",
+            "registry_dir",
+            "crs_configs_dir",
+            "benchmarks_root",
+            "benchmark_suites_root",
+            "experiment_filestore",
+            "report_filestore",
+        ]
+        for field in override_fields:
+            value = getattr(worker_config, field, None)
+            if value is not None:
+                env_var = f"CRSBENCH_WORKER_{field.upper()}"
+                os.environ[env_var] = str(value)
+                logger.info(f"Worker override: {field} = {value}")
 
     # Validate --no-cpuset with multiple workers
     if getattr(args, "no_cpuset", False) and num_workers > 1:

@@ -606,6 +606,26 @@ class WorkerConfig(BaseModel):
         default=None,
         description="Override report storage path for workers on different machines",
     )
+    oss_fuzz_path: Optional[Path] = Field(
+        default=None,
+        description="Override oss-fuzz path for workers on different machines",
+    )
+    registry_dir: Optional[Path] = Field(
+        default=None,
+        description="Override registry directory for workers on different machines",
+    )
+    crs_configs_dir: Optional[Path] = Field(
+        default=None,
+        description="Override CRS configs directory for workers on different machines",
+    )
+    benchmarks_root: Optional[Path] = Field(
+        default=None,
+        description="Override benchmarks root directory for workers on different machines",
+    )
+    benchmark_suites_root: Optional[Path] = Field(
+        default=None,
+        description="Override benchmark suites root directory for workers on different machines",
+    )
 
 
 class ExperimentConfig(BaseModel):

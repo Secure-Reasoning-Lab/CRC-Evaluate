@@ -135,6 +135,24 @@ worker:
   # Example 3: Workers in cloud with different mount points
   # experiment_filestore: /mnt/gcs-fuse/experiment-data
   # report_filestore: /mnt/gcs-fuse/reports
+  #
+  # OPTIONAL: Worker-specific path overrides
+  # Uncomment if workers have different paths for these directories
+  #
+  # Override oss-fuzz path (if workers have oss-fuzz at different location)
+  # oss_fuzz_path: /worker/oss-fuzz
+  #
+  # Override registry directory (for CRS type detection)
+  # registry_dir: /worker/crses/registry
+  #
+  # Override CRS configs directory (for CRS configurations)
+  # crs_configs_dir: /worker/crses/configs
+  #
+  # Override benchmarks root (if workers have benchmarks at different location)
+  # benchmarks_root: /worker/benchmarks
+  #
+  # Override benchmark suites root (for benchmark suite YAML files)
+  # benchmark_suites_root: /worker/benchmark-suites
 
 # =============================================================================
 # ===== Storage Configuration =====
