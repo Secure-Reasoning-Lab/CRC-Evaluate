@@ -187,8 +187,17 @@ def collect_benchmark_info(benchmark_dir: Path) -> BenchmarkInfo | None:
                 patches_dir = cpv_dir / "patches"
                 num_patches = count_files_in_dir(patches_dir, "*.diff")
 
-                # Check vuln.yaml existence
-                has_vuln_yaml = (cpv_dir / "vuln.yaml").exists()
+                # Check vuln.yaml existence and read CWEs
+                vuln_yaml_path = cpv_dir / "vuln.yaml"
+                has_vuln_yaml = vuln_yaml_path.exists()
+                cwes: list[str] = []
+                if has_vuln_yaml:
+                    try:
+                        with vuln_yaml_path.open() as vf:
+                            vuln_data = yaml.safe_load(vf) or {}
+                        cwes = vuln_data.get("cwes", [])
+                    except Exception:
+                        pass  # Ignore errors reading vuln.yaml for CWEs
 
                 vuln_entry = VulnEntry(
                     benchmark_name=benchmark_name,
@@ -202,6 +211,7 @@ def collect_benchmark_info(benchmark_dir: Path) -> BenchmarkInfo | None:
                     num_patches=num_patches,
                     has_test_sh=info.has_test_sh,
                     has_vuln_yaml=has_vuln_yaml,
+                    cwes=cwes,
                 )
                 info.vulns.append(vuln_entry)
 
