@@ -247,7 +247,8 @@ def collect_benchmark_stats(
             results.append(info)
             logger.debug(
                 f"Collected {item.name}: {len(info.vulns)} vulns, "
-                f"{len(info.harnesses)} harnesses"
+                f"{len(info.harnesses)} harnesses, "
+                f"lang={info.language or 'Unknown'}, mode={info.mode}"
             )
 
     return results

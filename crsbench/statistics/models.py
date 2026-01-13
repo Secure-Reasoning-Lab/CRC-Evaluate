@@ -38,7 +38,7 @@ class BenchmarkInfo:
     mode: str = ""
     language: str = ""
     has_test_sh: bool = False
-    rts_mode: str | None = None  # None, "jcgeks", "openclover", "binary_rts"
+    rts_mode: str | None = None  # None, "none", "jcgeks", "openclover", "binaryrts"
     inc_build: bool = True
     harnesses: list[str] = field(default_factory=list)
     vulns: list[VulnEntry] = field(default_factory=list)
@@ -84,6 +84,9 @@ class BenchmarkStats:
     by_mode: dict[str, CategoryStats] = field(default_factory=dict)
     by_language: dict[str, CategoryStats] = field(default_factory=dict)
     source_mode: dict[tuple[str, str], CategoryStats] = field(default_factory=dict)
+    source_language_mode: dict[tuple[str, str, str], CategoryStats] = field(
+        default_factory=dict
+    )
 
     @classmethod
     def from_benchmarks(cls, benchmarks: Sequence[BenchmarkInfo]) -> BenchmarkStats:
@@ -144,5 +147,12 @@ class BenchmarkStats:
                 stats.source_mode[key] = CategoryStats()
             stats.source_mode[key].benchmarks += 1
             stats.source_mode[key].vulns += len(b.vulns)
+
+            # Source x Language x Mode cross-tabulation
+            slm_key = (b.source, lang, b.mode)
+            if slm_key not in stats.source_language_mode:
+                stats.source_language_mode[slm_key] = CategoryStats()
+            stats.source_language_mode[slm_key].benchmarks += 1
+            stats.source_language_mode[slm_key].vulns += len(b.vulns)
 
         return stats

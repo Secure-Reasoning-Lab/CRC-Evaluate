@@ -287,4 +287,28 @@ def print_summary(benchmarks: Sequence[BenchmarkInfo]) -> None:
     logger.info(
         f"  {'Total':<15} {'':<10} {stats.total_benchmarks:>12} {stats.total_vulns:>12}"
     )
+    logger.info("")
+
+    logger.info("-" * 70)
+    logger.info("By Source x Language x Mode:")
+    logger.info("-" * 70)
+    logger.info(
+        f"  {'Source':<15} {'Language':<10} {'Mode':<8} {'# Projects':>12} {'# Vulns':>12}"
+    )
+    logger.info(f"  {'-' * 15} {'-' * 10} {'-' * 8} {'-' * 12} {'-' * 12}")
+    for source in ["AFC", "ASC", "Team-Atlanta"]:
+        for lang in sorted(stats.by_language.keys()):
+            for mode in ["delta", "full"]:
+                key = (source, lang, mode)
+                if key in stats.source_language_mode:
+                    cat = stats.source_language_mode[key]
+                    logger.info(
+                        f"  {source:<15} {lang:<10} {mode:<8} "
+                        f"{cat.benchmarks:>12} {cat.vulns:>12}"
+                    )
+    logger.info(f"  {'-' * 15} {'-' * 10} {'-' * 8} {'-' * 12} {'-' * 12}")
+    logger.info(
+        f"  {'Total':<15} {'':<10} {'':<8} "
+        f"{stats.total_benchmarks:>12} {stats.total_vulns:>12}"
+    )
     logger.info("=" * 70)

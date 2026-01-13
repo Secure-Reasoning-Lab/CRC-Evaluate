@@ -167,9 +167,10 @@ class EvaluationMode(str, Enum):
 class RtsMode(str, Enum):
     """Regression Test Selection mode for Java projects."""
 
+    NONE = "none"  # Explicitly disabled (prefer null in YAML)
     JCGEKS = "jcgeks"
     OPENCLOVER = "openclover"
-    BINARY_RTS = "binary_rts"
+    BINARYRTS = "binaryrts"
 
 
 @dataclass
@@ -1284,7 +1285,7 @@ class ProjectConfig(BaseModel):
     # CRSBench extensions
     rts_mode: Optional[RtsMode] = Field(
         default=None,
-        description="Regression Test Selection mode for Java projects (jcgeks, openclover, binary_rts)",
+        description="Regression Test Selection mode (none, jcgeks, openclover, binaryrts)",
     )
     inc_build: bool = Field(
         default=True,
