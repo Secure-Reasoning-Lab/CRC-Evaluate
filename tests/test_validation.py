@@ -1506,10 +1506,20 @@ class TestProjectConfig:
 
     def test_project_config_rts_modes(self):
         """Test all RTS mode values."""
-        for mode in [RtsMode.JCGEKS, RtsMode.OPENCLOVER, RtsMode.BINARY_RTS]:
+        for mode in [
+            RtsMode.NONE,
+            RtsMode.JCGEKS,
+            RtsMode.OPENCLOVER,
+            RtsMode.BINARYRTS,
+        ]:
             config = ProjectConfig(language="jvm", rts_mode=mode)
             assert config.rts_mode == mode
-            assert config.rts_mode.value in ["jcgeks", "openclover", "binary_rts"]
+            assert config.rts_mode.value in [
+                "none",
+                "jcgeks",
+                "openclover",
+                "binaryrts",
+            ]
 
     def test_project_config_language_normalization(self):
         """Test language normalization."""
