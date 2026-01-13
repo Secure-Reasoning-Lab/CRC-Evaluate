@@ -1288,7 +1288,7 @@ class ProjectConfig(BaseModel):
         description="Regression Test Selection mode (none, jcgeks, openclover, binaryrts)",
     )
     inc_build: bool = Field(
-        default=True,
+        default=False,
         description="Whether incremental build is supported",
     )
 
