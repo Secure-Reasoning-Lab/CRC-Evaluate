@@ -618,6 +618,7 @@ class VerificationEngine:
             language=adapter.lang,
             repo_name=adapter.repo_name,
             include_coverage=False,
+            use_inc_build=adapter.inc_build,
         )
 
         # Build variants

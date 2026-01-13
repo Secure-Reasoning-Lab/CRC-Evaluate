@@ -398,7 +398,7 @@ class OSSFuzzBuilder:
         repo_name: Optional[str] = None,
         *,
         include_coverage: bool = False,
-        use_inc_build: bool = True,
+        use_inc_build: bool = False,
     ) -> BuildPlan:
         """Create a build plan for a benchmark.
 
@@ -416,7 +416,7 @@ class OSSFuzzBuilder:
             language: Programming language
             repo_name: Optional repository name for caching
             include_coverage: Whether to include coverage variant
-            use_inc_build: Use incremental builds if available (default: True).
+            use_inc_build: Use incremental builds if available (default: False).
                 When True, validation variants use pre-built Docker images
                 with cached dependencies for faster builds. Falls back to
                 standard build if inc-build image is not available.
@@ -584,7 +584,7 @@ class OSSFuzzBuilder:
         repo_name: Optional[str] = None,
         sanitizer: str = "address",
         *,
-        use_inc_build: bool = True,
+        use_inc_build: bool = False,
     ) -> BuildPlan:
         """Create a build plan for patch verification.
 
@@ -601,7 +601,7 @@ class OSSFuzzBuilder:
             language: Programming language
             repo_name: Optional repository name for caching
             sanitizer: Sanitizer type (default: "address")
-            use_inc_build: Use incremental builds if available (default: True)
+            use_inc_build: Use incremental builds if available (default: False)
 
         Returns:
             BuildPlan with configurations for each patch

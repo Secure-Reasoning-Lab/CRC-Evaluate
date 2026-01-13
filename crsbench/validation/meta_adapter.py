@@ -19,24 +19,26 @@ from crsbench.validation.schemas import POV, BenchmarkConfig, HarnessFile
 logger = get_logger(__name__)
 
 
-def _load_project_config(project_yaml: Path) -> tuple[str, str, Optional[str]]:
+def _load_project_config(project_yaml: Path) -> tuple[str, str, Optional[str], bool]:
     """Load project configuration from project.yaml.
 
-    Extracts language, main_repo, and repo_name from a benchmark's
+    Extracts language, main_repo, repo_name, and inc_build from a benchmark's
     project.yaml file, with sensible defaults for missing values.
 
     Args:
         project_yaml: Path to project.yaml file.
 
     Returns:
-        Tuple of (language, main_repo, repo_name).
+        Tuple of (language, main_repo, repo_name, inc_build).
         - language defaults to "c"
         - main_repo defaults to ""
         - repo_name defaults to None
+        - inc_build defaults to False
     """
     lang = "c"
     main_repo = ""
     repo_name = None
+    inc_build = False
 
     if project_yaml.exists():
         try:
@@ -46,10 +48,11 @@ def _load_project_config(project_yaml: Path) -> tuple[str, str, Optional[str]]:
                 lang = project_data.get("language", "c")
                 main_repo = project_data.get("main_repo", "")
                 repo_name = project_data.get("repo_name")
+                inc_build = project_data.get("inc_build", True)
         except Exception as e:
             logger.warning(f"Failed to load project.yaml: {e}")
 
-    return lang, main_repo, repo_name
+    return lang, main_repo, repo_name, inc_build
 
 
 class MetaYamlAdapter:
@@ -65,6 +68,7 @@ class MetaYamlAdapter:
         main_repo: URL or path to the main repository
         repo_name: Optional repository name (overrides derivation from URL)
         benchmark_path: Full path to the benchmark directory
+        inc_build: Whether to use incremental builds
     """
 
     def __init__(
@@ -75,6 +79,8 @@ class MetaYamlAdapter:
         main_repo: str,
         benchmark_path: Optional[Path] = None,
         repo_name: Optional[str] = None,
+        *,
+        inc_build: bool = False,
     ):
         """Initialize the adapter.
 
@@ -85,6 +91,7 @@ class MetaYamlAdapter:
             main_repo: Main repository URL/path
             benchmark_path: Full path to the benchmark directory
             repo_name: Optional repository name (overrides derivation from URL)
+            inc_build: Whether to use incremental builds (default: False)
         """
         self.config = config
         self.benchmark_name = benchmark_name
@@ -92,6 +99,7 @@ class MetaYamlAdapter:
         self.main_repo = main_repo
         self.repo_name = repo_name
         self.benchmark_path = benchmark_path
+        self.inc_build = inc_build
         self._harness_map = {h.name: h for h in config.harness_files}
 
     @classmethod
@@ -103,6 +111,8 @@ class MetaYamlAdapter:
         main_repo: str,
         benchmark_path: Optional[Path] = None,
         repo_name: Optional[str] = None,
+        *,
+        inc_build: bool = False,
     ) -> "MetaYamlAdapter":
         """Create adapter from meta.yaml file.
 
@@ -113,6 +123,7 @@ class MetaYamlAdapter:
             main_repo: Main repository URL/path
             benchmark_path: Full path to the benchmark directory
             repo_name: Optional repository name (overrides derivation from URL)
+            inc_build: Whether to use incremental builds (default: False)
 
         Returns:
             MetaYamlAdapter instance
@@ -138,7 +149,15 @@ class MetaYamlAdapter:
                 meta_yaml_path.parent.parent
             )  # .aixcc/meta.yaml -> benchmark_dir
 
-        return cls(config, benchmark_name, lang, main_repo, benchmark_path, repo_name)
+        return cls(
+            config,
+            benchmark_name,
+            lang,
+            main_repo,
+            benchmark_path,
+            repo_name,
+            inc_build=inc_build,
+        )
 
     @classmethod
     def from_benchmark_path(cls, benchmark_path: Path) -> Optional["MetaYamlAdapter"]:
@@ -175,7 +194,7 @@ class MetaYamlAdapter:
         benchmark_name = benchmark_path.name
 
         # Load project configuration
-        lang, main_repo, repo_name = _load_project_config(project_yaml)
+        lang, main_repo, repo_name, inc_build = _load_project_config(project_yaml)
 
         try:
             return cls.from_meta_yaml(
@@ -185,6 +204,7 @@ class MetaYamlAdapter:
                 main_repo=main_repo,
                 repo_name=repo_name,
                 benchmark_path=benchmark_path,
+                inc_build=inc_build,
             )
         except Exception as e:
             logger.error(f"Failed to load adapter: {e}")
