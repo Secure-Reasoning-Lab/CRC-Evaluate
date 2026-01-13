@@ -661,7 +661,7 @@ class TestIncBuildSupport:
     def test_create_build_plan_default_uses_inc_build(
         self, builder: OSSFuzzBuilder, tmp_path: Path
     ):
-        """Test that use_inc_build defaults to True."""
+        """Test that use_inc_build defaults to False."""
         benchmark_path = tmp_path / "benchmark"
         benchmark_path.mkdir()
 
@@ -676,9 +676,9 @@ class TestIncBuildSupport:
             language="c",
         )
 
-        # All configs should have use_inc_build=True (default)
+        # All configs should have use_inc_build=False (default)
         for config in plan.configs:
-            assert config.use_inc_build is True
+            assert config.use_inc_build is False
 
     def test_build_single_uses_inc_build_when_image_available(
         self, builder: OSSFuzzBuilder, tmp_path: Path

@@ -1483,7 +1483,7 @@ class TestProjectConfig:
 
         assert config.language == "c"
         assert config.rts_mode is None
-        assert config.inc_build is True  # defaults to True
+        assert config.inc_build is False  # defaults to False
         assert config.get_normalized_language() == "C/C++"
 
     def test_project_config_full(self):
@@ -1575,4 +1575,4 @@ class TestProjectConfig:
 
         # CRSBench extensions should have defaults
         assert config.rts_mode is None
-        assert config.inc_build is True  # defaults to True
+        assert config.inc_build is False  # defaults to False
