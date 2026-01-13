@@ -24,7 +24,7 @@ build_timeout: 3600  # 1 hour, default: 3600
 # Maximum time in seconds for CRS run phase.
 run_timeout: 14400  # 4 hours, default: 7200
 
-# Maximum time in seconds for POV verification phase.
+# Maximum time in seconds for POV/patch verification phase.
 verify_timeout: 7200  # 2 hours, default: 7200
 
 # Difficulty level controlling assistance. (0-4)
@@ -161,6 +161,8 @@ hints_enabled: false  # default: false
 
 # LiteLLM mode.
 # Possible values: "passthrough" | "proxy"
+# passthrough: pass the upstream LITELLM to the CRS
+# proxy: CRSBench setup a LiteLLM proxy
 # - passthrough: uses UPSTREAM_LITELLM_BASE_URL, LITELLM_API_KEY
 # - proxy: uses LITELLM_BASE_URL, LITELLM_MASTER_KEY
 litellm_mode: passthrough  # default: passthrough
@@ -180,7 +182,7 @@ coverage_enabled: false  # default: false
 # Time in seconds without new coverage before saturation.
 coverage_saturation_time: 21600  # 6 hours, default: 21600
 
-# Terminate trial early when coverage saturation detected. (NOT YET IMPLEMENTED)
+# Terminate trial early when coverage saturation is detected. (NOT YET IMPLEMENTED)
 coverage_early_stop: false  # default: false
 
 # Terminate trial early when all CPVs for harness are found.
