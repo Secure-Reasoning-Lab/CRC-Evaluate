@@ -20,6 +20,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
+from crsbench.evaluation.results import TrialResult
 from crsbench.utils.logger import configure_logger, get_logger
 
 # Load environment variables from .env file if present
@@ -475,26 +476,55 @@ def _run_single_job_worker(
             # Execute the job
             result = job.perform()
 
-            # Mark job as FINISHED and cleanup
-            with redis_conn.pipeline() as pipeline:
-                job._status = JobStatus.FINISHED
-                job.ended_at = rq.utils.now()  # type: ignore[attr-defined]
-                job._result = result
-                job.save_meta()
-                pipeline.hset(
-                    job.key,
-                    mapping={
-                        "status": JobStatus.FINISHED,
-                        "ended_at": rq.utils.utcformat(job.ended_at),  # type: ignore[attr-defined]
-                    },
-                )
-                # Remove from started registry and add to finished registry
-                if execution:
-                    execution.delete(job, pipeline=pipeline)
-                finished_registry.add(job, ttl=-1, pipeline=pipeline)
-                pipeline.execute()
+            # Check if this is a TrialResult with success=False
+            if isinstance(result, TrialResult) and not result.success:
+                # Treat as failed job
+                with redis_conn.pipeline() as pipeline:
+                    job._status = JobStatus.FAILED
+                    job.ended_at = rq.utils.now()  # type: ignore[attr-defined]
+                    job._result = result
+                    job.save_meta()
+                    pipeline.hset(
+                        job.key,
+                        mapping={
+                            "status": JobStatus.FAILED,
+                            "ended_at": rq.utils.utcformat(job.ended_at),  # type: ignore[attr-defined]
+                        },
+                    )
+                    # Remove from started registry and add to failed registry
+                    if execution:
+                        execution.delete(job, pipeline=pipeline)
+                    # Store trial error as exc_string for failed registry
+                    exc_string = f"Trial failed: {result.error_type}: {result.error}"
+                    failed_registry.add(
+                        job, ttl=-1, exc_string=exc_string, pipeline=pipeline
+                    )
+                    pipeline.execute()
 
-            logger.info(f"Worker {worker_name} finished job {job_id}")
+                logger.warning(
+                    f"Worker {worker_name} job {job_id} failed: {result.error}"
+                )
+            else:
+                # Mark job as FINISHED and cleanup (original success path)
+                with redis_conn.pipeline() as pipeline:
+                    job._status = JobStatus.FINISHED
+                    job.ended_at = rq.utils.now()  # type: ignore[attr-defined]
+                    job._result = result
+                    job.save_meta()
+                    pipeline.hset(
+                        job.key,
+                        mapping={
+                            "status": JobStatus.FINISHED,
+                            "ended_at": rq.utils.utcformat(job.ended_at),  # type: ignore[attr-defined]
+                        },
+                    )
+                    # Remove from started registry and add to finished registry
+                    if execution:
+                        execution.delete(job, pipeline=pipeline)
+                    finished_registry.add(job, ttl=-1, pipeline=pipeline)
+                    pipeline.execute()
+
+                logger.info(f"Worker {worker_name} finished job {job_id}")
 
         except Exception as e:
             # Mark job as FAILED and cleanup
