@@ -53,17 +53,10 @@ class EvaluationResult:
     def __init__(
         self,
         report: EvaluationReport,
-        validation_result: ValidationResult,
         verification_results: Optional[list] = None,
     ):
         self.report = report
-        self.validation_result = validation_result
         self.verification_results = verification_results or []
-
-    @property
-    def is_valid(self) -> bool:
-        """Whether the benchmark configuration was valid."""
-        return self.validation_result.is_valid
 
     @property
     def success_rate(self) -> float:
@@ -215,7 +208,7 @@ class BenchmarkRunner:
             report = collector.finalize_report()
             self._log_evaluation_summary(report)
 
-            return EvaluationResult(report, validation_result, pov_verification_results)
+            return EvaluationResult(report, pov_verification_results)
 
         except Exception as e:
             self.logger.error(f"Benchmark evaluation failed: {str(e)}")

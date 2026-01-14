@@ -371,7 +371,7 @@ class TrialResult(BaseModel):
             harness=harness,
             trial_num=trial_num,
             crs_type=crs_type,
-            success=result.is_valid,
+            success=True,  # Validation passed (exception raised if invalid)
             execution_time=execution_time,
             povs_found=result.povs_found,
             total_povs=result.total_povs,
