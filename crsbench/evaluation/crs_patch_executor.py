@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from crsbench.evaluation.crs_executor import CRSExecutionResult, CRSExecutor
+from crsbench.evaluation.network import ContainerBlockingWatcher
 from crsbench.evaluation.process_utils import run_with_graceful_timeout
 from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import USE_GITCACHE
@@ -392,27 +393,51 @@ class CRSPatchExecutor(CRSExecutor):
         if memory:
             cmd.extend(["--memory", memory])
 
-        logger.info(f"Run command: {' '.join(cmd)}")
-        logger.debug(f"Command: {cmd}")
-
         # Set up environment with LiteLLM configuration
         env = os.environ.copy()
         litellm_env = self._get_litellm_env()
         env.update(litellm_env)
+
+        # Anti-cheating network blocking setup
+        block_network = self.config.get("block_external_network", True)
+        crs_image_name = f"gcr.io/oss-patch/{registry_name}"
+
+        logger.info(f"Run command: {' '.join(cmd)}")
+        logger.debug(f"Command: {cmd}")
 
         start_time = time.time()
         try:
             timeout = self.config.get("run_timeout", 3600)
             grace_period = self.config.get("graceful_timeout", 60)
 
-            # Run with graceful timeout handling
-            stdout, stderr, returncode, timed_out = run_with_graceful_timeout(
-                cmd=cmd,
-                timeout=timeout,
-                grace_period=grace_period,
-                cwd=trial_output_dir,
-                env=env,
-            )
+            # Use ContainerBlockingWatcher to inject iptables rules into CRS container
+            if block_network:
+                logger.info(
+                    f"Anti-cheating network blocking enabled for image: {crs_image_name}"
+                )
+                watcher = ContainerBlockingWatcher(crs_image_name)
+            else:
+                watcher = None
+
+            # Run with optional network blocking
+            if watcher:
+                with watcher:
+                    stdout, stderr, returncode, timed_out = run_with_graceful_timeout(
+                        cmd=cmd,
+                        timeout=timeout,
+                        grace_period=grace_period,
+                        cwd=trial_output_dir,
+                        env=env,
+                    )
+                logger.info(f"Blocked {len(watcher.blocked_containers)} container(s)")
+            else:
+                stdout, stderr, returncode, timed_out = run_with_graceful_timeout(
+                    cmd=cmd,
+                    timeout=timeout,
+                    grace_period=grace_period,
+                    cwd=trial_output_dir,
+                    env=env,
+                )
 
             execution_time = time.time() - start_time
 
