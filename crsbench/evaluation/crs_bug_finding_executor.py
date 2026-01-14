@@ -107,6 +107,19 @@ class CRSBugFindingExecutor(CRSExecutor):
         self._llm_api_key_override = api_key
         logger.debug("Set trial-specific LLM API key")
 
+    def cleanup_other_harnesses(
+        self,
+        trial_output_dir: Path,
+        target_harness: str,
+    ) -> None:
+        """Clean up files from harnesses other than the target.
+
+        Args:
+            trial_output_dir: Trial directory containing CRS outputs
+            target_harness: Name of the harness to keep
+        """
+        # TODO: Implement cleanup logic for disk optimization
+
     def build_crs(self, benchmark_path: Path, trial_output_dir: Path) -> None:
         """Pre-build CRS Docker image before running.
 
