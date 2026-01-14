@@ -122,7 +122,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         """
         # Clean OSS-Fuzz build output
         build_out_dir = self._get_oss_fuzz_build_output_dir(
-            trial_output_dir, target_harness
+            trial_output_dir, project_name
         )
 
         if build_out_dir.exists():
@@ -890,22 +890,22 @@ class CRSBugFindingExecutor(CRSExecutor):
         )
 
     def _get_oss_fuzz_build_output_dir(
-        self, trial_output_dir: Path, harness_name: str
+        self, trial_output_dir: Path, project_name: str
     ) -> Path:
         """Get OSS-Fuzz build output directory path.
 
         The build output is at:
-        {{ trial_output_dir }}/crs-build/crs/oss-fuzz/{{ harness_name }}/build/out/
+        {{ trial_output_dir }}/crs-build/crs/oss-fuzz/{{ project_name }}/build/out/
 
         Args:
             trial_output_dir: Trial directory (from TrialDirectoryPreparer)
-            harness_name: Harness name
+            project_name: Project name
 
         Returns:
             Path to OSS-Fuzz build output directory
         """
         build_dir = trial_output_dir / "crs-build"
-        return build_dir / "crs" / "oss-fuzz" / harness_name / "build" / "out"
+        return build_dir / "crs" / "oss-fuzz" / project_name / "build" / "out"
 
     def _prepare_hints(
         self, benchmark_path: Path, harness_name: str, trial_output_dir: Path
