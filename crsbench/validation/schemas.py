@@ -375,6 +375,10 @@ class VulnerabilityMetadata(BaseModel):
         default=None,
         description="Author who created or labeled this vulnerability metadata",
     )
+    validator: Optional[str] = Field(
+        default=None,
+        description="Validator who verified this vulnerability metadata",
+    )
     origin: Optional[Literal["1-day", "synthetic"]] = Field(
         default=None,
         description="Origin of vulnerability: '1-day' (real CVE) or 'synthetic' (artificially created)",
