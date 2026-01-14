@@ -371,6 +371,11 @@ Examples:
 
     add_dashboard_subparser(subparsers)
 
+    # 'ci' subcommand - benchmark CI testing
+    from crsbench.benchmark_ci.cli import add_ci_subparser
+
+    add_ci_subparser(subparsers)
+
     args = parser.parse_args()
 
     # Default to 'run' if no command specified (shouldn't happen due to legacy handling)
@@ -1980,6 +1985,12 @@ def main() -> None:
         from crsbench.reporting.cli import run_dashboard
 
         sys.exit(run_dashboard(args))
+
+    if args.command == "ci":
+        # Handle ci command
+        from crsbench.benchmark_ci.cli import run_ci
+
+        sys.exit(run_ci(args))
 
     # Below is for 'run' command (experiment execution)
 

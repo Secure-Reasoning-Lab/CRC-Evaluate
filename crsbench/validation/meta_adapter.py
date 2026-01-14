@@ -295,6 +295,34 @@ class MetaYamlAdapter:
                     result.append((harness_name, vuln_keyword, pov_path))
         return result
 
+    def get_patch_path(self, harness_name: str, vuln_keyword: str) -> Optional[Path]:
+        """Get the path to the first patch file for a vulnerability.
+
+        CRSBench structure: .aixcc/{harness}/{vuln_keyword}/patches/patch_*.diff
+
+        Args:
+            harness_name: Name of the harness
+            vuln_keyword: Vulnerability keyword (e.g., "cpv_0")
+
+        Returns:
+            Path to the first patch file if found, None otherwise
+        """
+        if not self.benchmark_path:
+            return None
+
+        patches_dir = (
+            self.benchmark_path / ".aixcc" / harness_name / vuln_keyword / "patches"
+        )
+
+        if not patches_dir.exists():
+            return None
+
+        patch_files = list(patches_dir.glob("patch_*.diff"))
+        if patch_files:
+            return patch_files[0]
+
+        return None
+
     # =========================================================================
     # Variant Building Methods
     # =========================================================================
