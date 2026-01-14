@@ -118,7 +118,27 @@ class CRSBugFindingExecutor(CRSExecutor):
             trial_output_dir: Trial directory containing CRS outputs
             target_harness: Name of the harness to keep
         """
-        # TODO: Implement cleanup logic for disk optimization
+        build_out_dir = self._get_oss_fuzz_build_output_dir(
+            trial_output_dir, target_harness
+        )
+
+        if not build_out_dir.exists():
+            logger.debug(f"OSS-Fuzz build output dir not found: {build_out_dir}")
+            return
+
+        # Iterate subdirectories under build/out/
+        for subdir in build_out_dir.iterdir():
+            if not subdir.is_dir():
+                continue
+            # Iterate files inside each subdirectory
+            for item in subdir.iterdir():
+                # TODO: check this logic is enough that we don't remove neceesary files
+                if target_harness not in item.name:
+                    logger.info(f"Removing non-target harness file: {item}")
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
 
     def build_crs(self, benchmark_path: Path, trial_output_dir: Path) -> None:
         """Pre-build CRS Docker image before running.
