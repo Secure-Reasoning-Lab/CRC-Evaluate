@@ -365,6 +365,10 @@ class CRSBugFindingExecutor(CRSExecutor):
                 trial_registry_dir,
             )
 
+            # Cleanup other harness files to optimize disk usage
+            harness_name = Path(harness.name).stem
+            self.cleanup_other_harnesses(trial_output_dir, harness_name)
+
             # Signal that CRS run is starting (after build)
             if on_run_start:
                 on_run_start()
@@ -381,7 +385,6 @@ class CRSBugFindingExecutor(CRSExecutor):
                     )
 
             # 4. Prepare hints if enabled
-            harness_name = Path(harness.name).stem
             hints_path = self._prepare_hints(
                 benchmark_path, harness_name, trial_output_dir
             )
