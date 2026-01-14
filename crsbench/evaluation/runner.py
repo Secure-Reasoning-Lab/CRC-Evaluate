@@ -39,6 +39,14 @@ class EvaluationError(Exception):
     """Exception raised during benchmark evaluation."""
 
 
+class BenchmarkFormatError(Exception):
+    """Exception raised when benchmark configuration is invalid."""
+
+    def __init__(self, message: str, validation_result: ValidationResult):
+        self.validation_result = validation_result
+        super().__init__(message)
+
+
 class EvaluationResult:
     """Result from a benchmark evaluation."""
 
@@ -169,6 +177,12 @@ class BenchmarkRunner:
         try:
             # Setup phase
             validation_result = self._validate_benchmark(benchmark_path)
+            if not validation_result.is_valid:
+                errors_str = "; ".join(e.message for e in validation_result.errors)
+                raise BenchmarkFormatError(
+                    f"Invalid benchmark format: {errors_str}",
+                    validation_result,
+                )
             config = self._load_benchmark_config(benchmark_path)
             evaluation_mode = self._determine_evaluation_mode(config, mode)
             collector = self._setup_result_collector(
