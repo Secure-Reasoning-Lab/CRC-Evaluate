@@ -21,9 +21,9 @@ from crsbench.evaluation.litellm_tracker import (
     is_tracking_available,
 )
 from crsbench.evaluation.results import CRSType, TrialMetadata, TrialResult
-from crsbench.evaluation.runner import BenchmarkRunner
+from crsbench.evaluation.runner import BenchmarkFormatError, BenchmarkRunner
 from crsbench.utils.crs_helper import get_crs_registry_name
-from crsbench.utils.logger import get_logger
+from crsbench.utils.logger import escape_loguru_braces, get_logger
 
 # Import file-based metadata schema (distinct from evaluation.results.TrialMetadata)
 from crsbench.validation.schemas import (
@@ -618,7 +618,7 @@ def run_crs_trial(
             harness=harness_name,
             trial_num=trial_num,
             crs_type=crs_type_enum,
-            success=result.is_valid,
+            success=True,  # Validation passed (exception raised if invalid)
             execution_time=execution_time,
             povs_found=result.povs_found,
             total_povs=result.total_povs,
@@ -631,11 +631,19 @@ def run_crs_trial(
         # Log completion message
         logger.info(trial_result.log_summary())
 
+        # Create success/fail marker file
+        marker_file = trial_output_dir / ".success"
+        marker_file.touch()
+
         return trial_result
 
     except FileNotFoundError as e:
         execution_time = time.time() - start_time
-        logger.error(f"[Trial {trial_num}] Benchmark not found: {e}")
+        error_msg = escape_loguru_braces(str(e))
+        logger.error(f"[Trial {trial_num}] Benchmark not found: {error_msg}")
+        # Create .fail marker if trial_output_dir exists
+        if "trial_output_dir" in locals() and trial_output_dir.exists():
+            (trial_output_dir / ".fail").touch()
         return TrialResult(
             crs=crs,
             benchmark=benchmark,
@@ -653,13 +661,39 @@ def run_crs_trial(
             ),
         )
 
+    except BenchmarkFormatError as e:
+        execution_time = time.time() - start_time
+        error_msg = escape_loguru_braces(str(e))
+        logger.error(f"[Trial {trial_num}] Invalid benchmark format: {error_msg}")
+        # Create .fail marker if trial_output_dir exists
+        if "trial_output_dir" in locals() and trial_output_dir.exists():
+            (trial_output_dir / ".fail").touch()
+        return TrialResult(
+            crs=crs,
+            benchmark=benchmark,
+            harness=harness_name,
+            trial_num=trial_num,
+            crs_type=crs_type_enum,
+            success=False,
+            execution_time=execution_time,
+            error=f"Invalid benchmark format: {e!s}",
+            error_type="BenchmarkFormatError",
+            report={},
+            metadata=TrialMetadata(
+                timestamp_start=start_time,
+                timestamp_end=time.time(),
+            ),
+        )
+
     except Exception as e:
         execution_time = time.time() - start_time
-        # Use str(e) to avoid loguru interpreting curly braces in error messages
-        error_msg = str(e).replace("{", "{{").replace("}", "}}")
+        error_msg = escape_loguru_braces(str(e))
         logger.error(
             f"[Trial {trial_num}] Failed with error: {error_msg}", exc_info=True
         )
+        # Create .fail marker if trial_output_dir exists
+        if "trial_output_dir" in locals() and trial_output_dir.exists():
+            (trial_output_dir / ".fail").touch()
         return TrialResult(
             crs=crs,
             benchmark=benchmark,

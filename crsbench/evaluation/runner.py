@@ -39,23 +39,24 @@ class EvaluationError(Exception):
     """Exception raised during benchmark evaluation."""
 
 
+class BenchmarkFormatError(Exception):
+    """Exception raised when benchmark configuration is invalid."""
+
+    def __init__(self, message: str, validation_result: ValidationResult):
+        self.validation_result = validation_result
+        super().__init__(message)
+
+
 class EvaluationResult:
     """Result from a benchmark evaluation."""
 
     def __init__(
         self,
         report: EvaluationReport,
-        validation_result: ValidationResult,
         verification_results: Optional[list] = None,
     ):
         self.report = report
-        self.validation_result = validation_result
         self.verification_results = verification_results or []
-
-    @property
-    def is_valid(self) -> bool:
-        """Whether the benchmark configuration was valid."""
-        return self.validation_result.is_valid
 
     @property
     def success_rate(self) -> float:
@@ -169,6 +170,12 @@ class BenchmarkRunner:
         try:
             # Setup phase
             validation_result = self._validate_benchmark(benchmark_path)
+            if not validation_result.is_valid:
+                errors_str = "; ".join(e.message for e in validation_result.errors)
+                raise BenchmarkFormatError(
+                    f"Invalid benchmark format: {errors_str}",
+                    validation_result,
+                )
             config = self._load_benchmark_config(benchmark_path)
             evaluation_mode = self._determine_evaluation_mode(config, mode)
             collector = self._setup_result_collector(
@@ -201,8 +208,11 @@ class BenchmarkRunner:
             report = collector.finalize_report()
             self._log_evaluation_summary(report)
 
-            return EvaluationResult(report, validation_result, pov_verification_results)
+            return EvaluationResult(report, pov_verification_results)
 
+        except BenchmarkFormatError:
+            # Let validation errors propagate unchanged
+            raise
         except Exception as e:
             self.logger.error(f"Benchmark evaluation failed: {str(e)}")
             raise EvaluationError(f"Failed to evaluate benchmark: {str(e)}") from e

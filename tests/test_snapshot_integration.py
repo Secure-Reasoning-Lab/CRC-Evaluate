@@ -61,9 +61,7 @@ full_mode:
             benchmark_harness=benchmark_harness, mode="full", trial_output_dir=trial_dir
         )
 
-        # Should complete successfully
-        assert result.is_valid
-
+        # Should complete successfully (exception raised if validation fails)
         # No snapshots should be created
         snapshots = list_snapshots(trial_dir)
         assert len(snapshots) == 0
@@ -92,9 +90,7 @@ full_mode:
             benchmark_harness=benchmark_harness, mode="full", trial_output_dir=trial_dir
         )
 
-        # Should complete successfully
-        assert result.is_valid
-
+        # Should complete successfully (exception raised if validation fails)
         # At least one snapshot should be created
         # (StubCRSExecutor is fast, but snapshot thread should capture at least 1)
         snapshots = list_snapshots(trial_dir)
@@ -119,8 +115,7 @@ full_mode:
             benchmark_harness=benchmark_harness, mode="full", trial_output_dir=trial_dir
         )
 
-        assert result.is_valid
-
+        # Should complete successfully (exception raised if validation fails)
         # No snapshots should be created
         snapshots = list_snapshots(trial_dir)
         assert len(snapshots) == 0
