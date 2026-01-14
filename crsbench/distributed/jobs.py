@@ -631,11 +631,18 @@ def run_crs_trial(
         # Log completion message
         logger.info(trial_result.log_summary())
 
+        # Create success/fail marker file
+        marker_file = trial_output_dir / (".success" if result.is_valid else ".fail")
+        marker_file.touch()
+
         return trial_result
 
     except FileNotFoundError as e:
         execution_time = time.time() - start_time
         logger.error(f"[Trial {trial_num}] Benchmark not found: {e}")
+        # Create .fail marker if trial_output_dir exists
+        if "trial_output_dir" in locals() and trial_output_dir.exists():
+            (trial_output_dir / ".fail").touch()
         return TrialResult(
             crs=crs,
             benchmark=benchmark,
@@ -660,6 +667,9 @@ def run_crs_trial(
         logger.error(
             f"[Trial {trial_num}] Failed with error: {error_msg}", exc_info=True
         )
+        # Create .fail marker if trial_output_dir exists
+        if "trial_output_dir" in locals() and trial_output_dir.exists():
+            (trial_output_dir / ".fail").touch()
         return TrialResult(
             crs=crs,
             benchmark=benchmark,
