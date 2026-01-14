@@ -373,7 +373,7 @@ def _add_arguments(
     )
     parser.add_argument(
         "--litellm-base-url",
-        help="LiteLLM proxy URL (default: LITELLM_BASE_URL env var)",
+        help="LiteLLM proxy URL (default: LITELLM_BASE_URL or LITELLM_API_BASE env var)",
     )
     parser.add_argument(
         "--litellm-api-key", help="LiteLLM API key (default: LITELLM_API_KEY env var)"
@@ -437,11 +437,18 @@ def run_generate_test_sh(args: argparse.Namespace) -> int:
         Exit code (0 for success, non-zero for failure)
     """
     # Validate environment
-    litellm_base_url = args.litellm_base_url or os.getenv("LITELLM_BASE_URL")
+    litellm_base_url = (
+        args.litellm_base_url
+        or os.getenv("LITELLM_BASE_URL")
+        or os.getenv("LITELLM_API_BASE")
+    )
     litellm_api_key = args.litellm_api_key or os.getenv("LITELLM_API_KEY")
 
     if not litellm_base_url:
-        logger.error("LITELLM_BASE_URL must be set via --litellm-base-url or env var")
+        logger.error(
+            "LITELLM_BASE_URL or LITELLM_API_BASE must be set via "
+            "--litellm-base-url or env var"
+        )
         return 1
 
     if not litellm_api_key:

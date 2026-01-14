@@ -8,6 +8,7 @@ to analyze vulnerabilities and generate vuln.yaml files.
 import asyncio
 import json
 import os
+from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 from claude_agent_sdk import ClaudeAgentOptions, query
@@ -19,6 +20,22 @@ from crsbench.migration.vuln_yaml.validator import (
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _get_crsbench_repo_root() -> str:
+    """
+    Get the crsbench repository root directory.
+
+    This is where .claude/skills/ directory is located for skill loading.
+
+    Returns:
+        Absolute path to crsbench repository root
+    """
+    # Start from this file and go up to find the repo root
+    current = Path(__file__).resolve()
+    # Go up from crsbench/migration/vuln_yaml/generator.py to repo root
+    repo_root = current.parent.parent.parent.parent
+    return str(repo_root)
 
 
 class VulnYamlGenerator:
@@ -38,16 +55,22 @@ class VulnYamlGenerator:
         Initialize the vuln.yaml generator agent.
 
         Args:
-            litellm_base_url: LiteLLM proxy URL (defaults to LITELLM_BASE_URL env var)
+            litellm_base_url: LiteLLM proxy URL (defaults to LITELLM_BASE_URL or
+                LITELLM_API_BASE env var)
             litellm_api_key: LiteLLM API key (defaults to LITELLM_API_KEY env var)
             model: Model to use via LiteLLM
         """
-        self.litellm_base_url = litellm_base_url or os.getenv("LITELLM_BASE_URL")
+        self.litellm_base_url = (
+            litellm_base_url
+            or os.getenv("LITELLM_BASE_URL")
+            or os.getenv("LITELLM_API_BASE")
+        )
         self.litellm_api_key = litellm_api_key or os.getenv("LITELLM_API_KEY")
 
         if not self.litellm_base_url:
             raise ValueError(
-                "LITELLM_BASE_URL must be set in environment or passed as parameter"
+                "LITELLM_BASE_URL or LITELLM_API_BASE must be set in environment "
+                "or passed as parameter"
             )
         if not self.litellm_api_key:
             raise ValueError(
@@ -141,15 +164,27 @@ class VulnYamlGenerator:
         """
         prompt = self._build_analysis_prompt(project_dir, cpv_dir, cpv_id, harness_name)
 
+        # Use repo root as cwd so skills can be loaded from .claude/skills/
         options = ClaudeAgentOptions(
             model=self.model,
-            allowed_tools=["Read", "Grep", "Glob", "Bash"],
+            allowed_tools=[
+                "Skill",
+                "Read",
+                "Grep",
+                "Glob",
+                "Bash",
+                "WebSearch",
+                "WebFetch",
+            ],
+            setting_sources=["project"],
+            cwd=_get_crsbench_repo_root(),
             system_prompt=(
                 "You are a thorough security researcher. "
+                "Use the vuln-yaml-analyzer skill for analysis guidance. "
                 "Use Grep to search patterns in source code, Glob to find files, and Read to examine files. "
+                "Use WebSearch and WebFetch to find CVE/reference information online. "
                 "CRITICAL: ONLY analyze crash logs from the specified CPV's logs directory. "
                 "DO NOT search for or read crash logs from other CPVs. "
-                "ALWAYS start by analyzing crash logs from the current CPV only. "
                 "Be precise and cite specific locations."
             ),
             env=self._get_env_dict(),
@@ -179,6 +214,14 @@ class VulnYamlGenerator:
                 logger.error(f"Vulnerability analyzer agent error: {e}")
             result_text = f"# Error\n\nFailed to analyze vulnerability: {str(e)}"
 
+        # Filter out skill prompt content - only keep actual analysis
+        # The actual analysis starts with "# Vulnerability Analysis for cpv_X"
+        # Use "cpv" to avoid matching template "{cpv_id}" in skill file
+        analysis_marker = "# Vulnerability Analysis for cpv"
+        if analysis_marker in result_text:
+            marker_pos = result_text.find(analysis_marker)
+            result_text = result_text[marker_pos:]
+
         # Generate agent log
         agent_log = self._format_agent_log(messages, "Vulnerability Analysis")
 
@@ -193,151 +236,22 @@ class VulnYamlGenerator:
 # Task
 Analyze the vulnerability for: **{cpv_id}** in harness **{harness_name}**
 
-CPV directory: `{cpv_dir}`
-Project source: `{project_dir}`
+**Use the `vuln-yaml-analyzer` skill for detailed analysis guidance.**
 
-# OSS-Fuzz Context
-Check the `.oss-fuzz/` directory in the project root for:
-- **build.sh**: Shows how the project is built
-- **Dockerfile**: Lists dependencies and build environment
-- **.aixcc/meta.yaml**: Contains harness file information
+# Context
+- **CPV directory**: `{cpv_dir}`
+  - `logs/`: Crash logs (pov_0.log, etc.)
+  - `blobs/`: POV files
+  - `patches/`: Patch files
+- **Project source**: `{project_dir}`
+- **OSS-Fuzz files**: `{project_dir}/.oss-fuzz/` (build.sh, Dockerfile)
 
-# Analysis Strategy
+# Critical Rules
+- **ONLY** read crash logs from `{cpv_dir}/logs/` - DO NOT search other CPVs
+- **ONLY** read patches from `{cpv_dir}/patches/`
+- **ONLY** read POVs from `{cpv_dir}/blobs/`
 
-## 1. Analyze Crash Log
-**IMPORTANT**: The crash log is the primary source of vulnerability information.
-
-**CRITICAL**:
-- **ONLY** read crash log files from **THIS CPV's logs directory**: `{cpv_dir}/logs/`
-- **DO NOT** search for or read crash logs from other CPVs or other directories
-- **DO NOT** use Grep/Glob to search for crash logs outside `{cpv_dir}/logs/`
-- Each CPV has its own crash logs - you must ONLY analyze THIS CPV's logs
-
-Steps:
-- Find and read crash log files in `{cpv_dir}/logs/` (and ONLY this directory)
-  - Typical names: `pov_0.log`, `pov_1.log`, `crash.log`
-  - Use: `ls {cpv_dir}/logs/` or `Glob` pattern: `{cpv_dir}/logs/*.log`
-- Extract key information:
-  - **Error type**: AddressSanitizer error (heap-buffer-overflow, use-after-free, etc.)
-  - **Vulnerable function**: The function where the crash occurred (from stack trace)
-  - **Vulnerable file**: The source file path (from stack trace)
-  - **Line number**: Exact line where crash happened
-  - **DEDUP_TOKEN**: Unique identifier for this crash
-  - **Stack trace**: Full call stack for understanding control flow
-
-Example crash log analysis:
-```
-ERROR: AddressSanitizer: heap-buffer-overflow
-READ of size 45 at 0x50400000033c
-#0 __asan_memcpy /src/llvm-project/compiler-rt/lib/asan/...
-#1 cr_buf_read /src/curl/lib/sendf.c:1298:5    <-- Vulnerable function
-#2 Curl_creader_read /src/curl/lib/sendf.c:542:10
-...
-SUMMARY: AddressSanitizer: heap-buffer-overflow /src/curl/lib/sendf.c:1298:5 in cr_buf_read
-```
-
-From this, extract:
-- Error type: heap-buffer-overflow
-- File: lib/sendf.c (relative to project root)
-- Function: cr_buf_read
-- Line: 1298
-
-## 2. Locate Vulnerable Code
-- Use the file path from crash log to find the vulnerable source file in `{project_dir}`
-- Read the vulnerable file around the crash line number
-- Identify the exact vulnerability location
-- Note the function name, line numbers, and code context
-
-## 3. Analyze POV (Proof of Vulnerability)
-- **ONLY** check `{cpv_dir}/blobs/` for POV files (THIS CPV's blobs directory only)
-- These are test inputs that trigger the vulnerability
-- Note if POV structure provides hints about vulnerability type
-
-## 4. Analyze Patches (if available)
-- **ONLY** check `{cpv_dir}/patches/` for patch files (THIS CPV's patches directory only)
-- Analyze what was changed to fix the vulnerability
-- This helps understand the root cause
-
-## 5. Identify CWE (Common Weakness Enumeration)
-Based on the vulnerability type, identify relevant CWEs:
-- Heap buffer overflow → CWE-122, CWE-787
-- Stack buffer overflow → CWE-121, CWE-787
-- Use-after-free → CWE-416
-- NULL pointer dereference → CWE-476
-- Integer overflow → CWE-190
-- Command injection → CWE-77
-- Path traversal → CWE-22
-- Format string → CWE-134
-
-## 6. Generate Vulnerability Description
-Write a clear description that includes:
-- What type of vulnerability it is
-- Where it occurs (file, function)
-- What causes it (based on crash log and patches)
-- Potential impact
-
-# Output Format
-
-Provide a markdown document with the following structure:
-
-```markdown
-# Vulnerability Analysis for {cpv_id}
-
-## Summary
-- **CPV ID**: {cpv_id}
-- **Harness**: {harness_name}
-- **Vulnerability Type**: <type from crash log>
-- **Severity**: <High/Medium/Low based on type>
-
-## Crash Log Analysis
-- **Error Type**: <AddressSanitizer error type>
-- **Crash Location**: <file>:<line>
-- **Vulnerable Function**: <function name>
-- **DEDUP Token**: <dedup token from crash log>
-
-### Stack Trace
-```
-<relevant stack trace snippet>
-```
-
-## Vulnerable Code Location
-- **File Path**: <path from project root>
-- **Function**: <function name>
-- **Line Range**: <start>-<end>
-- **Column Range**: <start>-<end>
-
-### Code Context
-```<language>
-<vulnerable code snippet>
-```
-
-## CWE Classification
-- CWE-XXX: <description>
-- CWE-YYY: <description>
-
-## Vulnerability Description
-<Clear description of the vulnerability, its cause, and impact>
-
-## POV Analysis (if available)
-<Analysis of proof-of-vulnerability test case>
-
-## Patch Analysis (if available)
-<Analysis of how the vulnerability was fixed>
-
-## Recommendations
-- Suggested CWEs: [CWE-XXX, CWE-YYY]
-- Vulnerability name: <concise name>
-```
-
-# Important
-- **ALWAYS read and analyze the crash log first** - it contains the most critical information
-- **ONLY analyze crash logs from `{cpv_dir}/logs/`** - DO NOT search for crash logs in other CPVs
-- Use Grep and Glob to find relevant **source code files** in `{project_dir}` (NOT other CPVs' crash logs)
-- Read actual source code to verify vulnerability locations
-- Cite specific file paths and line numbers
-- Be precise about code locations (line and column numbers)
-
-Now analyze the vulnerability and provide the markdown document.
+Now analyze the vulnerability using the vuln-yaml-analyzer skill.
 """
 
     async def generate_vuln_yaml(
@@ -357,11 +271,15 @@ Now analyze the vulnerability and provide the markdown document.
         """
         prompt = self._build_generation_prompt(analysis_md, cpv_id, harness_name)
 
+        # Use repo root as cwd so skills can be loaded from .claude/skills/
         options = ClaudeAgentOptions(
             model=self.model,
-            allowed_tools=["Read"],  # Only reading for context
+            allowed_tools=["Skill", "Read"],
+            setting_sources=["project"],
+            cwd=_get_crsbench_repo_root(),
             system_prompt=(
                 "You are a YAML generation expert. "
+                "Use the vuln-yaml-generator skill for YAML format guidance. "
                 "Generate clean, valid YAML following the exact format specified. "
                 "Output only the YAML content, no extra text."
             ),
@@ -395,13 +313,18 @@ Now analyze the vulnerability and provide the markdown document.
 
 name: 'Error: Failed to generate vuln.yaml'
 
+origin: synthetic
+
+release_date: 01/01/2024
+
 cwes: []
 
 description: |
   Error: Vulnerability analysis failed.
 
 locations:
-- path_from_root: 'unknown'
+- type: crash_site
+  path_from_root: 'unknown'
   function_name: unknown
   startLine: 0
   startColumn: 0
@@ -436,103 +359,18 @@ locations:
 # Task
 Generate vuln.yaml for: **{cpv_id}** in harness **{harness_name}**
 
-Based on the following vulnerability analysis:
+**Use the `vuln-yaml-generator` skill for detailed YAML format guidance.**
+
+# Vulnerability Analysis
 
 ```markdown
 {analysis_md}
 ```
 
-# vuln.yaml Format
-
-The output must be a valid YAML file with this structure:
-
-```yaml
-id: {cpv_id}
-
-name: <Short, descriptive vulnerability name>
-
-cwes:
-- CWE-XXX
-- CWE-YYY
-
-description: |
-  <Clear, multi-line description of the vulnerability.
-  Include what causes it, where it occurs, and potential impact.>
-
-locations:
-- path_from_root: <relative/path/from/project/root.c>
-  function_name: <vulnerable_function>
-  startLine: <line_number>
-  startColumn: <column_number>
-  endLine: <line_number>
-  endColumn: <column_number>
-```
-
-# Field Guidelines
-
-## id
-- Must be exactly: `{cpv_id}`
-
-## name
-- Short, descriptive name (max 80 chars)
-- Examples:
-  - "Heap buffer overflow in cr_buf_read"
-  - "Use-after-free in HTTP chunk processing"
-  - "NULL pointer dereference in JSON parser"
-- DO NOT use generic names like "MOCK: cpv_0 vulnerability"
-- **CRITICAL**: Field values MUST NOT contain special YAML characters that require quoting:
-  - DO NOT use colons (`:`) in unquoted field values
-  - DO NOT use brackets (`[`, `]`, `{{`, `}}`) unless it's the YAML list syntax
-  - DO NOT use special characters (`#`, `&`, `*`, `!`, `|`, `>`, `'`, `"`, `%`, `@`, `` ` ``)
-  - If you must include special characters, wrap the entire value in quotes
-  - Example BAD: `name: Heap buffer overflow: cr_buf_read` (colon in value)
-  - Example GOOD: `name: Heap buffer overflow in cr_buf_read` (no special chars)
-  - Example GOOD: `name: "Heap buffer overflow: cr_buf_read"` (quoted if colon needed)
-
-## cwes
-- List of relevant CWE numbers
-- Include 1-3 most relevant CWEs
-- Common CWEs:
-  - CWE-787: Out-of-bounds Write
-  - CWE-125: Out-of-bounds Read
-  - CWE-416: Use After Free
-  - CWE-476: NULL Pointer Dereference
-  - CWE-190: Integer Overflow
-  - CWE-122: Heap-based Buffer Overflow
-  - CWE-121: Stack-based Buffer Overflow
-
-## description
-- Clear explanation of the vulnerability
-- Include:
-  - What type of vulnerability it is
-  - Where it occurs (file, function)
-  - What causes it
-  - Potential security impact
-- Use "|" for multi-line strings
-- Be specific and technical
-
-## locations
-- At least one location (the primary vulnerable code location)
-- **path_from_root**: Relative path from project root (NOT absolute path)
-  - Remove `/src/curl/` prefix if present → use `lib/sendf.c`
-  - Remove `/src/pdfbox/` prefix if present → use `pdfbox/src/main/java/...`
-- **function_name**: Exact function name from crash log
-- **startLine/endLine**: Line range of vulnerable code
-  - If exact range unknown, use same line for both
-- **startColumn/endColumn**: Column range
-  - If unknown, use 0 for both
-
-# Instructions
-1. Extract CWE numbers from the analysis
-2. Create a concise, descriptive name
-3. Write a clear description based on the analysis
-4. Extract code location information
-5. Format as valid YAML
-
 # Output
 Provide ONLY the vuln.yaml content. No explanation, no markdown fences, just the raw YAML.
 
-Generate the vuln.yaml file now:
+Now generate the vuln.yaml file using the vuln-yaml-generator skill.
 """
 
     async def fix_vuln_yaml(
@@ -589,12 +427,20 @@ Fix the following vuln.yaml for: **{cpv_id}** in harness **{harness_name}**
 ## For empty values:
 - Fill in actual values based on vulnerability analysis
 
+## For invalid type field:
+- Each location MUST have a `type` field
+- Valid values: `crash_site` or `root_cause`
+- `crash_site`: Where the crash/error occurs
+- `root_cause`: Where the underlying defect exists
+- If unsure, use `crash_site` for the crash location from the stack trace
+
 # CRITICAL YAML Rules
 - Field values MUST NOT contain unquoted special characters (`:`, `#`, `&`, `*`, `!`, etc.)
 - If a value must contain special characters, wrap the ENTIRE value in quotes
 - Use `|` for multi-line description strings
 - CWEs must be a list format with `- CWE-XXX`
 - Locations must be a list with proper indentation
+- Each location MUST have a `type` field (`crash_site` or `root_cause`)
 
 # Output
 Provide ONLY the fixed vuln.yaml content. No explanation, no markdown fences, just the raw YAML.

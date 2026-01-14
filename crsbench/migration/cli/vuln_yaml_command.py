@@ -8,7 +8,9 @@ crash logs, POV files, patches, and source code.
 import argparse
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -122,6 +124,13 @@ def _add_arguments(parser: argparse.ArgumentParser) -> None:
 
     parser.add_argument(
         "--force", action="store_true", help="Overwrite existing vuln.yaml file"
+    )
+
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of workers for parallel processing (default: 1, sequential)",
     )
 
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
@@ -254,13 +263,19 @@ def run_generate_vuln_yaml(args: argparse.Namespace) -> int:
         logger.success(f"All {len(tasks)} CPV(s) already have vuln.yaml files.")
         return 0
 
-    logger.info(f"Processing {len(tasks_to_process)} CPV(s)...")
-
-    for idx, (benchmark_name, harness_name, cpv_id) in enumerate(tasks_to_process, 1):
-        log_progress(
-            idx, len(tasks_to_process), f"{benchmark_name}/{harness_name}/{cpv_id}"
+    num_workers = min(args.workers, len(tasks_to_process))
+    if num_workers > 1:
+        logger.info(
+            f"Processing {len(tasks_to_process)} CPV(s) with {num_workers} parallel workers..."
         )
+    else:
+        logger.info(f"Processing {len(tasks_to_process)} CPV(s)...")
 
+    def process_single_task(
+        task_info: tuple[str, str, str],
+    ) -> tuple[str, str, str, dict[str, Any]]:
+        """Process a single CPV task."""
+        benchmark_name, harness_name, cpv_id = task_info
         benchmark_dir = str(Path(args.benchmarks_root) / benchmark_name)
 
         if args.project_dir:
@@ -275,20 +290,15 @@ def run_generate_vuln_yaml(args: argparse.Namespace) -> int:
             )
 
             if not project_dir:
-                logger.error(f"Could not find/clone repository for {benchmark_name}")
-                results.append(
-                    (
-                        benchmark_name,
-                        harness_name,
-                        cpv_id,
-                        {
-                            "success": False,
-                            "message": "Could not find or clone project repository",
-                        },
-                    )
+                return (
+                    benchmark_name,
+                    harness_name,
+                    cpv_id,
+                    {
+                        "success": False,
+                        "message": "Could not find or clone project repository",
+                    },
                 )
-                failed_count += 1
-                continue
 
         result = generate_vuln_yaml_for_cpv(
             benchmark_name=benchmark_name,
@@ -300,14 +310,43 @@ def run_generate_vuln_yaml(args: argparse.Namespace) -> int:
             verbose=args.verbose,
         )
 
-        results.append((benchmark_name, harness_name, cpv_id, result))
+        return (benchmark_name, harness_name, cpv_id, result)
 
-        if result["success"]:
-            success_count += 1
-            logger.success(f"Generated: {result['vuln_yaml_path']}")
-        else:
-            failed_count += 1
-            logger.error(f"Failed: {result['message']}")
+    # Process tasks (parallel or sequential)
+    if num_workers > 1:
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = {
+                executor.submit(process_single_task, task): task
+                for task in tasks_to_process
+            }
+            completed = 0
+            for future in as_completed(futures):
+                completed += 1
+                benchmark_name, harness_name, cpv_id, result = future.result()
+                results.append((benchmark_name, harness_name, cpv_id, result))
+
+                task_name = f"{benchmark_name}/{harness_name}/{cpv_id}"
+                if result["success"]:
+                    success_count += 1
+                    logger.success(f"[{completed}/{len(tasks_to_process)}] {task_name}")
+                else:
+                    failed_count += 1
+                    logger.error(
+                        f"[{completed}/{len(tasks_to_process)}] {task_name}: {result['message']}"
+                    )
+    else:
+        # Sequential processing
+        for idx, task in enumerate(tasks_to_process, 1):
+            log_progress(idx, len(tasks_to_process), f"{task[0]}/{task[1]}/{task[2]}")
+            benchmark_name, harness_name, cpv_id, result = process_single_task(task)
+            results.append((benchmark_name, harness_name, cpv_id, result))
+
+            if result["success"]:
+                success_count += 1
+                logger.success(f"Generated: {result['vuln_yaml_path']}")
+            else:
+                failed_count += 1
+                logger.error(f"Failed: {result['message']}")
 
     # Print summary
     log_summary(

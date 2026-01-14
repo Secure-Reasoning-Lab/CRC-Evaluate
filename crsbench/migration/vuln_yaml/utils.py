@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import yaml
+
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -78,9 +80,10 @@ def generate_vuln_yaml_for_cpv(
     # Check if vuln.yaml already exists
     vuln_yaml_path = cpv_path / "vuln.yaml"
     is_temporary = False
+    existing_author: Optional[str] = None
 
     if vuln_yaml_path.exists():
-        # Check if it's a temporary/MOCK file
+        # Check if it's a temporary/MOCK file and extract existing author
         try:
             content = vuln_yaml_path.read_text()
             # Check for MOCK or TBD markers indicating temporary content
@@ -90,6 +93,16 @@ def generate_vuln_yaml_for_cpv(
                     logger.debug(
                         "Found temporary vuln.yaml (contains MOCK/TBD), will regenerate..."
                     )
+
+            # Extract author field from existing vuln.yaml to preserve it
+            try:
+                existing_data = yaml.safe_load(content)
+                if isinstance(existing_data, dict) and "author" in existing_data:
+                    existing_author = existing_data["author"]
+                    if verbose:
+                        logger.debug(f"Found existing author: {existing_author}")
+            except yaml.YAMLError:
+                pass  # Ignore YAML parsing errors for author extraction
         except Exception as e:
             if verbose:
                 logger.warning(f"Could not read existing vuln.yaml: {e}")
@@ -138,6 +151,25 @@ def generate_vuln_yaml_for_cpv(
             analysis_md, cpv_id, harness_name, max_retries=2, verbose=verbose
         )
     )
+
+    # Inject existing author field if present
+    if existing_author:
+        try:
+            yaml_data = yaml.safe_load(vuln_yaml_content)
+            if isinstance(yaml_data, dict):
+                yaml_data["author"] = existing_author
+                # Regenerate YAML with author field preserved
+                vuln_yaml_content = yaml.dump(
+                    yaml_data,
+                    default_flow_style=False,
+                    allow_unicode=True,
+                    sort_keys=False,
+                )
+                if verbose:
+                    logger.debug(f"Preserved author field: {existing_author}")
+        except yaml.YAMLError as e:
+            if verbose:
+                logger.warning(f"Could not inject author field: {e}")
 
     # Save vuln.yaml
     with vuln_yaml_path.open("w") as f:
