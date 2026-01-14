@@ -1,42 +1,44 @@
 """Benchmark CI module for end-to-end testing of CRSBench benchmarks.
 
 This module provides comprehensive testing for benchmarks including:
-- File format validation
-- Build verification
-- POV reproduction testing
-- Patch verification
-- test.sh execution validation
+- Delta/Full mode build verification
+- POV reproduction testing (using VerificationEngine)
+- Patch verification (using PatchVerificationEngine)
+- Coverage measurement (using CoverageEngine)
+- Incremental build image pulling
+
+Structure:
+- models.py: Data models (JobContext, Task, CIResult, etc.)
+- runner.py: BenchmarkCIRunner for orchestrating tests
+- jobs/: Job executor classes
+- cli/: Command-line interface
 """
 
-from crsbench.benchmark_ci.run_helper import (
-    DockerExecutionError,
-    FatalTestError,
-    TestExecutionError,
-    TestExitCode,
-    TestFailedError,
-)
-from crsbench.benchmark_ci.utils import (
-    POV,
+from crsbench.benchmark_ci.models import (
+    CIResult,
     ExecJobType,
-    Harness,
+    IncBuildMetrics,
     JobContext,
+    JobResult,
+    ResultCollector,
     Task,
     TaskMode,
-    Vulnerability,
+    get_benchmarks_root,
 )
+from crsbench.benchmark_ci.runner import BenchmarkCIRunner
 
 __all__ = [
+    # Runner
+    "BenchmarkCIRunner",
+    # Models
     "JobContext",
     "ExecJobType",
     "TaskMode",
     "Task",
-    "Harness",
-    "Vulnerability",
-    "POV",
-    # Test exit code handling
-    "TestExitCode",
-    "TestExecutionError",
-    "DockerExecutionError",
-    "TestFailedError",
-    "FatalTestError",
+    "IncBuildMetrics",
+    "JobResult",
+    "CIResult",
+    "ResultCollector",
+    # Utilities
+    "get_benchmarks_root",
 ]
