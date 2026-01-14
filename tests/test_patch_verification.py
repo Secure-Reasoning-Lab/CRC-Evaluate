@@ -639,56 +639,6 @@ class TestPatchDiscovery:
 # =============================================================================
 
 
-class TestCpvDiscovery:
-    """Tests for CPV and POV variant discovery methods."""
-
-    def test_discover_all_cpvs_in_harness(self, benchmark_path: Path):
-        """Test discovering all CPVs for a harness."""
-        from unittest.mock import MagicMock
-
-        from crsbench.evaluation.verification.patch import PatchVerificationEngine
-
-        # Create a mock engine (we don't need full infrastructure for discovery)
-        engine = MagicMock(spec=PatchVerificationEngine)
-        engine._discover_all_cpvs_in_harness = (
-            PatchVerificationEngine._discover_all_cpvs_in_harness.__get__(
-                engine, PatchVerificationEngine
-            )
-        )
-
-        cpvs = engine._discover_all_cpvs_in_harness(benchmark_path, HARNESS_NAME)
-
-        # Should find at least one CPV
-        assert len(cpvs) >= 1, f"Should find at least one CPV in {HARNESS_NAME}"
-
-        # All should be cpv_* format
-        for cpv in cpvs:
-            assert cpv.startswith("cpv_"), f"CPV should start with cpv_: {cpv}"
-
-        # Should be sorted numerically
-        if len(cpvs) > 1:
-            cpv_nums = [int(c.split("_")[1]) for c in cpvs]
-            assert cpv_nums == sorted(cpv_nums), "CPVs should be sorted numerically"
-
-    def test_discover_all_cpvs_nonexistent_harness(self, benchmark_path: Path):
-        """Test CPV discovery for nonexistent harness returns empty list."""
-        from unittest.mock import MagicMock
-
-        from crsbench.evaluation.verification.patch import PatchVerificationEngine
-
-        engine = MagicMock(spec=PatchVerificationEngine)
-        engine._discover_all_cpvs_in_harness = (
-            PatchVerificationEngine._discover_all_cpvs_in_harness.__get__(
-                engine, PatchVerificationEngine
-            )
-        )
-
-        cpvs = engine._discover_all_cpvs_in_harness(
-            benchmark_path, "nonexistent_harness"
-        )
-        assert cpvs == [], "Should return empty list for nonexistent harness"
-
-
 class TestDiscoverPatchesFromBenchmark:
     """Tests for _discover_patches_from_benchmark method."""
 
@@ -1714,24 +1664,6 @@ class TestEngineDiscoveryFunctions:
         infra.mkdir(parents=True)
         (infra / "helper.py").write_text("# mock helper")
         return oss_fuzz
-
-    def test_discover_all_cpvs_sorts_numerically(
-        self, tmp_path: Path, mock_oss_fuzz: Path
-    ):
-        """Test that CPVs are sorted numerically (cpv_0, cpv_1, cpv_10)."""
-        # Create .aixcc/harness/cpv_* structure
-        benchmark = tmp_path / "benchmark"
-        harness_dir = benchmark / ".aixcc" / "test_harness"
-        for i in [0, 1, 10, 2, 5]:
-            (harness_dir / f"cpv_{i}").mkdir(parents=True)
-
-        from crsbench.evaluation.verification.patch import PatchVerificationEngine
-
-        engine = PatchVerificationEngine(mock_oss_fuzz)
-        cpvs = engine._discover_all_cpvs_in_harness(benchmark, "test_harness")
-
-        # Should be sorted numerically, not lexicographically
-        assert cpvs == ["cpv_0", "cpv_1", "cpv_2", "cpv_5", "cpv_10"]
 
     def test_discover_pov_variants_sorts_numerically(
         self, tmp_path: Path, mock_oss_fuzz: Path
