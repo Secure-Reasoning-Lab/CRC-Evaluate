@@ -847,20 +847,21 @@ class CRSBugFindingExecutor(CRSExecutor):
         )
 
     def _get_oss_fuzz_build_output_dir(
-        self, build_dir: Path, harness_name: str
+        self, trial_output_dir: Path, harness_name: str
     ) -> Path:
         """Get OSS-Fuzz build output directory path.
 
         The build output is at:
-        {{ build_dir }}/crs/oss-fuzz/{{ harness_name }}/build/out/
+        {{ trial_output_dir }}/crs-build/crs/oss-fuzz/{{ harness_name }}/build/out/
 
         Args:
-            build_dir: Build directory
+            trial_output_dir: Trial directory (from TrialDirectoryPreparer)
             harness_name: Harness name
 
         Returns:
             Path to OSS-Fuzz build output directory
         """
+        build_dir = trial_output_dir / "crs-build"
         return build_dir / "crs" / "oss-fuzz" / harness_name / "build" / "out"
 
     def _prepare_hints(
