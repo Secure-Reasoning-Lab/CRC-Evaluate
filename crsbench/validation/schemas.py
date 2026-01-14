@@ -339,6 +339,13 @@ class HarnessFile(BaseModel):
 class VulnerabilityLocation(BaseModel):
     """Location of vulnerable code in the repository."""
 
+    type: Optional[Literal["crash_site", "root_cause"]] = Field(
+        default=None,
+        description=(
+            "Type of location: 'crash_site' (where crash occurs, excluding 3rd-party "
+            "libraries) or 'root_cause' (underlying defect that enables vulnerability)"
+        ),
+    )
     path_from_root: str = Field(description="Path to the file from repository root")
     function_name: Optional[str] = Field(
         default=None, description="Name of the function containing the vulnerability"
@@ -364,6 +371,22 @@ class VulnerabilityMetadata(BaseModel):
 
     id: str = Field(description="Vulnerability identifier (e.g., cpv_0, cpv_1)")
     name: str = Field(description="Human-readable name for the vulnerability")
+    author: Optional[str] = Field(
+        default=None,
+        description="Author who created or labeled this vulnerability metadata",
+    )
+    origin: Optional[Literal["1-day", "synthetic"]] = Field(
+        default=None,
+        description="Origin of vulnerability: '1-day' (real CVE) or 'synthetic' (artificially created)",
+    )
+    release_date: Optional[str] = Field(
+        default=None,
+        description="Vulnerability disclosure date in MM/DD/YYYY format",
+    )
+    references: List[str] = Field(
+        default_factory=list,
+        description="URLs to vulnerability details (CVE, OSV, GitHub advisory, bug tracker)",
+    )
     cwes: List[str] = Field(
         default_factory=list,
         description="List of CWE identifiers associated with this vulnerability",
