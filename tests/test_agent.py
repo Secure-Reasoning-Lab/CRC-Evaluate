@@ -152,11 +152,13 @@ class TestShTestGenerator:
 
     def test_agent_missing_base_url(self):
         """Test agent raises error when base URL is missing."""
-        # Clear env var
+        # Clear env vars
         if "LITELLM_BASE_URL" in os.environ:
             del os.environ["LITELLM_BASE_URL"]
+        if "LITELLM_API_BASE" in os.environ:
+            del os.environ["LITELLM_API_BASE"]
 
-        with pytest.raises(ValueError, match="LITELLM_BASE_URL"):
+        with pytest.raises(ValueError, match="LITELLM_BASE_URL or LITELLM_API_BASE"):
             ShTestGenerator(litellm_api_key="test-key")
 
     def test_agent_missing_api_key(self):
