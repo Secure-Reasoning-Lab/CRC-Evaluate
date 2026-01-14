@@ -111,28 +111,48 @@ class CRSBugFindingExecutor(CRSExecutor):
         self,
         trial_output_dir: Path,
         target_harness: str,
+        project_name: str,
     ) -> None:
         """Clean up files from harnesses other than the target.
 
         Args:
             trial_output_dir: Trial directory containing CRS outputs
             target_harness: Name of the harness to keep
+            project_name: Project name (for CRS output directory path)
         """
+        # Clean OSS-Fuzz build output
         build_out_dir = self._get_oss_fuzz_build_output_dir(
             trial_output_dir, target_harness
         )
 
-        if not build_out_dir.exists():
-            logger.debug(f"OSS-Fuzz build output dir not found: {build_out_dir}")
-            return
+        if build_out_dir.exists():
+            # Iterate subdirectories under build/out/
+            for subdir in build_out_dir.iterdir():
+                if not subdir.is_dir():
+                    continue
+                # Iterate files inside each subdirectory
+                for item in subdir.iterdir():
+                    # TODO: check this logic is enough that we don't remove neceesary files
+                    if target_harness not in item.name:
+                        logger.info(f"Removing non-target harness file: {item}")
+                        if item.is_dir():
+                            shutil.rmtree(item)
+                        else:
+                            item.unlink()
 
-        # Iterate subdirectories under build/out/
-        for subdir in build_out_dir.iterdir():
-            if not subdir.is_dir():
+        # Clean up CRS output directories for each CRS in ensemble
+        from crsbench.utils.crs_helper import get_all_crs_registry_names
+
+        crs_names = get_all_crs_registry_names(
+            self.crs_config_name, self.crs_configs_dir
+        )
+        build_dir = trial_output_dir / "crs-build"
+
+        for crs_name in crs_names:
+            crs_out_dir = build_dir / "out" / crs_name / project_name
+            if not crs_out_dir.exists():
                 continue
-            # Iterate files inside each subdirectory
-            for item in subdir.iterdir():
-                # TODO: check this logic is enough that we don't remove neceesary files
+            for item in crs_out_dir.iterdir():
                 if target_harness not in item.name:
                     logger.info(f"Removing non-target harness file: {item}")
                     if item.is_dir():
@@ -367,7 +387,7 @@ class CRSBugFindingExecutor(CRSExecutor):
 
             # Cleanup other harness files to optimize disk usage
             harness_name = Path(harness.name).stem
-            self.cleanup_other_harnesses(trial_output_dir, harness_name)
+            self.cleanup_other_harnesses(trial_output_dir, harness_name, project_name)
 
             # Signal that CRS run is starting (after build)
             if on_run_start:

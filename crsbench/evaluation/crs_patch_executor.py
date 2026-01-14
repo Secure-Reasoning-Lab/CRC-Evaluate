@@ -86,12 +86,14 @@ class CRSPatchExecutor(CRSExecutor):
         self,
         trial_output_dir: Path,
         target_harness: str,
+        project_name: str,
     ) -> None:
         """Clean up files from harnesses other than the target.
 
         Args:
             trial_output_dir: Trial directory containing CRS outputs
             target_harness: Name of the harness to keep
+            project_name: Project name (for CRS output directory path)
         """
         # TODO: Implement cleanup logic for disk optimization
 

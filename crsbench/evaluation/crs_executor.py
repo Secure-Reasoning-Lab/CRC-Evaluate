@@ -97,6 +97,7 @@ class CRSExecutor(ABC):
         self,
         trial_output_dir: Path,
         target_harness: str,
+        project_name: str,
     ) -> None:
         """Clean up files from harnesses other than the target to optimize disk usage.
 
@@ -105,6 +106,7 @@ class CRSExecutor(ABC):
         Args:
             trial_output_dir: Trial directory containing CRS outputs
             target_harness: Name of the harness to keep (all others will be cleaned)
+            project_name: Project name (for CRS output directory path)
 
         Note:
             Default implementation is a no-op. Subclasses should override
