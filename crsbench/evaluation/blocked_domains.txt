@@ -1,0 +1,65 @@
+# Blocked domains for CRS anti-cheating
+# These domains are blocked to prevent CRS from accessing
+# vulnerability information during benchmark evaluation.
+
+# Search Engines
+.google.com
+.google.co.kr
+.google.co.jp
+.google.co.uk
+.google.de
+.google.fr
+.google.ca
+.google.com.au
+.google.com.br
+.google.co.in
+.google.ru
+.google.cn
+.bing.com
+.duckduckgo.com
+.yahoo.com
+.yahoo.co.jp
+.yahoo.co.kr
+.yandex.com
+.yandex.ru
+.baidu.com
+.naver.com
+
+# Vulnerability Databases
+.cve.mitre.org
+.nvd.nist.gov
+.exploit-db.com
+.osv.dev
+.cvedetails.com
+.vuldb.com
+.snyk.io
+.vulners.com
+
+# Bug Trackers
+.issues.chromium.org
+.crbug.com
+.bugs.chromium.org
+.bugzilla.mozilla.org
+.bugs.launchpad.net
+.bugzilla.redhat.com
+.bugzilla.suse.com
+
+# Security Advisories
+.securityfocus.com
+.packetstormsecurity.com
+.zerodayinitiative.com
+.rapid7.com
+.tenable.com
+.qualys.com
+
+# Bug Bounty / Security Research
+.huntr.dev
+.hackerone.com
+.bugcrowd.com
+
+# Distribution Security Notices
+.security.gentoo.org
+
+# CTF Sites
+.ctftime.org
+.ctf101.org

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from crsbench.evaluation.crs_executor import CRSExecutionResult, CRSExecutor
+from crsbench.evaluation.network import ContainerBlockingWatcher
 from crsbench.evaluation.process_utils import run_with_graceful_timeout
 from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.logger import get_logger
@@ -399,18 +400,43 @@ class CRSBugFindingExecutor(CRSExecutor):
             env = os.environ.copy()
             env.update(litellm_env)
 
+            # Anti-cheating network blocking setup
+            block_network = self.config.get("block_external_network", True)
+            crs_image_name = f"gcr.io/oss-fuzz/{self.actual_crs_name}"
+
             timeout = self.config.get("run_timeout", 7200)
             grace_period = self.config.get("graceful_timeout", 60)
 
-            # Run with graceful timeout handling
-            stdout, stderr, returncode, timed_out = run_with_graceful_timeout(
-                cmd=cmd,
-                timeout=timeout,
-                grace_period=grace_period,
-                cwd=trial_output_dir,
-                env=env,
-                stop_event=stop_event,
-            )
+            # Use ContainerBlockingWatcher to inject iptables rules into CRS container
+            if block_network:
+                logger.info(
+                    f"Anti-cheating network blocking enabled for image: {crs_image_name}"
+                )
+                watcher = ContainerBlockingWatcher(crs_image_name)
+            else:
+                watcher = None
+
+            # Run with optional network blocking
+            if watcher:
+                with watcher:
+                    stdout, stderr, returncode, timed_out = run_with_graceful_timeout(
+                        cmd=cmd,
+                        timeout=timeout,
+                        grace_period=grace_period,
+                        cwd=trial_output_dir,
+                        env=env,
+                        stop_event=stop_event,
+                    )
+                logger.info(f"Blocked {len(watcher.blocked_containers)} container(s)")
+            else:
+                stdout, stderr, returncode, timed_out = run_with_graceful_timeout(
+                    cmd=cmd,
+                    timeout=timeout,
+                    grace_period=grace_period,
+                    cwd=trial_output_dir,
+                    env=env,
+                    stop_event=stop_event,
+                )
 
             execution_time = time.time() - start_time
 
