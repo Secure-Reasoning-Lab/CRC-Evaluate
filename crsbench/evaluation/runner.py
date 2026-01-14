@@ -210,6 +210,9 @@ class BenchmarkRunner:
 
             return EvaluationResult(report, pov_verification_results)
 
+        except BenchmarkFormatError:
+            # Let validation errors propagate unchanged
+            raise
         except Exception as e:
             self.logger.error(f"Benchmark evaluation failed: {str(e)}")
             raise EvaluationError(f"Failed to evaluate benchmark: {str(e)}") from e
