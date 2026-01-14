@@ -230,6 +230,7 @@ migration_report.csv
 
 # Agent logs
 *agent_log.txt
+!vuln_agent_log.txt
 
 # Local sources
 .crsbench-repos
@@ -264,3 +265,5 @@ next-env.d.ts
 # auto generated version tracking files
 crsbench/_version.py
 crsbench/_submodule_commits.py
+
+*.old
