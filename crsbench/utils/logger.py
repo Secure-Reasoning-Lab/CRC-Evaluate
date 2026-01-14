@@ -705,3 +705,23 @@ def log_error_detail(
     else:
         # Normal length message
         log_func(f"Message: {error_msg}")
+
+
+def escape_loguru_braces(message: str) -> str:
+    """Escape curly braces in a string for safe loguru logging.
+
+    Loguru interprets curly braces as format placeholders. This function
+    escapes them to prevent formatting errors in log messages.
+
+    Args:
+        message: String that may contain curly braces
+
+    Returns:
+        String with escaped curly braces
+
+    Example:
+        >>> error_msg = "Invalid JSON: {key: value}"
+        >>> safe_msg = escape_loguru_braces(error_msg)
+        >>> logger.error(f"Error: {safe_msg}")
+    """
+    return message.replace("{", "{{").replace("}", "}}")
