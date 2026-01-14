@@ -5,6 +5,7 @@ This module contains the VulnYamlValidationError class and validate_vuln_yaml
 function for validating vuln.yaml content.
 """
 
+import re
 from typing import List
 
 import yaml
@@ -108,6 +109,32 @@ def validate_vuln_yaml(yaml_content: str) -> List[VulnYamlValidationError]:
                 )
             break
 
+    # Validate 'origin' field if present
+    if "origin" in data:
+        origin = data["origin"]
+        valid_origins = ["1-day", "synthetic"]
+        if origin not in valid_origins:
+            errors.append(
+                VulnYamlValidationError(
+                    "origin",
+                    f"Invalid origin value. Must be one of: {valid_origins}",
+                    str(origin),
+                )
+            )
+
+    # Validate 'release_date' field if present
+    if "release_date" in data:
+        release_date = str(data["release_date"])
+        # Basic format check for MM/DD/YYYY
+        if not re.match(r"^\d{2}/\d{2}/\d{4}$", release_date):
+            errors.append(
+                VulnYamlValidationError(
+                    "release_date",
+                    "Invalid date format. Must be MM/DD/YYYY",
+                    release_date,
+                )
+            )
+
     # Validate 'description' field
     if "description" in data:
         desc = str(data["description"])
@@ -175,6 +202,19 @@ def validate_vuln_yaml(yaml_content: str) -> List[VulnYamlValidationError]:
                                 f"locations[{idx}].path_from_root",
                                 "Contains placeholder or empty value",
                                 path,
+                            )
+                        )
+
+                # Validate 'type' field if present
+                if "type" in loc:
+                    loc_type = loc["type"]
+                    valid_types = ["crash_site", "root_cause"]
+                    if loc_type not in valid_types:
+                        errors.append(
+                            VulnYamlValidationError(
+                                f"locations[{idx}].type",
+                                f"Invalid type value. Must be one of: {valid_types}",
+                                str(loc_type),
                             )
                         )
 

@@ -647,31 +647,77 @@ def clone_or_copy_cached_repo(
             # Fall through to clone
 
     # No cache - clone directly to target
-    if verbose:
-        logger.info(f"📦 No cache available, cloning to {target_dir}...")
+    # If target_dir == cache_dir, we need to protect the clone with a lock
+    # to prevent parallel workers from cloning to the same directory
+    target_is_cache = str(Path(target_dir).resolve()) == str(Path(cache_dir).resolve())
 
-    success = clone_repository(
-        repo_url=repo_url, target_dir=target_dir, commit=commit, verbose=verbose
-    )
+    if target_is_cache:
+        # Clone to cache directory with lock protection
+        with cache_lock:
+            # Double-check: another worker might have created cache while we waited
+            if Path(cache_dir).is_dir() and (Path(cache_dir) / ".git").exists():
+                try:
+                    result = run_git(
+                        ["rev-parse", "HEAD"],
+                        cwd=cache_dir,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
+                    )
+                    if result.returncode == 0:
+                        current_commit = result.stdout.strip()
+                        if current_commit.startswith(commit[:8]):
+                            if verbose:
+                                logger.info(
+                                    f"✅ Cache created by another worker: {cache_dir}"
+                                )
+                            reset_and_clean_repo(cache_dir, verbose=verbose)
+                            return cache_dir
+                except Exception:
+                    pass
 
-    if not success:
-        return None
-
-    # Populate cache for future uses (protected by lock)
-    with cache_lock:
-        if not Path(cache_dir).is_dir():
             if verbose:
-                logger.info(f"📦 Populating cache: {target_dir} -> {cache_dir}")
-            try:
-                shutil.copytree(
-                    target_dir, cache_dir, symlinks=True, ignore_dangling_symlinks=True
-                )
-                if verbose:
-                    logger.info(f"✅ Cache created at {cache_dir}")
-            except Exception as e:
-                logger.warning(f"⚠️  Failed to create cache: {e}")
+                logger.info(f"📦 No cache available, cloning to {target_dir}...")
 
-    return target_dir
+            success = clone_repository(
+                repo_url=repo_url, target_dir=target_dir, commit=commit, verbose=verbose
+            )
+
+            if not success:
+                return None
+
+            return target_dir
+    else:
+        # Clone to separate target_dir (not the cache)
+        if verbose:
+            logger.info(f"📦 No cache available, cloning to {target_dir}...")
+
+        success = clone_repository(
+            repo_url=repo_url, target_dir=target_dir, commit=commit, verbose=verbose
+        )
+
+        if not success:
+            return None
+
+        # Populate cache for future uses (protected by lock)
+        with cache_lock:
+            if not Path(cache_dir).is_dir():
+                if verbose:
+                    logger.info(f"📦 Populating cache: {target_dir} -> {cache_dir}")
+                try:
+                    shutil.copytree(
+                        target_dir,
+                        cache_dir,
+                        symlinks=True,
+                        ignore_dangling_symlinks=True,
+                    )
+                    if verbose:
+                        logger.info(f"✅ Cache created at {cache_dir}")
+                except Exception as e:
+                    logger.warning(f"⚠️  Failed to create cache: {e}")
+
+        return target_dir
 
 
 def ensure_project_repository(
