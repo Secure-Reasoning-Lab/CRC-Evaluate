@@ -92,6 +92,8 @@ class VerificationEngine:
         dedup_strategy: DeduplicationStrategy | None = None,
         build_workers: int = DEFAULT_WORKERS,
         verify_workers: int = DEFAULT_WORKERS,
+        *,
+        source_mode: str = "pkgs",
     ):
         """Initialize the verification engine.
 
@@ -101,11 +103,14 @@ class VerificationEngine:
             dedup_strategy: Deduplication strategy instance (defaults to PatchBasedDedup)
             build_workers: Maximum number of parallel workers for building
             verify_workers: Maximum number of parallel workers for verification
+            source_mode: Source mode - "pkgs" (bundled, default) or "main_repo" (clone)
         """
         self.oss_fuzz_path = Path(oss_fuzz_path)
         self.timeout = timeout
         self.verify_workers = verify_workers
-        self.builder = OSSFuzzBuilder(oss_fuzz_path, max_workers=build_workers)
+        self.builder = OSSFuzzBuilder(
+            oss_fuzz_path, max_workers=build_workers, source_mode=source_mode
+        )
         self.dedup_strategy = dedup_strategy if dedup_strategy else PatchBasedDedup()
         self._built_results: dict[str, dict[str, BuildResult]] = {}
 

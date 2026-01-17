@@ -51,15 +51,19 @@ class OSSFuzzBuilder:
         self,
         oss_fuzz_path: Path,
         max_workers: int = 4,
+        *,
+        source_mode: str = "pkgs",
     ):
         """Initialize the builder.
 
         Args:
             oss_fuzz_path: Path to oss-fuzz directory
             max_workers: Maximum number of parallel workers (default: 4)
+            source_mode: Source mode - "pkgs" (bundled, default) or "main_repo" (clone)
         """
         self.oss_fuzz_path = Path(oss_fuzz_path).resolve()
         self.max_workers = max_workers
+        self.source_mode = source_mode
         self.infra = OSSFuzzInfrastructure(oss_fuzz_path)
         self.executor = ParallelExecutor(max_workers)
 
@@ -121,19 +125,14 @@ class OSSFuzzBuilder:
         Args:
             configs: Build configurations to process
         """
-        from crsbench.benchmark.runtime import has_bundled_source
-
-        # Skip caching if all configs use bundled source
-        if configs and all(has_bundled_source(c.benchmark_path) for c in configs):
-            logger.debug("All builds use bundled source, skipping repo cache")
+        # Skip caching in pkgs mode - bundled source doesn't need git repos
+        if self.source_mode == "pkgs":
+            logger.debug("Using pkgs source mode, skipping repo cache")
             return
 
-        # Collect unique (main_repo, commit, repo_name) combinations
+        # main_repo mode - cache all unique repos
         unique_repos: dict[str, BuildConfig] = {}
         for config in configs:
-            # Skip configs that use bundled source
-            if has_bundled_source(config.benchmark_path):
-                continue
             cache_key = f"{config.main_repo}:{config.commit}"
             if cache_key not in unique_repos:
                 unique_repos[cache_key] = config
@@ -296,8 +295,9 @@ class OSSFuzzBuilder:
     def _prepare_source(self, config: BuildConfig, temp_dir: Path) -> Optional[Path]:
         """Prepare source for building - from pkgs/ or git clone.
 
-        For bundled benchmarks (pkgs/), extracts tarball and applies ref.diff
-        when needed. Falls back to git clone for non-bundled benchmarks.
+        Source mode determines how source is obtained:
+        - "pkgs": Use bundled tarballs from pkgs/ (default, requires pkgs/)
+        - "main_repo": Clone from main_repo in project.yaml
 
         Args:
             config: Build configuration
@@ -305,6 +305,9 @@ class OSSFuzzBuilder:
 
         Returns:
             Path to prepared source, or None on failure
+
+        Raises:
+            RuntimeError: If source_mode is "pkgs" but no pkgs/ exists
         """
         from crsbench.benchmark.runtime import (
             has_bundled_source,
@@ -313,37 +316,43 @@ class OSSFuzzBuilder:
 
         benchmark_path = config.benchmark_path
 
-        # Check for bundled source
-        if has_bundled_source(benchmark_path):
-            # Get source name from Dockerfile WORKDIR
-            from crsbench.benchmark.packaging import get_expected_source_dir
+        # Handle main_repo mode - always clone from git
+        if self.source_mode == "main_repo":
+            logger.info("Using main_repo source (cloning from git)")
+            return self.infra.clone_source(config, temp_dir)
 
-            dockerfile = benchmark_path / "Dockerfile"
-            source_name = get_expected_source_dir(dockerfile)
-            if not source_name:
-                # Fall back to repo_name or benchmark name
-                source_name = config.repo_name or benchmark_path.name
-                logger.debug(f"No WORKDIR found, using: {source_name}")
-
-            # Determine if ref.diff should be applied
-            # DELTA_BASE and FULL_BASE use base commit (no ref.diff)
-            # DELTA_REF, ALL_PATCHED, CPV use ref commit (apply ref.diff)
-            apply_ref_diff = self._needs_ref_diff(config.variant_type)
-
-            logger.info(
-                f"Using bundled source: {source_name}.tar.gz "
-                f"(apply_ref_diff={apply_ref_diff})"
-            )
-            return prepare_source_from_bundle(
-                benchmark_path,
-                temp_dir,
-                source_name,
-                apply_ref_diff=apply_ref_diff,
+        # pkgs mode (default) - require bundled source
+        if not has_bundled_source(benchmark_path):
+            raise RuntimeError(
+                f"No bundled source (pkgs/) found for {benchmark_path.name}. "
+                "Run 'crsbench benchmark bundle' first, or use --source main_repo."
             )
 
-        # Fall back to git clone
-        logger.debug("No bundled source, cloning from git")
-        return self.infra.clone_source(config, temp_dir)
+        # Get source name from Dockerfile WORKDIR
+        from crsbench.benchmark.packaging import get_expected_source_dir
+
+        dockerfile = benchmark_path / "Dockerfile"
+        source_name = get_expected_source_dir(dockerfile)
+        if not source_name:
+            # Fall back to repo_name or benchmark name
+            source_name = config.repo_name or benchmark_path.name
+            logger.debug(f"No WORKDIR found, using: {source_name}")
+
+        # Determine if ref.diff should be applied
+        # DELTA_BASE and FULL_BASE use base commit (no ref.diff)
+        # DELTA_REF, ALL_PATCHED, CPV use ref commit (apply ref.diff)
+        apply_ref_diff = self._needs_ref_diff(config.variant_type)
+
+        logger.info(
+            f"Using bundled source: {source_name}.tar.gz "
+            f"(apply_ref_diff={apply_ref_diff})"
+        )
+        return prepare_source_from_bundle(
+            benchmark_path,
+            temp_dir,
+            source_name,
+            apply_ref_diff=apply_ref_diff,
+        )
 
     def _needs_ref_diff(self, variant_type: VariantType) -> bool:
         """Check if variant needs ref.diff applied.

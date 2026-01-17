@@ -166,6 +166,16 @@ Examples:
         help="Path to oss-fuzz directory (default: ./oss-fuzz)",
     )
 
+    # Source mode
+    parser.add_argument(
+        "--source",
+        type=str,
+        default="pkgs",
+        choices=["pkgs", "main_repo"],
+        help="Source for benchmark code: 'pkgs' uses bundled tarballs (default), "
+        "'main_repo' clones from repository",
+    )
+
     # Test mode
     parser.add_argument(
         "--test-mode",
@@ -355,6 +365,7 @@ def run_patch_verify(args: argparse.Namespace) -> int:
         verify_variants=not args.no_variants,
         force_rebuild=args.force_rebuild,
         use_inc_build=not args.no_inc_build,
+        source_mode=args.source,
     )
 
     logger.info(f"Verifying patches for benchmark: {args.benchmark_path}")
