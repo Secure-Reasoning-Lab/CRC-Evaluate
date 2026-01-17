@@ -511,7 +511,7 @@ class OSSFuzzInfrastructure:
     def build_fuzzers(
         self,
         config: BuildConfig,
-        src_path: Path,
+        src_path: Optional[Path] = None,
         *,
         use_inc_image: bool = False,
     ) -> bool:
@@ -519,7 +519,7 @@ class OSSFuzzInfrastructure:
 
         Args:
             config: Build configuration
-            src_path: Path to source repository
+            src_path: Path to source repository. If None, uses bundled source in Docker.
             use_inc_image: Use pre-built inc-build image for faster builds
 
         Returns:
@@ -552,7 +552,10 @@ class OSSFuzzInfrastructure:
                 ]
             )
 
-        cmd.extend([variant_name, str(src_path)])
+        cmd.append(variant_name)
+        # Only add source path if provided (not using bundled pkgs/)
+        if src_path:
+            cmd.append(str(src_path))
 
         logger.info(f"Building {variant_name} with {config.sanitizer} sanitizer...")
         logger.debug(f"Command: {' '.join(cmd)}")

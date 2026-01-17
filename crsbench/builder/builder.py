@@ -121,9 +121,19 @@ class OSSFuzzBuilder:
         Args:
             configs: Build configurations to process
         """
+        from crsbench.benchmark.runtime import has_bundled_source
+
+        # Skip caching if all configs use bundled source
+        if configs and all(has_bundled_source(c.benchmark_path) for c in configs):
+            logger.debug("All builds use bundled source, skipping repo cache")
+            return
+
         # Collect unique (main_repo, commit, repo_name) combinations
         unique_repos: dict[str, BuildConfig] = {}
         for config in configs:
+            # Skip configs that use bundled source
+            if has_bundled_source(config.benchmark_path):
+                continue
             cache_key = f"{config.main_repo}:{config.commit}"
             if cache_key not in unique_repos:
                 unique_repos[cache_key] = config
@@ -214,6 +224,10 @@ class OSSFuzzBuilder:
     def _build_standard(self, config: BuildConfig, start_time: float) -> BuildResult:
         """Build a variant using standard OSS-Fuzz build process.
 
+        Supports two source modes:
+        1. Bundled source (pkgs/): Extract tarball, apply ref.diff if needed
+        2. Git clone: Clone from main_repo and checkout commit
+
         Args:
             config: Build configuration
             start_time: Build start time
@@ -235,14 +249,14 @@ class OSSFuzzBuilder:
                 elapsed_seconds=time.time() - start_time,
             )
 
-        # Clone and checkout source
+        # Prepare source (from pkgs/ or git clone)
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
-                repo_path = self.infra.clone_source(config, Path(temp_dir))
+                repo_path = self._prepare_source(config, Path(temp_dir))
                 if not repo_path:
                     return BuildResult.from_error(
                         config=config,
-                        error="Failed to clone source repository",
+                        error="Failed to prepare source",
                         elapsed_seconds=time.time() - start_time,
                     )
 
@@ -279,6 +293,77 @@ class OSSFuzzBuilder:
                     elapsed_seconds=time.time() - start_time,
                 )
 
+    def _prepare_source(self, config: BuildConfig, temp_dir: Path) -> Optional[Path]:
+        """Prepare source for building - from pkgs/ or git clone.
+
+        For bundled benchmarks (pkgs/), extracts tarball and applies ref.diff
+        when needed. Falls back to git clone for non-bundled benchmarks.
+
+        Args:
+            config: Build configuration
+            temp_dir: Temporary directory for source extraction
+
+        Returns:
+            Path to prepared source, or None on failure
+        """
+        from crsbench.benchmark.runtime import (
+            has_bundled_source,
+            prepare_source_from_bundle,
+        )
+
+        benchmark_path = config.benchmark_path
+
+        # Check for bundled source
+        if has_bundled_source(benchmark_path):
+            # Get source name from Dockerfile WORKDIR
+            from crsbench.benchmark.packaging import get_expected_source_dir
+
+            dockerfile = benchmark_path / "Dockerfile"
+            source_name = get_expected_source_dir(dockerfile)
+            if not source_name:
+                # Fall back to repo_name or benchmark name
+                source_name = config.repo_name or benchmark_path.name
+                logger.debug(f"No WORKDIR found, using: {source_name}")
+
+            # Determine if ref.diff should be applied
+            # DELTA_BASE and FULL_BASE use base commit (no ref.diff)
+            # DELTA_REF, ALL_PATCHED, CPV use ref commit (apply ref.diff)
+            apply_ref_diff = self._needs_ref_diff(config.variant_type)
+
+            logger.info(
+                f"Using bundled source: {source_name}.tar.gz "
+                f"(apply_ref_diff={apply_ref_diff})"
+            )
+            return prepare_source_from_bundle(
+                benchmark_path,
+                temp_dir,
+                source_name,
+                apply_ref_diff=apply_ref_diff,
+            )
+
+        # Fall back to git clone
+        logger.debug("No bundled source, cloning from git")
+        return self.infra.clone_source(config, temp_dir)
+
+    def _needs_ref_diff(self, variant_type: VariantType) -> bool:
+        """Check if variant needs ref.diff applied.
+
+        ref.diff transforms base_commit → ref_commit state.
+        Needed for: DELTA_REF, ALL_PATCHED, CPV
+        Not needed for: DELTA_BASE, FULL_BASE, COVERAGE, PATCHED
+
+        Args:
+            variant_type: Type of variant being built
+
+        Returns:
+            True if ref.diff should be applied
+        """
+        return variant_type in (
+            VariantType.DELTA_REF,
+            VariantType.ALL_PATCHED,
+            VariantType.CPV,
+        )
+
     def _build_with_inc_image(
         self, config: BuildConfig, start_time: float
     ) -> BuildResult:
@@ -286,6 +371,8 @@ class OSSFuzzBuilder:
 
         Uses pre-built Docker images that contain compiled dependencies,
         allowing faster incremental builds when only the source changes.
+
+        Supports bundled source (pkgs/) and git clone.
 
         Args:
             config: Build configuration
@@ -296,14 +383,14 @@ class OSSFuzzBuilder:
         """
         variant_name = config.variant_name
 
-        # Clone and checkout source to a persistent location for inc-build
+        # Prepare source (from pkgs/ or git clone)
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
-                repo_path = self.infra.clone_source(config, Path(temp_dir))
+                repo_path = self._prepare_source(config, Path(temp_dir))
                 if not repo_path:
                     return BuildResult.from_error(
                         config=config,
-                        error="Failed to clone source repository",
+                        error="Failed to prepare source",
                         elapsed_seconds=time.time() - start_time,
                     )
 
