@@ -106,6 +106,7 @@ def prepare_source_from_bundle(
     source_name: str,
     *,
     apply_ref_diff: bool = False,
+    squash_history: bool = True,
 ) -> Optional[Path]:
     """Prepare source by extracting tarball from pkgs/.
 
@@ -118,6 +119,9 @@ def prepare_source_from_bundle(
         source_name: Name of source (e.g., "curl") - matches tarball name
         apply_ref_diff: If True, apply .aixcc/ref.diff after extraction
             (for deltaref, allpatched, cpvN variants)
+        squash_history: If True (default), squash git history after applying
+            ref.diff to prevent CRS from using `git diff` to discover changes.
+            Set to False for delta mode where CRS already has ref.diff hint.
 
     Returns:
         Path to extracted source directory, or None if failed
@@ -126,8 +130,11 @@ def prepare_source_from_bundle(
         # For deltabase variant (no ref.diff needed)
         src = prepare_source_from_bundle(bench_path, tmp, "curl")
 
-        # For deltaref variant (apply ref.diff)
+        # For fullbase variant (apply ref.diff, squash history)
         src = prepare_source_from_bundle(bench_path, tmp, "curl", apply_ref_diff=True)
+
+        # For deltaref variant (apply ref.diff, keep 2 commits)
+        src = prepare_source_from_bundle(bench_path, tmp, "curl", apply_ref_diff=True, squash_history=False)
     """
     benchmark_path = Path(benchmark_path)
     dest_dir = Path(dest_dir)
@@ -171,10 +178,22 @@ def prepare_source_from_bundle(
             if not _apply_diff(source_path, ref_diff_path):
                 logger.error("Failed to apply ref.diff")
                 return None
-            # Commit ref.diff changes so subsequent patches can be applied
-            if not _commit_changes(source_path, "Apply ref.diff"):
-                logger.error("Failed to commit ref.diff changes")
-                return None
+
+            if squash_history:
+                # Full mode: Re-initialize git to prevent history leakage
+                # This ensures CRS cannot use `git diff` to discover what changed
+                logger.info(
+                    "Re-initializing git to squash history (full mode protection)"
+                )
+                if not _reinit_git_repo(source_path):
+                    logger.error("Failed to re-initialize git repository")
+                    return None
+            else:
+                # Delta mode: Keep 2 commits (CRS already has ref.diff hint)
+                logger.info("Committing ref.diff changes (delta mode - 2 commits)")
+                if not _commit_changes(source_path, "Apply ref.diff"):
+                    logger.error("Failed to commit ref.diff changes")
+                    return None
         else:
             logger.warning(f"ref.diff not found at {ref_diff_path}, skipping")
 
@@ -205,6 +224,16 @@ def _init_git_repo(repo_path: Path) -> bool:
         True if successful
     """
     try:
+        # Common env to prevent any interactive prompts
+        git_env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "CRSBench",
+            "GIT_AUTHOR_EMAIL": "crsbench@example.com",
+            "GIT_COMMITTER_NAME": "CRSBench",
+            "GIT_COMMITTER_EMAIL": "crsbench@example.com",
+            "GIT_TERMINAL_PROMPT": "0",  # Prevent credential prompts
+        }
+
         # Git init
         result = subprocess.run(
             ["git", "init"],
@@ -212,6 +241,8 @@ def _init_git_repo(repo_path: Path) -> bool:
             capture_output=True,
             text=True,
             check=False,
+            stdin=subprocess.DEVNULL,  # Prevent interactive prompts
+            env=git_env,
         )
         if result.returncode != 0:
             logger.error(f"git init failed: {result.stderr}")
@@ -224,6 +255,8 @@ def _init_git_repo(repo_path: Path) -> bool:
             capture_output=True,
             text=True,
             check=False,
+            stdin=subprocess.DEVNULL,
+            env=git_env,
         )
         if result.returncode != 0:
             logger.error(f"git add failed: {result.stderr}")
@@ -236,13 +269,8 @@ def _init_git_repo(repo_path: Path) -> bool:
             capture_output=True,
             text=True,
             check=False,
-            env={
-                **os.environ,
-                "GIT_AUTHOR_NAME": "CRSBench",
-                "GIT_AUTHOR_EMAIL": "crsbench@example.com",
-                "GIT_COMMITTER_NAME": "CRSBench",
-                "GIT_COMMITTER_EMAIL": "crsbench@example.com",
-            },
+            stdin=subprocess.DEVNULL,
+            env=git_env,
         )
         if result.returncode != 0:
             logger.error(f"git commit failed: {result.stderr}")
@@ -251,6 +279,33 @@ def _init_git_repo(repo_path: Path) -> bool:
         return True
     except Exception as e:
         logger.error(f"Failed to init git repo: {e}")
+        return False
+
+
+def _reinit_git_repo(repo_path: Path) -> bool:
+    """Remove existing git history and create fresh single-commit repo.
+
+    This is used after applying ref.diff to ensure CRS cannot use
+    `git diff` or `git log` to discover what changes were made.
+
+    Args:
+        repo_path: Path to git repository
+
+    Returns:
+        True if successful
+    """
+    import shutil
+
+    try:
+        # Remove existing .git directory
+        git_dir = repo_path / ".git"
+        if git_dir.exists():
+            shutil.rmtree(git_dir)
+
+        # Re-initialize with fresh single commit
+        return _init_git_repo(repo_path)
+    except Exception as e:
+        logger.error(f"Failed to re-initialize git repo: {e}")
         return False
 
 
@@ -265,6 +320,16 @@ def _commit_changes(repo_path: Path, message: str) -> bool:
         True if successful
     """
     try:
+        # Common env to prevent any interactive prompts
+        git_env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "CRSBench",
+            "GIT_AUTHOR_EMAIL": "crsbench@example.com",
+            "GIT_COMMITTER_NAME": "CRSBench",
+            "GIT_COMMITTER_EMAIL": "crsbench@example.com",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+
         # Add all changes
         result = subprocess.run(
             ["git", "add", "."],
@@ -272,6 +337,8 @@ def _commit_changes(repo_path: Path, message: str) -> bool:
             capture_output=True,
             text=True,
             check=False,
+            stdin=subprocess.DEVNULL,
+            env=git_env,
         )
         if result.returncode != 0:
             logger.error(f"git add failed: {result.stderr}")
@@ -284,13 +351,8 @@ def _commit_changes(repo_path: Path, message: str) -> bool:
             capture_output=True,
             text=True,
             check=False,
-            env={
-                **os.environ,
-                "GIT_AUTHOR_NAME": "CRSBench",
-                "GIT_AUTHOR_EMAIL": "crsbench@example.com",
-                "GIT_COMMITTER_NAME": "CRSBench",
-                "GIT_COMMITTER_EMAIL": "crsbench@example.com",
-            },
+            stdin=subprocess.DEVNULL,
+            env=git_env,
         )
         if result.returncode != 0:
             logger.error(f"git commit failed: {result.stderr}")
@@ -321,6 +383,7 @@ def _apply_diff(repo_path: Path, diff_path: Path) -> bool:
             capture_output=True,
             text=True,
             check=False,
+            stdin=subprocess.DEVNULL,  # Prevent interactive prompts
         )
         if result.returncode != 0:
             logger.error(f"git apply failed: {result.stderr}")
