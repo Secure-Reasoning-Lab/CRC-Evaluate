@@ -25,12 +25,16 @@ def bundle_benchmark(
 ) -> Path:
     """Bundle benchmark by creating pkgs/ with source tarball.
 
+    Bundling differs based on benchmark type:
+    - Delta mode benchmarks: tarball at base_commit (pre-vuln) + ref.diff
+    - Full-only benchmarks: tarball at base_commit (vulnerable), no ref.diff
+
     Workflow:
     1. Validate benchmark structure
     2. Extract repo info from project.yaml and meta.yaml
     3. Determine source name from Dockerfile WORKDIR
     4. Clone repo, checkout base_commit, create tarball
-    5. Generate ref.diff if delta mode (ref_commit exists)
+    5. Generate ref.diff if delta mode (has ref_commit)
     6. Write pkg_refs.txt for provenance
 
     Args:
@@ -69,9 +73,17 @@ def bundle_benchmark(
             "Ensure project.yaml has main_repo and meta.yaml has base_commit."
         )
 
-    main_repo = info["main_repo"]
-    base_commit = info["base_commit"]
-    ref_commit = info.get("ref_commit")
+    main_repo = str(info["main_repo"])
+    base_commit = str(info["base_commit"])
+    has_delta_mode = bool(info.get("has_delta_mode", False))
+    ref_commit = str(info["ref_commit"]) if info.get("ref_commit") else None
+
+    # Validate: delta mode requires ref_commit
+    if has_delta_mode and not ref_commit:
+        raise ValueError(
+            "Delta mode benchmark requires ref_commit. "
+            "Add ref_commit to delta_mode section in meta.yaml."
+        )
 
     # 4. Determine source name from Dockerfile WORKDIR
     dockerfile = benchmark_path / "Dockerfile"
@@ -84,14 +96,18 @@ def bundle_benchmark(
             f"Using benchmark name: {source_name}"
         )
 
+    # Log bundling info
     logger.info(f"Bundling {benchmark_path.name}:")
     logger.info(f"  Source: {main_repo}")
     logger.info(f"  Base commit: {base_commit[:8]}")
-    if ref_commit:
-        logger.info(f"  Ref commit: {ref_commit[:8]} (delta mode)")
+    if has_delta_mode:
+        logger.info(f"  Ref commit: {ref_commit[:8] if ref_commit else 'N/A'}")
+        logger.info("  Mode: delta (tarball at pre-vuln, ref.diff generated)")
+    else:
+        logger.info("  Mode: full-only (tarball at vulnerable state, no ref.diff)")
     logger.info(f"  Tarball name: {source_name}.tar.gz")
 
-    # 5. Create tarball
+    # 5. Create tarball (and ref.diff if delta mode)
     pkgs_dir.mkdir(parents=True, exist_ok=True)
 
     tarball_path, ref_diff_path = create_source_tarball(
@@ -99,10 +115,10 @@ def bundle_benchmark(
         base_commit=base_commit,
         source_name=source_name,
         output_dir=pkgs_dir,
-        ref_commit=ref_commit,
+        ref_commit=ref_commit,  # None for full-only benchmarks
     )
 
-    # 6. Move ref.diff to .aixcc/ if generated
+    # 6. Move ref.diff to .aixcc/ if generated (delta mode only)
     if ref_diff_path:
         aixcc_ref_diff = benchmark_path / ".aixcc" / "ref.diff"
         shutil.move(str(ref_diff_path), str(aixcc_ref_diff))
@@ -138,17 +154,25 @@ def prepare_delta(benchmark_path: Path) -> Path:
     if not info:
         raise ValueError("Could not extract benchmark info")
 
-    ref_commit = info.get("ref_commit")
-    if not ref_commit:
+    ref_commit_val = info.get("ref_commit")
+    if not ref_commit_val or not isinstance(ref_commit_val, str):
         raise ValueError("Benchmark is not delta mode (no ref_commit in meta.yaml)")
+    ref_commit: str = ref_commit_val
 
     # For prepare-delta, we only generate the diff, not the tarball
     import tempfile
 
     from crsbench.benchmark.packaging.tarball import _generate_ref_diff, _run_git
 
-    main_repo = info["main_repo"]
-    base_commit = info["base_commit"]
+    main_repo_val = info["main_repo"]
+    base_commit_val = info["base_commit"]
+    # Type narrowing: these must be strings
+    if not isinstance(main_repo_val, str) or not isinstance(base_commit_val, str):
+        raise ValueError(
+            "Invalid benchmark info: main_repo and base_commit must be strings"
+        )
+    main_repo: str = main_repo_val
+    base_commit: str = base_commit_val
     output_dir = benchmark_path / ".aixcc"
 
     logger.info(f"Generating ref.diff for {benchmark_path.name}")

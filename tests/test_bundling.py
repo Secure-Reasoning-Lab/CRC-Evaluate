@@ -120,13 +120,15 @@ class TestValidateBenchmark:
 
     def test_valid_benchmark(self, tmp_path: Path) -> None:
         """Test validation of valid benchmark."""
-        # Create minimal valid benchmark
+        # Create minimal valid benchmark (ref_commit is required for all)
         (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
         (tmp_path / "project.yaml").write_text(
             "main_repo: https://github.com/test/repo\n"
         )
         (tmp_path / ".aixcc").mkdir()
-        (tmp_path / ".aixcc" / "meta.yaml").write_text("base_commit: abc123\n")
+        (tmp_path / ".aixcc" / "meta.yaml").write_text(
+            "base_commit: abc123\nref_commit: def456\n"
+        )
 
         result = validate_benchmark(tmp_path)
         assert result.valid
@@ -166,20 +168,23 @@ class TestValidateBenchmark:
         (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
         (tmp_path / "project.yaml").write_text("language: c\n")  # No main_repo
         (tmp_path / ".aixcc").mkdir()
-        (tmp_path / ".aixcc" / "meta.yaml").write_text("base_commit: abc123\n")
+        (tmp_path / ".aixcc" / "meta.yaml").write_text(
+            "base_commit: abc123\nref_commit: def456\n"
+        )
 
         result = validate_benchmark(tmp_path)
         assert result.valid  # Still valid, but warning
         assert any("main_repo" in w for w in result.warnings)
 
-    def test_warns_missing_ref_commit(self, tmp_path: Path) -> None:
-        """Test validation warns about missing ref_commit."""
+    def test_warns_missing_ref_commit_flat_format(self, tmp_path: Path) -> None:
+        """Test validation warns when ref_commit is missing in flat format (full-only mode)."""
         (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
         (tmp_path / "project.yaml").write_text("main_repo: test\n")
         (tmp_path / ".aixcc").mkdir()
         (tmp_path / ".aixcc" / "meta.yaml").write_text("base_commit: abc123\n")
 
         result = validate_benchmark(tmp_path)
+        # Flat format without ref_commit is valid but treated as full-only
         assert result.valid
         assert any("ref_commit" in w for w in result.warnings)
 
@@ -246,24 +251,37 @@ class TestValidationResult:
 
 
 class TestGetBenchmarkInfo:
-    """Tests for get_benchmark_info function."""
+    """Tests for get_benchmark_info function.
 
-    def test_flat_format(self, tmp_path: Path) -> None:
-        """Test extraction from flat meta.yaml format."""
+    Note: These tests use MetaYamlAdapter which requires:
+    - Valid commit hash format (7-40 hex characters)
+    - harness_files field (at least one entry)
+    """
+
+    # Minimal harness_files for valid meta.yaml
+    HARNESS_FILES = (
+        "harness_files:\n  - name: test_harness\n    path: /src/test/harness\n"
+    )
+
+    def test_flat_format_not_supported(self, tmp_path: Path) -> None:
+        """Test that flat format (legacy) is no longer supported.
+
+        All benchmarks now use nested format (delta_mode/full_mode sections).
+        Flat format with just base_commit/ref_commit at top level is rejected.
+        """
         (tmp_path / "project.yaml").write_text(
             "main_repo: https://github.com/test/repo\n"
         )
         (tmp_path / ".aixcc").mkdir()
+        # Flat format - no delta_mode or full_mode section
         (tmp_path / ".aixcc" / "meta.yaml").write_text(
-            "base_commit: abc123\nref_commit: def456\n"
+            f"base_commit: abc1234\nref_commit: def5678\n{self.HARNESS_FILES}"
         )
 
         info = get_benchmark_info(tmp_path)
 
-        assert info is not None
-        assert info["main_repo"] == "https://github.com/test/repo"
-        assert info["base_commit"] == "abc123"
-        assert info["ref_commit"] == "def456"
+        # Flat format is rejected by Pydantic validation
+        assert info is None
 
     def test_nested_delta_mode(self, tmp_path: Path) -> None:
         """Test extraction from nested delta_mode format."""
@@ -272,52 +290,56 @@ class TestGetBenchmarkInfo:
         )
         (tmp_path / ".aixcc").mkdir()
         (tmp_path / ".aixcc" / "meta.yaml").write_text(
-            "delta_mode:\n  base_commit: abc123\n  ref_commit: def456\n"
+            f"delta_mode:\n  base_commit: abc1234\n  ref_commit: def5678\n{self.HARNESS_FILES}"
         )
 
-        info = get_benchmark_info(tmp_path, mode="delta")
+        info = get_benchmark_info(tmp_path)
 
         assert info is not None
-        assert info["base_commit"] == "abc123"
-        assert info["ref_commit"] == "def456"
+        assert info["base_commit"] == "abc1234"
+        assert info["ref_commit"] == "def5678"
+        assert info["has_delta_mode"] is True
 
     def test_nested_full_mode(self, tmp_path: Path) -> None:
-        """Test extraction from nested full_mode format."""
+        """Test extraction from nested full_mode format (no ref_commit needed)."""
         (tmp_path / "project.yaml").write_text(
             "main_repo: https://github.com/test/repo\n"
         )
         (tmp_path / ".aixcc").mkdir()
         (tmp_path / ".aixcc" / "meta.yaml").write_text(
-            "full_mode:\n  base_commit: fullbase123\n"
+            f"full_mode:\n  base_commit: abc1234def5678\n{self.HARNESS_FILES}"
         )
 
-        info = get_benchmark_info(tmp_path, mode="full")
+        info = get_benchmark_info(tmp_path)
 
         assert info is not None
-        assert info["base_commit"] == "fullbase123"
+        assert info["base_commit"] == "abc1234def5678"
+        # Full-only mode doesn't have ref_commit (base IS the vulnerable state)
         assert "ref_commit" not in info
+        assert info["has_delta_mode"] is False
 
-    def test_both_modes_prefers_requested(self, tmp_path: Path) -> None:
-        """Test that requested mode is used when both exist."""
+    def test_both_modes_prefers_delta_for_bundling(self, tmp_path: Path) -> None:
+        """Test that delta_mode is preferred for bundling when both modes exist."""
         (tmp_path / "project.yaml").write_text(
             "main_repo: https://github.com/test/repo\n"
         )
         (tmp_path / ".aixcc").mkdir()
         (tmp_path / ".aixcc" / "meta.yaml").write_text(
             "delta_mode:\n"
-            "  base_commit: delta_base\n"
-            "  ref_commit: delta_ref\n"
+            "  base_commit: aaa1111\n"
+            "  ref_commit: bbb2222\n"
             "full_mode:\n"
-            "  base_commit: full_base\n"
+            "  base_commit: ccc3333\n"
+            f"{self.HARNESS_FILES}"
         )
 
-        delta_info = get_benchmark_info(tmp_path, mode="delta")
-        full_info = get_benchmark_info(tmp_path, mode="full")
+        info = get_benchmark_info(tmp_path)
 
-        assert delta_info["base_commit"] == "delta_base"
-        assert delta_info["ref_commit"] == "delta_ref"
-        assert full_info["base_commit"] == "full_base"
-        assert "ref_commit" not in full_info
+        # Delta mode is preferred for bundling because it allows ref.diff generation
+        assert info is not None
+        assert info["has_delta_mode"] is True
+        assert info["base_commit"] == "aaa1111"
+        assert info["ref_commit"] == "bbb2222"
 
     def test_missing_main_repo_returns_none(self, tmp_path: Path) -> None:
         """Test returns None when main_repo missing."""
@@ -364,7 +386,7 @@ class TestValidateNestedMetaYaml:
         assert len(result.errors) == 0
 
     def test_valid_full_mode(self, tmp_path: Path) -> None:
-        """Test validation of valid full_mode section."""
+        """Test validation of valid full_mode section (no ref_commit needed)."""
         (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
         (tmp_path / "project.yaml").write_text("main_repo: test\n")
         (tmp_path / ".aixcc").mkdir()
@@ -400,6 +422,20 @@ class TestValidateNestedMetaYaml:
         result = validate_benchmark(tmp_path)
         assert not result.valid
         assert any("delta_mode missing ref_commit" in e for e in result.errors)
+
+    def test_full_mode_valid_without_ref_commit(self, tmp_path: Path) -> None:
+        """Test validation accepts full_mode without ref_commit (base IS the vulnerable state)."""
+        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        (tmp_path / "project.yaml").write_text("main_repo: test\n")
+        (tmp_path / ".aixcc").mkdir()
+        (tmp_path / ".aixcc" / "meta.yaml").write_text(
+            "full_mode:\n  base_commit: abc123\n"
+        )
+
+        result = validate_benchmark(tmp_path)
+        # Full mode doesn't need ref_commit - base_commit IS the vulnerable state
+        assert result.valid
+        assert len(result.errors) == 0
 
     def test_both_modes_valid(self, tmp_path: Path) -> None:
         """Test validation passes with both modes defined."""

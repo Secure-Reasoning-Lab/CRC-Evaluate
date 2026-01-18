@@ -10,7 +10,9 @@ from typing import Optional
 import yaml
 
 from crsbench.benchmark.packaging.workdir_parser import get_expected_source_dir
+from crsbench.builder.types import BenchmarkMode
 from crsbench.utils.logger import get_logger
+from crsbench.validation.meta_adapter import MetaYamlAdapter
 
 logger = get_logger(__name__)
 
@@ -128,7 +130,10 @@ def _validate_meta_yaml(meta_yaml: Path) -> tuple[list[str], list[str]]:
 
     2. Flat format (legacy):
        base_commit: abc123
-       ref_commit: def456
+       ref_commit: def456  (optional for full-only)
+
+    Note: ref_commit is only required for delta_mode. Full-only benchmarks
+    don't need ref_commit because the base_commit IS the vulnerable state.
     """
     errors: list[str] = []
     warnings: list[str] = []
@@ -155,14 +160,19 @@ def _validate_meta_yaml(meta_yaml: Path) -> tuple[list[str], list[str]]:
                 full = content["full_mode"]
                 if not full.get("base_commit"):
                     errors.append("meta.yaml full_mode missing base_commit")
+                # Note: full_mode does NOT require ref_commit
+                # The base_commit IS the vulnerable state for full-only benchmarks
         else:
             # Flat format validation (legacy)
             if "base_commit" not in content:
                 errors.append(
                     "meta.yaml missing base_commit (and no delta_mode/full_mode sections)"
                 )
+            # Note: ref_commit is optional in flat format (might be full-only)
             if "ref_commit" not in content:
-                warnings.append("meta.yaml missing ref_commit (full mode assumed)")
+                warnings.append(
+                    "meta.yaml missing ref_commit (only supports full mode, not delta)"
+                )
 
     except yaml.YAMLError as e:
         errors.append(f"Invalid meta.yaml: {e}")
@@ -203,80 +213,44 @@ def _validate_pkgs_dir(pkgs_dir: Path, dockerfile: Path) -> list[str]:
 
 def get_benchmark_info(
     benchmark_path: Path,
-    *,
-    mode: str = "delta",
-) -> Optional[dict[str, str]]:
+) -> Optional[dict[str, str | bool]]:
     """Extract benchmark info for bundling.
 
-    Supports two meta.yaml formats:
-    1. Nested format: delta_mode.base_commit, full_mode.base_commit
-    2. Flat format: base_commit, ref_commit
+    Uses MetaYamlAdapter as the single source of truth for benchmark metadata.
+
+    For bundling, we need to know:
+    - If benchmark has delta_mode: use delta_mode.base_commit, generate ref.diff
+    - If full-only: use full_mode.base_commit, no ref.diff needed
 
     Args:
         benchmark_path: Path to benchmark directory
-        mode: "delta" or "full" - determines which commits to extract
 
     Returns:
-        Dict with main_repo, base_commit, ref_commit (optional), or None if invalid
+        Dict with main_repo, base_commit, has_delta_mode, and optionally ref_commit.
+        Returns None if invalid.
     """
-    project_yaml = benchmark_path / "project.yaml"
-    meta_yaml = benchmark_path / ".aixcc" / "meta.yaml"
+    adapter = MetaYamlAdapter.from_benchmark_path(benchmark_path)
+    if not adapter:
+        return None
 
-    if not project_yaml.exists() or not meta_yaml.exists():
+    if not adapter.main_repo:
         return None
 
     try:
-        project = yaml.safe_load(project_yaml.read_text())
-        meta = yaml.safe_load(meta_yaml.read_text())
-
-        if not project or not meta:
-            return None
-
-        main_repo = project.get("main_repo")
-        if not main_repo:
-            return None
-
-        # Try nested format first (current standard)
-        has_delta_mode = "delta_mode" in meta and meta["delta_mode"]
-        has_full_mode = "full_mode" in meta and meta["full_mode"]
-
-        if has_delta_mode or has_full_mode:
-            # Nested format
-            if mode == "delta" and has_delta_mode:
-                delta = meta["delta_mode"]
-                base_commit = delta.get("base_commit")
-                ref_commit = delta.get("ref_commit")
-            elif mode == "full" and has_full_mode:
-                full = meta["full_mode"]
-                base_commit = full.get("base_commit")
-                ref_commit = None
-            elif has_delta_mode:
-                # Fallback to delta if requested mode not available
-                delta = meta["delta_mode"]
-                base_commit = delta.get("base_commit")
-                ref_commit = delta.get("ref_commit")
-            else:
-                # Fallback to full
-                full = meta["full_mode"]
-                base_commit = full.get("base_commit")
-                ref_commit = None
-        else:
-            # Flat format (legacy)
-            base_commit = meta.get("base_commit")
-            ref_commit = meta.get("ref_commit")
-
-        if not base_commit:
-            return None
-
-        info: dict[str, str] = {
-            "main_repo": main_repo,
-            "base_commit": base_commit,
-        }
-
-        if ref_commit:
-            info["ref_commit"] = ref_commit
-
-        return info
-
-    except yaml.YAMLError:
+        base_commit = adapter.get_base_commit()
+    except ValueError:
         return None
+
+    has_delta_mode = adapter.get_mode() == BenchmarkMode.DELTA
+    ref_commit = adapter.get_ref_commit()  # None for full mode
+
+    info: dict[str, str | bool] = {
+        "main_repo": adapter.main_repo,
+        "base_commit": base_commit,
+        "has_delta_mode": has_delta_mode,
+    }
+
+    if ref_commit:
+        info["ref_commit"] = ref_commit
+
+    return info
