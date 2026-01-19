@@ -141,9 +141,19 @@ def _generate_ref_diff(
     _clean_source(ref_dir)
 
     # Generate diff with git diff --no-index
+    # --binary: Include binary file content (needed for .zip, .png, etc.)
+    # --full-index: Use full SHA-1 hashes (required for applying binary patches)
     # Note: git diff --no-index returns exit code 1 when there are differences
     result = subprocess.run(
-        ["git", "diff", "--no-index", str(base_dir), str(ref_dir)],
+        [
+            "git",
+            "diff",
+            "--no-index",
+            "--binary",
+            "--full-index",
+            str(base_dir),
+            str(ref_dir),
+        ],
         capture_output=True,
         text=True,
     )

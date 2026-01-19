@@ -195,7 +195,14 @@ def prepare_source_from_bundle(
                     logger.error("Failed to commit ref.diff changes")
                     return None
         else:
-            logger.warning(f"ref.diff not found at {ref_diff_path}, skipping")
+            # DELTA mode (squash_history=False) requires ref.diff - error if missing
+            # FULL mode (squash_history=True) doesn't use ref.diff - normal to skip
+            if not squash_history:
+                logger.error(
+                    f"ref.diff not found at {ref_diff_path} (required for DELTA mode)"
+                )
+                return None
+            logger.debug("ref.diff not found (FULL mode), skipping")
 
     logger.info(f"Source prepared at: {source_path}")
     return source_path
