@@ -861,38 +861,36 @@ class OSSFuzzInfrastructure:
             logger.debug(f"{req_prefix}Reproducing: {' '.join(cmd)}")
 
             # Use slightly longer subprocess timeout to let helper.py handle it
+            # Use binary mode to handle fuzzer output that may contain non-UTF-8 bytes
             result = subprocess.run(
                 cmd,
                 cwd=self.oss_fuzz_path,
                 capture_output=True,
-                text=True,
                 timeout=timeout + 30,  # Grace period for helper.py
                 stdin=subprocess.DEVNULL,  # Prevent terminal issues
             )
+
+            # Decode output with error handling for binary content
+            stdout = result.stdout.decode("utf-8", errors="replace")
+            stderr = result.stderr.decode("utf-8", errors="replace")
 
             # Handle exit codes explicitly
             if result.returncode == 0:
                 reproduce_logger.info(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} did not crash"
                 )
-                return ReproduceOutput(
-                    crashed=False, stdout=result.stdout, stderr=result.stderr
-                )
+                return ReproduceOutput(crashed=False, stdout=stdout, stderr=stderr)
             if result.returncode == EXIT_CODE_TIMEOUT:
                 reproduce_logger.info(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} "
                     "timed out (exit code 124)"
                 )
-                return ReproduceOutput(
-                    crashed=False, stdout=result.stdout, stderr=result.stderr
-                )
+                return ReproduceOutput(crashed=False, stdout=stdout, stderr=stderr)
             reproduce_logger.info(
                 f"{req_prefix}{pov_prefix}{project_name}/{harness} crashed "
                 f"(exit code {result.returncode})"
             )
-            return ReproduceOutput(
-                crashed=True, stdout=result.stdout, stderr=result.stderr
-            )
+            return ReproduceOutput(crashed=True, stdout=stdout, stderr=stderr)
 
         except subprocess.TimeoutExpired:
             # Our subprocess timeout (shouldn't happen with grace period)
