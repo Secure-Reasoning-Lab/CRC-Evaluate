@@ -115,14 +115,15 @@ def _generate_ref_diff(
     logger.info(f"Generating ref.diff: {base_commit[:8]}..{ref_commit[:8]}")
 
     # Checkout base version
+    # Use symlinks=True to preserve symlinks (some repos like mongoose have many)
     base_dir = work_dir / "base"
-    shutil.copytree(repo_dir, base_dir)
+    shutil.copytree(repo_dir, base_dir, symlinks=True)
     _run_git(["checkout", base_commit], cwd=base_dir)
     _clean_source(base_dir)
 
     # Checkout ref version
     ref_dir = work_dir / "ref"
-    shutil.copytree(repo_dir, ref_dir)
+    shutil.copytree(repo_dir, ref_dir, symlinks=True)
     _run_git(["checkout", ref_commit], cwd=ref_dir)
     _clean_source(ref_dir)
 

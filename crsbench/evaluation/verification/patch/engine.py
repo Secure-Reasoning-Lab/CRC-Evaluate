@@ -1282,8 +1282,8 @@ class PatchVerificationEngine:
         # Determine squash_history based on benchmark mode:
         # - DELTA mode: squash_history=False (CRS already receives ref.diff as hint)
         # - FULL mode: squash_history=True (prevent info leak via git diff)
-        from crsbench.validation.meta_adapter import MetaYamlAdapter
         from crsbench.builder.types import BenchmarkMode
+        from crsbench.validation.meta_adapter import MetaYamlAdapter
 
         adapter = MetaYamlAdapter.from_benchmark_path(benchmark_path)
         is_delta_mode = adapter and adapter.get_mode() == BenchmarkMode.DELTA

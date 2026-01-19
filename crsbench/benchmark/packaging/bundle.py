@@ -55,17 +55,7 @@ def bundle_benchmark(
     if not result.valid:
         raise ValueError(f"Invalid benchmark: {result}")
 
-    # 2. Check for existing pkgs/
-    pkgs_dir = benchmark_path / "pkgs"
-    if pkgs_dir.exists():
-        if not force:
-            raise ValueError(
-                f"pkgs/ already exists at {pkgs_dir}. Use --force to overwrite."
-            )
-        logger.warning(f"Removing existing pkgs/: {pkgs_dir}")
-        shutil.rmtree(pkgs_dir)
-
-    # 3. Get benchmark info
+    # 2. Get benchmark info first (needed to determine source tarball name)
     info = get_benchmark_info(benchmark_path)
     if not info:
         raise ValueError(
@@ -73,6 +63,32 @@ def bundle_benchmark(
             "Ensure project.yaml has main_repo and meta.yaml has base_commit."
         )
 
+    # 3. Determine source name from Dockerfile WORKDIR
+    dockerfile = benchmark_path / "Dockerfile"
+    source_name = get_expected_source_dir(dockerfile)
+    if not source_name:
+        # Fallback to benchmark name
+        source_name = benchmark_path.name
+        logger.warning(
+            f"Could not determine source name from Dockerfile WORKDIR. "
+            f"Using benchmark name: {source_name}"
+        )
+
+    # 4. Check for existing source tarball
+    pkgs_dir = benchmark_path / "pkgs"
+    source_tarball = pkgs_dir / f"{source_name}.tar.gz"
+    aixcc_ref_diff = benchmark_path / ".aixcc" / "ref.diff"
+
+    if source_tarball.exists():
+        if not force:
+            logger.warning(
+                f"Source tarball already exists: {source_tarball}. "
+                "Skipping. Use --force to overwrite."
+            )
+            return pkgs_dir
+        logger.info(f"Overwriting existing source tarball: {source_tarball}")
+
+    # 5. Extract commit info
     main_repo = str(info["main_repo"])
     base_commit = str(info["base_commit"])
     has_delta_mode = bool(info.get("has_delta_mode", False))
@@ -85,18 +101,7 @@ def bundle_benchmark(
             "Add ref_commit to delta_mode section in meta.yaml."
         )
 
-    # 4. Determine source name from Dockerfile WORKDIR
-    dockerfile = benchmark_path / "Dockerfile"
-    source_name = get_expected_source_dir(dockerfile)
-    if not source_name:
-        # Fallback to benchmark name
-        source_name = benchmark_path.name
-        logger.warning(
-            f"Could not determine source name from Dockerfile WORKDIR. "
-            f"Using benchmark name: {source_name}"
-        )
-
-    # Log bundling info
+    # 6. Log bundling info
     logger.info(f"Bundling {benchmark_path.name}:")
     logger.info(f"  Source: {main_repo}")
     logger.info(f"  Base commit: {base_commit[:8]}")
@@ -107,7 +112,7 @@ def bundle_benchmark(
         logger.info("  Mode: full-only (tarball at vulnerable state, no ref.diff)")
     logger.info(f"  Tarball name: {source_name}.tar.gz")
 
-    # 5. Create tarball (and ref.diff if delta mode)
+    # 7. Create tarball (and ref.diff if delta mode)
     pkgs_dir.mkdir(parents=True, exist_ok=True)
 
     tarball_path, ref_diff_path = create_source_tarball(
@@ -118,13 +123,15 @@ def bundle_benchmark(
         ref_commit=ref_commit,  # None for full-only benchmarks
     )
 
-    # 6. Move ref.diff to .aixcc/ if generated (delta mode only)
+    # 8. Move ref.diff to .aixcc/ if generated (delta mode only)
     if ref_diff_path:
-        aixcc_ref_diff = benchmark_path / ".aixcc" / "ref.diff"
+        # shutil.move behavior varies; explicitly remove dest to ensure overwrite
+        if aixcc_ref_diff.exists():
+            aixcc_ref_diff.unlink()
         shutil.move(str(ref_diff_path), str(aixcc_ref_diff))
         logger.info(f"  Moved ref.diff to: {aixcc_ref_diff}")
 
-    # 7. Write pkg_refs.txt for provenance
+    # 9. Write pkg_refs.txt for provenance
     pkg_refs_path = pkgs_dir / "pkg_refs.txt"
     pkg_refs_path.write_text(f"{main_repo}@{base_commit}\n")
     logger.info(f"  Wrote provenance: {pkg_refs_path}")

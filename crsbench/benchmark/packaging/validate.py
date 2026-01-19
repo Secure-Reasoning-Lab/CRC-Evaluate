@@ -90,6 +90,10 @@ def validate_benchmark(benchmark_path: Path) -> ValidationResult:
         pkgs_warnings = _validate_pkgs_dir(pkgs_dir, dockerfile)
         warnings.extend(pkgs_warnings)
 
+    # Check ref.diff for delta mode benchmarks
+    ref_diff_warnings = _validate_ref_diff(benchmark_path, meta_yaml)
+    warnings.extend(ref_diff_warnings)
+
     return ValidationResult(
         valid=len(errors) == 0,
         errors=errors,
@@ -202,6 +206,41 @@ def _validate_pkgs_dir(pkgs_dir: Path, dockerfile: Path) -> list[str]:
     pkg_refs = pkgs_dir / "pkg_refs.txt"
     if not pkg_refs.exists():
         warnings.append("pkgs/pkg_refs.txt not found (provenance tracking)")
+
+    return warnings
+
+
+def _validate_ref_diff(benchmark_path: Path, meta_yaml: Path) -> list[str]:
+    """Validate ref.diff exists for delta mode benchmarks.
+
+    Delta mode benchmarks need ref.diff to transform base_commit to ref_commit
+    (the vulnerable state). Without ref.diff, delta mode won't work properly.
+    """
+    warnings: list[str] = []
+
+    try:
+        content = yaml.safe_load(meta_yaml.read_text())
+        if not content:
+            return warnings
+
+        # Check if benchmark supports delta mode
+        has_delta_mode = "delta_mode" in content and content["delta_mode"]
+
+        # Also check flat format with ref_commit (legacy delta mode indicator)
+        if not has_delta_mode and "ref_commit" in content:
+            has_delta_mode = True
+
+        if has_delta_mode:
+            ref_diff = benchmark_path / ".aixcc" / "ref.diff"
+            if not ref_diff.exists():
+                warnings.append(
+                    "Delta mode benchmark missing .aixcc/ref.diff "
+                    "(run 'crsbench benchmark prepare-delta' to generate)"
+                )
+
+    except yaml.YAMLError:
+        # meta.yaml parsing errors are already caught in _validate_meta_yaml
+        pass
 
     return warnings
 
