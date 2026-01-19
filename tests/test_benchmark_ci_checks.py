@@ -1,15 +1,14 @@
 """Tests for CI result checking functions."""
 
 import json
-
-# Import the check functions
-import sys
 from pathlib import Path
 
 import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "ci-tests"))
-from check_ci_results import check_coverage, check_patch_verify, check_verify
+from crsbench.benchmark_ci.checks import (
+    check_coverage,
+    check_patch_verify,
+    check_verify,
+)
 
 
 class TestCheckVerify:

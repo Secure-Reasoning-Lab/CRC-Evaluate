@@ -16,6 +16,8 @@ from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import clone_or_copy_cached_repo
 
 logger = get_logger(__name__)
+# Separate logger for crash reproduction results
+reproduce_logger = get_logger("reproduce")
 
 # Exit code constants from helper.py
 EXIT_CODE_TIMEOUT = 124  # Subprocess timeout in helper.py
@@ -511,7 +513,7 @@ class OSSFuzzInfrastructure:
     def build_fuzzers(
         self,
         config: BuildConfig,
-        src_path: Path,
+        src_path: Optional[Path] = None,
         *,
         use_inc_image: bool = False,
     ) -> bool:
@@ -519,7 +521,7 @@ class OSSFuzzInfrastructure:
 
         Args:
             config: Build configuration
-            src_path: Path to source repository
+            src_path: Path to source repository. If None, uses bundled source in Docker.
             use_inc_image: Use pre-built inc-build image for faster builds
 
         Returns:
@@ -552,7 +554,10 @@ class OSSFuzzInfrastructure:
                 ]
             )
 
-        cmd.extend([variant_name, str(src_path)])
+        cmd.append(variant_name)
+        # Only add source path if provided (not using bundled pkgs/)
+        if src_path:
+            cmd.append(str(src_path))
 
         logger.info(f"Building {variant_name} with {config.sanitizer} sanitizer...")
         logger.debug(f"Command: {' '.join(cmd)}")
@@ -750,6 +755,11 @@ class OSSFuzzInfrastructure:
     def _apply_single_patch(self, repo_path: Path, patch_file: Path) -> bool:
         """Apply a single patch file.
 
+        Uses --whitespace=nowarn instead of --3way because bundled tarballs
+        have fresh git init with different blob hashes than the original
+        repository where patches were created. The --3way option requires
+        matching index hashes which won't exist.
+
         Args:
             repo_path: Path to repository
             patch_file: Path to patch file
@@ -760,7 +770,7 @@ class OSSFuzzInfrastructure:
         try:
             patch_file_abs = patch_file.resolve()
             result = subprocess.run(
-                ["git", "apply", "--3way", str(patch_file_abs)],
+                ["git", "apply", "--whitespace=nowarn", str(patch_file_abs)],
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
@@ -800,7 +810,7 @@ class OSSFuzzInfrastructure:
         project_name: str,
         harness: str,
         pov_data: bytes,
-        timeout: int = 120,
+        timeout: int = 180,
         request_id: Optional[int] = None,
         pov_id: Optional[str] = None,
     ) -> "ReproduceOutput":
@@ -816,7 +826,8 @@ class OSSFuzzInfrastructure:
             project_name: Variant name (e.g., "benchmark-deltaref")
             harness: Harness name to run
             pov_data: Raw POV/testcase bytes
-            timeout: Timeout for reproduce operation in seconds
+            timeout: Timeout for reproduce operation in seconds (default: 180s
+                to handle large projects like wireshark)
             request_id: Optional request ID for logging
             pov_id: Optional POV identifier for logging
 
@@ -851,38 +862,36 @@ class OSSFuzzInfrastructure:
             logger.debug(f"{req_prefix}Reproducing: {' '.join(cmd)}")
 
             # Use slightly longer subprocess timeout to let helper.py handle it
+            # Use binary mode to handle fuzzer output that may contain non-UTF-8 bytes
             result = subprocess.run(
                 cmd,
                 cwd=self.oss_fuzz_path,
                 capture_output=True,
-                text=True,
                 timeout=timeout + 30,  # Grace period for helper.py
                 stdin=subprocess.DEVNULL,  # Prevent terminal issues
             )
 
+            # Decode output with error handling for binary content
+            stdout = result.stdout.decode("utf-8", errors="replace")
+            stderr = result.stderr.decode("utf-8", errors="replace")
+
             # Handle exit codes explicitly
             if result.returncode == 0:
-                logger.info(
+                reproduce_logger.info(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} did not crash"
                 )
-                return ReproduceOutput(
-                    crashed=False, stdout=result.stdout, stderr=result.stderr
-                )
+                return ReproduceOutput(crashed=False, stdout=stdout, stderr=stderr)
             if result.returncode == EXIT_CODE_TIMEOUT:
-                logger.info(
+                reproduce_logger.info(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} "
                     "timed out (exit code 124)"
                 )
-                return ReproduceOutput(
-                    crashed=False, stdout=result.stdout, stderr=result.stderr
-                )
-            logger.info(
+                return ReproduceOutput(crashed=False, stdout=stdout, stderr=stderr)
+            reproduce_logger.info(
                 f"{req_prefix}{pov_prefix}{project_name}/{harness} crashed "
                 f"(exit code {result.returncode})"
             )
-            return ReproduceOutput(
-                crashed=True, stdout=result.stdout, stderr=result.stderr
-            )
+            return ReproduceOutput(crashed=True, stdout=stdout, stderr=stderr)
 
         except subprocess.TimeoutExpired:
             # Our subprocess timeout (shouldn't happen with grace period)

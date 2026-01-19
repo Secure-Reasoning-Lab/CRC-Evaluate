@@ -132,6 +132,14 @@ Examples:
         help="Number of parallel workers for coverage collection (default: 4). "
         "Priority: CLI > CRSBENCH_VERIFY_WORKERS env.",
     )
+    parser.add_argument(
+        "--source",
+        type=str,
+        default="main_repo",
+        choices=["pkgs", "main_repo"],
+        help="Source for benchmark code: 'main_repo' clones from repository (default), "
+        "'pkgs' uses bundled tarballs",
+    )
 
     parser.set_defaults(func=run_coverage)
 
@@ -184,6 +192,7 @@ def run_coverage(args: argparse.Namespace) -> int:
         oss_fuzz_path=oss_fuzz_path,
         build_workers=args.build_workers,
         verify_workers=args.verify_workers,
+        source_mode=args.source,
     )
 
     try:

@@ -483,9 +483,13 @@ class DeltaMode(BaseModel):
 
 
 class FullMode(BaseModel):
-    """Full mode configuration with single base commit."""
+    """Full mode configuration with single base commit.
 
-    base_commit: str = Field(..., description="Base commit hash")
+    In full mode, base_commit IS the vulnerable state. No ref_commit needed
+    because there's no "before vulnerability" state to compare against.
+    """
+
+    base_commit: str = Field(..., description="Base commit hash (vulnerable state)")
 
     @field_validator("base_commit")
     @classmethod

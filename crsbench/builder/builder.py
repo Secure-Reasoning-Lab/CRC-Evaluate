@@ -51,15 +51,19 @@ class OSSFuzzBuilder:
         self,
         oss_fuzz_path: Path,
         max_workers: int = 4,
+        *,
+        source_mode: str = "main_repo",
     ):
         """Initialize the builder.
 
         Args:
             oss_fuzz_path: Path to oss-fuzz directory
             max_workers: Maximum number of parallel workers (default: 4)
+            source_mode: Source mode - "main_repo" (clone, default) or "pkgs" (bundled)
         """
         self.oss_fuzz_path = Path(oss_fuzz_path).resolve()
         self.max_workers = max_workers
+        self.source_mode = source_mode
         self.infra = OSSFuzzInfrastructure(oss_fuzz_path)
         self.executor = ParallelExecutor(max_workers)
 
@@ -121,7 +125,12 @@ class OSSFuzzBuilder:
         Args:
             configs: Build configurations to process
         """
-        # Collect unique (main_repo, commit, repo_name) combinations
+        # Skip caching in pkgs mode - bundled source doesn't need git repos
+        if self.source_mode == "pkgs":
+            logger.debug("Using pkgs source mode, skipping repo cache")
+            return
+
+        # main_repo mode - cache all unique repos
         unique_repos: dict[str, BuildConfig] = {}
         for config in configs:
             cache_key = f"{config.main_repo}:{config.commit}"
@@ -214,6 +223,10 @@ class OSSFuzzBuilder:
     def _build_standard(self, config: BuildConfig, start_time: float) -> BuildResult:
         """Build a variant using standard OSS-Fuzz build process.
 
+        Supports two source modes:
+        1. Bundled source (pkgs/): Extract tarball, apply ref.diff if needed
+        2. Git clone: Clone from main_repo and checkout commit
+
         Args:
             config: Build configuration
             start_time: Build start time
@@ -235,14 +248,14 @@ class OSSFuzzBuilder:
                 elapsed_seconds=time.time() - start_time,
             )
 
-        # Clone and checkout source
+        # Prepare source (from pkgs/ or git clone)
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
-                repo_path = self.infra.clone_source(config, Path(temp_dir))
+                repo_path = self._prepare_source(config, Path(temp_dir))
                 if not repo_path:
                     return BuildResult.from_error(
                         config=config,
-                        error="Failed to clone source repository",
+                        error="Failed to prepare source",
                         elapsed_seconds=time.time() - start_time,
                     )
 
@@ -279,6 +292,93 @@ class OSSFuzzBuilder:
                     elapsed_seconds=time.time() - start_time,
                 )
 
+    def _prepare_source(self, config: BuildConfig, temp_dir: Path) -> Optional[Path]:
+        """Prepare source for building - from pkgs/ or git clone.
+
+        Source mode determines how source is obtained:
+        - "main_repo": Clone from main_repo in project.yaml (default)
+        - "pkgs": Use bundled tarballs from pkgs/ (requires pkgs/)
+
+        Args:
+            config: Build configuration
+            temp_dir: Temporary directory for source extraction
+
+        Returns:
+            Path to prepared source, or None on failure
+
+        Raises:
+            RuntimeError: If source_mode is "pkgs" but no pkgs/ exists
+        """
+        from crsbench.benchmark.runtime import (
+            has_bundled_source,
+            prepare_source_from_bundle,
+        )
+
+        benchmark_path = config.benchmark_path
+
+        # Handle main_repo mode - always clone from git
+        if self.source_mode == "main_repo":
+            logger.info("Using main_repo source (cloning from git)")
+            return self.infra.clone_source(config, temp_dir)
+
+        # pkgs mode (default) - require bundled source
+        if not has_bundled_source(benchmark_path):
+            raise RuntimeError(
+                f"No bundled source (pkgs/) found for {benchmark_path.name}. "
+                "Run 'crsbench benchmark bundle' first, or use --source main_repo."
+            )
+
+        # Get source name from Dockerfile WORKDIR
+        from crsbench.benchmark.packaging import get_expected_source_dir
+
+        dockerfile = benchmark_path / "Dockerfile"
+        source_name = get_expected_source_dir(dockerfile)
+        if not source_name:
+            # Fall back to repo_name or benchmark name
+            source_name = config.repo_name or benchmark_path.name
+            logger.debug(f"No WORKDIR found, using: {source_name}")
+
+        # Determine if ref.diff should be applied
+        # DELTA_BASE and FULL_BASE use base commit (no ref.diff)
+        # DELTA_REF, ALL_PATCHED, CPV use ref commit (apply ref.diff)
+        apply_ref_diff = self._needs_ref_diff(config.variant_type)
+
+        # Determine if git history should be squashed after applying ref.diff
+        # DELTA mode: squash_history=False (CRS already receives ref.diff as hint)
+        # FULL mode: squash_history=True (prevent CRS from using git diff)
+        squash_history = config.mode != BenchmarkMode.DELTA
+
+        logger.info(
+            f"Using bundled source: {source_name}.tar.gz "
+            f"(apply_ref_diff={apply_ref_diff})"
+        )
+        return prepare_source_from_bundle(
+            benchmark_path,
+            temp_dir,
+            source_name,
+            apply_ref_diff=apply_ref_diff,
+            squash_history=squash_history,
+        )
+
+    def _needs_ref_diff(self, variant_type: VariantType) -> bool:
+        """Check if variant needs ref.diff applied.
+
+        ref.diff transforms base_commit → ref_commit state.
+        Needed for: DELTA_REF, ALL_PATCHED, CPV
+        Not needed for: DELTA_BASE, FULL_BASE, COVERAGE, PATCHED
+
+        Args:
+            variant_type: Type of variant being built
+
+        Returns:
+            True if ref.diff should be applied
+        """
+        return variant_type in (
+            VariantType.DELTA_REF,
+            VariantType.ALL_PATCHED,
+            VariantType.CPV,
+        )
+
     def _build_with_inc_image(
         self, config: BuildConfig, start_time: float
     ) -> BuildResult:
@@ -286,6 +386,8 @@ class OSSFuzzBuilder:
 
         Uses pre-built Docker images that contain compiled dependencies,
         allowing faster incremental builds when only the source changes.
+
+        Supports bundled source (pkgs/) and git clone.
 
         Args:
             config: Build configuration
@@ -296,14 +398,14 @@ class OSSFuzzBuilder:
         """
         variant_name = config.variant_name
 
-        # Clone and checkout source to a persistent location for inc-build
+        # Prepare source (from pkgs/ or git clone)
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
-                repo_path = self.infra.clone_source(config, Path(temp_dir))
+                repo_path = self._prepare_source(config, Path(temp_dir))
                 if not repo_path:
                     return BuildResult.from_error(
                         config=config,
-                        error="Failed to clone source repository",
+                        error="Failed to prepare source",
                         elapsed_seconds=time.time() - start_time,
                     )
 

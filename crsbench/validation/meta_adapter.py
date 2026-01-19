@@ -355,6 +355,9 @@ class MetaYamlAdapter:
     def get_ref_commit(self) -> Optional[str]:
         """Get the reference commit hash (delta mode only).
 
+        Only delta mode has ref_commit. Full mode doesn't need it because
+        the base_commit IS the vulnerable state.
+
         Returns:
             Reference commit hash if delta mode, None otherwise
         """

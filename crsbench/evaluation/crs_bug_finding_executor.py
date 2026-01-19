@@ -336,13 +336,16 @@ class CRSBugFindingExecutor(CRSExecutor):
             if on_run_start:
                 on_run_start()
 
-            # 3. Verify source path exists after build
-            source_path = self._find_source_path(trial_build_dir, project_name)
-            if not source_path.exists():
-                raise ExecutorError(
-                    f"Source path not found: {source_path}. "
-                    "Repository cloning or build preparation failed."
-                )
+            # 3. Verify source path exists after build (only if not using bundled source)
+            from crsbench.benchmark.runtime import has_bundled_source
+
+            if not has_bundled_source(benchmark_path):
+                source_path = self._find_source_path(trial_build_dir, project_name)
+                if not source_path.exists():
+                    raise ExecutorError(
+                        f"Source path not found: {source_path}. "
+                        "Repository cloning or build preparation failed."
+                    )
 
             # 4. Prepare hints if enabled
             harness_name = Path(harness.name).stem
@@ -584,26 +587,17 @@ class CRSBugFindingExecutor(CRSExecutor):
         build_start_time = time.time()
         logger.info(f"Building CRS for {build_key}")
 
-        # Use repository manager to ensure source code exists
-        from crsbench.utils.repo_manager import ensure_project_repository
+        # Load benchmark source (handles pkgs/ vs git clone)
+        from crsbench.benchmark.runtime import load_benchmark_source
 
-        # Clone to trial-specific build directory
         source_dest = trial_build_dir / "src" / project_name
-
-        source_path = ensure_project_repository(
-            benchmark_dir=str(benchmark_path),
-            project_dir=str(source_dest),
+        source = load_benchmark_source(
+            benchmark_path,
+            dest_dir=source_dest,
             mode=self.config.get("mode"),
             verbose=self.config.get("verbose", False),
         )
-
-        if not source_path:
-            raise ExecutorError(
-                f"Failed to obtain source code for {project_name}. "
-                "Check that project.yaml has valid main_repo or provide source manually."
-            )
-
-        logger.info(f"Using source from: {source_path}")
+        source_path = source.path
 
         # Construct build command using trial-local paths
         cmd = [
@@ -621,8 +615,11 @@ class CRSBugFindingExecutor(CRSExecutor):
             self.config.get("project_image_prefix", "aixcc-afc"),
             str(trial_crs_config_dir),  # Use trial-local config
             project_name,
-            str(source_path),
         ]
+
+        # Only add source path if not using bundled source
+        if source_path:
+            cmd.append(str(source_path))
 
         # Add external LiteLLM flag if using external LiteLLM
         if self.litellm_mode is not None:

@@ -13,7 +13,7 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def fix_docker_ownership(path: Path, *, timeout: int = 60) -> bool:
+def fix_docker_ownership(path: Path, *, timeout: int = 300) -> bool:
     """Fix ownership of Docker-created files.
 
     Docker builds run as root, creating files owned by root.
@@ -22,7 +22,8 @@ def fix_docker_ownership(path: Path, *, timeout: int = 60) -> bool:
 
     Args:
         path: Path to fix ownership for (file or directory)
-        timeout: Timeout in seconds for the Docker command
+        timeout: Timeout in seconds for the Docker command (default: 300s
+            to handle large projects like wireshark)
 
     Returns:
         True if successful, False otherwise

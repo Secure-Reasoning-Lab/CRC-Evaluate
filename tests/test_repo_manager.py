@@ -868,16 +868,19 @@ class TestParallelCacheAccess:
         errors = []
         lock = threading.Lock()
 
-        def clone_to_target(thread_id: int) -> str:
-            """Clone from cache to unique target."""
-            target = tmp_path / "targets" / f"target-{thread_id}"
-            target.mkdir(parents=True, exist_ok=True)
-            try:
-                with mock.patch("subprocess.run") as mock_run:
-                    # Mock git rev-parse HEAD to return the expected commit
-                    mock_run.return_value = mock.Mock(
-                        returncode=0, stdout="abc12345abcdef\n", stderr=""
-                    )
+        # Apply mock BEFORE spawning threads to avoid thread-unsafe mocking
+        # Patch at module level to avoid polluting global subprocess.run
+        with mock.patch("crsbench.utils.repo_manager.subprocess.run") as mock_run:
+            # Return string (text=True is used in the real code)
+            mock_run.return_value = mock.Mock(
+                returncode=0, stdout="abc12345abcdef\n", stderr=""
+            )
+
+            def clone_to_target(thread_id: int) -> str:
+                """Clone from cache to unique target."""
+                target = tmp_path / "targets" / f"target-{thread_id}"
+                target.mkdir(parents=True, exist_ok=True)
+                try:
                     result = clone_or_copy_cached_repo(
                         repo_url="https://example.com/test-repo.git",
                         commit="abc12345",
@@ -885,19 +888,23 @@ class TestParallelCacheAccess:
                         repos_dir=str(tmp_path / "cache"),
                         verbose=False,
                     )
-                with lock:
-                    results.append((thread_id, result))
-                return result
-            except Exception as e:
-                with lock:
-                    errors.append((thread_id, str(e)))
-                return None
+                    with lock:
+                        results.append((thread_id, result))
+                    return result
+                except Exception as e:
+                    with lock:
+                        errors.append((thread_id, str(e)))
+                    return None
 
-        # Run parallel clones
-        num_threads = 5
-        with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-            futures = [executor.submit(clone_to_target, i) for i in range(num_threads)]
-            concurrent.futures.wait(futures)
+            # Run parallel clones INSIDE the mock context
+            num_threads = 5
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=num_threads
+            ) as executor:
+                futures = [
+                    executor.submit(clone_to_target, i) for i in range(num_threads)
+                ]
+                concurrent.futures.wait(futures)
 
         # Verify no errors
         assert len(errors) == 0, f"Errors occurred: {errors}"
@@ -961,7 +968,9 @@ class TestParallelCacheAccess:
         target = tmp_path / "target" / "repo"
         target.parent.mkdir(parents=True, exist_ok=True)
 
-        with mock.patch("subprocess.run") as mock_run:
+        # Patch at module level to avoid polluting global subprocess.run
+        # Return string (text=True is used in the real code)
+        with mock.patch("crsbench.utils.repo_manager.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(
                 returncode=0, stdout="abc12345abcdef\n", stderr=""
             )

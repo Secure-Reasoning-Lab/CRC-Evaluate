@@ -82,7 +82,7 @@ class PatchVerificationEngine:
         *,
         test_mode: UnitTestMode = UnitTestMode.FULL,
         sanitizer: str = "address",
-        timeout: int = 120,
+        timeout: int = 180,
         build_timeout: int = 1200,
         test_timeout: int = 1800,
         build_workers: Optional[int] = None,
@@ -91,6 +91,7 @@ class PatchVerificationEngine:
         work_dir: Optional[Path] = None,
         force_rebuild: bool = False,
         use_inc_build: bool = True,
+        source_mode: str = "main_repo",
     ):
         """Initialize the patch verification engine.
 
@@ -114,6 +115,7 @@ class PatchVerificationEngine:
             force_rebuild: If True, clean and rebuild even if build exists.
             use_inc_build: If True, use incremental builds when available (faster).
                 If False, always use full OSS-Fuzz build.
+            source_mode: Source mode - "main_repo" (clone, default) or "pkgs" (bundled)
         """
         self.oss_fuzz_path = Path(oss_fuzz_path)
         self.work_dir = Path(work_dir) if work_dir else None
@@ -128,6 +130,7 @@ class PatchVerificationEngine:
         self.verify_variants = verify_variants
         self.force_rebuild = force_rebuild
         self.use_inc_build = use_inc_build
+        self.source_mode = source_mode
         self._inc_images_pulled: set[str] = set()
         self._inc_images_unavailable: set[str] = set()  # Cache failed pulls
         self._temp_dirs: list[Path] = []
@@ -218,7 +221,7 @@ class PatchVerificationEngine:
             inc_available = False
             logger.info(f"Inc-build disabled, using full build for {project_name}")
 
-        # Step 2: Clone source and apply patch
+        # Step 2: Prepare source and apply patch
         # Use isolated source path if work_dir is set, otherwise use temp directory
         if self.work_dir:
             # Use isolated source path
@@ -231,17 +234,26 @@ class PatchVerificationEngine:
             self._temp_dirs.append(temp_dir)
             repo_path = temp_dir / "repo"
 
-        clone_result = clone_or_copy_cached_repo(
-            repo_url=main_repo,
-            commit=commit,
-            target_dir=str(repo_path),
-            repo_name=repo_name,
-            verbose=True,
-        )
-        if not clone_result:
+        try:
+            source_path = self._prepare_source(
+                benchmark_path=benchmark_path,
+                dest_dir=repo_path,
+                main_repo=main_repo,
+                commit=commit,
+                repo_name=repo_name,
+            )
+        except RuntimeError as e:
             result.status = PatchVerificationStatus.BUILD_FAILED
-            result.details = f"Failed to clone repository: {main_repo}"
+            result.details = str(e)
             return result
+
+        if not source_path:
+            result.status = PatchVerificationStatus.BUILD_FAILED
+            result.details = f"Failed to prepare source for {benchmark_path.name}"
+            return result
+
+        # Use the actual source path (may differ from repo_path for bundled source)
+        repo_path = source_path
 
         # Apply the patch
         if not self._apply_patch(repo_path, patch):
@@ -649,11 +661,18 @@ class PatchVerificationEngine:
         This prevents multiple workers from cloning the same repo concurrently.
         The first clone populates the cache, subsequent clones copy from cache.
 
+        Only applies to main_repo mode - bundled source (pkgs) doesn't need caching.
+
         Args:
             main_repo: Repository URL
             commit: Commit hash
             repo_name: Optional repository name for cache key
         """
+        # Skip caching in pkgs mode - bundled source doesn't need git repos
+        if self.source_mode == "pkgs":
+            logger.debug("Using pkgs source mode, skipping repo cache")
+            return
+
         # Clone to a temp directory just to populate the cache
         with tempfile.TemporaryDirectory(prefix="repo-cache-") as temp_dir:
             target = str(Path(temp_dir) / "repo")
@@ -1194,6 +1213,90 @@ class PatchVerificationEngine:
         except Exception as e:
             logger.error(f"Failed to load adapter: {e}")
             return None
+
+    def _prepare_source(
+        self,
+        benchmark_path: Path,
+        dest_dir: Path,
+        main_repo: str,
+        commit: str,
+        repo_name: Optional[str] = None,
+    ) -> Optional[Path]:
+        """Prepare source for patch verification - from pkgs/ or git clone.
+
+        Source mode determines how source is obtained:
+        - "main_repo": Clone from main_repo in project.yaml (default)
+        - "pkgs": Use bundled tarballs from pkgs/ (requires pkgs/)
+
+        For patch verification, ref.diff is always applied (patches target ref_commit).
+
+        Args:
+            benchmark_path: Path to benchmark directory
+            dest_dir: Destination directory for source
+            main_repo: Repository URL (used for main_repo mode)
+            commit: Commit hash (used for main_repo mode)
+            repo_name: Optional repository name
+
+        Returns:
+            Path to prepared source, or None on failure
+
+        Raises:
+            RuntimeError: If source_mode is "pkgs" but no pkgs/ exists
+        """
+        # Handle main_repo mode - always clone from git
+        if self.source_mode == "main_repo":
+            logger.info("Using main_repo source (cloning from git)")
+            clone_result = clone_or_copy_cached_repo(
+                repo_url=main_repo,
+                commit=commit,
+                target_dir=str(dest_dir),
+                repo_name=repo_name,
+                verbose=True,
+            )
+            return dest_dir if clone_result else None
+
+        # pkgs mode (default) - use bundled source
+        from crsbench.benchmark.packaging import get_expected_source_dir
+        from crsbench.benchmark.runtime import (
+            has_bundled_source,
+            prepare_source_from_bundle,
+        )
+
+        if not has_bundled_source(benchmark_path):
+            raise RuntimeError(
+                f"No bundled source (pkgs/) found for {benchmark_path.name}. "
+                "Run 'crsbench benchmark bundle' first, or use --source main_repo."
+            )
+
+        # Get source name from Dockerfile WORKDIR
+        dockerfile = benchmark_path / "Dockerfile"
+        source_name = get_expected_source_dir(dockerfile)
+        if not source_name:
+            # Fall back to repo_name or benchmark name
+            source_name = repo_name or benchmark_path.name
+            logger.debug(f"No WORKDIR found, using: {source_name}")
+
+        # For patch verification, always apply ref.diff
+        # Patches are designed to apply on top of ref_commit state
+        #
+        # Determine squash_history based on benchmark mode:
+        # - DELTA mode: squash_history=False (CRS already receives ref.diff as hint)
+        # - FULL mode: squash_history=True (prevent info leak via git diff)
+        from crsbench.builder.types import BenchmarkMode
+        from crsbench.validation.meta_adapter import MetaYamlAdapter
+
+        adapter = MetaYamlAdapter.from_benchmark_path(benchmark_path)
+        is_delta_mode = adapter and adapter.get_mode() == BenchmarkMode.DELTA
+        squash_history = not is_delta_mode
+
+        logger.info(f"Using bundled source: {source_name}.tar.gz (apply_ref_diff=True)")
+        return prepare_source_from_bundle(
+            benchmark_path,
+            dest_dir.parent,  # prepare_source_from_bundle creates subdirectory
+            source_name,
+            apply_ref_diff=True,
+            squash_history=squash_history,
+        )
 
     def cleanup(self) -> None:
         """Clean up temporary directories only.
