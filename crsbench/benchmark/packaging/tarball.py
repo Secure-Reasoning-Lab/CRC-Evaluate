@@ -78,11 +78,24 @@ def create_source_tarball(
         output_dir.mkdir(parents=True, exist_ok=True)
         tarball_path = output_dir / f"{source_name}.tar.gz"
 
-        subprocess.run(
-            ["tar", "-czf", str(tarball_path), source_name],
+        # Use --warning=no-file-changed to handle race conditions with git objects
+        # tar returns exit code 1 when files change during archiving, which is okay
+        result = subprocess.run(
+            [
+                "tar",
+                "--warning=no-file-changed",
+                "-czf",
+                str(tarball_path),
+                source_name,
+            ],
             cwd=work_dir,
-            check=True,
+            capture_output=True,
         )
+        # Exit code 1 with "file changed" is acceptable, only fail on other errors
+        if result.returncode not in (0, 1):
+            raise subprocess.CalledProcessError(
+                result.returncode, result.args, result.stdout, result.stderr
+            )
 
         logger.info(f"Created tarball: {tarball_path}")
         return tarball_path, ref_diff_path
@@ -164,6 +177,7 @@ def _fresh_git_init(directory: Path) -> None:
         cwd=directory,
         check=True,
         capture_output=True,
+        stdin=subprocess.DEVNULL,
         env=env,
     )
     subprocess.run(
@@ -171,13 +185,24 @@ def _fresh_git_init(directory: Path) -> None:
         cwd=directory,
         check=True,
         capture_output=True,
+        stdin=subprocess.DEVNULL,
         env=env,
     )
     subprocess.run(
-        ["git", "commit", "-m", "Initial source"],
+        ["git", "commit", "--no-gpg-sign", "-m", "Initial source"],
         cwd=directory,
         check=True,
         capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env=env,
+    )
+    # Pack all loose objects to prevent race conditions during tar
+    # This ensures git is done writing and all objects are in packfiles
+    subprocess.run(
+        ["git", "gc", "--aggressive", "--prune=now"],
+        cwd=directory,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
         env=env,
     )
 
