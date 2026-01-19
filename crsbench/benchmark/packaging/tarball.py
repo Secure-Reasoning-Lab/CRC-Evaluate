@@ -167,16 +167,44 @@ def _generate_ref_diff(
         capture_output=True,
     )
 
-    # Clean up paths in diff (operate on bytes to preserve line endings)
-    # For normal files: a/base_dir/path -> a/path, b/ref_dir/path -> b/path
-    # For new files: git shows ref_dir in both a/ and b/ paths
-    # For deleted files: git shows base_dir in both a/ and b/ paths
+    # Clean up temp directory paths from diff output
+    # git diff --no-index produces paths like:
+    #   diff --git a/tmp/base/file b/tmp/ref/file
+    #   --- a/tmp/base/file
+    #   +++ b/tmp/ref/file
+    #   rename from tmp/base/old
+    #   rename to tmp/ref/new
+    #   copy from tmp/base/old
+    #   copy to tmp/ref/new
+    #
+    # We need to strip the temp dir prefixes to get clean relative paths.
+    # Handle both base_dir and ref_dir since git may use either depending on
+    # whether a file is new, deleted, renamed, or modified.
     diff_content = result.stdout
-    diff_content = diff_content.replace(f"a{base_dir}/".encode(), b"a/")
-    diff_content = diff_content.replace(f"b{ref_dir}/".encode(), b"b/")
-    # Handle edge cases for new/deleted files
-    diff_content = diff_content.replace(f"a{ref_dir}/".encode(), b"a/")
-    diff_content = diff_content.replace(f"b{base_dir}/".encode(), b"b/")
+    base_prefix = str(base_dir).encode()
+    ref_prefix = str(ref_dir).encode()
+
+    # Pattern replacements: (search_pattern, replacement)
+    # Order matters - more specific patterns first
+    replacements = [
+        # a/prefix and b/prefix patterns (for diff --git, ---, +++ lines)
+        (b"a" + base_prefix + b"/", b"a/"),
+        (b"b" + ref_prefix + b"/", b"b/"),
+        (b"a" + ref_prefix + b"/", b"a/"),  # new files: both point to ref
+        (b"b" + base_prefix + b"/", b"b/"),  # deleted files: both point to base
+        # rename/copy patterns (no a/ or b/ prefix)
+        (b"rename from " + base_prefix + b"/", b"rename from "),
+        (b"rename to " + ref_prefix + b"/", b"rename to "),
+        (b"rename from " + ref_prefix + b"/", b"rename from "),
+        (b"rename to " + base_prefix + b"/", b"rename to "),
+        (b"copy from " + base_prefix + b"/", b"copy from "),
+        (b"copy to " + ref_prefix + b"/", b"copy to "),
+        (b"copy from " + ref_prefix + b"/", b"copy from "),
+        (b"copy to " + base_prefix + b"/", b"copy to "),
+    ]
+
+    for pattern, replacement in replacements:
+        diff_content = diff_content.replace(pattern, replacement)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     ref_diff_path = output_dir / "ref.diff"

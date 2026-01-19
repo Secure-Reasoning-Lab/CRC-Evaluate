@@ -158,6 +158,83 @@ class TestGenerateRefDiff:
             diff_content = diff_path.read_text()
             assert "return 0" in diff_content or "return 1" in diff_content
 
+    @pytest.mark.skipif(
+        not shutil.which("git"),
+        reason="git not available",
+    )
+    def test_generate_ref_diff_with_renames(self):
+        """Test that _generate_ref_diff cleans up paths for renamed files.
+
+        This test verifies that temp directory paths are stripped from rename
+        operations, which would otherwise cause 'inconsistent old filename' errors.
+        """
+        import os
+
+        from crsbench.benchmark.packaging.tarball import _generate_ref_diff
+
+        git_env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Test",
+            "GIT_AUTHOR_EMAIL": "test@test.com",
+            "GIT_COMMITTER_NAME": "Test",
+            "GIT_COMMITTER_EMAIL": "test@test.com",
+        }
+
+        def run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+            full_args = ["-c", "commit.gpgsign=false", *args]
+            return subprocess.run(
+                ["git", *full_args],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                env=git_env,
+                check=True,
+            )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+
+            # Create a git repo
+            repo_dir = work_dir / "repo"
+            repo_dir.mkdir()
+            run_git(["init"], cwd=repo_dir)
+
+            # Create initial commit (base) with a file to be renamed
+            (repo_dir / "old_name.c").write_text("int old() { return 0; }")
+            run_git(["add", "-A"], cwd=repo_dir)
+            run_git(["commit", "-m", "Initial"], cwd=repo_dir)
+            base_commit = run_git(["rev-parse", "HEAD"], cwd=repo_dir).stdout.strip()
+
+            # Create second commit (ref) with renamed file
+            run_git(["mv", "old_name.c", "new_name.c"], cwd=repo_dir)
+            run_git(["commit", "-m", "Rename file"], cwd=repo_dir)
+            ref_commit = run_git(["rev-parse", "HEAD"], cwd=repo_dir).stdout.strip()
+
+            # Generate ref.diff
+            output_dir = work_dir / "output"
+            output_dir.mkdir()
+
+            diff_path = _generate_ref_diff(
+                repo_dir=repo_dir,
+                base_commit=base_commit,
+                ref_commit=ref_commit,
+                work_dir=work_dir / "work",
+                output_dir=output_dir,
+            )
+
+            # Verify diff was generated and paths are clean
+            assert diff_path.exists()
+            diff_content = diff_path.read_text()
+
+            # Should have clean rename paths (no temp dir)
+            assert "rename from old_name.c" in diff_content
+            assert "rename to new_name.c" in diff_content
+
+            # Should NOT have temp directory paths
+            assert "/tmp/" not in diff_content
+            assert "base/" not in diff_content
+            assert "ref/" not in diff_content
+
 
 class TestCRLFLineEndings:
     """Test that CRLF line endings are preserved in tarball and ref.diff."""
