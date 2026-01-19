@@ -8,7 +8,9 @@ This module provides a thin orchestration layer over existing engines:
 No custom build logic - delegates everything to existing, tested code.
 """
 
+import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -26,11 +28,43 @@ from crsbench.evaluation.verification.models import (
 )
 from crsbench.evaluation.verification.patch import PatchVerificationEngine
 from crsbench.evaluation.verification.pov import VerificationEngine
-from crsbench.utils.logger import get_logger
+from crsbench.utils.logger import add_file_handler, get_logger, remove_file_handler
 from crsbench.utils.run_helper import get_oss_fuzz_root
 from crsbench.validation import validate_benchmark as format_validate
 
 logger = get_logger(__name__)
+
+
+@contextmanager
+def _with_file_logging(log_file: Optional[Path]):
+    """Context manager to add/remove file logging for a phase.
+
+    Uses thread ID filtering to ensure logs from concurrent benchmark validations
+    don't get interleaved across log files.
+
+    Args:
+        log_file: Path to log file, or None to skip logging
+
+    Yields:
+        None
+    """
+    if log_file is None:
+        yield
+        return
+
+    # Use thread ID to filter logs - ensures parallel benchmark validations
+    # don't write to each other's log files
+    current_thread_id = threading.get_ident()
+
+    def thread_filter(record):
+        # Only capture logs from the current thread
+        return record["thread"].id == current_thread_id
+
+    handler_id = add_file_handler(log_file, level="DEBUG", filter_func=thread_filter)
+    try:
+        yield
+    finally:
+        remove_file_handler(handler_id)
 
 
 class BenchmarkValidator:
@@ -380,6 +414,7 @@ class BenchmarkValidator:
         skip_format: bool = False,
         skip_verify: bool = False,
         skip_patch_verify: bool = False,
+        log_dir: Optional[Path] = None,
     ) -> BenchmarkValidationResult:
         """Run all validation checks for a benchmark.
 
@@ -391,6 +426,7 @@ class BenchmarkValidator:
             skip_format: Skip format validation
             skip_verify: Skip POV verification
             skip_patch_verify: Skip patch verification
+            log_dir: Optional directory to save per-phase log files
 
         Returns:
             BenchmarkValidationResult with all check results
@@ -399,6 +435,12 @@ class BenchmarkValidator:
         benchmark_name = benchmark_path.name
         started_at = datetime.now()
 
+        # Setup log directory if specified
+        benchmark_log_dir = None
+        if log_dir:
+            benchmark_log_dir = log_dir / benchmark_name
+            benchmark_log_dir.mkdir(parents=True, exist_ok=True)
+
         logger.info(f"Validating benchmark: {benchmark_name}")
 
         # 1. Format validation (fast, no Docker)
@@ -406,7 +448,9 @@ class BenchmarkValidator:
             format_result = CheckResult.skip("--skip-format")
         else:
             logger.info(f"  [{benchmark_name}] Running format validation...")
-            format_result = self.validate_format(benchmark_path)
+            format_log = benchmark_log_dir / "format.log" if benchmark_log_dir else None
+            with _with_file_logging(format_log):
+                format_result = self.validate_format(benchmark_path)
             logger.info(
                 f"  [{benchmark_name}] Format: {format_result.status.value} "
                 f"({format_result.time_seconds:.1f}s)"
@@ -434,11 +478,13 @@ class BenchmarkValidator:
             pov_result = CheckResult.skip("--skip-verify")
         else:
             logger.info(f"  [{benchmark_name}] Running POV verification...")
-            pov_result = self.validate_povs(
-                benchmark_path,
-                force_rebuild=force_rebuild,
-                use_inc_build=use_inc_build,
-            )
+            verify_log = benchmark_log_dir / "verify.log" if benchmark_log_dir else None
+            with _with_file_logging(verify_log):
+                pov_result = self.validate_povs(
+                    benchmark_path,
+                    force_rebuild=force_rebuild,
+                    use_inc_build=use_inc_build,
+                )
             logger.info(
                 f"  [{benchmark_name}] POV: {pov_result.status.value} "
                 f"({pov_result.time_seconds:.1f}s)"
@@ -449,11 +495,15 @@ class BenchmarkValidator:
             patch_result = CheckResult.skip("--skip-patch-verify")
         else:
             logger.info(f"  [{benchmark_name}] Running patch verification...")
-            patch_result = self.validate_patches(
-                benchmark_path,
-                force_rebuild=force_rebuild,
-                use_inc_build=use_inc_build,
+            patch_log = (
+                benchmark_log_dir / "patch-verify.log" if benchmark_log_dir else None
             )
+            with _with_file_logging(patch_log):
+                patch_result = self.validate_patches(
+                    benchmark_path,
+                    force_rebuild=force_rebuild,
+                    use_inc_build=use_inc_build,
+                )
             logger.info(
                 f"  [{benchmark_name}] Patch: {patch_result.status.value} "
                 f"({patch_result.time_seconds:.1f}s)"
@@ -463,7 +513,11 @@ class BenchmarkValidator:
         coverage_result = None
         if include_coverage:
             logger.info(f"  [{benchmark_name}] Running coverage check...")
-            coverage_result = self.validate_coverage(benchmark_path)
+            coverage_log = (
+                benchmark_log_dir / "coverage.log" if benchmark_log_dir else None
+            )
+            with _with_file_logging(coverage_log):
+                coverage_result = self.validate_coverage(benchmark_path)
             logger.info(
                 f"  [{benchmark_name}] Coverage: {coverage_result.status.value} "
                 f"({coverage_result.time_seconds:.1f}s)"

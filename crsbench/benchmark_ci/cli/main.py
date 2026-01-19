@@ -384,13 +384,14 @@ def run_ci(args: argparse.Namespace) -> int:
     output_dir = Path(args.output_dir) if args.output_dir else None
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Logs will be saved to: {output_dir}")
+        logger.info(f"Per-phase logs will be saved to: {output_dir}/<benchmark>/")
 
     # Calculate worker distribution based on CPU count
     # When running N benchmarks in parallel, each gets cpu_count/N workers (min 1)
+    # Cap at 4 to avoid DoS-ing package servers with too many concurrent downloads
     cpu_count = os.cpu_count() or 8
     benchmark_workers = max(1, args.workers)
-    per_benchmark_workers = max(1, cpu_count // benchmark_workers)
+    per_benchmark_workers = min(4, max(1, cpu_count // benchmark_workers))
 
     logger.info(
         f"Running with {benchmark_workers} benchmark worker(s), "
@@ -428,6 +429,7 @@ def run_ci(args: argparse.Namespace) -> int:
             skip_format=args.skip_format,
             skip_verify=args.skip_verify,
             skip_patch_verify=args.skip_patch_verify,
+            log_dir=output_dir,
         )
 
     # Run validation

@@ -148,10 +148,16 @@ def _generate_ref_diff(
         text=True,
     )
 
-    # Clean up paths in diff (a/tmp/xxx/base/ -> a/, b/tmp/xxx/ref/ -> b/)
+    # Clean up paths in diff
+    # For normal files: a/base_dir/path -> a/path, b/ref_dir/path -> b/path
+    # For new files: git shows ref_dir in both a/ and b/ paths
+    # For deleted files: git shows base_dir in both a/ and b/ paths
     diff_content = result.stdout
     diff_content = diff_content.replace(f"a{base_dir}/", "a/")
     diff_content = diff_content.replace(f"b{ref_dir}/", "b/")
+    # Handle edge cases for new/deleted files
+    diff_content = diff_content.replace(f"a{ref_dir}/", "a/")
+    diff_content = diff_content.replace(f"b{base_dir}/", "b/")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     ref_diff_path = output_dir / "ref.diff"
