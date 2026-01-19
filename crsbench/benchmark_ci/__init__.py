@@ -1,44 +1,51 @@
-"""Benchmark CI module for end-to-end testing of CRSBench benchmarks.
+"""Simplified benchmark CI module for validating CRSBench benchmarks.
 
-This module provides comprehensive testing for benchmarks including:
-- Delta/Full mode build verification
-- POV reproduction testing (using VerificationEngine)
-- Patch verification (using PatchVerificationEngine)
-- Coverage measurement (using CoverageEngine)
-- Incremental build image pulling
+This module provides benchmark validation using existing verification engines:
+- VerificationEngine: POV verification (builds all variants, runs POVs)
+- PatchVerificationEngine: Patch verification
+- CoverageEngine: Coverage collection
 
-Structure:
-- models.py: Data models (JobContext, Task, CIResult, etc.)
-- runner.py: BenchmarkCIRunner for orchestrating tests
-- jobs/: Job executor classes
-- cli/: Command-line interface
+No custom build logic - delegates everything to existing, tested code.
+
+Usage:
+    from crsbench.benchmark_ci import BenchmarkValidator
+
+    validator = BenchmarkValidator()
+    result = validator.validate_benchmark(benchmark_path)
+
+Result checking:
+    from crsbench.benchmark_ci import check_verify, check_patch_verify, check_coverage
+
+CLI:
+    crsbench ci --all
+    crsbench ci --benchmarks bench1,bench2
 """
 
-from crsbench.benchmark_ci.models import (
-    CIResult,
-    ExecJobType,
-    IncBuildMetrics,
-    JobContext,
-    JobResult,
-    ResultCollector,
-    Task,
-    TaskMode,
-    get_benchmarks_root,
+from crsbench.benchmark_ci.checks import (
+    check_coverage,
+    check_patch_verify,
+    check_verify,
+    get_expected_cpvs,
 )
-from crsbench.benchmark_ci.runner import BenchmarkCIRunner
+from crsbench.benchmark_ci.models import (
+    BenchmarkValidationResult,
+    CheckResult,
+    CheckStatus,
+    ValidationSummary,
+)
+from crsbench.benchmark_ci.validator import BenchmarkValidator
 
 __all__ = [
-    # Runner
-    "BenchmarkCIRunner",
+    # Main validator
+    "BenchmarkValidator",
     # Models
-    "JobContext",
-    "ExecJobType",
-    "TaskMode",
-    "Task",
-    "IncBuildMetrics",
-    "JobResult",
-    "CIResult",
-    "ResultCollector",
-    # Utilities
-    "get_benchmarks_root",
+    "CheckResult",
+    "CheckStatus",
+    "BenchmarkValidationResult",
+    "ValidationSummary",
+    # Result checking functions
+    "check_verify",
+    "check_patch_verify",
+    "check_coverage",
+    "get_expected_cpvs",
 ]

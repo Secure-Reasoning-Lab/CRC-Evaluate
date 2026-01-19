@@ -1,22 +1,86 @@
-"""CLI entry point for benchmark CI testing.
+"""Simplified CLI for benchmark CI validation.
 
 Usage:
     crsbench ci --benchmarks bench1,bench2
+    crsbench ci --all
+    crsbench ci --all --include-coverage
 
-Or via module:
-    python -m crsbench.benchmark_ci.cli.main --benchmarks bench1,bench2
+This CLI uses BenchmarkValidator which delegates to existing engines:
+- VerificationEngine for POV checks
+- PatchVerificationEngine for patch checks
+- CoverageEngine for coverage checks
+
+No custom build/verify logic - just orchestration.
 """
 
 import argparse
+import fnmatch
+import json
+import os
 import sys
+from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import Optional, Union
 
-from crsbench.benchmark_ci.models import ExecJobType, get_benchmarks_root
-from crsbench.benchmark_ci.runner import BenchmarkCIRunner
+from crsbench.benchmark_ci.models import (
+    BenchmarkValidationResult,
+    CheckResult,
+    CheckStatus,
+    ValidationSummary,
+)
+from crsbench.benchmark_ci.validator import BenchmarkValidator
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def cli_print(*args, **kwargs) -> None:  # noqa: T201
+    """Print to stdout for CLI user-facing output."""
+    print(*args, **kwargs)  # noqa: T201
+
+
+def get_benchmarks_root() -> Path:
+    """Get the root benchmarks directory."""
+    if "BENCHMARKS_ROOT" in os.environ:
+        return Path(os.environ["BENCHMARKS_ROOT"])
+
+    # Default to benchmarks/ relative to project root
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        benchmarks_dir = parent / "benchmarks"
+        if benchmarks_dir.is_dir():
+            return benchmarks_dir
+
+    raise RuntimeError("Could not find benchmarks directory")
+
+
+def discover_benchmarks(
+    benchmarks_root: Path, filter_pattern: Optional[str] = None
+) -> list[Path]:
+    """Discover benchmark directories.
+
+    Args:
+        benchmarks_root: Root directory containing benchmarks
+        filter_pattern: Optional glob pattern to filter benchmarks
+
+    Returns:
+        List of benchmark paths
+    """
+    benchmarks = []
+    for path in sorted(benchmarks_root.iterdir()):
+        if not path.is_dir():
+            continue
+        # Skip hidden directories
+        if path.name.startswith("."):
+            continue
+        # Check for .aixcc directory (indicates valid benchmark)
+        if not (path / ".aixcc").exists():
+            continue
+        # Apply filter if specified
+        if filter_pattern and not fnmatch.fnmatch(path.name, filter_pattern):
+            continue
+        benchmarks.append(path)
+    return benchmarks
 
 
 def add_ci_subparser(subparsers: argparse._SubParsersAction) -> None:
@@ -27,27 +91,27 @@ def add_ci_subparser(subparsers: argparse._SubParsersAction) -> None:
     """
     ci_parser = subparsers.add_parser(
         "ci",
-        help="Run benchmark CI tests (POV checks, patch verification, coverage)",
+        help="Validate benchmarks (format, POV, patch verification)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Test specific benchmarks
-  %(prog)s --benchmarks sanity-mock-c-delta-01,sanity-mock-c-full-01
+  # Validate specific benchmarks
+  crsbench ci --benchmarks sanity-mock-c-delta-01,sanity-mock-c-full-01
 
-  # Test all benchmarks
-  %(prog)s --all
+  # Validate all benchmarks
+  crsbench ci --all
 
-  # Run specific job types only
-  %(prog)s --benchmarks bench1 --job-types delta_base_pov_check,patch_check
+  # Filter benchmarks by pattern
+  crsbench ci --all --filter "afc-*"
 
-  # Run with parallel workers
-  %(prog)s --all --workers 4
+  # Include coverage check (slower)
+  crsbench ci --all --include-coverage
 
-  # Export results to CSV
-  %(prog)s --all --csv results.csv
+  # Force rebuild Docker images
+  crsbench ci --benchmarks bench1 --force-rebuild
 
-  # Dry run - show jobs without executing
-  %(prog)s --benchmarks bench1 --dry-run
+  # Export results to JSON
+  crsbench ci --all --output results.json
         """,
     )
 
@@ -56,95 +120,226 @@ Examples:
         "--benchmarks",
         "-b",
         type=str,
-        help="Comma-separated list of benchmark names to test",
+        help="Comma-separated list of benchmark names to validate",
     )
     ci_parser.add_argument(
         "--all",
         action="store_true",
-        help="Test all benchmarks in the benchmarks/ directory",
+        help="Validate all benchmarks in the benchmarks/ directory",
+    )
+    ci_parser.add_argument(
+        "--filter",
+        "-f",
+        type=str,
+        help="Filter benchmarks by glob pattern (e.g., 'afc-*', 'sanity-*')",
     )
 
-    # Job type filtering
+    # Check options
     ci_parser.add_argument(
-        "--job-types",
-        "-j",
-        type=str,
-        help="Comma-separated list of job types to run (e.g., delta_base_pov_check,patch_check)",
+        "--include-coverage",
+        action="store_true",
+        help="Include coverage check (slower)",
+    )
+    ci_parser.add_argument(
+        "--format-only",
+        action="store_true",
+        help="Only run format validation (fast, no Docker)",
+    )
+
+    # Skip options
+    ci_parser.add_argument(
+        "--skip-format",
+        action="store_true",
+        help="Skip format validation",
+    )
+    ci_parser.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help="Skip POV verification",
+    )
+    ci_parser.add_argument(
+        "--skip-patch-verify",
+        action="store_true",
+        help="Skip patch verification",
+    )
+
+    # Build options
+    ci_parser.add_argument(
+        "--force-rebuild",
+        action="store_true",
+        help="Force rebuild Docker images even if cached",
+    )
+    ci_parser.add_argument(
+        "--no-inc-build",
+        action="store_true",
+        help="Disable incremental builds",
     )
 
     # Output
     ci_parser.add_argument(
-        "--csv",
+        "--output",
+        "-o",
         type=str,
-        help="Path to export results CSV",
+        help="Path to save results JSON",
+    )
+    ci_parser.add_argument(
+        "--output-dir",
+        type=str,
+        help="Directory for detailed logs (creates per-benchmark subdirs with logs)",
     )
 
-    # Parallel execution
+    # Display options
     ci_parser.add_argument(
-        "--workers",
-        "-w",
-        type=int,
-        default=1,
-        help="Number of parallel workers for job execution (default: 1)",
-    )
-
-    # Options
-    ci_parser.add_argument(
-        "--check-default-only",
+        "--no-color",
         action="store_true",
-        help="Only test libfuzzer + address/none sanitizers",
-    )
-    ci_parser.add_argument(
-        "--force-rebuild",
-        action="store_true",
-        help="Force rebuild Docker images even if they already exist",
-    )
-    ci_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show jobs that would be executed without running them",
+        help="Disable colored output",
     )
 
     ci_parser.set_defaults(command="ci")
 
 
-def get_benchmarks_to_test(args: argparse.Namespace) -> Set[str]:
-    """Get set of benchmarks to test based on CLI arguments."""
-    benchmarks: Set[str] = set()
-
-    if args.all:
-        # Get all benchmarks from benchmarks/ directory
-        benchmarks_root = Path(get_benchmarks_root())
-        for path in benchmarks_root.iterdir():
-            if path.is_dir() and not path.name.startswith("."):
-                benchmarks.add(path.name)
-    elif args.benchmarks:
-        benchmarks = set(args.benchmarks.split(","))
-    else:
-        logger.error("No benchmarks specified. Use --benchmarks or --all")
-        sys.exit(1)
-
-    return benchmarks
+def format_time(seconds: float) -> str:
+    """Format time in human-readable form."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes = int(seconds // 60)
+    secs = seconds % 60
+    if minutes < 60:
+        return f"{minutes}m{secs:.0f}s"
+    hours = minutes // 60
+    mins = minutes % 60
+    return f"{hours}h{mins}m"
 
 
-def parse_job_types(job_types_str: Optional[str]) -> Optional[Set[ExecJobType]]:
-    """Parse job types from comma-separated string."""
-    if not job_types_str:
-        return None
+def print_results_table(summary: ValidationSummary, *, use_color: bool = True) -> None:
+    """Print results in a formatted table.
 
-    job_types: Set[ExecJobType] = set()
-    for jt in job_types_str.split(","):
-        jt = jt.strip()
-        try:
-            job_types.add(ExecJobType(jt))
-        except ValueError:
-            logger.warning(f"Unknown job type: {jt}")
+    Args:
+        summary: ValidationSummary with results
+        use_color: Whether to use ANSI color codes
+    """
+    # Header
+    cli_print()
+    cli_print("=" * 100)
+    cli_print("BENCHMARK VALIDATION REPORT")
+    cli_print("=" * 100)
+    cli_print()
 
-    return job_types if job_types else None
+    # Column headers
+    header = (
+        f"{'Benchmark':<45} {'Format':<8} {'POV':<8} {'Patch':<8} "
+        f"{'Coverage':<8} {'Total':<8} {'Time':<10}"
+    )
+    cli_print(header)
+    cli_print("-" * 100)
+
+    # Status formatting - accepts CheckResult, CheckStatus, or None
+    def status_str(
+        check_or_status: Union[CheckResult, CheckStatus, None],
+        *,
+        with_color: bool = True,
+    ) -> str:
+        if check_or_status is None:
+            status = "SKIP"
+        elif isinstance(check_or_status, CheckStatus):
+            status = check_or_status.value.upper()
+            if status == "ERROR":
+                status = "ERR"
+        elif check_or_status.status == CheckStatus.PASS:
+            status = "PASS"
+        elif check_or_status.status == CheckStatus.FAIL:
+            status = "FAIL"
+        elif check_or_status.status == CheckStatus.SKIP:
+            status = "SKIP"
+        else:
+            status = "ERR"
+
+        if not with_color:
+            return status
+
+        # Add ANSI color codes
+        colors = {
+            "PASS": "\033[92m",  # Green
+            "FAIL": "\033[91m",  # Red
+            "SKIP": "\033[93m",  # Yellow
+            "ERR": "\033[91m",  # Red
+        }
+        reset = "\033[0m"
+        return f"{colors.get(status, '')}{status}{reset}"
+
+    # Results
+    for r in summary.results:
+        total_status = status_str(r.total_status, with_color=use_color)
+        cov_status = status_str(r.coverage_check, with_color=use_color)
+
+        # Adjust column width for ANSI codes (they don't take visual space)
+        col_width = 17 if use_color else 8
+
+        row = (
+            f"{r.benchmark:<45} "
+            f"{status_str(r.format_check, with_color=use_color):<{col_width}} "
+            f"{status_str(r.pov_check, with_color=use_color):<{col_width}} "
+            f"{status_str(r.patch_check, with_color=use_color):<{col_width}} "
+            f"{cov_status:<{col_width}} "
+            f"{total_status:<{col_width}} "
+            f"{format_time(r.total_time):<10}"
+        )
+        cli_print(row)
+
+    # Summary
+    cli_print("-" * 100)
+    cli_print(
+        f"Summary: {summary.passed} passed, {summary.failed} failed, "
+        f"{summary.errors} errors, {summary.total} total"
+    )
+    cli_print()
+
+
+def _save_benchmark_logs(
+    result: BenchmarkValidationResult, output_dir: Optional[Path]
+) -> None:
+    """Save detailed logs for a benchmark validation result.
+
+    Args:
+        result: Validation result for a benchmark
+        output_dir: Output directory for logs (None to skip)
+    """
+    if output_dir is None:
+        return
+
+    benchmark_dir = output_dir / result.benchmark
+    benchmark_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save summary using model's to_dict() method
+    summary_path = benchmark_dir / "summary.json"
+    with summary_path.open("w") as f:
+        json.dump(result.to_dict(), f, indent=2)
+
+    # Save detailed error logs if any failures
+    if result.total_status in (CheckStatus.FAIL, CheckStatus.ERROR):
+        errors_path = benchmark_dir / "errors.txt"
+        with errors_path.open("w") as f:
+            f.write(f"Benchmark: {result.benchmark}\n")
+            f.write(f"Status: {result.total_status.value}\n\n")
+
+            for name, check in [
+                ("Format", result.format_check),
+                ("POV", result.pov_check),
+                ("Patch", result.patch_check),
+                ("Coverage", result.coverage_check),
+            ]:
+                if check and check.status in (CheckStatus.FAIL, CheckStatus.ERROR):
+                    f.write(f"=== {name} Check ===\n")
+                    f.write(f"Status: {check.status.value}\n")
+                    if check.error:
+                        f.write(f"Error: {check.error}\n")
+                    if check.details:
+                        f.write(f"Details: {json.dumps(check.details, indent=2)}\n")
+                    f.write("\n")
 
 
 def run_ci(args: argparse.Namespace) -> int:
-    """Run benchmark CI tests.
+    """Run benchmark CI validation.
 
     Args:
         args: Parsed command line arguments
@@ -152,82 +347,182 @@ def run_ci(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success, 1 for failure)
     """
-    # Get benchmarks to test
-    benchmarks = get_benchmarks_to_test(args)
-    logger.info(f"Testing {len(benchmarks)} benchmarks: {sorted(benchmarks)}")
+    # Get benchmarks to validate
+    benchmarks_root = get_benchmarks_root()
 
-    # Parse job types
-    job_types = parse_job_types(args.job_types)
-    if job_types:
-        logger.info(f"Running job types: {[jt.value for jt in job_types]}")
+    if args.all:
+        benchmark_paths = discover_benchmarks(benchmarks_root, args.filter)
+    elif args.benchmarks:
+        benchmark_names = [b.strip() for b in args.benchmarks.split(",")]
+        benchmark_paths = [benchmarks_root / name for name in benchmark_names]
+        # Validate paths exist
+        for path in benchmark_paths:
+            if not path.exists():
+                logger.error(f"Benchmark not found: {path}")
+                return 1
+    else:
+        logger.error("No benchmarks specified. Use --benchmarks or --all")
+        return 1
 
-    # Create runner
-    runner = BenchmarkCIRunner(
-        force_rebuild=args.force_rebuild,
-        max_workers=args.workers,
-    )
+    if not benchmark_paths:
+        logger.error("No benchmarks found matching criteria")
+        return 1
 
-    # Dry run - just show jobs
-    if args.dry_run:
-        jobs = runner.generate_jobs(
-            benchmarks,
-            job_types,
-            check_default_only=args.check_default_only,
-        )
-        logger.info(f"Would execute {len(jobs)} jobs:")
-        for i, job in enumerate(jobs, 1):
-            inc_build_str = " [inc-build]" if job.use_inc_build else ""
-            logger.info(f"  {i}. {job}{inc_build_str}")
-        return 0
+    logger.info(f"Validating {len(benchmark_paths)} benchmarks")
 
-    # Run tests
-    results = runner.run(
-        benchmarks,
-        job_types,
-        check_default_only=args.check_default_only,
-    )
+    # Setup output directory for logs if requested
+    output_dir = Path(args.output_dir) if args.output_dir else None
+    if output_dir:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Logs will be saved to: {output_dir}")
 
-    # Print summary
-    results.print_summary()
+    # Create validator
+    validator = BenchmarkValidator()
 
-    # Export CSV if requested
-    if args.csv:
-        results.export_csv(args.csv)
+    # Determine color usage
+    use_color = not args.no_color
 
-    # Return exit code based on results
-    summary = results.get_summary()
-    if summary["failed"] > 0:
+    # Run validation
+    if args.format_only:
+        # Fast path - format validation only
+        summary = ValidationSummary(started_at=datetime.now())
+        for i, path in enumerate(benchmark_paths, 1):
+            logger.info(f"[{i}/{len(benchmark_paths)}] {path.name}")
+            format_result = validator.validate_format(path)
+            result = BenchmarkValidationResult(
+                benchmark=path.name,
+                benchmark_path=path,
+                format_check=format_result,
+                pov_check=CheckResult.skip("format-only mode"),
+                patch_check=CheckResult.skip("format-only mode"),
+                started_at=datetime.now(),
+                finished_at=datetime.now(),
+            )
+            summary.add_result(result)
+            _save_benchmark_logs(result, output_dir)
+        summary.finished_at = datetime.now()
+    else:
+        summary = ValidationSummary(started_at=datetime.now())
+        for i, path in enumerate(benchmark_paths, 1):
+            logger.info(f"[{i}/{len(benchmark_paths)}] {path.name}")
+            result = validator.validate_benchmark(
+                path,
+                include_coverage=args.include_coverage,
+                force_rebuild=args.force_rebuild,
+                use_inc_build=not args.no_inc_build,
+                skip_format=args.skip_format,
+                skip_verify=args.skip_verify,
+                skip_patch_verify=args.skip_patch_verify,
+            )
+            summary.add_result(result)
+            _save_benchmark_logs(result, output_dir)
+        summary.finished_at = datetime.now()
+
+    # Print results
+    print_results_table(summary, use_color=use_color)
+
+    # Save results if requested
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w") as f:
+            json.dump(summary.to_dict(), f, indent=2)
+        logger.info(f"Results saved to: {output_path}")
+
+    # Return exit code
+    if summary.failed > 0 or summary.errors > 0:
         return 1
     return 0
 
 
-def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
-    """Parse command line arguments (for standalone execution)."""
+def main(args: Optional[list[str]] = None) -> int:
+    """Main entry point for benchmark CI CLI."""
     parser = argparse.ArgumentParser(
-        description="Benchmark CI testing for CRSBench",
+        description="Benchmark CI validation for CRSBench",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    # Create subparsers and add ci command
-    subparsers = parser.add_subparsers(dest="command")
-    add_ci_subparser(subparsers)
+    # Benchmark selection
+    parser.add_argument(
+        "--benchmarks",
+        "-b",
+        type=str,
+        help="Comma-separated list of benchmark names to validate",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Validate all benchmarks",
+    )
+    parser.add_argument(
+        "--filter",
+        "-f",
+        type=str,
+        help="Filter benchmarks by glob pattern",
+    )
 
-    # For standalone execution, parse without subcommand requirement
-    parsed = parser.parse_args(args)
+    # Check options
+    parser.add_argument(
+        "--include-coverage",
+        action="store_true",
+        help="Include coverage check",
+    )
+    parser.add_argument(
+        "--format-only",
+        action="store_true",
+        help="Only run format validation",
+    )
 
-    # If no command specified, show help
-    if parsed.command is None:
-        # Re-parse with ci as default command
-        if args is None:
-            args = sys.argv[1:]
-        return parser.parse_args(["ci"] + list(args))
+    # Skip options
+    parser.add_argument(
+        "--skip-format",
+        action="store_true",
+        help="Skip format validation",
+    )
+    parser.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help="Skip POV verification",
+    )
+    parser.add_argument(
+        "--skip-patch-verify",
+        action="store_true",
+        help="Skip patch verification",
+    )
 
-    return parsed
+    # Build options
+    parser.add_argument(
+        "--force-rebuild",
+        action="store_true",
+        help="Force rebuild Docker images",
+    )
+    parser.add_argument(
+        "--no-inc-build",
+        action="store_true",
+        help="Disable incremental builds",
+    )
 
+    # Output options
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        help="Path to save results JSON",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        help="Directory for detailed logs (creates per-benchmark subdirs)",
+    )
 
-def main(args: Optional[List[str]] = None) -> int:
-    """Main entry point for benchmark CI CLI."""
-    parsed_args = parse_args(args)
+    # Display options
+    parser.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable colored output",
+    )
+
+    parsed_args = parser.parse_args(args)
     return run_ci(parsed_args)
 
 

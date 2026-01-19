@@ -80,7 +80,7 @@ jobs:
             --format json
           echo "=== Verify ${{ matrix.project }} Results ==="
           cat verify-${{ matrix.project }}.json
-          uv run python3 ci-tests/check_ci_results.py verify \
+          uv run python -m crsbench.benchmark_ci.checks verify \
             benchmarks/${{ matrix.benchmark }} \
             verify-${{ matrix.project }}.json
 
@@ -92,7 +92,7 @@ jobs:
             --format json
           echo "=== Patch-verify ${{ matrix.project }} Results ==="
           cat patch-verify-${{ matrix.project }}.json
-          uv run python3 ci-tests/check_ci_results.py patch-verify \
+          uv run python -m crsbench.benchmark_ci.checks patch-verify \
             patch-verify-${{ matrix.project }}.json
 
       - name: Coverage ${{ matrix.project }}
@@ -109,7 +109,7 @@ jobs:
           rm -rf "$CORPUS_DIR"
           echo "=== Coverage ${{ matrix.project }} Results ==="
           cat coverage-${{ matrix.project }}.json
-          uv run python3 ci-tests/check_ci_results.py coverage \
+          uv run python -m crsbench.benchmark_ci.checks coverage \
             coverage-${{ matrix.project }}.json
 
   # Stage 3: E2E Bug Finding
