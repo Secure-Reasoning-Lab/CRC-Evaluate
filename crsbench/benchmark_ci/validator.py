@@ -105,7 +105,7 @@ class BenchmarkValidator:
         benchmark_path: Path,
         *,
         force_rebuild: bool = False,
-        use_inc_build: bool = True,
+        use_inc_build: bool = False,
     ) -> CheckResult:
         """Validate POVs using VerificationEngine.
 
@@ -203,7 +203,7 @@ class BenchmarkValidator:
         benchmark_path: Path,
         *,
         force_rebuild: bool = False,
-        use_inc_build: bool = True,
+        use_inc_build: bool = False,
     ) -> CheckResult:
         """Validate patches using PatchVerificationEngine.
 
@@ -362,7 +362,7 @@ class BenchmarkValidator:
         *,
         include_coverage: bool = False,
         force_rebuild: bool = False,
-        use_inc_build: bool = True,
+        use_inc_build: bool = False,
         skip_format: bool = False,
         skip_verify: bool = False,
         skip_patch_verify: bool = False,
@@ -472,7 +472,7 @@ class BenchmarkValidator:
         *,
         include_coverage: bool = False,
         force_rebuild: bool = False,
-        use_inc_build: bool = True,
+        use_inc_build: bool = False,
     ) -> ValidationSummary:
         """Validate multiple benchmarks.
 

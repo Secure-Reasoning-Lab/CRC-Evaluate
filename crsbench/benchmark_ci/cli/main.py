@@ -170,9 +170,9 @@ Examples:
         help="Force rebuild Docker images even if cached",
     )
     ci_parser.add_argument(
-        "--no-inc-build",
+        "--inc-build",
         action="store_true",
-        help="Disable incremental builds",
+        help="Enable incremental builds (pull pre-built images from registry)",
     )
 
     # Output
@@ -409,7 +409,7 @@ def run_ci(args: argparse.Namespace) -> int:
                 path,
                 include_coverage=args.include_coverage,
                 force_rebuild=args.force_rebuild,
-                use_inc_build=not args.no_inc_build,
+                use_inc_build=args.inc_build,
                 skip_format=args.skip_format,
                 skip_verify=args.skip_verify,
                 skip_patch_verify=args.skip_patch_verify,
@@ -497,9 +497,9 @@ def main(args: Optional[list[str]] = None) -> int:
         help="Force rebuild Docker images",
     )
     parser.add_argument(
-        "--no-inc-build",
+        "--inc-build",
         action="store_true",
-        help="Disable incremental builds",
+        help="Enable incremental builds (pull pre-built images from registry)",
     )
 
     # Output options
