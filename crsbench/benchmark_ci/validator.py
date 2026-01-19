@@ -151,12 +151,26 @@ class BenchmarkValidator:
 
             # Check results - for CI validation, we expect CPV status
             # (POV triggers known vulnerability that is fixed by patch)
+            # Additionally, verify that each POV matches its expected CPV
+            # pov_id format: "cpv_N/pov_M.blob" -> expected_cpv = "cpv_N"
             failed_povs = []
             passed_povs = []
 
             for r in results:
+                # Extract expected CPV from pov_id (e.g., "cpv_0" from "cpv_0/pov_0.blob")
+                expected_cpv = None
+                if r.pov_id and "/" in r.pov_id:
+                    expected_cpv = r.pov_id.split("/")[0]
+
                 if r.status == PovVerificationStatus.CPV:
-                    passed_povs.append(r.pov_id)
+                    # Verify POV matches its expected CPV
+                    if expected_cpv and expected_cpv not in r.cpv_matched:
+                        failed_povs.append(
+                            f"{r.pov_id}: CPV mismatch - expected {expected_cpv}, "
+                            f"got {r.cpv_matched}"
+                        )
+                    else:
+                        passed_povs.append(r.pov_id)
                 elif r.status == PovVerificationStatus.NOT_VULNERABLE:
                     # POV didn't crash where expected - this is a failure
                     failed_povs.append(f"{r.pov_id}: NOT_VULNERABLE - {r.details}")

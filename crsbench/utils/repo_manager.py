@@ -495,6 +495,27 @@ def clone_repository(
             if verbose:
                 logger.info(f"✅ Checked out commit {commit}")
 
+        # Initialize submodules if present (some projects like shadowsocks need this)
+        gitmodules = target_path / ".gitmodules"
+        if gitmodules.exists():
+            if verbose:
+                logger.info("🔄 Initializing git submodules...")
+
+            result = run_git(
+                ["submodule", "update", "--init", "--recursive"],
+                cwd=target_dir,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minute timeout for submodules
+                check=False,
+            )
+
+            if result.returncode != 0:
+                logger.warning(f"⚠️  Failed to initialize submodules: {result.stderr}")
+                # Don't fail - submodules might not be required
+            elif verbose:
+                logger.info("✅ Submodules initialized")
+
         return True
 
     except subprocess.TimeoutExpired:

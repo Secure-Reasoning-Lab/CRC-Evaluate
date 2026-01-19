@@ -548,7 +548,7 @@ class VerificationEngine:
                 return [], 0
 
             # Filter out POVs with hashes in skip_hashes (pre-verification dedup)
-            for harness_name, _vuln_keyword, pov_path in all_povs:
+            for harness_name, vuln_keyword, pov_path in all_povs:
                 if skip_hashes:
                     pov_hash = compute_content_hash(pov_path)
                     if pov_hash in skip_hashes:
@@ -559,7 +559,10 @@ class VerificationEngine:
                         skipped_count += 1
                         continue
                 pov_data = pov_path.read_bytes()
-                pov_harness_pairs.append((pov_path.name, pov_data, harness_name))
+                # Include vuln_keyword in pov_id to track POV→CPV correspondence
+                # e.g., "cpv_0/pov_0.blob" instead of just "pov_0.blob"
+                pov_id = f"{vuln_keyword}/{pov_path.name}"
+                pov_harness_pairs.append((pov_id, pov_data, harness_name))
 
         if not pov_harness_pairs:
             if skipped_count > 0:
