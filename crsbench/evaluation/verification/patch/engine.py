@@ -1278,12 +1278,24 @@ class PatchVerificationEngine:
 
         # For patch verification, always apply ref.diff
         # Patches are designed to apply on top of ref_commit state
+        #
+        # Determine squash_history based on benchmark mode:
+        # - DELTA mode: squash_history=False (CRS already receives ref.diff as hint)
+        # - FULL mode: squash_history=True (prevent info leak via git diff)
+        from crsbench.validation.meta_adapter import MetaYamlAdapter
+        from crsbench.builder.types import BenchmarkMode
+
+        adapter = MetaYamlAdapter.from_benchmark_path(benchmark_path)
+        is_delta_mode = adapter and adapter.get_mode() == BenchmarkMode.DELTA
+        squash_history = not is_delta_mode
+
         logger.info(f"Using bundled source: {source_name}.tar.gz (apply_ref_diff=True)")
         return prepare_source_from_bundle(
             benchmark_path,
             dest_dir.parent,  # prepare_source_from_bundle creates subdirectory
             source_name,
             apply_ref_diff=True,
+            squash_history=squash_history,
         )
 
     def cleanup(self) -> None:

@@ -343,6 +343,11 @@ class OSSFuzzBuilder:
         # DELTA_REF, ALL_PATCHED, CPV use ref commit (apply ref.diff)
         apply_ref_diff = self._needs_ref_diff(config.variant_type)
 
+        # Determine if git history should be squashed after applying ref.diff
+        # DELTA mode: squash_history=False (CRS already receives ref.diff as hint)
+        # FULL mode: squash_history=True (prevent CRS from using git diff)
+        squash_history = config.mode != BenchmarkMode.DELTA
+
         logger.info(
             f"Using bundled source: {source_name}.tar.gz "
             f"(apply_ref_diff={apply_ref_diff})"
@@ -352,6 +357,7 @@ class OSSFuzzBuilder:
             temp_dir,
             source_name,
             apply_ref_diff=apply_ref_diff,
+            squash_history=squash_history,
         )
 
     def _needs_ref_diff(self, variant_type: VariantType) -> bool:
