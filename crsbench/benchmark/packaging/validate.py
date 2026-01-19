@@ -191,17 +191,12 @@ def _validate_pkgs_dir(pkgs_dir: Path, dockerfile: Path) -> list[str]:
         )
         return warnings
 
+    # Check for expected tarball (regular or split format)
     expected_tarball = pkgs_dir / f"{expected_name}.tar.gz"
-    if not expected_tarball.exists():
-        # Check for any tarballs
-        tarballs = list(pkgs_dir.glob("*.tar.gz"))
-        if tarballs:
-            warnings.append(
-                f"pkgs/ has tarball(s) but expected {expected_tarball.name} "
-                f"(found: {', '.join(t.name for t in tarballs)})"
-            )
-        else:
-            warnings.append("pkgs/ exists but no tarballs found")
+    expected_split = pkgs_dir / f"{expected_name}.tar.gz.partaa"
+
+    if not expected_tarball.exists() and not expected_split.exists():
+        warnings.append(f"Expected source tarball not found: {expected_name}.tar.gz")
 
     # Check pkg_refs.txt for provenance
     pkg_refs = pkgs_dir / "pkg_refs.txt"
