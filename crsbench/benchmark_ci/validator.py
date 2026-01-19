@@ -338,8 +338,9 @@ class BenchmarkValidator:
     ) -> CheckResult:
         """Validate coverage collection works.
 
-        Coverage validation requires a corpus directory with test inputs.
-        If no corpus is provided, looks for corpus in benchmark's .aixcc directory.
+        For benchmark CI validation, this verifies that coverage collection
+        infrastructure works correctly. If no corpus is provided, creates a
+        minimal artificial corpus with a simple "A" input to test the pipeline.
 
         Args:
             benchmark_path: Path to benchmark directory
@@ -348,7 +349,11 @@ class BenchmarkValidator:
         Returns:
             CheckResult with coverage check status
         """
+        import tempfile
+
         start_time = time.time()
+        temp_corpus_dir = None
+        use_artificial_corpus = False
 
         # Look for corpus in benchmark directory if not provided
         if corpus_dir is None:
@@ -364,11 +369,17 @@ class BenchmarkValidator:
                     corpus_dir = path
                     break
 
+        # If no corpus found, create minimal artificial corpus for validation
         if corpus_dir is None or not corpus_dir.exists():
-            return CheckResult(
-                status=CheckStatus.SKIP,
-                time_seconds=time.time() - start_time,
-                error="No corpus directory found for coverage collection",
+            temp_corpus_dir = Path(tempfile.mkdtemp(prefix="benchmark_ci_corpus_"))
+            corpus_dir = temp_corpus_dir
+            use_artificial_corpus = True
+
+            # Create minimal test input - simple "A" byte
+            minimal_input = temp_corpus_dir / "minimal_input"
+            minimal_input.write_bytes(b"A")
+            logger.info(
+                "No corpus found, using artificial corpus for coverage validation"
             )
 
         try:
@@ -396,6 +407,7 @@ class BenchmarkValidator:
                     "harness": result.harness_name,
                     "lines_covered": result.final_summary.lines_covered,
                     "lines_total": result.final_summary.lines_total,
+                    "artificial_corpus": use_artificial_corpus,
                 },
             )
 
@@ -403,6 +415,13 @@ class BenchmarkValidator:
             elapsed = time.time() - start_time
             logger.exception("Coverage validation failed")
             return CheckResult.make_error(str(e), elapsed)
+
+        finally:
+            # Clean up temporary corpus directory
+            if temp_corpus_dir and temp_corpus_dir.exists():
+                import shutil
+
+                shutil.rmtree(temp_corpus_dir, ignore_errors=True)
 
     def validate_benchmark(
         self,

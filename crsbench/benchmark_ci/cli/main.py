@@ -87,6 +87,10 @@ def discover_benchmarks(
 def add_ci_subparser(subparsers: argparse._SubParsersAction) -> None:
     """Add 'ci' subcommand to the CLI.
 
+    Supports two subcommands:
+    - ci run: Run validation (default if no subcommand given)
+    - ci parse: Parse and display results from output directory
+
     Args:
         subparsers: Subparsers object from argparse
     """
@@ -113,8 +117,17 @@ Examples:
 
   # Export results to JSON
   crsbench ci --all --output results.json
+
+  # Parse existing results
+  crsbench ci parse --output-dir ./results --format table
         """,
     )
+
+    # Add subparsers for ci subcommands
+    ci_subparsers = ci_parser.add_subparsers(dest="ci_subcommand")
+
+    # Add parse subcommand
+    add_ci_parse_subparser(ci_subparsers)
 
     # Benchmark selection
     ci_parser.add_argument(
@@ -196,6 +209,13 @@ Examples:
         "--output-dir",
         type=str,
         help="Directory for detailed logs (creates per-benchmark subdirs with logs)",
+    )
+
+    # Execution options
+    ci_parser.add_argument(
+        "--exit-on-error",
+        action="store_true",
+        help="Exit immediately on first benchmark failure (for fast feedback)",
     )
 
     # Display options
@@ -348,6 +368,168 @@ def _save_benchmark_logs(
                     f.write("\n")
 
 
+def _load_summary_from_output_dir(output_dir: Path) -> Optional[ValidationSummary]:
+    """Load ValidationSummary from an output directory.
+
+    Args:
+        output_dir: Directory containing summary.json
+
+    Returns:
+        ValidationSummary if found, None otherwise
+    """
+    summary_path = output_dir / "summary.json"
+    if not summary_path.exists():
+        logger.error(f"summary.json not found in {output_dir}")
+        return None
+
+    with summary_path.open() as f:
+        data = json.load(f)
+
+    # Parse the summary data
+    results = []
+    for r in data.get("results", []):
+        # Parse check results
+        format_check = CheckResult(
+            status=CheckStatus(r["format_check"]["status"]),
+            time_seconds=r["format_check"].get("time_seconds", 0),
+            error=r["format_check"].get("error", ""),
+            details=r["format_check"].get("details", {}),
+        )
+        pov_check = CheckResult(
+            status=CheckStatus(r["pov_check"]["status"]),
+            time_seconds=r["pov_check"].get("time_seconds", 0),
+            error=r["pov_check"].get("error", ""),
+            details=r["pov_check"].get("details", {}),
+        )
+        patch_check = CheckResult(
+            status=CheckStatus(r["patch_check"]["status"]),
+            time_seconds=r["patch_check"].get("time_seconds", 0),
+            error=r["patch_check"].get("error", ""),
+            details=r["patch_check"].get("details", {}),
+        )
+        coverage_check = None
+        if r.get("coverage_check"):
+            coverage_check = CheckResult(
+                status=CheckStatus(r["coverage_check"]["status"]),
+                time_seconds=r["coverage_check"].get("time_seconds", 0),
+                error=r["coverage_check"].get("error", ""),
+                details=r["coverage_check"].get("details", {}),
+            )
+
+        result = BenchmarkValidationResult(
+            benchmark=r["benchmark"],
+            benchmark_path=Path(r["benchmark_path"]),
+            format_check=format_check,
+            pov_check=pov_check,
+            patch_check=patch_check,
+            coverage_check=coverage_check,
+            started_at=datetime.fromisoformat(r["started_at"])
+            if r.get("started_at")
+            else None,
+            finished_at=datetime.fromisoformat(r["finished_at"])
+            if r.get("finished_at")
+            else None,
+        )
+        results.append(result)
+
+    summary = ValidationSummary(
+        started_at=datetime.fromisoformat(data["started_at"])
+        if data.get("started_at")
+        else None,
+        finished_at=datetime.fromisoformat(data["finished_at"])
+        if data.get("finished_at")
+        else None,
+    )
+    for r in results:
+        summary.add_result(r)
+
+    return summary
+
+
+def _save_aggregated_summary(summary: ValidationSummary, output_dir: Path) -> None:
+    """Save aggregated summary at top level of output directory.
+
+    Creates:
+    - summary.json: Full JSON summary
+    - summary.csv: CSV format for easy analysis
+    - RESULTS.txt: Human-readable summary
+
+    Args:
+        summary: ValidationSummary with all results
+        output_dir: Output directory
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save JSON summary
+    json_path = output_dir / "summary.json"
+    with json_path.open("w") as f:
+        json.dump(summary.to_dict(), f, indent=2)
+
+    # Save CSV summary
+    csv_path = output_dir / "summary.csv"
+    with csv_path.open("w") as f:
+        # Header
+        f.write("benchmark,status,format,pov,patch,coverage,time_seconds\n")
+        # Rows
+        for r in summary.results:
+            cov_status = r.coverage_check.status.value if r.coverage_check else "skip"
+            f.write(
+                f"{r.benchmark},{r.total_status.value},"
+                f"{r.format_check.status.value},{r.pov_check.status.value},"
+                f"{r.patch_check.status.value},{cov_status},"
+                f"{r.total_time:.1f}\n"
+            )
+
+    # Save human-readable summary
+    results_path = output_dir / "RESULTS.txt"
+    with results_path.open("w") as f:
+        f.write("=" * 60 + "\n")
+        f.write("BENCHMARK CI RESULTS\n")
+        f.write("=" * 60 + "\n\n")
+
+        if summary.started_at:
+            f.write(f"Started: {summary.started_at.isoformat()}\n")
+        if summary.finished_at:
+            f.write(f"Finished: {summary.finished_at.isoformat()}\n")
+            if summary.started_at:
+                duration = (summary.finished_at - summary.started_at).total_seconds()
+                f.write(f"Duration: {format_time(duration)}\n")
+        f.write("\n")
+
+        f.write(f"Total: {summary.total}\n")
+        f.write(f"Passed: {summary.passed}\n")
+        f.write(f"Failed: {summary.failed}\n")
+        f.write(f"Errors: {summary.errors}\n")
+        f.write("\n")
+
+        # List failures
+        failed_benchmarks = [
+            r
+            for r in summary.results
+            if r.total_status in (CheckStatus.FAIL, CheckStatus.ERROR)
+        ]
+        if failed_benchmarks:
+            f.write("-" * 60 + "\n")
+            f.write("FAILED BENCHMARKS:\n")
+            f.write("-" * 60 + "\n")
+            for r in failed_benchmarks:
+                f.write(f"\n{r.benchmark}: {r.total_status.value}\n")
+                for name, check in [
+                    ("Format", r.format_check),
+                    ("POV", r.pov_check),
+                    ("Patch", r.patch_check),
+                ]:
+                    if check.status in (CheckStatus.FAIL, CheckStatus.ERROR):
+                        f.write(
+                            f"  - {name}: {check.error[:100] if check.error else 'unknown'}\n"
+                        )
+
+    logger.info(f"Aggregated results saved to: {output_dir}/")
+    logger.info("  - summary.json (full JSON)")
+    logger.info("  - summary.csv (CSV format)")
+    logger.info("  - RESULTS.txt (human-readable)")
+
+
 def run_ci(args: argparse.Namespace) -> int:
     """Run benchmark CI validation.
 
@@ -407,6 +589,9 @@ def run_ci(args: argparse.Namespace) -> int:
     # Determine color usage
     use_color = not args.no_color
 
+    # Check for exit-on-error option
+    exit_on_error = getattr(args, "exit_on_error", False)
+
     # Helper function for parallel execution
     def validate_single_benchmark(path: Path) -> BenchmarkValidationResult:
         """Validate a single benchmark (used for parallel execution)."""
@@ -442,10 +627,21 @@ def run_ci(args: argparse.Namespace) -> int:
             result = validate_single_benchmark(path)
             summary.add_result(result)
             _save_benchmark_logs(result, output_dir)
+            # Exit early if requested and there's a failure
+            if exit_on_error and result.total_status in (
+                CheckStatus.FAIL,
+                CheckStatus.ERROR,
+            ):
+                logger.warning(
+                    f"Exiting early due to failure: {path.name} "
+                    f"(--exit-on-error enabled)"
+                )
+                break
     else:
         # Parallel execution
         completed = 0
         total = len(benchmark_paths)
+        should_exit = False
         with ThreadPoolExecutor(max_workers=benchmark_workers) as executor:
             future_to_path = {
                 executor.submit(validate_single_benchmark, path): path
@@ -462,6 +658,16 @@ def run_ci(args: argparse.Namespace) -> int:
                     )
                     summary.add_result(result)
                     _save_benchmark_logs(result, output_dir)
+                    # Check for early exit
+                    if exit_on_error and result.total_status in (
+                        CheckStatus.FAIL,
+                        CheckStatus.ERROR,
+                    ):
+                        logger.warning(
+                            f"Failure detected: {path.name} "
+                            "(--exit-on-error enabled, waiting for running tasks)"
+                        )
+                        should_exit = True
                 except Exception as e:
                     logger.error(f"[{completed}/{total}] {path.name}: ERROR - {e}")
                     # Create error result
@@ -475,11 +681,21 @@ def run_ci(args: argparse.Namespace) -> int:
                         finished_at=datetime.now(),
                     )
                     summary.add_result(error_result)
+                    if exit_on_error:
+                        should_exit = True
+            # Cancel remaining futures if exiting early
+            if should_exit:
+                for f in future_to_path:
+                    f.cancel()
 
     summary.finished_at = datetime.now()
 
     # Print results
     print_results_table(summary, use_color=use_color)
+
+    # Save aggregated summary at top level if output_dir specified
+    if output_dir:
+        _save_aggregated_summary(summary, output_dir)
 
     # Save results if requested
     if args.output:
@@ -493,6 +709,124 @@ def run_ci(args: argparse.Namespace) -> int:
     if summary.failed > 0 or summary.errors > 0:
         return 1
     return 0
+
+
+def add_ci_parse_subparser(subparsers: argparse._SubParsersAction) -> None:
+    """Add 'ci parse' subcommand to the CLI.
+
+    Args:
+        subparsers: Subparsers object from argparse
+    """
+    parse_parser = subparsers.add_parser(
+        "parse",
+        help="Parse and display CI results from an output directory",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Display results as table (default)
+  crsbench ci parse --output-dir ./results
+
+  # Export as JSON
+  crsbench ci parse --output-dir ./results --format json
+
+  # Export as CSV
+  crsbench ci parse --output-dir ./results --format csv
+
+  # Show only failed benchmarks
+  crsbench ci parse --output-dir ./results --failed-only
+        """,
+    )
+
+    parse_parser.add_argument(
+        "--output-dir",
+        "-d",
+        type=str,
+        required=True,
+        help="Directory containing CI results (summary.json)",
+    )
+    parse_parser.add_argument(
+        "--format",
+        "-f",
+        type=str,
+        choices=["table", "json", "csv"],
+        default="table",
+        help="Output format (default: table)",
+    )
+    parse_parser.add_argument(
+        "--failed-only",
+        action="store_true",
+        help="Only show failed benchmarks",
+    )
+    parse_parser.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable colored output",
+    )
+
+    parse_parser.set_defaults(command="ci_parse")
+
+
+def run_ci_parse(args: argparse.Namespace) -> int:
+    """Parse and display CI results from an output directory.
+
+    Args:
+        args: Parsed command line arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    output_dir = Path(args.output_dir)
+    if not output_dir.exists():
+        logger.error(f"Output directory not found: {output_dir}")
+        return 1
+
+    summary = _load_summary_from_output_dir(output_dir)
+    if summary is None:
+        return 1
+
+    # Filter to failed only if requested
+    if args.failed_only:
+        failed_results = [
+            r
+            for r in summary.results
+            if r.total_status in (CheckStatus.FAIL, CheckStatus.ERROR)
+        ]
+        summary = ValidationSummary(
+            started_at=summary.started_at,
+            finished_at=summary.finished_at,
+        )
+        for r in failed_results:
+            summary.add_result(r)
+
+    # Output based on format
+    output_format = args.format
+    use_color = not args.no_color
+
+    if output_format == "table":
+        print_results_table(summary, use_color=use_color)
+    elif output_format == "json":
+        cli_print(json.dumps(summary.to_dict(), indent=2))
+    elif output_format == "csv":
+        # Header
+        cli_print("benchmark,status,format,pov,patch,coverage,time_seconds")
+        # Rows
+        for r in summary.results:
+            cov_status = r.coverage_check.status.value if r.coverage_check else "skip"
+            cli_print(
+                f"{r.benchmark},{r.total_status.value},"
+                f"{r.format_check.status.value},{r.pov_check.status.value},"
+                f"{r.patch_check.status.value},{cov_status},"
+                f"{r.total_time:.1f}"
+            )
+
+    # Print summary stats
+    if output_format == "table":
+        if summary.failed > 0 or summary.errors > 0:
+            logger.info(f"Found {summary.failed} failures, {summary.errors} errors")
+        else:
+            logger.info(f"All {summary.passed} benchmarks passed")
+
+    return 0 if summary.failed == 0 and summary.errors == 0 else 1
 
 
 def main(args: Optional[list[str]] = None) -> int:
@@ -582,6 +916,13 @@ def main(args: Optional[list[str]] = None) -> int:
         "--output-dir",
         type=str,
         help="Directory for detailed logs (creates per-benchmark subdirs)",
+    )
+
+    # Execution options
+    parser.add_argument(
+        "--exit-on-error",
+        action="store_true",
+        help="Exit immediately on first benchmark failure (for fast feedback)",
     )
 
     # Display options
