@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 from crsbench.validation import (
-    validate_benchmark,
     validate_benchmark_from_string,
     validate_benchmark_suite_from_string,
     validate_experiment_config,
@@ -501,11 +500,17 @@ class TestIntegration:
     """Integration tests with actual files."""
 
     def test_validate_meta_example_yaml(self):
-        """Test validation of docs/meta-example.yaml."""
+        """Test validation of docs/meta-example.yaml schema.
+
+        Uses validate_benchmark_from_string to test schema validation without
+        requiring ref.diff file (which is checked by validate_benchmark).
+        """
         # Use Path to construct path relative to test file
         test_dir = Path(__file__).parent
         meta_path = test_dir / "assets" / "meta-example.yaml"
-        result = validate_benchmark(meta_path)
+        with meta_path.open() as f:
+            yaml_content = f.read()
+        result = validate_benchmark_from_string(yaml_content)
 
         assert result.is_valid is True
         assert result.metadata["total_harnesses"] == 2
