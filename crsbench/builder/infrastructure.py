@@ -810,7 +810,7 @@ class OSSFuzzInfrastructure:
         project_name: str,
         harness: str,
         pov_data: bytes,
-        timeout: int = 120,
+        timeout: int = 180,
         request_id: Optional[int] = None,
         pov_id: Optional[str] = None,
     ) -> "ReproduceOutput":
@@ -826,7 +826,8 @@ class OSSFuzzInfrastructure:
             project_name: Variant name (e.g., "benchmark-deltaref")
             harness: Harness name to run
             pov_data: Raw POV/testcase bytes
-            timeout: Timeout for reproduce operation in seconds
+            timeout: Timeout for reproduce operation in seconds (default: 180s
+                to handle large projects like wireshark)
             request_id: Optional request ID for logging
             pov_id: Optional POV identifier for logging
 

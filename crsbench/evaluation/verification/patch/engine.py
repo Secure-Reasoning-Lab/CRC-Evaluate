@@ -82,7 +82,7 @@ class PatchVerificationEngine:
         *,
         test_mode: UnitTestMode = UnitTestMode.FULL,
         sanitizer: str = "address",
-        timeout: int = 120,
+        timeout: int = 180,
         build_timeout: int = 1200,
         test_timeout: int = 1800,
         build_workers: Optional[int] = None,

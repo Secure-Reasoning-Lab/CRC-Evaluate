@@ -88,7 +88,7 @@ class VerificationEngine:
     def __init__(
         self,
         oss_fuzz_path: Path,
-        timeout: int = 120,
+        timeout: int = 180,
         dedup_strategy: DeduplicationStrategy | None = None,
         build_workers: int = DEFAULT_WORKERS,
         verify_workers: int = DEFAULT_WORKERS,
