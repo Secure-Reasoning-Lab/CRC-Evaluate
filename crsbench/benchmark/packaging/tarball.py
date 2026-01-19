@@ -65,13 +65,20 @@ def create_source_tarball(
         # 3. Checkout base commit for source tarball
         _run_git(["checkout", base_commit], cwd=repo_dir)
 
-        # 4. Clean up - remove git metadata and sensitive directories
+        # 4. Initialize submodules (if any)
+        # Some projects like shadowsocks have submodules that must be fetched
+        gitmodules = repo_dir / ".gitmodules"
+        if gitmodules.exists():
+            logger.info("Initializing git submodules...")
+            _run_git(["submodule", "update", "--init", "--recursive"], cwd=repo_dir)
+
+        # 5. Clean up - remove git metadata and sensitive directories
         _clean_source(repo_dir)
 
-        # 5. Fresh git init (CRS needs git commands to work)
+        # 6. Fresh git init (CRS needs git commands to work)
         _fresh_git_init(repo_dir)
 
-        # 6. Rename to expected name and create tarball
+        # 7. Rename to expected name and create tarball
         source_dir = work_dir / source_name
         repo_dir.rename(source_dir)
 
@@ -119,12 +126,18 @@ def _generate_ref_diff(
     base_dir = work_dir / "base"
     shutil.copytree(repo_dir, base_dir, symlinks=True)
     _run_git(["checkout", base_commit], cwd=base_dir)
+    # Initialize submodules if present
+    if (base_dir / ".gitmodules").exists():
+        _run_git(["submodule", "update", "--init", "--recursive"], cwd=base_dir)
     _clean_source(base_dir)
 
     # Checkout ref version
     ref_dir = work_dir / "ref"
     shutil.copytree(repo_dir, ref_dir, symlinks=True)
     _run_git(["checkout", ref_commit], cwd=ref_dir)
+    # Initialize submodules if present
+    if (ref_dir / ".gitmodules").exists():
+        _run_git(["submodule", "update", "--init", "--recursive"], cwd=ref_dir)
     _clean_source(ref_dir)
 
     # Generate diff with git diff --no-index
@@ -149,12 +162,23 @@ def _generate_ref_diff(
 
 
 def _clean_source(directory: Path) -> None:
-    """Remove git metadata and sensitive directories from source."""
-    cleanup_dirs = [".git", ".github", ".aixcc"]
-    for cleanup_dir in cleanup_dirs:
+    """Remove git metadata and sensitive directories from source.
+
+    Recursively removes .git directories/files from submodules too.
+    """
+    # Remove top-level sensitive directories
+    for cleanup_dir in [".github", ".aixcc"]:
         cleanup_path = directory / cleanup_dir
         if cleanup_path.exists():
             shutil.rmtree(cleanup_path)
+
+    # Recursively remove all .git directories and files (including submodules)
+    # Submodules have .git as a file pointing to parent's .git/modules/
+    for git_path in directory.rglob(".git"):
+        if git_path.is_file():
+            git_path.unlink()
+        elif git_path.is_dir():
+            shutil.rmtree(git_path)
 
 
 def _fresh_git_init(directory: Path) -> None:

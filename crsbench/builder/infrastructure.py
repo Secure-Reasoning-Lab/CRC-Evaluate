@@ -753,6 +753,11 @@ class OSSFuzzInfrastructure:
     def _apply_single_patch(self, repo_path: Path, patch_file: Path) -> bool:
         """Apply a single patch file.
 
+        Uses --whitespace=nowarn instead of --3way because bundled tarballs
+        have fresh git init with different blob hashes than the original
+        repository where patches were created. The --3way option requires
+        matching index hashes which won't exist.
+
         Args:
             repo_path: Path to repository
             patch_file: Path to patch file
@@ -763,7 +768,7 @@ class OSSFuzzInfrastructure:
         try:
             patch_file_abs = patch_file.resolve()
             result = subprocess.run(
-                ["git", "apply", "--3way", str(patch_file_abs)],
+                ["git", "apply", "--whitespace=nowarn", str(patch_file_abs)],
                 cwd=repo_path,
                 capture_output=True,
                 text=True,

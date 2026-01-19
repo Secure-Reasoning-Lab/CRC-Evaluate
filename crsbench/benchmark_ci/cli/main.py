@@ -456,7 +456,7 @@ def run_ci(args: argparse.Namespace) -> int:
                     result = future.result()
                     logger.info(
                         f"[{completed}/{total}] {path.name}: "
-                        f"{result.overall_status.value}"
+                        f"{result.total_status.value}"
                     )
                     summary.add_result(result)
                     _save_benchmark_logs(result, output_dir)
