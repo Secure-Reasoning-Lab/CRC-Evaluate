@@ -16,6 +16,8 @@ from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import clone_or_copy_cached_repo
 
 logger = get_logger(__name__)
+# Separate logger for crash reproduction results
+reproduce_logger = get_logger("reproduce")
 
 # Exit code constants from helper.py
 EXIT_CODE_TIMEOUT = 124  # Subprocess timeout in helper.py
@@ -870,21 +872,21 @@ class OSSFuzzInfrastructure:
 
             # Handle exit codes explicitly
             if result.returncode == 0:
-                logger.info(
+                reproduce_logger.info(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} did not crash"
                 )
                 return ReproduceOutput(
                     crashed=False, stdout=result.stdout, stderr=result.stderr
                 )
             if result.returncode == EXIT_CODE_TIMEOUT:
-                logger.info(
+                reproduce_logger.info(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} "
                     "timed out (exit code 124)"
                 )
                 return ReproduceOutput(
                     crashed=False, stdout=result.stdout, stderr=result.stderr
                 )
-            logger.info(
+            reproduce_logger.info(
                 f"{req_prefix}{pov_prefix}{project_name}/{harness} crashed "
                 f"(exit code {result.returncode})"
             )

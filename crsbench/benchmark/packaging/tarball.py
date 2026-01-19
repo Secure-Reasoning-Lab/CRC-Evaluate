@@ -62,23 +62,27 @@ def create_source_tarball(
                 output_dir=output_dir,
             )
 
-        # 3. Checkout base commit for source tarball
+        # 3. Disable autocrlf to preserve original line endings (CRLF or LF)
+        # This ensures tarball content matches ref.diff exactly
+        _run_git(["config", "core.autocrlf", "false"], cwd=repo_dir)
+
+        # 4. Checkout base commit for source tarball
         _run_git(["checkout", base_commit], cwd=repo_dir)
 
-        # 4. Initialize submodules (if any)
+        # 5. Initialize submodules (if any)
         # Some projects like shadowsocks have submodules that must be fetched
         gitmodules = repo_dir / ".gitmodules"
         if gitmodules.exists():
             logger.info("Initializing git submodules...")
             _run_git(["submodule", "update", "--init", "--recursive"], cwd=repo_dir)
 
-        # 5. Clean up - remove git metadata and sensitive directories
+        # 6. Clean up - remove git metadata and sensitive directories
         _clean_source(repo_dir)
 
-        # 6. Fresh git init (CRS needs git commands to work)
+        # 7. Fresh git init (CRS needs git commands to work)
         _fresh_git_init(repo_dir)
 
-        # 7. Rename to expected name and create tarball
+        # 8. Rename to expected name and create tarball
         source_dir = work_dir / source_name
         repo_dir.rename(source_dir)
 
@@ -125,6 +129,9 @@ def _generate_ref_diff(
     # Use symlinks=True to preserve symlinks (some repos like mongoose have many)
     base_dir = work_dir / "base"
     shutil.copytree(repo_dir, base_dir, symlinks=True)
+    # Disable autocrlf to preserve original line endings (CRLF or LF)
+    # This ensures diff matches tarball content exactly
+    _run_git(["config", "core.autocrlf", "false"], cwd=base_dir)
     _run_git(["checkout", base_commit], cwd=base_dir)
     # Initialize submodules if present
     if (base_dir / ".gitmodules").exists():
@@ -134,6 +141,7 @@ def _generate_ref_diff(
     # Checkout ref version
     ref_dir = work_dir / "ref"
     shutil.copytree(repo_dir, ref_dir, symlinks=True)
+    _run_git(["config", "core.autocrlf", "false"], cwd=ref_dir)
     _run_git(["checkout", ref_commit], cwd=ref_dir)
     # Initialize submodules if present
     if (ref_dir / ".gitmodules").exists():
