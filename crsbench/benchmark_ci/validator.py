@@ -84,6 +84,7 @@ class BenchmarkValidator:
         pov_timeout: int = 120,
         build_workers: int = 4,
         verify_workers: int = 4,
+        source_mode: str = "pkgs",
     ):
         """Initialize validator.
 
@@ -92,11 +93,13 @@ class BenchmarkValidator:
             pov_timeout: Timeout for POV verification in seconds
             build_workers: Number of parallel build workers
             verify_workers: Number of parallel verification workers
+            source_mode: Source mode - "pkgs" (bundled, default) or "main_repo" (clone)
         """
         self.oss_fuzz_path = Path(oss_fuzz_path or get_oss_fuzz_root())
         self.pov_timeout = pov_timeout
         self.build_workers = build_workers
         self.verify_workers = verify_workers
+        self.source_mode = source_mode
 
     def validate_format(self, benchmark_path: Path) -> CheckResult:
         """Validate benchmark format and structure.
@@ -166,6 +169,7 @@ class BenchmarkValidator:
                 timeout=self.pov_timeout,
                 build_workers=self.build_workers,
                 verify_workers=self.verify_workers,
+                source_mode=self.source_mode,
             )
 
             results, skipped = engine.verify_benchmark(
@@ -276,6 +280,7 @@ class BenchmarkValidator:
                 timeout=self.pov_timeout,
                 force_rebuild=force_rebuild,
                 use_inc_build=use_inc_build,
+                source_mode=self.source_mode,
             )
 
             try:
@@ -387,6 +392,7 @@ class BenchmarkValidator:
                 oss_fuzz_path=self.oss_fuzz_path,
                 build_workers=self.build_workers,
                 verify_workers=self.verify_workers,
+                source_mode=self.source_mode,
             )
 
             # Collect coverage using the corpus

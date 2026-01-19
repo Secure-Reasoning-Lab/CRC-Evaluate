@@ -188,6 +188,13 @@ Examples:
         action="store_true",
         help="Enable incremental builds (pull pre-built images from registry)",
     )
+    ci_parser.add_argument(
+        "--source",
+        type=str,
+        choices=["pkgs", "main_repo"],
+        default="main_repo",
+        help="Source mode: 'pkgs' (bundled tarballs) or 'main_repo' (git clone, default)",
+    )
 
     # Parallelism options
     ci_parser.add_argument(
@@ -581,9 +588,11 @@ def run_ci(args: argparse.Namespace) -> int:
     )
 
     # Create validator with adjusted workers
+    source_mode = getattr(args, "source", "pkgs")
     validator = BenchmarkValidator(
         build_workers=per_benchmark_workers,
         verify_workers=per_benchmark_workers,
+        source_mode=source_mode,
     )
 
     # Determine color usage
@@ -894,6 +903,13 @@ def main(args: Optional[list[str]] = None) -> int:
         "--inc-build",
         action="store_true",
         help="Enable incremental builds (pull pre-built images from registry)",
+    )
+    parser.add_argument(
+        "--source",
+        type=str,
+        choices=["pkgs", "main_repo"],
+        default="main_repo",
+        help="Source mode: 'pkgs' (bundled tarballs) or 'main_repo' (git clone, default)",
     )
 
     # Parallelism options

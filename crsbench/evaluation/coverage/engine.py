@@ -78,6 +78,7 @@ class CoverageEngine:
         build_workers: Optional[int] = None,
         verify_workers: Optional[int] = None,
         work_dir: Optional[Path] = None,
+        source_mode: str = "pkgs",
     ):
         """Initialize the coverage engine.
 
@@ -89,12 +90,15 @@ class CoverageEngine:
                 Priority: CLI > CRSBENCH_VERIFY_WORKERS env > config > default.
             work_dir: Working directory for isolated builds. If None, uses
                 default oss-fuzz/build/out/ location.
+            source_mode: Source mode - "pkgs" (bundled, default) or "main_repo" (clone)
         """
         self.oss_fuzz_path = Path(oss_fuzz_path)
         self.work_dir = Path(work_dir) if work_dir else None
         self.build_workers = resolve_build_workers(build_workers)
         self.verify_workers = resolve_verify_workers(verify_workers)
-        self.builder = OSSFuzzBuilder(oss_fuzz_path, max_workers=self.build_workers)
+        self.builder = OSSFuzzBuilder(
+            oss_fuzz_path, max_workers=self.build_workers, source_mode=source_mode
+        )
         self.infra = OSSFuzzInfrastructure(oss_fuzz_path, work_dir=work_dir)
 
         # Cache for strategies (keyed by variant_name)
