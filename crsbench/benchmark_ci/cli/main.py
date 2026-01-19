@@ -18,6 +18,7 @@ import fnmatch
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
@@ -173,6 +174,15 @@ Examples:
         "--inc-build",
         action="store_true",
         help="Enable incremental builds (pull pre-built images from registry)",
+    )
+
+    # Parallelism options
+    ci_parser.add_argument(
+        "--workers",
+        "-j",
+        type=int,
+        default=4,
+        help="Number of benchmarks to validate in parallel (default: 4)",
     )
 
     # Output
@@ -376,20 +386,32 @@ def run_ci(args: argparse.Namespace) -> int:
         output_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Logs will be saved to: {output_dir}")
 
-    # Create validator
-    validator = BenchmarkValidator()
+    # Calculate worker distribution based on CPU count
+    # When running N benchmarks in parallel, each gets cpu_count/N workers (min 1)
+    cpu_count = os.cpu_count() or 8
+    benchmark_workers = max(1, args.workers)
+    per_benchmark_workers = max(1, cpu_count // benchmark_workers)
+
+    logger.info(
+        f"Running with {benchmark_workers} benchmark worker(s), "
+        f"{per_benchmark_workers} internal worker(s) each"
+    )
+
+    # Create validator with adjusted workers
+    validator = BenchmarkValidator(
+        build_workers=per_benchmark_workers,
+        verify_workers=per_benchmark_workers,
+    )
 
     # Determine color usage
     use_color = not args.no_color
 
-    # Run validation
-    if args.format_only:
-        # Fast path - format validation only
-        summary = ValidationSummary(started_at=datetime.now())
-        for i, path in enumerate(benchmark_paths, 1):
-            logger.info(f"[{i}/{len(benchmark_paths)}] {path.name}")
+    # Helper function for parallel execution
+    def validate_single_benchmark(path: Path) -> BenchmarkValidationResult:
+        """Validate a single benchmark (used for parallel execution)."""
+        if args.format_only:
             format_result = validator.validate_format(path)
-            result = BenchmarkValidationResult(
+            return BenchmarkValidationResult(
                 benchmark=path.name,
                 benchmark_path=path,
                 format_check=format_result,
@@ -398,25 +420,61 @@ def run_ci(args: argparse.Namespace) -> int:
                 started_at=datetime.now(),
                 finished_at=datetime.now(),
             )
-            summary.add_result(result)
-            _save_benchmark_logs(result, output_dir)
-        summary.finished_at = datetime.now()
-    else:
-        summary = ValidationSummary(started_at=datetime.now())
+        return validator.validate_benchmark(
+            path,
+            include_coverage=args.include_coverage,
+            force_rebuild=args.force_rebuild,
+            use_inc_build=args.inc_build,
+            skip_format=args.skip_format,
+            skip_verify=args.skip_verify,
+            skip_patch_verify=args.skip_patch_verify,
+        )
+
+    # Run validation
+    summary = ValidationSummary(started_at=datetime.now())
+
+    if benchmark_workers == 1:
+        # Sequential execution
         for i, path in enumerate(benchmark_paths, 1):
             logger.info(f"[{i}/{len(benchmark_paths)}] {path.name}")
-            result = validator.validate_benchmark(
-                path,
-                include_coverage=args.include_coverage,
-                force_rebuild=args.force_rebuild,
-                use_inc_build=args.inc_build,
-                skip_format=args.skip_format,
-                skip_verify=args.skip_verify,
-                skip_patch_verify=args.skip_patch_verify,
-            )
+            result = validate_single_benchmark(path)
             summary.add_result(result)
             _save_benchmark_logs(result, output_dir)
-        summary.finished_at = datetime.now()
+    else:
+        # Parallel execution
+        completed = 0
+        total = len(benchmark_paths)
+        with ThreadPoolExecutor(max_workers=benchmark_workers) as executor:
+            future_to_path = {
+                executor.submit(validate_single_benchmark, path): path
+                for path in benchmark_paths
+            }
+            for future in as_completed(future_to_path):
+                path = future_to_path[future]
+                completed += 1
+                try:
+                    result = future.result()
+                    logger.info(
+                        f"[{completed}/{total}] {path.name}: "
+                        f"{result.overall_status.value}"
+                    )
+                    summary.add_result(result)
+                    _save_benchmark_logs(result, output_dir)
+                except Exception as e:
+                    logger.error(f"[{completed}/{total}] {path.name}: ERROR - {e}")
+                    # Create error result
+                    error_result = BenchmarkValidationResult(
+                        benchmark=path.name,
+                        benchmark_path=path,
+                        format_check=CheckResult.make_error(str(e), 0),
+                        pov_check=CheckResult.skip("Error in validation"),
+                        patch_check=CheckResult.skip("Error in validation"),
+                        started_at=datetime.now(),
+                        finished_at=datetime.now(),
+                    )
+                    summary.add_result(error_result)
+
+    summary.finished_at = datetime.now()
 
     # Print results
     print_results_table(summary, use_color=use_color)
@@ -500,6 +558,15 @@ def main(args: Optional[list[str]] = None) -> int:
         "--inc-build",
         action="store_true",
         help="Enable incremental builds (pull pre-built images from registry)",
+    )
+
+    # Parallelism options
+    parser.add_argument(
+        "--workers",
+        "-j",
+        type=int,
+        default=4,
+        help="Number of benchmarks to validate in parallel (default: 4)",
     )
 
     # Output options
