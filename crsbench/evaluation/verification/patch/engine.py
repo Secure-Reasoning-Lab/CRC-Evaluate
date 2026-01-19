@@ -91,7 +91,7 @@ class PatchVerificationEngine:
         work_dir: Optional[Path] = None,
         force_rebuild: bool = False,
         use_inc_build: bool = True,
-        source_mode: str = "pkgs",
+        source_mode: str = "main_repo",
     ):
         """Initialize the patch verification engine.
 
@@ -115,7 +115,7 @@ class PatchVerificationEngine:
             force_rebuild: If True, clean and rebuild even if build exists.
             use_inc_build: If True, use incremental builds when available (faster).
                 If False, always use full OSS-Fuzz build.
-            source_mode: Source mode - "pkgs" (bundled, default) or "main_repo" (clone)
+            source_mode: Source mode - "main_repo" (clone, default) or "pkgs" (bundled)
         """
         self.oss_fuzz_path = Path(oss_fuzz_path)
         self.work_dir = Path(work_dir) if work_dir else None
@@ -1225,8 +1225,8 @@ class PatchVerificationEngine:
         """Prepare source for patch verification - from pkgs/ or git clone.
 
         Source mode determines how source is obtained:
-        - "pkgs": Use bundled tarballs from pkgs/ (default, requires pkgs/)
-        - "main_repo": Clone from main_repo in project.yaml
+        - "main_repo": Clone from main_repo in project.yaml (default)
+        - "pkgs": Use bundled tarballs from pkgs/ (requires pkgs/)
 
         For patch verification, ref.diff is always applied (patches target ref_commit).
 

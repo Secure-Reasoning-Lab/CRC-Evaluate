@@ -52,14 +52,14 @@ class OSSFuzzBuilder:
         oss_fuzz_path: Path,
         max_workers: int = 4,
         *,
-        source_mode: str = "pkgs",
+        source_mode: str = "main_repo",
     ):
         """Initialize the builder.
 
         Args:
             oss_fuzz_path: Path to oss-fuzz directory
             max_workers: Maximum number of parallel workers (default: 4)
-            source_mode: Source mode - "pkgs" (bundled, default) or "main_repo" (clone)
+            source_mode: Source mode - "main_repo" (clone, default) or "pkgs" (bundled)
         """
         self.oss_fuzz_path = Path(oss_fuzz_path).resolve()
         self.max_workers = max_workers
@@ -296,8 +296,8 @@ class OSSFuzzBuilder:
         """Prepare source for building - from pkgs/ or git clone.
 
         Source mode determines how source is obtained:
-        - "pkgs": Use bundled tarballs from pkgs/ (default, requires pkgs/)
-        - "main_repo": Clone from main_repo in project.yaml
+        - "main_repo": Clone from main_repo in project.yaml (default)
+        - "pkgs": Use bundled tarballs from pkgs/ (requires pkgs/)
 
         Args:
             config: Build configuration
