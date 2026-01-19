@@ -105,6 +105,7 @@ class BenchmarkValidator:
         benchmark_path: Path,
         *,
         force_rebuild: bool = False,
+        use_inc_build: bool = True,
     ) -> CheckResult:
         """Validate POVs using VerificationEngine.
 
@@ -119,6 +120,7 @@ class BenchmarkValidator:
         Args:
             benchmark_path: Path to benchmark directory
             force_rebuild: Force rebuild of Docker images
+            use_inc_build: Use incremental build if available
 
         Returns:
             CheckResult with POV verification status
@@ -135,6 +137,7 @@ class BenchmarkValidator:
             results, skipped = engine.verify_benchmark(
                 benchmark_path,
                 force_rebuild=force_rebuild,
+                use_inc_build=use_inc_build,
             )
 
             elapsed = time.time() - start_time
@@ -417,7 +420,11 @@ class BenchmarkValidator:
             pov_result = CheckResult.skip("--skip-verify")
         else:
             logger.info(f"  [{benchmark_name}] Running POV verification...")
-            pov_result = self.validate_povs(benchmark_path, force_rebuild=force_rebuild)
+            pov_result = self.validate_povs(
+                benchmark_path,
+                force_rebuild=force_rebuild,
+                use_inc_build=use_inc_build,
+            )
             logger.info(
                 f"  [{benchmark_name}] POV: {pov_result.status.value} "
                 f"({pov_result.time_seconds:.1f}s)"

@@ -434,7 +434,7 @@ class TestBenchmarkValidator:
             # Verify engine was created and used
             mock_engine_class.assert_called_once()
             mock_engine.verify_benchmark.assert_called_once_with(
-                benchmark_path, force_rebuild=False
+                benchmark_path, force_rebuild=False, use_inc_build=True
             )
             assert result.status == CheckStatus.PASS
 

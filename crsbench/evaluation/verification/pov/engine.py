@@ -466,6 +466,7 @@ class VerificationEngine:
         force_rebuild: bool = False,
         deduplicate: bool = True,
         skip_hashes: set[str] | None = None,
+        use_inc_build: Optional[bool] = None,
     ) -> tuple[list[PovVerificationResult], int]:
         """Verify POVs for a complete benchmark.
 
@@ -478,6 +479,7 @@ class VerificationEngine:
             force_rebuild: Force rebuild of variants
             deduplicate: Whether to deduplicate results
             skip_hashes: Optional set of content hashes to skip (pre-verification dedup)
+            use_inc_build: Override incremental build setting (None uses project.yaml default)
 
         Returns:
             Tuple of (list of verification results, number of POVs skipped due to hash)
@@ -491,7 +493,9 @@ class VerificationEngine:
         if force_rebuild:
             self._built_results.pop(adapter.benchmark_name, None)
 
-        build_results = self._get_or_build_results(adapter, force_rebuild=force_rebuild)
+        build_results = self._get_or_build_results(
+            adapter, force_rebuild=force_rebuild, use_inc_build=use_inc_build
+        )
         if not build_results:
             logger.error(f"Failed to build variants for {adapter.benchmark_name}")
             return [], 0
@@ -594,12 +598,14 @@ class VerificationEngine:
         adapter: MetaYamlAdapter,
         *,
         force_rebuild: bool = False,
+        use_inc_build: Optional[bool] = None,
     ) -> dict[str, BuildResult]:
         """Get cached build results or build new ones.
 
         Args:
             adapter: MetaYamlAdapter for benchmark config
             force_rebuild: Force rebuild even if cached
+            use_inc_build: Override incremental build setting (None uses adapter default)
 
         Returns:
             Dict mapping variant names to BuildResult
@@ -610,6 +616,9 @@ class VerificationEngine:
         # Determine mode
         mode_str = adapter.get_mode().value
         mode = BenchmarkMode.FULL if mode_str == "full" else BenchmarkMode.DELTA
+
+        # Use override if provided, otherwise use adapter's setting
+        inc_build = use_inc_build if use_inc_build is not None else adapter.inc_build
 
         # Create build plan
         plan = self.builder.create_build_plan(
@@ -623,7 +632,7 @@ class VerificationEngine:
             language=adapter.lang,
             repo_name=adapter.repo_name,
             include_coverage=False,
-            use_inc_build=adapter.inc_build,
+            use_inc_build=inc_build,
         )
 
         # Build variants
