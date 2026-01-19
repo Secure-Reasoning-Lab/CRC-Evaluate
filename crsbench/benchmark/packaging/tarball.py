@@ -152,6 +152,8 @@ def _generate_ref_diff(
     # --binary: Include binary file content (needed for .zip, .png, etc.)
     # --full-index: Use full SHA-1 hashes (required for applying binary patches)
     # Note: git diff --no-index returns exit code 1 when there are differences
+    # Use binary mode to preserve CRLF line endings in the diff output
+    # text=True would normalize line endings, breaking CRLF files like curl's test data
     result = subprocess.run(
         [
             "git",
@@ -163,23 +165,22 @@ def _generate_ref_diff(
             str(ref_dir),
         ],
         capture_output=True,
-        text=True,
     )
 
-    # Clean up paths in diff
+    # Clean up paths in diff (operate on bytes to preserve line endings)
     # For normal files: a/base_dir/path -> a/path, b/ref_dir/path -> b/path
     # For new files: git shows ref_dir in both a/ and b/ paths
     # For deleted files: git shows base_dir in both a/ and b/ paths
     diff_content = result.stdout
-    diff_content = diff_content.replace(f"a{base_dir}/", "a/")
-    diff_content = diff_content.replace(f"b{ref_dir}/", "b/")
+    diff_content = diff_content.replace(f"a{base_dir}/".encode(), b"a/")
+    diff_content = diff_content.replace(f"b{ref_dir}/".encode(), b"b/")
     # Handle edge cases for new/deleted files
-    diff_content = diff_content.replace(f"a{ref_dir}/", "a/")
-    diff_content = diff_content.replace(f"b{base_dir}/", "b/")
+    diff_content = diff_content.replace(f"a{ref_dir}/".encode(), b"a/")
+    diff_content = diff_content.replace(f"b{base_dir}/".encode(), b"b/")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     ref_diff_path = output_dir / "ref.diff"
-    ref_diff_path.write_text(diff_content)
+    ref_diff_path.write_bytes(diff_content)
 
     logger.info(f"Generated ref.diff: {ref_diff_path} ({len(diff_content)} bytes)")
     return ref_diff_path
