@@ -5,6 +5,8 @@ Provides:
 - crsbench benchmark bundle <path> - Create pkgs/ tarball
 - crsbench benchmark bundle-all <dir> - Bundle all benchmarks in directory
 - crsbench benchmark prepare-delta <path> - Generate ref.diff
+- crsbench benchmark inject-canary <dir> --filter <pattern> - Add canary for contamination detection
+- crsbench benchmark list-canaries - List registered canary UUIDs
 """
 
 import argparse
@@ -89,8 +91,8 @@ Examples:
   # Bundle with parallel workers
   %(prog)s benchmarks/ --workers 8
 
-  # Filter by pattern
-  %(prog)s benchmarks/ --pattern "afc-*"
+  # Filter by glob pattern
+  %(prog)s benchmarks/ --filter "afc-*"
         """,
     )
     bundle_all_parser.add_argument(
@@ -110,7 +112,7 @@ Examples:
         help="Number of parallel workers (default: 4)",
     )
     bundle_all_parser.add_argument(
-        "--pattern",
+        "--filter",
         type=str,
         default=None,
         help="Filter benchmarks by glob pattern (e.g., 'afc-*')",
@@ -133,6 +135,80 @@ Examples:
         help="Path to benchmark directory",
     )
     delta_parser.set_defaults(func=handle_prepare_delta)
+
+    # crsbench benchmark inject-canary
+    canary_parser = benchmark_subparsers.add_parser(
+        "inject-canary",
+        help="Add canary string for contamination detection (BIG-bench style)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Injects canary strings into .aixcc/ files for contamination detection.
+All benchmarks matching --filter get the SAME UUID (per-prefix grouping).
+
+Files injected:
+  - .aixcc/meta.yaml
+  - .aixcc/**/vuln.yaml
+  - .aixcc/ref.diff (ground truth patch)
+  - .aixcc/**/*.patch, .aixcc/**/*.diff
+
+Examples:
+  # Inject canary into all atlanta-* benchmarks (same UUID for all)
+  %(prog)s benchmarks/ --filter "atlanta-*"
+
+  # Inject into afc-* benchmarks (different UUID from atlanta-*)
+  %(prog)s benchmarks/ --filter "afc-*"
+
+  # Use a specific UUID
+  %(prog)s benchmarks/ --filter "sanity-*" --uuid 12345678-1234-5678-1234-567812345678
+
+  # Force re-inject (overwrites existing)
+  %(prog)s benchmarks/ --filter "sanity-*" --force
+
+Registry stored at: ./canary-registry.json (repo root)
+        """,
+    )
+    canary_parser.add_argument(
+        "benchmarks_dir",
+        type=str,
+        help="Directory containing benchmarks",
+    )
+    canary_parser.add_argument(
+        "--filter",
+        type=str,
+        required=True,
+        help="Filter benchmarks by glob pattern (e.g., 'atlanta-*')",
+    )
+    canary_parser.add_argument(
+        "--uuid",
+        type=str,
+        default=None,
+        help="Use a specific UUID instead of generating one",
+    )
+    canary_parser.add_argument(
+        "--registry",
+        type=str,
+        default=None,
+        help="Path to canary registry file (default: ./canary-registry.json)",
+    )
+    canary_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force re-inject canary even if one exists",
+    )
+    canary_parser.set_defaults(func=handle_inject_canary)
+
+    # crsbench benchmark list-canaries
+    list_canary_parser = benchmark_subparsers.add_parser(
+        "list-canaries",
+        help="List registered canary UUIDs by prefix",
+    )
+    list_canary_parser.add_argument(
+        "--registry",
+        type=str,
+        default=None,
+        help="Path to canary registry file (default: ./canary-registry.json)",
+    )
+    list_canary_parser.set_defaults(func=handle_list_canaries)
 
     benchmark_parser.set_defaults(command="benchmark", func=handle_benchmark_help)
 
@@ -216,8 +292,8 @@ def handle_bundle_all(args: argparse.Namespace) -> int:
         # Check for .aixcc directory (indicates a benchmark)
         if not (path / ".aixcc").exists():
             continue
-        # Apply pattern filter
-        if args.pattern and not fnmatch.fnmatch(path.name, args.pattern):
+        # Apply filter
+        if args.filter and not fnmatch.fnmatch(path.name, args.filter):
             continue
         benchmarks.append(path)
 
@@ -269,9 +345,9 @@ def handle_bundle_all(args: argparse.Namespace) -> int:
             name, status = future.result()
             results[name] = status
             if status == "success":
-                logger.info(f"  ✓ {name}")
+                logger.info(f"  [OK] {name}")
             else:
-                logger.error(f"  ✗ {name}: {status}")
+                logger.error(f"  [FAILED] {name}: {status}")
 
     # Summary
     success_count = sum(1 for s in results.values() if s == "success")
@@ -315,6 +391,95 @@ def handle_prepare_delta(args: argparse.Namespace) -> int:
     except Exception as e:
         logger.error(f"Prepare-delta failed: {e}")
         return 1
+
+
+def handle_inject_canary(args: argparse.Namespace) -> int:
+    """Handle 'crsbench benchmark inject-canary' command.
+
+    Injects canary strings into all benchmarks matching --filter.
+    All matching benchmarks get the SAME UUID (per-prefix grouping).
+    """
+    import uuid
+
+    from crsbench.benchmark.canary.generator import inject_canaries_by_prefix
+
+    benchmarks_dir = Path(args.benchmarks_dir)
+
+    if not benchmarks_dir.is_dir():
+        logger.error(f"Benchmarks directory not found: {benchmarks_dir}")
+        return 1
+
+    # Parse optional UUID
+    canary_uuid = None
+    if args.uuid:
+        try:
+            canary_uuid = uuid.UUID(args.uuid)
+        except ValueError:
+            logger.error(f"Invalid UUID format: {args.uuid}")
+            return 1
+
+    # Parse optional registry path
+    registry_path = Path(args.registry) if args.registry else None
+
+    try:
+        result = inject_canaries_by_prefix(
+            benchmarks_dir,
+            args.filter,
+            canary_uuid=canary_uuid,
+            registry_path=registry_path,
+            force=args.force,
+        )
+
+        if not result.benchmarks and result.skipped_count == 0:
+            logger.warning(f"No benchmarks found matching filter: {args.filter}")
+            return 0
+
+        # Summary
+        logger.info("=" * 50)
+        logger.info("CANARY INJECTION SUMMARY")
+        logger.info("=" * 50)
+        logger.info(f"Filter: {args.filter}")
+        logger.info(f"UUID: {result.canary_uuid}")
+        logger.info(f"Files injected: {result.injected_count}")
+        logger.info(f"Benchmarks skipped (existing): {result.skipped_count}")
+        logger.info(f"Benchmarks processed: {len(result.benchmarks)}")
+
+        if result.benchmarks:
+            logger.info("\nProcessed benchmarks:")
+            for name in result.benchmarks:
+                logger.info(f"  - {name}")
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"Canary injection failed: {e}")
+        return 1
+
+
+def handle_list_canaries(args: argparse.Namespace) -> int:
+    """Handle 'crsbench benchmark list-canaries' command."""
+    from crsbench.benchmark.canary.detector import list_registered_canaries
+
+    # Parse optional registry path
+    registry_path = Path(args.registry) if args.registry else None
+
+    canaries = list_registered_canaries(registry_path)
+
+    if not canaries:
+        logger.info("No canaries registered yet.")
+        logger.info("Use 'crsbench benchmark inject-canary' to inject canaries.")
+        return 0
+
+    logger.info("=" * 50)
+    logger.info("REGISTERED CANARIES")
+    logger.info("=" * 50)
+
+    for prefix, uuid_val in sorted(canaries.items()):
+        logger.info(f"  {prefix}: {uuid_val}")
+
+    logger.info(f"\nTotal: {len(canaries)} prefix groups")
+
+    return 0
 
 
 def run_benchmark_command(args: argparse.Namespace) -> int:
