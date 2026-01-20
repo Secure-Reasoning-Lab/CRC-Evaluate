@@ -124,6 +124,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         build_out_dir = self._get_oss_fuzz_build_output_dir(
             trial_output_dir, project_name
         )
+        logger.debug(f"build_out_dir {build_out_dir}")
 
         if build_out_dir.exists():
             # Iterate subdirectories under build/out/
@@ -134,7 +135,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 for item in subdir.iterdir():
                     # TODO: check this logic is enough that we don't remove neceesary files
                     if target_harness not in item.name:
-                        logger.info(f"Removing non-target harness file: {item}")
+                        logger.debug(f"Removing non-target harness file: {item}")
                         if item.is_dir():
                             shutil.rmtree(item)
                         else:
@@ -154,7 +155,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 continue
             for item in crs_out_dir.iterdir():
                 if target_harness not in item.name:
-                    logger.info(f"Removing non-target harness file: {item}")
+                    logger.debug(f"Removing non-target harness file: {item}")
                     if item.is_dir():
                         shutil.rmtree(item)
                     else:
