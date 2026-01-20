@@ -514,6 +514,7 @@ class OSSFuzzInfrastructure:
         src_path: Path,
         *,
         use_inc_image: bool = False,
+        inc_fallback: bool = False,
     ) -> bool:
         """Build fuzzers for a variant.
 
@@ -521,6 +522,8 @@ class OSSFuzzInfrastructure:
             config: Build configuration
             src_path: Path to source repository
             use_inc_image: Use pre-built inc-build image for faster builds
+            inc_fallback: Fallback to clean build using /src instead of /built-src.
+                Use when incremental build fails due to incompatibility.
 
         Returns:
             True if build succeeded
@@ -551,6 +554,9 @@ class OSSFuzzInfrastructure:
                     "--no-build-image",
                 ]
             )
+            # Add inc-fallback flag if needed
+            if inc_fallback:
+                cmd.append("--inc-fallback")
 
         cmd.extend([variant_name, str(src_path)])
 
@@ -866,7 +872,10 @@ class OSSFuzzInfrastructure:
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} did not crash"
                 )
                 return ReproduceOutput(
-                    crashed=False, stdout=result.stdout, stderr=result.stderr
+                    crashed=False,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    exit_code=0,
                 )
             if result.returncode == EXIT_CODE_TIMEOUT:
                 logger.info(
@@ -874,14 +883,20 @@ class OSSFuzzInfrastructure:
                     "timed out (exit code 124)"
                 )
                 return ReproduceOutput(
-                    crashed=False, stdout=result.stdout, stderr=result.stderr
+                    crashed=False,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    exit_code=124,
                 )
             logger.info(
                 f"{req_prefix}{pov_prefix}{project_name}/{harness} crashed "
                 f"(exit code {result.returncode})"
             )
             return ReproduceOutput(
-                crashed=True, stdout=result.stdout, stderr=result.stderr
+                crashed=True,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                exit_code=result.returncode,
             )
 
         except subprocess.TimeoutExpired:
