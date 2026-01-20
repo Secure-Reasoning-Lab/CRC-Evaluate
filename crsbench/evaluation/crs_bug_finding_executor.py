@@ -107,6 +107,60 @@ class CRSBugFindingExecutor(CRSExecutor):
         self._llm_api_key_override = api_key
         logger.debug("Set trial-specific LLM API key")
 
+    def cleanup_other_harnesses(
+        self,
+        trial_output_dir: Path,
+        target_harness: str,
+        project_name: str,
+    ) -> None:
+        """Clean up files from harnesses other than the target.
+
+        Args:
+            trial_output_dir: Trial directory containing CRS outputs
+            target_harness: Name of the harness to keep
+            project_name: Project name (for CRS output directory path)
+        """
+        # Clean OSS-Fuzz build output
+        build_out_dir = self._get_oss_fuzz_build_output_dir(
+            trial_output_dir, project_name
+        )
+        logger.debug(f"build_out_dir {build_out_dir}")
+
+        if build_out_dir.exists():
+            # Iterate subdirectories under build/out/
+            for subdir in build_out_dir.iterdir():
+                if not subdir.is_dir():
+                    continue
+                # Iterate files inside each subdirectory
+                for item in subdir.iterdir():
+                    # TODO: check this logic is enough that we don't remove neceesary files
+                    if target_harness not in item.name:
+                        logger.debug(f"Removing non-target harness file: {item}")
+                        if item.is_dir():
+                            shutil.rmtree(item)
+                        else:
+                            item.unlink()
+
+        # Clean up CRS output directories for each CRS in ensemble
+        from crsbench.utils.crs_helper import get_all_crs_registry_names
+
+        crs_names = get_all_crs_registry_names(
+            self.crs_config_name, self.crs_configs_dir
+        )
+        build_dir = trial_output_dir / "crs-build"
+
+        for crs_name in crs_names:
+            crs_out_dir = build_dir / "out" / crs_name / project_name
+            if not crs_out_dir.exists():
+                continue
+            for item in crs_out_dir.iterdir():
+                if target_harness not in item.name:
+                    logger.debug(f"Removing non-target harness file: {item}")
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
+
     def build_crs(self, benchmark_path: Path, trial_output_dir: Path) -> None:
         """Pre-build CRS Docker image before running.
 
@@ -332,6 +386,10 @@ class CRSBugFindingExecutor(CRSExecutor):
                 trial_registry_dir,
             )
 
+            # Cleanup other harness files to optimize disk usage
+            harness_name = Path(harness.name).stem
+            self.cleanup_other_harnesses(trial_output_dir, harness_name, project_name)
+
             # Signal that CRS run is starting (after build)
             if on_run_start:
                 on_run_start()
@@ -348,7 +406,6 @@ class CRSBugFindingExecutor(CRSExecutor):
                     )
 
             # 4. Prepare hints if enabled
-            harness_name = Path(harness.name).stem
             hints_path = self._prepare_hints(
                 benchmark_path, harness_name, trial_output_dir
             )
@@ -699,6 +756,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         cmd = [
             "oss-bugfind-crs",
             "run",
+            "--skip-oss-fuzz-clone",  # already cloned by building; need this to work for harness cleanup
             "--build-dir",
             str(trial_build_dir),
             "--oss-fuzz-dir",
@@ -832,6 +890,24 @@ class CRSBugFindingExecutor(CRSExecutor):
             / "run"
             / harness_name
         )
+
+    def _get_oss_fuzz_build_output_dir(
+        self, trial_output_dir: Path, project_name: str
+    ) -> Path:
+        """Get OSS-Fuzz build output directory path.
+
+        The build output is at:
+        {{ trial_output_dir }}/crs-build/crs/oss-fuzz/{{ project_name }}/build/out/
+
+        Args:
+            trial_output_dir: Trial directory (from TrialDirectoryPreparer)
+            project_name: Project name
+
+        Returns:
+            Path to OSS-Fuzz build output directory
+        """
+        build_dir = trial_output_dir / "crs-build"
+        return build_dir / "crs" / "oss-fuzz" / project_name / "build" / "out"
 
     def _prepare_hints(
         self, benchmark_path: Path, harness_name: str, trial_output_dir: Path
