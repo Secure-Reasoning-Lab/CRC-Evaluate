@@ -80,7 +80,7 @@ def save_registry(
 
 
 def generate_canary_block(canary_uuid: UUID) -> str:
-    """Generate the canary comment block (BIG-bench style).
+    """Generate the canary comment block (BIG-bench style with CRSBench prefix).
 
     Args:
         canary_uuid: UUID for this canary
@@ -261,9 +261,9 @@ def extract_canary_from_file(file_path: Path) -> Optional[UUID]:
 
     content = file_path.read_text(encoding="utf-8")
 
-    # Match: canary GUID <uuid>
+    # Match: canary GUID <uuid> or CRSBench: canary GUID <uuid>
     match = re.search(
-        r"canary GUID ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+        r"(?:CRSBench:\s*)?canary GUID ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
         content,
         re.IGNORECASE,
     )
