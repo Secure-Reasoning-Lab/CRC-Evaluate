@@ -756,6 +756,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         cmd = [
             "oss-bugfind-crs",
             "run",
+            "--skip-oss-fuzz-clone",  # already cloned by building; need this to work for harness cleanup
             "--build-dir",
             str(trial_build_dir),
             "--oss-fuzz-dir",
