@@ -436,16 +436,38 @@ class OSSFuzzBuilder:
                     )
 
                 # Build using helper.py build_fuzzers with inc-build image
+                # DELTA_BASE must always use inc-fallback because inc-build images
+                # are built at ref_commit, not base_commit
+                use_fallback = (
+                    config.variant_type.should_fallback_on_inc_build_failure()
+                )
                 success = self.infra.build_fuzzers(
-                    config, repo_path, use_inc_image=True
+                    config, repo_path, use_inc_image=True, inc_fallback=use_fallback
                 )
 
-                if not success:
-                    return BuildResult.from_error(
-                        config=config,
-                        error="Incremental build failed",
-                        elapsed_seconds=time.time() - start_time,
-                    )
+                if not success and not use_fallback:
+                    # Check if this variant type should fallback
+                    if config.variant_type.should_fallback_on_inc_build_failure():
+                        logger.warning(
+                            f"Incremental build failed for {config.variant_name}, "
+                            f"retrying with inc-fallback (clean build from /src)"
+                        )
+                        success = self.infra.build_fuzzers(
+                            config, repo_path, use_inc_image=True, inc_fallback=True
+                        )
+                        if not success:
+                            return BuildResult.from_error(
+                                config=config,
+                                error="Incremental build failed (inc-fallback also failed)",
+                                elapsed_seconds=time.time() - start_time,
+                            )
+                    else:
+                        # For PATCHED variants, don't fallback
+                        return BuildResult.from_error(
+                            config=config,
+                            error="Incremental build failed",
+                            elapsed_seconds=time.time() - start_time,
+                        )
 
                 # Success - build output is in /build/out/{variant_name}/
                 build_path = self.oss_fuzz_path / "build" / "out" / variant_name

@@ -516,6 +516,7 @@ class OSSFuzzInfrastructure:
         src_path: Optional[Path] = None,
         *,
         use_inc_image: bool = False,
+        inc_fallback: bool = False,
     ) -> bool:
         """Build fuzzers for a variant.
 
@@ -523,6 +524,8 @@ class OSSFuzzInfrastructure:
             config: Build configuration
             src_path: Path to source repository. If None, uses bundled source in Docker.
             use_inc_image: Use pre-built inc-build image for faster builds
+            inc_fallback: Fallback to clean build using /src instead of /built-src.
+                Use when incremental build fails due to incompatibility.
 
         Returns:
             True if build succeeded
@@ -553,6 +556,9 @@ class OSSFuzzInfrastructure:
                     "--no-build-image",
                 ]
             )
+            # Add inc-fallback flag if needed
+            if inc_fallback:
+                cmd.append("--inc-fallback")
 
         cmd.append(variant_name)
         # Only add source path if provided (not using bundled pkgs/)
@@ -880,18 +886,33 @@ class OSSFuzzInfrastructure:
                 reproduce_logger.info(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} did not crash"
                 )
-                return ReproduceOutput(crashed=False, stdout=stdout, stderr=stderr)
+                return ReproduceOutput(
+                    crashed=False,
+                    stdout=stdout,
+                    stderr=stderr,
+                    exit_code=0,
+                )
             if result.returncode == EXIT_CODE_TIMEOUT:
                 reproduce_logger.info(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} "
                     "timed out (exit code 124)"
                 )
-                return ReproduceOutput(crashed=False, stdout=stdout, stderr=stderr)
-            reproduce_logger.info(
+                return ReproduceOutput(
+                    crashed=False,
+                    stdout=stdout,
+                    stderr=stderr,
+                    exit_code=124,
+                )
+            logger.info(
                 f"{req_prefix}{pov_prefix}{project_name}/{harness} crashed "
                 f"(exit code {result.returncode})"
             )
-            return ReproduceOutput(crashed=True, stdout=stdout, stderr=stderr)
+            return ReproduceOutput(
+                crashed=True,
+                stdout=stdout,
+                stderr=stderr,
+                exit_code=result.returncode,
+            )
 
         except subprocess.TimeoutExpired:
             # Our subprocess timeout (shouldn't happen with grace period)
@@ -1089,11 +1110,11 @@ class OSSFuzzInfrastructure:
             self._retag_for_ossfuzz(inc_image, ossfuzz_image)
             return True
 
-        # Check nested format and retag if found
-        nested_image = self._get_nested_image_name(project_name, sanitizer)
-        if self._docker_image_exists(nested_image):
-            self._retag_for_ossfuzz(nested_image, ossfuzz_image)
-            return True
+        # Check nested formats and retag if found
+        for nested_image in self._get_nested_image_names(project_name, sanitizer):
+            if self._docker_image_exists(nested_image):
+                self._retag_for_ossfuzz(nested_image, ossfuzz_image)
+                return True
 
         return False
 
@@ -1111,23 +1132,28 @@ class OSSFuzzInfrastructure:
             logger.debug(f"Error checking image {image_name}: {e}")
             return False
 
-    def _get_nested_image_name(
+    def _get_nested_image_names(
         self,
         project_name: str,
         sanitizer: str = "address",
-    ) -> str:
-        """Get nested format image name (legacy local builds).
+    ) -> list[str]:
+        """Get all possible nested format image names (legacy local builds).
 
-        Some local builds use nested path format: aixcc-afc/aixcc/c/{project}:inc-{sanitizer}
+        Some local builds use nested path format:
+        - C/C++: aixcc-afc/aixcc/c/{project}:inc-{sanitizer}
+        - JVM: aixcc-afc/aixcc/jvm/{project}:inc-{sanitizer}
 
         Args:
             project_name: OSS-Fuzz project name
             sanitizer: Sanitizer type
 
         Returns:
-            Nested format image name
+            List of possible nested format image names
         """
-        return f"aixcc-afc/aixcc/c/{project_name}:inc-{sanitizer}"
+        return [
+            f"aixcc-afc/aixcc/c/{project_name}:inc-{sanitizer}",
+            f"aixcc-afc/aixcc/jvm/{project_name}:inc-{sanitizer}",
+        ]
 
     def pull_inc_build_image(
         self,
@@ -1159,11 +1185,11 @@ class OSSFuzzInfrastructure:
             logger.info(f"Inc-build image available locally: {inc_image}")
             return self._retag_for_ossfuzz(inc_image, ossfuzz_image)
 
-        # Fallback: check nested format (legacy local builds)
-        nested_image = self._get_nested_image_name(project_name, sanitizer)
-        if self._docker_image_exists(nested_image):
-            logger.info(f"Found nested format image locally: {nested_image}")
-            return self._retag_for_ossfuzz(nested_image, ossfuzz_image)
+        # Fallback: check nested formats (legacy local builds)
+        for nested_image in self._get_nested_image_names(project_name, sanitizer):
+            if self._docker_image_exists(nested_image):
+                logger.info(f"Found nested format image locally: {nested_image}")
+                return self._retag_for_ossfuzz(nested_image, ossfuzz_image)
 
         # Pull from registry
         logger.info(f"Pulling inc-build image: {inc_image}")

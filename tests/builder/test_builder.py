@@ -52,6 +52,27 @@ class TestVariantType:
         # Coverage does NOT support inc-build (different instrumentation)
         assert not VariantType.COVERAGE.supports_inc_build()
 
+    def test_should_fallback_on_inc_build_failure(self):
+        """Test should_fallback_on_inc_build_failure method.
+
+        Only DELTA_BASE should fallback because inc-build images are built at
+        ref_commit, which may be incompatible with base_commit.
+        """
+        # Only DELTA_BASE should fallback
+        assert VariantType.DELTA_BASE.should_fallback_on_inc_build_failure()
+
+        # Other validation variants should NOT fallback (same commit as inc-build image)
+        assert not VariantType.FULL_BASE.should_fallback_on_inc_build_failure()
+        assert not VariantType.DELTA_REF.should_fallback_on_inc_build_failure()
+        assert not VariantType.ALL_PATCHED.should_fallback_on_inc_build_failure()
+        assert not VariantType.CPV.should_fallback_on_inc_build_failure()
+
+        # PATCHED variants should NOT fallback
+        assert not VariantType.PATCHED.should_fallback_on_inc_build_failure()
+
+        # COVERAGE does not support inc-build
+        assert not VariantType.COVERAGE.should_fallback_on_inc_build_failure()
+
 
 class TestBuildConfig:
     """Tests for BuildConfig dataclass."""

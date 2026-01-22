@@ -59,6 +59,26 @@ class VariantType(Enum):
         """
         return self != VariantType.COVERAGE
 
+    def should_fallback_on_inc_build_failure(self) -> bool:
+        """Check if this variant should fallback to clean build on inc-build failure.
+
+        Only DELTA_BASE should fallback because inc-build images are built at
+        ref_commit, which may be incompatible with base_commit (e.g., header
+        files in the inc-build image don't exist at the base commit).
+
+        Other variants (DELTA_REF, FULL_BASE, ALL_PATCHED, CPV) build at the
+        same commit as the inc-build image, so they shouldn't have compatibility
+        issues.
+
+        PATCHED variants should NOT fallback because the failure is likely due
+        to an invalid CRS-generated patch, which should be reported as a build
+        failure rather than masked by fallback.
+
+        Returns:
+            True if fallback to clean build is appropriate for this variant type.
+        """
+        return self == VariantType.DELTA_BASE
+
 
 class BenchmarkMode(Enum):
     """Benchmark testing mode."""
@@ -300,8 +320,10 @@ class ReproduceOutput:
         crashed: True if the POV caused a crash
         stdout: Standard output from reproduce (contains crash log if crashed)
         stderr: Standard error from reproduce
+        exit_code: Exit code from reproduce command
     """
 
     crashed: bool
     stdout: str = ""
     stderr: str = ""
+    exit_code: int = 0
