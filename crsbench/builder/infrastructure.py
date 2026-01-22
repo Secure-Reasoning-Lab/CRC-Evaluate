@@ -888,8 +888,8 @@ class OSSFuzzInfrastructure:
                 )
                 return ReproduceOutput(
                     crashed=False,
-                    stdout=result.stdout,
-                    stderr=result.stderr,
+                    stdout=stdout,
+                    stderr=stderr,
                     exit_code=0,
                 )
             if result.returncode == EXIT_CODE_TIMEOUT:
@@ -899,8 +899,8 @@ class OSSFuzzInfrastructure:
                 )
                 return ReproduceOutput(
                     crashed=False,
-                    stdout=result.stdout,
-                    stderr=result.stderr,
+                    stdout=stdout,
+                    stderr=stderr,
                     exit_code=124,
                 )
             logger.info(
@@ -909,8 +909,8 @@ class OSSFuzzInfrastructure:
             )
             return ReproduceOutput(
                 crashed=True,
-                stdout=result.stdout,
-                stderr=result.stderr,
+                stdout=stdout,
+                stderr=stderr,
                 exit_code=result.returncode,
             )
 
