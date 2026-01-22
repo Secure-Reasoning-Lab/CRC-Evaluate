@@ -1095,11 +1095,11 @@ class OSSFuzzInfrastructure:
             self._retag_for_ossfuzz(inc_image, ossfuzz_image)
             return True
 
-        # Check nested format and retag if found
-        nested_image = self._get_nested_image_name(project_name, sanitizer)
-        if self._docker_image_exists(nested_image):
-            self._retag_for_ossfuzz(nested_image, ossfuzz_image)
-            return True
+        # Check nested formats and retag if found
+        for nested_image in self._get_nested_image_names(project_name, sanitizer):
+            if self._docker_image_exists(nested_image):
+                self._retag_for_ossfuzz(nested_image, ossfuzz_image)
+                return True
 
         return False
 
@@ -1117,23 +1117,28 @@ class OSSFuzzInfrastructure:
             logger.debug(f"Error checking image {image_name}: {e}")
             return False
 
-    def _get_nested_image_name(
+    def _get_nested_image_names(
         self,
         project_name: str,
         sanitizer: str = "address",
-    ) -> str:
-        """Get nested format image name (legacy local builds).
+    ) -> list[str]:
+        """Get all possible nested format image names (legacy local builds).
 
-        Some local builds use nested path format: aixcc-afc/aixcc/c/{project}:inc-{sanitizer}
+        Some local builds use nested path format:
+        - C/C++: aixcc-afc/aixcc/c/{project}:inc-{sanitizer}
+        - JVM: aixcc-afc/aixcc/jvm/{project}:inc-{sanitizer}
 
         Args:
             project_name: OSS-Fuzz project name
             sanitizer: Sanitizer type
 
         Returns:
-            Nested format image name
+            List of possible nested format image names
         """
-        return f"aixcc-afc/aixcc/c/{project_name}:inc-{sanitizer}"
+        return [
+            f"aixcc-afc/aixcc/c/{project_name}:inc-{sanitizer}",
+            f"aixcc-afc/aixcc/jvm/{project_name}:inc-{sanitizer}",
+        ]
 
     def pull_inc_build_image(
         self,
@@ -1165,11 +1170,11 @@ class OSSFuzzInfrastructure:
             logger.info(f"Inc-build image available locally: {inc_image}")
             return self._retag_for_ossfuzz(inc_image, ossfuzz_image)
 
-        # Fallback: check nested format (legacy local builds)
-        nested_image = self._get_nested_image_name(project_name, sanitizer)
-        if self._docker_image_exists(nested_image):
-            logger.info(f"Found nested format image locally: {nested_image}")
-            return self._retag_for_ossfuzz(nested_image, ossfuzz_image)
+        # Fallback: check nested formats (legacy local builds)
+        for nested_image in self._get_nested_image_names(project_name, sanitizer):
+            if self._docker_image_exists(nested_image):
+                logger.info(f"Found nested format image locally: {nested_image}")
+                return self._retag_for_ossfuzz(nested_image, ossfuzz_image)
 
         # Pull from registry
         logger.info(f"Pulling inc-build image: {inc_image}")
