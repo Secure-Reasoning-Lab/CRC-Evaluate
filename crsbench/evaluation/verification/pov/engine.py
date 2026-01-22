@@ -88,10 +88,12 @@ class VerificationEngine:
     def __init__(
         self,
         oss_fuzz_path: Path,
-        timeout: int = 120,
+        timeout: int = 180,
         dedup_strategy: DeduplicationStrategy | None = None,
         build_workers: int = DEFAULT_WORKERS,
         verify_workers: int = DEFAULT_WORKERS,
+        *,
+        source_mode: str = "pkgs",
     ):
         """Initialize the verification engine.
 
@@ -101,11 +103,14 @@ class VerificationEngine:
             dedup_strategy: Deduplication strategy instance (defaults to PatchBasedDedup)
             build_workers: Maximum number of parallel workers for building
             verify_workers: Maximum number of parallel workers for verification
+            source_mode: Source mode - "pkgs" (bundled, default) or "main_repo" (clone)
         """
         self.oss_fuzz_path = Path(oss_fuzz_path)
         self.timeout = timeout
         self.verify_workers = verify_workers
-        self.builder = OSSFuzzBuilder(oss_fuzz_path, max_workers=build_workers)
+        self.builder = OSSFuzzBuilder(
+            oss_fuzz_path, max_workers=build_workers, source_mode=source_mode
+        )
         self.dedup_strategy = dedup_strategy if dedup_strategy else PatchBasedDedup()
         self._built_results: dict[str, dict[str, BuildResult]] = {}
 
@@ -461,6 +466,7 @@ class VerificationEngine:
         force_rebuild: bool = False,
         deduplicate: bool = True,
         skip_hashes: set[str] | None = None,
+        use_inc_build: Optional[bool] = None,
     ) -> tuple[list[PovVerificationResult], int]:
         """Verify POVs for a complete benchmark.
 
@@ -473,6 +479,7 @@ class VerificationEngine:
             force_rebuild: Force rebuild of variants
             deduplicate: Whether to deduplicate results
             skip_hashes: Optional set of content hashes to skip (pre-verification dedup)
+            use_inc_build: Override incremental build setting (None uses project.yaml default)
 
         Returns:
             Tuple of (list of verification results, number of POVs skipped due to hash)
@@ -486,7 +493,9 @@ class VerificationEngine:
         if force_rebuild:
             self._built_results.pop(adapter.benchmark_name, None)
 
-        build_results = self._get_or_build_results(adapter, force_rebuild=force_rebuild)
+        build_results = self._get_or_build_results(
+            adapter, force_rebuild=force_rebuild, use_inc_build=use_inc_build
+        )
         if not build_results:
             logger.error(f"Failed to build variants for {adapter.benchmark_name}")
             return [], 0
@@ -539,7 +548,7 @@ class VerificationEngine:
                 return [], 0
 
             # Filter out POVs with hashes in skip_hashes (pre-verification dedup)
-            for harness_name, _vuln_keyword, pov_path in all_povs:
+            for harness_name, vuln_keyword, pov_path in all_povs:
                 if skip_hashes:
                     pov_hash = compute_content_hash(pov_path)
                     if pov_hash in skip_hashes:
@@ -550,7 +559,10 @@ class VerificationEngine:
                         skipped_count += 1
                         continue
                 pov_data = pov_path.read_bytes()
-                pov_harness_pairs.append((pov_path.name, pov_data, harness_name))
+                # Include vuln_keyword in pov_id to track POV→CPV correspondence
+                # e.g., "cpv_0/pov_0.blob" instead of just "pov_0.blob"
+                pov_id = f"{vuln_keyword}/{pov_path.name}"
+                pov_harness_pairs.append((pov_id, pov_data, harness_name))
 
         if not pov_harness_pairs:
             if skipped_count > 0:
@@ -589,12 +601,14 @@ class VerificationEngine:
         adapter: MetaYamlAdapter,
         *,
         force_rebuild: bool = False,
+        use_inc_build: Optional[bool] = None,
     ) -> dict[str, BuildResult]:
         """Get cached build results or build new ones.
 
         Args:
             adapter: MetaYamlAdapter for benchmark config
             force_rebuild: Force rebuild even if cached
+            use_inc_build: Override incremental build setting (None uses adapter default)
 
         Returns:
             Dict mapping variant names to BuildResult
@@ -605,6 +619,9 @@ class VerificationEngine:
         # Determine mode
         mode_str = adapter.get_mode().value
         mode = BenchmarkMode.FULL if mode_str == "full" else BenchmarkMode.DELTA
+
+        # Use override if provided, otherwise use adapter's setting
+        inc_build = use_inc_build if use_inc_build is not None else adapter.inc_build
 
         # Create build plan
         plan = self.builder.create_build_plan(
@@ -618,7 +635,7 @@ class VerificationEngine:
             language=adapter.lang,
             repo_name=adapter.repo_name,
             include_coverage=False,
-            use_inc_build=adapter.inc_build,
+            use_inc_build=inc_build,
         )
 
         # Build variants

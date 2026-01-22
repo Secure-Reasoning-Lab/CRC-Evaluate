@@ -2,7 +2,7 @@
 
 # Get version from setuptools-scm
 try:
-    from crsbench._version import __version__
+    from crsbench._version import __version__  # type: ignore[import-untyped]
 except ImportError:
     # Fallback for development without install
     __version__ = "0.1.0.dev0+unknown"

@@ -67,23 +67,22 @@ class TestCRSPatchExecutor(unittest.TestCase):
         self.assertTrue(output_dir.is_dir())
 
     @patch("crsbench.utils.crs_helper.get_crs_registry_name")
-    @patch("crsbench.utils.repo_manager.ensure_project_repository")
     @patch("subprocess.run")
-    def test_build_crs_if_needed(
-        self, mock_run, mock_ensure_repo, mock_get_registry_name
-    ):
-        """Test CRS build with repository manager integration."""
+    def test_build_crs_if_needed(self, mock_run, mock_get_registry_name):
+        """Test CRS build with bundled source (pkgs/)."""
         # Mock CRS registry name lookup
         mock_get_registry_name.return_value = "test-crs-registry"
-
-        # Mock repository manager response
-        mock_ensure_repo.return_value = "/path/to/source"
 
         # Mock successful build
         mock_run.return_value = Mock(returncode=0, stdout="Build successful", stderr="")
 
         benchmark_path = self.benchmarks_root / "test-project"
         benchmark_path.mkdir()
+
+        # Create fake pkgs/ directory with a dummy tarball (for has_bundled_source)
+        pkgs_dir = benchmark_path / "pkgs"
+        pkgs_dir.mkdir()
+        (pkgs_dir / "source.tar.gz").write_bytes(b"fake tarball")
 
         trial_build_dir = Path(self.temp_dir) / "trial-build"
         trial_build_dir.mkdir()
@@ -99,11 +98,6 @@ class TestCRSPatchExecutor(unittest.TestCase):
             trial_registry_dir,
         )
 
-        # Verify repository manager was called
-        mock_ensure_repo.assert_called_once_with(
-            benchmark_dir=str(benchmark_path), verbose=False
-        )
-
         # Verify build command was called
         mock_run.assert_called_once()
         call_args = mock_run.call_args
@@ -116,7 +110,8 @@ class TestCRSPatchExecutor(unittest.TestCase):
         self.assertEqual(cmd[3], "test-project")
         self.assertIn("--oss-fuzz", cmd)
         self.assertIn("--project-path", cmd)
-        self.assertIn("--source-path", cmd)
+        # With bundled source (pkgs/), --source-path is NOT passed
+        self.assertNotIn("--source-path", cmd)
         self.assertIn("--registry", cmd)
         self.assertIn("--work-dir", cmd)
 

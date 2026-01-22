@@ -495,6 +495,27 @@ def clone_repository(
             if verbose:
                 logger.info(f"✅ Checked out commit {commit}")
 
+        # Initialize submodules if present (some projects like shadowsocks need this)
+        gitmodules = target_path / ".gitmodules"
+        if gitmodules.exists():
+            if verbose:
+                logger.info("🔄 Initializing git submodules...")
+
+            result = run_git(
+                ["submodule", "update", "--init", "--recursive"],
+                cwd=target_dir,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minute timeout for submodules
+                check=False,
+            )
+
+            if result.returncode != 0:
+                logger.warning(f"⚠️  Failed to initialize submodules: {result.stderr}")
+                # Don't fail - submodules might not be required
+            elif verbose:
+                logger.info("✅ Submodules initialized")
+
         return True
 
     except subprocess.TimeoutExpired:
@@ -720,6 +741,70 @@ def clone_or_copy_cached_repo(
         return target_dir
 
 
+def _extract_pkgs_source(
+    pkgs_dir: Path,
+    repos_dir: Optional[str] = None,
+    *,
+    verbose: bool = False,
+) -> Optional[Path]:
+    """Extract source from pkgs/ tarball.
+
+    Bundled source tarballs in pkgs/ directory contain pre-packaged source
+    code with fresh git init, avoiding the need to clone from remote repos.
+
+    Args:
+        pkgs_dir: Path to pkgs/ directory
+        repos_dir: Directory to extract to (default: .crsbench-repos/pkgs-cache)
+        verbose: Enable verbose logging
+
+    Returns:
+        Path to extracted source, or None if failed
+    """
+    tarballs = list(pkgs_dir.glob("*.tar.gz"))
+    if not tarballs:
+        if verbose:
+            logger.warning(f"⚠️  No tarballs found in {pkgs_dir}")
+        return None
+
+    # Find main source tarball (heuristic: use first tarball)
+    # TODO: improve heuristic to distinguish main source from dependencies
+    main_tarball = tarballs[0]
+
+    # Extract to repos_dir
+    extract_dir = Path(repos_dir or ".crsbench-repos") / "pkgs-cache"
+    extract_dir.mkdir(parents=True, exist_ok=True)
+
+    # Determine source name from tarball (curl.tar.gz -> curl)
+    source_name = main_tarball.stem
+    if source_name.endswith(".tar"):
+        source_name = source_name[:-4]
+    source_path = extract_dir / source_name
+
+    # Check if already extracted (cache hit)
+    if source_path.exists():
+        if verbose:
+            logger.info(f"📦 Using cached extracted source: {source_path}")
+        return source_path
+
+    # Extract tarball
+    if verbose:
+        logger.info(f"📦 Extracting {main_tarball.name} to {extract_dir}...")
+
+    try:
+        subprocess.run(
+            ["tar", "-xzf", str(main_tarball), "-C", str(extract_dir)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        if verbose:
+            logger.info(f"✅ Extracted {main_tarball.name} to {source_path}")
+        return source_path
+    except subprocess.CalledProcessError as e:
+        logger.error(f"❌ Failed to extract {main_tarball.name}: {e.stderr}")
+        return None
+
+
 def ensure_project_repository(
     benchmark_dir: str,
     repos_dir: Optional[str] = None,
@@ -757,6 +842,22 @@ def ensure_project_repository(
     verbose = True
     if verbose:
         configure_logger(level="INFO")
+
+    benchmark_path = Path(benchmark_dir)
+
+    # Check for bundled source in pkgs/ (takes precedence over cloning)
+    pkgs_dir = benchmark_path / "pkgs"
+    if pkgs_dir.exists() and not project_dir:
+        extracted_path = _extract_pkgs_source(
+            pkgs_dir=pkgs_dir,
+            repos_dir=repos_dir,
+            verbose=verbose,
+        )
+        if extracted_path:
+            logger.info(f"📦 Using bundled source from pkgs/: {extracted_path}")
+            return str(extracted_path)
+        # Fall through to clone if extraction fails
+        logger.warning("⚠️  pkgs/ extraction failed, falling back to clone")
 
     # If explicit project_dir is provided
     if project_dir:

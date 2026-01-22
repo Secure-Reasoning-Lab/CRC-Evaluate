@@ -1,26 +1,20 @@
-"""Job executors for benchmark CI testing.
+"""Job classes for benchmark CI.
 
-This submodule contains job executor classes that implement
-specific test operations for benchmarks.
+This module provides job abstractions for two-phase benchmark validation:
+- BuildJob: Build a variant (tracked with time, logs)
+- VerifyPovJob: Verify a POV against a variant
+- VerifyPatchJob: Verify a patch fixes all POVs for a CPV
 """
 
-from crsbench.benchmark_ci.jobs.base import JobExecutor
-from crsbench.benchmark_ci.jobs.coverage import CoverageCheckJob
-from crsbench.benchmark_ci.jobs.delta import DeltaBasePovCheckJob, DeltaRefPovCheckJob
-from crsbench.benchmark_ci.jobs.full import FullBasePovCheckJob
-from crsbench.benchmark_ci.jobs.inc_build import IncBuildPullJob
-from crsbench.benchmark_ci.jobs.patch import PatchCheckJob
+from crsbench.benchmark_ci.jobs.base import Job, JobContext, JobResult
+from crsbench.benchmark_ci.jobs.build import BuildJob
+from crsbench.benchmark_ci.jobs.verify import VerifyPatchJob, VerifyPovJob
 
 __all__ = [
-    "JobExecutor",
-    # POV checks
-    "DeltaBasePovCheckJob",
-    "DeltaRefPovCheckJob",
-    "FullBasePovCheckJob",
-    # Patch check
-    "PatchCheckJob",
-    # Coverage check
-    "CoverageCheckJob",
-    # Inc-build pull
-    "IncBuildPullJob",
+    "Job",
+    "JobContext",
+    "JobResult",
+    "BuildJob",
+    "VerifyPovJob",
+    "VerifyPatchJob",
 ]

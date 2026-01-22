@@ -1,526 +1,344 @@
-"""Benchmark CI runner for orchestrating test jobs.
+"""Project CI runner for executing benchmark validation jobs.
 
-This module provides the main runner class for executing benchmark CI tests.
-Follows the pattern from crsbench.evaluation.runner.BenchmarkRunner.
+Two-phase execution model:
+1. Build Phase: Execute all BuildJobs (parallel via OSSFuzzBuilder)
+2. Verify Phase: Execute all VerifyJobs (parallel via ThreadPoolExecutor)
 """
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any
 
-import yaml
-
-from crsbench.benchmark_ci.jobs import (
-    CoverageCheckJob,
-    DeltaBasePovCheckJob,
-    DeltaRefPovCheckJob,
-    FullBasePovCheckJob,
-    IncBuildPullJob,
-    JobExecutor,
-    PatchCheckJob,
-)
-from crsbench.benchmark_ci.models import (
-    CIResult,
-    ExecJobType,
-    JobContext,
-    JobResult,
-    ResultCollector,
-    Task,
-    TaskMode,
-    get_benchmarks_root,
-)
-from crsbench.builder.types import BenchmarkMode
+from crsbench.benchmark_ci.jobs import BuildJob, Job, JobContext, JobResult
+from crsbench.builder import OSSFuzzBuilder
+from crsbench.builder.types import BuildResult
 from crsbench.utils.logger import get_logger
-from crsbench.validation import validate_benchmark
-from crsbench.validation.meta_adapter import MetaYamlAdapter
-from crsbench.validation.schemas import ProjectConfig
 
 logger = get_logger(__name__)
 
-# Default job types (excludes coverage_check)
-DEFAULT_JOB_TYPES: Set[ExecJobType] = {
-    ExecJobType.DELTA_BASE_POV_CHECK,
-    ExecJobType.DELTA_REF_POV_CHECK,
-    ExecJobType.FULL_BASE_POV_CHECK,
-    ExecJobType.PATCH_CHECK,
-    ExecJobType.INC_BUILD_PULL,
-}
+
+@dataclass
+class ProjectCIResult:
+    """Complete CI result for a project.
+
+    Collects all job results and provides summary statistics.
+
+    Attributes:
+        started_at: When CI started
+        finished_at: When CI finished
+        results: List of all job results
+    """
+
+    started_at: datetime
+    finished_at: datetime
+    results: list[JobResult] = field(default_factory=list)
+
+    @property
+    def build_results(self) -> list[JobResult]:
+        """Get all build job results."""
+        return [r for r in self.results if r.job_type == "build"]
+
+    @property
+    def verify_results(self) -> list[JobResult]:
+        """Get all verification job results."""
+        return [r for r in self.results if r.job_type.startswith("verify")]
+
+    @property
+    def total_build_time(self) -> float:
+        """Total time spent on build jobs."""
+        return sum(r.elapsed_seconds for r in self.build_results)
+
+    @property
+    def total_verify_time(self) -> float:
+        """Total time spent on verification jobs."""
+        return sum(r.elapsed_seconds for r in self.verify_results)
+
+    @property
+    def passed(self) -> bool:
+        """True if all jobs passed."""
+        return all(r.success for r in self.results)
+
+    @property
+    def passed_count(self) -> int:
+        """Number of jobs that passed."""
+        return sum(1 for r in self.results if r.success)
+
+    @property
+    def failed_count(self) -> int:
+        """Number of jobs that failed."""
+        return sum(1 for r in self.results if not r.success)
+
+    def get_summary(self) -> dict[str, Any]:
+        """Get summary statistics."""
+        return {
+            "total_jobs": len(self.results),
+            "passed": self.passed_count,
+            "failed": self.failed_count,
+            "build_time_seconds": self.total_build_time,
+            "verify_time_seconds": self.total_verify_time,
+            "duration_seconds": (self.finished_at - self.started_at).total_seconds(),
+        }
+
+    def get_failed_jobs(self) -> list[JobResult]:
+        """Get all failed job results."""
+        return [r for r in self.results if not r.success]
+
+    def to_csv_rows(self) -> list[dict[str, Any]]:
+        """Convert results to CSV-compatible rows."""
+        rows = []
+        for r in self.results:
+            row = {
+                "job_id": r.job_id,
+                "job_type": r.job_type,
+                "success": r.success,
+                "elapsed_seconds": r.elapsed_seconds,
+                "error": r.error or "",
+                "started_at": r.started_at.isoformat() if r.started_at else "",
+                "finished_at": r.finished_at.isoformat() if r.finished_at else "",
+            }
+            # Add details as separate columns
+            for key, value in r.details.items():
+                row[f"detail_{key}"] = value
+            rows.append(row)
+        return rows
 
 
-class BenchmarkCIRunner:
-    """Main class for running benchmark CI tests.
+class ProjectCIRunner:
+    """Runs CI for a single project using two-phase execution.
 
-    This runner orchestrates the execution of various CI jobs
-    (POV checks, patch checks, coverage checks, inc-build pull)
-    for benchmarks.
+    Phase 1 (Build): Builds all variants in parallel
+    Phase 2 (Verify): Runs all verification jobs in parallel
+
+    This separation eliminates race conditions and simplifies coordination.
+
+    Attributes:
+        builder: OSSFuzzBuilder for building variants
+        infra: OSSFuzzInfrastructure for reproduce operations
+        verify_workers: Number of parallel verification workers
+        timeout: Timeout for verification jobs in seconds
     """
 
     def __init__(
         self,
+        oss_fuzz_path: Path,
         *,
-        force_rebuild: bool = False,
-        max_workers: int = 1,
+        build_workers: int = 4,
+        verify_workers: int = 4,
+        timeout: int = 120,
     ):
-        """Initialize BenchmarkCIRunner.
+        """Initialize the runner.
 
         Args:
-            force_rebuild: Force rebuild Docker images even if they already exist
-            max_workers: Maximum number of parallel workers (default: 1)
+            oss_fuzz_path: Path to OSS-Fuzz directory
+            build_workers: Number of parallel build workers
+            verify_workers: Number of parallel verification workers
+            timeout: Timeout for verification jobs in seconds
         """
-        self.force_rebuild = force_rebuild
-        self.max_workers = max(1, max_workers)
-        self.result_collector = ResultCollector()
+        self.builder = OSSFuzzBuilder(oss_fuzz_path, max_workers=build_workers)
+        self.infra = self.builder.infra
+        self.verify_workers = verify_workers
+        self.timeout = timeout
 
-        # Initialize job executors
-        self._executors: Dict[ExecJobType, JobExecutor] = {
-            ExecJobType.DELTA_BASE_POV_CHECK: DeltaBasePovCheckJob(),
-            ExecJobType.DELTA_REF_POV_CHECK: DeltaRefPovCheckJob(),
-            ExecJobType.FULL_BASE_POV_CHECK: FullBasePovCheckJob(),
-            ExecJobType.PATCH_CHECK: PatchCheckJob(),
-            ExecJobType.COVERAGE_CHECK: CoverageCheckJob(),
-            ExecJobType.INC_BUILD_PULL: IncBuildPullJob(),
-        }
-
-    def run(
-        self,
-        benchmarks: Set[str],
-        job_types: Optional[Set[ExecJobType]] = None,
-        *,
-        check_default_only: bool = False,
-    ) -> ResultCollector:
-        """Run CI tests for benchmarks.
+    def run(self, jobs: list[Job]) -> ProjectCIResult:
+        """Execute jobs in two phases.
 
         Args:
-            benchmarks: Set of benchmark names to test
-            job_types: Optional set of job types to filter (None means default)
-            check_default_only: Only test libfuzzer + address/none sanitizers
+            jobs: List of jobs to execute (build and verify)
 
         Returns:
-            ResultCollector with all test results
+            ProjectCIResult with all job results
         """
-        self.result_collector.start()
+        started_at = datetime.now()
 
-        # Use default job types if not specified
-        effective_job_types = job_types if job_types is not None else DEFAULT_JOB_TYPES
+        # Separate jobs by type
+        build_jobs = [j for j in jobs if isinstance(j, BuildJob)]
+        verify_jobs = [j for j in jobs if j.job_type.startswith("verify")]
 
-        # Generate jobs
-        jobs = self._generate_jobs(
-            benchmarks, effective_job_types, check_default_only=check_default_only
+        results: dict[str, JobResult] = {}
+
+        # Phase 1: Build all variants
+        logger.info(f"=== Build Phase: {len(build_jobs)} jobs ===")
+        build_results = self._execute_build_phase(build_jobs)
+        results.update(build_results)
+
+        # Check for build failures
+        failed_builds = {jid for jid, r in build_results.items() if not r.success}
+        if failed_builds:
+            logger.warning(f"Build failures: {len(failed_builds)} jobs failed")
+
+        # Phase 2: Verify (skip jobs with failed dependencies)
+        logger.info(f"=== Verify Phase: {len(verify_jobs)} jobs ===")
+        verify_results = self._execute_verify_phase(verify_jobs, failed_builds)
+        results.update(verify_results)
+
+        finished_at = datetime.now()
+
+        return ProjectCIResult(
+            started_at=started_at,
+            finished_at=finished_at,
+            results=list(results.values()),
         )
 
-        logger.info(f"Generated {len(jobs)} jobs for {len(benchmarks)} benchmarks")
+    def _execute_build_phase(self, jobs: list[BuildJob]) -> dict[str, JobResult]:
+        """Execute build jobs using OSSFuzzBuilder.
 
-        # Execute jobs (parallel or sequential)
-        if self.max_workers > 1:
-            self._execute_jobs_parallel(jobs)
-        else:
-            self._execute_jobs_sequential(jobs)
-
-        self.result_collector.finish()
-        return self.result_collector
-
-    def generate_jobs(
-        self,
-        benchmarks: Set[str],
-        job_types: Optional[Set[ExecJobType]] = None,
-        *,
-        check_default_only: bool = False,
-    ) -> List[JobContext]:
-        """Generate jobs without executing them (for dry-run).
+        Extracts BuildConfigs and uses builder's parallel execution.
 
         Args:
-            benchmarks: Set of benchmark names to test
-            job_types: Optional set of job types to filter (None means default)
-            check_default_only: Only test libfuzzer + address/none sanitizers
+            jobs: List of BuildJob instances
 
         Returns:
-            List of JobContext objects that would be executed
+            Dictionary mapping job_id to JobResult
         """
-        effective_job_types = job_types if job_types is not None else DEFAULT_JOB_TYPES
-        return self._generate_jobs(
-            benchmarks, effective_job_types, check_default_only=check_default_only
-        )
+        results = {}
 
-    def _execute_jobs_sequential(self, jobs: List[JobContext]) -> None:
-        """Execute jobs sequentially."""
-        for i, job in enumerate(jobs, 1):
-            logger.info("-" * 80)
-            logger.info(f"Job {i}/{len(jobs)}: {job}")
+        if not jobs:
+            return results
 
-            start_time = datetime.now()
-            result = self._execute_job(job)
-            end_time = datetime.now()
+        # Extract BuildConfigs and use builder's parallel execution
+        configs = [job.config for job in jobs]
 
-            # Create and collect result
-            ci_result = CIResult.from_job_result(job, result, start_time, end_time)
-            self.result_collector.add_result(ci_result)
+        # Create a mapping from variant_name to job for result correlation
+        variant_to_job = {job.config.variant_name: job for job in jobs}
 
-            if not result.success:
-                logger.error(f"Job failed: {result.error_message}")
+        # Use builder's batch build
+        build_results = self.builder.build_variants(configs)
 
-    def _execute_jobs_parallel(self, jobs: List[JobContext]) -> None:
-        """Execute jobs in parallel using ThreadPoolExecutor.
+        # Convert BuildResults to JobResults
+        for variant_name, br in build_results.items():
+            job = variant_to_job.get(variant_name)
+            if not job:
+                continue
 
-        INC_BUILD_PULL jobs run first as pre-validation. If any fail,
-        remaining jobs for that benchmark are skipped.
-        """
-        # Separate INC_BUILD_PULL jobs from others
-        inc_build_jobs = [j for j in jobs if j.job_type == ExecJobType.INC_BUILD_PULL]
-        other_jobs = [j for j in jobs if j.job_type != ExecJobType.INC_BUILD_PULL]
+            result = self._build_result_to_job_result(job, br)
+            results[job.job_id] = result
 
-        total_jobs = len(jobs)
-        completed = 0
-
-        # Phase 1: Run INC_BUILD_PULL jobs first (pre-validation)
-        failed_benchmarks: Set[str] = set()
-        if inc_build_jobs:
+            status = "PASS" if result.success else "FAIL"
+            cached = " (cached)" if br.cached else ""
             logger.info(
-                f"Phase 1: Pulling inc-build images for {len(inc_build_jobs)} benchmarks..."
-            )
-            completed = self._run_job_batch(
-                inc_build_jobs, total_jobs, completed, failed_benchmarks
+                f"  [{job.job_id}] {status}{cached} ({result.elapsed_seconds:.1f}s)"
             )
 
-        # Phase 2: Run other jobs (skip benchmarks that failed inc-build pull)
-        if other_jobs:
-            if failed_benchmarks:
-                # Filter out jobs for failed benchmarks
-                skipped_jobs = [
-                    j for j in other_jobs if j.benchmark in failed_benchmarks
-                ]
-                other_jobs = [
-                    j for j in other_jobs if j.benchmark not in failed_benchmarks
-                ]
+        return results
 
-                for job in skipped_jobs:
-                    completed += 1
-                    ci_result = CIResult.from_job_result(
-                        job,
-                        JobResult(
-                            success=False,
-                            error_message="Skipped: inc-build pull failed",
-                        ),
-                        datetime.now(),
-                        datetime.now(),
-                    )
-                    self.result_collector.add_result(ci_result)
-                    logger.warning(
-                        f"[{completed}/{total_jobs}] {job.benchmark}: SKIPPED (inc-build pull failed)"
-                    )
-
-            if other_jobs:
-                logger.info(
-                    f"Phase 2: Running {len(other_jobs)} jobs with {self.max_workers} workers..."
-                )
-                self._run_job_batch(
-                    other_jobs, total_jobs, completed, failed_benchmarks
-                )
-
-        # Summary
-        summary = self.result_collector.get_summary()
-        logger.info(
-            f"Parallel execution complete: {summary['passed']}/{summary['total']} passed"
-        )
-
-    def _run_job_batch(
-        self,
-        jobs: List[JobContext],
-        total_jobs: int,
-        completed: int,
-        failed_benchmarks: Set[str],
-    ) -> int:
-        """Run a batch of jobs in parallel.
+    def _build_result_to_job_result(self, job: BuildJob, br: BuildResult) -> JobResult:
+        """Convert BuildResult to JobResult.
 
         Args:
-            jobs: Jobs to run
-            total_jobs: Total number of jobs (for progress logging)
-            completed: Number of jobs already completed
-            failed_benchmarks: Set to add failed benchmark names to
+            job: The BuildJob
+            br: BuildResult from builder
 
         Returns:
-            Updated completed count
+            JobResult with build information
         """
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_job = {
-                executor.submit(self._execute_job_with_timing, job): job for job in jobs
-            }
+        return JobResult(
+            job_id=job.job_id,
+            job_type="build",
+            success=br.success,
+            started_at=datetime.now(),  # Approximation - builder doesn't track per-job timing
+            finished_at=datetime.now(),
+            elapsed_seconds=br.elapsed_seconds,
+            error=br.error,
+            artifacts={"build_path": br.build_path} if br.build_path else {},
+            details={
+                "variant_name": br.variant_name,
+                "cached": br.cached,
+            },
+        )
 
-            for future in as_completed(future_to_job):
-                job = future_to_job[future]
-                completed += 1
+    def _execute_verify_phase(
+        self,
+        jobs: list[Job],
+        failed_builds: set[str],
+    ) -> dict[str, JobResult]:
+        """Execute verify jobs in parallel.
 
+        Jobs with failed dependencies are skipped.
+
+        Args:
+            jobs: List of verification jobs
+            failed_builds: Set of failed build job IDs
+
+        Returns:
+            Dictionary mapping job_id to JobResult
+        """
+        results = {}
+
+        if not jobs:
+            return results
+
+        context = JobContext(
+            builder=self.builder,
+            infra=self.infra,
+            timeout=self.timeout,
+        )
+
+        with ThreadPoolExecutor(max_workers=self.verify_workers) as executor:
+            futures = {}
+
+            for job in jobs:
+                # Skip if any dependency failed
+                deps_failed = any(dep in failed_builds for dep in job.depends_on)
+                if deps_failed:
+                    results[job.job_id] = JobResult(
+                        job_id=job.job_id,
+                        job_type=job.job_type,
+                        success=False,
+                        started_at=datetime.now(),
+                        finished_at=datetime.now(),
+                        elapsed_seconds=0,
+                        error="Dependency build failed",
+                    )
+                    logger.warning(f"  [{job.job_id}] SKIP (dependency failed)")
+                else:
+                    futures[executor.submit(job.execute, context)] = job
+
+            for future in as_completed(futures):
+                job = futures[future]
                 try:
-                    result, start_time, end_time = future.result()
-
-                    ci_result = CIResult.from_job_result(
-                        job, result, start_time, end_time
+                    result = future.result()
+                    results[job.job_id] = result
+                    status = "PASS" if result.success else "FAIL"
+                    logger.info(
+                        f"  [{job.job_id}] {status} ({result.elapsed_seconds:.1f}s)"
                     )
-                    self.result_collector.add_result(ci_result)
-
-                    status = "OK" if result.success else "FAILED"
-                    logger.info(f"[{completed}/{total_jobs}] {job.benchmark}: {status}")
-
-                    if not result.success:
-                        logger.error(f"  Error: {result.error_message}")
-                        failed_benchmarks.add(job.benchmark)
-
                 except Exception as e:
-                    logger.error(
-                        f"[{completed}/{total_jobs}] {job.benchmark}: Unexpected error: {e}"
+                    results[job.job_id] = JobResult(
+                        job_id=job.job_id,
+                        job_type=job.job_type,
+                        success=False,
+                        started_at=datetime.now(),
+                        finished_at=datetime.now(),
+                        elapsed_seconds=0,
+                        error=str(e),
                     )
-                    ci_result = CIResult.from_job_result(
-                        job,
-                        JobResult(success=False, error_message=str(e)),
-                        datetime.now(),
-                        datetime.now(),
-                    )
-                    self.result_collector.add_result(ci_result)
-                    failed_benchmarks.add(job.benchmark)
+                    logger.error(f"  [{job.job_id}] ERROR: {e}")
 
-        return completed
+        return results
 
-    def _execute_job_with_timing(
-        self, job: JobContext
-    ) -> Tuple[JobResult, datetime, datetime]:
-        """Execute a job and return result with timing info."""
-        start_time = datetime.now()
-        result = self._execute_job(job)
-        end_time = datetime.now()
-        return result, start_time, end_time
+    def run_dry(self, jobs: list[Job]) -> None:
+        """Print job execution plan without running.
 
-    def _execute_job(self, job: JobContext) -> JobResult:
-        """Execute a single job."""
-        executor = self._executors.get(job.job_type)
-        if not executor:
-            return JobResult(
-                success=False, error_message=f"Unknown job type: {job.job_type}"
-            )
+        Args:
+            jobs: List of jobs to plan
+        """
+        build_jobs = [j for j in jobs if j.job_type == "build"]
+        verify_jobs = [j for j in jobs if j.job_type.startswith("verify")]
 
-        return executor.execute(job, use_inc_build=job.use_inc_build)
+        logger.info("=== Dry Run: Job Execution Plan ===")
+        logger.info("")
+        logger.info(f"Build Phase ({len(build_jobs)} jobs):")
+        for job in build_jobs:
+            logger.info(f"  - {job.job_id}")
 
-    def _generate_jobs(
-        self,
-        benchmarks: Set[str],
-        job_types: Optional[Set[ExecJobType]] = None,
-        *,
-        check_default_only: bool = False,
-    ) -> List[JobContext]:
-        """Generate test jobs for benchmarks."""
-        jobs: List[JobContext] = []
+        logger.info("")
+        logger.info(f"Verify Phase ({len(verify_jobs)} jobs):")
+        for job in verify_jobs:
+            deps = ", ".join(job.depends_on) if job.depends_on else "none"
+            logger.info(f"  - {job.job_id}")
+            logger.info(f"    depends_on: {deps}")
 
-        for benchmark in sorted(benchmarks):
-            try:
-                benchmark_jobs = self._generate_benchmark_jobs(
-                    benchmark, job_types, check_default_only=check_default_only
-                )
-                jobs.extend(benchmark_jobs)
-            except Exception as e:
-                logger.error(f"Failed to generate jobs for {benchmark}: {e}")
-                self.result_collector.add_skipped(benchmark, str(e))
-
-        return sorted(jobs)
-
-    def _generate_benchmark_jobs(
-        self,
-        benchmark: str,
-        job_types: Optional[Set[ExecJobType]] = None,
-        *,
-        check_default_only: bool = False,
-    ) -> List[JobContext]:
-        """Generate jobs for a single benchmark."""
-        jobs: List[JobContext] = []
-
-        # Validate benchmark first
-        benchmark_path = Path(get_benchmarks_root()) / benchmark
-        result = validate_benchmark(benchmark_path)
-        if not result.is_valid:
-            raise ValueError(f"Invalid benchmark: {result.errors}")
-
-        # Load configs
-        project_config = self._load_project_config(benchmark)
-        adapter = MetaYamlAdapter.from_benchmark_path(benchmark_path)
-        if not adapter:
-            raise ValueError(f"Failed to load MetaYamlAdapter for {benchmark}")
-
-        language = project_config.language
-        sanitizers = project_config.sanitizers
-        fuzzing_engines = project_config.fuzzing_engines
-        use_inc_build = project_config.inc_build
-
-        # Get tasks from adapter
-        tasks = self._get_tasks_from_adapter(adapter)
-
-        # Check if delta mode exists (to skip redundant full_base_pov_check)
-        has_delta_mode = any(t.mode == TaskMode.DELTA for t in tasks)
-
-        # Find the delta task for patch checks (prefer delta over full)
-        delta_task = next((t for t in tasks if t.mode == TaskMode.DELTA), None)
-        patch_task = delta_task or (tasks[0] if tasks else None)
-
-        # Generate POV check jobs for each task
-        for task in tasks:
-            for engine in fuzzing_engines:
-                for sanitizer in sanitizers:
-                    if check_default_only:
-                        if sanitizer not in ["none", "address"]:
-                            continue
-                        if engine != "libfuzzer":
-                            continue
-
-                    # Delta mode POV checks
-                    if task.mode == TaskMode.DELTA:
-                        if (
-                            not job_types
-                            or ExecJobType.DELTA_BASE_POV_CHECK in job_types
-                        ):
-                            jobs.append(
-                                JobContext(
-                                    job_type=ExecJobType.DELTA_BASE_POV_CHECK,
-                                    task=task,
-                                    benchmark=benchmark,
-                                    language=language,
-                                    engine=engine,
-                                    sanitizer=sanitizer,
-                                    use_inc_build=use_inc_build,
-                                )
-                            )
-
-                        if (
-                            not job_types
-                            or ExecJobType.DELTA_REF_POV_CHECK in job_types
-                        ):
-                            jobs.append(
-                                JobContext(
-                                    job_type=ExecJobType.DELTA_REF_POV_CHECK,
-                                    task=task,
-                                    benchmark=benchmark,
-                                    language=language,
-                                    engine=engine,
-                                    sanitizer=sanitizer,
-                                    use_inc_build=use_inc_build,
-                                )
-                            )
-
-                    # Full mode POV checks (skip if delta mode exists)
-                    if task.mode == TaskMode.FULL and not has_delta_mode:
-                        if (
-                            not job_types
-                            or ExecJobType.FULL_BASE_POV_CHECK in job_types
-                        ):
-                            jobs.append(
-                                JobContext(
-                                    job_type=ExecJobType.FULL_BASE_POV_CHECK,
-                                    task=task,
-                                    benchmark=benchmark,
-                                    language=language,
-                                    engine=engine,
-                                    sanitizer=sanitizer,
-                                    use_inc_build=use_inc_build,
-                                )
-                            )
-
-        # Generate patch checks using adapter
-        if patch_task and (not job_types or ExecJobType.PATCH_CHECK in job_types):
-            for engine in fuzzing_engines:
-                for sanitizer in sanitizers:
-                    if check_default_only:
-                        if sanitizer not in ["none", "address"]:
-                            continue
-                        if engine != "libfuzzer":
-                            continue
-
-                    for harness_name in adapter.get_harness_names():
-                        for vuln_keyword, pov in adapter.get_all_povs(harness_name):
-                            patch_path = adapter.get_patch_path(
-                                harness_name, vuln_keyword
-                            )
-                            pov_path = adapter.get_pov_path(
-                                harness_name, vuln_keyword, pov.id
-                            )
-
-                            if (
-                                pov.sanitizer == sanitizer
-                                and engine == "libfuzzer"
-                                and patch_path
-                            ):
-                                jobs.append(
-                                    JobContext(
-                                        job_type=ExecJobType.PATCH_CHECK,
-                                        task=patch_task,
-                                        benchmark=benchmark,
-                                        language=language,
-                                        engine=engine,
-                                        sanitizer=sanitizer,
-                                        harness_name=harness_name,
-                                        vuln_keyword=vuln_keyword,
-                                        pov_id=pov.id,
-                                        patch_path=patch_path,
-                                        pov_path=pov_path,
-                                        use_inc_build=use_inc_build,
-                                    )
-                                )
-
-        # Add coverage check (once per benchmark)
-        if not job_types or ExecJobType.COVERAGE_CHECK in job_types:
-            jobs.append(
-                JobContext(
-                    job_type=ExecJobType.COVERAGE_CHECK,
-                    task=tasks[0] if tasks else None,
-                    benchmark=benchmark,
-                    language=language,
-                    engine="libfuzzer",
-                    sanitizer="coverage",
-                )
-            )
-
-        # Pull inc-build image (once per benchmark, if inc_build enabled)
-        if project_config.inc_build:
-            if not job_types or ExecJobType.INC_BUILD_PULL in job_types:
-                jobs.append(
-                    JobContext(
-                        job_type=ExecJobType.INC_BUILD_PULL,
-                        task=tasks[0] if tasks else None,
-                        benchmark=benchmark,
-                        language=language,
-                        engine="libfuzzer",
-                        sanitizer="address",
-                    )
-                )
-
-        return jobs
-
-    def _get_tasks_from_adapter(self, adapter: MetaYamlAdapter) -> List[Task]:
-        """Get tasks (delta/full mode) from MetaYamlAdapter."""
-        tasks = []
-
-        mode = adapter.get_mode()
-        if mode == BenchmarkMode.DELTA:
-            ref_commit = adapter.get_ref_commit()
-            if ref_commit:
-                tasks.append(
-                    Task(
-                        mode=TaskMode.DELTA,
-                        base_commit=adapter.get_base_commit(),
-                        ref_commit=ref_commit,
-                    )
-                )
-        else:
-            tasks.append(
-                Task(mode=TaskMode.FULL, base_commit=adapter.get_base_commit())
-            )
-
-        return tasks
-
-    def _load_project_config(self, benchmark: str) -> ProjectConfig:
-        """Load project configuration from project.yaml."""
-        benchmark_path = Path(get_benchmarks_root()) / benchmark
-        project_yaml = benchmark_path / "project.yaml"
-
-        if not project_yaml.exists():
-            raise ValueError(f"project.yaml not found for {benchmark}")
-
-        with project_yaml.open() as f:
-            data = yaml.safe_load(f) or {}
-
-        return ProjectConfig(**data)
+        logger.info("")
+        logger.info(f"Total: {len(jobs)} jobs")

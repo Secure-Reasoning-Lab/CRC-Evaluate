@@ -52,8 +52,9 @@ Configuration:
 
 import os
 import sys
+import threading
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from loguru import logger as _loguru_logger
 
@@ -725,3 +726,91 @@ def escape_loguru_braces(message: str) -> str:
         >>> logger.error(f"Error: {safe_msg}")
     """
     return message.replace("{", "{{").replace("}", "}}")
+
+
+# Track file handler IDs for removal (thread-safe)
+_file_handler_lock = threading.Lock()
+_file_handler_ids: list[int] = []
+
+
+def add_file_handler(
+    file_path: Path | str,
+    level: Optional[str] = None,
+    *,
+    rotation: Optional[str] = None,
+    retention: Optional[str] = None,
+    filter_func: Optional[Callable] = None,
+) -> int:
+    """Add a file handler to capture logs to a file.
+
+    Args:
+        file_path: Path to the log file
+        level: Log level (uses global level if not specified)
+        rotation: Rotation policy (e.g., "10 MB", "1 day")
+        retention: Retention policy (e.g., "7 days", "3 files")
+        filter_func: Optional filter function to control which logs are captured.
+                     Takes a record dict and returns True to include the message.
+
+    Returns:
+        Handler ID that can be used to remove the handler later
+
+    Example:
+        >>> handler_id = add_file_handler("/tmp/crsbench.log")
+        >>> # ... do work ...
+        >>> remove_file_handler(handler_id)
+
+        # With filter to capture only specific benchmark logs:
+        >>> handler_id = add_file_handler(
+        ...     "/tmp/bench.log",
+        ...     filter_func=lambda r: r["extra"].get("benchmark") == "my-bench"
+        ... )
+    """
+    file_path = Path(file_path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    final_level = level or _log_level
+
+    # Use plain format for file output (no colors)
+    def _file_formatter(record):
+        record["extra"]["module_path"] = _format_module_path(record)
+        return _PLAIN_FORMAT + "\n"
+
+    handler_id = _loguru_logger.add(
+        file_path,
+        format=_file_formatter,
+        level=final_level,
+        colorize=False,
+        backtrace=True,
+        diagnose=True,
+        rotation=rotation,
+        retention=retention,
+        filter=filter_func,
+    )
+
+    with _file_handler_lock:
+        _file_handler_ids.append(handler_id)
+    return handler_id
+
+
+def remove_file_handler(handler_id: int) -> None:
+    """Remove a file handler by its ID.
+
+    Args:
+        handler_id: The handler ID returned by add_file_handler()
+    """
+    try:
+        _loguru_logger.remove(handler_id)
+    except ValueError:
+        pass  # Handler already removed
+
+    with _file_handler_lock:
+        if handler_id in _file_handler_ids:
+            _file_handler_ids.remove(handler_id)
+
+
+def remove_all_file_handlers() -> None:
+    """Remove all file handlers added via add_file_handler()."""
+    with _file_handler_lock:
+        handler_ids = _file_handler_ids.copy()
+    for handler_id in handler_ids:
+        remove_file_handler(handler_id)

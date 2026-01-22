@@ -82,6 +82,21 @@ class CRSPatchExecutor(CRSExecutor):
         self._llm_api_key_override = api_key
         logger.debug("Set trial-specific LLM API key")
 
+    def cleanup_other_harnesses(
+        self,
+        trial_output_dir: Path,
+        target_harness: str,
+        project_name: str,
+    ) -> None:
+        """Clean up files from harnesses other than the target.
+
+        Args:
+            trial_output_dir: Trial directory containing CRS outputs
+            target_harness: Name of the harness to keep
+            project_name: Project name (for CRS output directory path)
+        """
+        # TODO: Implement cleanup logic for disk optimization
+
     def _get_litellm_env(self) -> Dict[str, str]:
         """Get LiteLLM environment variables based on mode.
 
@@ -504,21 +519,14 @@ class CRSPatchExecutor(CRSExecutor):
 
         build_start_time = time.time()
 
-        # Use repository manager to ensure source code exists
-        from crsbench.utils.repo_manager import ensure_project_repository
+        # Load benchmark source (handles pkgs/ vs git clone)
+        from crsbench.benchmark.runtime import load_benchmark_source
 
-        logger.info(f"Ensuring source repository for {project_name}...")
-        source_path = ensure_project_repository(
-            benchmark_dir=str(benchmark_path), verbose=self.config.get("verbose", False)
+        source = load_benchmark_source(
+            benchmark_path,
+            verbose=self.config.get("verbose", False),
         )
-
-        if not source_path:
-            raise RuntimeError(
-                f"Failed to obtain source code for {project_name}. "
-                "Check that project.yaml has valid main_repo or provide source manually."
-            )
-
-        logger.info(f"Using source from: {source_path}")
+        source_path = source.path
 
         # Get registry name for the CRS
         from crsbench.utils.crs_helper import get_crs_registry_name
@@ -539,13 +547,15 @@ class CRSPatchExecutor(CRSExecutor):
             str(self.oss_fuzz_path),
             "--project-path",
             str(benchmark_path),  # Benchmark dir (OSS-Fuzz compatible)
-            "--source-path",
-            str(source_path),  # Pre-cloned source from repo manager
             "--registry",
             str(trial_registry_dir),  # Use trial-local registry
             "--work-dir",
             str(trial_build_dir),
         ]
+
+        # Only add --source-path if not using bundled source
+        if source_path:
+            cmd.extend(["--source-path", str(source_path)])
 
         # Add gitcache flag if enabled
         if USE_GITCACHE:

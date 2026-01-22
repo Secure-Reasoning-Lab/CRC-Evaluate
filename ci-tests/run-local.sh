@@ -50,7 +50,7 @@ run_benchmark() {
         --output "verify-$benchmark.json" \
         --format json || fail "Verify failed for $benchmark"
 
-    uv run python3 ci-tests/check_ci_results.py verify \
+    uv run python -m crsbench.benchmark_ci.checks verify \
         "benchmarks/$benchmark" \
         "verify-$benchmark.json" || fail "Verify check failed for $benchmark"
     success "Verify passed"
@@ -63,7 +63,7 @@ run_benchmark() {
         --output "patch-verify-$benchmark.json" \
         --format json || fail "Patch-verify failed for $benchmark"
 
-    uv run python3 ci-tests/check_ci_results.py patch-verify \
+    uv run python -m crsbench.benchmark_ci.checks patch-verify \
         "patch-verify-$benchmark.json" || fail "Patch-verify check failed for $benchmark"
     success "Patch-verify passed"
     rm -f "patch-verify-$benchmark.json"
@@ -81,7 +81,7 @@ run_benchmark() {
         --format json || { rm -rf "$corpus_dir"; fail "Coverage failed for $benchmark"; }
 
     rm -rf "$corpus_dir"
-    uv run python3 ci-tests/check_ci_results.py coverage \
+    uv run python -m crsbench.benchmark_ci.checks coverage \
         "coverage-$benchmark.json" || fail "Coverage check failed for $benchmark"
     success "Coverage passed"
     rm -f "coverage-$benchmark.json"

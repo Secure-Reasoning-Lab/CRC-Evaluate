@@ -93,6 +93,27 @@ class CRSExecutor(ABC):
         """
         # Intentional no-op: subclasses override to store the key
 
+    def cleanup_other_harnesses(  # noqa: ARG002, B027
+        self,
+        trial_output_dir: Path,
+        target_harness: str,
+        project_name: str,
+    ) -> None:
+        """Clean up files from harnesses other than the target to optimize disk usage.
+
+        This method removes build artifacts and outputs from harnesses that are
+        not the target harness, helping to reduce disk space consumption.
+        Args:
+            trial_output_dir: Trial directory containing CRS outputs
+            target_harness: Name of the harness to keep (all others will be cleaned)
+            project_name: Project name (for CRS output directory path)
+
+        Note:
+            Default implementation is a no-op. Subclasses should override
+            to implement executor-specific cleanup logic.
+        """
+        # Intentional no-op: subclasses override to implement cleanup
+
     @abstractmethod
     def run_crs(
         self,

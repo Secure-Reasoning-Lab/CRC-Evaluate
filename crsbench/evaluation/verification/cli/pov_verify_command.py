@@ -107,6 +107,14 @@ Examples:
         help="Path to oss-fuzz directory (default: ./oss-fuzz)",
     )
     parser.add_argument(
+        "--source",
+        type=str,
+        default="main_repo",
+        choices=["pkgs", "main_repo"],
+        help="Source for benchmark code: 'main_repo' clones from repository (default), "
+        "'pkgs' uses bundled tarballs",
+    )
+    parser.add_argument(
         "--force-rebuild",
         action="store_true",
         help="Force rebuild of all variant projects",
@@ -219,6 +227,7 @@ def run_verify(args: argparse.Namespace) -> int:
         oss_fuzz_path=oss_fuzz_path,
         timeout=args.timeout,
         dedup_strategy=dedup_strategy,
+        source_mode=args.source,
     )
 
     logger.info(f"Verifying benchmark: {args.benchmark_path}")
