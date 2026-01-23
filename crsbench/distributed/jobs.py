@@ -85,6 +85,14 @@ def _setup_llm_tracking(
         )
         budget_info = f" (budget: ${max_budget})" if max_budget else ""
         logger.info(f"Generated LLM tracking key for trial {trial_num}{budget_info}")
+
+        # Debug: verify budget was actually set by fetching key info
+        key_info = tracker.get_key_info(api_key)
+        info = key_info.get("info", {})
+        actual_budget = info.get("max_budget")
+        logger.info(
+            f"Key info after creation - max_budget: {actual_budget}, spend: {info.get('spend', 0)}"
+        )
         return tracker, api_key
     except LiteLLMTrackerError as e:
         logger.error(f"Failed to set up LLM tracking: {e}")
