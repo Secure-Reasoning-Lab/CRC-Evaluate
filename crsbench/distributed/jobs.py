@@ -380,6 +380,14 @@ def run_crs_trial(
         except Exception as e:
             logger.warning(f"Failed to get allocated resources from job metadata: {e}")
 
+        # Fall back to config.resources for local execution (no RQ job)
+        if allocated_cpus is None and config.resources:
+            allocated_cpus = str(config.resources.cores_per_trial)
+            logger.info(f"Using cores_per_trial from config: {allocated_cpus}")
+        if allocated_memory is None and config.resources:
+            allocated_memory = config.resources.memory_per_trial
+            logger.info(f"Using memory_per_trial from config: {allocated_memory}")
+
         # Helper function to get worker override from environment variable
         def get_worker_override(field: str) -> Optional[str]:
             """Get worker override from environment variable."""
