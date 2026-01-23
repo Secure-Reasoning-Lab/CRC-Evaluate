@@ -426,6 +426,35 @@ def run_crs_trial(
                 f"Worker override applied: benchmark_suites_root = {config.benchmark_suites_root}"
             )
 
+        # Apply cleanup configuration overrides
+        keep_only_results_override = get_worker_override("keep_only_results")
+        if keep_only_results_override:
+            config.keep_only_results = keep_only_results_override.lower() == "true"
+            logger.info(
+                f"Worker override applied: keep_only_results = {config.keep_only_results}"
+            )
+
+        cleanup_after_trial_override = get_worker_override("cleanup_after_trial")
+        if cleanup_after_trial_override:
+            config.cleanup_after_trial = cleanup_after_trial_override.lower() == "true"
+            logger.info(
+                f"Worker override applied: cleanup_after_trial = {config.cleanup_after_trial}"
+            )
+
+        copy_results_override = get_worker_override("copy_results_to_filestore")
+        if copy_results_override:
+            config.copy_results_to_filestore = copy_results_override.lower() == "true"
+            logger.info(
+                f"Worker override applied: copy_results_to_filestore = {config.copy_results_to_filestore}"
+            )
+
+        results_filestore_override = get_worker_override("results_filestore")
+        if results_filestore_override:
+            config.results_filestore = Path(results_filestore_override).resolve()
+            logger.info(
+                f"Worker override applied: results_filestore = {config.results_filestore}"
+            )
+
         # Resolve CRS config name to registry name
         registry_name = get_crs_registry_name(crs, crs_configs_dir)
         logger.info(f"Resolved CRS config '{crs}' to registry '{registry_name}'")

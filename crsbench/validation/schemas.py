@@ -673,6 +673,22 @@ class WorkerConfig(BaseModel):
         default=None,
         description="Override benchmark suites root directory for workers on different machines",
     )
+    keep_only_results: Optional[bool] = Field(
+        default=None,
+        description="Override cleanup after experiment completion for workers",
+    )
+    cleanup_after_trial: Optional[bool] = Field(
+        default=None,
+        description="Override cleanup after each trial for workers",
+    )
+    copy_results_to_filestore: Optional[bool] = Field(
+        default=None,
+        description="Override result copying behavior for workers",
+    )
+    results_filestore: Optional[Path] = Field(
+        default=None,
+        description="Override results destination path for workers",
+    )
 
 
 class ExperimentConfig(BaseModel):

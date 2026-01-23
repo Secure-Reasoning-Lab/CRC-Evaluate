@@ -175,6 +175,10 @@ def run_worker(args: argparse.Namespace) -> int:
             "benchmark_suites_root",
             "experiment_filestore",
             "report_filestore",
+            "keep_only_results",
+            "cleanup_after_trial",
+            "copy_results_to_filestore",
+            "results_filestore",
         ]
         for field in override_fields:
             value = getattr(worker_config, field, None)
