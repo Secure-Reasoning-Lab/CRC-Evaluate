@@ -697,6 +697,15 @@ class WorkerConfig(BaseModel):
         default=None,
         description="Override report results destination path for workers",
     )
+    minimum_disk_size: str = Field(
+        default="10GB",
+        description="Minimum free disk space required to accept new jobs (e.g., '200GB', '100MB')",
+    )
+    disk_check_interval: int = Field(
+        default=60,
+        ge=1,
+        description="Interval (seconds) between disk space checks when paused",
+    )
 
 
 class ExperimentConfig(BaseModel):

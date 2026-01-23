@@ -171,6 +171,17 @@ snapshot_period: 900
 #   # Set to false for one-shot execution (useful for testing or batch processing)
 #   continuous: true
 #
+#   # Minimum free disk space required to accept new jobs
+#   # Default: "10GB"
+#   # Workers will pause job processing when disk space falls below this threshold
+#   # Supported formats: "200GB", "100MB", "1TB", etc.
+#   minimum_disk_size: "10GB"
+#
+#   # Interval (seconds) between disk space checks when paused
+#   # Default: 60
+#   # How often to check disk space when waiting for space to become available
+#   disk_check_interval: 60
+#
 #   # OPTIONAL: Override experiment filestore path for workers on different machines
 #   # Default: null (uses main experiment_filestore setting)
 #   # Useful when workers have different filesystem layouts or use local storage
