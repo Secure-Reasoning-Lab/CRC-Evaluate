@@ -24,7 +24,14 @@ from crsbench.evaluation.litellm_tracker import (
 from crsbench.evaluation.results import CRSType, TrialMetadata, TrialResult
 from crsbench.evaluation.runner import BenchmarkFormatError, BenchmarkRunner
 from crsbench.utils.crs_helper import get_crs_registry_name
-from crsbench.utils.logger import escape_loguru_braces, get_logger
+from crsbench.utils.logger import (
+    add_file_handler,
+    create_trial_filter,
+    escape_loguru_braces,
+    get_logger,
+    remove_file_handler,
+    set_trial_context,
+)
 
 # Import file-based metadata schema (distinct from evaluation.results.TrialMetadata)
 from crsbench.validation.schemas import (
@@ -870,6 +877,15 @@ def run_crs_trial(
         trial_output_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Trial output directory: {trial_output_dir}")
 
+        # Set up per-trial logging
+        set_trial_context(trial_id)
+        trial_log_handler = add_file_handler(
+            trial_output_dir / "worker.log",
+            level="DEBUG",
+            filter_func=create_trial_filter(trial_id),
+        )
+        logger.info(f"Per-trial logging enabled: {trial_output_dir / 'worker.log'}")
+
         # Write trial metadata.json
         trial_mode = (
             TrialMode.patch_generation
@@ -906,6 +922,11 @@ def run_crs_trial(
                 skip_verification=config.skip_verification,
             )
         finally:
+            # Clean up per-trial logging
+            if "trial_log_handler" in locals() and trial_log_handler is not None:
+                remove_file_handler(trial_log_handler)
+            set_trial_context(None)
+
             # Clean up LLM tracking (write usage file and delete key)
             _cleanup_llm_tracking(
                 tracker=llm_tracker,

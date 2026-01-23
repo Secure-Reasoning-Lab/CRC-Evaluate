@@ -50,6 +50,7 @@ Configuration:
     - Format includes timestamp, level, module name, and message
 """
 
+import contextvars
 import os
 import sys
 import threading
@@ -325,6 +326,51 @@ def getLogger(name: Optional[str] = None) -> LoggerAdapter:
 
 # Export the main logger for direct use
 logger = _loguru_logger
+
+
+# ============================================================================
+# Trial Context Management for Log Filtering
+# ============================================================================
+
+_trial_context: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "trial_context", default=None
+)
+
+
+def set_trial_context(trial_id: Optional[str]) -> None:
+    """Set current trial context for log filtering.
+
+    Args:
+        trial_id: Trial identifier (e.g., "exp-crs-bench-harness-trial1")
+                  or None to clear context
+    """
+    _trial_context.set(trial_id)
+
+
+def get_trial_context() -> Optional[str]:
+    """Get current trial context.
+
+    Returns:
+        Current trial ID or None if not in trial context
+    """
+    return _trial_context.get()
+
+
+def create_trial_filter(trial_id: str) -> Callable:
+    """Create filter function that matches logs with specific trial_id.
+
+    Args:
+        trial_id: Trial identifier to filter for
+
+    Returns:
+        Filter function that returns True for logs matching the trial_id
+    """
+
+    def filter_func(record) -> bool:  # noqa: ARG001
+        # record parameter required by loguru filter API but unused
+        return _trial_context.get() == trial_id
+
+    return filter_func
 
 
 # ============================================================================

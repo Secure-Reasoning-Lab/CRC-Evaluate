@@ -474,8 +474,28 @@ def _run_single_job_worker(
     from rq.job import JobStatus
     from rq.registry import FailedJobRegistry, FinishedJobRegistry
 
+    from crsbench.utils.logger import add_file_handler, remove_file_handler
+
     # Reconfigure logging in subprocess
     configure_logger(level=os.environ.get("LOG_LEVEL", "INFO").upper(), sink=sys.stdout)
+
+    # Set up per-worker logging
+    worker_log_handler = None
+    experiment_filestore = os.environ.get("CRSBENCH_WORKER_EXPERIMENT_FILESTORE")
+    experiment_name_env = os.environ.get("CRSBENCH_EXPERIMENT_NAME")
+
+    if experiment_filestore and experiment_name_env:
+        worker_log_dir = (
+            Path(experiment_filestore) / experiment_name_env / "worker-logs"
+        )
+        worker_log_path = worker_log_dir / f"{worker_name}.log"
+        worker_log_handler = add_file_handler(
+            worker_log_path,
+            level="DEBUG",
+            rotation="100 MB",
+            retention="7 days",
+        )
+        logger.info(f"Per-worker logging enabled: {worker_log_path}")
 
     # Connect to Redis
     redis_password = os.environ.get("REDIS_PASSWORD") or None
@@ -597,6 +617,10 @@ def _run_single_job_worker(
     except Exception as e:
         logger.error(f"Worker {worker_name} error: {e}", exc_info=True)
         raise
+    finally:
+        # Clean up per-worker logging
+        if worker_log_handler is not None:
+            remove_file_handler(worker_log_handler)
 
 
 def _run_single_worker(

@@ -190,6 +190,9 @@ def run_worker(args: argparse.Namespace) -> int:
                 os.environ[env_var] = str(value)
                 logger.info(f"Worker override: {field} = {value}")
 
+    # Export experiment name for worker logging
+    os.environ["CRSBENCH_EXPERIMENT_NAME"] = experiment_name
+
     # Validate --no-cpuset with multiple workers
     if getattr(args, "no_cpuset", False) and num_workers > 1:
         raise ValueError("--no-cpuset is not supported with multiple workers (-j > 1)")
