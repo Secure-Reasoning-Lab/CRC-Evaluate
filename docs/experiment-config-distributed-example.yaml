@@ -36,6 +36,31 @@ experiment_filestore: /data/crsbench/experiments
 # Directory path for HTML reports and summary data.
 report_filestore: /data/crsbench/reports
 
+# =============================================================================
+# Cleanup Configuration
+# =============================================================================
+
+# Delete bulky artifacts after experiment completes, keeping only essential files.
+# Essential files include: metadata.json, snapshots, status markers, output/, input directories.
+# Uses whitelist approach - everything not in whitelist is deleted.
+# Default: false
+keep_only_results: false
+
+# Delete bulky artifacts after each trial completes (more aggressive cleanup).
+# Useful for long experiments with many trials to save disk space during execution.
+# Default: false
+cleanup_after_trial: false
+
+# Enable copying essential files to a separate results location.
+# Requires results_filestore to be set.
+# Copying happens BEFORE cleanup, so you keep a copy of essential files.
+# Default: false
+copy_results_to_filestore: false
+
+# Destination path for copying essential result files.
+# Only used when copy_results_to_filestore is true.
+# results_filestore: /opt/crsbench-finished/my-experiment
+
 # List of CRS implementations to evaluate.
 crses:
   - atlantis-c
@@ -136,6 +161,23 @@ worker:
 
   # Override benchmark suites root directory.
   # benchmark_suites_root: /opt/benchmark-suites
+
+  # ---------------------------------------------------------------------------
+  # Cleanup Configuration Overrides (optional)
+  # Use when workers need different cleanup behavior than orchestrator.
+  # ---------------------------------------------------------------------------
+
+  # Override cleanup after experiment completion.
+  # keep_only_results: true
+
+  # Override cleanup after each trial.
+  # cleanup_after_trial: true
+
+  # Override result copying behavior.
+  # copy_results_to_filestore: true
+
+  # Override results destination path.
+  # results_filestore: /mnt/nfs/finished-experiments
 
 # =============================================================================
 # Optional Features

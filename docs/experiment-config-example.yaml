@@ -202,6 +202,13 @@ snapshot_period: 900
 #   # OPTIONAL: Override benchmark suites root for workers on different machines
 #   # Default: null (uses main benchmark_suites_root setting or ./benchmark-suites)
 #   # benchmark_suites_root: /custom/path/to/benchmark-suites
+#
+#   # OPTIONAL: Override cleanup configuration for workers
+#   # Default: null (uses main cleanup settings)
+#   # keep_only_results: true
+#   # cleanup_after_trial: true
+#   # copy_results_to_filestore: true
+#   # results_filestore: /custom/path/to/results
 
 # ===== Storage Configuration =====
 
@@ -213,6 +220,29 @@ experiment_filestore: /tmp/crsbench/experiment-data
 # The folder where HTML reports and summary data will be stored.
 # Can be local path or cloud storage (gs://, s3://, etc.)
 report_filestore: /tmp/crsbench/report-data
+
+# ===== Cleanup Configuration =====
+
+# Delete bulky artifacts after experiment completes, keeping only essential files.
+# Essential files include: metadata.json, snapshots, status markers, output/, input directories.
+# Uses whitelist approach - everything not in whitelist is deleted.
+# Default: false
+keep_only_results: false
+
+# Delete bulky artifacts after each trial completes (more aggressive cleanup).
+# Useful for long experiments with many trials to save disk space during execution.
+# Default: false
+cleanup_after_trial: false
+
+# Enable copying essential files to a separate results location.
+# Requires results_filestore to be set.
+# Copying happens BEFORE cleanup, so you keep a copy of essential files.
+# Default: false
+copy_results_to_filestore: false
+
+# Destination path for copying essential result files.
+# Only used when copy_results_to_filestore is true.
+# results_filestore: /opt/crsbench-finished/my-experiment
 
 # ===== Advanced Configuration (Optional) =====
 
