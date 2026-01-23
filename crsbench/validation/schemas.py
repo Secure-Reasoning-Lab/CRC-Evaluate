@@ -673,6 +673,39 @@ class WorkerConfig(BaseModel):
         default=None,
         description="Override benchmark suites root directory for workers on different machines",
     )
+    keep_only_results: Optional[bool] = Field(
+        default=None,
+        description="Override cleanup after experiment completion for workers",
+    )
+    cleanup_after_trial: Optional[bool] = Field(
+        default=None,
+        description="Override cleanup after each trial for workers",
+    )
+    copy_results_after_trial: Optional[bool] = Field(
+        default=None,
+        description="Override per-trial result copying for workers",
+    )
+    copy_results_to_filestore: Optional[bool] = Field(
+        default=None,
+        description="Override result copying behavior for workers",
+    )
+    experiment_results_filestore: Optional[Path] = Field(
+        default=None,
+        description="Override experiment results destination path for workers",
+    )
+    reports_results_filestore: Optional[Path] = Field(
+        default=None,
+        description="Override report results destination path for workers",
+    )
+    minimum_disk_size: str = Field(
+        default="10GB",
+        description="Minimum free disk space required to accept new jobs (e.g., '200GB', '100MB')",
+    )
+    disk_check_interval: int = Field(
+        default=60,
+        ge=1,
+        description="Interval (seconds) between disk space checks when paused",
+    )
 
 
 class ExperimentConfig(BaseModel):
@@ -830,6 +863,30 @@ class ExperimentConfig(BaseModel):
     )
     worker: Optional[WorkerConfig] = Field(
         default=None, description="Distributed worker configuration"
+    )
+    keep_only_results: bool = Field(
+        default=False,
+        description="Delete bulky artifacts after experiment, keeping only essential files for reporting",
+    )
+    cleanup_after_trial: bool = Field(
+        default=False,
+        description="Delete bulky artifacts after each trial completes",
+    )
+    copy_results_after_trial: bool = Field(
+        default=False,
+        description="Copy essential files to results_filestore after each trial completes",
+    )
+    copy_results_to_filestore: bool = Field(
+        default=False,
+        description="Enable copying essential files to results_filestore location",
+    )
+    experiment_results_filestore: Optional[Path] = Field(
+        default=None,
+        description="Destination path for copying experiment trial data",
+    )
+    reports_results_filestore: Optional[Path] = Field(
+        default=None,
+        description="Destination path for copying report data",
     )
 
     @field_validator("experiment")
@@ -1046,6 +1103,24 @@ class ExperimentConfig(BaseModel):
                 f"max_total_time ({self.max_total_time}s) must be greater than "
                 f"build_timeout + run_timeout + verify_timeout ({min_required}s = "
                 f"{self.build_timeout} + {self.run_timeout} + {self.verify_timeout})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_results_filestore_configuration(self):
+        """Validate results_filestore configuration."""
+        if self.copy_results_to_filestore:
+            if (
+                not self.experiment_results_filestore
+                and not self.reports_results_filestore
+            ):
+                raise ValueError(
+                    "copy_results_to_filestore=true requires at least one of "
+                    "experiment_results_filestore or reports_results_filestore to be set"
+                )
+        if self.copy_results_after_trial and not self.experiment_results_filestore:
+            raise ValueError(
+                "copy_results_after_trial=true requires experiment_results_filestore to be set"
             )
         return self
 

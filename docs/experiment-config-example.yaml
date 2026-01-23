@@ -171,6 +171,17 @@ snapshot_period: 900
 #   # Set to false for one-shot execution (useful for testing or batch processing)
 #   continuous: true
 #
+#   # Minimum free disk space required to accept new jobs
+#   # Default: "10GB"
+#   # Workers will pause job processing when disk space falls below this threshold
+#   # Supported formats: "200GB", "100MB", "1TB", etc.
+#   minimum_disk_size: "10GB"
+#
+#   # Interval (seconds) between disk space checks when paused
+#   # Default: 60
+#   # How often to check disk space when waiting for space to become available
+#   disk_check_interval: 60
+#
 #   # OPTIONAL: Override experiment filestore path for workers on different machines
 #   # Default: null (uses main experiment_filestore setting)
 #   # Useful when workers have different filesystem layouts or use local storage
@@ -202,6 +213,15 @@ snapshot_period: 900
 #   # OPTIONAL: Override benchmark suites root for workers on different machines
 #   # Default: null (uses main benchmark_suites_root setting or ./benchmark-suites)
 #   # benchmark_suites_root: /custom/path/to/benchmark-suites
+#
+#   # OPTIONAL: Override cleanup configuration for workers
+#   # Default: null (uses main cleanup settings)
+#   # keep_only_results: true
+#   # cleanup_after_trial: true
+#   # copy_results_after_trial: true
+#   # copy_results_to_filestore: true
+#   # experiment_results_filestore: /custom/path/to/results
+#   # reports_results_filestore: /custom/path/to/reports
 
 # ===== Storage Configuration =====
 
@@ -213,6 +233,40 @@ experiment_filestore: /tmp/crsbench/experiment-data
 # The folder where HTML reports and summary data will be stored.
 # Can be local path or cloud storage (gs://, s3://, etc.)
 report_filestore: /tmp/crsbench/report-data
+
+# ===== Cleanup Configuration =====
+
+# Delete bulky artifacts after experiment completes, keeping only essential files.
+# Essential files include: metadata.json, snapshots, status markers, output/, input directories.
+# Uses whitelist approach - everything not in whitelist is deleted.
+# Default: false
+keep_only_results: false
+
+# Delete bulky artifacts after each trial completes (more aggressive cleanup).
+# Useful for long experiments with many trials to save disk space during execution.
+# Default: false
+cleanup_after_trial: false
+
+# Copy essential files to results_filestore after each trial completes.
+# Requires experiment_results_filestore to be set.
+# Copying happens immediately after trial ends and BEFORE cleanup.
+# Useful for preserving results when cleanup_after_trial=true or when workers may be interrupted.
+# Default: false
+copy_results_after_trial: false
+
+# Enable copying essential files to a separate results location (bulk copy after all trials).
+# Requires at least one of experiment_results_filestore or reports_results_filestore to be set.
+# Copying happens BEFORE cleanup, so you keep a copy of essential files.
+# Default: false
+copy_results_to_filestore: false
+
+# Destination path for copying experiment trial data.
+# Used by both copy_results_after_trial and copy_results_to_filestore.
+# experiment_results_filestore: /opt/crsbench-finished/my-experiment
+
+# Destination path for copying report data.
+# Used by copy_results_to_filestore (reports are not copied per-trial).
+# reports_results_filestore: /opt/crsbench-finished/my-experiment-reports
 
 # ===== Advanced Configuration (Optional) =====
 
