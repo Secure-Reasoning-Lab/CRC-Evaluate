@@ -22,6 +22,7 @@ from crsbench.builder import OSSFuzzInfrastructure
 from crsbench.builder.types import BuildConfig, VariantType
 from crsbench.evaluation.verification.models import (
     CpvStats,
+    PatchBenchmarkOutput,
     PatchInfo,
     PatchVerificationResult,
     PatchVerificationStatus,
@@ -92,6 +93,8 @@ class PatchVerificationEngine:
         force_rebuild: bool = False,
         use_inc_build: bool = True,
         source_mode: str = "main_repo",
+        build_only: bool = False,
+        max_povs_per_cpv: Optional[int] = None,
     ):
         """Initialize the patch verification engine.
 
@@ -116,6 +119,11 @@ class PatchVerificationEngine:
             use_inc_build: If True, use incremental builds when available (faster).
                 If False, always use full OSS-Fuzz build.
             source_mode: Source mode - "main_repo" (clone, default) or "pkgs" (bundled)
+            build_only: If True, build variants but skip verification (POV tests
+                and unit tests). Used to pre-build variants for subsequent
+                verify-only calls with force_rebuild=False.
+            max_povs_per_cpv: Limit POV variants tested per CPV (None = no limit).
+                When set to 1, only pov_0.blob is used per CPV.
         """
         self.oss_fuzz_path = Path(oss_fuzz_path)
         self.work_dir = Path(work_dir) if work_dir else None
@@ -131,6 +139,8 @@ class PatchVerificationEngine:
         self.force_rebuild = force_rebuild
         self.use_inc_build = use_inc_build
         self.source_mode = source_mode
+        self.build_only = build_only
+        self.max_povs_per_cpv = max_povs_per_cpv
         self._inc_images_pulled: set[str] = set()
         self._inc_images_unavailable: set[str] = set()  # Cache failed pulls
         self._temp_dirs: list[Path] = []
@@ -197,15 +207,25 @@ class PatchVerificationEngine:
         )
         variant_name = build_config.variant_name
 
-        # Check build cache
+        # Check build cache (respect inc_build mode)
         if self.force_rebuild:
             logger.info(f"Force rebuild: cleaning {variant_name}")
             self.infra.cleanup_build_outputs(variant_name)
             self.infra.cleanup_source(variant_name)
-        elif self.infra.is_variant_built(variant_name):
-            logger.info(f"Using cached build for {variant_name}")
+        elif self.infra.is_variant_built(
+            variant_name,
+            require_inc_build=self.use_inc_build,
+        ):
+            logger.debug(f"Using cached build for {variant_name}")
             # Track variant (for _built_variants list)
             self._built_variants.append(variant_name)
+
+            # Build-only mode: build already exists, nothing to do
+            if self.build_only:
+                result.status = PatchVerificationStatus.VALID
+                result.elapsed_seconds = time.time() - start_time
+                return result
+
             # Skip to verification (build_time stays 0 for cached builds)
             result.harness = harness
             verified_result = self._run_verification(
@@ -219,7 +239,7 @@ class PatchVerificationEngine:
             inc_available = self._ensure_inc_build_image(project_name)
         else:
             inc_available = False
-            logger.info(f"Inc-build disabled, using full build for {project_name}")
+            logger.debug(f"Inc-build disabled, using full build for {project_name}")
 
         # Step 2: Prepare source and apply patch
         # Use isolated source path if work_dir is set, otherwise use temp directory
@@ -282,11 +302,19 @@ class PatchVerificationEngine:
                 result.details = "Failed to prepare inc-build image for variant"
                 return result
 
-        # Build using helper.py build_fuzzers (with inc-build image if available)
-        build_success = self.infra.build_fuzzers(
-            build_config, repo_path, use_inc_image=inc_available
+        # Try inc-build first (uses pre-compiled objects from /built-src)
+        build_result = self.infra.build_fuzzers(
+            build_config, repo_path, use_inc_image=inc_available, inc_fallback=False
         )
-        used_inc_build = inc_available
+        # If inc-build fails, retry with fallback (full recompile from /src)
+        if not build_result.success and inc_available:
+            logger.info(f"Inc-build failed for {variant_name}, retrying with fallback")
+            build_result = self.infra.build_fuzzers(
+                build_config, repo_path, use_inc_image=True, inc_fallback=True
+            )
+        # Track if we actually used inc-build (not if fallback was triggered)
+        # When fallback_used=True, the build may have fallen back to standard build
+        used_inc_build = inc_available and not build_result.fallback_used
 
         # Record build time
         result.build_time = time.time() - start_time
@@ -294,10 +322,31 @@ class PatchVerificationEngine:
         # Track variant for cleanup (even if build failed, we may have partial artifacts)
         self._built_variants.append(variant_name)
 
-        if not build_success:
+        if not build_result.success:
             result.status = PatchVerificationStatus.BUILD_FAILED
             if not result.details:
                 result.details = "Build failed"
+            result.elapsed_seconds = time.time() - start_time
+            return result
+
+        # Write build metadata for cache validation
+        # Track fallback usage so cache can be properly invalidated
+        self.infra.write_build_metadata(
+            variant_name,
+            inc_build=inc_available,  # Was inc-build image used
+            sanitizer=self.sanitizer,
+            fallback_used=build_result.fallback_used,
+        )
+
+        # Track fallback status in result
+        # Mark as fallback if inc-build was expected but image wasn't available
+        result.fallback_used = build_result.fallback_used or (
+            self.use_inc_build and not inc_available
+        )
+
+        # Build-only mode: skip verification, return after successful build
+        if self.build_only:
+            result.status = PatchVerificationStatus.VALID
             result.elapsed_seconds = time.time() - start_time
             return result
 
@@ -373,6 +422,9 @@ class PatchVerificationEngine:
             # Test all POV variants for this specific CPV
             cpv_id = result.pov_id
             pov_variants = self._discover_pov_variants(benchmark_path, harness, cpv_id)
+
+            if self.max_povs_per_cpv and len(pov_variants) > self.max_povs_per_cpv:
+                pov_variants = pov_variants[: self.max_povs_per_cpv]
 
             if not pov_variants:
                 logger.warning(f"No POV variants found for {harness}/{cpv_id}")
@@ -647,9 +699,8 @@ class PatchVerificationEngine:
 
         # Cache the failure to avoid retrying
         self._inc_images_unavailable.add(cache_key)
-        logger.warning(
-            f"Inc-build image not available for {project_name}, "
-            "will use standard build (slower)"
+        logger.debug(
+            f"Inc-build image not available for {project_name}, will use standard build"
         )
         return False
 
@@ -1031,7 +1082,7 @@ class PatchVerificationEngine:
         harness: Optional[str] = None,
         *,
         parallel: bool = True,
-    ) -> list[PatchVerificationResult]:
+    ) -> PatchBenchmarkOutput:
         """Verify all patches in a benchmark using auto-discovery.
 
         Discovers patches from .aixcc/<harness>/<cpv>/patches/ and verifies each.
@@ -1042,14 +1093,16 @@ class PatchVerificationEngine:
             parallel: Run in parallel
 
         Returns:
-            List of PatchVerificationResult
+            PatchBenchmarkOutput containing:
+            - results: List of PatchVerificationResult
+            - fallback_used: True if any patch build used fallback to standard build
         """
         # Discover all patches
         discovered = self._discover_patches_from_benchmark(benchmark_path, harness)
 
         if not discovered:
             logger.warning(f"No patches found in {benchmark_path}")
-            return []
+            return PatchBenchmarkOutput(results=[], fallback_used=False)
 
         # Collect unique harnesses for logging
         harnesses = sorted({h for h, _, _ in discovered})
@@ -1097,17 +1150,31 @@ class PatchVerificationEngine:
             if self.use_inc_build:
                 self._ensure_inc_build_image(project_name)
 
-        if not parallel or len(tasks) <= 1:
-            # Sequential verification
-            for h, patch, pov_path in tasks:
+        # Deduplicate tasks by variant key (cpv_id, patch_id).
+        # Different harnesses with the same CPV produce the same variant_name,
+        # causing race conditions if built in parallel. This is a benchmark
+        # data quality issue (see #80) — skip duplicates with a warning.
+        seen_variants: set[str] = set()
+        deduped_tasks: list[tuple[str, PatchInfo, Path]] = []
+        for h, patch, pov_path in tasks:
+            variant_key = f"{patch.pov_id}-{patch.patch_id}"
+            if variant_key in seen_variants:
+                logger.warning(
+                    f"Skipping duplicate patch {variant_key} under harness "
+                    f"{h} (already queued from another harness)"
+                )
+                continue
+            seen_variants.add(variant_key)
+            deduped_tasks.append((h, patch, pov_path))
+
+        if not parallel or len(deduped_tasks) <= 1:
+            for h, patch, pov_path in deduped_tasks:
                 result = self.verify_patch(benchmark_path, patch, h, pov_path)
                 results.append(result)
         else:
-            # Parallel patch builds and verification across all harnesses
-            # Use build_workers since builds dominate execution time
             with ThreadPoolExecutor(max_workers=self.build_workers) as executor:
                 futures = {}
-                for h, patch, pov_path in tasks:
+                for h, patch, pov_path in deduped_tasks:
                     future = executor.submit(
                         self.verify_patch,
                         benchmark_path,
@@ -1121,7 +1188,9 @@ class PatchVerificationEngine:
                     result = future.result()
                     results.append(result)
 
-        return results
+        # Compute overall fallback status
+        fallback_used = any(r.fallback_used for r in results)
+        return PatchBenchmarkOutput(results=results, fallback_used=fallback_used)
 
     def _find_pov_for_patch(
         self,
@@ -1245,7 +1314,7 @@ class PatchVerificationEngine:
         """
         # Handle main_repo mode - always clone from git
         if self.source_mode == "main_repo":
-            logger.info("Using main_repo source (cloning from git)")
+            logger.debug("Using main_repo source (cloning from git)")
             clone_result = clone_or_copy_cached_repo(
                 repo_url=main_repo,
                 commit=commit,
@@ -1289,7 +1358,9 @@ class PatchVerificationEngine:
         is_delta_mode = adapter and adapter.get_mode() == BenchmarkMode.DELTA
         squash_history = not is_delta_mode
 
-        logger.info(f"Using bundled source: {source_name}.tar.gz (apply_ref_diff=True)")
+        logger.debug(
+            f"Using bundled source: {source_name}.tar.gz (apply_ref_diff=True)"
+        )
         return prepare_source_from_bundle(
             benchmark_path,
             dest_dir.parent,  # prepare_source_from_bundle creates subdirectory

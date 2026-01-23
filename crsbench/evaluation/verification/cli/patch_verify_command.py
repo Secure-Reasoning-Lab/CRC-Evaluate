@@ -3,34 +3,30 @@
 This module provides the `crsbench patch-verify` CLI command for verifying
 CRS-generated patches against benchmark POVs.
 
+Requires explicit patch input (--patch or --patch-dir) and POV input
+(--pov or --pov-dir). For validating benchmark ground-truth patches,
+use `crsbench ci patch` instead.
+
 Usage:
-    crsbench patch-verify <benchmark_path> [options]
+    crsbench patch-verify <benchmark_path> --patch-dir ./patches --pov-dir ./povs [options]
+    crsbench patch-verify <benchmark_path> --patch ./fix.diff --pov ./pov.blob [options]
 
 Examples:
-    # Auto-discovery mode: verify all patches in benchmark
-    crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01
-
-    # Verify patches in a directory
+    # Verify patches in a directory against POVs
     crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01 \
-        --harness curl_fuzzer_ws \
-        --patch-dir ./patches \
-        --pov-dir ./povs
+        --patch-dir ./patches --pov-dir ./povs
 
     # Verify a single patch with a single POV
     crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01 \
-        --harness curl_fuzzer_ws \
-        --patch ./my-patch.diff \
-        --pov ./pov.blob
+        --patch ./my-patch.diff --pov ./pov.blob
 
-    # Verify a single patch with POV directory
+    # Verify with specific harness filter
     crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01 \
-        --harness curl_fuzzer_ws \
-        --patch ./my-patch.diff \
-        --pov-dir ./povs
+        --patch-dir ./patches --pov-dir ./povs --harness curl_fuzzer_ws
 
     # Output results to JSON file
     crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01 \
-        --output results.json --format json
+        --patch-dir ./patches --pov-dir ./povs --output results.json --format json
 """
 
 import argparse
@@ -67,49 +63,33 @@ def add_patch_verify_subparser(subparsers: argparse._SubParsersAction) -> None:
             "benchmark POVs. Builds patched code using inc-build images, runs POV "
             "tests to ensure the patch fixes the vulnerability, and optionally "
             "runs unit tests to ensure no regressions.\n\n"
-            "Three modes are supported:\n"
-            "  1. Auto-discovery (default): Discover patches from .aixcc/<harness>/<cpv>/patches/\n"
-            "  2. Single patch: Verify a single patch file with --patch\n"
-            "  3. Directory: Verify all patches in a directory with --patch-dir"
+            "Two modes are supported:\n"
+            "  1. Single patch: Verify a single patch file with --patch\n"
+            "  2. Directory: Verify all patches in a directory with --patch-dir\n\n"
+            "For validating benchmark ground-truth patches, use 'crsbench ci patch' instead."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Auto-discovery mode: verify all patches in benchmark
-  crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01
-
-  # Auto-discovery with harness filter
-  crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01 \\
-      --harness curl_fuzzer_ws
-
   # Verify all patches in a directory
   crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01 \\
-      --harness curl_fuzzer_ws \\
-      --patch-dir ./patches \\
-      --pov-dir ./povs
+      --patch-dir ./patches --pov-dir ./povs
 
   # Verify a single patch file with single POV
   crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01 \\
-      --harness curl_fuzzer_ws \\
-      --patch ./my-patch.diff \\
-      --pov ./pov.blob
+      --patch ./my-patch.diff --pov ./pov.blob
 
-  # Verify a single patch file with POV directory
+  # Filter to specific harness
   crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01 \\
-      --harness curl_fuzzer_ws \\
-      --patch ./my-patch.diff \\
-      --pov-dir ./povs
+      --patch-dir ./patches --pov-dir ./povs --harness curl_fuzzer_ws
 
-  # Use RTS (Regression Test Selection) mode for faster tests
+  # Use RTS mode for faster tests
   crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01 \\
-      --harness curl_fuzzer_ws \\
-      --patch-dir ./patches \\
-      --pov-dir ./povs \\
-      --test-mode rts
+      --patch-dir ./patches --pov-dir ./povs --test-mode rts
 
   # Output results as JSON
   crsbench patch-verify benchmarks/aixcc/c/afc-curl-delta-01 \\
-      --output results.json --format json
+      --patch-dir ./patches --pov-dir ./povs --output results.json --format json
         """,
     )
 
@@ -120,42 +100,38 @@ Examples:
         help="Path to the benchmark project directory",
     )
 
-    # Harness (optional - if not specified, verify all harnesses)
-    parser.add_argument(
-        "--harness",
-        type=str,
-        default=None,
-        help="Harness name to test patches against (default: all harnesses)",
-    )
-
-    # Mutually exclusive patch input group
-    patch_group = parser.add_mutually_exclusive_group()
+    # Patch input (one required)
+    patch_group = parser.add_mutually_exclusive_group(required=True)
     patch_group.add_argument(
         "--patch",
         type=Path,
-        default=None,
         help="Single patch file to verify",
     )
     patch_group.add_argument(
         "--patch-dir",
         type=Path,
-        default=None,
         help="Directory containing patches (structure: <pov_id>/patch.diff)",
     )
 
-    # POV input options (mutually exclusive)
-    pov_group = parser.add_mutually_exclusive_group()
+    # POV input (one required)
+    pov_group = parser.add_mutually_exclusive_group(required=True)
     pov_group.add_argument(
         "--pov",
         type=Path,
-        default=None,
-        help="Single POV file (use with --patch for single patch mode)",
+        help="Single POV file to verify against",
     )
     pov_group.add_argument(
         "--pov-dir",
         type=Path,
+        help="Directory containing POV files to verify against",
+    )
+
+    # Harness (optional - tests all harnesses if not specified)
+    parser.add_argument(
+        "--harness",
+        type=str,
         default=None,
-        help="Directory containing POV files (use with --patch-dir)",
+        help="Harness name to test against (default: all harnesses)",
     )
 
     # OSS-Fuzz path
@@ -288,10 +264,11 @@ Examples:
 def run_patch_verify(args: argparse.Namespace) -> int:
     """Execute the patch-verify command.
 
-    Three modes are supported:
-    1. Auto-discovery mode (default): Discover patches from .aixcc/<harness>/<cpv>/patches/
-    2. Single patch mode (--patch): Verify a single patch file
-    3. Directory mode (--patch-dir): Verify all patches in a directory
+    Two modes are supported:
+    1. Single patch mode (--patch): Verify a single patch file
+    2. Directory mode (--patch-dir): Verify all patches in a directory
+
+    When --harness is not specified, tests against all harnesses from the benchmark.
 
     Args:
         args: Parsed command-line arguments
@@ -309,42 +286,19 @@ def run_patch_verify(args: argparse.Namespace) -> int:
         logger.error(f"Benchmark path not found: {args.benchmark_path}")
         return 1
 
-    # Determine mode and validate inputs
-    if args.patch is not None:
-        mode = "single"
-        if not args.patch.exists():
-            logger.error(f"Patch file not found: {args.patch}")
-            return 1
-        # Accept either --pov or --pov-dir for single patch mode
-        if args.pov is None and args.pov_dir is None:
-            logger.error("--pov or --pov-dir is required when using --patch")
-            return 1
-        if args.pov is not None and not args.pov.exists():
-            logger.error(f"POV file not found: {args.pov}")
-            return 1
-        if args.pov_dir is not None and not args.pov_dir.exists():
-            logger.error(f"POV directory not found: {args.pov_dir}")
-            return 1
-        if args.harness is None:
-            logger.error("--harness is required when using --patch")
-            return 1
-    elif args.patch_dir is not None:
-        mode = "directory"
-        if not args.patch_dir.exists():
-            logger.error(f"Patch directory not found: {args.patch_dir}")
-            return 1
-        if args.pov_dir is None:
-            logger.error("--pov-dir is required when using --patch-dir")
-            return 1
-        if not args.pov_dir.exists():
-            logger.error(f"POV directory not found: {args.pov_dir}")
-            return 1
-        if args.harness is None:
-            logger.error("--harness is required when using --patch-dir")
-            return 1
-    else:
-        mode = "auto"
-        # Auto-discovery mode: harness is optional (filter), pov-dir not needed
+    # Validate inputs
+    if args.patch is not None and not args.patch.exists():
+        logger.error(f"Patch file not found: {args.patch}")
+        return 1
+    if args.patch_dir is not None and not args.patch_dir.exists():
+        logger.error(f"Patch directory not found: {args.patch_dir}")
+        return 1
+    if args.pov is not None and not args.pov.exists():
+        logger.error(f"POV file not found: {args.pov}")
+        return 1
+    if args.pov_dir is not None and not args.pov_dir.exists():
+        logger.error(f"POV directory not found: {args.pov_dir}")
+        return 1
 
     # Determine oss-fuzz path
     oss_fuzz_path = args.oss_fuzz or Path("./oss-fuzz")
@@ -368,10 +322,15 @@ def run_patch_verify(args: argparse.Namespace) -> int:
         source_mode=args.source,
     )
 
+    # Resolve harness names
+    harness_names = _resolve_harness_names(engine, args.benchmark_path, args.harness)
+    if not harness_names:
+        logger.error("No harnesses found for benchmark")
+        return 1
+
+    mode = "single" if args.patch is not None else "directory"
     logger.info(f"Verifying patches for benchmark: {args.benchmark_path}")
-    logger.info(f"Mode: {mode}")
-    if args.harness:
-        logger.info(f"Harness filter: {args.harness}")
+    logger.info(f"Mode: {mode}, Harnesses: {harness_names}")
     if args.force_rebuild:
         logger.info("Force rebuild enabled")
 
@@ -379,27 +338,16 @@ def run_patch_verify(args: argparse.Namespace) -> int:
         results: list[PatchVerificationResult] = []
         wall_clock_start = time.time()
 
-        if mode == "auto":
-            # Auto-discovery mode: discover patches from benchmark
-            logger.info("Using auto-discovery mode")
-            results = engine.verify_benchmark(
-                benchmark_path=args.benchmark_path,
-                harness=args.harness,
-                parallel=not args.no_parallel,
-            )
-
-        elif mode == "single":
-            # Single patch mode: verify a single patch file
+        if mode == "single":
             logger.info(f"Verifying single patch: {args.patch}")
 
-            # Create PatchInfo from the patch file
             patch_info = PatchInfo(
-                patch_id=args.patch.stem,  # Use filename without extension as patch_id
-                pov_id="pov_0",  # Default pov_id for single patch mode
+                patch_id=args.patch.stem,
+                pov_id="pov_0",
                 patch_path=args.patch,
             )
 
-            # Get POV file: use --pov if provided, otherwise find first in --pov-dir
+            # Get POV path
             if args.pov is not None:
                 pov_path = args.pov
             else:
@@ -408,27 +356,29 @@ def run_patch_verify(args: argparse.Namespace) -> int:
                     logger.error(f"No POV files found in {args.pov_dir}")
                     return 1
 
-            result = engine.verify_patch(
-                benchmark_path=args.benchmark_path,
-                patch=patch_info,
-                harness=args.harness,
-                pov_path=pov_path,
-            )
-            results = [result]
+            for harness in harness_names:
+                result = engine.verify_patch(
+                    benchmark_path=args.benchmark_path,
+                    patch=patch_info,
+                    harness=harness,
+                    pov_path=pov_path,
+                )
+                results.append(result)
 
-        else:  # mode == "directory"
-            # Directory mode: verify all patches in directory
+        else:  # directory mode
+            pov_dir = args.pov_dir if args.pov_dir else args.pov.parent
             logger.info(f"Patch directory: {args.patch_dir}")
-            logger.info(f"POV directory: {args.pov_dir}")
-            logger.info(f"Harness: {args.harness}")
+            logger.info(f"POV directory: {pov_dir}")
 
-            results = engine.verify_patches(
-                benchmark_path=args.benchmark_path,
-                patch_dir=args.patch_dir,
-                harness=args.harness,
-                pov_dir=args.pov_dir,
-                parallel=not args.no_parallel,
-            )
+            for harness in harness_names:
+                harness_results = engine.verify_patches(
+                    benchmark_path=args.benchmark_path,
+                    patch_dir=args.patch_dir,
+                    harness=harness,
+                    pov_dir=pov_dir,
+                    parallel=not args.no_parallel,
+                )
+                results.extend(harness_results)
 
         wall_clock_time = time.time() - wall_clock_start
 
@@ -452,6 +402,35 @@ def run_patch_verify(args: argparse.Namespace) -> int:
 
     finally:
         engine.cleanup()
+
+
+def _resolve_harness_names(
+    engine: PatchVerificationEngine,
+    benchmark_path: Path,
+    harness: Optional[str],
+) -> list[str]:
+    """Resolve harness names to test against.
+
+    When harness is specified, returns [harness]. Otherwise loads the
+    adapter and returns all harness names from meta.yaml.
+
+    Args:
+        engine: PatchVerificationEngine instance
+        benchmark_path: Path to benchmark directory
+        harness: Optional harness name filter
+
+    Returns:
+        List of harness names to test
+    """
+    if harness:
+        return [harness]
+
+    adapter = engine._load_adapter(benchmark_path)
+    if not adapter:
+        logger.error(f"Failed to load benchmark adapter for {benchmark_path}")
+        return []
+
+    return adapter.get_harness_names()
 
 
 def _find_first_pov(pov_dir: Path) -> Optional[Path]:

@@ -63,9 +63,53 @@ class TestCheckResult:
         assert d == {
             "status": "fail",
             "time_seconds": 3.0,
+            "build_time": 0.0,
+            "verify_time": 0.0,
             "error": "test error",
             "details": {"count": 5},
+            "fallback_used": False,
         }
+
+    def test_check_result_build_verify_times(self) -> None:
+        """Test CheckResult with build_time and verify_time fields."""
+        result = CheckResult(
+            status=CheckStatus.PASS,
+            time_seconds=90.0,
+            build_time=60.0,
+            verify_time=30.0,
+        )
+        assert result.build_time == 60.0
+        assert result.verify_time == 30.0
+        d = result.to_dict()
+        assert d["build_time"] == 60.0
+        assert d["verify_time"] == 30.0
+
+    def test_check_result_format_status_verify_only(self) -> None:
+        """Test format_status shows V:Xs when only verify_time is set."""
+        result = CheckResult(
+            status=CheckStatus.PASS,
+            time_seconds=30.0,
+            verify_time=30.0,
+        )
+        assert result.format_status() == "PASS(V:30s)"
+
+    def test_check_result_format_status_build_and_verify(self) -> None:
+        """Test format_status shows B:Xm V:Ys when both are set."""
+        result = CheckResult(
+            status=CheckStatus.PASS,
+            time_seconds=150.0,
+            build_time=120.0,
+            verify_time=30.0,
+        )
+        assert result.format_status() == "PASS(B:2m V:30s)"
+
+    def test_check_result_format_status_total_only(self) -> None:
+        """Test format_status shows total when no split times."""
+        result = CheckResult(
+            status=CheckStatus.PASS,
+            time_seconds=120.0,
+        )
+        assert result.format_status() == "PASS(2m)"
 
 
 class TestBenchmarkValidationResult:
@@ -104,8 +148,8 @@ class TestBenchmarkValidationResult:
         )
         assert result.total_status == CheckStatus.ERROR
 
-    def test_total_status_with_skip(self) -> None:
-        """Test total_status when some checks are skipped."""
+    def test_total_status_with_some_skip(self) -> None:
+        """Test total_status when some checks are skipped but executed ones pass."""
         result = BenchmarkValidationResult(
             benchmark="test-bench",
             benchmark_path=Path("/tmp/test"),
@@ -113,7 +157,19 @@ class TestBenchmarkValidationResult:
             pov_check=CheckResult(status=CheckStatus.SKIP, time_seconds=0.0),
             patch_check=CheckResult(status=CheckStatus.SKIP, time_seconds=0.0),
         )
-        # Not all PASS, so should be SKIP
+        # Executed checks (format) passed, skipped checks don't affect total
+        assert result.total_status == CheckStatus.PASS
+
+    def test_total_status_all_skip(self) -> None:
+        """Test total_status when all checks are skipped."""
+        result = BenchmarkValidationResult(
+            benchmark="test-bench",
+            benchmark_path=Path("/tmp/test"),
+            format_check=CheckResult(status=CheckStatus.SKIP, time_seconds=0.0),
+            pov_check=CheckResult(status=CheckStatus.SKIP, time_seconds=0.0),
+            patch_check=CheckResult(status=CheckStatus.SKIP, time_seconds=0.0),
+        )
+        # All checks skipped, so total should be SKIP
         assert result.total_status == CheckStatus.SKIP
 
     def test_total_time(self) -> None:
@@ -422,12 +478,17 @@ class TestBenchmarkValidator:
             mock_pov_result = MagicMock()
             mock_pov_result.pov_id = "pov_001"
             mock_pov_result.status.value = "CPV"
-            # Use the actual enum
-            from crsbench.evaluation.verification.models import PovVerificationStatus
+            # Use the actual enum and dataclass
+            from crsbench.evaluation.verification.models import (
+                PovBenchmarkOutput,
+                PovVerificationStatus,
+            )
 
             mock_pov_result.status = PovVerificationStatus.CPV
 
-            mock_engine.verify_benchmark.return_value = ([mock_pov_result], 0)
+            mock_engine.verify_benchmark.return_value = PovBenchmarkOutput(
+                results=[mock_pov_result], skipped_count=0, fallback_used=False
+            )
 
             result = validator.validate_povs(benchmark_path)
 
@@ -451,14 +512,19 @@ class TestBenchmarkValidator:
             mock_engine = MagicMock()
             mock_engine_class.return_value = mock_engine
 
-            # Mock successful patch verification
+            # Mock successful patch verification with dataclass return type
             mock_patch_result = MagicMock()
             mock_patch_result.patch_id = "patch_001"
-            from crsbench.evaluation.verification.models import PatchVerificationStatus
+            from crsbench.evaluation.verification.models import (
+                PatchBenchmarkOutput,
+                PatchVerificationStatus,
+            )
 
             mock_patch_result.status = PatchVerificationStatus.VALID
 
-            mock_engine.verify_benchmark.return_value = [mock_patch_result]
+            mock_engine.verify_benchmark.return_value = PatchBenchmarkOutput(
+                results=[mock_patch_result], fallback_used=False
+            )
 
             result = validator.validate_patches(benchmark_path)
 

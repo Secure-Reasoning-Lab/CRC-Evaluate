@@ -281,18 +281,61 @@ class MetaYamlAdapter:
     def get_all_pov_paths(self) -> List[Tuple[str, str, Path]]:
         """Get paths to all POV blobs in the benchmark.
 
+        Discovers POV blobs by scanning the directory structure:
+        .aixcc/{harness}/{cpv_X}/blobs/pov_*.blob
+
+        This ensures ALL blob files are tested, not just those listed in meta.yaml.
+
         Returns:
-            List of (harness_name, vuln_keyword, pov_path) tuples
+            List of (harness_name, vuln_keyword, pov_path) tuples sorted by
+            (harness, cpv number, pov number)
         """
         if not self.benchmark_path:
             return []
 
         result = []
-        for harness_name in self.get_harness_names():
-            for vuln_keyword, pov in self.get_all_povs(harness_name):
-                pov_path = self.get_pov_path(harness_name, vuln_keyword, pov.id)
-                if pov_path and pov_path.exists():
+        aixcc_dir = self.benchmark_path / ".aixcc"
+
+        if not aixcc_dir.exists():
+            return []
+
+        # Iterate through harness directories
+        for harness_dir in sorted(aixcc_dir.iterdir()):
+            if not harness_dir.is_dir():
+                continue
+
+            harness_name = harness_dir.name
+
+            # Skip non-harness entries (meta.yaml, etc.)
+            if harness_name.endswith(".yaml") or harness_name.startswith("."):
+                continue
+
+            # Iterate through CPV directories
+            for cpv_dir in sorted(harness_dir.iterdir()):
+                if not cpv_dir.is_dir() or not cpv_dir.name.startswith("cpv_"):
+                    continue
+
+                vuln_keyword = cpv_dir.name
+                blobs_dir = cpv_dir / "blobs"
+
+                if not blobs_dir.exists():
+                    continue
+
+                # Discover all POV blob files
+                pov_files = list(blobs_dir.glob("pov_*.blob"))
+
+                # Sort by POV number (pov_0, pov_1, pov_2, ...)
+                def extract_pov_num(path: Path) -> int:
+                    try:
+                        return int(path.stem.split("_")[1])
+                    except (IndexError, ValueError):
+                        return 999
+
+                pov_files.sort(key=extract_pov_num)
+
+                for pov_path in pov_files:
                     result.append((harness_name, vuln_keyword, pov_path))
+
         return result
 
     def get_patch_path(self, harness_name: str, vuln_keyword: str) -> Optional[Path]:

@@ -87,7 +87,10 @@ class TestVerdictResolverFullMode:
         """Base doesn't crash -> NOT_VULNERABLE."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
-            crash_results={VariantType.FULL_BASE: False},
+            crash_results={
+                VariantType.FULL_BASE: False,
+                VariantType.ALL_PATCHED: False,
+            },
             cpv_crash_map={},
             benchmark_name="test",
         )
@@ -155,7 +158,11 @@ class TestVerdictResolverDeltaMode:
         """Base crashes in delta mode -> ZERODAY (pre-existing bug)."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
-            crash_results={VariantType.DELTA_BASE: True},
+            crash_results={
+                VariantType.DELTA_BASE: True,
+                VariantType.DELTA_REF: True,
+                VariantType.ALL_PATCHED: False,
+            },
             cpv_crash_map={},
             benchmark_name="test",
         )
@@ -168,6 +175,7 @@ class TestVerdictResolverDeltaMode:
             crash_results={
                 VariantType.DELTA_BASE: False,
                 VariantType.DELTA_REF: False,
+                VariantType.ALL_PATCHED: False,
             },
             cpv_crash_map={},
             benchmark_name="test",
@@ -325,16 +333,17 @@ class TestDeduplication:
 class TestVerdictResolverEdgeCases:
     """Edge case tests for VerdictResolver."""
 
-    def test_missing_allpatched_defaults_to_true(self):
-        """Missing ALL_PATCHED should default to True (crashed)."""
+    def test_missing_allpatched_returns_error(self):
+        """Missing ALL_PATCHED should return ERROR (build/reproduce failed)."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
             crash_results={VariantType.FULL_BASE: True},  # No ALL_PATCHED
             cpv_crash_map={0: True},
             benchmark_name="test",
         )
-        # Should be UNINTENDED_CRASH since allpatched defaults to True
-        assert result.status == PovVerificationStatus.UNINTENDED_CRASH
+        # Should be ERROR since required variant is missing
+        assert result.status == PovVerificationStatus.ERROR
+        assert "allpatched" in result.details
 
     def test_empty_cpv_map(self):
         """Empty CPV map should result in appropriate status."""
@@ -353,7 +362,10 @@ class TestVerdictResolverEdgeCases:
         """POV ID should be preserved in result."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
-            crash_results={VariantType.FULL_BASE: False},
+            crash_results={
+                VariantType.FULL_BASE: False,
+                VariantType.ALL_PATCHED: False,
+            },
             cpv_crash_map={},
             benchmark_name="test",
             pov_id="test_pov_123",

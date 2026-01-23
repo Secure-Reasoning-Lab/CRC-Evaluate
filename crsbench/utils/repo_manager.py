@@ -219,7 +219,7 @@ def reset_and_clean_repo(repo_dir: str, *, verbose: bool = False) -> bool:
         True if successful, False otherwise
     """
     if verbose:
-        logger.info("🔄 Resetting repository to pristine state...")
+        logger.debug("Resetting repository to pristine state...")
 
     # First, reset tracked files
     reset_result = run_git(
@@ -250,7 +250,7 @@ def reset_and_clean_repo(repo_dir: str, *, verbose: bool = False) -> bool:
         return False
 
     if verbose:
-        logger.info("✅ Repository reset and cleaned to pristine state")
+        logger.debug("Repository reset and cleaned to pristine state")
 
     return True
 
@@ -565,7 +565,7 @@ def get_commit_specific_cache_dir(
     else:
         repo_name = derive_repo_name_from_url(repo_info.repo_url)
         if verbose:
-            logger.info(f"Derived repo_name from URL: {repo_name}")
+            logger.debug(f"Derived repo_name from URL: {repo_name}")
 
     # Create commit-specific directory: {repo_name}-{short_commit}
     short_commit = target_commit[:8]
@@ -573,7 +573,7 @@ def get_commit_specific_cache_dir(
     target_dir = repos_dir_path / commit_specific_name
 
     if verbose:
-        logger.info(f"Using commit-specific directory: {target_dir}")
+        logger.debug(f"Using commit-specific directory: {target_dir}")
 
     return str(target_dir)
 
@@ -636,7 +636,7 @@ def clone_or_copy_cached_repo(
                     if current_commit.startswith(commit[:8]):
                         cache_verified = True
                         if verbose:
-                            logger.info(f"✅ Cache verified: {cache_dir}")
+                            logger.debug(f"Cache verified: {cache_dir}")
                     else:
                         logger.warning(
                             f"⚠️  Cache at wrong commit: {current_commit[:8]} != {commit[:8]}, removing"
@@ -649,10 +649,18 @@ def clone_or_copy_cached_repo(
                 except Exception:
                     pass
 
+    # If target already exists and is a valid git repo, reuse it directly
+    target_path = Path(target_dir)
+    if target_path.is_dir() and (target_path / ".git").exists():
+        reset_and_clean_repo(target_dir, verbose=verbose)
+        if verbose:
+            logger.debug(f"Reusing existing repo at {target_dir}")
+        return target_dir
+
     # If cache verified, copy to target
     if cache_verified:
         if verbose:
-            logger.info(f"📦 Copying from cache: {cache_dir} -> {target_dir}")
+            logger.debug(f"Copying from cache: {cache_dir} -> {target_dir}")
         try:
             with cache_lock:
                 shutil.copytree(
@@ -661,7 +669,7 @@ def clone_or_copy_cached_repo(
             # Reset target to fix stale git index from copytree
             reset_and_clean_repo(target_dir, verbose=verbose)
             if verbose:
-                logger.info(f"✅ Successfully copied from cache to {target_dir}")
+                logger.debug(f"Successfully copied from cache to {target_dir}")
             return target_dir
         except Exception as e:
             logger.warning(f"⚠️  Failed to copy from cache: {e}, will clone instead")

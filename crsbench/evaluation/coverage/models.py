@@ -155,3 +155,5 @@ class CoverageReport(BaseModel):
     snapshots: list[CoverageSnapshot] = Field(default_factory=list)
     final_summary: Optional[CoverageSummary] = None
     saturation_cycle: Optional[int] = None
+    build_time: float = 0.0
+    verify_time: float = 0.0

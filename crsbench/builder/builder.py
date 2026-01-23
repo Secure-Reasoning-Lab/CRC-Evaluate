@@ -92,12 +92,15 @@ class OSSFuzzBuilder:
         for config in configs:
             if force_rebuild:
                 # Clean up existing build outputs for force rebuild
-                logger.info(f"Force rebuild: cleaning {config.variant_name}")
+                logger.debug(f"Force rebuild: cleaning {config.variant_name}")
                 self.infra.cleanup_build_outputs(config.variant_name)
                 self.infra.cleanup_source(config.variant_name)
                 configs_to_build.append(config)
-            elif self.infra.is_variant_built(config.variant_name):
-                logger.info(f"Using cached build for {config.variant_name}")
+            elif self.infra.is_variant_built(
+                config.variant_name,
+                require_inc_build=config.use_inc_build,
+            ):
+                logger.debug(f"Using cached build for {config.variant_name}")
                 build_path = self.infra.get_build_output_path(config.variant_name)
                 results[config.variant_name] = BuildResult.from_cache(
                     config, build_path
@@ -175,8 +178,11 @@ class OSSFuzzBuilder:
             self.infra.cleanup_source(config.variant_name)
 
         # Check cache (skip if force_rebuild to ensure rebuild even if cleanup fails)
-        if not force_rebuild and self.infra.is_variant_built(config.variant_name):
-            logger.info(f"Using cached build for {config.variant_name}")
+        if not force_rebuild and self.infra.is_variant_built(
+            config.variant_name,
+            require_inc_build=config.use_inc_build,
+        ):
+            logger.debug(f"Using cached build for {config.variant_name}")
             build_path = self.infra.get_build_output_path(config.variant_name)
             return BuildResult.from_cache(config, build_path)
 
@@ -205,6 +211,7 @@ class OSSFuzzBuilder:
             Build result
         """
         start_time = time.time()
+        fallback_from_inc = False
 
         # Use inc-build path for supported variants when enabled and image available
         if config.variant_type.supports_inc_build() and config.use_inc_build:
@@ -212,15 +219,25 @@ class OSSFuzzBuilder:
             if self.infra.ensure_inc_image(config.benchmark_name, config.sanitizer):
                 return self._build_with_inc_image(config, start_time)
             # Fall back to standard build if inc-build image not available
-            logger.info(
+            # Mark as fallback so PASS-FB signals "prepare the inc-build image"
+            logger.debug(
                 f"Inc-build image not available for {config.benchmark_name}, "
-                f"falling back to standard build for {config.variant_name}"
+                f"using standard build for {config.variant_name}"
             )
+            fallback_from_inc = True
 
         # Standard build path for coverage, non-inc variants, and fallback
-        return self._build_standard(config, start_time)
+        return self._build_standard(
+            config, start_time, fallback_from_inc=fallback_from_inc
+        )
 
-    def _build_standard(self, config: BuildConfig, start_time: float) -> BuildResult:
+    def _build_standard(
+        self,
+        config: BuildConfig,
+        start_time: float,
+        *,
+        fallback_from_inc: bool = False,
+    ) -> BuildResult:
         """Build a variant using standard OSS-Fuzz build process.
 
         Supports two source modes:
@@ -230,6 +247,8 @@ class OSSFuzzBuilder:
         Args:
             config: Build configuration
             start_time: Build start time
+            fallback_from_inc: Whether this is a fallback from inc-build
+                (inc-build was requested but image was unavailable)
 
         Returns:
             Build result
@@ -268,21 +287,28 @@ class OSSFuzzBuilder:
                     self._apply_patches_for_variant(config, repo_path)
 
                 # Build fuzzers
-                if not self.infra.build_fuzzers(config, repo_path):
+                build_result = self.infra.build_fuzzers(config, repo_path)
+                if not build_result.success:
                     return BuildResult.from_error(
                         config=config,
                         error="Build failed",
                         elapsed_seconds=time.time() - start_time,
                     )
 
-                # Success
+                # Success - write metadata and return
                 build_path = self.infra.get_build_output_path(variant_name)
+                self.infra.write_build_metadata(
+                    variant_name,
+                    inc_build=False,
+                    sanitizer=config.sanitizer,
+                )
                 return BuildResult(
                     config=config,
                     success=True,
                     variant_name=variant_name,
                     build_path=build_path,
                     elapsed_seconds=time.time() - start_time,
+                    fallback_used=fallback_from_inc,
                 )
 
             except Exception as e:
@@ -318,7 +344,7 @@ class OSSFuzzBuilder:
 
         # Handle main_repo mode - always clone from git
         if self.source_mode == "main_repo":
-            logger.info("Using main_repo source (cloning from git)")
+            logger.debug("Using main_repo source (cloning from git)")
             return self.infra.clone_source(config, temp_dir)
 
         # pkgs mode (default) - require bundled source
@@ -348,7 +374,7 @@ class OSSFuzzBuilder:
         # FULL mode: squash_history=True (prevent CRS from using git diff)
         squash_history = config.mode != BenchmarkMode.DELTA
 
-        logger.info(
+        logger.debug(
             f"Using bundled source: {source_name}.tar.gz "
             f"(apply_ref_diff={apply_ref_diff})"
         )
@@ -435,48 +461,41 @@ class OSSFuzzBuilder:
                         elapsed_seconds=time.time() - start_time,
                     )
 
-                # Build using helper.py build_fuzzers with inc-build image
-                # DELTA_BASE must always use inc-fallback because inc-build images
-                # are built at ref_commit, not base_commit
-                use_fallback = (
-                    config.variant_type.should_fallback_on_inc_build_failure()
+                # Try inc-build first (uses pre-compiled objects from /built-src)
+                build_result = self.infra.build_fuzzers(
+                    config, repo_path, use_inc_image=True, inc_fallback=False
                 )
-                success = self.infra.build_fuzzers(
-                    config, repo_path, use_inc_image=True, inc_fallback=use_fallback
+                # If inc-build fails, retry with fallback (full recompile from /src)
+                if not build_result.success:
+                    logger.info(
+                        f"Inc-build failed for {variant_name}, retrying with fallback"
+                    )
+                    build_result = self.infra.build_fuzzers(
+                        config, repo_path, use_inc_image=True, inc_fallback=True
+                    )
+
+                if not build_result.success:
+                    return BuildResult.from_error(
+                        config=config,
+                        error="Incremental build failed (both inc and fallback)",
+                        elapsed_seconds=time.time() - start_time,
+                    )
+
+                # Success - write metadata and return
+                build_path = self.infra.get_build_output_path(variant_name)
+                self.infra.write_build_metadata(
+                    variant_name,
+                    inc_build=True,
+                    sanitizer=config.sanitizer,
+                    fallback_used=build_result.fallback_used,
                 )
-
-                if not success and not use_fallback:
-                    # Check if this variant type should fallback
-                    if config.variant_type.should_fallback_on_inc_build_failure():
-                        logger.warning(
-                            f"Incremental build failed for {config.variant_name}, "
-                            f"retrying with inc-fallback (clean build from /src)"
-                        )
-                        success = self.infra.build_fuzzers(
-                            config, repo_path, use_inc_image=True, inc_fallback=True
-                        )
-                        if not success:
-                            return BuildResult.from_error(
-                                config=config,
-                                error="Incremental build failed (inc-fallback also failed)",
-                                elapsed_seconds=time.time() - start_time,
-                            )
-                    else:
-                        # For PATCHED variants, don't fallback
-                        return BuildResult.from_error(
-                            config=config,
-                            error="Incremental build failed",
-                            elapsed_seconds=time.time() - start_time,
-                        )
-
-                # Success - build output is in /build/out/{variant_name}/
-                build_path = self.oss_fuzz_path / "build" / "out" / variant_name
                 return BuildResult(
                     config=config,
                     success=True,
                     variant_name=variant_name,
                     build_path=build_path,
                     elapsed_seconds=time.time() - start_time,
+                    fallback_used=build_result.fallback_used,
                 )
 
             except Exception as e:
@@ -548,7 +567,8 @@ class OSSFuzzBuilder:
         Returns:
             BuildPlan with all required configurations
         """
-        plan = BuildPlan(benchmark_name=benchmark_name)
+        # Create plan with global inc-build setting
+        plan = BuildPlan(benchmark_name=benchmark_name, use_inc_build=use_inc_build)
 
         # Get all CPV patches upfront
         all_patches = self.infra.get_all_patches(benchmark_path)
@@ -559,97 +579,77 @@ class OSSFuzzBuilder:
             if mode == BenchmarkMode.FULL
             else VariantType.DELTA_BASE
         )
-        plan.add_config(
-            BuildConfig(
-                benchmark_name=benchmark_name,
-                variant_type=base_type,
-                commit=base_commit,
-                main_repo=main_repo,
-                benchmark_path=benchmark_path,
-                mode=mode,
-                patches=[],  # Base: no patches
-                language=language,
-                repo_name=repo_name,
-                use_inc_build=use_inc_build,
-            )
+        plan.add_variant(
+            variant_type=base_type,
+            commit=base_commit,
+            main_repo=main_repo,
+            benchmark_path=benchmark_path,
+            mode=mode,
+            patches=[],  # Base: no patches
+            language=language,
+            repo_name=repo_name,
         )
 
         # Reference version (delta mode only, no patches)
         if mode == BenchmarkMode.DELTA and ref_commit:
-            plan.add_config(
-                BuildConfig(
-                    benchmark_name=benchmark_name,
-                    variant_type=VariantType.DELTA_REF,
-                    commit=ref_commit,
-                    main_repo=main_repo,
-                    benchmark_path=benchmark_path,
-                    mode=mode,
-                    patches=[],  # Ref: no patches
-                    language=language,
-                    repo_name=repo_name,
-                    use_inc_build=use_inc_build,
-                )
+            plan.add_variant(
+                variant_type=VariantType.DELTA_REF,
+                commit=ref_commit,
+                main_repo=main_repo,
+                benchmark_path=benchmark_path,
+                mode=mode,
+                patches=[],  # Ref: no patches
+                language=language,
+                repo_name=repo_name,
             )
 
         # All-patched version (all patches applied)
         patched_commit = ref_commit if mode == BenchmarkMode.DELTA else base_commit
         if patched_commit:
-            plan.add_config(
-                BuildConfig(
-                    benchmark_name=benchmark_name,
-                    variant_type=VariantType.ALL_PATCHED,
-                    commit=patched_commit,
-                    main_repo=main_repo,
-                    benchmark_path=benchmark_path,
-                    mode=mode,
-                    patches=all_patches,  # All patches
-                    language=language,
-                    repo_name=repo_name,
-                    use_inc_build=use_inc_build,
-                )
+            plan.add_variant(
+                variant_type=VariantType.ALL_PATCHED,
+                commit=patched_commit,
+                main_repo=main_repo,
+                benchmark_path=benchmark_path,
+                mode=mode,
+                patches=all_patches,  # All patches
+                language=language,
+                repo_name=repo_name,
             )
 
         # CPV variants (all patches except one)
         for cpv_num in cpv_numbers:
             cpv_patches = self.infra.get_patches_except(benchmark_path, cpv_num)
-            plan.add_config(
-                BuildConfig(
-                    benchmark_name=benchmark_name,
-                    variant_type=VariantType.CPV,
-                    commit=patched_commit or base_commit,
-                    main_repo=main_repo,
-                    benchmark_path=benchmark_path,
-                    mode=mode,
-                    patches=cpv_patches,  # All patches except this CPV
-                    language=language,
-                    cpv_num=cpv_num,
-                    repo_name=repo_name,
-                    use_inc_build=use_inc_build,
-                )
+            plan.add_variant(
+                variant_type=VariantType.CPV,
+                commit=patched_commit or base_commit,
+                main_repo=main_repo,
+                benchmark_path=benchmark_path,
+                mode=mode,
+                patches=cpv_patches,  # All patches except this CPV
+                language=language,
+                cpv_num=cpv_num,
+                repo_name=repo_name,
             )
 
         # Coverage variant (no patches, different sanitizer)
+        # Note: Coverage doesn't support inc-build (handled by add_variant)
         if include_coverage:
-            plan.add_config(
-                BuildConfig(
-                    benchmark_name=benchmark_name,
-                    variant_type=VariantType.COVERAGE,
-                    commit=patched_commit or base_commit,
-                    main_repo=main_repo,
-                    benchmark_path=benchmark_path,
-                    mode=mode,
-                    patches=[],  # Coverage: no patches
-                    language=language,
-                    repo_name=repo_name,
-                )
+            plan.add_variant(
+                variant_type=VariantType.COVERAGE,
+                commit=patched_commit or base_commit,
+                main_repo=main_repo,
+                benchmark_path=benchmark_path,
+                mode=mode,
+                patches=[],  # Coverage: no patches
+                language=language,
+                repo_name=repo_name,
             )
 
         # Check which variants are already cached
-        for config in plan.configs:
-            if self.infra.is_variant_built(config.variant_name):
-                plan.mark_cached(config.variant_name)
+        self._mark_cached_variants(plan)
 
-        logger.info(
+        logger.debug(
             f"Build plan for {benchmark_name}: "
             f"{plan.total_count} variants, {plan.cached_count} cached, "
             f"{plan.build_count} to build"
@@ -685,16 +685,38 @@ class OSSFuzzBuilder:
             if variant_dir.is_dir() and variant_dir.name.startswith(prefix):
                 self.infra.cleanup_variant(variant_dir.name)
 
-    def is_variant_built(self, variant_name: str) -> bool:
+    def is_variant_built(
+        self,
+        variant_name: str,
+        *,
+        require_inc_build: Optional[bool] = None,
+    ) -> bool:
         """Check if a variant has been built.
 
         Args:
             variant_name: Variant name
+            require_inc_build: If specified, also verify the cached build
+                matches the requested inc-build mode. None means don't check.
 
         Returns:
-            True if built
+            True if built (and matches required inc_build mode if specified)
         """
-        return self.infra.is_variant_built(variant_name)
+        return self.infra.is_variant_built(
+            variant_name, require_inc_build=require_inc_build
+        )
+
+    def _mark_cached_variants(self, plan: BuildPlan) -> None:
+        """Mark variants that are already built as cached in the plan.
+
+        Args:
+            plan: Build plan to update with cached variant information
+        """
+        for config in plan.configs:
+            if self.infra.is_variant_built(
+                config.variant_name,
+                require_inc_build=config.use_inc_build,
+            ):
+                plan.mark_cached(config.variant_name)
 
     def create_patch_build_plan(
         self,
@@ -730,15 +752,15 @@ class OSSFuzzBuilder:
         Returns:
             BuildPlan with configurations for each patch
         """
-        plan = BuildPlan(benchmark_name=benchmark_name)
+        # Create plan with global inc-build setting
+        plan = BuildPlan(benchmark_name=benchmark_name, use_inc_build=use_inc_build)
 
         if not patches:
             logger.warning(f"No patches provided for {benchmark_name}")
             return plan
 
         for pov_id, patch_id, patch_path in patches:
-            config = BuildConfig(
-                benchmark_name=benchmark_name,
+            plan.add_variant(
                 variant_type=VariantType.PATCHED,
                 commit=commit,
                 main_repo=main_repo,
@@ -748,17 +770,14 @@ class OSSFuzzBuilder:
                 language=language,
                 pov_id=pov_id,
                 patch_id=patch_id,
-                use_inc_build=use_inc_build,
                 sanitizer=sanitizer,
                 repo_name=repo_name,
             )
-            plan.add_config(config)
 
-            # Check if already cached
-            if self.infra.is_variant_built(config.variant_name):
-                plan.mark_cached(config.variant_name)
+        # Check which variants are already cached (respects inc_build mode)
+        self._mark_cached_variants(plan)
 
-        logger.info(
+        logger.debug(
             f"Patch build plan for {benchmark_name}: "
             f"{plan.total_count} patches, {plan.cached_count} cached, "
             f"{plan.build_count} to build"

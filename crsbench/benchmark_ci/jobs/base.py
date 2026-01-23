@@ -10,9 +10,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-from crsbench.builder import OSSFuzzBuilder, OSSFuzzInfrastructure
+if TYPE_CHECKING:
+    from crsbench.builder import OSSFuzzBuilder, OSSFuzzInfrastructure
 
 
 @dataclass
@@ -54,10 +55,12 @@ class JobContext:
     """Shared context for job execution.
 
     Provides access to builder, infrastructure, and configuration.
+    Fine-grained jobs (BuildJob, VerifyPovJob, etc.) require builder/infra.
+    CI-level check jobs store their own references and use JobContext() empty.
     """
 
-    builder: OSSFuzzBuilder
-    infra: OSSFuzzInfrastructure
+    builder: Optional["OSSFuzzBuilder"] = None
+    infra: Optional["OSSFuzzInfrastructure"] = None
     timeout: int = 120
 
 

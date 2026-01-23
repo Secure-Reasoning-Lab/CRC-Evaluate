@@ -17,7 +17,10 @@ class TestVerdictResolverFullMode:
         """If base doesn't crash, POV is not vulnerable."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
-            crash_results={VariantType.FULL_BASE: False},
+            crash_results={
+                VariantType.FULL_BASE: False,
+                VariantType.ALL_PATCHED: False,
+            },
             cpv_crash_map={},
             benchmark_name="test-bench",
             pov_id="pov_1",
@@ -97,7 +100,11 @@ class TestVerdictResolverDeltaMode:
         """In DELTA mode, if base crashes, bug is pre-existing (zeroday)."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
-            crash_results={VariantType.DELTA_BASE: True},
+            crash_results={
+                VariantType.DELTA_BASE: True,
+                VariantType.DELTA_REF: True,
+                VariantType.ALL_PATCHED: False,
+            },
             cpv_crash_map={},
             benchmark_name="test-bench",
             pov_id="pov_1",
@@ -115,6 +122,7 @@ class TestVerdictResolverDeltaMode:
             crash_results={
                 VariantType.DELTA_BASE: False,
                 VariantType.DELTA_REF: False,
+                VariantType.ALL_PATCHED: False,
             },
             cpv_crash_map={},
             benchmark_name="test-bench",
@@ -176,7 +184,10 @@ class TestVerdictResolverMetadata:
         """Benchmark name should be in result."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
-            crash_results={VariantType.FULL_BASE: False},
+            crash_results={
+                VariantType.FULL_BASE: False,
+                VariantType.ALL_PATCHED: False,
+            },
             cpv_crash_map={},
             benchmark_name="my-benchmark",
             pov_id="pov_1",
@@ -187,7 +198,10 @@ class TestVerdictResolverMetadata:
         """POV ID should be in result."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
-            crash_results={VariantType.FULL_BASE: False},
+            crash_results={
+                VariantType.FULL_BASE: False,
+                VariantType.ALL_PATCHED: False,
+            },
             cpv_crash_map={},
             benchmark_name="test",
             pov_id="test_pov_123",
@@ -198,7 +212,10 @@ class TestVerdictResolverMetadata:
         """POV ID can be None."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
-            crash_results={VariantType.FULL_BASE: False},
+            crash_results={
+                VariantType.FULL_BASE: False,
+                VariantType.ALL_PATCHED: False,
+            },
             cpv_crash_map={},
             benchmark_name="test",
             pov_id=None,

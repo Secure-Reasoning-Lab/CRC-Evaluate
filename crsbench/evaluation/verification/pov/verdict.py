@@ -79,12 +79,31 @@ class VerdictResolver:
         """Resolve verdict for FULL mode benchmarks.
 
         Logic:
+        0. If any required variant missing -> ERROR
         1. If base doesn't crash -> NOT_VULNERABLE
         2. If allpatched crashes -> UNINTENDED_CRASH
         3. If any cpvN crashes -> CPV
         4. Else -> ZERODAY
         """
-        base_crashed = crash_results.get(VariantType.FULL_BASE, False)
+        # Check all required variants exist (build/reproduce succeeded)
+        required_variants = [VariantType.FULL_BASE, VariantType.ALL_PATCHED]
+        missing = [v.value for v in required_variants if v not in crash_results]
+
+        if missing:
+            pov_prefix = f"[{pov_id}] " if pov_id else ""
+            logger.error(
+                f"{pov_prefix}[{benchmark_name}] ERROR - missing results for: {missing}"
+            )
+            return PovVerificationResult(
+                status=PovVerificationStatus.ERROR,
+                benchmark=benchmark_name,
+                cpv_matched=[],
+                pov_id=pov_id,
+                details=f"Build or reproduce failed for variants: {missing}",
+            )
+
+        # Now safe to access without defaults
+        base_crashed = crash_results[VariantType.FULL_BASE]
 
         # Check if POV triggers the vulnerability at all
         if not base_crashed:
@@ -101,7 +120,7 @@ class VerdictResolver:
             )
 
         # Check if allpatched still crashes (unintended crash)
-        allpatched_crashed = crash_results.get(VariantType.ALL_PATCHED, True)
+        allpatched_crashed = crash_results[VariantType.ALL_PATCHED]
         if allpatched_crashed:
             pov_prefix = f"[{pov_id}] " if pov_id else ""
             logger.warning(
@@ -156,13 +175,36 @@ class VerdictResolver:
         """Resolve verdict for DELTA mode benchmarks.
 
         Logic:
+        0. If any required variant missing -> ERROR
         1. If base crashes -> ZERODAY (vulnerability exists before changes)
         2. If ref doesn't crash -> NOT_VULNERABLE
         3. If allpatched crashes -> UNINTENDED_CRASH
         4. If any cpvN crashes -> CPV
         5. Else -> UNINTENDED_CRASH
         """
-        base_crashed = crash_results.get(VariantType.DELTA_BASE, False)
+        # Check all required variants exist (build/reproduce succeeded)
+        required_variants = [
+            VariantType.DELTA_BASE,
+            VariantType.DELTA_REF,
+            VariantType.ALL_PATCHED,
+        ]
+        missing = [v.value for v in required_variants if v not in crash_results]
+
+        if missing:
+            pov_prefix = f"[{pov_id}] " if pov_id else ""
+            logger.error(
+                f"{pov_prefix}[{benchmark_name}] ERROR - missing results for: {missing}"
+            )
+            return PovVerificationResult(
+                status=PovVerificationStatus.ERROR,
+                benchmark=benchmark_name,
+                cpv_matched=[],
+                pov_id=pov_id,
+                details=f"Build or reproduce failed for variants: {missing}",
+            )
+
+        # Now safe to access without defaults
+        base_crashed = crash_results[VariantType.DELTA_BASE]
 
         # If base crashes, the bug exists before the delta - it's a zeroday
         if base_crashed:
@@ -179,7 +221,7 @@ class VerdictResolver:
             )
 
         # Check if POV crashes on ref (the vulnerable version)
-        ref_crashed = crash_results.get(VariantType.DELTA_REF, False)
+        ref_crashed = crash_results[VariantType.DELTA_REF]
         if not ref_crashed:
             pov_prefix = f"[{pov_id}] " if pov_id else ""
             logger.debug(
@@ -194,7 +236,7 @@ class VerdictResolver:
             )
 
         # Check if allpatched still crashes
-        allpatched_crashed = crash_results.get(VariantType.ALL_PATCHED, True)
+        allpatched_crashed = crash_results[VariantType.ALL_PATCHED]
         if allpatched_crashed:
             pov_prefix = f"[{pov_id}] " if pov_id else ""
             logger.warning(

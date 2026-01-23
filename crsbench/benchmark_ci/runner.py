@@ -159,7 +159,7 @@ class ProjectCIRunner:
         results: dict[str, JobResult] = {}
 
         # Phase 1: Build all variants
-        logger.info(f"=== Build Phase: {len(build_jobs)} jobs ===")
+        logger.debug(f"=== Build Phase: {len(build_jobs)} jobs ===")
         build_results = self._execute_build_phase(build_jobs)
         results.update(build_results)
 
@@ -169,7 +169,7 @@ class ProjectCIRunner:
             logger.warning(f"Build failures: {len(failed_builds)} jobs failed")
 
         # Phase 2: Verify (skip jobs with failed dependencies)
-        logger.info(f"=== Verify Phase: {len(verify_jobs)} jobs ===")
+        logger.debug(f"=== Verify Phase: {len(verify_jobs)} jobs ===")
         verify_results = self._execute_verify_phase(verify_jobs, failed_builds)
         results.update(verify_results)
 
@@ -217,7 +217,7 @@ class ProjectCIRunner:
 
             status = "PASS" if result.success else "FAIL"
             cached = " (cached)" if br.cached else ""
-            logger.info(
+            logger.debug(
                 f"  [{job.job_id}] {status}{cached} ({result.elapsed_seconds:.1f}s)"
             )
 
@@ -301,7 +301,7 @@ class ProjectCIRunner:
                     result = future.result()
                     results[job.job_id] = result
                     status = "PASS" if result.success else "FAIL"
-                    logger.info(
+                    logger.debug(
                         f"  [{job.job_id}] {status} ({result.elapsed_seconds:.1f}s)"
                     )
                 except Exception as e:
@@ -327,18 +327,18 @@ class ProjectCIRunner:
         build_jobs = [j for j in jobs if j.job_type == "build"]
         verify_jobs = [j for j in jobs if j.job_type.startswith("verify")]
 
-        logger.info("=== Dry Run: Job Execution Plan ===")
-        logger.info("")
-        logger.info(f"Build Phase ({len(build_jobs)} jobs):")
+        logger.debug("=== Dry Run: Job Execution Plan ===")
+        logger.debug("")
+        logger.debug(f"Build Phase ({len(build_jobs)} jobs):")
         for job in build_jobs:
-            logger.info(f"  - {job.job_id}")
+            logger.debug(f"  - {job.job_id}")
 
-        logger.info("")
-        logger.info(f"Verify Phase ({len(verify_jobs)} jobs):")
+        logger.debug("")
+        logger.debug(f"Verify Phase ({len(verify_jobs)} jobs):")
         for job in verify_jobs:
             deps = ", ".join(job.depends_on) if job.depends_on else "none"
-            logger.info(f"  - {job.job_id}")
-            logger.info(f"    depends_on: {deps}")
+            logger.debug(f"  - {job.job_id}")
+            logger.debug(f"    depends_on: {deps}")
 
-        logger.info("")
-        logger.info(f"Total: {len(jobs)} jobs")
+        logger.debug("")
+        logger.debug(f"Total: {len(jobs)} jobs")

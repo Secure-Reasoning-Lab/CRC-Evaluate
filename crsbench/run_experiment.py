@@ -2284,14 +2284,9 @@ def main() -> None:
         sys.exit(run_dashboard(args))
 
     if args.command == "ci":
-        # Handle ci command
-        from crsbench.benchmark_ci.cli import run_ci, run_ci_parse
+        from crsbench.benchmark_ci.cli import dispatch_ci
 
-        # Check for subcommand (parse)
-        if hasattr(args, "ci_subcommand") and args.ci_subcommand == "parse":
-            sys.exit(run_ci_parse(args))
-        else:
-            sys.exit(run_ci(args))
+        sys.exit(dispatch_ci(args))
 
     if args.command == "benchmark":
         # Handle benchmark command (bundle, validate, prepare-delta)

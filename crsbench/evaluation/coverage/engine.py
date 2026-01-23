@@ -28,6 +28,7 @@ Usage:
 from __future__ import annotations
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
@@ -119,6 +120,7 @@ class CoverageEngine:
         harness_filter: Optional[str] = None,
         *,
         force_rebuild: bool = False,
+        use_inc_build: bool = False,
     ) -> CoverageReport:
         """Collect coverage for a benchmark.
 
@@ -160,9 +162,11 @@ class CoverageEngine:
         logger.info(f"Using harness: {harness_name}")
 
         # Build coverage variant
+        build_start = time.time()
         variant_name = self._build_coverage_variant(
-            adapter, force_rebuild=force_rebuild
+            adapter, force_rebuild=force_rebuild, use_inc_build=use_inc_build
         )
+        build_elapsed = time.time() - build_start
         if not variant_name:
             logger.error("Failed to build coverage variant")
             return CoverageReport(
@@ -207,12 +211,14 @@ class CoverageEngine:
         )
 
         # Collect coverage in parallel (for per-file contribution tracking)
+        verify_start = time.time()
         merged_coverage, success_count, contributing_count, unique_count = (
             self._collect_coverage_parallel(corpus_files, strategy, harness_name)
         )
 
         # Run batch coverage to get totals from summary.json
         totals = self._get_coverage_totals(strategy, harness_name, corpus_dir)
+        verify_elapsed = time.time() - verify_start
 
         # Compute summary with totals
         summary = self._compute_summary(
@@ -233,6 +239,8 @@ class CoverageEngine:
         return CoverageReport(
             harness_name=harness_name,
             final_summary=summary,
+            build_time=build_elapsed,
+            verify_time=verify_elapsed,
         )
 
     def _collect_coverage_parallel(
@@ -431,14 +439,20 @@ class CoverageEngine:
         adapter: MetaYamlAdapter,
         *,
         force_rebuild: bool = False,
+        use_inc_build: bool = False,
     ) -> Optional[str]:
         """Build coverage variant for benchmark.
 
         Uses OSSFuzzBuilder to build the coverage-instrumented variant.
 
+        Note: Coverage variants do not support inc-build (requires different
+        instrumentation). The use_inc_build parameter is accepted for
+        interface consistency but has no effect on coverage builds.
+
         Args:
             adapter: MetaYamlAdapter with benchmark configuration.
             force_rebuild: If True, clean and rebuild.
+            use_inc_build: Accepted for consistency but not used for coverage.
 
         Returns:
             Variant name if build succeeded, None otherwise.
@@ -455,6 +469,7 @@ class CoverageEngine:
             commit=commit,
             main_repo=adapter.main_repo,
             repo_name=adapter.repo_name,
+            use_inc_build=use_inc_build,
         )
 
         logger.info(f"Building coverage variant: {config.variant_name}")
