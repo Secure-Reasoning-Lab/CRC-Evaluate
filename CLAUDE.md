@@ -602,6 +602,40 @@ python crsbench/run_experiment.py \
   --crses crs1,crs2
 ```
 
+## Worker Override Pattern (Distributed Execution)
+
+When adding new configuration fields that need worker-level overrides in distributed mode:
+
+1. **Add field to `WorkerConfig` schema** (in `crsbench/validation/schemas.py`):
+   ```python
+   class WorkerConfig(BaseModel):
+       new_field: Optional[SomeType] = Field(
+           default=None,
+           description="Override new_field for workers on different machines",
+       )
+   ```
+
+2. **Add to override_fields list** (in `crsbench/distributed/cli/worker_command.py`):
+   ```python
+   override_fields = [
+       # ... existing fields ...
+       "new_field",  # Add new field here
+   ]
+   ```
+
+3. **Apply override in job execution** (in `crsbench/distributed/jobs.py`, in `run_crs_trial()`):
+   ```python
+   new_field_override = get_worker_override("new_field")
+   if new_field_override:
+       config.new_field = Path(new_field_override).resolve()  # or appropriate type conversion
+       logger.info(f"Worker override applied: new_field = {config.new_field}")
+   ```
+
+**Pattern locations to remember:**
+- Schema: `crsbench/validation/schemas.py` (WorkerConfig class)
+- Override list: `crsbench/distributed/cli/worker_command.py` (override_fields)
+- Application: `crsbench/distributed/jobs.py` (run_crs_trial function)
+
 ## Other instructions
 - read TODO.md in the new session.
 - use uv as python package manager

@@ -680,50 +680,7 @@ def run_worker_continuous(
         worker_name or os.environ.get("CRSBENCH_WORKER_NAME") or socket.gethostname()
     )
 
-    # Single worker mode (use lock)
-    if num_workers == 1:
-        logger.info(f"Starting continuous worker for experiment: {experiment_name}")
-        logger.info(f"Worker name: {worker_name}")
-
-        # Acquire worker lock to ensure only one worker runs at a time
-        try:
-            with worker_lock(worker_name):
-                redis_password = os.environ.get("REDIS_PASSWORD") or None
-                redis_connection = redis.Redis(host=redis_host, password=redis_password)
-                redis_connection.ping()
-
-                # Set up RQ queue and worker (RQ 2.x requires explicit connection)
-                queue_name = f"crsbench_{experiment_name}"
-                queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
-
-                # Store friendly worker name in environment for job metadata
-                os.environ["CRSBENCH_WORKER_DISPLAY_NAME"] = worker_name
-
-                # Let RQ generate unique worker name to avoid conflicts
-                worker = rq.Worker([queue], connection=redis_connection)  # type: ignore[attr-defined]
-
-                logger.info(
-                    f"Worker '{worker_name}' running in continuous mode on queue: {queue_name}"
-                )
-
-                # Run worker in continuous mode (never exits)
-                worker.work(
-                    burst=False  # Continuous mode
-                )
-
-        except BlockingIOError:
-            lock_file_path = LOCK_DIR / f"crsbench-worker-{worker_name}.lock"
-            logger.error("Another worker is already running")
-            logger.error(f"Lock file: {lock_file_path}")
-            raise
-
-        except KeyboardInterrupt:
-            logger.info("Received interrupt, shutting down...")
-        except Exception as e:
-            logger.error(f"Worker error: {e}", exc_info=True)
-            raise
-
-    # Multi-worker mode (no lock, spawn multiple processes)
+    # Always use supervisor mode for consistent behavior
     if use_cpuset:
         # Use supervisor mode for CPU affinity
         logger.info(

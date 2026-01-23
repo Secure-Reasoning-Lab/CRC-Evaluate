@@ -33,6 +33,7 @@ from pydantic import BaseModel
 from crsbench.builder import BuildResult, OSSFuzzBuilder
 from crsbench.builder.types import BenchmarkMode
 from crsbench.distributed.jobs import get_crs_type
+from crsbench.evaluation.cleanup import cleanup_trial_directory, copy_essential_files
 from crsbench.evaluation.results import CRSType, TrialResult
 from crsbench.utils import log_progress, log_section, log_summary, set_gitcache
 from crsbench.utils.crs_helper import get_crs_registry_name
@@ -265,6 +266,46 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         "Bug-fixing CRS always skips harnesses without CPVs regardless of this flag.",
     )
 
+    parser.add_argument(
+        "--keep-only-results",
+        action="store_true",
+        help="Delete bulky artifacts after experiment completes, keeping only essential files for reporting",
+    )
+
+    parser.add_argument(
+        "--cleanup-after-trial",
+        action="store_true",
+        help="Delete bulky artifacts after each trial completes",
+    )
+
+    parser.add_argument(
+        "--copy-results-after-trial",
+        action="store_true",
+        help="Copy essential files to results_filestore after each trial completes",
+    )
+
+    parser.add_argument(
+        "--copy-results-to-filestore",
+        action="store_true",
+        help="Enable copying essential files to results_filestore location",
+    )
+
+    parser.add_argument(
+        "--experiment-results-filestore",
+        type=str,
+        required=False,
+        metavar="PATH",
+        help="Destination path for copying experiment trial data (requires --copy-results-to-filestore)",
+    )
+
+    parser.add_argument(
+        "--reports-results-filestore",
+        type=str,
+        required=False,
+        metavar="PATH",
+        help="Destination path for copying report data (requires --copy-results-to-filestore)",
+    )
+
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments with subcommand support.
@@ -418,6 +459,60 @@ def validate_arguments(args: argparse.Namespace) -> None:
         )
 
     logger.info(f"Experiment configuration: {config_path}")
+
+
+def validate_filestore_permissions(config: ExperimentConfig) -> None:
+    """Validate write permissions for filestore directories.
+
+    Attempts to create directories and verifies write access early
+    to avoid permission errors during experiment execution.
+
+    Args:
+        config: Experiment configuration
+
+    Raises:
+        SystemExit: If directory creation fails or write permission is denied
+    """
+    directories_to_check = [
+        ("experiment_filestore", config.experiment_filestore),
+        ("report_filestore", config.report_filestore),
+    ]
+
+    # Add results filestores if copy is enabled
+    if config.copy_results_to_filestore:
+        if config.experiment_results_filestore:
+            directories_to_check.append(
+                ("experiment_results_filestore", config.experiment_results_filestore)
+            )
+        if config.reports_results_filestore:
+            directories_to_check.append(
+                ("reports_results_filestore", config.reports_results_filestore)
+            )
+
+    for name, path in directories_to_check:
+        try:
+            # Try to create the directory
+            path.mkdir(parents=True, exist_ok=True)
+
+            # Verify write permission by creating a test file
+            test_file = path / ".crsbench_permission_test"
+            test_file.touch()
+            test_file.unlink()
+
+            logger.debug(f"Verified write access to {name}: {path}")
+        except PermissionError as e:
+            logger.error(f"Permission denied for {name}: {path}")
+            logger.error(f"  Error: {e}")
+            logger.error(
+                "Please ensure you have write permissions or use a different directory."
+            )
+            sys.exit(1)
+        except OSError as e:
+            logger.error(f"Failed to create {name} directory: {path}")
+            logger.error(f"  Error: {e}")
+            sys.exit(1)
+
+    logger.info("Filestore permissions verified")
 
 
 def parse_list_argument(arg_value: str) -> List[str]:
@@ -1114,6 +1209,41 @@ def enhance_config_with_cli_args(
         overrides["only_cpv_harnesses"] = True
         logger.info("Using only_cpv_harnesses=True from CLI")
 
+    # Cleanup configuration overrides
+    if hasattr(args, "keep_only_results") and args.keep_only_results:
+        overrides["keep_only_results"] = True
+        logger.info("Using keep_only_results=True from CLI")
+
+    if hasattr(args, "cleanup_after_trial") and args.cleanup_after_trial:
+        overrides["cleanup_after_trial"] = True
+        logger.info("Using cleanup_after_trial=True from CLI")
+
+    if hasattr(args, "copy_results_after_trial") and args.copy_results_after_trial:
+        overrides["copy_results_after_trial"] = True
+        logger.info("Using copy_results_after_trial=True from CLI")
+
+    if hasattr(args, "copy_results_to_filestore") and args.copy_results_to_filestore:
+        overrides["copy_results_to_filestore"] = True
+        logger.info("Using copy_results_to_filestore=True from CLI")
+
+    if (
+        hasattr(args, "experiment_results_filestore")
+        and args.experiment_results_filestore is not None
+    ):
+        overrides["experiment_results_filestore"] = args.experiment_results_filestore
+        logger.info(
+            f"Using experiment_results_filestore from CLI: {args.experiment_results_filestore}"
+        )
+
+    if (
+        hasattr(args, "reports_results_filestore")
+        and args.reports_results_filestore is not None
+    ):
+        overrides["reports_results_filestore"] = args.reports_results_filestore
+        logger.info(
+            f"Using reports_results_filestore from CLI: {args.reports_results_filestore}"
+        )
+
     return config.model_copy(update=overrides)
 
 
@@ -1225,6 +1355,17 @@ def run_experiment_local(
     log_section("Experiment Complete - Generating Report", width=60)
 
     generate_final_report(results, experiment_name, config)
+
+    # Post-experiment operations
+    # Copy results first (before cleanup)
+    if config.copy_results_to_filestore and (
+        config.experiment_results_filestore or config.reports_results_filestore
+    ):
+        _copy_experiment_results(experiment_name, config)
+
+    # Cleanup bulky artifacts
+    if config.keep_only_results:
+        _cleanup_experiment_artifacts(experiment_name, config)
 
 
 def monitor_jobs(queue, job_list: List, experiment_name: str) -> List[TrialResult]:
@@ -1830,6 +1971,101 @@ def run_experiment_distributed(
 
     generate_final_report(results, experiment_name, config)
 
+    # Post-experiment operations
+    # Copy results first (before cleanup)
+    if config.copy_results_to_filestore and (
+        config.experiment_results_filestore or config.reports_results_filestore
+    ):
+        _copy_experiment_results(experiment_name, config)
+
+    # Cleanup bulky artifacts
+    if config.keep_only_results:
+        _cleanup_experiment_artifacts(experiment_name, config)
+
+
+def _copy_experiment_results(experiment_name: str, config) -> None:
+    """Copy essential files from experiment to results filestore.
+
+    Args:
+        experiment_name: Experiment identifier
+        config: Experiment configuration
+    """
+    from crsbench.reporting.snapshot_loader import discover_trials
+
+    experiment_dir = Path(config.experiment_filestore) / experiment_name
+
+    if not experiment_dir.exists():
+        logger.warning(f"Experiment directory not found for copying: {experiment_dir}")
+        return
+
+    # Copy experiment trial data to experiment_results_filestore
+    if config.experiment_results_filestore:
+        # Discover all trial directories
+        trial_infos = discover_trials(experiment_dir)
+        trial_dirs = [trial_info.trial_dir for trial_info in trial_infos]
+
+        if not trial_dirs:
+            logger.warning(f"No trial directories found in {experiment_dir}")
+        else:
+            log_section("Copying experiment trial data to filestore", width=60)
+            results_dest = Path(config.experiment_results_filestore) / experiment_name
+            logger.info(f"Copying trial data to: {results_dest}")
+            logger.info(f"Found {len(trial_dirs)} trial directories to copy")
+
+            for trial_dir in trial_dirs:
+                # Compute relative path from experiment_dir to preserve structure
+                rel_path = trial_dir.relative_to(experiment_dir)
+                dest_dir = results_dest / rel_path
+                copy_essential_files(trial_dir, dest_dir)
+
+            logger.info(f"Trial data copying complete: {results_dest}")
+
+    # Copy report data to reports_results_filestore
+    if config.reports_results_filestore:
+        import shutil
+
+        report_dir = Path(config.report_filestore) / experiment_name
+        if report_dir.exists():
+            log_section("Copying report data to filestore", width=60)
+            report_dest = Path(config.reports_results_filestore) / experiment_name
+            logger.info(f"Copying report data to: {report_dest}")
+            shutil.copytree(report_dir, report_dest, dirs_exist_ok=True)
+            logger.info(f"Report data copying complete: {report_dest}")
+        else:
+            logger.warning(f"Report directory not found: {report_dir}")
+
+
+def _cleanup_experiment_artifacts(experiment_name: str, config) -> None:
+    """Clean up bulky artifacts from experiment directory.
+
+    Args:
+        experiment_name: Experiment identifier
+        config: Experiment configuration
+    """
+    from crsbench.reporting.snapshot_loader import discover_trials
+
+    experiment_dir = Path(config.experiment_filestore) / experiment_name
+
+    if not experiment_dir.exists():
+        logger.warning(f"Experiment directory not found for cleanup: {experiment_dir}")
+        return
+
+    # Discover all trial directories
+    trial_infos = discover_trials(experiment_dir)
+    trial_dirs = [trial_info.trial_dir for trial_info in trial_infos]
+
+    if not trial_dirs:
+        logger.warning(f"No trial directories found in {experiment_dir}")
+        return
+
+    log_section("Cleaning up bulky artifacts", width=60)
+    logger.info(f"Found {len(trial_dirs)} trial directories to clean")
+
+    for trial_dir in trial_dirs:
+        cleanup_trial_directory(trial_dir)
+
+    logger.info("Cleanup complete")
+
 
 def generate_final_report(
     results: List[TrialResult], experiment_name: str, config
@@ -2028,6 +2264,9 @@ def main() -> None:
     config_path = Path(args.experiment_config)
     config = load_experiment_config(config_path)
 
+    # Validate filestore directory permissions early
+    validate_filestore_permissions(config)
+
     # Resolve experiment name (CLI overrides config)
     experiment_name = (
         args.experiment_name if args.experiment_name else config.experiment
@@ -2125,8 +2364,13 @@ def main() -> None:
         logger.error(f"Failed to resolve harnesses: {e}")
         sys.exit(1)
 
-    # Calculate total jobs
-    total_jobs = len(benchmark_harnesses) * len(crses) * config.trials
+    # Calculate total jobs using trial matrix (accounts for mode and CPV filtering)
+    registry_dir = Path(config.registry_dir or "crses/registry")
+    crs_configs_dir = Path(config.crs_configs_dir or "crses/configs")
+    trial_matrix = generate_trial_matrix(
+        benchmark_harnesses, crses, config, registry_dir, crs_configs_dir
+    )
+    total_jobs = len(trial_matrix)
     logger.info(f"Total jobs to execute: {total_jobs}")
 
     # Determine execution mode
