@@ -447,6 +447,53 @@ def validate_arguments(args: argparse.Namespace) -> None:
     logger.info(f"Experiment configuration: {config_path}")
 
 
+def validate_filestore_permissions(config: ExperimentConfig) -> None:
+    """Validate write permissions for filestore directories.
+
+    Attempts to create directories and verifies write access early
+    to avoid permission errors during experiment execution.
+
+    Args:
+        config: Experiment configuration
+
+    Raises:
+        SystemExit: If directory creation fails or write permission is denied
+    """
+    directories_to_check = [
+        ("experiment_filestore", config.experiment_filestore),
+        ("report_filestore", config.report_filestore),
+    ]
+
+    # Add results_filestore if copy is enabled
+    if config.copy_results_to_filestore and config.results_filestore:
+        directories_to_check.append(("results_filestore", config.results_filestore))
+
+    for name, path in directories_to_check:
+        try:
+            # Try to create the directory
+            path.mkdir(parents=True, exist_ok=True)
+
+            # Verify write permission by creating a test file
+            test_file = path / ".crsbench_permission_test"
+            test_file.touch()
+            test_file.unlink()
+
+            logger.debug(f"Verified write access to {name}: {path}")
+        except PermissionError as e:
+            logger.error(f"Permission denied for {name}: {path}")
+            logger.error(f"  Error: {e}")
+            logger.error(
+                "Please ensure you have write permissions or use a different directory."
+            )
+            sys.exit(1)
+        except OSError as e:
+            logger.error(f"Failed to create {name} directory: {path}")
+            logger.error(f"  Error: {e}")
+            sys.exit(1)
+
+    logger.info("Filestore permissions verified")
+
+
 def parse_list_argument(arg_value: str) -> List[str]:
     """Parse comma-separated list argument.
 
@@ -2132,6 +2179,9 @@ def main() -> None:
     # Load and validate experiment configuration
     config_path = Path(args.experiment_config)
     config = load_experiment_config(config_path)
+
+    # Validate filestore directory permissions early
+    validate_filestore_permissions(config)
 
     # Resolve experiment name (CLI overrides config)
     experiment_name = (
