@@ -274,6 +274,252 @@ def _create_phase_callbacks():
     return on_build_start, on_run_start, on_verification_start
 
 
+def _build_trial_output_path(
+    filestore: Path,
+    experiment_name: str,
+    crs: str,
+    benchmark: str,
+    harness: str,
+    mode: str,
+    trial_num: int,
+) -> Path:
+    """Construct trial output directory path.
+
+    Args:
+        filestore: Base filestore directory
+        experiment_name: Experiment name
+        crs: CRS name
+        benchmark: Benchmark name
+        harness: Harness name
+        mode: Evaluation mode ('delta', 'full', or 'all')
+        trial_num: Trial number
+
+    Returns:
+        Path to trial output directory
+    """
+    return (
+        filestore
+        / experiment_name
+        / crs
+        / benchmark
+        / harness
+        / mode
+        / f"trial-{trial_num}"
+    )
+
+
+def _reconstruct_trial_result_from_success(
+    trial_dir: Path,
+    crs: str,
+    benchmark: str,
+    harness: str,
+    trial_num: int,
+) -> TrialResult:
+    """Reconstruct TrialResult from a successful trial's metadata.json.
+
+    Args:
+        trial_dir: Path to trial directory
+        crs: CRS name
+        benchmark: Benchmark name
+        harness: Harness name
+        trial_num: Trial number
+
+    Returns:
+        TrialResult reconstructed from metadata
+    """
+    metadata_file = trial_dir / "metadata.json"
+
+    # Default values
+    crs_type_enum = CRSType.BUG_FINDING
+    execution_time = 0.0
+    povs_found = 0
+    total_povs = 0
+    patches_generated = 0
+    patches_valid = 0
+
+    if metadata_file.exists():
+        try:
+            with metadata_file.open("r") as f:
+                metadata = json.load(f)
+
+            # Extract CRS type from metadata
+            mode_str = metadata.get("mode", "bug_finding")
+            if mode_str == "patch_generation":
+                crs_type_enum = CRSType.BUG_FIXING
+
+            # Try to extract results from metadata if available
+            # (These may not be in the standard metadata.json format)
+            povs_found = metadata.get("povs_found", 0)
+            total_povs = metadata.get("total_povs", 0)
+            patches_generated = metadata.get("patches_generated", 0)
+            patches_valid = metadata.get("patches_valid", 0)
+
+        except Exception as e:
+            logger.warning(
+                f"Could not parse metadata.json for trial {trial_num}: {e}. Using defaults."
+            )
+    else:
+        logger.warning(
+            f"metadata.json not found for trial {trial_num} at {trial_dir}. Using defaults."
+        )
+
+    logger.info(
+        f"[Trial {trial_num}] Skipping execution - found existing .success marker at {trial_dir}"
+    )
+
+    return TrialResult(
+        crs=crs,
+        benchmark=benchmark,
+        harness=harness,
+        trial_num=trial_num,
+        crs_type=crs_type_enum,
+        success=True,
+        execution_time=execution_time,
+        povs_found=povs_found,
+        total_povs=total_povs,
+        patches_generated=patches_generated,
+        patches_valid=patches_valid,
+        report={},
+        metadata=TrialMetadata(
+            timestamp_start=0.0,
+            timestamp_end=0.0,
+        ),
+    )
+
+
+def _create_failed_trial_result(
+    trial_dir: Path,
+    crs: str,
+    benchmark: str,
+    harness: str,
+    trial_num: int,
+) -> TrialResult:
+    """Create TrialResult for a previously failed trial.
+
+    Args:
+        trial_dir: Path to trial directory
+        crs: CRS name
+        benchmark: Benchmark name
+        harness: Harness name
+        trial_num: Trial number
+
+    Returns:
+        TrialResult indicating failure (for retry)
+    """
+    metadata_file = trial_dir / "metadata.json"
+
+    # Default values
+    crs_type_enum = CRSType.BUG_FINDING
+
+    if metadata_file.exists():
+        try:
+            with metadata_file.open("r") as f:
+                metadata = json.load(f)
+
+            # Extract CRS type from metadata
+            mode_str = metadata.get("mode", "bug_finding")
+            if mode_str == "patch_generation":
+                crs_type_enum = CRSType.BUG_FIXING
+
+        except Exception as e:
+            logger.warning(
+                f"Could not parse metadata.json for failed trial {trial_num}: {e}. Using default CRS type."
+            )
+
+    logger.info(
+        f"[Trial {trial_num}] Found existing .fail marker at {trial_dir} - returning failed result for retry"
+    )
+
+    return TrialResult(
+        crs=crs,
+        benchmark=benchmark,
+        harness=harness,
+        trial_num=trial_num,
+        crs_type=crs_type_enum,
+        success=False,
+        execution_time=0.0,
+        error="Trial previously failed (marked for retry)",
+        error_type="PreviousFailure",
+        report={},
+        metadata=TrialMetadata(
+            timestamp_start=0.0,
+            timestamp_end=0.0,
+        ),
+    )
+
+
+def _check_existing_trial(
+    config: ExperimentConfig,
+    crs: str,
+    benchmark: str,
+    harness: str,
+    mode: str,
+    trial_num: int,
+) -> Optional[TrialResult]:
+    """Check for existing trial markers and return TrialResult if found.
+
+    Checks experiment_results_filestore first (if configured), then experiment_filestore.
+    Returns immediately if .success or .fail marker is found.
+
+    Args:
+        config: Experiment configuration
+        crs: CRS name
+        benchmark: Benchmark name
+        harness: Harness name
+        mode: Evaluation mode
+        trial_num: Trial number
+
+    Returns:
+        TrialResult if existing marker found, None otherwise
+    """
+    experiment_name = config.experiment
+
+    # Check results filestore first (if configured)
+    filestores_to_check = []
+    if config.experiment_results_filestore:
+        filestores_to_check.append(config.experiment_results_filestore.resolve())
+    filestores_to_check.append(config.experiment_filestore.resolve())
+
+    for filestore in filestores_to_check:
+        trial_dir = _build_trial_output_path(
+            filestore=filestore,
+            experiment_name=experiment_name,
+            crs=crs,
+            benchmark=benchmark,
+            harness=harness,
+            mode=mode,
+            trial_num=trial_num,
+        )
+
+        if not trial_dir.exists():
+            continue
+
+        # Check for success marker
+        success_marker = trial_dir / ".success"
+        if success_marker.exists():
+            return _reconstruct_trial_result_from_success(
+                trial_dir=trial_dir,
+                crs=crs,
+                benchmark=benchmark,
+                harness=harness,
+                trial_num=trial_num,
+            )
+
+        # Check for fail marker
+        fail_marker = trial_dir / ".fail"
+        if fail_marker.exists():
+            return _create_failed_trial_result(
+                trial_dir=trial_dir,
+                crs=crs,
+                benchmark=benchmark,
+                harness=harness,
+                trial_num=trial_num,
+            )
+
+    # No existing trial markers found
+    return None
+
+
 def run_crs_trial(
     crs: str,
     benchmark: str,
@@ -319,6 +565,18 @@ def run_crs_trial(
     """
     # Reconstruct ExperimentConfig from dict - Pydantic will convert strings to Paths
     config = ExperimentConfig(**config_dict)
+
+    # Check for existing trial markers before any heavy setup
+    existing_result = _check_existing_trial(
+        config=config,
+        crs=crs,
+        benchmark=benchmark,
+        harness=harness_name,
+        mode=mode,
+        trial_num=trial_num,
+    )
+    if existing_result is not None:
+        return existing_result
 
     logger.info(
         f"[Trial {trial_num}] Starting CRS '{crs}' on benchmark '{benchmark}' harness '{harness_name}'"
@@ -600,14 +858,14 @@ def run_crs_trial(
         experiment_filestore = config.experiment_filestore.resolve()
         experiment_name = config.experiment
         # TODO: decide a better orgnization
-        trial_output_dir = (
-            experiment_filestore
-            / experiment_name
-            / crs
-            / benchmark
-            / harness_name
-            / mode
-            / f"trial-{trial_num}"
+        trial_output_dir = _build_trial_output_path(
+            filestore=experiment_filestore,
+            experiment_name=experiment_name,
+            crs=crs,
+            benchmark=benchmark,
+            harness=harness_name,
+            mode=mode,
+            trial_num=trial_num,
         )
         trial_output_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Trial output directory: {trial_output_dir}")
