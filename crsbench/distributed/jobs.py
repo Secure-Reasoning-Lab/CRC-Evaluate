@@ -459,11 +459,26 @@ def run_crs_trial(
                 f"Worker override applied: copy_results_to_filestore = {config.copy_results_to_filestore}"
             )
 
-        results_filestore_override = get_worker_override("results_filestore")
-        if results_filestore_override:
-            config.results_filestore = Path(results_filestore_override).resolve()
+        experiment_results_filestore_override = get_worker_override(
+            "experiment_results_filestore"
+        )
+        if experiment_results_filestore_override:
+            config.experiment_results_filestore = Path(
+                experiment_results_filestore_override
+            ).resolve()
             logger.info(
-                f"Worker override applied: results_filestore = {config.results_filestore}"
+                f"Worker override applied: experiment_results_filestore = {config.experiment_results_filestore}"
+            )
+
+        reports_results_filestore_override = get_worker_override(
+            "reports_results_filestore"
+        )
+        if reports_results_filestore_override:
+            config.reports_results_filestore = Path(
+                reports_results_filestore_override
+            ).resolve()
+            logger.info(
+                f"Worker override applied: reports_results_filestore = {config.reports_results_filestore}"
             )
 
         # Resolve CRS config name to registry name
@@ -677,10 +692,12 @@ def run_crs_trial(
         marker_file.touch()
 
         # Per-trial copy if enabled (before cleanup)
-        if config.copy_results_after_trial and config.results_filestore:
+        if config.copy_results_after_trial and config.experiment_results_filestore:
             experiment_dir = config.experiment_filestore.resolve() / config.experiment
             rel_path = trial_output_dir.relative_to(experiment_dir)
-            dest_dir = Path(config.results_filestore) / config.experiment / rel_path
+            dest_dir = (
+                Path(config.experiment_results_filestore) / config.experiment / rel_path
+            )
             copy_essential_files(trial_output_dir, dest_dir)
 
         # Per-trial cleanup if enabled
@@ -697,12 +714,16 @@ def run_crs_trial(
         if "trial_output_dir" in locals() and trial_output_dir.exists():
             (trial_output_dir / ".fail").touch()
             # Per-trial copy if enabled (before cleanup, even for failed trials)
-            if config.copy_results_after_trial and config.results_filestore:
+            if config.copy_results_after_trial and config.experiment_results_filestore:
                 experiment_dir = (
                     config.experiment_filestore.resolve() / config.experiment
                 )
                 rel_path = trial_output_dir.relative_to(experiment_dir)
-                dest_dir = Path(config.results_filestore) / config.experiment / rel_path
+                dest_dir = (
+                    Path(config.experiment_results_filestore)
+                    / config.experiment
+                    / rel_path
+                )
                 copy_essential_files(trial_output_dir, dest_dir)
             # Per-trial cleanup if enabled (even for failed trials)
             if config.cleanup_after_trial:
@@ -732,12 +753,16 @@ def run_crs_trial(
         if "trial_output_dir" in locals() and trial_output_dir.exists():
             (trial_output_dir / ".fail").touch()
             # Per-trial copy if enabled (before cleanup, even for failed trials)
-            if config.copy_results_after_trial and config.results_filestore:
+            if config.copy_results_after_trial and config.experiment_results_filestore:
                 experiment_dir = (
                     config.experiment_filestore.resolve() / config.experiment
                 )
                 rel_path = trial_output_dir.relative_to(experiment_dir)
-                dest_dir = Path(config.results_filestore) / config.experiment / rel_path
+                dest_dir = (
+                    Path(config.experiment_results_filestore)
+                    / config.experiment
+                    / rel_path
+                )
                 copy_essential_files(trial_output_dir, dest_dir)
             # Per-trial cleanup if enabled (even for failed trials)
             if config.cleanup_after_trial:
@@ -769,12 +794,16 @@ def run_crs_trial(
         if "trial_output_dir" in locals() and trial_output_dir.exists():
             (trial_output_dir / ".fail").touch()
             # Per-trial copy if enabled (before cleanup, even for failed trials)
-            if config.copy_results_after_trial and config.results_filestore:
+            if config.copy_results_after_trial and config.experiment_results_filestore:
                 experiment_dir = (
                     config.experiment_filestore.resolve() / config.experiment
                 )
                 rel_path = trial_output_dir.relative_to(experiment_dir)
-                dest_dir = Path(config.results_filestore) / config.experiment / rel_path
+                dest_dir = (
+                    Path(config.experiment_results_filestore)
+                    / config.experiment
+                    / rel_path
+                )
                 copy_essential_files(trial_output_dir, dest_dir)
             # Per-trial cleanup if enabled (even for failed trials)
             if config.cleanup_after_trial:

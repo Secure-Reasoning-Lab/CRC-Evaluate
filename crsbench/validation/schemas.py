@@ -689,9 +689,13 @@ class WorkerConfig(BaseModel):
         default=None,
         description="Override result copying behavior for workers",
     )
-    results_filestore: Optional[Path] = Field(
+    experiment_results_filestore: Optional[Path] = Field(
         default=None,
-        description="Override results destination path for workers",
+        description="Override experiment results destination path for workers",
+    )
+    reports_results_filestore: Optional[Path] = Field(
+        default=None,
+        description="Override report results destination path for workers",
     )
 
 
@@ -867,9 +871,13 @@ class ExperimentConfig(BaseModel):
         default=False,
         description="Enable copying essential files to results_filestore location",
     )
-    results_filestore: Optional[Path] = Field(
+    experiment_results_filestore: Optional[Path] = Field(
         default=None,
-        description="Destination path for copying essential result files (requires copy_results_to_filestore=true)",
+        description="Destination path for copying experiment trial data",
+    )
+    reports_results_filestore: Optional[Path] = Field(
+        default=None,
+        description="Destination path for copying report data",
     )
 
     @field_validator("experiment")
@@ -1092,9 +1100,18 @@ class ExperimentConfig(BaseModel):
     @model_validator(mode="after")
     def check_results_filestore_configuration(self):
         """Validate results_filestore configuration."""
-        if self.copy_results_to_filestore and not self.results_filestore:
+        if self.copy_results_to_filestore:
+            if (
+                not self.experiment_results_filestore
+                and not self.reports_results_filestore
+            ):
+                raise ValueError(
+                    "copy_results_to_filestore=true requires at least one of "
+                    "experiment_results_filestore or reports_results_filestore to be set"
+                )
+        if self.copy_results_after_trial and not self.experiment_results_filestore:
             raise ValueError(
-                "copy_results_to_filestore=true requires results_filestore path to be set"
+                "copy_results_after_trial=true requires experiment_results_filestore to be set"
             )
         return self
 

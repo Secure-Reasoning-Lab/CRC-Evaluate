@@ -52,21 +52,25 @@ keep_only_results: false
 cleanup_after_trial: false
 
 # Copy essential files to results_filestore after each trial completes.
-# Requires results_filestore to be set.
+# Requires experiment_results_filestore to be set.
 # Copying happens immediately after trial ends and BEFORE cleanup.
 # Useful for preserving results when cleanup_after_trial=true or when workers may be interrupted.
 # Default: false
 copy_results_after_trial: false
 
 # Enable copying essential files to a separate results location (bulk copy after all trials).
-# Requires results_filestore to be set.
+# Requires at least one of experiment_results_filestore or reports_results_filestore to be set.
 # Copying happens BEFORE cleanup, so you keep a copy of essential files.
 # Default: false
 copy_results_to_filestore: false
 
-# Destination path for copying essential result files.
+# Destination path for copying experiment trial data.
 # Used by both copy_results_after_trial and copy_results_to_filestore.
-# results_filestore: /opt/crsbench-finished/my-experiment
+# experiment_results_filestore: /opt/crsbench-finished/my-experiment
+
+# Destination path for copying report data.
+# Used by copy_results_to_filestore (reports are not copied per-trial).
+# reports_results_filestore: /opt/crsbench-finished/my-experiment-reports
 
 # List of CRS implementations to evaluate.
 crses:
@@ -186,8 +190,11 @@ worker:
   # Override bulk result copying behavior.
   # copy_results_to_filestore: true
 
-  # Override results destination path.
-  # results_filestore: /mnt/nfs/finished-experiments
+  # Override experiment results destination path.
+  # experiment_results_filestore: /mnt/nfs/finished-experiments
+
+  # Override report results destination path.
+  # reports_results_filestore: /mnt/nfs/finished-reports
 
 # =============================================================================
 # Optional Features

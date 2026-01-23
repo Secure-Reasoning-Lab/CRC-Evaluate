@@ -291,11 +291,19 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--results-filestore",
+        "--experiment-results-filestore",
         type=str,
         required=False,
         metavar="PATH",
-        help="Destination path for copying essential result files (requires --copy-results-to-filestore)",
+        help="Destination path for copying experiment trial data (requires --copy-results-to-filestore)",
+    )
+
+    parser.add_argument(
+        "--reports-results-filestore",
+        type=str,
+        required=False,
+        metavar="PATH",
+        help="Destination path for copying report data (requires --copy-results-to-filestore)",
     )
 
 
@@ -470,9 +478,16 @@ def validate_filestore_permissions(config: ExperimentConfig) -> None:
         ("report_filestore", config.report_filestore),
     ]
 
-    # Add results_filestore if copy is enabled
-    if config.copy_results_to_filestore and config.results_filestore:
-        directories_to_check.append(("results_filestore", config.results_filestore))
+    # Add results filestores if copy is enabled
+    if config.copy_results_to_filestore:
+        if config.experiment_results_filestore:
+            directories_to_check.append(
+                ("experiment_results_filestore", config.experiment_results_filestore)
+            )
+        if config.reports_results_filestore:
+            directories_to_check.append(
+                ("reports_results_filestore", config.reports_results_filestore)
+            )
 
     for name, path in directories_to_check:
         try:
@@ -1211,9 +1226,23 @@ def enhance_config_with_cli_args(
         overrides["copy_results_to_filestore"] = True
         logger.info("Using copy_results_to_filestore=True from CLI")
 
-    if hasattr(args, "results_filestore") and args.results_filestore is not None:
-        overrides["results_filestore"] = args.results_filestore
-        logger.info(f"Using results_filestore from CLI: {args.results_filestore}")
+    if (
+        hasattr(args, "experiment_results_filestore")
+        and args.experiment_results_filestore is not None
+    ):
+        overrides["experiment_results_filestore"] = args.experiment_results_filestore
+        logger.info(
+            f"Using experiment_results_filestore from CLI: {args.experiment_results_filestore}"
+        )
+
+    if (
+        hasattr(args, "reports_results_filestore")
+        and args.reports_results_filestore is not None
+    ):
+        overrides["reports_results_filestore"] = args.reports_results_filestore
+        logger.info(
+            f"Using reports_results_filestore from CLI: {args.reports_results_filestore}"
+        )
 
     return config.model_copy(update=overrides)
 
@@ -1329,7 +1358,9 @@ def run_experiment_local(
 
     # Post-experiment operations
     # Copy results first (before cleanup)
-    if config.copy_results_to_filestore and config.results_filestore:
+    if config.copy_results_to_filestore and (
+        config.experiment_results_filestore or config.reports_results_filestore
+    ):
         _copy_experiment_results(experiment_name, config)
 
     # Cleanup bulky artifacts
@@ -1942,7 +1973,9 @@ def run_experiment_distributed(
 
     # Post-experiment operations
     # Copy results first (before cleanup)
-    if config.copy_results_to_filestore and config.results_filestore:
+    if config.copy_results_to_filestore and (
+        config.experiment_results_filestore or config.reports_results_filestore
+    ):
         _copy_experiment_results(experiment_name, config)
 
     # Cleanup bulky artifacts
@@ -1965,26 +1998,41 @@ def _copy_experiment_results(experiment_name: str, config) -> None:
         logger.warning(f"Experiment directory not found for copying: {experiment_dir}")
         return
 
-    # Discover all trial directories
-    trial_infos = discover_trials(experiment_dir)
-    trial_dirs = [trial_info.trial_dir for trial_info in trial_infos]
+    # Copy experiment trial data to experiment_results_filestore
+    if config.experiment_results_filestore:
+        # Discover all trial directories
+        trial_infos = discover_trials(experiment_dir)
+        trial_dirs = [trial_info.trial_dir for trial_info in trial_infos]
 
-    if not trial_dirs:
-        logger.warning(f"No trial directories found in {experiment_dir}")
-        return
+        if not trial_dirs:
+            logger.warning(f"No trial directories found in {experiment_dir}")
+        else:
+            log_section("Copying experiment trial data to filestore", width=60)
+            results_dest = Path(config.experiment_results_filestore) / experiment_name
+            logger.info(f"Copying trial data to: {results_dest}")
+            logger.info(f"Found {len(trial_dirs)} trial directories to copy")
 
-    log_section("Copying essential results to filestore", width=60)
-    results_dest = Path(config.results_filestore) / experiment_name
-    logger.info(f"Copying results to: {results_dest}")
-    logger.info(f"Found {len(trial_dirs)} trial directories to copy")
+            for trial_dir in trial_dirs:
+                # Compute relative path from experiment_dir to preserve structure
+                rel_path = trial_dir.relative_to(experiment_dir)
+                dest_dir = results_dest / rel_path
+                copy_essential_files(trial_dir, dest_dir)
 
-    for trial_dir in trial_dirs:
-        # Compute relative path from experiment_dir to preserve structure
-        rel_path = trial_dir.relative_to(experiment_dir)
-        dest_dir = results_dest / rel_path
-        copy_essential_files(trial_dir, dest_dir)
+            logger.info(f"Trial data copying complete: {results_dest}")
 
-    logger.info(f"Copying complete: {results_dest}")
+    # Copy report data to reports_results_filestore
+    if config.reports_results_filestore:
+        import shutil
+
+        report_dir = Path(config.report_filestore) / experiment_name
+        if report_dir.exists():
+            log_section("Copying report data to filestore", width=60)
+            report_dest = Path(config.reports_results_filestore) / experiment_name
+            logger.info(f"Copying report data to: {report_dest}")
+            shutil.copytree(report_dir, report_dest, dirs_exist_ok=True)
+            logger.info(f"Report data copying complete: {report_dest}")
+        else:
+            logger.warning(f"Report directory not found: {report_dir}")
 
 
 def _cleanup_experiment_artifacts(experiment_name: str, config) -> None:
