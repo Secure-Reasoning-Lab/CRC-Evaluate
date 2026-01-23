@@ -2316,8 +2316,13 @@ def main() -> None:
         logger.error(f"Failed to resolve harnesses: {e}")
         sys.exit(1)
 
-    # Calculate total jobs
-    total_jobs = len(benchmark_harnesses) * len(crses) * config.trials
+    # Calculate total jobs using trial matrix (accounts for mode and CPV filtering)
+    registry_dir = Path(config.registry_dir or "crses/registry")
+    crs_configs_dir = Path(config.crs_configs_dir or "crses/configs")
+    trial_matrix = generate_trial_matrix(
+        benchmark_harnesses, crses, config, registry_dir, crs_configs_dir
+    )
+    total_jobs = len(trial_matrix)
     logger.info(f"Total jobs to execute: {total_jobs}")
 
     # Determine execution mode
