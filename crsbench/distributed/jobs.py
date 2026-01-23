@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from crsbench.evaluation.cleanup import cleanup_build_variants, cleanup_trial_artifacts
+from crsbench.evaluation.cleanup import cleanup_trial_directory
 from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
 from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
 from crsbench.evaluation.litellm_tracker import (
@@ -638,8 +638,7 @@ def run_crs_trial(
 
         # Per-trial cleanup if enabled
         if config.cleanup_after_trial:
-            cleanup_trial_artifacts(trial_output_dir)
-            cleanup_build_variants(oss_fuzz_path, benchmark, mode)
+            cleanup_trial_directory(trial_output_dir)
 
         return trial_result
 
@@ -651,9 +650,8 @@ def run_crs_trial(
         if "trial_output_dir" in locals() and trial_output_dir.exists():
             (trial_output_dir / ".fail").touch()
             # Per-trial cleanup if enabled (even for failed trials)
-            if config.cleanup_after_trial and "oss_fuzz_path" in locals():
-                cleanup_trial_artifacts(trial_output_dir)
-                cleanup_build_variants(oss_fuzz_path, benchmark, mode)
+            if config.cleanup_after_trial:
+                cleanup_trial_directory(trial_output_dir)
         return TrialResult(
             crs=crs,
             benchmark=benchmark,
@@ -679,9 +677,8 @@ def run_crs_trial(
         if "trial_output_dir" in locals() and trial_output_dir.exists():
             (trial_output_dir / ".fail").touch()
             # Per-trial cleanup if enabled (even for failed trials)
-            if config.cleanup_after_trial and "oss_fuzz_path" in locals():
-                cleanup_trial_artifacts(trial_output_dir)
-                cleanup_build_variants(oss_fuzz_path, benchmark, mode)
+            if config.cleanup_after_trial:
+                cleanup_trial_directory(trial_output_dir)
         return TrialResult(
             crs=crs,
             benchmark=benchmark,
@@ -709,9 +706,8 @@ def run_crs_trial(
         if "trial_output_dir" in locals() and trial_output_dir.exists():
             (trial_output_dir / ".fail").touch()
             # Per-trial cleanup if enabled (even for failed trials)
-            if config.cleanup_after_trial and "oss_fuzz_path" in locals():
-                cleanup_trial_artifacts(trial_output_dir)
-                cleanup_build_variants(oss_fuzz_path, benchmark, mode)
+            if config.cleanup_after_trial:
+                cleanup_trial_directory(trial_output_dir)
         return TrialResult(
             crs=crs,
             benchmark=benchmark,

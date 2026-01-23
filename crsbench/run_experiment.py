@@ -33,11 +33,7 @@ from pydantic import BaseModel
 from crsbench.builder import BuildResult, OSSFuzzBuilder
 from crsbench.builder.types import BenchmarkMode
 from crsbench.distributed.jobs import get_crs_type
-from crsbench.evaluation.cleanup import (
-    cleanup_build_variants,
-    cleanup_trial_artifacts,
-    copy_essential_files,
-)
+from crsbench.evaluation.cleanup import cleanup_trial_directory, copy_essential_files
 from crsbench.evaluation.results import CRSType, TrialResult
 from crsbench.utils import log_progress, log_section, log_summary, set_gitcache
 from crsbench.utils.crs_helper import get_crs_registry_name
@@ -1879,20 +1875,27 @@ def run_experiment_distributed(
     generate_final_report(results, experiment_name, config)
 
 
-def _perform_post_experiment_cleanup(
-    experiment_name: str, config, results: List[TrialResult]
-) -> None:
+def _perform_post_experiment_cleanup(experiment_name: str, config) -> None:
     """Perform post-experiment cleanup and optional results copying.
 
     Args:
         experiment_name: Experiment identifier
         config: Experiment configuration
-        results: List of trial results
     """
+    from crsbench.reporting.snapshot_loader import discover_trials
+
     experiment_dir = Path(config.experiment_filestore) / experiment_name
 
     if not experiment_dir.exists():
         logger.warning(f"Experiment directory not found for cleanup: {experiment_dir}")
+        return
+
+    # Discover all trial directories
+    trial_infos = discover_trials(experiment_dir)
+    trial_dirs = [trial_info.trial_dir for trial_info in trial_infos]
+
+    if not trial_dirs:
+        logger.warning(f"No trial directories found in {experiment_dir}")
         return
 
     # Copy essential files first (before cleanup)
@@ -1900,9 +1903,6 @@ def _perform_post_experiment_cleanup(
         log_section("Copying essential results to filestore", width=60)
         results_dest = Path(config.results_filestore) / experiment_name
         logger.info(f"Copying results to: {results_dest}")
-
-        # Find all trial directories
-        trial_dirs = list(experiment_dir.rglob("trial-*"))
         logger.info(f"Found {len(trial_dirs)} trial directories to copy")
 
         for trial_dir in trial_dirs:
@@ -1913,40 +1913,13 @@ def _perform_post_experiment_cleanup(
 
         logger.info(f"Copying complete: {results_dest}")
 
-    # Cleanup bulky artifacts
+    # Cleanup bulky artifacts using whitelist approach
     if config.keep_only_results:
         log_section("Cleaning up bulky artifacts", width=60)
-
-        # Find all trial directories
-        trial_dirs = list(experiment_dir.rglob("trial-*"))
         logger.info(f"Found {len(trial_dirs)} trial directories to clean")
 
         for trial_dir in trial_dirs:
-            cleanup_trial_artifacts(trial_dir)
-
-        # Also cleanup build variants
-        # Get unique benchmark-mode combinations from results
-        oss_fuzz_path = config.oss_fuzz_path
-        benchmarks_modes = set()
-        for result in results:
-            # Extract mode from trial directory structure
-            # trial_dir structure: {experiment}/{crs}/{benchmark}/{harness}/{mode}/trial-{num}
-            trial_dir = (
-                experiment_dir
-                / result.crs
-                / result.benchmark
-                / result.harness
-                / "delta"  # Default to delta, should ideally extract from trial metadata
-            )
-            if trial_dir.parent.exists():
-                mode = trial_dir.parent.name
-                benchmarks_modes.add((result.benchmark, mode))
-
-        logger.info(
-            f"Cleaning build variants for {len(benchmarks_modes)} benchmark-mode combinations"
-        )
-        for benchmark, mode in benchmarks_modes:
-            cleanup_build_variants(oss_fuzz_path, benchmark, mode)
+            cleanup_trial_directory(trial_dir)
 
         logger.info("Cleanup complete")
 
@@ -2015,7 +1988,7 @@ def generate_final_report(
     if config.keep_only_results or (
         config.copy_results_to_filestore and config.results_filestore
     ):
-        _perform_post_experiment_cleanup(experiment_name, config, results)
+        _perform_post_experiment_cleanup(experiment_name, config)
 
 
 def _generate_html_json_reports(experiment_name: str, config) -> None:
