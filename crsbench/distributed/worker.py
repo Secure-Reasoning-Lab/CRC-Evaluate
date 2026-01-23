@@ -290,6 +290,23 @@ def _run_supervisor(
     os.environ["CRSBENCH_SUPERVISOR"] = "1"
     logger.info("Starting supervisor mode for dynamic CPU allocation...")
 
+    # Create all filestore directories from config if they don't exist
+    filestore_vars = [
+        "CRSBENCH_WORKER_EXPERIMENT_FILESTORE",
+        "CRSBENCH_WORKER_REPORT_FILESTORE",
+        "CRSBENCH_WORKER_EXPERIMENT_RESULTS_FILESTORE",
+        "CRSBENCH_WORKER_REPORTS_RESULTS_FILESTORE",
+    ]
+    for var in filestore_vars:
+        filestore = os.environ.get(var)
+        if filestore:
+            # Create base path and experiment-specific subdirectory
+            base_path = Path(filestore)
+            base_path.mkdir(parents=True, exist_ok=True)
+            exp_path = base_path / experiment_name
+            exp_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Ensured filestore exists: {exp_path}")
+
     cpu_pool = CPUPool() if use_cpuset else None
     workers: dict[
         int, tuple[multiprocessing.Process, list[int], str, int]
@@ -717,7 +734,17 @@ def check_disk_space(path: Path) -> int:
     Returns:
         Available disk space in bytes
     """
-    stat = shutil.disk_usage(path)
+    # Walk up to find an existing directory (handles case where path doesn't exist yet)
+    check_path = path
+    while not check_path.exists():
+        parent = check_path.parent
+        if parent == check_path:
+            # Reached root without finding existing dir, fall back to cwd
+            check_path = Path.cwd()
+            break
+        check_path = parent
+
+    stat = shutil.disk_usage(check_path)
     return stat.free
 
 
