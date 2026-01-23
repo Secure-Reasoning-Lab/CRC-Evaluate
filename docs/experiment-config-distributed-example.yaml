@@ -51,14 +51,21 @@ keep_only_results: false
 # Default: false
 cleanup_after_trial: false
 
-# Enable copying essential files to a separate results location.
+# Copy essential files to results_filestore after each trial completes.
+# Requires results_filestore to be set.
+# Copying happens immediately after trial ends and BEFORE cleanup.
+# Useful for preserving results when cleanup_after_trial=true or when workers may be interrupted.
+# Default: false
+copy_results_after_trial: false
+
+# Enable copying essential files to a separate results location (bulk copy after all trials).
 # Requires results_filestore to be set.
 # Copying happens BEFORE cleanup, so you keep a copy of essential files.
 # Default: false
 copy_results_to_filestore: false
 
 # Destination path for copying essential result files.
-# Only used when copy_results_to_filestore is true.
+# Used by both copy_results_after_trial and copy_results_to_filestore.
 # results_filestore: /opt/crsbench-finished/my-experiment
 
 # List of CRS implementations to evaluate.
@@ -173,7 +180,10 @@ worker:
   # Override cleanup after each trial.
   # cleanup_after_trial: true
 
-  # Override result copying behavior.
+  # Override per-trial result copying.
+  # copy_results_after_trial: true
+
+  # Override bulk result copying behavior.
   # copy_results_to_filestore: true
 
   # Override results destination path.

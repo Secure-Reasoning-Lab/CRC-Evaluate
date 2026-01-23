@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from crsbench.evaluation.cleanup import cleanup_trial_directory
+from crsbench.evaluation.cleanup import cleanup_trial_directory, copy_essential_files
 from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
 from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
 from crsbench.evaluation.litellm_tracker import (
@@ -441,6 +441,17 @@ def run_crs_trial(
                 f"Worker override applied: cleanup_after_trial = {config.cleanup_after_trial}"
             )
 
+        copy_results_after_trial_override = get_worker_override(
+            "copy_results_after_trial"
+        )
+        if copy_results_after_trial_override:
+            config.copy_results_after_trial = (
+                copy_results_after_trial_override.lower() == "true"
+            )
+            logger.info(
+                f"Worker override applied: copy_results_after_trial = {config.copy_results_after_trial}"
+            )
+
         copy_results_override = get_worker_override("copy_results_to_filestore")
         if copy_results_override:
             config.copy_results_to_filestore = copy_results_override.lower() == "true"
@@ -665,6 +676,13 @@ def run_crs_trial(
         marker_file = trial_output_dir / ".success"
         marker_file.touch()
 
+        # Per-trial copy if enabled (before cleanup)
+        if config.copy_results_after_trial and config.results_filestore:
+            experiment_dir = config.experiment_filestore.resolve() / config.experiment
+            rel_path = trial_output_dir.relative_to(experiment_dir)
+            dest_dir = Path(config.results_filestore) / config.experiment / rel_path
+            copy_essential_files(trial_output_dir, dest_dir)
+
         # Per-trial cleanup if enabled
         if config.cleanup_after_trial:
             cleanup_trial_directory(trial_output_dir)
@@ -678,6 +696,14 @@ def run_crs_trial(
         # Create .fail marker if trial_output_dir exists
         if "trial_output_dir" in locals() and trial_output_dir.exists():
             (trial_output_dir / ".fail").touch()
+            # Per-trial copy if enabled (before cleanup, even for failed trials)
+            if config.copy_results_after_trial and config.results_filestore:
+                experiment_dir = (
+                    config.experiment_filestore.resolve() / config.experiment
+                )
+                rel_path = trial_output_dir.relative_to(experiment_dir)
+                dest_dir = Path(config.results_filestore) / config.experiment / rel_path
+                copy_essential_files(trial_output_dir, dest_dir)
             # Per-trial cleanup if enabled (even for failed trials)
             if config.cleanup_after_trial:
                 cleanup_trial_directory(trial_output_dir)
@@ -705,6 +731,14 @@ def run_crs_trial(
         # Create .fail marker if trial_output_dir exists
         if "trial_output_dir" in locals() and trial_output_dir.exists():
             (trial_output_dir / ".fail").touch()
+            # Per-trial copy if enabled (before cleanup, even for failed trials)
+            if config.copy_results_after_trial and config.results_filestore:
+                experiment_dir = (
+                    config.experiment_filestore.resolve() / config.experiment
+                )
+                rel_path = trial_output_dir.relative_to(experiment_dir)
+                dest_dir = Path(config.results_filestore) / config.experiment / rel_path
+                copy_essential_files(trial_output_dir, dest_dir)
             # Per-trial cleanup if enabled (even for failed trials)
             if config.cleanup_after_trial:
                 cleanup_trial_directory(trial_output_dir)
@@ -734,6 +768,14 @@ def run_crs_trial(
         # Create .fail marker if trial_output_dir exists
         if "trial_output_dir" in locals() and trial_output_dir.exists():
             (trial_output_dir / ".fail").touch()
+            # Per-trial copy if enabled (before cleanup, even for failed trials)
+            if config.copy_results_after_trial and config.results_filestore:
+                experiment_dir = (
+                    config.experiment_filestore.resolve() / config.experiment
+                )
+                rel_path = trial_output_dir.relative_to(experiment_dir)
+                dest_dir = Path(config.results_filestore) / config.experiment / rel_path
+                copy_essential_files(trial_output_dir, dest_dir)
             # Per-trial cleanup if enabled (even for failed trials)
             if config.cleanup_after_trial:
                 cleanup_trial_directory(trial_output_dir)

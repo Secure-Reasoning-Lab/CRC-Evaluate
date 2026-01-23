@@ -121,19 +121,18 @@ def run_worker(args: argparse.Namespace) -> int:
 
     from crsbench.distributed.worker import main as worker_main
     from crsbench.distributed.worker import run_worker_continuous
-    from crsbench.utils.logger import configure_logger
+    from crsbench.utils.logger import configure_logger, get_logger
 
     # Configure logging
     configure_logger(level=args.log_level, sink=sys.stdout)
+    logger = get_logger(__name__)
 
     # Load experiment config if provided
     worker_config = None
     experiment_name_from_config = None
     if args.experiment_config:
         from crsbench.run_experiment import load_experiment_config
-        from crsbench.utils.logger import get_logger
 
-        logger = get_logger(__name__)
         config_path = Path(args.experiment_config)
         logger.info(f"Loading experiment config from: {config_path}")
         config = load_experiment_config(config_path)
@@ -177,6 +176,7 @@ def run_worker(args: argparse.Namespace) -> int:
             "report_filestore",
             "keep_only_results",
             "cleanup_after_trial",
+            "copy_results_after_trial",
             "copy_results_to_filestore",
             "results_filestore",
         ]

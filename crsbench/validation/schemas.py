@@ -681,6 +681,10 @@ class WorkerConfig(BaseModel):
         default=None,
         description="Override cleanup after each trial for workers",
     )
+    copy_results_after_trial: Optional[bool] = Field(
+        default=None,
+        description="Override per-trial result copying for workers",
+    )
     copy_results_to_filestore: Optional[bool] = Field(
         default=None,
         description="Override result copying behavior for workers",
@@ -854,6 +858,10 @@ class ExperimentConfig(BaseModel):
     cleanup_after_trial: bool = Field(
         default=False,
         description="Delete bulky artifacts after each trial completes",
+    )
+    copy_results_after_trial: bool = Field(
+        default=False,
+        description="Copy essential files to results_filestore after each trial completes",
     )
     copy_results_to_filestore: bool = Field(
         default=False,

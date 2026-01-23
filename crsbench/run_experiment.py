@@ -279,6 +279,12 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--copy-results-after-trial",
+        action="store_true",
+        help="Copy essential files to results_filestore after each trial completes",
+    )
+
+    parser.add_argument(
         "--copy-results-to-filestore",
         action="store_true",
         help="Enable copying essential files to results_filestore location",
@@ -1197,6 +1203,10 @@ def enhance_config_with_cli_args(
         overrides["cleanup_after_trial"] = True
         logger.info("Using cleanup_after_trial=True from CLI")
 
+    if hasattr(args, "copy_results_after_trial") and args.copy_results_after_trial:
+        overrides["copy_results_after_trial"] = True
+        logger.info("Using copy_results_after_trial=True from CLI")
+
     if hasattr(args, "copy_results_to_filestore") and args.copy_results_to_filestore:
         overrides["copy_results_to_filestore"] = True
         logger.info("Using copy_results_to_filestore=True from CLI")
@@ -1317,11 +1327,14 @@ def run_experiment_local(
 
     generate_final_report(results, experiment_name, config)
 
-    # Post-experiment cleanup if enabled
-    if config.keep_only_results or (
-        config.copy_results_to_filestore and config.results_filestore
-    ):
-        _perform_post_experiment_cleanup(experiment_name, config)
+    # Post-experiment operations
+    # Copy results first (before cleanup)
+    if config.copy_results_to_filestore and config.results_filestore:
+        _copy_experiment_results(experiment_name, config)
+
+    # Cleanup bulky artifacts
+    if config.keep_only_results:
+        _cleanup_experiment_artifacts(experiment_name, config)
 
 
 def monitor_jobs(queue, job_list: List, experiment_name: str) -> List[TrialResult]:
@@ -1927,15 +1940,55 @@ def run_experiment_distributed(
 
     generate_final_report(results, experiment_name, config)
 
-    # Post-experiment cleanup if enabled
-    if config.keep_only_results or (
-        config.copy_results_to_filestore and config.results_filestore
-    ):
-        _perform_post_experiment_cleanup(experiment_name, config)
+    # Post-experiment operations
+    # Copy results first (before cleanup)
+    if config.copy_results_to_filestore and config.results_filestore:
+        _copy_experiment_results(experiment_name, config)
+
+    # Cleanup bulky artifacts
+    if config.keep_only_results:
+        _cleanup_experiment_artifacts(experiment_name, config)
 
 
-def _perform_post_experiment_cleanup(experiment_name: str, config) -> None:
-    """Perform post-experiment cleanup and optional results copying.
+def _copy_experiment_results(experiment_name: str, config) -> None:
+    """Copy essential files from experiment to results filestore.
+
+    Args:
+        experiment_name: Experiment identifier
+        config: Experiment configuration
+    """
+    from crsbench.reporting.snapshot_loader import discover_trials
+
+    experiment_dir = Path(config.experiment_filestore) / experiment_name
+
+    if not experiment_dir.exists():
+        logger.warning(f"Experiment directory not found for copying: {experiment_dir}")
+        return
+
+    # Discover all trial directories
+    trial_infos = discover_trials(experiment_dir)
+    trial_dirs = [trial_info.trial_dir for trial_info in trial_infos]
+
+    if not trial_dirs:
+        logger.warning(f"No trial directories found in {experiment_dir}")
+        return
+
+    log_section("Copying essential results to filestore", width=60)
+    results_dest = Path(config.results_filestore) / experiment_name
+    logger.info(f"Copying results to: {results_dest}")
+    logger.info(f"Found {len(trial_dirs)} trial directories to copy")
+
+    for trial_dir in trial_dirs:
+        # Compute relative path from experiment_dir to preserve structure
+        rel_path = trial_dir.relative_to(experiment_dir)
+        dest_dir = results_dest / rel_path
+        copy_essential_files(trial_dir, dest_dir)
+
+    logger.info(f"Copying complete: {results_dest}")
+
+
+def _cleanup_experiment_artifacts(experiment_name: str, config) -> None:
+    """Clean up bulky artifacts from experiment directory.
 
     Args:
         experiment_name: Experiment identifier
@@ -1957,30 +2010,13 @@ def _perform_post_experiment_cleanup(experiment_name: str, config) -> None:
         logger.warning(f"No trial directories found in {experiment_dir}")
         return
 
-    # Copy essential files first (before cleanup)
-    if config.copy_results_to_filestore and config.results_filestore:
-        log_section("Copying essential results to filestore", width=60)
-        results_dest = Path(config.results_filestore) / experiment_name
-        logger.info(f"Copying results to: {results_dest}")
-        logger.info(f"Found {len(trial_dirs)} trial directories to copy")
+    log_section("Cleaning up bulky artifacts", width=60)
+    logger.info(f"Found {len(trial_dirs)} trial directories to clean")
 
-        for trial_dir in trial_dirs:
-            # Compute relative path from experiment_dir to preserve structure
-            rel_path = trial_dir.relative_to(experiment_dir)
-            dest_dir = results_dest / rel_path
-            copy_essential_files(trial_dir, dest_dir)
+    for trial_dir in trial_dirs:
+        cleanup_trial_directory(trial_dir)
 
-        logger.info(f"Copying complete: {results_dest}")
-
-    # Cleanup bulky artifacts using whitelist approach
-    if config.keep_only_results:
-        log_section("Cleaning up bulky artifacts", width=60)
-        logger.info(f"Found {len(trial_dirs)} trial directories to clean")
-
-        for trial_dir in trial_dirs:
-            cleanup_trial_directory(trial_dir)
-
-        logger.info("Cleanup complete")
+    logger.info("Cleanup complete")
 
 
 def generate_final_report(
