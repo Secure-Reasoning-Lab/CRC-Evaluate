@@ -180,6 +180,8 @@ def run_worker(args: argparse.Namespace) -> int:
             "copy_results_to_filestore",
             "experiment_results_filestore",
             "reports_results_filestore",
+            "minimum_disk_size",
+            "disk_check_interval",
         ]
         for field in override_fields:
             value = getattr(worker_config, field, None)
@@ -194,6 +196,10 @@ def run_worker(args: argparse.Namespace) -> int:
 
     # cpuset is enabled by default, disabled with --no-cpuset
     use_cpuset = not getattr(args, "no_cpuset", False)
+
+    # Get disk space config from worker_config
+    minimum_disk_size = worker_config.minimum_disk_size if worker_config else "10GB"
+    disk_check_interval = worker_config.disk_check_interval if worker_config else 60
 
     # TODO: fix timeout too short
     # Prepare worker arguments with resolved values
@@ -215,6 +221,8 @@ def run_worker(args: argparse.Namespace) -> int:
                 worker_name=args.worker_name,
                 num_workers=num_workers,
                 use_cpuset=use_cpuset,
+                minimum_disk_size=minimum_disk_size,
+                disk_check_interval=disk_check_interval,
             )
             return 0
         # Run in burst mode (default)

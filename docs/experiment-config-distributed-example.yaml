@@ -147,6 +147,13 @@ worker:
   # Run continuously or exit when queue is empty.
   continuous: true  # default: true
 
+  # Minimum free disk space required to accept new jobs.
+  # Possible values: "200GB" | "100MB" | "1TB" | etc.
+  minimum_disk_size: "10GB"  # default: "10GB"
+
+  # Interval (seconds) between disk space checks when paused.
+  disk_check_interval: 60  # default: 60
+
   # ---------------------------------------------------------------------------
   # Path Overrides (optional)
   # Use when workers have different filesystem layouts than orchestrator.
