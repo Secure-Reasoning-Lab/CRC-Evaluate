@@ -1270,6 +1270,12 @@ def run_experiment_local(
 
     generate_final_report(results, experiment_name, config)
 
+    # Post-experiment cleanup if enabled
+    if config.keep_only_results or (
+        config.copy_results_to_filestore and config.results_filestore
+    ):
+        _perform_post_experiment_cleanup(experiment_name, config)
+
 
 def monitor_jobs(queue, job_list: List, experiment_name: str) -> List[TrialResult]:
     """Monitor job progress and display status.
@@ -1874,6 +1880,12 @@ def run_experiment_distributed(
 
     generate_final_report(results, experiment_name, config)
 
+    # Post-experiment cleanup if enabled
+    if config.keep_only_results or (
+        config.copy_results_to_filestore and config.results_filestore
+    ):
+        _perform_post_experiment_cleanup(experiment_name, config)
+
 
 def _perform_post_experiment_cleanup(experiment_name: str, config) -> None:
     """Perform post-experiment cleanup and optional results copying.
@@ -1983,12 +1995,6 @@ def generate_final_report(
     log_section("Report generation complete", width=60)
     logger.info(f"Experiment filestore: {config.experiment_filestore}")
     logger.info(f"Report filestore: {config.report_filestore}")
-
-    # Post-experiment cleanup if enabled
-    if config.keep_only_results or (
-        config.copy_results_to_filestore and config.results_filestore
-    ):
-        _perform_post_experiment_cleanup(experiment_name, config)
 
 
 def _generate_html_json_reports(experiment_name: str, config) -> None:
