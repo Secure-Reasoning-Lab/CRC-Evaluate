@@ -35,6 +35,63 @@ ESSENTIAL_PATTERNS: list[str] = [
 ]
 
 
+def _resolve_symlinks_to_real(trial_dir: Path) -> None:
+    """Resolve symlinks in whitelist to real files/directories.
+
+    Some whitelisted items (e.g., output/) may be symlinks to locations
+    in crs-build/. Before cleanup, we need to convert these to real
+    files/directories by copying the content, otherwise deleting crs-build/
+    would break the symlinks.
+
+    Args:
+        trial_dir: Path to trial output directory
+    """
+    for pattern in ESSENTIAL_PATTERNS:
+        if pattern.endswith("/"):
+            # Directory pattern
+            name = pattern.rstrip("/")
+            path = trial_dir / name
+        elif "*" in pattern:
+            # Glob pattern - check each match
+            for path in trial_dir.glob(pattern):
+                _resolve_single_symlink(path)
+            continue
+        else:
+            # Exact file pattern
+            path = trial_dir / pattern
+
+        _resolve_single_symlink(path)
+
+
+def _resolve_single_symlink(path: Path) -> None:
+    """Resolve a single symlink to real file/directory.
+
+    Args:
+        path: Path that might be a symlink
+    """
+    # Check if it's a symlink (must check before exists() which follows symlinks)
+    if not path.is_symlink():
+        return
+
+    target = path.resolve()
+    if not target.exists():
+        logger.warning(f"Symlink {path.name} points to non-existent target: {target}")
+        path.unlink()
+        return
+
+    logger.info(f"Resolving symlink {path.name} -> {target}")
+    # Remove the symlink first
+    path.unlink()
+
+    # Copy the actual content
+    if target.is_dir():
+        shutil.copytree(target, path)
+    else:
+        shutil.copy2(target, path)
+
+    logger.debug(f"Converted symlink to real: {path.name}")
+
+
 def cleanup_trial_directory(trial_dir: Path) -> None:
     """Clean up a trial directory, keeping only essential files.
 
@@ -49,6 +106,10 @@ def cleanup_trial_directory(trial_dir: Path) -> None:
         return
 
     logger.info(f"Cleaning up trial directory: {trial_dir}")
+
+    # Resolve symlinks to real files/directories before cleanup
+    # This prevents data loss when symlinks point to directories being deleted
+    _resolve_symlinks_to_real(trial_dir)
 
     # Collect all paths to keep (resolve globs and directories)
     paths_to_keep: set[Path] = set()
