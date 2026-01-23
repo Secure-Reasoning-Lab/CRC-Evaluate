@@ -862,3 +862,135 @@ class TestIsTrackingAvailable:
         """Test returns False when both env vars are missing."""
         with patch.dict(os.environ, {}, clear=True):
             assert is_tracking_available() is False
+
+
+class TestSetupLlmTrackingBudget:
+    """Tests for _setup_llm_tracking budget propagation."""
+
+    @pytest.fixture
+    def base_config_dict(self, tmp_path):
+        """Base config dict with required fields."""
+        return {
+            "experiment": "test-exp",
+            "trials": 1,
+            "mode": "delta",
+            "max_total_time": 36000,  # Must be > build + run + verify timeouts
+            "build_timeout": 3600,
+            "run_timeout": 7200,
+            "verify_timeout": 7200,
+            "difficulty_level": 0,
+            "experiment_filestore": tmp_path / "experiments",
+            "report_filestore": tmp_path / "reports",
+            "crses": ["test-crs"],
+            "benchmarks": ["test-bench"],
+        }
+
+    @patch("crsbench.distributed.jobs.LiteLLMTracker")
+    @patch("crsbench.distributed.jobs.is_tracking_available")
+    def test_budget_passed_to_generate_key(
+        self, mock_is_available, mock_tracker_class, base_config_dict
+    ):
+        """Test that cost_budget from config is passed to generate_key()."""
+        from crsbench.distributed.jobs import _setup_llm_tracking
+        from crsbench.validation.schemas import (
+            ExperimentConfig,
+            LitellmResourceConfig,
+            ResourceConfig,
+        )
+
+        mock_is_available.return_value = True
+        mock_tracker = MagicMock()
+        mock_tracker.generate_key.return_value = "sk-test-key"
+        mock_tracker_class.return_value = mock_tracker
+
+        config = ExperimentConfig(
+            **base_config_dict,
+            resources=ResourceConfig(litellm=LitellmResourceConfig(cost_budget=50.0)),
+        )
+
+        tracker, api_key = _setup_llm_tracking(
+            config=config,
+            crs="test-crs",
+            benchmark="test-bench",
+            harness_name="fuzz_test",
+            trial_num=1,
+        )
+
+        assert api_key == "sk-test-key"
+        mock_tracker.generate_key.assert_called_once_with(
+            experiment="test-exp",
+            crs="test-crs",
+            benchmark="test-bench",
+            harness="fuzz_test",
+            trial_num=1,
+            max_budget=50.0,
+        )
+
+    @patch("crsbench.distributed.jobs.LiteLLMTracker")
+    @patch("crsbench.distributed.jobs.is_tracking_available")
+    def test_no_budget_when_resources_not_configured(
+        self, mock_is_available, mock_tracker_class, base_config_dict
+    ):
+        """Test that max_budget is None when resources.litellm not configured."""
+        from crsbench.distributed.jobs import _setup_llm_tracking
+        from crsbench.validation.schemas import ExperimentConfig
+
+        mock_is_available.return_value = True
+        mock_tracker = MagicMock()
+        mock_tracker.generate_key.return_value = "sk-test-key"
+        mock_tracker_class.return_value = mock_tracker
+
+        config = ExperimentConfig(**base_config_dict)
+
+        _setup_llm_tracking(
+            config=config,
+            crs="test-crs",
+            benchmark="test-bench",
+            harness_name="fuzz_test",
+            trial_num=1,
+        )
+
+        mock_tracker.generate_key.assert_called_once_with(
+            experiment="test-exp",
+            crs="test-crs",
+            benchmark="test-bench",
+            harness="fuzz_test",
+            trial_num=1,
+            max_budget=None,
+        )
+
+    @patch("crsbench.distributed.jobs.LiteLLMTracker")
+    @patch("crsbench.distributed.jobs.is_tracking_available")
+    def test_no_budget_when_litellm_not_configured(
+        self, mock_is_available, mock_tracker_class, base_config_dict
+    ):
+        """Test that max_budget is None when litellm not in resources."""
+        from crsbench.distributed.jobs import _setup_llm_tracking
+        from crsbench.validation.schemas import ExperimentConfig, ResourceConfig
+
+        mock_is_available.return_value = True
+        mock_tracker = MagicMock()
+        mock_tracker.generate_key.return_value = "sk-test-key"
+        mock_tracker_class.return_value = mock_tracker
+
+        config = ExperimentConfig(
+            **base_config_dict,
+            resources=ResourceConfig(),  # No litellm configured
+        )
+
+        _setup_llm_tracking(
+            config=config,
+            crs="test-crs",
+            benchmark="test-bench",
+            harness_name="fuzz_test",
+            trial_num=1,
+        )
+
+        mock_tracker.generate_key.assert_called_once_with(
+            experiment="test-exp",
+            crs="test-crs",
+            benchmark="test-bench",
+            harness="fuzz_test",
+            trial_num=1,
+            max_budget=None,
+        )

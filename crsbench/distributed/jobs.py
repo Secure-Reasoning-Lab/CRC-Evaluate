@@ -69,14 +69,22 @@ def _setup_llm_tracking(
 
     try:
         tracker = LiteLLMTracker()
+
+        # Extract cost budget from config if present
+        max_budget = None
+        if config.resources and config.resources.litellm:
+            max_budget = config.resources.litellm.cost_budget
+
         api_key = tracker.generate_key(
             experiment=config.experiment,
             crs=crs,
             benchmark=benchmark,
             harness=harness_name,
             trial_num=trial_num,
+            max_budget=max_budget,
         )
-        logger.info(f"Generated LLM tracking key for trial {trial_num}")
+        budget_info = f" (budget: ${max_budget})" if max_budget else ""
+        logger.info(f"Generated LLM tracking key for trial {trial_num}{budget_info}")
         return tracker, api_key
     except LiteLLMTrackerError as e:
         logger.error(f"Failed to set up LLM tracking: {e}")
