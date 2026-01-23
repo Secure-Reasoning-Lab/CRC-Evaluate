@@ -831,6 +831,22 @@ class ExperimentConfig(BaseModel):
     worker: Optional[WorkerConfig] = Field(
         default=None, description="Distributed worker configuration"
     )
+    keep_only_results: bool = Field(
+        default=False,
+        description="Delete bulky artifacts after experiment, keeping only essential files for reporting",
+    )
+    cleanup_after_trial: bool = Field(
+        default=False,
+        description="Delete bulky artifacts after each trial completes",
+    )
+    copy_results_to_filestore: bool = Field(
+        default=False,
+        description="Enable copying essential files to results_filestore location",
+    )
+    results_filestore: Optional[Path] = Field(
+        default=None,
+        description="Destination path for copying essential result files (requires copy_results_to_filestore=true)",
+    )
 
     @field_validator("experiment")
     @classmethod
@@ -1046,6 +1062,15 @@ class ExperimentConfig(BaseModel):
                 f"max_total_time ({self.max_total_time}s) must be greater than "
                 f"build_timeout + run_timeout + verify_timeout ({min_required}s = "
                 f"{self.build_timeout} + {self.run_timeout} + {self.verify_timeout})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_results_filestore_configuration(self):
+        """Validate results_filestore configuration."""
+        if self.copy_results_to_filestore and not self.results_filestore:
+            raise ValueError(
+                "copy_results_to_filestore=true requires results_filestore path to be set"
             )
         return self
 
