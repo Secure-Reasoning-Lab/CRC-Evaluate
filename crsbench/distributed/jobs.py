@@ -820,6 +820,12 @@ def run_crs_trial(
                 litellm_mode=config.litellm_mode,
             )
 
+        # Build trial_id for use as run_id
+        experiment_name = config.experiment
+        trial_id = (
+            f"{experiment_name}-{crs}-{benchmark}-{harness_name}-trial{trial_num}"
+        )
+
         # Configure executor
         crs_executor.configure_crs(
             {
@@ -832,6 +838,7 @@ def run_crs_trial(
                 "mode": mode,
                 "allocated_cpus": allocated_cpus,
                 "allocated_memory": allocated_memory,
+                "run_id": trial_id,
             }
         )
 
@@ -849,12 +856,6 @@ def run_crs_trial(
 
         # Create phase callbacks for job metadata tracking
         on_build_start, on_run_start, on_verification_start = _create_phase_callbacks()
-
-        # Build trial_id for LLM tracking
-        experiment_name = config.experiment
-        trial_id = (
-            f"{experiment_name}-{crs}-{benchmark}-{harness_name}-trial{trial_num}"
-        )
 
         # Set up LLM tracking if enabled (must be before BenchmarkRunner creation)
         llm_tracker, llm_api_key = _setup_llm_tracking(

@@ -34,7 +34,7 @@ class CRSBugFindingExecutor(CRSExecutor):
 
     This executor uses oss-bugfind-crs's interface with pre-cloned source repositories
     via repository manager integration. Output location is auto-determined by
-    oss-crs as {{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/run/{{ harness_name }}/.
+    oss-crs as {{ build_dir }}/run/{{ crs_name }}/{{ project }}/{{ harness_name }}/{{ run_id }}.
     """
 
     def __init__(
@@ -354,7 +354,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             information - it simply runs CRS on pre-prepared directories.
 
             Output location is auto-determined by oss-bugfind-crs as:
-            {{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/run/{{ harness_name }}/
+            {{ build_dir }}/run/{{ crs_name }}/{{ project }}/{{ harness_name }}/{{ run_id }}
         """
         start_time = time.time()
         project_name = self._extract_project_name(benchmark_path)
@@ -431,8 +431,9 @@ class CRSBugFindingExecutor(CRSExecutor):
             logger.debug(f"Working directory: {trial_output_dir}")
 
             # Get expected output location
+            run_id = self.config.get("run_id", "default")
             expected_output_dir = self._get_crs_output_dir(
-                trial_build_dir, project_name, harness_name
+                trial_build_dir, project_name, harness_name, run_id
             )
             logger.info(f"Expected output at: {expected_output_dir}")
 
@@ -442,11 +443,11 @@ class CRSBugFindingExecutor(CRSExecutor):
                 # Compute relative path from symlink location to target
                 relative_target = (
                     Path("crs-build")
-                    / "artifacts"
+                    / "run"
                     / self.actual_crs_name  # # TODO: ensemble settings
                     / project_name
-                    / "run"
                     / harness_name
+                    / run_id
                 )
                 symlink_path.symlink_to(relative_target)
                 logger.debug(
@@ -674,6 +675,11 @@ class CRSBugFindingExecutor(CRSExecutor):
             project_name,
         ]
 
+        # Add run_id if configured
+        run_id = self.config.get("run_id")
+        if run_id:
+            cmd.extend(["--run-id", run_id])
+
         # Only add source path if not using bundled source
         if source_path:
             cmd.append(str(source_path))
@@ -751,7 +757,7 @@ class CRSBugFindingExecutor(CRSExecutor):
 
         Note:
             NO --output parameter. Output location is auto-determined by oss-bugfind-crs as:
-            {{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/run/{{ harness_name }}/
+            {{ build_dir }}/run/{{ crs_name }}/{{ project }}/{{ harness_name }}/{{ run_id }}
         """
         cmd = [
             "oss-bugfind-crs",
@@ -787,6 +793,11 @@ class CRSBugFindingExecutor(CRSExecutor):
         # Add gitcache flag if enabled
         if USE_GITCACHE:
             cmd.append("--gitcache")
+
+        # Add run_id if configured
+        run_id = self.config.get("run_id")
+        if run_id:
+            cmd.extend(["--run-id", run_id])
 
         return cmd
 
@@ -863,17 +874,18 @@ class CRSBugFindingExecutor(CRSExecutor):
         return build_dir / "src" / benchmark_name
 
     def _get_crs_output_dir(
-        self, build_dir: Path, benchmark_name: str, harness_name: str
+        self, build_dir: Path, benchmark_name: str, harness_name: str, run_id: str
     ) -> Path:
         """Get CRS output directory path.
 
         The output directory is auto-determined by oss-bugfind-crs as:
-        {{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/run/{{ harness_name }}/
+        {{ build_dir }}/run/{{ crs_name }}/{{ project }}/{{ harness_name }}/{{ run_id }}
 
         Args:
             build_dir: Build directory
             benchmark_name: Benchmark name
             harness_name: Harness name
+            run_id: Run ID for unique trial identification
 
         Returns:
             Path to CRS output directory
@@ -884,11 +896,11 @@ class CRSBugFindingExecutor(CRSExecutor):
         """
         return (
             build_dir
-            / "artifacts"
+            / "run"
             / self.actual_crs_name  # TODO: ensemble settings
             / benchmark_name
-            / "run"
             / harness_name
+            / run_id
         )
 
     def _get_oss_fuzz_build_output_dir(
@@ -1012,7 +1024,10 @@ class CRSBugFindingExecutor(CRSExecutor):
         build_dir = trial_output_dir / "crs-build"
 
         # Get actual output directory (auto-determined by oss-bugfind-crs)
-        crs_output_dir = self._get_crs_output_dir(build_dir, project_name, harness.name)
+        run_id = self.config.get("run_id", "default")
+        crs_output_dir = self._get_crs_output_dir(
+            build_dir, project_name, harness.name, run_id
+        )
 
         metadata = {
             "timestamp": datetime.now().isoformat(),
@@ -1044,7 +1059,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             "outputs": {
                 "crs_output_dir": str(crs_output_dir),
                 "build_dir": str(build_dir),
-                "note": "CRS output is at {{ build_dir }}/artifacts/{{ crs_name }}/{{ project }}/run/{{ harness_name }}/",
+                "note": "CRS output is at {{ build_dir }}/run/{{ crs_name }}/{{ project }}/{{ harness_name }}/{{ run_id }}",
             },
             "result": {
                 "stdout_length": len(stdout),
