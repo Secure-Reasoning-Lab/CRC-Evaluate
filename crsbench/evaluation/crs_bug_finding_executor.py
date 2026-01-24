@@ -680,6 +680,10 @@ class CRSBugFindingExecutor(CRSExecutor):
         if run_id:
             cmd.extend(["--run-id", run_id])
 
+        # Add sanitizer flag
+        sanitizer = self.config.get("sanitizer", "address")
+        cmd.extend(["--sanitizer", sanitizer])
+
         # Only add source path if not using bundled source
         if source_path:
             cmd.append(str(source_path))
@@ -798,6 +802,10 @@ class CRSBugFindingExecutor(CRSExecutor):
         run_id = self.config.get("run_id")
         if run_id:
             cmd.extend(["--run-id", run_id])
+
+        # Add sanitizer flag
+        sanitizer = self.config.get("sanitizer", "address")
+        cmd.extend(["--sanitizer", sanitizer])
 
         return cmd
 

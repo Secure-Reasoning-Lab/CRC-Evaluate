@@ -321,6 +321,7 @@ def _build_trial_output_path(
     benchmark: str,
     harness: str,
     mode: str,
+    sanitizer: str,
     trial_num: int,
 ) -> Path:
     """Construct trial output directory path.
@@ -332,6 +333,7 @@ def _build_trial_output_path(
         benchmark: Benchmark name
         harness: Harness name
         mode: Evaluation mode ('delta', 'full', or 'all')
+        sanitizer: Sanitizer type ('address', 'memory', or 'undefined')
         trial_num: Trial number
 
     Returns:
@@ -344,6 +346,7 @@ def _build_trial_output_path(
         / benchmark
         / harness
         / mode
+        / sanitizer
         / f"trial-{trial_num}"
     )
 
@@ -494,6 +497,7 @@ def _check_existing_trial(
     benchmark: str,
     harness: str,
     mode: str,
+    sanitizer: str,
     trial_num: int,
 ) -> Optional[TrialResult]:
     """Check for existing trial markers and return TrialResult if found.
@@ -507,6 +511,7 @@ def _check_existing_trial(
         benchmark: Benchmark name
         harness: Harness name
         mode: Evaluation mode
+        sanitizer: Sanitizer type
         trial_num: Trial number
 
     Returns:
@@ -528,6 +533,7 @@ def _check_existing_trial(
             benchmark=benchmark,
             harness=harness,
             mode=mode,
+            sanitizer=sanitizer,
             trial_num=trial_num,
         )
 
@@ -568,6 +574,7 @@ def run_crs_trial(
     trial_num: int,
     config_dict: Dict[str, Any],
     mode: str,
+    sanitizer: str = "address",
 ) -> TrialResult:
     """
     Execute a single CRS trial.
@@ -587,6 +594,7 @@ def run_crs_trial(
         trial_num: Trial number (1-indexed) for this execution
         config_dict: Experiment configuration as dict (deserialized by RQ)
         mode: Evaluation mode ('delta', 'full', or 'all')
+        sanitizer: Sanitizer type ('address', 'memory', or 'undefined')
 
     Returns:
         TrialResult: Trial results including POVs found, success rate, and metadata
@@ -613,6 +621,7 @@ def run_crs_trial(
         benchmark=benchmark,
         harness=harness_name,
         mode=mode,
+        sanitizer=sanitizer,
         trial_num=trial_num,
     )
     if existing_result is not None:
@@ -834,6 +843,7 @@ def run_crs_trial(
                 "hint_corpus_level": config.hint_corpus_level,
                 "project_image_prefix": config.project_image_prefix,
                 "mode": mode,
+                "sanitizer": sanitizer,
                 "allocated_cpus": allocated_cpus,
                 "allocated_memory": allocated_memory,
                 "run_id": trial_id,
@@ -912,6 +922,7 @@ def run_crs_trial(
             benchmark=benchmark,
             harness=harness_name,
             mode=mode,
+            sanitizer=sanitizer,
             trial_num=trial_num,
         )
         trial_output_dir.mkdir(parents=True, exist_ok=True)

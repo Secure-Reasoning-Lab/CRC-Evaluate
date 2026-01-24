@@ -58,12 +58,14 @@ class Trial(BaseModel):
         benchmark_harness: Resolved benchmark-harness pair
         trial_num: Trial number (1-indexed)
         mode: Evaluation mode ("delta" or "full")
+        sanitizer: Sanitizer type ("address", "memory", or "undefined")
     """
 
     crs: str
     benchmark_harness: BenchmarkHarness
     trial_num: int
     mode: str
+    sanitizer: str
 
 
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
@@ -773,21 +775,24 @@ def generate_trial_matrix(
                 # Single mode: delta or full
                 modes_to_run = [config_mode]
 
-            # Generate trials for each mode
+            # Generate trials for each mode and sanitizer
             for mode in modes_to_run:
-                for trial_num in range(1, config.trials + 1):
-                    trials.append(
-                        Trial(
-                            crs=crs,
-                            benchmark_harness=benchmark_harness,
-                            trial_num=trial_num,
-                            mode=mode,
+                for sanitizer in config.sanitizers:
+                    for trial_num in range(1, config.trials + 1):
+                        trials.append(
+                            Trial(
+                                crs=crs,
+                                benchmark_harness=benchmark_harness,
+                                trial_num=trial_num,
+                                mode=mode,
+                                sanitizer=sanitizer.value,
+                            )
                         )
-                    )
 
     logger.info(
         f"Generated {len(trials)} trials: {len(crses)} CRSes × "
         f"{len(benchmark_harnesses)} benchmark-harness pairs × "
+        f"{len(config.sanitizers)} sanitizers × "
         f"{config.trials} trials × mode={config_mode}"
     )
     return trials
@@ -1943,6 +1948,7 @@ def run_experiment_distributed(
             trial_num=trial.trial_num,
             config_dict=enhanced_config.model_dump(),
             mode=trial.mode,
+            sanitizer=trial.sanitizer,
             job_timeout=config.max_total_time,
             result_ttl=-1,  # Persist results forever
             meta={
@@ -1950,6 +1956,7 @@ def run_experiment_distributed(
                 "benchmark": bh.name,
                 "harness": bh.harness.name,
                 "mode": trial.mode,
+                "sanitizer": trial.sanitizer,
                 "trial_num": trial.trial_num,
                 "cpu_count": cpu_count,  # CPU count from resource config
                 "memory_limit": memory_limit,  # Memory limit from resource config
