@@ -18,7 +18,10 @@ experiment: pov-e2e-test
 
 trials: 1
 mode: delta
-max_total_time: 300  # 5 minutes
+max_total_time: 1801   # >30 minutes (pov_early_stop terminates early)
+build_timeout: 1200    # 20 minutes
+run_timeout: 300       # 5 minutes
+verify_timeout: 300    # 5 minutes
 difficulty_level: 1
 
 experiment_filestore: /tmp/crsbench/experiments/pov-e2e-test
