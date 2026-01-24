@@ -6,6 +6,7 @@ job queue system. Jobs are enqueued by the orchestrator and executed by workers.
 
 import json
 import os
+import socket
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +14,7 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from crsbench.evaluation.cleanup import cleanup_trial_directory, copy_essential_files
+from crsbench.evaluation.cleanup import cleanup_trial_directory, copy_trial_results
 from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
 from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
 from crsbench.evaluation.litellm_tracker import (
@@ -45,6 +46,22 @@ from crsbench.validation.schemas import TrialMetadata as TrialMetadataFile
 logger = get_logger(__name__)
 
 
+def _generate_results_folder_name(experiment_name: str) -> str:
+    """Generate folder name with experiment name, hostname, and timestamp suffix.
+
+    Format: {experiment_name}_{hostname}_{YYYYMMDD-HHMMSS}
+
+    Args:
+        experiment_name: Name of the experiment
+
+    Returns:
+        Folder name with suffix
+    """
+    hostname = socket.gethostname()
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"{experiment_name}_{hostname}_{timestamp}"
+
+
 def _setup_llm_tracking(
     config: ExperimentConfig,
     crs: str,
@@ -70,8 +87,8 @@ def _setup_llm_tracking(
     if not is_tracking_available():
         logger.warning(
             "LLM tracking enabled but required env vars not set. "
-            "Need (LITELLM_BASE_URL or UPSTREAM_LITELLM_BASE_URL) and LITELLM_MASTER_KEY. "
-            "Skipping tracking."
+            "Need (LITELLM_BASE_URL or UPSTREAM_LITELLM_BASE_URL) and "
+            "(LITELLM_MASTER_KEY or LITELLM_API_KEY). Skipping tracking."
         )
         return None, None
 
@@ -998,10 +1015,15 @@ def run_crs_trial(
         if config.copy_results_after_trial and config.experiment_results_filestore:
             experiment_dir = config.experiment_filestore.resolve() / config.experiment
             rel_path = trial_output_dir.relative_to(experiment_dir)
+            folder_name = _generate_results_folder_name(config.experiment)
             dest_dir = (
-                Path(config.experiment_results_filestore) / config.experiment / rel_path
+                Path(config.experiment_results_filestore)
+                / folder_name
+                / "experiment-data"
+                / config.experiment
+                / rel_path
             )
-            copy_essential_files(trial_output_dir, dest_dir)
+            copy_trial_results(trial_output_dir, dest_dir)
 
         # Per-trial cleanup if enabled
         if config.cleanup_after_trial:
@@ -1022,12 +1044,15 @@ def run_crs_trial(
                     config.experiment_filestore.resolve() / config.experiment
                 )
                 rel_path = trial_output_dir.relative_to(experiment_dir)
+                folder_name = _generate_results_folder_name(config.experiment)
                 dest_dir = (
                     Path(config.experiment_results_filestore)
+                    / folder_name
+                    / "experiment-data"
                     / config.experiment
                     / rel_path
                 )
-                copy_essential_files(trial_output_dir, dest_dir)
+                copy_trial_results(trial_output_dir, dest_dir)
             # Per-trial cleanup if enabled (even for failed trials)
             if config.cleanup_after_trial:
                 cleanup_trial_directory(trial_output_dir)
@@ -1061,12 +1086,15 @@ def run_crs_trial(
                     config.experiment_filestore.resolve() / config.experiment
                 )
                 rel_path = trial_output_dir.relative_to(experiment_dir)
+                folder_name = _generate_results_folder_name(config.experiment)
                 dest_dir = (
                     Path(config.experiment_results_filestore)
+                    / folder_name
+                    / "experiment-data"
                     / config.experiment
                     / rel_path
                 )
-                copy_essential_files(trial_output_dir, dest_dir)
+                copy_trial_results(trial_output_dir, dest_dir)
             # Per-trial cleanup if enabled (even for failed trials)
             if config.cleanup_after_trial:
                 cleanup_trial_directory(trial_output_dir)
@@ -1102,12 +1130,15 @@ def run_crs_trial(
                     config.experiment_filestore.resolve() / config.experiment
                 )
                 rel_path = trial_output_dir.relative_to(experiment_dir)
+                folder_name = _generate_results_folder_name(config.experiment)
                 dest_dir = (
                     Path(config.experiment_results_filestore)
+                    / folder_name
+                    / "experiment-data"
                     / config.experiment
                     / rel_path
                 )
-                copy_essential_files(trial_output_dir, dest_dir)
+                copy_trial_results(trial_output_dir, dest_dir)
             # Per-trial cleanup if enabled (even for failed trials)
             if config.cleanup_after_trial:
                 cleanup_trial_directory(trial_output_dir)

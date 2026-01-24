@@ -33,7 +33,7 @@ from pydantic import BaseModel
 from crsbench.builder import BuildResult, OSSFuzzBuilder
 from crsbench.builder.types import BenchmarkMode
 from crsbench.distributed.jobs import get_crs_type
-from crsbench.evaluation.cleanup import cleanup_trial_directory, copy_essential_files
+from crsbench.evaluation.cleanup import cleanup_trial_directory, copy_trial_results
 from crsbench.evaluation.results import CRSType, TrialResult
 from crsbench.utils import log_progress, log_section, log_summary, set_gitcache
 from crsbench.utils.crs_helper import get_crs_registry_name
@@ -1998,6 +1998,14 @@ def _copy_experiment_results(experiment_name: str, config) -> None:
         logger.warning(f"Experiment directory not found for copying: {experiment_dir}")
         return
 
+    # Generate folder name with timestamp and hostname suffix (shared for both copies)
+    import socket
+    from datetime import datetime
+
+    hostname = socket.gethostname()
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    folder_name = f"{experiment_name}_{hostname}_{timestamp}"
+
     # Copy experiment trial data to experiment_results_filestore
     if config.experiment_results_filestore:
         # Discover all trial directories
@@ -2008,7 +2016,13 @@ def _copy_experiment_results(experiment_name: str, config) -> None:
             logger.warning(f"No trial directories found in {experiment_dir}")
         else:
             log_section("Copying experiment trial data to filestore", width=60)
-            results_dest = Path(config.experiment_results_filestore) / experiment_name
+            # Preserve original structure: {folder_name}/experiment-data/{experiment_name}/...
+            results_dest = (
+                Path(config.experiment_results_filestore)
+                / folder_name
+                / "experiment-data"
+                / experiment_name
+            )
             logger.info(f"Copying trial data to: {results_dest}")
             logger.info(f"Found {len(trial_dirs)} trial directories to copy")
 
@@ -2016,7 +2030,7 @@ def _copy_experiment_results(experiment_name: str, config) -> None:
                 # Compute relative path from experiment_dir to preserve structure
                 rel_path = trial_dir.relative_to(experiment_dir)
                 dest_dir = results_dest / rel_path
-                copy_essential_files(trial_dir, dest_dir)
+                copy_trial_results(trial_dir, dest_dir)
 
             logger.info(f"Trial data copying complete: {results_dest}")
 
@@ -2027,7 +2041,13 @@ def _copy_experiment_results(experiment_name: str, config) -> None:
         report_dir = Path(config.report_filestore) / experiment_name
         if report_dir.exists():
             log_section("Copying report data to filestore", width=60)
-            report_dest = Path(config.reports_results_filestore) / experiment_name
+            # Preserve original structure: {folder_name}/report-data/{experiment_name}/...
+            report_dest = (
+                Path(config.reports_results_filestore)
+                / folder_name
+                / "report-data"
+                / experiment_name
+            )
             logger.info(f"Copying report data to: {report_dest}")
             shutil.copytree(report_dir, report_dest, dirs_exist_ok=True)
             logger.info(f"Report data copying complete: {report_dest}")
