@@ -96,6 +96,13 @@ def run_coverage(args: argparse.Namespace) -> int:
         )
         all_jobs.append(coverage_job)
 
+    # Log DAG summary
+    build_count = sum(1 for j in all_jobs if isinstance(j, BuildVariantsJob))
+    coverage_count = sum(1 for j in all_jobs if isinstance(j, FlatCollectCoverageJob))
+    logger.info(
+        f"DAG: {len(all_jobs)} jobs — {build_count} build, {coverage_count} coverage"
+    )
+
     # Execute with typed concurrency
     start_dt = datetime.now()
     executor = DAGExecutor(

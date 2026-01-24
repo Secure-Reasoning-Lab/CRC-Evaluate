@@ -210,6 +210,20 @@ def run_all(args: argparse.Namespace) -> int:
 
         benchmark_metadata.append((path, supports_inc, rts_mode, cpv_ids, patch_keys))
 
+    # Log DAG summary
+    build_count = sum(1 for j in all_jobs if isinstance(j, BuildVariantsJob))
+    pov_jobs = [j for j in all_jobs if isinstance(j, VerifyCpvPovJob)]
+    pov_blob_count = sum(len(j.pov_paths) for j in pov_jobs)
+    patch_build_count = sum(1 for j in all_jobs if isinstance(j, BuildPatchVariantJob))
+    patch_test_count = sum(1 for j in all_jobs if isinstance(j, TestPatchVariantJob))
+    coverage_count = sum(1 for j in all_jobs if isinstance(j, FlatCollectCoverageJob))
+    logger.info(
+        f"DAG: {len(all_jobs)} jobs — "
+        f"{build_count} build, {len(pov_jobs)} pov-verify ({pov_blob_count} blobs), "
+        f"{patch_build_count} patch-build, {patch_test_count} patch-test, "
+        f"{coverage_count} coverage"
+    )
+
     # Phase 3: Execute flat DAG with typed concurrency
     executor = DAGExecutor(
         type_limits={"build": build_workers, "verify": verify_workers}

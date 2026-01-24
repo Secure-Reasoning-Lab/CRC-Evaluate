@@ -132,6 +132,16 @@ def run_patch(args: argparse.Namespace) -> int:
 
         benchmark_metadata.append((path, supports_inc, rts_mode, patch_keys))
 
+    # Log DAG summary
+    build_count = sum(1 for j in all_jobs if isinstance(j, BuildVariantsJob))
+    patch_build_count = sum(1 for j in all_jobs if isinstance(j, BuildPatchVariantJob))
+    patch_test_count = sum(1 for j in all_jobs if isinstance(j, TestPatchVariantJob))
+    logger.info(
+        f"DAG: {len(all_jobs)} jobs — "
+        f"{build_count} build, {patch_build_count} patch-build, "
+        f"{patch_test_count} patch-test"
+    )
+
     # Execute with typed concurrency
     start_dt = datetime.now()
     executor = DAGExecutor(

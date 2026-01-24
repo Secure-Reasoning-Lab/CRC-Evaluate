@@ -112,6 +112,15 @@ def run_pov(args: argparse.Namespace) -> int:
 
         benchmark_metadata.append((path, supports_inc, rts_mode, cpv_ids))
 
+    # Log DAG summary
+    build_count = sum(1 for j in all_jobs if isinstance(j, BuildVariantsJob))
+    pov_jobs = [j for j in all_jobs if isinstance(j, VerifyCpvPovJob)]
+    pov_blob_count = sum(len(j.pov_paths) for j in pov_jobs)
+    logger.info(
+        f"DAG: {len(all_jobs)} jobs — "
+        f"{build_count} build, {len(pov_jobs)} pov-verify ({pov_blob_count} blobs)"
+    )
+
     # Execute with typed concurrency
     start_dt = datetime.now()
     executor = DAGExecutor(
