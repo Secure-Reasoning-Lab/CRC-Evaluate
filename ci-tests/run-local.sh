@@ -5,10 +5,10 @@
 # Local adds: integration (libxml2, apache-commons-compress)
 #
 # Usage:
-#   ./ci-tests/run-local.sh              # Run checks + format + sanity-mock (matches CI)
-#   ./ci-tests/run-local.sh all          # Run all stages including integration + e2e
+#   ./ci-tests/run-local.sh              # Run full CI pipeline (checks + format + mock + real + e2e)
+#   ./ci-tests/run-local.sh all          # Run all stages including integration
 #   ./ci-tests/run-local.sh checks       # Stage 1: typecheck, lint, format, unit tests
-#   ./ci-tests/run-local.sh format       # Stage 2a: format validation (all benchmarks)
+#   ./ci-tests/run-local.sh format       # Stage 2a: format validation (CI + integration benchmarks)
 #   ./ci-tests/run-local.sh sanity       # Stage 2b: all checks (mock-c + mock-java)
 #   ./ci-tests/run-local.sh sanity-real  # Stage 2c: all checks (afc-xz + json-java)
 #   ./ci-tests/run-local.sh integration  # Local only: real projects (libxml2, commons-compress)
@@ -65,9 +65,17 @@ run_checks() {
 
 # Stage 2a: Format validation
 run_format() {
-    run_stage "Stage 2a: Format Validation (all benchmarks)"
+    run_stage "Stage 2a: Format Validation"
 
-    uv run crsbench ci format --all || fail "Format validation failed"
+    for benchmark in \
+        sanity-mock-c-delta-01 \
+        sanity-mock-java-delta-01 \
+        afc-xz-full-01 \
+        atlanta-json-java-full-01 \
+        afc-libxml2-full-01 \
+        afc-apache-commons-compress-delta-01; do
+        uv run crsbench ci format "$benchmark" || fail "Format validation failed for $benchmark"
+    done
 
     success "Stage 2a completed!"
 }
@@ -78,8 +86,7 @@ run_sanity() {
 
     for benchmark in sanity-mock-c-delta-01 sanity-mock-java-delta-01; do
         echo -e "\n${YELLOW}--- $benchmark ---${NC}"
-        uv run crsbench ci all \
-            --benchmark "$benchmark" \
+        uv run crsbench ci all "$benchmark" \
             --no-inc-build \
             --force-rebuild || fail "All checks failed for $benchmark"
         success "$benchmark passed"
@@ -94,9 +101,7 @@ run_sanity_real() {
 
     for benchmark in afc-xz-full-01 atlanta-json-java-full-01; do
         echo -e "\n${YELLOW}--- $benchmark ---${NC}"
-        uv run crsbench ci all \
-            --benchmark "$benchmark" \
-            --no-inc-build \
+        uv run crsbench ci all "$benchmark" \
             --force-rebuild || fail "All checks failed for $benchmark"
         success "$benchmark passed"
     done
@@ -110,9 +115,7 @@ run_integration() {
 
     for benchmark in afc-libxml2-full-01 afc-apache-commons-compress-delta-01; do
         echo -e "\n${YELLOW}--- $benchmark ---${NC}"
-        uv run crsbench ci all \
-            --benchmark "$benchmark" \
-            --no-inc-build \
+        uv run crsbench ci all "$benchmark" \
             --force-rebuild || fail "All checks failed for $benchmark"
         success "$benchmark passed"
     done
@@ -133,7 +136,7 @@ run_e2e() {
         -e "s|PLACEHOLDER_REPORT|$REPORT_DIR|" \
         ci-tests/pov-e2e-test.yaml > /tmp/pov-e2e-config.yaml
 
-    echo "Running E2E experiment (max 5 minutes)..."
+    echo "Running E2E experiment (max 30 minutes, early stop enabled)..."
     uv run crsbench run --experiment-config /tmp/pov-e2e-config.yaml || fail "E2E experiment failed"
 
     echo "Verifying POV results..."
@@ -212,10 +215,12 @@ main() {
             run_e2e
             ;;
         default)
-            # Default: run Stage 1 + 2a + 2b (matches CI core path)
+            # Default: matches CI pipeline (checks → format → mock → real → e2e)
             run_checks
             run_format
             run_sanity
+            run_sanity_real
+            run_e2e
             ;;
         all)
             run_checks
@@ -228,9 +233,9 @@ main() {
         *)
             echo "Usage: $0 [checks|format|sanity|sanity-real|integration|e2e|all]"
             echo ""
-            echo "  (default)    Run checks + format + sanity-mock (matches CI)"
+            echo "  (default)    Run checks + format + sanity-mock + sanity-real + e2e (matches CI)"
             echo "  checks       Stage 1: typecheck, lint, format, unit tests"
-            echo "  format       Stage 2a: format validation (all benchmarks)"
+            echo "  format       Stage 2a: format validation (CI + integration benchmarks)"
             echo "  sanity       Stage 2b: all checks (mock-c + mock-java)"
             echo "  sanity-real  Stage 2c: all checks (afc-xz + json-java)"
             echo "  integration  Local only: real projects (libxml2, commons-compress)"

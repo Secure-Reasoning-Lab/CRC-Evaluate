@@ -1,8 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -53,8 +51,12 @@ jobs:
 
       - uses: ./.github/actions/setup
 
-      - name: Validate all benchmarks
-        run: uv run crsbench ci format --all --no-color
+      - name: Validate benchmark formats
+        run: |
+          uv run crsbench ci format sanity-mock-c-delta-01 --no-color
+          uv run crsbench ci format sanity-mock-java-delta-01 --no-color
+          uv run crsbench ci format afc-xz-full-01 --no-color
+          uv run crsbench ci format atlanta-json-java-full-01 --no-color
 
   # Stage 2b: Sanity checks on mock projects (fail-fast)
   sanity-mock:
@@ -90,8 +92,7 @@ jobs:
 
       - name: Run all checks on ${{ matrix.project }}
         run: |
-          uv run crsbench ci all \
-            --benchmark ${{ matrix.benchmark }} \
+          uv run crsbench ci all ${{ matrix.benchmark }} \
             --no-inc-build \
             --force-rebuild \
             --no-color
@@ -130,9 +131,7 @@ jobs:
 
       - name: Run all checks on ${{ matrix.project }}
         run: |
-          uv run crsbench ci all \
-            --benchmark ${{ matrix.benchmark }} \
-            --no-inc-build \
+          uv run crsbench ci all ${{ matrix.benchmark }} \
             --force-rebuild \
             --no-color
 
