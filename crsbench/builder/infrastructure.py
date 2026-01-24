@@ -1099,6 +1099,8 @@ class OSSFuzzInfrastructure:
             str(corpus_dir),
             "--fuzz-target",
             harness,
+            "--timeout",
+            f"{timeout}s",
             "--no-serve",
             project_name,
         ]
