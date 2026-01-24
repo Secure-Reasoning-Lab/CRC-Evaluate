@@ -30,7 +30,7 @@ harness_files:
   - name: test_harness
     path: /src/test/harness.c
     vulns:
-      - vuln_keyword: test_vuln
+      - vuln_keyword: cpv_0
         difficulty_level: 1
         povs:
           - id: pov_0

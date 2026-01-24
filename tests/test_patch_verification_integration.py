@@ -219,7 +219,7 @@ def run_e2e_patch_verification(
                 for gt_patch in patches:
                     patch_info = PatchInfo(
                         patch_id=gt_patch.unique_id,
-                        pov_id=gt_patch.unique_id,
+                        pov_id=gt_patch.cpv_id,
                         patch_path=patch_dir / gt_patch.unique_id / "patch.diff",
                     )
                     pov_path = pov_dir / f"{gt_patch.unique_id}.blob"
