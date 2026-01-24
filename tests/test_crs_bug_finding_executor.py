@@ -101,11 +101,17 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         build_dir = Path(self.temp_dir) / "crs-build"
         run_id = "test-exp-test-crs-test-project-test_harness-trial1"
         output_dir = self.executor._get_crs_output_dir(
-            build_dir, "test-project", "test_harness", run_id
+            build_dir, "test-project", "address", "test_harness", run_id
         )
 
         expected = (
-            build_dir / "run" / "test-crs" / "test-project" / "test_harness" / run_id
+            build_dir
+            / "run"
+            / "test-crs"
+            / "test-project"
+            / "address"
+            / "test_harness"
+            / run_id
         )
         self.assertEqual(output_dir, expected)
 

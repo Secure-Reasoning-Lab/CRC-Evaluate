@@ -432,8 +432,9 @@ class CRSBugFindingExecutor(CRSExecutor):
 
             # Get expected output location
             run_id = self.config.get("run_id", "default")
+            sanitizer = self.config.get("sanitizer", "address")
             expected_output_dir = self._get_crs_output_dir(
-                trial_build_dir, project_name, harness_name, run_id
+                trial_build_dir, project_name, sanitizer, harness_name, run_id
             )
             logger.info(f"Expected output at: {expected_output_dir}")
 
@@ -446,6 +447,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                     / "run"
                     / self.actual_crs_name  # # TODO: ensemble settings
                     / project_name
+                    / sanitizer
                     / harness_name
                     / run_id
                 )
@@ -882,16 +884,22 @@ class CRSBugFindingExecutor(CRSExecutor):
         return build_dir / "src" / benchmark_name
 
     def _get_crs_output_dir(
-        self, build_dir: Path, benchmark_name: str, harness_name: str, run_id: str
+        self,
+        build_dir: Path,
+        benchmark_name: str,
+        sanitizer: str,
+        harness_name: str,
+        run_id: str,
     ) -> Path:
         """Get CRS output directory path.
 
         The output directory is auto-determined by oss-bugfind-crs as:
-        {{ build_dir }}/run/{{ crs_name }}/{{ project }}/{{ harness_name }}/{{ run_id }}
+        {{ build_dir }}/run/{{ crs_name }}/{{ project }}/{{ sanitizer }}/{{ harness_name }}/{{ run_id }}
 
         Args:
             build_dir: Build directory
             benchmark_name: Benchmark name
+            sanitizer: Sanitizer type (e.g., 'address', 'memory', 'undefined')
             harness_name: Harness name
             run_id: Run ID for unique trial identification
 
@@ -907,6 +915,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             / "run"
             / self.actual_crs_name  # TODO: ensemble settings
             / benchmark_name
+            / sanitizer
             / harness_name
             / run_id
         )
@@ -1033,8 +1042,9 @@ class CRSBugFindingExecutor(CRSExecutor):
 
         # Get actual output directory (auto-determined by oss-bugfind-crs)
         run_id = self.config.get("run_id", "default")
+        sanitizer = self.config.get("sanitizer", "address")
         crs_output_dir = self._get_crs_output_dir(
-            build_dir, project_name, harness.name, run_id
+            build_dir, project_name, sanitizer, harness.name, run_id
         )
 
         metadata = {
