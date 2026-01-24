@@ -25,7 +25,14 @@ from crsbench.evaluation.litellm_tracker import (
 from crsbench.evaluation.results import CRSType, TrialMetadata, TrialResult
 from crsbench.evaluation.runner import BenchmarkFormatError, BenchmarkRunner
 from crsbench.utils.crs_helper import get_crs_registry_name
-from crsbench.utils.logger import escape_loguru_braces, get_logger
+from crsbench.utils.logger import (
+    add_file_handler,
+    create_trial_filter,
+    escape_loguru_braces,
+    get_logger,
+    remove_file_handler,
+    set_trial_context,
+)
 
 # Import file-based metadata schema (distinct from evaluation.results.TrialMetadata)
 from crsbench.validation.schemas import (
@@ -87,14 +94,30 @@ def _setup_llm_tracking(
 
     try:
         tracker = LiteLLMTracker()
+
+        # Extract cost budget from config if present
+        max_budget = None
+        if config.resources and config.resources.litellm:
+            max_budget = config.resources.litellm.cost_budget
+
         api_key = tracker.generate_key(
             experiment=config.experiment,
             crs=crs,
             benchmark=benchmark,
             harness=harness_name,
             trial_num=trial_num,
+            max_budget=max_budget,
         )
-        logger.info(f"Generated LLM tracking key for trial {trial_num}")
+        budget_info = f" (budget: ${max_budget})" if max_budget else ""
+        logger.info(f"Generated LLM tracking key for trial {trial_num}{budget_info}")
+
+        # Debug: verify budget was actually set by fetching key info
+        key_info = tracker.get_key_info(api_key)
+        info = key_info.get("info", {})
+        actual_budget = info.get("max_budget")
+        logger.info(
+            f"Key info after creation - max_budget: {actual_budget}, spend: {info.get('spend', 0)}"
+        )
         return tracker, api_key
     except LiteLLMTrackerError as e:
         logger.error(f"Failed to set up LLM tracking: {e}")
@@ -291,6 +314,252 @@ def _create_phase_callbacks():
     return on_build_start, on_run_start, on_verification_start
 
 
+def _build_trial_output_path(
+    filestore: Path,
+    experiment_name: str,
+    crs: str,
+    benchmark: str,
+    harness: str,
+    mode: str,
+    trial_num: int,
+) -> Path:
+    """Construct trial output directory path.
+
+    Args:
+        filestore: Base filestore directory
+        experiment_name: Experiment name
+        crs: CRS name
+        benchmark: Benchmark name
+        harness: Harness name
+        mode: Evaluation mode ('delta', 'full', or 'all')
+        trial_num: Trial number
+
+    Returns:
+        Path to trial output directory
+    """
+    return (
+        filestore
+        / experiment_name
+        / crs
+        / benchmark
+        / harness
+        / mode
+        / f"trial-{trial_num}"
+    )
+
+
+def _reconstruct_trial_result_from_success(
+    trial_dir: Path,
+    crs: str,
+    benchmark: str,
+    harness: str,
+    trial_num: int,
+) -> TrialResult:
+    """Reconstruct TrialResult from a successful trial's metadata.json.
+
+    Args:
+        trial_dir: Path to trial directory
+        crs: CRS name
+        benchmark: Benchmark name
+        harness: Harness name
+        trial_num: Trial number
+
+    Returns:
+        TrialResult reconstructed from metadata
+    """
+    metadata_file = trial_dir / "metadata.json"
+
+    # Default values
+    crs_type_enum = CRSType.BUG_FINDING
+    execution_time = 0.0
+    povs_found = 0
+    total_povs = 0
+    patches_generated = 0
+    patches_valid = 0
+
+    if metadata_file.exists():
+        try:
+            with metadata_file.open("r") as f:
+                metadata = json.load(f)
+
+            # Extract CRS type from metadata
+            mode_str = metadata.get("mode", "bug_finding")
+            if mode_str == "patch_generation":
+                crs_type_enum = CRSType.BUG_FIXING
+
+            # Try to extract results from metadata if available
+            # (These may not be in the standard metadata.json format)
+            povs_found = metadata.get("povs_found", 0)
+            total_povs = metadata.get("total_povs", 0)
+            patches_generated = metadata.get("patches_generated", 0)
+            patches_valid = metadata.get("patches_valid", 0)
+
+        except Exception as e:
+            logger.warning(
+                f"Could not parse metadata.json for trial {trial_num}: {e}. Using defaults."
+            )
+    else:
+        logger.warning(
+            f"metadata.json not found for trial {trial_num} at {trial_dir}. Using defaults."
+        )
+
+    logger.info(
+        f"[Trial {trial_num}] Skipping execution - found existing .success marker at {trial_dir}"
+    )
+
+    return TrialResult(
+        crs=crs,
+        benchmark=benchmark,
+        harness=harness,
+        trial_num=trial_num,
+        crs_type=crs_type_enum,
+        success=True,
+        execution_time=execution_time,
+        povs_found=povs_found,
+        total_povs=total_povs,
+        patches_generated=patches_generated,
+        patches_valid=patches_valid,
+        report={},
+        metadata=TrialMetadata(
+            timestamp_start=0.0,
+            timestamp_end=0.0,
+        ),
+    )
+
+
+def _create_failed_trial_result(
+    trial_dir: Path,
+    crs: str,
+    benchmark: str,
+    harness: str,
+    trial_num: int,
+) -> TrialResult:
+    """Create TrialResult for a previously failed trial.
+
+    Args:
+        trial_dir: Path to trial directory
+        crs: CRS name
+        benchmark: Benchmark name
+        harness: Harness name
+        trial_num: Trial number
+
+    Returns:
+        TrialResult indicating failure (for retry)
+    """
+    metadata_file = trial_dir / "metadata.json"
+
+    # Default values
+    crs_type_enum = CRSType.BUG_FINDING
+
+    if metadata_file.exists():
+        try:
+            with metadata_file.open("r") as f:
+                metadata = json.load(f)
+
+            # Extract CRS type from metadata
+            mode_str = metadata.get("mode", "bug_finding")
+            if mode_str == "patch_generation":
+                crs_type_enum = CRSType.BUG_FIXING
+
+        except Exception as e:
+            logger.warning(
+                f"Could not parse metadata.json for failed trial {trial_num}: {e}. Using default CRS type."
+            )
+
+    logger.info(
+        f"[Trial {trial_num}] Found existing .fail marker at {trial_dir} - returning failed result for retry"
+    )
+
+    return TrialResult(
+        crs=crs,
+        benchmark=benchmark,
+        harness=harness,
+        trial_num=trial_num,
+        crs_type=crs_type_enum,
+        success=False,
+        execution_time=0.0,
+        error="Trial previously failed (marked for retry)",
+        error_type="PreviousFailure",
+        report={},
+        metadata=TrialMetadata(
+            timestamp_start=0.0,
+            timestamp_end=0.0,
+        ),
+    )
+
+
+def _check_existing_trial(
+    config: ExperimentConfig,
+    crs: str,
+    benchmark: str,
+    harness: str,
+    mode: str,
+    trial_num: int,
+) -> Optional[TrialResult]:
+    """Check for existing trial markers and return TrialResult if found.
+
+    Checks experiment_results_filestore first (if configured), then experiment_filestore.
+    Returns immediately if .success or .fail marker is found.
+
+    Args:
+        config: Experiment configuration
+        crs: CRS name
+        benchmark: Benchmark name
+        harness: Harness name
+        mode: Evaluation mode
+        trial_num: Trial number
+
+    Returns:
+        TrialResult if existing marker found, None otherwise
+    """
+    experiment_name = config.experiment
+
+    # Check results filestore first (if configured)
+    filestores_to_check = []
+    if config.experiment_results_filestore:
+        filestores_to_check.append(config.experiment_results_filestore.resolve())
+    filestores_to_check.append(config.experiment_filestore.resolve())
+
+    for filestore in filestores_to_check:
+        trial_dir = _build_trial_output_path(
+            filestore=filestore,
+            experiment_name=experiment_name,
+            crs=crs,
+            benchmark=benchmark,
+            harness=harness,
+            mode=mode,
+            trial_num=trial_num,
+        )
+
+        if not trial_dir.exists():
+            continue
+
+        # Check for success marker
+        success_marker = trial_dir / ".success"
+        if success_marker.exists():
+            return _reconstruct_trial_result_from_success(
+                trial_dir=trial_dir,
+                crs=crs,
+                benchmark=benchmark,
+                harness=harness,
+                trial_num=trial_num,
+            )
+
+        # Check for fail marker
+        fail_marker = trial_dir / ".fail"
+        if fail_marker.exists():
+            return _create_failed_trial_result(
+                trial_dir=trial_dir,
+                crs=crs,
+                benchmark=benchmark,
+                harness=harness,
+                trial_num=trial_num,
+            )
+
+    # No existing trial markers found
+    return None
+
+
 def run_crs_trial(
     crs: str,
     benchmark: str,
@@ -337,6 +606,18 @@ def run_crs_trial(
     # Reconstruct ExperimentConfig from dict - Pydantic will convert strings to Paths
     config = ExperimentConfig(**config_dict)
 
+    # Check for existing trial markers before any heavy setup
+    existing_result = _check_existing_trial(
+        config=config,
+        crs=crs,
+        benchmark=benchmark,
+        harness=harness_name,
+        mode=mode,
+        trial_num=trial_num,
+    )
+    if existing_result is not None:
+        return existing_result
+
     logger.info(
         f"[Trial {trial_num}] Starting CRS '{crs}' on benchmark '{benchmark}' harness '{harness_name}'"
     )
@@ -381,6 +662,14 @@ def run_crs_trial(
                     logger.info(f"Job assigned memory: {allocated_memory}")
         except Exception as e:
             logger.warning(f"Failed to get allocated resources from job metadata: {e}")
+
+        # Fall back to config.resources for local execution (no RQ job)
+        if allocated_cpus is None and config.resources:
+            allocated_cpus = str(config.resources.cores_per_trial)
+            logger.info(f"Using cores_per_trial from config: {allocated_cpus}")
+        if allocated_memory is None and config.resources:
+            allocated_memory = config.resources.memory_per_trial
+            logger.info(f"Using memory_per_trial from config: {allocated_memory}")
 
         # Helper function to get worker override from environment variable
         def get_worker_override(field: str) -> Optional[str]:
@@ -617,17 +906,26 @@ def run_crs_trial(
         experiment_filestore = config.experiment_filestore.resolve()
         experiment_name = config.experiment
         # TODO: decide a better orgnization
-        trial_output_dir = (
-            experiment_filestore
-            / experiment_name
-            / crs
-            / benchmark
-            / harness_name
-            / mode
-            / f"trial-{trial_num}"
+        trial_output_dir = _build_trial_output_path(
+            filestore=experiment_filestore,
+            experiment_name=experiment_name,
+            crs=crs,
+            benchmark=benchmark,
+            harness=harness_name,
+            mode=mode,
+            trial_num=trial_num,
         )
         trial_output_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Trial output directory: {trial_output_dir}")
+
+        # Set up per-trial logging
+        set_trial_context(trial_id)
+        trial_log_handler = add_file_handler(
+            trial_output_dir / "worker.log",
+            level="DEBUG",
+            filter_func=create_trial_filter(trial_id),
+        )
+        logger.info(f"Per-trial logging enabled: {trial_output_dir / 'worker.log'}")
 
         # Write trial metadata.json
         trial_mode = (
@@ -665,6 +963,11 @@ def run_crs_trial(
                 skip_verification=config.skip_verification,
             )
         finally:
+            # Clean up per-trial logging
+            if "trial_log_handler" in locals() and trial_log_handler is not None:
+                remove_file_handler(trial_log_handler)
+            set_trial_context(None)
+
             # Clean up LLM tracking (write usage file and delete key)
             _cleanup_llm_tracking(
                 tracker=llm_tracker,

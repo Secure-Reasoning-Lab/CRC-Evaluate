@@ -128,6 +128,7 @@ def run_worker(args: argparse.Namespace) -> int:
     logger = get_logger(__name__)
 
     # Load experiment config if provided
+    config = None
     worker_config = None
     experiment_name_from_config = None
     if args.experiment_config:
@@ -180,6 +181,8 @@ def run_worker(args: argparse.Namespace) -> int:
             "copy_results_to_filestore",
             "experiment_results_filestore",
             "reports_results_filestore",
+            "minimum_disk_size",
+            "disk_check_interval",
         ]
         for field in override_fields:
             value = getattr(worker_config, field, None)
@@ -188,12 +191,33 @@ def run_worker(args: argparse.Namespace) -> int:
                 os.environ[env_var] = str(value)
                 logger.info(f"Worker override: {field} = {value}")
 
+    # Export experiment_filestore from main config if worker didn't override it
+    if (
+        args.experiment_config
+        and config is not None
+        and "CRSBENCH_WORKER_EXPERIMENT_FILESTORE" not in os.environ
+    ):
+        # Get from main config
+        experiment_filestore = config.experiment_filestore
+        if experiment_filestore:
+            os.environ["CRSBENCH_WORKER_EXPERIMENT_FILESTORE"] = str(
+                experiment_filestore
+            )
+            logger.info(f"Experiment filestore: {experiment_filestore}")
+
+    # Export experiment name for worker logging
+    os.environ["CRSBENCH_EXPERIMENT_NAME"] = experiment_name
+
     # Validate --no-cpuset with multiple workers
     if getattr(args, "no_cpuset", False) and num_workers > 1:
         raise ValueError("--no-cpuset is not supported with multiple workers (-j > 1)")
 
     # cpuset is enabled by default, disabled with --no-cpuset
     use_cpuset = not getattr(args, "no_cpuset", False)
+
+    # Get disk space config from worker_config
+    minimum_disk_size = worker_config.minimum_disk_size if worker_config else "10GB"
+    disk_check_interval = worker_config.disk_check_interval if worker_config else 60
 
     # TODO: fix timeout too short
     # Prepare worker arguments with resolved values
@@ -215,6 +239,8 @@ def run_worker(args: argparse.Namespace) -> int:
                 worker_name=args.worker_name,
                 num_workers=num_workers,
                 use_cpuset=use_cpuset,
+                minimum_disk_size=minimum_disk_size,
+                disk_check_interval=disk_check_interval,
             )
             return 0
         # Run in burst mode (default)

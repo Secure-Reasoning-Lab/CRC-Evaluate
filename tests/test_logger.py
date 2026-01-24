@@ -1,17 +1,24 @@
 """Tests for the centralized loguru-based logger."""
 
 import os
+import tempfile
 from io import StringIO
+from pathlib import Path
 
 import pytest
 from crsbench.utils.logger import (
+    add_file_handler,
     configure_logger,
+    create_trial_filter,
     critical,
     debug,
     error,
     get_logger,
+    get_trial_context,
     getLogger,
     info,
+    remove_file_handler,
+    set_trial_context,
     success,
     warning,
 )
@@ -184,6 +191,141 @@ def test_colorize_option():
 
     # Colored output should be longer due to ANSI codes (unless TTY detection overrides)
     # This is a basic check - exact behavior depends on TTY detection
+
+
+def test_trial_context():
+    """Test trial context management functions."""
+    # Initially no context
+    assert get_trial_context() is None
+
+    # Set context
+    set_trial_context("trial-1")
+    assert get_trial_context() == "trial-1"
+
+    # Change context
+    set_trial_context("trial-2")
+    assert get_trial_context() == "trial-2"
+
+    # Clear context
+    set_trial_context(None)
+    assert get_trial_context() is None
+
+
+def test_create_trial_filter():
+    """Test trial filter creation and functionality."""
+    # Create filter for trial-1
+    filter_trial_1 = create_trial_filter("trial-1")
+    assert callable(filter_trial_1)
+
+    # Mock record object (loguru record dict)
+    mock_record = {"message": "test"}
+
+    # Filter should return False when context doesn't match
+    set_trial_context("trial-2")
+    assert filter_trial_1(mock_record) is False
+
+    # Filter should return True when context matches
+    set_trial_context("trial-1")
+    assert filter_trial_1(mock_record) is True
+
+    # Filter should return False when no context
+    set_trial_context(None)
+    assert filter_trial_1(mock_record) is False
+
+
+def test_add_file_handler_with_filter():
+    """Test adding file handler with trial filter."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        log_path = Path(tmpdir) / "trial.log"
+
+        # Create filter for trial-1
+        filter_func = create_trial_filter("trial-1")
+
+        # Add file handler with filter
+        handler_id = add_file_handler(log_path, level="DEBUG", filter_func=filter_func)
+
+        try:
+            logger = get_logger("test_filtered")
+
+            # Set context to trial-1 and log
+            set_trial_context("trial-1")
+            logger.info("Message from trial-1")
+
+            # Set context to trial-2 and log
+            set_trial_context("trial-2")
+            logger.info("Message from trial-2")
+
+            # Clear context and log
+            set_trial_context(None)
+            logger.info("Message with no context")
+
+            # Read log file
+            with log_path.open("r") as f:
+                log_content = f.read()
+
+            # Only trial-1 message should be in the log
+            assert "Message from trial-1" in log_content
+            assert "Message from trial-2" not in log_content
+            assert "Message with no context" not in log_content
+
+        finally:
+            remove_file_handler(handler_id)
+            set_trial_context(None)
+
+
+def test_add_file_handler_without_filter():
+    """Test adding file handler without filter (all messages)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        log_path = Path(tmpdir) / "all.log"
+
+        # Add file handler without filter
+        handler_id = add_file_handler(log_path, level="DEBUG")
+
+        try:
+            logger = get_logger("test_all")
+
+            # Log with different contexts
+            set_trial_context("trial-1")
+            logger.info("Message from trial-1")
+
+            set_trial_context("trial-2")
+            logger.info("Message from trial-2")
+
+            set_trial_context(None)
+            logger.info("Message with no context")
+
+            # Read log file
+            with log_path.open("r") as f:
+                log_content = f.read()
+
+            # All messages should be in the log
+            assert "Message from trial-1" in log_content
+            assert "Message from trial-2" in log_content
+            assert "Message with no context" in log_content
+
+        finally:
+            remove_file_handler(handler_id)
+            set_trial_context(None)
+
+
+def test_file_handler_rotation():
+    """Test file handler with rotation policy."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        log_path = Path(tmpdir) / "rotated.log"
+
+        # Add file handler with rotation
+        handler_id = add_file_handler(
+            log_path, level="DEBUG", rotation="10 MB", retention="7 days"
+        )
+
+        try:
+            logger = get_logger("test_rotation")
+            logger.info("Test rotation policy")
+
+            assert log_path.exists()
+
+        finally:
+            remove_file_handler(handler_id)
 
 
 if __name__ == "__main__":

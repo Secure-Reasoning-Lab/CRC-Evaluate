@@ -11,6 +11,7 @@ A file-based lock ensures only one worker process runs at a time.
 import fcntl
 import multiprocessing
 import os
+import shutil
 import socket
 import sys
 import time
@@ -260,6 +261,8 @@ def _run_supervisor(
     max_workers: int,
     *,
     use_cpuset: bool = False,
+    minimum_disk_size: str = "10GB",
+    disk_check_interval: int = 60,
 ) -> int:
     """Supervisor that spawns workers based on job CPU requirements.
 
@@ -281,16 +284,39 @@ def _run_supervisor(
         Exit code (0 for success)
     """
     from crsbench.utils.cpu_pool import CPUPool, format_cpuset
+    from crsbench.utils.size_parser import parse_size_to_bytes
 
     # Set supervisor environment variable for logger
     os.environ["CRSBENCH_SUPERVISOR"] = "1"
     logger.info("Starting supervisor mode for dynamic CPU allocation...")
+
+    # Create all filestore directories from config if they don't exist
+    filestore_vars = [
+        "CRSBENCH_WORKER_EXPERIMENT_FILESTORE",
+        "CRSBENCH_WORKER_REPORT_FILESTORE",
+        "CRSBENCH_WORKER_EXPERIMENT_RESULTS_FILESTORE",
+        "CRSBENCH_WORKER_REPORTS_RESULTS_FILESTORE",
+    ]
+    for var in filestore_vars:
+        filestore = os.environ.get(var)
+        if filestore:
+            # Create base path and experiment-specific subdirectory
+            base_path = Path(filestore)
+            base_path.mkdir(parents=True, exist_ok=True)
+            exp_path = base_path / experiment_name
+            exp_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Ensured filestore exists: {exp_path}")
 
     cpu_pool = CPUPool() if use_cpuset else None
     workers: dict[
         int, tuple[multiprocessing.Process, list[int], str, int]
     ] = {}  # pid -> (process, cpus, job_id, worker_num)
     used_worker_nums: set[int] = set()  # Track which worker numbers are in use
+
+    # Disk space checking state
+    minimum_disk_bytes = parse_size_to_bytes(minimum_disk_size)
+    disk_space_ok = True
+    last_disk_check = 0.0
 
     try:
         # Connect to Redis
@@ -324,13 +350,41 @@ def _run_supervisor(
                     used_worker_nums.discard(worker_num)
                     del workers[pid]
 
+            # Check disk space periodically
+            current_time = time.time()
+            if current_time - last_disk_check >= disk_check_interval:
+                # Get filestore path from worker override or use cwd
+                filestore_path = Path(
+                    os.environ.get("CRSBENCH_WORKER_EXPERIMENT_FILESTORE") or Path.cwd()
+                )
+                available_bytes = check_disk_space(filestore_path)
+                last_disk_check = current_time
+
+                if available_bytes < minimum_disk_bytes:
+                    if disk_space_ok:
+                        # Transition from OK to low disk space
+                        logger.warning(
+                            f"Disk space below threshold: {available_bytes / (1024**3):.2f}GB available, "
+                            f"minimum required: {minimum_disk_bytes / (1024**3):.2f}GB. "
+                            f"Pausing job processing until space is available."
+                        )
+                        disk_space_ok = False
+                elif not disk_space_ok:
+                    # Disk space recovered
+                    logger.info(
+                        f"Disk space recovered: {available_bytes / (1024**3):.2f}GB available. "
+                        f"Resuming job processing."
+                    )
+                    disk_space_ok = True
+
             # Check if queue has jobs
             queue_count = queue.count
             # Continuous mode: keep running and waiting for new jobs
             # (don't exit when queue is empty)
 
             # Try to start new worker if jobs available and we have capacity
-            if queue_count > 0 and len(workers) < max_workers:
+            # Also check if disk space is sufficient
+            if queue_count > 0 and len(workers) < max_workers and disk_space_ok:
                 # Properly dequeue job from queue (atomically removes it)
                 result = rq.Queue.dequeue_any(
                     [queue],
@@ -437,8 +491,28 @@ def _run_single_job_worker(
     from rq.job import JobStatus
     from rq.registry import FailedJobRegistry, FinishedJobRegistry
 
+    from crsbench.utils.logger import add_file_handler, remove_file_handler
+
     # Reconfigure logging in subprocess
     configure_logger(level=os.environ.get("LOG_LEVEL", "INFO").upper(), sink=sys.stdout)
+
+    # Set up per-worker logging
+    worker_log_handler = None
+    experiment_filestore = os.environ.get("CRSBENCH_WORKER_EXPERIMENT_FILESTORE")
+    experiment_name_env = os.environ.get("CRSBENCH_EXPERIMENT_NAME")
+
+    if experiment_filestore and experiment_name_env:
+        worker_log_dir = (
+            Path(experiment_filestore) / experiment_name_env / "worker-logs"
+        )
+        worker_log_path = worker_log_dir / f"{worker_name}.log"
+        worker_log_handler = add_file_handler(
+            worker_log_path,
+            level="DEBUG",
+            rotation="100 MB",
+            retention="7 days",
+        )
+        logger.info(f"Per-worker logging enabled: {worker_log_path}")
 
     # Connect to Redis
     redis_password = os.environ.get("REDIS_PASSWORD") or None
@@ -560,6 +634,10 @@ def _run_single_job_worker(
     except Exception as e:
         logger.error(f"Worker {worker_name} error: {e}", exc_info=True)
         raise
+    finally:
+        # Clean up per-worker logging
+        if worker_log_handler is not None:
+            remove_file_handler(worker_log_handler)
 
 
 def _run_single_worker(
@@ -647,6 +725,29 @@ def _run_worker(redis_host: str, experiment_name: str, worker_name: str):
         raise
 
 
+def check_disk_space(path: Path) -> int:
+    """Check available disk space at given path.
+
+    Args:
+        path: Path to check disk space for
+
+    Returns:
+        Available disk space in bytes
+    """
+    # Walk up to find an existing directory (handles case where path doesn't exist yet)
+    check_path = path
+    while not check_path.exists():
+        parent = check_path.parent
+        if parent == check_path:
+            # Reached root without finding existing dir, fall back to cwd
+            check_path = Path.cwd()
+            break
+        check_path = parent
+
+    stat = shutil.disk_usage(check_path)
+    return stat.free
+
+
 def run_worker_continuous(
     redis_host: str,
     experiment_name: str,
@@ -655,6 +756,8 @@ def run_worker_continuous(
     num_workers: int = 1,
     *,
     use_cpuset: bool = False,
+    minimum_disk_size: str = "10GB",
+    disk_check_interval: int = 60,
 ):
     """
     Run worker in continuous mode (polling indefinitely).
@@ -687,7 +790,13 @@ def run_worker_continuous(
             f"Starting supervisor with {num_workers} workers and CPU affinity for: {experiment_name}"
         )
         exit_code = _run_supervisor(
-            redis_host, experiment_name, worker_name, num_workers, use_cpuset=True
+            redis_host,
+            experiment_name,
+            worker_name,
+            num_workers,
+            use_cpuset=True,
+            minimum_disk_size=minimum_disk_size,
+            disk_check_interval=disk_check_interval,
         )
     else:
         logger.info(
