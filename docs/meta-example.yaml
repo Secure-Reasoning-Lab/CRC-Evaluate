@@ -36,7 +36,7 @@ harness_files:
     path: "$PROJECT/customfuzz3.c"
     # Vulnerability configurations for customfuzz3
     vulns:
-      - vuln_keyword: "buffer_overflow"      # Maps to directory name
+      - vuln_keyword: "cpv_0"                # Maps to directory name (must follow cpv_N pattern)
         povs:
           - id: "pov_0"                      # POV variant ID
             sanitizer: "address"
@@ -44,7 +44,7 @@ harness_files:
           - id: "pov_1"                      # POV variant ID
             sanitizer: "undefined"
             error_token: "runtime error: index out of bounds"
-      - vuln_keyword: "use_after_free"       # Maps to directory name
+      - vuln_keyword: "cpv_1"                # Maps to directory name (must follow cpv_N pattern)
         povs:
           - id: "pov_0"                      # POV variant ID
             sanitizer: "memory"

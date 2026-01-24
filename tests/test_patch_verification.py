@@ -1761,7 +1761,7 @@ class TestProjectDirectoryCreation:
 harness_files:
   - name: fuzz_target
     vulns:
-      - vuln_keyword: test_vuln
+      - vuln_keyword: cpv_0
         povs:
           - id: pov_0
 delta_mode:

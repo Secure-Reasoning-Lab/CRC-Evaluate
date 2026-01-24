@@ -72,21 +72,21 @@ class TestVulnerabilityModel:
     def test_vulnerability_valid(self):
         """Test valid vulnerability."""
         vuln = Vulnerability(
-            vuln_keyword="buffer_overflow",
+            vuln_keyword="cpv_0",
             difficulty_level=3,
             povs=[
                 POV(id="pov_0", sanitizer="address"),
                 POV(id="pov_1", sanitizer="undefined"),
             ],
         )
-        assert vuln.vuln_keyword == "buffer_overflow"
+        assert vuln.vuln_keyword == "cpv_0"
         assert vuln.difficulty_level == 3
         assert len(vuln.povs) == 2
 
     def test_vulnerability_without_difficulty(self):
         """Test vulnerability without difficulty level (optional)."""
         vuln = Vulnerability(
-            vuln_keyword="use_after_free", povs=[POV(id="pov_0", sanitizer="memory")]
+            vuln_keyword="cpv_1", povs=[POV(id="pov_0", sanitizer="memory")]
         )
         assert vuln.difficulty_level is None
 
@@ -94,7 +94,7 @@ class TestVulnerabilityModel:
         """Test vulnerability with duplicate POV IDs."""
         with pytest.raises(PydanticValidationError) as exc_info:
             Vulnerability(
-                vuln_keyword="buffer_overflow",
+                vuln_keyword="cpv_0",
                 povs=[
                     POV(id="pov_0", sanitizer="address"),
                     POV(id="pov_0", sanitizer="undefined"),  # Duplicate
@@ -105,7 +105,7 @@ class TestVulnerabilityModel:
     def test_vulnerability_empty_povs(self):
         """Test vulnerability with no POVs."""
         with pytest.raises(PydanticValidationError):
-            Vulnerability(vuln_keyword="buffer_overflow", povs=[])
+            Vulnerability(vuln_keyword="cpv_0", povs=[])
 
 
 class TestHarnessFileModel:
@@ -155,7 +155,7 @@ harness_files:
   - name: "test_harness"
     path: "/src/project/test/harness.c"
     vulns:
-      - vuln_keyword: "buffer_overflow"
+      - vuln_keyword: "cpv_0"
         povs:
           - id: "pov_0"
             sanitizer: "address"
@@ -187,7 +187,7 @@ harness_files:
   - name: "fuzz_parser"
     path: "/src/project/test/fuzz_parser.c"
     vulns:
-      - vuln_keyword: "buffer_overflow"
+      - vuln_keyword: "cpv_0"
         difficulty_level: 3
         povs:
           - id: "pov_0"
@@ -196,7 +196,7 @@ harness_files:
           - id: "pov_1"
             sanitizer: "undefined"
             error_token: "runtime error: index out of bounds"
-      - vuln_keyword: "use_after_free"
+      - vuln_keyword: "cpv_1"
         povs:
           - id: "pov_0"
             sanitizer: "memory"
@@ -224,7 +224,7 @@ harness_files:
   - name: "test"
     path: "/src/test.c"
     vulns:
-      - vuln_keyword: "buffer_overflow"
+      - vuln_keyword: "cpv_0"
         povs:
           - id: "pov_0"
             sanitizer: "address"
@@ -442,20 +442,20 @@ harness_files:
   - name: "h1"
     path: "/src/h1.c"
     vulns:
-      - vuln_keyword: "v1"
+      - vuln_keyword: "cpv_0"
         povs:
           - id: "pov_0"
             sanitizer: "address"
           - id: "pov_1"
             sanitizer: "undefined"
-      - vuln_keyword: "v2"
+      - vuln_keyword: "cpv_1"
         povs:
           - id: "pov_0"
             sanitizer: "memory"
   - name: "h2"
     path: "/src/h2.c"
     vulns:
-      - vuln_keyword: "v3"
+      - vuln_keyword: "cpv_2"
         povs:
           - id: "pov_0"
             sanitizer: "address"
@@ -476,7 +476,7 @@ harness_files:
   - name: "real"
     path: "/src/real.c"
     vulns:
-      - vuln_keyword: "buffer_overflow"
+      - vuln_keyword: "cpv_0"
         povs:
           - id: "pov_0"
             sanitizer: "address"
