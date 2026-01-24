@@ -50,6 +50,9 @@ from crsbench.validation import validate_benchmark as format_validate
 
 logger = get_logger(__name__)
 
+# Type alias for benchmark metadata tuple
+type BenchmarkMeta = tuple[Path, bool, str | None, list[str], list[tuple[str, str]]]
+
 
 def register(subparsers: argparse._SubParsersAction) -> None:
     """Register the all subcommand."""
@@ -65,58 +68,20 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     parser.set_defaults(ci_func=run_all)
 
 
-def run_all(args: argparse.Namespace) -> int:
-    """Run all checks on resolved benchmarks with shared build via flat DAG."""
-    paths = resolve_benchmark_paths(
-        benchmark_arg=getattr(args, "benchmark", None),
-        all_benchmarks=getattr(args, "all", False),
-        filter_pattern=getattr(args, "filter", None),
-    )
+def _build_dag(
+    paths: list[Path],
+    *,
+    use_inc_build: bool,
+    force_rebuild: bool,
+    source_mode: str,
+) -> tuple[list[Job], list[BenchmarkMeta]]:
+    """Build flat DAG with shared BuildVariantsJob per benchmark.
 
-    source_mode = getattr(args, "source", "main_repo")
-    build_workers = getattr(args, "build_workers", 4)
-    verify_workers = getattr(args, "verify_workers", 4)
-    use_inc_build = not getattr(args, "no_inc_build", False)
-    force_rebuild = getattr(args, "force_rebuild", True)
-
-    build_mode = "inc-build" if use_inc_build else "full-build"
-    rebuild_mode = "force-rebuild" if force_rebuild else "cached"
-    logger.info(
-        f"Running all: {len(paths)} benchmark(s), "
-        f"build-workers={build_workers}, verify-workers={verify_workers}, "
-        f"{build_mode}, {rebuild_mode}"
-    )
-
-    start_dt = datetime.now()
-
-    # Phase 1: Format validation (fast, no DAG needed)
-    format_results: dict[str, CheckResult] = {}
-    for path in paths:
-        fmt_start = datetime.now()
-        try:
-            result = format_validate(path)
-            elapsed = (datetime.now() - fmt_start).total_seconds()
-            if result.is_valid:
-                format_results[path.name] = CheckResult(
-                    status=CheckStatus.PASS, time_seconds=elapsed
-                )
-            else:
-                issues = [str(i) for i in result.issues[:5]]
-                format_results[path.name] = CheckResult(
-                    status=CheckStatus.FAIL,
-                    time_seconds=elapsed,
-                    error="; ".join(issues),
-                    details={"issues": issues},
-                )
-        except Exception as e:
-            elapsed = (datetime.now() - fmt_start).total_seconds()
-            format_results[path.name] = CheckResult.make_error(str(e), elapsed)
-
-    # Phase 2: Build flat DAG with SHARED BuildVariantsJob per benchmark
+    Returns:
+        Tuple of (all_jobs, benchmark_metadata)
+    """
     all_jobs: list[Job] = []
-    benchmark_metadata: list[
-        tuple[Path, bool, str | None, list[str], list[tuple[str, str]]]
-    ] = []
+    benchmark_metadata: list[BenchmarkMeta] = []
 
     for path in paths:
         supports_inc, rts_mode = _load_project_capabilities(path)
@@ -210,7 +175,11 @@ def run_all(args: argparse.Namespace) -> int:
 
         benchmark_metadata.append((path, supports_inc, rts_mode, cpv_ids, patch_keys))
 
-    # Log DAG summary
+    return all_jobs, benchmark_metadata
+
+
+def _log_dag_summary(all_jobs: list[Job]) -> None:
+    """Log DAG job counts by type."""
     build_count = sum(1 for j in all_jobs if isinstance(j, BuildVariantsJob))
     pov_jobs = [j for j in all_jobs if isinstance(j, VerifyCpvPovJob)]
     pov_blob_count = sum(len(j.pov_paths) for j in pov_jobs)
@@ -224,57 +193,122 @@ def run_all(args: argparse.Namespace) -> int:
         f"{coverage_count} coverage"
     )
 
-    # Phase 3: Execute flat DAG with typed concurrency
+
+def _aggregate_benchmark(
+    dag_results: dict,
+    path: Path,
+    supports_inc: bool,
+    rts_mode: str | None,
+    cpv_ids: list[str],
+    patch_keys: list[tuple[str, str]],
+    format_results: dict[str, CheckResult],
+    start_dt: datetime,
+) -> BenchmarkValidationResult:
+    """Aggregate DAG results into a single BenchmarkValidationResult."""
+    benchmark_name = path.name
+
+    fmt_result = format_results.get(
+        benchmark_name, CheckResult.make_error("format check not run")
+    )
+    pov_result = aggregate_pov_results(dag_results, benchmark_name, cpv_ids)
+    patch_result = aggregate_patch_results(
+        dag_results, benchmark_name, patch_keys, test_mode="FULL"
+    )
+
+    if rts_mode:
+        rts_result = aggregate_patch_results(
+            dag_results, benchmark_name, patch_keys, test_mode="RTS"
+        )
+    else:
+        rts_result = CheckResult.skip("No RTS mode")
+
+    coverage_result = aggregate_coverage_result(dag_results, benchmark_name)
+
+    return BenchmarkValidationResult(
+        benchmark=benchmark_name,
+        benchmark_path=path,
+        format_check=fmt_result,
+        pov_check=pov_result,
+        patch_check=patch_result,
+        patch_rts_check=rts_result,
+        coverage_check=coverage_result,
+        supports_inc_build=supports_inc,
+        rts_mode=rts_mode,
+        started_at=start_dt,
+        finished_at=datetime.now(),
+    )
+
+
+def run_all(args: argparse.Namespace) -> int:
+    """Run all checks on resolved benchmarks with shared build via flat DAG."""
+    paths = resolve_benchmark_paths(
+        benchmark_arg=getattr(args, "benchmark", None),
+        all_benchmarks=getattr(args, "all", False),
+        filter_pattern=getattr(args, "filter", None),
+    )
+
+    source_mode = getattr(args, "source", "main_repo")
+    build_workers = getattr(args, "build_workers", 4)
+    verify_workers = getattr(args, "verify_workers", 4)
+    use_inc_build = not getattr(args, "no_inc_build", False)
+    force_rebuild = getattr(args, "force_rebuild", True)
+
+    build_mode = "inc-build" if use_inc_build else "full-build"
+    rebuild_mode = "force-rebuild" if force_rebuild else "cached"
+    logger.info(
+        f"Running all: {len(paths)} benchmark(s), "
+        f"build-workers={build_workers}, verify-workers={verify_workers}, "
+        f"{build_mode}, {rebuild_mode}"
+    )
+
+    start_dt = datetime.now()
+
+    # Phase 1: Format validation (fast, no DAG needed)
+    format_results: dict[str, CheckResult] = {}
+    for path in paths:
+        fmt_start = datetime.now()
+        try:
+            result = format_validate(path)
+            elapsed = (datetime.now() - fmt_start).total_seconds()
+            if result.is_valid:
+                format_results[path.name] = CheckResult(
+                    status=CheckStatus.PASS, time_seconds=elapsed
+                )
+            else:
+                issues = [str(i) for i in result.issues[:5]]
+                format_results[path.name] = CheckResult(
+                    status=CheckStatus.FAIL,
+                    time_seconds=elapsed,
+                    error="; ".join(issues),
+                    details={"issues": issues},
+                )
+        except Exception as e:
+            elapsed = (datetime.now() - fmt_start).total_seconds()
+            format_results[path.name] = CheckResult.make_error(str(e), elapsed)
+
+    # Phase 2: Build and execute flat DAG
+    all_jobs, benchmark_metadata = _build_dag(
+        list(paths),
+        use_inc_build=use_inc_build,
+        force_rebuild=force_rebuild,
+        source_mode=source_mode,
+    )
+    _log_dag_summary(all_jobs)
+
+    output_dir = getattr(args, "output_dir", None)
+    context = JobContext(output_dir=Path(output_dir) if output_dir else None)
     executor = DAGExecutor(
         type_limits={"build": build_workers, "verify": verify_workers}
     )
-    output_dir = getattr(args, "output_dir", None)
-    context = JobContext(output_dir=Path(output_dir) if output_dir else None)
     dag_results = executor.execute(all_jobs, context)
 
-    # Phase 4: Aggregate into ValidationSummary
+    # Phase 3: Aggregate into ValidationSummary
     summary = ValidationSummary(started_at=start_dt)
-
     for path, supports_inc, rts_mode, cpv_ids, patch_keys in benchmark_metadata:
-        benchmark_name = path.name
-
-        # Format check (from Phase 1)
-        fmt_result = format_results.get(
-            benchmark_name, CheckResult.make_error("format check not run")
-        )
-
-        # POV check
-        pov_result = aggregate_pov_results(dag_results, benchmark_name, cpv_ids)
-
-        # Patch check (FULL mode)
-        patch_result = aggregate_patch_results(
-            dag_results, benchmark_name, patch_keys, test_mode="FULL"
-        )
-
-        # RTS check
-        if rts_mode:
-            rts_result = aggregate_patch_results(
-                dag_results, benchmark_name, patch_keys, test_mode="RTS"
-            )
-        else:
-            rts_result = CheckResult.skip("No RTS mode")
-
-        # Coverage check
-        coverage_result = aggregate_coverage_result(dag_results, benchmark_name)
-
         summary.add_result(
-            BenchmarkValidationResult(
-                benchmark=benchmark_name,
-                benchmark_path=path,
-                format_check=fmt_result,
-                pov_check=pov_result,
-                patch_check=patch_result,
-                patch_rts_check=rts_result,
-                coverage_check=coverage_result,
-                supports_inc_build=supports_inc,
-                rts_mode=rts_mode,
-                started_at=start_dt,
-                finished_at=datetime.now(),
+            _aggregate_benchmark(
+                dag_results, path, supports_inc, rts_mode,
+                cpv_ids, patch_keys, format_results, start_dt,
             )
         )
 
