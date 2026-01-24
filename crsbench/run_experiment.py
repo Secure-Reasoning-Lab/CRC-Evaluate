@@ -25,6 +25,7 @@ import secrets
 import string
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import List
 
@@ -1951,6 +1952,9 @@ def run_experiment_distributed(
         secrets.choice(string.ascii_lowercase + string.digits) for _ in range(6)
     )
 
+    # Generate timestamp once for all jobs in this experiment batch
+    results_timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
     jobs = []
     for trial in trials:
         bh = trial.benchmark_harness
@@ -1972,6 +1976,7 @@ def run_experiment_distributed(
             config_dict=enhanced_config.model_dump(),
             mode=trial.mode,
             sanitizer=trial.sanitizer,
+            results_timestamp=results_timestamp,
             job_timeout=config.max_total_time,
             result_ttl=-1,  # Persist results forever
             meta={

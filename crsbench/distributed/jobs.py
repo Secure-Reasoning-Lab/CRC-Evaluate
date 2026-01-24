@@ -46,19 +46,24 @@ from crsbench.validation.schemas import TrialMetadata as TrialMetadataFile
 logger = get_logger(__name__)
 
 
-def _generate_results_folder_name(experiment_name: str) -> str:
+def _generate_results_folder_name(
+    experiment_name: str, timestamp: Optional[str] = None
+) -> str:
     """Generate folder name with experiment name, hostname, and timestamp suffix.
 
     Format: {experiment_name}_{hostname}_{YYYYMMDD-HHMMSS}
 
     Args:
         experiment_name: Name of the experiment
+        timestamp: Pre-generated timestamp string (format: YYYYMMDD-HHMMSS).
+                   If None, generates a new timestamp.
 
     Returns:
         Folder name with suffix
     """
     hostname = socket.gethostname()
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    if timestamp is None:
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     return f"{experiment_name}_{hostname}_{timestamp}"
 
 
@@ -576,6 +581,7 @@ def run_crs_trial(
     config_dict: Dict[str, Any],
     mode: str,
     sanitizer: str = "address",
+    results_timestamp: Optional[str] = None,
 ) -> TrialResult:
     """
     Execute a single CRS trial.
@@ -1023,7 +1029,9 @@ def run_crs_trial(
         if config.copy_results_after_trial and config.experiment_results_filestore:
             experiment_dir = config.experiment_filestore.resolve() / config.experiment
             rel_path = trial_output_dir.relative_to(experiment_dir)
-            folder_name = _generate_results_folder_name(config.experiment)
+            folder_name = _generate_results_folder_name(
+                config.experiment, results_timestamp
+            )
             dest_dir = (
                 Path(config.experiment_results_filestore)
                 / folder_name
@@ -1052,7 +1060,9 @@ def run_crs_trial(
                     config.experiment_filestore.resolve() / config.experiment
                 )
                 rel_path = trial_output_dir.relative_to(experiment_dir)
-                folder_name = _generate_results_folder_name(config.experiment)
+                folder_name = _generate_results_folder_name(
+                    config.experiment, results_timestamp
+                )
                 dest_dir = (
                     Path(config.experiment_results_filestore)
                     / folder_name
@@ -1094,7 +1104,9 @@ def run_crs_trial(
                     config.experiment_filestore.resolve() / config.experiment
                 )
                 rel_path = trial_output_dir.relative_to(experiment_dir)
-                folder_name = _generate_results_folder_name(config.experiment)
+                folder_name = _generate_results_folder_name(
+                    config.experiment, results_timestamp
+                )
                 dest_dir = (
                     Path(config.experiment_results_filestore)
                     / folder_name
@@ -1138,7 +1150,9 @@ def run_crs_trial(
                     config.experiment_filestore.resolve() / config.experiment
                 )
                 rel_path = trial_output_dir.relative_to(experiment_dir)
-                folder_name = _generate_results_folder_name(config.experiment)
+                folder_name = _generate_results_folder_name(
+                    config.experiment, results_timestamp
+                )
                 dest_dir = (
                     Path(config.experiment_results_filestore)
                     / folder_name
