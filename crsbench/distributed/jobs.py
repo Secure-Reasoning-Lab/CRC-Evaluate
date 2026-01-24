@@ -77,14 +77,30 @@ def _setup_llm_tracking(
 
     try:
         tracker = LiteLLMTracker()
+
+        # Extract cost budget from config if present
+        max_budget = None
+        if config.resources and config.resources.litellm:
+            max_budget = config.resources.litellm.cost_budget
+
         api_key = tracker.generate_key(
             experiment=config.experiment,
             crs=crs,
             benchmark=benchmark,
             harness=harness_name,
             trial_num=trial_num,
+            max_budget=max_budget,
         )
-        logger.info(f"Generated LLM tracking key for trial {trial_num}")
+        budget_info = f" (budget: ${max_budget})" if max_budget else ""
+        logger.info(f"Generated LLM tracking key for trial {trial_num}{budget_info}")
+
+        # Debug: verify budget was actually set by fetching key info
+        key_info = tracker.get_key_info(api_key)
+        info = key_info.get("info", {})
+        actual_budget = info.get("max_budget")
+        logger.info(
+            f"Key info after creation - max_budget: {actual_budget}, spend: {info.get('spend', 0)}"
+        )
         return tracker, api_key
     except LiteLLMTrackerError as e:
         logger.error(f"Failed to set up LLM tracking: {e}")
@@ -629,6 +645,14 @@ def run_crs_trial(
                     logger.info(f"Job assigned memory: {allocated_memory}")
         except Exception as e:
             logger.warning(f"Failed to get allocated resources from job metadata: {e}")
+
+        # Fall back to config.resources for local execution (no RQ job)
+        if allocated_cpus is None and config.resources:
+            allocated_cpus = str(config.resources.cores_per_trial)
+            logger.info(f"Using cores_per_trial from config: {allocated_cpus}")
+        if allocated_memory is None and config.resources:
+            allocated_memory = config.resources.memory_per_trial
+            logger.info(f"Using memory_per_trial from config: {allocated_memory}")
 
         # Helper function to get worker override from environment variable
         def get_worker_override(field: str) -> Optional[str]:

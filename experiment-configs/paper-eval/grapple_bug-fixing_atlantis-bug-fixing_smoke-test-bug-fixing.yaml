@@ -43,6 +43,13 @@ verify_timeout: 600
 
 hints_enabled: false
 
+# Resource Allocation
+resources:
+  cores_per_trial: 16
+  memory_per_trial: "64G"
+  litellm:
+    cost_budget: 10.0  # $10 per trial
+
 # Distributed Execution Configuration
 redis_host: localhost
 
