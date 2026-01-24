@@ -14,7 +14,8 @@ logger = get_logger(__name__)
 def discover_harness_names(benchmark_path: Path) -> list[str]:
     """Discover harness names from the .aixcc directory.
 
-    Returns list of harness directory names (excluding meta.yaml, dotfiles).
+    A directory is considered a harness if it contains cpv_* subdirectories.
+    Utility directories (tests/, etc.) are excluded.
     """
     aixcc_dir = benchmark_path / ".aixcc"
     if not aixcc_dir.exists():
@@ -24,9 +25,14 @@ def discover_harness_names(benchmark_path: Path) -> list[str]:
     for entry in sorted(aixcc_dir.iterdir()):
         if not entry.is_dir():
             continue
-        if entry.name.endswith(".yaml") or entry.name.startswith("."):
+        if entry.name.startswith("."):
             continue
-        harnesses.append(entry.name)
+        # Only directories with cpv_* subdirectories are harnesses
+        has_cpvs = any(
+            sub.is_dir() and sub.name.startswith("cpv_") for sub in entry.iterdir()
+        )
+        if has_cpvs:
+            harnesses.append(entry.name)
     return harnesses
 
 

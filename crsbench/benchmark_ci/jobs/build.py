@@ -63,8 +63,10 @@ class BuildJob(Job):
         """
         started_at = datetime.now()
 
+        if not context.builder:
+            raise RuntimeError("JobContext.builder is required for BuildJob")
+
         try:
-            # Use existing builder - handles all complexity
             result = context.builder.build_single(self.config)
 
             finished_at = datetime.now()

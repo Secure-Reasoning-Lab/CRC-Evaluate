@@ -54,6 +54,9 @@ class BuildPatchJob(Job):
 
     def execute(self, context: JobContext) -> JobResult:
         """Apply patch and rebuild the variant."""
+        if not context.builder:
+            raise RuntimeError("JobContext.builder is required for PatchBuildJob")
+
         started_at = datetime.now()
 
         try:
@@ -134,6 +137,9 @@ class TestPatchJob(Job):
 
     def execute(self, context: JobContext) -> JobResult:
         """Run POVs against patched variant. None should crash."""
+        if not context.infra:
+            raise RuntimeError("JobContext.infra is required for PatchTestJob")
+
         started_at = datetime.now()
 
         try:

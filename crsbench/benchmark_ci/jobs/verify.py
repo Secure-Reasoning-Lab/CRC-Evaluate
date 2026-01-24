@@ -67,6 +67,9 @@ class VerifyPovJob(Job):
         Returns:
             JobResult with verification status
         """
+        if not context.infra:
+            raise RuntimeError("JobContext.infra is required for VerifyCpvPovJob")
+
         started_at = datetime.now()
 
         try:
@@ -195,6 +198,9 @@ class VerifyPatchJob(Job):
         Returns:
             JobResult with patch verification status
         """
+        if not context.infra:
+            raise RuntimeError("JobContext.infra is required for VerifyPatchJob")
+
         started_at = datetime.now()
 
         try:
