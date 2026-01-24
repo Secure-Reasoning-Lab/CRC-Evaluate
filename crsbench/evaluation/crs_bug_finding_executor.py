@@ -793,9 +793,12 @@ class CRSBugFindingExecutor(CRSExecutor):
             logger.info("Running without hints")
 
         # Add diff path if available (delta mode)
+        mode = self.config.get("mode")
         if diff_path and diff_path.exists():
             cmd.extend(["--diff", str(diff_path)])
             logger.info(f"Using diff for delta mode: {diff_path}")
+        elif mode == "delta":
+            logger.error("Delta mode configured but no diff file available")
 
         # Add external LiteLLM flag if using external LiteLLM
         if self.litellm_mode is not None:
