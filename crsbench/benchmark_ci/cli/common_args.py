@@ -79,7 +79,8 @@ def create_build_options_parent() -> argparse.ArgumentParser:
     parser.add_argument(
         "--force-rebuild",
         action="store_true",
-        help="Force rebuild even if cached build exists",
+        default=True,
+        help="Force rebuild even if cached build exists (on by default for CI)",
     )
     parser.add_argument(
         "--max-povs-per-cpv",

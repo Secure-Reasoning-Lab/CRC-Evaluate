@@ -11,6 +11,18 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _get_build_fallback(
+    dag_results: dict[str, ExecutorResult],
+    benchmark_name: str,
+) -> bool:
+    """Extract fallback_used from the build-variants job details."""
+    build_job_id = f"build-variants:{benchmark_name}"
+    build_result = dag_results.get(build_job_id)
+    if build_result and build_result.job_result:
+        return build_result.job_result.details.get("fallback_used", False)
+    return False
+
+
 def aggregate_pov_results(
     dag_results: dict[str, ExecutorResult],
     benchmark_name: str,
@@ -50,11 +62,12 @@ def aggregate_pov_results(
             if result.job_result and not result.job_result.success:
                 failures.append(f"{cpv_id}: POV not detected")
 
-    # Get build time from shared build-variants job
+    # Get build time and fallback from shared build-variants job
     build_job_id = f"build-variants:{benchmark_name}"
     build_result = dag_results.get(build_job_id)
     build_time = build_result.elapsed_seconds if build_result else 0.0
     total_time = build_time + verify_time
+    fallback = _get_build_fallback(dag_results, benchmark_name)
 
     if errors:
         return CheckResult(
@@ -64,6 +77,7 @@ def aggregate_pov_results(
             verify_time=verify_time,
             error="; ".join(errors),
             details={"failures": failures, "errors": errors},
+            fallback_used=fallback,
         )
 
     if failures:
@@ -74,6 +88,7 @@ def aggregate_pov_results(
             verify_time=verify_time,
             error="; ".join(failures[:3]),
             details={"failures": failures},
+            fallback_used=fallback,
         )
 
     return CheckResult(
@@ -82,6 +97,7 @@ def aggregate_pov_results(
         build_time=build_time,
         verify_time=verify_time,
         details={"cpv_count": len(cpv_ids)},
+        fallback_used=fallback,
     )
 
 
@@ -143,6 +159,7 @@ def aggregate_patch_results(
                 failures.append(f"{cpv_id}/{patch_id}: {error_msg}")
 
     total_time = build_time + verify_time
+    fallback = _get_build_fallback(dag_results, benchmark_name)
 
     if errors:
         return CheckResult(
@@ -152,6 +169,7 @@ def aggregate_patch_results(
             verify_time=verify_time,
             error="; ".join(errors),
             details={"failures": failures, "errors": errors},
+            fallback_used=fallback,
         )
 
     if failures:
@@ -162,6 +180,7 @@ def aggregate_patch_results(
             verify_time=verify_time,
             error="; ".join(failures[:3]),
             details={"failures": failures},
+            fallback_used=fallback,
         )
 
     return CheckResult(
@@ -170,6 +189,7 @@ def aggregate_patch_results(
         build_time=build_time,
         verify_time=verify_time,
         details={"patch_count": len(patch_keys)},
+        fallback_used=fallback,
     )
 
 
@@ -194,6 +214,7 @@ def aggregate_coverage_result(
 
     verify_time = result.elapsed_seconds
     total_time = build_time + verify_time
+    fallback = _get_build_fallback(dag_results, benchmark_name)
 
     if result.status == JobStatus.FAILED:
         error = result.error or "Coverage collection failed"
@@ -203,6 +224,7 @@ def aggregate_coverage_result(
             build_time=build_time,
             verify_time=verify_time,
             error=error,
+            fallback_used=fallback,
         )
 
     return CheckResult(
@@ -210,6 +232,7 @@ def aggregate_coverage_result(
         time_seconds=total_time,
         build_time=build_time,
         verify_time=verify_time,
+        fallback_used=fallback,
     )
 
 

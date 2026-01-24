@@ -45,6 +45,16 @@ class VariantType(Enum):
         """Check if this is a patch verification variant."""
         return self == VariantType.PATCHED
 
+    def is_inc_build_target(self) -> bool:
+        """Whether this variant uses the inc-build image's commit.
+
+        Inc-build images are built for ref_commit (delta mode) or base_commit
+        (full mode). DELTA_BASE uses a different commit (base_commit in delta
+        mode), so fallback is expected. COVERAGE uses different instrumentation,
+        not inc-build.
+        """
+        return self not in (VariantType.DELTA_BASE, VariantType.COVERAGE)
+
     def supports_inc_build(self) -> bool:
         """Check if this variant type supports incremental builds.
 

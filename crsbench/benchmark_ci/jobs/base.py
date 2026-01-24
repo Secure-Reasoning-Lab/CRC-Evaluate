@@ -66,6 +66,7 @@ class JobContext:
     infra: Optional["OSSFuzzInfrastructure"] = None
     timeout: int = 120
     shared: dict[str, Any] = field(default_factory=dict)
+    output_dir: Optional[Path] = None
 
 
 class Job(ABC):
@@ -117,6 +118,42 @@ class Job(ABC):
             JobResult with success status, timing, and details
         """
         ...
+
+    def _job_log_path(self, context: JobContext) -> Optional[Path]:
+        """Get log file path for this job, or None if no output_dir."""
+        if not context.output_dir:
+            return None
+        parts = self.job_id.split(":")
+        benchmark_name = parts[1] if len(parts) > 1 else "unknown"
+        job_dir = context.output_dir / benchmark_name / self.job_type
+        job_dir.mkdir(parents=True, exist_ok=True)
+        safe_id = self.job_id.replace(":", "-")
+        return job_dir / f"{safe_id}.log"
+
+    def _write_job_log(self, context: JobContext, result: JobResult) -> None:
+        """Write job execution log to output_dir if configured."""
+        log_path = self._job_log_path(context)
+        if not log_path:
+            return
+        import json as _json
+
+        sep = "=" * 60
+        status = "SUCCESS" if result.success else "FAILED"
+        lines = [
+            sep,
+            f"Job:     {result.job_id}",
+            f"Type:    {result.job_type}",
+            f"Status:  {status}",
+            f"Elapsed: {result.elapsed_seconds:.1f}s",
+            sep,
+        ]
+        if result.error:
+            lines.append(f"Error: {result.error}")
+            lines.append("")
+        if result.details:
+            lines.append(_json.dumps(result.details, indent=2, default=str))
+            lines.append("")
+        log_path.write_text("\n".join(lines) + "\n")
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.job_id})"

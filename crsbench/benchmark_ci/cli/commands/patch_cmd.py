@@ -67,14 +67,14 @@ def run_patch(args: argparse.Namespace) -> int:
     build_workers = getattr(args, "build_workers", 4)
     verify_workers = getattr(args, "verify_workers", 4)
     use_inc_build = not getattr(args, "no_inc_build", False)
-    # CI subcommands always force-rebuild for clean validation
-    force_rebuild = True
+    force_rebuild = getattr(args, "force_rebuild", True)
 
     build_mode = "inc-build" if use_inc_build else "full-build"
+    rebuild_mode = "force-rebuild" if force_rebuild else "cached"
     logger.info(
         f"Running patch: {len(paths)} benchmark(s), "
         f"build-workers={build_workers}, verify-workers={verify_workers}, "
-        f"{build_mode}"
+        f"{build_mode}, {rebuild_mode}"
     )
 
     # Build flat DAG across all benchmarks
@@ -137,7 +137,8 @@ def run_patch(args: argparse.Namespace) -> int:
     executor = DAGExecutor(
         type_limits={"build": build_workers, "verify": verify_workers}
     )
-    context = JobContext()
+    output_dir = getattr(args, "output_dir", None)
+    context = JobContext(output_dir=Path(output_dir) if output_dir else None)
     dag_results = executor.execute(all_jobs, context)
 
     # Aggregate into ValidationSummary

@@ -493,8 +493,12 @@ class VerificationEngine:
             logger.error(f"Failed to build variants for {adapter.benchmark_name}")
             return PovBenchmarkOutput(results=[], skipped_count=0, fallback_used=False)
 
-        # Check if any build used fallback
-        fallback_used = any(r.fallback_used for r in build_results.values())
+        # Check if any inc-build target variant used fallback
+        fallback_used = any(
+            r.fallback_used
+            for r in build_results.values()
+            if r.config.variant_type.is_inc_build_target()
+        )
 
         # Collect (pov_id, pov_data, harness) tuples
         pov_harness_pairs: list[tuple[str, bytes, str]] = []

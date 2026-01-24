@@ -77,14 +77,14 @@ def run_all(args: argparse.Namespace) -> int:
     build_workers = getattr(args, "build_workers", 4)
     verify_workers = getattr(args, "verify_workers", 4)
     use_inc_build = not getattr(args, "no_inc_build", False)
-    # ci all always force-rebuilds to ensure clean state across all checks
-    force_rebuild = True
+    force_rebuild = getattr(args, "force_rebuild", True)
 
     build_mode = "inc-build" if use_inc_build else "full-build"
+    rebuild_mode = "force-rebuild" if force_rebuild else "cached"
     logger.info(
         f"Running all: {len(paths)} benchmark(s), "
         f"build-workers={build_workers}, verify-workers={verify_workers}, "
-        f"{build_mode}"
+        f"{build_mode}, {rebuild_mode}"
     )
 
     start_dt = datetime.now()
@@ -214,7 +214,8 @@ def run_all(args: argparse.Namespace) -> int:
     executor = DAGExecutor(
         type_limits={"build": build_workers, "verify": verify_workers}
     )
-    context = JobContext()
+    output_dir = getattr(args, "output_dir", None)
+    context = JobContext(output_dir=Path(output_dir) if output_dir else None)
     dag_results = executor.execute(all_jobs, context)
 
     # Phase 4: Aggregate into ValidationSummary

@@ -71,10 +71,29 @@ class BuildVariantsJob(Job):
                 "adapter": adapter,
             }
 
+            # Only consider inc-build target variants for fallback
+            fallback_used = any(
+                r.fallback_used
+                for r in build_results.values()
+                if r.config.variant_type.is_inc_build_target()
+            )
+
             finished_at = datetime.now()
             elapsed = (finished_at - started_at).total_seconds()
 
-            return JobResult(
+            variants_info = [
+                {
+                    "name": name,
+                    "variant_type": r.config.variant_type.value,
+                    "success": r.success,
+                    "fallback": r.fallback_used,
+                    "cached": r.cached,
+                    "elapsed": f"{r.elapsed_seconds:.1f}s",
+                }
+                for name, r in build_results.items()
+            ]
+
+            result = JobResult(
                 job_id=self.job_id,
                 job_type=self.job_type,
                 success=success,
@@ -87,11 +106,15 @@ class BuildVariantsJob(Job):
                         [r for r in build_results.values() if r.success]
                     ),
                     "variants_total": len(build_results),
+                    "fallback_used": fallback_used,
+                    "variants": variants_info,
                 },
             )
+            self._write_job_log(context, result)
+            return result
         except Exception as e:
             finished_at = datetime.now()
-            return JobResult(
+            result = JobResult(
                 job_id=self.job_id,
                 job_type=self.job_type,
                 success=False,
@@ -100,6 +123,8 @@ class BuildVariantsJob(Job):
                 elapsed_seconds=(finished_at - started_at).total_seconds(),
                 error=str(e),
             )
+            self._write_job_log(context, result)
+            return result
 
 
 @dataclass
@@ -134,7 +159,7 @@ class VerifyCpvPovJob(Job):
         try:
             if not self.pov_paths:
                 finished_at = datetime.now()
-                return JobResult(
+                result = JobResult(
                     job_id=self.job_id,
                     job_type=self.job_type,
                     success=True,
@@ -143,6 +168,8 @@ class VerifyCpvPovJob(Job):
                     elapsed_seconds=(finished_at - started_at).total_seconds(),
                     details={"cpv_id": self.cpv_id, "pov_count": 0},
                 )
+                self._write_job_log(context, result)
+                return result
 
             from crsbench.evaluation.verification.pov import VerificationEngine
             from crsbench.utils.run_helper import get_oss_fuzz_root
@@ -176,8 +203,28 @@ class VerifyCpvPovJob(Job):
 
             passed = all(r.status == PovVerificationStatus.CPV for r in results)
 
+            # Collect variant info for structured logging
+            variants_used = [
+                {
+                    "name": name,
+                    "variant_type": r.config.variant_type.value,
+                }
+                for name, r in build_results.items()
+                if r.success
+            ]
+
+            # Collect per-POV verdict info
+            pov_verdicts = [
+                {
+                    "pov_id": r.pov_id or "unknown",
+                    "status": r.status.value,
+                    "cpv_matched": r.cpv_matched,
+                }
+                for r in results
+            ]
+
             finished_at = datetime.now()
-            return JobResult(
+            result = JobResult(
                 job_id=self.job_id,
                 job_type=self.job_type,
                 success=passed,
@@ -187,12 +234,16 @@ class VerifyCpvPovJob(Job):
                 details={
                     "cpv_id": self.cpv_id,
                     "pov_count": len(pov_harness_pairs),
-                    "verdicts": [r.status for r in results],
+                    "variants_used": len(variants_used),
+                    "variants": variants_used,
+                    "verdicts": pov_verdicts,
                 },
             )
+            self._write_job_log(context, result)
+            return result
         except Exception as e:
             finished_at = datetime.now()
-            return JobResult(
+            result = JobResult(
                 job_id=self.job_id,
                 job_type=self.job_type,
                 success=False,
@@ -201,6 +252,8 @@ class VerifyCpvPovJob(Job):
                 elapsed_seconds=(finished_at - started_at).total_seconds(),
                 error=str(e),
             )
+            self._write_job_log(context, result)
+            return result
 
 
 @dataclass
@@ -277,7 +330,7 @@ class BuildPatchVariantJob(Job):
             }
 
             finished_at = datetime.now()
-            return JobResult(
+            job_result = JobResult(
                 job_id=self.job_id,
                 job_type=self.job_type,
                 success=success,
@@ -291,9 +344,11 @@ class BuildPatchVariantJob(Job):
                     "patch_id": self.patch_id,
                 },
             )
+            self._write_job_log(context, job_result)
+            return job_result
         except Exception as e:
             finished_at = datetime.now()
-            return JobResult(
+            job_result = JobResult(
                 job_id=self.job_id,
                 job_type=self.job_type,
                 success=False,
@@ -302,6 +357,8 @@ class BuildPatchVariantJob(Job):
                 elapsed_seconds=(finished_at - started_at).total_seconds(),
                 error=str(e),
             )
+            self._write_job_log(context, job_result)
+            return job_result
 
 
 @dataclass
@@ -379,7 +436,7 @@ class TestPatchVariantJob(Job):
             success = len(failed_povs) == 0 and test_passed
 
             finished_at = datetime.now()
-            return JobResult(
+            result = JobResult(
                 job_id=self.job_id,
                 job_type=self.job_type,
                 success=success,
@@ -401,9 +458,11 @@ class TestPatchVariantJob(Job):
                     "test_passed": test_passed,
                 },
             )
+            self._write_job_log(context, result)
+            return result
         except Exception as e:
             finished_at = datetime.now()
-            return JobResult(
+            result = JobResult(
                 job_id=self.job_id,
                 job_type=self.job_type,
                 success=False,
@@ -412,6 +471,8 @@ class TestPatchVariantJob(Job):
                 elapsed_seconds=(finished_at - started_at).total_seconds(),
                 error=str(e),
             )
+            self._write_job_log(context, result)
+            return result
 
 
 @dataclass
@@ -439,7 +500,7 @@ class FlatCollectCoverageJob(Job):
     def depends_on(self) -> list[str]:
         return [self.build_job_id] if self.build_job_id else []
 
-    def execute(self, context: JobContext) -> JobResult:  # noqa: ARG002
+    def execute(self, context: JobContext) -> JobResult:
         """Collect coverage using pre-built variants."""
         started_at = datetime.now()
         temp_corpus_dir: Path | None = None
@@ -476,7 +537,7 @@ class FlatCollectCoverageJob(Job):
             success = bool(report.harness_name)
 
             finished_at = datetime.now()
-            return JobResult(
+            result = JobResult(
                 job_id=self.job_id,
                 job_type=self.job_type,
                 success=success,
@@ -488,9 +549,11 @@ class FlatCollectCoverageJob(Job):
                     "harness": self.harness,
                 },
             )
+            self._write_job_log(context, result)
+            return result
         except Exception as e:
             finished_at = datetime.now()
-            return JobResult(
+            result = JobResult(
                 job_id=self.job_id,
                 job_type=self.job_type,
                 success=False,
@@ -499,6 +562,8 @@ class FlatCollectCoverageJob(Job):
                 elapsed_seconds=(finished_at - started_at).total_seconds(),
                 error=str(e),
             )
+            self._write_job_log(context, result)
+            return result
         finally:
             if temp_corpus_dir and temp_corpus_dir.exists():
                 shutil.rmtree(temp_corpus_dir, ignore_errors=True)

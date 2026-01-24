@@ -220,10 +220,14 @@ class OSSFuzzBuilder:
                 return self._build_with_inc_image(config, start_time)
             # Fall back to standard build if inc-build image not available
             # Mark as fallback so PASS-FB signals "prepare the inc-build image"
-            logger.debug(
+            msg = (
                 f"Inc-build image not available for {config.benchmark_name}, "
                 f"using standard build for {config.variant_name}"
             )
+            if config.variant_type.is_inc_build_target():
+                logger.warning(msg)
+            else:
+                logger.debug(msg)
             fallback_from_inc = True
 
         # Standard build path for coverage, non-inc variants, and fallback
