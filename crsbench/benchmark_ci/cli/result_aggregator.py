@@ -62,18 +62,13 @@ def aggregate_pov_results(
             if result.job_result and not result.job_result.success:
                 failures.append(f"{cpv_id}: POV not detected")
 
-    # Get build time and fallback from shared build-variants job
-    build_job_id = f"build-variants:{benchmark_name}"
-    build_result = dag_results.get(build_job_id)
-    build_time = build_result.elapsed_seconds if build_result else 0.0
-    total_time = build_time + verify_time
+    # POV uses only the shared build — don't attribute shared build time here
     fallback = _get_build_fallback(dag_results, benchmark_name)
 
     if errors:
         return CheckResult(
             status=CheckStatus.ERROR,
-            time_seconds=total_time,
-            build_time=build_time,
+            time_seconds=verify_time,
             verify_time=verify_time,
             error="; ".join(errors),
             details={"failures": failures, "errors": errors},
@@ -83,8 +78,7 @@ def aggregate_pov_results(
     if failures:
         return CheckResult(
             status=CheckStatus.FAIL,
-            time_seconds=total_time,
-            build_time=build_time,
+            time_seconds=verify_time,
             verify_time=verify_time,
             error="; ".join(failures[:3]),
             details={"failures": failures},
@@ -93,8 +87,7 @@ def aggregate_pov_results(
 
     return CheckResult(
         status=CheckStatus.PASS,
-        time_seconds=total_time,
-        build_time=build_time,
+        time_seconds=verify_time,
         verify_time=verify_time,
         details={"cpv_count": len(cpv_ids)},
         fallback_used=fallback,
@@ -115,7 +108,6 @@ def aggregate_patch_results(
     if not patch_keys:
         return CheckResult.skip("No patches to verify")
 
-    total_time = 0.0
     failures: list[str] = []
     errors: list[str] = []
     build_time = 0.0
@@ -125,7 +117,9 @@ def aggregate_patch_results(
         # Check build
         build_job_id = f"build-patch:{benchmark_name}:{cpv_id}:{patch_id}"
         build_result = dag_results.get(build_job_id)
-        if build_result:
+
+        # Only attribute build time to FULL mode — RTS reuses the same build
+        if build_result and test_mode == "FULL":
             build_time += build_result.elapsed_seconds
 
         if build_result and build_result.status != JobStatus.SUCCESS:
@@ -142,7 +136,6 @@ def aggregate_patch_results(
             continue
 
         verify_time += test_result.elapsed_seconds
-        total_time += test_result.elapsed_seconds
 
         if test_result.status == JobStatus.DEP_FAILED:
             errors.append(f"{cpv_id}/{patch_id}: dependency failed")
@@ -204,24 +197,18 @@ def aggregate_coverage_result(
     if result is None:
         return CheckResult.make_error("Coverage job not found")
 
-    # Get build time from shared build-variants job
-    build_job_id = f"build-variants:{benchmark_name}"
-    build_result = dag_results.get(build_job_id)
-    build_time = build_result.elapsed_seconds if build_result else 0.0
-
     if result.status == JobStatus.DEP_FAILED:
         return CheckResult.make_error("Coverage dependency failed")
 
+    # Coverage uses only the shared build — don't attribute shared build time here
     verify_time = result.elapsed_seconds
-    total_time = build_time + verify_time
     fallback = _get_build_fallback(dag_results, benchmark_name)
 
     if result.status == JobStatus.FAILED:
         error = result.error or "Coverage collection failed"
         return CheckResult(
             status=CheckStatus.FAIL,
-            time_seconds=total_time,
-            build_time=build_time,
+            time_seconds=verify_time,
             verify_time=verify_time,
             error=error,
             fallback_used=fallback,
@@ -229,8 +216,7 @@ def aggregate_coverage_result(
 
     return CheckResult(
         status=CheckStatus.PASS,
-        time_seconds=total_time,
-        build_time=build_time,
+        time_seconds=verify_time,
         verify_time=verify_time,
         fallback_used=fallback,
     )

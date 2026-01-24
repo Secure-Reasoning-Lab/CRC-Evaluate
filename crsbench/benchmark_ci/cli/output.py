@@ -100,6 +100,25 @@ def _add_detail_rows(
             )
 
 
+def _add_format_columns(table: Table) -> None:
+    """Add columns for FORMAT check mode (per-check columns)."""
+    table.add_column("Struct", justify="center")
+    table.add_column("Schema", justify="center")
+    table.add_column("Harness", justify="center")
+    table.add_column("CPV", justify="center")
+    table.add_column("Blob", justify="center")
+    table.add_column("Patch", justify="center")
+    table.add_column("Total", justify="center")
+
+
+def _add_format_rows(table: Table, summary: ValidationSummary) -> None:
+    """Add rows for FORMAT check mode (per-check columns)."""
+    check_names = ("struct", "schema", "harness", "cpv", "blob", "patch")
+    for r in summary.results:
+        cols = [format_status(r.format_checks.get(n)) for n in check_names]
+        table.add_row(r.benchmark, *cols, _format_total_status(r.total_status))
+
+
 def _add_default_columns(table: Table) -> None:
     """Add columns for DEFAULT check mode."""
     table.add_column("Format", justify="center")
@@ -221,7 +240,10 @@ def print_results_table(
     table = Table(title="Benchmark Validation Report", show_lines=False)
     table.add_column("Benchmark", style="cyan", min_width=25)
 
-    if check_mode == CheckMode.DEFAULT:
+    if check_mode == CheckMode.FORMAT:
+        _add_format_columns(table)
+        _add_format_rows(table, summary)
+    elif check_mode == CheckMode.DEFAULT:
         _add_default_columns(table)
         _add_default_rows(table, summary)
     elif check_mode == CheckMode.INC:
@@ -291,11 +313,14 @@ def _save_results_txt(
     """
     results_path = output_dir / "results.txt"
     with results_path.open("w") as f:
-        console = Console(file=f, no_color=True, width=140)
+        console = Console(file=f, no_color=True, width=10_000)
         table = Table(title="Benchmark Validation Report", show_lines=False)
         table.add_column("Benchmark", min_width=25)
 
-        if check_mode == CheckMode.DEFAULT:
+        if check_mode == CheckMode.FORMAT:
+            _add_format_columns(table)
+            _add_format_rows(table, summary)
+        elif check_mode == CheckMode.DEFAULT:
             _add_default_columns(table)
             _add_default_rows(table, summary)
         elif check_mode == CheckMode.INC:
@@ -337,90 +362,132 @@ def _plain_status(check: CheckResult | None) -> str:
     return "SKIP"
 
 
-def _save_summary_csv(
-    summary: ValidationSummary, output_dir: Path, *, check_mode: CheckMode
+def _check_build_time(check: CheckResult | None) -> float:
+    """Extract build time from a check result, defaulting to 0."""
+    if check is None:
+        return 0.0
+    return check.build_time
+
+
+def _check_verify_time(check: CheckResult | None) -> float:
+    """Extract verify time from a check result, defaulting to 0."""
+    if check is None:
+        return 0.0
+    return check.verify_time
+
+
+def write_summary_csv(
+    summary: ValidationSummary,
+    f,
+    *,
+    check_mode: CheckMode,
 ) -> None:
-    """Save results as CSV for easy analysis.
+    """Write CSV summary to a file-like object.
 
     Args:
         summary: ValidationSummary with all results
-        output_dir: Output directory
+        f: File-like object to write to (file or sys.stdout)
         check_mode: Check mode for column layout
     """
+    if check_mode == CheckMode.FORMAT:
+        f.write("benchmark,struct,schema,harness,cpv,blob,patch,total,time_s\n")
+        for r in summary.results:
+            fmt_time = r.format_check.time_seconds if r.format_check else 0.0
+            check_names = ("struct", "schema", "harness", "cpv", "blob", "patch")
+            cols = [_plain_status(r.format_checks.get(n)) for n in check_names]
+            f.write(
+                f"{r.benchmark},{','.join(cols)},"
+                f"{r.total_status.value},{fmt_time:.1f}\n"
+            )
+    elif check_mode == CheckMode.DEFAULT:
+        f.write(
+            "benchmark,format,pov,patch,coverage,"
+            "total,time_s,build_time_s,verify_time_s\n"
+        )
+        for r in summary.results:
+            build_t = r.patch_check.build_time if r.patch_check else 0.0
+            verify_t = r.patch_check.verify_time if r.patch_check else 0.0
+            f.write(
+                f"{r.benchmark},"
+                f"{_plain_status(r.format_check)},"
+                f"{_plain_status(r.pov_check)},"
+                f"{_plain_status(r.patch_check)},"
+                f"{_plain_status(r.coverage_check)},"
+                f"{r.total_status.value},{r.total_time:.1f},"
+                f"{build_t:.1f},{verify_t:.1f}\n"
+            )
+    elif check_mode == CheckMode.INC:
+        f.write(
+            "benchmark,inc,format,pov_inc,patch_inc,cov_inc,"
+            "total,time_s,build_time_s,verify_time_s\n"
+        )
+        for r in summary.results:
+            inc = "Y" if r.supports_inc_build else "N"
+            build_t = r.patch_inc_check.build_time if r.patch_inc_check else 0.0
+            verify_t = r.patch_inc_check.verify_time if r.patch_inc_check else 0.0
+            f.write(
+                f"{r.benchmark},{inc},"
+                f"{_plain_status(r.format_check)},"
+                f"{_plain_status(r.pov_inc_check)},"
+                f"{_plain_status(r.patch_inc_check)},"
+                f"{_plain_status(r.coverage_inc_check)},"
+                f"{r.total_status.value},{r.total_time:.1f},"
+                f"{build_t:.1f},{verify_t:.1f}\n"
+            )
+    elif check_mode == CheckMode.RTS:
+        f.write(
+            "benchmark,rts_mode,format,patch_rts,"
+            "total,time_s,build_time_s,verify_time_s\n"
+        )
+        for r in summary.results:
+            rts = r.rts_mode or ""
+            build_t = r.patch_rts_check.build_time if r.patch_rts_check else 0.0
+            verify_t = r.patch_rts_check.verify_time if r.patch_rts_check else 0.0
+            f.write(
+                f"{r.benchmark},{rts},"
+                f"{_plain_status(r.format_check)},"
+                f"{_plain_status(r.patch_rts_check)},"
+                f"{r.total_status.value},{r.total_time:.1f},"
+                f"{build_t:.1f},{verify_t:.1f}\n"
+            )
+    else:
+        # ALL mode — shared build + per-check verify times
+        f.write(
+            "benchmark,inc,rts,"
+            "fmt,build_s,"
+            "pov,pov_s,"
+            "patch,patch_build_s,patch_s,"
+            "patch_rts,patch_rts_s,"
+            "cov,cov_s,"
+            "total,total_time_s\n"
+        )
+        for r in summary.results:
+            inc = "Y" if r.supports_inc_build else "N"
+            rts = r.rts_mode or ""
+            f.write(
+                f"{r.benchmark},{inc},{rts},"
+                f"{_plain_status(r.format_check)},"
+                f"{r.shared_build_time:.1f},"
+                f"{_plain_status(r.pov_check)},"
+                f"{_check_verify_time(r.pov_check):.1f},"
+                f"{_plain_status(r.patch_check)},"
+                f"{_check_build_time(r.patch_check):.1f},"
+                f"{_check_verify_time(r.patch_check):.1f},"
+                f"{_plain_status(r.patch_rts_check)},"
+                f"{_check_verify_time(r.patch_rts_check):.1f},"
+                f"{_plain_status(r.coverage_check)},"
+                f"{_check_verify_time(r.coverage_check):.1f},"
+                f"{r.total_status.value},{r.total_time:.1f}\n"
+            )
+
+
+def _save_summary_csv(
+    summary: ValidationSummary, output_dir: Path, *, check_mode: CheckMode
+) -> None:
+    """Save results as CSV file in the output directory."""
     csv_path = output_dir / "summary.csv"
     with csv_path.open("w") as f:
-        if check_mode == CheckMode.DEFAULT:
-            f.write(
-                "benchmark,format,pov,patch,coverage,"
-                "total,time_s,build_time_s,verify_time_s\n"
-            )
-            for r in summary.results:
-                build_t = r.patch_check.build_time if r.patch_check else 0.0
-                verify_t = r.patch_check.verify_time if r.patch_check else 0.0
-                f.write(
-                    f"{r.benchmark},"
-                    f"{_plain_status(r.format_check)},"
-                    f"{_plain_status(r.pov_check)},"
-                    f"{_plain_status(r.patch_check)},"
-                    f"{_plain_status(r.coverage_check)},"
-                    f"{r.total_status.value},{r.total_time:.1f},"
-                    f"{build_t:.1f},{verify_t:.1f}\n"
-                )
-        elif check_mode == CheckMode.INC:
-            f.write(
-                "benchmark,inc,format,pov_inc,patch_inc,cov_inc,"
-                "total,time_s,build_time_s,verify_time_s\n"
-            )
-            for r in summary.results:
-                inc = "Y" if r.supports_inc_build else "N"
-                build_t = r.patch_inc_check.build_time if r.patch_inc_check else 0.0
-                verify_t = r.patch_inc_check.verify_time if r.patch_inc_check else 0.0
-                f.write(
-                    f"{r.benchmark},{inc},"
-                    f"{_plain_status(r.format_check)},"
-                    f"{_plain_status(r.pov_inc_check)},"
-                    f"{_plain_status(r.patch_inc_check)},"
-                    f"{_plain_status(r.coverage_inc_check)},"
-                    f"{r.total_status.value},{r.total_time:.1f},"
-                    f"{build_t:.1f},{verify_t:.1f}\n"
-                )
-        elif check_mode == CheckMode.RTS:
-            f.write(
-                "benchmark,rts_mode,format,patch_rts,"
-                "total,time_s,build_time_s,verify_time_s\n"
-            )
-            for r in summary.results:
-                rts = r.rts_mode or ""
-                build_t = r.patch_rts_check.build_time if r.patch_rts_check else 0.0
-                verify_t = r.patch_rts_check.verify_time if r.patch_rts_check else 0.0
-                f.write(
-                    f"{r.benchmark},{rts},"
-                    f"{_plain_status(r.format_check)},"
-                    f"{_plain_status(r.patch_rts_check)},"
-                    f"{r.total_status.value},{r.total_time:.1f},"
-                    f"{build_t:.1f},{verify_t:.1f}\n"
-                )
-        else:
-            # ALL mode (single build mode)
-            f.write(
-                "benchmark,inc,rts,fmt,pov,patch,"
-                "patch_rts,cov,total,time_s,build_time_s,verify_time_s\n"
-            )
-            for r in summary.results:
-                inc = "Y" if r.supports_inc_build else "N"
-                rts = r.rts_mode or ""
-                build_t = r.patch_check.build_time if r.patch_check else 0.0
-                verify_t = r.patch_check.verify_time if r.patch_check else 0.0
-                f.write(
-                    f"{r.benchmark},{inc},{rts},"
-                    f"{_plain_status(r.format_check)},"
-                    f"{_plain_status(r.pov_check)},"
-                    f"{_plain_status(r.patch_check)},"
-                    f"{_plain_status(r.patch_rts_check)},"
-                    f"{_plain_status(r.coverage_check)},"
-                    f"{r.total_status.value},{r.total_time:.1f},"
-                    f"{build_t:.1f},{verify_t:.1f}\n"
-                )
+        write_summary_csv(summary, f, check_mode=check_mode)
 
 
 def _save_benchmark_result(result: BenchmarkValidationResult, output_dir: Path) -> None:
@@ -444,8 +511,22 @@ def _save_benchmark_result(result: BenchmarkValidationResult, output_dir: Path) 
             f.write(f"Benchmark: {result.benchmark}\n")
             f.write(f"Status: {result.total_status.value}\n\n")
 
+            # Format sub-checks (detailed per-check output)
+            if result.format_checks:
+                for name, check in result.format_checks.items():
+                    if check.status not in (CheckStatus.FAIL, CheckStatus.ERROR):
+                        continue
+                    f.write(f"=== Format:{name} ===\n")
+                    f.write(f"Status: {check.status.value}\n")
+                    if check.error:
+                        f.write(f"Error: {check.error}\n")
+                    if check.details and check.details.get("issues"):
+                        for issue in check.details["issues"]:
+                            f.write(f"  - {issue}\n")
+                    f.write("\n")
+
+            # Non-format checks
             checks = [
-                ("Format", result.format_check),
                 ("POV", result.pov_check),
                 ("Patch", result.patch_check),
                 ("Patch(rts)", result.patch_rts_check),

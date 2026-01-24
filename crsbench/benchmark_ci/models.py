@@ -26,6 +26,7 @@ class CheckMode(Enum):
     Controls which build/verification variants are tested.
     """
 
+    FORMAT = "format"  # Format validation only (Fmt column)
     DEFAULT = "default"  # Standard checks only (POV, Patch)
     INC = "inc"  # Inc-build variants only (POV:inc, Patch:inc)
     RTS = "rts"  # RTS variants only (Patch:rts)
@@ -117,6 +118,8 @@ class BenchmarkValidationResult:
     benchmark: str
     benchmark_path: Path
     format_check: Optional[CheckResult] = None
+    # Per-check format sub-results (struct, schema, harness, cpv, blob, patch)
+    format_checks: dict[str, CheckResult] = field(default_factory=dict)
     pov_check: Optional[CheckResult] = None
     patch_check: Optional[CheckResult] = None
     coverage_check: Optional[CheckResult] = None
@@ -126,6 +129,8 @@ class BenchmarkValidationResult:
     patch_rts_check: Optional[CheckResult] = None
     patch_inc_rts_check: Optional[CheckResult] = None
     coverage_inc_check: Optional[CheckResult] = None
+    # Shared build time (BuildVariantsJob — one per benchmark)
+    shared_build_time: float = 0.0
     # Benchmark capabilities from project.yaml
     supports_inc_build: bool = True
     rts_mode: Optional[str] = None  # none, jcgeks, openclover, binaryrts
@@ -194,6 +199,7 @@ class BenchmarkValidationResult:
             "total_status": self.total_status.value,
             "total_time_seconds": self.total_time,
             "format_check": self.format_check.to_dict() if self.format_check else None,
+            "format_checks": {k: v.to_dict() for k, v in self.format_checks.items()},
             "pov_check": self.pov_check.to_dict() if self.pov_check else None,
             "patch_check": self.patch_check.to_dict() if self.patch_check else None,
             "coverage_check": self.coverage_check.to_dict()
@@ -214,6 +220,7 @@ class BenchmarkValidationResult:
             "coverage_inc_check": self.coverage_inc_check.to_dict()
             if self.coverage_inc_check
             else None,
+            "shared_build_time": self.shared_build_time,
             "supports_inc_build": self.supports_inc_build,
             "rts_mode": self.rts_mode,
             "started_at": self.started_at.isoformat() if self.started_at else None,

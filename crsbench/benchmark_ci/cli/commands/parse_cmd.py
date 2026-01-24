@@ -6,13 +6,14 @@ an output directory and displays results in table, JSON, or CSV format.
 
 import argparse
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from rich.console import Console
 
-from crsbench.benchmark_ci.cli.output import print_results_table
+from crsbench.benchmark_ci.cli.output import print_results_table, write_summary_csv
 from crsbench.benchmark_ci.models import (
     BenchmarkValidationResult,
     CheckMode,
@@ -92,6 +93,7 @@ def _load_summary_from_output_dir(output_dir: Path) -> Optional[ValidationSummar
             patch_rts_check=patch_rts_check,
             patch_inc_rts_check=patch_inc_rts_check,
             coverage_inc_check=coverage_inc_check,
+            shared_build_time=r.get("shared_build_time", 0.0),
             supports_inc_build=r.get("supports_inc_build", True),
             rts_mode=r.get("rts_mode"),
             started_at=datetime.fromisoformat(r["started_at"])
@@ -103,12 +105,8 @@ def _load_summary_from_output_dir(output_dir: Path) -> Optional[ValidationSummar
         )
         results.append(result)
 
-    # Parse check_mode (default to DEFAULT for backward compatibility)
-    check_mode_value = data.get("check_mode", "default")
-    try:
-        check_mode = CheckMode(check_mode_value)
-    except ValueError:
-        check_mode = CheckMode.DEFAULT
+    # Always use ALL mode — shows full column set regardless of stored value
+    check_mode = CheckMode.ALL
 
     summary = ValidationSummary(
         check_mode=check_mode,
@@ -211,24 +209,14 @@ def run_parse(args: argparse.Namespace) -> int:
 
     # Output based on format
     output_format = args.format
-    console = Console(no_color=args.no_color)
 
     if output_format == "table":
         print_results_table(summary, check_mode=check_mode, no_color=args.no_color)
     elif output_format == "json":
+        console = Console(no_color=args.no_color)
         console.print(json.dumps(summary.to_dict(), indent=2))
     elif output_format == "csv":
-        console.print("benchmark,status,format,pov,patch,coverage,time_seconds")
-        for r in summary.results:
-            fmt_s = r.format_check.status.value if r.format_check else "-"
-            pov_s = r.pov_check.status.value if r.pov_check else "-"
-            pat_s = r.patch_check.status.value if r.patch_check else "-"
-            cov_s = r.coverage_check.status.value if r.coverage_check else "-"
-            console.print(
-                f"{r.benchmark},{r.total_status.value},"
-                f"{fmt_s},{pov_s},{pat_s},{cov_s},"
-                f"{r.total_time:.1f}"
-            )
+        write_summary_csv(summary, sys.stdout, check_mode=check_mode)
 
     # Print summary stats
     if output_format == "table":

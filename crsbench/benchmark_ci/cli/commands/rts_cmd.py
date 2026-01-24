@@ -161,7 +161,7 @@ def run_rts(args: argparse.Namespace) -> int:
         dag_results = {}
 
     # Aggregate into ValidationSummary
-    summary = ValidationSummary(started_at=start_dt)
+    summary = ValidationSummary(started_at=start_dt, check_mode=CheckMode.ALL)
 
     for path, supports_inc, rts_mode, patch_keys in benchmark_metadata:
         if not rts_mode:
@@ -171,11 +171,14 @@ def run_rts(args: argparse.Namespace) -> int:
                 dag_results, path.name, patch_keys, test_mode="RTS"
             )
 
+        build_result = dag_results.get(f"build-variants:{path.name}")
+        shared_build = build_result.elapsed_seconds if build_result else 0.0
         summary.add_result(
             BenchmarkValidationResult(
                 benchmark=path.name,
                 benchmark_path=path,
                 patch_rts_check=patch_rts_result,
+                shared_build_time=shared_build,
                 supports_inc_build=supports_inc,
                 rts_mode=rts_mode,
                 started_at=start_dt,

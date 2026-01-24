@@ -16,6 +16,9 @@ from crsbench.benchmark_ci.cli.benchmark_discovery import (
     discover_patch_paths,
     discover_pov_paths,
 )
+from crsbench.benchmark_ci.cli.commands.format_cmd import (
+    _validate_benchmark as validate_format,
+)
 from crsbench.benchmark_ci.cli.common_args import (
     create_benchmark_selection_parent,
     create_build_options_parent,
@@ -40,13 +43,11 @@ from crsbench.benchmark_ci.models import (
     BenchmarkValidationResult,
     CheckMode,
     CheckResult,
-    CheckStatus,
     ValidationSummary,
 )
 from crsbench.benchmark_ci.validator import _load_project_capabilities
 from crsbench.executor import DAGExecutor
 from crsbench.utils.logger import get_logger
-from crsbench.validation import validate_benchmark as format_validate
 
 logger = get_logger(__name__)
 
@@ -224,6 +225,11 @@ def _aggregate_benchmark(
 
     coverage_result = aggregate_coverage_result(dag_results, benchmark_name)
 
+    # Get shared build time from BuildVariantsJob
+    build_job_id = f"build-variants:{benchmark_name}"
+    build_result = dag_results.get(build_job_id)
+    shared_build_time = build_result.elapsed_seconds if build_result else 0.0
+
     return BenchmarkValidationResult(
         benchmark=benchmark_name,
         benchmark_path=path,
@@ -232,6 +238,7 @@ def _aggregate_benchmark(
         patch_check=patch_result,
         patch_rts_check=rts_result,
         coverage_check=coverage_result,
+        shared_build_time=shared_build_time,
         supports_inc_build=supports_inc,
         rts_mode=rts_mode,
         started_at=start_dt,
@@ -266,25 +273,10 @@ def run_all(args: argparse.Namespace) -> int:
     # Phase 1: Format validation (fast, no DAG needed)
     format_results: dict[str, CheckResult] = {}
     for path in paths:
-        fmt_start = datetime.now()
-        try:
-            result = format_validate(path)
-            elapsed = (datetime.now() - fmt_start).total_seconds()
-            if result.is_valid:
-                format_results[path.name] = CheckResult(
-                    status=CheckStatus.PASS, time_seconds=elapsed
-                )
-            else:
-                issues = [str(i) for i in result.issues[:5]]
-                format_results[path.name] = CheckResult(
-                    status=CheckStatus.FAIL,
-                    time_seconds=elapsed,
-                    error="; ".join(issues),
-                    details={"issues": issues},
-                )
-        except Exception as e:
-            elapsed = (datetime.now() - fmt_start).total_seconds()
-            format_results[path.name] = CheckResult.make_error(str(e), elapsed)
+        fmt_result = validate_format(path, source_mode)
+        format_results[path.name] = fmt_result.format_check or CheckResult.make_error(
+            "format check not run"
+        )
 
     # Phase 2: Build and execute flat DAG
     all_jobs, benchmark_metadata = _build_dag(
@@ -303,12 +295,18 @@ def run_all(args: argparse.Namespace) -> int:
     dag_results = executor.execute(all_jobs, context)
 
     # Phase 3: Aggregate into ValidationSummary
-    summary = ValidationSummary(started_at=start_dt)
+    summary = ValidationSummary(started_at=start_dt, check_mode=CheckMode.ALL)
     for path, supports_inc, rts_mode, cpv_ids, patch_keys in benchmark_metadata:
         summary.add_result(
             _aggregate_benchmark(
-                dag_results, path, supports_inc, rts_mode,
-                cpv_ids, patch_keys, format_results, start_dt,
+                dag_results,
+                path,
+                supports_inc,
+                rts_mode,
+                cpv_ids,
+                patch_keys,
+                format_results,
+                start_dt,
             )
         )
 

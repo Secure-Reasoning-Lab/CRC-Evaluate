@@ -38,10 +38,10 @@ class TestSubcommandRegistration:
         assert args.ci_subcommand == "format"
         assert args.all is True
 
-    def test_ci_subparser_format_has_no_build_options(self):
+    def test_ci_subparser_format_has_no_build_workers(self):
         parser = _make_parser()
         with pytest.raises(SystemExit):
-            parser.parse_args(["ci", "format", "--source", "pkgs"])
+            parser.parse_args(["ci", "format", "--build-workers", "4"])
 
     def test_ci_subparser_format_has_parallel(self):
         parser = _make_parser()
@@ -91,14 +91,21 @@ class TestDispatchCi:
                 "crsbench.benchmark_ci.cli.commands.format_cmd.resolve_benchmark_paths"
             ) as mock_discover,
             patch(
-                "crsbench.benchmark_ci.cli.commands.format_cmd.format_validate"
-            ) as mock_validate,
+                "crsbench.benchmark_ci.cli.commands.format_cmd.structural_validate"
+            ) as mock_structural,
+            patch(
+                "crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate"
+            ) as mock_schema,
             patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table"),
         ):
+            from crsbench.benchmark.packaging.validate import (
+                ValidationResult as StructResult,
+            )
             from crsbench.validation.errors import ValidationResult
 
             mock_discover.return_value = [Path("/tmp/bench1")]
-            mock_validate.return_value = ValidationResult(is_valid=True, issues=[])
+            mock_structural.return_value = StructResult(valid=True)
+            mock_schema.return_value = ValidationResult(is_valid=True, issues=[])
             result = dispatch_ci(args)
             assert result == 0
 
@@ -317,13 +324,20 @@ class TestFormatSubcommand:
     """Integration tests for the format subcommand."""
 
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.structural_validate")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.resolve_benchmark_paths")
-    def test_format_all_pass_returns_0(self, mock_discover, mock_validate, mock_table):
+    def test_format_all_pass_returns_0(
+        self, mock_discover, mock_structural, mock_schema, mock_table
+    ):
+        from crsbench.benchmark.packaging.validate import (
+            ValidationResult as StructResult,
+        )
         from crsbench.validation.errors import ValidationResult
 
         mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_validate.return_value = ValidationResult(is_valid=True, issues=[])
+        mock_structural.return_value = StructResult(valid=True)
+        mock_schema.return_value = ValidationResult(is_valid=True, issues=[])
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "format", "--all"])
@@ -333,9 +347,39 @@ class TestFormatSubcommand:
         mock_table.assert_called_once()
 
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.structural_validate")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.resolve_benchmark_paths")
-    def test_format_fail_returns_1(self, mock_discover, mock_validate, mock_table):
+    def test_format_structural_fail_returns_1(
+        self, mock_discover, mock_structural, mock_schema, mock_table
+    ):
+        from crsbench.benchmark.packaging.validate import (
+            ValidationResult as StructResult,
+        )
+        from crsbench.validation.errors import ValidationResult
+
+        mock_discover.return_value = [Path("/tmp/bench1")]
+        mock_structural.return_value = StructResult(
+            valid=False, errors=["Missing Dockerfile"]
+        )
+        mock_schema.return_value = ValidationResult(is_valid=True, issues=[])
+
+        parser = _make_parser()
+        args = parser.parse_args(["ci", "format", "--all"])
+        result = dispatch_ci(args)
+
+        assert result == 1
+
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.structural_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.resolve_benchmark_paths")
+    def test_format_schema_fail_returns_1(
+        self, mock_discover, mock_structural, mock_schema, mock_table
+    ):
+        from crsbench.benchmark.packaging.validate import (
+            ValidationResult as StructResult,
+        )
         from crsbench.validation.errors import (
             ValidationIssue,
             ValidationResult,
@@ -343,7 +387,8 @@ class TestFormatSubcommand:
         )
 
         mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_validate.return_value = ValidationResult(
+        mock_structural.return_value = StructResult(valid=True)
+        mock_schema.return_value = ValidationResult(
             is_valid=False,
             issues=[
                 ValidationIssue(
@@ -361,16 +406,21 @@ class TestFormatSubcommand:
         assert result == 1
 
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.structural_validate")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.resolve_benchmark_paths")
     def test_format_calls_print_results_table(
-        self, mock_discover, mock_validate, mock_table
+        self, mock_discover, mock_structural, mock_schema, mock_table
     ):
+        from crsbench.benchmark.packaging.validate import (
+            ValidationResult as StructResult,
+        )
         from crsbench.benchmark_ci.models import ValidationSummary
         from crsbench.validation.errors import ValidationResult
 
         mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_validate.return_value = ValidationResult(is_valid=True, issues=[])
+        mock_structural.return_value = StructResult(valid=True)
+        mock_schema.return_value = ValidationResult(is_valid=True, issues=[])
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "format", "--all"])
@@ -381,13 +431,19 @@ class TestFormatSubcommand:
         assert isinstance(call_args[0][0], ValidationSummary)
 
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.structural_validate")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.resolve_benchmark_paths")
     def test_format_exception_returns_error_status(
-        self, mock_discover, mock_validate, mock_table
+        self, mock_discover, mock_structural, mock_schema, mock_table
     ):
+        from crsbench.benchmark.packaging.validate import (
+            ValidationResult as StructResult,
+        )
+
         mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_validate.side_effect = Exception("boom")
+        mock_structural.return_value = StructResult(valid=True)
+        mock_schema.side_effect = Exception("boom")
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "format", "--all"])
@@ -396,15 +452,20 @@ class TestFormatSubcommand:
         assert result == 1
 
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.structural_validate")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.resolve_benchmark_paths")
     def test_format_output_writes_json(
-        self, mock_discover, mock_validate, mock_table, tmp_path
+        self, mock_discover, mock_structural, mock_schema, mock_table, tmp_path
     ):
+        from crsbench.benchmark.packaging.validate import (
+            ValidationResult as StructResult,
+        )
         from crsbench.validation.errors import ValidationResult
 
         mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_validate.return_value = ValidationResult(is_valid=True, issues=[])
+        mock_structural.return_value = StructResult(valid=True)
+        mock_schema.return_value = ValidationResult(is_valid=True, issues=[])
 
         output_file = tmp_path / "out.json"
         parser = _make_parser()
@@ -419,11 +480,15 @@ class TestFormatSubcommand:
         assert "summary" in data
 
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.structural_validate")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.resolve_benchmark_paths")
     def test_format_multiple_benchmarks_mixed_results(
-        self, mock_discover, mock_validate, mock_table
+        self, mock_discover, mock_structural, mock_schema, mock_table
     ):
+        from crsbench.benchmark.packaging.validate import (
+            ValidationResult as StructResult,
+        )
         from crsbench.validation.errors import (
             ValidationIssue,
             ValidationResult,
@@ -431,7 +496,8 @@ class TestFormatSubcommand:
         )
 
         mock_discover.return_value = [Path("/tmp/bench1"), Path("/tmp/bench2")]
-        mock_validate.side_effect = [
+        mock_structural.return_value = StructResult(valid=True)
+        mock_schema.side_effect = [
             ValidationResult(is_valid=True, issues=[]),
             ValidationResult(
                 is_valid=False,
@@ -450,6 +516,114 @@ class TestFormatSubcommand:
         result = dispatch_ci(args)
 
         assert result == 1
+
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.structural_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.resolve_benchmark_paths")
+    def test_format_cpv_conflict_returns_1(
+        self, mock_discover, mock_structural, mock_schema, mock_table, tmp_path
+    ):
+        from crsbench.benchmark.packaging.validate import (
+            ValidationResult as StructResult,
+        )
+        from crsbench.validation.errors import ValidationResult
+
+        # Create benchmark with cpv_0 under two harnesses (conflict)
+        bench = tmp_path / "bench1"
+        for harness in ["harness_a", "harness_b"]:
+            cpv_dir = bench / ".aixcc" / harness / "cpv_0"
+            (cpv_dir / "blobs").mkdir(parents=True)
+            (cpv_dir / "blobs" / "pov_0.blob").write_bytes(b"x")
+            (cpv_dir / "patches").mkdir()
+            (cpv_dir / "patches" / "patch_0.diff").write_text("diff")
+            (cpv_dir / "vuln.yaml").write_text("id: cpv_0")
+
+        mock_discover.return_value = [bench]
+        mock_structural.return_value = StructResult(valid=True)
+        mock_schema.return_value = ValidationResult(is_valid=True, issues=[])
+
+        parser = _make_parser()
+        args = parser.parse_args(["ci", "format", "--all"])
+        result = dispatch_ci(args)
+
+        assert result == 1
+
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.structural_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.resolve_benchmark_paths")
+    def test_format_cpv_missing_files_returns_1(
+        self, mock_discover, mock_structural, mock_schema, mock_table, tmp_path
+    ):
+        from crsbench.benchmark.packaging.validate import (
+            ValidationResult as StructResult,
+        )
+        from crsbench.validation.errors import ValidationResult
+
+        # Create CPV without vuln.yaml, blobs, or patches
+        bench = tmp_path / "bench1"
+        cpv_dir = bench / ".aixcc" / "harness_a" / "cpv_0"
+        cpv_dir.mkdir(parents=True)
+
+        mock_discover.return_value = [bench]
+        mock_structural.return_value = StructResult(valid=True)
+        mock_schema.return_value = ValidationResult(is_valid=True, issues=[])
+
+        parser = _make_parser()
+        args = parser.parse_args(["ci", "format", "--all"])
+        result = dispatch_ci(args)
+
+        assert result == 1
+
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.structural_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.resolve_benchmark_paths")
+    def test_format_cpv_complete_structure_passes(
+        self, mock_discover, mock_structural, mock_schema, mock_table, tmp_path
+    ):
+        from crsbench.benchmark.packaging.validate import (
+            ValidationResult as StructResult,
+        )
+        from crsbench.validation.errors import ValidationResult
+
+        # Create complete CPV structure
+        bench = tmp_path / "bench1"
+        aixcc = bench / ".aixcc"
+        for cpv_id in ["cpv_0", "cpv_1"]:
+            cpv_dir = aixcc / "harness_a" / cpv_id
+            (cpv_dir / "blobs").mkdir(parents=True)
+            (cpv_dir / "blobs" / "pov_0.blob").write_bytes(b"x")
+            (cpv_dir / "patches").mkdir()
+            (cpv_dir / "patches" / "patch_0.diff").write_text("diff")
+            (cpv_dir / "vuln.yaml").write_text("id: test")
+
+        # meta.yaml declaring the harness and vulns
+        meta_content = {
+            "harness_files": [
+                {
+                    "name": "harness_a",
+                    "vulns": [
+                        {"vuln_keyword": "cpv_0"},
+                        {"vuln_keyword": "cpv_1"},
+                    ],
+                }
+            ]
+        }
+        import yaml
+
+        (aixcc / "meta.yaml").write_text(yaml.dump(meta_content))
+
+        mock_discover.return_value = [bench]
+        mock_structural.return_value = StructResult(valid=True)
+        mock_schema.return_value = ValidationResult(is_valid=True, issues=[])
+
+        parser = _make_parser()
+        args = parser.parse_args(["ci", "format", "--all"])
+        result = dispatch_ci(args)
+
+        assert result == 0
 
 
 # --- Test POV subcommand integration ---
@@ -1337,13 +1511,22 @@ def _setup_all_cmd_mocks(
     success=True,
 ):
     """Common setup for all_cmd tests."""
-    from crsbench.validation.errors import ValidationResult
+    from crsbench.benchmark_ci.models import (
+        BenchmarkValidationResult,
+        CheckResult,
+        CheckStatus,
+    )
 
     if paths is None:
         paths = [Path("/tmp/bench1")]
     mock_discover.return_value = paths
     mock_caps.return_value = (supports_inc, rts_mode)
-    mock_fmt.return_value = ValidationResult(is_valid=True, issues=[])
+    # validate_format returns BenchmarkValidationResult with format_check
+    mock_fmt.side_effect = lambda path, _source_mode: BenchmarkValidationResult(
+        benchmark=path.name,
+        benchmark_path=path,
+        format_check=CheckResult(status=CheckStatus.PASS, time_seconds=0.1),
+    )
     mock_harness.return_value = ["fuzz_target"]
     mock_cpvs.return_value = ["cpv_0"]
     mock_patches.return_value = [("patch_0", Path("/tmp/patch_0.diff"))]
@@ -1363,7 +1546,7 @@ _ALL_CMD_PATCHES = [
     "crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids",
     "crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names",
     "crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities",
-    "crsbench.benchmark_ci.cli.commands.all_cmd.format_validate",
+    "crsbench.benchmark_ci.cli.commands.all_cmd.validate_format",
     "crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths",
 ]
 
@@ -1378,7 +1561,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
     def test_all_pass_returns_0(
         self,
@@ -1417,7 +1600,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
     def test_all_fail_returns_1(
         self,
@@ -1456,7 +1639,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
     def test_all_output_writes_json(
         self,
@@ -1499,7 +1682,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
     def test_all_uses_all_check_mode(
         self,
@@ -1540,7 +1723,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
     def test_all_single_build_per_benchmark(
         self,
@@ -1584,7 +1767,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
     def test_all_no_inc_support_uses_full_build(
         self,
@@ -1626,7 +1809,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
     def test_all_multiple_benchmarks(
         self,
@@ -1670,7 +1853,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
     def test_all_default_workers(
         self,
@@ -1709,7 +1892,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
     def test_all_default_uses_inc_build_and_force_rebuild(
         self,
@@ -1753,7 +1936,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
     def test_all_no_inc_build_flag(
         self,
@@ -1794,9 +1977,9 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
-    def test_all_calls_format_validate(
+    def test_all_calls_validate_format(
         self,
         mock_discover,
         mock_fmt,
