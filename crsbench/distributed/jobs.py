@@ -822,9 +822,7 @@ def run_crs_trial(
 
         # Build trial_id for use as run_id
         experiment_name = config.experiment
-        trial_id = (
-            f"{experiment_name}-{crs}-{benchmark}-{harness_name}-trial{trial_num}"
-        )
+        trial_id = f"{experiment_name}-{crs}-{benchmark}-{harness_name}-{mode}-trial{trial_num}"
 
         # Configure executor
         crs_executor.configure_crs(
