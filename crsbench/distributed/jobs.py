@@ -572,6 +572,7 @@ def run_crs_trial(
     harness_name: str,
     harness_path: str,
     trial_num: int,
+    trial_id: str,
     config_dict: Dict[str, Any],
     mode: str,
     sanitizer: str = "address",
@@ -592,6 +593,7 @@ def run_crs_trial(
         harness_name: Harness name to run
         harness_path: Path to harness file
         trial_num: Trial number (1-indexed) for this execution
+        trial_id: Pre-generated trial identifier with random suffix
         config_dict: Experiment configuration as dict (deserialized by RQ)
         mode: Evaluation mode ('delta', 'full', or 'all')
         sanitizer: Sanitizer type ('address', 'memory', or 'undefined')
@@ -828,10 +830,6 @@ def run_crs_trial(
                 crs_configs_dir=crs_configs_dir,
                 litellm_mode=config.litellm_mode,
             )
-
-        # Build trial_id for use as run_id
-        experiment_name = config.experiment
-        trial_id = f"{experiment_name}-{crs}-{benchmark}-{harness_name}-{mode}-trial{trial_num}"
 
         # Configure executor
         crs_executor.configure_crs(

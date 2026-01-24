@@ -21,6 +21,8 @@ Usage:
 
 import argparse
 import os
+import secrets
+import string
 import sys
 import time
 from pathlib import Path
@@ -1312,6 +1314,11 @@ def run_experiment_local(
 
     log_section("Executing Trials", width=60)
 
+    # Generate 6-char random alphanumeric suffix (shared by all trials)
+    trial_suffix = "_" + "".join(
+        secrets.choice(string.ascii_uppercase + string.digits) for _ in range(6)
+    )
+
     # Execute trials sequentially
     results = []
     for idx, trial in enumerate(trials, 1):
@@ -1328,14 +1335,20 @@ def run_experiment_local(
         # Enhance config with CLI arguments (highest precedence)
         enhanced_config = enhance_config_with_cli_args(config, args)
 
+        # Build trial_id with random suffix
+        harness_name_stem = Path(bh.harness.name).stem
+        trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
+
         result = run_crs_trial(
             crs=trial.crs,
             benchmark=bh.name,
             harness_name=bh.harness.name,
             harness_path=bh.harness.path,
             trial_num=trial.trial_num,
+            trial_id=trial_id,
             config_dict=enhanced_config.model_dump(),
             mode=trial.mode,
+            sanitizer=trial.sanitizer,
         )
 
         results.append(result)
@@ -1933,11 +1946,20 @@ def run_experiment_distributed(
             else:
                 logger.debug(f"CRS {crs} has no memory limit configured")
 
+    # Generate 6-char random alphanumeric suffix (shared by all trials)
+    trial_suffix = "_" + "".join(
+        secrets.choice(string.ascii_uppercase + string.digits) for _ in range(6)
+    )
+
     jobs = []
     for trial in trials:
         bh = trial.benchmark_harness
         cpu_count = crs_cpu_counts.get(trial.crs, 4)
         memory_limit = crs_memory_limits.get(trial.crs)
+
+        # Build trial_id at enqueue time with random suffix
+        harness_name_stem = Path(bh.harness.name).stem
+        trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
 
         job = queue.enqueue(
             "crsbench.distributed.jobs.run_crs_trial",
@@ -1946,6 +1968,7 @@ def run_experiment_distributed(
             harness_name=bh.harness.name,
             harness_path=bh.harness.path,
             trial_num=trial.trial_num,
+            trial_id=trial_id,
             config_dict=enhanced_config.model_dump(),
             mode=trial.mode,
             sanitizer=trial.sanitizer,
