@@ -13,7 +13,6 @@ from __future__ import annotations
 import shutil
 import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -442,21 +441,14 @@ class PatchVerificationEngine:
             variant_results: dict[str, bool] = {}
             variants_matched = 0
 
-            with ThreadPoolExecutor(max_workers=self.verify_workers) as executor:
-                futures = {
-                    executor.submit(
-                        self._verify_single_pov, variant_name, harness, pov_path
-                    ): pov_path
-                    for pov_path in pov_variants
-                }
-
-                for future in as_completed(futures):
-                    pov_path = futures[future]
-                    pov_name, passed = future.result()
-                    variant_id = pov_path.stem
-                    variant_results[variant_id] = passed
-                    if passed:
-                        variants_matched += 1
+            for pov_path in pov_variants:
+                pov_name, passed = self._verify_single_pov(
+                    variant_name, harness, pov_path
+                )
+                variant_id = pov_path.stem
+                variant_results[variant_id] = passed
+                if passed:
+                    variants_matched += 1
 
             # Build CpvStats for this CPV
             stats = CpvStats(
@@ -580,8 +572,6 @@ class PatchVerificationEngine:
         patch_dir: Path,
         harness: str,
         pov_dir: Path,
-        *,
-        parallel: bool = True,
     ) -> list[PatchVerificationResult]:
         """Verify multiple patches.
 
@@ -593,7 +583,6 @@ class PatchVerificationEngine:
             patch_dir: Directory containing patches
             harness: Harness name to test
             pov_dir: Directory containing POV files
-            parallel: If True, run verifications in parallel
 
         Returns:
             List of PatchVerificationResult
@@ -644,29 +633,9 @@ class PatchVerificationEngine:
             if self.use_inc_build:
                 self._ensure_inc_build_image(project_name)
 
-        if not parallel or len(tasks) <= 1:
-            # Sequential verification
-            for patch, pov_path in tasks:
-                result = self.verify_patch(benchmark_path, patch, harness, pov_path)
-                results.append(result)
-        else:
-            # Parallel patch builds and verification
-            # Use build_workers since builds dominate execution time
-            with ThreadPoolExecutor(max_workers=self.build_workers) as executor:
-                futures = {}
-                for patch, pov_path in tasks:
-                    future = executor.submit(
-                        self.verify_patch,
-                        benchmark_path,
-                        patch,
-                        harness,
-                        pov_path,
-                    )
-                    futures[future] = patch
-
-                for future in as_completed(futures):
-                    result = future.result()
-                    results.append(result)
+        for patch, pov_path in tasks:
+            result = self.verify_patch(benchmark_path, patch, harness, pov_path)
+            results.append(result)
 
         return results
 
@@ -958,19 +927,10 @@ class PatchVerificationEngine:
 
         failed_povs: list[str] = []
 
-        # Run POV tests in parallel
-        with ThreadPoolExecutor(max_workers=self.verify_workers) as executor:
-            futures = {
-                executor.submit(
-                    self._verify_single_pov, variant_name, harness, pov_path
-                ): pov_path
-                for pov_path in pov_paths
-            }
-
-            for future in as_completed(futures):
-                pov_name, passed = future.result()
-                if not passed:
-                    failed_povs.append(pov_name)
+        for pov_path in pov_paths:
+            pov_name, passed = self._verify_single_pov(variant_name, harness, pov_path)
+            if not passed:
+                failed_povs.append(pov_name)
 
         all_passed = len(failed_povs) == 0
         if all_passed:
@@ -1080,8 +1040,6 @@ class PatchVerificationEngine:
         self,
         benchmark_path: Path,
         harness: Optional[str] = None,
-        *,
-        parallel: bool = True,
     ) -> PatchBenchmarkOutput:
         """Verify all patches in a benchmark using auto-discovery.
 
@@ -1090,7 +1048,6 @@ class PatchVerificationEngine:
         Args:
             benchmark_path: Path to benchmark directory
             harness: Optional harness filter (None = all harnesses)
-            parallel: Run in parallel
 
         Returns:
             PatchBenchmarkOutput containing:
@@ -1167,26 +1124,9 @@ class PatchVerificationEngine:
             seen_variants.add(variant_key)
             deduped_tasks.append((h, patch, pov_path))
 
-        if not parallel or len(deduped_tasks) <= 1:
-            for h, patch, pov_path in deduped_tasks:
-                result = self.verify_patch(benchmark_path, patch, h, pov_path)
-                results.append(result)
-        else:
-            with ThreadPoolExecutor(max_workers=self.build_workers) as executor:
-                futures = {}
-                for h, patch, pov_path in deduped_tasks:
-                    future = executor.submit(
-                        self.verify_patch,
-                        benchmark_path,
-                        patch,
-                        h,
-                        pov_path,
-                    )
-                    futures[future] = (h, patch)
-
-                for future in as_completed(futures):
-                    result = future.result()
-                    results.append(result)
+        for h, patch, pov_path in deduped_tasks:
+            result = self.verify_patch(benchmark_path, patch, h, pov_path)
+            results.append(result)
 
         # Compute overall fallback status
         fallback_used = any(r.fallback_used for r in results)

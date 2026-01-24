@@ -443,19 +443,13 @@ class BenchmarkValidator:
         temp_corpus_dir = None
         use_artificial_corpus = False
 
-        # Look for corpus in benchmark directory if not provided
+        # Look for corpus via MetaYamlAdapter if not provided
         if corpus_dir is None:
-            aixcc_dir = benchmark_path / ".aixcc"
-            # Try common corpus locations
-            possible_corpus = [
-                aixcc_dir / "corpus",
-                aixcc_dir / "seed_corpus",
-                benchmark_path / "corpus",
-            ]
-            for path in possible_corpus:
-                if path.exists() and any(path.iterdir()):
-                    corpus_dir = path
-                    break
+            from crsbench.validation.meta_adapter import MetaYamlAdapter
+
+            adapter = MetaYamlAdapter.from_benchmark_path(benchmark_path)
+            if adapter:
+                corpus_dir = adapter.get_corpus_dir()
 
         # If no corpus found, create minimal artificial corpus for validation
         if corpus_dir is None or not corpus_dir.exists():

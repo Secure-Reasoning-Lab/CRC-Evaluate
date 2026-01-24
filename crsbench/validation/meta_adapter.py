@@ -465,6 +465,35 @@ class MetaYamlAdapter:
 
         return f"{self.benchmark_name}-{mode_prefix}-{variant_type.value}"
 
+    def get_corpus_dir(self, harness_name: Optional[str] = None) -> Optional[Path]:
+        """Get the corpus directory for this benchmark.
+
+        Checks known corpus locations under .aixcc/:
+        - .aixcc/{harness}/corpus/ (per-harness corpus)
+        - .aixcc/corpus/ (shared corpus)
+
+        Args:
+            harness_name: Optional harness name for per-harness corpus.
+
+        Returns:
+            Path to corpus directory if found and non-empty, None otherwise.
+        """
+        if not self.benchmark_path:
+            return None
+
+        aixcc_dir = self.benchmark_path / ".aixcc"
+        candidates: list[Path] = []
+
+        if harness_name:
+            candidates.append(aixcc_dir / harness_name / "corpus")
+        candidates.append(aixcc_dir / "corpus")
+
+        for candidate in candidates:
+            if candidate.exists() and any(candidate.iterdir()):
+                return candidate
+
+        return None
+
     def get_patch_dir(self) -> Path:
         """Get the path to the patches directory.
 

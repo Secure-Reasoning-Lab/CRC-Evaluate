@@ -23,18 +23,38 @@ class DAGExecutor:
     Jobs are scheduled via topological sort. At most max_workers jobs run
     concurrently. When a job fails, all transitive dependents are marked
     DEP_FAILED without execution.
+
+    Supports typed concurrency limits via type_limits parameter:
+        type_limits={"build": 2, "verify": 8} means at most 2 build jobs
+        and 8 verify jobs run concurrently (pool size = sum = 10).
     """
 
-    def __init__(self, max_workers: int = 4) -> None:
-        if max_workers < 1:
-            msg = f"max_workers must be >= 1, got {max_workers}"
-            raise ValueError(msg)
-        self.max_workers = max_workers
+    def __init__(
+        self,
+        max_workers: int = 4,
+        type_limits: dict[str, int] | None = None,
+    ) -> None:
+        if type_limits:
+            total = sum(type_limits.values())
+            if total < 1:
+                msg = f"sum of type_limits must be >= 1, got {total}"
+                raise ValueError(msg)
+            self.max_workers = total
+            self.type_limits = type_limits
+        else:
+            if max_workers < 1:
+                msg = f"max_workers must be >= 1, got {max_workers}"
+                raise ValueError(msg)
+            self.max_workers = max_workers
+            self.type_limits: dict[str, int] | None = None
 
     def execute(
         self, jobs: list[Job], context: JobContext
     ) -> dict[str, ExecutorResult]:
         """Execute jobs respecting dependencies with bounded parallelism.
+
+        When type_limits is set, per-type concurrency is enforced: ready jobs
+        whose type is at capacity are held in a buffer until a slot frees.
 
         Args:
             jobs: List of jobs to execute. Each job declares depends_on.
@@ -62,11 +82,17 @@ class DAGExecutor:
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
             in_flight: dict[str, Future[JobResult]] = {}
+            ready_buffer: list[str] = []
+            type_counts: dict[str, int] = (
+                dict.fromkeys(self.type_limits, 0) if self.type_limits else {}
+            )
 
             while ts.is_active():
-                ready_ids = ts.get_ready()
+                ready_buffer.extend(ts.get_ready())
 
-                for job_id in ready_ids:
+                remaining: list[str] = []
+                dep_failed_processed = False
+                for job_id in ready_buffer:
                     if self._has_failed_dep(job_id, graph, failed_jobs):
                         results[job_id] = ExecutorResult(
                             job_id=job_id,
@@ -75,25 +101,35 @@ class DAGExecutor:
                         )
                         failed_jobs.add(job_id)
                         ts.done(job_id)
+                        dep_failed_processed = True
                         logger.debug("Job %s: DEP_FAILED (dependency failed)", job_id)
                         continue
 
                     job = job_map[job_id]
-                    logger.debug("Job %s: submitting", job_id)
-                    future = pool.submit(self._run_job, job, context)
-                    in_flight[job_id] = future
+                    if self._can_submit(job, type_counts):
+                        logger.debug("Job %s: submitting", job_id)
+                        future = pool.submit(self._run_job, job, context)
+                        in_flight[job_id] = future
+                        if self.type_limits:
+                            type_counts[job.job_type] = (
+                                type_counts.get(job.job_type, 0) + 1
+                            )
+                    else:
+                        remaining.append(job_id)
+                ready_buffer = remaining
+
+                # DEP_FAILED may have unblocked new jobs via ts.done()
+                if dep_failed_processed:
+                    continue
 
                 if not in_flight:
-                    if ts.is_active() and not ready_ids:
+                    if ts.is_active() and not ready_buffer:
                         logger.error("Deadlock: no in-flight jobs but DAG still active")
                         break
-                    # Either DAG is done, or we just processed DEP_FAILED jobs
-                    # which may unblock more jobs — loop back to get_ready()
                     continue
 
                 # Wait for at least one job to complete
                 for completed_future in as_completed(in_flight.values()):
-                    # Find which job_id this future belongs to
                     completed_id = None
                     for jid, fut in in_flight.items():
                         if fut is completed_future:
@@ -128,11 +164,25 @@ class DAGExecutor:
                     )
 
                     del in_flight[completed_id]
+                    if self.type_limits:
+                        completed_type = job_map[completed_id].job_type
+                        type_counts[completed_type] = max(
+                            0, type_counts.get(completed_type, 1) - 1
+                        )
                     ts.done(completed_id)
-                    # Break to re-check get_ready() for newly unblocked jobs
                     break
 
         return results
+
+    def _can_submit(self, job: Job, type_counts: dict[str, int]) -> bool:
+        """Check if a job can be submitted given current type counts."""
+        if not self.type_limits:
+            return True
+        jtype = job.job_type
+        limit = self.type_limits.get(jtype)
+        if limit is None:
+            return True
+        return type_counts.get(jtype, 0) < limit
 
     def _validate_dependencies(
         self,

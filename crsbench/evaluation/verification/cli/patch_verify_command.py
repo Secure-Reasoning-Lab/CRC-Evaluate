@@ -210,12 +210,6 @@ Examples:
     )
 
     parser.add_argument(
-        "--no-parallel",
-        action="store_true",
-        help="Disable parallel verification",
-    )
-
-    parser.add_argument(
         "--no-variants",
         action="store_true",
         help="Disable POV variant verification (only test original POV)",
@@ -376,7 +370,6 @@ def run_patch_verify(args: argparse.Namespace) -> int:
                     patch_dir=args.patch_dir,
                     harness=harness,
                     pov_dir=pov_dir,
-                    parallel=not args.no_parallel,
                 )
                 results.extend(harness_results)
 

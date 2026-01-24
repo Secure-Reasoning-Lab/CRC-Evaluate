@@ -455,23 +455,58 @@ class TestFormatSubcommand:
 # --- Test POV subcommand integration ---
 
 
+def _make_pov_dag_results(
+    benchmark_name: str, cpv_ids: list[str], *, success: bool = True
+):
+    """Create DAG results for POV verification jobs."""
+    from crsbench.executor.types import ExecutorResult, JobStatus
+
+    results = {}
+    status = JobStatus.SUCCESS if success else JobStatus.FAILED
+    for cpv_id in cpv_ids:
+        job_id = f"verify-cpv-pov:{benchmark_name}:{cpv_id}"
+        results[job_id] = ExecutorResult(
+            job_id=job_id,
+            status=status,
+            elapsed_seconds=2.0,
+            error=None if success else "POV not detected",
+        )
+    build_id = f"build-variants:{benchmark_name}"
+    results[build_id] = ExecutorResult(
+        job_id=build_id,
+        status=JobStatus.SUCCESS,
+        elapsed_seconds=5.0,
+    )
+    return results
+
+
 class TestPovSubcommand:
     """Integration tests for the POV subcommand."""
 
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.resolve_benchmark_paths")
     def test_pov_all_pass_returns_0(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table
+        self,
+        mock_discover,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_caps.return_value = (True, None)
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=5.0
+        mock_harness.return_value = ["fuzz_target"]
+        mock_cpvs.return_value = ["cpv_0"]
+        mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+        mock_executor_cls.return_value.execute.return_value = _make_pov_dag_results(
+            "bench1", ["cpv_0"]
         )
 
         parser = _make_parser()
@@ -482,21 +517,29 @@ class TestPovSubcommand:
         mock_table.assert_called_once()
 
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.resolve_benchmark_paths")
     def test_pov_fail_returns_1(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table
+        self,
+        mock_discover,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_caps.return_value = (True, None)
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.return_value = CheckResult(
-            status=CheckStatus.FAIL,
-            time_seconds=3.0,
-            details={"failures": ["cpv_0/pov_0.blob: NOT_VULNERABLE"]},
+        mock_harness.return_value = ["fuzz_target"]
+        mock_cpvs.return_value = ["cpv_0"]
+        mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+        mock_executor_cls.return_value.execute.return_value = _make_pov_dag_results(
+            "bench1", ["cpv_0"], success=False
         )
 
         parser = _make_parser()
@@ -506,19 +549,30 @@ class TestPovSubcommand:
         assert result == 1
 
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.resolve_benchmark_paths")
     def test_pov_output_writes_json(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table, tmp_path
+        self,
+        mock_discover,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
+        tmp_path,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_caps.return_value = (True, None)
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=5.0
+        mock_harness.return_value = ["fuzz_target"]
+        mock_cpvs.return_value = ["cpv_0"]
+        mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+        mock_executor_cls.return_value.execute.return_value = _make_pov_dag_results(
+            "bench1", ["cpv_0"]
         )
 
         output_file = tmp_path / "out.json"
@@ -532,118 +586,181 @@ class TestPovSubcommand:
         assert "summary" in data
 
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.resolve_benchmark_paths")
-    def test_pov_exception_returns_error(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table
+    def test_pov_no_cpvs_returns_0(
+        self,
+        mock_discover,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_caps.return_value = (True, None)
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.side_effect = Exception("docker failed")
+        mock_harness.return_value = ["fuzz_target"]
+        mock_cpvs.return_value = []
+        mock_povs.return_value = []
+        # No verify jobs → empty results (only build)
+        mock_executor_cls.return_value.execute.return_value = {
+            "build-variants:bench1": _make_pov_dag_results("bench1", [])[
+                "build-variants:bench1"
+            ]
+        }
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "pov", "--all"])
         result = dispatch_ci(args)
 
-        assert result == 1
+        assert result == 0
 
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.resolve_benchmark_paths")
     def test_pov_default_uses_inc_build(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table
+        self,
+        mock_discover,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_caps.return_value = (True, None)
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=5.0
+        mock_harness.return_value = ["fuzz_target"]
+        mock_cpvs.return_value = ["cpv_0"]
+        mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+        mock_executor_cls.return_value.execute.return_value = _make_pov_dag_results(
+            "bench1", ["cpv_0"]
         )
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "pov", "--all"])
         dispatch_ci(args)
 
-        calls = mock_validator.validate_povs.call_args_list
-        # Default: inc-build is used
-        assert calls[0].kwargs.get("use_inc_build") is True
-        # Default: no force_rebuild for standalone commands
-        assert calls[0].kwargs.get("force_rebuild") is False
+        # Check the BuildVariantsJob passed to executor
+        call_args = mock_executor_cls.return_value.execute.call_args
+        jobs = call_args[0][0]
+        build_job = next(j for j in jobs if j.job_id == "build-variants:bench1")
+        assert build_job.use_inc_build is True
+        assert build_job.force_rebuild is True
 
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.resolve_benchmark_paths")
     def test_pov_no_inc_build_flag(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table
+        self,
+        mock_discover,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_caps.return_value = (True, None)
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=5.0
+        mock_harness.return_value = ["fuzz_target"]
+        mock_cpvs.return_value = ["cpv_0"]
+        mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+        mock_executor_cls.return_value.execute.return_value = _make_pov_dag_results(
+            "bench1", ["cpv_0"]
         )
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "pov", "--all", "--no-inc-build"])
         dispatch_ci(args)
 
-        calls = mock_validator.validate_povs.call_args_list
-        # --no-inc-build: standard call uses full build
-        assert calls[0].kwargs.get("use_inc_build") is False
-
-    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.BenchmarkValidator")
-    @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.resolve_benchmark_paths")
-    def test_pov_force_rebuild_flag(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table
-    ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
-        mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_caps.return_value = (True, None)
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=5.0
-        )
-
-        parser = _make_parser()
-        args = parser.parse_args(["ci", "pov", "--all", "--force-rebuild"])
-        dispatch_ci(args)
-
-        calls = mock_validator.validate_povs.call_args_list
-        # --force-rebuild: force_rebuild=True
-        assert calls[0].kwargs.get("force_rebuild") is True
+        call_args = mock_executor_cls.return_value.execute.call_args
+        jobs = call_args[0][0]
+        build_job = next(j for j in jobs if j.job_id == "build-variants:bench1")
+        assert build_job.use_inc_build is False
 
 
 # --- Test Patch subcommand integration ---
+
+
+def _make_patch_dag_results(
+    benchmark_name: str,
+    patch_keys: list[tuple[str, str]],
+    *,
+    success: bool = True,
+    test_mode: str = "FULL",
+):
+    """Create DAG results for patch build + test jobs."""
+    from crsbench.executor.types import ExecutorResult, JobStatus
+
+    results = {}
+    build_id = f"build-variants:{benchmark_name}"
+    results[build_id] = ExecutorResult(
+        job_id=build_id,
+        status=JobStatus.SUCCESS,
+        elapsed_seconds=5.0,
+    )
+    status = JobStatus.SUCCESS if success else JobStatus.FAILED
+    for cpv_id, patch_id in patch_keys:
+        bp_id = f"build-patch:{benchmark_name}:{cpv_id}:{patch_id}"
+        results[bp_id] = ExecutorResult(
+            job_id=bp_id,
+            status=JobStatus.SUCCESS,
+            elapsed_seconds=3.0,
+        )
+        tp_id = f"test-patch:{benchmark_name}:{cpv_id}:{patch_id}:{test_mode}"
+        results[tp_id] = ExecutorResult(
+            job_id=tp_id,
+            status=status,
+            elapsed_seconds=4.0,
+            error=None if success else "POVs still crash",
+        )
+    return results
 
 
 class TestPatchSubcommand:
     """Integration tests for the Patch subcommand."""
 
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.resolve_benchmark_paths")
     def test_patch_all_pass_returns_0(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table
+        self,
+        mock_discover,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_caps.return_value = (True, None)
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
+        mock_harness.return_value = ["fuzz_target"]
+        mock_cpvs.return_value = ["cpv_0"]
+        mock_patches.return_value = [("patch_0", Path("/tmp/patch_0.diff"))]
+        mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+        mock_executor_cls.return_value.execute.return_value = _make_patch_dag_results(
+            "bench1", [("cpv_0", "patch_0")]
         )
 
         parser = _make_parser()
@@ -654,21 +771,32 @@ class TestPatchSubcommand:
         mock_table.assert_called_once()
 
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.resolve_benchmark_paths")
     def test_patch_fail_returns_1(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table
+        self,
+        mock_discover,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_caps.return_value = (True, None)
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.FAIL,
-            time_seconds=10.0,
-            details={"failures": ["cpv_0: test.sh returned non-zero"]},
+        mock_harness.return_value = ["fuzz_target"]
+        mock_cpvs.return_value = ["cpv_0"]
+        mock_patches.return_value = [("patch_0", Path("/tmp/patch_0.diff"))]
+        mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+        mock_executor_cls.return_value.execute.return_value = _make_patch_dag_results(
+            "bench1", [("cpv_0", "patch_0")], success=False
         )
 
         parser = _make_parser()
@@ -678,19 +806,33 @@ class TestPatchSubcommand:
         assert result == 1
 
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.resolve_benchmark_paths")
     def test_patch_output_writes_json(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table, tmp_path
+        self,
+        mock_discover,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
+        tmp_path,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_caps.return_value = (True, None)
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
+        mock_harness.return_value = ["fuzz_target"]
+        mock_cpvs.return_value = ["cpv_0"]
+        mock_patches.return_value = [("patch_0", Path("/tmp/patch_0.diff"))]
+        mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+        mock_executor_cls.return_value.execute.return_value = _make_patch_dag_results(
+            "bench1", [("cpv_0", "patch_0")]
         )
 
         output_file = tmp_path / "out.json"
@@ -704,77 +846,81 @@ class TestPatchSubcommand:
         assert "summary" in data
 
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.resolve_benchmark_paths")
     def test_patch_default_uses_inc_build(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table
+        self,
+        mock_discover,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_caps.return_value = (True, None)
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
+        mock_harness.return_value = ["fuzz_target"]
+        mock_cpvs.return_value = ["cpv_0"]
+        mock_patches.return_value = [("patch_0", Path("/tmp/patch_0.diff"))]
+        mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+        mock_executor_cls.return_value.execute.return_value = _make_patch_dag_results(
+            "bench1", [("cpv_0", "patch_0")]
         )
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "patch", "--all"])
         dispatch_ci(args)
 
-        calls = mock_validator.validate_patches.call_args_list
-        # Default: inc-build is used
-        assert calls[0].kwargs.get("use_inc_build") is True
-        # Default: no force_rebuild for standalone commands
-        assert calls[0].kwargs.get("force_rebuild") is False
+        call_args = mock_executor_cls.return_value.execute.call_args
+        jobs = call_args[0][0]
+        build_job = next(j for j in jobs if j.job_id == "build-variants:bench1")
+        assert build_job.use_inc_build is True
+        assert build_job.force_rebuild is True
 
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.resolve_benchmark_paths")
     def test_patch_no_inc_build_flag(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table
+        self,
+        mock_discover,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_caps.return_value = (True, None)
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
+        mock_harness.return_value = ["fuzz_target"]
+        mock_cpvs.return_value = ["cpv_0"]
+        mock_patches.return_value = [("patch_0", Path("/tmp/patch_0.diff"))]
+        mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+        mock_executor_cls.return_value.execute.return_value = _make_patch_dag_results(
+            "bench1", [("cpv_0", "patch_0")]
         )
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "patch", "--all", "--no-inc-build"])
         dispatch_ci(args)
 
-        calls = mock_validator.validate_patches.call_args_list
-        # --no-inc-build: full build
-        assert calls[0].kwargs.get("use_inc_build") is False
-
-    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.BenchmarkValidator")
-    @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.resolve_benchmark_paths")
-    def test_patch_force_rebuild_flag(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table
-    ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
-        mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_caps.return_value = (True, None)
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
-        )
-
-        parser = _make_parser()
-        args = parser.parse_args(["ci", "patch", "--all", "--force-rebuild"])
-        dispatch_ci(args)
-
-        calls = mock_validator.validate_patches.call_args_list
-        assert calls[0].kwargs.get("force_rebuild") is True
+        call_args = mock_executor_cls.return_value.execute.call_args
+        jobs = call_args[0][0]
+        build_job = next(j for j in jobs if j.job_id == "build-variants:bench1")
+        assert build_job.use_inc_build is False
 
 
 # --- Test RTS subcommand integration ---
@@ -784,19 +930,32 @@ class TestRtsSubcommand:
     """Integration tests for the RTS subcommand."""
 
     @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.rts_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.resolve_benchmark_paths")
     def test_rts_all_pass_returns_0(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table
+        self,
+        mock_discover,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_caps.return_value = (True, "jcgeks")
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
+        mock_harness.return_value = ["fuzz_target"]
+        mock_cpvs.return_value = ["cpv_0"]
+        mock_patches.return_value = [("patch_0", Path("/tmp/patch_0.diff"))]
+        mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+        mock_executor_cls.return_value.execute.return_value = _make_patch_dag_results(
+            "bench1", [("cpv_0", "patch_0")], test_mode="RTS"
         )
 
         parser = _make_parser()
@@ -807,21 +966,32 @@ class TestRtsSubcommand:
         mock_table.assert_called_once()
 
     @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.rts_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.resolve_benchmark_paths")
     def test_rts_fail_returns_1(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table
+        self,
+        mock_discover,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_caps.return_value = (True, "jcgeks")
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.FAIL,
-            time_seconds=10.0,
-            details={"failures": ["cpv_0: rts test failed"]},
+        mock_harness.return_value = ["fuzz_target"]
+        mock_cpvs.return_value = ["cpv_0"]
+        mock_patches.return_value = [("patch_0", Path("/tmp/patch_0.diff"))]
+        mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+        mock_executor_cls.return_value.execute.return_value = _make_patch_dag_results(
+            "bench1", [("cpv_0", "patch_0")], success=False, test_mode="RTS"
         )
 
         parser = _make_parser()
@@ -832,23 +1002,17 @@ class TestRtsSubcommand:
 
     @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.print_results_table")
     @patch("crsbench.benchmark_ci.cli.commands.rts_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.resolve_benchmark_paths")
-    def test_rts_no_rts_mode_shows_skip(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table
-    ):
+    def test_rts_no_rts_mode_shows_skip(self, mock_discover, mock_caps, mock_table):
         from crsbench.benchmark_ci.models import CheckStatus
 
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_caps.return_value = (True, None)  # No rts_mode
-        mock_validator = mock_validator_cls.return_value
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "rts", "--all"])
         result = dispatch_ci(args)
 
-        # validate_patches NOT called
-        mock_validator.validate_patches.assert_not_called()
         # Return 0 (skip = no failure)
         assert result == 0
         # Verify SKIP in summary
@@ -857,37 +1021,33 @@ class TestRtsSubcommand:
         assert summary.results[0].patch_rts_check.status == CheckStatus.SKIP
 
     @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.rts_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.BenchmarkValidator")
-    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.resolve_benchmark_paths")
-    def test_rts_exception_returns_1(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table
-    ):
-        mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_caps.return_value = (True, "jcgeks")
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_patches.side_effect = Exception("rts check failed")
-
-        parser = _make_parser()
-        args = parser.parse_args(["ci", "rts", "--all"])
-        result = dispatch_ci(args)
-
-        assert result == 1
-
-    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.resolve_benchmark_paths")
     def test_rts_output_writes_json(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table, tmp_path
+        self,
+        mock_discover,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
+        tmp_path,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_caps.return_value = (True, "jcgeks")
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
+        mock_harness.return_value = ["fuzz_target"]
+        mock_cpvs.return_value = ["cpv_0"]
+        mock_patches.return_value = [("patch_0", Path("/tmp/patch_0.diff"))]
+        mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+        mock_executor_cls.return_value.execute.return_value = _make_patch_dag_results(
+            "bench1", [("cpv_0", "patch_0")], test_mode="RTS"
         )
 
         output_file = tmp_path / "out.json"
@@ -901,53 +1061,87 @@ class TestRtsSubcommand:
         assert "summary" in data
 
     @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.rts_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.rts_cmd.resolve_benchmark_paths")
-    def test_rts_uses_unit_test_mode_rts(
-        self, mock_discover, mock_validator_cls, mock_caps, mock_table
+    def test_rts_uses_rts_test_mode(
+        self,
+        mock_discover,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-        from crsbench.evaluation.verification.models import UnitTestMode
-
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_caps.return_value = (True, "jcgeks")
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
+        mock_harness.return_value = ["fuzz_target"]
+        mock_cpvs.return_value = ["cpv_0"]
+        mock_patches.return_value = [("patch_0", Path("/tmp/patch_0.diff"))]
+        mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+        mock_executor_cls.return_value.execute.return_value = _make_patch_dag_results(
+            "bench1", [("cpv_0", "patch_0")], test_mode="RTS"
         )
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "rts", "--all"])
         dispatch_ci(args)
 
-        # validate_patches called twice: build_only + RTS verify
-        assert mock_validator.validate_patches.call_count == 2
-        calls = mock_validator.validate_patches.call_args_list
-        # First call: build_only
-        assert calls[0].kwargs.get("build_only") is True
-        # Second call: RTS mode
-        assert calls[1].kwargs.get("test_mode") == UnitTestMode.RTS
+        # Verify TestPatchVariantJob uses test_mode="RTS"
+        call_args = mock_executor_cls.return_value.execute.call_args
+        jobs = call_args[0][0]
+        from crsbench.benchmark_ci.jobs.flat import TestPatchVariantJob
+
+        test_jobs = [j for j in jobs if isinstance(j, TestPatchVariantJob)]
+        assert len(test_jobs) == 1
+        assert test_jobs[0].test_mode == "RTS"
 
 
 # --- Test Coverage subcommand integration ---
+
+
+def _make_coverage_dag_results(benchmark_name: str, *, success: bool = True):
+    """Create DAG results for coverage jobs."""
+    from crsbench.executor.types import ExecutorResult, JobStatus
+
+    build_id = f"build-variants:{benchmark_name}"
+    cov_id = f"collect-coverage:{benchmark_name}"
+    status = JobStatus.SUCCESS if success else JobStatus.FAILED
+    return {
+        build_id: ExecutorResult(
+            job_id=build_id, status=JobStatus.SUCCESS, elapsed_seconds=5.0
+        ),
+        cov_id: ExecutorResult(
+            job_id=cov_id,
+            status=status,
+            elapsed_seconds=10.0,
+            error=None if success else "Coverage failed",
+        ),
+    }
 
 
 class TestCoverageSubcommand:
     """Integration tests for the Coverage subcommand."""
 
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.BenchmarkValidator")
+    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.resolve_benchmark_paths")
     def test_coverage_all_pass_returns_0(
-        self, mock_discover, mock_validator_cls, mock_table
+        self, mock_discover, mock_caps, mock_harness, mock_executor_cls, mock_table
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
         mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_coverage.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=10.0
+        mock_caps.return_value = (True, None)
+        mock_harness.return_value = ["fuzz_target"]
+        mock_executor_cls.return_value.execute.return_value = (
+            _make_coverage_dag_results("bench1")
         )
 
         parser = _make_parser()
@@ -958,19 +1152,18 @@ class TestCoverageSubcommand:
         mock_table.assert_called_once()
 
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.BenchmarkValidator")
+    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.resolve_benchmark_paths")
     def test_coverage_fail_returns_1(
-        self, mock_discover, mock_validator_cls, mock_table
+        self, mock_discover, mock_caps, mock_harness, mock_executor_cls, mock_table
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
         mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_coverage.return_value = CheckResult(
-            status=CheckStatus.FAIL,
-            time_seconds=10.0,
-            error="No coverage results generated",
+        mock_caps.return_value = (True, None)
+        mock_harness.return_value = ["fuzz_target"]
+        mock_executor_cls.return_value.execute.return_value = (
+            _make_coverage_dag_results("bench1", success=False)
         )
 
         parser = _make_parser()
@@ -980,35 +1173,24 @@ class TestCoverageSubcommand:
         assert result == 1
 
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.BenchmarkValidator")
-    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.resolve_benchmark_paths")
-    def test_coverage_exception_returns_1(
-        self, mock_discover, mock_validator_cls, mock_table
-    ):
-        mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_coverage.side_effect = Exception(
-            "coverage engine failed"
-        )
-
-        parser = _make_parser()
-        args = parser.parse_args(["ci", "coverage", "--all"])
-        result = dispatch_ci(args)
-
-        assert result == 1
-
-    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.BenchmarkValidator")
+    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.resolve_benchmark_paths")
     def test_coverage_output_writes_json(
-        self, mock_discover, mock_validator_cls, mock_table, tmp_path
+        self,
+        mock_discover,
+        mock_caps,
+        mock_harness,
+        mock_executor_cls,
+        mock_table,
+        tmp_path,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
         mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_coverage.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=10.0
+        mock_caps.return_value = (True, None)
+        mock_harness.return_value = ["fuzz_target"]
+        mock_executor_cls.return_value.execute.return_value = (
+            _make_coverage_dag_results("bench1")
         )
 
         output_file = tmp_path / "out.json"
@@ -1024,37 +1206,20 @@ class TestCoverageSubcommand:
         assert "summary" in data
 
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.BenchmarkValidator")
+    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.resolve_benchmark_paths")
-    def test_coverage_calls_validate_coverage(
-        self, mock_discover, mock_validator_cls, mock_table
+    def test_coverage_uses_all_check_mode(
+        self, mock_discover, mock_caps, mock_harness, mock_executor_cls, mock_table
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
+        from crsbench.benchmark_ci.models import CheckMode
 
         mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_coverage.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=10.0
-        )
-
-        parser = _make_parser()
-        args = parser.parse_args(["ci", "coverage", "--all"])
-        dispatch_ci(args)
-
-        mock_validator.validate_coverage.assert_called_once()
-
-    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.BenchmarkValidator")
-    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.resolve_benchmark_paths")
-    def test_coverage_uses_default_check_mode(
-        self, mock_discover, mock_validator_cls, mock_table
-    ):
-        from crsbench.benchmark_ci.models import CheckMode, CheckResult, CheckStatus
-
-        mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_coverage.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=10.0
+        mock_caps.return_value = (True, None)
+        mock_harness.return_value = ["fuzz_target"]
+        mock_executor_cls.return_value.execute.return_value = (
+            _make_coverage_dag_results("bench1")
         )
 
         parser = _make_parser()
@@ -1065,98 +1230,177 @@ class TestCoverageSubcommand:
         assert call_args.kwargs.get("check_mode") == CheckMode.ALL
 
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.BenchmarkValidator")
+    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.resolve_benchmark_paths")
     def test_coverage_default_uses_inc_build(
-        self, mock_discover, mock_validator_cls, mock_table
+        self, mock_discover, mock_caps, mock_harness, mock_executor_cls, mock_table
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
         mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_coverage.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=10.0
+        mock_caps.return_value = (True, None)
+        mock_harness.return_value = ["fuzz_target"]
+        mock_executor_cls.return_value.execute.return_value = (
+            _make_coverage_dag_results("bench1")
         )
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "coverage", "--all"])
         dispatch_ci(args)
 
-        calls = mock_validator.validate_coverage.call_args_list
-        # Default: inc-build is used
-        assert calls[0].kwargs.get("use_inc_build") is True
-        # Default: no force_rebuild for standalone commands
-        assert calls[0].kwargs.get("force_rebuild") is False
+        call_args = mock_executor_cls.return_value.execute.call_args
+        jobs = call_args[0][0]
+        build_job = next(j for j in jobs if j.job_id == "build-variants:bench1")
+        assert build_job.use_inc_build is True
+        assert build_job.force_rebuild is True
 
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.BenchmarkValidator")
+    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.resolve_benchmark_paths")
     def test_coverage_no_inc_build_flag(
-        self, mock_discover, mock_validator_cls, mock_table
+        self, mock_discover, mock_caps, mock_harness, mock_executor_cls, mock_table
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
         mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_coverage.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=10.0
+        mock_caps.return_value = (True, None)
+        mock_harness.return_value = ["fuzz_target"]
+        mock_executor_cls.return_value.execute.return_value = (
+            _make_coverage_dag_results("bench1")
         )
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "coverage", "--all", "--no-inc-build"])
         dispatch_ci(args)
 
-        calls = mock_validator.validate_coverage.call_args_list
-        assert calls[0].kwargs.get("use_inc_build") is False
-
-    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.BenchmarkValidator")
-    @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.resolve_benchmark_paths")
-    def test_coverage_force_rebuild_flag(
-        self, mock_discover, mock_validator_cls, mock_table
-    ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-
-        mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_coverage.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=10.0
-        )
-
-        parser = _make_parser()
-        args = parser.parse_args(["ci", "coverage", "--all", "--force-rebuild"])
-        dispatch_ci(args)
-
-        calls = mock_validator.validate_coverage.call_args_list
-        assert calls[0].kwargs.get("force_rebuild") is True
+        call_args = mock_executor_cls.return_value.execute.call_args
+        jobs = call_args[0][0]
+        build_job = next(j for j in jobs if j.job_id == "build-variants:bench1")
+        assert build_job.use_inc_build is False
 
 
 # --- Test All subcommand integration ---
+
+
+def _make_all_dag_results(benchmark_name: str, *, success: bool = True):
+    """Create DAG results for all checks (POV + patch + coverage)."""
+    from crsbench.executor.types import ExecutorResult, JobStatus
+
+    status = JobStatus.SUCCESS if success else JobStatus.FAILED
+    return {
+        f"build-variants:{benchmark_name}": ExecutorResult(
+            job_id=f"build-variants:{benchmark_name}",
+            status=JobStatus.SUCCESS,
+            elapsed_seconds=5.0,
+        ),
+        f"verify-cpv-pov:{benchmark_name}:cpv_0": ExecutorResult(
+            job_id=f"verify-cpv-pov:{benchmark_name}:cpv_0",
+            status=status,
+            elapsed_seconds=2.0,
+        ),
+        f"build-patch:{benchmark_name}:cpv_0:patch_0": ExecutorResult(
+            job_id=f"build-patch:{benchmark_name}:cpv_0:patch_0",
+            status=JobStatus.SUCCESS,
+            elapsed_seconds=3.0,
+        ),
+        f"test-patch:{benchmark_name}:cpv_0:patch_0:FULL": ExecutorResult(
+            job_id=f"test-patch:{benchmark_name}:cpv_0:patch_0:FULL",
+            status=status,
+            elapsed_seconds=4.0,
+        ),
+        f"test-patch:{benchmark_name}:cpv_0:patch_0:RTS": ExecutorResult(
+            job_id=f"test-patch:{benchmark_name}:cpv_0:patch_0:RTS",
+            status=status,
+            elapsed_seconds=3.0,
+        ),
+        f"collect-coverage:{benchmark_name}": ExecutorResult(
+            job_id=f"collect-coverage:{benchmark_name}",
+            status=status,
+            elapsed_seconds=10.0,
+        ),
+    }
+
+
+def _setup_all_cmd_mocks(
+    mock_discover,
+    mock_fmt,
+    mock_caps,
+    mock_harness,
+    mock_cpvs,
+    mock_patches,
+    mock_povs,
+    mock_executor_cls,
+    *,
+    paths=None,
+    rts_mode="jcgeks",
+    supports_inc=True,
+    success=True,
+):
+    """Common setup for all_cmd tests."""
+    from crsbench.validation.errors import ValidationResult
+
+    if paths is None:
+        paths = [Path("/tmp/bench1")]
+    mock_discover.return_value = paths
+    mock_caps.return_value = (supports_inc, rts_mode)
+    mock_fmt.return_value = ValidationResult(is_valid=True, issues=[])
+    mock_harness.return_value = ["fuzz_target"]
+    mock_cpvs.return_value = ["cpv_0"]
+    mock_patches.return_value = [("patch_0", Path("/tmp/patch_0.diff"))]
+    mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+
+    results = {}
+    for p in paths:
+        results.update(_make_all_dag_results(p.name, success=success))
+    mock_executor_cls.return_value.execute.return_value = results
+
+
+_ALL_CMD_PATCHES = [
+    "crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table",
+    "crsbench.benchmark_ci.cli.commands.all_cmd.DAGExecutor",
+    "crsbench.benchmark_ci.cli.commands.all_cmd.discover_pov_paths",
+    "crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths",
+    "crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids",
+    "crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names",
+    "crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities",
+    "crsbench.benchmark_ci.cli.commands.all_cmd.format_validate",
+    "crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths",
+]
 
 
 class TestAllSubcommand:
     """Integration tests for the All subcommand."""
 
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
     def test_all_pass_returns_0(
-        self, mock_discover, mock_fmt, mock_validator_cls, mock_caps, mock_table
+        self,
+        mock_discover,
+        mock_fmt,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-        from crsbench.validation.errors import ValidationResult
-
-        mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_caps.return_value = (True, "jcgeks")
-        mock_fmt.return_value = ValidationResult(is_valid=True, issues=[])
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=5.0
-        )
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
+        _setup_all_cmd_mocks(
+            mock_discover,
+            mock_fmt,
+            mock_caps,
+            mock_harness,
+            mock_cpvs,
+            mock_patches,
+            mock_povs,
+            mock_executor_cls,
         )
 
         parser = _make_parser()
@@ -1167,27 +1411,36 @@ class TestAllSubcommand:
         mock_table.assert_called_once()
 
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
     def test_all_fail_returns_1(
-        self, mock_discover, mock_fmt, mock_validator_cls, mock_caps, mock_table
+        self,
+        mock_discover,
+        mock_fmt,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-        from crsbench.validation.errors import ValidationResult
-
-        mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_caps.return_value = (True, None)
-        mock_fmt.return_value = ValidationResult(is_valid=True, issues=[])
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.return_value = CheckResult(
-            status=CheckStatus.FAIL,
-            time_seconds=5.0,
-            details={"failures": ["cpv_0/pov_0: NOT_VULNERABLE"]},
-        )
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
+        _setup_all_cmd_mocks(
+            mock_discover,
+            mock_fmt,
+            mock_caps,
+            mock_harness,
+            mock_cpvs,
+            mock_patches,
+            mock_povs,
+            mock_executor_cls,
+            success=False,
         )
 
         parser = _make_parser()
@@ -1197,56 +1450,36 @@ class TestAllSubcommand:
         assert result == 1
 
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.BenchmarkValidator")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
-    def test_all_exception_returns_1(
-        self, mock_discover, mock_fmt, mock_validator_cls, mock_caps, mock_table
-    ):
-        from crsbench.validation.errors import ValidationResult
-
-        mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_caps.return_value = (True, None)
-        mock_fmt.return_value = ValidationResult(is_valid=True, issues=[])
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.side_effect = Exception("docker failed")
-
-        parser = _make_parser()
-        args = parser.parse_args(["ci", "all", "--all"])
-        result = dispatch_ci(args)
-
-        assert result == 1
-
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
     def test_all_output_writes_json(
         self,
         mock_discover,
         mock_fmt,
-        mock_validator_cls,
         mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
         mock_table,
         tmp_path,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-        from crsbench.validation.errors import ValidationResult
-
-        mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_caps.return_value = (True, None)
-        mock_fmt.return_value = ValidationResult(is_valid=True, issues=[])
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=5.0
-        )
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
-        )
-        mock_validator.validate_coverage.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=10.0
+        _setup_all_cmd_mocks(
+            mock_discover,
+            mock_fmt,
+            mock_caps,
+            mock_harness,
+            mock_cpvs,
+            mock_patches,
+            mock_povs,
+            mock_executor_cls,
         )
 
         output_file = tmp_path / "out.json"
@@ -1260,25 +1493,37 @@ class TestAllSubcommand:
         assert "summary" in data
 
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
     def test_all_uses_all_check_mode(
-        self, mock_discover, mock_fmt, mock_validator_cls, mock_caps, mock_table
+        self,
+        mock_discover,
+        mock_fmt,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckMode, CheckResult, CheckStatus
-        from crsbench.validation.errors import ValidationResult
+        from crsbench.benchmark_ci.models import CheckMode
 
-        mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_caps.return_value = (True, None)
-        mock_fmt.return_value = ValidationResult(is_valid=True, issues=[])
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=5.0
-        )
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
+        _setup_all_cmd_mocks(
+            mock_discover,
+            mock_fmt,
+            mock_caps,
+            mock_harness,
+            mock_cpvs,
+            mock_patches,
+            mock_povs,
+            mock_executor_cls,
         )
 
         parser = _make_parser()
@@ -1289,136 +1534,124 @@ class TestAllSubcommand:
         assert call_args.kwargs.get("check_mode") == CheckMode.ALL
 
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
-    def test_all_always_runs_coverage(
-        self, mock_discover, mock_fmt, mock_validator_cls, mock_caps, mock_table
+    def test_all_single_build_per_benchmark(
+        self,
+        mock_discover,
+        mock_fmt,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-        from crsbench.validation.errors import ValidationResult
-
-        mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_caps.return_value = (True, None)
-        mock_fmt.return_value = ValidationResult(is_valid=True, issues=[])
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=5.0
-        )
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
-        )
-        mock_validator.validate_coverage.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=10.0
+        """ci all: ONE BuildVariantsJob shared by POV, patch, coverage."""
+        _setup_all_cmd_mocks(
+            mock_discover,
+            mock_fmt,
+            mock_caps,
+            mock_harness,
+            mock_cpvs,
+            mock_patches,
+            mock_povs,
+            mock_executor_cls,
         )
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "all", "--all"])
         dispatch_ci(args)
 
-        mock_validator.validate_coverage.assert_called_once()
+        call_args = mock_executor_cls.return_value.execute.call_args
+        jobs = call_args[0][0]
+        from crsbench.benchmark_ci.jobs.flat import BuildVariantsJob
+
+        build_jobs = [j for j in jobs if isinstance(j, BuildVariantsJob)]
+        assert len(build_jobs) == 1
 
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
     def test_all_no_inc_support_uses_full_build(
-        self, mock_discover, mock_fmt, mock_validator_cls, mock_caps, mock_table
+        self,
+        mock_discover,
+        mock_fmt,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-        from crsbench.validation.errors import ValidationResult
-
-        mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_caps.return_value = (False, None)  # No inc-build support
-        mock_fmt.return_value = ValidationResult(is_valid=True, issues=[])
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=5.0
-        )
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
-        )
-        mock_validator.validate_coverage.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=3.0
+        _setup_all_cmd_mocks(
+            mock_discover,
+            mock_fmt,
+            mock_caps,
+            mock_harness,
+            mock_cpvs,
+            mock_patches,
+            mock_povs,
+            mock_executor_cls,
+            supports_inc=False,
         )
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "all", "--all"])
         dispatch_ci(args)
 
-        # validate_povs called once via DAG (single build mode)
-        assert mock_validator.validate_povs.call_count == 1
-        # POV uses full build (supports_inc=False means effective_inc=False)
-        pov_call = mock_validator.validate_povs.call_args_list[0]
-        assert pov_call.kwargs.get("use_inc_build") is False
+        call_args = mock_executor_cls.return_value.execute.call_args
+        jobs = call_args[0][0]
+        build_job = next(j for j in jobs if j.job_id == "build-variants:bench1")
+        assert build_job.use_inc_build is False
 
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
-    def test_all_runs_format_pov_patch_coverage_via_dag(
-        self, mock_discover, mock_fmt, mock_validator_cls, mock_caps, mock_table
+    def test_all_multiple_benchmarks(
+        self,
+        mock_discover,
+        mock_fmt,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-        from crsbench.validation.errors import ValidationResult
-
-        mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_caps.return_value = (True, "jcgeks")
-        mock_fmt.return_value = ValidationResult(is_valid=True, issues=[])
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=5.0
-        )
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
-        )
-        mock_validator.validate_coverage.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=3.0
-        )
-
-        parser = _make_parser()
-        args = parser.parse_args(["ci", "all", "--all"])
-        dispatch_ci(args)
-
-        # format_validate called
-        mock_fmt.assert_called_once()
-        # validate_povs called once (single build mode via DAG)
-        assert mock_validator.validate_povs.call_count == 1
-        # validate_patches: build_only + verify + RTS = 3 calls
-        assert mock_validator.validate_patches.call_count == 3
-        # validate_coverage called once
-        mock_validator.validate_coverage.assert_called_once()
-
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.BenchmarkValidator")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
-    def test_all_parallel_runs_multiple_benchmarks(
-        self, mock_discover, mock_fmt, mock_validator_cls, mock_caps, mock_table
-    ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-        from crsbench.validation.errors import ValidationResult
-
-        mock_discover.return_value = [
-            Path("/tmp/bench1"),
-            Path("/tmp/bench2"),
-            Path("/tmp/bench3"),
-        ]
-        mock_caps.return_value = (False, None)
-        mock_fmt.return_value = ValidationResult(is_valid=True, issues=[])
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=5.0
-        )
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
-        )
-        mock_validator.validate_coverage.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=3.0
+        _setup_all_cmd_mocks(
+            mock_discover,
+            mock_fmt,
+            mock_caps,
+            mock_harness,
+            mock_cpvs,
+            mock_patches,
+            mock_povs,
+            mock_executor_cls,
+            paths=[Path("/tmp/bench1"), Path("/tmp/bench2"), Path("/tmp/bench3")],
+            supports_inc=False,
+            rts_mode=None,
         )
 
         parser = _make_parser()
@@ -1426,115 +1659,168 @@ class TestAllSubcommand:
         result = dispatch_ci(args)
 
         assert result == 0
-        # All 3 benchmarks processed (parallel via ThreadPoolExecutor)
         call_args = mock_table.call_args
         summary = call_args[0][0]
         assert len(summary.results) == 3
 
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.BenchmarkValidator")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
-    def test_all_parallel_default_is_sequential(
-        self, mock_discover, mock_fmt, mock_validator_cls, mock_caps, mock_table
+    def test_all_default_workers(
+        self,
+        mock_discover,
+        mock_fmt,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-        from crsbench.validation.errors import ValidationResult
-
-        mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_caps.return_value = (False, None)
-        mock_fmt.return_value = ValidationResult(is_valid=True, issues=[])
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=5.0
-        )
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
-        )
-        mock_validator.validate_coverage.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=3.0
-        )
-
-        parser = _make_parser()
-        # Single benchmark runs sequentially (no ThreadPoolExecutor overhead)
-        args = parser.parse_args(["ci", "all", "--all"])
-        result = dispatch_ci(args)
-
-        assert result == 0
-        assert args.build_workers == 4  # default build workers
-        assert args.verify_workers == 4  # default verify workers
-
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.BenchmarkValidator")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
-    def test_all_default_uses_inc_build(
-        self, mock_discover, mock_fmt, mock_validator_cls, mock_caps, mock_table
-    ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-        from crsbench.validation.errors import ValidationResult
-
-        mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_caps.return_value = (True, "jcgeks")
-        mock_fmt.return_value = ValidationResult(is_valid=True, issues=[])
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=5.0
-        )
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
-        )
-        mock_validator.validate_coverage.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=3.0
+        _setup_all_cmd_mocks(
+            mock_discover,
+            mock_fmt,
+            mock_caps,
+            mock_harness,
+            mock_cpvs,
+            mock_patches,
+            mock_povs,
+            mock_executor_cls,
         )
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "all", "--all"])
         dispatch_ci(args)
 
-        # Standard POV call: uses inc-build by default
-        pov_calls = mock_validator.validate_povs.call_args_list
-        assert pov_calls[0].kwargs.get("use_inc_build") is True
-        # Standard Patch build_only call: uses inc-build
-        patch_calls = mock_validator.validate_patches.call_args_list
-        assert patch_calls[0].kwargs.get("use_inc_build") is True
-        # CI all always force-rebuilds
-        assert pov_calls[0].kwargs.get("force_rebuild") is True
+        assert args.build_workers == 4
+        assert args.verify_workers == 4
 
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
-    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.BenchmarkValidator")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
+    def test_all_default_uses_inc_build_and_force_rebuild(
+        self,
+        mock_discover,
+        mock_fmt,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
+    ):
+        _setup_all_cmd_mocks(
+            mock_discover,
+            mock_fmt,
+            mock_caps,
+            mock_harness,
+            mock_cpvs,
+            mock_patches,
+            mock_povs,
+            mock_executor_cls,
+        )
+
+        parser = _make_parser()
+        args = parser.parse_args(["ci", "all", "--all"])
+        dispatch_ci(args)
+
+        call_args = mock_executor_cls.return_value.execute.call_args
+        jobs = call_args[0][0]
+        build_job = next(j for j in jobs if j.job_id == "build-variants:bench1")
+        # ci all: inc-build by default when project supports it
+        assert build_job.use_inc_build is True
+        # ci all: always force-rebuild by default
+        assert build_job.force_rebuild is True
+
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
     def test_all_no_inc_build_flag(
-        self, mock_discover, mock_fmt, mock_validator_cls, mock_caps, mock_table
+        self,
+        mock_discover,
+        mock_fmt,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
     ):
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
-        from crsbench.validation.errors import ValidationResult
-
-        mock_discover.return_value = [Path("/tmp/bench1")]
-        mock_caps.return_value = (True, "jcgeks")
-        mock_fmt.return_value = ValidationResult(is_valid=True, issues=[])
-        mock_validator = mock_validator_cls.return_value
-        mock_validator.validate_povs.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=5.0
-        )
-        mock_validator.validate_patches.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=8.0
-        )
-        mock_validator.validate_coverage.return_value = CheckResult(
-            status=CheckStatus.PASS, time_seconds=3.0
+        _setup_all_cmd_mocks(
+            mock_discover,
+            mock_fmt,
+            mock_caps,
+            mock_harness,
+            mock_cpvs,
+            mock_patches,
+            mock_povs,
+            mock_executor_cls,
         )
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "all", "--all", "--no-inc-build"])
         dispatch_ci(args)
 
-        # With --no-inc-build, all checks use full build (single build mode)
-        pov_calls = mock_validator.validate_povs.call_args_list
-        assert pov_calls[0].kwargs.get("use_inc_build") is False
-        # Coverage also uses full build
-        cov_calls = mock_validator.validate_coverage.call_args_list
-        assert cov_calls[0].kwargs.get("use_inc_build") is False
+        call_args = mock_executor_cls.return_value.execute.call_args
+        jobs = call_args[0][0]
+        build_job = next(j for j in jobs if j.job_id == "build-variants:bench1")
+        assert build_job.use_inc_build is False
+
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.format_validate")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
+    def test_all_calls_format_validate(
+        self,
+        mock_discover,
+        mock_fmt,
+        mock_caps,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
+    ):
+        _setup_all_cmd_mocks(
+            mock_discover,
+            mock_fmt,
+            mock_caps,
+            mock_harness,
+            mock_cpvs,
+            mock_patches,
+            mock_povs,
+            mock_executor_cls,
+        )
+
+        parser = _make_parser()
+        args = parser.parse_args(["ci", "all", "--all"])
+        dispatch_ci(args)
+
+        mock_fmt.assert_called_once()

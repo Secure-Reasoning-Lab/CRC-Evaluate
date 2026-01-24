@@ -57,11 +57,15 @@ class JobContext:
     Provides access to builder, infrastructure, and configuration.
     Fine-grained jobs (BuildJob, VerifyPovJob, etc.) require builder/infra.
     CI-level check jobs store their own references and use JobContext() empty.
+
+    The `shared` dict allows inter-job data passing (e.g., build results
+    consumed by downstream verify jobs).
     """
 
     builder: Optional["OSSFuzzBuilder"] = None
     infra: Optional["OSSFuzzInfrastructure"] = None
     timeout: int = 120
+    shared: dict[str, Any] = field(default_factory=dict)
 
 
 class Job(ABC):

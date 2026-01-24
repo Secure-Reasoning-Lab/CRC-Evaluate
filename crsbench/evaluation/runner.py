@@ -1078,7 +1078,6 @@ class BenchmarkRunner:
                 patch_dir=patch_dir,
                 harness=harness_name,
                 pov_dir=pov_dir,
-                parallel=True,
             )
 
             # Log summary

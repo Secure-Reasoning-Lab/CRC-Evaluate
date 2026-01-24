@@ -1,10 +1,20 @@
-"""Regression test selection check subcommand."""
+"""Regression test selection check subcommand.
+
+Same structure as patch_cmd but uses test_mode="RTS" for TestPatchVariantJob.
+Skips benchmarks without rts_mode configured.
+"""
 
 import argparse
 import json
 from datetime import datetime
 from pathlib import Path
 
+from crsbench.benchmark_ci.cli.benchmark_discovery import (
+    discover_cpv_ids,
+    discover_harness_names,
+    discover_patch_paths,
+    discover_pov_paths,
+)
 from crsbench.benchmark_ci.cli.common_args import (
     create_benchmark_selection_parent,
     create_build_options_parent,
@@ -12,18 +22,20 @@ from crsbench.benchmark_ci.cli.common_args import (
 )
 from crsbench.benchmark_ci.cli.discovery import resolve_benchmark_paths
 from crsbench.benchmark_ci.cli.output import print_results_table, save_output_dir
-from crsbench.benchmark_ci.jobs.base import JobContext
-from crsbench.benchmark_ci.jobs.ci_checks import RtsCheckJob
+from crsbench.benchmark_ci.cli.result_aggregator import aggregate_patch_results
+from crsbench.benchmark_ci.jobs.base import Job, JobContext
+from crsbench.benchmark_ci.jobs.flat import (
+    BuildPatchVariantJob,
+    BuildVariantsJob,
+    TestPatchVariantJob,
+)
 from crsbench.benchmark_ci.models import (
     BenchmarkValidationResult,
     CheckMode,
     CheckResult,
     ValidationSummary,
 )
-from crsbench.benchmark_ci.validator import (
-    BenchmarkValidator,
-    _load_project_capabilities,
-)
+from crsbench.benchmark_ci.validator import _load_project_capabilities
 from crsbench.executor import DAGExecutor
 from crsbench.utils.logger import get_logger
 
@@ -45,7 +57,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
 
 def run_rts(args: argparse.Namespace) -> int:
-    """Run regression test selection checks via DAG executor."""
+    """Run regression test selection checks via flat DAG."""
     paths = resolve_benchmark_paths(
         benchmark_arg=getattr(args, "benchmark", None),
         all_benchmarks=getattr(args, "all", False),
@@ -56,62 +68,97 @@ def run_rts(args: argparse.Namespace) -> int:
     build_workers = getattr(args, "build_workers", 4)
     verify_workers = getattr(args, "verify_workers", 4)
     use_inc_build = not getattr(args, "no_inc_build", False)
-    force_rebuild = getattr(args, "force_rebuild", False)
-    max_povs_per_cpv = getattr(args, "max_povs_per_cpv", None)
-
-    validator = BenchmarkValidator(
-        build_workers=build_workers,
-        verify_workers=verify_workers,
-        source_mode=source_mode,
-        max_povs_per_cpv=max_povs_per_cpv,
-    )
+    # CI subcommands always force-rebuild for clean validation
+    force_rebuild = True
 
     build_mode = "inc-build" if use_inc_build else "full-build"
     logger.info(
         f"Running rts: {len(paths)} benchmark(s), "
-        f"build-workers={build_workers}, verify-workers={verify_workers}, {build_mode}"
+        f"build-workers={build_workers}, verify-workers={verify_workers}, "
+        f"{build_mode}"
     )
 
-    # Pre-compute per-benchmark capabilities
-    benchmark_configs = []
+    # Build flat DAG across all benchmarks
+    all_jobs: list[Job] = []
+    benchmark_metadata: list[tuple[Path, bool, str | None, list[tuple[str, str]]]] = []
+
     for path in paths:
         supports_inc, rts_mode = _load_project_capabilities(path)
         effective_inc = use_inc_build and supports_inc
-        benchmark_configs.append((path, supports_inc, rts_mode, effective_inc))
+        benchmark_name = path.name
 
-    # Build DAG: one RtsCheckJob per benchmark
-    jobs = [
-        RtsCheckJob(
+        # Skip benchmarks without RTS mode
+        if not rts_mode:
+            benchmark_metadata.append((path, supports_inc, rts_mode, []))
+            continue
+
+        build_job = BuildVariantsJob(
             benchmark_path=path,
-            validator=validator,
+            benchmark_name=benchmark_name,
             use_inc_build=effective_inc,
             force_rebuild=force_rebuild,
-            rts_mode=rts_mode,
+            source_mode=source_mode,
         )
-        for path, _, rts_mode, effective_inc in benchmark_configs
-    ]
+        all_jobs.append(build_job)
 
-    # Execute via DAG executor
+        # Discover patches and create per-patch build + RTS test jobs
+        patch_keys: list[tuple[str, str]] = []
+        harnesses = discover_harness_names(path)
+        for harness in harnesses:
+            for cpv_id in discover_cpv_ids(path, harness):
+                patches = discover_patch_paths(path, harness, cpv_id)
+                pov_paths = discover_pov_paths(path, harness, cpv_id)
+
+                for patch_id, patch_path in patches:
+                    patch_keys.append((cpv_id, patch_id))
+
+                    build_patch_job = BuildPatchVariantJob(
+                        benchmark_path=path,
+                        benchmark_name=benchmark_name,
+                        cpv_id=cpv_id,
+                        patch_id=patch_id,
+                        patch_path=patch_path,
+                        use_inc_build=effective_inc,
+                        force_rebuild=force_rebuild,
+                        build_job_id=build_job.job_id,
+                    )
+                    all_jobs.append(build_patch_job)
+
+                    test_job = TestPatchVariantJob(
+                        benchmark_path=path,
+                        benchmark_name=benchmark_name,
+                        cpv_id=cpv_id,
+                        patch_id=patch_id,
+                        harness=harness,
+                        pov_paths=pov_paths,
+                        test_mode="RTS",
+                        build_patch_job_id=build_patch_job.job_id,
+                    )
+                    all_jobs.append(test_job)
+
+        benchmark_metadata.append((path, supports_inc, rts_mode, patch_keys))
+
+    # Execute with typed concurrency
     start_dt = datetime.now()
-    executor = DAGExecutor(max_workers=build_workers)
-    dag_results = executor.execute(jobs, JobContext())
+    if all_jobs:
+        executor = DAGExecutor(
+            type_limits={"build": build_workers, "verify": verify_workers}
+        )
+        context = JobContext()
+        dag_results = executor.execute(all_jobs, context)
+    else:
+        dag_results = {}
 
-    # Build summary from DAG results
+    # Aggregate into ValidationSummary
     summary = ValidationSummary(started_at=start_dt)
 
-    for path, supports_inc, rts_mode, _ in benchmark_configs:
-        job_id = f"rts-check:{path.name}"
-        patch_rts_result = None
-
-        if job_id in dag_results:
-            exec_result = dag_results[job_id]
-            if exec_result.job_result and exec_result.job_result.details:
-                patch_rts_result = exec_result.job_result.details.get("check_result")
-            if patch_rts_result is None:
-                error = exec_result.error or "DAG execution failed"
-                patch_rts_result = CheckResult.make_error(error)
+    for path, supports_inc, rts_mode, patch_keys in benchmark_metadata:
+        if not rts_mode:
+            patch_rts_result = CheckResult.skip("No RTS mode configured")
         else:
-            patch_rts_result = CheckResult.make_error("Job not found in DAG results")
+            patch_rts_result = aggregate_patch_results(
+                dag_results, path.name, patch_keys, test_mode="RTS"
+            )
 
         summary.add_result(
             BenchmarkValidationResult(

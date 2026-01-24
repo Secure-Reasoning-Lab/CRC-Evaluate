@@ -2229,21 +2229,6 @@ class TestPatchVerifyCLI:
         assert args.build_workers == 8
         assert args.verify_workers == 16
 
-    def test_no_parallel_flag(self, cli_module, temp_dir: Path):
-        """Test --no-parallel flag."""
-        args = cli_module.parse_args(
-            [
-                "patch-verify",
-                str(temp_dir / "benchmark"),
-                "--patch-dir",
-                str(temp_dir / "patches"),
-                "--pov-dir",
-                str(temp_dir / "povs"),
-                "--no-parallel",
-            ]
-        )
-        assert args.no_parallel is True
-
     def test_no_variants_flag(self, cli_module, temp_dir: Path):
         """Test --no-variants flag."""
         args = cli_module.parse_args(
@@ -2367,7 +2352,6 @@ class TestPatchVerifyCLIValidation:
             test_timeout=1800,
             build_workers=None,
             verify_workers=None,
-            no_parallel=False,
             no_variants=False,
             force_rebuild=False,
             no_inc_build=False,
@@ -2402,7 +2386,6 @@ class TestPatchVerifyCLIValidation:
             test_timeout=1800,
             build_workers=None,
             verify_workers=None,
-            no_parallel=False,
             no_variants=False,
             force_rebuild=False,
             no_inc_build=False,

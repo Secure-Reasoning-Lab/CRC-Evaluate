@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -200,28 +199,20 @@ class VerificationEngine:
         cpv_crash_map: dict[int, bool] = {}
         crash_logs: dict[str, str] = {}  # variant_name -> crash_log
 
-        with ThreadPoolExecutor(max_workers=self.verify_workers) as executor:
-            futures = {
-                executor.submit(self._execute_reproduce, task): task for task in tasks
-            }
+        for task in tasks:
+            result = self._execute_reproduce(task)
+            if result.variant_type == VariantType.CPV and result.cpv_num is not None:
+                cpv_crash_map[result.cpv_num] = result.crashed
+            else:
+                crash_results[result.variant_type] = result.crashed
 
-            for future in as_completed(futures):
-                result = future.result()
-                if (
-                    result.variant_type == VariantType.CPV
-                    and result.cpv_num is not None
-                ):
-                    cpv_crash_map[result.cpv_num] = result.crashed
-                else:
-                    crash_results[result.variant_type] = result.crashed
+            # Collect crash log if crashed
+            if result.crashed and result.crash_log:
+                crash_logs[result.variant_name] = result.crash_log
 
-                # Collect crash log if crashed
-                if result.crashed and result.crash_log:
-                    crash_logs[result.variant_name] = result.crash_log
-
-                logger.debug(
-                    f"{result.variant_name}: {'crashed' if result.crashed else 'ok'}"
-                )
+            logger.debug(
+                f"{result.variant_name}: {'crashed' if result.crashed else 'ok'}"
+            )
 
         # Determine mode for verdict resolution
         mode_str = adapter.get_mode().value
@@ -298,40 +289,32 @@ class VerificationEngine:
         last_report_time = start_time
         report_interval = 60  # Report every minute for parallel execution
 
-        with ThreadPoolExecutor(max_workers=self.verify_workers) as executor:
-            futures = {
-                executor.submit(self._execute_reproduce, task): task for task in tasks
-            }
+        for task in tasks:
+            result = self._execute_reproduce(task)
+            key = (result.pov_id, result.harness)
+            crash_results, cpv_crash_map, crash_logs = results_by_pov_harness[key]
 
-            for future in as_completed(futures):
-                result = future.result()
-                key = (result.pov_id, result.harness)
-                crash_results, cpv_crash_map, crash_logs = results_by_pov_harness[key]
+            if result.variant_type == VariantType.CPV and result.cpv_num is not None:
+                cpv_crash_map[result.cpv_num] = result.crashed
+            else:
+                crash_results[result.variant_type] = result.crashed
 
-                if (
-                    result.variant_type == VariantType.CPV
-                    and result.cpv_num is not None
-                ):
-                    cpv_crash_map[result.cpv_num] = result.crashed
-                else:
-                    crash_results[result.variant_type] = result.crashed
+            # Collect crash log if crashed
+            if result.crashed and result.crash_log:
+                crash_logs[result.variant_name] = result.crash_log
 
-                # Collect crash log if crashed
-                if result.crashed and result.crash_log:
-                    crash_logs[result.variant_name] = result.crash_log
-
-                # Progress reporting
-                completed += 1
-                current_time = time.time()
-                if current_time - last_report_time >= report_interval:
-                    elapsed = current_time - start_time
-                    rate = completed / elapsed if elapsed > 0 else 0
-                    remaining = (len(tasks) - completed) / rate if rate > 0 else 0
-                    logger.debug(
-                        f"Progress: {completed}/{len(tasks)} reproduce calls "
-                        f"({elapsed:.0f}s elapsed, ~{remaining:.0f}s remaining)"
-                    )
-                    last_report_time = current_time
+            # Progress reporting
+            completed += 1
+            current_time = time.time()
+            if current_time - last_report_time >= report_interval:
+                elapsed = current_time - start_time
+                rate = completed / elapsed if elapsed > 0 else 0
+                remaining = (len(tasks) - completed) / rate if rate > 0 else 0
+                logger.debug(
+                    f"Progress: {completed}/{len(tasks)} reproduce calls "
+                    f"({elapsed:.0f}s elapsed, ~{remaining:.0f}s remaining)"
+                )
+                last_report_time = current_time
 
         # Determine mode for verdict resolution
         mode_str = adapter.get_mode().value
