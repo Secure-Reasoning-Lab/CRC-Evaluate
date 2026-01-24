@@ -47,7 +47,7 @@ def create_source_tarball(
         work_dir = Path(tmpdir)
 
         # 1. Clone repository
-        logger.info(f"Cloning {repo_url}...")
+        logger.info(f"Cloning {repo_url} to {work_dir}...")
         _run_git(["clone", repo_url, "repo"], cwd=work_dir)
         repo_dir = work_dir / "repo"
 
@@ -266,6 +266,15 @@ def _fresh_git_init(directory: Path) -> None:
         stdin=subprocess.DEVNULL,
         env=env,
     )
+    # Disable auto-gc to prevent conflict with our explicit gc below
+    subprocess.run(
+        ["git", "config", "gc.auto", "0"],
+        cwd=directory,
+        check=True,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env=env,
+    )
     subprocess.run(
         ["git", "commit", "--no-gpg-sign", "-m", "Initial source"],
         cwd=directory,
@@ -276,13 +285,16 @@ def _fresh_git_init(directory: Path) -> None:
     )
     # Pack all loose objects to prevent race conditions during tar
     # This ensures git is done writing and all objects are in packfiles
-    subprocess.run(
+    result = subprocess.run(
         ["git", "gc", "--aggressive", "--prune=now"],
         cwd=directory,
         capture_output=True,
         stdin=subprocess.DEVNULL,
         env=env,
     )
+    if result.returncode != 0:
+        stderr_msg = result.stderr.decode(errors="replace").strip()
+        raise RuntimeError(f"git gc failed (exit {result.returncode}): {stderr_msg}")
 
 
 def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[bytes]:
