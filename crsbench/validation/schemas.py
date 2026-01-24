@@ -262,7 +262,14 @@ class Vulnerability(BaseModel):
     def validate_vuln_keyword(cls, v):
         if not v or not v.strip():
             raise ValueError("Vulnerability keyword cannot be empty")
-        return v.strip()
+        v = v.strip()
+        # Enforce cpv_N pattern (e.g., cpv_0, cpv_1, cpv_123)
+        if not re.match(r"^cpv_\d+$", v):
+            raise ValueError(
+                f"Invalid vuln_keyword format: '{v}'. "
+                "Must follow pattern 'cpv_N' (e.g., cpv_0, cpv_1)"
+            )
+        return v
 
     @field_validator("povs")
     @classmethod

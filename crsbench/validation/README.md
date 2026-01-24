@@ -70,7 +70,7 @@ harness_files:
   - name: "test_harness"
     path: "/src/project/test/harness.c"
     vulns:
-      - vuln_keyword: "buffer_overflow"
+      - vuln_keyword: "cpv_0"  # Must follow cpv_N pattern
         povs:
           - id: "pov_0"
             sanitizer: "address"
@@ -174,7 +174,7 @@ class HarnessFile(BaseModel):
 class Vulnerability(BaseModel):
     """Vulnerability grouping POV variants by root cause."""
 
-    vuln_keyword: str  # Maps to directory name
+    vuln_keyword: str  # Maps to directory name (must follow cpv_N pattern)
     difficulty_level: Optional[int] = None  # 1-5, intrinsic difficulty
     povs: List[POV]
 

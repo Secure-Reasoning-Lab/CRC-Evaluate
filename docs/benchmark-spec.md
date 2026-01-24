@@ -124,7 +124,7 @@ harness_files:
     path: "$PROJECT/customfuzz3.c"
     # Vulnerability configurations for customfuzz3
     vulns:
-      - vuln_keyword: "buffer_overflow"      # Maps to directory name
+      - vuln_keyword: "cpv_0"                # Maps to directory name (must follow cpv_N pattern)
         povs:
           - id: "pov_0"                      # POV variant ID
             sanitizer: "address"
@@ -132,7 +132,7 @@ harness_files:
           - id: "pov_1"                      # POV variant ID
             sanitizer: "undefined"
             error_token: "runtime error: index out of bounds"  # optional field for descriptive purpose
-      - vuln_keyword: "use_after_free"       # Maps to directory name
+      - vuln_keyword: "cpv_1"                # Maps to directory name (must follow cpv_N pattern)
         povs:
           - id: "pov_0"                      # POV variant ID
             sanitizer: "memory"
@@ -240,10 +240,10 @@ Defines how vulnerabilities are detected and verified:
 
 ### Benchmark Components - Ground Truth
 
-Each harness directory contains subdirectories for each vulnerability keyword, which groups related POV variants by their root cause. For example, with vulnerability `buffer_overflow` having POV variants `pov_0` and `pov_1`:
+Each harness directory contains subdirectories for each vulnerability keyword, which groups related POV variants by their root cause. For example, with vulnerability `cpv_0` having POV variants `pov_0` and `pov_1`:
 
-- `{vuln-keyword}/` - Directory for each vulnerability (e.g., `buffer_overflow/`)
-  - `{vuln-keyword}.md` - Human-readable vulnerability description and root cause analysis (e.g., `buffer_overflow.md`)
+- `{vuln-keyword}/` - Directory for each vulnerability (e.g., `cpv_0/`)
+  - `{vuln-keyword}.md` - Human-readable vulnerability description and root cause analysis (e.g., `cpv_0.md`)
   - `patches/` - Directory containing patches that fix all POV variants of this vulnerability
     - `{patch-variant-id}.diff` - Bug-fixing patch (e.g., `patch_0.diff`, `patch_1.diff`)
   - `{pov-variant-id}/` - Directory for each POV variant (e.g., `pov_0/`, `pov_1/`)
@@ -293,7 +293,7 @@ docker build -t project-vuln0 .
 docker run --name eval-vuln0 project-vuln0
 
 # Extract build artifacts from container
-docker cp eval-vuln0:/artifacts ./evaluation-results/buffer_overflow/
+docker cp eval-vuln0:/artifacts ./evaluation-results/cpv_0/
 ```
 
 ### Helper Script Integration
@@ -302,13 +302,13 @@ The evaluation framework provides automated Docker image management:
 
 ```bash
 # Build evaluation image for specific vulnerability
-helper.py build-image --vuln buffer_overflow --tag project-vuln0
+helper.py build-image --vuln cpv_0 --tag project-vuln0
 
 # Run complete evaluation workflow
-helper.py evaluate --vuln buffer_overflow --output-dir ./results/
+helper.py evaluate --vuln cpv_0 --output-dir ./results/
 
 # Compare multiple patch evaluations
-helper.py compare --baseline project-base --vulns buffer_overflow,use_after_free,null_deref
+helper.py compare --baseline project-base --vulns cpv_0,cpv_1,cpv_2
 ```
 
 The helper script automatically:
@@ -443,7 +443,7 @@ The test script can identify and execute only the subset of tests affected by a 
 
 ```bash
 # Run coverage-guided test selection
-./test.sh --coverage-guided --patch-file=buffer_overflow/patches/patch_0.diff
+./test.sh --coverage-guided --patch-file=cpv_0/patches/patch_0.diff
 
 # Run specific test categories based on coverage
 ./test.sh --unit-tests --affected-only
@@ -664,7 +664,7 @@ harness_files:
   - name: "ossfuzz"
     path: "/src/project/test/ossfuzz.c"
     vulns:
-      - vuln_keyword: "buffer_overflow_main"  # Maps to directory name
+      - vuln_keyword: "cpv_0"                  # Maps to directory name (must follow cpv_N pattern)
         difficulty_level: 3                   # Intrinsic difficulty level
         povs:
           - id: "pov_0"                       # POV variant ID
