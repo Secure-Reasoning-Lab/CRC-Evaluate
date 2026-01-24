@@ -87,6 +87,7 @@ class CRSPatchExecutor(CRSExecutor):
         trial_output_dir: Path,
         target_harness: str,
         project_name: str,
+        sanitizer: str,
     ) -> None:
         """Clean up files from harnesses other than the target.
 
@@ -94,6 +95,7 @@ class CRSPatchExecutor(CRSExecutor):
             trial_output_dir: Trial directory containing CRS outputs
             target_harness: Name of the harness to keep
             project_name: Project name (for CRS output directory path)
+            sanitizer: Sanitizer type (e.g., 'address', 'memory', 'undefined')
         """
         # TODO: Implement cleanup logic for disk optimization
 

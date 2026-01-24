@@ -46,19 +46,24 @@ from crsbench.validation.schemas import TrialMetadata as TrialMetadataFile
 logger = get_logger(__name__)
 
 
-def _generate_results_folder_name(experiment_name: str) -> str:
+def _generate_results_folder_name(
+    experiment_name: str, timestamp: Optional[str] = None
+) -> str:
     """Generate folder name with experiment name, hostname, and timestamp suffix.
 
     Format: {experiment_name}_{hostname}_{YYYYMMDD-HHMMSS}
 
     Args:
         experiment_name: Name of the experiment
+        timestamp: Pre-generated timestamp string (format: YYYYMMDD-HHMMSS).
+                   If None, generates a new timestamp.
 
     Returns:
         Folder name with suffix
     """
     hostname = socket.gethostname()
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    if timestamp is None:
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     return f"{experiment_name}_{hostname}_{timestamp}"
 
 
@@ -321,6 +326,7 @@ def _build_trial_output_path(
     benchmark: str,
     harness: str,
     mode: str,
+    sanitizer: str,
     trial_num: int,
 ) -> Path:
     """Construct trial output directory path.
@@ -332,6 +338,7 @@ def _build_trial_output_path(
         benchmark: Benchmark name
         harness: Harness name
         mode: Evaluation mode ('delta', 'full', or 'all')
+        sanitizer: Sanitizer type ('address', 'memory', or 'undefined')
         trial_num: Trial number
 
     Returns:
@@ -344,6 +351,7 @@ def _build_trial_output_path(
         / benchmark
         / harness
         / mode
+        / sanitizer
         / f"trial-{trial_num}"
     )
 
@@ -494,6 +502,7 @@ def _check_existing_trial(
     benchmark: str,
     harness: str,
     mode: str,
+    sanitizer: str,
     trial_num: int,
 ) -> Optional[TrialResult]:
     """Check for existing trial markers and return TrialResult if found.
@@ -507,6 +516,7 @@ def _check_existing_trial(
         benchmark: Benchmark name
         harness: Harness name
         mode: Evaluation mode
+        sanitizer: Sanitizer type
         trial_num: Trial number
 
     Returns:
@@ -528,6 +538,7 @@ def _check_existing_trial(
             benchmark=benchmark,
             harness=harness,
             mode=mode,
+            sanitizer=sanitizer,
             trial_num=trial_num,
         )
 
@@ -566,8 +577,11 @@ def run_crs_trial(
     harness_name: str,
     harness_path: str,
     trial_num: int,
+    trial_id: str,
     config_dict: Dict[str, Any],
     mode: str,
+    sanitizer: str = "address",
+    results_timestamp: Optional[str] = None,
 ) -> TrialResult:
     """
     Execute a single CRS trial.
@@ -585,8 +599,10 @@ def run_crs_trial(
         harness_name: Harness name to run
         harness_path: Path to harness file
         trial_num: Trial number (1-indexed) for this execution
+        trial_id: Pre-generated trial identifier with random suffix
         config_dict: Experiment configuration as dict (deserialized by RQ)
         mode: Evaluation mode ('delta', 'full', or 'all')
+        sanitizer: Sanitizer type ('address', 'memory', or 'undefined')
 
     Returns:
         TrialResult: Trial results including POVs found, success rate, and metadata
@@ -613,6 +629,7 @@ def run_crs_trial(
         benchmark=benchmark,
         harness=harness_name,
         mode=mode,
+        sanitizer=sanitizer,
         trial_num=trial_num,
     )
     if existing_result is not None:
@@ -820,10 +837,6 @@ def run_crs_trial(
                 litellm_mode=config.litellm_mode,
             )
 
-        # Build trial_id for use as run_id
-        experiment_name = config.experiment
-        trial_id = f"{experiment_name}-{crs}-{benchmark}-{harness_name}-{mode}-trial{trial_num}"
-
         # Configure executor
         crs_executor.configure_crs(
             {
@@ -834,6 +847,7 @@ def run_crs_trial(
                 "hint_corpus_level": config.hint_corpus_level,
                 "project_image_prefix": config.project_image_prefix,
                 "mode": mode,
+                "sanitizer": sanitizer,
                 "allocated_cpus": allocated_cpus,
                 "allocated_memory": allocated_memory,
                 "run_id": trial_id,
@@ -912,6 +926,7 @@ def run_crs_trial(
             benchmark=benchmark,
             harness=harness_name,
             mode=mode,
+            sanitizer=sanitizer,
             trial_num=trial_num,
         )
         trial_output_dir.mkdir(parents=True, exist_ok=True)
@@ -1014,7 +1029,9 @@ def run_crs_trial(
         if config.copy_results_after_trial and config.experiment_results_filestore:
             experiment_dir = config.experiment_filestore.resolve() / config.experiment
             rel_path = trial_output_dir.relative_to(experiment_dir)
-            folder_name = _generate_results_folder_name(config.experiment)
+            folder_name = _generate_results_folder_name(
+                config.experiment, results_timestamp
+            )
             dest_dir = (
                 Path(config.experiment_results_filestore)
                 / folder_name
@@ -1043,7 +1060,9 @@ def run_crs_trial(
                     config.experiment_filestore.resolve() / config.experiment
                 )
                 rel_path = trial_output_dir.relative_to(experiment_dir)
-                folder_name = _generate_results_folder_name(config.experiment)
+                folder_name = _generate_results_folder_name(
+                    config.experiment, results_timestamp
+                )
                 dest_dir = (
                     Path(config.experiment_results_filestore)
                     / folder_name
@@ -1085,7 +1104,9 @@ def run_crs_trial(
                     config.experiment_filestore.resolve() / config.experiment
                 )
                 rel_path = trial_output_dir.relative_to(experiment_dir)
-                folder_name = _generate_results_folder_name(config.experiment)
+                folder_name = _generate_results_folder_name(
+                    config.experiment, results_timestamp
+                )
                 dest_dir = (
                     Path(config.experiment_results_filestore)
                     / folder_name
@@ -1129,7 +1150,9 @@ def run_crs_trial(
                     config.experiment_filestore.resolve() / config.experiment
                 )
                 rel_path = trial_output_dir.relative_to(experiment_dir)
-                folder_name = _generate_results_folder_name(config.experiment)
+                folder_name = _generate_results_folder_name(
+                    config.experiment, results_timestamp
+                )
                 dest_dir = (
                     Path(config.experiment_results_filestore)
                     / folder_name

@@ -112,6 +112,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         trial_output_dir: Path,
         target_harness: str,
         project_name: str,
+        sanitizer: str,
     ) -> None:
         """Clean up files from harnesses other than the target.
 
@@ -119,6 +120,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             trial_output_dir: Trial directory containing CRS outputs
             target_harness: Name of the harness to keep
             project_name: Project name (for CRS output directory path)
+            sanitizer: Sanitizer type (e.g., 'address', 'memory', 'undefined')
         """
         # Clean OSS-Fuzz build output
         build_out_dir = self._get_oss_fuzz_build_output_dir(
@@ -150,7 +152,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         build_dir = trial_output_dir / "crs-build"
 
         for crs_name in crs_names:
-            crs_out_dir = build_dir / "out" / crs_name / project_name
+            crs_out_dir = build_dir / "out" / crs_name / project_name / sanitizer
             if not crs_out_dir.exists():
                 continue
             for item in crs_out_dir.iterdir():
@@ -388,7 +390,10 @@ class CRSBugFindingExecutor(CRSExecutor):
 
             # Cleanup other harness files to optimize disk usage
             harness_name = Path(harness.name).stem
-            self.cleanup_other_harnesses(trial_output_dir, harness_name, project_name)
+            sanitizer = self.config.get("sanitizer", "address")
+            self.cleanup_other_harnesses(
+                trial_output_dir, harness_name, project_name, sanitizer
+            )
 
             # Signal that CRS run is starting (after build)
             if on_run_start:
@@ -432,8 +437,9 @@ class CRSBugFindingExecutor(CRSExecutor):
 
             # Get expected output location
             run_id = self.config.get("run_id", "default")
+            sanitizer = self.config.get("sanitizer", "address")
             expected_output_dir = self._get_crs_output_dir(
-                trial_build_dir, project_name, harness_name, run_id
+                trial_build_dir, project_name, sanitizer, harness_name, run_id
             )
             logger.info(f"Expected output at: {expected_output_dir}")
 
@@ -446,6 +452,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                     / "run"
                     / self.actual_crs_name  # # TODO: ensemble settings
                     / project_name
+                    / sanitizer
                     / harness_name
                     / run_id
                 )
@@ -680,6 +687,10 @@ class CRSBugFindingExecutor(CRSExecutor):
         if run_id:
             cmd.extend(["--run-id", run_id])
 
+        # Add sanitizer flag
+        sanitizer = self.config.get("sanitizer", "address")
+        cmd.extend(["--sanitizer", sanitizer])
+
         # Only add source path if not using bundled source
         if source_path:
             cmd.append(str(source_path))
@@ -782,9 +793,12 @@ class CRSBugFindingExecutor(CRSExecutor):
             logger.info("Running without hints")
 
         # Add diff path if available (delta mode)
+        mode = self.config.get("mode")
         if diff_path and diff_path.exists():
             cmd.extend(["--diff", str(diff_path)])
             logger.info(f"Using diff for delta mode: {diff_path}")
+        elif mode == "delta":
+            logger.error("Delta mode configured but no diff file available")
 
         # Add external LiteLLM flag if using external LiteLLM
         if self.litellm_mode is not None:
@@ -798,6 +812,10 @@ class CRSBugFindingExecutor(CRSExecutor):
         run_id = self.config.get("run_id")
         if run_id:
             cmd.extend(["--run-id", run_id])
+
+        # Add sanitizer flag
+        sanitizer = self.config.get("sanitizer", "address")
+        cmd.extend(["--sanitizer", sanitizer])
 
         return cmd
 
@@ -874,16 +892,22 @@ class CRSBugFindingExecutor(CRSExecutor):
         return build_dir / "src" / benchmark_name
 
     def _get_crs_output_dir(
-        self, build_dir: Path, benchmark_name: str, harness_name: str, run_id: str
+        self,
+        build_dir: Path,
+        benchmark_name: str,
+        sanitizer: str,
+        harness_name: str,
+        run_id: str,
     ) -> Path:
         """Get CRS output directory path.
 
         The output directory is auto-determined by oss-bugfind-crs as:
-        {{ build_dir }}/run/{{ crs_name }}/{{ project }}/{{ harness_name }}/{{ run_id }}
+        {{ build_dir }}/run/{{ crs_name }}/{{ project }}/{{ sanitizer }}/{{ harness_name }}/{{ run_id }}
 
         Args:
             build_dir: Build directory
             benchmark_name: Benchmark name
+            sanitizer: Sanitizer type (e.g., 'address', 'memory', 'undefined')
             harness_name: Harness name
             run_id: Run ID for unique trial identification
 
@@ -899,6 +923,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             / "run"
             / self.actual_crs_name  # TODO: ensemble settings
             / benchmark_name
+            / sanitizer
             / harness_name
             / run_id
         )
@@ -1025,8 +1050,9 @@ class CRSBugFindingExecutor(CRSExecutor):
 
         # Get actual output directory (auto-determined by oss-bugfind-crs)
         run_id = self.config.get("run_id", "default")
+        sanitizer = self.config.get("sanitizer", "address")
         crs_output_dir = self._get_crs_output_dir(
-            build_dir, project_name, harness.name, run_id
+            build_dir, project_name, sanitizer, harness.name, run_id
         )
 
         metadata = {

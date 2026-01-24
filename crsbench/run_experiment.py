@@ -21,8 +21,11 @@ Usage:
 
 import argparse
 import os
+import secrets
+import string
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import List
 
@@ -58,12 +61,14 @@ class Trial(BaseModel):
         benchmark_harness: Resolved benchmark-harness pair
         trial_num: Trial number (1-indexed)
         mode: Evaluation mode ("delta" or "full")
+        sanitizer: Sanitizer type ("address", "memory", or "undefined")
     """
 
     crs: str
     benchmark_harness: BenchmarkHarness
     trial_num: int
     mode: str
+    sanitizer: str
 
 
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
@@ -773,21 +778,24 @@ def generate_trial_matrix(
                 # Single mode: delta or full
                 modes_to_run = [config_mode]
 
-            # Generate trials for each mode
+            # Generate trials for each mode and sanitizer
             for mode in modes_to_run:
-                for trial_num in range(1, config.trials + 1):
-                    trials.append(
-                        Trial(
-                            crs=crs,
-                            benchmark_harness=benchmark_harness,
-                            trial_num=trial_num,
-                            mode=mode,
+                for sanitizer in config.sanitizers:
+                    for trial_num in range(1, config.trials + 1):
+                        trials.append(
+                            Trial(
+                                crs=crs,
+                                benchmark_harness=benchmark_harness,
+                                trial_num=trial_num,
+                                mode=mode,
+                                sanitizer=sanitizer.value,
+                            )
                         )
-                    )
 
     logger.info(
         f"Generated {len(trials)} trials: {len(crses)} CRSes × "
         f"{len(benchmark_harnesses)} benchmark-harness pairs × "
+        f"{len(config.sanitizers)} sanitizers × "
         f"{config.trials} trials × mode={config_mode}"
     )
     return trials
@@ -1307,6 +1315,11 @@ def run_experiment_local(
 
     log_section("Executing Trials", width=60)
 
+    # Generate 6-char random alphanumeric suffix (shared by all trials)
+    trial_suffix = "_" + "".join(
+        secrets.choice(string.ascii_lowercase + string.digits) for _ in range(6)
+    )
+
     # Execute trials sequentially
     results = []
     for idx, trial in enumerate(trials, 1):
@@ -1323,14 +1336,20 @@ def run_experiment_local(
         # Enhance config with CLI arguments (highest precedence)
         enhanced_config = enhance_config_with_cli_args(config, args)
 
+        # Build trial_id with random suffix
+        harness_name_stem = Path(bh.harness.name).stem
+        trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
+
         result = run_crs_trial(
             crs=trial.crs,
             benchmark=bh.name,
             harness_name=bh.harness.name,
             harness_path=bh.harness.path,
             trial_num=trial.trial_num,
+            trial_id=trial_id,
             config_dict=enhanced_config.model_dump(),
             mode=trial.mode,
+            sanitizer=trial.sanitizer,
         )
 
         results.append(result)
@@ -1928,11 +1947,23 @@ def run_experiment_distributed(
             else:
                 logger.debug(f"CRS {crs} has no memory limit configured")
 
+    # Generate 6-char random alphanumeric suffix (shared by all trials)
+    trial_suffix = "_" + "".join(
+        secrets.choice(string.ascii_lowercase + string.digits) for _ in range(6)
+    )
+
+    # Generate timestamp once for all jobs in this experiment batch
+    results_timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
     jobs = []
     for trial in trials:
         bh = trial.benchmark_harness
         cpu_count = crs_cpu_counts.get(trial.crs, 4)
         memory_limit = crs_memory_limits.get(trial.crs)
+
+        # Build trial_id at enqueue time with random suffix
+        harness_name_stem = Path(bh.harness.name).stem
+        trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
 
         job = queue.enqueue(
             "crsbench.distributed.jobs.run_crs_trial",
@@ -1941,8 +1972,11 @@ def run_experiment_distributed(
             harness_name=bh.harness.name,
             harness_path=bh.harness.path,
             trial_num=trial.trial_num,
+            trial_id=trial_id,
             config_dict=enhanced_config.model_dump(),
             mode=trial.mode,
+            sanitizer=trial.sanitizer,
+            results_timestamp=results_timestamp,
             job_timeout=config.max_total_time,
             result_ttl=-1,  # Persist results forever
             meta={
@@ -1950,6 +1984,7 @@ def run_experiment_distributed(
                 "benchmark": bh.name,
                 "harness": bh.harness.name,
                 "mode": trial.mode,
+                "sanitizer": trial.sanitizer,
                 "trial_num": trial.trial_num,
                 "cpu_count": cpu_count,  # CPU count from resource config
                 "memory_limit": memory_limit,  # Memory limit from resource config

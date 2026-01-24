@@ -164,6 +164,14 @@ class EvaluationMode(str, Enum):
     ALL = "all"
 
 
+class Sanitizer(str, Enum):
+    """Sanitizer type for fuzzing builds."""
+
+    ADDRESS = "address"
+    MEMORY = "memory"
+    UNDEFINED = "undefined"
+
+
 class RtsMode(str, Enum):
     """Regression Test Selection mode for Java projects."""
 
@@ -754,6 +762,10 @@ class ExperimentConfig(BaseModel):
         ..., description="Directory path for HTML reports and summary data"
     )
     crses: List[str] = Field(..., description="List of CRS implementations to evaluate")
+    sanitizers: List[Sanitizer] = Field(
+        default=[Sanitizer.ADDRESS],
+        description="List of sanitizers to use (address, memory, undefined). Each creates separate trials.",
+    )
     redis_host: Optional[str] = Field(
         default=None,
         description="Redis server hostname or IP (optional, omit or set to 'none' for local mode)",
@@ -922,6 +934,14 @@ class ExperimentConfig(BaseModel):
             raise ValueError(f"Duplicate CRS names found: {', '.join(set(duplicates))}")
 
         return cleaned
+
+    @field_validator("sanitizers")
+    @classmethod
+    def validate_sanitizers(cls, v):
+        """Validate sanitizers list."""
+        if not v:
+            raise ValueError("sanitizers list cannot be empty")
+        return v
 
     @field_validator("experiment_filestore", "report_filestore")
     @classmethod
