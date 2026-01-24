@@ -112,6 +112,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         trial_output_dir: Path,
         target_harness: str,
         project_name: str,
+        sanitizer: str,
     ) -> None:
         """Clean up files from harnesses other than the target.
 
@@ -119,6 +120,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             trial_output_dir: Trial directory containing CRS outputs
             target_harness: Name of the harness to keep
             project_name: Project name (for CRS output directory path)
+            sanitizer: Sanitizer type (e.g., 'address', 'memory', 'undefined')
         """
         # Clean OSS-Fuzz build output
         build_out_dir = self._get_oss_fuzz_build_output_dir(
@@ -150,7 +152,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         build_dir = trial_output_dir / "crs-build"
 
         for crs_name in crs_names:
-            crs_out_dir = build_dir / "out" / crs_name / project_name
+            crs_out_dir = build_dir / "out" / crs_name / project_name / sanitizer
             if not crs_out_dir.exists():
                 continue
             for item in crs_out_dir.iterdir():
@@ -388,7 +390,10 @@ class CRSBugFindingExecutor(CRSExecutor):
 
             # Cleanup other harness files to optimize disk usage
             harness_name = Path(harness.name).stem
-            self.cleanup_other_harnesses(trial_output_dir, harness_name, project_name)
+            sanitizer = self.config.get("sanitizer", "address")
+            self.cleanup_other_harnesses(
+                trial_output_dir, harness_name, project_name, sanitizer
+            )
 
             # Signal that CRS run is starting (after build)
             if on_run_start:

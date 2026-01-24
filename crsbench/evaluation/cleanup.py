@@ -67,6 +67,7 @@ def _rmtree_with_docker(path: Path) -> bool:
 # These contain large build artifacts that aren't needed for results
 EXCLUDE_PATTERNS: list[str] = [
     "crs-build",
+    ".oss-bugfind",
 ]
 
 
