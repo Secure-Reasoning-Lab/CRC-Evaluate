@@ -1316,7 +1316,7 @@ def run_experiment_local(
 
     # Generate 6-char random alphanumeric suffix (shared by all trials)
     trial_suffix = "_" + "".join(
-        secrets.choice(string.ascii_uppercase + string.digits) for _ in range(6)
+        secrets.choice(string.ascii_lowercase + string.digits) for _ in range(6)
     )
 
     # Execute trials sequentially
@@ -1948,7 +1948,7 @@ def run_experiment_distributed(
 
     # Generate 6-char random alphanumeric suffix (shared by all trials)
     trial_suffix = "_" + "".join(
-        secrets.choice(string.ascii_uppercase + string.digits) for _ in range(6)
+        secrets.choice(string.ascii_lowercase + string.digits) for _ in range(6)
     )
 
     jobs = []
