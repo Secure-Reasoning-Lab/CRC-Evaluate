@@ -365,7 +365,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             if on_run_start:
                 on_run_start()
 
-            # 3. Verify source path exists after build (only if not using bundled source)
+            # 4. Verify source path exists after build (only if not using bundled source)
             from crsbench.benchmark.runtime import has_bundled_source
 
             if not has_bundled_source(benchmark_path):
@@ -376,17 +376,27 @@ class CRSBugFindingExecutor(CRSExecutor):
                         "Repository cloning or build preparation failed."
                     )
 
-            # 4. Prepare hints if enabled
+            # 5. Prepare hints if enabled
             hints_path = self._prepare_hints(
                 benchmark_path, harness_name, trial_output_dir
             )
 
-            # Detect ref.diff for delta mode (prepared by trial_preparation in hints)
+            # 6. Detect ref.diff for delta mode (independent of hints)
+            # ref.diff is based on evaluation mode, not hints configuration
             diff_path = None
-            if hints_path and (hints_path / "ref.diff").exists():
-                diff_path = hints_path / "ref.diff"
+            mode = self.config.get("mode")
+            if mode == "delta":
+                # Check benchmark's .aixcc/ref.diff directly
+                benchmark_ref_diff = benchmark_path / ".aixcc" / "ref.diff"
+                if benchmark_ref_diff.exists():
+                    diff_path = benchmark_ref_diff
+                    logger.info(f"Using ref.diff for delta mode: {diff_path}")
+                # Also check if it was prepared in hints dir (backward compat)
+                elif hints_path and (hints_path / "ref.diff").exists():
+                    diff_path = hints_path / "ref.diff"
+                    logger.info(f"Using ref.diff from hints: {diff_path}")
 
-            # 5. Run CRS bug finding campaign
+            # 7. Run CRS bug finding campaign
             cmd = self._construct_run_command(
                 project_name=project_name,
                 harness_name=harness_name,
@@ -474,7 +484,7 @@ class CRSBugFindingExecutor(CRSExecutor):
 
             execution_time = time.time() - start_time
 
-            # 6. Store execution metadata
+            # 8. Store execution metadata
             self._store_execution_metadata(
                 trial_output_dir=trial_output_dir,
                 project_name=project_name,
@@ -488,7 +498,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 stderr=stderr,
             )
 
-            # 7. Return result
+            # 9. Return result
             # Timeout is considered success (CRS ran for full specified time)
             # Only other errors count as failure
             success = returncode == 0 or timed_out

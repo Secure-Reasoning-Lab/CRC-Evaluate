@@ -198,15 +198,53 @@ class TestSourceCodePreparation:
 class TestHintsPreparation:
     """Tests for hints preparation."""
 
-    def test_prepare_hints_disabled(self, preparer, mock_benchmark_with_hints):
-        """Test hints preparation when disabled in config."""
+    def test_prepare_hints_disabled_full_mode(
+        self, preparer, mock_benchmark_with_hints
+    ):
+        """Test hints preparation when disabled and mode is full."""
         trial_dir = preparer.experiment_dir / "trial-0"
         trial_dir.mkdir()
 
-        # Config has hints_enabled=False by default
+        # Config has hints_enabled=False by default and no mode set (defaults to full)
         hints_dir = preparer._prepare_hints("test-bench", trial_dir)
 
         assert hints_dir is None
+
+    def test_prepare_hints_disabled_delta_mode_with_ref_diff(
+        self,
+        mock_benchmark_with_hints,
+        temp_experiment_dir,
+        temp_benchmarks_dir,
+        temp_oss_fuzz_dir,
+    ):
+        """Test that ref.diff is prepared for delta mode even when hints_enabled=False."""
+        # Create ref.diff in the benchmark
+        ref_diff_path = mock_benchmark_with_hints / ".aixcc" / "ref.diff"
+        ref_diff_path.write_text(
+            "--- a/file.c\n+++ b/file.c\n@@ -1 +1 @@\n-old\n+new\n"
+        )
+
+        # hints_enabled=False, but mode=delta
+        config = {"hints_enabled": False, "mode": "delta"}
+        preparer = TrialDirectoryPreparer(
+            experiment_dir=temp_experiment_dir,
+            benchmarks_root=temp_benchmarks_dir,
+            oss_fuzz_dir=temp_oss_fuzz_dir,
+            config=config,
+        )
+
+        trial_dir = temp_experiment_dir / "trial-0"
+        trial_dir.mkdir()
+
+        hints_dir = preparer._prepare_hints("test-bench", trial_dir)
+
+        # Should return hints_dir with ref.diff even though hints_enabled=False
+        assert hints_dir is not None
+        assert hints_dir.exists()
+        assert (hints_dir / "ref.diff").exists()
+        # No SARIF files should be copied since hints_enabled=False
+        sarif_files = list(hints_dir.glob("*.sarif"))
+        assert len(sarif_files) == 0
 
     def test_prepare_hints_enabled(
         self,
