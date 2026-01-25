@@ -1285,28 +1285,15 @@ class PatchVerificationEngine:
             source_name = repo_name or benchmark_path.name
             logger.debug(f"No WORKDIR found, using: {source_name}")
 
-        # For patch verification, always apply ref.diff
-        # Patches are designed to apply on top of ref_commit state
-        #
-        # Determine squash_history based on benchmark mode:
-        # - DELTA mode: squash_history=False (CRS already receives ref.diff as hint)
-        # - FULL mode: squash_history=True (prevent info leak via git diff)
-        from crsbench.builder.types import BenchmarkMode
-        from crsbench.validation.meta_adapter import MetaYamlAdapter
-
-        adapter = MetaYamlAdapter.from_benchmark_path(benchmark_path)
-        is_delta_mode = adapter and adapter.get_mode() == BenchmarkMode.DELTA
-        squash_history = not is_delta_mode
-
-        logger.debug(
-            f"Using bundled source: {source_name}.tar.gz (apply_ref_diff=True)"
-        )
+        # Bundled tarball already has correct commit structure (done at packaging):
+        # - Delta mode: 2 commits (base → ref) at ref_commit state
+        # - Full mode: 1 squashed commit at vulnerable state
+        # Just extract and use - no post-processing needed.
+        logger.debug(f"Using bundled source: {source_name}.tar.gz")
         return prepare_source_from_bundle(
             benchmark_path,
             dest_dir.parent,  # prepare_source_from_bundle creates subdirectory
             source_name,
-            apply_ref_diff=True,
-            squash_history=squash_history,
         )
 
     def cleanup(self) -> None:

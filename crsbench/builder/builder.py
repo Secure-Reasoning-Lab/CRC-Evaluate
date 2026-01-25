@@ -368,45 +368,15 @@ class OSSFuzzBuilder:
             source_name = config.repo_name or benchmark_path.name
             logger.debug(f"No WORKDIR found, using: {source_name}")
 
-        # Determine if ref.diff should be applied
-        # FULL_BASE uses base commit (no ref.diff)
-        # DELTA_REF, ALL_PATCHED, CPV use ref commit (apply ref.diff)
-        apply_ref_diff = self._needs_ref_diff(config.variant_type)
-
-        # Determine if git history should be squashed after applying ref.diff
-        # DELTA mode: squash_history=False (CRS already receives ref.diff as hint)
-        # FULL mode: squash_history=True (prevent CRS from using git diff)
-        squash_history = config.mode != BenchmarkMode.DELTA
-
-        logger.debug(
-            f"Using bundled source: {source_name}.tar.gz "
-            f"(apply_ref_diff={apply_ref_diff})"
-        )
+        # Bundled tarball already has correct commit structure (done at packaging):
+        # - Delta mode: 2 commits (base → ref) at ref_commit state
+        # - Full mode: 1 squashed commit at vulnerable state
+        # Just extract and use - no post-processing needed.
+        logger.debug(f"Using bundled source: {source_name}.tar.gz")
         return prepare_source_from_bundle(
             benchmark_path,
             temp_dir,
             source_name,
-            apply_ref_diff=apply_ref_diff,
-            squash_history=squash_history,
-        )
-
-    def _needs_ref_diff(self, variant_type: VariantType) -> bool:
-        """Check if variant needs ref.diff applied.
-
-        ref.diff transforms base_commit → ref_commit state.
-        Needed for: DELTA_REF, ALL_PATCHED, CPV
-        Not needed for: FULL_BASE, COVERAGE, PATCHED
-
-        Args:
-            variant_type: Type of variant being built
-
-        Returns:
-            True if ref.diff should be applied
-        """
-        return variant_type in (
-            VariantType.DELTA_REF,
-            VariantType.ALL_PATCHED,
-            VariantType.CPV,
         )
 
     def _build_with_inc_image(

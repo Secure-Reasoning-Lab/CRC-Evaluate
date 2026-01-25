@@ -27,14 +27,20 @@ def create_source_tarball(
     *,
     ref_commit: Optional[str] = None,
 ) -> tuple[Path, Optional[Path]]:
-    """Create source tarball with fresh git init.
+    """Create source tarball with proper git commit structure.
+
+    Commit structure depends on benchmark type:
+    - Delta mode (ref_commit provided): 2 commits (base → ref) + ref.diff
+      CRS can use `git diff HEAD~1` to see vulnerability-introducing changes
+    - Full-only mode (no ref_commit): 1 squashed commit at vulnerable state
+      CRS cannot use git history to discover changes
 
     Args:
         repo_url: Git repository URL
         base_commit: Commit to checkout for base source
         source_name: Directory name in tarball (from Dockerfile WORKDIR)
         output_dir: Directory to write tarball and ref.diff
-        ref_commit: If provided, generate ref.diff between base and ref
+        ref_commit: If provided, create 2-commit history and generate ref.diff
 
     Returns:
         Tuple of (tarball_path, ref_diff_path or None)
@@ -66,23 +72,14 @@ def create_source_tarball(
         # This ensures tarball content matches ref.diff exactly
         _run_git(["config", "core.autocrlf", "false"], cwd=repo_dir)
 
-        # 4. Checkout base commit for source tarball
-        _run_git(["checkout", base_commit], cwd=repo_dir)
+        if ref_commit:
+            # Delta mode: Create 2-commit tarball at ref_commit
+            _prepare_delta_source(repo_dir, base_commit, ref_commit, ref_diff_path)
+        else:
+            # Full-only mode: Create 1-commit tarball at base_commit (vulnerable)
+            _prepare_full_source(repo_dir, base_commit)
 
-        # 5. Initialize submodules (if any)
-        # Some projects like shadowsocks have submodules that must be fetched
-        gitmodules = repo_dir / ".gitmodules"
-        if gitmodules.exists():
-            logger.info("Initializing git submodules...")
-            _run_git(["submodule", "update", "--init", "--recursive"], cwd=repo_dir)
-
-        # 6. Clean up - remove git metadata and sensitive directories
-        _clean_source(repo_dir)
-
-        # 7. Fresh git init (CRS needs git commands to work)
-        _fresh_git_init(repo_dir)
-
-        # 8. Rename to expected name and create tarball
+        # 4. Rename to expected name and create tarball
         source_dir = work_dir / source_name
         repo_dir.rename(source_dir)
 
@@ -110,6 +107,127 @@ def create_source_tarball(
 
         logger.info(f"Created tarball: {tarball_path}")
         return tarball_path, ref_diff_path
+
+
+def _prepare_delta_source(
+    repo_dir: Path,
+    base_commit: str,
+    ref_commit: str,
+    ref_diff_path: Optional[Path],
+) -> None:
+    """Prepare source for delta mode: 2 commits (base → ref).
+
+    Creates a clean 2-commit history:
+    - Commit 1: "Base commit" at base_commit state
+    - Commit 2: "Vulnerability introduced" at ref_commit state
+
+    CRS can use `git diff HEAD~1` to see the vulnerability-introducing changes.
+    """
+    logger.info(f"Creating 2-commit tarball: {base_commit[:8]} → {ref_commit[:8]}")
+
+    # 1. Checkout base commit
+    _run_git(["checkout", base_commit], cwd=repo_dir)
+
+    # Initialize submodules at base
+    if (repo_dir / ".gitmodules").exists():
+        logger.info("Initializing git submodules at base commit...")
+        _run_git(["submodule", "update", "--init", "--recursive"], cwd=repo_dir)
+
+    # 2. Clean and create first commit (skip gc since more commits follow)
+    _clean_source(repo_dir)
+    _fresh_git_init(repo_dir, commit_message="Base commit", run_gc=False)
+
+    # 3. Apply ref.diff to get to ref_commit state
+    if ref_diff_path and ref_diff_path.exists():
+        logger.info("Applying ref.diff to create second commit...")
+        if not _apply_diff(repo_dir, ref_diff_path):
+            raise RuntimeError("Failed to apply ref.diff")
+    else:
+        raise RuntimeError("ref.diff required for delta mode but not found")
+
+    # 4. Create second commit
+    _git_commit(repo_dir, "Vulnerability introduced")
+
+    # 5. Pack objects after final commit
+    _run_git_gc(repo_dir)
+
+    logger.info("Created 2-commit history for delta mode")
+
+
+def _prepare_full_source(repo_dir: Path, base_commit: str) -> None:
+    """Prepare source for full-only mode: 1 squashed commit.
+
+    Creates a single commit at the vulnerable state (base_commit for full-only
+    benchmarks IS the vulnerable state).
+
+    CRS cannot use git history to discover what changed.
+    """
+    logger.info(f"Creating 1-commit tarball at {base_commit[:8]}")
+
+    # 1. Checkout base commit (which is vulnerable for full-only benchmarks)
+    _run_git(["checkout", base_commit], cwd=repo_dir)
+
+    # Initialize submodules
+    if (repo_dir / ".gitmodules").exists():
+        logger.info("Initializing git submodules...")
+        _run_git(["submodule", "update", "--init", "--recursive"], cwd=repo_dir)
+
+    # 2. Clean and create single squashed commit
+    _clean_source(repo_dir)
+    _fresh_git_init(repo_dir)
+
+    logger.info("Created 1-commit history for full mode")
+
+
+def _apply_diff(repo_dir: Path, diff_path: Path) -> bool:
+    """Apply a diff file to the repository.
+
+    Args:
+        repo_dir: Path to git repository
+        diff_path: Path to diff file
+
+    Returns:
+        True if successful
+    """
+    result = subprocess.run(
+        ["git", "apply", "--whitespace=nowarn", str(diff_path)],
+        cwd=repo_dir,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.decode(errors="replace")
+        logger.error(f"Failed to apply diff: {stderr}")
+        return False
+    return True
+
+
+def _git_commit(directory: Path, message: str) -> None:
+    """Create a git commit with all current changes."""
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "CRSBench",
+        "GIT_AUTHOR_EMAIL": "crsbench@example.com",
+        "GIT_COMMITTER_NAME": "CRSBench",
+        "GIT_COMMITTER_EMAIL": "crsbench@example.com",
+        "GIT_AUTHOR_DATE": "2026-01-01T00:00:01+0000",
+        "GIT_COMMITTER_DATE": "2026-01-01T00:00:01+0000",
+    }
+    subprocess.run(
+        ["git", "add", "."],
+        cwd=directory,
+        check=True,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env=env,
+    )
+    subprocess.run(
+        ["git", "commit", "--no-gpg-sign", "-m", message],
+        cwd=directory,
+        check=True,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env=env,
+    )
 
 
 def _generate_ref_diff(
@@ -234,8 +352,18 @@ def _clean_source(directory: Path) -> None:
             shutil.rmtree(git_path)
 
 
-def _fresh_git_init(directory: Path) -> None:
+def _fresh_git_init(
+    directory: Path,
+    commit_message: str = "Initial source",
+    *,
+    run_gc: bool = True,
+) -> None:
     """Initialize fresh git repo with single commit.
+
+    Args:
+        directory: Path to directory to initialize
+        commit_message: Message for the initial commit
+        run_gc: If True, run git gc to pack objects (set False if more commits follow)
 
     Uses fixed author/committer for reproducibility.
     """
@@ -276,15 +404,27 @@ def _fresh_git_init(directory: Path) -> None:
         env=env,
     )
     subprocess.run(
-        ["git", "commit", "--no-gpg-sign", "-m", "Initial source"],
+        ["git", "commit", "--no-gpg-sign", "-m", commit_message],
         cwd=directory,
         check=True,
         capture_output=True,
         stdin=subprocess.DEVNULL,
         env=env,
     )
-    # Pack all loose objects to prevent race conditions during tar
-    # This ensures git is done writing and all objects are in packfiles
+
+    if run_gc:
+        _run_git_gc(directory)
+
+
+def _run_git_gc(directory: Path) -> None:
+    """Pack all loose objects to prevent race conditions during tar."""
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "CRSBench",
+        "GIT_AUTHOR_EMAIL": "crsbench@example.com",
+        "GIT_COMMITTER_NAME": "CRSBench",
+        "GIT_COMMITTER_EMAIL": "crsbench@example.com",
+    }
     result = subprocess.run(
         ["git", "gc", "--aggressive", "--prune=now"],
         cwd=directory,

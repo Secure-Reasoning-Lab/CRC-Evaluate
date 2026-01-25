@@ -76,9 +76,17 @@ def _load_from_pkgs(
 ) -> BenchmarkSource:
     """Load source from bundled pkgs/ tarball.
 
-    For delta mode: extracts tarball (at base_commit) and applies ref.diff
-    For full mode: extracts tarball (at base_commit, which is vulnerable)
+    The tarball already has the correct commit structure (done at packaging time):
+    - Delta mode: 2 commits (base → ref) at ref_commit state
+    - Full mode: 1 squashed commit at vulnerable state
+
+    Args:
+        benchmark_path: Path to benchmark directory
+        dest_dir: Destination directory to extract source into
+        mode: Benchmark mode (unused - kept for API compatibility)
     """
+    _ = mode  # Unused - commit structure is determined at packaging time
+
     if not has_bundled_source(benchmark_path):
         raise RuntimeError(
             f"No bundled source in {benchmark_path}/pkgs/. "
@@ -97,16 +105,11 @@ def _load_from_pkgs(
     if source_name.endswith(".tar"):
         source_name = source_name[:-4]
 
-    # For delta mode, need to apply ref.diff after extraction
-    apply_ref_diff = mode == "delta"
-
     logger.info(f"Extracting bundled source from {tarball.name}")
     source_path = prepare_source_from_bundle(
         benchmark_path,
         dest_dir,
         source_name,
-        apply_ref_diff=apply_ref_diff,
-        squash_history=mode != "delta",  # Squash for full mode, keep history for delta
     )
 
     if not source_path:
@@ -161,37 +164,22 @@ def prepare_source_from_bundle(
     benchmark_path: Path,
     dest_dir: Path,
     source_name: str,
-    *,
-    apply_ref_diff: bool = False,
-    squash_history: bool = True,
 ) -> Optional[Path]:
     """Prepare source by extracting tarball from pkgs/.
 
-    This is used by verification (verify/patch-verify) to prepare source
-    from bundled tarballs instead of cloning from git.
+    The bundled tarball already has the correct commit structure:
+    - Delta mode: 2 commits (base → ref) at ref_commit state
+    - Full mode: 1 squashed commit at vulnerable state
+
+    No post-processing needed - just extract and use.
 
     Args:
         benchmark_path: Path to benchmark directory
         dest_dir: Destination directory to extract source into
         source_name: Name of source (e.g., "curl") - matches tarball name
-        apply_ref_diff: If True, apply .aixcc/ref.diff after extraction
-            (for deltaref, allpatched, cpvN variants)
-        squash_history: If True (default), squash git history after applying
-            ref.diff to prevent CRS from using `git diff` to discover changes.
-            Set to False for delta mode where CRS already has ref.diff hint.
 
     Returns:
         Path to extracted source directory, or None if failed
-
-    Example:
-        # For deltabase variant (no ref.diff needed)
-        src = prepare_source_from_bundle(bench_path, tmp, "curl")
-
-        # For fullbase variant (apply ref.diff, squash history)
-        src = prepare_source_from_bundle(bench_path, tmp, "curl", apply_ref_diff=True)
-
-        # For deltaref variant (apply ref.diff, keep 2 commits)
-        src = prepare_source_from_bundle(bench_path, tmp, "curl", apply_ref_diff=True, squash_history=False)
     """
     benchmark_path = Path(benchmark_path)
     dest_dir = Path(dest_dir)
@@ -226,40 +214,6 @@ def prepare_source_from_bundle(
         if not _init_git_repo(source_path):
             logger.error("Failed to initialize git repository")
             return None
-
-    # Apply ref.diff if requested (for deltaref-like variants)
-    if apply_ref_diff:
-        ref_diff_path = benchmark_path / ".aixcc" / "ref.diff"
-        if ref_diff_path.exists():
-            logger.info("Applying ref.diff to get ref commit state")
-            if not _apply_diff(source_path, ref_diff_path):
-                logger.error("Failed to apply ref.diff")
-                return None
-
-            if squash_history:
-                # Full mode: Re-initialize git to prevent history leakage
-                # This ensures CRS cannot use `git diff` to discover what changed
-                logger.info(
-                    "Re-initializing git to squash history (full mode protection)"
-                )
-                if not _reinit_git_repo(source_path):
-                    logger.error("Failed to re-initialize git repository")
-                    return None
-            else:
-                # Delta mode: Keep 2 commits (CRS already has ref.diff hint)
-                logger.info("Committing ref.diff changes (delta mode - 2 commits)")
-                if not _commit_changes(source_path, "Apply ref.diff"):
-                    logger.error("Failed to commit ref.diff changes")
-                    return None
-        else:
-            # DELTA mode (squash_history=False) requires ref.diff - error if missing
-            # FULL mode (squash_history=True) doesn't use ref.diff - normal to skip
-            if not squash_history:
-                logger.error(
-                    f"ref.diff not found at {ref_diff_path} (required for DELTA mode)"
-                )
-                return None
-            logger.debug("ref.diff not found (FULL mode), skipping")
 
     logger.info(f"Source prepared at: {source_path}")
     return source_path
@@ -343,116 +297,4 @@ def _init_git_repo(repo_path: Path) -> bool:
         return True
     except Exception as e:
         logger.error(f"Failed to init git repo: {e}")
-        return False
-
-
-def _reinit_git_repo(repo_path: Path) -> bool:
-    """Remove existing git history and create fresh single-commit repo.
-
-    This is used after applying ref.diff to ensure CRS cannot use
-    `git diff` or `git log` to discover what changes were made.
-
-    Args:
-        repo_path: Path to git repository
-
-    Returns:
-        True if successful
-    """
-    import shutil
-
-    try:
-        # Remove existing .git directory
-        git_dir = repo_path / ".git"
-        if git_dir.exists():
-            shutil.rmtree(git_dir)
-
-        # Re-initialize with fresh single commit
-        return _init_git_repo(repo_path)
-    except Exception as e:
-        logger.error(f"Failed to re-initialize git repo: {e}")
-        return False
-
-
-def _commit_changes(repo_path: Path, message: str) -> bool:
-    """Commit all changes in the repository.
-
-    Args:
-        repo_path: Path to git repository
-        message: Commit message
-
-    Returns:
-        True if successful
-    """
-    try:
-        # Common env to prevent any interactive prompts
-        git_env = {
-            **os.environ,
-            "GIT_AUTHOR_NAME": "CRSBench",
-            "GIT_AUTHOR_EMAIL": "crsbench@example.com",
-            "GIT_COMMITTER_NAME": "CRSBench",
-            "GIT_COMMITTER_EMAIL": "crsbench@example.com",
-            "GIT_TERMINAL_PROMPT": "0",
-        }
-
-        # Add all changes
-        result = subprocess.run(
-            ["git", "add", "."],
-            cwd=repo_path,
-            capture_output=True,
-            text=True,
-            check=False,
-            stdin=subprocess.DEVNULL,
-            env=git_env,
-        )
-        if result.returncode != 0:
-            logger.error(f"git add failed: {result.stderr}")
-            return False
-
-        # Commit
-        result = subprocess.run(
-            ["git", "commit", "--no-gpg-sign", "-m", message],
-            cwd=repo_path,
-            capture_output=True,
-            text=True,
-            check=False,
-            stdin=subprocess.DEVNULL,
-            env=git_env,
-        )
-        if result.returncode != 0:
-            logger.error(f"git commit failed: {result.stderr}")
-            return False
-
-        return True
-    except Exception as e:
-        logger.error(f"Failed to commit changes: {e}")
-        return False
-
-
-def _apply_diff(repo_path: Path, diff_path: Path) -> bool:
-    """Apply a diff file to a repository.
-
-    Args:
-        repo_path: Path to git repository
-        diff_path: Path to diff file
-
-    Returns:
-        True if successful
-    """
-    try:
-        # Use absolute path since git runs from repo_path
-        abs_diff_path = Path(diff_path).resolve()
-        result = subprocess.run(
-            ["git", "apply", "--whitespace=nowarn", str(abs_diff_path)],
-            cwd=repo_path,
-            capture_output=True,
-            text=True,
-            check=False,
-            stdin=subprocess.DEVNULL,  # Prevent interactive prompts
-        )
-        if result.returncode != 0:
-            logger.error(f"git apply failed: {result.stderr}")
-            return False
-        return True
-    except Exception as e:
-        logger.error(f"Failed to apply diff: {e}")
         return False

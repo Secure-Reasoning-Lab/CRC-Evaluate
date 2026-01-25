@@ -559,7 +559,7 @@ class CRSPatchExecutor(CRSExecutor):
             str(trial_build_dir),
         ]
 
-        # Only add --source-path if not using bundled source
+        # Add --source-path if source was loaded (both bundled and cloned have paths now)
         if source_path:
             cmd.extend(["--source-path", str(source_path)])
 

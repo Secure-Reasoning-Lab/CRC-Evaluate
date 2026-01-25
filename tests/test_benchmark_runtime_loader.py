@@ -149,8 +149,15 @@ class TestLoadBenchmarkSourcePkgs:
             assert source.path == dest_dir / "mock-c"
             mock_prepare.assert_called_once()
 
-    def test_pkgs_mode_applies_ref_diff_for_delta(self, tmp_path: Path) -> None:
-        """source_mode='pkgs' with mode='delta' should apply ref.diff."""
+    def test_pkgs_mode_ignores_mode_parameter(self, tmp_path: Path) -> None:
+        """source_mode='pkgs' ignores mode - commit structure is from packaging.
+
+        The tarball already has the correct commit structure:
+        - Delta mode: 2 commits (base → ref) at ref_commit state
+        - Full mode: 1 squashed commit at vulnerable state
+
+        No runtime post-processing needed.
+        """
         pkgs_dir = tmp_path / "pkgs"
         pkgs_dir.mkdir()
         (pkgs_dir / "mock-c.tar.gz").touch()
@@ -162,36 +169,26 @@ class TestLoadBenchmarkSourcePkgs:
         ) as mock_prepare:
             mock_prepare.return_value = dest_dir / "mock-c"
 
+            # Call with mode="delta" - should be ignored
             load_benchmark_source(
                 tmp_path, dest_dir=dest_dir, source_mode="pkgs", mode="delta"
             )
 
-            # Check apply_ref_diff=True for delta mode
-            call_kwargs = mock_prepare.call_args[1]
-            assert call_kwargs.get("apply_ref_diff") is True
-            assert call_kwargs.get("squash_history") is False
+            # Verify no apply_ref_diff or squash_history params
+            call_args, call_kwargs = mock_prepare.call_args
+            assert "apply_ref_diff" not in call_kwargs
+            assert "squash_history" not in call_kwargs
 
-    def test_pkgs_mode_squashes_history_for_full(self, tmp_path: Path) -> None:
-        """source_mode='pkgs' with mode='full' should squash history."""
-        pkgs_dir = tmp_path / "pkgs"
-        pkgs_dir.mkdir()
-        (pkgs_dir / "mock-c.tar.gz").touch()
+            mock_prepare.reset_mock()
 
-        dest_dir = tmp_path / "dest"
-
-        with patch(
-            "crsbench.benchmark.runtime.loader.prepare_source_from_bundle"
-        ) as mock_prepare:
-            mock_prepare.return_value = dest_dir / "mock-c"
-
+            # Call with mode="full" - should also be ignored
             load_benchmark_source(
                 tmp_path, dest_dir=dest_dir, source_mode="pkgs", mode="full"
             )
 
-            # Check apply_ref_diff=False and squash_history=True for full mode
-            call_kwargs = mock_prepare.call_args[1]
-            assert call_kwargs.get("apply_ref_diff") is False
-            assert call_kwargs.get("squash_history") is True
+            call_args, call_kwargs = mock_prepare.call_args
+            assert "apply_ref_diff" not in call_kwargs
+            assert "squash_history" not in call_kwargs
 
 
 class TestLoadBenchmarkSourceInvalidMode:
