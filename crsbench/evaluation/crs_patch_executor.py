@@ -521,14 +521,33 @@ class CRSPatchExecutor(CRSExecutor):
 
         build_start_time = time.time()
 
-        # Load benchmark source (handles pkgs/ vs git clone)
-        from crsbench.benchmark.runtime import load_benchmark_source
-
-        source = load_benchmark_source(
-            benchmark_path,
-            verbose=self.config.get("verbose", False),
+        # Check for bundled source tarball first
+        from crsbench.benchmark.runtime.loader import (
+            get_bundled_tarball_path,
+            has_bundled_source,
         )
-        source_path = source.path
+
+        tarball_path = None
+        source_path = None
+
+        if has_bundled_source(benchmark_path):
+            tarball_path = get_bundled_tarball_path(benchmark_path)
+            if tarball_path:
+                logger.info(f"Using bundled source tarball: {tarball_path}")
+            else:
+                logger.warning(
+                    "Bundled source detected but tarball not found, falling back to git clone"
+                )
+
+        # Fall back to git clone if no tarball
+        if not tarball_path:
+            from crsbench.benchmark.runtime import load_benchmark_source
+
+            source = load_benchmark_source(
+                benchmark_path,
+                verbose=self.config.get("verbose", False),
+            )
+            source_path = source.path
 
         # Get registry name for the CRS
         from crsbench.utils.crs_helper import get_crs_registry_name
@@ -555,8 +574,10 @@ class CRSPatchExecutor(CRSExecutor):
             str(trial_build_dir),
         ]
 
-        # Only add --source-path if not using bundled source
-        if source_path:
+        # Add source option: prefer --source-tarball over --source-path
+        if tarball_path:
+            cmd.extend(["--source-tarball", str(tarball_path)])
+        elif source_path:
             cmd.extend(["--source-path", str(source_path)])
 
         # Add gitcache flag if enabled

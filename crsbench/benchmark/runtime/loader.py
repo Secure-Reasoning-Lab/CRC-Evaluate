@@ -100,6 +100,89 @@ def has_bundled_source(benchmark_path: Path) -> bool:
     return pkgs_dir.exists() and any(pkgs_dir.glob("*.tar.gz"))
 
 
+def get_bundled_tarball_path(benchmark_path: Path) -> Optional[Path]:
+    """Get path to bundled source tarball in pkgs/.
+
+    Finds the main repo tarball by extracting source name from Dockerfile's
+    WORKDIR directive.
+
+    Args:
+        benchmark_path: Path to benchmark directory
+
+    Returns:
+        Path to tarball if found, None otherwise
+    """
+    benchmark_path = Path(benchmark_path)
+    pkgs_dir = benchmark_path / "pkgs"
+
+    if not pkgs_dir.exists():
+        return None
+
+    # Get source name from Dockerfile WORKDIR
+    dockerfile_path = benchmark_path / "Dockerfile"
+    source_name = _get_source_name_from_dockerfile(dockerfile_path)
+
+    if not source_name:
+        # Fallback: use first tarball found
+        tarballs = list(pkgs_dir.glob("*.tar.gz"))
+        if tarballs:
+            logger.warning(
+                f"Could not determine source name from Dockerfile, "
+                f"using first tarball: {tarballs[0].name}"
+            )
+            return tarballs[0]
+        return None
+
+    tarball_path = pkgs_dir / f"{source_name}.tar.gz"
+    if tarball_path.exists():
+        return tarball_path
+
+    return None
+
+
+def _get_source_name_from_dockerfile(dockerfile_path: Path) -> Optional[str]:
+    """Extract source directory name from Dockerfile WORKDIR directive.
+
+    Parses the last WORKDIR in Dockerfile to determine source directory name.
+    Handles common patterns like:
+    - WORKDIR $SRC/curl -> curl
+    - WORKDIR /src/curl -> curl
+    - WORKDIR libtiff -> libtiff
+
+    Args:
+        dockerfile_path: Path to Dockerfile
+
+    Returns:
+        Source directory name, or None if not found
+    """
+    import re
+
+    if not dockerfile_path.exists():
+        logger.debug(f"Dockerfile not found: {dockerfile_path}")
+        return None
+
+    lines = dockerfile_path.read_text().splitlines()
+
+    for line in reversed(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        match = re.match(r"WORKDIR\s+(.+)", stripped, re.IGNORECASE)
+        if match:
+            workdir = match.group(1).strip()
+            # Normalize: remove common prefixes
+            for prefix in ["$SRC/", "${SRC}/", "/src/"]:
+                if workdir.startswith(prefix):
+                    workdir = workdir[len(prefix) :]
+                    break
+            # Return last path component
+            return Path(workdir).name
+
+    logger.debug(f"No WORKDIR found in {dockerfile_path}")
+    return None
+
+
 def prepare_source_from_bundle(
     benchmark_path: Path,
     dest_dir: Path,
