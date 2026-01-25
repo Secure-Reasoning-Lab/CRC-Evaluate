@@ -116,7 +116,9 @@ class CoverageSummary(BaseModel):
             or "10 (total N/A)" when total is unknown (e.g., JVM coverage).
         """
         if self.lines_total > 0:
-            return f"{self.lines_covered}/{self.lines_total} ({self.lines_percent:.1f}%)"
+            return (
+                f"{self.lines_covered}/{self.lines_total} ({self.lines_percent:.1f}%)"
+            )
         return f"{self.lines_covered} (total N/A)"
 
     def format_functions(self) -> str:

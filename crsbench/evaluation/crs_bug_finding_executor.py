@@ -128,7 +128,6 @@ class CRSBugFindingExecutor(CRSExecutor):
             sanitizer: Sanitizer type (e.g., 'address', 'memory', 'undefined')
         """
         # Intentionally disabled - CRS owns /out directory contents
-        pass
 
     def build_crs(self, benchmark_path: Path, trial_output_dir: Path) -> None:
         """Pre-build CRS Docker image before running.
