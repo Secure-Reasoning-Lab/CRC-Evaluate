@@ -136,8 +136,8 @@ class TestLoadBenchmarkSource:
 class TestPrepareSourceFromBundle:
     """Tests for prepare_source_from_bundle function.
 
-    Note: Commit structure tests (delta mode 2 commits, full mode 1 commit)
-    are in test_tarball.py since that logic is now at packaging time, not runtime.
+    Note: Commit structure tests (both modes use 1 commit) are in test_tarball.py
+    since that logic is now at packaging time, not runtime.
     """
 
     @pytest.fixture
@@ -145,8 +145,8 @@ class TestPrepareSourceFromBundle:
         """Create a mock benchmark with pkgs/ tarball.
 
         The tarball already has the correct commit structure (done at packaging time):
-        - Delta mode: 2 commits (base → ref) at ref_commit state
-        - Full mode: 1 squashed commit at vulnerable state
+        - Both modes: 1 squashed commit at vulnerable state
+        - Delta mode provides ref.diff as hint (not via git history)
         """
         benchmark_path = tmp_path / "test-benchmark"
         benchmark_path.mkdir()

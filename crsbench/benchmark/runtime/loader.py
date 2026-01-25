@@ -77,8 +77,8 @@ def _load_from_pkgs(
     """Load source from bundled pkgs/ tarball.
 
     The tarball already has the correct commit structure (done at packaging time):
-    - Delta mode: 2 commits (base → ref) at ref_commit state
-    - Full mode: 1 squashed commit at vulnerable state
+    - Both modes: 1 squashed commit at vulnerable state
+    - Delta mode provides ref.diff as hint (not via git history)
 
     Args:
         benchmark_path: Path to benchmark directory
@@ -168,8 +168,8 @@ def prepare_source_from_bundle(
     """Prepare source by extracting tarball from pkgs/.
 
     The bundled tarball already has the correct commit structure:
-    - Delta mode: 2 commits (base → ref) at ref_commit state
-    - Full mode: 1 squashed commit at vulnerable state
+    - Both modes: 1 squashed commit at vulnerable state
+    - Delta mode provides ref.diff as hint (not via git history)
 
     No post-processing needed - just extract and use.
 

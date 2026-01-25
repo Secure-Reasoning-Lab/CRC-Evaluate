@@ -153,8 +153,8 @@ class TestLoadBenchmarkSourcePkgs:
         """source_mode='pkgs' ignores mode - commit structure is from packaging.
 
         The tarball already has the correct commit structure:
-        - Delta mode: 2 commits (base → ref) at ref_commit state
-        - Full mode: 1 squashed commit at vulnerable state
+        - Both modes: 1 squashed commit at vulnerable state
+        - Delta mode provides ref.diff as hint (not via git history)
 
         No runtime post-processing needed.
         """

@@ -1286,8 +1286,8 @@ class PatchVerificationEngine:
             logger.debug(f"No WORKDIR found, using: {source_name}")
 
         # Bundled tarball already has correct commit structure (done at packaging):
-        # - Delta mode: 2 commits (base → ref) at ref_commit state
-        # - Full mode: 1 squashed commit at vulnerable state
+        # - Both modes: 1 squashed commit at vulnerable state
+        # - Delta mode provides ref.diff as hint (not via git history)
         # Just extract and use - no post-processing needed.
         logger.debug(f"Using bundled source: {source_name}.tar.gz")
         return prepare_source_from_bundle(
