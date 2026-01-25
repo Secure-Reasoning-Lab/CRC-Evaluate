@@ -262,15 +262,12 @@ def _clean_source(directory: Path) -> None:
 def _fresh_git_init(
     directory: Path,
     commit_message: str = "Initial source",
-    *,
-    run_gc: bool = True,
 ) -> None:
     """Initialize fresh git repo with single commit.
 
     Args:
         directory: Path to directory to initialize
         commit_message: Message for the initial commit
-        run_gc: If True, run git gc to pack objects (set False if more commits follow)
 
     Uses fixed author/committer for reproducibility.
     """
@@ -319,8 +316,7 @@ def _fresh_git_init(
         env=env,
     )
 
-    if run_gc:
-        _run_git_gc(directory)
+    _run_git_gc(directory)
 
 
 def _run_git_gc(directory: Path) -> None:
