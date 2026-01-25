@@ -229,8 +229,7 @@ class CoverageManager:
 
         logger.info(
             f"Coverage snapshot {cycle}: "
-            f"lines={summary.lines_covered}/{summary.lines_total} "
-            f"({summary.lines_percent:.1f}%), "
+            f"lines={summary.format_lines()}, "
             f"unique_corpus={unique_corpus_count} (+{new_unique_corpus}), "
             f"saturation={saturation_detected}"
         )

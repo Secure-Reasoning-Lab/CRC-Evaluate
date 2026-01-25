@@ -220,8 +220,8 @@ class CoverageEngine:
         )
 
         logger.info(
-            f"Coverage collection complete: {summary.lines_covered}/{summary.lines_total} lines, "
-            f"{summary.functions_covered}/{summary.functions_total} functions, "
+            f"Coverage collection complete: {summary.format_lines()} lines, "
+            f"{summary.format_functions()} functions, "
             f"{success_count}/{len(corpus_files)} corpus processed, "
             f"{contributing_count} contributing, {unique_count} unique"
         )
