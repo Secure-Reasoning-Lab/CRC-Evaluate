@@ -451,14 +451,13 @@ def write_summary_csv(
                 f"{build_t:.1f},{verify_t:.1f}\n"
             )
     else:
-        # ALL mode — shared build + per-check verify times
+        # ALL mode — per-check build + verify times
         f.write(
-            "benchmark,inc,rts,"
-            "fmt,build_s,"
-            "pov,pov_s,"
-            "patch,patch_build_s,patch_s,"
-            "patch_rts,patch_rts_s,"
-            "cov,cov_s,"
+            "benchmark,inc,rts,fmt,"
+            "pov,pov_build_s,pov_verify_s,"
+            "patch,patch_build_s,patch_verify_s,"
+            "patch_rts,patch_rts_verify_s,"
+            "cov,cov_verify_s,"
             "total,total_time_s\n"
         )
         for r in summary.results:
@@ -467,8 +466,8 @@ def write_summary_csv(
             f.write(
                 f"{r.benchmark},{inc},{rts},"
                 f"{_plain_status(r.format_check)},"
-                f"{r.shared_build_time:.1f},"
                 f"{_plain_status(r.pov_check)},"
+                f"{r.shared_build_time:.1f},"
                 f"{_check_verify_time(r.pov_check):.1f},"
                 f"{_plain_status(r.patch_check)},"
                 f"{_check_build_time(r.patch_check):.1f},"
