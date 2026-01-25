@@ -395,6 +395,11 @@ class CRSBugFindingExecutor(CRSExecutor):
                 elif hints_path and (hints_path / "ref.diff").exists():
                     diff_path = hints_path / "ref.diff"
                     logger.info(f"Using ref.diff from hints: {diff_path}")
+                else:
+                    # Fail fast - delta mode requires ref.diff
+                    raise ValueError(
+                        f"Delta mode requires .aixcc/ref.diff but not found in {benchmark_path}"
+                    )
 
             # 7. Run CRS bug finding campaign
             cmd = self._construct_run_command(
@@ -773,11 +778,8 @@ class CRSBugFindingExecutor(CRSExecutor):
             logger.info("Running without hints")
 
         # Add diff path if available (delta mode)
-        mode = self.config.get("mode")
         if diff_path and diff_path.exists():
             cmd.extend(["--diff", str(diff_path)])
-        elif mode == "delta":
-            logger.error("Delta mode configured but no diff file available")
 
         # Add external LiteLLM flag if using external LiteLLM
         if self.litellm_mode is not None:
