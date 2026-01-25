@@ -57,6 +57,8 @@ jobs:
           uv run crsbench ci format sanity-mock-java-delta-01 --no-color
           uv run crsbench ci format afc-xz-full-01 --no-color
           uv run crsbench ci format atlanta-json-java-full-01 --no-color
+          uv run crsbench ci format afc-libxml2-full-01 --no-color
+          uv run crsbench ci format afc-apache-commons-compress-delta-01 --no-color
 
   # Stage 2b: Sanity checks on mock projects (fail-fast)
   sanity-mock:
@@ -162,6 +164,7 @@ jobs:
           EXPERIMENT_DIR=$(mktemp -d)
           REPORT_DIR=$(mktemp -d)
           echo "experiment_dir=$EXPERIMENT_DIR" >> "$GITHUB_OUTPUT"
+          echo "report_dir=$REPORT_DIR" >> "$GITHUB_OUTPUT"
 
           # Generate config with random temp directories
           sed \
@@ -222,3 +225,10 @@ jobs:
             exit 1
           fi
           echo "E2E PASSED: All answer POVs found for mock-c and mock-java"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -rf "${{ steps.e2e-run.outputs.experiment_dir }}" || true
+          rm -rf "${{ steps.e2e-run.outputs.report_dir }}" || true
+          rm -f /tmp/pov-e2e-config.yaml || true
