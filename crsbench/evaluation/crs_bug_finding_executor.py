@@ -776,7 +776,6 @@ class CRSBugFindingExecutor(CRSExecutor):
         mode = self.config.get("mode")
         if diff_path and diff_path.exists():
             cmd.extend(["--diff", str(diff_path)])
-            logger.info(f"Using diff for delta mode: {diff_path}")
         elif mode == "delta":
             logger.error("Delta mode configured but no diff file available")
 

@@ -260,80 +260,72 @@ class TrialDirectoryPreparer:
 
     def _prepare_hints(self, benchmark: str, trial_dir: Path) -> Optional[Path]:
         """
-        Prepare hints directory by aggregating hints from all CPVs.
+        Prepare hints directory by aggregating SARIF/corpus hints from all CPVs.
 
-        This method handles two independent concerns:
-        1. SARIF/corpus hints (requires hints_enabled=True)
-        2. ref.diff for delta mode (based on evaluation_mode, not hints_enabled)
+        Note: ref.diff for delta mode is NOT handled here. The executor reads
+        ref.diff directly from benchmark's .aixcc/ref.diff based on mode config.
 
         Args:
             benchmark: Benchmark name
             trial_dir: Trial directory
 
         Returns:
-            Path to prepared hints directory, or None if nothing prepared
+            Path to prepared hints directory, or None if hints not enabled
         """
+        if not self.config.get("hints_enabled", False):
+            logger.debug("Hints not enabled, skipping")
+            return None
+
+        sarif_level = self.config.get("hint_sarif_level")
+        corpus_level = self.config.get("hint_corpus_level")
+
+        if sarif_level is None and corpus_level is None:
+            logger.warning("hints_enabled=True but no hint levels configured")
+            return None
+
         benchmark_dir = self.benchmarks_root / benchmark
         if not benchmark_dir.exists():
             logger.warning(f"Benchmark directory not found: {benchmark_dir}")
             return None
 
+        # Load meta.yaml to discover all harnesses and CPVs
+        meta_yaml_path = benchmark_dir / ".aixcc" / "meta.yaml"
+        if not meta_yaml_path.exists():
+            logger.warning(f"No meta.yaml found for {benchmark}")
+            return None
+
+        try:
+            with meta_yaml_path.open("r") as f:
+                meta = yaml.safe_load(f)
+        except Exception as e:
+            logger.error(f"Failed to load meta.yaml for {benchmark}: {e}")
+            return None
+
+        # Create hints directory
         hints_dir = trial_dir / "hints"
+        hints_dir.mkdir(parents=True, exist_ok=True)
+
         sarif_copied = False
         corpus_copied = False
-        delta_copied = False
 
-        # 1. Prepare SARIF/corpus hints (only if hints_enabled)
-        if self.config.get("hints_enabled", False):
-            sarif_level = self.config.get("hint_sarif_level")
-            corpus_level = self.config.get("hint_corpus_level")
+        # Aggregate SARIF hints from all CPVs
+        if sarif_level is not None:
+            sarif_copied = self._aggregate_sarif_hints(
+                benchmark_dir=benchmark_dir,
+                meta=meta,
+                sarif_level=sarif_level,
+                hints_dir=hints_dir,
+            )
 
-            if sarif_level is None and corpus_level is None:
-                logger.warning("hints_enabled=True but no hint levels configured")
-            else:
-                # Load meta.yaml to discover all harnesses and CPVs
-                meta_yaml_path = benchmark_dir / ".aixcc" / "meta.yaml"
-                if not meta_yaml_path.exists():
-                    logger.warning(f"No meta.yaml found for {benchmark}")
-                else:
-                    try:
-                        with meta_yaml_path.open("r") as f:
-                            meta = yaml.safe_load(f)
+        # Aggregate corpus hints (not yet implemented)
+        if corpus_level is not None:
+            logger.warning("Corpus hints not yet implemented")
 
-                        # Create hints directory for SARIF hints
-                        hints_dir.mkdir(parents=True, exist_ok=True)
-
-                        # Aggregate SARIF hints from all CPVs
-                        if sarif_level is not None:
-                            sarif_copied = self._aggregate_sarif_hints(
-                                benchmark_dir=benchmark_dir,
-                                meta=meta,
-                                sarif_level=sarif_level,
-                                hints_dir=hints_dir,
-                            )
-
-                        # Aggregate corpus hints (not yet implemented)
-                        if corpus_level is not None:
-                            logger.warning("Corpus hints not yet implemented")
-
-                    except Exception as e:
-                        logger.error(f"Failed to load meta.yaml for {benchmark}: {e}")
-        else:
-            logger.debug("Hints not enabled, skipping SARIF/corpus hints")
-
-        # 2. Prepare ref.diff for delta mode (independent of hints_enabled)
-        # ref.diff is based on evaluation mode, not hints configuration
-        evaluation_mode = self.config.get("evaluation_mode") or self.config.get("mode")
-        if evaluation_mode == "delta":
-            # Create hints directory if not already created
-            hints_dir.mkdir(parents=True, exist_ok=True)
-            delta_copied = self._prepare_delta_diff(benchmark, hints_dir)
-
-        if sarif_copied or corpus_copied or delta_copied:
+        if sarif_copied or corpus_copied:
             logger.info(f"Prepared hints at: {hints_dir}")
             return hints_dir
 
-        logger.debug(f"No hints content prepared for {benchmark}")
+        logger.warning(f"No hints content aggregated for {benchmark}")
         return None
 
     def _aggregate_sarif_hints(
@@ -396,31 +388,6 @@ class TrialDirectoryPreparer:
             logger.info(f"Aggregated {sarif_index} SARIF hints at level {sarif_level}")
             return True
         logger.warning(f"No SARIF hints found at level {sarif_level}")
-        return False
-
-    def _prepare_delta_diff(self, benchmark: str, hints_dir: Path) -> bool:
-        """
-        Copy pre-generated ref.diff for delta mode benchmarks.
-
-        Args:
-            benchmark: Benchmark name
-            hints_dir: Destination hints directory
-
-        Returns:
-            True if ref.diff was copied, False if not found
-        """
-        benchmark_dir = self.benchmarks_root / benchmark
-
-        pregenerated = benchmark_dir / ".aixcc" / "ref.diff"
-        if pregenerated.exists():
-            shutil.copy2(pregenerated, hints_dir / "ref.diff")
-            logger.info(f"Copied pre-generated ref.diff from {pregenerated}")
-            return True
-
-        logger.warning(
-            f"Delta mode but no ref.diff found at {pregenerated}. "
-            "Run 'crsbench benchmark prepare-delta' to generate it."
-        )
         return False
 
     def _prepare_povs(
