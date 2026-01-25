@@ -1,7 +1,7 @@
 """Patch verification subcommand.
 
 Constructs a flat DAG of BuildVariantsJob + BuildPatchVariantJob +
-TestPatchVariantJob per patch, executed with typed concurrency limits.
+PatchVariantTestJob per patch, executed with typed concurrency limits.
 """
 
 import argparse
@@ -27,7 +27,7 @@ from crsbench.benchmark_ci.jobs.base import Job, JobContext
 from crsbench.benchmark_ci.jobs.flat import (
     BuildPatchVariantJob,
     BuildVariantsJob,
-    TestPatchVariantJob,
+    PatchVariantTestJob,
 )
 from crsbench.benchmark_ci.models import (
     BenchmarkValidationResult,
@@ -121,7 +121,7 @@ def run_patch(args: argparse.Namespace) -> int:
                     )
                     all_jobs.append(build_patch_job)
 
-                    test_job = TestPatchVariantJob(
+                    test_job = PatchVariantTestJob(
                         benchmark_path=path,
                         benchmark_name=benchmark_name,
                         cpv_id=cpv_id,
@@ -138,7 +138,7 @@ def run_patch(args: argparse.Namespace) -> int:
     # Log DAG summary
     build_count = sum(1 for j in all_jobs if isinstance(j, BuildVariantsJob))
     patch_build_count = sum(1 for j in all_jobs if isinstance(j, BuildPatchVariantJob))
-    patch_test_count = sum(1 for j in all_jobs if isinstance(j, TestPatchVariantJob))
+    patch_test_count = sum(1 for j in all_jobs if isinstance(j, PatchVariantTestJob))
     logger.info(
         f"DAG: {len(all_jobs)} jobs — "
         f"{build_count} build, {patch_build_count} patch-build, "

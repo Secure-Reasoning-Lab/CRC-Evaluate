@@ -36,7 +36,7 @@ from crsbench.benchmark_ci.jobs.flat import (
     BuildPatchVariantJob,
     BuildVariantsJob,
     FlatCollectCoverageJob,
-    TestPatchVariantJob,
+    PatchVariantTestJob,
     VerifyCpvPovJob,
 )
 from crsbench.benchmark_ci.models import (
@@ -140,7 +140,7 @@ def _build_dag(
                     )
                     all_jobs.append(build_patch_job)
 
-                    test_full_job = TestPatchVariantJob(
+                    test_full_job = PatchVariantTestJob(
                         benchmark_path=path,
                         benchmark_name=benchmark_name,
                         cpv_id=cpv_id,
@@ -154,7 +154,7 @@ def _build_dag(
 
                     # RTS test jobs (if RTS mode available)
                     if rts_mode:
-                        test_rts_job = TestPatchVariantJob(
+                        test_rts_job = PatchVariantTestJob(
                             benchmark_path=path,
                             benchmark_name=benchmark_name,
                             cpv_id=cpv_id,
@@ -187,7 +187,7 @@ def _log_dag_summary(all_jobs: list[Job]) -> None:
     pov_jobs = [j for j in all_jobs if isinstance(j, VerifyCpvPovJob)]
     pov_blob_count = sum(len(j.pov_paths) for j in pov_jobs)
     patch_build_count = sum(1 for j in all_jobs if isinstance(j, BuildPatchVariantJob))
-    patch_test_count = sum(1 for j in all_jobs if isinstance(j, TestPatchVariantJob))
+    patch_test_count = sum(1 for j in all_jobs if isinstance(j, PatchVariantTestJob))
     coverage_count = sum(1 for j in all_jobs if isinstance(j, FlatCollectCoverageJob))
     logger.info(
         f"DAG: {len(all_jobs)} jobs — "

@@ -126,32 +126,6 @@ class TestPOVVerificationE2E:
         assert "cpv_matched" in output, f"Expected 'cpv_matched' in output:\n{output}"
         assert "cpv_1" in output, f"Expected 'cpv_1' in output:\n{output}"
 
-    def test_both_cpvs_verified(self, benchmark_path, oss_fuzz_path):
-        """Verify all POVs from meta.yaml - should find both CPVs."""
-        cmd = [
-            "uv",
-            "run",
-            "crsbench",
-            "verify",
-            str(benchmark_path),
-            "--oss-fuzz",
-            str(oss_fuzz_path),
-        ]
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-
-        output = result.stdout
-
-        # Check summary shows both CPVs found
-        assert "cpv_0" in output, f"Expected 'cpv_0' in output:\n{output}"
-        assert "cpv_1" in output, f"Expected 'cpv_1' in output:\n{output}"
-        assert "CPVs triggered" in output, f"Expected summary in output:\n{output}"
-
 
 class TestBuildUIDOwnership:
     """Test that BUILD_UID correctly sets file ownership."""

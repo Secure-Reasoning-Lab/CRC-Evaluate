@@ -14,7 +14,7 @@ from crsbench.benchmark_ci.jobs.flat import (
     BuildPatchVariantJob,
     BuildVariantsJob,
     FlatCollectCoverageJob,
-    TestPatchVariantJob,
+    PatchVariantTestJob,
     VerifyCpvPovJob,
 )
 
@@ -128,9 +128,9 @@ class TestBuildPatchVariantJob:
         assert job.depends_on == []
 
 
-class TestTestPatchVariantJob:
+class TestPatchVariantTestJob:
     def test_job_id_full(self) -> None:
-        job = TestPatchVariantJob(
+        job = PatchVariantTestJob(
             benchmark_path=Path("/bench/test-proj"),
             benchmark_name="test-proj",
             cpv_id="cpv_0",
@@ -142,7 +142,7 @@ class TestTestPatchVariantJob:
         assert job.job_id == "test-patch:test-proj:cpv_0:patch_0:FULL"
 
     def test_job_id_rts(self) -> None:
-        job = TestPatchVariantJob(
+        job = PatchVariantTestJob(
             benchmark_path=Path("/bench/test-proj"),
             benchmark_name="test-proj",
             cpv_id="cpv_0",
@@ -154,7 +154,7 @@ class TestTestPatchVariantJob:
         assert job.job_id == "test-patch:test-proj:cpv_0:patch_0:RTS"
 
     def test_job_type(self) -> None:
-        job = TestPatchVariantJob(
+        job = PatchVariantTestJob(
             benchmark_path=Path("/bench/test-proj"),
             benchmark_name="test-proj",
             cpv_id="cpv_0",
@@ -164,7 +164,7 @@ class TestTestPatchVariantJob:
         assert job.job_type == "verify"
 
     def test_depends_on_build_patch(self) -> None:
-        job = TestPatchVariantJob(
+        job = PatchVariantTestJob(
             benchmark_path=Path("/bench/test-proj"),
             benchmark_name="test-proj",
             cpv_id="cpv_0",
@@ -236,7 +236,7 @@ class TestFlatDAGConstruction:
         assert graph["verify-cpv-pov:proj:cpv_1"] == {"build-variants:proj"}
 
     def test_patch_dag_structure(self) -> None:
-        """BuildVariantsJob -> BuildPatchVariantJob -> TestPatchVariantJob."""
+        """BuildVariantsJob -> BuildPatchVariantJob -> PatchVariantTestJob."""
         build = BuildVariantsJob(
             benchmark_path=Path("/bench/proj"),
             benchmark_name="proj",
@@ -249,7 +249,7 @@ class TestFlatDAGConstruction:
             patch_path=Path("/patch.diff"),
             build_job_id=build.job_id,
         )
-        test_patch = TestPatchVariantJob(
+        test_patch = PatchVariantTestJob(
             benchmark_path=Path("/bench/proj"),
             benchmark_name="proj",
             cpv_id="cpv_0",

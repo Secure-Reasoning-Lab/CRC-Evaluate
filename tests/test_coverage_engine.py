@@ -4,7 +4,7 @@ Essential tests for:
 - Worker configuration
 - Thread-safe coverage merging
 - Summary computation
-- Parallel coverage collection
+- Sequential coverage collection
 - Variant building
 """
 
@@ -78,7 +78,7 @@ def mock_corpus(tmp_path: Path) -> Path:
 @pytest.fixture
 def engine(mock_oss_fuzz: Path) -> Generator[CoverageEngine, None, None]:
     """Create CoverageEngine with cleanup."""
-    eng = CoverageEngine(mock_oss_fuzz, build_workers=2, verify_workers=4)
+    eng = CoverageEngine(mock_oss_fuzz, build_workers=2)
     yield eng
     eng.cleanup()
 
@@ -88,9 +88,9 @@ class TestCoverageEngine:
 
     def test_worker_configuration(self, mock_oss_fuzz: Path):
         """Test worker counts are set correctly."""
-        eng = CoverageEngine(mock_oss_fuzz, build_workers=8, verify_workers=16)
+        eng = CoverageEngine(mock_oss_fuzz, build_workers=8)
         assert eng.build_workers == 8
-        assert eng.verify_workers == 16
+        # Note: verify_workers removed - parallelism handled by DAGExecutor
 
     def test_merge_overlapping_coverage(self, engine: CoverageEngine):
         """Test merging coverage deduplicates overlapping lines."""
@@ -135,7 +135,7 @@ class TestCoverageEngine:
 
     @patch("crsbench.evaluation.coverage.engine.parse_llvm_cov_summary")
     @patch("crsbench.evaluation.coverage.engine.create_coverage_strategy")
-    def test_parallel_corpus_processing(
+    def test_sequential_corpus_processing(
         self,
         mock_create_strategy,
         mock_parse_summary,
@@ -143,7 +143,7 @@ class TestCoverageEngine:
         mock_benchmark: Path,
         mock_corpus: Path,
     ):
-        """Test corpus files are processed in parallel."""
+        """Test corpus files are processed sequentially."""
         mock_strategy = MagicMock()
         mock_strategy.collect_single_coverage.return_value = {
             "main": {"src": "main.c", "lines": [1, 2, 3]}
@@ -160,7 +160,8 @@ class TestCoverageEngine:
             "functions_total": 20,
         }
 
-        eng = CoverageEngine(mock_oss_fuzz, verify_workers=2)
+        # No verify_workers - parallelism handled by DAGExecutor
+        eng = CoverageEngine(mock_oss_fuzz)
 
         with patch.object(eng.builder, "build_single") as mock_build:
             mock_result = MagicMock()
@@ -171,7 +172,7 @@ class TestCoverageEngine:
             with patch.object(eng.infra, "has_harness", return_value=True):
                 report = eng.collect_coverage(mock_benchmark, mock_corpus)
 
-        # All 3 corpus files should be processed
+        # All 3 corpus files should be processed sequentially
         assert mock_strategy.collect_single_coverage.call_count == 3
         assert report.final_summary.corpus_total == 3
         assert report.final_summary.lines_total == 100

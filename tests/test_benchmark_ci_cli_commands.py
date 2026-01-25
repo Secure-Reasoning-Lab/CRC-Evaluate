@@ -1267,12 +1267,12 @@ class TestRtsSubcommand:
         args = parser.parse_args(["ci", "rts", "--all"])
         dispatch_ci(args)
 
-        # Verify TestPatchVariantJob uses test_mode="RTS"
+        # Verify PatchVariantTestJob uses test_mode="RTS"
         call_args = mock_executor_cls.return_value.execute.call_args
         jobs = call_args[0][0]
-        from crsbench.benchmark_ci.jobs.flat import TestPatchVariantJob
+        from crsbench.benchmark_ci.jobs.flat import PatchVariantTestJob
 
-        test_jobs = [j for j in jobs if isinstance(j, TestPatchVariantJob)]
+        test_jobs = [j for j in jobs if isinstance(j, PatchVariantTestJob)]
         assert len(test_jobs) == 1
         assert test_jobs[0].test_mode == "RTS"
 

@@ -468,7 +468,6 @@ class BenchmarkValidator:
             engine = CoverageEngine(
                 oss_fuzz_path=self.oss_fuzz_path,
                 build_workers=self.build_workers,
-                verify_workers=self.verify_workers,
                 source_mode=self.source_mode,
             )
 

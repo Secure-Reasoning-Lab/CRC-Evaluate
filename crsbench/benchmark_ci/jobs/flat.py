@@ -8,7 +8,7 @@ Job types:
 - BuildVariantsJob: Build all variants for a benchmark (type="build")
 - VerifyCpvPovJob: Verify POVs for a single CPV (type="verify")
 - BuildPatchVariantJob: Build a patched variant (type="build")
-- TestPatchVariantJob: Run POVs + unit tests on patch (type="verify")
+- PatchVariantTestJob: Run POVs + unit tests on patch (type="verify")
 - CollectCoverageJob: Collect coverage data (type="verify")
 """
 
@@ -262,7 +262,7 @@ class BuildPatchVariantJob(Job):
     """Build a patched variant for a specific CPV.
 
     Applies a patch and rebuilds, storing the variant name in
-    context.shared for downstream TestPatchVariantJob.
+    context.shared for downstream PatchVariantTestJob.
     """
 
     benchmark_path: Path
@@ -366,7 +366,7 @@ class BuildPatchVariantJob(Job):
 
 
 @dataclass
-class TestPatchVariantJob(Job):
+class PatchVariantTestJob(Job):
     """Run POVs and unit tests against a patched build.
 
     Verifies that the patch fixes the vulnerability (POVs don't crash)
@@ -485,6 +485,9 @@ class FlatCollectCoverageJob(Job):
 
     Runs after BuildVariantsJob completes. Uses the coverage variant
     from the build results.
+
+    Note: CoverageEngine processes corpus files sequentially.
+    Parallelism is controlled by DAGExecutor at the benchmark level.
     """
 
     benchmark_path: Path

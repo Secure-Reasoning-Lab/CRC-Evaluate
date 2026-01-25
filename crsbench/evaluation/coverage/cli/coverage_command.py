@@ -188,10 +188,11 @@ def run_coverage(args: argparse.Namespace) -> int:
     logger.info(f"Corpus directory: {args.corpus_dir} ({len(corpus_files)} files)")
 
     # Create engine and collect coverage
+    # Note: CoverageEngine processes corpus sequentially; verify_workers
+    # is used by DAGExecutor for benchmark-level parallelism
     engine = CoverageEngine(
         oss_fuzz_path=oss_fuzz_path,
         build_workers=args.build_workers,
-        verify_workers=args.verify_workers,
         source_mode=args.source,
     )
 

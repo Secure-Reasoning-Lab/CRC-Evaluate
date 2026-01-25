@@ -1,6 +1,6 @@
 """Regression test selection check subcommand.
 
-Same structure as patch_cmd but uses test_mode="RTS" for TestPatchVariantJob.
+Same structure as patch_cmd but uses test_mode="RTS" for PatchVariantTestJob.
 Skips benchmarks without rts_mode configured.
 """
 
@@ -27,7 +27,7 @@ from crsbench.benchmark_ci.jobs.base import Job, JobContext
 from crsbench.benchmark_ci.jobs.flat import (
     BuildPatchVariantJob,
     BuildVariantsJob,
-    TestPatchVariantJob,
+    PatchVariantTestJob,
 )
 from crsbench.benchmark_ci.models import (
     BenchmarkValidationResult,
@@ -127,7 +127,7 @@ def run_rts(args: argparse.Namespace) -> int:
                     )
                     all_jobs.append(build_patch_job)
 
-                    test_job = TestPatchVariantJob(
+                    test_job = PatchVariantTestJob(
                         benchmark_path=path,
                         benchmark_name=benchmark_name,
                         cpv_id=cpv_id,
@@ -144,7 +144,7 @@ def run_rts(args: argparse.Namespace) -> int:
     # Log DAG summary
     build_count = sum(1 for j in all_jobs if isinstance(j, BuildVariantsJob))
     patch_build_count = sum(1 for j in all_jobs if isinstance(j, BuildPatchVariantJob))
-    patch_test_count = sum(1 for j in all_jobs if isinstance(j, TestPatchVariantJob))
+    patch_test_count = sum(1 for j in all_jobs if isinstance(j, PatchVariantTestJob))
     logger.info(
         f"DAG: {len(all_jobs)} jobs — "
         f"{build_count} build, {patch_build_count} patch-build, "
