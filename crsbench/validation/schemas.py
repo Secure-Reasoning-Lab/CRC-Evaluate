@@ -162,6 +162,7 @@ class EvaluationMode(str, Enum):
     DELTA = "delta"
     FULL = "full"
     ALL = "all"
+    AUTO = "auto"
 
 
 class Sanitizer(str, Enum):
@@ -732,7 +733,7 @@ class ExperimentConfig(BaseModel):
     trials: int = Field(..., ge=1, description="Number of trials (must be >= 1)")
     mode: EvaluationMode = Field(
         ...,
-        description="Evaluation mode: 'delta', 'full', or 'all' (run all available)",
+        description="Evaluation mode: 'delta', 'full', 'all' (run all available), or 'auto' (single mode, delta preferred)",
     )
     max_total_time: int = Field(
         ..., ge=1, description="Maximum time in seconds per trial (must be >= 1)"

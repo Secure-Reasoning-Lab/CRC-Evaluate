@@ -774,6 +774,18 @@ def generate_trial_matrix(
                     )
                     continue
                 modes_to_run = available_modes
+            elif config_mode == "auto":
+                # Auto mode: run single mode, prefer delta
+                available_modes = get_available_modes_for_benchmark(
+                    benchmark_harness.path
+                )
+                if not available_modes:
+                    logger.warning(
+                        f"No modes available for {benchmark_harness.name}, skipping"
+                    )
+                    continue
+                # Prefer delta, fallback to full
+                modes_to_run = ["delta"] if "delta" in available_modes else ["full"]
             else:
                 # Single mode: delta or full
                 modes_to_run = [config_mode]
