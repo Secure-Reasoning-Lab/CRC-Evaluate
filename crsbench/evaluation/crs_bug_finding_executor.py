@@ -381,7 +381,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 benchmark_path, harness_name, trial_output_dir
             )
 
-            # Detect ref.diff for delta mode
+            # Detect ref.diff for delta mode (prepared by trial_preparation in hints)
             diff_path = None
             if hints_path and (hints_path / "ref.diff").exists():
                 diff_path = hints_path / "ref.diff"
@@ -631,6 +631,9 @@ class CRSBugFindingExecutor(CRSExecutor):
         source_path = source.path
 
         # Construct build command using trial-local paths
+        # Note: source_path is a positional arg in oss-bugfind-crs, so it must come
+        # right after the other positional args (config_dir, project_name), before
+        # any optional flags that follow.
         cmd = [
             "oss-bugfind-crs",
             "build",
@@ -644,9 +647,13 @@ class CRSBugFindingExecutor(CRSExecutor):
             str(benchmark_path),
             "--project-image-prefix",
             self.config.get("project_image_prefix", "aixcc-afc"),
-            str(trial_crs_config_dir),  # Use trial-local config
-            project_name,
+            str(trial_crs_config_dir),  # config_dir positional arg
+            project_name,  # project positional arg
         ]
+
+        # Add source_path right after positional args (it's also positional in CLI)
+        if source_path:
+            cmd.append(str(source_path))
 
         # Add run_id if configured
         run_id = self.config.get("run_id")
@@ -656,10 +663,6 @@ class CRSBugFindingExecutor(CRSExecutor):
         # Add sanitizer flag
         sanitizer = self.config.get("sanitizer", "address")
         cmd.extend(["--sanitizer", sanitizer])
-
-        # Only add source path if not using bundled source
-        if source_path:
-            cmd.append(str(source_path))
 
         # Add external LiteLLM flag if using external LiteLLM
         if self.litellm_mode is not None:
