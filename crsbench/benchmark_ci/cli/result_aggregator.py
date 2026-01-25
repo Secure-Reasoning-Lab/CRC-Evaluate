@@ -23,6 +23,18 @@ def _get_build_fallback(
     return False
 
 
+def _get_shared_build_time(
+    dag_results: dict[str, ExecutorResult],
+    benchmark_name: str,
+) -> float:
+    """Get elapsed time from the shared build-variants job."""
+    build_job_id = f"build-variants:{benchmark_name}"
+    build_result = dag_results.get(build_job_id)
+    if build_result:
+        return build_result.elapsed_seconds
+    return 0.0
+
+
 def aggregate_pov_results(
     dag_results: dict[str, ExecutorResult],
     benchmark_name: str,
@@ -62,13 +74,16 @@ def aggregate_pov_results(
             if result.job_result and not result.job_result.success:
                 failures.append(f"{cpv_id}: POV not detected")
 
-    # POV uses only the shared build — don't attribute shared build time here
+    # Include shared build time for display
+    build_time = _get_shared_build_time(dag_results, benchmark_name)
+    total_time = build_time + verify_time
     fallback = _get_build_fallback(dag_results, benchmark_name)
 
     if errors:
         return CheckResult(
             status=CheckStatus.ERROR,
-            time_seconds=verify_time,
+            time_seconds=total_time,
+            build_time=build_time,
             verify_time=verify_time,
             error="; ".join(errors),
             details={"failures": failures, "errors": errors},
@@ -78,7 +93,8 @@ def aggregate_pov_results(
     if failures:
         return CheckResult(
             status=CheckStatus.FAIL,
-            time_seconds=verify_time,
+            time_seconds=total_time,
+            build_time=build_time,
             verify_time=verify_time,
             error="; ".join(failures[:3]),
             details={"failures": failures},
@@ -87,7 +103,8 @@ def aggregate_pov_results(
 
     return CheckResult(
         status=CheckStatus.PASS,
-        time_seconds=verify_time,
+        time_seconds=total_time,
+        build_time=build_time,
         verify_time=verify_time,
         details={"cpv_count": len(cpv_ids)},
         fallback_used=fallback,
@@ -200,15 +217,18 @@ def aggregate_coverage_result(
     if result.status == JobStatus.DEP_FAILED:
         return CheckResult.make_error("Coverage dependency failed")
 
-    # Coverage uses only the shared build — don't attribute shared build time here
+    # Include shared build time for display
+    build_time = _get_shared_build_time(dag_results, benchmark_name)
     verify_time = result.elapsed_seconds
+    total_time = build_time + verify_time
     fallback = _get_build_fallback(dag_results, benchmark_name)
 
     if result.status == JobStatus.FAILED:
         error = result.error or "Coverage collection failed"
         return CheckResult(
             status=CheckStatus.FAIL,
-            time_seconds=verify_time,
+            time_seconds=total_time,
+            build_time=build_time,
             verify_time=verify_time,
             error=error,
             fallback_used=fallback,
@@ -216,7 +236,8 @@ def aggregate_coverage_result(
 
     return CheckResult(
         status=CheckStatus.PASS,
-        time_seconds=verify_time,
+        time_seconds=total_time,
+        build_time=build_time,
         verify_time=verify_time,
         fallback_used=fallback,
     )
