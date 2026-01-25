@@ -618,13 +618,14 @@ class CRSBugFindingExecutor(CRSExecutor):
         build_start_time = time.time()
         logger.info(f"Building CRS for {build_key}")
 
-        # Load benchmark source (handles pkgs/ vs git clone)
+        # Load benchmark source (clone from main_repo or extract from pkgs/)
         from crsbench.benchmark.runtime import load_benchmark_source
 
         source_dest = trial_build_dir / "src" / project_name
         source = load_benchmark_source(
             benchmark_path,
             dest_dir=source_dest,
+            source_mode=self.config.get("source_mode", "main_repo"),
             mode=self.config.get("mode"),
             verbose=self.config.get("verbose", False),
         )

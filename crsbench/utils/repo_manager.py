@@ -851,21 +851,8 @@ def ensure_project_repository(
     if verbose:
         configure_logger(level="INFO")
 
-    benchmark_path = Path(benchmark_dir)
-
-    # Check for bundled source in pkgs/ (takes precedence over cloning)
-    pkgs_dir = benchmark_path / "pkgs"
-    if pkgs_dir.exists() and not project_dir:
-        extracted_path = _extract_pkgs_source(
-            pkgs_dir=pkgs_dir,
-            repos_dir=repos_dir,
-            verbose=verbose,
-        )
-        if extracted_path:
-            logger.info(f"📦 Using bundled source from pkgs/: {extracted_path}")
-            return str(extracted_path)
-        # Fall through to clone if extraction fails
-        logger.warning("⚠️  pkgs/ extraction failed, falling back to clone")
+    # This function always clones from main_repo.
+    # For bundled pkgs/, use load_benchmark_source(source_mode="pkgs") instead.
 
     # If explicit project_dir is provided
     if project_dir:

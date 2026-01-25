@@ -26,20 +26,18 @@ logger = get_logger(__name__)
 
 def load_benchmark_source(
     benchmark_path: Path,
-    dest_dir: Optional[Path] = None,
+    dest_dir: Path,
     *,
+    source_mode: str = "main_repo",
     mode: Optional[str] = None,
     verbose: bool = False,
 ) -> BenchmarkSource:
-    """Load benchmark source - from pkgs/ or by cloning.
-
-    This is the single source of truth for determining how to provide
-    source code to a CRS. It checks for bundled source first, then
-    falls back to git cloning.
+    """Load benchmark source based on source_mode.
 
     Args:
         benchmark_path: Path to benchmark directory
-        dest_dir: Destination directory for cloned source (required if not bundled)
+        dest_dir: Destination directory for extracted/cloned source
+        source_mode: "main_repo" (clone from git) or "pkgs" (use bundled tarball)
         mode: Benchmark mode ("delta" or "full") for commit selection
         verbose: Enable verbose logging
 
@@ -47,26 +45,85 @@ def load_benchmark_source(
         BenchmarkSource with path and is_bundled status
 
     Raises:
-        RuntimeError: If source cannot be obtained (no pkgs/ and clone fails)
+        RuntimeError: If source cannot be obtained
+        ValueError: If source_mode is invalid
 
     Example:
+        # Clone from main_repo (default)
         source = load_benchmark_source(benchmark_path, trial_dir / "src")
-        if source.requires_source_path:
-            cmd.extend(["--source-path", str(source.path)])
+
+        # Use bundled pkgs/
+        source = load_benchmark_source(benchmark_path, trial_dir / "src", source_mode="pkgs")
     """
     benchmark_path = Path(benchmark_path)
 
-    # Check for bundled source in pkgs/
-    if has_bundled_source(benchmark_path):
-        logger.info("Using bundled source from pkgs/ (no source-path needed)")
-        return BenchmarkSource(path=None, is_bundled=True)
-
-    # Clone source (requires dest_dir)
-    if dest_dir is None:
-        raise RuntimeError(
-            "No bundled source (pkgs/) and no dest_dir provided for cloning"
+    if source_mode not in ("main_repo", "pkgs"):
+        raise ValueError(
+            f"Invalid source_mode: {source_mode}. Use 'main_repo' or 'pkgs'"
         )
 
+    if source_mode == "pkgs":
+        return _load_from_pkgs(benchmark_path, dest_dir, mode=mode)
+
+    return _load_from_main_repo(benchmark_path, dest_dir, mode=mode, verbose=verbose)
+
+
+def _load_from_pkgs(
+    benchmark_path: Path,
+    dest_dir: Path,
+    *,
+    mode: Optional[str] = None,
+) -> BenchmarkSource:
+    """Load source from bundled pkgs/ tarball.
+
+    For delta mode: extracts tarball (at base_commit) and applies ref.diff
+    For full mode: extracts tarball (at base_commit, which is vulnerable)
+    """
+    if not has_bundled_source(benchmark_path):
+        raise RuntimeError(
+            f"No bundled source in {benchmark_path}/pkgs/. "
+            "Use --source main_repo or run 'crsbench bundle' first."
+        )
+
+    # Determine source name from tarball
+    pkgs_dir = benchmark_path / "pkgs"
+    tarballs = list(pkgs_dir.glob("*.tar.gz"))
+    if not tarballs:
+        raise RuntimeError(f"No tarballs found in {pkgs_dir}")
+
+    # Use first tarball (assume single main source)
+    tarball = tarballs[0]
+    source_name = tarball.stem
+    if source_name.endswith(".tar"):
+        source_name = source_name[:-4]
+
+    # For delta mode, need to apply ref.diff after extraction
+    apply_ref_diff = mode == "delta"
+
+    logger.info(f"Extracting bundled source from {tarball.name}")
+    source_path = prepare_source_from_bundle(
+        benchmark_path,
+        dest_dir,
+        source_name,
+        apply_ref_diff=apply_ref_diff,
+        squash_history=mode != "delta",  # Squash for full mode, keep history for delta
+    )
+
+    if not source_path:
+        raise RuntimeError(f"Failed to extract source from {tarball}")
+
+    logger.info(f"Using bundled source from: {source_path}")
+    return BenchmarkSource(path=source_path, is_bundled=True)
+
+
+def _load_from_main_repo(
+    benchmark_path: Path,
+    dest_dir: Path,
+    *,
+    mode: Optional[str] = None,
+    verbose: bool = False,
+) -> BenchmarkSource:
+    """Load source by cloning from main_repo."""
     from crsbench.utils.repo_manager import ensure_project_repository
 
     logger.info(f"Cloning source to: {dest_dir}")
