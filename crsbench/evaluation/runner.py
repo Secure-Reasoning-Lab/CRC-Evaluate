@@ -443,7 +443,7 @@ class BenchmarkRunner:
                 f"POV verification report: "
                 f"cpvs={len(report.cpvs_found)}/{report.total_expected_cpvs}, "
                 f"povs={report.total_povs_processed}, "
-                f"zerodays={report.zerodays_detected}, "
+                f"unintended_crashes={report.unintended_crashes}, "
                 f"early_stopped={report.early_stopped}"
             )
 

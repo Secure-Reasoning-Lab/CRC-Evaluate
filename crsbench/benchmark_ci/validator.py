@@ -185,7 +185,7 @@ class BenchmarkValidator:
         """Validate POVs using VerificationEngine.
 
         The engine handles:
-        - Building all variants (DELTA_BASE, DELTA_REF, FULL_BASE, ALL_PATCHED, CPVs)
+        - Building all variants (DELTA_REF, FULL_BASE, ALL_PATCHED, CPVs)
         - Running POVs against each variant
         - Resolving verdicts based on crash patterns
 
@@ -252,10 +252,6 @@ class BenchmarkValidator:
                 elif r.status == PovVerificationStatus.NOT_VULNERABLE:
                     # POV didn't crash where expected - this is a failure
                     failed_povs.append(f"{r.pov_id}: NOT_VULNERABLE - {r.details}")
-                elif r.status == PovVerificationStatus.ZERODAY:
-                    # In DELTA mode: crashed on base (pre-existing bug)
-                    # In FULL mode: crashed but no CPV matched
-                    failed_povs.append(f"{r.pov_id}: ZERODAY - {r.details}")
                 elif r.status == PovVerificationStatus.UNINTENDED_CRASH:
                     # Crashed even with patches applied
                     failed_povs.append(f"{r.pov_id}: UNINTENDED_CRASH - {r.details}")

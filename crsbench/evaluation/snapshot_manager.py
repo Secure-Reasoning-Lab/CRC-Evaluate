@@ -641,7 +641,7 @@ class SnapshotManager:
                 "povs_total": pov_snapshot.povs_total,
                 "povs_new": pov_snapshot.povs_new,
                 "duplicates_skipped": pov_snapshot.duplicates_skipped,
-                "zerodays_count": pov_snapshot.zerodays_count,
+                "unintended_crashes_count": pov_snapshot.unintended_crashes_count,
                 "early_stop_triggered": pov_snapshot.early_stop_triggered,
             }
 

@@ -1,8 +1,8 @@
 """Tests for VerdictResolver.
 
-Tests verdict logic for FULL and DELTA modes:
-- FULL mode: base crash → allpatched crash → CPV matches → ZERODAY
-- DELTA mode: base crash → ref crash → allpatched crash → CPV matches → UNINTENDED
+Tests verdict logic for FULL and DELTA modes (same logic, different base variant):
+- Check base/ref crash → allpatched crash → CPV matches → UNINTENDED_CRASH
+- FULL mode uses FULL_BASE, DELTA mode uses DELTA_REF
 """
 
 from crsbench.builder.types import BenchmarkMode, VariantType
@@ -74,8 +74,8 @@ class TestVerdictResolverFullMode:
         assert result.status == PovVerificationStatus.CPV
         assert result.cpv_matched == ["cpv_0", "cpv_1"]
 
-    def test_zeroday_when_base_crashes_no_cpv_match(self):
-        """If base crashes but no CPV matches, it's a zeroday."""
+    def test_unintended_crash_when_base_crashes_no_cpv_match(self):
+        """If base crashes but no CPV matches, it's an unintended crash."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
             crash_results={
@@ -86,41 +86,21 @@ class TestVerdictResolverFullMode:
             benchmark_name="test-bench",
             pov_id="pov_1",
         )
-        assert result.status == PovVerificationStatus.ZERODAY
+        assert result.status == PovVerificationStatus.UNINTENDED_CRASH
         assert result.cpv_matched == []
-        assert (
-            "zeroday" in result.details.lower() or "unknown" in result.details.lower()
-        )
 
 
 class TestVerdictResolverDeltaMode:
-    """Tests for DELTA mode verdict resolution."""
+    """Tests for DELTA mode verdict resolution.
 
-    def test_delta_base_crashes_returns_zeroday(self):
-        """In DELTA mode, if base crashes, bug is pre-existing (zeroday)."""
-        result = VerdictResolver.resolve(
-            mode=BenchmarkMode.DELTA,
-            crash_results={
-                VariantType.DELTA_BASE: True,
-                VariantType.DELTA_REF: True,
-                VariantType.ALL_PATCHED: False,
-            },
-            cpv_crash_map={},
-            benchmark_name="test-bench",
-            pov_id="pov_1",
-        )
-        assert result.status == PovVerificationStatus.ZERODAY
-        assert (
-            "before delta" in result.details.lower()
-            or "pre-existing" in result.details.lower()
-        )
+    DELTA mode uses DELTA_REF as the vulnerable version (same logic as FULL mode).
+    """
 
     def test_delta_ref_no_crash_returns_not_vulnerable(self):
         """In DELTA mode, if ref doesn't crash, POV is not vulnerable."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                VariantType.DELTA_BASE: False,
                 VariantType.DELTA_REF: False,
                 VariantType.ALL_PATCHED: False,
             },
@@ -135,7 +115,6 @@ class TestVerdictResolverDeltaMode:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                VariantType.DELTA_BASE: False,
                 VariantType.DELTA_REF: True,
                 VariantType.ALL_PATCHED: True,
             },
@@ -150,7 +129,6 @@ class TestVerdictResolverDeltaMode:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                VariantType.DELTA_BASE: False,
                 VariantType.DELTA_REF: True,
                 VariantType.ALL_PATCHED: False,
             },
@@ -166,7 +144,6 @@ class TestVerdictResolverDeltaMode:
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                VariantType.DELTA_BASE: False,
                 VariantType.DELTA_REF: True,
                 VariantType.ALL_PATCHED: False,
             },

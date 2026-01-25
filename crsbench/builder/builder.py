@@ -36,7 +36,7 @@ class OSSFuzzBuilder:
     """Unified builder for OSS-Fuzz project variants.
 
     Builds validation, coverage, and patch variants for benchmarks:
-    - Validation variants (FULL_BASE, DELTA_BASE, DELTA_REF, ALL_PATCHED, CPV)
+    - Validation variants (FULL_BASE, DELTA_REF, ALL_PATCHED, CPV)
     - Coverage variant (COVERAGE)
     - Patch variant (PATCHED) - CRS-generated patches for verification
 
@@ -199,7 +199,7 @@ class OSSFuzzBuilder:
 
         Supported variant types for inc-build:
         - PATCHED: CRS-generated patches for verification
-        - Validation variants: DELTA_BASE, DELTA_REF, ALL_PATCHED, CPV
+        - Validation variants: DELTA_REF, ALL_PATCHED, CPV, FULL_BASE
         - NOT supported: COVERAGE (requires different instrumentation)
 
         Falls back to standard build if inc-build image is not available.
@@ -369,7 +369,7 @@ class OSSFuzzBuilder:
             logger.debug(f"No WORKDIR found, using: {source_name}")
 
         # Determine if ref.diff should be applied
-        # DELTA_BASE and FULL_BASE use base commit (no ref.diff)
+        # FULL_BASE uses base commit (no ref.diff)
         # DELTA_REF, ALL_PATCHED, CPV use ref commit (apply ref.diff)
         apply_ref_diff = self._needs_ref_diff(config.variant_type)
 
@@ -395,7 +395,7 @@ class OSSFuzzBuilder:
 
         ref.diff transforms base_commit → ref_commit state.
         Needed for: DELTA_REF, ALL_PATCHED, CPV
-        Not needed for: DELTA_BASE, FULL_BASE, COVERAGE, PATCHED
+        Not needed for: FULL_BASE, COVERAGE, PATCHED
 
         Args:
             variant_type: Type of variant being built
@@ -577,32 +577,28 @@ class OSSFuzzBuilder:
         # Get all CPV patches upfront
         all_patches = self.infra.get_all_patches(benchmark_path)
 
-        # Base version (no patches)
-        base_type = (
-            VariantType.FULL_BASE
-            if mode == BenchmarkMode.FULL
-            else VariantType.DELTA_BASE
-        )
-        plan.add_variant(
-            variant_type=base_type,
-            commit=base_commit,
-            main_repo=main_repo,
-            benchmark_path=benchmark_path,
-            mode=mode,
-            patches=[],  # Base: no patches
-            language=language,
-            repo_name=repo_name,
-        )
-
-        # Reference version (delta mode only, no patches)
-        if mode == BenchmarkMode.DELTA and ref_commit:
+        # Base/ref version (vulnerable version, no patches)
+        # FULL mode: FULL_BASE at base_commit
+        # DELTA mode: DELTA_REF at ref_commit
+        if mode == BenchmarkMode.FULL:
+            plan.add_variant(
+                variant_type=VariantType.FULL_BASE,
+                commit=base_commit,
+                main_repo=main_repo,
+                benchmark_path=benchmark_path,
+                mode=mode,
+                patches=[],
+                language=language,
+                repo_name=repo_name,
+            )
+        elif mode == BenchmarkMode.DELTA and ref_commit:
             plan.add_variant(
                 variant_type=VariantType.DELTA_REF,
                 commit=ref_commit,
                 main_repo=main_repo,
                 benchmark_path=benchmark_path,
                 mode=mode,
-                patches=[],  # Ref: no patches
+                patches=[],
                 language=language,
                 repo_name=repo_name,
             )

@@ -129,7 +129,7 @@ class POVVerificationManager:
         # Counter tracking (derived from store on demand for stats)
         self._duplicates_count = 0
         self._errors_count = 0
-        self._zerodays_count = 0
+        self._unintended_crashes_count = 0
 
         # Early stop state
         self._early_stop_triggered = False
@@ -264,11 +264,8 @@ class POVVerificationManager:
             pov_path, result.status, result.cpv_matched, pov_hash=pov_hash
         )
 
-        # Store POV file and crash logs for successful verifications (CPV or ZERODAY)
-        if result.status in (
-            PovVerificationStatus.CPV,
-            PovVerificationStatus.ZERODAY,
-        ):
+        # Store POV file and crash logs for successful CPV verifications
+        if result.status == PovVerificationStatus.CPV:
             # Copy POV file to category-specific blobs directory
             self.store.store_unique_pov(
                 pov_path, pov_hash, result.status, result.cpv_matched
@@ -294,10 +291,10 @@ class POVVerificationManager:
                     f"found={len(self.found_cpvs)} "
                     f"total={self.total_expected_cpvs}"
                 )
-        elif result.status == PovVerificationStatus.ZERODAY:
+        elif result.status == PovVerificationStatus.UNINTENDED_CRASH:
             with self._lock:
-                self._zerodays_count += 1
-            logger.info(f"Zeroday detected: pov={pov_path.name}")
+                self._unintended_crashes_count += 1
+            logger.info(f"Unintended crash: pov={pov_path.name}")
         elif result.status == PovVerificationStatus.NOT_VULNERABLE:
             logger.debug(f"POV not vulnerable: pov={pov_path.name}")
         else:
@@ -372,7 +369,7 @@ class POVVerificationManager:
                 povs_total=len(self.store.povs),
                 povs_new=povs_new,
                 duplicates_skipped=0,  # Duplicates filtered in _discover_new_povs
-                zerodays_count=self._zerodays_count,
+                unintended_crashes_count=self._unintended_crashes_count,
                 early_stop_triggered=self._early_stop_triggered,
             )
             self._snapshot_count += 1
@@ -387,7 +384,7 @@ class POVVerificationManager:
             f"POV snapshot {cycle}: "
             f"cpvs={len(self.found_cpvs)}/{self.total_expected_cpvs}, "
             f"povs={len(self.store.povs)} (+{povs_new}), "
-            f"zerodays={self._zerodays_count}"
+            f"unintended_crashes={self._unintended_crashes_count}"
         )
 
         return snapshot
@@ -406,7 +403,7 @@ class POVVerificationManager:
                 "found_cpvs": list(self.found_cpvs),
                 "processed_hashes_count": len(self.store.povs),
                 "duplicates_count": self._duplicates_count,
-                "zerodays_count": self._zerodays_count,
+                "unintended_crashes_count": self._unintended_crashes_count,
                 "errors_count": self._errors_count,
                 "cpvs_remaining": self.total_expected_cpvs - len(self.found_cpvs),
                 "all_cpvs_found": self.all_cpvs_found,
@@ -432,7 +429,7 @@ class POVVerificationManager:
                 cpvs_remaining=cpvs_remaining,
                 total_povs_processed=len(self.store.povs),
                 duplicates_skipped=self._duplicates_count,
-                zerodays_detected=self._zerodays_count,
+                unintended_crashes=self._unintended_crashes_count,
                 verification_errors=self._errors_count,
                 verification_timeouts=0,  # Not tracked separately
                 early_stopped=self._early_stop_triggered,
@@ -461,7 +458,7 @@ class POVVerificationManager:
                 "povs_total": snapshot.povs_total,
                 "povs_new": snapshot.povs_new,
                 "duplicates_skipped": snapshot.duplicates_skipped,
-                "zerodays_count": snapshot.zerodays_count,
+                "unintended_crashes_count": snapshot.unintended_crashes_count,
                 "early_stop_triggered": snapshot.early_stop_triggered,
             }
 
@@ -496,7 +493,7 @@ class POVVerificationManager:
                         "cpvs_remaining": latest.cpvs_remaining,
                         "povs_total": latest.povs_total,
                         "povs_new": latest.povs_new,
-                        "zerodays_count": latest.zerodays_count,
+                        "unintended_crashes_count": latest.unintended_crashes_count,
                         "early_stop_triggered": latest.early_stop_triggered,
                     }
                     if latest

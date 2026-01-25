@@ -21,14 +21,12 @@ class PovVerificationStatus(Enum):
 
     - NOT_VULNERABLE: POV does not trigger any vulnerability
     - CPV: POV triggers one or more known CPVs
-    - ZERODAY: POV triggers a crash not covered by any known CPV
-    - UNINTENDED_CRASH: POV crashes even with all patches applied
+    - UNINTENDED_CRASH: POV crashes but doesn't match any known CPV
     - ERROR: Verification failed due to an error
     """
 
     NOT_VULNERABLE = "not_vulnerable"
     CPV = "cpv"
-    ZERODAY = "zeroday"
     UNINTENDED_CRASH = "unintended_crash"
     ERROR = "error"
 
@@ -55,7 +53,7 @@ class PovVerificationResult:
     """Result of POV verification.
 
     Attributes:
-        status: Verification status (CPV, ZERODAY, NOT_VULNERABLE, etc.)
+        status: Verification status (CPV, NOT_VULNERABLE, UNINTENDED_CRASH, ERROR)
         benchmark: Name of the benchmark tested
         cpv_matched: List of CPV identifiers that this POV triggers
         pov_id: Optional identifier for the POV that was verified
@@ -104,11 +102,8 @@ class PovVerificationResult:
 
     @property
     def is_vulnerability(self) -> bool:
-        """Return True if the POV triggers any vulnerability."""
-        return self.status in (
-            PovVerificationStatus.CPV,
-            PovVerificationStatus.ZERODAY,
-        )
+        """Return True if the POV triggers a known vulnerability (CPV)."""
+        return self.status == PovVerificationStatus.CPV
 
     def __str__(self) -> str:
         if self.status == PovVerificationStatus.CPV:
