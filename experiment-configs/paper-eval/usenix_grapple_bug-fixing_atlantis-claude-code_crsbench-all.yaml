@@ -49,14 +49,14 @@ resources:
     cost_budget: 100.0  # $100 per trial
 
 # Storage Configuration (local SSD for fast I/O)
-experiment_filestore: /mnt/ssd2/acorn421/crsbench/usenix-eval/experiment-data
-report_filestore: /mnt/ssd2/acorn421/crsbench/usenix-eval/report-data
+experiment_filestore: /mnt/ssd2/acorn421/crsbench/usenix-grapple-bug-fixing-eval/experiment-data
+report_filestore: /mnt/ssd2/acorn421/crsbench/usenix-grapple-bug-fixing-eval/report-data
 
 # NFS result transfer settings
 copy_results_to_filestore: true
 copy_results_after_trial: true
-experiment_results_filestore: /mnt/crsbench_nfs/crsbench/grapple/experiment-data
-reports_results_filestore: /mnt/crsbench_nfs/crsbench/grapple/report-data
+experiment_results_filestore: /mnt/crsbench_nfs/crsbench/grapple/usenix-grapple-bug-fixing-eval/experiment-data
+reports_results_filestore: /mnt/crsbench_nfs/crsbench/grapple/usenix-grapple-bug-fixing-eval/report-data
 
 # Disk cleanup (delete local artifacts after transfer to NFS)
 cleanup_after_trial: true
