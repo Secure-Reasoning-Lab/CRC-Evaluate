@@ -52,27 +52,6 @@ class TestVariantType:
         # Coverage does NOT support inc-build (different instrumentation)
         assert not VariantType.COVERAGE.supports_inc_build()
 
-    def test_should_fallback_on_inc_build_failure(self):
-        """Test should_fallback_on_inc_build_failure method.
-
-        Only DELTA_BASE should fallback because inc-build images are built at
-        ref_commit, which may be incompatible with base_commit.
-        """
-        # Only DELTA_BASE should fallback
-        assert VariantType.DELTA_BASE.should_fallback_on_inc_build_failure()
-
-        # Other validation variants should NOT fallback (same commit as inc-build image)
-        assert not VariantType.FULL_BASE.should_fallback_on_inc_build_failure()
-        assert not VariantType.DELTA_REF.should_fallback_on_inc_build_failure()
-        assert not VariantType.ALL_PATCHED.should_fallback_on_inc_build_failure()
-        assert not VariantType.CPV.should_fallback_on_inc_build_failure()
-
-        # PATCHED variants should NOT fallback
-        assert not VariantType.PATCHED.should_fallback_on_inc_build_failure()
-
-        # COVERAGE does not support inc-build
-        assert not VariantType.COVERAGE.should_fallback_on_inc_build_failure()
-
 
 class TestBuildConfig:
     """Tests for BuildConfig dataclass."""
@@ -772,6 +751,9 @@ class TestIncBuildSupport:
             mock_ensure.assert_called_once()
             mock_inc_build.assert_not_called()
             mock_standard.assert_called_once()
+            # Image unavailable → fallback signals "prepare the inc-build image"
+            call_kwargs = mock_standard.call_args.kwargs
+            assert call_kwargs.get("fallback_from_inc") is True
 
     def test_build_single_skips_inc_build_for_coverage(
         self, builder: OSSFuzzBuilder, tmp_path: Path
@@ -806,6 +788,9 @@ class TestIncBuildSupport:
             mock_ensure.assert_not_called()
             mock_inc_build.assert_not_called()
             mock_standard.assert_called_once()
+            # Verify fallback_from_inc=False (not a fallback, just not supported)
+            call_kwargs = mock_standard.call_args.kwargs
+            assert call_kwargs.get("fallback_from_inc") is False
 
     def test_build_single_skips_inc_build_when_disabled(
         self, builder: OSSFuzzBuilder, tmp_path: Path
@@ -840,3 +825,169 @@ class TestIncBuildSupport:
             mock_ensure.assert_not_called()
             mock_inc_build.assert_not_called()
             mock_standard.assert_called_once()
+            # Verify fallback_from_inc=False (not a fallback, just disabled)
+            call_kwargs = mock_standard.call_args.kwargs
+            assert call_kwargs.get("fallback_from_inc") is False
+
+
+class TestBuildMetadataCaching:
+    """Tests for build metadata caching and inc-build cache validation."""
+
+    @pytest.fixture
+    def oss_fuzz_path(self, tmp_path: Path) -> Path:
+        """Create a mock oss-fuzz directory structure."""
+        oss_fuzz = tmp_path / "oss-fuzz"
+        (oss_fuzz / "infra").mkdir(parents=True)
+        (oss_fuzz / "projects").mkdir(parents=True)
+        (oss_fuzz / "build" / "out").mkdir(parents=True)
+
+        # Create a mock helper.py
+        helper = oss_fuzz / "infra" / "helper.py"
+        helper.write_text("# mock helper")
+
+        return oss_fuzz
+
+    @pytest.fixture
+    def infra(self, oss_fuzz_path: Path):
+        """Create OSSFuzzInfrastructure instance."""
+        from crsbench.builder.infrastructure import OSSFuzzInfrastructure
+
+        return OSSFuzzInfrastructure(oss_fuzz_path)
+
+    def _create_mock_build(
+        self,
+        infra,
+        variant_name: str,
+        *,
+        inc_build: bool = False,
+        with_metadata: bool = True,
+    ) -> Path:
+        """Create a mock build output with optional metadata."""
+        build_path = infra.get_build_output_path(variant_name)
+        build_path.mkdir(parents=True, exist_ok=True)
+
+        # Create a mock fuzzer binary
+        (build_path / "fuzz_target").write_text("mock binary")
+
+        # Create project symlink
+        project_path = infra.projects_base / variant_name
+        project_path.mkdir(parents=True, exist_ok=True)
+
+        # Write metadata if requested
+        if with_metadata:
+            infra.write_build_metadata(
+                variant_name, inc_build=inc_build, sanitizer="address"
+            )
+
+        return build_path
+
+    def test_is_variant_built_without_require_inc_build(self, infra):
+        """Test is_variant_built accepts any cache when require_inc_build is None."""
+        # Create non-inc build
+        self._create_mock_build(infra, "test-variant", inc_build=False)
+
+        # Should accept without inc_build requirement
+        assert infra.is_variant_built("test-variant") is True
+        assert infra.is_variant_built("test-variant", require_inc_build=None) is True
+
+    def test_is_variant_built_rejects_non_inc_cache_when_inc_required(self, infra):
+        """Test is_variant_built rejects non-inc cache when require_inc_build=True."""
+        # Create non-inc build
+        self._create_mock_build(infra, "test-variant", inc_build=False)
+
+        # Should reject because cached build is not inc-build
+        assert infra.is_variant_built("test-variant", require_inc_build=True) is False
+
+    def test_is_variant_built_accepts_inc_cache_when_inc_required(self, infra):
+        """Test is_variant_built accepts inc cache when require_inc_build=True."""
+        # Create inc-build
+        self._create_mock_build(infra, "test-variant", inc_build=True)
+
+        # Should accept because cached build is inc-build
+        assert infra.is_variant_built("test-variant", require_inc_build=True) is True
+
+    def test_is_variant_built_rejects_inc_cache_when_non_inc_required(self, infra):
+        """Test is_variant_built rejects inc cache when require_inc_build=False."""
+        # Create inc-build
+        self._create_mock_build(infra, "test-variant", inc_build=True)
+
+        # Should reject because cached build is inc-build but non-inc required
+        assert infra.is_variant_built("test-variant", require_inc_build=False) is False
+
+    def test_is_variant_built_treats_no_metadata_as_non_inc(self, infra):
+        """Test legacy builds without metadata are treated as non-inc."""
+        # Create build without metadata (legacy)
+        self._create_mock_build(
+            infra, "test-variant", inc_build=False, with_metadata=False
+        )
+
+        # Should accept without requirement
+        assert infra.is_variant_built("test-variant") is True
+
+        # Should reject when inc-build required (no metadata = non-inc)
+        assert infra.is_variant_built("test-variant", require_inc_build=True) is False
+
+        # Should accept when non-inc required
+        assert infra.is_variant_built("test-variant", require_inc_build=False) is True
+
+    def test_builder_uses_cache_when_inc_build_matches(
+        self, oss_fuzz_path: Path, infra, tmp_path: Path
+    ):
+        """Test builder uses cache when inc-build mode matches."""
+        builder = OSSFuzzBuilder(oss_fuzz_path)
+
+        # Create inc-build cache
+        variant_name = "test-benchmark-deltabase"
+        self._create_mock_build(infra, variant_name, inc_build=True)
+
+        config = BuildConfig(
+            benchmark_name="test-benchmark",
+            variant_type=VariantType.DELTA_BASE,
+            commit="abc123",
+            main_repo="https://example.com",
+            benchmark_path=tmp_path / "benchmark",
+            use_inc_build=True,  # Matches cached build
+        )
+
+        # Mock _build_single to track if it's called
+        with patch.object(builder, "_build_single") as mock_build:
+            results = builder.build_variants([config])
+
+            # Should use cache, not call _build_single
+            mock_build.assert_not_called()
+            assert config.variant_name in results
+            assert results[config.variant_name].cached is True
+
+    def test_builder_rebuilds_when_inc_build_mismatches(
+        self, oss_fuzz_path: Path, infra, tmp_path: Path
+    ):
+        """Test builder rebuilds when inc-build mode doesn't match cache."""
+        builder = OSSFuzzBuilder(oss_fuzz_path)
+
+        # Create non-inc cache
+        variant_name = "test-benchmark-deltabase"
+        self._create_mock_build(infra, variant_name, inc_build=False)
+
+        config = BuildConfig(
+            benchmark_name="test-benchmark",
+            variant_type=VariantType.DELTA_BASE,
+            commit="abc123",
+            main_repo="https://example.com",
+            benchmark_path=tmp_path / "benchmark",
+            use_inc_build=True,  # Doesn't match cached build
+        )
+
+        # Mock _build_single to return success
+        mock_result = BuildResult(
+            config=config,
+            success=True,
+            variant_name=config.variant_name,
+            build_path=Path("/tmp/build"),
+        )
+        with patch.object(builder, "_build_single", return_value=mock_result) as mock:
+            results = builder.build_variants([config])
+
+            # Should rebuild because cache doesn't match inc-build requirement
+            mock.assert_called_once()
+            assert config.variant_name in results
+            assert results[config.variant_name].cached is False

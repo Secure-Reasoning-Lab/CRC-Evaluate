@@ -116,52 +116,18 @@ class CRSBugFindingExecutor(CRSExecutor):
     ) -> None:
         """Clean up files from harnesses other than the target.
 
+        NOTE: This function is intentionally a no-op. CRS may place arbitrary
+        files in /out (metadata, tarballs, etc.) and crsbench should not make
+        assumptions about what can be safely removed. The disk space optimization
+        is not worth the risk of breaking CRS functionality.
+
         Args:
             trial_output_dir: Trial directory containing CRS outputs
             target_harness: Name of the harness to keep
             project_name: Project name (for CRS output directory path)
             sanitizer: Sanitizer type (e.g., 'address', 'memory', 'undefined')
         """
-        # Clean OSS-Fuzz build output
-        build_out_dir = self._get_oss_fuzz_build_output_dir(
-            trial_output_dir, project_name
-        )
-        logger.debug(f"build_out_dir {build_out_dir}")
-
-        if build_out_dir.exists():
-            # Iterate subdirectories under build/out/
-            for subdir in build_out_dir.iterdir():
-                if not subdir.is_dir():
-                    continue
-                # Iterate files inside each subdirectory
-                for item in subdir.iterdir():
-                    # TODO: check this logic is enough that we don't remove neceesary files
-                    if target_harness not in item.name:
-                        logger.debug(f"Removing non-target harness file: {item}")
-                        if item.is_dir():
-                            shutil.rmtree(item)
-                        else:
-                            item.unlink()
-
-        # Clean up CRS output directories for each CRS in ensemble
-        from crsbench.utils.crs_helper import get_all_crs_registry_names
-
-        crs_names = get_all_crs_registry_names(
-            self.crs_config_name, self.crs_configs_dir
-        )
-        build_dir = trial_output_dir / "crs-build"
-
-        for crs_name in crs_names:
-            crs_out_dir = build_dir / "out" / crs_name / project_name / sanitizer
-            if not crs_out_dir.exists():
-                continue
-            for item in crs_out_dir.iterdir():
-                if target_harness not in item.name:
-                    logger.debug(f"Removing non-target harness file: {item}")
-                    if item.is_dir():
-                        shutil.rmtree(item)
-                    else:
-                        item.unlink()
+        # Intentionally disabled - CRS owns /out directory contents
 
     def build_crs(self, benchmark_path: Path, trial_output_dir: Path) -> None:
         """Pre-build CRS Docker image before running.
@@ -415,7 +381,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 benchmark_path, harness_name, trial_output_dir
             )
 
-            # Detect ref.diff for delta mode
+            # Detect ref.diff for delta mode (prepared by trial_preparation in hints)
             diff_path = None
             if hints_path and (hints_path / "ref.diff").exists():
                 diff_path = hints_path / "ref.diff"
@@ -665,6 +631,9 @@ class CRSBugFindingExecutor(CRSExecutor):
         source_path = source.path
 
         # Construct build command using trial-local paths
+        # Note: source_path is a positional arg in oss-bugfind-crs, so it must come
+        # right after the other positional args (config_dir, project_name), before
+        # any optional flags that follow.
         cmd = [
             "oss-bugfind-crs",
             "build",
@@ -678,9 +647,13 @@ class CRSBugFindingExecutor(CRSExecutor):
             str(benchmark_path),
             "--project-image-prefix",
             self.config.get("project_image_prefix", "aixcc-afc"),
-            str(trial_crs_config_dir),  # Use trial-local config
-            project_name,
+            str(trial_crs_config_dir),  # config_dir positional arg
+            project_name,  # project positional arg
         ]
+
+        # Add source_path right after positional args (it's also positional in CLI)
+        if source_path:
+            cmd.append(str(source_path))
 
         # Add run_id if configured
         run_id = self.config.get("run_id")
@@ -690,10 +663,6 @@ class CRSBugFindingExecutor(CRSExecutor):
         # Add sanitizer flag
         sanitizer = self.config.get("sanitizer", "address")
         cmd.extend(["--sanitizer", sanitizer])
-
-        # Only add source path if not using bundled source
-        if source_path:
-            cmd.append(str(source_path))
 
         # Add external LiteLLM flag if using external LiteLLM
         if self.litellm_mode is not None:

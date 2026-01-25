@@ -287,10 +287,10 @@ class TestVerifyBenchmarkSkipHashes:
 
         return pov_dir
 
-    def test_verify_benchmark_returns_tuple_with_skipped_count(
+    def test_verify_benchmark_returns_output_with_skipped_count(
         self, mock_oss_fuzz: Path, benchmark_path: Path, pov_dir: Path
     ) -> None:
-        """Test that verify_benchmark returns tuple including skipped count."""
+        """Test that verify_benchmark returns PovBenchmarkOutput with skipped count."""
         from crsbench.evaluation.verification.pov.engine import VerificationEngine
 
         with (
@@ -313,11 +313,9 @@ class TestVerifyBenchmarkSkipHashes:
             pov1_hash = compute_content_hash(pov_dir / "pov1.bin")
             skip_hashes = {pov1_hash}
 
-            results, skipped = engine.verify_benchmark(
+            output = engine.verify_benchmark(
                 benchmark_path, pov_dir=pov_dir, skip_hashes=skip_hashes
             )
 
-            # Should return tuple
-            assert isinstance(results, list)
-            assert isinstance(skipped, int)
-            assert skipped == 1  # pov1.bin was skipped
+            assert isinstance(output.results, list)
+            assert output.skipped_count == 1  # pov1.bin was skipped

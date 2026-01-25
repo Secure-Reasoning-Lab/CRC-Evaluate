@@ -188,10 +188,11 @@ def run_coverage(args: argparse.Namespace) -> int:
     logger.info(f"Corpus directory: {args.corpus_dir} ({len(corpus_files)} files)")
 
     # Create engine and collect coverage
+    # Note: CoverageEngine processes corpus sequentially; verify_workers
+    # is used by DAGExecutor for benchmark-level parallelism
     engine = CoverageEngine(
         oss_fuzz_path=oss_fuzz_path,
         build_workers=args.build_workers,
-        verify_workers=args.verify_workers,
         source_mode=args.source,
     )
 
@@ -257,9 +258,8 @@ def output_report(
     else:  # text
         output = (
             f"Harness: {harness_name}\n"
-            f"Lines Covered: {summary.lines_covered}/{summary.lines_total} "
-            f"({summary.lines_percent:.1f}%)\n"
-            f"Functions Covered: {summary.functions_covered}/{summary.functions_total}\n"
+            f"Lines Covered: {summary.format_lines()}\n"
+            f"Functions Covered: {summary.format_functions()}\n"
             f"Corpus Files: {summary.corpus_total} "
             f"(contributing: {summary.corpus_contributing}, unique: {summary.corpus_unique})"
         )
@@ -282,11 +282,8 @@ def print_summary(summary: CoverageSummary, harness_name: str) -> None:
     logger.info("COVERAGE SUMMARY")
     logger.info("=" * 50)
     logger.info(f"Harness: {harness_name}")
-    logger.info(
-        f"Lines: {summary.lines_covered}/{summary.lines_total} "
-        f"({summary.lines_percent:.1f}%)"
-    )
-    logger.info(f"Functions: {summary.functions_covered}/{summary.functions_total}")
+    logger.info(f"Lines: {summary.format_lines()}")
+    logger.info(f"Functions: {summary.format_functions()}")
     logger.info(
         f"Corpus: {summary.corpus_total} total, "
         f"{summary.corpus_contributing} contributing, "

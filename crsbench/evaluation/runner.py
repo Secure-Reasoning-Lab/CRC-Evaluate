@@ -1011,14 +1011,14 @@ class BenchmarkRunner:
                 dedup_strategy=PatchBasedDedup(),  # TODO: make it configurable
             )
             pov_dir = crs_output_dir / "povs"
-            results, _skipped = engine.verify_benchmark(
+            output = engine.verify_benchmark(
                 benchmark_path=benchmark_path,
                 pov_dir=pov_dir,
                 deduplicate=True,  # TODO: configurable?
                 harness_filter=harness_name,
                 force_rebuild=False,  # Variants are pre-built at experiment start
             )
-            return results
+            return output.results
         except Exception as e:
             self.logger.error(
                 f"POV verification failed for harness '{harness_name}': {e}",
@@ -1078,7 +1078,6 @@ class BenchmarkRunner:
                 patch_dir=patch_dir,
                 harness=harness_name,
                 pov_dir=pov_dir,
-                parallel=True,
             )
 
             # Log summary

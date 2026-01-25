@@ -20,14 +20,33 @@ class CheckStatus(Enum):
     ERROR = "error"
 
 
+class CheckMode(Enum):
+    """Mode for CI validation checks.
+
+    Controls which build/verification variants are tested.
+    """
+
+    FORMAT = "format"  # Format validation only (Fmt column)
+    DEFAULT = "default"  # Standard checks only (POV, Patch)
+    INC = "inc"  # Inc-build variants only (POV:inc, Patch:inc)
+    RTS = "rts"  # RTS variants only (Patch:rts)
+    INC_RTS = (
+        "inc-rts"  # Inc + RTS + combined (POV:inc, Patch:inc, Patch:rts, Patch:inc-rts)
+    )
+    ALL = "all"  # Full matrix (all variants)
+
+
 @dataclass
 class CheckResult:
     """Result of a single validation check."""
 
     status: CheckStatus
     time_seconds: float
+    build_time: float = 0.0
+    verify_time: float = 0.0
     error: str = ""
     details: dict[str, Any] = field(default_factory=dict)
+    fallback_used: bool = False  # True if inc-build fell back to standard build
 
     @classmethod
     def skip(cls, reason: str = "") -> "CheckResult":
@@ -39,14 +58,57 @@ class CheckResult:
         """Create an error result."""
         return cls(status=CheckStatus.ERROR, time_seconds=time_seconds, error=message)
 
+    def format_status(self) -> str:
+        """Format status for display with time and fallback indicator.
+
+        Returns:
+            Formatted string like "PASS(2m)", "PASS(V:30s)", "PASS(B:2m V:1m)",
+            "PASS-FB(8m)", "FAIL", "-"
+        """
+        if self.status == CheckStatus.SKIP:
+            return "-"
+        if self.status == CheckStatus.FAIL:
+            return "FAIL"
+        if self.status == CheckStatus.ERROR:
+            return "ERROR"
+
+        # Format time with build/verify split when available
+        if self.verify_time > 0 and self.build_time == 0:
+            time_str = f"V:{_format_time_short(self.verify_time)}"
+        elif self.verify_time > 0 and self.build_time > 0:
+            b_str = _format_time_short(self.build_time)
+            v_str = _format_time_short(self.verify_time)
+            time_str = f"B:{b_str} V:{v_str}"
+        else:
+            time_str = _format_time_short(self.time_seconds)
+
+        # PASS with optional fallback indicator
+        if self.fallback_used:
+            return f"PASS-FB({time_str})"
+        return f"PASS({time_str})"
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "status": self.status.value,
             "time_seconds": self.time_seconds,
+            "build_time": self.build_time,
+            "verify_time": self.verify_time,
             "error": self.error,
             "details": self.details,
+            "fallback_used": self.fallback_used,
         }
+
+
+def _format_time_short(seconds: float) -> str:
+    """Format time in short form (e.g., '2m', '30s', '1h')."""
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    if seconds < 3600:
+        minutes = int(seconds / 60)
+        return f"{minutes}m"
+    hours = seconds / 3600
+    return f"{hours:.1f}h"
 
 
 @dataclass
@@ -55,39 +117,79 @@ class BenchmarkValidationResult:
 
     benchmark: str
     benchmark_path: Path
-    format_check: CheckResult
-    pov_check: CheckResult
-    patch_check: CheckResult
+    format_check: Optional[CheckResult] = None
+    # Per-check format sub-results (struct, schema, harness, cpv, blob, patch)
+    format_checks: dict[str, CheckResult] = field(default_factory=dict)
+    pov_check: Optional[CheckResult] = None
+    patch_check: Optional[CheckResult] = None
     coverage_check: Optional[CheckResult] = None
+    # Variant-specific results (inc-build, RTS)
+    pov_inc_check: Optional[CheckResult] = None
+    patch_inc_check: Optional[CheckResult] = None
+    patch_rts_check: Optional[CheckResult] = None
+    patch_inc_rts_check: Optional[CheckResult] = None
+    coverage_inc_check: Optional[CheckResult] = None
+    # Shared build time (BuildVariantsJob — one per benchmark)
+    shared_build_time: float = 0.0
+    # Benchmark capabilities from project.yaml
+    supports_inc_build: bool = True
+    rts_mode: Optional[str] = None  # none, jcgeks, openclover, binaryrts
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
 
     @property
     def total_status(self) -> CheckStatus:
-        """Overall status - PASS only if all checks pass."""
-        checks = [self.format_check, self.pov_check, self.patch_check]
-        if self.coverage_check:
-            checks.append(self.coverage_check)
+        """Overall status - PASS if all executed checks pass.
 
+        None checks (not requested) are ignored entirely.
+        SKIP checks are ignored when determining pass/fail status.
+        Returns PASS if all non-SKIP checks passed, SKIP if all checks were skipped.
+        """
+        all_checks = [
+            self.format_check,
+            self.pov_check,
+            self.patch_check,
+            self.coverage_check,
+            self.pov_inc_check,
+            self.patch_inc_check,
+            self.patch_rts_check,
+            self.patch_inc_rts_check,
+            self.coverage_inc_check,
+        ]
+        # Filter out None (not requested by command)
+        checks = [c for c in all_checks if c is not None]
+        if not checks:
+            return CheckStatus.SKIP
+
+        # Check for failures and errors first
         if any(c.status == CheckStatus.FAIL for c in checks):
             return CheckStatus.FAIL
         if any(c.status == CheckStatus.ERROR for c in checks):
             return CheckStatus.ERROR
-        if all(c.status == CheckStatus.PASS for c in checks):
+
+        # Filter out SKIP checks to determine if all executed checks passed
+        executed_checks = [c for c in checks if c.status != CheckStatus.SKIP]
+        if not executed_checks:
+            return CheckStatus.SKIP
+        if all(c.status == CheckStatus.PASS for c in executed_checks):
             return CheckStatus.PASS
         return CheckStatus.SKIP
 
     @property
     def total_time(self) -> float:
         """Total time for all checks."""
-        total = (
-            self.format_check.time_seconds
-            + self.pov_check.time_seconds
-            + self.patch_check.time_seconds
-        )
-        if self.coverage_check:
-            total += self.coverage_check.time_seconds
-        return total
+        all_checks = [
+            self.format_check,
+            self.pov_check,
+            self.patch_check,
+            self.coverage_check,
+            self.pov_inc_check,
+            self.patch_inc_check,
+            self.patch_rts_check,
+            self.patch_inc_rts_check,
+            self.coverage_inc_check,
+        ]
+        return sum(c.time_seconds for c in all_checks if c is not None)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -96,12 +198,31 @@ class BenchmarkValidationResult:
             "benchmark_path": str(self.benchmark_path),
             "total_status": self.total_status.value,
             "total_time_seconds": self.total_time,
-            "format_check": self.format_check.to_dict(),
-            "pov_check": self.pov_check.to_dict(),
-            "patch_check": self.patch_check.to_dict(),
+            "format_check": self.format_check.to_dict() if self.format_check else None,
+            "format_checks": {k: v.to_dict() for k, v in self.format_checks.items()},
+            "pov_check": self.pov_check.to_dict() if self.pov_check else None,
+            "patch_check": self.patch_check.to_dict() if self.patch_check else None,
             "coverage_check": self.coverage_check.to_dict()
             if self.coverage_check
             else None,
+            "pov_inc_check": self.pov_inc_check.to_dict()
+            if self.pov_inc_check
+            else None,
+            "patch_inc_check": self.patch_inc_check.to_dict()
+            if self.patch_inc_check
+            else None,
+            "patch_rts_check": self.patch_rts_check.to_dict()
+            if self.patch_rts_check
+            else None,
+            "patch_inc_rts_check": self.patch_inc_rts_check.to_dict()
+            if self.patch_inc_rts_check
+            else None,
+            "coverage_inc_check": self.coverage_inc_check.to_dict()
+            if self.coverage_inc_check
+            else None,
+            "shared_build_time": self.shared_build_time,
+            "supports_inc_build": self.supports_inc_build,
+            "rts_mode": self.rts_mode,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
         }
@@ -112,6 +233,7 @@ class ValidationSummary:
     """Summary of validation results across multiple benchmarks."""
 
     results: list[BenchmarkValidationResult] = field(default_factory=list)
+    check_mode: CheckMode = CheckMode.DEFAULT
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
 
@@ -148,6 +270,7 @@ class ValidationSummary:
                 "failed": self.failed,
                 "errors": self.errors,
             },
+            "check_mode": self.check_mode.value,
             "results": [r.to_dict() for r in self.results],
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,

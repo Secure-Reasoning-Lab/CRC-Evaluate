@@ -45,6 +45,16 @@ class VariantType(Enum):
         """Check if this is a patch verification variant."""
         return self == VariantType.PATCHED
 
+    def is_inc_build_target(self) -> bool:
+        """Whether this variant uses the inc-build image's commit.
+
+        Inc-build images are built for ref_commit (delta mode) or base_commit
+        (full mode). DELTA_BASE uses a different commit (base_commit in delta
+        mode), so fallback is expected. COVERAGE uses different instrumentation,
+        not inc-build.
+        """
+        return self not in (VariantType.DELTA_BASE, VariantType.COVERAGE)
+
     def supports_inc_build(self) -> bool:
         """Check if this variant type supports incremental builds.
 
@@ -58,26 +68,6 @@ class VariantType(Enum):
             True if inc-build is supported for this variant type.
         """
         return self != VariantType.COVERAGE
-
-    def should_fallback_on_inc_build_failure(self) -> bool:
-        """Check if this variant should fallback to clean build on inc-build failure.
-
-        Only DELTA_BASE should fallback because inc-build images are built at
-        ref_commit, which may be incompatible with base_commit (e.g., header
-        files in the inc-build image don't exist at the base commit).
-
-        Other variants (DELTA_REF, FULL_BASE, ALL_PATCHED, CPV) build at the
-        same commit as the inc-build image, so they shouldn't have compatibility
-        issues.
-
-        PATCHED variants should NOT fallback because the failure is likely due
-        to an invalid CRS-generated patch, which should be reported as a build
-        failure rather than masked by fallback.
-
-        Returns:
-            True if fallback to clean build is appropriate for this variant type.
-        """
-        return self == VariantType.DELTA_BASE
 
 
 class BenchmarkMode(Enum):
@@ -212,6 +202,7 @@ class BuildResult:
         error: Error message (if failed)
         elapsed_seconds: Time taken for the build
         cached: Whether the result was from cache
+        fallback_used: Whether inc-build fell back to standard build
     """
 
     config: BuildConfig
@@ -221,6 +212,7 @@ class BuildResult:
     error: Optional[str] = None
     elapsed_seconds: float = 0.0
     cached: bool = False
+    fallback_used: bool = False
 
     @classmethod
     def from_cache(cls, config: BuildConfig, build_path: Path) -> "BuildResult":
@@ -267,25 +259,133 @@ class BuildResult:
         )
 
 
+# Marker file name for build metadata
+BUILD_METADATA_FILE = ".build-meta.json"
+
+
+@dataclass
+class BuildMetadata:
+    """Metadata about a build stored in the build output directory.
+
+    Used to track how a build was created, enabling cache validation
+    when switching between build modes (e.g., standard vs inc-build).
+
+    Attributes:
+        inc_build: Whether this was an incremental build
+        sanitizer: Sanitizer used for the build
+        timestamp: Build timestamp (ISO format)
+        fallback_used: Whether fallback to clean build was used (inc-build failed)
+    """
+
+    inc_build: bool = False
+    sanitizer: str = "address"
+    timestamp: str = ""
+    fallback_used: bool = False
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "inc_build": self.inc_build,
+            "sanitizer": self.sanitizer,
+            "timestamp": self.timestamp,
+            "fallback_used": self.fallback_used,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BuildMetadata":
+        """Create from dictionary."""
+        return cls(
+            inc_build=data.get("inc_build", False),
+            sanitizer=data.get("sanitizer", "address"),
+            timestamp=data.get("timestamp", ""),
+            fallback_used=data.get("fallback_used", False),
+        )
+
+
+@dataclass
+class FuzzerBuildResult:
+    """Result of build_fuzzers operation.
+
+    Tracks whether the build succeeded and if fallback was used.
+
+    Attributes:
+        success: Whether the build succeeded
+        fallback_used: Whether fallback to clean build was used (inc-build failed)
+    """
+
+    success: bool
+    fallback_used: bool = False
+
+
 @dataclass
 class BuildPlan:
     """Plan for building multiple variants.
 
     Tracks which variants need to be built vs are already cached.
+    Encapsulates inc-build configuration at the plan level.
 
     Attributes:
         benchmark_name: Name of the benchmark
         configs: List of build configurations
         cached_variants: Set of variant names already cached
+        use_inc_build: Whether to use incremental builds (plan-level setting)
     """
 
     benchmark_name: str
     configs: list[BuildConfig] = field(default_factory=list)
     cached_variants: set[str] = field(default_factory=set)
+    use_inc_build: bool = False
 
     def add_config(self, config: BuildConfig) -> None:
-        """Add a build configuration to the plan."""
+        """Add a pre-configured BuildConfig to the plan.
+
+        Use this when you need full control over the config.
+        For automatic inc-build handling, use add_variant() instead.
+        """
         self.configs.append(config)
+
+    def add_variant(
+        self,
+        variant_type: "VariantType",
+        commit: str,
+        main_repo: str,
+        benchmark_path: Path,
+        mode: Optional["BenchmarkMode"] = None,
+        patches: Optional[list[Path]] = None,
+        language: str = "c",
+        repo_name: Optional[str] = None,
+        cpv_num: Optional[int] = None,
+        patch_id: Optional[str] = None,
+        pov_id: Optional[str] = None,
+        sanitizer: str = "address",
+    ) -> None:
+        """Add a variant to the plan with automatic inc-build configuration.
+
+        Uses self.benchmark_name for the variant's benchmark name.
+        The use_inc_build is automatically determined from:
+        1. Plan-level use_inc_build setting
+        2. VariantType.supports_inc_build()
+        """
+        # Determine use_inc_build for this variant
+        variant_use_inc = self.use_inc_build and variant_type.supports_inc_build()
+
+        config = BuildConfig(
+            benchmark_name=self.benchmark_name,
+            variant_type=variant_type,
+            commit=commit,
+            main_repo=main_repo,
+            benchmark_path=benchmark_path,
+            mode=mode,
+            patches=patches or [],
+            language=language,
+            repo_name=repo_name,
+            cpv_num=cpv_num,
+            patch_id=patch_id,
+            pov_id=pov_id,
+            use_inc_build=variant_use_inc,
+            sanitizer=sanitizer,
+        )
+        self.add_config(config)
 
     def mark_cached(self, variant_name: str) -> None:
         """Mark a variant as already cached."""

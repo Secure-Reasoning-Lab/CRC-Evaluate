@@ -1,14 +1,16 @@
 #!/bin/bash
 # Run CI checks locally
 #
-# CI runs: checks → sanity (mock-c, mock-java in parallel) → e2e
+# CI runs: checks → format → sanity-mock → sanity-real → e2e
 # Local adds: integration (libxml2, apache-commons-compress)
 #
 # Usage:
-#   ./ci-tests/run-local.sh              # Run checks + sanity (matches CI)
+#   ./ci-tests/run-local.sh              # Run full CI pipeline (checks + format + mock + real + e2e)
 #   ./ci-tests/run-local.sh all          # Run all stages including integration
 #   ./ci-tests/run-local.sh checks       # Stage 1: typecheck, lint, format, unit tests
-#   ./ci-tests/run-local.sh sanity       # Stage 2: verify, patch-verify, coverage (mock-c + mock-java)
+#   ./ci-tests/run-local.sh format       # Stage 2a: format validation (CI + integration benchmarks)
+#   ./ci-tests/run-local.sh sanity       # Stage 2b: all checks (mock-c + mock-java)
+#   ./ci-tests/run-local.sh sanity-real  # Stage 2c: all checks (afc-xz + json-java)
 #   ./ci-tests/run-local.sh integration  # Local only: real projects (libxml2, commons-compress)
 #   ./ci-tests/run-local.sh e2e          # Stage 3: bug finding E2E
 
@@ -38,57 +40,6 @@ fail() {
     exit 1
 }
 
-# Run verify → patch-verify → coverage for a single benchmark
-run_benchmark() {
-    local benchmark=$1
-    echo -e "\n${YELLOW}--- $benchmark ---${NC}"
-
-    # Verify
-    echo "Verifying $benchmark..."
-    uv run crsbench verify "benchmarks/$benchmark" \
-        --force-rebuild \
-        --output "verify-$benchmark.json" \
-        --format json || fail "Verify failed for $benchmark"
-
-    uv run python -m crsbench.benchmark_ci.checks verify \
-        "benchmarks/$benchmark" \
-        "verify-$benchmark.json" || fail "Verify check failed for $benchmark"
-    success "Verify passed"
-    rm -f "verify-$benchmark.json"
-
-    # Patch-verify
-    echo "Patch-verifying $benchmark..."
-    uv run crsbench patch-verify "benchmarks/$benchmark" \
-        --force-rebuild \
-        --output "patch-verify-$benchmark.json" \
-        --format json || fail "Patch-verify failed for $benchmark"
-
-    uv run python -m crsbench.benchmark_ci.checks patch-verify \
-        "patch-verify-$benchmark.json" || fail "Patch-verify check failed for $benchmark"
-    success "Patch-verify passed"
-    rm -f "patch-verify-$benchmark.json"
-
-    # Coverage
-    echo "Coverage $benchmark..."
-    local corpus_dir
-    corpus_dir=$(mktemp -d)
-    head -c 64 /dev/urandom > "$corpus_dir/seed_input"
-
-    uv run crsbench coverage "benchmarks/$benchmark" \
-        --corpus-dir "$corpus_dir" \
-        --force-rebuild \
-        --output "coverage-$benchmark.json" \
-        --format json || { rm -rf "$corpus_dir"; fail "Coverage failed for $benchmark"; }
-
-    rm -rf "$corpus_dir"
-    uv run python -m crsbench.benchmark_ci.checks coverage \
-        "coverage-$benchmark.json" || fail "Coverage check failed for $benchmark"
-    success "Coverage passed"
-    rm -f "coverage-$benchmark.json"
-
-    success "$benchmark completed!"
-}
-
 # Stage 1: Basic checks
 run_checks() {
     run_stage "Stage 1: Basic Checks"
@@ -112,47 +63,129 @@ run_checks() {
     success "Stage 1 completed!"
 }
 
-# Stage 2: Sanity checks (mock-c + mock-java)
+# Stage 2a: Format validation
+run_format() {
+    run_stage "Stage 2a: Format Validation"
+
+    for benchmark in \
+        sanity-mock-c-delta-01 \
+        sanity-mock-java-delta-01 \
+        afc-xz-full-01 \
+        atlanta-json-java-full-01 \
+        afc-libxml2-full-01 \
+        afc-apache-commons-compress-delta-01; do
+        uv run crsbench ci format "$benchmark" || fail "Format validation failed for $benchmark"
+    done
+
+    success "Stage 2a completed!"
+}
+
+# Stage 2b: Sanity checks (mock-c + mock-java)
 run_sanity() {
-    run_stage "Stage 2: Sanity Checks (mock-c + mock-java)"
+    run_stage "Stage 2b: Sanity Checks (mock-c + mock-java)"
 
-    run_benchmark "sanity-mock-c-delta-01"
-    run_benchmark "sanity-mock-java-delta-01"
+    for benchmark in sanity-mock-c-delta-01 sanity-mock-java-delta-01; do
+        echo -e "\n${YELLOW}--- $benchmark ---${NC}"
+        uv run crsbench ci all "$benchmark" \
+            --no-inc-build \
+            --force-rebuild || fail "All checks failed for $benchmark"
+        success "$benchmark passed"
+    done
 
-    success "Stage 2 completed!"
+    success "Stage 2b completed!"
 }
 
-# Stage 3: Integration tests (real projects - local only, not in CI)
+# Stage 2c: Sanity checks (real projects)
+run_sanity_real() {
+    run_stage "Stage 2c: Sanity Checks (real projects)"
+
+    for benchmark in afc-xz-full-01 atlanta-json-java-full-01; do
+        echo -e "\n${YELLOW}--- $benchmark ---${NC}"
+        uv run crsbench ci all "$benchmark" \
+            --force-rebuild || fail "All checks failed for $benchmark"
+        success "$benchmark passed"
+    done
+
+    success "Stage 2c completed!"
+}
+
+# Integration tests (local only)
 run_integration() {
-    run_stage "Stage 3: Integration Tests (Real Projects)"
+    run_stage "Integration Tests (Real Projects)"
 
-    run_benchmark "afc-libxml2-full-01"
-    run_benchmark "afc-apache-commons-compress-delta-01"
+    for benchmark in afc-libxml2-full-01 afc-apache-commons-compress-delta-01; do
+        echo -e "\n${YELLOW}--- $benchmark ---${NC}"
+        uv run crsbench ci all "$benchmark" \
+            --force-rebuild || fail "All checks failed for $benchmark"
+        success "$benchmark passed"
+    done
 
-    success "Stage 3 completed!"
+    success "Integration tests completed!"
 }
 
-# Stage 3 (CI) / Stage 4 (local): Bug finding E2E
+# Stage 3: E2E Bug Finding
 run_e2e() {
-    run_stage "E2E Bug Finding"
+    run_stage "Stage 3: E2E Bug Finding"
 
-    echo "Running E2E experiment..."
-    uv run crsbench --experiment-config experiment-configs/coverage-e2e-test.yaml || fail "E2E failed"
+    EXPERIMENT_DIR=$(mktemp -d)
+    REPORT_DIR=$(mktemp -d)
 
-    local result_dir="/tmp/crsbench/experiments/coverage-e2e-test"
-    if [ ! -d "$result_dir" ]; then
-        fail "Experiment directory not found: $result_dir"
+    # Generate config with temp directories
+    sed \
+        -e "s|PLACEHOLDER_EXPERIMENT|$EXPERIMENT_DIR|" \
+        -e "s|PLACEHOLDER_REPORT|$REPORT_DIR|" \
+        ci-tests/pov-e2e-test.yaml > /tmp/pov-e2e-config.yaml
+
+    echo "Running E2E experiment (max 30 minutes, early stop enabled)..."
+    uv run crsbench run --experiment-config /tmp/pov-e2e-config.yaml || fail "E2E experiment failed"
+
+    echo "Verifying POV results..."
+    # Expected CPVs per benchmark/harness
+    declare -A EXPECTED
+    EXPECTED["sanity-mock-c-delta-01/fuzz_process_input_header"]="cpv_0"
+    EXPECTED["sanity-mock-c-delta-01/fuzz_parse_buffer_section"]="cpv_1"
+    EXPECTED["sanity-mock-java-delta-01/OssFuzz1"]="cpv_0"
+
+    FAILED=0
+    for key in "${!EXPECTED[@]}"; do
+        bench=$(echo "$key" | cut -d'/' -f1)
+        harness=$(echo "$key" | cut -d'/' -f2)
+        expected_cpv="${EXPECTED[$key]}"
+
+        POV_STORE=$(find "$EXPERIMENT_DIR" -path "*/$bench/$harness/*/trial-*/povs/pov_store.json" | head -1)
+
+        if [ -z "$POV_STORE" ]; then
+            echo -e "${RED}FAIL: No pov_store.json for $bench/$harness${NC}"
+            FAILED=1
+            continue
+        fi
+
+        if python3 -c "
+import json, sys
+with open('$POV_STORE') as f:
+    data = json.load(f)
+cpvs = set()
+for pov in data.get('povs', {}).values():
+    for cpv in pov.get('cpv_matched', []):
+        cpvs.add(cpv)
+if '$expected_cpv' not in cpvs:
+    sys.exit(1)
+"; then
+            echo -e "${GREEN}PASS: $bench/$harness found $expected_cpv${NC}"
+        else
+            echo -e "${RED}FAIL: $bench/$harness missing $expected_cpv${NC}"
+            FAILED=1
+        fi
+    done
+
+    # Cleanup
+    rm -rf "$EXPERIMENT_DIR" "$REPORT_DIR" /tmp/pov-e2e-config.yaml
+
+    if [ "$FAILED" -ne 0 ]; then
+        fail "E2E FAILED: Not all answer POVs were found"
     fi
 
-    local trial_count
-    trial_count=$(find "$result_dir" -type d -name "trial-*" | wc -l)
-    echo "Trial directories found: $trial_count"
-
-    if [ "$trial_count" -eq 0 ]; then
-        fail "No trial directories found"
-    fi
-
-    success "E2E completed!"
+    success "E2E PASSED: All answer POVs found!"
 }
 
 # Main
@@ -166,8 +199,14 @@ main() {
         checks)
             run_checks
             ;;
+        format)
+            run_format
+            ;;
         sanity)
             run_sanity
+            ;;
+        sanity-real)
+            run_sanity_real
             ;;
         integration)
             run_integration
@@ -176,25 +215,32 @@ main() {
             run_e2e
             ;;
         default)
-            # Default: run Stage 1-2 (auto checks)
+            # Default: matches CI pipeline (checks → format → mock → real → e2e)
             run_checks
+            run_format
             run_sanity
+            run_sanity_real
+            run_e2e
             ;;
         all)
             run_checks
+            run_format
             run_sanity
+            run_sanity_real
             run_integration
             run_e2e
             ;;
         *)
-            echo "Usage: $0 [checks|sanity|integration|e2e|all]"
+            echo "Usage: $0 [checks|format|sanity|sanity-real|integration|e2e|all]"
             echo ""
-            echo "  (default)    Run checks + sanity (matches CI)"
+            echo "  (default)    Run checks + format + sanity-mock + sanity-real + e2e (matches CI)"
             echo "  checks       Stage 1: typecheck, lint, format, unit tests"
-            echo "  sanity       Stage 2: verify, patch-verify, coverage (mock-c + mock-java)"
+            echo "  format       Stage 2a: format validation (CI + integration benchmarks)"
+            echo "  sanity       Stage 2b: all checks (mock-c + mock-java)"
+            echo "  sanity-real  Stage 2c: all checks (afc-xz + json-java)"
             echo "  integration  Local only: real projects (libxml2, commons-compress)"
             echo "  e2e          Stage 3: bug finding E2E"
-            echo "  all          Run all stages including integration"
+            echo "  all          Run all stages"
             exit 1
             ;;
     esac

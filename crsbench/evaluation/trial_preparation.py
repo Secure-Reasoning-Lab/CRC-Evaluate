@@ -400,44 +400,28 @@ class TrialDirectoryPreparer:
 
     def _prepare_delta_diff(self, benchmark: str, hints_dir: Path) -> bool:
         """
-        Generate or copy ref.diff for delta mode benchmarks.
-
-        Strategy:
-        1. Check for pre-generated ref.diff in .aixcc/
-        2. If not found, generate dynamically using write_benchmark_delta_diff()
+        Copy pre-generated ref.diff for delta mode benchmarks.
 
         Args:
             benchmark: Benchmark name
             hints_dir: Destination hints directory
 
         Returns:
-            True if ref.diff was successfully placed in hints_dir
+            True if ref.diff was copied, False if not found
         """
         benchmark_dir = self.benchmarks_root / benchmark
 
-        # Strategy 1: Check for pre-generated ref.diff
         pregenerated = benchmark_dir / ".aixcc" / "ref.diff"
         if pregenerated.exists():
             shutil.copy2(pregenerated, hints_dir / "ref.diff")
             logger.info(f"Copied pre-generated ref.diff from {pregenerated}")
             return True
 
-        # Strategy 2: Generate dynamically
-        try:
-            from crsbench.utils.repo_manager import write_benchmark_delta_diff
-
-            output_path = hints_dir / "ref.diff"
-            write_benchmark_delta_diff(
-                str(benchmark_dir), str(output_path), verbose=True
-            )
-            logger.info(f"Generated ref.diff dynamically for {benchmark}")
-            return True
-        except ValueError as e:
-            logger.debug(f"Cannot generate ref.diff: {e}")
-            return False
-        except Exception as e:
-            logger.warning(f"Failed to generate ref.diff: {e}")
-            return False
+        logger.warning(
+            f"Delta mode but no ref.diff found at {pregenerated}. "
+            "Run 'crsbench benchmark prepare-delta' to generate it."
+        )
+        return False
 
     def _prepare_povs(
         self, benchmark: str, harness: str, trial_dir: Path

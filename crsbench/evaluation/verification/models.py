@@ -61,6 +61,7 @@ class PovVerificationResult:
         pov_id: Optional identifier for the POV that was verified
         details: Optional additional details about the verification
         crash_info: Optional crash information (sanitizer output, etc.)
+        fallback_used: Whether inc-build fell back to standard build
     """
 
     status: PovVerificationStatus
@@ -69,6 +70,7 @@ class PovVerificationResult:
     pov_id: Optional[str] = None
     details: Optional[str] = None
     crash_info: Optional[dict[str, Any]] = None
+    fallback_used: bool = False
 
     def to_dict(self, *, include_logs: bool = True) -> dict[str, Any]:
         """Convert result to dictionary for serialization.
@@ -80,6 +82,7 @@ class PovVerificationResult:
             "status": self.status.value,
             "benchmark": self.benchmark,
             "cpv_matched": self.cpv_matched,
+            "fallback_used": self.fallback_used,
         }
         if self.pov_id:
             result["pov_id"] = self.pov_id
@@ -287,6 +290,7 @@ class PatchVerificationResult:
         cpv_stats: Per-CPV breakdown of verification results
         scores: Aggregate benchmark scoring metrics
         security_verdict: Binary security verdict (PASS if all CPVs fixed)
+        fallback_used: Whether inc-build fell back to standard build
     """
 
     status: PatchVerificationStatus
@@ -309,6 +313,7 @@ class PatchVerificationResult:
     cpv_stats: dict[str, CpvStats] = field(default_factory=dict)
     scores: Optional[VerificationScores] = None
     security_verdict: SecurityVerdict = "FAIL"
+    fallback_used: bool = False
 
     @property
     def is_valid(self) -> bool:
@@ -339,6 +344,7 @@ class PatchVerificationResult:
                 cpv_id: stats.to_dict() for cpv_id, stats in self.cpv_stats.items()
             },
             "security_verdict": self.security_verdict,
+            "fallback_used": self.fallback_used,
         }
         if self.scores is not None:
             result["scores"] = self.scores.to_dict()
@@ -444,3 +450,42 @@ class PatchVerificationOutput(BaseModel):
             summary=PatchVerificationSummary.from_results(results, total_input_povs),
             results=[PatchVerificationDetailedResult.from_result(r) for r in results],
         )
+
+
+# =============================================================================
+# Verification Benchmark Output Types
+# =============================================================================
+
+
+@dataclass
+class PovBenchmarkOutput:
+    """Structured output from POV benchmark verification.
+
+    Replaces the raw tuple return type for better type safety and clarity.
+
+    Attributes:
+        results: List of POV verification results
+        skipped_count: Number of POVs skipped (e.g., due to deduplication)
+        fallback_used: True if any build fell back to standard build from inc-build
+    """
+
+    results: list[PovVerificationResult]
+    skipped_count: int = 0
+    fallback_used: bool = False
+    build_time: float = 0.0
+    verify_time: float = 0.0
+
+
+@dataclass
+class PatchBenchmarkOutput:
+    """Structured output from patch benchmark verification.
+
+    Replaces the raw tuple return type for better type safety and clarity.
+
+    Attributes:
+        results: List of patch verification results
+        fallback_used: True if any build fell back to standard build from inc-build
+    """
+
+    results: list[PatchVerificationResult]
+    fallback_used: bool = False

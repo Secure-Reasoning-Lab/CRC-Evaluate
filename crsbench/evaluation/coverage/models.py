@@ -108,6 +108,30 @@ class CoverageSummary(BaseModel):
     functions_total: int = Field(default=0, ge=0)
     saturation_detected: bool = False
 
+    def format_lines(self) -> str:
+        """Format lines coverage for display.
+
+        Returns:
+            Formatted string like "10/100 (10.0%)" when total is known,
+            or "10 (total N/A)" when total is unknown (e.g., JVM coverage).
+        """
+        if self.lines_total > 0:
+            return (
+                f"{self.lines_covered}/{self.lines_total} ({self.lines_percent:.1f}%)"
+            )
+        return f"{self.lines_covered} (total N/A)"
+
+    def format_functions(self) -> str:
+        """Format functions coverage for display.
+
+        Returns:
+            Formatted string like "5/50" when total is known,
+            or "5 (total N/A)" when total is unknown.
+        """
+        if self.functions_total > 0:
+            return f"{self.functions_covered}/{self.functions_total}"
+        return f"{self.functions_covered} (total N/A)"
+
 
 class CoverageSnapshot(BaseModel):
     """Point-in-time coverage data for a snapshot cycle.
@@ -155,3 +179,5 @@ class CoverageReport(BaseModel):
     snapshots: list[CoverageSnapshot] = Field(default_factory=list)
     final_summary: Optional[CoverageSummary] = None
     saturation_cycle: Optional[int] = None
+    build_time: float = 0.0
+    verify_time: float = 0.0

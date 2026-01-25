@@ -819,7 +819,8 @@ class ExperimentConfig(BaseModel):
     litellm_mode: Optional[Literal["passthrough", "proxy"]] = Field(
         default="passthrough",
         description="LiteLLM mode: 'passthrough' uses external LiteLLM (UPSTREAM_LITELLM_BASE_URL, LITELLM_API_KEY), "
-        "'proxy' uses self-hosted proxy (LITELLM_BASE_URL, LITELLM_MASTER_KEY). "
+        "'proxy' uses self-hosted proxy (LITELLM_BASE_URL, LITELLM_MASTER_KEY), "
+        "null skips LiteLLM entirely (for CRS that don't need LLM). "
         "Default is 'passthrough'.",
     )
     llm_tracking_enabled: bool = Field(

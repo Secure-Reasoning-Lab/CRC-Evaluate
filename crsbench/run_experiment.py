@@ -1337,8 +1337,9 @@ def run_experiment_local(
         enhanced_config = enhance_config_with_cli_args(config, args)
 
         # Build trial_id with random suffix
+        # Must be lowercase for Docker Compose project name compatibility
         harness_name_stem = Path(bh.harness.name).stem
-        trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
+        trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}".lower()
 
         result = run_crs_trial(
             crs=trial.crs,
@@ -1962,8 +1963,9 @@ def run_experiment_distributed(
         memory_limit = crs_memory_limits.get(trial.crs)
 
         # Build trial_id at enqueue time with random suffix
+        # Must be lowercase for Docker Compose project name compatibility
         harness_name_stem = Path(bh.harness.name).stem
-        trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
+        trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}".lower()
 
         job = queue.enqueue(
             "crsbench.distributed.jobs.run_crs_trial",
@@ -2284,14 +2286,9 @@ def main() -> None:
         sys.exit(run_dashboard(args))
 
     if args.command == "ci":
-        # Handle ci command
-        from crsbench.benchmark_ci.cli import run_ci, run_ci_parse
+        from crsbench.benchmark_ci.cli import dispatch_ci
 
-        # Check for subcommand (parse)
-        if hasattr(args, "ci_subcommand") and args.ci_subcommand == "parse":
-            sys.exit(run_ci_parse(args))
-        else:
-            sys.exit(run_ci(args))
+        sys.exit(dispatch_ci(args))
 
     if args.command == "benchmark":
         # Handle benchmark command (bundle, validate, prepare-delta)
