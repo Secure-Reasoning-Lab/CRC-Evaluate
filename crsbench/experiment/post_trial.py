@@ -46,6 +46,7 @@ def create_post_trial_jobs(
     build_job_ids: dict[str, str],
     *,
     coverage_enabled: bool = True,
+    source_mode: str = "main_repo",
 ) -> list[Job]:
     """Create post-trial analysis jobs from trial results.
 
@@ -53,6 +54,7 @@ def create_post_trial_jobs(
         trial_results: List of TrialResult from completed CRS trials
         build_job_ids: Maps benchmark_name to build job ID for dependency
         coverage_enabled: Whether to create coverage collection jobs
+        source_mode: Source mode - 'main_repo' (git clone) or 'pkgs' (bundled tarballs)
 
     Returns:
         List of jobs with proper dependency ordering:
@@ -111,7 +113,7 @@ def create_post_trial_jobs(
                     use_inc_build=True,
                     force_rebuild=False,
                     build_job_id=build_job_id,
-                    source_mode="main_repo",
+                    source_mode=source_mode,
                 )
                 jobs.append(build_patch_job)
                 patch_build_count += 1

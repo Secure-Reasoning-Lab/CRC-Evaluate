@@ -28,6 +28,7 @@ def create_upfront_build_jobs(
     *,
     use_inc_build: bool = True,
     force_rebuild: bool = False,
+    source_mode: str = "main_repo",
 ) -> list[BuildVariantsJob]:
     """Create deduplicated build jobs from trial list.
 
@@ -35,6 +36,7 @@ def create_upfront_build_jobs(
         trials: List of Trial objects (must have benchmark_harness.path and sanitizer)
         use_inc_build: Whether to use incremental builds (default True)
         force_rebuild: Whether to force rebuilding even if cached (default False)
+        source_mode: Source mode - 'main_repo' (git clone) or 'pkgs' (bundled tarballs)
 
     Returns:
         List of BuildVariantsJob, one per unique (benchmark_path, sanitizer) tuple
@@ -67,7 +69,7 @@ def create_upfront_build_jobs(
             benchmark_name=benchmark_name,
             use_inc_build=use_inc_build,
             force_rebuild=force_rebuild,
-            source_mode="main_repo",
+            source_mode=source_mode,
         )
         seen[key] = job
 

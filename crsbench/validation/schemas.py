@@ -842,6 +842,11 @@ class ExperimentConfig(BaseModel):
         default=Path("oss-fuzz"),
         description="Path to oss-fuzz directory (default: oss-fuzz)",
     )
+    source_mode: Literal["main_repo", "pkgs"] = Field(
+        default="main_repo",
+        description="Source mode: 'main_repo' clones from git (default), "
+        "'pkgs' uses bundled tarballs from pkgs/ directory.",
+    )
     coverage_enabled: bool = Field(
         default=False,
         description="Enable coverage collection during trials (default: False). "

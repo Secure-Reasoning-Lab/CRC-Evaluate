@@ -939,7 +939,10 @@ def build_variants_upfront(
     logger.info(f"Found {len(benchmark_modes)} unique (benchmark, mode) combinations")
 
     # Create builder
-    builder = OSSFuzzBuilder(oss_fuzz_path, max_workers=build_workers)
+    source_mode = getattr(config, "source_mode", "main_repo")
+    builder = OSSFuzzBuilder(
+        oss_fuzz_path, max_workers=build_workers, source_mode=source_mode
+    )
 
     # Collect all build configs
     all_configs: list = []
