@@ -121,6 +121,7 @@ def run_rts(args: argparse.Namespace) -> int:
                         use_inc_build=effective_inc,
                         force_rebuild=force_rebuild,
                         build_job_id=build_job.job_id,
+                        source_mode=source_mode,
                     )
                     all_jobs.append(build_patch_job)
 

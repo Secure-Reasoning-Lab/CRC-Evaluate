@@ -107,6 +107,7 @@ def run_pov(args: argparse.Namespace) -> int:
                     harness=harness,
                     pov_paths=pov_paths,
                     build_job_id=build_job.job_id,
+                    source_mode=source_mode,
                 )
                 all_jobs.append(verify_job)
 

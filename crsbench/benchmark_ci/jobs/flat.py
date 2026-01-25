@@ -140,6 +140,7 @@ class VerifyCpvPovJob(Job):
     harness: str
     pov_paths: list[Path] = field(default_factory=list)
     build_job_id: str = ""
+    source_mode: str = "main_repo"
 
     @property
     def job_id(self) -> str:
@@ -184,7 +185,7 @@ class VerifyCpvPovJob(Job):
             oss_fuzz_path = Path(get_oss_fuzz_root())
             engine = VerificationEngine(
                 oss_fuzz_path,
-                source_mode="main_repo",
+                source_mode=self.source_mode,
             )
 
             pov_harness_pairs = []
@@ -272,6 +273,7 @@ class BuildPatchVariantJob(Job):
     use_inc_build: bool = True
     force_rebuild: bool = False
     build_job_id: str = ""
+    source_mode: str = "main_repo"
 
     @property
     def job_id(self) -> str:
@@ -294,7 +296,9 @@ class BuildPatchVariantJob(Job):
             from crsbench.utils.run_helper import get_oss_fuzz_root
 
             oss_fuzz_path = Path(get_oss_fuzz_root())
-            builder = OSSFuzzBuilder(oss_fuzz_path, max_workers=1)
+            builder = OSSFuzzBuilder(
+                oss_fuzz_path, max_workers=1, source_mode=self.source_mode
+            )
 
             # Get adapter from parent build job's shared context
             build_data = context.shared.get(self.build_job_id, {})
