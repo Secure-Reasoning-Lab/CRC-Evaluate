@@ -140,7 +140,7 @@ jobs:
   # Stage 3: E2E Bug Finding with CRS
   e2e-bugfinding:
     name: E2E Bug Finding
-    needs: [sanity-mock]
+    needs: [sanity-mock, sanity-real]
     runs-on: [self-hosted, linux, crs]
     timeout-minutes: 30
     steps:
