@@ -25,7 +25,7 @@ benchmark_suite: crsbench-all
 difficulty_level: 1
 
 # Build Configuration
-build_timeout: 1200   # 20 minutes
+build_timeout: 1800   # 20 minutes
 run_timeout: 3600     # 1 hour
 verify_timeout: 1200  # 20 minutes
 
