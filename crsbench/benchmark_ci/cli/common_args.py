@@ -13,6 +13,8 @@ def create_benchmark_selection_parent() -> argparse.ArgumentParser:
 
     Provides:
         benchmark: Positional arg for benchmark path (e.g., "benchmarks/project_name")
+        --benchmarks / -b: Comma-separated list of benchmark names
+        --benchmark-suite / -s: Load benchmarks from a suite file
         --all: Run against all benchmarks
         --filter / -f: Glob pattern to filter benchmarks
     """
@@ -22,6 +24,19 @@ def create_benchmark_selection_parent() -> argparse.ArgumentParser:
         nargs="?",
         type=str,
         help="Benchmark path (e.g., benchmarks/project_name)",
+    )
+    parser.add_argument(
+        "--benchmarks",
+        "-b",
+        type=str,
+        help="Comma-separated list of benchmark names (e.g., 'bench1,bench2,bench3')",
+    )
+    parser.add_argument(
+        "--benchmark-suite",
+        "-s",
+        type=str,
+        dest="benchmark_suite",
+        help="Load benchmarks from a suite file (e.g., 'smoke-test-bug-finding')",
     )
     parser.add_argument(
         "--all",

@@ -252,6 +252,8 @@ def run_all(args: argparse.Namespace) -> int:
     """Run all checks on resolved benchmarks with shared build via flat DAG."""
     paths = resolve_benchmark_paths(
         benchmark_arg=getattr(args, "benchmark", None),
+        benchmarks_list=getattr(args, "benchmarks", None),
+        benchmark_suite=getattr(args, "benchmark_suite", None),
         all_benchmarks=getattr(args, "all", False),
         filter_pattern=getattr(args, "filter", None),
     )
