@@ -16,7 +16,10 @@ runs:
   steps:
     - name: Configure git safe directory
       shell: bash
-      run: git config --global --add safe.directory '*'
+      run: |
+        # Remove stale lock file if exists (from crashed/concurrent processes)
+        rm -f ~/.gitconfig.lock
+        git config --global --add safe.directory '*'
 
     - name: Set up Python
       uses: actions/setup-python@v6
