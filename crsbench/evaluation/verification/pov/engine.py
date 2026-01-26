@@ -652,6 +652,10 @@ class VerificationEngine:
         # Use override if provided, otherwise use adapter's setting
         inc_build = use_inc_build if use_inc_build is not None else adapter.inc_build
 
+        # Get sanitizer from meta.yaml POV definitions
+        # All CPVs must use the same sanitizer (raises ValueError if not)
+        sanitizer = adapter.get_required_sanitizer()
+
         # Create build plan
         plan = self.builder.create_build_plan(
             benchmark_name=adapter.benchmark_name,
@@ -665,6 +669,7 @@ class VerificationEngine:
             repo_name=adapter.repo_name,
             include_coverage=False,
             use_inc_build=inc_build,
+            sanitizer=sanitizer,
         )
 
         # Build variants

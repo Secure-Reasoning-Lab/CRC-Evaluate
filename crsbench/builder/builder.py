@@ -516,6 +516,7 @@ class OSSFuzzBuilder:
         *,
         include_coverage: bool = False,
         use_inc_build: bool = False,
+        sanitizer: str = "address",
     ) -> BuildPlan:
         """Create a build plan for a benchmark.
 
@@ -537,6 +538,7 @@ class OSSFuzzBuilder:
                 When True, validation variants use pre-built Docker images
                 with cached dependencies for faster builds. Falls back to
                 standard build if inc-build image is not available.
+            sanitizer: Sanitizer type (default: "address"). Read from project.yaml.
 
         Returns:
             BuildPlan with all required configurations
@@ -560,6 +562,7 @@ class OSSFuzzBuilder:
                 patches=[],
                 language=language,
                 repo_name=repo_name,
+                sanitizer=sanitizer,
             )
         elif mode == BenchmarkMode.DELTA and ref_commit:
             plan.add_variant(
@@ -571,6 +574,7 @@ class OSSFuzzBuilder:
                 patches=[],
                 language=language,
                 repo_name=repo_name,
+                sanitizer=sanitizer,
             )
 
         # All-patched version (all patches applied)
@@ -585,6 +589,7 @@ class OSSFuzzBuilder:
                 patches=all_patches,  # All patches
                 language=language,
                 repo_name=repo_name,
+                sanitizer=sanitizer,
             )
 
         # CPV variants (all patches except one)
@@ -600,6 +605,7 @@ class OSSFuzzBuilder:
                 language=language,
                 cpv_num=cpv_num,
                 repo_name=repo_name,
+                sanitizer=sanitizer,
             )
 
         # Coverage variant (no patches, different sanitizer)
