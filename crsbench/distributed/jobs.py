@@ -73,6 +73,8 @@ def _setup_llm_tracking(
     benchmark: str,
     harness_name: str,
     trial_num: int,
+    mode: str,
+    sanitizer: str,
 ) -> tuple[Optional[LiteLLMTracker], Optional[str]]:
     """Set up LLM tracking if enabled.
 
@@ -82,6 +84,8 @@ def _setup_llm_tracking(
         benchmark: Benchmark name
         harness_name: Harness name
         trial_num: Trial number
+        mode: Build mode
+        sanitizer: Sanitizer type
 
     Returns:
         Tuple of (tracker, api_key) if tracking enabled, (None, None) otherwise
@@ -111,6 +115,8 @@ def _setup_llm_tracking(
             benchmark=benchmark,
             harness=harness_name,
             trial_num=trial_num,
+            mode=mode,
+            sanitizer=sanitizer,
             max_budget=max_budget,
         )
         budget_info = f" (budget: ${max_budget})" if max_budget else ""
@@ -877,6 +883,8 @@ def run_crs_trial(
             benchmark=benchmark,
             harness_name=harness_name,
             trial_num=trial_num,
+            mode=mode,
+            sanitizer=sanitizer,
         )
 
         # If tracking is enabled, pass the trial-specific API key to executor

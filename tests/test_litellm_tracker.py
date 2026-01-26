@@ -88,9 +88,13 @@ class TestLiteLLMTracker:
             benchmark="curl",
             harness="fuzz_http",
             trial_num=1,
+            mode="delta",
+            sanitizer="address",
         )
         # Should start with expected prefix and end with 8-char random suffix
-        assert alias.startswith("crsbench-exp1-atlantis-curl-fuzz_http-trial1-")
+        assert alias.startswith(
+            "crsbench-exp1-atlantis-curl-fuzz_http-delta-address-trial1-"
+        )
         # Random suffix is 8 hex characters
         suffix = alias.split("-")[-1]
         assert len(suffix) == 8
@@ -104,6 +108,8 @@ class TestLiteLLMTracker:
             benchmark="curl",
             harness="fuzz_http",
             trial_num=1,
+            mode="delta",
+            sanitizer="address",
         )
         alias2 = tracker._build_key_alias(
             experiment="exp1",
@@ -111,6 +117,8 @@ class TestLiteLLMTracker:
             benchmark="curl",
             harness="fuzz_http",
             trial_num=1,
+            mode="delta",
+            sanitizer="address",
         )
         # Same parameters should generate different aliases due to random suffix
         assert alias1 != alias2
@@ -123,6 +131,8 @@ class TestLiteLLMTracker:
             benchmark="curl test",
             harness="fuzz http",
             trial_num=1,
+            mode="delta",
+            sanitizer="address",
         )
         assert "/" not in alias
         assert ":" not in alias
@@ -145,6 +155,8 @@ class TestLiteLLMTracker:
             benchmark="curl",
             harness="fuzz_http",
             trial_num=1,
+            mode="delta",
+            sanitizer="address",
         )
 
         assert key == "sk-generated-key-abc123"
@@ -156,7 +168,7 @@ class TestLiteLLMTracker:
         payload = call_kwargs[1]["json"]
         # Key alias includes random suffix
         assert payload["key_alias"].startswith(
-            "crsbench-exp1-atlantis-curl-fuzz_http-trial1-"
+            "crsbench-exp1-atlantis-curl-fuzz_http-delta-address-trial1-"
         )
         assert payload["metadata"]["experiment"] == "exp1"
         assert payload["metadata"]["crs"] == "atlantis"
@@ -175,6 +187,8 @@ class TestLiteLLMTracker:
             benchmark="curl",
             harness="fuzz_http",
             trial_num=1,
+            mode="delta",
+            sanitizer="address",
             max_budget=10.0,
         )
 
@@ -193,6 +207,8 @@ class TestLiteLLMTracker:
                 benchmark="curl",
                 harness="fuzz_http",
                 trial_num=1,
+                mode="delta",
+                sanitizer="address",
             )
 
     @patch("crsbench.evaluation.litellm_tracker.requests.post")
@@ -210,6 +226,8 @@ class TestLiteLLMTracker:
                 benchmark="curl",
                 harness="fuzz_http",
                 trial_num=1,
+                mode="delta",
+                sanitizer="address",
             )
 
     @patch("crsbench.evaluation.litellm_tracker.requests.get")
@@ -762,6 +780,8 @@ class TestLLMTrackingContext:
             benchmark="curl",
             harness="fuzz_http",
             trial_num=1,
+            mode="delta",
+            sanitizer="address",
             output_dir=tmp_path,
         ) as ctx:
             assert ctx.api_key == "sk-generated-key"
@@ -812,6 +832,8 @@ class TestLLMTrackingContext:
             benchmark="curl",
             harness="fuzz_http",
             trial_num=1,
+            mode="delta",
+            sanitizer="address",
             output_dir=tmp_path,
         ) as ctx:
             # Write intermediate usage
@@ -914,6 +936,8 @@ class TestSetupLlmTrackingBudget:
             benchmark="test-bench",
             harness_name="fuzz_test",
             trial_num=1,
+            mode="delta",
+            sanitizer="address",
         )
 
         assert api_key == "sk-test-key"
@@ -923,6 +947,8 @@ class TestSetupLlmTrackingBudget:
             benchmark="test-bench",
             harness="fuzz_test",
             trial_num=1,
+            mode="delta",
+            sanitizer="address",
             max_budget=50.0,
         )
 
@@ -948,6 +974,8 @@ class TestSetupLlmTrackingBudget:
             benchmark="test-bench",
             harness_name="fuzz_test",
             trial_num=1,
+            mode="delta",
+            sanitizer="address",
         )
 
         mock_tracker.generate_key.assert_called_once_with(
@@ -956,6 +984,8 @@ class TestSetupLlmTrackingBudget:
             benchmark="test-bench",
             harness="fuzz_test",
             trial_num=1,
+            mode="delta",
+            sanitizer="address",
             max_budget=None,
         )
 
@@ -984,6 +1014,8 @@ class TestSetupLlmTrackingBudget:
             benchmark="test-bench",
             harness_name="fuzz_test",
             trial_num=1,
+            mode="delta",
+            sanitizer="address",
         )
 
         mock_tracker.generate_key.assert_called_once_with(
@@ -992,5 +1024,7 @@ class TestSetupLlmTrackingBudget:
             benchmark="test-bench",
             harness="fuzz_test",
             trial_num=1,
+            mode="delta",
+            sanitizer="address",
             max_budget=None,
         )

@@ -196,6 +196,8 @@ class LiteLLMTracker:
         benchmark: str,
         harness: str,
         trial_num: int,
+        mode: str,
+        sanitizer: str,
         *,
         team_id: Optional[str] = None,
         max_budget: Optional[float] = None,
@@ -208,6 +210,8 @@ class LiteLLMTracker:
             benchmark: Benchmark name
             harness: Harness name
             trial_num: Trial number
+            mode: Build mode
+            sanitizer: Sanitizer type
             team_id: Optional team ID for key association
             max_budget: Optional maximum budget for the key
 
@@ -218,7 +222,7 @@ class LiteLLMTracker:
             LiteLLMTrackerError: If key generation fails
         """
         key_alias = self._build_key_alias(
-            experiment, crs, benchmark, harness, trial_num
+            experiment, crs, benchmark, harness, trial_num, mode, sanitizer
         )
 
         payload: dict = {
@@ -591,10 +595,12 @@ class LiteLLMTracker:
         benchmark: str,
         harness: str,
         trial_num: int,
+        mode: str,
+        sanitizer: str,
     ) -> KeyAlias:
         """Build a unique key alias for the trial.
 
-        Format: crsbench-{experiment}-{crs}-{benchmark}-{harness}-trial{N}-{random}
+        Format: crsbench-{experiment}-{crs}-{benchmark}-{harness}-{mode}-{sanitizer}-trial{N}-{random}
 
         The random suffix ensures uniqueness when the same experiment
         is run concurrently multiple times.
@@ -605,6 +611,8 @@ class LiteLLMTracker:
             benchmark: Benchmark name
             harness: Harness name
             trial_num: Trial number
+            mode: Build mode
+            sanitizer: Sanitizer type
 
         Returns:
             Key alias string
@@ -620,7 +628,8 @@ class LiteLLMTracker:
 
         return (
             f"crsbench-{sanitize(experiment)}-{sanitize(crs)}-"
-            f"{sanitize(benchmark)}-{sanitize(harness)}-trial{trial_num}-{random_suffix}"
+            f"{sanitize(benchmark)}-{sanitize(harness)}-{sanitize(mode)}-{sanitize(sanitizer)}-"
+            f"trial{trial_num}-{random_suffix}"
         )
 
 
@@ -641,6 +650,8 @@ class LLMTrackingContext:
             benchmark="curl",
             harness="fuzz_http",
             trial_num=1,
+            mode="delta",
+            sanitizer="address",
             output_dir=trial_output_dir,
         ) as ctx:
             # ctx.api_key contains the trial-specific key
@@ -656,6 +667,8 @@ class LLMTrackingContext:
         benchmark: str,
         harness: str,
         trial_num: int,
+        mode: str,
+        sanitizer: str,
         output_dir: Path,
     ):
         """Initialize tracking context.
@@ -667,6 +680,8 @@ class LLMTrackingContext:
             benchmark: Benchmark name
             harness: Harness name
             trial_num: Trial number
+            mode: Build mode
+            sanitizer: Sanitizer type
             output_dir: Directory to write llm-usage.json
         """
         self.tracker = tracker
@@ -675,6 +690,8 @@ class LLMTrackingContext:
         self.benchmark = benchmark
         self.harness = harness
         self.trial_num = trial_num
+        self.mode = mode
+        self.sanitizer = sanitizer
         self.output_dir = output_dir
 
         self.api_key: Optional[str] = None
@@ -683,7 +700,13 @@ class LLMTrackingContext:
     def __enter__(self) -> "LLMTrackingContext":
         """Generate API key and return context."""
         self.trial_id = self.tracker._build_key_alias(
-            self.experiment, self.crs, self.benchmark, self.harness, self.trial_num
+            self.experiment,
+            self.crs,
+            self.benchmark,
+            self.harness,
+            self.trial_num,
+            self.mode,
+            self.sanitizer,
         )
 
         self.api_key = self.tracker.generate_key(
@@ -692,6 +715,8 @@ class LLMTrackingContext:
             benchmark=self.benchmark,
             harness=self.harness,
             trial_num=self.trial_num,
+            mode=self.mode,
+            sanitizer=self.sanitizer,
         )
 
         return self
