@@ -275,3 +275,23 @@ export interface ExecutionResponse {
   content: ExecutionInfo | null;
   error?: string;
 }
+
+// Artifact types for viewing patches and POVs
+export interface ArtifactInfo {
+  name: string;
+  type: 'patch' | 'pov';
+  size?: number;
+}
+
+export interface ArtifactListResponse {
+  patches: ArtifactInfo[];
+  povs: ArtifactInfo[];
+  error?: string;
+}
+
+export interface ArtifactContentResponse {
+  type: 'patch' | 'pov';
+  name: string;
+  content: string | null;
+  error?: string;
+}

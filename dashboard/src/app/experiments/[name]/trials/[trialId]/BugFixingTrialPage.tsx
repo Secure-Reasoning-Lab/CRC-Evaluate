@@ -1,12 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import type {
   TrialReport,
   SnapshotEntry,
   LLMLogsFile,
   ExecutionInfo,
+  ArtifactListResponse,
 } from '@/lib/data/trials';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -27,6 +28,7 @@ import {
   CRSLogsModal,
   LLMLogsModal,
   BugFixingExecutionInfoModal,
+  ArtifactViewerModal,
   formatTime,
 } from './components';
 
@@ -55,7 +57,7 @@ export default function BugFixingTrialPage({
   experimentName,
   report,
 }: BugFixingTrialPageProps) {
-  const { trial, summary, patches, llm_usage, time_series, timeline } = report;
+  const { trial, summary, patches, povs, llm_usage, time_series, timeline } = report;
 
   const [crsLogs, setCrsLogs] = useState<string | null>(null);
   const [crsLogsLoading, setCrsLogsLoading] = useState(false);
@@ -71,6 +73,18 @@ export default function BugFixingTrialPage({
   const [executionLoading, setExecutionLoading] = useState(false);
   const [executionError, setExecutionError] = useState<string | null>(null);
   const [executionModalOpen, setExecutionModalOpen] = useState(false);
+
+  // Artifact viewer state
+  const [artifactModalOpen, setArtifactModalOpen] = useState(false);
+  const [selectedArtifactType, setSelectedArtifactType] = useState<'patch' | 'pov' | null>(null);
+  const [selectedArtifactName, setSelectedArtifactName] = useState<string | null>(null);
+  const [artifactContent, setArtifactContent] = useState<string | null>(null);
+  const [artifactLoading, setArtifactLoading] = useState(false);
+  const [artifactError, setArtifactError] = useState<string | null>(null);
+
+  // Artifact list from snapshot (for actual content viewing)
+  const [artifactList, setArtifactList] = useState<ArtifactListResponse | null>(null);
+  const [artifactListLoaded, setArtifactListLoaded] = useState(false);
 
   const loadCrsLogs = useCallback(async () => {
     if (crsLogs !== null) return;
@@ -122,6 +136,53 @@ export default function BugFixingTrialPage({
       setExecutionLoading(false);
     }
   }, [experimentName, trial.trial_num, executionInfo]);
+
+  // Load artifact list from snapshot
+  const loadArtifactList = useCallback(async () => {
+    if (artifactListLoaded) return;
+    try {
+      const res = await fetch(
+        `/api/experiments/${experimentName}/trials/${trial.trial_num}/artifacts?type=list`
+      );
+      const data = await res.json();
+      setArtifactList(data);
+      setArtifactListLoaded(true);
+    } catch {
+      // Silently fail - artifact list is optional
+      setArtifactListLoaded(true);
+    }
+  }, [experimentName, trial.trial_num, artifactListLoaded]);
+
+  // Load artifact content
+  const loadArtifactContent = useCallback(async (type: 'patch' | 'pov', name: string) => {
+    setSelectedArtifactType(type);
+    setSelectedArtifactName(name);
+    setArtifactContent(null);
+    setArtifactError(null);
+    setArtifactLoading(true);
+    setArtifactModalOpen(true);
+
+    try {
+      const res = await fetch(
+        `/api/experiments/${experimentName}/trials/${trial.trial_num}/artifacts?type=${type}&name=${encodeURIComponent(name)}`
+      );
+      const data = await res.json();
+      if (data.error) {
+        setArtifactError(data.error);
+      } else {
+        setArtifactContent(data.content);
+      }
+    } catch {
+      setArtifactError(`Failed to load ${type}`);
+    } finally {
+      setArtifactLoading(false);
+    }
+  }, [experimentName, trial.trial_num]);
+
+  // Load artifact list on mount
+  useEffect(() => {
+    loadArtifactList();
+  }, [loadArtifactList]);
 
   return (
     <div className="space-y-6">
@@ -226,18 +287,81 @@ export default function BugFixingTrialPage({
         </TabsContent>
       </Tabs>
 
+      {/* Generated Patches Card */}
       <Card>
         <CardHeader><CardTitle>Generated Patches ({patches.count})</CardTitle></CardHeader>
         <CardContent>
           {patches.unique_names.length > 0 ? (
-            <ul className="space-y-1 text-sm font-mono">{patches.unique_names.map((patch, idx) => <li key={idx} className="text-muted-foreground">{patch}</li>)}</ul>
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground mb-3">Click on a patch name to view its content</p>
+              <ul className="space-y-1 text-sm font-mono">
+                {patches.unique_names.map((patch, idx) => {
+                  // Check if this patch exists in the artifact list
+                  const patchInSnapshot = artifactList?.patches?.some(p => p.name === patch);
+                  return (
+                    <li key={idx}>
+                      {patchInSnapshot || !artifactListLoaded ? (
+                        <button
+                          onClick={() => loadArtifactContent('patch', patch)}
+                          className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-200 hover:underline text-left"
+                        >
+                          {patch}
+                        </button>
+                      ) : (
+                        <span className="text-muted-foreground">{patch}</span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           ) : <p className="text-muted-foreground">No patches generated</p>}
         </CardContent>
       </Card>
 
+      {/* POVs Card (if available) */}
+      {povs && povs.unique_names.length > 0 && (
+        <Card>
+          <CardHeader><CardTitle>POVs ({povs.count})</CardTitle></CardHeader>
+          <CardContent>
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground mb-3">Click on a POV name to view its content</p>
+              <ul className="space-y-1 text-sm font-mono">
+                {povs.unique_names.map((pov, idx) => {
+                  const povInSnapshot = artifactList?.povs?.some(p => p.name === pov);
+                  return (
+                    <li key={idx}>
+                      {povInSnapshot || !artifactListLoaded ? (
+                        <button
+                          onClick={() => loadArtifactContent('pov', pov)}
+                          className="text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-200 hover:underline text-left"
+                        >
+                          {pov}
+                        </button>
+                      ) : (
+                        <span className="text-muted-foreground">{pov}</span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <CRSLogsModal open={crsLogsModalOpen} onOpenChange={setCrsLogsModalOpen} logs={crsLogs} loading={crsLogsLoading} error={crsLogsError} />
       <LLMLogsModal open={llmLogsModalOpen} onOpenChange={setLlmLogsModalOpen} logs={llmLogs} loading={llmLogsLoading} error={llmLogsError} />
       <BugFixingExecutionInfoModal open={executionModalOpen} onOpenChange={setExecutionModalOpen} info={executionInfo} loading={executionLoading} error={executionError} />
+      <ArtifactViewerModal
+        open={artifactModalOpen}
+        onOpenChange={setArtifactModalOpen}
+        artifactType={selectedArtifactType}
+        artifactName={selectedArtifactName}
+        content={artifactContent}
+        loading={artifactLoading}
+        error={artifactError}
+      />
     </div>
   );
 }
