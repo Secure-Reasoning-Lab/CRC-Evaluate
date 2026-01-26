@@ -226,11 +226,14 @@ class LiteLLMTracker:
             logger.warning(f"Failed to search teams: {e}")
             return None
 
-    def create_team(self, team_alias: str) -> str:
+    def create_team(
+        self, team_alias: str, *, max_budget: Optional[float] = None
+    ) -> str:
         """Create a new team.
 
         Args:
             team_alias: Team alias/name
+            max_budget: Optional maximum budget for the team in USD
 
         Returns:
             team_id of created team
@@ -238,11 +241,15 @@ class LiteLLMTracker:
         Raises:
             LiteLLMTrackerError: If team creation fails
         """
+        payload: dict = {"team_alias": team_alias}
+        if max_budget is not None:
+            payload["max_budget"] = max_budget
+
         try:
             response = requests.post(
                 f"{self.base_url}/team/new",
                 headers=self._headers,
-                json={"team_alias": team_alias},
+                json=payload,
                 timeout=self.timeout,
             )
             response.raise_for_status()
@@ -252,21 +259,54 @@ class LiteLLMTracker:
             if not team_id:
                 raise LiteLLMTrackerError(f"No team_id in response: {data}")
 
-            logger.info(f"Created LiteLLM team: {team_alias} ({team_id})")
+            budget_info = f" (max_budget: ${max_budget})" if max_budget else ""
+            logger.info(f"Created LiteLLM team: {team_alias} ({team_id}){budget_info}")
             return team_id
 
         except requests.RequestException as e:
             raise LiteLLMTrackerError(f"Failed to create team: {e}") from e
 
-    def get_or_create_team(self, team_alias: str) -> str:
-        """Get existing team or create new one.
+    def update_team(self, team_id: str, *, max_budget: Optional[float] = None) -> None:
+        """Update an existing team's settings.
+
+        Args:
+            team_id: Team ID to update
+            max_budget: Optional new maximum budget for the team in USD
+
+        Raises:
+            LiteLLMTrackerError: If team update fails
+        """
+        payload: dict = {"team_id": team_id}
+        if max_budget is not None:
+            payload["max_budget"] = max_budget
+
+        try:
+            response = requests.post(
+                f"{self.base_url}/team/update",
+                headers=self._headers,
+                json=payload,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            logger.info(f"Updated LiteLLM team {team_id}: max_budget=${max_budget}")
+
+        except requests.RequestException as e:
+            raise LiteLLMTrackerError(f"Failed to update team: {e}") from e
+
+    def get_or_create_team(
+        self, team_alias: str, *, max_budget: Optional[float] = None
+    ) -> str:
+        """Get existing team or create new one, ensuring budget is set.
 
         1. Search for team by alias using /v2/team/list
-        2. If exact match found, return existing team_id
-        3. If no match, create new team
+        2. If exact match found:
+           - Update team budget if max_budget provided
+           - Return existing team_id
+        3. If no match, create new team with max_budget
 
         Args:
             team_alias: Team alias/name
+            max_budget: Optional maximum budget for the team in USD
 
         Returns:
             team_id (existing or newly created)
@@ -278,10 +318,13 @@ class LiteLLMTracker:
         team_id = self.find_team_by_alias(team_alias)
         if team_id:
             logger.info(f"Using existing LiteLLM team: {team_alias} ({team_id})")
+            # Update budget if provided
+            if max_budget is not None:
+                self.update_team(team_id, max_budget=max_budget)
             return team_id
 
         # No existing team, create new one
-        return self.create_team(team_alias)
+        return self.create_team(team_alias, max_budget=max_budget)
 
     def generate_key(
         self,

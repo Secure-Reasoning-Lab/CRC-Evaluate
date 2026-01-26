@@ -412,6 +412,49 @@ class TestLiteLLMTracker:
         with pytest.raises(LiteLLMTrackerError, match="Failed to create team"):
             tracker.create_team("crsbench")
 
+    @patch("crsbench.evaluation.litellm_tracker.requests.post")
+    def test_create_team_with_max_budget(self, mock_post, tracker):
+        """Test team creation with max_budget parameter."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "team_id": "team-123",
+            "team_alias": "crsbench",
+        }
+        mock_post.return_value = mock_response
+
+        team_id = tracker.create_team("crsbench", max_budget=100.0)
+
+        assert team_id == "team-123"
+        mock_post.assert_called_once()
+        payload = mock_post.call_args[1]["json"]
+        assert payload["team_alias"] == "crsbench"
+        assert payload["max_budget"] == 100.0
+
+    @patch("crsbench.evaluation.litellm_tracker.requests.post")
+    def test_update_team_success(self, mock_post, tracker):
+        """Test successful team update."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"status": "success"}
+        mock_post.return_value = mock_response
+
+        tracker.update_team("team-123", max_budget=150.0)
+
+        mock_post.assert_called_once()
+        assert mock_post.call_args[0][0] == "http://litellm:4000/team/update"
+        payload = mock_post.call_args[1]["json"]
+        assert payload["team_id"] == "team-123"
+        assert payload["max_budget"] == 150.0
+
+    @patch("crsbench.evaluation.litellm_tracker.requests.post")
+    def test_update_team_api_error(self, mock_post, tracker):
+        """Test team update with API error."""
+        mock_post.side_effect = requests.RequestException("Connection failed")
+
+        with pytest.raises(LiteLLMTrackerError, match="Failed to update team"):
+            tracker.update_team("team-123", max_budget=150.0)
+
     @patch("crsbench.evaluation.litellm_tracker.requests.get")
     def test_get_or_create_team_uses_existing(self, mock_get, tracker):
         """Test get_or_create_team uses existing team when found."""
@@ -453,6 +496,69 @@ class TestLiteLLMTracker:
         # Should call both GET (find) and POST (create)
         mock_get.assert_called_once()
         mock_post.assert_called_once()
+
+    @patch("crsbench.evaluation.litellm_tracker.requests.post")
+    @patch("crsbench.evaluation.litellm_tracker.requests.get")
+    def test_get_or_create_team_updates_existing_budget(
+        self, mock_get, mock_post, tracker
+    ):
+        """Test get_or_create_team updates budget on existing team."""
+        # Mock find (returns existing team)
+        mock_find_response = MagicMock()
+        mock_find_response.status_code = 200
+        mock_find_response.json.return_value = [
+            {"team_id": "team-123", "team_alias": "crsbench"},
+        ]
+        mock_get.return_value = mock_find_response
+
+        # Mock update
+        mock_update_response = MagicMock()
+        mock_update_response.status_code = 200
+        mock_update_response.json.return_value = {"status": "success"}
+        mock_post.return_value = mock_update_response
+
+        team_id = tracker.get_or_create_team("crsbench", max_budget=200.0)
+
+        assert team_id == "team-123"
+        # Should call GET (find) and POST (update)
+        mock_get.assert_called_once()
+        mock_post.assert_called_once()
+        # Verify update was called with correct params
+        assert mock_post.call_args[0][0] == "http://litellm:4000/team/update"
+        payload = mock_post.call_args[1]["json"]
+        assert payload["team_id"] == "team-123"
+        assert payload["max_budget"] == 200.0
+
+    @patch("crsbench.evaluation.litellm_tracker.requests.post")
+    @patch("crsbench.evaluation.litellm_tracker.requests.get")
+    def test_get_or_create_team_creates_with_budget(self, mock_get, mock_post, tracker):
+        """Test get_or_create_team creates team with budget."""
+        # Mock find (returns None)
+        mock_find_response = MagicMock()
+        mock_find_response.status_code = 200
+        mock_find_response.json.return_value = []
+        mock_get.return_value = mock_find_response
+
+        # Mock create
+        mock_create_response = MagicMock()
+        mock_create_response.status_code = 200
+        mock_create_response.json.return_value = {
+            "team_id": "team-456",
+            "team_alias": "crsbench",
+        }
+        mock_post.return_value = mock_create_response
+
+        team_id = tracker.get_or_create_team("crsbench", max_budget=250.0)
+
+        assert team_id == "team-456"
+        # Should call GET (find) and POST (create)
+        mock_get.assert_called_once()
+        mock_post.assert_called_once()
+        # Verify create was called with budget
+        assert mock_post.call_args[0][0] == "http://litellm:4000/team/new"
+        payload = mock_post.call_args[1]["json"]
+        assert payload["team_alias"] == "crsbench"
+        assert payload["max_budget"] == 250.0
 
     @patch("crsbench.evaluation.litellm_tracker.requests.get")
     def test_generate_llm_usage_json(self, mock_get, tracker):
@@ -1181,7 +1287,9 @@ class TestSetupLlmTrackingBudget:
         )
 
         # Should use experiment name as team
-        mock_tracker.get_or_create_team.assert_called_once_with("test-exp")
+        mock_tracker.get_or_create_team.assert_called_once_with(
+            "test-exp", max_budget=None
+        )
 
         mock_tracker.generate_key.assert_called_once_with(
             experiment="test-exp",
@@ -1232,7 +1340,9 @@ class TestSetupLlmTrackingBudget:
         )
 
         # Should use custom team name
-        mock_tracker.get_or_create_team.assert_called_once_with("custom-team")
+        mock_tracker.get_or_create_team.assert_called_once_with(
+            "custom-team", max_budget=None
+        )
 
         mock_tracker.generate_key.assert_called_once_with(
             experiment="test-exp",
@@ -1274,7 +1384,9 @@ class TestSetupLlmTrackingBudget:
         )
 
         # Should use experiment name as team
-        mock_tracker.get_or_create_team.assert_called_once_with("test-exp")
+        mock_tracker.get_or_create_team.assert_called_once_with(
+            "test-exp", max_budget=None
+        )
 
         mock_tracker.generate_key.assert_called_once_with(
             experiment="test-exp",
@@ -1286,4 +1398,62 @@ class TestSetupLlmTrackingBudget:
             sanitizer="address",
             team_id="team-789",
             max_budget=None,
+        )
+
+    @patch("crsbench.distributed.jobs.LiteLLMTracker")
+    @patch("crsbench.distributed.jobs.is_tracking_available")
+    def test_team_max_budget_passed_to_get_or_create_team(
+        self, mock_is_available, mock_tracker_class, base_config_dict
+    ):
+        """Test that team_max_budget from config is passed to get_or_create_team()."""
+        from crsbench.distributed.jobs import _setup_llm_tracking
+        from crsbench.validation.schemas import (
+            ExperimentConfig,
+            LitellmResourceConfig,
+            ResourceConfig,
+        )
+
+        mock_is_available.return_value = True
+        mock_tracker = MagicMock()
+        mock_tracker.generate_key.return_value = "sk-test-key"
+        mock_tracker.get_or_create_team.return_value = "team-999"
+        mock_tracker_class.return_value = mock_tracker
+
+        config = ExperimentConfig(
+            **base_config_dict,
+            resources=ResourceConfig(
+                litellm=LitellmResourceConfig(
+                    cost_budget=50.0,
+                    team="custom-team",
+                    team_max_budget=500.0,
+                )
+            ),
+        )
+
+        tracker, api_key = _setup_llm_tracking(
+            config=config,
+            crs="test-crs",
+            benchmark="test-bench",
+            harness_name="fuzz_test",
+            trial_num=1,
+            mode="delta",
+            sanitizer="address",
+        )
+
+        assert api_key == "sk-test-key"
+        # Should pass team_max_budget to get_or_create_team
+        mock_tracker.get_or_create_team.assert_called_once_with(
+            "custom-team", max_budget=500.0
+        )
+
+        mock_tracker.generate_key.assert_called_once_with(
+            experiment="test-exp",
+            crs="test-crs",
+            benchmark="test-bench",
+            harness="fuzz_test",
+            trial_num=1,
+            mode="delta",
+            sanitizer="address",
+            team_id="team-999",
+            max_budget=50.0,
         )

@@ -637,6 +637,11 @@ class LitellmResourceConfig(BaseModel):
         default=None,
         description="Team name to group API keys. If not set, experiment name is used.",
     )
+    team_max_budget: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="Maximum budget in USD for the team. Applied when creating or updating team.",
+    )
 
 
 class ResourceConfig(BaseModel):

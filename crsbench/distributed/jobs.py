@@ -119,7 +119,17 @@ def _setup_llm_tracking(
             team_name = config.resources.litellm.team
         else:
             team_name = config.experiment
-        team_id = tracker.get_or_create_team(team_name)
+
+        # Extract team budget from config if present
+        team_max_budget = None
+        if (
+            config.resources
+            and config.resources.litellm
+            and config.resources.litellm.team_max_budget
+        ):
+            team_max_budget = config.resources.litellm.team_max_budget
+
+        team_id = tracker.get_or_create_team(team_name, max_budget=team_max_budget)
 
         api_key = tracker.generate_key(
             experiment=config.experiment,
