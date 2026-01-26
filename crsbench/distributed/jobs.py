@@ -851,6 +851,7 @@ def run_crs_trial(
                 "allocated_cpus": allocated_cpus,
                 "allocated_memory": allocated_memory,
                 "run_id": trial_id,
+                "source_mode": config.source_mode,
             }
         )
 

@@ -521,11 +521,15 @@ class CRSPatchExecutor(CRSExecutor):
 
         build_start_time = time.time()
 
-        # Load benchmark source (handles pkgs/ vs git clone)
+        # Load benchmark source (clone from main_repo or extract from pkgs/)
         from crsbench.benchmark.runtime import load_benchmark_source
 
+        source_dest = trial_build_dir / "src" / project_name
         source = load_benchmark_source(
             benchmark_path,
+            dest_dir=source_dest,
+            source_mode=self.config.get("source_mode", "main_repo"),
+            mode=self.config.get("mode"),
             verbose=self.config.get("verbose", False),
         )
         source_path = source.path
@@ -555,7 +559,7 @@ class CRSPatchExecutor(CRSExecutor):
             str(trial_build_dir),
         ]
 
-        # Only add --source-path if not using bundled source
+        # Add --source-path if source was loaded (both bundled and cloned have paths now)
         if source_path:
             cmd.extend(["--source-path", str(source_path)])
 

@@ -451,7 +451,6 @@ class MetaYamlAdapter:
         # Base and ref variants already have mode in type name
         if variant_type in (
             VariantType.FULL_BASE,
-            VariantType.DELTA_BASE,
             VariantType.DELTA_REF,
         ):
             return f"{self.benchmark_name}-{variant_type.value}"

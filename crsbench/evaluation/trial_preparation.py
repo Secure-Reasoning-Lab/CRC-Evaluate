@@ -260,20 +260,17 @@ class TrialDirectoryPreparer:
 
     def _prepare_hints(self, benchmark: str, trial_dir: Path) -> Optional[Path]:
         """
-        Prepare hints directory by aggregating hints from all CPVs.
+        Prepare hints directory by aggregating SARIF/corpus hints from all CPVs.
 
-        New behavior:
-        - Loads meta.yaml to discover ALL harnesses and CPVs
-        - Aggregates SARIF hints from level_N.sarif files based on hint_sarif_level
-        - Uses sequential numeric names (0.sarif, 1.sarif, ...) to avoid leaking CPV info
-        - Corpus support is placeholder for future implementation
+        Note: ref.diff for delta mode is NOT handled here. The executor reads
+        ref.diff directly from benchmark's .aixcc/ref.diff based on mode config.
 
         Args:
             benchmark: Benchmark name
             trial_dir: Trial directory
 
         Returns:
-            Path to prepared hints directory, or None if not enabled
+            Path to prepared hints directory, or None if hints not enabled
         """
         if not self.config.get("hints_enabled", False):
             logger.debug("Hints not enabled, skipping")
@@ -282,7 +279,6 @@ class TrialDirectoryPreparer:
         sarif_level = self.config.get("hint_sarif_level")
         corpus_level = self.config.get("hint_corpus_level")
 
-        # Must have at least one hint type configured
         if sarif_level is None and corpus_level is None:
             logger.warning("hints_enabled=True but no hint levels configured")
             return None
@@ -305,12 +301,14 @@ class TrialDirectoryPreparer:
             logger.error(f"Failed to load meta.yaml for {benchmark}: {e}")
             return None
 
-        # Create trial hints directory
+        # Create hints directory
         hints_dir = trial_dir / "hints"
         hints_dir.mkdir(parents=True, exist_ok=True)
 
-        # Aggregate SARIF hints from all CPVs
         sarif_copied = False
+        corpus_copied = False
+
+        # Aggregate SARIF hints from all CPVs
         if sarif_level is not None:
             sarif_copied = self._aggregate_sarif_hints(
                 benchmark_dir=benchmark_dir,
@@ -320,19 +318,13 @@ class TrialDirectoryPreparer:
             )
 
         # Aggregate corpus hints (not yet implemented)
-        corpus_copied = False
         if corpus_level is not None:
             logger.warning("Corpus hints not yet implemented")
 
-        # Prepare ref.diff for delta mode
-        delta_copied = False
-        evaluation_mode = self.config.get("evaluation_mode")
-        if evaluation_mode == "delta":
-            delta_copied = self._prepare_delta_diff(benchmark, hints_dir)
-
-        if sarif_copied or corpus_copied or delta_copied:
+        if sarif_copied or corpus_copied:
             logger.info(f"Prepared hints at: {hints_dir}")
             return hints_dir
+
         logger.warning(f"No hints content aggregated for {benchmark}")
         return None
 
@@ -396,31 +388,6 @@ class TrialDirectoryPreparer:
             logger.info(f"Aggregated {sarif_index} SARIF hints at level {sarif_level}")
             return True
         logger.warning(f"No SARIF hints found at level {sarif_level}")
-        return False
-
-    def _prepare_delta_diff(self, benchmark: str, hints_dir: Path) -> bool:
-        """
-        Copy pre-generated ref.diff for delta mode benchmarks.
-
-        Args:
-            benchmark: Benchmark name
-            hints_dir: Destination hints directory
-
-        Returns:
-            True if ref.diff was copied, False if not found
-        """
-        benchmark_dir = self.benchmarks_root / benchmark
-
-        pregenerated = benchmark_dir / ".aixcc" / "ref.diff"
-        if pregenerated.exists():
-            shutil.copy2(pregenerated, hints_dir / "ref.diff")
-            logger.info(f"Copied pre-generated ref.diff from {pregenerated}")
-            return True
-
-        logger.warning(
-            f"Delta mode but no ref.diff found at {pregenerated}. "
-            "Run 'crsbench benchmark prepare-delta' to generate it."
-        )
         return False
 
     def _prepare_povs(

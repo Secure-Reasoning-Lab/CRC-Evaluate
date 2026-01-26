@@ -21,7 +21,6 @@ class TestVariantType:
     def test_variant_type_values(self):
         """Test variant type values."""
         assert VariantType.FULL_BASE.value == "fullbase"
-        assert VariantType.DELTA_BASE.value == "deltabase"
         assert VariantType.DELTA_REF.value == "deltaref"
         assert VariantType.ALL_PATCHED.value == "allpatched"
         assert VariantType.CPV.value == "cpv"
@@ -30,7 +29,7 @@ class TestVariantType:
     def test_is_validation_variant(self):
         """Test is_validation_variant method."""
         assert VariantType.FULL_BASE.is_validation_variant()
-        assert VariantType.DELTA_BASE.is_validation_variant()
+        assert VariantType.DELTA_REF.is_validation_variant()
         assert VariantType.CPV.is_validation_variant()
         assert not VariantType.COVERAGE.is_validation_variant()
 
@@ -41,7 +40,6 @@ class TestVariantType:
         """
         # Validation variants support inc-build
         assert VariantType.FULL_BASE.supports_inc_build()
-        assert VariantType.DELTA_BASE.supports_inc_build()
         assert VariantType.DELTA_REF.supports_inc_build()
         assert VariantType.ALL_PATCHED.supports_inc_build()
         assert VariantType.CPV.supports_inc_build()
@@ -60,15 +58,15 @@ class TestBuildConfig:
         """Test basic configuration."""
         config = BuildConfig(
             benchmark_name="test-benchmark",
-            variant_type=VariantType.DELTA_BASE,
+            variant_type=VariantType.DELTA_REF,
             commit="abc123",
             main_repo="https://github.com/test/repo",
             benchmark_path=Path("/tmp/benchmark"),
             language="c",
         )
         assert config.benchmark_name == "test-benchmark"
-        assert config.variant_type == VariantType.DELTA_BASE
-        assert config.variant_name == "test-benchmark-deltabase"
+        assert config.variant_type == VariantType.DELTA_REF
+        assert config.variant_name == "test-benchmark-deltaref"
 
     def test_cpv_variant_name(self):
         """Test CPV variant naming (includes mode)."""
@@ -110,7 +108,7 @@ class TestBuildConfig:
         """Test that string benchmark_path is converted to Path."""
         config = BuildConfig(
             benchmark_name="test-benchmark",
-            variant_type=VariantType.DELTA_BASE,
+            variant_type=VariantType.DELTA_REF,
             commit="abc123",
             main_repo="https://github.com/test/repo",
             benchmark_path="/tmp/benchmark",  # type: ignore
@@ -125,7 +123,7 @@ class TestBuildResult:
         """Test creating result from cache."""
         config = BuildConfig(
             benchmark_name="test",
-            variant_type=VariantType.DELTA_BASE,
+            variant_type=VariantType.DELTA_REF,
             commit="abc",
             main_repo="https://example.com",
             benchmark_path=Path("/tmp"),
@@ -139,7 +137,7 @@ class TestBuildResult:
         """Test creating error result."""
         config = BuildConfig(
             benchmark_name="test",
-            variant_type=VariantType.DELTA_BASE,
+            variant_type=VariantType.DELTA_REF,
             commit="abc",
             main_repo="https://example.com",
             benchmark_path=Path("/tmp"),
@@ -165,7 +163,7 @@ class TestBuildPlan:
         plan = BuildPlan(benchmark_name="test")
         config = BuildConfig(
             benchmark_name="test",
-            variant_type=VariantType.DELTA_BASE,
+            variant_type=VariantType.DELTA_REF,
             commit="abc",
             main_repo="https://example.com",
             benchmark_path=Path("/tmp"),
@@ -179,13 +177,13 @@ class TestBuildPlan:
         plan = BuildPlan(benchmark_name="test")
         config = BuildConfig(
             benchmark_name="test",
-            variant_type=VariantType.DELTA_BASE,
+            variant_type=VariantType.DELTA_REF,
             commit="abc",
             main_repo="https://example.com",
             benchmark_path=Path("/tmp"),
         )
         plan.add_config(config)
-        plan.mark_cached("test-deltabase")
+        plan.mark_cached("test-deltaref")
 
         assert plan.total_count == 1
         assert plan.cached_count == 1
@@ -212,7 +210,7 @@ class TestParallelExecutor:
         executor = ParallelExecutor(max_workers=1)
         config = BuildConfig(
             benchmark_name="test",
-            variant_type=VariantType.DELTA_BASE,
+            variant_type=VariantType.DELTA_REF,
             commit="abc",
             main_repo="https://example.com",
             benchmark_path=Path("/tmp"),
@@ -234,14 +232,14 @@ class TestParallelExecutor:
         executor = ParallelExecutor(max_workers=2)
         configs = [
             BuildConfig(
-                benchmark_name="test",
-                variant_type=VariantType.DELTA_BASE,
+                benchmark_name="test1",
+                variant_type=VariantType.DELTA_REF,
                 commit="abc",
                 main_repo="https://example.com",
                 benchmark_path=Path("/tmp"),
             ),
             BuildConfig(
-                benchmark_name="test",
+                benchmark_name="test2",
                 variant_type=VariantType.DELTA_REF,
                 commit="def",
                 main_repo="https://example.com",
@@ -266,7 +264,7 @@ class TestParallelExecutor:
         executor = ParallelExecutor(max_workers=1)
         config = BuildConfig(
             benchmark_name="test",
-            variant_type=VariantType.DELTA_BASE,
+            variant_type=VariantType.DELTA_REF,
             commit="abc",
             main_repo="https://example.com",
             benchmark_path=Path("/tmp"),
@@ -318,11 +316,10 @@ class TestOSSFuzzBuilder:
             language="c",
         )
 
-        # Should have: deltabase, deltaref, allpatched, cpv0, cpv1
+        # Should have: deltaref, allpatched, cpv0, cpv1
         # Shared variants include mode prefix: delta-allpatched, delta-cpv0, etc.
-        assert plan.total_count == 5
+        assert plan.total_count == 4
         variant_names = [c.variant_name for c in plan.configs]
-        assert "test-delta-01-deltabase" in variant_names
         assert "test-delta-01-deltaref" in variant_names
         assert "test-delta-01-delta-allpatched" in variant_names
         assert "test-delta-01-delta-cpv0" in variant_names
@@ -383,7 +380,7 @@ class TestOSSFuzzBuilder:
         builder = OSSFuzzBuilder(mock_oss_fuzz_path)
 
         # Create fake built variant
-        variant_name = "test-deltabase"
+        variant_name = "test-deltaref"
         (mock_oss_fuzz_path / "projects" / variant_name).mkdir()
         build_out = mock_oss_fuzz_path / "build" / "out" / variant_name
         build_out.mkdir(parents=True)
@@ -417,7 +414,7 @@ class TestOSSFuzzBuilderForceRebuild:
         """Create a sample build config."""
         return BuildConfig(
             benchmark_name="test",
-            variant_type=VariantType.DELTA_BASE,
+            variant_type=VariantType.DELTA_REF,
             commit="abc123",
             main_repo="https://example.com",
             benchmark_path=tmp_path / "benchmark",
@@ -498,7 +495,7 @@ class TestOSSFuzzBuilderForceRebuild:
         configs = [
             BuildConfig(
                 benchmark_name="test",
-                variant_type=VariantType.DELTA_BASE,
+                variant_type=VariantType.DELTA_REF,
                 commit="abc",
                 main_repo="https://example.com",
                 benchmark_path=tmp_path / "benchmark",
@@ -545,7 +542,7 @@ class TestOSSFuzzBuilderForceRebuild:
         configs = [
             BuildConfig(
                 benchmark_name="test",
-                variant_type=VariantType.DELTA_BASE,
+                variant_type=VariantType.DELTA_REF,
                 commit="abc",
                 main_repo="https://example.com",
                 benchmark_path=tmp_path / "benchmark",
@@ -575,7 +572,7 @@ class TestBuildConfigVariantNames:
     """Tests for variant name generation.
 
     Naming convention:
-    - Base/ref variants include mode in type name: {benchmark}-deltabase
+    - Base/ref variants include mode in type name: {benchmark}-fullbase, {benchmark}-deltaref
     - Shared variants need mode prefix: {benchmark}-delta-allpatched
     """
 
@@ -584,7 +581,6 @@ class TestBuildConfigVariantNames:
         [
             # Base/ref variants: mode is in the type name
             (VariantType.FULL_BASE, None, BenchmarkMode.FULL, "fullbase"),
-            (VariantType.DELTA_BASE, None, BenchmarkMode.DELTA, "deltabase"),
             (VariantType.DELTA_REF, None, BenchmarkMode.DELTA, "deltaref"),
             # Shared variants: mode prefix required
             (VariantType.ALL_PATCHED, None, BenchmarkMode.DELTA, "delta-allpatched"),
@@ -686,7 +682,7 @@ class TestIncBuildSupport:
         """Test that _build_single uses inc-build path when image is available."""
         config = BuildConfig(
             benchmark_name="test-benchmark",
-            variant_type=VariantType.DELTA_BASE,
+            variant_type=VariantType.DELTA_REF,
             commit="abc123",
             main_repo="https://example.com",
             benchmark_path=tmp_path / "benchmark",
@@ -722,7 +718,7 @@ class TestIncBuildSupport:
         """Test that _build_single falls back to standard build when no image."""
         config = BuildConfig(
             benchmark_name="test-benchmark",
-            variant_type=VariantType.DELTA_BASE,
+            variant_type=VariantType.DELTA_REF,
             commit="abc123",
             main_repo="https://example.com",
             benchmark_path=tmp_path / "benchmark",
@@ -798,7 +794,7 @@ class TestIncBuildSupport:
         """Test that use_inc_build=False skips inc-build check."""
         config = BuildConfig(
             benchmark_name="test-benchmark",
-            variant_type=VariantType.DELTA_BASE,
+            variant_type=VariantType.DELTA_REF,
             commit="abc123",
             main_repo="https://example.com",
             benchmark_path=tmp_path / "benchmark",
@@ -937,12 +933,12 @@ class TestBuildMetadataCaching:
         builder = OSSFuzzBuilder(oss_fuzz_path)
 
         # Create inc-build cache
-        variant_name = "test-benchmark-deltabase"
+        variant_name = "test-benchmark-deltaref"
         self._create_mock_build(infra, variant_name, inc_build=True)
 
         config = BuildConfig(
             benchmark_name="test-benchmark",
-            variant_type=VariantType.DELTA_BASE,
+            variant_type=VariantType.DELTA_REF,
             commit="abc123",
             main_repo="https://example.com",
             benchmark_path=tmp_path / "benchmark",
@@ -965,12 +961,12 @@ class TestBuildMetadataCaching:
         builder = OSSFuzzBuilder(oss_fuzz_path)
 
         # Create non-inc cache
-        variant_name = "test-benchmark-deltabase"
+        variant_name = "test-benchmark-deltaref"
         self._create_mock_build(infra, variant_name, inc_build=False)
 
         config = BuildConfig(
             benchmark_name="test-benchmark",
-            variant_type=VariantType.DELTA_BASE,
+            variant_type=VariantType.DELTA_REF,
             commit="abc123",
             main_repo="https://example.com",
             benchmark_path=tmp_path / "benchmark",

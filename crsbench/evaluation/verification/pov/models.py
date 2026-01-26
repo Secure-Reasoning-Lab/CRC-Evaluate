@@ -53,7 +53,9 @@ class POVSnapshot(BaseModel):
     duplicates_skipped: int = Field(
         default=0, description="Duplicates skipped in this cycle"
     )
-    zerodays_count: int = Field(default=0, description="Zerodays found so far")
+    unintended_crashes_count: int = Field(
+        default=0, description="Unintended crashes found so far"
+    )
     early_stop_triggered: bool = Field(
         default=False, description="Whether early stop was triggered"
     )
@@ -77,7 +79,7 @@ class POVVerificationReport(BaseModel):
     duplicates_skipped: int = Field(
         default=0, description="Duplicate POVs not re-verified"
     )
-    zerodays_detected: int = Field(default=0, description="Potential zerodays found")
+    unintended_crashes: int = Field(default=0, description="Unintended crashes found")
     verification_errors: int = Field(default=0, description="Verification failures")
     verification_timeouts: int = Field(default=0, description="Verification timeouts")
     early_stopped: bool = Field(

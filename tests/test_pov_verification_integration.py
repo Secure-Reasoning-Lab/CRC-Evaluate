@@ -159,7 +159,7 @@ class TestSnapshotManagerIntegration:
             povs_total=1,
             povs_new=1,
             duplicates_skipped=0,
-            zerodays_count=0,
+            unintended_crashes_count=0,
             early_stop_triggered=False,
         )
 
@@ -192,7 +192,7 @@ class TestSnapshotManagerIntegration:
         mock_snapshot.povs_total = 5
         mock_snapshot.povs_new = 2
         mock_snapshot.duplicates_skipped = 1
-        mock_snapshot.zerodays_count = 0
+        mock_snapshot.unintended_crashes_count = 0
         mock_snapshot.early_stop_triggered = False
         mock_pov_manager.on_snapshot.return_value = mock_snapshot
 

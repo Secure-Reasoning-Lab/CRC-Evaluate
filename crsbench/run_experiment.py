@@ -159,6 +159,16 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--source",
+        type=str,
+        choices=["main_repo", "pkgs"],
+        required=False,
+        metavar="SOURCE_MODE",
+        help="Source mode: 'main_repo' (git clone, default) or 'pkgs' (bundled tarballs). "
+        "Overrides config file if specified.",
+    )
+
+    parser.add_argument(
         "--registry-dir",
         type=str,
         required=False,
@@ -939,7 +949,10 @@ def build_variants_upfront(
     logger.info(f"Found {len(benchmark_modes)} unique (benchmark, mode) combinations")
 
     # Create builder
-    builder = OSSFuzzBuilder(oss_fuzz_path, max_workers=build_workers)
+    source_mode = getattr(config, "source_mode", "main_repo")
+    builder = OSSFuzzBuilder(
+        oss_fuzz_path, max_workers=build_workers, source_mode=source_mode
+    )
 
     # Collect all build configs
     all_configs: list = []
@@ -1178,6 +1191,11 @@ def enhance_config_with_cli_args(
     if hasattr(args, "mode") and args.mode is not None:
         overrides["mode"] = args.mode
         logger.info(f"Using evaluation mode from CLI: {args.mode}")
+
+    # Source mode override
+    if hasattr(args, "source") and args.source is not None:
+        overrides["source_mode"] = args.source
+        logger.info(f"Using source mode from CLI: {args.source}")
 
     # Hint configuration overrides
     if args.hints_enabled:

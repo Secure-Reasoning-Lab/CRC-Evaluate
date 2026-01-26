@@ -460,3 +460,51 @@ class TestExecutePostTrialAnalysis:
             call_args = mock_executor.execute.call_args
             passed_context = call_args[0][1]
             assert passed_context.shared == shared_data
+
+
+class TestCreatePostTrialJobsSourceMode:
+    """Tests for source_mode parameter."""
+
+    def test_source_mode_default_is_main_repo(self, tmp_path: Path) -> None:
+        """Default source_mode is 'main_repo'."""
+        patch_path = tmp_path / "cpv_0_patch.diff"
+        patch_path.write_text("patch")
+
+        result = TrialResult(
+            trial_id="trial-001",
+            benchmark_path=tmp_path / "benchmark",
+            harness_name="test_harness",
+            trial_output_dir=tmp_path / "output",
+            success=True,
+            crs_type="bug_fixing",
+            patches=[patch_path],
+        )
+
+        jobs = create_post_trial_jobs([result], {}, coverage_enabled=False)
+
+        build_job = jobs[0]
+        assert isinstance(build_job, BuildPatchVariantJob)
+        assert build_job.source_mode == "main_repo"
+
+    def test_source_mode_pkgs_passed_to_patch_jobs(self, tmp_path: Path) -> None:
+        """source_mode='pkgs' is passed to BuildPatchVariantJob."""
+        patch_path = tmp_path / "cpv_0_patch.diff"
+        patch_path.write_text("patch")
+
+        result = TrialResult(
+            trial_id="trial-001",
+            benchmark_path=tmp_path / "benchmark",
+            harness_name="test_harness",
+            trial_output_dir=tmp_path / "output",
+            success=True,
+            crs_type="bug_fixing",
+            patches=[patch_path],
+        )
+
+        jobs = create_post_trial_jobs(
+            [result], {}, coverage_enabled=False, source_mode="pkgs"
+        )
+
+        build_job = jobs[0]
+        assert isinstance(build_job, BuildPatchVariantJob)
+        assert build_job.source_mode == "pkgs"

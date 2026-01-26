@@ -309,11 +309,11 @@ class TestVerifyPovMatchesCpv:
         assert stored_content == pov_content
 
 
-class TestVerifyPovZeroday:
-    """Tests for zeroday detection (T025)."""
+class TestVerifyPovUnintendedCrash:
+    """Tests for unintended crash detection (T025)."""
 
-    def test_verify_pov_zeroday(self, tmp_path: Path) -> None:
-        """Test that verification correctly identifies zeroday."""
+    def test_verify_pov_unintended_crash(self, tmp_path: Path) -> None:
+        """Test that verification correctly identifies unintended crash."""
         from crsbench.evaluation.verification.models import (
             PovVerificationResult,
             PovVerificationStatus,
@@ -327,7 +327,7 @@ class TestVerifyPovZeroday:
         pov_output_dir = trial_dir / "pov_output"
         pov_output_dir.mkdir()
 
-        pov_file = pov_output_dir / "pov_zeroday.blob"
+        pov_file = pov_output_dir / "pov_unintended.blob"
         pov_file.write_bytes(b"pov_that_triggers_unknown_crash")
 
         config = POVVerificationConfig()
@@ -340,11 +340,11 @@ class TestVerifyPovZeroday:
             expected_cpv_ids=["cpv_0", "cpv_1", "cpv_2"],
         )
 
-        # Mock the verification engine returning zeroday
+        # Mock the verification engine returning unintended crash
         mock_result = PovVerificationResult(
-            status=PovVerificationStatus.ZERODAY,
+            status=PovVerificationStatus.UNINTENDED_CRASH,
             benchmark="test-benchmark",
-            pov_id="pov_zeroday",
+            pov_id="pov_unintended",
             cpv_matched=[],
             details="Crash does not match any known CPV",
         )
@@ -356,10 +356,10 @@ class TestVerifyPovZeroday:
         result = manager._verify_pov(pov_file)
 
         assert result is not None
-        assert result.status == PovVerificationStatus.ZERODAY
+        assert result.status == PovVerificationStatus.UNINTENDED_CRASH
 
-    def test_zeroday_updates_state_counter(self, tmp_path: Path) -> None:
-        """Test that zeroday increments state counter."""
+    def test_unintended_crash_updates_state_counter(self, tmp_path: Path) -> None:
+        """Test that unintended crash increments state counter."""
         from crsbench.evaluation.verification.models import (
             PovVerificationResult,
             PovVerificationStatus,
@@ -373,7 +373,7 @@ class TestVerifyPovZeroday:
         pov_output_dir = trial_dir / "pov_output"
         pov_output_dir.mkdir()
 
-        pov_file = pov_output_dir / "pov_zeroday.blob"
+        pov_file = pov_output_dir / "pov_unintended.blob"
         pov_file.write_bytes(b"pov_that_triggers_unknown_crash")
 
         config = POVVerificationConfig()
@@ -387,9 +387,9 @@ class TestVerifyPovZeroday:
         )
 
         mock_result = PovVerificationResult(
-            status=PovVerificationStatus.ZERODAY,
+            status=PovVerificationStatus.UNINTENDED_CRASH,
             benchmark="test-benchmark",
-            pov_id="pov_zeroday",
+            pov_id="pov_unintended",
             cpv_matched=[],
             details="Crash does not match any known CPV",
         )
@@ -401,7 +401,7 @@ class TestVerifyPovZeroday:
         manager._verify_pov(pov_file)
         manager._update_state(pov_file, mock_result)
 
-        assert manager._zerodays_count == 1
+        assert manager._unintended_crashes_count == 1
 
 
 class TestEarlyStopCondition:
@@ -679,11 +679,11 @@ class TestGetReport:
         manager.store.add_pov(pov1, PovVerificationStatus.CPV, ["cpv_0"])
         manager.store.add_pov(pov2, PovVerificationStatus.CPV, ["cpv_1"])
 
-        # Add zeroday
+        # Add unintended crash
         pov3 = pov_output_dir / "pov3.blob"
         pov3.write_bytes(b"pov3")
-        manager.store.add_pov(pov3, PovVerificationStatus.ZERODAY, [])
-        manager._zerodays_count = 1
+        manager.store.add_pov(pov3, PovVerificationStatus.UNINTENDED_CRASH, [])
+        manager._unintended_crashes_count = 1
 
         # Add duplicates count
         manager._duplicates_count = 2
@@ -695,5 +695,5 @@ class TestGetReport:
         assert report.harness_name == "fuzz_parser"
         assert report.total_expected_cpvs == 3
         assert set(report.cpvs_found) == {"cpv_0", "cpv_1"}
-        assert report.zerodays_detected == 1
+        assert report.unintended_crashes == 1
         assert report.duplicates_skipped == 2

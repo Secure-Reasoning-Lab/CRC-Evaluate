@@ -196,7 +196,7 @@ class TestCreateUpfrontBuildJobs:
         assert jobs == []
 
     def test_source_mode_set_to_main_repo(self) -> None:
-        """Jobs have source_mode set to 'main_repo'."""
+        """Jobs have source_mode set to 'main_repo' by default."""
         trials = [
             MockTrial(
                 benchmark_harness=MockBenchmarkHarness(path=Path("/benchmarks/curl")),
@@ -207,6 +207,19 @@ class TestCreateUpfrontBuildJobs:
         jobs = create_upfront_build_jobs(trials)
 
         assert jobs[0].source_mode == "main_repo"
+
+    def test_source_mode_pkgs_passed_to_jobs(self) -> None:
+        """Jobs have source_mode set to 'pkgs' when specified."""
+        trials = [
+            MockTrial(
+                benchmark_harness=MockBenchmarkHarness(path=Path("/benchmarks/curl")),
+                sanitizer="address",
+            ),
+        ]
+
+        jobs = create_upfront_build_jobs(trials, source_mode="pkgs")
+
+        assert jobs[0].source_mode == "pkgs"
 
 
 class TestExecuteUpfrontBuilds:

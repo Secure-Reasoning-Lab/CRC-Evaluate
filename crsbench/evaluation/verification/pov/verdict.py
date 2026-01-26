@@ -1,22 +1,17 @@
 """VerdictResolver for POV verification results.
 
 This module implements the verdict logic for determining whether a POV
-triggers a known CPV, a zeroday, or is not vulnerable.
+triggers a known CPV or is not vulnerable.
 
-Verdict Logic:
+Verdict Logic (same for FULL and DELTA modes):
 
-FULL Mode:
-- If base doesn't crash: NOT_VULNERABLE
+- If base/ref doesn't crash: NOT_VULNERABLE
 - If allpatched crashes: UNINTENDED_CRASH
 - If any cpvN crashes: CPV (matched to crashing variants)
-- Else: ZERODAY
+- Else: UNINTENDED_CRASH (crashes but no CPV matched)
 
-DELTA Mode:
-- If base crashes: ZERODAY (bug exists in base, not induced by changes)
-- If ref doesn't crash: NOT_VULNERABLE
-- If allpatched crashes: UNINTENDED_CRASH
-- If any cpvN crashes: CPV
-- Else: UNINTENDED_CRASH (crashes on ref but not fixed by any patch)
+FULL mode checks FULL_BASE, DELTA mode checks DELTA_REF.
+The verdict logic is identical - only the base variant differs.
 """
 
 from typing import Optional, Union
@@ -83,7 +78,7 @@ class VerdictResolver:
         1. If base doesn't crash -> NOT_VULNERABLE
         2. If allpatched crashes -> UNINTENDED_CRASH
         3. If any cpvN crashes -> CPV
-        4. Else -> ZERODAY
+        4. Else -> UNINTENDED_CRASH (crashes but no CPV matched)
         """
         # Check all required variants exist (build/reproduce succeeded)
         required_variants = [VariantType.FULL_BASE, VariantType.ALL_PATCHED]
@@ -152,17 +147,17 @@ class VerdictResolver:
                 details=f"POV triggers {len(matched_cpvs)} known vulnerability(ies)",
             )
 
-        # Crashes base but no CPV variant crashes - this is a zeroday
+        # Crashes base but no CPV variant crashes - unintended crash
         pov_prefix = f"[{pov_id}] " if pov_id else ""
         logger.warning(
-            f"{pov_prefix}[{benchmark_name}] ZERODAY - crashes base but no CPV matched"
+            f"{pov_prefix}[{benchmark_name}] UNINTENDED_CRASH - crashes base but no CPV matched"
         )
         return PovVerificationResult(
-            status=PovVerificationStatus.ZERODAY,
+            status=PovVerificationStatus.UNINTENDED_CRASH,
             benchmark=benchmark_name,
             cpv_matched=[],
             pov_id=pov_id,
-            details="POV triggers unknown vulnerability not covered by any CPV",
+            details="POV crashes but doesn't match any known CPV",
         )
 
     @staticmethod
@@ -174,17 +169,15 @@ class VerdictResolver:
     ) -> PovVerificationResult:
         """Resolve verdict for DELTA mode benchmarks.
 
-        Logic:
+        Logic (same as FULL mode, just uses DELTA_REF instead of FULL_BASE):
         0. If any required variant missing -> ERROR
-        1. If base crashes -> ZERODAY (vulnerability exists before changes)
-        2. If ref doesn't crash -> NOT_VULNERABLE
-        3. If allpatched crashes -> UNINTENDED_CRASH
-        4. If any cpvN crashes -> CPV
-        5. Else -> UNINTENDED_CRASH
+        1. If ref doesn't crash -> NOT_VULNERABLE
+        2. If allpatched crashes -> UNINTENDED_CRASH
+        3. If any cpvN crashes -> CPV
+        4. Else -> UNINTENDED_CRASH (crashes but no CPV matched)
         """
         # Check all required variants exist (build/reproduce succeeded)
         required_variants = [
-            VariantType.DELTA_BASE,
             VariantType.DELTA_REF,
             VariantType.ALL_PATCHED,
         ]
@@ -201,23 +194,6 @@ class VerdictResolver:
                 cpv_matched=[],
                 pov_id=pov_id,
                 details=f"Build or reproduce failed for variants: {missing}",
-            )
-
-        # Now safe to access without defaults
-        base_crashed = crash_results[VariantType.DELTA_BASE]
-
-        # If base crashes, the bug exists before the delta - it's a zeroday
-        if base_crashed:
-            pov_prefix = f"[{pov_id}] " if pov_id else ""
-            logger.warning(
-                f"{pov_prefix}[{benchmark_name}] ZERODAY - crashed on DELTA_BASE (pre-existing bug)"
-            )
-            return PovVerificationResult(
-                status=PovVerificationStatus.ZERODAY,
-                benchmark=benchmark_name,
-                cpv_matched=[],
-                pov_id=pov_id,
-                details="POV triggers bug that exists before delta changes",
             )
 
         # Check if POV crashes on ref (the vulnerable version)
@@ -278,5 +254,5 @@ class VerdictResolver:
             benchmark=benchmark_name,
             cpv_matched=[],
             pov_id=pov_id,
-            details="POV crashes ref but not fixed by any known patch",
+            details="POV crashes but doesn't match any known CPV",
         )

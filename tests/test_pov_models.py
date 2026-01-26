@@ -63,7 +63,7 @@ class TestPOVEntry:
         """Test POVEntry with different PovVerificationStatus values."""
         for status in [
             PovVerificationStatus.CPV,
-            PovVerificationStatus.ZERODAY,
+            PovVerificationStatus.UNINTENDED_CRASH,
             PovVerificationStatus.NOT_VULNERABLE,
             PovVerificationStatus.ERROR,
         ]:
@@ -107,7 +107,7 @@ class TestPOVSnapshot:
         assert snapshot.povs_total == 0
         assert snapshot.povs_new == 0
         assert snapshot.duplicates_skipped == 0
-        assert snapshot.zerodays_count == 0
+        assert snapshot.unintended_crashes_count == 0
         assert snapshot.early_stop_triggered is False
 
     def test_full_snapshot(self) -> None:
@@ -122,7 +122,7 @@ class TestPOVSnapshot:
             povs_total=10,
             povs_new=3,
             duplicates_skipped=2,
-            zerodays_count=1,
+            unintended_crashes_count=1,
             early_stop_triggered=False,
         )
 
@@ -158,7 +158,7 @@ class TestPOVVerificationReport:
         assert report.cpvs_remaining == []
         assert report.total_povs_processed == 0
         assert report.duplicates_skipped == 0
-        assert report.zerodays_detected == 0
+        assert report.unintended_crashes == 0
         assert report.verification_errors == 0
         assert report.verification_timeouts == 0
         assert report.early_stopped is False
@@ -176,7 +176,7 @@ class TestPOVVerificationReport:
             cpvs_remaining=["cpv_2"],
             total_povs_processed=15,
             duplicates_skipped=5,
-            zerodays_detected=1,
+            unintended_crashes=1,
             verification_errors=2,
             verification_timeouts=1,
             early_stopped=True,
@@ -193,7 +193,7 @@ class TestPOVVerificationReport:
         assert data["cpvs_remaining"] == ["cpv_2"]
         assert data["total_povs_processed"] == 15
         assert data["duplicates_skipped"] == 5
-        assert data["zerodays_detected"] == 1
+        assert data["unintended_crashes"] == 1
         assert data["verification_errors"] == 2
         assert data["verification_timeouts"] == 1
         assert data["early_stopped"] is True

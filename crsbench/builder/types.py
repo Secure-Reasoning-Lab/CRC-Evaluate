@@ -17,7 +17,6 @@ class VariantType(Enum):
 
     Validation variants (for POV verification):
     - FULL_BASE: Base commit for full mode (vulnerable version)
-    - DELTA_BASE: Base commit for delta mode (pre-vulnerability)
     - DELTA_REF: Reference commit for delta mode (vulnerable)
     - ALL_PATCHED: All CPV patches applied (should not crash)
     - CPV: All patches except one CPV (crashes if POV triggers that CPV)
@@ -30,7 +29,6 @@ class VariantType(Enum):
     """
 
     FULL_BASE = "fullbase"
-    DELTA_BASE = "deltabase"
     DELTA_REF = "deltaref"
     ALL_PATCHED = "allpatched"
     CPV = "cpv"
@@ -49,11 +47,9 @@ class VariantType(Enum):
         """Whether this variant uses the inc-build image's commit.
 
         Inc-build images are built for ref_commit (delta mode) or base_commit
-        (full mode). DELTA_BASE uses a different commit (base_commit in delta
-        mode), so fallback is expected. COVERAGE uses different instrumentation,
-        not inc-build.
+        (full mode). COVERAGE uses different instrumentation, not inc-build.
         """
-        return self not in (VariantType.DELTA_BASE, VariantType.COVERAGE)
+        return self != VariantType.COVERAGE
 
     def supports_inc_build(self) -> bool:
         """Check if this variant type supports incremental builds.
@@ -163,7 +159,6 @@ class BuildConfig:
         # Base and ref variants already have mode in type name
         if self.variant_type in (
             VariantType.FULL_BASE,
-            VariantType.DELTA_BASE,
             VariantType.DELTA_REF,
         ):
             return f"{self.benchmark_name}-{self.variant_type.value}"
