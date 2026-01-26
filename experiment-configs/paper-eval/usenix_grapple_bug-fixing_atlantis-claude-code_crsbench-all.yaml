@@ -55,8 +55,7 @@ report_filestore: /mnt/ssd2/acorn421/crsbench/usenix-grapple-bug-fixing-eval/rep
 # NFS result transfer settings
 copy_results_to_filestore: true
 copy_results_after_trial: true
-experiment_results_filestore: /mnt/crsbench_nfs/crsbench/grapple/usenix-grapple-bug-fixing-eval/experiment-data
-reports_results_filestore: /mnt/crsbench_nfs/crsbench/grapple/usenix-grapple-bug-fixing-eval/report-data
+results_filestore: /mnt/crsbench_nfs/crsbench/grapple/usenix-grapple-bug-fixing-eval
 
 # Disk cleanup (delete local artifacts after transfer to NFS)
 cleanup_after_trial: true
