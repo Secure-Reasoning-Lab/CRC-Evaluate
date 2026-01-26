@@ -229,6 +229,8 @@ resources:
     max_concurrent_requests: 50
     # Cost budget in USD
     cost_budget: 500.0
+    # Team name for grouping API keys (defaults to experiment name)
+    team: "crsbench"
 ```
 
 **Priority order for resources**:

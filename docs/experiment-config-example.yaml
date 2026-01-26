@@ -148,6 +148,11 @@ snapshot_period: 900
 #     # Default: 100.0
 #     # Experiment will halt if this budget is exceeded (if cost tracking is enabled)
 #     cost_budget: 200.0
+#
+#     # Team name for grouping API keys in LiteLLM
+#     # Default: Uses experiment name
+#     # Useful for organizing API keys by project or research group
+#     # team: "crsbench"
 
 # ===== Distributed Worker Configuration =====
 

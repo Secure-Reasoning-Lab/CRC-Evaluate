@@ -134,6 +134,11 @@ resources:
     # Cost budget in USD. (>= 0)
     cost_budget: 500.0  # default: 100.0
 
+    # Team name for grouping API keys in LiteLLM.
+    # If not set, uses experiment name as team name.
+    # Useful for organizing API keys by project or research group.
+    # team: "crsbench"  # default: uses experiment name
+
 # =============================================================================
 # Worker Configuration
 # =============================================================================
