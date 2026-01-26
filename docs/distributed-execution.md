@@ -227,10 +227,12 @@ resources:
   litellm:
     # Maximum concurrent LLM API requests
     max_concurrent_requests: 50
-    # Cost budget in USD
+    # Cost budget in USD per trial
     cost_budget: 500.0
     # Team name for grouping API keys (defaults to experiment name)
     team: "crsbench"
+    # Maximum budget in USD for the entire team (all trials combined)
+    team_max_budget: 5000.0
 ```
 
 **Priority order for resources**:
