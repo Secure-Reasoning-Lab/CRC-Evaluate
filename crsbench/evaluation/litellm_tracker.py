@@ -227,6 +227,7 @@ class LiteLLMTracker:
 
         payload: dict = {
             "key_alias": key_alias,
+            "key_type": "llm_api",
             "models": [],  # Empty means all models allowed
             "metadata": {
                 "experiment": experiment,
