@@ -633,6 +633,10 @@ class LitellmResourceConfig(BaseModel):
         default=10, ge=1, description="Maximum concurrent requests to LiteLLM"
     )
     cost_budget: float = Field(default=100.0, ge=0, description="Cost budget in USD")
+    team: Optional[str] = Field(
+        default=None,
+        description="Team name to group API keys. If not set, experiment name is used.",
+    )
 
 
 class ResourceConfig(BaseModel):

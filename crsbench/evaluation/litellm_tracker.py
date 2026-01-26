@@ -189,6 +189,100 @@ class LiteLLMTracker:
             "Content-Type": "application/json",
         }
 
+    def find_team_by_alias(self, team_alias: str) -> Optional[str]:
+        """Find a team by exact alias match.
+
+        Uses /v2/team/list with team_alias parameter for partial search,
+        then filters for exact match.
+
+        Args:
+            team_alias: Team alias to search for
+
+        Returns:
+            team_id if exact match found, None otherwise
+        """
+        try:
+            response = requests.get(
+                f"{self.base_url}/v2/team/list",
+                headers=self._headers,
+                params={"team_alias": team_alias},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # Search results for exact alias match
+            teams = (
+                data
+                if isinstance(data, list)
+                else data.get("teams", data.get("data", []))
+            )
+            for team in teams:
+                if team.get("team_alias") == team_alias:
+                    return team.get("team_id")
+            return None
+
+        except requests.RequestException as e:
+            logger.warning(f"Failed to search teams: {e}")
+            return None
+
+    def create_team(self, team_alias: str) -> str:
+        """Create a new team.
+
+        Args:
+            team_alias: Team alias/name
+
+        Returns:
+            team_id of created team
+
+        Raises:
+            LiteLLMTrackerError: If team creation fails
+        """
+        try:
+            response = requests.post(
+                f"{self.base_url}/team/new",
+                headers=self._headers,
+                json={"team_alias": team_alias},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            team_id = data.get("team_id")
+            if not team_id:
+                raise LiteLLMTrackerError(f"No team_id in response: {data}")
+
+            logger.info(f"Created LiteLLM team: {team_alias} ({team_id})")
+            return team_id
+
+        except requests.RequestException as e:
+            raise LiteLLMTrackerError(f"Failed to create team: {e}") from e
+
+    def get_or_create_team(self, team_alias: str) -> str:
+        """Get existing team or create new one.
+
+        1. Search for team by alias using /v2/team/list
+        2. If exact match found, return existing team_id
+        3. If no match, create new team
+
+        Args:
+            team_alias: Team alias/name
+
+        Returns:
+            team_id (existing or newly created)
+
+        Raises:
+            LiteLLMTrackerError: If both search and creation fail
+        """
+        # First, search for existing team
+        team_id = self.find_team_by_alias(team_alias)
+        if team_id:
+            logger.info(f"Using existing LiteLLM team: {team_alias} ({team_id})")
+            return team_id
+
+        # No existing team, create new one
+        return self.create_team(team_alias)
+
     def generate_key(
         self,
         experiment: str,
