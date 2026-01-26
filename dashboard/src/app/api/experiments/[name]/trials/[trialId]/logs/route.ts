@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readFile, readdir } from 'fs/promises';
 import path from 'path';
-import { loadTrialReport } from '@/lib/data/trials';
+import { loadTrialReportByIndex } from '@/lib/data/trials';
 import type { LLMLogsFile } from '@/lib/types';
 
 export interface ExecutionInfo {
@@ -45,13 +45,13 @@ export async function GET(
     const { searchParams } = new URL(request.url);
     const logType = searchParams.get('type') || 'crs';
 
-    const trialNum = parseInt(trialId, 10);
-    if (isNaN(trialNum)) {
+    const trialIndex = parseInt(trialId, 10);
+    if (isNaN(trialIndex) || trialIndex < 0) {
       return NextResponse.json({ error: 'Invalid trial ID' }, { status: 400 });
     }
 
     // Load trial report to get trial directory
-    const report = await loadTrialReport(name, trialNum);
+    const report = await loadTrialReportByIndex(name, trialIndex);
     if (!report) {
       return NextResponse.json({ error: 'Trial not found' }, { status: 404 });
     }

@@ -163,10 +163,10 @@ export default async function ExperimentPage({ params }: ExperimentPageProps) {
                 <TableRow key={idx} className="hover:bg-muted/50">
                   <TableCell className="font-medium">
                     <Link
-                      href={`/experiments/${name}/trials/${trial.trial_num}`}
+                      href={`/experiments/${name}/trials/${idx}`}
                       className="hover:underline text-primary"
                     >
-                      #{trial.trial_num}
+                      #{idx}
                     </Link>
                   </TableCell>
                   <TableCell>{trial.crs}</TableCell>
@@ -183,7 +183,7 @@ export default async function ExperimentPage({ params }: ExperimentPageProps) {
                   </TableCell>
                   <TableCell className="text-right">
                     <Button variant="outline" size="sm" asChild>
-                      <Link href={`/experiments/${name}/trials/${trial.trial_num}`}>
+                      <Link href={`/experiments/${name}/trials/${idx}`}>
                         View
                       </Link>
                     </Button>
