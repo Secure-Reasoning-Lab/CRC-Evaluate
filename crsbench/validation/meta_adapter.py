@@ -252,6 +252,75 @@ class MetaYamlAdapter:
                 result.append((vuln.vuln_keyword, pov))
         return result
 
+    def get_harness_sanitizer(self, harness_name: str) -> str:
+        """Get the sanitizer required for a specific harness.
+
+        All CPVs within a harness must use the same sanitizer.
+
+        Args:
+            harness_name: Name of the harness
+
+        Returns:
+            The sanitizer type (e.g., "address", "memory")
+
+        Raises:
+            ValueError: If multiple different sanitizers are used within the harness
+        """
+        harness = self.get_harness(harness_name)
+        if not harness or not harness.vulns:
+            return "address"  # default
+
+        sanitizers: set[str] = set()
+        for vuln in harness.vulns:
+            for pov in vuln.povs:
+                sanitizers.add(pov.sanitizer)
+
+        if not sanitizers:
+            return "address"
+
+        if len(sanitizers) > 1:
+            raise ValueError(
+                f"Harness '{harness_name}' requires multiple sanitizers: {sorted(sanitizers)}. "
+                "All CPVs within a harness must use the same sanitizer."
+            )
+
+        return sanitizers.pop()
+
+    def get_required_sanitizer(self) -> str:
+        """Get the sanitizer required for CPV detection across all harnesses.
+
+        Each harness must use a single sanitizer internally. If different harnesses
+        use different sanitizers, this is currently not supported for batch verification.
+
+        Returns:
+            The sanitizer type (e.g., "address", "memory")
+
+        Raises:
+            ValueError: If different harnesses require different sanitizers
+        """
+        harness_sanitizers: dict[str, str] = {}
+
+        for harness in self.config.harness_files:
+            if not harness.vulns:
+                continue
+            # Check each harness has consistent sanitizer
+            sanitizer = self.get_harness_sanitizer(harness.name)
+            harness_sanitizers[harness.name] = sanitizer
+
+        if not harness_sanitizers:
+            return "address"
+
+        unique_sanitizers = set(harness_sanitizers.values())
+        if len(unique_sanitizers) > 1:
+            details = ", ".join(f"{h}={s}" for h, s in harness_sanitizers.items())
+            raise ValueError(
+                f"Different harnesses require different sanitizers: {details}. "
+                "Batch verification across harnesses with different sanitizers "
+                "is not currently supported."
+            )
+
+        return unique_sanitizers.pop()
+
     def get_pov_path(
         self, harness_name: str, vuln_keyword: str, pov_id: str
     ) -> Optional[Path]:
