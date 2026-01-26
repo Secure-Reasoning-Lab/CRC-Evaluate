@@ -775,13 +775,6 @@ def run_crs_trial(
                 f"Worker override applied: copy_results_after_trial = {config.copy_results_after_trial}"
             )
 
-        copy_results_override = get_worker_override("copy_results_to_filestore")
-        if copy_results_override:
-            config.copy_results_to_filestore = copy_results_override.lower() == "true"
-            logger.info(
-                f"Worker override applied: copy_results_to_filestore = {config.copy_results_to_filestore}"
-            )
-
         results_filestore_override = get_worker_override("results_filestore")
         if results_filestore_override:
             config.results_filestore = Path(results_filestore_override).resolve()

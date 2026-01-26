@@ -701,10 +701,6 @@ class WorkerConfig(BaseModel):
         default=None,
         description="Override per-trial result copying for workers",
     )
-    copy_results_to_filestore: Optional[bool] = Field(
-        default=None,
-        description="Override result copying behavior for workers",
-    )
     results_filestore: Optional[Path] = Field(
         default=None,
         description="Override results destination path for workers (contains experiment-data/ and report-data/)",
@@ -891,10 +887,6 @@ class ExperimentConfig(BaseModel):
     copy_results_after_trial: bool = Field(
         default=False,
         description="Copy essential files to results_filestore after each trial completes",
-    )
-    copy_results_to_filestore: bool = Field(
-        default=False,
-        description="Enable copying essential files to results_filestore location",
     )
     results_filestore: Optional[Path] = Field(
         default=None,
@@ -1129,10 +1121,6 @@ class ExperimentConfig(BaseModel):
     @model_validator(mode="after")
     def check_results_filestore_configuration(self):
         """Validate results_filestore configuration."""
-        if self.copy_results_to_filestore and not self.results_filestore:
-            raise ValueError(
-                "copy_results_to_filestore=true requires results_filestore to be set"
-            )
         if self.copy_results_after_trial and not self.results_filestore:
             raise ValueError(
                 "copy_results_after_trial=true requires results_filestore to be set"

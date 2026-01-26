@@ -178,7 +178,6 @@ def run_worker(args: argparse.Namespace) -> int:
             "keep_only_results",
             "cleanup_after_trial",
             "copy_results_after_trial",
-            "copy_results_to_filestore",
             "results_filestore",
             "minimum_disk_size",
             "disk_check_interval",
