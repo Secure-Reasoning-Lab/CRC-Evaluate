@@ -52,14 +52,14 @@ class OSSFuzzBuilder:
         oss_fuzz_path: Path,
         max_workers: int = 4,
         *,
-        source_mode: str = "main_repo",
+        source_mode: str = "pkgs",
     ):
         """Initialize the builder.
 
         Args:
             oss_fuzz_path: Path to oss-fuzz directory
             max_workers: Maximum number of parallel workers (default: 4)
-            source_mode: Source mode - "main_repo" (clone, default) or "pkgs" (bundled)
+            source_mode: Source mode - "pkgs" (bundled, default) or "main_repo" (clone)
         """
         self.oss_fuzz_path = Path(oss_fuzz_path).resolve()
         self.max_workers = max_workers
