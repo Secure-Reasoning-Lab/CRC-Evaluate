@@ -326,6 +326,31 @@ class LiteLLMTracker:
         # No existing team, create new one
         return self.create_team(team_alias, max_budget=max_budget)
 
+    def get_team_info(self, team_id: str) -> dict:
+        """Get team information including spend and budget.
+
+        Args:
+            team_id: Team ID to query
+
+        Returns:
+            Team info dict with spend, max_budget, etc.
+
+        Raises:
+            LiteLLMTrackerError: If query fails
+        """
+        try:
+            response = requests.get(
+                f"{self.base_url}/team/info",
+                headers=self._headers,
+                params={"team_id": team_id},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            return response.json()
+
+        except requests.RequestException as e:
+            raise LiteLLMTrackerError(f"Failed to get team info: {e}") from e
+
     def generate_key(
         self,
         experiment: str,

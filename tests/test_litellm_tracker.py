@@ -456,6 +456,39 @@ class TestLiteLLMTracker:
             tracker.update_team("team-123", max_budget=150.0)
 
     @patch("crsbench.evaluation.litellm_tracker.requests.get")
+    def test_get_team_info_success(self, mock_get, tracker):
+        """Test successful team info retrieval."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "team_id": "team-123",
+            "team_alias": "test-team",
+            "spend": 42.50,
+            "max_budget": 100.0,
+        }
+        mock_get.return_value = mock_response
+
+        team_info = tracker.get_team_info("team-123")
+
+        assert team_info["team_id"] == "team-123"
+        assert team_info["spend"] == 42.50
+        assert team_info["max_budget"] == 100.0
+        mock_get.assert_called_once_with(
+            "http://litellm:4000/team/info",
+            headers=tracker._headers,
+            params={"team_id": "team-123"},
+            timeout=30,
+        )
+
+    @patch("crsbench.evaluation.litellm_tracker.requests.get")
+    def test_get_team_info_api_error(self, mock_get, tracker):
+        """Test team info retrieval with API error."""
+        mock_get.side_effect = requests.RequestException("Connection failed")
+
+        with pytest.raises(LiteLLMTrackerError, match="Failed to get team info"):
+            tracker.get_team_info("team-123")
+
+    @patch("crsbench.evaluation.litellm_tracker.requests.get")
     def test_get_or_create_team_uses_existing(self, mock_get, tracker):
         """Test get_or_create_team uses existing team when found."""
         mock_response = MagicMock()
@@ -1187,6 +1220,7 @@ class TestSetupLlmTrackingBudget:
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
         mock_tracker.get_or_create_team.return_value = "team-123"
+        mock_tracker.get_team_info.return_value = {"spend": 10.0, "max_budget": 100.0}
         mock_tracker_class.return_value = mock_tracker
 
         config = ExperimentConfig(
@@ -1230,6 +1264,7 @@ class TestSetupLlmTrackingBudget:
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
         mock_tracker.get_or_create_team.return_value = "team-123"
+        mock_tracker.get_team_info.return_value = {"spend": 10.0, "max_budget": None}
         mock_tracker_class.return_value = mock_tracker
 
         config = ExperimentConfig(**base_config_dict)
@@ -1269,6 +1304,7 @@ class TestSetupLlmTrackingBudget:
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
         mock_tracker.get_or_create_team.return_value = "team-123"
+        mock_tracker.get_team_info.return_value = {"spend": 10.0, "max_budget": None}
         mock_tracker_class.return_value = mock_tracker
 
         config = ExperimentConfig(
@@ -1320,6 +1356,7 @@ class TestSetupLlmTrackingBudget:
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
         mock_tracker.get_or_create_team.return_value = "team-456"
+        mock_tracker.get_team_info.return_value = {"spend": 25.0, "max_budget": None}
         mock_tracker_class.return_value = mock_tracker
 
         config = ExperimentConfig(
@@ -1369,6 +1406,7 @@ class TestSetupLlmTrackingBudget:
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
         mock_tracker.get_or_create_team.return_value = "team-789"
+        mock_tracker.get_team_info.return_value = {"spend": 5.0, "max_budget": None}
         mock_tracker_class.return_value = mock_tracker
 
         config = ExperimentConfig(**base_config_dict)
@@ -1417,6 +1455,7 @@ class TestSetupLlmTrackingBudget:
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
         mock_tracker.get_or_create_team.return_value = "team-999"
+        mock_tracker.get_team_info.return_value = {"spend": 150.0, "max_budget": 500.0}
         mock_tracker_class.return_value = mock_tracker
 
         config = ExperimentConfig(

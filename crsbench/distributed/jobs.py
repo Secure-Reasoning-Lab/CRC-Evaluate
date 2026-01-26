@@ -131,6 +131,25 @@ def _setup_llm_tracking(
 
         team_id = tracker.get_or_create_team(team_name, max_budget=team_max_budget)
 
+        # Log team budget information
+        try:
+            team_info = tracker.get_team_info(team_id)
+            team_spend = team_info.get("spend", 0)
+            team_budget = team_info.get("max_budget")
+
+            if team_budget is not None:
+                remaining = team_budget - team_spend
+                logger.info(
+                    f"Team '{team_name}' budget: "
+                    f"used=${team_spend:.2f}, remaining=${remaining:.2f}, max=${team_budget:.2f}"
+                )
+            else:
+                logger.info(
+                    f"Team '{team_name}' budget: used=${team_spend:.2f}, max=unlimited"
+                )
+        except LiteLLMTrackerError as e:
+            logger.warning(f"Could not fetch team budget info: {e}")
+
         api_key = tracker.generate_key(
             experiment=config.experiment,
             crs=crs,
