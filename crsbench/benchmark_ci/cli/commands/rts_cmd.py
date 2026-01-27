@@ -120,6 +120,7 @@ def run_rts(args: argparse.Namespace) -> int:
                         cpv_id=cpv_id,
                         patch_id=patch_id,
                         patch_path=patch_path,
+                        harness=harness,  # Pass harness for per-harness sanitizer
                         use_inc_build=effective_inc,
                         force_rebuild=force_rebuild,
                         build_job_id=build_job.job_id,

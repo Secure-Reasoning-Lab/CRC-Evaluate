@@ -2076,3 +2076,158 @@ class TestAllSubcommand:
         dispatch_ci(args)
 
         mock_fmt.assert_called_once()
+
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.DAGExecutor")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_benchmark_adapter")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
+    def test_all_handles_mixed_sanitizers(
+        self,
+        mock_discover,
+        mock_fmt,
+        mock_caps,
+        mock_adapter,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
+    ):
+        """Test that all command handles benchmarks with mixed sanitizers across harnesses."""
+        from crsbench.benchmark_ci.models import (
+            BenchmarkValidationResult,
+            CheckResult,
+            CheckStatus,
+        )
+
+        # Setup mocks
+        paths = [Path("/tmp/bench1")]
+        mock_discover.return_value = paths
+        mock_caps.return_value = (True, "jcgeks")  # supports_inc, rts_mode
+        mock_fmt.side_effect = lambda path, _source_mode: BenchmarkValidationResult(
+            benchmark=path.name,
+            benchmark_path=path,
+            format_check=CheckResult(status=CheckStatus.PASS, time_seconds=0.1),
+        )
+
+        # Mock two harnesses with different sanitizers
+        mock_harness.return_value = ["harness_addr", "harness_undef"]
+        # Return different CPVs for each harness
+        mock_cpvs.side_effect = lambda _path, harness: (
+            ["cpv_0"] if harness == "harness_addr" else ["cpv_1"]
+        )
+        mock_patches.return_value = [("patch_0", Path("/tmp/patch_0.diff"))]
+        mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+
+        # Setup mock adapter with mixed sanitizers
+        adapter = MagicMock()
+        adapter.get_ref_commit.return_value = "abc123def456"
+        adapter.get_base_commit.return_value = "base123456"
+        adapter.main_repo = "https://github.com/test/repo.git"
+        adapter.lang = "c"
+        adapter.repo_name = None
+        adapter.get_mode.return_value.value = "delta"
+
+        # get_required_sanitizer raises ValueError for mixed sanitizers
+        adapter.get_required_sanitizer.side_effect = ValueError(
+            "Different harnesses require different sanitizers: "
+            "harness_addr=address, harness_undef=undefined"
+        )
+
+        # get_harness_sanitizer returns per-harness sanitizers
+        def harness_sanitizer(harness_name):
+            return "address" if harness_name == "harness_addr" else "undefined"
+
+        adapter.get_harness_sanitizer.side_effect = harness_sanitizer
+        mock_adapter.return_value = adapter
+
+        # Mock executor results - need results for both CPVs
+        from crsbench.executor.types import ExecutorResult, JobStatus
+
+        results = {
+            # Build jobs (4 total: deltaref, allpatched, cpv_0, cpv_1)
+            "build-single:bench1:deltaref": ExecutorResult(
+                job_id="build-single:bench1:deltaref",
+                status=JobStatus.SUCCESS,
+                elapsed_seconds=5.0,
+            ),
+            "build-single:bench1:delta-allpatched": ExecutorResult(
+                job_id="build-single:bench1:delta-allpatched",
+                status=JobStatus.SUCCESS,
+                elapsed_seconds=5.0,
+            ),
+            "build-single:bench1:delta-cpv0": ExecutorResult(
+                job_id="build-single:bench1:delta-cpv0",
+                status=JobStatus.SUCCESS,
+                elapsed_seconds=5.0,
+            ),
+            "build-single:bench1:delta-cpv1": ExecutorResult(
+                job_id="build-single:bench1:delta-cpv1",
+                status=JobStatus.SUCCESS,
+                elapsed_seconds=5.0,
+            ),
+            # POV verify jobs (2 total: cpv_0, cpv_1)
+            "verify-cpv-pov:bench1:cpv_0": ExecutorResult(
+                job_id="verify-cpv-pov:bench1:cpv_0",
+                status=JobStatus.SUCCESS,
+                elapsed_seconds=2.0,
+            ),
+            "verify-cpv-pov:bench1:cpv_1": ExecutorResult(
+                job_id="verify-cpv-pov:bench1:cpv_1",
+                status=JobStatus.SUCCESS,
+                elapsed_seconds=2.0,
+            ),
+            # Patch build jobs (2 total: cpv_0:patch_0, cpv_1:patch_0)
+            "build-patch:bench1:cpv_0:patch_0": ExecutorResult(
+                job_id="build-patch:bench1:cpv_0:patch_0",
+                status=JobStatus.SUCCESS,
+                elapsed_seconds=3.0,
+            ),
+            "build-patch:bench1:cpv_1:patch_0": ExecutorResult(
+                job_id="build-patch:bench1:cpv_1:patch_0",
+                status=JobStatus.SUCCESS,
+                elapsed_seconds=3.0,
+            ),
+            # Patch test jobs (4 total: cpv_0:FULL, cpv_0:RTS, cpv_1:FULL, cpv_1:RTS)
+            "test-patch:bench1:cpv_0:patch_0:FULL": ExecutorResult(
+                job_id="test-patch:bench1:cpv_0:patch_0:FULL",
+                status=JobStatus.SUCCESS,
+                elapsed_seconds=4.0,
+            ),
+            "test-patch:bench1:cpv_0:patch_0:RTS": ExecutorResult(
+                job_id="test-patch:bench1:cpv_0:patch_0:RTS",
+                status=JobStatus.SUCCESS,
+                elapsed_seconds=3.0,
+            ),
+            "test-patch:bench1:cpv_1:patch_0:FULL": ExecutorResult(
+                job_id="test-patch:bench1:cpv_1:patch_0:FULL",
+                status=JobStatus.SUCCESS,
+                elapsed_seconds=4.0,
+            ),
+            "test-patch:bench1:cpv_1:patch_0:RTS": ExecutorResult(
+                job_id="test-patch:bench1:cpv_1:patch_0:RTS",
+                status=JobStatus.SUCCESS,
+                elapsed_seconds=3.0,
+            ),
+        }
+        mock_executor_cls.return_value.execute.return_value = results
+
+        # Execute command
+        parser = _make_parser()
+        args = parser.parse_args(["ci", "all", "--all"])
+        result = dispatch_ci(args)
+
+        # Verify success
+        assert result == 0
+
+        # Verify get_harness_sanitizer was called for each harness
+        assert adapter.get_harness_sanitizer.call_count == 2
+        adapter.get_harness_sanitizer.assert_any_call("harness_addr")
+        adapter.get_harness_sanitizer.assert_any_call("harness_undef")

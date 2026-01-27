@@ -146,7 +146,18 @@ def _build_dag(
         main_repo = adapter.main_repo
         language = adapter.lang
         repo_name = adapter.repo_name
-        sanitizer = adapter.get_required_sanitizer()
+
+        # Try to get global sanitizer, but if harnesses have mixed sanitizers,
+        # we'll use per-harness sanitizers later
+        try:
+            global_sanitizer = adapter.get_required_sanitizer()
+        except ValueError:
+            # Mixed sanitizers across harnesses - will use per-harness
+            global_sanitizer = "address"  # default for shared variants
+            logger.debug(
+                f"{benchmark_name} has mixed sanitizers across harnesses, "
+                "will use per-CPV sanitizers"
+            )
 
         # Collect all patches for allpatched variant from discovery
         all_patches: list[Path] = []
@@ -177,7 +188,7 @@ def _build_dag(
             use_inc_build=effective_inc,
             force_rebuild=force_rebuild,
             source_mode=source_mode,
-            sanitizer=sanitizer,
+            sanitizer=global_sanitizer,
             repo_name=repo_name,
             sanitizer=sanitizer,
         )
@@ -197,7 +208,7 @@ def _build_dag(
             use_inc_build=effective_inc,
             force_rebuild=force_rebuild,
             source_mode=source_mode,
-            sanitizer=sanitizer,
+            sanitizer=global_sanitizer,
             repo_name=repo_name,
             sanitizer=sanitizer,
         )
@@ -229,6 +240,9 @@ def _build_dag(
         patch_keys: list[tuple[str, str]] = []
 
         for harness in harnesses:
+            # Get sanitizer for this specific harness
+            harness_sanitizer = adapter.get_harness_sanitizer(harness)
+
             for cpv_id in discover_cpv_ids(path, harness):
                 if cpv_id in cpv_ids:
                     continue
@@ -250,6 +264,7 @@ def _build_dag(
                 ]
 
                 # Create BuildSingleVariantJob for this CPV variant
+                # Use harness-specific sanitizer (supports mixed sanitizers)
                 cpv_build_job = BuildSingleVariantJob(
                     benchmark_path=path,
                     benchmark_name=benchmark_name,
@@ -263,7 +278,7 @@ def _build_dag(
                     use_inc_build=effective_inc,
                     force_rebuild=force_rebuild,
                     source_mode=source_mode,
-                    sanitizer=sanitizer,
+                    sanitizer=harness_sanitizer,
                     repo_name=repo_name,
                     sanitizer=sanitizer,
                 )
@@ -302,6 +317,7 @@ def _build_dag(
                         cpv_id=cpv_id,
                         patch_id=patch_id,
                         patch_path=patch_path,
+                        harness=harness,  # Pass harness for per-harness sanitizer
                         use_inc_build=effective_inc,
                         force_rebuild=force_rebuild,
                         build_job_id=vulnerable_job.job_id,

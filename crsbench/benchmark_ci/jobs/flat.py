@@ -453,6 +453,7 @@ class BuildPatchVariantJob(Job):
     cpv_id: str
     patch_id: str
     patch_path: Path
+    harness: str = ""  # Harness name for per-harness sanitizer
     use_inc_build: bool = True
     force_rebuild: bool = False
     build_job_id: str = ""
@@ -498,7 +499,21 @@ class BuildPatchVariantJob(Job):
                 raise ValueError(f"Failed to load adapter for {self.benchmark_path}")
 
             commit = adapter.get_ref_commit() or adapter.get_base_commit()
-            sanitizer = adapter.get_required_sanitizer()
+
+            # Get sanitizer for this specific harness (supports mixed sanitizers)
+            if self.harness:
+                sanitizer = adapter.get_harness_sanitizer(self.harness)
+            else:
+                # Fallback to global sanitizer if harness not provided (backward compat)
+                try:
+                    sanitizer = adapter.get_required_sanitizer()
+                except ValueError:
+                    # Mixed sanitizers - use address as default
+                    sanitizer = "address"
+
+            # PATCHED variants can use inc-build:
+            # - Base inc-build image (benchmark_name) is retagged to variant_name
+            # - Patches are applied to the inc-build source
             build_config = BuildConfig(
                 benchmark_name=self.benchmark_name,
                 benchmark_path=self.benchmark_path,
