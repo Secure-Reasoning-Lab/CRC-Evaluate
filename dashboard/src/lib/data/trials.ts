@@ -1,8 +1,102 @@
 import { readdir, readFile } from 'fs/promises';
 import path from 'path';
 
-import type { TrialFileInfo, TrialReport } from '@/lib/types';
+import type {
+  TrialFileInfo,
+  TrialReport,
+  LLMLogsFile,
+  ModelUsage,
+  TimeSeriesPoint,
+} from '@/lib/types';
 import { findExperimentName, getReportDataDir } from './experiments';
+
+/**
+ * Parse LLM logs to build by_model breakdown and time_series data.
+ */
+async function parseLlmLogsFromTrialDir(
+  trialDir: string
+): Promise<{
+  by_model: Record<string, ModelUsage>;
+  time_series: TimeSeriesPoint[];
+  total_tokens: number;
+  total_cost: number;
+} | null> {
+  try {
+    const llmLogsPath = path.join(trialDir, 'llm-logs.json');
+    const content = await readFile(llmLogsPath, 'utf-8');
+    const llmLogs: LLMLogsFile = JSON.parse(content);
+
+    if (!llmLogs.logs || llmLogs.logs.length === 0) {
+      return null;
+    }
+
+    // Build by_model breakdown
+    const byModel: Record<string, ModelUsage> = {};
+    let totalTokens = 0;
+    let totalCost = 0;
+
+    // Sort logs by startTime for time_series
+    const sortedLogs = [...llmLogs.logs].sort((a, b) => {
+      return new Date(a.startTime).getTime() - new Date(b.startTime).getTime();
+    });
+
+    // Get start time for elapsed_time calculation
+    const startTime =
+      sortedLogs.length > 0
+        ? new Date(sortedLogs[0].startTime).getTime()
+        : Date.now();
+
+    // Build time_series
+    const timeSeries: TimeSeriesPoint[] = [];
+    let cumulativeTokens = 0;
+    let cumulativeCost = 0;
+
+    for (const entry of sortedLogs) {
+      const model = entry.model || entry.model_id || 'unknown';
+
+      // Update by_model
+      if (!byModel[model]) {
+        byModel[model] = {
+          input_tokens: 0,
+          output_tokens: 0,
+          cost_usd: 0,
+          request_count: 0,
+        };
+      }
+      byModel[model].input_tokens += entry.prompt_tokens || 0;
+      byModel[model].output_tokens += entry.completion_tokens || 0;
+      byModel[model].cost_usd += entry.spend || 0;
+      byModel[model].request_count = (byModel[model].request_count || 0) + 1;
+
+      totalTokens += entry.total_tokens || 0;
+      totalCost += entry.spend || 0;
+
+      // Update cumulative values for time_series
+      cumulativeTokens += entry.total_tokens || 0;
+      cumulativeCost += entry.spend || 0;
+
+      const elapsedTime =
+        (new Date(entry.endTime).getTime() - startTime) / 1000; // Convert to seconds
+
+      timeSeries.push({
+        elapsed_time: elapsedTime,
+        cumulative_povs: 0, // Will be updated from snapshots
+        cumulative_patches: 0, // Will be updated from snapshots
+        llm_tokens: cumulativeTokens,
+        llm_cost: cumulativeCost,
+      });
+    }
+
+    return {
+      by_model: byModel,
+      time_series: timeSeries,
+      total_tokens: totalTokens,
+      total_cost: totalCost,
+    };
+  } catch {
+    return null;
+  }
+}
 
 // Re-export types for convenience
 export type {
@@ -146,8 +240,12 @@ export async function loadTrialReportByIndex(
     }
   }
 
-  // Fallback: construct a minimal trial report from the summary
-  console.warn(`Could not find trial report file for ${trialDir}, using summary data`);
+  // Fallback: construct a trial report from the summary + trial directory files
+  console.warn(`Could not find trial report file for ${trialDir}, using summary data + trial files`);
+
+  // Try to read LLM logs for more complete data
+  const llmData = await parseLlmLogsFromTrialDir(trialDir);
+
   return {
     report_type: 'trial',
     generated_at: expReport.generated_at,
@@ -164,16 +262,20 @@ export async function loadTrialReportByIndex(
       unique_povs: trialSummary.unique_povs,
       total_patches_generated: trialSummary.total_patches,
       unique_patches: trialSummary.unique_patches,
-      total_llm_cost: trialSummary.total_cost,
-      total_llm_tokens: 0,
+      total_llm_cost: llmData?.total_cost ?? trialSummary.total_cost,
+      total_llm_tokens: llmData?.total_tokens ?? 0,
       total_time: trialSummary.total_time,
       time_to_first_pov: trialSummary.time_to_first_pov,
       snapshot_count: 0,
     },
     povs: { unique_names: [], count: trialSummary.unique_povs },
     patches: { unique_names: [], count: trialSummary.unique_patches },
-    llm_usage: { total_tokens: 0, total_cost: trialSummary.total_cost, by_model: {} },
-    time_series: [],
+    llm_usage: {
+      total_tokens: llmData?.total_tokens ?? 0,
+      total_cost: llmData?.total_cost ?? trialSummary.total_cost,
+      by_model: llmData?.by_model ?? {},
+    },
+    time_series: llmData?.time_series ?? [],
     timeline: { total_snapshots: 0, snapshots: [] },
   };
 }
