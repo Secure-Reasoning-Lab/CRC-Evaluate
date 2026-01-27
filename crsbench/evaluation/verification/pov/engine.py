@@ -50,6 +50,7 @@ class ReproduceTask:
     variant_name: str
     variant_type: VariantType
     cpv_num: Optional[int]
+    sanitizer: str = "address"  # Sanitizer for this variant
 
 
 @dataclass
@@ -134,6 +135,7 @@ class VerificationEngine:
             pov_data=task.pov_data,
             timeout=self.timeout,
             pov_id=task.pov_id,
+            sanitizer=task.sanitizer,  # Pass sanitizer to reproduce
         )
         # Strip ANSI escape codes from crash log for cleaner storage
         crash_log = strip_ansi(output.stdout) if output.crashed else ""
@@ -267,6 +269,7 @@ class VerificationEngine:
                         variant_name=variant_name,
                         variant_type=result.config.variant_type,
                         cpv_num=result.config.cpv_num,
+                        sanitizer=result.config.sanitizer,  # Pass sanitizer from build config
                     )
                 )
 

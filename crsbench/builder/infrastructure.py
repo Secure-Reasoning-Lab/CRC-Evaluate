@@ -1058,6 +1058,7 @@ class OSSFuzzInfrastructure:
         timeout: int = 180,
         request_id: Optional[int] = None,
         pov_id: Optional[str] = None,
+        sanitizer: str = "address",
     ) -> "ReproduceOutput":
         """Reproduce a crash using OSS-Fuzz helper.py.
 
@@ -1075,6 +1076,7 @@ class OSSFuzzInfrastructure:
                 to handle large projects like wireshark)
             request_id: Optional request ID for logging
             pov_id: Optional POV identifier for logging
+            sanitizer: Sanitizer type (address, undefined, memory, etc.) for image selection
 
         Returns:
             ReproduceOutput with crashed status and stdout/stderr
@@ -1094,6 +1096,8 @@ class OSSFuzzInfrastructure:
                 "python3",
                 str(self._helper_script),
                 "reproduce",
+                "--sanitizer",
+                sanitizer,  # Specify which sanitizer image to use
                 "--propagate_exit_codes",
                 "--timeout",
                 str(timeout),
