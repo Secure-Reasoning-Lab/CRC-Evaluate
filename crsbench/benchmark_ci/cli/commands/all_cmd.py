@@ -173,6 +173,7 @@ def _build_dag(
             benchmark_name=benchmark_name,
             harness=harness,
             build_job_id=build_job.job_id,
+            source_mode=source_mode,
         )
         all_jobs.append(coverage_job)
 

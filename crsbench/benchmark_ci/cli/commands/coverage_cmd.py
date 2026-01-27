@@ -95,6 +95,7 @@ def run_coverage(args: argparse.Namespace) -> int:
             benchmark_name=benchmark_name,
             harness=harness,
             build_job_id=build_job.job_id,
+            source_mode=source_mode,
         )
         all_jobs.append(coverage_job)
 

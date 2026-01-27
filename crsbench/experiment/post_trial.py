@@ -93,6 +93,7 @@ def create_post_trial_jobs(
                 benchmark_name=benchmark_name,
                 harness=result.harness_name,
                 build_job_id=build_job_id,
+                source_mode=source_mode,
             )
             jobs.append(coverage_job)
             coverage_count += 1

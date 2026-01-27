@@ -140,6 +140,7 @@ class CoverageEngine:
             return CoverageReport(
                 harness_name="",
                 final_summary=CoverageSummary(),
+                success=False,
             )
 
         # Determine harness
@@ -149,7 +150,9 @@ class CoverageEngine:
 
         if not harness_names:
             logger.error("No harnesses found in benchmark")
-            return CoverageReport(harness_name="", final_summary=CoverageSummary())
+            return CoverageReport(
+                harness_name="", final_summary=CoverageSummary(), success=False
+            )
 
         harness_name = harness_names[0]  # Use first harness
         logger.info(f"Using harness: {harness_name}")
@@ -163,7 +166,9 @@ class CoverageEngine:
         if not variant_name:
             logger.error("Failed to build coverage variant")
             return CoverageReport(
-                harness_name=harness_name, final_summary=CoverageSummary()
+                harness_name=harness_name,
+                final_summary=CoverageSummary(),
+                success=False,
             )
 
         # Verify harness exists in build
@@ -172,7 +177,9 @@ class CoverageEngine:
                 f"Harness '{harness_name}' not found in build output for {variant_name}"
             )
             return CoverageReport(
-                harness_name=harness_name, final_summary=CoverageSummary()
+                harness_name=harness_name,
+                final_summary=CoverageSummary(),
+                success=False,
             )
 
         # Create or get strategy
@@ -182,7 +189,9 @@ class CoverageEngine:
         if not corpus_dir.exists():
             logger.error(f"Corpus directory not found: {corpus_dir}")
             return CoverageReport(
-                harness_name=harness_name, final_summary=CoverageSummary()
+                harness_name=harness_name,
+                final_summary=CoverageSummary(),
+                success=False,
             )
 
         # Find corpus files
@@ -195,7 +204,9 @@ class CoverageEngine:
         if not corpus_files:
             logger.warning(f"No corpus files found in {corpus_dir}")
             return CoverageReport(
-                harness_name=harness_name, final_summary=CoverageSummary()
+                harness_name=harness_name,
+                final_summary=CoverageSummary(),
+                success=False,
             )
 
         logger.info(f"Collecting coverage for {len(corpus_files)} corpus files")
