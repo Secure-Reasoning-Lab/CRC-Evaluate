@@ -567,10 +567,16 @@ export function ArtifactViewerModal({
             </p>
           ) : error ? (
             <p className="text-center text-muted-foreground py-8">{error}</p>
-          ) : content ? (
-            <pre className="bg-muted rounded p-4 text-sm font-mono whitespace-pre-wrap break-words">
-              {content}
-            </pre>
+          ) : content !== null ? (
+            content.trim() ? (
+              <pre className="bg-muted rounded p-4 text-sm font-mono whitespace-pre-wrap break-words">
+                {content}
+              </pre>
+            ) : (
+              <p className="text-center text-muted-foreground py-8">
+                Empty {artifactType}
+              </p>
+            )
           ) : (
             <p className="text-center text-muted-foreground py-8">
               No content available
