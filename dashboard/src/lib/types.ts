@@ -120,6 +120,7 @@ export interface SnapshotEntry {
   cycle: number;
   timestamp: number;
   elapsed_time: number;
+  running_elapsed_time?: number;
   povs_in_snapshot: number;
   cumulative_povs: number;
   patches_in_snapshot: number;
