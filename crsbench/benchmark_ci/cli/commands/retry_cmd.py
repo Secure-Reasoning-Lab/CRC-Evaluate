@@ -43,15 +43,15 @@ def _parse_csv_for_failed_benchmarks(csv_path: Path) -> list[str]:
             if not benchmark:
                 continue
 
-            # Check 'total' column for status
-            total_status = row.get("total", "")
-            if total_status in ("FAIL", "ERR"):
+            # Check 'total' column for status (case-insensitive)
+            total_status = row.get("total", "").upper()
+            if total_status in ("FAIL", "ERR", "ERROR"):
                 failed_benchmarks.append(benchmark)
                 continue
 
             # Also check 'total_status' for older format
-            total_status_alt = row.get("total_status", "")
-            if total_status_alt in ("FAIL", "ERR", "fail", "error"):
+            total_status_alt = row.get("total_status", "").upper()
+            if total_status_alt in ("FAIL", "ERR", "ERROR"):
                 failed_benchmarks.append(benchmark)
 
     return failed_benchmarks
