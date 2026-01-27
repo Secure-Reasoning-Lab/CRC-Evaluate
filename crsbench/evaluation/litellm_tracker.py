@@ -189,6 +189,168 @@ class LiteLLMTracker:
             "Content-Type": "application/json",
         }
 
+    def find_team_by_alias(self, team_alias: str) -> Optional[str]:
+        """Find a team by exact alias match.
+
+        Uses /v2/team/list with team_alias parameter for partial search,
+        then filters for exact match.
+
+        Args:
+            team_alias: Team alias to search for
+
+        Returns:
+            team_id if exact match found, None otherwise
+        """
+        try:
+            response = requests.get(
+                f"{self.base_url}/v2/team/list",
+                headers=self._headers,
+                params={"team_alias": team_alias},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # Search results for exact alias match
+            teams = (
+                data
+                if isinstance(data, list)
+                else data.get("teams", data.get("data", []))
+            )
+            for team in teams:
+                if team.get("team_alias") == team_alias:
+                    return team.get("team_id")
+            return None
+
+        except requests.RequestException as e:
+            logger.warning(f"Failed to search teams: {e}")
+            return None
+
+    def create_team(
+        self, team_alias: str, *, max_budget: Optional[float] = None
+    ) -> str:
+        """Create a new team.
+
+        Args:
+            team_alias: Team alias/name
+            max_budget: Optional maximum budget for the team in USD
+
+        Returns:
+            team_id of created team
+
+        Raises:
+            LiteLLMTrackerError: If team creation fails
+        """
+        payload: dict = {"team_alias": team_alias}
+        if max_budget is not None:
+            payload["max_budget"] = max_budget
+
+        try:
+            response = requests.post(
+                f"{self.base_url}/team/new",
+                headers=self._headers,
+                json=payload,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            team_id = data.get("team_id")
+            if not team_id:
+                raise LiteLLMTrackerError(f"No team_id in response: {data}")
+
+            budget_info = f" (max_budget: ${max_budget})" if max_budget else ""
+            logger.info(f"Created LiteLLM team: {team_alias} ({team_id}){budget_info}")
+            return team_id
+
+        except requests.RequestException as e:
+            raise LiteLLMTrackerError(f"Failed to create team: {e}") from e
+
+    def update_team(self, team_id: str, *, max_budget: Optional[float] = None) -> None:
+        """Update an existing team's settings.
+
+        Args:
+            team_id: Team ID to update
+            max_budget: Optional new maximum budget for the team in USD
+
+        Raises:
+            LiteLLMTrackerError: If team update fails
+        """
+        payload: dict = {"team_id": team_id}
+        if max_budget is not None:
+            payload["max_budget"] = max_budget
+
+        try:
+            response = requests.post(
+                f"{self.base_url}/team/update",
+                headers=self._headers,
+                json=payload,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            logger.info(f"Updated LiteLLM team {team_id}: max_budget=${max_budget}")
+
+        except requests.RequestException as e:
+            raise LiteLLMTrackerError(f"Failed to update team: {e}") from e
+
+    def get_or_create_team(
+        self, team_alias: str, *, max_budget: Optional[float] = None
+    ) -> str:
+        """Get existing team or create new one, ensuring budget is set.
+
+        1. Search for team by alias using /v2/team/list
+        2. If exact match found:
+           - Update team budget if max_budget provided
+           - Return existing team_id
+        3. If no match, create new team with max_budget
+
+        Args:
+            team_alias: Team alias/name
+            max_budget: Optional maximum budget for the team in USD
+
+        Returns:
+            team_id (existing or newly created)
+
+        Raises:
+            LiteLLMTrackerError: If both search and creation fail
+        """
+        # First, search for existing team
+        team_id = self.find_team_by_alias(team_alias)
+        if team_id:
+            logger.info(f"Using existing LiteLLM team: {team_alias} ({team_id})")
+            # Update budget if provided
+            if max_budget is not None:
+                self.update_team(team_id, max_budget=max_budget)
+            return team_id
+
+        # No existing team, create new one
+        return self.create_team(team_alias, max_budget=max_budget)
+
+    def get_team_info(self, team_id: str) -> dict:
+        """Get team information including spend and budget.
+
+        Args:
+            team_id: Team ID to query
+
+        Returns:
+            Team info dict with spend, max_budget, etc.
+
+        Raises:
+            LiteLLMTrackerError: If query fails
+        """
+        try:
+            response = requests.get(
+                f"{self.base_url}/team/info",
+                headers=self._headers,
+                params={"team_id": team_id},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            return response.json()
+
+        except requests.RequestException as e:
+            raise LiteLLMTrackerError(f"Failed to get team info: {e}") from e
+
     def generate_key(
         self,
         experiment: str,
@@ -196,6 +358,8 @@ class LiteLLMTracker:
         benchmark: str,
         harness: str,
         trial_num: int,
+        mode: str,
+        sanitizer: str,
         *,
         team_id: Optional[str] = None,
         max_budget: Optional[float] = None,
@@ -208,6 +372,8 @@ class LiteLLMTracker:
             benchmark: Benchmark name
             harness: Harness name
             trial_num: Trial number
+            mode: Build mode
+            sanitizer: Sanitizer type
             team_id: Optional team ID for key association
             max_budget: Optional maximum budget for the key
 
@@ -218,11 +384,12 @@ class LiteLLMTracker:
             LiteLLMTrackerError: If key generation fails
         """
         key_alias = self._build_key_alias(
-            experiment, crs, benchmark, harness, trial_num
+            experiment, crs, benchmark, harness, trial_num, mode, sanitizer
         )
 
         payload: dict = {
             "key_alias": key_alias,
+            "key_type": "llm_api",
             "models": [],  # Empty means all models allowed
             "metadata": {
                 "experiment": experiment,
@@ -591,10 +758,12 @@ class LiteLLMTracker:
         benchmark: str,
         harness: str,
         trial_num: int,
+        mode: str,
+        sanitizer: str,
     ) -> KeyAlias:
         """Build a unique key alias for the trial.
 
-        Format: crsbench-{experiment}-{crs}-{benchmark}-{harness}-trial{N}-{random}
+        Format: crsbench-{experiment}-{crs}-{benchmark}-{harness}-{mode}-{sanitizer}-trial{N}-{random}
 
         The random suffix ensures uniqueness when the same experiment
         is run concurrently multiple times.
@@ -605,6 +774,8 @@ class LiteLLMTracker:
             benchmark: Benchmark name
             harness: Harness name
             trial_num: Trial number
+            mode: Build mode
+            sanitizer: Sanitizer type
 
         Returns:
             Key alias string
@@ -620,7 +791,8 @@ class LiteLLMTracker:
 
         return (
             f"crsbench-{sanitize(experiment)}-{sanitize(crs)}-"
-            f"{sanitize(benchmark)}-{sanitize(harness)}-trial{trial_num}-{random_suffix}"
+            f"{sanitize(benchmark)}-{sanitize(harness)}-{sanitize(mode)}-{sanitize(sanitizer)}-"
+            f"trial{trial_num}-{random_suffix}"
         )
 
 
@@ -641,6 +813,8 @@ class LLMTrackingContext:
             benchmark="curl",
             harness="fuzz_http",
             trial_num=1,
+            mode="delta",
+            sanitizer="address",
             output_dir=trial_output_dir,
         ) as ctx:
             # ctx.api_key contains the trial-specific key
@@ -656,6 +830,8 @@ class LLMTrackingContext:
         benchmark: str,
         harness: str,
         trial_num: int,
+        mode: str,
+        sanitizer: str,
         output_dir: Path,
     ):
         """Initialize tracking context.
@@ -667,6 +843,8 @@ class LLMTrackingContext:
             benchmark: Benchmark name
             harness: Harness name
             trial_num: Trial number
+            mode: Build mode
+            sanitizer: Sanitizer type
             output_dir: Directory to write llm-usage.json
         """
         self.tracker = tracker
@@ -675,6 +853,8 @@ class LLMTrackingContext:
         self.benchmark = benchmark
         self.harness = harness
         self.trial_num = trial_num
+        self.mode = mode
+        self.sanitizer = sanitizer
         self.output_dir = output_dir
 
         self.api_key: Optional[str] = None
@@ -683,7 +863,13 @@ class LLMTrackingContext:
     def __enter__(self) -> "LLMTrackingContext":
         """Generate API key and return context."""
         self.trial_id = self.tracker._build_key_alias(
-            self.experiment, self.crs, self.benchmark, self.harness, self.trial_num
+            self.experiment,
+            self.crs,
+            self.benchmark,
+            self.harness,
+            self.trial_num,
+            self.mode,
+            self.sanitizer,
         )
 
         self.api_key = self.tracker.generate_key(
@@ -692,6 +878,8 @@ class LLMTrackingContext:
             benchmark=self.benchmark,
             harness=self.harness,
             trial_num=self.trial_num,
+            mode=self.mode,
+            sanitizer=self.sanitizer,
         )
 
         return self
