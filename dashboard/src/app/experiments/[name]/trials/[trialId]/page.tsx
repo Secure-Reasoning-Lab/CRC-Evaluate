@@ -53,13 +53,13 @@ export default function TrialPage({ params }: TrialPageProps) {
   const mode = report.trial.mode;
 
   if (mode === 'bug_finding') {
-    return <BugFindingTrialPage experimentName={name} report={report} />;
+    return <BugFindingTrialPage experimentName={name} trialId={trialId} report={report} />;
   }
 
   if (mode === 'patch_generation') {
-    return <BugFixingTrialPage experimentName={name} report={report} />;
+    return <BugFixingTrialPage experimentName={name} trialId={trialId} report={report} />;
   }
 
   // Fallback: show bug finding page for unknown modes
-  return <BugFindingTrialPage experimentName={name} report={report} />;
+  return <BugFindingTrialPage experimentName={name} trialId={trialId} report={report} />;
 }

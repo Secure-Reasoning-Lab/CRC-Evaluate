@@ -35,6 +35,7 @@ import {
 
 interface BugFindingTrialPageProps {
   experimentName: string;
+  trialId: string;
   report: TrialReport;
 }
 
@@ -56,6 +57,7 @@ function snapshotsToChartData(snapshots: SnapshotEntry[]): SnapshotData[] {
 
 export default function BugFindingTrialPage({
   experimentName,
+  trialId,
   report,
 }: BugFindingTrialPageProps) {
   const { trial, summary, povs, llm_usage, time_series, timeline } = report;
@@ -92,7 +94,7 @@ export default function BugFindingTrialPage({
     setCrsLogsLoading(true);
     try {
       const res = await fetch(
-        `/api/experiments/${experimentName}/trials/${trial.trial_num}/logs?type=crs`
+        `/api/experiments/${experimentName}/trials/${trialId}/logs?type=crs`
       );
       const data = await res.json();
       if (data.error) setCrsLogsError(data.error);
@@ -102,14 +104,14 @@ export default function BugFindingTrialPage({
     } finally {
       setCrsLogsLoading(false);
     }
-  }, [experimentName, trial.trial_num, crsLogs]);
+  }, [experimentName, trialId, crsLogs]);
 
   const loadLlmLogs = useCallback(async () => {
     if (llmLogs !== null) return;
     setLlmLogsLoading(true);
     try {
       const res = await fetch(
-        `/api/experiments/${experimentName}/trials/${trial.trial_num}/logs?type=llm`
+        `/api/experiments/${experimentName}/trials/${trialId}/logs?type=llm`
       );
       const data = await res.json();
       if (data.error) setLlmLogsError(data.error);
@@ -119,14 +121,14 @@ export default function BugFindingTrialPage({
     } finally {
       setLlmLogsLoading(false);
     }
-  }, [experimentName, trial.trial_num, llmLogs]);
+  }, [experimentName, trialId, llmLogs]);
 
   const loadExecutionInfo = useCallback(async () => {
     if (executionInfo !== null) return;
     setExecutionLoading(true);
     try {
       const res = await fetch(
-        `/api/experiments/${experimentName}/trials/${trial.trial_num}/logs?type=execution`
+        `/api/experiments/${experimentName}/trials/${trialId}/logs?type=execution`
       );
       const data = await res.json();
       if (data.error) setExecutionError(data.error);
@@ -136,14 +138,14 @@ export default function BugFindingTrialPage({
     } finally {
       setExecutionLoading(false);
     }
-  }, [experimentName, trial.trial_num, executionInfo]);
+  }, [experimentName, trialId, executionInfo]);
 
   // Load artifact list from snapshot
   const loadArtifactList = useCallback(async () => {
     if (artifactListLoaded) return;
     try {
       const res = await fetch(
-        `/api/experiments/${experimentName}/trials/${trial.trial_num}/artifacts?type=list`
+        `/api/experiments/${experimentName}/trials/${trialId}/artifacts?type=list`
       );
       const data = await res.json();
       setArtifactList(data);
@@ -151,7 +153,7 @@ export default function BugFindingTrialPage({
     } catch {
       setArtifactListLoaded(true);
     }
-  }, [experimentName, trial.trial_num, artifactListLoaded]);
+  }, [experimentName, trialId, artifactListLoaded]);
 
   // Load artifact content
   const loadArtifactContent = useCallback(async (type: 'patch' | 'pov', name: string) => {
@@ -164,7 +166,7 @@ export default function BugFindingTrialPage({
 
     try {
       const res = await fetch(
-        `/api/experiments/${experimentName}/trials/${trial.trial_num}/artifacts?type=${type}&name=${encodeURIComponent(name)}`
+        `/api/experiments/${experimentName}/trials/${trialId}/artifacts?type=${type}&name=${encodeURIComponent(name)}`
       );
       const data = await res.json();
       if (data.error) {
@@ -177,7 +179,7 @@ export default function BugFindingTrialPage({
     } finally {
       setArtifactLoading(false);
     }
-  }, [experimentName, trial.trial_num]);
+  }, [experimentName, trialId]);
 
   // Load artifact list on mount
   useEffect(() => {
@@ -192,7 +194,7 @@ export default function BugFindingTrialPage({
           <span>/</span>
           <Link href={`/experiments/${experimentName}`} className="hover:text-foreground">{experimentName}</Link>
           <span>/</span>
-          <span>Trial {trial.trial_num}</span>
+          <span>Trial {trialId}</span>
         </div>
         <div className="flex items-center gap-4">
           <h1 className="text-3xl font-bold">{trial.crs} - {trial.benchmark}/{trial.harness}</h1>
