@@ -177,6 +177,7 @@ def _build_dag(
             use_inc_build=effective_inc,
             force_rebuild=force_rebuild,
             source_mode=source_mode,
+            sanitizer=sanitizer,
             repo_name=repo_name,
             sanitizer=sanitizer,
         )
@@ -196,6 +197,7 @@ def _build_dag(
             use_inc_build=effective_inc,
             force_rebuild=force_rebuild,
             source_mode=source_mode,
+            sanitizer=sanitizer,
             repo_name=repo_name,
             sanitizer=sanitizer,
         )
@@ -261,6 +263,7 @@ def _build_dag(
                     use_inc_build=effective_inc,
                     force_rebuild=force_rebuild,
                     source_mode=source_mode,
+                    sanitizer=sanitizer,
                     repo_name=repo_name,
                     sanitizer=sanitizer,
                 )
