@@ -5,7 +5,8 @@ nodes that call builder/infra directly. The DAGExecutor becomes the single
 source of concurrency control via typed limits.
 
 Job types:
-- BuildVariantsJob: Build all variants for a benchmark (type="build")
+- BuildSingleVariantJob: Build a single variant for a benchmark (type="build")
+- BuildVariantsJob: Build all variants for a benchmark (type="build") [legacy]
 - VerifyCpvPovJob: Verify POVs for a single CPV (type="verify")
 - BuildPatchVariantJob: Build a patched variant (type="build")
 - PatchVariantTestJob: Run POVs + unit tests on patch (type="verify")
@@ -15,11 +16,148 @@ Job types:
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from crsbench.benchmark_ci.jobs.base import Job, JobContext, JobResult
+from crsbench.benchmark_ci.storage import collect_benchmark_storage
+from crsbench.builder.types import BenchmarkMode, VariantType
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class BuildSingleVariantJob(Job):
+    """Build a single variant for a benchmark.
+
+    Creates a single BuildConfig and executes via OSSFuzzBuilder.build_single().
+    Stores build result in context.shared for downstream jobs.
+
+    This job enables DAGExecutor to parallelize builds across variants.
+    """
+
+    benchmark_path: Path
+    benchmark_name: str
+    variant_type: VariantType
+    commit: str
+    main_repo: str
+    mode: BenchmarkMode
+    language: str = "c"
+    cpv_num: Optional[int] = None
+    patches: list[Path] = field(default_factory=list)
+    use_inc_build: bool = True
+    force_rebuild: bool = False
+    source_mode: str = "main_repo"
+    sanitizer: str = "address"
+    repo_name: Optional[str] = None
+    project_image_prefix: str = "aixcc-afc"
+
+    @property
+    def job_id(self) -> str:
+        """Compute job ID using BuildConfig naming logic."""
+        from crsbench.builder.types import BuildConfig
+
+        # Create a temporary config to compute variant_name
+        config = BuildConfig(
+            benchmark_name=self.benchmark_name,
+            variant_type=self.variant_type,
+            commit=self.commit,
+            main_repo=self.main_repo,
+            benchmark_path=self.benchmark_path,
+            mode=self.mode,
+            patches=self.patches,
+            language=self.language,
+            cpv_num=self.cpv_num,
+            use_inc_build=self.use_inc_build,
+            sanitizer=self.sanitizer,
+            repo_name=self.repo_name,
+        )
+        return f"build-single:{self.benchmark_name}:{config.variant_name}"
+
+    @property
+    def job_type(self) -> str:
+        return "build"
+
+    def execute(self, context: JobContext) -> JobResult:
+        """Build single variant via OSSFuzzBuilder."""
+        started_at = datetime.now()
+        try:
+            from crsbench.builder import OSSFuzzBuilder
+            from crsbench.builder.types import BuildConfig
+            from crsbench.utils.run_helper import get_oss_fuzz_root
+
+            oss_fuzz_path = Path(get_oss_fuzz_root())
+            builder = OSSFuzzBuilder(
+                oss_fuzz_path, max_workers=1, source_mode=self.source_mode
+            )
+
+            # Build config from job fields
+            config = BuildConfig(
+                benchmark_name=self.benchmark_name,
+                variant_type=self.variant_type,
+                commit=self.commit,
+                main_repo=self.main_repo,
+                benchmark_path=self.benchmark_path,
+                mode=self.mode,
+                patches=self.patches,
+                language=self.language,
+                cpv_num=self.cpv_num,
+                use_inc_build=self.use_inc_build,
+                sanitizer=self.sanitizer,
+                repo_name=self.repo_name,
+            )
+
+            result = builder.build_single(config, force_rebuild=self.force_rebuild)
+
+            # Store in context.shared for downstream jobs
+            context.shared[self.job_id] = {
+                "build_result": result,
+                "variant_name": result.variant_name,
+            }
+
+            # Collect storage metrics after build
+            storage_metrics = collect_benchmark_storage(
+                benchmark_name=self.benchmark_name,
+                benchmark_path=self.benchmark_path,
+                oss_fuzz_path=oss_fuzz_path,
+                project_image_prefix=self.project_image_prefix,
+            )
+            storage_bytes = storage_metrics.total_bytes
+
+            finished_at = datetime.now()
+            elapsed = (finished_at - started_at).total_seconds()
+
+            job_result = JobResult(
+                job_id=self.job_id,
+                job_type=self.job_type,
+                success=result.success,
+                started_at=started_at,
+                finished_at=finished_at,
+                elapsed_seconds=elapsed,
+                error=None if result.success else (result.error or "Build failed"),
+                details={
+                    "variant_name": result.variant_name,
+                    "variant_type": self.variant_type.value,
+                    "cached": result.cached,
+                    "fallback_used": result.fallback_used,
+                    "storage_bytes": storage_bytes,
+                },
+            )
+            self._write_job_log(context, job_result)
+            return job_result
+        except Exception as e:
+            finished_at = datetime.now()
+            job_result = JobResult(
+                job_id=self.job_id,
+                job_type=self.job_type,
+                success=False,
+                started_at=started_at,
+                finished_at=finished_at,
+                elapsed_seconds=(finished_at - started_at).total_seconds(),
+                error=str(e),
+            )
+            self._write_job_log(context, job_result)
+            return job_result
 
 
 @dataclass
@@ -35,6 +173,7 @@ class BuildVariantsJob(Job):
     use_inc_build: bool = True
     force_rebuild: bool = False
     source_mode: str = "main_repo"
+    project_image_prefix: str = "aixcc-afc"
 
     @property
     def job_id(self) -> str:
@@ -93,6 +232,15 @@ class BuildVariantsJob(Job):
                 for name, r in build_results.items()
             ]
 
+            # Collect storage metrics after build
+            storage_metrics = collect_benchmark_storage(
+                benchmark_name=self.benchmark_name,
+                benchmark_path=self.benchmark_path,
+                oss_fuzz_path=oss_fuzz_path,
+                project_image_prefix=self.project_image_prefix,
+            )
+            storage_bytes = storage_metrics.total_bytes
+
             result = JobResult(
                 job_id=self.job_id,
                 job_type=self.job_type,
@@ -108,6 +256,7 @@ class BuildVariantsJob(Job):
                     "variants_total": len(build_results),
                     "fallback_used": fallback_used,
                     "variants": variants_info,
+                    "storage_bytes": storage_bytes,
                 },
             )
             self._write_job_log(context, result)
@@ -133,13 +282,18 @@ class VerifyCpvPovJob(Job):
 
     Runs reproduce for each POV against each variant and resolves
     the verdict using the standard VerdictResolver.
+
+    Supports both legacy build_job_id (single BuildVariantsJob) and
+    new build_job_ids (list of BuildSingleVariantJob IDs).
     """
 
     benchmark_name: str
     cpv_id: str
     harness: str
+    benchmark_path: Optional[Path] = None
     pov_paths: list[Path] = field(default_factory=list)
     build_job_id: str = ""
+    build_job_ids: list[str] = field(default_factory=list)
     source_mode: str = "main_repo"
 
     @property
@@ -152,6 +306,9 @@ class VerifyCpvPovJob(Job):
 
     @property
     def depends_on(self) -> list[str]:
+        # Support both legacy single build_job_id and new build_job_ids list
+        if self.build_job_ids:
+            return self.build_job_ids
         return [self.build_job_id] if self.build_job_id else []
 
     def execute(self, context: JobContext) -> JobResult:
@@ -175,14 +332,40 @@ class VerifyCpvPovJob(Job):
             from crsbench.evaluation.verification.pov import VerificationEngine
             from crsbench.utils.run_helper import get_oss_fuzz_root
 
-            build_data = context.shared.get(self.build_job_id, {})
-            build_results = build_data.get("build_results", {})
-            adapter = build_data.get("adapter")
+            oss_fuzz_path = Path(get_oss_fuzz_root())
+
+            # Collect build results from multiple build jobs or single legacy job
+            build_results: dict = {}
+            adapter = None
+
+            if self.build_job_ids:
+                # New mode: collect from multiple BuildSingleVariantJob results
+                for job_id in self.build_job_ids:
+                    build_data = context.shared.get(job_id, {})
+                    if build_data:
+                        build_result = build_data.get("build_result")
+                        if build_result:
+                            build_results[build_result.variant_name] = build_result
+                        if not adapter:
+                            adapter = build_data.get("adapter")
+            else:
+                # Legacy mode: single BuildVariantsJob
+                build_data = context.shared.get(self.build_job_id, {})
+                build_results = build_data.get("build_results", {})
+                adapter = build_data.get("adapter")
+
+            # If adapter not in context.shared, load via VerificationEngine
+            if not adapter and self.benchmark_path:
+                engine = VerificationEngine(
+                    oss_fuzz_path,
+                    source_mode=self.source_mode,
+                )
+                adapter = engine._load_adapter(self.benchmark_path)
 
             if not build_results or not adapter:
-                raise ValueError(f"No build data from {self.build_job_id}")
+                deps = self.build_job_ids or [self.build_job_id]
+                raise ValueError(f"No build data from {deps}")
 
-            oss_fuzz_path = Path(get_oss_fuzz_root())
             engine = VerificationEngine(
                 oss_fuzz_path,
                 source_mode=self.source_mode,
@@ -300,11 +483,19 @@ class BuildPatchVariantJob(Job):
                 oss_fuzz_path, max_workers=1, source_mode=self.source_mode
             )
 
-            # Get adapter from parent build job's shared context
+            # Get adapter from parent build job's shared context, or load directly
             build_data = context.shared.get(self.build_job_id, {})
             adapter = build_data.get("adapter")
+
+            # If adapter not in context.shared (BuildSingleVariantJob case), load directly
             if not adapter:
-                raise ValueError(f"No adapter from {self.build_job_id}")
+                from crsbench.evaluation.verification.pov import VerificationEngine
+
+                engine = VerificationEngine(oss_fuzz_path, source_mode=self.source_mode)
+                adapter = engine._load_adapter(self.benchmark_path)
+
+            if not adapter:
+                raise ValueError(f"Failed to load adapter for {self.benchmark_path}")
 
             commit = adapter.get_ref_commit() or adapter.get_base_commit()
             sanitizer = adapter.get_required_sanitizer()
@@ -490,6 +681,9 @@ class FlatCollectCoverageJob(Job):
 
     Note: CoverageEngine processes corpus files sequentially.
     Parallelism is controlled by DAGExecutor at the benchmark level.
+
+    Supports both legacy build_job_id (single BuildVariantsJob) and
+    new build_job_ids (list of BuildSingleVariantJob IDs).
     """
 
     benchmark_path: Path
@@ -497,6 +691,7 @@ class FlatCollectCoverageJob(Job):
     harness: str
     build_job_id: str = ""
     source_mode: str = "main_repo"
+    build_job_ids: list[str] = field(default_factory=list)
 
     @property
     def job_id(self) -> str:
@@ -508,6 +703,9 @@ class FlatCollectCoverageJob(Job):
 
     @property
     def depends_on(self) -> list[str]:
+        # Support both legacy single build_job_id and new build_job_ids list
+        if self.build_job_ids:
+            return self.build_job_ids
         return [self.build_job_id] if self.build_job_id else []
 
     def execute(self, context: JobContext) -> JobResult:
@@ -526,8 +724,18 @@ class FlatCollectCoverageJob(Job):
             engine = CoverageEngine(oss_fuzz_path, source_mode=self.source_mode)
 
             # Use adapter from shared build context for corpus discovery
-            build_data = context.shared.get(self.build_job_id, {})
-            adapter = build_data.get("adapter")
+            # Try build_job_ids first, then fall back to legacy build_job_id
+            adapter = None
+            if self.build_job_ids:
+                for job_id in self.build_job_ids:
+                    build_data = context.shared.get(job_id, {})
+                    if build_data:
+                        adapter = build_data.get("adapter")
+                        if adapter:
+                            break
+            else:
+                build_data = context.shared.get(self.build_job_id, {})
+                adapter = build_data.get("adapter")
 
             corpus_dir = (
                 adapter.get_corpus_dir(harness_name=self.harness) if adapter else None

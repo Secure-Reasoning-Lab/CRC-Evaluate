@@ -10,7 +10,6 @@ from crsbench.builder import (
     BuildPlan,
     BuildResult,
     OSSFuzzBuilder,
-    ParallelExecutor,
     VariantType,
 )
 
@@ -191,93 +190,6 @@ class TestBuildPlan:
         assert plan.configs_to_build == []
 
 
-class TestParallelExecutor:
-    """Tests for ParallelExecutor."""
-
-    def test_invalid_workers(self):
-        """Test that invalid worker count raises error."""
-        with pytest.raises(ValueError, match="max_workers must be >= 1"):
-            ParallelExecutor(max_workers=0)
-
-    def test_execute_empty_configs(self):
-        """Test executing with empty config list."""
-        executor = ParallelExecutor(max_workers=2)
-        results = executor.execute_builds([], lambda _c: None)  # type: ignore  # noqa: ARG005
-        assert results == {}
-
-    def test_execute_single_success(self):
-        """Test executing a single successful build."""
-        executor = ParallelExecutor(max_workers=1)
-        config = BuildConfig(
-            benchmark_name="test",
-            variant_type=VariantType.DELTA_REF,
-            commit="abc",
-            main_repo="https://example.com",
-            benchmark_path=Path("/tmp"),
-        )
-
-        def mock_build(c: BuildConfig) -> BuildResult:
-            return BuildResult(
-                config=c,
-                success=True,
-                variant_name=c.variant_name,
-                build_path=Path("/tmp/build"),
-            )
-
-        result = executor.execute_single(config, mock_build)
-        assert result.success
-
-    def test_execute_builds_parallel(self):
-        """Test parallel execution of multiple builds."""
-        executor = ParallelExecutor(max_workers=2)
-        configs = [
-            BuildConfig(
-                benchmark_name="test1",
-                variant_type=VariantType.DELTA_REF,
-                commit="abc",
-                main_repo="https://example.com",
-                benchmark_path=Path("/tmp"),
-            ),
-            BuildConfig(
-                benchmark_name="test2",
-                variant_type=VariantType.DELTA_REF,
-                commit="def",
-                main_repo="https://example.com",
-                benchmark_path=Path("/tmp"),
-            ),
-        ]
-
-        def mock_build(c: BuildConfig) -> BuildResult:
-            return BuildResult(
-                config=c,
-                success=True,
-                variant_name=c.variant_name,
-                build_path=Path("/tmp/build"),
-            )
-
-        results = executor.execute_builds(configs, mock_build)
-        assert len(results) == 2
-        assert all(r.success for r in results.values())
-
-    def test_execute_handles_exception(self):
-        """Test that exceptions in build function are handled."""
-        executor = ParallelExecutor(max_workers=1)
-        config = BuildConfig(
-            benchmark_name="test",
-            variant_type=VariantType.DELTA_REF,
-            commit="abc",
-            main_repo="https://example.com",
-            benchmark_path=Path("/tmp"),
-        )
-
-        def failing_build(_c: BuildConfig) -> BuildResult:  # noqa: ARG001
-            raise RuntimeError("Build exploded")
-
-        result = executor.execute_single(config, failing_build)
-        assert not result.success
-        assert "Unexpected error" in result.error  # type: ignore
-
-
 class TestOSSFuzzBuilder:
     """Tests for OSSFuzzBuilder (with mocked infrastructure)."""
 
@@ -431,8 +343,8 @@ class TestOSSFuzzBuilderForceRebuild:
             patch.object(builder.infra, "cleanup_source") as mock_cleanup_source,
             patch.object(builder.infra, "is_variant_built", return_value=True),
             patch.object(
-                builder.executor,
-                "execute_single",
+                builder,
+                "_build_single",
                 return_value=BuildResult.from_cache(config, Path("/tmp/build")),
             ),
         ):
@@ -471,20 +383,20 @@ class TestOSSFuzzBuilderForceRebuild:
             patch.object(builder.infra, "cleanup_source"),
             patch.object(builder.infra, "is_variant_built", return_value=True),
             patch.object(
-                builder.executor,
-                "execute_single",
+                builder,
+                "_build_single",
                 return_value=BuildResult(
                     config=config,
                     success=True,
                     variant_name=config.variant_name,
                     build_path=Path("/tmp/build"),
                 ),
-            ) as mock_execute,
+            ) as mock_build,
         ):
             result = builder.build_single(config, force_rebuild=True)
 
-            # execute_single should be called (not cache)
-            mock_execute.assert_called_once()
+            # _build_single should be called (not cache)
+            mock_build.assert_called_once()
             assert result.success
             assert not result.cached
 
@@ -509,25 +421,21 @@ class TestOSSFuzzBuilderForceRebuild:
             ),
         ]
 
+        def mock_build_single(config: BuildConfig) -> BuildResult:
+            return BuildResult(
+                config=config,
+                success=True,
+                variant_name=config.variant_name,
+                build_path=Path("/tmp/build"),
+            )
+
         with (
             patch.object(
                 builder.infra, "cleanup_build_outputs"
             ) as mock_cleanup_outputs,
             patch.object(builder.infra, "cleanup_source") as mock_cleanup_source,
             patch.object(builder, "_ensure_repos_cached"),
-            patch.object(
-                builder.executor,
-                "execute_builds",
-                return_value={
-                    c.variant_name: BuildResult(
-                        config=c,
-                        success=True,
-                        variant_name=c.variant_name,
-                        build_path=Path("/tmp/build"),
-                    )
-                    for c in configs
-                },
-            ),
+            patch.object(builder, "_build_single", side_effect=mock_build_single),
         ):
             builder.build_variants(configs, force_rebuild=True)
 

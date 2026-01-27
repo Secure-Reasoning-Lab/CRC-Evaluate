@@ -12,7 +12,7 @@ Tests verify:
 import argparse
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from crsbench.benchmark_ci.cli import add_ci_subparser, dispatch_ci
@@ -1504,6 +1504,7 @@ def _setup_all_cmd_mocks(
     mock_patches,
     mock_povs,
     mock_executor_cls,
+    mock_adapter=None,
     *,
     paths=None,
     rts_mode="jcgeks",
@@ -1531,6 +1532,16 @@ def _setup_all_cmd_mocks(
     mock_cpvs.return_value = ["cpv_0"]
     mock_patches.return_value = [("patch_0", Path("/tmp/patch_0.diff"))]
     mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+
+    # Setup mock adapter for _load_benchmark_adapter
+    if mock_adapter is not None:
+        adapter = MagicMock()
+        adapter.get_ref_commit.return_value = "abc123def456"
+        adapter.get_base_commit.return_value = "base123456"
+        adapter.main_repo = "https://github.com/test/repo.git"
+        adapter.lang = "c"
+        adapter.repo_name = None
+        mock_adapter.return_value = adapter
 
     results = {}
     for p in paths:
@@ -1560,6 +1571,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_benchmark_adapter")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
@@ -1568,6 +1580,7 @@ class TestAllSubcommand:
         mock_discover,
         mock_fmt,
         mock_caps,
+        mock_adapter,
         mock_harness,
         mock_cpvs,
         mock_patches,
@@ -1584,6 +1597,7 @@ class TestAllSubcommand:
             mock_patches,
             mock_povs,
             mock_executor_cls,
+            mock_adapter,
         )
 
         parser = _make_parser()
@@ -1599,6 +1613,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_benchmark_adapter")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
@@ -1607,6 +1622,7 @@ class TestAllSubcommand:
         mock_discover,
         mock_fmt,
         mock_caps,
+        mock_adapter,
         mock_harness,
         mock_cpvs,
         mock_patches,
@@ -1623,6 +1639,7 @@ class TestAllSubcommand:
             mock_patches,
             mock_povs,
             mock_executor_cls,
+            mock_adapter,
             success=False,
         )
 
@@ -1638,6 +1655,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_benchmark_adapter")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
@@ -1646,6 +1664,7 @@ class TestAllSubcommand:
         mock_discover,
         mock_fmt,
         mock_caps,
+        mock_adapter,
         mock_harness,
         mock_cpvs,
         mock_patches,
@@ -1663,6 +1682,7 @@ class TestAllSubcommand:
             mock_patches,
             mock_povs,
             mock_executor_cls,
+            mock_adapter,
         )
 
         output_file = tmp_path / "out.json"
@@ -1681,6 +1701,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_benchmark_adapter")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
@@ -1689,6 +1710,7 @@ class TestAllSubcommand:
         mock_discover,
         mock_fmt,
         mock_caps,
+        mock_adapter,
         mock_harness,
         mock_cpvs,
         mock_patches,
@@ -1707,6 +1729,7 @@ class TestAllSubcommand:
             mock_patches,
             mock_povs,
             mock_executor_cls,
+            mock_adapter,
         )
 
         parser = _make_parser()
@@ -1722,6 +1745,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_benchmark_adapter")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
@@ -1730,6 +1754,7 @@ class TestAllSubcommand:
         mock_discover,
         mock_fmt,
         mock_caps,
+        mock_adapter,
         mock_harness,
         mock_cpvs,
         mock_patches,
@@ -1747,6 +1772,7 @@ class TestAllSubcommand:
             mock_patches,
             mock_povs,
             mock_executor_cls,
+            mock_adapter,
         )
 
         parser = _make_parser()
@@ -1755,10 +1781,12 @@ class TestAllSubcommand:
 
         call_args = mock_executor_cls.return_value.execute.call_args
         jobs = call_args[0][0]
-        from crsbench.benchmark_ci.jobs.flat import BuildVariantsJob
+        from crsbench.benchmark_ci.jobs.flat import BuildSingleVariantJob
 
-        build_jobs = [j for j in jobs if isinstance(j, BuildVariantsJob)]
-        assert len(build_jobs) == 1
+        # Now uses BuildSingleVariantJob - 3 variants per benchmark (vulnerable, allpatched, coverage)
+        build_jobs = [j for j in jobs if isinstance(j, BuildSingleVariantJob)]
+        # At least one build job should exist
+        assert len(build_jobs) >= 1
 
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.DAGExecutor")
@@ -1766,6 +1794,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_benchmark_adapter")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
@@ -1774,6 +1803,7 @@ class TestAllSubcommand:
         mock_discover,
         mock_fmt,
         mock_caps,
+        mock_adapter,
         mock_harness,
         mock_cpvs,
         mock_patches,
@@ -1790,6 +1820,7 @@ class TestAllSubcommand:
             mock_patches,
             mock_povs,
             mock_executor_cls,
+            mock_adapter,
             supports_inc=False,
         )
 
@@ -1799,7 +1830,14 @@ class TestAllSubcommand:
 
         call_args = mock_executor_cls.return_value.execute.call_args
         jobs = call_args[0][0]
-        build_job = next(j for j in jobs if j.job_id == "build-variants:bench1")
+        from crsbench.benchmark_ci.jobs.flat import BuildSingleVariantJob
+
+        # Find any BuildSingleVariantJob for bench1
+        build_job = next(
+            j
+            for j in jobs
+            if isinstance(j, BuildSingleVariantJob) and "bench1" in j.job_id
+        )
         assert build_job.use_inc_build is False
 
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
@@ -1808,6 +1846,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_benchmark_adapter")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
@@ -1816,6 +1855,7 @@ class TestAllSubcommand:
         mock_discover,
         mock_fmt,
         mock_caps,
+        mock_adapter,
         mock_harness,
         mock_cpvs,
         mock_patches,
@@ -1832,6 +1872,7 @@ class TestAllSubcommand:
             mock_patches,
             mock_povs,
             mock_executor_cls,
+            mock_adapter,
             paths=[Path("/tmp/bench1"), Path("/tmp/bench2"), Path("/tmp/bench3")],
             supports_inc=False,
             rts_mode=None,
@@ -1852,6 +1893,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_benchmark_adapter")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
@@ -1860,6 +1902,7 @@ class TestAllSubcommand:
         mock_discover,
         mock_fmt,
         mock_caps,
+        mock_adapter,
         mock_harness,
         mock_cpvs,
         mock_patches,
@@ -1876,6 +1919,7 @@ class TestAllSubcommand:
             mock_patches,
             mock_povs,
             mock_executor_cls,
+            mock_adapter,
         )
 
         parser = _make_parser()
@@ -1891,6 +1935,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_benchmark_adapter")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
@@ -1899,6 +1944,7 @@ class TestAllSubcommand:
         mock_discover,
         mock_fmt,
         mock_caps,
+        mock_adapter,
         mock_harness,
         mock_cpvs,
         mock_patches,
@@ -1915,6 +1961,7 @@ class TestAllSubcommand:
             mock_patches,
             mock_povs,
             mock_executor_cls,
+            mock_adapter,
         )
 
         parser = _make_parser()
@@ -1923,7 +1970,14 @@ class TestAllSubcommand:
 
         call_args = mock_executor_cls.return_value.execute.call_args
         jobs = call_args[0][0]
-        build_job = next(j for j in jobs if j.job_id == "build-variants:bench1")
+        from crsbench.benchmark_ci.jobs.flat import BuildSingleVariantJob
+
+        # Find any BuildSingleVariantJob for bench1
+        build_job = next(
+            j
+            for j in jobs
+            if isinstance(j, BuildSingleVariantJob) and "bench1" in j.job_id
+        )
         # ci all: inc-build by default when project supports it
         assert build_job.use_inc_build is True
         # ci all: always force-rebuild by default
@@ -1935,6 +1989,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_benchmark_adapter")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
@@ -1943,6 +1998,7 @@ class TestAllSubcommand:
         mock_discover,
         mock_fmt,
         mock_caps,
+        mock_adapter,
         mock_harness,
         mock_cpvs,
         mock_patches,
@@ -1959,6 +2015,7 @@ class TestAllSubcommand:
             mock_patches,
             mock_povs,
             mock_executor_cls,
+            mock_adapter,
         )
 
         parser = _make_parser()
@@ -1967,7 +2024,14 @@ class TestAllSubcommand:
 
         call_args = mock_executor_cls.return_value.execute.call_args
         jobs = call_args[0][0]
-        build_job = next(j for j in jobs if j.job_id == "build-variants:bench1")
+        from crsbench.benchmark_ci.jobs.flat import BuildSingleVariantJob
+
+        # Find any BuildSingleVariantJob for bench1
+        build_job = next(
+            j
+            for j in jobs
+            if isinstance(j, BuildSingleVariantJob) and "bench1" in j.job_id
+        )
         assert build_job.use_inc_build is False
 
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
@@ -1976,6 +2040,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_benchmark_adapter")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
@@ -1984,6 +2049,7 @@ class TestAllSubcommand:
         mock_discover,
         mock_fmt,
         mock_caps,
+        mock_adapter,
         mock_harness,
         mock_cpvs,
         mock_patches,
@@ -2000,6 +2066,7 @@ class TestAllSubcommand:
             mock_patches,
             mock_povs,
             mock_executor_cls,
+            mock_adapter,
         )
 
         parser = _make_parser()

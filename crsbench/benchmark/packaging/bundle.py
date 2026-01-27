@@ -18,6 +18,38 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _update_pkg_refs(
+    pkg_refs_path: Path,
+    main_repo: str,
+    vulnerable_commit: str,
+) -> None:
+    """Update pkg_refs.txt, appending our entry if not present.
+
+    Preserves all original entries for full provenance. Only adds our
+    main_repo@commit entry if the URL isn't already in the file.
+
+    Args:
+        pkg_refs_path: Path to pkg_refs.txt
+        main_repo: Main repository URL
+        vulnerable_commit: Commit hash for the main source
+    """
+    new_entry = f"{main_repo}@{vulnerable_commit}"
+    existing_content = ""
+
+    if pkg_refs_path.exists():
+        existing_content = pkg_refs_path.read_text()
+        # Check if our repo URL already exists (ignore commit hash)
+        if main_repo in existing_content:
+            return  # Already present, don't duplicate
+
+    # Append our entry
+    with pkg_refs_path.open("a") as f:
+        # Add newline if file doesn't end with one
+        if existing_content and not existing_content.endswith("\n"):
+            f.write("\n")
+        f.write(f"{new_entry}\n")
+
+
 def bundle_benchmark(
     benchmark_path: Path,
     *,
@@ -28,14 +60,17 @@ def bundle_benchmark(
     Bundling differs based on benchmark type:
     - Delta mode benchmarks: tarball at ref_commit (vulnerable) + ref.diff hint
     - Full-only benchmarks: tarball at base_commit (vulnerable), no ref.diff
+    Tarball always contains the VULNERABLE state so patches can fix it:
+    - Delta mode: tarball at ref_commit (vulnerable), base_commit is benign
+    - Full mode: tarball at base_commit (vulnerable)
 
     Workflow:
     1. Validate benchmark structure
     2. Extract repo info from project.yaml and meta.yaml
     3. Determine source name from Dockerfile WORKDIR
     4. Clone repo, checkout vulnerable commit, create tarball
-    5. Generate ref.diff if delta mode (base→ref diff as hint)
-    6. Write pkg_refs.txt for provenance
+    5. Generate ref.diff if delta mode (diff from base to ref)
+    6. Write pkg_refs.txt for provenance (records vulnerable commit)
 
     Args:
         benchmark_path: Path to benchmark directory
@@ -101,18 +136,28 @@ def bundle_benchmark(
             "Add ref_commit to delta_mode section in meta.yaml."
         )
 
-    # 6. Log bundling info
+    # 6. Determine vulnerable commit (tarball always contains vulnerable state)
+    # Delta mode: ref_commit is vulnerable, base_commit is benign
+    # Full mode: base_commit is vulnerable
+    vulnerable_commit = ref_commit if has_delta_mode else base_commit
+    assert vulnerable_commit is not None  # Guaranteed by validation above
+
+    # 7. Log bundling info
     logger.info(f"Bundling {benchmark_path.name}:")
     logger.info(f"  Source: {main_repo}")
-    logger.info(f"  Base commit: {base_commit[:8]}")
+    logger.info(f"  Vulnerable commit: {vulnerable_commit[:8]}")
     if has_delta_mode:
-        logger.info(f"  Ref commit: {ref_commit[:8] if ref_commit else 'N/A'}")
-        logger.info("  Mode: delta (tarball at pre-vuln, ref.diff generated)")
+        logger.info(f"  Base commit (benign): {base_commit[:8]}")
+        logger.info(
+            "  Mode: delta (tarball at ref_commit/vulnerable, ref.diff generated)"
+        )
     else:
-        logger.info("  Mode: full-only (tarball at vulnerable state, no ref.diff)")
+        logger.info(
+            "  Mode: full-only (tarball at base_commit/vulnerable, no ref.diff)"
+        )
     logger.info(f"  Tarball name: {source_name}.tar.gz")
 
-    # 7. Create tarball (and ref.diff if delta mode)
+    # 8. Create tarball (and ref.diff if delta mode)
     pkgs_dir.mkdir(parents=True, exist_ok=True)
 
     tarball_path, ref_diff_path = create_source_tarball(
@@ -123,7 +168,7 @@ def bundle_benchmark(
         ref_commit=ref_commit,  # None for full-only benchmarks
     )
 
-    # 8. Move ref.diff to .aixcc/ if generated (delta mode only)
+    # 9. Move ref.diff to .aixcc/ if generated (delta mode only)
     if ref_diff_path:
         # shutil.move behavior varies; explicitly remove dest to ensure overwrite
         if aixcc_ref_diff.exists():
@@ -131,9 +176,9 @@ def bundle_benchmark(
         shutil.move(str(ref_diff_path), str(aixcc_ref_diff))
         logger.info(f"  Moved ref.diff to: {aixcc_ref_diff}")
 
-    # 9. Write pkg_refs.txt for provenance
+    # 10. Update pkg_refs.txt for provenance (preserves other package refs)
     pkg_refs_path = pkgs_dir / "pkg_refs.txt"
-    pkg_refs_path.write_text(f"{main_repo}@{base_commit}\n")
+    _update_pkg_refs(pkg_refs_path, main_repo, vulnerable_commit)
     logger.info(f"  Wrote provenance: {pkg_refs_path}")
 
     logger.info(f"Successfully bundled: {benchmark_path.name}")

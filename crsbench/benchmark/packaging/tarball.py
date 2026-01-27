@@ -15,8 +15,19 @@ from pathlib import Path
 from typing import Optional
 
 from crsbench.utils.logger import get_logger
+from crsbench.utils.repo_manager import clone_repository
 
 logger = get_logger(__name__)
+
+
+def _get_default_repos_dir() -> str:
+    """Get the default repos directory for caching mirrors.
+
+    Uses PROJECT_REPOS_DIR env var, or .crsbench-repos in crsbench root.
+    """
+    crsbench_root = Path(__file__).parent.parent.parent.resolve()
+    default_repos_dir = crsbench_root / ".crsbench-repos"
+    return os.getenv("PROJECT_REPOS_DIR", str(default_repos_dir))
 
 
 def create_source_tarball(
@@ -53,10 +64,17 @@ def create_source_tarball(
     with tempfile.TemporaryDirectory() as tmpdir:
         work_dir = Path(tmpdir)
 
-        # 1. Clone repository
-        logger.info(f"Cloning {repo_url} to {work_dir}...")
-        _run_git(["clone", repo_url, "repo"], cwd=work_dir)
+        # 1. Clone repository using cached mirror for speed (remote URLs only)
         repo_dir = work_dir / "repo"
+        repos_dir = _get_default_repos_dir()
+        logger.info(f"Cloning {repo_url}...")
+        success = clone_repository(
+            repo_url=repo_url,
+            target_dir=str(repo_dir),
+            repos_dir=repos_dir,
+        )
+        if not success:
+            raise RuntimeError(f"Failed to clone {repo_url}")
 
         # 2. Generate ref.diff for delta mode (before modifying repo)
         ref_diff_path = None

@@ -65,6 +65,7 @@ def run_pov(args: argparse.Namespace) -> int:
     verify_workers = getattr(args, "verify_workers", 4)
     use_inc_build = not getattr(args, "no_inc_build", False)
     force_rebuild = getattr(args, "force_rebuild", True)
+    max_povs_per_cpv = getattr(args, "max_povs_per_cpv", None)
 
     build_mode = "inc-build" if use_inc_build else "full-build"
     rebuild_mode = "force-rebuild" if force_rebuild else "cached"
@@ -101,6 +102,9 @@ def run_pov(args: argparse.Namespace) -> int:
                     continue
                 cpv_ids.append(cpv_id)
                 pov_paths = discover_pov_paths(path, harness, cpv_id)
+                # Apply max_povs_per_cpv limit (paths already sorted by pov number)
+                if max_povs_per_cpv and len(pov_paths) > max_povs_per_cpv:
+                    pov_paths = pov_paths[:max_povs_per_cpv]
                 if not pov_paths:
                     continue
                 verify_job = VerifyCpvPovJob(
@@ -140,12 +144,16 @@ def run_pov(args: argparse.Namespace) -> int:
         pov_result = aggregate_pov_results(dag_results, path.name, cpv_ids)
         build_result = dag_results.get(f"build-variants:{path.name}")
         shared_build = build_result.elapsed_seconds if build_result else 0.0
+        storage_bytes = 0
+        if build_result and build_result.job_result:
+            storage_bytes = build_result.job_result.details.get("storage_bytes", 0)
         summary.add_result(
             BenchmarkValidationResult(
                 benchmark=path.name,
                 benchmark_path=path,
                 pov_check=pov_result,
                 shared_build_time=shared_build,
+                storage_bytes=storage_bytes,
                 supports_inc_build=supports_inc,
                 rts_mode=rts_mode,
                 started_at=start_dt,

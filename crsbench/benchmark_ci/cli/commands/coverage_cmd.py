@@ -122,12 +122,16 @@ def run_coverage(args: argparse.Namespace) -> int:
         coverage_result = aggregate_coverage_result(dag_results, path.name)
         build_result = dag_results.get(f"build-variants:{path.name}")
         shared_build = build_result.elapsed_seconds if build_result else 0.0
+        storage_bytes = 0
+        if build_result and build_result.job_result:
+            storage_bytes = build_result.job_result.details.get("storage_bytes", 0)
         summary.add_result(
             BenchmarkValidationResult(
                 benchmark=path.name,
                 benchmark_path=path,
                 coverage_check=coverage_result,
                 shared_build_time=shared_build,
+                storage_bytes=storage_bytes,
                 started_at=start_dt,
                 finished_at=datetime.now(),
             )

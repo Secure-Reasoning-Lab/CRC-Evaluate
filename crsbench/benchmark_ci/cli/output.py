@@ -18,6 +18,7 @@ from crsbench.benchmark_ci.models import (
     CheckStatus,
     ValidationSummary,
 )
+from crsbench.benchmark_ci.storage import format_storage_size
 
 
 def format_status(check: CheckResult | None) -> str:
@@ -100,6 +101,17 @@ def _add_detail_rows(
             )
 
 
+def _format_storage(result: BenchmarkValidationResult) -> str:
+    """Format storage size for table display.
+
+    Returns:
+        Right-aligned storage size string, or "-" if no storage data
+    """
+    if result.storage_bytes <= 0:
+        return "[dim]-[/dim]"
+    return format_storage_size(result.storage_bytes)
+
+
 def _add_format_columns(table: Table) -> None:
     """Add columns for FORMAT check mode (per-check columns)."""
     table.add_column("Struct", justify="center")
@@ -108,6 +120,7 @@ def _add_format_columns(table: Table) -> None:
     table.add_column("CPV", justify="center")
     table.add_column("Blob", justify="center")
     table.add_column("Patch", justify="center")
+    table.add_column("Storage", justify="right")
     table.add_column("Total", justify="center")
 
 
@@ -116,7 +129,9 @@ def _add_format_rows(table: Table, summary: ValidationSummary) -> None:
     check_names = ("struct", "schema", "harness", "cpv", "blob", "patch")
     for r in summary.results:
         cols = [format_status(r.format_checks.get(n)) for n in check_names]
-        table.add_row(r.benchmark, *cols, _format_total_status(r.total_status))
+        table.add_row(
+            r.benchmark, *cols, _format_storage(r), _format_total_status(r.total_status)
+        )
 
 
 def _add_default_columns(table: Table) -> None:
@@ -125,6 +140,7 @@ def _add_default_columns(table: Table) -> None:
     table.add_column("POV", justify="center")
     table.add_column("Patch", justify="center")
     table.add_column("Coverage", justify="center")
+    table.add_column("Storage", justify="right")
     table.add_column("Total", justify="center")
 
 
@@ -137,9 +153,10 @@ def _add_default_rows(table: Table, summary: ValidationSummary) -> None:
             format_status(r.pov_check),
             format_status(r.patch_check),
             format_status(r.coverage_check),
+            _format_storage(r),
             _format_total_status(r.total_status),
         )
-        _add_detail_rows(table, r, 5)
+        _add_detail_rows(table, r, 6)
 
 
 def _add_inc_columns(table: Table) -> None:
@@ -149,6 +166,7 @@ def _add_inc_columns(table: Table) -> None:
     table.add_column("POV(inc)", justify="center")
     table.add_column("Patch(inc)", justify="center")
     table.add_column("Cov(inc)", justify="center")
+    table.add_column("Storage", justify="right")
     table.add_column("Total", justify="center")
 
 
@@ -163,9 +181,10 @@ def _add_inc_rows(table: Table, summary: ValidationSummary) -> None:
             format_status(r.pov_inc_check),
             format_status(r.patch_inc_check),
             format_status(r.coverage_inc_check),
+            _format_storage(r),
             _format_total_status(r.total_status),
         )
-        _add_detail_rows(table, r, 6)
+        _add_detail_rows(table, r, 7)
 
 
 def _add_rts_columns(table: Table) -> None:
@@ -173,6 +192,7 @@ def _add_rts_columns(table: Table) -> None:
     table.add_column("rts", justify="center")
     table.add_column("Format", justify="center")
     table.add_column("Patch(rts)", justify="center")
+    table.add_column("Storage", justify="right")
     table.add_column("Total", justify="center")
 
 
@@ -185,6 +205,7 @@ def _add_rts_rows(table: Table, summary: ValidationSummary) -> None:
             rts_mode,
             format_status(r.format_check),
             format_status(r.patch_rts_check),
+            _format_storage(r),
             _format_total_status(r.total_status),
         )
 
@@ -198,6 +219,7 @@ def _add_all_columns(table: Table) -> None:
     table.add_column("Patch", justify="center")
     table.add_column("P(rts)", justify="center")
     table.add_column("Cov", justify="center")
+    table.add_column("Storage", justify="right")
     table.add_column("Total", justify="center")
 
 
@@ -215,9 +237,10 @@ def _add_all_rows(table: Table, summary: ValidationSummary) -> None:
             format_status(r.patch_check),
             format_status(r.patch_rts_check),
             format_status(r.coverage_check),
+            _format_storage(r),
             _format_total_status(r.total_status),
         )
-        _add_detail_rows(table, r, 8)
+        _add_detail_rows(table, r, 9)
 
 
 def print_results_table(
@@ -258,9 +281,14 @@ def print_results_table(
         _add_all_rows(table, summary)
 
     console.print(table)
+
+    # Calculate total storage across all benchmarks
+    total_storage = sum(r.storage_bytes for r in summary.results)
+    storage_str = format_storage_size(total_storage) if total_storage > 0 else "0 B"
+
     console.print(
         f"\nSummary: {summary.passed} passed, {summary.failed} failed, "
-        f"{summary.errors} errors, {summary.total} total"
+        f"{summary.errors} errors, {summary.total} total | Storage: {storage_str}"
     )
 
 
@@ -334,9 +362,14 @@ def _save_results_txt(
             _add_all_rows(table, summary)
 
         console.print(table)
+
+        # Calculate total storage across all benchmarks
+        total_storage = sum(r.storage_bytes for r in summary.results)
+        storage_str = format_storage_size(total_storage) if total_storage > 0 else "0 B"
+
         console.print(
             f"\nSummary: {summary.passed} passed, {summary.failed} failed, "
-            f"{summary.errors} errors, {summary.total} total"
+            f"{summary.errors} errors, {summary.total} total | Storage: {storage_str}"
         )
 
 
@@ -390,19 +423,22 @@ def write_summary_csv(
         check_mode: Check mode for column layout
     """
     if check_mode == CheckMode.FORMAT:
-        f.write("benchmark,struct,schema,harness,cpv,blob,patch,total,time_s\n")
+        f.write(
+            "benchmark,struct,schema,harness,cpv,blob,patch,"
+            "total,time_s,storage_bytes\n"
+        )
         for r in summary.results:
             fmt_time = r.format_check.time_seconds if r.format_check else 0.0
             check_names = ("struct", "schema", "harness", "cpv", "blob", "patch")
             cols = [_plain_status(r.format_checks.get(n)) for n in check_names]
             f.write(
                 f"{r.benchmark},{','.join(cols)},"
-                f"{r.total_status.value},{fmt_time:.1f}\n"
+                f"{r.total_status.value},{fmt_time:.1f},{r.storage_bytes}\n"
             )
     elif check_mode == CheckMode.DEFAULT:
         f.write(
             "benchmark,format,pov,patch,coverage,"
-            "total,time_s,build_time_s,verify_time_s\n"
+            "total,time_s,build_time_s,verify_time_s,storage_bytes\n"
         )
         for r in summary.results:
             build_t = r.patch_check.build_time if r.patch_check else 0.0
@@ -414,12 +450,12 @@ def write_summary_csv(
                 f"{_plain_status(r.patch_check)},"
                 f"{_plain_status(r.coverage_check)},"
                 f"{r.total_status.value},{r.total_time:.1f},"
-                f"{build_t:.1f},{verify_t:.1f}\n"
+                f"{build_t:.1f},{verify_t:.1f},{r.storage_bytes}\n"
             )
     elif check_mode == CheckMode.INC:
         f.write(
             "benchmark,inc,format,pov_inc,patch_inc,cov_inc,"
-            "total,time_s,build_time_s,verify_time_s\n"
+            "total,time_s,build_time_s,verify_time_s,storage_bytes\n"
         )
         for r in summary.results:
             inc = "Y" if r.supports_inc_build else "N"
@@ -432,12 +468,12 @@ def write_summary_csv(
                 f"{_plain_status(r.patch_inc_check)},"
                 f"{_plain_status(r.coverage_inc_check)},"
                 f"{r.total_status.value},{r.total_time:.1f},"
-                f"{build_t:.1f},{verify_t:.1f}\n"
+                f"{build_t:.1f},{verify_t:.1f},{r.storage_bytes}\n"
             )
     elif check_mode == CheckMode.RTS:
         f.write(
             "benchmark,rts_mode,format,patch_rts,"
-            "total,time_s,build_time_s,verify_time_s\n"
+            "total,time_s,build_time_s,verify_time_s,storage_bytes\n"
         )
         for r in summary.results:
             rts = r.rts_mode or ""
@@ -448,7 +484,7 @@ def write_summary_csv(
                 f"{_plain_status(r.format_check)},"
                 f"{_plain_status(r.patch_rts_check)},"
                 f"{r.total_status.value},{r.total_time:.1f},"
-                f"{build_t:.1f},{verify_t:.1f}\n"
+                f"{build_t:.1f},{verify_t:.1f},{r.storage_bytes}\n"
             )
     else:
         # ALL mode — per-check build + verify times
@@ -458,7 +494,7 @@ def write_summary_csv(
             "patch,patch_build_s,patch_verify_s,"
             "patch_rts,patch_rts_verify_s,"
             "cov,cov_verify_s,"
-            "total,total_time_s\n"
+            "total,total_time_s,storage_bytes\n"
         )
         for r in summary.results:
             inc = "Y" if r.supports_inc_build else "N"
@@ -476,7 +512,7 @@ def write_summary_csv(
                 f"{_check_verify_time(r.patch_rts_check):.1f},"
                 f"{_plain_status(r.coverage_check)},"
                 f"{_check_verify_time(r.coverage_check):.1f},"
-                f"{r.total_status.value},{r.total_time:.1f}\n"
+                f"{r.total_status.value},{r.total_time:.1f},{r.storage_bytes}\n"
             )
 
 

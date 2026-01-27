@@ -11,10 +11,13 @@ from crsbench.utils.repo_manager import (
     clone_repository,
     derive_repo_name_from_url,
     ensure_project_repository,
+    ensure_reference_repo,
     find_or_clone_project,
     get_diff_from_repo_info,
+    get_reference_repo_path,
     get_repo_info_from_benchmark,
     set_gitcache,
+    set_reference_repos,
     write_benchmark_delta_diff,
     write_diff_from_repo_info,
 )
@@ -990,6 +993,165 @@ class TestParallelCacheAccess:
 
         # Verify cache is unchanged
         assert (cache_dir / "file.txt").read_text() == original_content
+
+
+# ============================================================================
+# Reference Repository Tests
+# ============================================================================
+
+
+class TestReferenceRepos:
+    """Tests for git reference repository functionality."""
+
+    def test_get_reference_repo_path(self, tmp_path: Path) -> None:
+        """Test reference repo path generation."""
+        path = get_reference_repo_path(
+            "https://github.com/curl/curl.git",
+            str(tmp_path),
+        )
+        assert path == tmp_path / "curl-mirror.git"
+
+    def test_get_reference_repo_path_ssh_url(self, tmp_path: Path) -> None:
+        """Test reference repo path from SSH URL."""
+        path = get_reference_repo_path(
+            "git@github.com:user/repo.git",
+            str(tmp_path),
+        )
+        assert path == tmp_path / "repo-mirror.git"
+
+    def test_set_reference_repos(self) -> None:
+        """Test enabling/disabling reference repos."""
+        import crsbench.utils.repo_manager as rm
+
+        original = rm.USE_REFERENCE_REPOS
+
+        try:
+            set_reference_repos(False)
+            assert rm.USE_REFERENCE_REPOS is False
+
+            set_reference_repos(True)
+            assert rm.USE_REFERENCE_REPOS is True
+        finally:
+            rm.USE_REFERENCE_REPOS = original
+
+    def test_ensure_reference_repo_creates_mirror(self, tmp_path: Path) -> None:
+        """Test that ensure_reference_repo creates a mirror repo."""
+        repos_dir = tmp_path / "repos"
+        repos_dir.mkdir()
+
+        # Mock run_git to simulate successful clone
+        mock_result = mock.MagicMock()
+        mock_result.returncode = 0
+
+        with mock.patch(
+            "crsbench.utils.repo_manager.run_git", return_value=mock_result
+        ) as mock_run:
+            result = ensure_reference_repo(
+                "https://github.com/curl/curl.git",
+                str(repos_dir),
+                verbose=True,
+            )
+
+        assert result == str(repos_dir / "curl-mirror.git")
+        # Verify clone --mirror was called
+        call_args = mock_run.call_args_list[0][0][0]
+        assert "clone" in call_args
+        assert "--mirror" in call_args
+
+    def test_ensure_reference_repo_updates_existing(self, tmp_path: Path) -> None:
+        """Test that ensure_reference_repo updates existing mirror."""
+        repos_dir = tmp_path / "repos"
+        mirror_path = repos_dir / "curl-mirror.git"
+        mirror_path.mkdir(parents=True)
+
+        mock_result = mock.MagicMock()
+        mock_result.returncode = 0
+
+        with mock.patch(
+            "crsbench.utils.repo_manager.run_git", return_value=mock_result
+        ) as mock_run:
+            result = ensure_reference_repo(
+                "https://github.com/curl/curl.git",
+                str(repos_dir),
+                verbose=True,
+            )
+
+        assert result == str(mirror_path)
+        # Verify remote update was called
+        call_args = mock_run.call_args_list[0][0][0]
+        assert "remote" in call_args
+        assert "update" in call_args
+
+    def test_clone_with_reference_repos_enabled(self, tmp_path: Path) -> None:
+        """Test that clone uses reference repo when enabled."""
+        import crsbench.utils.repo_manager as rm
+
+        target_dir = tmp_path / "target"
+        repos_dir = tmp_path / "repos"
+        repos_dir.mkdir()
+
+        original = rm.USE_REFERENCE_REPOS
+
+        try:
+            rm.USE_REFERENCE_REPOS = True
+
+            mock_result = mock.MagicMock()
+            mock_result.returncode = 0
+
+            with mock.patch(
+                "crsbench.utils.repo_manager.run_git", return_value=mock_result
+            ) as mock_run:
+                result = clone_repository(
+                    "https://github.com/curl/curl.git",
+                    str(target_dir),
+                    commit="abc12345",
+                    repos_dir=str(repos_dir),
+                    verbose=True,
+                )
+
+            assert result is True
+
+            # Find the clone call (should have --reference and --dissociate)
+            clone_calls = [
+                call
+                for call in mock_run.call_args_list
+                if "clone" in call[0][0] and "--mirror" not in call[0][0]
+            ]
+            if clone_calls:
+                clone_args = clone_calls[0][0][0]
+                assert "--reference" in clone_args
+                assert "--dissociate" in clone_args
+        finally:
+            rm.USE_REFERENCE_REPOS = original
+
+    def test_clone_without_reference_repos(self, tmp_path: Path) -> None:
+        """Test that clone works without reference repos."""
+        import crsbench.utils.repo_manager as rm
+
+        target_dir = tmp_path / "target"
+
+        original = rm.USE_REFERENCE_REPOS
+
+        try:
+            rm.USE_REFERENCE_REPOS = False
+
+            mock_result = mock.MagicMock()
+            mock_result.returncode = 0
+
+            with mock.patch(
+                "crsbench.utils.repo_manager.run_git", return_value=mock_result
+            ):
+                result = clone_repository(
+                    "https://github.com/curl/curl.git",
+                    str(target_dir),
+                    commit="abc12345",
+                    repos_dir=str(tmp_path / "repos"),
+                    verbose=True,
+                )
+
+            assert result is True
+        finally:
+            rm.USE_REFERENCE_REPOS = original
 
 
 # ============================================================================

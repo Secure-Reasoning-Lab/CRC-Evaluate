@@ -6,10 +6,11 @@ This module provides OSSFuzzBuilder, which builds all types of variants:
 - Patch variants: CRS-generated patches for verification
 
 Features:
-- Parallel builds using ThreadPoolExecutor
 - Build caching with staleness detection
 - Support for both FULL and DELTA benchmark modes
 - Incremental builds using pre-built images (for patch verification)
+
+For parallel builds, use BuildSingleVariantJob with DAGExecutor.
 """
 
 import tempfile
@@ -17,7 +18,6 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from crsbench.builder.executor import ParallelExecutor
 from crsbench.builder.infrastructure import OSSFuzzInfrastructure
 from crsbench.builder.types import (
     BenchmarkMode,
@@ -65,7 +65,6 @@ class OSSFuzzBuilder:
         self.max_workers = max_workers
         self.source_mode = source_mode
         self.infra = OSSFuzzInfrastructure(oss_fuzz_path)
-        self.executor = ParallelExecutor(max_workers)
 
     def build_variants(
         self,
@@ -73,7 +72,9 @@ class OSSFuzzBuilder:
         *,
         force_rebuild: bool = False,
     ) -> dict[str, BuildResult]:
-        """Build multiple variants in parallel.
+        """Build multiple variants sequentially.
+
+        For parallel builds, use BuildSingleVariantJob with DAGExecutor.
 
         Args:
             configs: List of build configurations
@@ -108,17 +109,14 @@ class OSSFuzzBuilder:
             else:
                 configs_to_build.append(config)
 
-        # Build remaining variants in parallel
+        # Build remaining variants sequentially
+        # For parallel builds, use BuildSingleVariantJob with DAGExecutor
         if configs_to_build:
-            # Pre-cache repositories before parallel execution
-            # This prevents multiple workers from cloning the same repo concurrently
             self._ensure_repos_cached(configs_to_build)
-
-            build_results = self.executor.execute_builds(
-                configs=configs_to_build,
-                build_fn=self._build_single,
-            )
-            results.update(build_results)
+            for config in configs_to_build:
+                # Pass force_rebuild=False since we already did cleanup above
+                result = self.build_single(config, force_rebuild=False)
+                results[result.variant_name] = result
 
         return results
 
@@ -186,10 +184,7 @@ class OSSFuzzBuilder:
             build_path = self.infra.get_build_output_path(config.variant_name)
             return BuildResult.from_cache(config, build_path)
 
-        return self.executor.execute_single(
-            config=config,
-            build_fn=self._build_single,
-        )
+        return self._build_single(config)
 
     def _build_single(self, config: BuildConfig) -> BuildResult:
         """Internal method to build a single variant.

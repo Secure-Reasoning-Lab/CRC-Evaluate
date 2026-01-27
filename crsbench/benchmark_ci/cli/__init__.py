@@ -11,6 +11,7 @@ from crsbench.benchmark_ci.cli.commands import (
     pov_cmd,
     retry_cmd,
     rts_cmd,
+    storage_cmd,
 )
 
 
@@ -30,6 +31,7 @@ Subcommands:
   all         Run all validation checks
   parse       Parse and display results from output directory
   retry       Retry failed benchmarks from a previous CI run
+  storage     Show storage usage per benchmark
         """,
     )
     ci_parser.set_defaults(command="ci")
@@ -45,6 +47,7 @@ Subcommands:
     all_cmd.register(ci_subparsers)
     parse_cmd.register(ci_subparsers)
     retry_cmd.register(ci_subparsers)
+    storage_cmd.register(ci_subparsers)
 
 
 def dispatch_ci(args: argparse.Namespace) -> int:

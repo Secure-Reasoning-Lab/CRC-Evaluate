@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -18,6 +19,9 @@ from pydantic import BaseModel
 from crsbench.utils.logger import configure_logger, get_logger
 
 logger = get_logger(__name__)
+
+# Global setting for reference repository usage
+USE_REFERENCE_REPOS = True
 
 # Per-directory locks to prevent concurrent git operations on the same repo
 _repo_locks: dict[str, threading.Lock] = {}
@@ -79,6 +83,113 @@ def set_gitcache(enabled: bool):
 
     USE_GITCACHE = enabled
     logger.debug(f"Gitcache {'enabled' if enabled else 'disabled'}")
+
+
+def set_reference_repos(enabled: bool) -> None:
+    """Set global reference repository mode.
+
+    When enabled, git clones use --reference --dissociate pattern
+    to share objects between clones of the same repository.
+
+    Args:
+        enabled: True to use reference repositories, False for standard clones
+    """
+    global USE_REFERENCE_REPOS
+    USE_REFERENCE_REPOS = enabled
+    logger.debug(f"Reference repos {'enabled' if enabled else 'disabled'}")
+
+
+def get_reference_repo_path(repo_url: str, repos_dir: str) -> Path:
+    """Get path to reference (mirror) repository.
+
+    Args:
+        repo_url: Repository URL
+        repos_dir: Base directory for repositories
+
+    Returns:
+        Path to mirror repository (e.g., .crsbench-repos/curl-mirror.git)
+    """
+    repo_name = derive_repo_name_from_url(repo_url)
+    return Path(repos_dir) / f"{repo_name}-mirror.git"
+
+
+def ensure_reference_repo(
+    repo_url: str,
+    repos_dir: str,
+    *,
+    verbose: bool = False,
+) -> Optional[str]:
+    """Ensure mirror reference repository exists and is updated.
+
+    Creates a bare mirror repository that can be used as a reference
+    for subsequent clones, sharing git objects to save storage.
+
+    Args:
+        repo_url: Repository URL to mirror
+        repos_dir: Directory to store the mirror
+        verbose: Enable verbose logging
+
+    Returns:
+        Path to mirror repository, or None if failed
+    """
+    mirror_path = get_reference_repo_path(repo_url, repos_dir)
+    mirror_lock = _get_repo_lock(str(mirror_path))
+
+    with mirror_lock:
+        if mirror_path.exists():
+            # Update existing mirror
+            start_time = time.time()
+            if verbose:
+                logger.info(f"Updating reference repo: {mirror_path}")
+
+            try:
+                result = run_git(
+                    ["remote", "update"],
+                    cwd=str(mirror_path),
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                    check=False,
+                )
+                elapsed = time.time() - start_time
+                if result.returncode != 0:
+                    logger.warning(
+                        f"Failed to update reference repo "
+                        f"after {elapsed:.1f}s: {result.stderr}"
+                    )
+                elif verbose:
+                    logger.info(f"Updated reference repo in {elapsed:.1f}s")
+            except subprocess.TimeoutExpired:
+                logger.warning("Reference repo update timed out")
+        else:
+            # Create new mirror
+            start_time = time.time()
+            logger.info(f"Creating reference repo: {mirror_path} from {repo_url}")
+
+            try:
+                mirror_path.parent.mkdir(parents=True, exist_ok=True)
+                result = run_git(
+                    ["clone", "--mirror", repo_url, str(mirror_path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                    check=False,
+                )
+                elapsed = time.time() - start_time
+
+                if result.returncode != 0:
+                    logger.error(
+                        f"Failed to create reference repo "
+                        f"after {elapsed:.1f}s: {result.stderr}"
+                    )
+                    return None
+
+                logger.info(f"Created reference repo in {elapsed:.1f}s: {mirror_path}")
+            except subprocess.TimeoutExpired:
+                logger.error("Reference repo creation timed out")
+                return None
+
+    return str(mirror_path)
 
 
 def run_git(args: List[str], **kwargs) -> subprocess.CompletedProcess:
@@ -412,22 +523,29 @@ def clone_repository(
     repo_url: str,
     target_dir: str,
     commit: Optional[str] = None,
+    repos_dir: Optional[str] = None,
     *,
     verbose: bool = False,
 ) -> bool:
     """
     Clone a git repository and optionally checkout a specific commit.
 
+    Uses reference repository pattern (--reference --dissociate) when
+    USE_REFERENCE_REPOS is enabled to share git objects and reduce storage.
+
     Args:
         repo_url: Git repository URL
         target_dir: Directory to clone into
         commit: Optional commit hash to checkout
+        repos_dir: Directory for reference repos (for --reference pattern)
         verbose: Enable verbose logging
 
     Returns:
         True if successful, False otherwise
     """
     target_path = Path(target_dir)
+    repo_name = derive_repo_name_from_url(repo_url)
+    short_commit = commit[:8] if commit else "HEAD"
 
     # Check if directory already exists
     if target_path.exists():
@@ -442,12 +560,12 @@ def clone_repository(
             try:
                 reset_and_clean_repo(target_dir, verbose=verbose)
             except Exception as e:
-                logger.warning(f"⚠️  Error resetting repository: {e}")
+                logger.warning(f"Error resetting repository: {e}")
 
             if verbose:
-                logger.info(f"✅ {target_dir} is already a git repository")
+                logger.info(f"{target_dir} is already a git repository")
             return True
-        logger.error(f"❌ {target_dir} exists but is not a git repository")
+        logger.error(f"{target_dir} exists but is not a git repository")
         return False
 
     # Create parent directory if needed
@@ -455,28 +573,63 @@ def clone_repository(
 
     # Clone repository
     try:
-        if verbose:
-            logger.info(f"🔄 Cloning {repo_url} to {target_dir}...")
+        start_time = time.time()
+
+        # Determine if we should use reference repository
+        use_reference = USE_REFERENCE_REPOS and repos_dir is not None
+        reference_repo: Optional[str] = None
+
+        if use_reference and repos_dir is not None:
+            reference_repo = ensure_reference_repo(repo_url, repos_dir, verbose=verbose)
+            if reference_repo:
+                logger.info(
+                    f"Cloning {repo_name}@{short_commit} with reference → {target_dir}"
+                )
+                clone_args = [
+                    "clone",
+                    "--reference",
+                    reference_repo,
+                    "--dissociate",
+                    repo_url,
+                    str(target_dir),
+                ]
+            else:
+                logger.warning(
+                    "Reference repo unavailable, falling back to standard clone"
+                )
+                use_reference = False
+
+        if not use_reference:
+            logger.info(f"Cloning {repo_name}@{short_commit} → {target_dir}")
+            clone_args = ["clone", repo_url, str(target_dir)]
 
         result = run_git(
-            ["clone", repo_url, str(target_dir)],
+            clone_args,
             capture_output=True,
             text=True,
             timeout=300,  # 5 minute timeout
             check=False,
         )
 
+        elapsed = time.time() - start_time
+
         if result.returncode != 0:
-            logger.error(f"❌ Git clone failed: {result.stderr}")
+            logger.error(
+                f"Clone failed for {repo_name}@{short_commit} "
+                f"after {elapsed:.1f}s: {result.stderr}"
+            )
             return False
 
-        if verbose:
-            logger.info("✅ Successfully cloned repository")
+        clone_mode = "with reference" if use_reference else "standard"
+        logger.info(
+            f"Cloned {repo_name}@{short_commit} in {elapsed:.1f}s ({clone_mode})"
+        )
 
         # Checkout specific commit if provided
         if commit:
+            checkout_start = time.time()
             if verbose:
-                logger.info(f"🔄 Checking out commit {commit}...")
+                logger.info(f"Checking out {repo_name}@{commit[:8]}...")
 
             result = run_git(
                 ["checkout", commit],
@@ -487,19 +640,24 @@ def clone_repository(
                 check=False,
             )
 
+            checkout_elapsed = time.time() - checkout_start
+
             if result.returncode != 0:
-                logger.error(f"⚠️  Failed to checkout {commit}: {result.stderr}")
+                logger.error(
+                    f"Checkout failed for {commit[:8]} "
+                    f"after {checkout_elapsed:.1f}s: {result.stderr}"
+                )
                 logger.warning("Repository cloned but commit checkout failed")
                 return True  # Still return True as clone succeeded
 
             if verbose:
-                logger.info(f"✅ Checked out commit {commit}")
+                logger.info(f"Checked out {commit[:8]} in {checkout_elapsed:.1f}s")
 
         # Initialize submodules if present (some projects like shadowsocks need this)
         gitmodules = target_path / ".gitmodules"
         if gitmodules.exists():
             if verbose:
-                logger.info("🔄 Initializing git submodules...")
+                logger.info("Initializing git submodules...")
 
             result = run_git(
                 ["submodule", "update", "--init", "--recursive"],
@@ -511,18 +669,18 @@ def clone_repository(
             )
 
             if result.returncode != 0:
-                logger.warning(f"⚠️  Failed to initialize submodules: {result.stderr}")
+                logger.warning(f"Failed to initialize submodules: {result.stderr}")
                 # Don't fail - submodules might not be required
             elif verbose:
-                logger.info("✅ Submodules initialized")
+                logger.info("Submodules initialized")
 
         return True
 
     except subprocess.TimeoutExpired:
-        logger.error("❌ Git clone timed out")
+        logger.error(f"Clone timed out for {repo_name}")
         return False
     except Exception as e:
-        logger.error(f"❌ Error cloning repository: {e}")
+        logger.error(f"Error cloning {repo_name}: {e}")
         return False
 
 
@@ -659,8 +817,8 @@ def clone_or_copy_cached_repo(
 
     # If cache verified, copy to target
     if cache_verified:
-        if verbose:
-            logger.debug(f"Copying from cache: {cache_dir} -> {target_dir}")
+        derived_name = repo_name or derive_repo_name_from_url(repo_url)
+        start_time = time.time()
         try:
             with cache_lock:
                 shutil.copytree(
@@ -668,17 +826,22 @@ def clone_or_copy_cached_repo(
                 )
             # Reset target to fix stale git index from copytree
             reset_and_clean_repo(target_dir, verbose=verbose)
-            if verbose:
-                logger.debug(f"Successfully copied from cache to {target_dir}")
+            elapsed = time.time() - start_time
+            logger.info(
+                f"CACHE HIT: {derived_name}@{commit[:8]} → {target_dir} ({elapsed:.1f}s)"
+            )
             return target_dir
         except Exception as e:
-            logger.warning(f"⚠️  Failed to copy from cache: {e}, will clone instead")
+            logger.warning(f"Failed to copy from cache: {e}, will clone")
             # Fall through to clone
 
     # No cache - clone directly to target
     # If target_dir == cache_dir, we need to protect the clone with a lock
     # to prevent parallel workers from cloning to the same directory
     target_is_cache = str(Path(target_dir).resolve()) == str(Path(cache_dir).resolve())
+
+    derived_name = repo_name or derive_repo_name_from_url(repo_url)
+    logger.info(f"CACHE MISS: {derived_name}@{commit[:8]} (expected at {cache_dir})")
 
     if target_is_cache:
         # Clone to cache directory with lock protection
@@ -709,8 +872,24 @@ def clone_or_copy_cached_repo(
             if verbose:
                 logger.info(f"📦 No cache available, cloning to {target_dir}...")
 
+            # Determine repos_dir for reference repo
+            effective_repos_dir = repos_dir
+            if not effective_repos_dir:
+                crsbench_root = Path(__file__).parent.parent.parent.resolve()
+                effective_repos_dir = str(
+                    Path(
+                        os.getenv(
+                            "PROJECT_REPOS_DIR", str(crsbench_root / ".crsbench-repos")
+                        )
+                    )
+                )
+
             success = clone_repository(
-                repo_url=repo_url, target_dir=target_dir, commit=commit, verbose=verbose
+                repo_url=repo_url,
+                target_dir=target_dir,
+                commit=commit,
+                repos_dir=effective_repos_dir,
+                verbose=verbose,
             )
 
             if not success:
@@ -722,8 +901,24 @@ def clone_or_copy_cached_repo(
         if verbose:
             logger.info(f"📦 No cache available, cloning to {target_dir}...")
 
+        # Determine repos_dir for reference repo
+        effective_repos_dir = repos_dir
+        if not effective_repos_dir:
+            crsbench_root = Path(__file__).parent.parent.parent.resolve()
+            effective_repos_dir = str(
+                Path(
+                    os.getenv(
+                        "PROJECT_REPOS_DIR", str(crsbench_root / ".crsbench-repos")
+                    )
+                )
+            )
+
         success = clone_repository(
-            repo_url=repo_url, target_dir=target_dir, commit=commit, verbose=verbose
+            repo_url=repo_url,
+            target_dir=target_dir,
+            commit=commit,
+            repos_dir=effective_repos_dir,
+            verbose=verbose,
         )
 
         if not success:

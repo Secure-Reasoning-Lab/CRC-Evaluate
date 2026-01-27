@@ -131,6 +131,8 @@ class BenchmarkValidationResult:
     coverage_inc_check: Optional[CheckResult] = None
     # Shared build time (BuildVariantsJob — one per benchmark)
     shared_build_time: float = 0.0
+    # Storage metrics (total bytes for build artifacts, Docker, git)
+    storage_bytes: int = 0
     # Benchmark capabilities from project.yaml
     supports_inc_build: bool = True
     rts_mode: Optional[str] = None  # none, jcgeks, openclover, binaryrts
@@ -221,6 +223,7 @@ class BenchmarkValidationResult:
             if self.coverage_inc_check
             else None,
             "shared_build_time": self.shared_build_time,
+            "storage_bytes": self.storage_bytes,
             "supports_inc_build": self.supports_inc_build,
             "rts_mode": self.rts_mode,
             "started_at": self.started_at.isoformat() if self.started_at else None,
