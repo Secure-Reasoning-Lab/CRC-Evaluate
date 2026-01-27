@@ -1762,7 +1762,7 @@ class TestAllSubcommand:
         mock_executor_cls,
         mock_table,
     ):
-        """ci all: ONE BuildVariantsJob shared by POV, patch, coverage."""
+        """ci all: Creates BuildSingleVariantJob for each variant (vulnerable, allpatched, cpv)."""
         _setup_all_cmd_mocks(
             mock_discover,
             mock_fmt,
@@ -1783,10 +1783,12 @@ class TestAllSubcommand:
         jobs = call_args[0][0]
         from crsbench.benchmark_ci.jobs.flat import BuildSingleVariantJob
 
-        # Now uses BuildSingleVariantJob - 3 variants per benchmark (vulnerable, allpatched, coverage)
+        # 3 BuildSingleVariantJob per benchmark with 1 CPV:
+        # - deltaref (vulnerable)
+        # - allpatched (all patches applied)
+        # - cpv0 (excludes cpv_0's patch, so cpv_0 vuln is present for POV verification)
         build_jobs = [j for j in jobs if isinstance(j, BuildSingleVariantJob)]
-        # At least one build job should exist
-        assert len(build_jobs) >= 1
+        assert len(build_jobs) == 3
 
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.DAGExecutor")

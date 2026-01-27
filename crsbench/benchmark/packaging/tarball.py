@@ -20,6 +20,11 @@ from crsbench.utils.repo_manager import clone_repository
 logger = get_logger(__name__)
 
 
+def _log_msg(prefix: Optional[str], msg: str) -> str:
+    """Format log message with optional prefix."""
+    return f"[{prefix}] {msg}" if prefix else msg
+
+
 def _get_default_repos_dir() -> str:
     """Get the default repos directory for caching mirrors.
 
@@ -37,6 +42,7 @@ def create_source_tarball(
     output_dir: Path,
     *,
     ref_commit: Optional[str] = None,
+    log_prefix: Optional[str] = None,
 ) -> tuple[Path, Optional[Path]]:
     """Create source tarball with single squashed commit.
 
@@ -53,6 +59,7 @@ def create_source_tarball(
         source_name: Directory name in tarball (from Dockerfile WORKDIR)
         output_dir: Directory to write tarball and ref.diff
         ref_commit: If provided, generate ref.diff and use ref_commit as vulnerable state
+        log_prefix: Prefix for log messages (e.g., benchmark name for parallel runs)
 
     Returns:
         Tuple of (tarball_path, ref_diff_path or None)
@@ -67,7 +74,7 @@ def create_source_tarball(
         # 1. Clone repository using cached mirror for speed (remote URLs only)
         repo_dir = work_dir / "repo"
         repos_dir = _get_default_repos_dir()
-        logger.info(f"Cloning {repo_url}...")
+        logger.info(_log_msg(log_prefix, f"Cloning {repo_url}..."))
         success = clone_repository(
             repo_url=repo_url,
             target_dir=str(repo_dir),
@@ -85,6 +92,7 @@ def create_source_tarball(
                 ref_commit=ref_commit,
                 work_dir=work_dir,
                 output_dir=output_dir,
+                log_prefix=log_prefix,
             )
 
         # 3. Disable autocrlf to preserve original line endings (CRLF or LF)
@@ -95,7 +103,7 @@ def create_source_tarball(
         # Delta mode: ref_commit is vulnerable state
         # Full mode: base_commit is vulnerable state
         vulnerable_commit = ref_commit if ref_commit else base_commit
-        _prepare_source(repo_dir, vulnerable_commit)
+        _prepare_source(repo_dir, vulnerable_commit, log_prefix=log_prefix)
 
         # 4. Rename to expected name and create tarball
         source_dir = work_dir / source_name
@@ -123,11 +131,16 @@ def create_source_tarball(
                 result.returncode, result.args, result.stdout, result.stderr
             )
 
-        logger.info(f"Created tarball: {tarball_path}")
+        logger.info(_log_msg(log_prefix, f"Created tarball: {tarball_path}"))
         return tarball_path, ref_diff_path
 
 
-def _prepare_source(repo_dir: Path, target_commit: str) -> None:
+def _prepare_source(
+    repo_dir: Path,
+    target_commit: str,
+    *,
+    log_prefix: Optional[str] = None,
+) -> None:
     """Prepare source with single squashed commit at target state.
 
     Creates a single commit at the specified commit (vulnerable state).
@@ -137,22 +150,25 @@ def _prepare_source(repo_dir: Path, target_commit: str) -> None:
     Args:
         repo_dir: Path to cloned repository
         target_commit: Commit to checkout (vulnerable state)
+        log_prefix: Prefix for log messages
     """
-    logger.info(f"Creating 1-commit tarball at {target_commit[:8]}")
+    logger.info(
+        _log_msg(log_prefix, f"Creating 1-commit tarball at {target_commit[:8]}")
+    )
 
     # 1. Checkout target commit (vulnerable state)
     _run_git(["checkout", target_commit], cwd=repo_dir)
 
     # Initialize submodules
     if (repo_dir / ".gitmodules").exists():
-        logger.info("Initializing git submodules...")
+        logger.info(_log_msg(log_prefix, "Initializing git submodules..."))
         _run_git(["submodule", "update", "--init", "--recursive"], cwd=repo_dir)
 
     # 2. Clean and create single squashed commit
     _clean_source(repo_dir)
     _fresh_git_init(repo_dir)
 
-    logger.info("Created 1-commit tarball")
+    logger.info(_log_msg(log_prefix, "Created 1-commit tarball"))
 
 
 def _generate_ref_diff(
@@ -161,12 +177,26 @@ def _generate_ref_diff(
     ref_commit: str,
     work_dir: Path,
     output_dir: Path,
+    *,
+    log_prefix: Optional[str] = None,
 ) -> Path:
     """Generate ref.diff between base and ref commits.
 
     Uses git diff --no-index to create a clean diff without git history.
+
+    Args:
+        repo_dir: Path to cloned repository
+        base_commit: Base commit hash (benign state)
+        ref_commit: Ref commit hash (vulnerable state)
+        work_dir: Working directory for temp files
+        output_dir: Output directory for ref.diff
+        log_prefix: Prefix for log messages
     """
-    logger.info(f"Generating ref.diff: {base_commit[:8]}..{ref_commit[:8]}")
+    logger.info(
+        _log_msg(
+            log_prefix, f"Generating ref.diff: {base_commit[:8]}..{ref_commit[:8]}"
+        )
+    )
 
     # Checkout base version
     # Use symlinks=True to preserve symlinks (some repos like mongoose have many)
@@ -253,7 +283,12 @@ def _generate_ref_diff(
     ref_diff_path = output_dir / "ref.diff"
     ref_diff_path.write_bytes(diff_content)
 
-    logger.info(f"Generated ref.diff: {ref_diff_path} ({len(diff_content)} bytes)")
+    logger.info(
+        _log_msg(
+            log_prefix,
+            f"Generated ref.diff: {ref_diff_path} ({len(diff_content)} bytes)",
+        )
+    )
     return ref_diff_path
 
 

@@ -143,19 +143,11 @@ def bundle_benchmark(
     assert vulnerable_commit is not None  # Guaranteed by validation above
 
     # 7. Log bundling info
-    logger.info(f"Bundling {benchmark_path.name}:")
-    logger.info(f"  Source: {main_repo}")
-    logger.info(f"  Vulnerable commit: {vulnerable_commit[:8]}")
-    if has_delta_mode:
-        logger.info(f"  Base commit (benign): {base_commit[:8]}")
-        logger.info(
-            "  Mode: delta (tarball at ref_commit/vulnerable, ref.diff generated)"
-        )
-    else:
-        logger.info(
-            "  Mode: full-only (tarball at base_commit/vulnerable, no ref.diff)"
-        )
-    logger.info(f"  Tarball name: {source_name}.tar.gz")
+    benchmark_name = benchmark_path.name
+    mode_str = "delta" if has_delta_mode else "full"
+    logger.info(
+        f"[{benchmark_name}] Starting bundle: {vulnerable_commit[:8]} ({mode_str})"
+    )
 
     # 8. Create tarball (and ref.diff if delta mode)
     pkgs_dir.mkdir(parents=True, exist_ok=True)
@@ -166,6 +158,7 @@ def bundle_benchmark(
         source_name=source_name,
         output_dir=pkgs_dir,
         ref_commit=ref_commit,  # None for full-only benchmarks
+        log_prefix=benchmark_name,
     )
 
     # 9. Move ref.diff to .aixcc/ if generated (delta mode only)
@@ -174,14 +167,12 @@ def bundle_benchmark(
         if aixcc_ref_diff.exists():
             aixcc_ref_diff.unlink()
         shutil.move(str(ref_diff_path), str(aixcc_ref_diff))
-        logger.info(f"  Moved ref.diff to: {aixcc_ref_diff}")
 
     # 10. Update pkg_refs.txt for provenance (preserves other package refs)
     pkg_refs_path = pkgs_dir / "pkg_refs.txt"
     _update_pkg_refs(pkg_refs_path, main_repo, vulnerable_commit)
-    logger.info(f"  Wrote provenance: {pkg_refs_path}")
 
-    logger.info(f"Successfully bundled: {benchmark_path.name}")
+    logger.info(f"[{benchmark_name}] Bundle complete")
     return pkgs_dir
 
 

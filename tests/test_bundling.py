@@ -608,7 +608,9 @@ class TestBundleBenchmark:
             base_commit,  # noqa: ARG001
             source_name,  # noqa: ARG001
             output_dir,  # noqa: ARG001
+            *,
             ref_commit=None,  # noqa: ARG001
+            log_prefix=None,  # noqa: ARG001
         ):
             # Simulate creating new tarball (uses closure vars, not params)
             new_tarball.write_text("new tarball content")
@@ -642,7 +644,9 @@ class TestBundleBenchmark:
             base_commit,  # noqa: ARG001
             source_name,
             output_dir,
+            *,
             ref_commit=None,  # noqa: ARG001
+            log_prefix=None,  # noqa: ARG001
         ):
             tarball = output_dir / f"{source_name}.tar.gz"
             tarball.write_text("new tarball")
@@ -681,7 +685,9 @@ class TestBundleBenchmark:
             base_commit,  # noqa: ARG001
             source_name,
             output_dir,
+            *,
             ref_commit=None,  # noqa: ARG001
+            log_prefix=None,  # noqa: ARG001
         ):
             tarball = output_dir / f"{source_name}.tar.gz"
             tarball.write_text("new source")
@@ -718,7 +724,9 @@ class TestBundleBenchmark:
             base_commit,  # noqa: ARG001
             source_name,
             output_dir,
+            *,
             ref_commit=None,  # noqa: ARG001
+            log_prefix=None,  # noqa: ARG001
         ):
             tarball = output_dir / f"{source_name}.tar.gz"
             tarball.write_text("tarball content")

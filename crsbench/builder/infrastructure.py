@@ -101,7 +101,11 @@ class OSSFuzzInfrastructure:
         # Cache for inc-build image availability (project:sanitizer -> bool)
         # Prevents redundant docker pull attempts during parallel builds
         self._inc_image_cache: dict[str, bool] = {}
-        self._inc_image_lock = threading.Lock()
+        # Per-project locks to allow parallel pulls for different projects
+        self._inc_image_locks: dict[str, threading.Lock] = {}
+        self._inc_image_locks_lock = (
+            threading.Lock()
+        )  # Meta-lock for creating per-project locks
 
         # Ensure OSS-Fuzz is ready for parallel builds
         ensure_oss_fuzz_ready(self.oss_fuzz_path)
@@ -1431,6 +1435,23 @@ class OSSFuzzInfrastructure:
 
         return self._retag_for_ossfuzz(src_image, dst_image)
 
+    def _get_inc_image_lock(self, cache_key: str) -> threading.Lock:
+        """Get or create a per-project lock for inc-image operations.
+
+        This allows parallel pulls for different projects while preventing
+        concurrent pulls for the same project.
+
+        Args:
+            cache_key: Cache key (project_name:sanitizer)
+
+        Returns:
+            Lock for the specific project/sanitizer combination
+        """
+        with self._inc_image_locks_lock:
+            if cache_key not in self._inc_image_locks:
+                self._inc_image_locks[cache_key] = threading.Lock()
+            return self._inc_image_locks[cache_key]
+
     def ensure_inc_image(
         self,
         project_name: str,
@@ -1447,6 +1468,9 @@ class OSSFuzzInfrastructure:
         Use this method to prepare inc-build images before building variants.
         If this method returns False, callers should fall back to standard builds.
 
+        Uses per-project locks to allow parallel pulls for different projects
+        while preventing redundant pulls for the same project.
+
         Args:
             project_name: OSS-Fuzz project name
             sanitizer: Sanitizer type (default: "address")
@@ -1457,7 +1481,15 @@ class OSSFuzzInfrastructure:
         """
         cache_key = f"{project_name}:{sanitizer}"
 
-        with self._inc_image_lock:
+        # Quick check without lock - if already cached, return immediately
+        if cache_key in self._inc_image_cache:
+            return self._inc_image_cache[cache_key]
+
+        # Get per-project lock (allows parallel pulls for different projects)
+        project_lock = self._get_inc_image_lock(cache_key)
+
+        with project_lock:
+            # Double-check after acquiring lock (another thread may have completed)
             if cache_key in self._inc_image_cache:
                 return self._inc_image_cache[cache_key]
 
