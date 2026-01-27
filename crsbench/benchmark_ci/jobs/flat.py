@@ -307,17 +307,19 @@ class BuildPatchVariantJob(Job):
                 raise ValueError(f"No adapter from {self.build_job_id}")
 
             commit = adapter.get_ref_commit() or adapter.get_base_commit()
+            sanitizer = adapter.get_required_sanitizer()
             build_config = BuildConfig(
                 benchmark_name=self.benchmark_name,
                 benchmark_path=self.benchmark_path,
                 variant_type=VariantType.PATCHED,
                 mode=adapter.get_mode(),
-                sanitizer="address",
+                sanitizer=sanitizer,
                 language=adapter.lang,
                 commit=commit,
                 main_repo=adapter.main_repo,
                 patch_id=self.patch_id,
                 pov_id=self.cpv_id,
+                patches=[self.patch_path],
                 use_inc_build=self.use_inc_build,
             )
 
@@ -494,6 +496,7 @@ class FlatCollectCoverageJob(Job):
     benchmark_name: str
     harness: str
     build_job_id: str = ""
+    source_mode: str = "main_repo"
 
     @property
     def job_id(self) -> str:
@@ -509,17 +512,18 @@ class FlatCollectCoverageJob(Job):
 
     def execute(self, context: JobContext) -> JobResult:
         """Collect coverage using pre-built variants."""
+        import shutil
+        import tempfile
+
+        from crsbench.evaluation.coverage import CoverageEngine
+
         started_at = datetime.now()
         temp_corpus_dir: Path | None = None
         try:
-            import shutil
-            import tempfile
-
-            from crsbench.evaluation.coverage import CoverageEngine
             from crsbench.utils.run_helper import get_oss_fuzz_root
 
             oss_fuzz_path = Path(get_oss_fuzz_root())
-            engine = CoverageEngine(oss_fuzz_path)
+            engine = CoverageEngine(oss_fuzz_path, source_mode=self.source_mode)
 
             # Use adapter from shared build context for corpus discovery
             build_data = context.shared.get(self.build_job_id, {})
@@ -541,7 +545,7 @@ class FlatCollectCoverageJob(Job):
                 harness_filter=self.harness,
             )
 
-            success = bool(report.harness_name)
+            success = report.success
 
             finished_at = datetime.now()
             result = JobResult(

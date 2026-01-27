@@ -173,6 +173,7 @@ class CoverageReport(BaseModel):
         snapshots: List of coverage snapshots in chronological order.
         final_summary: Final coverage summary at trial completion.
         saturation_cycle: Cycle number when saturation was detected (None if not).
+        success: Whether coverage collection succeeded.
     """
 
     harness_name: str
@@ -181,3 +182,4 @@ class CoverageReport(BaseModel):
     saturation_cycle: Optional[int] = None
     build_time: float = 0.0
     verify_time: float = 0.0
+    success: bool = True
