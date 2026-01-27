@@ -307,17 +307,19 @@ class BuildPatchVariantJob(Job):
                 raise ValueError(f"No adapter from {self.build_job_id}")
 
             commit = adapter.get_ref_commit() or adapter.get_base_commit()
+            sanitizer = adapter.get_required_sanitizer()
             build_config = BuildConfig(
                 benchmark_name=self.benchmark_name,
                 benchmark_path=self.benchmark_path,
                 variant_type=VariantType.PATCHED,
                 mode=adapter.get_mode(),
-                sanitizer="address",
+                sanitizer=sanitizer,
                 language=adapter.lang,
                 commit=commit,
                 main_repo=adapter.main_repo,
                 patch_id=self.patch_id,
                 pov_id=self.cpv_id,
+                patches=[self.patch_path],
                 use_inc_build=self.use_inc_build,
             )
 

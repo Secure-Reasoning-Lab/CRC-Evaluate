@@ -4,6 +4,7 @@ This module provides OSSFuzzInfrastructure, which wraps OSS-Fuzz's helper.py
 for building fuzzers and reproducing crashes.
 """
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -816,6 +817,9 @@ class OSSFuzzInfrastructure:
     def apply_patches_from_list(self, repo_path: Path, patches: list[Path]) -> bool:
         """Apply a list of patches to a repository.
 
+        Skips duplicate patches (identical content) to handle cases where
+        multiple CPVs share the same vulnerability fix.
+
         Args:
             repo_path: Path to repository
             patches: List of patch files to apply
@@ -824,12 +828,24 @@ class OSSFuzzInfrastructure:
             True if all patches applied successfully
         """
         success = True
+        applied_hashes: set[str] = set()
+
         for patch_file in patches:
+            # Hash patch content to detect duplicates
+            patch_content = patch_file.read_bytes()
+            patch_hash = hashlib.sha256(patch_content).hexdigest()
+
+            if patch_hash in applied_hashes:
+                logger.debug(f"Skipping duplicate patch: {patch_file.name}")
+                continue
+
             if not self._apply_single_patch(repo_path, patch_file):
                 logger.warning(f"Failed to apply patch: {patch_file}")
                 success = False
             else:
                 logger.debug(f"Applied patch: {patch_file.name}")
+                applied_hashes.add(patch_hash)
+
         return success
 
     def apply_patches(
@@ -907,7 +923,13 @@ class OSSFuzzInfrastructure:
         try:
             patch_file_abs = patch_file.resolve()
             result = subprocess.run(
-                ["git", "apply", "--whitespace=nowarn", str(patch_file_abs)],
+                [
+                    "git",
+                    "apply",
+                    "--whitespace=nowarn",
+                    "--verbose",
+                    str(patch_file_abs),
+                ],
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
@@ -916,7 +938,14 @@ class OSSFuzzInfrastructure:
             )
             if result.returncode == 0:
                 return True
-            logger.warning(f"Patch apply failed: {result.stderr}")
+            # Log verbose info for debugging patch failures
+            logger.warning(
+                f"Patch apply failed:\n"
+                f"  repo: {repo_path}\n"
+                f"  patch: {patch_file_abs}\n"
+                f"  stderr: {result.stderr}\n"
+                f"  stdout: {result.stdout}"
+            )
             return False
         except Exception as e:
             logger.error(f"Patch error: {e}")
