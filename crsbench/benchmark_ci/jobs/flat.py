@@ -757,6 +757,7 @@ class PatchVariantTestJob(Job):
             build_data = context.shared.get(self.build_patch_job_id, {})
             variant_name = build_data.get("variant_name")
             sanitizer = build_data.get("sanitizer", "address")
+            inc_build_available = build_data.get("inc_build_available", False)
 
             if not variant_name:
                 raise ValueError(f"No variant name from {self.build_patch_job_id}")
@@ -767,9 +768,8 @@ class PatchVariantTestJob(Job):
             # - force_rebuild=False: use cached build from BuildPatchVariantJob
             # - build_only=False: run full verification (POV + unit tests)
             # - verify_variants=True: test all POV variants for this CPV
-            # Note: use_inc_build=True because fallback_used only affects build path
-            # (/src vs /built-src), not the image tag (:inc-{sanitizer})
-            # Source is prepared in temp dir - each job is self-contained
+            # use_inc_build must match what was used during build phase
+            # (determined by inc_build_available from build job)
             test_mode = (
                 UnitTestMode.RTS if self.test_mode == "RTS" else UnitTestMode.FULL
             )
@@ -778,7 +778,7 @@ class PatchVariantTestJob(Job):
                 test_mode=test_mode,
                 sanitizer=sanitizer,
                 timeout=context.timeout,
-                use_inc_build=True,  # Always use inc-build image if available
+                use_inc_build=inc_build_available,
                 force_rebuild=False,  # Use cached build
                 source_mode=self.source_mode,
                 build_only=False,  # Run full verification
