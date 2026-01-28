@@ -93,6 +93,8 @@ class BenchmarkRunner:
         llm_tracker: Optional["LiteLLMTracker"] = None,
         llm_api_key: Optional[str] = None,
         llm_trial_id: Optional[str] = None,
+        build_workers: Optional[int] = None,
+        verify_workers: Optional[int] = None,
     ):
         """Initialize benchmark runner.
 
@@ -110,6 +112,8 @@ class BenchmarkRunner:
             llm_tracker: Optional LiteLLMTracker for querying LLM usage during snapshots
             llm_api_key: Optional trial-specific API key for LLM tracking
             llm_trial_id: Optional trial identifier for LLM usage files
+            build_workers: Number of parallel workers for building variants
+            verify_workers: Number of parallel workers for POV/patch verification
         """
         self.crs_executor = crs_executor or StubCRSExecutor()
         self.snapshot_period = snapshot_period
@@ -124,6 +128,8 @@ class BenchmarkRunner:
         self.llm_tracker = llm_tracker
         self.llm_api_key = llm_api_key
         self.llm_trial_id = llm_trial_id
+        self.build_workers = build_workers
+        self.verify_workers = verify_workers
         self.logger = get_logger(__name__)
 
         if coverage_early_stop:
@@ -784,6 +790,8 @@ class BenchmarkRunner:
                 oss_fuzz_path=self.oss_fuzz_path,
                 timeout=120,
                 dedup_strategy=PatchBasedDedup(),
+                build_workers=self.build_workers,
+                verify_workers=self.verify_workers,
             )
 
             # POV output directory (where CRS writes discovered POVs)
@@ -1009,6 +1017,8 @@ class BenchmarkRunner:
                 oss_fuzz_path=oss_fuzz_path,
                 timeout=120,
                 dedup_strategy=PatchBasedDedup(),  # TODO: make it configurable
+                build_workers=self.build_workers,
+                verify_workers=self.verify_workers,
             )
             pov_dir = crs_output_dir / "povs"
             output = engine.verify_benchmark(
@@ -1070,6 +1080,8 @@ class BenchmarkRunner:
                 test_timeout=1800,
                 work_dir=work_dir,
                 force_rebuild=True,  # Always rebuild for fresh verification
+                build_workers=self.build_workers,
+                verify_workers=self.verify_workers,
             )
 
             # Run verification
