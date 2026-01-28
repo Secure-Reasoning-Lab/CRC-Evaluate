@@ -309,6 +309,7 @@ class PatchVerificationResult:
     scores: Optional[VerificationScores] = None
     security_verdict: SecurityVerdict = "FAIL"
     fallback_used: bool = False
+    inc_build_available: bool = False  # Whether inc-build image was available
 
     @property
     def is_valid(self) -> bool:
@@ -340,6 +341,7 @@ class PatchVerificationResult:
             },
             "security_verdict": self.security_verdict,
             "fallback_used": self.fallback_used,
+            "inc_build_available": self.inc_build_available,
         }
         if self.scores is not None:
             result["scores"] = self.scores.to_dict()

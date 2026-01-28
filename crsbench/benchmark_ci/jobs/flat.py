@@ -338,7 +338,7 @@ class VerifyCpvPovJob(Job):
         return [self.build_job_id] if self.build_job_id else []
 
     def _write_verdict_logs(self, context: JobContext, results: list) -> None:
-        """Write separate .stdout and .stderr files for verdict logs."""
+        """Write separate .stdout and .stderr files per variant for verdict logs."""
         if not context.output_dir:
             return
 
@@ -354,27 +354,23 @@ class VerifyCpvPovJob(Job):
 
             pov_id = r.pov_id or "unknown"
 
-            # Write stdout logs
+            # Write stdout logs - one file per variant
             stdout_logs = r.crash_info.get("stdout", {})
-            if stdout_logs:
-                stdout_path = base_path.parent / f"{base_path.name}-{pov_id}.stdout"
-                lines = []
-                for variant_name, log in stdout_logs.items():
-                    lines.append(f"=== {variant_name} ===")
-                    lines.append(log)
-                    lines.append("")
-                stdout_path.write_text("\n".join(lines))
+            for variant_name, log in stdout_logs.items():
+                stdout_path = (
+                    base_path.parent
+                    / f"{base_path.name}-{pov_id}-{variant_name}.stdout"
+                )
+                stdout_path.write_text(log)
 
-            # Write stderr logs
+            # Write stderr logs - one file per variant
             stderr_logs = r.crash_info.get("stderr", {})
-            if stderr_logs:
-                stderr_path = base_path.parent / f"{base_path.name}-{pov_id}.stderr"
-                lines = []
-                for variant_name, log in stderr_logs.items():
-                    lines.append(f"=== {variant_name} ===")
-                    lines.append(log)
-                    lines.append("")
-                stderr_path.write_text("\n".join(lines))
+            for variant_name, log in stderr_logs.items():
+                stderr_path = (
+                    base_path.parent
+                    / f"{base_path.name}-{pov_id}-{variant_name}.stderr"
+                )
+                stderr_path.write_text(log)
 
     def execute(self, context: JobContext) -> JobResult:
         """Verify POVs for this CPV using pre-built variants."""
@@ -627,6 +623,7 @@ class BuildPatchVariantJob(Job):
                 "variant_name": variant_name,
                 "sanitizer": sanitizer,
                 "fallback_used": result.fallback_used,
+                "inc_build_available": result.inc_build_available,
             }
 
             finished_at = datetime.now()
@@ -709,7 +706,7 @@ class PatchVariantTestJob(Job):
         test_stdout: str,
         test_stderr: str,
     ) -> None:
-        """Write separate .stdout and .stderr files for test logs."""
+        """Write separate .stdout and .stderr files per POV and for unit tests."""
         if not context.output_dir:
             return
 
@@ -719,40 +716,24 @@ class PatchVariantTestJob(Job):
 
         base_path = log_path.with_suffix("")  # Remove .log suffix
 
-        # Combine POV logs and test logs
-        stdout_lines = []
-        stderr_lines = []
-
-        # Add POV outputs
+        # Write POV stdout logs - one file per POV
         for pov_id, stdout in pov_stdout.items():
-            stdout_lines.append(f"=== POV: {pov_id} ===")
-            stdout_lines.append(stdout)
-            stdout_lines.append("")
+            stdout_path = base_path.parent / f"{base_path.name}-{pov_id}.stdout"
+            stdout_path.write_text(stdout)
 
+        # Write POV stderr logs - one file per POV
         for pov_id, stderr in pov_stderr.items():
-            stderr_lines.append(f"=== POV: {pov_id} ===")
-            stderr_lines.append(stderr)
-            stderr_lines.append("")
+            stderr_path = base_path.parent / f"{base_path.name}-{pov_id}.stderr"
+            stderr_path.write_text(stderr)
 
-        # Add test outputs
+        # Write unit test logs
         if test_stdout:
-            stdout_lines.append("=== Unit Tests ===")
-            stdout_lines.append(test_stdout)
-            stdout_lines.append("")
+            stdout_path = base_path.parent / f"{base_path.name}-unit-tests.stdout"
+            stdout_path.write_text(test_stdout)
 
         if test_stderr:
-            stderr_lines.append("=== Unit Tests ===")
-            stderr_lines.append(test_stderr)
-            stderr_lines.append("")
-
-        # Write files
-        if stdout_lines:
-            stdout_path = base_path.parent / f"{base_path.name}.stdout"
-            stdout_path.write_text("\n".join(stdout_lines))
-
-        if stderr_lines:
-            stderr_path = base_path.parent / f"{base_path.name}.stderr"
-            stderr_path.write_text("\n".join(stderr_lines))
+            stderr_path = base_path.parent / f"{base_path.name}-unit-tests.stderr"
+            stderr_path.write_text(test_stderr)
 
     def execute(self, context: JobContext) -> JobResult:
         """Run POVs and tests against patched variant using PatchVerificationEngine.

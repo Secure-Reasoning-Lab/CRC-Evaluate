@@ -346,6 +346,8 @@ class PatchVerificationEngine:
             result.fallback_used = build_result.fallback_used or (
                 self.use_inc_build and not inc_available
             )
+            # Track whether inc-build was available (for test phase image tag selection)
+            result.inc_build_available = inc_available
 
             # Build-only mode: skip verification, return after successful build
             if self.build_only:
@@ -404,10 +406,11 @@ class PatchVerificationEngine:
         """
         # For cached builds, detect inc_build and find repo_path
         if used_inc_build is None:
-            # Check if inc-build image exists for this variant
-            inc_image = f"aixcc-afc/{variant_name}:inc-{self.sanitizer}"
+            # Check if inc-build image exists for the BASE project (not variant)
+            # Variant images might be stale from previous runs when inc-build was available
+            inc_image = f"aixcc-afc/{project_name}:inc-{self.sanitizer}"
             used_inc_build = self.infra._docker_image_exists(inc_image)
-            logger.debug(f"Detected inc_build={used_inc_build} for {variant_name}")
+            logger.debug(f"Detected inc_build={used_inc_build} for {project_name}")
 
         if repo_path is None:
             # Find source path from infra
