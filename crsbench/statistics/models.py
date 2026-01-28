@@ -97,6 +97,17 @@ class BenchmarkStats:
         default_factory=dict
     )  # Top 25 CWE ID -> vuln count
 
+    # Harness statistics
+    vulns_per_harness: list[int] = field(
+        default_factory=list
+    )  # List of vuln counts per harness
+    avg_vulns_per_harness: float = 0.0
+    min_vulns_per_harness: int = 0
+    max_vulns_per_harness: int = 0
+    vulns_per_harness_histogram: dict[int, int] = field(
+        default_factory=dict
+    )  # vuln_count -> num_harnesses
+
     @classmethod
     def from_benchmarks(cls, benchmarks: Sequence[BenchmarkInfo]) -> BenchmarkStats:
         """Calculate statistics from a list of BenchmarkInfo objects.
@@ -202,5 +213,34 @@ class BenchmarkStats:
 
         stats.by_pillar = aggregate_cwes_by_pillar(stats.by_cwe)
         stats.by_top25 = calculate_top25_coverage(stats.by_cwe)
+
+        # Calculate harness statistics
+        # Count vulns per harness (only harnesses with vulns)
+        vulns_per_harness: list[int] = []
+        for b in filtered:
+            # Group vulns by harness_name within this benchmark
+            harness_vuln_counts: dict[str, int] = {}
+            for v in b.vulns:
+                harness_vuln_counts[v.harness_name] = (
+                    harness_vuln_counts.get(v.harness_name, 0) + 1
+                )
+            # Only include harnesses that have vulnerabilities
+            for count in harness_vuln_counts.values():
+                vulns_per_harness.append(count)
+
+        stats.vulns_per_harness = vulns_per_harness
+
+        if vulns_per_harness:
+            stats.avg_vulns_per_harness = sum(vulns_per_harness) / len(
+                vulns_per_harness
+            )
+            stats.min_vulns_per_harness = min(vulns_per_harness)
+            stats.max_vulns_per_harness = max(vulns_per_harness)
+
+            # Build histogram
+            for count in vulns_per_harness:
+                stats.vulns_per_harness_histogram[count] = (
+                    stats.vulns_per_harness_histogram.get(count, 0) + 1
+                )
 
         return stats
