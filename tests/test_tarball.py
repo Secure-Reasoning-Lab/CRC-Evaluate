@@ -596,3 +596,291 @@ class TestCRLFLineEndings:
             diff_content = diff_path.read_text()
             assert "Line 2" in diff_content
             assert "Line 2 CHANGED" in diff_content
+
+
+class TestTarballVulnerableCommit:
+    """Test that tarballs contain the correct (vulnerable) commit.
+
+    Both full and delta mode tarballs should contain vulnerable code:
+    - Full mode: base_commit is vulnerable
+    - Delta mode: ref_commit is vulnerable (base_commit is benign)
+
+    This ensures patches can be applied to fix the vulnerability.
+    """
+
+    @pytest.mark.skipif(
+        not shutil.which("git"),
+        reason="git not available",
+    )
+    def test_full_mode_tarball_at_base_commit(self):
+        """Test that full mode creates tarball at base_commit (vulnerable)."""
+        import os
+
+        from crsbench.benchmark.packaging.tarball import create_source_tarball
+
+        git_env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Test",
+            "GIT_AUTHOR_EMAIL": "test@test.com",
+            "GIT_COMMITTER_NAME": "Test",
+            "GIT_COMMITTER_EMAIL": "test@test.com",
+        }
+
+        def run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+            full_args = ["-c", "commit.gpgsign=false", *args]
+            return subprocess.run(
+                ["git", *full_args],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                env=git_env,
+                check=True,
+            )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+
+            # Create a git repo simulating full mode
+            repo_dir = work_dir / "repo"
+            repo_dir.mkdir()
+            run_git(["init"], cwd=repo_dir)
+
+            # Create base_commit with vulnerable code (full mode: base is vulnerable)
+            (repo_dir / "vuln.c").write_text("void vuln() { /* BUG HERE */ }")
+            run_git(["add", "-A"], cwd=repo_dir)
+            run_git(["commit", "-m", "Vulnerable code"], cwd=repo_dir)
+            base_commit = run_git(["rev-parse", "HEAD"], cwd=repo_dir).stdout.strip()
+
+            # Create tarball (full mode: no ref_commit)
+            output_dir = work_dir / "output"
+            output_dir.mkdir()
+
+            tarball_path, ref_diff_path = create_source_tarball(
+                repo_url=str(repo_dir),
+                base_commit=base_commit,
+                source_name="test-source",
+                output_dir=output_dir,
+                ref_commit=None,  # Full mode: no ref_commit
+            )
+
+            # Extract and verify tarball contains vulnerable code
+            extract_dir = work_dir / "extract"
+            extract_dir.mkdir()
+            subprocess.run(
+                ["tar", "-xzf", str(tarball_path)],
+                cwd=extract_dir,
+                check=True,
+            )
+
+            vuln_file = extract_dir / "test-source" / "vuln.c"
+            assert vuln_file.exists()
+            assert "BUG HERE" in vuln_file.read_text()
+
+            # No ref.diff for full mode
+            assert ref_diff_path is None
+
+    @pytest.mark.skipif(
+        not shutil.which("git"),
+        reason="git not available",
+    )
+    def test_delta_mode_tarball_at_ref_commit(self):
+        """Test that delta mode creates tarball at ref_commit (vulnerable).
+
+        Delta mode: base_commit is benign, ref_commit introduced the vulnerability.
+        Tarball should be at ref_commit so patches can fix it.
+        """
+        import os
+
+        from crsbench.benchmark.packaging.tarball import create_source_tarball
+
+        git_env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Test",
+            "GIT_AUTHOR_EMAIL": "test@test.com",
+            "GIT_COMMITTER_NAME": "Test",
+            "GIT_COMMITTER_EMAIL": "test@test.com",
+        }
+
+        def run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+            full_args = ["-c", "commit.gpgsign=false", *args]
+            return subprocess.run(
+                ["git", *full_args],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                env=git_env,
+                check=True,
+            )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+
+            # Create a git repo simulating delta mode
+            repo_dir = work_dir / "repo"
+            repo_dir.mkdir()
+            run_git(["init"], cwd=repo_dir)
+
+            # Create base_commit with safe code (delta mode: base is benign)
+            (repo_dir / "code.c").write_text("void safe() { /* SAFE CODE */ }")
+            run_git(["add", "-A"], cwd=repo_dir)
+            run_git(["commit", "-m", "Safe code"], cwd=repo_dir)
+            base_commit = run_git(["rev-parse", "HEAD"], cwd=repo_dir).stdout.strip()
+
+            # Create ref_commit that introduces vulnerability
+            (repo_dir / "code.c").write_text("void vuln() { /* BUG INTRODUCED */ }")
+            run_git(["add", "-A"], cwd=repo_dir)
+            run_git(["commit", "-m", "Introduce vulnerability"], cwd=repo_dir)
+            ref_commit = run_git(["rev-parse", "HEAD"], cwd=repo_dir).stdout.strip()
+
+            # Create tarball (delta mode: ref_commit provided)
+            output_dir = work_dir / "output"
+            output_dir.mkdir()
+
+            tarball_path, ref_diff_path = create_source_tarball(
+                repo_url=str(repo_dir),
+                base_commit=base_commit,
+                source_name="test-source",
+                output_dir=output_dir,
+                ref_commit=ref_commit,  # Delta mode: ref_commit is vulnerable
+            )
+
+            # Extract and verify tarball contains VULNERABLE code (ref_commit)
+            extract_dir = work_dir / "extract"
+            extract_dir.mkdir()
+            subprocess.run(
+                ["tar", "-xzf", str(tarball_path)],
+                cwd=extract_dir,
+                check=True,
+            )
+
+            code_file = extract_dir / "test-source" / "code.c"
+            assert code_file.exists()
+            content = code_file.read_text()
+
+            # Should have vulnerable code from ref_commit, NOT safe code from base
+            assert "BUG INTRODUCED" in content
+            assert "SAFE CODE" not in content
+
+            # ref.diff should be generated for delta mode
+            assert ref_diff_path is not None
+            assert ref_diff_path.exists()
+
+    @pytest.mark.skipif(
+        not shutil.which("git"),
+        reason="git not available",
+    )
+    def test_delta_mode_patch_applies_to_tarball(self):
+        """Test that CPV patches can be applied to delta mode tarball.
+
+        This simulates the real-world scenario: patches fix the vulnerability
+        in ref_commit, so they must apply cleanly to the tarball.
+        """
+        import os
+
+        from crsbench.benchmark.packaging.tarball import create_source_tarball
+
+        git_env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Test",
+            "GIT_AUTHOR_EMAIL": "test@test.com",
+            "GIT_COMMITTER_NAME": "Test",
+            "GIT_COMMITTER_EMAIL": "test@test.com",
+        }
+
+        def run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+            full_args = ["-c", "commit.gpgsign=false", *args]
+            return subprocess.run(
+                ["git", *full_args],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                env=git_env,
+                check=True,
+            )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+
+            # Create repo with vulnerability
+            repo_dir = work_dir / "repo"
+            repo_dir.mkdir()
+            run_git(["init"], cwd=repo_dir)
+
+            # base_commit: safe code
+            (repo_dir / "code.c").write_text(
+                "int process(char *input) {\n"
+                "    // Safe version with bounds check\n"
+                "    if (strlen(input) > MAX_LEN) return -1;\n"
+                "    return 0;\n"
+                "}\n"
+            )
+            run_git(["add", "-A"], cwd=repo_dir)
+            run_git(["commit", "-m", "Safe code"], cwd=repo_dir)
+            base_commit = run_git(["rev-parse", "HEAD"], cwd=repo_dir).stdout.strip()
+
+            # ref_commit: vulnerable code (removed bounds check)
+            (repo_dir / "code.c").write_text(
+                "int process(char *input) {\n"
+                "    // Vulnerable: no bounds check\n"
+                "    return 0;\n"
+                "}\n"
+            )
+            run_git(["add", "-A"], cwd=repo_dir)
+            run_git(
+                ["commit", "-m", "Remove bounds check (vulnerability)"], cwd=repo_dir
+            )
+            ref_commit = run_git(["rev-parse", "HEAD"], cwd=repo_dir).stdout.strip()
+
+            # Create a patch that fixes the vulnerability (adds back bounds check)
+            fix_patch = work_dir / "fix.patch"
+            fix_patch.write_text(
+                "--- a/code.c\n"
+                "+++ b/code.c\n"
+                "@@ -1,4 +1,5 @@\n"
+                " int process(char *input) {\n"
+                "-    // Vulnerable: no bounds check\n"
+                "+    // Fixed: bounds check restored\n"
+                "+    if (strlen(input) > MAX_LEN) return -1;\n"
+                "     return 0;\n"
+                " }\n"
+            )
+
+            # Create tarball at ref_commit (vulnerable)
+            output_dir = work_dir / "output"
+            output_dir.mkdir()
+
+            tarball_path, _ = create_source_tarball(
+                repo_url=str(repo_dir),
+                base_commit=base_commit,
+                source_name="test-source",
+                output_dir=output_dir,
+                ref_commit=ref_commit,
+            )
+
+            # Extract tarball
+            extract_dir = work_dir / "extract"
+            extract_dir.mkdir()
+            subprocess.run(
+                ["tar", "-xzf", str(tarball_path)],
+                cwd=extract_dir,
+                check=True,
+            )
+
+            source_dir = extract_dir / "test-source"
+
+            # Tarball already has git initialized by _fresh_git_init()
+            # Just apply the patch directly - no need to reinitialize
+
+            # Apply the fix patch - this should succeed
+            result = subprocess.run(
+                ["git", "apply", str(fix_patch)],
+                cwd=source_dir,
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == 0, f"Patch failed: {result.stderr}"
+
+            # Verify patch was applied
+            patched_content = (source_dir / "code.c").read_text()
+            assert "bounds check restored" in patched_content
+            assert "strlen(input) > MAX_LEN" in patched_content

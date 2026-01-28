@@ -120,6 +120,7 @@ def run_rts(args: argparse.Namespace) -> int:
                         cpv_id=cpv_id,
                         patch_id=patch_id,
                         patch_path=patch_path,
+                        harness=harness,  # Pass harness for per-harness sanitizer
                         use_inc_build=effective_inc,
                         force_rebuild=force_rebuild,
                         build_job_id=build_job.job_id,
@@ -176,12 +177,16 @@ def run_rts(args: argparse.Namespace) -> int:
 
         build_result = dag_results.get(f"build-variants:{path.name}")
         shared_build = build_result.elapsed_seconds if build_result else 0.0
+        storage_bytes = 0
+        if build_result and build_result.job_result:
+            storage_bytes = build_result.job_result.details.get("storage_bytes", 0)
         summary.add_result(
             BenchmarkValidationResult(
                 benchmark=path.name,
                 benchmark_path=path,
                 patch_rts_check=patch_rts_result,
                 shared_build_time=shared_build,
+                storage_bytes=storage_bytes,
                 supports_inc_build=supports_inc,
                 rts_mode=rts_mode,
                 started_at=start_dt,

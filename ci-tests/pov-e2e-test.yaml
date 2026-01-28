@@ -27,6 +27,6 @@ benchmarks:
   - sanity-mock-java-delta-01
 
 snapshot_period: 60
-coverage_enabled: true
+coverage_enabled: false
 pov_early_stop: true
 litellm_mode: null

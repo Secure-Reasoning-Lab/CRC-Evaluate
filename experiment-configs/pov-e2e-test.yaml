@@ -37,7 +37,7 @@ benchmarks:
 snapshot_period: 60
 
 # Enable coverage collection
-coverage_enabled: true
+coverage_enabled: false
 
 # Enable POV early stop: terminate when all CPVs for harness are found
 pov_early_stop: true

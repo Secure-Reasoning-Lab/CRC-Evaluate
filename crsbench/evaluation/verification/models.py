@@ -299,7 +299,7 @@ class PatchVerificationResult:
     pov_test_time: float = 0.0
     unit_test_time: float = 0.0
     elapsed_seconds: float = 0.0
-    pov_test_passed: bool = False
+    pov_test_passed: Optional[bool] = None  # None if POV tests were skipped
     unit_tests_passed: Optional[bool] = None
     unit_tests_run: int = 0
     unit_tests_failed: int = 0
@@ -309,6 +309,9 @@ class PatchVerificationResult:
     scores: Optional[VerificationScores] = None
     security_verdict: SecurityVerdict = "FAIL"
     fallback_used: bool = False
+    inc_build_available: bool = False  # Whether inc-build image was available
+    build_stdout: str = ""  # Build stdout for debugging
+    build_stderr: str = ""  # Build stderr for debugging
 
     @property
     def is_valid(self) -> bool:
@@ -340,6 +343,7 @@ class PatchVerificationResult:
             },
             "security_verdict": self.security_verdict,
             "fallback_used": self.fallback_used,
+            "inc_build_available": self.inc_build_available,
         }
         if self.scores is not None:
             result["scores"] = self.scores.to_dict()
@@ -406,7 +410,7 @@ class PatchVerificationDetailedResult(BaseModel):
     is_valid: bool
     security_verdict: str
     build_time: float
-    pov_test_passed: bool
+    pov_test_passed: Optional[bool]  # None if POV tests were skipped
     unit_tests_passed: Optional[bool]
     details: Optional[str]
     cpv_fixed: list[str]

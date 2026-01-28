@@ -73,7 +73,7 @@ def create_build_options_parent() -> argparse.ArgumentParser:
         "--build-workers",
         type=int,
         default=4,
-        help="Number of parallel build workers (default: 4)",
+        help="Number of parallel build workers (default: 6)",
     )
     parser.add_argument(
         "--verify-workers",
@@ -103,6 +103,13 @@ def create_build_options_parent() -> argparse.ArgumentParser:
         default=None,
         dest="max_povs_per_cpv",
         help="Limit POVs verified per CPV (e.g., 1 uses only pov_0.blob)",
+    )
+    parser.add_argument(
+        "--controller-cores",
+        type=int,
+        default=None,
+        help="CPU cores reserved for controller (DAGExecutor, monitoring). "
+        "Priority: CLI > CRSBENCH_CONTROLLER_CORES env > config (default: 2)",
     )
     return parser
 

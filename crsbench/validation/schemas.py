@@ -264,6 +264,12 @@ class Vulnerability(BaseModel):
     povs: List[POV] = Field(
         ..., description="List of POV variants for this vulnerability"
     )
+    patch_superset: Optional[str] = Field(
+        default=None,
+        description="CPV whose patch is a superset of this CPV's patch (e.g., 'cpv_7'). "
+        "When specified, this CPV's patch will be skipped when applying all patches, "
+        "as the superset patch already includes the fix.",
+    )
 
     @field_validator("vuln_keyword")
     @classmethod
@@ -293,6 +299,22 @@ class Vulnerability(BaseModel):
             duplicates = [pov_id for pov_id in pov_ids if pov_ids.count(pov_id) > 1]
             raise ValueError(f"Duplicate POV IDs found: {', '.join(set(duplicates))}")
 
+        return v
+
+    @field_validator("patch_superset")
+    @classmethod
+    def validate_patch_superset(cls, v):
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        # Enforce cpv_N pattern
+        if not re.match(r"^cpv_\d+$", v):
+            raise ValueError(
+                f"Invalid patch_superset format: '{v}'. "
+                "Must follow pattern 'cpv_N' (e.g., cpv_0, cpv_7)"
+            )
         return v
 
 

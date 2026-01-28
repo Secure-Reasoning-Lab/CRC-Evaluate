@@ -326,6 +326,8 @@ def handle_bundle_all(args: argparse.Namespace) -> int:
 
     # Bundle in parallel
     results: dict[str, str] = {}  # name -> status
+    total = len(to_bundle)
+    completed_count = 0
 
     def bundle_one(bench_path: Path) -> tuple[str, str]:
         try:
@@ -334,9 +336,7 @@ def handle_bundle_all(args: argparse.Namespace) -> int:
         except Exception as e:
             return bench_path.name, f"failed: {e}"
 
-    logger.info(
-        f"\nBundling {len(to_bundle)} benchmarks with {args.workers} workers..."
-    )
+    logger.info(f"Bundling {total} benchmarks with {args.workers} workers...")
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {executor.submit(bundle_one, bench): bench for bench in to_bundle}
@@ -344,10 +344,12 @@ def handle_bundle_all(args: argparse.Namespace) -> int:
         for future in as_completed(futures):
             name, status = future.result()
             results[name] = status
+            completed_count += 1
+            progress = f"[{completed_count}/{total}]"
             if status == "success":
-                logger.info(f"  [OK] {name}")
+                logger.info(f"{progress} OK: {name}")
             else:
-                logger.error(f"  [FAILED] {name}: {status}")
+                logger.error(f"{progress} FAILED: {name} - {status}")
 
     # Summary
     success_count = sum(1 for s in results.values() if s == "success")

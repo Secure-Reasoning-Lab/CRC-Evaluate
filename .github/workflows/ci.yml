@@ -134,6 +134,7 @@ jobs:
       - name: Run all checks on ${{ matrix.project }}
         run: |
           uv run crsbench ci all ${{ matrix.benchmark }} \
+            --no-inc-build \
             --force-rebuild \
             --no-color
 

@@ -85,23 +85,24 @@ class TestCheckResult:
         assert d["verify_time"] == 30.0
 
     def test_check_result_format_status_verify_only(self) -> None:
-        """Test format_status shows V:Xs when only verify_time is set."""
+        """Test format_status shows time when only verify_time is set."""
         result = CheckResult(
             status=CheckStatus.PASS,
             time_seconds=30.0,
             verify_time=30.0,
         )
-        assert result.format_status() == "PASS(V:30s)"
+        assert result.format_status() == "PASS(30s)"
 
     def test_check_result_format_status_build_and_verify(self) -> None:
-        """Test format_status shows B:Xm V:Ys when both are set."""
+        """Test format_status prefers verify_time when both are set."""
         result = CheckResult(
             status=CheckStatus.PASS,
             time_seconds=150.0,
             build_time=120.0,
             verify_time=30.0,
         )
-        assert result.format_status() == "PASS(B:2m V:30s)"
+        # Uses verify_time (most specific) when available
+        assert result.format_status() == "PASS(30s)"
 
     def test_check_result_format_status_total_only(self) -> None:
         """Test format_status shows total when no split times."""

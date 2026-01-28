@@ -252,74 +252,55 @@ class MetaYamlAdapter:
                 result.append((vuln.vuln_keyword, pov))
         return result
 
-    def get_harness_sanitizer(self, harness_name: str) -> str:
-        """Get the sanitizer required for a specific harness.
+    def get_cpv_sanitizer(self, harness_name: str, vuln_keyword: str) -> str:
+        """Get the sanitizer required for a specific CPV.
 
-        All CPVs within a harness must use the same sanitizer.
+        This is the primary method for getting sanitizer information.
+        Each CPV build uses the sanitizer specified in meta.yaml for that CPV.
 
         Args:
             harness_name: Name of the harness
+            vuln_keyword: Vulnerability keyword (e.g., "cpv_0")
 
         Returns:
-            The sanitizer type (e.g., "address", "memory")
-
-        Raises:
-            ValueError: If multiple different sanitizers are used within the harness
+            The sanitizer type (e.g., "address", "undefined")
         """
         harness = self.get_harness(harness_name)
         if not harness or not harness.vulns:
-            return "address"  # default
-
-        sanitizers: set[str] = set()
-        for vuln in harness.vulns:
-            for pov in vuln.povs:
-                sanitizers.add(pov.sanitizer)
-
-        if not sanitizers:
             return "address"
 
-        if len(sanitizers) > 1:
-            raise ValueError(
-                f"Harness '{harness_name}' requires multiple sanitizers: {sorted(sanitizers)}. "
-                "All CPVs within a harness must use the same sanitizer."
-            )
+        # Find the vulnerability with matching keyword
+        for vuln in harness.vulns:
+            if vuln.vuln_keyword == vuln_keyword:
+                # All POVs for a CPV should use the same sanitizer
+                if vuln.povs:
+                    return vuln.povs[0].sanitizer
+                break
 
-        return sanitizers.pop()
+        return "address"
 
-    def get_required_sanitizer(self) -> str:
-        """Get the sanitizer required for CPV detection across all harnesses.
+    def get_all_cpv_sanitizers(self) -> list[str]:
+        """Get all unique sanitizers used by any CPV in this benchmark.
 
-        Each harness must use a single sanitizer internally. If different harnesses
-        use different sanitizers, this is currently not supported for batch verification.
+        With multi-sanitizer support, we need to build separate variant sets
+        for each sanitizer (e.g., benchmark-asan-deltaref, benchmark-ubsan-deltaref).
 
         Returns:
-            The sanitizer type (e.g., "address", "memory")
-
-        Raises:
-            ValueError: If different harnesses require different sanitizers
+            Sorted list of unique sanitizer types (e.g., ["address", "undefined"])
         """
-        harness_sanitizers: dict[str, str] = {}
+        sanitizers: set[str] = set()
 
         for harness in self.config.harness_files:
             if not harness.vulns:
                 continue
-            # Check each harness has consistent sanitizer
-            sanitizer = self.get_harness_sanitizer(harness.name)
-            harness_sanitizers[harness.name] = sanitizer
+            for vuln in harness.vulns:
+                for pov in vuln.povs:
+                    sanitizers.add(pov.sanitizer)
 
-        if not harness_sanitizers:
-            return "address"
+        if not sanitizers:
+            return ["address"]
 
-        unique_sanitizers = set(harness_sanitizers.values())
-        if len(unique_sanitizers) > 1:
-            details = ", ".join(f"{h}={s}" for h, s in harness_sanitizers.items())
-            raise ValueError(
-                f"Different harnesses require different sanitizers: {details}. "
-                "Batch verification across harnesses with different sanitizers "
-                "is not currently supported."
-            )
-
-        return unique_sanitizers.pop()
+        return sorted(sanitizers)
 
     def get_pov_path(
         self, harness_name: str, vuln_keyword: str, pov_id: str
@@ -577,3 +558,43 @@ class MetaYamlAdapter:
             List of file patterns that patches cannot modify
         """
         return self.config.patch_exclude_list or []
+
+    def get_patch_superset_map(self) -> dict[int, int]:
+        """Get mapping of CPV subset to superset relationships.
+
+        When a CPV has patch_superset set, it means that CPV's patch is a subset
+        of another CPV's patch (the superset).
+
+        Example: cpv_1 has patch_superset: cpv_7
+        - cpv_1's patch is a subset of cpv_7's patch
+        - When applying all patches, cpv_1 should be skipped (cpv_7 covers it)
+        - When excluding cpv_1, cpv_7 should also be excluded (contains cpv_1's fix)
+
+        Returns:
+            Dict mapping subset CPV number to superset CPV number.
+            Example: {1: 7} means cpv_1 is subset of cpv_7.
+        """
+        superset_map: dict[int, int] = {}
+
+        for harness in self.config.harness_files:
+            if not harness.vulns:
+                continue
+            for vuln in harness.vulns:
+                if not vuln.patch_superset:
+                    continue
+
+                # Extract CPV numbers from vuln_keyword and patch_superset
+                try:
+                    subset_num = int(vuln.vuln_keyword.split("_")[1])
+                    superset_num = int(vuln.patch_superset.split("_")[1])
+                    superset_map[subset_num] = superset_num
+                    logger.debug(
+                        f"Patch superset relationship: cpv_{subset_num} ⊂ cpv_{superset_num}"
+                    )
+                except (IndexError, ValueError) as e:
+                    logger.warning(
+                        f"Invalid CPV format in superset relationship: "
+                        f"{vuln.vuln_keyword} -> {vuln.patch_superset}: {e}"
+                    )
+
+        return superset_map

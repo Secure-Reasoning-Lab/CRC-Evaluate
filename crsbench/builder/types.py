@@ -12,6 +12,47 @@ from pathlib import Path
 from typing import Optional
 
 
+def sanitizer_short_name(sanitizer: str) -> str:
+    """Convert sanitizer name to short form for variant names.
+
+    Args:
+        sanitizer: Full sanitizer name (e.g., "address", "undefined")
+
+    Returns:
+        Short form for use in variant names (e.g., "asan", "ubsan")
+    """
+    mapping = {
+        "address": "asan",
+        "undefined": "ubsan",
+        "memory": "msan",
+        "thread": "tsan",
+        "coverage": "coverage",
+    }
+    return mapping.get(sanitizer, sanitizer)
+
+
+def sanitizer_to_inc_tag(san_short: str) -> str:
+    """Convert short sanitizer name back to full name for inc-build image tags.
+
+    Inc-build images use full sanitizer names as Docker tags.
+    Example: curl:address (not curl:asan)
+
+    Args:
+        san_short: Short sanitizer name from variant name (e.g., "asan")
+
+    Returns:
+        Full sanitizer name for Docker tag (e.g., "address")
+    """
+    mapping = {
+        "asan": "address",
+        "ubsan": "undefined",
+        "msan": "memory",
+        "tsan": "thread",
+        "coverage": "coverage",
+    }
+    return mapping.get(san_short, san_short)
+
+
 class VariantType(Enum):
     """Type of variant to build.
 
@@ -147,33 +188,38 @@ class BuildConfig:
     def variant_name(self) -> str:
         """Get the variant name for this build config.
 
-        Naming convention:
-        - Base variants include mode in type: {benchmark}-deltabase, {benchmark}-fullbase
-        - Ref variants are mode-specific: {benchmark}-deltaref
-        - Shared variants need mode prefix: {benchmark}-delta-allpatched, {benchmark}-full-cpv0
-        - Patch variants: {benchmark}-{mode}-patched-{pov_id}-{patch_id}
+        Naming convention (includes sanitizer for multi-sanitizer support):
+        - Format: {benchmark}-{san_short}-{variant_suffix}
+        - Base variants: {benchmark}-{san_short}-{type} (e.g., afc-curl-asan-deltabase)
+        - Ref variants: {benchmark}-{san_short}-deltaref
+        - Shared variants: {benchmark}-{san_short}-{mode}-{type} (e.g., afc-curl-asan-delta-cpv0)
+        - Patch variants: {benchmark}-{san_short}-{mode}-patched-{pov_id}-{patch_id}
 
         Returns:
-            Variant name (e.g., "benchmark-deltabase", "benchmark-delta-cpv0")
+            Variant name (e.g., "benchmark-asan-deltabase", "benchmark-ubsan-delta-cpv0")
         """
+        san_short = sanitizer_short_name(self.sanitizer)
+
         # Base and ref variants already have mode in type name
         if self.variant_type in (
             VariantType.FULL_BASE,
             VariantType.DELTA_REF,
         ):
-            return f"{self.benchmark_name}-{self.variant_type.value}"
+            return f"{self.benchmark_name}-{san_short}-{self.variant_type.value}"
 
         # Shared variants need mode prefix to avoid conflicts
         mode_prefix = self.mode.value if self.mode else "delta"
 
         if self.variant_type == VariantType.CPV:
-            return f"{self.benchmark_name}-{mode_prefix}-cpv{self.cpv_num}"
+            return f"{self.benchmark_name}-{san_short}-{mode_prefix}-cpv{self.cpv_num}"
 
         # Patch variants include pov_id and patch_id for isolation
         if self.variant_type == VariantType.PATCHED:
-            return f"{self.benchmark_name}-{mode_prefix}-patched-{self.pov_id}-{self.patch_id}"
+            return f"{self.benchmark_name}-{san_short}-{mode_prefix}-patched-{self.pov_id}-{self.patch_id}"
 
-        return f"{self.benchmark_name}-{mode_prefix}-{self.variant_type.value}"
+        return (
+            f"{self.benchmark_name}-{san_short}-{mode_prefix}-{self.variant_type.value}"
+        )
 
     @property
     def is_shared(self) -> bool:
@@ -198,6 +244,8 @@ class BuildResult:
         elapsed_seconds: Time taken for the build
         cached: Whether the result was from cache
         fallback_used: Whether inc-build fell back to standard build
+        stdout: Build stdout output
+        stderr: Build stderr output
     """
 
     config: BuildConfig
@@ -208,6 +256,8 @@ class BuildResult:
     elapsed_seconds: float = 0.0
     cached: bool = False
     fallback_used: bool = False
+    stdout: str = ""
+    stderr: str = ""
 
     @classmethod
     def from_cache(cls, config: BuildConfig, build_path: Path) -> "BuildResult":
@@ -306,10 +356,14 @@ class FuzzerBuildResult:
     Attributes:
         success: Whether the build succeeded
         fallback_used: Whether fallback to clean build was used (inc-build failed)
+        stdout: Build stdout output
+        stderr: Build stderr output
     """
 
     success: bool
     fallback_used: bool = False
+    stdout: str = ""
+    stderr: str = ""
 
 
 @dataclass

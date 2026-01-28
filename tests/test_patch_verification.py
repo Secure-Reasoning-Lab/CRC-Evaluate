@@ -1914,8 +1914,8 @@ class TestBuildFallbackLogic:
             pov_id="cpv_0",
         )
 
-        # Verify variant_name format
-        expected = "sanity-mock-c-delta-01-delta-patched-cpv_0-patch_0"
+        # Verify variant_name format (includes sanitizer)
+        expected = "sanity-mock-c-delta-01-asan-delta-patched-cpv_0-patch_0"
         assert config.variant_name == expected
 
 

@@ -50,6 +50,7 @@ class ReproduceTask:
     variant_name: str
     variant_type: VariantType
     cpv_num: Optional[int]
+    sanitizer: str = "address"  # Sanitizer for this variant
 
 
 @dataclass
@@ -62,7 +63,8 @@ class ReproduceResult:
     variant_type: VariantType
     cpv_num: Optional[int]
     crashed: bool
-    crash_log: str = ""
+    crash_log: str = ""  # stdout from reproduce
+    stderr: str = ""  # stderr from reproduce
 
 
 class VerificationEngine:
@@ -119,6 +121,111 @@ class VerificationEngine:
         self.dedup_strategy = dedup_strategy if dedup_strategy else PatchBasedDedup()
         self._built_results: dict[str, dict[str, BuildResult]] = {}
 
+    def _log_crash_summary(
+        self, pov_id: str, crash_logs: dict[str, str], max_lines: int = 30
+    ) -> None:
+        """Log crash summary for debugging UNINTENDED_CRASH.
+
+        Extracts and logs key crash information from crash logs.
+
+        Args:
+            pov_id: POV identifier
+            crash_logs: Dict mapping variant_name -> crash_log
+            max_lines: Maximum lines to show per variant
+        """
+        for variant_name, crash_log in crash_logs.items():
+            if not crash_log:
+                continue
+
+            summary_lines = self._extract_crash_summary(crash_log, max_lines)
+
+            if summary_lines:
+                summary = "\n".join(summary_lines)
+                logger.warning(f"[{pov_id}] Crash on {variant_name}:\n{summary}")
+
+    def _extract_crash_summary(self, crash_log: str, max_lines: int = 30) -> list[str]:
+        """Extract crash summary from log.
+
+        Patterns matched (in order):
+        1. Java Exception: "== Java Exception:" line and stack trace
+        2. ASAN/Sanitizer: "==N==ERROR: AddressSanitizer" and SUMMARY
+        3. libFuzzer OOM: "libFuzzer: out-of-memory" or "SUMMARY: libFuzzer"
+        4. General crash: Last N lines as fallback
+
+        Args:
+            crash_log: Full crash log text
+            max_lines: Maximum lines to extract
+
+        Returns:
+            List of summary lines
+        """
+        lines = crash_log.splitlines()
+        summary_lines: list[str] = []
+
+        for i, line in enumerate(lines):
+            # Java Exception from Jazzer (high priority - specific pattern)
+            if "== Java Exception:" in line:
+                end = min(len(lines), i + 15)
+                summary_lines = lines[i:end]
+                break
+
+            # Regular Java exception (e.g., "Exception in thread "main"")
+            if line.startswith("Exception in thread "):
+                end = min(len(lines), i + 15)
+                summary_lines = lines[i:end]
+                break
+
+            # ASAN/Sanitizer error (specific pattern with process ID)
+            if "==ERROR: AddressSanitizer" in line or "==ERROR: LeakSanitizer" in line:
+                start = max(0, i - 1)
+                # Find SUMMARY line
+                summary_idx = i
+                for j in range(i, min(len(lines), i + 30)):
+                    if "SUMMARY:" in lines[j]:
+                        summary_idx = j
+                        break
+                end = min(len(lines), summary_idx + 2)
+                summary_lines = lines[start:end]
+                break
+
+            # libFuzzer OOM (specific pattern)
+            if "ERROR: libFuzzer: out-of-memory" in line:
+                start = max(0, i - 5)
+                end = min(len(lines), i + 3)
+                summary_lines = lines[start:end]
+                break
+
+            # libFuzzer timeout (specific pattern)
+            if "ERROR: libFuzzer: timeout" in line:
+                start = max(0, i - 2)
+                # Find SUMMARY line
+                summary_idx = i
+                for j in range(i, min(len(lines), i + 20)):
+                    if "SUMMARY:" in lines[j]:
+                        summary_idx = j
+                        break
+                end = min(len(lines), summary_idx + 2)
+                summary_lines = lines[start:end]
+                break
+
+            # SUMMARY line as fallback for sanitizers
+            if line.startswith("SUMMARY:"):
+                start = max(0, i - 10)
+                end = min(len(lines), i + 2)
+                summary_lines = lines[start:end]
+                break
+
+        # If no patterns found, use last N lines
+        if not summary_lines:
+            summary_lines = lines[-max_lines:]
+
+        # Truncate if too long
+        if len(summary_lines) > max_lines:
+            summary_lines = summary_lines[:max_lines]
+            summary_lines.append("... (truncated)")
+
+        return summary_lines
+
     def _execute_reproduce(self, task: ReproduceTask) -> ReproduceResult:
         """Execute a single reproduce task.
 
@@ -135,8 +242,9 @@ class VerificationEngine:
             timeout=self.timeout,
             pov_id=task.pov_id,
         )
-        # Strip ANSI escape codes from crash log for cleaner storage
-        crash_log = strip_ansi(output.stdout) if output.crashed else ""
+        # Strip ANSI escape codes for cleaner storage
+        stdout = strip_ansi(output.stdout) if output.stdout else ""
+        stderr = strip_ansi(output.stderr) if output.stderr else ""
 
         return ReproduceResult(
             pov_id=task.pov_id,
@@ -145,7 +253,8 @@ class VerificationEngine:
             variant_type=task.variant_type,
             cpv_num=task.cpv_num,
             crashed=output.crashed,
-            crash_log=crash_log,
+            crash_log=stdout,
+            stderr=stderr,
         )
 
     def verify_pov(
@@ -267,6 +376,7 @@ class VerificationEngine:
                         variant_name=variant_name,
                         variant_type=result.config.variant_type,
                         cpv_num=result.config.cpv_num,
+                        sanitizer=result.config.sanitizer,  # Pass sanitizer from build config
                     )
                 )
 
@@ -279,11 +389,16 @@ class VerificationEngine:
         )
 
         # Execute all reproduce calls in parallel
-        # Track crash results, cpv crash map, and crash logs per (pov, harness)
+        # Track crash results, cpv crash map, stdout, and stderr per (pov, harness)
         results_by_pov_harness: dict[
             tuple[str, str],
-            tuple[dict[VariantType, bool], dict[int, bool], dict[str, str]],
-        ] = defaultdict(lambda: ({}, {}, {}))
+            tuple[
+                dict[VariantType, bool],
+                dict[int, bool],
+                dict[str, str],
+                dict[str, str],
+            ],
+        ] = defaultdict(lambda: ({}, {}, {}, {}))
 
         start_time = time.time()
         completed = 0
@@ -293,16 +408,20 @@ class VerificationEngine:
         for task in tasks:
             result = self._execute_reproduce(task)
             key = (result.pov_id, result.harness)
-            crash_results, cpv_crash_map, crash_logs = results_by_pov_harness[key]
+            crash_results, cpv_crash_map, stdout_logs, stderr_logs = (
+                results_by_pov_harness[key]
+            )
 
             if result.variant_type == VariantType.CPV and result.cpv_num is not None:
                 cpv_crash_map[result.cpv_num] = result.crashed
             else:
                 crash_results[result.variant_type] = result.crashed
 
-            # Collect crash log if crashed
-            if result.crashed and result.crash_log:
-                crash_logs[result.variant_name] = result.crash_log
+            # Collect stdout/stderr logs (always capture for debugging)
+            if result.crash_log:
+                stdout_logs[result.variant_name] = result.crash_log
+            if result.stderr:
+                stderr_logs[result.variant_name] = result.stderr
 
             # Progress reporting
             completed += 1
@@ -326,7 +445,8 @@ class VerificationEngine:
         for (pov_id, _harness), (
             crash_results,
             cpv_crash_map,
-            crash_logs,
+            stdout_logs,
+            stderr_logs,
         ) in results_by_pov_harness.items():
             verdict = VerdictResolver.resolve(
                 mode=mode,
@@ -335,9 +455,19 @@ class VerificationEngine:
                 benchmark_name=adapter.benchmark_name,
                 pov_id=pov_id,
             )
-            # Attach crash logs to result
-            if crash_logs:
-                verdict.crash_info = {"logs": crash_logs}
+            # Attach stdout/stderr logs to result
+            crash_info: dict[str, dict[str, str]] = {}
+            if stdout_logs:
+                crash_info["stdout"] = stdout_logs
+            if stderr_logs:
+                crash_info["stderr"] = stderr_logs
+            if crash_info:
+                verdict.crash_info = crash_info
+
+            # Log crash summary for UNINTENDED_CRASH to help debugging
+            if verdict.status == PovVerificationStatus.UNINTENDED_CRASH and stdout_logs:
+                self._log_crash_summary(pov_id, stdout_logs)
+
             verification_results.append(verdict)
 
         elapsed = time.time() - start_time
@@ -653,9 +783,16 @@ class VerificationEngine:
         # Use override if provided, otherwise use adapter's setting
         inc_build = use_inc_build if use_inc_build is not None else adapter.inc_build
 
-        # Get sanitizer from meta.yaml POV definitions
-        # All CPVs must use the same sanitizer (raises ValueError if not)
-        sanitizer = adapter.get_required_sanitizer()
+        # Get sanitizer(s) from meta.yaml POV definitions
+        # If multiple sanitizers, use the first one (CI handles multi-sanitizer properly)
+        sanitizers = adapter.get_all_cpv_sanitizers()
+        sanitizer = sanitizers[0]
+        if len(sanitizers) > 1:
+            logger.warning(
+                f"{adapter.benchmark_name} uses multiple sanitizers: {sanitizers}. "
+                f"POV verification will use {sanitizer}. "
+                "Use 'crsbench ci' for full multi-sanitizer support."
+            )
 
         # Create build plan
         plan = self.builder.create_build_plan(

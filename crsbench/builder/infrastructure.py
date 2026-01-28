@@ -101,7 +101,11 @@ class OSSFuzzInfrastructure:
         # Cache for inc-build image availability (project:sanitizer -> bool)
         # Prevents redundant docker pull attempts during parallel builds
         self._inc_image_cache: dict[str, bool] = {}
-        self._inc_image_lock = threading.Lock()
+        # Per-project locks to allow parallel pulls for different projects
+        self._inc_image_locks: dict[str, threading.Lock] = {}
+        self._inc_image_locks_lock = (
+            threading.Lock()
+        )  # Meta-lock for creating per-project locks
 
         # Ensure OSS-Fuzz is ready for parallel builds
         ensure_oss_fuzz_ready(self.oss_fuzz_path)
@@ -639,6 +643,8 @@ class OSSFuzzInfrastructure:
         *,
         use_inc_image: bool = False,
         inc_fallback: bool = False,
+        inc_patch: Optional[Path] = None,
+        apply_patch: bool = False,
     ) -> FuzzerBuildResult:
         """Build fuzzers for a variant.
 
@@ -648,6 +654,11 @@ class OSSFuzzInfrastructure:
             use_inc_image: Use pre-built inc-build image for faster builds
             inc_fallback: Fallback to clean build using /src instead of /built-src.
                 Use when incremental build fails due to incompatibility.
+            inc_patch: Path to patch file to apply to /built-src/ for true incremental
+                builds. When provided with use_inc_image=True, applies patch to /built-src
+                and compiles incrementally.
+            apply_patch: If True, rsync source directly to /built-src for true
+                incremental build. Use with use_inc_image=True and src_path.
 
         Returns:
             FuzzerBuildResult with success status and fallback tracking.
@@ -684,6 +695,12 @@ class OSSFuzzInfrastructure:
             # Add inc-fallback flag if needed
             if inc_fallback:
                 cmd.append("--inc-fallback")
+            # Add inc-patch for true incremental patched builds
+            if inc_patch:
+                cmd.extend(["--inc-patch", str(inc_patch)])
+            # Add apply-patch for true incremental with patched source
+            if apply_patch:
+                cmd.append("--apply-patch")
 
         cmd.append(variant_name)
         # Only add source path if provided (not using bundled pkgs/)
@@ -713,7 +730,12 @@ class OSSFuzzInfrastructure:
                 # Only relevant when inc-build was attempted (use_inc_image=True)
                 # and fallback was enabled (inc_fallback=True)
                 actual_fallback = use_inc_image and inc_fallback
-                return FuzzerBuildResult(success=True, fallback_used=actual_fallback)
+                return FuzzerBuildResult(
+                    success=True,
+                    fallback_used=actual_fallback,
+                    stdout=result.stdout or "",
+                    stderr=result.stderr or "",
+                )
 
             logger.error(
                 f"Build failed for {variant_name}. "
@@ -721,7 +743,12 @@ class OSSFuzzInfrastructure:
                 f"stdout: {result.stdout[:2000] if result.stdout else 'None'}...\n"
                 f"stderr: {result.stderr[:2000] if result.stderr else 'None'}..."
             )
-            return FuzzerBuildResult(success=False, fallback_used=False)
+            return FuzzerBuildResult(
+                success=False,
+                fallback_used=False,
+                stdout=result.stdout or "",
+                stderr=result.stderr or "",
+            )
 
         except subprocess.TimeoutExpired:
             logger.error(f"Build timed out for {variant_name} ({config.timeout}s)")
@@ -729,6 +756,33 @@ class OSSFuzzInfrastructure:
         except Exception as e:
             logger.error(f"Build error for {variant_name}: {e}")
             return FuzzerBuildResult(success=False, fallback_used=False)
+
+    def get_patch_superset_map(self, benchmark_path: Path) -> dict[int, int]:
+        """Get mapping of CPV subset to superset relationships from meta.yaml.
+
+        This delegates to MetaYamlAdapter for reusability.
+        When a CPV has patch_superset set, it means that CPV's patch is a subset
+        of another CPV's patch (the superset).
+
+        Example: cpv_1 has patch_superset: cpv_7
+        - cpv_1's patch is a subset of cpv_7's patch
+        - When applying all patches, cpv_1 should be skipped (cpv_7 covers it)
+        - When excluding cpv_1, cpv_7 should also be excluded (contains cpv_1's fix)
+
+        Args:
+            benchmark_path: Path to benchmark directory
+
+        Returns:
+            Dict mapping subset CPV number to superset CPV number.
+            Example: {1: 7} means cpv_1 is subset of cpv_7.
+        """
+        from crsbench.validation.meta_adapter import MetaYamlAdapter
+
+        adapter = MetaYamlAdapter.from_benchmark_path(benchmark_path)
+        if adapter is None:
+            return {}
+
+        return adapter.get_patch_superset_map()
 
     def get_cpv_patches(self, benchmark_path: Path) -> dict[int, list[Path]]:
         """Get all CPV patches from a benchmark's .aixcc directory.
@@ -771,35 +825,117 @@ class OSSFuzzInfrastructure:
         return cpv_patches
 
     def get_all_patches(self, benchmark_path: Path) -> list[Path]:
-        """Get all CPV patches as a flat list.
+        """Get all CPV patches as a flat list, excluding subset CPVs.
+
+        When a CPV has a patch_superset relationship (e.g., cpv_1 ⊂ cpv_7),
+        the subset CPV's patch is skipped because the superset's patch
+        already includes the fix.
 
         Args:
             benchmark_path: Path to benchmark directory
 
         Returns:
-            Sorted list of all patch files
+            Sorted list of all patch files (excluding subsets)
         """
+        superset_map = self.get_patch_superset_map(benchmark_path)
         cpv_patches = self.get_cpv_patches(benchmark_path)
+
+        # Subset CPVs should be skipped (superset includes their fix)
+        subsets = set(superset_map.keys())
+
         all_patches = []
         for cpv_num in sorted(cpv_patches.keys()):
+            if cpv_num in subsets:
+                superset_cpv = superset_map[cpv_num]
+                logger.debug(
+                    f"Skipping cpv_{cpv_num} patches (subset of cpv_{superset_cpv})"
+                )
+                continue
             all_patches.extend(cpv_patches[cpv_num])
+
         return all_patches
 
     def get_patches_except(self, benchmark_path: Path, exclude_cpv: int) -> list[Path]:
         """Get all CPV patches except for a specific CPV.
+
+        Handles patch superset relationships:
+        - If exclude_cpv is a subset (has patch_superset), its superset is also excluded
+        - If exclude_cpv is a superset, only it is excluded (subsets can be applied)
+        - Subset patches are always skipped unless their superset is excluded
+
+        Also excludes patches from other CPVs that have identical content
+        (same SHA-256 hash) to prevent unintended patching when multiple
+        CPVs share the same vulnerability fix.
 
         Args:
             benchmark_path: Path to benchmark directory
             exclude_cpv: CPV number to exclude
 
         Returns:
-            List of patch files excluding the specified CPV
+            List of patch files excluding the specified CPV and related patches
         """
+        superset_map = self.get_patch_superset_map(benchmark_path)
         cpv_patches = self.get_cpv_patches(benchmark_path)
+
+        # Build set of CPVs to exclude
+        cpvs_to_exclude = {exclude_cpv}
+
+        # If exclude_cpv is a subset, also exclude its superset
+        # (testing subset vulnerability requires removing both patches)
+        if exclude_cpv in superset_map:
+            superset_cpv = superset_map[exclude_cpv]
+            cpvs_to_exclude.add(superset_cpv)
+            logger.debug(
+                f"Excluding cpv_{superset_cpv} (superset of excluded cpv_{exclude_cpv})"
+            )
+
+        # Determine which supersets are excluded
+        supersets_excluded = set()
+        for _subset_cpv, superset_cpv in superset_map.items():
+            if superset_cpv in cpvs_to_exclude:
+                supersets_excluded.add(superset_cpv)
+
+        # Calculate hashes of excluded CPV patches for duplicate detection
+        excluded_hashes: set[str] = set()
+        for excluded_cpv in cpvs_to_exclude:
+            if excluded_cpv in cpv_patches:
+                for patch_file in cpv_patches[excluded_cpv]:
+                    patch_hash = hashlib.sha256(patch_file.read_bytes()).hexdigest()
+                    excluded_hashes.add(patch_hash)
+
+        # Collect patches
         patches = []
         for cpv_num in sorted(cpv_patches.keys()):
-            if cpv_num != exclude_cpv:
-                patches.extend(cpv_patches[cpv_num])
+            if cpv_num in cpvs_to_exclude:
+                continue
+
+            # Handle subset CPVs
+            if cpv_num in superset_map:
+                superset_cpv = superset_map[cpv_num]
+                if superset_cpv in supersets_excluded:
+                    # Superset is excluded, so apply the subset
+                    logger.debug(
+                        f"Including cpv_{cpv_num} patches "
+                        f"(superset cpv_{superset_cpv} is excluded)"
+                    )
+                else:
+                    # Superset will be applied, skip the subset
+                    logger.debug(
+                        f"Skipping cpv_{cpv_num} patches (subset of cpv_{superset_cpv})"
+                    )
+                    continue
+
+            # Add patches, checking for duplicates
+            for patch_file in cpv_patches[cpv_num]:
+                patch_hash = hashlib.sha256(patch_file.read_bytes()).hexdigest()
+                if patch_hash not in excluded_hashes:
+                    patches.append(patch_file)
+                else:
+                    logger.debug(
+                        f"Skipping duplicate patch {patch_file.name} "
+                        f"(same content as excluded CPV)"
+                    )
+
         return patches
 
     def apply_patch(self, repo_path: Path, patch_file: Path) -> bool:
@@ -820,6 +956,9 @@ class OSSFuzzInfrastructure:
         Skips duplicate patches (identical content) to handle cases where
         multiple CPVs share the same vulnerability fix.
 
+        When applying multiple patches, uses fuzz mode for second and subsequent
+        patches to handle context changes from earlier patches.
+
         Args:
             repo_path: Path to repository
             patches: List of patch files to apply
@@ -829,6 +968,15 @@ class OSSFuzzInfrastructure:
         """
         success = True
         applied_hashes: set[str] = set()
+        applied_count = 0
+
+        # Debug: log all patches to be applied
+        patch_cpvs = []
+        for p in patches:
+            cpv_parts = [x for x in p.parts if x.startswith("cpv_")]
+            cpv_name = cpv_parts[0] if cpv_parts else "unknown"
+            patch_cpvs.append(cpv_name)
+        logger.debug(f"Applying patches to {repo_path}: {patch_cpvs}")
 
         for patch_file in patches:
             # Hash patch content to detect duplicates
@@ -839,12 +987,17 @@ class OSSFuzzInfrastructure:
                 logger.debug(f"Skipping duplicate patch: {patch_file.name}")
                 continue
 
-            if not self._apply_single_patch(repo_path, patch_file):
+            # Use fuzz for second and subsequent patches to handle
+            # context changes from earlier patches
+            use_fuzz = applied_count > 0
+
+            if not self._apply_single_patch(repo_path, patch_file, use_fuzz=use_fuzz):
                 logger.warning(f"Failed to apply patch: {patch_file}")
                 success = False
             else:
                 logger.debug(f"Applied patch: {patch_file.name}")
                 applied_hashes.add(patch_hash)
+                applied_count += 1
 
         return success
 
@@ -905,7 +1058,13 @@ class OSSFuzzInfrastructure:
                 else:
                     logger.debug(f"Applied patch: {patch_file.name} (cpv_{cpv_num})")
 
-    def _apply_single_patch(self, repo_path: Path, patch_file: Path) -> bool:
+    def _apply_single_patch(
+        self,
+        repo_path: Path,
+        patch_file: Path,
+        *,
+        use_fuzz: bool = False,
+    ) -> bool:
         """Apply a single patch file.
 
         Uses --whitespace=nowarn instead of --3way because bundled tarballs
@@ -913,38 +1072,76 @@ class OSSFuzzInfrastructure:
         repository where patches were created. The --3way option requires
         matching index hashes which won't exist.
 
+        Falls back to the patch binary if git apply fails.
+
         Args:
             repo_path: Path to repository
             patch_file: Path to patch file
+            use_fuzz: If True, use lenient context matching (git apply -C1,
+                patch --fuzz=3). Useful when applying multiple patches where
+                earlier patches may have changed the context lines.
 
         Returns:
             True if successful
         """
         try:
             patch_file_abs = patch_file.resolve()
+
+            # Build git apply command
+            git_cmd = [
+                "git",
+                "apply",
+                "--whitespace=nowarn",
+                "--verbose",
+            ]
+            if use_fuzz:
+                # Use -C1 to require only 1 line of context (more lenient)
+                git_cmd.append("-C1")
+            git_cmd.append(str(patch_file_abs))
+
+            # Try git apply first
             result = subprocess.run(
-                [
-                    "git",
-                    "apply",
-                    "--whitespace=nowarn",
-                    "--verbose",
-                    str(patch_file_abs),
-                ],
+                git_cmd,
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
                 timeout=60,
-                stdin=subprocess.DEVNULL,  # Prevent interactive terminal issues
+                stdin=subprocess.DEVNULL,
             )
             if result.returncode == 0:
                 return True
-            # Log verbose info for debugging patch failures
+
+            # git apply failed, try patch binary as fallback
+            logger.debug(
+                f"git apply failed, trying patch binary: {patch_file.name}\n"
+                f"  stderr: {result.stderr}"
+            )
+
+            # Build patch command
+            patch_cmd = ["patch", "-p1", "-i", str(patch_file_abs)]
+            if use_fuzz:
+                # Use --fuzz=3 for lenient matching with patch binary
+                patch_cmd.append("--fuzz=3")
+
+            fallback_result = subprocess.run(
+                patch_cmd,
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                stdin=subprocess.DEVNULL,
+            )
+            if fallback_result.returncode == 0:
+                logger.debug(f"Patch applied via fallback: {patch_file.name}")
+                return True
+
+            # Both methods failed
             logger.warning(
-                f"Patch apply failed:\n"
+                f"Patch apply failed (both git apply and patch):\n"
                 f"  repo: {repo_path}\n"
                 f"  patch: {patch_file_abs}\n"
-                f"  stderr: {result.stderr}\n"
-                f"  stdout: {result.stdout}"
+                f"  git stderr: {result.stderr}\n"
+                f"  patch stderr: {fallback_result.stderr}"
             )
             return False
         except Exception as e:
@@ -988,8 +1185,11 @@ class OSSFuzzInfrastructure:
         - 124: Timeout (treated as no crash)
         - Other non-zero: Other crash types
 
+        Note: sanitizer is embedded in project_name (e.g., project-asan-deltaref).
+        helper.py reproduce doesn't accept --sanitizer flag.
+
         Args:
-            project_name: Variant name (e.g., "benchmark-deltaref")
+            project_name: Variant name (e.g., "benchmark-asan-deltaref")
             harness: Harness name to run
             pov_data: Raw POV/testcase bytes
             timeout: Timeout for reproduce operation in seconds (default: 180s
@@ -1011,6 +1211,8 @@ class OSSFuzzInfrastructure:
         pov_prefix = f"[{pov_id}] " if pov_id else ""
 
         try:
+            # Note: sanitizer is embedded in project_name (e.g., project-asan-deltaref)
+            # helper.py reproduce doesn't accept --sanitizer flag
             cmd = [
                 "python3",
                 str(self._helper_script),
@@ -1431,6 +1633,55 @@ class OSSFuzzInfrastructure:
 
         return self._retag_for_ossfuzz(src_image, dst_image)
 
+    def prepare_image_for_variant(
+        self,
+        source_variant: str,
+        target_variant: str,
+        docker_tag: str = "latest",
+    ) -> bool:
+        """Prepare Docker image for a derived variant by retagging.
+
+        This allows test execution with a separate variant name without rebuilding.
+        The source image is retagged to the target variant name.
+
+        Args:
+            source_variant: Source variant name (e.g., base patched variant)
+            target_variant: Target variant name (e.g., with -unittest suffix)
+            docker_tag: Docker image tag (default: "latest")
+
+        Returns:
+            True if image is ready for use
+        """
+        src_image = f"aixcc-afc/{source_variant}:{docker_tag}"
+        dst_image = f"aixcc-afc/{target_variant}:{docker_tag}"
+
+        if self._docker_image_exists(dst_image):
+            logger.debug(f"Target variant image already exists: {dst_image}")
+            return True
+
+        if not self._docker_image_exists(src_image):
+            logger.warning(f"Source variant image not found: {src_image}")
+            return False
+
+        return self._retag_for_ossfuzz(src_image, dst_image)
+
+    def _get_inc_image_lock(self, cache_key: str) -> threading.Lock:
+        """Get or create a per-project lock for inc-image operations.
+
+        This allows parallel pulls for different projects while preventing
+        concurrent pulls for the same project.
+
+        Args:
+            cache_key: Cache key (project_name:sanitizer)
+
+        Returns:
+            Lock for the specific project/sanitizer combination
+        """
+        with self._inc_image_locks_lock:
+            if cache_key not in self._inc_image_locks:
+                self._inc_image_locks[cache_key] = threading.Lock()
+            return self._inc_image_locks[cache_key]
+
     def ensure_inc_image(
         self,
         project_name: str,
@@ -1447,6 +1698,9 @@ class OSSFuzzInfrastructure:
         Use this method to prepare inc-build images before building variants.
         If this method returns False, callers should fall back to standard builds.
 
+        Uses per-project locks to allow parallel pulls for different projects
+        while preventing redundant pulls for the same project.
+
         Args:
             project_name: OSS-Fuzz project name
             sanitizer: Sanitizer type (default: "address")
@@ -1457,7 +1711,15 @@ class OSSFuzzInfrastructure:
         """
         cache_key = f"{project_name}:{sanitizer}"
 
-        with self._inc_image_lock:
+        # Quick check without lock - if already cached, return immediately
+        if cache_key in self._inc_image_cache:
+            return self._inc_image_cache[cache_key]
+
+        # Get per-project lock (allows parallel pulls for different projects)
+        project_lock = self._get_inc_image_lock(cache_key)
+
+        with project_lock:
+            # Double-check after acquiring lock (another thread may have completed)
             if cache_key in self._inc_image_cache:
                 return self._inc_image_cache[cache_key]
 

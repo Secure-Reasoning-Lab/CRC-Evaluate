@@ -6,10 +6,11 @@ This module provides OSSFuzzBuilder, which builds all types of variants:
 - Patch variants: CRS-generated patches for verification
 
 Features:
-- Parallel builds using ThreadPoolExecutor
 - Build caching with staleness detection
 - Support for both FULL and DELTA benchmark modes
 - Incremental builds using pre-built images (for patch verification)
+
+For parallel builds, use BuildSingleVariantJob with DAGExecutor.
 """
 
 import tempfile
@@ -17,7 +18,6 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from crsbench.builder.executor import ParallelExecutor
 from crsbench.builder.infrastructure import OSSFuzzInfrastructure
 from crsbench.builder.types import (
     BenchmarkMode,
@@ -65,7 +65,6 @@ class OSSFuzzBuilder:
         self.max_workers = max_workers
         self.source_mode = source_mode
         self.infra = OSSFuzzInfrastructure(oss_fuzz_path)
-        self.executor = ParallelExecutor(max_workers)
 
     def build_variants(
         self,
@@ -73,7 +72,9 @@ class OSSFuzzBuilder:
         *,
         force_rebuild: bool = False,
     ) -> dict[str, BuildResult]:
-        """Build multiple variants in parallel.
+        """Build multiple variants sequentially.
+
+        For parallel builds, use BuildSingleVariantJob with DAGExecutor.
 
         Args:
             configs: List of build configurations
@@ -108,17 +109,14 @@ class OSSFuzzBuilder:
             else:
                 configs_to_build.append(config)
 
-        # Build remaining variants in parallel
+        # Build remaining variants sequentially
+        # For parallel builds, use BuildSingleVariantJob with DAGExecutor
         if configs_to_build:
-            # Pre-cache repositories before parallel execution
-            # This prevents multiple workers from cloning the same repo concurrently
             self._ensure_repos_cached(configs_to_build)
-
-            build_results = self.executor.execute_builds(
-                configs=configs_to_build,
-                build_fn=self._build_single,
-            )
-            results.update(build_results)
+            for config in configs_to_build:
+                # Pass force_rebuild=False since we already did cleanup above
+                result = self.build_single(config, force_rebuild=False)
+                results[result.variant_name] = result
 
         return results
 
@@ -186,10 +184,7 @@ class OSSFuzzBuilder:
             build_path = self.infra.get_build_output_path(config.variant_name)
             return BuildResult.from_cache(config, build_path)
 
-        return self.executor.execute_single(
-            config=config,
-            build_fn=self._build_single,
-        )
+        return self._build_single(config)
 
     def _build_single(self, config: BuildConfig) -> BuildResult:
         """Internal method to build a single variant.
@@ -293,10 +288,14 @@ class OSSFuzzBuilder:
                 # Build fuzzers
                 build_result = self.infra.build_fuzzers(config, repo_path)
                 if not build_result.success:
-                    return BuildResult.from_error(
+                    return BuildResult(
                         config=config,
+                        success=False,
+                        variant_name=variant_name,
                         error="Build failed",
                         elapsed_seconds=time.time() - start_time,
+                        stdout=build_result.stdout,
+                        stderr=build_result.stderr,
                     )
 
                 # Success - write metadata and return
@@ -313,6 +312,8 @@ class OSSFuzzBuilder:
                     build_path=build_path,
                     elapsed_seconds=time.time() - start_time,
                     fallback_used=fallback_from_inc,
+                    stdout=build_result.stdout,
+                    stderr=build_result.stderr,
                 )
 
             except Exception as e:
@@ -435,33 +436,46 @@ class OSSFuzzBuilder:
                         elapsed_seconds=time.time() - start_time,
                     )
 
-                # Try inc-build first (uses pre-compiled objects from /built-src)
+                # Try inc-build with apply_patch (true incremental)
+                # apply_patch: rsync to /built-src/ without --delete, preserving .o files
                 build_result = self.infra.build_fuzzers(
-                    config, repo_path, use_inc_image=True, inc_fallback=False
+                    config, repo_path, use_inc_image=True, apply_patch=True
                 )
-                # If inc-build fails, retry with fallback (full recompile from /src)
+
+                # If inc-build fails, fallback to full build (no inc-build)
+                fallback_used = False
                 if not build_result.success:
-                    logger.info(
-                        f"Inc-build failed for {variant_name}, retrying with fallback"
+                    logger.warning(
+                        f"Inc-build failed for {variant_name}, falling back to full build"
                     )
+                    fallback_used = True
+                    # Clean up failed build outputs before retry
+                    self.infra.cleanup_build_outputs(variant_name)
+                    # Full build without inc-build
                     build_result = self.infra.build_fuzzers(
-                        config, repo_path, use_inc_image=True, inc_fallback=True
+                        config, repo_path, use_inc_image=False, apply_patch=False
                     )
 
                 if not build_result.success:
-                    return BuildResult.from_error(
+                    return BuildResult(
                         config=config,
-                        error="Incremental build failed (both inc and fallback)",
+                        success=False,
+                        variant_name=variant_name,
+                        error="Build failed (inc-build and full build both failed)"
+                        if fallback_used
+                        else "Build failed",
                         elapsed_seconds=time.time() - start_time,
+                        stdout=build_result.stdout,
+                        stderr=build_result.stderr,
                     )
 
                 # Success - write metadata and return
                 build_path = self.infra.get_build_output_path(variant_name)
                 self.infra.write_build_metadata(
                     variant_name,
-                    inc_build=True,
+                    inc_build=not fallback_used,  # True only if inc-build succeeded
                     sanitizer=config.sanitizer,
-                    fallback_used=build_result.fallback_used,
+                    fallback_used=fallback_used,
                 )
                 return BuildResult(
                     config=config,
@@ -469,7 +483,9 @@ class OSSFuzzBuilder:
                     variant_name=variant_name,
                     build_path=build_path,
                     elapsed_seconds=time.time() - start_time,
-                    fallback_used=build_result.fallback_used,
+                    fallback_used=fallback_used,
+                    stdout=build_result.stdout,
+                    stderr=build_result.stderr,
                 )
 
             except Exception as e:

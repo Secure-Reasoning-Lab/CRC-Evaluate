@@ -107,6 +107,46 @@ class TestVulnerabilityModel:
         with pytest.raises(PydanticValidationError):
             Vulnerability(vuln_keyword="cpv_0", povs=[])
 
+    def test_vulnerability_with_patch_superset(self):
+        """Test vulnerability with valid patch_superset."""
+        vuln = Vulnerability(
+            vuln_keyword="cpv_1",
+            patch_superset="cpv_7",
+            povs=[POV(id="pov_0", sanitizer="address")],
+        )
+        assert vuln.vuln_keyword == "cpv_1"
+        assert vuln.patch_superset == "cpv_7"
+
+    def test_vulnerability_without_patch_superset(self):
+        """Test vulnerability without patch_superset (defaults to None)."""
+        vuln = Vulnerability(
+            vuln_keyword="cpv_2",
+            povs=[POV(id="pov_0", sanitizer="address")],
+        )
+        assert vuln.patch_superset is None
+
+    def test_vulnerability_invalid_patch_superset_format(self):
+        """Test vulnerability with invalid patch_superset format."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            Vulnerability(
+                vuln_keyword="cpv_1",
+                patch_superset="invalid_format",
+                povs=[POV(id="pov_0", sanitizer="address")],
+            )
+        assert (
+            "cpv_n" in str(exc_info.value).lower()
+            or "pattern" in str(exc_info.value).lower()
+        )
+
+    def test_vulnerability_empty_patch_superset(self):
+        """Test vulnerability with empty patch_superset (converts to None)."""
+        vuln = Vulnerability(
+            vuln_keyword="cpv_1",
+            patch_superset="",
+            povs=[POV(id="pov_0", sanitizer="address")],
+        )
+        assert vuln.patch_superset is None
+
 
 class TestHarnessFileModel:
     """Test HarnessFile model validation."""
