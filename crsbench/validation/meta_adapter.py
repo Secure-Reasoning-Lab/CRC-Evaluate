@@ -558,3 +558,43 @@ class MetaYamlAdapter:
             List of file patterns that patches cannot modify
         """
         return self.config.patch_exclude_list or []
+
+    def get_patch_superset_map(self) -> dict[int, int]:
+        """Get mapping of CPV subset to superset relationships.
+
+        When a CPV has patch_superset set, it means that CPV's patch is a subset
+        of another CPV's patch (the superset).
+
+        Example: cpv_1 has patch_superset: cpv_7
+        - cpv_1's patch is a subset of cpv_7's patch
+        - When applying all patches, cpv_1 should be skipped (cpv_7 covers it)
+        - When excluding cpv_1, cpv_7 should also be excluded (contains cpv_1's fix)
+
+        Returns:
+            Dict mapping subset CPV number to superset CPV number.
+            Example: {1: 7} means cpv_1 is subset of cpv_7.
+        """
+        superset_map: dict[int, int] = {}
+
+        for harness in self.config.harness_files:
+            if not harness.vulns:
+                continue
+            for vuln in harness.vulns:
+                if not vuln.patch_superset:
+                    continue
+
+                # Extract CPV numbers from vuln_keyword and patch_superset
+                try:
+                    subset_num = int(vuln.vuln_keyword.split("_")[1])
+                    superset_num = int(vuln.patch_superset.split("_")[1])
+                    superset_map[subset_num] = superset_num
+                    logger.debug(
+                        f"Patch superset relationship: cpv_{subset_num} ⊂ cpv_{superset_num}"
+                    )
+                except (IndexError, ValueError) as e:
+                    logger.warning(
+                        f"Invalid CPV format in superset relationship: "
+                        f"{vuln.vuln_keyword} -> {vuln.patch_superset}: {e}"
+                    )
+
+        return superset_map

@@ -734,6 +734,33 @@ class OSSFuzzInfrastructure:
             logger.error(f"Build error for {variant_name}: {e}")
             return FuzzerBuildResult(success=False, fallback_used=False)
 
+    def get_patch_superset_map(self, benchmark_path: Path) -> dict[int, int]:
+        """Get mapping of CPV subset to superset relationships from meta.yaml.
+
+        This delegates to MetaYamlAdapter for reusability.
+        When a CPV has patch_superset set, it means that CPV's patch is a subset
+        of another CPV's patch (the superset).
+
+        Example: cpv_1 has patch_superset: cpv_7
+        - cpv_1's patch is a subset of cpv_7's patch
+        - When applying all patches, cpv_1 should be skipped (cpv_7 covers it)
+        - When excluding cpv_1, cpv_7 should also be excluded (contains cpv_1's fix)
+
+        Args:
+            benchmark_path: Path to benchmark directory
+
+        Returns:
+            Dict mapping subset CPV number to superset CPV number.
+            Example: {1: 7} means cpv_1 is subset of cpv_7.
+        """
+        from crsbench.validation.meta_adapter import MetaYamlAdapter
+
+        adapter = MetaYamlAdapter.from_benchmark_path(benchmark_path)
+        if adapter is None:
+            return {}
+
+        return adapter.get_patch_superset_map()
+
     def get_cpv_patches(self, benchmark_path: Path) -> dict[int, list[Path]]:
         """Get all CPV patches from a benchmark's .aixcc directory.
 
@@ -775,22 +802,43 @@ class OSSFuzzInfrastructure:
         return cpv_patches
 
     def get_all_patches(self, benchmark_path: Path) -> list[Path]:
-        """Get all CPV patches as a flat list.
+        """Get all CPV patches as a flat list, excluding subset CPVs.
+
+        When a CPV has a patch_superset relationship (e.g., cpv_1 ⊂ cpv_7),
+        the subset CPV's patch is skipped because the superset's patch
+        already includes the fix.
 
         Args:
             benchmark_path: Path to benchmark directory
 
         Returns:
-            Sorted list of all patch files
+            Sorted list of all patch files (excluding subsets)
         """
+        superset_map = self.get_patch_superset_map(benchmark_path)
         cpv_patches = self.get_cpv_patches(benchmark_path)
+
+        # Subset CPVs should be skipped (superset includes their fix)
+        subsets = set(superset_map.keys())
+
         all_patches = []
         for cpv_num in sorted(cpv_patches.keys()):
+            if cpv_num in subsets:
+                superset_cpv = superset_map[cpv_num]
+                logger.debug(
+                    f"Skipping cpv_{cpv_num} patches (subset of cpv_{superset_cpv})"
+                )
+                continue
             all_patches.extend(cpv_patches[cpv_num])
+
         return all_patches
 
     def get_patches_except(self, benchmark_path: Path, exclude_cpv: int) -> list[Path]:
         """Get all CPV patches except for a specific CPV.
+
+        Handles patch superset relationships:
+        - If exclude_cpv is a subset (has patch_superset), its superset is also excluded
+        - If exclude_cpv is a superset, only it is excluded (subsets can be applied)
+        - Subset patches are always skipped unless their superset is excluded
 
         Also excludes patches from other CPVs that have identical content
         (same SHA-256 hash) to prevent unintended patching when multiple
@@ -801,22 +849,60 @@ class OSSFuzzInfrastructure:
             exclude_cpv: CPV number to exclude
 
         Returns:
-            List of patch files excluding the specified CPV and duplicates
+            List of patch files excluding the specified CPV and related patches
         """
+        superset_map = self.get_patch_superset_map(benchmark_path)
         cpv_patches = self.get_cpv_patches(benchmark_path)
 
-        # Calculate hashes of excluded CPV patches
-        excluded_hashes: set[str] = set()
-        if exclude_cpv in cpv_patches:
-            for patch_file in cpv_patches[exclude_cpv]:
-                patch_hash = hashlib.sha256(patch_file.read_bytes()).hexdigest()
-                excluded_hashes.add(patch_hash)
+        # Build set of CPVs to exclude
+        cpvs_to_exclude = {exclude_cpv}
 
-        # Collect patches, excluding those with matching hashes
+        # If exclude_cpv is a subset, also exclude its superset
+        # (testing subset vulnerability requires removing both patches)
+        if exclude_cpv in superset_map:
+            superset_cpv = superset_map[exclude_cpv]
+            cpvs_to_exclude.add(superset_cpv)
+            logger.debug(
+                f"Excluding cpv_{superset_cpv} (superset of excluded cpv_{exclude_cpv})"
+            )
+
+        # Determine which supersets are excluded
+        supersets_excluded = set()
+        for _subset_cpv, superset_cpv in superset_map.items():
+            if superset_cpv in cpvs_to_exclude:
+                supersets_excluded.add(superset_cpv)
+
+        # Calculate hashes of excluded CPV patches for duplicate detection
+        excluded_hashes: set[str] = set()
+        for excluded_cpv in cpvs_to_exclude:
+            if excluded_cpv in cpv_patches:
+                for patch_file in cpv_patches[excluded_cpv]:
+                    patch_hash = hashlib.sha256(patch_file.read_bytes()).hexdigest()
+                    excluded_hashes.add(patch_hash)
+
+        # Collect patches
         patches = []
         for cpv_num in sorted(cpv_patches.keys()):
-            if cpv_num == exclude_cpv:
+            if cpv_num in cpvs_to_exclude:
                 continue
+
+            # Handle subset CPVs
+            if cpv_num in superset_map:
+                superset_cpv = superset_map[cpv_num]
+                if superset_cpv in supersets_excluded:
+                    # Superset is excluded, so apply the subset
+                    logger.debug(
+                        f"Including cpv_{cpv_num} patches "
+                        f"(superset cpv_{superset_cpv} is excluded)"
+                    )
+                else:
+                    # Superset will be applied, skip the subset
+                    logger.debug(
+                        f"Skipping cpv_{cpv_num} patches (subset of cpv_{superset_cpv})"
+                    )
+                    continue
+
+            # Add patches, checking for duplicates
             for patch_file in cpv_patches[cpv_num]:
                 patch_hash = hashlib.sha256(patch_file.read_bytes()).hexdigest()
                 if patch_hash not in excluded_hashes:
@@ -824,8 +910,9 @@ class OSSFuzzInfrastructure:
                 else:
                     logger.debug(
                         f"Skipping duplicate patch {patch_file.name} "
-                        f"(same content as excluded cpv_{exclude_cpv})"
+                        f"(same content as excluded CPV)"
                     )
+
         return patches
 
     def apply_patch(self, repo_path: Path, patch_file: Path) -> bool:
@@ -859,6 +946,14 @@ class OSSFuzzInfrastructure:
         success = True
         applied_hashes: set[str] = set()
         applied_count = 0
+
+        # Debug: log all patches to be applied
+        patch_cpvs = []
+        for p in patches:
+            cpv_parts = [x for x in p.parts if x.startswith("cpv_")]
+            cpv_name = cpv_parts[0] if cpv_parts else "unknown"
+            patch_cpvs.append(cpv_name)
+        logger.debug(f"Applying patches to {repo_path}: {patch_cpvs}")
 
         for patch_file in patches:
             # Hash patch content to detect duplicates

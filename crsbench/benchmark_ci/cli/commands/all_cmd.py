@@ -151,15 +151,12 @@ def _build_dag(
         required_sanitizers = adapter.get_all_cpv_sanitizers()
         logger.debug(f"{benchmark_name} requires sanitizers: {required_sanitizers}")
 
-        # Collect all patches for allpatched variant from discovery
-        all_patches: list[Path] = []
-        harnesses = discover_harness_names(path)
-        for harness in harnesses:
-            for cpv_id in discover_cpv_ids(path, harness):
-                patches = discover_patch_paths(path, harness, cpv_id)
-                for _, patch_path in patches:
-                    if patch_path not in all_patches:
-                        all_patches.append(patch_path)
+        # Collect all patches for allpatched variant using infrastructure
+        # This respects patch_superset relationships (skips subset patches)
+        from crsbench.builder.infrastructure import OSSFuzzInfrastructure
+
+        infra = OSSFuzzInfrastructure(Path("oss-fuzz"))
+        all_patches = infra.get_all_patches(path)
 
         # Build shared variants (deltaref, allpatched) for each sanitizer
         # Track build job IDs by sanitizer: {sanitizer: [deltaref_id, allpatched_id]}
@@ -247,17 +244,9 @@ def _build_dag(
                 # Get sanitizer for this specific CPV (supports mixed sanitizers per harness)
                 cpv_sanitizer = adapter.get_cpv_sanitizer(harness, cpv_id)
 
-                # Get patches for this specific CPV
-                cpv_specific_patches = [
-                    patch_path
-                    for _, patch_path in discover_patch_paths(path, harness, cpv_id)
-                ]
-
                 # CPV variant patches = all patches except this CPV's patches
-                # This is used to test if the POV triggers this specific vulnerability
-                cpv_variant_patches = [
-                    p for p in all_patches if p not in cpv_specific_patches
-                ]
+                # This uses get_patches_except() which respects patch_superset relationships
+                cpv_variant_patches = infra.get_patches_except(path, cpv_num)
 
                 # Create BuildSingleVariantJob for this CPV variant
                 # Use CPV-specific sanitizer (supports mixed sanitizers within harness)
