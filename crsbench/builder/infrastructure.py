@@ -792,18 +792,40 @@ class OSSFuzzInfrastructure:
     def get_patches_except(self, benchmark_path: Path, exclude_cpv: int) -> list[Path]:
         """Get all CPV patches except for a specific CPV.
 
+        Also excludes patches from other CPVs that have identical content
+        (same SHA-256 hash) to prevent unintended patching when multiple
+        CPVs share the same vulnerability fix.
+
         Args:
             benchmark_path: Path to benchmark directory
             exclude_cpv: CPV number to exclude
 
         Returns:
-            List of patch files excluding the specified CPV
+            List of patch files excluding the specified CPV and duplicates
         """
         cpv_patches = self.get_cpv_patches(benchmark_path)
+
+        # Calculate hashes of excluded CPV patches
+        excluded_hashes: set[str] = set()
+        if exclude_cpv in cpv_patches:
+            for patch_file in cpv_patches[exclude_cpv]:
+                patch_hash = hashlib.sha256(patch_file.read_bytes()).hexdigest()
+                excluded_hashes.add(patch_hash)
+
+        # Collect patches, excluding those with matching hashes
         patches = []
         for cpv_num in sorted(cpv_patches.keys()):
-            if cpv_num != exclude_cpv:
-                patches.extend(cpv_patches[cpv_num])
+            if cpv_num == exclude_cpv:
+                continue
+            for patch_file in cpv_patches[cpv_num]:
+                patch_hash = hashlib.sha256(patch_file.read_bytes()).hexdigest()
+                if patch_hash not in excluded_hashes:
+                    patches.append(patch_file)
+                else:
+                    logger.debug(
+                        f"Skipping duplicate patch {patch_file.name} "
+                        f"(same content as excluded cpv_{exclude_cpv})"
+                    )
         return patches
 
     def apply_patch(self, repo_path: Path, patch_file: Path) -> bool:
@@ -917,6 +939,8 @@ class OSSFuzzInfrastructure:
         repository where patches were created. The --3way option requires
         matching index hashes which won't exist.
 
+        Falls back to the patch binary if git apply fails.
+
         Args:
             repo_path: Path to repository
             patch_file: Path to patch file
@@ -926,6 +950,8 @@ class OSSFuzzInfrastructure:
         """
         try:
             patch_file_abs = patch_file.resolve()
+
+            # Try git apply first
             result = subprocess.run(
                 [
                     "git",
@@ -938,17 +964,36 @@ class OSSFuzzInfrastructure:
                 capture_output=True,
                 text=True,
                 timeout=60,
-                stdin=subprocess.DEVNULL,  # Prevent interactive terminal issues
+                stdin=subprocess.DEVNULL,
             )
             if result.returncode == 0:
                 return True
-            # Log verbose info for debugging patch failures
+
+            # git apply failed, try patch binary as fallback
+            logger.debug(
+                f"git apply failed, trying patch binary: {patch_file.name}\n"
+                f"  stderr: {result.stderr}"
+            )
+
+            fallback_result = subprocess.run(
+                ["patch", "-p1", "-i", str(patch_file_abs)],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                stdin=subprocess.DEVNULL,
+            )
+            if fallback_result.returncode == 0:
+                logger.debug(f"Patch applied via fallback: {patch_file.name}")
+                return True
+
+            # Both methods failed
             logger.warning(
-                f"Patch apply failed:\n"
+                f"Patch apply failed (both git apply and patch):\n"
                 f"  repo: {repo_path}\n"
                 f"  patch: {patch_file_abs}\n"
-                f"  stderr: {result.stderr}\n"
-                f"  stdout: {result.stdout}"
+                f"  git stderr: {result.stderr}\n"
+                f"  patch stderr: {fallback_result.stderr}"
             )
             return False
         except Exception as e:
