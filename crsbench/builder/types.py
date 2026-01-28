@@ -244,6 +244,8 @@ class BuildResult:
         elapsed_seconds: Time taken for the build
         cached: Whether the result was from cache
         fallback_used: Whether inc-build fell back to standard build
+        stdout: Build stdout output
+        stderr: Build stderr output
     """
 
     config: BuildConfig
@@ -254,6 +256,8 @@ class BuildResult:
     elapsed_seconds: float = 0.0
     cached: bool = False
     fallback_used: bool = False
+    stdout: str = ""
+    stderr: str = ""
 
     @classmethod
     def from_cache(cls, config: BuildConfig, build_path: Path) -> "BuildResult":
@@ -352,10 +356,14 @@ class FuzzerBuildResult:
     Attributes:
         success: Whether the build succeeded
         fallback_used: Whether fallback to clean build was used (inc-build failed)
+        stdout: Build stdout output
+        stderr: Build stderr output
     """
 
     success: bool
     fallback_used: bool = False
+    stdout: str = ""
+    stderr: str = ""
 
 
 @dataclass

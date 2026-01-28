@@ -63,7 +63,8 @@ class ReproduceResult:
     variant_type: VariantType
     cpv_num: Optional[int]
     crashed: bool
-    crash_log: str = ""
+    crash_log: str = ""  # stdout from reproduce
+    stderr: str = ""  # stderr from reproduce
 
 
 class VerificationEngine:
@@ -241,8 +242,9 @@ class VerificationEngine:
             timeout=self.timeout,
             pov_id=task.pov_id,
         )
-        # Strip ANSI escape codes from crash log for cleaner storage
-        crash_log = strip_ansi(output.stdout) if output.crashed else ""
+        # Strip ANSI escape codes for cleaner storage
+        stdout = strip_ansi(output.stdout) if output.stdout else ""
+        stderr = strip_ansi(output.stderr) if output.stderr else ""
 
         return ReproduceResult(
             pov_id=task.pov_id,
@@ -251,7 +253,8 @@ class VerificationEngine:
             variant_type=task.variant_type,
             cpv_num=task.cpv_num,
             crashed=output.crashed,
-            crash_log=crash_log,
+            crash_log=stdout,
+            stderr=stderr,
         )
 
     def verify_pov(
@@ -386,11 +389,16 @@ class VerificationEngine:
         )
 
         # Execute all reproduce calls in parallel
-        # Track crash results, cpv crash map, and crash logs per (pov, harness)
+        # Track crash results, cpv crash map, stdout, and stderr per (pov, harness)
         results_by_pov_harness: dict[
             tuple[str, str],
-            tuple[dict[VariantType, bool], dict[int, bool], dict[str, str]],
-        ] = defaultdict(lambda: ({}, {}, {}))
+            tuple[
+                dict[VariantType, bool],
+                dict[int, bool],
+                dict[str, str],
+                dict[str, str],
+            ],
+        ] = defaultdict(lambda: ({}, {}, {}, {}))
 
         start_time = time.time()
         completed = 0
@@ -400,16 +408,20 @@ class VerificationEngine:
         for task in tasks:
             result = self._execute_reproduce(task)
             key = (result.pov_id, result.harness)
-            crash_results, cpv_crash_map, crash_logs = results_by_pov_harness[key]
+            crash_results, cpv_crash_map, stdout_logs, stderr_logs = (
+                results_by_pov_harness[key]
+            )
 
             if result.variant_type == VariantType.CPV and result.cpv_num is not None:
                 cpv_crash_map[result.cpv_num] = result.crashed
             else:
                 crash_results[result.variant_type] = result.crashed
 
-            # Collect crash log if crashed
-            if result.crashed and result.crash_log:
-                crash_logs[result.variant_name] = result.crash_log
+            # Collect stdout/stderr logs (always capture for debugging)
+            if result.crash_log:
+                stdout_logs[result.variant_name] = result.crash_log
+            if result.stderr:
+                stderr_logs[result.variant_name] = result.stderr
 
             # Progress reporting
             completed += 1
@@ -433,7 +445,8 @@ class VerificationEngine:
         for (pov_id, _harness), (
             crash_results,
             cpv_crash_map,
-            crash_logs,
+            stdout_logs,
+            stderr_logs,
         ) in results_by_pov_harness.items():
             verdict = VerdictResolver.resolve(
                 mode=mode,
@@ -442,13 +455,18 @@ class VerificationEngine:
                 benchmark_name=adapter.benchmark_name,
                 pov_id=pov_id,
             )
-            # Attach crash logs to result
-            if crash_logs:
-                verdict.crash_info = {"logs": crash_logs}
+            # Attach stdout/stderr logs to result
+            crash_info: dict[str, dict[str, str]] = {}
+            if stdout_logs:
+                crash_info["stdout"] = stdout_logs
+            if stderr_logs:
+                crash_info["stderr"] = stderr_logs
+            if crash_info:
+                verdict.crash_info = crash_info
 
             # Log crash summary for UNINTENDED_CRASH to help debugging
-            if verdict.status == PovVerificationStatus.UNINTENDED_CRASH and crash_logs:
-                self._log_crash_summary(pov_id, crash_logs)
+            if verdict.status == PovVerificationStatus.UNINTENDED_CRASH and stdout_logs:
+                self._log_crash_summary(pov_id, stdout_logs)
 
             verification_results.append(verdict)
 

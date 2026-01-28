@@ -288,10 +288,14 @@ class OSSFuzzBuilder:
                 # Build fuzzers
                 build_result = self.infra.build_fuzzers(config, repo_path)
                 if not build_result.success:
-                    return BuildResult.from_error(
+                    return BuildResult(
                         config=config,
+                        success=False,
+                        variant_name=variant_name,
                         error="Build failed",
                         elapsed_seconds=time.time() - start_time,
+                        stdout=build_result.stdout,
+                        stderr=build_result.stderr,
                     )
 
                 # Success - write metadata and return
@@ -308,6 +312,8 @@ class OSSFuzzBuilder:
                     build_path=build_path,
                     elapsed_seconds=time.time() - start_time,
                     fallback_used=fallback_from_inc,
+                    stdout=build_result.stdout,
+                    stderr=build_result.stderr,
                 )
 
             except Exception as e:
@@ -444,10 +450,14 @@ class OSSFuzzBuilder:
                     )
 
                 if not build_result.success:
-                    return BuildResult.from_error(
+                    return BuildResult(
                         config=config,
+                        success=False,
+                        variant_name=variant_name,
                         error="Incremental build failed (both inc and fallback)",
                         elapsed_seconds=time.time() - start_time,
+                        stdout=build_result.stdout,
+                        stderr=build_result.stderr,
                     )
 
                 # Success - write metadata and return
@@ -465,6 +475,8 @@ class OSSFuzzBuilder:
                     build_path=build_path,
                     elapsed_seconds=time.time() - start_time,
                     fallback_used=build_result.fallback_used,
+                    stdout=build_result.stdout,
+                    stderr=build_result.stderr,
                 )
 
             except Exception as e:

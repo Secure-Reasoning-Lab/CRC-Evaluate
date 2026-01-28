@@ -26,6 +26,26 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _write_build_logs(
+    context: JobContext, log_path: Path, stdout: str, stderr: str
+) -> None:
+    """Write separate .stdout and .stderr files for build logs."""
+    if not context.output_dir or not log_path:
+        return
+
+    base_path = log_path.with_suffix("")  # Remove .log suffix
+
+    # Write stdout log
+    if stdout:
+        stdout_path = base_path.parent / f"{base_path.name}.stdout"
+        stdout_path.write_text(stdout)
+
+    # Write stderr log
+    if stderr:
+        stderr_path = base_path.parent / f"{base_path.name}.stderr"
+        stderr_path.write_text(stderr)
+
+
 @dataclass
 class BuildSingleVariantJob(Job):
     """Build a single variant for a benchmark.
@@ -144,6 +164,12 @@ class BuildSingleVariantJob(Job):
                 },
             )
             self._write_job_log(context, job_result)
+
+            # Write separate stdout/stderr files
+            log_path = self._job_log_path(context)
+            if log_path:
+                _write_build_logs(context, log_path, result.stdout, result.stderr)
+
             return job_result
         except Exception as e:
             finished_at = datetime.now()
@@ -311,6 +337,45 @@ class VerifyCpvPovJob(Job):
             return self.build_job_ids
         return [self.build_job_id] if self.build_job_id else []
 
+    def _write_verdict_logs(self, context: JobContext, results: list) -> None:
+        """Write separate .stdout and .stderr files for verdict logs."""
+        if not context.output_dir:
+            return
+
+        log_path = self._job_log_path(context)
+        if not log_path:
+            return
+
+        base_path = log_path.with_suffix("")  # Remove .log suffix
+
+        for r in results:
+            if not r.crash_info:
+                continue
+
+            pov_id = r.pov_id or "unknown"
+
+            # Write stdout logs
+            stdout_logs = r.crash_info.get("stdout", {})
+            if stdout_logs:
+                stdout_path = base_path.parent / f"{base_path.name}-{pov_id}.stdout"
+                lines = []
+                for variant_name, log in stdout_logs.items():
+                    lines.append(f"=== {variant_name} ===")
+                    lines.append(log)
+                    lines.append("")
+                stdout_path.write_text("\n".join(lines))
+
+            # Write stderr logs
+            stderr_logs = r.crash_info.get("stderr", {})
+            if stderr_logs:
+                stderr_path = base_path.parent / f"{base_path.name}-{pov_id}.stderr"
+                lines = []
+                for variant_name, log in stderr_logs.items():
+                    lines.append(f"=== {variant_name} ===")
+                    lines.append(log)
+                    lines.append("")
+                stderr_path.write_text("\n".join(lines))
+
     def execute(self, context: JobContext) -> JobResult:
         """Verify POVs for this CPV using pre-built variants."""
         started_at = datetime.now()
@@ -397,15 +462,15 @@ class VerifyCpvPovJob(Job):
                 if r.success
             ]
 
-            # Collect per-POV verdict info
-            pov_verdicts = [
-                {
+            # Collect per-POV verdict info (without crash_info - written to separate files)
+            pov_verdicts = []
+            for r in results:
+                verdict_info = {
                     "pov_id": r.pov_id or "unknown",
                     "status": r.status.value,
                     "cpv_matched": r.cpv_matched,
                 }
-                for r in results
-            ]
+                pov_verdicts.append(verdict_info)
 
             finished_at = datetime.now()
             result = JobResult(
@@ -424,6 +489,10 @@ class VerifyCpvPovJob(Job):
                 },
             )
             self._write_job_log(context, result)
+
+            # Write separate stdout/stderr files for each verdict
+            self._write_verdict_logs(context, results)
+
             return result
         except Exception as e:
             finished_at = datetime.now()
@@ -555,6 +624,12 @@ class BuildPatchVariantJob(Job):
                 },
             )
             self._write_job_log(context, job_result)
+
+            # Write separate stdout/stderr files
+            log_path = self._job_log_path(context)
+            if log_path:
+                _write_build_logs(context, log_path, result.stdout, result.stderr)
+
             return job_result
         except Exception as e:
             finished_at = datetime.now()
@@ -603,6 +678,59 @@ class PatchVariantTestJob(Job):
     def depends_on(self) -> list[str]:
         return [self.build_patch_job_id] if self.build_patch_job_id else []
 
+    def _write_test_logs(
+        self,
+        context: JobContext,
+        pov_stdout: dict[str, str],
+        pov_stderr: dict[str, str],
+        test_stdout: str,
+        test_stderr: str,
+    ) -> None:
+        """Write separate .stdout and .stderr files for test logs."""
+        if not context.output_dir:
+            return
+
+        log_path = self._job_log_path(context)
+        if not log_path:
+            return
+
+        base_path = log_path.with_suffix("")  # Remove .log suffix
+
+        # Combine POV logs and test logs
+        stdout_lines = []
+        stderr_lines = []
+
+        # Add POV outputs
+        for pov_id, stdout in pov_stdout.items():
+            stdout_lines.append(f"=== POV: {pov_id} ===")
+            stdout_lines.append(stdout)
+            stdout_lines.append("")
+
+        for pov_id, stderr in pov_stderr.items():
+            stderr_lines.append(f"=== POV: {pov_id} ===")
+            stderr_lines.append(stderr)
+            stderr_lines.append("")
+
+        # Add test outputs
+        if test_stdout:
+            stdout_lines.append("=== Unit Tests ===")
+            stdout_lines.append(test_stdout)
+            stdout_lines.append("")
+
+        if test_stderr:
+            stderr_lines.append("=== Unit Tests ===")
+            stderr_lines.append(test_stderr)
+            stderr_lines.append("")
+
+        # Write files
+        if stdout_lines:
+            stdout_path = base_path.parent / f"{base_path.name}.stdout"
+            stdout_path.write_text("\n".join(stdout_lines))
+
+        if stderr_lines:
+            stderr_path = base_path.parent / f"{base_path.name}.stderr"
+            stderr_path.write_text("\n".join(stderr_lines))
+
     def execute(self, context: JobContext) -> JobResult:
         """Run POVs and tests against patched variant."""
         started_at = datetime.now()
@@ -615,6 +743,8 @@ class PatchVariantTestJob(Job):
 
             failed_povs: list[str] = []
             passed_povs: list[str] = []
+            pov_stdout: dict[str, str] = {}
+            pov_stderr: dict[str, str] = {}
 
             if context.infra:
                 for pov_path in self.pov_paths:
@@ -627,6 +757,10 @@ class PatchVariantTestJob(Job):
                         timeout=context.timeout,
                         pov_id=pov_id,
                     )
+                    # Capture stdout/stderr
+                    pov_stdout[pov_id] = output.stdout
+                    pov_stderr[pov_id] = output.stderr
+
                     if output.crashed:
                         failed_povs.append(pov_id)
                     else:
@@ -634,9 +768,11 @@ class PatchVariantTestJob(Job):
 
             # Run unit tests if infra supports it
             test_passed = True
+            test_stdout = ""
+            test_stderr = ""
             if context.infra and hasattr(context.infra, "run_tests"):
                 rts_mode = self.test_mode == "RTS"
-                passed, _stdout, _stderr = context.infra.run_tests(
+                passed, test_stdout, test_stderr = context.infra.run_tests(
                     variant_name,
                     self.benchmark_path,
                     rts_mode=rts_mode,
@@ -669,6 +805,12 @@ class PatchVariantTestJob(Job):
                 },
             )
             self._write_job_log(context, result)
+
+            # Write separate stdout/stderr files
+            self._write_test_logs(
+                context, pov_stdout, pov_stderr, test_stdout, test_stderr
+            )
+
             return result
         except Exception as e:
             finished_at = datetime.now()

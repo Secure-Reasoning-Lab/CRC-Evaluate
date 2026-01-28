@@ -717,7 +717,12 @@ class OSSFuzzInfrastructure:
                 # Only relevant when inc-build was attempted (use_inc_image=True)
                 # and fallback was enabled (inc_fallback=True)
                 actual_fallback = use_inc_image and inc_fallback
-                return FuzzerBuildResult(success=True, fallback_used=actual_fallback)
+                return FuzzerBuildResult(
+                    success=True,
+                    fallback_used=actual_fallback,
+                    stdout=result.stdout or "",
+                    stderr=result.stderr or "",
+                )
 
             logger.error(
                 f"Build failed for {variant_name}. "
@@ -725,7 +730,12 @@ class OSSFuzzInfrastructure:
                 f"stdout: {result.stdout[:2000] if result.stdout else 'None'}...\n"
                 f"stderr: {result.stderr[:2000] if result.stderr else 'None'}..."
             )
-            return FuzzerBuildResult(success=False, fallback_used=False)
+            return FuzzerBuildResult(
+                success=False,
+                fallback_used=False,
+                stdout=result.stdout or "",
+                stderr=result.stderr or "",
+            )
 
         except subprocess.TimeoutExpired:
             logger.error(f"Build timed out for {variant_name} ({config.timeout}s)")
