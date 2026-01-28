@@ -184,6 +184,12 @@ worker:
   # Override CRS configs directory.
   # crs_configs_dir: /opt/crses/configs
 
+  # Override number of parallel build workers.
+  # build_workers: 4
+
+  # Override number of parallel verification workers.
+  # verify_workers: 4
+
   # Override benchmarks root directory.
   # benchmarks_root: /opt/benchmarks
 

@@ -689,6 +689,16 @@ class WorkerConfig(BaseModel):
         default=None,
         description="Override CRS configs directory for workers on different machines",
     )
+    build_workers: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Override build_workers for workers on different machines",
+    )
+    verify_workers: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Override verify_workers for workers on different machines",
+    )
     benchmarks_root: Optional[Path] = Field(
         default=None,
         description="Override benchmarks root directory for workers on different machines",

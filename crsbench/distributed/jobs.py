@@ -852,6 +852,20 @@ def run_crs_trial(
                 f"Worker override applied: reports_results_filestore = {config.reports_results_filestore}"
             )
 
+        build_workers_override = get_worker_override("build_workers")
+        if build_workers_override:
+            config.build_workers = int(build_workers_override)
+            logger.info(
+                f"Worker override applied: build_workers = {config.build_workers}"
+            )
+
+        verify_workers_override = get_worker_override("verify_workers")
+        if verify_workers_override:
+            config.verify_workers = int(verify_workers_override)
+            logger.info(
+                f"Worker override applied: verify_workers = {config.verify_workers}"
+            )
+
         # Resolve CRS config name to registry name
         registry_name = get_crs_registry_name(crs, crs_configs_dir)
         logger.info(f"Resolved CRS config '{crs}' to registry '{registry_name}'")
