@@ -52,6 +52,87 @@ load_dotenv()
 logger = get_logger(__name__)
 
 
+def format_duration(seconds: int) -> str:
+    """Format duration in seconds to human-readable string.
+
+    Args:
+        seconds: Duration in seconds
+
+    Returns:
+        Human-readable duration string (e.g., "4h 0m", "30m", "1d 2h 30m")
+    """
+    if seconds < 60:
+        return f"{seconds}s"
+
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+
+    hours = minutes // 60
+    remaining_minutes = minutes % 60
+
+    if hours < 24:
+        if remaining_minutes > 0:
+            return f"{hours}h {remaining_minutes}m"
+        return f"{hours}h"
+
+    days = hours // 24
+    remaining_hours = hours % 24
+
+    if remaining_hours > 0:
+        return f"{days}d {remaining_hours}h"
+    return f"{days}d"
+
+
+def display_estimated_runtime(
+    total_jobs: int,
+    config: "ExperimentConfig",
+    *,
+    worker_count: int = 1,
+) -> None:
+    """Display estimated experiment runtime before execution.
+
+    Calculates and logs the estimated runtime based on phase timeouts
+    and total number of jobs. For distributed mode with multiple workers,
+    shows parallel estimate.
+
+    Args:
+        total_jobs: Total number of jobs to execute
+        config: Experiment configuration with timeout settings
+        worker_count: Number of workers for parallel execution (default: 1 for sequential)
+    """
+    if total_jobs == 0:
+        return
+
+    # Calculate per-job estimate from phase timeouts
+    per_job_seconds = config.build_timeout + config.run_timeout + config.verify_timeout
+    total_seconds = per_job_seconds * total_jobs
+
+    # Format individual timeouts
+    build_fmt = format_duration(config.build_timeout)
+    run_fmt = format_duration(config.run_timeout)
+    verify_fmt = format_duration(config.verify_timeout)
+
+    # Display estimates
+    logger.info(
+        f"Estimated max runtime per job: {format_duration(per_job_seconds)} "
+        f"(build: {build_fmt} + run: {run_fmt} + verify: {verify_fmt})"
+    )
+
+    if worker_count > 1:
+        # Parallel execution with multiple workers
+        parallel_seconds = total_seconds // worker_count
+        logger.info(
+            f"Estimated total runtime: {format_duration(parallel_seconds)} "
+            f"({total_jobs} jobs / {worker_count} workers)"
+        )
+    else:
+        # Sequential execution
+        logger.info(
+            f"Estimated total runtime (sequential): {format_duration(total_seconds)}"
+        )
+
+
 # Trial configuration
 class Trial(BaseModel):
     """Trial configuration for CRS evaluation.
@@ -744,7 +825,7 @@ def generate_trial_matrix(
                     skip_reason = (
                         "bug-fixing CRS" if is_bug_fixing else "only_cpv_harnesses=True"
                     )
-                    logger.info(
+                    logger.debug(
                         f"Skipping {benchmark_harness.name}/{benchmark_harness.harness.name}: "
                         f"no CPVs ({skip_reason})"
                     )
@@ -2326,6 +2407,12 @@ def main() -> None:
 
     # Determine execution mode
     use_distributed = should_use_distributed_mode(args, config, total_jobs)
+
+    # Display estimated runtime (with worker count for distributed mode)
+    if use_distributed and config.worker:
+        display_estimated_runtime(total_jobs, config, worker_count=config.worker.jobs)
+    else:
+        display_estimated_runtime(total_jobs, config)
 
     # Run experiment in appropriate mode
     if use_distributed:
