@@ -643,6 +643,8 @@ class OSSFuzzInfrastructure:
         *,
         use_inc_image: bool = False,
         inc_fallback: bool = False,
+        inc_patch: Optional[Path] = None,
+        apply_patch: bool = False,
     ) -> FuzzerBuildResult:
         """Build fuzzers for a variant.
 
@@ -652,6 +654,11 @@ class OSSFuzzInfrastructure:
             use_inc_image: Use pre-built inc-build image for faster builds
             inc_fallback: Fallback to clean build using /src instead of /built-src.
                 Use when incremental build fails due to incompatibility.
+            inc_patch: Path to patch file to apply to /built-src/ for true incremental
+                builds. When provided with use_inc_image=True, applies patch to /built-src
+                and compiles incrementally.
+            apply_patch: If True, rsync source directly to /built-src for true
+                incremental build. Use with use_inc_image=True and src_path.
 
         Returns:
             FuzzerBuildResult with success status and fallback tracking.
@@ -688,6 +695,12 @@ class OSSFuzzInfrastructure:
             # Add inc-fallback flag if needed
             if inc_fallback:
                 cmd.append("--inc-fallback")
+            # Add inc-patch for true incremental patched builds
+            if inc_patch:
+                cmd.extend(["--inc-patch", str(inc_patch)])
+            # Add apply-patch for true incremental with patched source
+            if apply_patch:
+                cmd.append("--apply-patch")
 
         cmd.append(variant_name)
         # Only add source path if provided (not using bundled pkgs/)

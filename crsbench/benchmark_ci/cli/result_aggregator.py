@@ -169,25 +169,43 @@ def aggregate_pov_var_results(
 ) -> CheckResult:
     """Aggregate POV verification results for variants (pov_1+) only.
 
+    Reads from VerifyCpvVarJob results (verify-cpv-var:...).
     Returns a result with var_passed/var_total in details.
     SKIP if no variants exist.
     """
     if not cpv_ids:
         return CheckResult.skip("No CPVs to verify")
 
+    verify_time = 0.0
     var_passed = 0
     var_total = 0
     failures: list[str] = []
+    errors: list[str] = []
+    has_var_jobs = False
 
     for cpv_id in cpv_ids:
-        job_id = f"verify-cpv-pov:{benchmark_name}:{cpv_id}"
+        # Read from the new VerifyCpvVarJob
+        job_id = f"verify-cpv-var:{benchmark_name}:{cpv_id}"
         result = dag_results.get(job_id)
 
         if result is None:
-            continue  # Already reported in pov_pov_results
+            continue  # No variants for this CPV
 
-        if result.status != JobStatus.SUCCESS:
-            continue  # Already reported in pov_pov_results
+        has_var_jobs = True
+        verify_time += result.elapsed_seconds
+
+        if result.status == JobStatus.DEP_FAILED:
+            errors.append(f"{cpv_id}: dependency failed")
+            continue
+
+        if result.status == JobStatus.FAILED:
+            if result.job_result:
+                cpv_var_passed = result.job_result.details.get("var_passed", 0)
+                cpv_var_total = result.job_result.details.get("var_total", 0)
+                var_passed += cpv_var_passed
+                var_total += cpv_var_total
+                failures.append(f"{cpv_id}: {cpv_var_passed}/{cpv_var_total} variants")
+            continue
 
         # Extract variant counts from job details
         if result.job_result:
@@ -198,14 +216,28 @@ def aggregate_pov_var_results(
             if cpv_var_total > 0 and cpv_var_passed < cpv_var_total:
                 failures.append(f"{cpv_id}: {cpv_var_passed}/{cpv_var_total} variants")
 
-    # No variants found
-    if var_total == 0:
+    # No variant jobs found
+    if not has_var_jobs or var_total == 0:
         return CheckResult.skip("No variants")
+
+    if errors:
+        return CheckResult(
+            status=CheckStatus.ERROR,
+            time_seconds=verify_time,
+            verify_time=verify_time,
+            error="; ".join(errors),
+            details={
+                "var_passed": var_passed,
+                "var_total": var_total,
+                "errors": errors,
+            },
+        )
 
     if failures:
         return CheckResult(
             status=CheckStatus.FAIL,
-            time_seconds=0.0,
+            time_seconds=verify_time,
+            verify_time=verify_time,
             error="; ".join(failures[:3]),
             details={
                 "var_passed": var_passed,
@@ -216,7 +248,8 @@ def aggregate_pov_var_results(
 
     return CheckResult(
         status=CheckStatus.PASS,
-        time_seconds=0.0,
+        time_seconds=verify_time,
+        verify_time=verify_time,
         details={"var_passed": var_passed, "var_total": var_total},
     )
 
@@ -585,8 +618,9 @@ def aggregate_patch_var_results(
     benchmark_name: str,
     patch_keys: list[tuple[str, str]],
 ) -> CheckResult:
-    """Aggregate variant POV test results (pov_1+) from test-patch-pov jobs.
+    """Aggregate variant POV test results (pov_1+) from test-patch-var jobs.
 
+    Reads from PatchVarTestJob results (test-patch-var:...).
     Returns a result with var_passed/var_total in details.
     SKIP if no variants exist.
     """
@@ -597,18 +631,33 @@ def aggregate_patch_var_results(
     var_passed = 0
     var_total = 0
     failures: list[str] = []
+    errors: list[str] = []
+    has_var_jobs = False
 
     for cpv_id, patch_id in patch_keys:
-        # Try new job ID format first (test-patch-pov)
-        test_job_id = f"test-patch-pov:{benchmark_name}:{cpv_id}:{patch_id}"
+        # Read from the new PatchVarTestJob
+        test_job_id = f"test-patch-var:{benchmark_name}:{cpv_id}:{patch_id}"
         test_result = dag_results.get(test_job_id)
 
-        # Fallback to old job ID format (test-patch:FULL) for compatibility
         if test_result is None:
-            test_job_id = f"test-patch:{benchmark_name}:{cpv_id}:{patch_id}:FULL"
-            test_result = dag_results.get(test_job_id)
+            continue  # No variants for this patch
 
-        if test_result is None or test_result.status != JobStatus.SUCCESS:
+        has_var_jobs = True
+        verify_time += test_result.elapsed_seconds
+
+        if test_result.status == JobStatus.DEP_FAILED:
+            errors.append(f"{cpv_id}/{patch_id}: dependency failed")
+            continue
+
+        if test_result.status == JobStatus.FAILED:
+            if test_result.job_result:
+                patch_var_passed = test_result.job_result.details.get("var_passed", 0)
+                patch_var_total = test_result.job_result.details.get("var_total", 0)
+                var_passed += patch_var_passed
+                var_total += patch_var_total
+                failures.append(
+                    f"{cpv_id}/{patch_id}: {patch_var_passed}/{patch_var_total} variants"
+                )
             continue
 
         # Extract variant counts from job details
@@ -622,9 +671,22 @@ def aggregate_patch_var_results(
                     f"{cpv_id}/{patch_id}: {patch_var_passed}/{patch_var_total} variants"
                 )
 
-    # No variants found
-    if var_total == 0:
+    # No variant jobs found
+    if not has_var_jobs or var_total == 0:
         return CheckResult.skip("No variants")
+
+    if errors:
+        return CheckResult(
+            status=CheckStatus.ERROR,
+            time_seconds=verify_time,
+            verify_time=verify_time,
+            error="; ".join(errors),
+            details={
+                "var_passed": var_passed,
+                "var_total": var_total,
+                "errors": errors,
+            },
+        )
 
     if failures:
         return CheckResult(

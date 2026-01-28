@@ -23,7 +23,11 @@ from crsbench.benchmark_ci.cli.discovery import resolve_benchmark_paths
 from crsbench.benchmark_ci.cli.output import print_results_table, save_output_dir
 from crsbench.benchmark_ci.cli.result_aggregator import aggregate_pov_results
 from crsbench.benchmark_ci.jobs.base import Job, JobContext
-from crsbench.benchmark_ci.jobs.flat import BuildVariantsJob, VerifyCpvPovJob
+from crsbench.benchmark_ci.jobs.flat import (
+    BuildVariantsJob,
+    VerifyCpvPovJob,
+    VerifyCpvVarJob,
+)
 from crsbench.benchmark_ci.models import (
     BenchmarkValidationResult,
     CheckMode,
@@ -107,25 +111,55 @@ def run_pov(args: argparse.Namespace) -> int:
                     pov_paths = pov_paths[:max_povs_per_cpv]
                 if not pov_paths:
                     continue
-                verify_job = VerifyCpvPovJob(
-                    benchmark_name=benchmark_name,
-                    cpv_id=cpv_id,
-                    harness=harness,
-                    pov_paths=pov_paths,
-                    build_job_id=build_job.job_id,
-                    source_mode=source_mode,
-                )
-                all_jobs.append(verify_job)
+
+                # Split pov_0 (ground truth) from variants (pov_1+)
+                pov_0_path: Path | None = None
+                var_pov_paths: list[Path] = []
+                for p in pov_paths:
+                    if p.stem in ("pov_0", "pov"):
+                        pov_0_path = p
+                    else:
+                        var_pov_paths.append(p)
+
+                # V:POV job - tests only pov_0 (ground truth)
+                if pov_0_path:
+                    verify_job = VerifyCpvPovJob(
+                        benchmark_name=benchmark_name,
+                        cpv_id=cpv_id,
+                        harness=harness,
+                        benchmark_path=path,
+                        pov_path=pov_0_path,
+                        build_job_ids=[build_job.job_id],
+                        source_mode=source_mode,
+                    )
+                    all_jobs.append(verify_job)
+
+                # V:VAR job - tests only variants (pov_1+)
+                if var_pov_paths:
+                    var_job = VerifyCpvVarJob(
+                        benchmark_name=benchmark_name,
+                        cpv_id=cpv_id,
+                        harness=harness,
+                        benchmark_path=path,
+                        pov_paths=var_pov_paths,
+                        build_job_ids=[build_job.job_id],
+                        source_mode=source_mode,
+                    )
+                    all_jobs.append(var_job)
 
         benchmark_metadata.append((path, supports_inc, rts_mode, cpv_ids))
 
     # Log DAG summary
     build_count = sum(1 for j in all_jobs if isinstance(j, BuildVariantsJob))
-    pov_jobs = [j for j in all_jobs if isinstance(j, VerifyCpvPovJob)]
-    pov_blob_count = sum(len(j.pov_paths) for j in pov_jobs)
+    pov_job_count = sum(1 for j in all_jobs if isinstance(j, VerifyCpvPovJob))
+    var_job_count = sum(1 for j in all_jobs if isinstance(j, VerifyCpvVarJob))
+    var_pov_count = sum(
+        len(j.pov_paths) for j in all_jobs if isinstance(j, VerifyCpvVarJob)
+    )
     logger.info(
         f"DAG: {len(all_jobs)} jobs — "
-        f"{build_count} build, {len(pov_jobs)} pov-verify ({pov_blob_count} blobs)"
+        f"{build_count} build, {pov_job_count} V:POV, "
+        f"{var_job_count} V:VAR ({var_pov_count} blobs)"
     )
 
     # Execute with typed concurrency

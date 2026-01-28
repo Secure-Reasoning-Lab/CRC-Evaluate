@@ -577,9 +577,9 @@ def write_summary_csv(
         # ALL mode — split POV and patch columns for detailed analysis
         f.write(
             "benchmark,inc,rts,fmt,"
-            "pov_build,pov_build_s,pov_pov,pov_pov_s,pov_var,"
+            "pov_build,pov_build_s,pov_pov,pov_pov_s,pov_var,pov_var_s,"
             "patch,patch_build,patch_pov,patch_var,patch_unittest,"
-            "patch_build_s,patch_pov_s,patch_unittest_s,"
+            "patch_build_s,patch_pov_s,patch_var_s,patch_unittest_s,"
             "patch_rts,patch_rts_s,"
             "cov,cov_verify_s,"
             "total,total_time_s,storage_bytes\n"
@@ -595,6 +595,7 @@ def write_summary_csv(
                 f"{_plain_status(r.pov_pov_check)},"
                 f"{_check_verify_time(r.pov_pov_check):.1f},"
                 f"{_plain_var_status(r.pov_var_check)},"
+                f"{_check_verify_time(r.pov_var_check):.1f},"
                 f"{_plain_status(r.patch_check)},"
                 f"{_plain_status(r.patch_build_check)},"
                 f"{_plain_status(r.patch_pov_check)},"
@@ -602,6 +603,7 @@ def write_summary_csv(
                 f"{_plain_status(r.patch_unittest_check)},"
                 f"{_check_build_time(r.patch_build_check):.1f},"
                 f"{_check_verify_time(r.patch_pov_check):.1f},"
+                f"{_check_verify_time(r.patch_var_check):.1f},"
                 f"{_check_verify_time(r.patch_unittest_check):.1f},"
                 f"{_plain_status(r.patch_rts_check)},"
                 f"{_check_verify_time(r.patch_rts_check):.1f},"

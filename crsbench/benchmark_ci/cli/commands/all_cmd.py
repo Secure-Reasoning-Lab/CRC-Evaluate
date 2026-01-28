@@ -49,7 +49,9 @@ from crsbench.benchmark_ci.jobs.flat import (
     PatchPovTestJob,
     PatchUnitTestJob,
     PatchVariantTestJob,
+    PatchVarTestJob,
     VerifyCpvPovJob,
+    VerifyCpvVarJob,
 )
 from crsbench.benchmark_ci.models import (
     BenchmarkValidationResult,
@@ -282,26 +284,49 @@ def _build_dag(
                 cpv_build_job_ids = build_jobs_by_sanitizer[cpv_sanitizer].copy()
                 cpv_build_job_ids.append(cpv_build_job.job_id)
 
-                # POV verify jobs - depend on vulnerable, allpatched, and CPV variant builds
+                # Discover POV paths and split into pov_0 and variants
                 pov_paths = discover_pov_paths(path, harness, cpv_id)
                 # Apply max_povs_per_cpv limit (paths already sorted by pov number)
                 if max_povs_per_cpv and len(pov_paths) > max_povs_per_cpv:
                     pov_paths = pov_paths[:max_povs_per_cpv]
-                if pov_paths:
+
+                # Split pov_0 (ground truth) from variants (pov_1+)
+                pov_0_path: Path | None = None
+                var_pov_paths: list[Path] = []
+                for p in pov_paths:
+                    if p.stem in ("pov_0", "pov"):
+                        pov_0_path = p
+                    else:
+                        var_pov_paths.append(p)
+
+                # V:POV job - tests only pov_0 (ground truth)
+                if pov_0_path:
                     pov_job = VerifyCpvPovJob(
                         benchmark_name=benchmark_name,
                         cpv_id=cpv_id,
                         harness=harness,
                         benchmark_path=path,
-                        pov_paths=pov_paths,
+                        pov_path=pov_0_path,
                         build_job_ids=cpv_build_job_ids,
                         source_mode=source_mode,
                     )
                     all_jobs.append(pov_job)
 
+                # V:VAR job - tests only variants (pov_1+), runs parallel to V:POV
+                if var_pov_paths:
+                    var_job = VerifyCpvVarJob(
+                        benchmark_name=benchmark_name,
+                        cpv_id=cpv_id,
+                        harness=harness,
+                        benchmark_path=path,
+                        pov_paths=var_pov_paths,
+                        build_job_ids=cpv_build_job_ids,
+                        source_mode=source_mode,
+                    )
+                    all_jobs.append(var_job)
+
                 # Patch build + test jobs
-                # New structure: build -> POV test -> unit tests (FULL/RTS)
-                # This avoids running POV tests twice (once in FULL, once in RTS)
+                # New structure: build -> (P:POV, P:VAR, P:UT, P:RTS) all in parallel
                 # BuildPatchVariantJob depends on vulnerable build for adapter
                 # Use sanitizer-specific vulnerable job (first in the list)
                 cpv_vulnerable_job_id = build_jobs_by_sanitizer[cpv_sanitizer][0]
@@ -325,20 +350,35 @@ def _build_dag(
                     )
                     all_jobs.append(build_patch_job)
 
-                    # Step 2: POV test (runs once, depends on build)
-                    pov_test_job = PatchPovTestJob(
-                        benchmark_path=path,
-                        benchmark_name=benchmark_name,
-                        cpv_id=cpv_id,
-                        patch_id=patch_id,
-                        harness=harness,
-                        pov_paths=pov_paths,
-                        build_patch_job_id=build_patch_job.job_id,
-                        source_mode=source_mode,
-                    )
-                    all_jobs.append(pov_test_job)
+                    # Step 2a: P:POV - tests only pov_0 (depends on build)
+                    if pov_0_path:
+                        pov_test_job = PatchPovTestJob(
+                            benchmark_path=path,
+                            benchmark_name=benchmark_name,
+                            cpv_id=cpv_id,
+                            patch_id=patch_id,
+                            harness=harness,
+                            pov_path=pov_0_path,
+                            build_patch_job_id=build_patch_job.job_id,
+                            source_mode=source_mode,
+                        )
+                        all_jobs.append(pov_test_job)
 
-                    # Step 3a: FULL unit test (depends on POV test passing)
+                    # Step 2b: P:VAR - tests only variants (depends on build, parallel to P:POV)
+                    if var_pov_paths:
+                        var_test_job = PatchVarTestJob(
+                            benchmark_path=path,
+                            benchmark_name=benchmark_name,
+                            cpv_id=cpv_id,
+                            patch_id=patch_id,
+                            harness=harness,
+                            pov_paths=var_pov_paths,
+                            build_patch_job_id=build_patch_job.job_id,
+                            source_mode=source_mode,
+                        )
+                        all_jobs.append(var_test_job)
+
+                    # Step 2c: P:UT FULL - unit tests (depends on build, parallel to POV/VAR)
                     unittest_full_job = PatchUnitTestJob(
                         benchmark_path=path,
                         benchmark_name=benchmark_name,
@@ -346,13 +386,12 @@ def _build_dag(
                         patch_id=patch_id,
                         harness=harness,
                         test_mode="FULL",
-                        pov_test_job_id=pov_test_job.job_id,
                         build_patch_job_id=build_patch_job.job_id,
                         source_mode=source_mode,
                     )
                     all_jobs.append(unittest_full_job)
 
-                    # Step 3b: RTS unit test (if RTS mode available)
+                    # Step 2d: P:RTS - RTS unit tests (if available, parallel to others)
                     if rts_mode:
                         unittest_rts_job = PatchUnitTestJob(
                             benchmark_path=path,
@@ -361,7 +400,6 @@ def _build_dag(
                             patch_id=patch_id,
                             harness=harness,
                             test_mode="RTS",
-                            pov_test_job_id=pov_test_job.job_id,
                             build_patch_job_id=build_patch_job.job_id,
                             source_mode=source_mode,
                         )
@@ -404,11 +442,18 @@ def _log_dag_summary(all_jobs: list[Job]) -> None:
         1 for j in all_jobs if isinstance(j, BuildSingleVariantJob)
     )
     build_legacy_count = sum(1 for j in all_jobs if isinstance(j, BuildVariantsJob))
-    pov_jobs = [j for j in all_jobs if isinstance(j, VerifyCpvPovJob)]
-    pov_blob_count = sum(len(j.pov_paths) for j in pov_jobs)
+
+    # Count new split verify jobs (V:POV and V:VAR)
+    pov_job_count = sum(1 for j in all_jobs if isinstance(j, VerifyCpvPovJob))
+    var_job_count = sum(1 for j in all_jobs if isinstance(j, VerifyCpvVarJob))
+    var_pov_count = sum(
+        len(j.pov_paths) for j in all_jobs if isinstance(j, VerifyCpvVarJob)
+    )
+
     patch_build_count = sum(1 for j in all_jobs if isinstance(j, BuildPatchVariantJob))
-    # Count new split jobs
+    # Count new split patch jobs (P:POV, P:VAR, P:UT)
     patch_pov_count = sum(1 for j in all_jobs if isinstance(j, PatchPovTestJob))
+    patch_var_count = sum(1 for j in all_jobs if isinstance(j, PatchVarTestJob))
     patch_unittest_count = sum(1 for j in all_jobs if isinstance(j, PatchUnitTestJob))
     # Legacy combined job count
     patch_test_count = sum(1 for j in all_jobs if isinstance(j, PatchVariantTestJob))
@@ -421,18 +466,23 @@ def _log_dag_summary(all_jobs: list[Job]) -> None:
         else f"{build_legacy_count} build"
     )
 
-    # Report new split structure if used, otherwise legacy combined
+    # Report new split verify structure
+    verify_info = (
+        f"{pov_job_count} V:POV, {var_job_count} V:VAR ({var_pov_count} blobs)"
+    )
+
+    # Report new split patch structure if used, otherwise legacy combined
     if patch_pov_count > 0:
         patch_info = (
-            f"{patch_build_count} patch-build, {patch_pov_count} patch-pov, "
-            f"{patch_unittest_count} patch-unittest"
+            f"{patch_build_count} P:Bld, {patch_pov_count} P:POV, "
+            f"{patch_var_count} P:VAR, {patch_unittest_count} P:UT"
         )
     else:
         patch_info = f"{patch_build_count} patch-build, {patch_test_count} patch-test"
 
     logger.info(
         f"DAG: {len(all_jobs)} jobs — "
-        f"{build_info}, {len(pov_jobs)} pov-verify ({pov_blob_count} blobs), "
+        f"{build_info}, {verify_info}, "
         f"{patch_info}, {coverage_count} coverage"
     )
 

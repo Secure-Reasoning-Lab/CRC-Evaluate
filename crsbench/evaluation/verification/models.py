@@ -310,6 +310,8 @@ class PatchVerificationResult:
     security_verdict: SecurityVerdict = "FAIL"
     fallback_used: bool = False
     inc_build_available: bool = False  # Whether inc-build image was available
+    build_stdout: str = ""  # Build stdout for debugging
+    build_stderr: str = ""  # Build stderr for debugging
 
     @property
     def is_valid(self) -> bool:

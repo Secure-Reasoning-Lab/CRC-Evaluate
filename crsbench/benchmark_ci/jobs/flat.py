@@ -304,21 +304,17 @@ class BuildVariantsJob(Job):
 
 @dataclass
 class VerifyCpvPovJob(Job):
-    """Verify POVs for a single CPV against built variants.
+    """Verify ground truth POV (pov_0) for a single CPV against built variants.
 
-    Runs reproduce for each POV against each variant and resolves
-    the verdict using the standard VerdictResolver.
-
-    Supports both legacy build_job_id (single BuildVariantsJob) and
-    new build_job_ids (list of BuildSingleVariantJob IDs).
+    Tests only pov_0 (ground truth) - variant POVs are handled by VerifyCpvVarJob.
+    Runs in parallel with VerifyCpvVarJob after build completes.
     """
 
     benchmark_name: str
     cpv_id: str
     harness: str
     benchmark_path: Optional[Path] = None
-    pov_paths: list[Path] = field(default_factory=list)
-    build_job_id: str = ""
+    pov_path: Optional[Path] = None  # Single pov_0 path
     build_job_ids: list[str] = field(default_factory=list)
     source_mode: str = "main_repo"
 
@@ -332,10 +328,7 @@ class VerifyCpvPovJob(Job):
 
     @property
     def depends_on(self) -> list[str]:
-        # Support both legacy single build_job_id and new build_job_ids list
-        if self.build_job_ids:
-            return self.build_job_ids
-        return [self.build_job_id] if self.build_job_id else []
+        return self.build_job_ids
 
     def _write_verdict_logs(self, context: JobContext, results: list) -> None:
         """Write separate .stdout and .stderr files per variant for verdict logs."""
@@ -373,10 +366,10 @@ class VerifyCpvPovJob(Job):
                 stderr_path.write_text(log)
 
     def execute(self, context: JobContext) -> JobResult:
-        """Verify POVs for this CPV using pre-built variants."""
+        """Verify pov_0 for this CPV using pre-built variants."""
         started_at = datetime.now()
         try:
-            if not self.pov_paths:
+            if not self.pov_path:
                 finished_at = datetime.now()
                 result = JobResult(
                     job_id=self.job_id,
@@ -390,30 +383,26 @@ class VerifyCpvPovJob(Job):
                 self._write_job_log(context, result)
                 return result
 
+            from crsbench.evaluation.verification.models import (
+                PovVerificationStatus,
+            )
             from crsbench.evaluation.verification.pov import VerificationEngine
             from crsbench.utils.run_helper import get_oss_fuzz_root
 
             oss_fuzz_path = Path(get_oss_fuzz_root())
 
-            # Collect build results from multiple build jobs or single legacy job
+            # Collect build results from build jobs
             build_results: dict = {}
             adapter = None
 
-            if self.build_job_ids:
-                # New mode: collect from multiple BuildSingleVariantJob results
-                for job_id in self.build_job_ids:
-                    build_data = context.shared.get(job_id, {})
-                    if build_data:
-                        build_result = build_data.get("build_result")
-                        if build_result:
-                            build_results[build_result.variant_name] = build_result
-                        if not adapter:
-                            adapter = build_data.get("adapter")
-            else:
-                # Legacy mode: single BuildVariantsJob
-                build_data = context.shared.get(self.build_job_id, {})
-                build_results = build_data.get("build_results", {})
-                adapter = build_data.get("adapter")
+            for job_id in self.build_job_ids:
+                build_data = context.shared.get(job_id, {})
+                if build_data:
+                    build_result = build_data.get("build_result")
+                    if build_result:
+                        build_results[build_result.variant_name] = build_result
+                    if not adapter:
+                        adapter = build_data.get("adapter")
 
             # If adapter not in context.shared, load via VerificationEngine
             if not adapter and self.benchmark_path:
@@ -424,23 +413,17 @@ class VerifyCpvPovJob(Job):
                 adapter = engine._load_adapter(self.benchmark_path)
 
             if not build_results or not adapter:
-                deps = self.build_job_ids or [self.build_job_id]
-                raise ValueError(f"No build data from {deps}")
+                raise ValueError(f"No build data from {self.build_job_ids}")
 
             engine = VerificationEngine(
                 oss_fuzz_path,
                 source_mode=self.source_mode,
             )
 
-            pov_harness_pairs = []
-            for pov_path in self.pov_paths:
-                pov_data = pov_path.read_bytes()
-                pov_id = pov_path.stem
-                pov_harness_pairs.append((pov_id, pov_data, self.harness))
-
-            from crsbench.evaluation.verification.models import (
-                PovVerificationStatus,
-            )
+            # Test only pov_0
+            pov_data = self.pov_path.read_bytes()
+            pov_id = self.pov_path.stem
+            pov_harness_pairs = [(pov_id, pov_data, self.harness)]
 
             results = engine.verify_povs_parallel(
                 pov_harness_pairs, adapter, build_results
@@ -458,28 +441,15 @@ class VerifyCpvPovJob(Job):
                 if r.success
             ]
 
-            # Collect per-POV verdict info (without crash_info - written to separate files)
+            # Collect verdict info
             pov_verdicts = []
-            pov_0_passed = True  # Ground truth POV
-            var_passed = 0  # Variant POVs (pov_1+)
-            var_total = 0
             for r in results:
-                pov_id = r.pov_id or "unknown"
-                is_cpv = r.status == PovVerificationStatus.CPV
                 verdict_info = {
-                    "pov_id": pov_id,
+                    "pov_id": r.pov_id or "unknown",
                     "status": r.status.value,
                     "cpv_matched": r.cpv_matched,
                 }
                 pov_verdicts.append(verdict_info)
-
-                # Track pov_0 separately from variants
-                if pov_id == "pov_0" or pov_id == "pov":
-                    pov_0_passed = is_cpv
-                else:
-                    var_total += 1
-                    if is_cpv:
-                        var_passed += 1
 
             finished_at = datetime.now()
             result = JobResult(
@@ -491,8 +461,201 @@ class VerifyCpvPovJob(Job):
                 elapsed_seconds=(finished_at - started_at).total_seconds(),
                 details={
                     "cpv_id": self.cpv_id,
-                    "pov_count": len(pov_harness_pairs),
-                    "pov_0_passed": pov_0_passed,
+                    "pov_count": 1,
+                    "pov_0_passed": passed,
+                    "variants_used": len(variants_used),
+                    "variants": variants_used,
+                    "verdicts": pov_verdicts,
+                },
+            )
+            self._write_job_log(context, result)
+
+            # Write separate stdout/stderr files for each verdict
+            self._write_verdict_logs(context, results)
+
+            return result
+        except Exception as e:
+            finished_at = datetime.now()
+            result = JobResult(
+                job_id=self.job_id,
+                job_type=self.job_type,
+                success=False,
+                started_at=started_at,
+                finished_at=finished_at,
+                elapsed_seconds=(finished_at - started_at).total_seconds(),
+                error=str(e),
+            )
+            self._write_job_log(context, result)
+            return result
+
+
+@dataclass
+class VerifyCpvVarJob(Job):
+    """Verify variant POVs (pov_1+) for a single CPV against built variants.
+
+    Tests only variant POVs - ground truth (pov_0) is handled by VerifyCpvPovJob.
+    Runs in parallel with VerifyCpvPovJob after build completes.
+    """
+
+    benchmark_name: str
+    cpv_id: str
+    harness: str
+    benchmark_path: Optional[Path] = None
+    pov_paths: list[Path] = field(default_factory=list)  # pov_1+ paths
+    build_job_ids: list[str] = field(default_factory=list)
+    source_mode: str = "main_repo"
+
+    @property
+    def job_id(self) -> str:
+        return f"verify-cpv-var:{self.benchmark_name}:{self.cpv_id}"
+
+    @property
+    def job_type(self) -> str:
+        return "verify"
+
+    @property
+    def depends_on(self) -> list[str]:
+        return self.build_job_ids
+
+    def _write_verdict_logs(self, context: JobContext, results: list) -> None:
+        """Write separate .stdout and .stderr files per variant for verdict logs."""
+        if not context.output_dir:
+            return
+
+        log_path = self._job_log_path(context)
+        if not log_path:
+            return
+
+        base_path = log_path.with_suffix("")  # Remove .log suffix
+
+        for r in results:
+            if not r.crash_info:
+                continue
+
+            pov_id = r.pov_id or "unknown"
+
+            stdout_logs = r.crash_info.get("stdout", {})
+            for variant_name, log in stdout_logs.items():
+                stdout_path = (
+                    base_path.parent
+                    / f"{base_path.name}-{pov_id}-{variant_name}.stdout"
+                )
+                stdout_path.write_text(log)
+
+            stderr_logs = r.crash_info.get("stderr", {})
+            for variant_name, log in stderr_logs.items():
+                stderr_path = (
+                    base_path.parent
+                    / f"{base_path.name}-{pov_id}-{variant_name}.stderr"
+                )
+                stderr_path.write_text(log)
+
+    def execute(self, context: JobContext) -> JobResult:
+        """Verify variant POVs for this CPV using pre-built variants."""
+        started_at = datetime.now()
+        try:
+            if not self.pov_paths:
+                finished_at = datetime.now()
+                result = JobResult(
+                    job_id=self.job_id,
+                    job_type=self.job_type,
+                    success=True,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    elapsed_seconds=(finished_at - started_at).total_seconds(),
+                    details={
+                        "cpv_id": self.cpv_id,
+                        "var_passed": 0,
+                        "var_total": 0,
+                    },
+                )
+                self._write_job_log(context, result)
+                return result
+
+            from crsbench.evaluation.verification.models import (
+                PovVerificationStatus,
+            )
+            from crsbench.evaluation.verification.pov import VerificationEngine
+            from crsbench.utils.run_helper import get_oss_fuzz_root
+
+            oss_fuzz_path = Path(get_oss_fuzz_root())
+
+            # Collect build results from build jobs
+            build_results: dict = {}
+            adapter = None
+
+            for job_id in self.build_job_ids:
+                build_data = context.shared.get(job_id, {})
+                if build_data:
+                    build_result = build_data.get("build_result")
+                    if build_result:
+                        build_results[build_result.variant_name] = build_result
+                    if not adapter:
+                        adapter = build_data.get("adapter")
+
+            # If adapter not in context.shared, load via VerificationEngine
+            if not adapter and self.benchmark_path:
+                engine = VerificationEngine(
+                    oss_fuzz_path,
+                    source_mode=self.source_mode,
+                )
+                adapter = engine._load_adapter(self.benchmark_path)
+
+            if not build_results or not adapter:
+                raise ValueError(f"No build data from {self.build_job_ids}")
+
+            engine = VerificationEngine(
+                oss_fuzz_path,
+                source_mode=self.source_mode,
+            )
+
+            # Test variant POVs (pov_1+)
+            pov_harness_pairs = []
+            for pov_path in self.pov_paths:
+                pov_data = pov_path.read_bytes()
+                pov_id = pov_path.stem
+                pov_harness_pairs.append((pov_id, pov_data, self.harness))
+
+            results = engine.verify_povs_parallel(
+                pov_harness_pairs, adapter, build_results
+            )
+
+            var_passed = sum(
+                1 for r in results if r.status == PovVerificationStatus.CPV
+            )
+            var_total = len(results)
+            passed = var_passed == var_total
+
+            # Collect variant info for structured logging
+            variants_used = [
+                {
+                    "name": name,
+                    "variant_type": r.config.variant_type.value,
+                }
+                for name, r in build_results.items()
+                if r.success
+            ]
+
+            # Collect verdict info
+            pov_verdicts = []
+            for r in results:
+                verdict_info = {
+                    "pov_id": r.pov_id or "unknown",
+                    "status": r.status.value,
+                    "cpv_matched": r.cpv_matched,
+                }
+                pov_verdicts.append(verdict_info)
+
+            finished_at = datetime.now()
+            result = JobResult(
+                job_id=self.job_id,
+                job_type=self.job_type,
+                success=passed,
+                started_at=started_at,
+                finished_at=finished_at,
+                elapsed_seconds=(finished_at - started_at).total_seconds(),
+                details={
+                    "cpv_id": self.cpv_id,
                     "var_passed": var_passed,
                     "var_total": var_total,
                     "variants_used": len(variants_used),
@@ -661,6 +824,13 @@ class BuildPatchVariantJob(Job):
                 },
             )
             self._write_job_log(context, job_result)
+
+            # Write separate stdout/stderr files for build output
+            log_path = self._job_log_path(context)
+            if log_path:
+                _write_build_logs(
+                    context, log_path, result.build_stdout, result.build_stderr
+                )
 
             return job_result
         except Exception as e:
@@ -921,11 +1091,10 @@ class PatchVariantTestJob(Job):
 
 @dataclass
 class PatchPovTestJob(Job):
-    """Run POV tests only against a patched build.
+    """Run pov_0 (ground truth) test only against a patched build.
 
-    Uses PatchVerificationEngine with skip_unittest=True to run only POV tests.
-    This job runs once per patch and provides the POV result for downstream
-    unit test jobs to depend on.
+    Tests only pov_0 - variant POVs are handled by PatchVarTestJob.
+    Runs in parallel with PatchVarTestJob and PatchUnitTestJob after build.
     """
 
     benchmark_path: Path
@@ -933,7 +1102,7 @@ class PatchPovTestJob(Job):
     cpv_id: str
     patch_id: str
     harness: str
-    pov_paths: list[Path] = field(default_factory=list)
+    pov_path: Optional[Path] = None  # Single pov_0 path
     build_patch_job_id: str = ""
     source_mode: str = "main_repo"
 
@@ -950,7 +1119,7 @@ class PatchPovTestJob(Job):
         return [self.build_patch_job_id] if self.build_patch_job_id else []
 
     def execute(self, context: JobContext) -> JobResult:
-        """Run POV tests only using PatchVerificationEngine with skip_unittest=True."""
+        """Run pov_0 test only using PatchVerificationEngine."""
         from crsbench.evaluation.verification.models import (
             PatchInfo,
             PatchVerificationStatus,
@@ -960,6 +1129,25 @@ class PatchPovTestJob(Job):
 
         started_at = datetime.now()
         try:
+            if not self.pov_path:
+                finished_at = datetime.now()
+                job_result = JobResult(
+                    job_id=self.job_id,
+                    job_type=self.job_type,
+                    success=True,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    elapsed_seconds=(finished_at - started_at).total_seconds(),
+                    details={
+                        "cpv_id": self.cpv_id,
+                        "patch_id": self.patch_id,
+                        "pov_0_passed": True,
+                        "pov_count": 0,
+                    },
+                )
+                self._write_job_log(context, job_result)
+                return job_result
+
             # Get build data from upstream job
             build_data = context.shared.get(self.build_patch_job_id, {})
             variant_name = build_data.get("variant_name")
@@ -971,7 +1159,7 @@ class PatchPovTestJob(Job):
 
             oss_fuzz_path = Path(get_oss_fuzz_root())
 
-            # Create engine with skip_unittest=True - only run POV tests
+            # Create engine - only test pov_0, no variants
             engine = PatchVerificationEngine(
                 oss_fuzz_path,
                 sanitizer=sanitizer,
@@ -980,14 +1168,9 @@ class PatchPovTestJob(Job):
                 force_rebuild=False,  # Use cached build
                 source_mode=self.source_mode,
                 build_only=False,
-                verify_variants=True,
-                skip_unittest=True,  # Skip unit tests, only run POV
+                verify_variants=False,  # Only test pov_0
+                skip_unittest=True,
             )
-
-            # Get first POV path for the engine (it will discover all variants)
-            pov_path = self.pov_paths[0] if self.pov_paths else None
-            if not pov_path:
-                raise ValueError(f"No POV paths provided for {self.cpv_id}")
 
             # Find patch path from benchmark structure
             patch_dir = (
@@ -1010,62 +1193,186 @@ class PatchPovTestJob(Job):
                 benchmark_path=self.benchmark_path,
                 patch=patch_info,
                 harness=self.harness,
-                pov_path=pov_path,
+                pov_path=self.pov_path,
             )
 
-            # POV test passes if status is VALID (security_verdict would be PASS if not skipped)
-            pov_test_passed = result.pov_test_passed
-            success = pov_test_passed is True
-
-            # Store POV result for downstream unit test jobs
-            context.shared[self.job_id] = {
-                "pov_test_passed": pov_test_passed,
-                "variant_name": variant_name,
-                "sanitizer": sanitizer,
-                "inc_build_available": inc_build_available,
-            }
+            # pov_0 passes if patch blocks the crash
+            pov_0_passed = result.pov_test_passed is True
+            success = pov_0_passed
 
             error_msg = None
             if not success:
                 if result.status == PatchVerificationStatus.POV_STILL_TRIGGERS:
-                    error_msg = result.details or "POVs still crash"
+                    error_msg = result.details or "pov_0 still crashes"
                 elif result.status == PatchVerificationStatus.ERROR:
                     error_msg = result.details or "POV verification error"
-
-            # Track pov_0 (ground truth) separately from variants (pov_1+)
-            pov_0_passed = True
-            var_passed = 0
-            var_total = 0
-
-            if result.cpv_stats:
-                cpv_stats = result.cpv_stats.get(self.cpv_id)
-                if cpv_stats and cpv_stats.variant_results:
-                    for variant_id, passed in cpv_stats.variant_results.items():
-                        if variant_id in ("pov_0", "pov"):
-                            pov_0_passed = passed
-                        else:
-                            var_total += 1
-                            if passed:
-                                var_passed += 1
 
             details: dict = {
                 "cpv_id": self.cpv_id,
                 "patch_id": self.patch_id,
-                "total_povs": len(self.pov_paths),
-                "pov_test_passed": pov_test_passed,
                 "pov_0_passed": pov_0_passed,
-                "var_passed": var_passed,
-                "var_total": var_total,
                 "pov_test_time": result.pov_test_time,
                 "inc_build_available": inc_build_available,
             }
 
-            if result.cpv_stats:
-                cpv_stats = result.cpv_stats.get(self.cpv_id)
-                if cpv_stats:
-                    details["variants_tested"] = cpv_stats.variants_tested
-                    details["variants_matched"] = cpv_stats.variants_matched
-                    details["cpv_status"] = cpv_stats.status
+            finished_at = datetime.now()
+            job_result = JobResult(
+                job_id=self.job_id,
+                job_type=self.job_type,
+                success=success,
+                started_at=started_at,
+                finished_at=finished_at,
+                elapsed_seconds=(finished_at - started_at).total_seconds(),
+                error=error_msg,
+                details=details,
+            )
+            self._write_job_log(context, job_result)
+            return job_result
+
+        except Exception as e:
+            finished_at = datetime.now()
+            job_result = JobResult(
+                job_id=self.job_id,
+                job_type=self.job_type,
+                success=False,
+                started_at=started_at,
+                finished_at=finished_at,
+                elapsed_seconds=(finished_at - started_at).total_seconds(),
+                error=str(e),
+            )
+            self._write_job_log(context, job_result)
+            return job_result
+
+
+@dataclass
+class PatchVarTestJob(Job):
+    """Run variant POV tests (pov_1+) against a patched build.
+
+    Tests only variant POVs - ground truth (pov_0) is handled by PatchPovTestJob.
+    Runs in parallel with PatchPovTestJob and PatchUnitTestJob after build.
+    """
+
+    benchmark_path: Path
+    benchmark_name: str
+    cpv_id: str
+    patch_id: str
+    harness: str
+    pov_paths: list[Path] = field(default_factory=list)  # pov_1+ paths
+    build_patch_job_id: str = ""
+    source_mode: str = "main_repo"
+
+    @property
+    def job_id(self) -> str:
+        return f"test-patch-var:{self.benchmark_name}:{self.cpv_id}:{self.patch_id}"
+
+    @property
+    def job_type(self) -> str:
+        return "verify"
+
+    @property
+    def depends_on(self) -> list[str]:
+        return [self.build_patch_job_id] if self.build_patch_job_id else []
+
+    def execute(self, context: JobContext) -> JobResult:
+        """Run variant POV tests using PatchVerificationEngine."""
+        from crsbench.evaluation.verification.models import (
+            PatchInfo,
+        )
+        from crsbench.evaluation.verification.patch import PatchVerificationEngine
+        from crsbench.utils.run_helper import get_oss_fuzz_root
+
+        started_at = datetime.now()
+        try:
+            if not self.pov_paths:
+                finished_at = datetime.now()
+                job_result = JobResult(
+                    job_id=self.job_id,
+                    job_type=self.job_type,
+                    success=True,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    elapsed_seconds=(finished_at - started_at).total_seconds(),
+                    details={
+                        "cpv_id": self.cpv_id,
+                        "patch_id": self.patch_id,
+                        "var_passed": 0,
+                        "var_total": 0,
+                    },
+                )
+                self._write_job_log(context, job_result)
+                return job_result
+
+            # Get build data from upstream job
+            build_data = context.shared.get(self.build_patch_job_id, {})
+            variant_name = build_data.get("variant_name")
+            sanitizer = build_data.get("sanitizer", "address")
+            inc_build_available = build_data.get("inc_build_available", False)
+
+            if not variant_name:
+                raise ValueError(f"No variant name from {self.build_patch_job_id}")
+
+            oss_fuzz_path = Path(get_oss_fuzz_root())
+
+            # Find patch path from benchmark structure
+            patch_dir = (
+                self.benchmark_path / ".aixcc" / self.harness / self.cpv_id / "patches"
+            )
+            patch_path = patch_dir / f"{self.patch_id}.diff"
+            if not patch_path.exists():
+                patch_path = patch_dir / "patch.diff"
+
+            if not patch_path.exists():
+                raise ValueError(f"Patch file not found: {patch_path}")
+
+            patch_info = PatchInfo(
+                patch_id=self.patch_id,
+                pov_id=self.cpv_id,
+                patch_path=patch_path,
+            )
+
+            # Test each variant POV
+            var_passed = 0
+            var_total = len(self.pov_paths)
+            pov_test_time = 0.0
+
+            for pov_path in self.pov_paths:
+                engine = PatchVerificationEngine(
+                    oss_fuzz_path,
+                    sanitizer=sanitizer,
+                    timeout=context.timeout,
+                    use_inc_build=inc_build_available,
+                    force_rebuild=False,
+                    source_mode=self.source_mode,
+                    build_only=False,
+                    verify_variants=False,  # Test one at a time
+                    skip_unittest=True,
+                )
+
+                result = engine.verify_patch(
+                    benchmark_path=self.benchmark_path,
+                    patch=patch_info,
+                    harness=self.harness,
+                    pov_path=pov_path,
+                )
+
+                if result.pov_test_passed:
+                    var_passed += 1
+                pov_test_time += result.pov_test_time or 0.0
+
+            success = var_passed == var_total
+
+            error_msg = None
+            if not success:
+                error_msg = f"Partial fix: {var_passed}/{var_total} variants passed"
+
+            details: dict = {
+                "cpv_id": self.cpv_id,
+                "patch_id": self.patch_id,
+                "var_passed": var_passed,
+                "var_total": var_total,
+                "pov_test_time": pov_test_time,
+                "inc_build_available": inc_build_available,
+            }
 
             finished_at = datetime.now()
             job_result = JobResult(
@@ -1101,7 +1408,8 @@ class PatchUnitTestJob(Job):
     """Run unit tests only against a patched build.
 
     Uses PatchVerificationEngine with skip_pov=True to run only unit tests.
-    This job depends on PatchPovTestJob and only runs if POV tests passed.
+    This job depends on BuildPatchVariantJob and runs independently of POV tests.
+    Unit tests verify functionality (no regressions), separate from security (POV).
     """
 
     benchmark_path: Path
@@ -1110,8 +1418,7 @@ class PatchUnitTestJob(Job):
     patch_id: str
     harness: str
     test_mode: str = "FULL"  # FULL or RTS
-    pov_test_job_id: str = ""  # Dependency on POV test
-    build_patch_job_id: str = ""  # For fallback access to build data
+    build_patch_job_id: str = ""  # Dependency on build job
     source_mode: str = "main_repo"
 
     @property
@@ -1127,11 +1434,8 @@ class PatchUnitTestJob(Job):
 
     @property
     def depends_on(self) -> list[str]:
-        # Depend on POV test job (which depends on build job)
-        deps = []
-        if self.pov_test_job_id:
-            deps.append(self.pov_test_job_id)
-        return deps
+        # Depend on build job directly (independent of POV test)
+        return [self.build_patch_job_id] if self.build_patch_job_id else []
 
     def execute(self, context: JobContext) -> JobResult:
         """Run unit tests only using PatchVerificationEngine with skip_pov=True."""
@@ -1145,49 +1449,14 @@ class PatchUnitTestJob(Job):
 
         started_at = datetime.now()
         try:
-            # Get POV test result from upstream job
-            pov_data = context.shared.get(self.pov_test_job_id, {})
-            pov_test_passed = pov_data.get("pov_test_passed")
-
-            # If POV test failed, skip unit tests
-            if not pov_test_passed:
-                finished_at = datetime.now()
-                job_result = JobResult(
-                    job_id=self.job_id,
-                    job_type=self.job_type,
-                    success=False,
-                    started_at=started_at,
-                    finished_at=finished_at,
-                    elapsed_seconds=(finished_at - started_at).total_seconds(),
-                    error="POV test failed, skipping unit tests",
-                    details={
-                        "cpv_id": self.cpv_id,
-                        "patch_id": self.patch_id,
-                        "test_mode": self.test_mode,
-                        "unit_tests_passed": None,  # Indicate skipped
-                        "unit_test_time": 0.0,
-                        "skipped_reason": "pov_test_failed",
-                    },
-                )
-                self._write_job_log(context, job_result)
-                return job_result
-
-            # Get build info from POV test job's shared data
-            variant_name = pov_data.get("variant_name")
-            sanitizer = pov_data.get("sanitizer", "address")
-            inc_build_available = pov_data.get("inc_build_available", False)
-
-            # Fallback to build job data if needed
-            if not variant_name and self.build_patch_job_id:
-                build_data = context.shared.get(self.build_patch_job_id, {})
-                variant_name = build_data.get("variant_name")
-                sanitizer = build_data.get("sanitizer", "address")
-                inc_build_available = build_data.get("inc_build_available", False)
+            # Get build info directly from build job
+            build_data = context.shared.get(self.build_patch_job_id, {})
+            variant_name = build_data.get("variant_name")
+            sanitizer = build_data.get("sanitizer", "address")
+            inc_build_available = build_data.get("inc_build_available", False)
 
             if not variant_name:
-                raise ValueError(
-                    f"No variant name from {self.pov_test_job_id} or {self.build_patch_job_id}"
-                )
+                raise ValueError(f"No variant name from {self.build_patch_job_id}")
 
             oss_fuzz_path = Path(get_oss_fuzz_root())
 

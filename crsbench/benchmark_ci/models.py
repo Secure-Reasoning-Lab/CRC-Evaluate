@@ -85,13 +85,10 @@ class CheckResult:
         return f"PASS({time_str})"
 
     def format_var_status(self) -> str:
-        """Format variant result for display as X/Y.
-
-        Time is not shown because variant verification time is already
-        included in the V:POV / P:POV column times.
+        """Format variant result for display as X/Y(time).
 
         Returns:
-            Formatted string like "6/18", "SKIP", "ERR"
+            Formatted string like "6/18(5s)", "SKIP", "ERR"
         """
         if self.status == CheckStatus.SKIP:
             return "SKIP"
@@ -103,6 +100,12 @@ class CheckResult:
 
         if var_total == 0:
             return "SKIP"
+
+        # Include time if available
+        time_val = self.verify_time if self.verify_time > 0 else self.time_seconds
+        if time_val > 0:
+            time_str = _format_time_short(time_val)
+            return f"{var_passed}/{var_total}({time_str})"
 
         return f"{var_passed}/{var_total}"
 

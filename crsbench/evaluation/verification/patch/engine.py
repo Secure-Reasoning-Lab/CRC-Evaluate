@@ -2,10 +2,15 @@
 
 This module provides the main orchestrator for patch verification:
 1. Pull inc-build image (if available)
-2. Clone source and apply patch
-3. Build with inc-build image (for faster incremental builds)
-4. Run POV test (should NOT crash)
-5. Run unit tests (optional)
+2. Clone source and apply patch locally
+3. Build via build_fuzzers --apply-patch (true incremental with ASAN)
+4. Run POV test via reproduce (should NOT crash)
+
+The key insight is that build_fuzzers with --apply-patch:
+- Rsyncs patched source directly to /built-src/ (not /src/)
+- Compiles incrementally (only changed files recompile)
+- Produces proper ASAN-instrumented binary for POV testing
+- Unlike run_tests which builds with fuzz-shim (no ASAN)
 """
 
 from __future__ import annotations
@@ -57,11 +62,10 @@ class PatchVerificationEngine:
     Coordinates the entire patch verification workflow:
     1. Load benchmark configuration
     2. Pull inc-build image (for faster incremental builds)
-    3. Clone source repository
-    4. Apply patch
-    5. Build with inc-build image
-    6. Run POV test (patch should prevent crash)
-    7. Run unit tests (optional, to ensure no regressions)
+    3. Clone source repository and apply patch locally
+    4. Build fuzzers with inc-build image (--inc-fallback) or full build
+    5. Run POV test (patch should prevent crash)
+    6. Run unit tests (optional, to ensure no regressions)
 
     Attributes:
         oss_fuzz_path: Path to oss-fuzz directory
@@ -282,8 +286,11 @@ class PatchVerificationEngine:
             result.details = f"Failed to apply patch: {patch.patch_path}"
             return result
 
-        # Step 3: Build with inc-build image or regular build (skip if cached)
-        # Initialize to None so _run_verification can detect inc-build for cached builds
+        # Step 3: Build via run_tests (uses inc-build for true incremental or standard)
+        # run_tests (helper.py's run_test) does both build AND unit tests:
+        # - With inc-build: Applies patch diff to /built-src/, incrementally compiles
+        # - With standard: Full rebuild from patched source
+        # Both output fuzzers to /out for subsequent POV testing
         used_inc_build = None
         if build_cached:
             logger.debug(f"Skipping build for cached variant: {variant_name}")
@@ -308,54 +315,86 @@ class PatchVerificationEngine:
                     result.details = "Failed to prepare inc-build image for variant"
                     return result
 
-            # Try inc-build first (uses pre-compiled objects from /built-src)
-            build_result = self.infra.build_fuzzers(
-                build_config, repo_path, use_inc_image=inc_available, inc_fallback=False
-            )
-            # If inc-build fails, retry with fallback (full recompile from /src)
-            if not build_result.success and inc_available:
-                logger.info(
-                    f"Inc-build failed for {variant_name}, retrying with fallback"
-                )
-                build_result = self.infra.build_fuzzers(
-                    build_config, repo_path, use_inc_image=True, inc_fallback=True
-                )
-            # Track if inc-build image was used (fallback is about source path, not image)
-            # When fallback_used=True, we still use inc-build image (:inc-{sanitizer}),
-            # but with /src instead of /built-src for the source path
+            # Use build_fuzzers for proper ASAN-instrumented binary
+            # - Inc-build available: Uses --apply-patch for true incremental build
+            # - Fallback: Full build without inc-build (automatic on inc-build failure)
             used_inc_build = inc_available
+            # Track if we're falling back: either inc-build not available or will fail
+            fallback_to_full = self.use_inc_build and not inc_available
 
-            # Record build time
+            logger.info(
+                f"Building {variant_name} via build_fuzzers "
+                f"(inc_build={inc_available}, apply_patch={inc_available})"
+            )
+
+            # Build fuzzers with proper ASAN instrumentation
+            build_result = self.infra.build_fuzzers(
+                build_config,
+                repo_path,
+                use_inc_image=inc_available,
+                apply_patch=inc_available,  # True incremental when inc-build available
+            )
+
+            # If inc-build failed, automatically fallback to full build
+            if inc_available and (not build_result or not build_result.success):
+                logger.warning(
+                    f"Inc-build failed for {variant_name}, falling back to full build"
+                )
+                fallback_to_full = True
+                used_inc_build = False
+
+                # Clean up failed build outputs before retry
+                self.infra.cleanup_build_outputs(variant_name)
+
+                # Retry with full build (no inc-build, no apply-patch)
+                build_result = self.infra.build_fuzzers(
+                    build_config,
+                    repo_path,
+                    use_inc_image=False,
+                    apply_patch=False,
+                )
+
+            # Record build time and output
             result.build_time = time.time() - start_time
+            result.build_stdout = build_result.stdout if build_result else ""
+            result.build_stderr = build_result.stderr if build_result else ""
 
-            # Track variant for cleanup (even if build failed, we may have partial artifacts)
-            self._built_variants.append(variant_name)
-
-            if not build_result.success:
+            if not build_result or not build_result.success:
                 result.status = PatchVerificationStatus.BUILD_FAILED
-                if not result.details:
-                    result.details = "Build failed"
-                result.elapsed_seconds = time.time() - start_time
+                result.details = (
+                    "Build failed (inc-build and full build both failed)"
+                    if fallback_to_full
+                    else "Build failed"
+                )
                 return result
 
+            # Verify harness binary exists
+            build_out = self.infra.get_build_output_path(variant_name)
+            harness_binary = build_out / harness
+            if not harness_binary.exists():
+                result.status = PatchVerificationStatus.BUILD_FAILED
+                result.details = f"Build failed - {harness} not found in {build_out}"
+                result.elapsed_seconds = time.time() - start_time
+                self._built_variants.append(variant_name)
+                return result
+
+            # Track variant for cleanup
+            self._built_variants.append(variant_name)
+
             # Write build metadata for cache validation
-            # Track fallback usage so cache can be properly invalidated
+            # fallback_used: True if inc-build failed and we fell back to full build
             self.infra.write_build_metadata(
                 variant_name,
-                inc_build=inc_available,  # Was inc-build image used
+                inc_build=used_inc_build,
                 sanitizer=self.sanitizer,
-                fallback_used=build_result.fallback_used,
+                fallback_used=fallback_to_full,
             )
 
             # Track fallback status in result
-            # Mark as fallback if inc-build was expected but image wasn't available
-            result.fallback_used = build_result.fallback_used or (
-                self.use_inc_build and not inc_available
-            )
-            # Track whether inc-build was available (for test phase image tag selection)
+            result.fallback_used = fallback_to_full
             result.inc_build_available = inc_available
 
-            # Build-only mode: skip verification, return after successful build
+            # Build-only mode: return after successful build
             if self.build_only:
                 result.status = PatchVerificationStatus.VALID
                 result.elapsed_seconds = time.time() - start_time
@@ -529,11 +568,25 @@ class PatchVerificationEngine:
                 return result
 
         # Step 5: Run unit tests (skip if skip_unittest is True)
+        # With the new run_tests approach, unit tests may have already run during build
         unit_test_start_time = time.time()
         if self.skip_unittest:
             logger.debug(f"Skipping unit tests for {variant_name} (skip_unittest=True)")
-            result.unit_tests_passed = None  # Indicate unit tests were skipped
-            result.unit_test_time = 0.0
+            if result.unit_tests_passed is None:
+                result.unit_tests_passed = None  # Indicate unit tests were skipped
+            result.unit_test_time = result.unit_test_time or 0.0
+        elif result.unit_tests_passed is not None:
+            # Unit tests already ran during build phase (run_tests approach)
+            logger.debug(
+                f"Unit tests already ran during build for {variant_name}: "
+                f"passed={result.unit_tests_passed}"
+            )
+            # Check the cached result
+            if not result.unit_tests_passed:
+                result.status = PatchVerificationStatus.TEST_FAILED
+                result.details = "Unit tests failed"
+                result.security_verdict = "FAIL"
+                return result
         elif repo_path is None:
             # Skip unit tests for cached builds without source
             logger.info(
@@ -554,6 +607,7 @@ class PatchVerificationEngine:
                 test_passed, test_details = self._run_unit_tests(
                     variant_name,
                     repo_path,
+                    benchmark_path,
                     use_inc_image=True,
                 )
                 result.unit_tests_passed = test_passed
@@ -569,6 +623,7 @@ class PatchVerificationEngine:
             test_passed, test_details = self._run_unit_tests(
                 variant_name,
                 repo_path,
+                benchmark_path,
                 use_inc_image=False,
             )
             result.unit_tests_passed = test_passed
@@ -820,17 +875,19 @@ class PatchVerificationEngine:
         self,
         variant_name: str,
         src_path: Path,
+        benchmark_path: Path,
         *,
         use_inc_image: bool = False,
     ) -> tuple[bool, str]:
         """Run unit tests on patched code.
 
-        Uses variant_name for both Docker image and test.sh lookup, enabling
-        proper parallel execution with path isolation.
+        Uses a separate test variant (variant_name-unittest or variant_name-rts)
+        to avoid overwriting ASAN binary from build_fuzzers.
 
         Args:
-            variant_name: Variant name (for Docker image and test.sh lookup)
+            variant_name: Base variant name (for Docker image lookup)
             src_path: Path to patched source code
+            benchmark_path: Path to benchmark directory
             use_inc_image: If True, use inc-{sanitizer} tag; else use latest
 
         Returns:
@@ -841,11 +898,32 @@ class PatchVerificationEngine:
             logger.warning(f"No test.sh in {variant_name}, skipping unit tests")
             return True, ""
 
-        # For inc-build: use inc-{sanitizer} tag (image was retagged to variant)
-        # For standard build: use latest tag (variant image was built)
+        # Use separate variant for test output to avoid overwriting ASAN binary
+        # test.sh rebuilds with fuzz-shim which produces non-ASAN binaries
+        test_suffix = "rts" if self.test_mode == UnitTestMode.RTS else "unittest"
+        test_variant_name = f"{variant_name}-{test_suffix}"
+
+        # Create test variant project directory
+        self.infra.create_variant_project(
+            benchmark_path=benchmark_path,
+            variant_name=test_variant_name,
+        )
+
+        # Prepare inc-build image for test variant if using inc-build
+        if use_inc_image:
+            # Get base project name (without patched suffix)
+            base_project = variant_name.rsplit("-patched-", 1)[0]
+            if "-patched-" in variant_name:
+                base_project = base_project.rsplit("-asan-", 1)[0]
+            self.infra.prepare_inc_image_for_variant(
+                base_project, test_variant_name, self.sanitizer
+            )
+
+        # For inc-build: use inc-{sanitizer} tag
+        # For standard build: use latest tag
         docker_tag = f"inc-{self.sanitizer}" if use_inc_image else "latest"
         passed, stdout, stderr = self.infra.run_tests(
-            variant_name,
+            test_variant_name,
             src_path,
             sanitizer=self.sanitizer,
             timeout=self.test_timeout,
