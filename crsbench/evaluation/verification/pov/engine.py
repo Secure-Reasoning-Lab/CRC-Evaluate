@@ -120,6 +120,111 @@ class VerificationEngine:
         self.dedup_strategy = dedup_strategy if dedup_strategy else PatchBasedDedup()
         self._built_results: dict[str, dict[str, BuildResult]] = {}
 
+    def _log_crash_summary(
+        self, pov_id: str, crash_logs: dict[str, str], max_lines: int = 30
+    ) -> None:
+        """Log crash summary for debugging UNINTENDED_CRASH.
+
+        Extracts and logs key crash information from crash logs.
+
+        Args:
+            pov_id: POV identifier
+            crash_logs: Dict mapping variant_name -> crash_log
+            max_lines: Maximum lines to show per variant
+        """
+        for variant_name, crash_log in crash_logs.items():
+            if not crash_log:
+                continue
+
+            summary_lines = self._extract_crash_summary(crash_log, max_lines)
+
+            if summary_lines:
+                summary = "\n".join(summary_lines)
+                logger.warning(f"[{pov_id}] Crash on {variant_name}:\n{summary}")
+
+    def _extract_crash_summary(self, crash_log: str, max_lines: int = 30) -> list[str]:
+        """Extract crash summary from log.
+
+        Patterns matched (in order):
+        1. Java Exception: "== Java Exception:" line and stack trace
+        2. ASAN/Sanitizer: "==N==ERROR: AddressSanitizer" and SUMMARY
+        3. libFuzzer OOM: "libFuzzer: out-of-memory" or "SUMMARY: libFuzzer"
+        4. General crash: Last N lines as fallback
+
+        Args:
+            crash_log: Full crash log text
+            max_lines: Maximum lines to extract
+
+        Returns:
+            List of summary lines
+        """
+        lines = crash_log.splitlines()
+        summary_lines: list[str] = []
+
+        for i, line in enumerate(lines):
+            # Java Exception from Jazzer (high priority - specific pattern)
+            if "== Java Exception:" in line:
+                end = min(len(lines), i + 15)
+                summary_lines = lines[i:end]
+                break
+
+            # Regular Java exception (e.g., "Exception in thread "main"")
+            if line.startswith("Exception in thread "):
+                end = min(len(lines), i + 15)
+                summary_lines = lines[i:end]
+                break
+
+            # ASAN/Sanitizer error (specific pattern with process ID)
+            if "==ERROR: AddressSanitizer" in line or "==ERROR: LeakSanitizer" in line:
+                start = max(0, i - 1)
+                # Find SUMMARY line
+                summary_idx = i
+                for j in range(i, min(len(lines), i + 30)):
+                    if "SUMMARY:" in lines[j]:
+                        summary_idx = j
+                        break
+                end = min(len(lines), summary_idx + 2)
+                summary_lines = lines[start:end]
+                break
+
+            # libFuzzer OOM (specific pattern)
+            if "ERROR: libFuzzer: out-of-memory" in line:
+                start = max(0, i - 5)
+                end = min(len(lines), i + 3)
+                summary_lines = lines[start:end]
+                break
+
+            # libFuzzer timeout (specific pattern)
+            if "ERROR: libFuzzer: timeout" in line:
+                start = max(0, i - 2)
+                # Find SUMMARY line
+                summary_idx = i
+                for j in range(i, min(len(lines), i + 20)):
+                    if "SUMMARY:" in lines[j]:
+                        summary_idx = j
+                        break
+                end = min(len(lines), summary_idx + 2)
+                summary_lines = lines[start:end]
+                break
+
+            # SUMMARY line as fallback for sanitizers
+            if line.startswith("SUMMARY:"):
+                start = max(0, i - 10)
+                end = min(len(lines), i + 2)
+                summary_lines = lines[start:end]
+                break
+
+        # If no patterns found, use last N lines
+        if not summary_lines:
+            summary_lines = lines[-max_lines:]
+
+        # Truncate if too long
+        if len(summary_lines) > max_lines:
+            summary_lines = summary_lines[:max_lines]
+            summary_lines.append("... (truncated)")
+
+        return summary_lines
+
     def _execute_reproduce(self, task: ReproduceTask) -> ReproduceResult:
         """Execute a single reproduce task.
 
@@ -341,6 +446,11 @@ class VerificationEngine:
             # Attach crash logs to result
             if crash_logs:
                 verdict.crash_info = {"logs": crash_logs}
+
+            # Log crash summary for UNINTENDED_CRASH to help debugging
+            if verdict.status == PovVerificationStatus.UNINTENDED_CRASH and crash_logs:
+                self._log_crash_summary(pov_id, crash_logs)
+
             verification_results.append(verdict)
 
         elapsed = time.time() - start_time
