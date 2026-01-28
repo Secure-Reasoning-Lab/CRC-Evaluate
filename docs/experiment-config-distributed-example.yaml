@@ -58,14 +58,8 @@ cleanup_after_trial: false
 # Default: false
 copy_results_after_trial: false
 
-# Enable copying essential files to a separate results location (bulk copy after all trials).
-# Requires results_filestore to be set.
-# Copying happens BEFORE cleanup, so you keep a copy of essential files.
-# Default: false
-copy_results_to_filestore: false
-
 # Destination path for copying results (contains experiment-data/ and report-data/).
-# Used by both copy_results_after_trial and copy_results_to_filestore.
+# Used by copy_results_after_trial.
 # Dashboard-compatible structure: results_filestore/{folder_name}/experiment-data/ and report-data/
 # results_filestore: /opt/crsbench-finished/my-experiment
 
@@ -190,9 +184,6 @@ worker:
 
   # Override per-trial result copying.
   # copy_results_after_trial: true
-
-  # Override bulk result copying behavior.
-  # copy_results_to_filestore: true
 
   # Override results destination path (contains experiment-data/ and report-data/).
   # results_filestore: /mnt/nfs/finished-experiments
