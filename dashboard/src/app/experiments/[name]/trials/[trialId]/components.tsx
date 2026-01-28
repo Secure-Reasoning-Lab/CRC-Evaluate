@@ -33,6 +33,59 @@ export function getMessageContent(content: unknown): string {
   return String(content || '');
 }
 
+// Helper to render CRS logs with syntax highlighting for [WARN] and [ERROR]
+function HighlightedLogs({ logs }: { logs: string }) {
+  const lines = logs.split('\n');
+
+  return (
+    <pre className="bg-muted rounded p-4 text-sm font-mono whitespace-pre-wrap break-words">
+      {lines.map((line, idx) => {
+        const isError = line.includes('[ERROR]') || line.includes('[CRITICAL]') || line.includes('[FATAL]');
+        const isWarning = line.includes('[WARN]') || line.includes('[WARNING]');
+
+        if (isError) {
+          return (
+            <div
+              key={idx}
+              style={{
+                backgroundColor: '#fecaca',
+                color: '#991b1b',
+                fontWeight: 'bold',
+                marginLeft: '-1rem',
+                marginRight: '-1rem',
+                paddingLeft: '1rem',
+                paddingRight: '1rem',
+              }}
+            >
+              {line}
+            </div>
+          );
+        } else if (isWarning) {
+          return (
+            <div
+              key={idx}
+              style={{
+                backgroundColor: '#fef08a',
+                color: '#854d0e',
+                marginLeft: '-1rem',
+                marginRight: '-1rem',
+                paddingLeft: '1rem',
+                paddingRight: '1rem',
+              }}
+            >
+              {line}
+            </div>
+          );
+        } else {
+          return (
+            <div key={idx}>{line}</div>
+          );
+        }
+      })}
+    </pre>
+  );
+}
+
 // CRS Logs Modal Component
 export function CRSLogsModal({
   open,
@@ -64,9 +117,7 @@ export function CRSLogsModal({
           ) : error ? (
             <p className="text-center text-muted-foreground py-8">{error}</p>
           ) : logs ? (
-            <pre className="bg-muted rounded p-4 text-sm font-mono whitespace-pre-wrap break-words">
-              {logs}
-            </pre>
+            <HighlightedLogs logs={logs} />
           ) : (
             <p className="text-center text-muted-foreground py-8">
               No logs available
@@ -471,6 +522,64 @@ export function BugFixingExecutionInfoModal({
           ) : (
             <p className="text-center text-muted-foreground py-8">
               No execution info available
+            </p>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Artifact Viewer Modal Component
+export function ArtifactViewerModal({
+  open,
+  onOpenChange,
+  artifactType,
+  artifactName,
+  content,
+  loading,
+  error,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  artifactType: 'patch' | 'pov' | null;
+  artifactName: string | null;
+  content: string | null;
+  loading: boolean;
+  error: string | null;
+}) {
+  const title = artifactType === 'patch' ? 'Patch Content' : 'POV Content';
+  const description = artifactName
+    ? `${artifactType === 'patch' ? 'Patch' : 'POV'}: ${artifactName}`
+    : '';
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-[95vw] w-[1400px] max-h-[90vh]">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        <div className="overflow-auto max-h-[calc(90vh-120px)]">
+          {loading ? (
+            <p className="text-center text-muted-foreground py-8">
+              Loading {artifactType}...
+            </p>
+          ) : error ? (
+            <p className="text-center text-muted-foreground py-8">{error}</p>
+          ) : content !== null ? (
+            content.trim() ? (
+              <pre className="bg-muted rounded p-4 text-sm font-mono whitespace-pre-wrap break-words">
+                {content}
+              </pre>
+            ) : (
+              <p className="text-center text-muted-foreground py-8">
+                Empty {artifactType}
+              </p>
+            )
+          ) : (
+            <p className="text-center text-muted-foreground py-8">
+              No content available
             </p>
           )}
         </div>

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { loadTrialReport } from '@/lib/data/trials';
+import { loadTrialReportByIndex } from '@/lib/data/trials';
 
 export async function GET(
   request: NextRequest,
@@ -8,16 +8,16 @@ export async function GET(
   try {
     const { name, trialId } = await params;
 
-    // trialId is the trial number
-    const trialNum = parseInt(trialId, 10);
-    if (isNaN(trialNum)) {
+    // trialId is the index in the trial_summaries array
+    const trialIndex = parseInt(trialId, 10);
+    if (isNaN(trialIndex) || trialIndex < 0) {
       return NextResponse.json(
         { error: 'Invalid trial ID' },
         { status: 400 }
       );
     }
 
-    const report = await loadTrialReport(name, trialNum);
+    const report = await loadTrialReportByIndex(name, trialIndex);
     if (!report) {
       return NextResponse.json(
         { error: 'Trial not found' },

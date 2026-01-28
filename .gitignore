@@ -267,3 +267,7 @@ crsbench/_version.py
 crsbench/_submodule_commits.py
 
 *.old
+
+# Benchmark artifacts
+benchmarks/*/pkgs/
+ref.diff

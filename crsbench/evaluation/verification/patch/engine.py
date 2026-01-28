@@ -95,7 +95,7 @@ class PatchVerificationEngine:
         work_dir: Optional[Path] = None,
         force_rebuild: bool = False,
         use_inc_build: bool = True,
-        source_mode: str = "main_repo",
+        source_mode: str = "pkgs",
         build_only: bool = False,
         max_povs_per_cpv: Optional[int] = None,
         skip_pov: bool = False,
@@ -123,7 +123,7 @@ class PatchVerificationEngine:
             force_rebuild: If True, clean and rebuild even if build exists.
             use_inc_build: If True, use incremental builds when available (faster).
                 If False, always use full OSS-Fuzz build.
-            source_mode: Source mode - "main_repo" (clone, default) or "pkgs" (bundled)
+            source_mode: Source mode - "pkgs" (bundled, default) or "main_repo" (clone)
             build_only: If True, build variants but skip verification (POV tests
                 and unit tests). Used to pre-build variants for subsequent
                 verify-only calls with force_rebuild=False.

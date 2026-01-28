@@ -36,7 +36,7 @@ from pydantic import BaseModel
 from crsbench.builder import BuildResult, OSSFuzzBuilder
 from crsbench.builder.types import BenchmarkMode
 from crsbench.distributed.jobs import get_crs_type
-from crsbench.evaluation.cleanup import cleanup_trial_directory, copy_trial_results
+from crsbench.evaluation.cleanup import cleanup_trial_directory
 from crsbench.evaluation.results import CRSType, TrialResult
 from crsbench.utils import log_progress, log_section, log_summary, set_gitcache
 from crsbench.utils.crs_helper import get_crs_registry_name
@@ -50,6 +50,87 @@ load_dotenv()
 
 # Get logger instance
 logger = get_logger(__name__)
+
+
+def format_duration(seconds: int) -> str:
+    """Format duration in seconds to human-readable string.
+
+    Args:
+        seconds: Duration in seconds
+
+    Returns:
+        Human-readable duration string (e.g., "4h 0m", "30m", "1d 2h 30m")
+    """
+    if seconds < 60:
+        return f"{seconds}s"
+
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+
+    hours = minutes // 60
+    remaining_minutes = minutes % 60
+
+    if hours < 24:
+        if remaining_minutes > 0:
+            return f"{hours}h {remaining_minutes}m"
+        return f"{hours}h"
+
+    days = hours // 24
+    remaining_hours = hours % 24
+
+    if remaining_hours > 0:
+        return f"{days}d {remaining_hours}h"
+    return f"{days}d"
+
+
+def display_estimated_runtime(
+    total_jobs: int,
+    config: "ExperimentConfig",
+    *,
+    worker_count: int = 1,
+) -> None:
+    """Display estimated experiment runtime before execution.
+
+    Calculates and logs the estimated runtime based on phase timeouts
+    and total number of jobs. For distributed mode with multiple workers,
+    shows parallel estimate.
+
+    Args:
+        total_jobs: Total number of jobs to execute
+        config: Experiment configuration with timeout settings
+        worker_count: Number of workers for parallel execution (default: 1 for sequential)
+    """
+    if total_jobs == 0:
+        return
+
+    # Calculate per-job estimate from phase timeouts
+    per_job_seconds = config.build_timeout + config.run_timeout + config.verify_timeout
+    total_seconds = per_job_seconds * total_jobs
+
+    # Format individual timeouts
+    build_fmt = format_duration(config.build_timeout)
+    run_fmt = format_duration(config.run_timeout)
+    verify_fmt = format_duration(config.verify_timeout)
+
+    # Display estimates
+    logger.info(
+        f"Estimated max runtime per job: {format_duration(per_job_seconds)} "
+        f"(build: {build_fmt} + run: {run_fmt} + verify: {verify_fmt})"
+    )
+
+    if worker_count > 1:
+        # Parallel execution with multiple workers
+        parallel_seconds = total_seconds // worker_count
+        logger.info(
+            f"Estimated total runtime: {format_duration(parallel_seconds)} "
+            f"({total_jobs} jobs / {worker_count} workers)"
+        )
+    else:
+        # Sequential execution
+        logger.info(
+            f"Estimated total runtime (sequential): {format_duration(total_seconds)}"
+        )
 
 
 # Trial configuration
@@ -306,19 +387,11 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--experiment-results-filestore",
+        "--results-filestore",
         type=str,
         required=False,
         metavar="PATH",
-        help="Destination path for copying experiment trial data (requires --copy-results-to-filestore)",
-    )
-
-    parser.add_argument(
-        "--reports-results-filestore",
-        type=str,
-        required=False,
-        metavar="PATH",
-        help="Destination path for copying report data (requires --copy-results-to-filestore)",
+        help="Destination path for copying results (contains experiment-data/ and report-data/)",
     )
 
 
@@ -494,15 +567,9 @@ def validate_filestore_permissions(config: ExperimentConfig) -> None:
     ]
 
     # Add results filestores if copy is enabled
-    if config.copy_results_to_filestore:
-        if config.experiment_results_filestore:
-            directories_to_check.append(
-                ("experiment_results_filestore", config.experiment_results_filestore)
-            )
-        if config.reports_results_filestore:
-            directories_to_check.append(
-                ("reports_results_filestore", config.reports_results_filestore)
-            )
+    if config.copy_results_after_trial:
+        if config.results_filestore:
+            directories_to_check.append(("results_filestore", config.results_filestore))
 
     for name, path in directories_to_check:
         try:
@@ -768,7 +835,7 @@ def generate_trial_matrix(
                     skip_reason = (
                         "bug-fixing CRS" if is_bug_fixing else "only_cpv_harnesses=True"
                     )
-                    logger.info(
+                    logger.debug(
                         f"Skipping {benchmark_harness.name}/{benchmark_harness.harness.name}: "
                         f"no CPVs ({skip_reason})"
                     )
@@ -784,6 +851,18 @@ def generate_trial_matrix(
                     )
                     continue
                 modes_to_run = available_modes
+            elif config_mode == "auto":
+                # Auto mode: run single mode, prefer delta
+                available_modes = get_available_modes_for_benchmark(
+                    benchmark_harness.path
+                )
+                if not available_modes:
+                    logger.warning(
+                        f"No modes available for {benchmark_harness.name}, skipping"
+                    )
+                    continue
+                # Prefer delta, fallback to full
+                modes_to_run = ["delta"] if "delta" in available_modes else ["full"]
             else:
                 # Single mode: delta or full
                 modes_to_run = [config_mode]
@@ -1248,27 +1327,9 @@ def enhance_config_with_cli_args(
         overrides["copy_results_after_trial"] = True
         logger.info("Using copy_results_after_trial=True from CLI")
 
-    if hasattr(args, "copy_results_to_filestore") and args.copy_results_to_filestore:
-        overrides["copy_results_to_filestore"] = True
-        logger.info("Using copy_results_to_filestore=True from CLI")
-
-    if (
-        hasattr(args, "experiment_results_filestore")
-        and args.experiment_results_filestore is not None
-    ):
-        overrides["experiment_results_filestore"] = args.experiment_results_filestore
-        logger.info(
-            f"Using experiment_results_filestore from CLI: {args.experiment_results_filestore}"
-        )
-
-    if (
-        hasattr(args, "reports_results_filestore")
-        and args.reports_results_filestore is not None
-    ):
-        overrides["reports_results_filestore"] = args.reports_results_filestore
-        logger.info(
-            f"Using reports_results_filestore from CLI: {args.reports_results_filestore}"
-        )
+    if hasattr(args, "results_filestore") and args.results_filestore is not None:
+        overrides["results_filestore"] = args.results_filestore
+        logger.info(f"Using results_filestore from CLI: {args.results_filestore}")
 
     return config.model_copy(update=overrides)
 
@@ -1395,12 +1456,6 @@ def run_experiment_local(
     generate_final_report(results, experiment_name, config)
 
     # Post-experiment operations
-    # Copy results first (before cleanup)
-    if config.copy_results_to_filestore and (
-        config.experiment_results_filestore or config.reports_results_filestore
-    ):
-        _copy_experiment_results(experiment_name, config)
-
     # Cleanup bulky artifacts
     if config.keep_only_results:
         _cleanup_experiment_artifacts(experiment_name, config)
@@ -2027,87 +2082,9 @@ def run_experiment_distributed(
     generate_final_report(results, experiment_name, config)
 
     # Post-experiment operations
-    # Copy results first (before cleanup)
-    if config.copy_results_to_filestore and (
-        config.experiment_results_filestore or config.reports_results_filestore
-    ):
-        _copy_experiment_results(experiment_name, config)
-
     # Cleanup bulky artifacts
     if config.keep_only_results:
         _cleanup_experiment_artifacts(experiment_name, config)
-
-
-def _copy_experiment_results(experiment_name: str, config) -> None:
-    """Copy essential files from experiment to results filestore.
-
-    Args:
-        experiment_name: Experiment identifier
-        config: Experiment configuration
-    """
-    from crsbench.reporting.snapshot_loader import discover_trials
-
-    experiment_dir = Path(config.experiment_filestore) / experiment_name
-
-    if not experiment_dir.exists():
-        logger.warning(f"Experiment directory not found for copying: {experiment_dir}")
-        return
-
-    # Generate folder name with timestamp and hostname suffix (shared for both copies)
-    import socket
-    from datetime import datetime
-
-    hostname = socket.gethostname()
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    folder_name = f"{experiment_name}_{hostname}_{timestamp}"
-
-    # Copy experiment trial data to experiment_results_filestore
-    if config.experiment_results_filestore:
-        # Discover all trial directories
-        trial_infos = discover_trials(experiment_dir)
-        trial_dirs = [trial_info.trial_dir for trial_info in trial_infos]
-
-        if not trial_dirs:
-            logger.warning(f"No trial directories found in {experiment_dir}")
-        else:
-            log_section("Copying experiment trial data to filestore", width=60)
-            # Preserve original structure: {folder_name}/experiment-data/{experiment_name}/...
-            results_dest = (
-                Path(config.experiment_results_filestore)
-                / folder_name
-                / "experiment-data"
-                / experiment_name
-            )
-            logger.info(f"Copying trial data to: {results_dest}")
-            logger.info(f"Found {len(trial_dirs)} trial directories to copy")
-
-            for trial_dir in trial_dirs:
-                # Compute relative path from experiment_dir to preserve structure
-                rel_path = trial_dir.relative_to(experiment_dir)
-                dest_dir = results_dest / rel_path
-                copy_trial_results(trial_dir, dest_dir)
-
-            logger.info(f"Trial data copying complete: {results_dest}")
-
-    # Copy report data to reports_results_filestore
-    if config.reports_results_filestore:
-        import shutil
-
-        report_dir = Path(config.report_filestore) / experiment_name
-        if report_dir.exists():
-            log_section("Copying report data to filestore", width=60)
-            # Preserve original structure: {folder_name}/report-data/{experiment_name}/...
-            report_dest = (
-                Path(config.reports_results_filestore)
-                / folder_name
-                / "report-data"
-                / experiment_name
-            )
-            logger.info(f"Copying report data to: {report_dest}")
-            shutil.copytree(report_dir, report_dest, dirs_exist_ok=True)
-            logger.info(f"Report data copying complete: {report_dest}")
-        else:
-            logger.warning(f"Report directory not found: {report_dir}")
 
 
 def _cleanup_experiment_artifacts(experiment_name: str, config) -> None:
@@ -2445,6 +2422,12 @@ def main() -> None:
 
     # Determine execution mode
     use_distributed = should_use_distributed_mode(args, config, total_jobs)
+
+    # Display estimated runtime (with worker count for distributed mode)
+    if use_distributed and config.worker:
+        display_estimated_runtime(total_jobs, config, worker_count=config.worker.jobs)
+    else:
+        display_estimated_runtime(total_jobs, config)
 
     # Run experiment in appropriate mode
     if use_distributed:

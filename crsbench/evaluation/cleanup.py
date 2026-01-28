@@ -45,7 +45,7 @@ def _rmtree_with_docker(path: Path) -> bool:
             ],
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=300,
         )
         if result.returncode == 0:
             logger.debug(f"Deleted with Docker: {path}")

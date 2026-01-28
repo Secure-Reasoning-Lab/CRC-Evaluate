@@ -120,6 +120,7 @@ export interface SnapshotEntry {
   cycle: number;
   timestamp: number;
   elapsed_time: number;
+  running_elapsed_time?: number;
   povs_in_snapshot: number;
   cumulative_povs: number;
   patches_in_snapshot: number;
@@ -273,5 +274,25 @@ export interface ExecutionInfo {
 export interface ExecutionResponse {
   type: 'execution';
   content: ExecutionInfo | null;
+  error?: string;
+}
+
+// Artifact types for viewing patches and POVs
+export interface ArtifactInfo {
+  name: string;
+  type: 'patch' | 'pov';
+  size?: number;
+}
+
+export interface ArtifactListResponse {
+  patches: ArtifactInfo[];
+  povs: ArtifactInfo[];
+  error?: string;
+}
+
+export interface ArtifactContentResponse {
+  type: 'patch' | 'pov';
+  name: string;
+  content: string | null;
   error?: string;
 }

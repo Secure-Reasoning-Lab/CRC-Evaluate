@@ -75,7 +75,7 @@ class CoverageEngine:
         *,
         build_workers: Optional[int] = None,
         work_dir: Optional[Path] = None,
-        source_mode: str = "main_repo",
+        source_mode: str = "pkgs",
     ):
         """Initialize the coverage engine.
 
@@ -85,7 +85,7 @@ class CoverageEngine:
                 Priority: CLI > CRSBENCH_BUILD_WORKERS env > config > default.
             work_dir: Working directory for isolated builds. If None, uses
                 default oss-fuzz/build/out/ location.
-            source_mode: Source mode - "main_repo" (clone, default) or "pkgs" (bundled)
+            source_mode: Source mode - "pkgs" (bundled, default) or "main_repo" (clone)
         """
         self.oss_fuzz_path = Path(oss_fuzz_path)
         self.work_dir = Path(work_dir) if work_dir else None

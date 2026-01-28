@@ -162,6 +162,7 @@ class EvaluationMode(str, Enum):
     DELTA = "delta"
     FULL = "full"
     ALL = "all"
+    AUTO = "auto"
 
 
 class Sanitizer(str, Enum):
@@ -741,17 +742,9 @@ class WorkerConfig(BaseModel):
         default=None,
         description="Override per-trial result copying for workers",
     )
-    copy_results_to_filestore: Optional[bool] = Field(
+    results_filestore: Optional[Path] = Field(
         default=None,
-        description="Override result copying behavior for workers",
-    )
-    experiment_results_filestore: Optional[Path] = Field(
-        default=None,
-        description="Override experiment results destination path for workers",
-    )
-    reports_results_filestore: Optional[Path] = Field(
-        default=None,
-        description="Override report results destination path for workers",
+        description="Override results destination path for workers (contains experiment-data/ and report-data/)",
     )
     minimum_disk_size: str = Field(
         default="10GB",
@@ -773,7 +766,7 @@ class ExperimentConfig(BaseModel):
     trials: int = Field(..., ge=1, description="Number of trials (must be >= 1)")
     mode: EvaluationMode = Field(
         ...,
-        description="Evaluation mode: 'delta', 'full', or 'all' (run all available)",
+        description="Evaluation mode: 'delta', 'full', 'all' (run all available), or 'auto' (single mode, delta preferred)",
     )
     max_total_time: int = Field(
         ..., ge=1, description="Maximum time in seconds per trial (must be >= 1)"
@@ -942,17 +935,9 @@ class ExperimentConfig(BaseModel):
         default=False,
         description="Copy essential files to results_filestore after each trial completes",
     )
-    copy_results_to_filestore: bool = Field(
-        default=False,
-        description="Enable copying essential files to results_filestore location",
-    )
-    experiment_results_filestore: Optional[Path] = Field(
+    results_filestore: Optional[Path] = Field(
         default=None,
-        description="Destination path for copying experiment trial data",
-    )
-    reports_results_filestore: Optional[Path] = Field(
-        default=None,
-        description="Destination path for copying report data",
+        description="Destination path for copying results (contains experiment-data/ and report-data/)",
     )
 
     @field_validator("experiment")
@@ -1183,18 +1168,9 @@ class ExperimentConfig(BaseModel):
     @model_validator(mode="after")
     def check_results_filestore_configuration(self):
         """Validate results_filestore configuration."""
-        if self.copy_results_to_filestore:
-            if (
-                not self.experiment_results_filestore
-                and not self.reports_results_filestore
-            ):
-                raise ValueError(
-                    "copy_results_to_filestore=true requires at least one of "
-                    "experiment_results_filestore or reports_results_filestore to be set"
-                )
-        if self.copy_results_after_trial and not self.experiment_results_filestore:
+        if self.copy_results_after_trial and not self.results_filestore:
             raise ValueError(
-                "copy_results_after_trial=true requires experiment_results_filestore to be set"
+                "copy_results_after_trial=true requires results_filestore to be set"
             )
         return self
 
