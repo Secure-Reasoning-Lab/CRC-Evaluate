@@ -51,6 +51,33 @@ def format_status(check: CheckResult | None) -> str:
     return "[dim]SKIP[/dim]"
 
 
+def format_var_status(check: CheckResult | None) -> str:
+    """Format a variant check result for Rich table display.
+
+    Returns:
+        Rich markup string for variant status (X/Y format).
+        None → "-"
+        SKIP → "SKIP" (no variants)
+        PASS → "X/Y(time)" in green
+        FAIL → "X/Y(time)" in red
+        ERROR → "ERR"
+    """
+    if check is None:
+        return "[dim]-[/dim]"
+
+    if check.status == CheckStatus.SKIP:
+        return "[dim]SKIP[/dim]"
+
+    if check.status == CheckStatus.ERROR:
+        return "[red]ERR[/red]"
+
+    var_str = check.format_var_status()
+    if check.status == CheckStatus.PASS:
+        return f"[green]{var_str}[/green]"
+    # FAIL - show in red
+    return f"[red]{var_str}[/red]"
+
+
 def _format_total_status(status: CheckStatus) -> str:
     """Format a total_status CheckStatus enum for Rich display.
 
@@ -250,9 +277,14 @@ def _add_all_columns(table: Table) -> None:
     table.add_column("inc", justify="center")
     table.add_column("rts", justify="center")
     table.add_column("Fmt", justify="center")
-    table.add_column("POV", justify="center")
-    table.add_column("Patch", justify="center")
-    table.add_column("P(rts)", justify="center")
+    table.add_column("V:Bld", justify="center")  # Variant build (shared)
+    table.add_column("V:POV", justify="center")  # POV verification (pov_0)
+    table.add_column("V:VAR", justify="center")  # POV variants (pov_1+)
+    table.add_column("P:Bld", justify="center")
+    table.add_column("P:POV", justify="center")  # Patch POV test (pov_0)
+    table.add_column("P:VAR", justify="center")  # Patch POV variants (pov_1+)
+    table.add_column("P:UT", justify="center")
+    table.add_column("P:RTS", justify="center")
     table.add_column("Cov", justify="center")
     table.add_column("Storage", justify="right")
     table.add_column("Total", justify="center")
@@ -268,14 +300,19 @@ def _add_all_rows(table: Table, summary: ValidationSummary) -> None:
             inc_marker,
             rts_mode,
             format_status(r.format_check),
-            format_status(r.pov_check),
-            format_status(r.patch_check),
+            format_status(r.pov_build_check),  # V:Bld - variant builds
+            format_status(r.pov_pov_check),  # V:POV - pov_0 verification
+            format_var_status(r.pov_var_check),  # V:VAR - pov_1+ variants
+            format_status(r.patch_build_check),
+            format_status(r.patch_pov_check),  # P:POV - pov_0 test
+            format_var_status(r.patch_var_check),  # P:VAR - pov_1+ variants
+            format_status(r.patch_unittest_check),
             format_status(r.patch_rts_check),
             format_status(r.coverage_check),
             _format_storage(r),
             _format_total_status(r.total_status),
         )
-        _add_detail_rows(table, r, 9)
+        _add_detail_rows(table, r, 14)
 
 
 def print_results_table(
@@ -444,6 +481,21 @@ def _check_verify_time(check: CheckResult | None) -> float:
     return check.verify_time
 
 
+def _plain_var_status(check: CheckResult | None) -> str:
+    """Plain text variant status for CSV (X/Y format)."""
+    if check is None:
+        return ""
+    if check.status == CheckStatus.SKIP:
+        return "SKIP"
+    if check.status == CheckStatus.ERROR:
+        return "ERR"
+    var_passed = check.details.get("var_passed", 0)
+    var_total = check.details.get("var_total", 0)
+    if var_total == 0:
+        return "SKIP"
+    return f"{var_passed}/{var_total}"
+
+
 def write_summary_csv(
     summary: ValidationSummary,
     f,
@@ -522,12 +574,13 @@ def write_summary_csv(
                 f"{build_t:.1f},{verify_t:.1f},{r.storage_bytes}\n"
             )
     else:
-        # ALL mode — per-check build + verify times
+        # ALL mode — split POV and patch columns for detailed analysis
         f.write(
             "benchmark,inc,rts,fmt,"
-            "pov,pov_build_s,pov_verify_s,"
-            "patch,patch_build_s,patch_verify_s,"
-            "patch_rts,patch_rts_verify_s,"
+            "pov_build,pov_build_s,pov_pov,pov_pov_s,pov_var,"
+            "patch,patch_build,patch_pov,patch_var,patch_unittest,"
+            "patch_build_s,patch_pov_s,patch_unittest_s,"
+            "patch_rts,patch_rts_s,"
             "cov,cov_verify_s,"
             "total,total_time_s,storage_bytes\n"
         )
@@ -537,12 +590,19 @@ def write_summary_csv(
             f.write(
                 f"{r.benchmark},{inc},{rts},"
                 f"{_plain_status(r.format_check)},"
-                f"{_plain_status(r.pov_check)},"
-                f"{r.shared_build_time:.1f},"
-                f"{_check_verify_time(r.pov_check):.1f},"
+                f"{_plain_status(r.pov_build_check)},"
+                f"{_check_build_time(r.pov_build_check):.1f},"
+                f"{_plain_status(r.pov_pov_check)},"
+                f"{_check_verify_time(r.pov_pov_check):.1f},"
+                f"{_plain_var_status(r.pov_var_check)},"
                 f"{_plain_status(r.patch_check)},"
-                f"{_check_build_time(r.patch_check):.1f},"
-                f"{_check_verify_time(r.patch_check):.1f},"
+                f"{_plain_status(r.patch_build_check)},"
+                f"{_plain_status(r.patch_pov_check)},"
+                f"{_plain_var_status(r.patch_var_check)},"
+                f"{_plain_status(r.patch_unittest_check)},"
+                f"{_check_build_time(r.patch_build_check):.1f},"
+                f"{_check_verify_time(r.patch_pov_check):.1f},"
+                f"{_check_verify_time(r.patch_unittest_check):.1f},"
                 f"{_plain_status(r.patch_rts_check)},"
                 f"{_check_verify_time(r.patch_rts_check):.1f},"
                 f"{_plain_status(r.coverage_check)},"

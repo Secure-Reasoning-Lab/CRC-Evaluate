@@ -299,7 +299,7 @@ class PatchVerificationResult:
     pov_test_time: float = 0.0
     unit_test_time: float = 0.0
     elapsed_seconds: float = 0.0
-    pov_test_passed: bool = False
+    pov_test_passed: Optional[bool] = None  # None if POV tests were skipped
     unit_tests_passed: Optional[bool] = None
     unit_tests_run: int = 0
     unit_tests_failed: int = 0
@@ -408,7 +408,7 @@ class PatchVerificationDetailedResult(BaseModel):
     is_valid: bool
     security_verdict: str
     build_time: float
-    pov_test_passed: bool
+    pov_test_passed: Optional[bool]  # None if POV tests were skipped
     unit_tests_passed: Optional[bool]
     details: Optional[str]
     cpv_fixed: list[str]

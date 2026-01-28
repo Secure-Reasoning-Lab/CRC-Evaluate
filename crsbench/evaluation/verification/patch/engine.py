@@ -94,6 +94,8 @@ class PatchVerificationEngine:
         source_mode: str = "main_repo",
         build_only: bool = False,
         max_povs_per_cpv: Optional[int] = None,
+        skip_pov: bool = False,
+        skip_unittest: bool = False,
     ):
         """Initialize the patch verification engine.
 
@@ -123,6 +125,8 @@ class PatchVerificationEngine:
                 verify-only calls with force_rebuild=False.
             max_povs_per_cpv: Limit POV variants tested per CPV (None = no limit).
                 When set to 1, only pov_0.blob is used per CPV.
+            skip_pov: If True, skip POV tests (run unit tests only).
+            skip_unittest: If True, skip unit tests (run POV tests only).
         """
         self.oss_fuzz_path = Path(oss_fuzz_path)
         self.work_dir = Path(work_dir) if work_dir else None
@@ -140,6 +144,8 @@ class PatchVerificationEngine:
         self.source_mode = source_mode
         self.build_only = build_only
         self.max_povs_per_cpv = max_povs_per_cpv
+        self.skip_pov = skip_pov
+        self.skip_unittest = skip_unittest
         self._inc_images_pulled: set[str] = set()
         self._inc_images_unavailable: set[str] = set()  # Cache failed pulls
         self._temp_dirs: list[Path] = []
@@ -422,9 +428,13 @@ class PatchVerificationEngine:
                     f"No source path found for {variant_name}, skip unit tests"
                 )
 
-        # Step 4: Run POV test
+        # Step 4: Run POV test (skip if skip_pov is True)
         pov_start_time = time.time()
-        if self.verify_variants:
+        if self.skip_pov:
+            logger.debug(f"Skipping POV tests for {variant_name} (skip_pov=True)")
+            result.pov_test_passed = None  # Indicate POV was skipped
+            result.pov_test_time = 0.0
+        elif self.verify_variants:
             # Test all POV variants for this specific CPV
             cpv_id = result.pov_id
             pov_variants = self._discover_pov_variants(benchmark_path, harness, cpv_id)
@@ -518,9 +528,13 @@ class PatchVerificationEngine:
                 result.security_verdict = "FAIL"
                 return result
 
-        # Step 5: Run unit tests (if source available)
+        # Step 5: Run unit tests (skip if skip_unittest is True)
         unit_test_start_time = time.time()
-        if repo_path is None:
+        if self.skip_unittest:
+            logger.debug(f"Skipping unit tests for {variant_name} (skip_unittest=True)")
+            result.unit_tests_passed = None  # Indicate unit tests were skipped
+            result.unit_test_time = 0.0
+        elif repo_path is None:
             # Skip unit tests for cached builds without source
             logger.info(
                 f"Skipping unit tests for {variant_name} (no source, cached build)"
@@ -566,11 +580,21 @@ class PatchVerificationEngine:
                 result.security_verdict = "FAIL"
                 return result
 
-        # All checks passed
+        # All checks passed (or skipped)
         result.status = PatchVerificationStatus.VALID
-        result.details = "Patch is valid"
+        # Determine details based on what was run
+        if self.skip_pov and self.skip_unittest:
+            result.details = "Build only (no verification)"
+        elif self.skip_pov:
+            result.details = "Unit tests passed (POV skipped)"
+        elif self.skip_unittest:
+            result.details = "POV tests passed (unit tests skipped)"
+        else:
+            result.details = "Patch is valid"
         # security_verdict = PASS requires: at least 1 CPV complete + tests pass
-        result.security_verdict = "PASS"
+        # When skip_pov is used, security cannot be verified, so leave as default "FAIL"
+        if not self.skip_pov:
+            result.security_verdict = "PASS"
         return result
 
     def verify_patches(

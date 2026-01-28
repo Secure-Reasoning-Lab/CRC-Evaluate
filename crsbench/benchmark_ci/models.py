@@ -62,8 +62,7 @@ class CheckResult:
         """Format status for display with time and fallback indicator.
 
         Returns:
-            Formatted string like "PASS(2m)", "PASS(V:30s)", "PASS(B:2m V:1m)",
-            "PASS-FB(8m)", "FAIL", "-"
+            Formatted string like "PASS(2m)", "PASS-FB(8m)", "FAIL", "-"
         """
         if self.status == CheckStatus.SKIP:
             return "-"
@@ -72,13 +71,11 @@ class CheckResult:
         if self.status == CheckStatus.ERROR:
             return "ERROR"
 
-        # Format time with build/verify split when available
-        if self.verify_time > 0 and self.build_time == 0:
-            time_str = f"V:{_format_time_short(self.verify_time)}"
-        elif self.verify_time > 0 and self.build_time > 0:
-            b_str = _format_time_short(self.build_time)
-            v_str = _format_time_short(self.verify_time)
-            time_str = f"B:{b_str} V:{v_str}"
+        # Use the most specific time available
+        if self.verify_time > 0:
+            time_str = _format_time_short(self.verify_time)
+        elif self.build_time > 0:
+            time_str = _format_time_short(self.build_time)
         else:
             time_str = _format_time_short(self.time_seconds)
 
@@ -86,6 +83,28 @@ class CheckResult:
         if self.fallback_used:
             return f"PASS-FB({time_str})"
         return f"PASS({time_str})"
+
+    def format_var_status(self) -> str:
+        """Format variant result for display as X/Y.
+
+        Time is not shown because variant verification time is already
+        included in the V:POV / P:POV column times.
+
+        Returns:
+            Formatted string like "6/18", "SKIP", "ERR"
+        """
+        if self.status == CheckStatus.SKIP:
+            return "SKIP"
+        if self.status == CheckStatus.ERROR:
+            return "ERR"
+
+        var_passed = self.details.get("var_passed", 0)
+        var_total = self.details.get("var_total", 0)
+
+        if var_total == 0:
+            return "SKIP"
+
+        return f"{var_passed}/{var_total}"
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -120,9 +139,18 @@ class BenchmarkValidationResult:
     format_check: Optional[CheckResult] = None
     # Per-check format sub-results (struct, schema, harness, cpv, blob, patch)
     format_checks: dict[str, CheckResult] = field(default_factory=dict)
-    pov_check: Optional[CheckResult] = None
-    patch_check: Optional[CheckResult] = None
+    pov_check: Optional[CheckResult] = None  # Combined result (legacy)
+    # Split POV results (build, pov_0 verify, variants)
+    pov_build_check: Optional[CheckResult] = None
+    pov_pov_check: Optional[CheckResult] = None  # Ground truth pov_0 only
+    pov_var_check: Optional[CheckResult] = None  # Variant POVs (pov_1+)
+    patch_check: Optional[CheckResult] = None  # Combined result (legacy)
     coverage_check: Optional[CheckResult] = None
+    # Split patch results (build, pov_0 test, variants, unit test)
+    patch_build_check: Optional[CheckResult] = None
+    patch_pov_check: Optional[CheckResult] = None  # Ground truth pov_0 only
+    patch_var_check: Optional[CheckResult] = None  # Variant POVs (pov_1+)
+    patch_unittest_check: Optional[CheckResult] = None
     # Variant-specific results (inc-build, RTS)
     pov_inc_check: Optional[CheckResult] = None
     patch_inc_check: Optional[CheckResult] = None
@@ -203,7 +231,28 @@ class BenchmarkValidationResult:
             "format_check": self.format_check.to_dict() if self.format_check else None,
             "format_checks": {k: v.to_dict() for k, v in self.format_checks.items()},
             "pov_check": self.pov_check.to_dict() if self.pov_check else None,
+            "pov_build_check": self.pov_build_check.to_dict()
+            if self.pov_build_check
+            else None,
+            "pov_pov_check": self.pov_pov_check.to_dict()
+            if self.pov_pov_check
+            else None,
+            "pov_var_check": self.pov_var_check.to_dict()
+            if self.pov_var_check
+            else None,
             "patch_check": self.patch_check.to_dict() if self.patch_check else None,
+            "patch_build_check": self.patch_build_check.to_dict()
+            if self.patch_build_check
+            else None,
+            "patch_pov_check": self.patch_pov_check.to_dict()
+            if self.patch_pov_check
+            else None,
+            "patch_var_check": self.patch_var_check.to_dict()
+            if self.patch_var_check
+            else None,
+            "patch_unittest_check": self.patch_unittest_check.to_dict()
+            if self.patch_unittest_check
+            else None,
             "coverage_check": self.coverage_check.to_dict()
             if self.coverage_check
             else None,
