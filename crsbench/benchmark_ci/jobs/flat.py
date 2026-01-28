@@ -500,16 +500,14 @@ class BuildPatchVariantJob(Job):
 
             commit = adapter.get_ref_commit() or adapter.get_base_commit()
 
-            # Get sanitizer for this specific harness (supports mixed sanitizers)
-            if self.harness:
-                sanitizer = adapter.get_harness_sanitizer(self.harness)
-            else:
-                # Fallback to global sanitizer if harness not provided (backward compat)
-                try:
-                    sanitizer = adapter.get_required_sanitizer()
-                except ValueError:
-                    # Mixed sanitizers - use address as default
-                    sanitizer = "address"
+            # Get sanitizer for this specific CPV (supports mixed sanitizers within harness)
+            if not self.harness or not self.cpv_id:
+                raise ValueError(
+                    f"VerifyCpvPovJob requires both harness and cpv_id: "
+                    f"harness={self.harness}, cpv_id={self.cpv_id}"
+                )
+
+            sanitizer = adapter.get_cpv_sanitizer(self.harness, self.cpv_id)
 
             # PATCHED variants can use inc-build:
             # - Base inc-build image (benchmark_name) is retagged to variant_name

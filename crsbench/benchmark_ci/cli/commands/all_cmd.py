@@ -147,17 +147,9 @@ def _build_dag(
         language = adapter.lang
         repo_name = adapter.repo_name
 
-        # Try to get global sanitizer, but if harnesses have mixed sanitizers,
-        # we'll use per-harness sanitizers later
-        try:
-            global_sanitizer = adapter.get_required_sanitizer()
-        except ValueError:
-            # Mixed sanitizers across harnesses - will use per-harness
-            global_sanitizer = "address"  # default for shared variants
-            logger.debug(
-                f"{benchmark_name} has mixed sanitizers across harnesses, "
-                "will use per-CPV sanitizers"
-            )
+        # Get all unique sanitizers used by CPVs (supports mixed sanitizers)
+        required_sanitizers = adapter.get_all_cpv_sanitizers()
+        logger.debug(f"{benchmark_name} requires sanitizers: {required_sanitizers}")
 
         # Collect all patches for allpatched variant from discovery
         all_patches: list[Path] = []
@@ -169,51 +161,55 @@ def _build_dag(
                     if patch_path not in all_patches:
                         all_patches.append(patch_path)
 
-        # Track build job IDs for this benchmark
-        build_job_ids: list[str] = []
-
-        # Create BuildSingleVariantJob for vulnerable variant
+        # Build shared variants (deltaref, allpatched) for each sanitizer
+        # Track build job IDs by sanitizer: {sanitizer: [deltaref_id, allpatched_id]}
+        build_jobs_by_sanitizer: dict[str, list[str]] = {}
         is_delta = mode == BenchmarkMode.DELTA
         vulnerable_variant_type = (
             VariantType.DELTA_REF if is_delta else VariantType.FULL_BASE
         )
-        vulnerable_job = BuildSingleVariantJob(
-            benchmark_path=path,
-            benchmark_name=benchmark_name,
-            variant_type=vulnerable_variant_type,
-            commit=commit,
-            main_repo=main_repo,
-            mode=mode,
-            language=language,
-            use_inc_build=effective_inc,
-            force_rebuild=force_rebuild,
-            source_mode=source_mode,
-            sanitizer=global_sanitizer,
-            repo_name=repo_name,
-            sanitizer=sanitizer,
-        )
-        all_jobs.append(vulnerable_job)
-        build_job_ids.append(vulnerable_job.job_id)
 
-        # Create BuildSingleVariantJob for allpatched variant
-        allpatched_job = BuildSingleVariantJob(
-            benchmark_path=path,
-            benchmark_name=benchmark_name,
-            variant_type=VariantType.ALL_PATCHED,
-            commit=commit,
-            main_repo=main_repo,
-            mode=mode,
-            language=language,
-            patches=all_patches,
-            use_inc_build=effective_inc,
-            force_rebuild=force_rebuild,
-            source_mode=source_mode,
-            sanitizer=global_sanitizer,
-            repo_name=repo_name,
-            sanitizer=sanitizer,
-        )
-        all_jobs.append(allpatched_job)
-        build_job_ids.append(allpatched_job.job_id)
+        for sanitizer in required_sanitizers:
+            # Create vulnerable variant for this sanitizer
+            vulnerable_job = BuildSingleVariantJob(
+                benchmark_path=path,
+                benchmark_name=benchmark_name,
+                variant_type=vulnerable_variant_type,
+                commit=commit,
+                main_repo=main_repo,
+                mode=mode,
+                language=language,
+                use_inc_build=effective_inc,
+                force_rebuild=force_rebuild,
+                source_mode=source_mode,
+                sanitizer=sanitizer,
+                repo_name=repo_name,
+            )
+            all_jobs.append(vulnerable_job)
+
+            # Create allpatched variant for this sanitizer
+            allpatched_job = BuildSingleVariantJob(
+                benchmark_path=path,
+                benchmark_name=benchmark_name,
+                variant_type=VariantType.ALL_PATCHED,
+                commit=commit,
+                main_repo=main_repo,
+                mode=mode,
+                language=language,
+                patches=all_patches,
+                use_inc_build=effective_inc,
+                force_rebuild=force_rebuild,
+                source_mode=source_mode,
+                sanitizer=sanitizer,
+                repo_name=repo_name,
+            )
+            all_jobs.append(allpatched_job)
+
+            # Track IDs for this sanitizer
+            build_jobs_by_sanitizer[sanitizer] = [
+                vulnerable_job.job_id,
+                allpatched_job.job_id,
+            ]
 
         # Coverage job (only if --inc-coverage)
         coverage_job_id = ""
@@ -240,9 +236,6 @@ def _build_dag(
         patch_keys: list[tuple[str, str]] = []
 
         for harness in harnesses:
-            # Get sanitizer for this specific harness
-            harness_sanitizer = adapter.get_harness_sanitizer(harness)
-
             for cpv_id in discover_cpv_ids(path, harness):
                 if cpv_id in cpv_ids:
                     continue
@@ -250,6 +243,9 @@ def _build_dag(
 
                 # Extract cpv_num from cpv_id (e.g., "cpv_0" -> 0)
                 cpv_num = int(cpv_id.split("_")[1])
+
+                # Get sanitizer for this specific CPV (supports mixed sanitizers per harness)
+                cpv_sanitizer = adapter.get_cpv_sanitizer(harness, cpv_id)
 
                 # Get patches for this specific CPV
                 cpv_specific_patches = [
@@ -264,7 +260,7 @@ def _build_dag(
                 ]
 
                 # Create BuildSingleVariantJob for this CPV variant
-                # Use harness-specific sanitizer (supports mixed sanitizers)
+                # Use CPV-specific sanitizer (supports mixed sanitizers within harness)
                 cpv_build_job = BuildSingleVariantJob(
                     benchmark_path=path,
                     benchmark_name=benchmark_name,
@@ -278,14 +274,14 @@ def _build_dag(
                     use_inc_build=effective_inc,
                     force_rebuild=force_rebuild,
                     source_mode=source_mode,
-                    sanitizer=harness_sanitizer,
+                    sanitizer=cpv_sanitizer,
                     repo_name=repo_name,
-                    sanitizer=sanitizer,
                 )
                 all_jobs.append(cpv_build_job)
 
-                # Build job IDs for this CPV: vulnerable + allpatched + this CPV variant
-                cpv_build_job_ids = build_job_ids.copy()
+                # Build job IDs for this CPV: vulnerable + allpatched + CPV variant
+                # Use only the shared variants that match this CPV's sanitizer
+                cpv_build_job_ids = build_jobs_by_sanitizer[cpv_sanitizer].copy()
                 cpv_build_job_ids.append(cpv_build_job.job_id)
 
                 # POV verify jobs - depend on vulnerable, allpatched, and CPV variant builds
@@ -307,6 +303,9 @@ def _build_dag(
 
                 # Patch build + test jobs (FULL mode)
                 # BuildPatchVariantJob depends on vulnerable build for adapter
+                # Use sanitizer-specific vulnerable job (first in the list)
+                cpv_vulnerable_job_id = build_jobs_by_sanitizer[cpv_sanitizer][0]
+
                 patches = discover_patch_paths(path, harness, cpv_id)
                 for patch_id, patch_path in patches:
                     patch_keys.append((cpv_id, patch_id))
@@ -317,10 +316,10 @@ def _build_dag(
                         cpv_id=cpv_id,
                         patch_id=patch_id,
                         patch_path=patch_path,
-                        harness=harness,  # Pass harness for per-harness sanitizer
+                        harness=harness,  # Pass harness for per-CPV sanitizer
                         use_inc_build=effective_inc,
                         force_rebuild=force_rebuild,
-                        build_job_id=vulnerable_job.job_id,
+                        build_job_id=cpv_vulnerable_job_id,
                         source_mode=source_mode,
                     )
                     all_jobs.append(build_patch_job)
@@ -363,8 +362,20 @@ def _build_dag(
             )
             all_jobs.append(coverage_verify_job)
 
+        # Flatten all shared build job IDs across sanitizers for aggregation
+        all_shared_build_job_ids = []
+        for job_ids in build_jobs_by_sanitizer.values():
+            all_shared_build_job_ids.extend(job_ids)
+
         benchmark_metadata.append(
-            (path, supports_inc, rts_mode, cpv_ids, patch_keys, build_job_ids)
+            (
+                path,
+                supports_inc,
+                rts_mode,
+                cpv_ids,
+                patch_keys,
+                all_shared_build_job_ids,
+            )
         )
 
     return all_jobs, benchmark_metadata

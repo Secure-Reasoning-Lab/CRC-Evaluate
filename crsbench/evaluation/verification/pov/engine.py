@@ -656,9 +656,16 @@ class VerificationEngine:
         # Use override if provided, otherwise use adapter's setting
         inc_build = use_inc_build if use_inc_build is not None else adapter.inc_build
 
-        # Get sanitizer from meta.yaml POV definitions
-        # All CPVs must use the same sanitizer (raises ValueError if not)
-        sanitizer = adapter.get_required_sanitizer()
+        # Get sanitizer(s) from meta.yaml POV definitions
+        # If multiple sanitizers, use the first one (CI handles multi-sanitizer properly)
+        sanitizers = adapter.get_all_cpv_sanitizers()
+        sanitizer = sanitizers[0]
+        if len(sanitizers) > 1:
+            logger.warning(
+                f"{adapter.benchmark_name} uses multiple sanitizers: {sanitizers}. "
+                f"POV verification will use {sanitizer}. "
+                "Use 'crsbench ci' for full multi-sanitizer support."
+            )
 
         # Create build plan
         plan = self.builder.create_build_plan(

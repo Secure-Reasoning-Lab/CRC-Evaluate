@@ -2135,41 +2135,52 @@ class TestAllSubcommand:
         adapter.repo_name = None
         adapter.get_mode.return_value.value = "delta"
 
-        # get_required_sanitizer raises ValueError for mixed sanitizers
-        adapter.get_required_sanitizer.side_effect = ValueError(
-            "Different harnesses require different sanitizers: "
-            "harness_addr=address, harness_undef=undefined"
-        )
+        # get_all_cpv_sanitizers returns both sanitizers used (supports mixed)
+        adapter.get_all_cpv_sanitizers.return_value = ["address", "undefined"]
 
-        # get_harness_sanitizer returns per-harness sanitizers
-        def harness_sanitizer(harness_name):
-            return "address" if harness_name == "harness_addr" else "undefined"
+        # get_cpv_sanitizer returns per-CPV sanitizers (supports mixed sanitizers)
+        def cpv_sanitizer(harness_name, cpv_id):
+            if harness_name == "harness_addr" and cpv_id == "cpv_0":
+                return "address"
+            if harness_name == "harness_undef" and cpv_id == "cpv_1":
+                return "undefined"
+            return "address"
 
-        adapter.get_harness_sanitizer.side_effect = harness_sanitizer
+        adapter.get_cpv_sanitizer.side_effect = cpv_sanitizer
         mock_adapter.return_value = adapter
 
         # Mock executor results - need results for both CPVs
         from crsbench.executor.types import ExecutorResult, JobStatus
 
         results = {
-            # Build jobs (4 total: deltaref, allpatched, cpv_0, cpv_1)
-            "build-single:bench1:deltaref": ExecutorResult(
-                job_id="build-single:bench1:deltaref",
+            # Build jobs (6 total: 2 deltaref, 2 allpatched, 2 cpv - one for each sanitizer)
+            "build-single:bench1-asan-deltaref": ExecutorResult(
+                job_id="build-single:bench1-asan-deltaref",
                 status=JobStatus.SUCCESS,
                 elapsed_seconds=5.0,
             ),
-            "build-single:bench1:delta-allpatched": ExecutorResult(
-                job_id="build-single:bench1:delta-allpatched",
+            "build-single:bench1-asan-delta-allpatched": ExecutorResult(
+                job_id="build-single:bench1-asan-delta-allpatched",
                 status=JobStatus.SUCCESS,
                 elapsed_seconds=5.0,
             ),
-            "build-single:bench1:delta-cpv0": ExecutorResult(
-                job_id="build-single:bench1:delta-cpv0",
+            "build-single:bench1-ubsan-deltaref": ExecutorResult(
+                job_id="build-single:bench1-ubsan-deltaref",
                 status=JobStatus.SUCCESS,
                 elapsed_seconds=5.0,
             ),
-            "build-single:bench1:delta-cpv1": ExecutorResult(
-                job_id="build-single:bench1:delta-cpv1",
+            "build-single:bench1-ubsan-delta-allpatched": ExecutorResult(
+                job_id="build-single:bench1-ubsan-delta-allpatched",
+                status=JobStatus.SUCCESS,
+                elapsed_seconds=5.0,
+            ),
+            "build-single:bench1-asan-delta-cpv0": ExecutorResult(
+                job_id="build-single:bench1-asan-delta-cpv0",
+                status=JobStatus.SUCCESS,
+                elapsed_seconds=5.0,
+            ),
+            "build-single:bench1-ubsan-delta-cpv1": ExecutorResult(
+                job_id="build-single:bench1-ubsan-delta-cpv1",
                 status=JobStatus.SUCCESS,
                 elapsed_seconds=5.0,
             ),
@@ -2227,7 +2238,7 @@ class TestAllSubcommand:
         # Verify success
         assert result == 0
 
-        # Verify get_harness_sanitizer was called for each harness
-        assert adapter.get_harness_sanitizer.call_count == 2
-        adapter.get_harness_sanitizer.assert_any_call("harness_addr")
-        adapter.get_harness_sanitizer.assert_any_call("harness_undef")
+        # Verify get_cpv_sanitizer was called for each CPV
+        assert adapter.get_cpv_sanitizer.call_count == 2
+        adapter.get_cpv_sanitizer.assert_any_call("harness_addr", "cpv_0")
+        adapter.get_cpv_sanitizer.assert_any_call("harness_undef", "cpv_1")
