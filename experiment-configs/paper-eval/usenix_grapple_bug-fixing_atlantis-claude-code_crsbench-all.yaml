@@ -17,7 +17,7 @@ max_total_time: 7200  # 2 hours total
 crses:
   - atlantis-claude-code
 
-mode: auto
+mode: all
 
 benchmark_suite: crsbench-all
 
@@ -25,7 +25,7 @@ benchmark_suite: crsbench-all
 difficulty_level: 1
 
 # Build Configuration
-build_timeout: 1800   # 20 minutes
+build_timeout: 1800   # 30 minutes
 run_timeout: 3600     # 1 hour
 verify_timeout: 1200  # 20 minutes
 
@@ -43,17 +43,16 @@ redis_host: localhost
 
 # Resource Allocation
 resources:
-  cores_per_trial: 16
-  memory_per_trial: "64G"
+  cores_per_trial: 8
+  memory_per_trial: "32G"
   litellm:
     cost_budget: 100.0  # $100 per trial
 
 # Storage Configuration (local SSD for fast I/O)
-experiment_filestore: /mnt/ssd2/acorn421/crsbench/usenix-grapple-bug-fixing-eval/experiment-data
-report_filestore: /mnt/ssd2/acorn421/crsbench/usenix-grapple-bug-fixing-eval/report-data
+experiment_filestore: /mnt/ssd2/acorn421/crsbench/usenix-grapple-bug-fixing-eval-3/experiment-data
+report_filestore: /mnt/ssd2/acorn421/crsbench/usenix-grapple-bug-fixing-eval-3/report-data
 
-# NFS result transfer settings
-copy_results_to_filestore: true
+# NFS result transfer settings (copy after each trial)
 copy_results_after_trial: true
 results_filestore: /mnt/crsbench_nfs/crsbench/grapple/usenix-grapple-bug-fixing-eval
 
