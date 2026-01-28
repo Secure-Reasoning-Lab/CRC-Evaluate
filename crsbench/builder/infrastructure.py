@@ -846,6 +846,9 @@ class OSSFuzzInfrastructure:
         Skips duplicate patches (identical content) to handle cases where
         multiple CPVs share the same vulnerability fix.
 
+        When applying multiple patches, uses fuzz mode for second and subsequent
+        patches to handle context changes from earlier patches.
+
         Args:
             repo_path: Path to repository
             patches: List of patch files to apply
@@ -855,6 +858,7 @@ class OSSFuzzInfrastructure:
         """
         success = True
         applied_hashes: set[str] = set()
+        applied_count = 0
 
         for patch_file in patches:
             # Hash patch content to detect duplicates
@@ -865,12 +869,17 @@ class OSSFuzzInfrastructure:
                 logger.debug(f"Skipping duplicate patch: {patch_file.name}")
                 continue
 
-            if not self._apply_single_patch(repo_path, patch_file):
+            # Use fuzz for second and subsequent patches to handle
+            # context changes from earlier patches
+            use_fuzz = applied_count > 0
+
+            if not self._apply_single_patch(repo_path, patch_file, use_fuzz=use_fuzz):
                 logger.warning(f"Failed to apply patch: {patch_file}")
                 success = False
             else:
                 logger.debug(f"Applied patch: {patch_file.name}")
                 applied_hashes.add(patch_hash)
+                applied_count += 1
 
         return success
 
@@ -931,7 +940,13 @@ class OSSFuzzInfrastructure:
                 else:
                     logger.debug(f"Applied patch: {patch_file.name} (cpv_{cpv_num})")
 
-    def _apply_single_patch(self, repo_path: Path, patch_file: Path) -> bool:
+    def _apply_single_patch(
+        self,
+        repo_path: Path,
+        patch_file: Path,
+        *,
+        use_fuzz: bool = False,
+    ) -> bool:
         """Apply a single patch file.
 
         Uses --whitespace=nowarn instead of --3way because bundled tarballs
@@ -944,6 +959,9 @@ class OSSFuzzInfrastructure:
         Args:
             repo_path: Path to repository
             patch_file: Path to patch file
+            use_fuzz: If True, use lenient context matching (git apply -C1,
+                patch --fuzz=3). Useful when applying multiple patches where
+                earlier patches may have changed the context lines.
 
         Returns:
             True if successful
@@ -951,15 +969,21 @@ class OSSFuzzInfrastructure:
         try:
             patch_file_abs = patch_file.resolve()
 
+            # Build git apply command
+            git_cmd = [
+                "git",
+                "apply",
+                "--whitespace=nowarn",
+                "--verbose",
+            ]
+            if use_fuzz:
+                # Use -C1 to require only 1 line of context (more lenient)
+                git_cmd.append("-C1")
+            git_cmd.append(str(patch_file_abs))
+
             # Try git apply first
             result = subprocess.run(
-                [
-                    "git",
-                    "apply",
-                    "--whitespace=nowarn",
-                    "--verbose",
-                    str(patch_file_abs),
-                ],
+                git_cmd,
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
@@ -975,8 +999,14 @@ class OSSFuzzInfrastructure:
                 f"  stderr: {result.stderr}"
             )
 
+            # Build patch command
+            patch_cmd = ["patch", "-p1", "-i", str(patch_file_abs)]
+            if use_fuzz:
+                # Use --fuzz=3 for lenient matching with patch binary
+                patch_cmd.append("--fuzz=3")
+
             fallback_result = subprocess.run(
-                ["patch", "-p1", "-i", str(patch_file_abs)],
+                patch_cmd,
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
