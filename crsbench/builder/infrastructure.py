@@ -1153,7 +1153,6 @@ class OSSFuzzInfrastructure:
         timeout: int = 180,
         request_id: Optional[int] = None,
         pov_id: Optional[str] = None,
-        sanitizer: str = "address",
     ) -> "ReproduceOutput":
         """Reproduce a crash using OSS-Fuzz helper.py.
 
@@ -1163,15 +1162,17 @@ class OSSFuzzInfrastructure:
         - 124: Timeout (treated as no crash)
         - Other non-zero: Other crash types
 
+        Note: sanitizer is embedded in project_name (e.g., project-asan-deltaref).
+        helper.py reproduce doesn't accept --sanitizer flag.
+
         Args:
-            project_name: Variant name (e.g., "benchmark-deltaref")
+            project_name: Variant name (e.g., "benchmark-asan-deltaref")
             harness: Harness name to run
             pov_data: Raw POV/testcase bytes
             timeout: Timeout for reproduce operation in seconds (default: 180s
                 to handle large projects like wireshark)
             request_id: Optional request ID for logging
             pov_id: Optional POV identifier for logging
-            sanitizer: Sanitizer type (address, undefined, memory, etc.) for image selection
 
         Returns:
             ReproduceOutput with crashed status and stdout/stderr
@@ -1187,12 +1188,12 @@ class OSSFuzzInfrastructure:
         pov_prefix = f"[{pov_id}] " if pov_id else ""
 
         try:
+            # Note: sanitizer is embedded in project_name (e.g., project-asan-deltaref)
+            # helper.py reproduce doesn't accept --sanitizer flag
             cmd = [
                 "python3",
                 str(self._helper_script),
                 "reproduce",
-                "--sanitizer",
-                sanitizer,  # Specify which sanitizer image to use
                 "--propagate_exit_codes",
                 "--timeout",
                 str(timeout),

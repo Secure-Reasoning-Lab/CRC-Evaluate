@@ -240,7 +240,6 @@ class VerificationEngine:
             pov_data=task.pov_data,
             timeout=self.timeout,
             pov_id=task.pov_id,
-            sanitizer=task.sanitizer,  # Pass sanitizer to reproduce
         )
         # Strip ANSI escape codes from crash log for cleaner storage
         crash_log = strip_ansi(output.stdout) if output.crashed else ""
