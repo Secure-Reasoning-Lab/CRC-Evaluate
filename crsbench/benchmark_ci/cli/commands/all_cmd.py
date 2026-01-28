@@ -146,6 +146,7 @@ def _build_dag(
         main_repo = adapter.main_repo
         language = adapter.lang
         repo_name = adapter.repo_name
+        sanitizer = adapter.get_required_sanitizer()
 
         # Collect all patches for allpatched variant from discovery
         all_patches: list[Path] = []
@@ -177,6 +178,7 @@ def _build_dag(
             force_rebuild=force_rebuild,
             source_mode=source_mode,
             repo_name=repo_name,
+            sanitizer=sanitizer,
         )
         all_jobs.append(vulnerable_job)
         build_job_ids.append(vulnerable_job.job_id)
@@ -195,6 +197,7 @@ def _build_dag(
             force_rebuild=force_rebuild,
             source_mode=source_mode,
             repo_name=repo_name,
+            sanitizer=sanitizer,
         )
         all_jobs.append(allpatched_job)
         build_job_ids.append(allpatched_job.job_id)
@@ -259,6 +262,7 @@ def _build_dag(
                     force_rebuild=force_rebuild,
                     source_mode=source_mode,
                     repo_name=repo_name,
+                    sanitizer=sanitizer,
                 )
                 all_jobs.append(cpv_build_job)
 
