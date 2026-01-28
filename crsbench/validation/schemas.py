@@ -634,6 +634,15 @@ class LitellmResourceConfig(BaseModel):
         default=10, ge=1, description="Maximum concurrent requests to LiteLLM"
     )
     cost_budget: float = Field(default=100.0, ge=0, description="Cost budget in USD")
+    team: Optional[str] = Field(
+        default=None,
+        description="Team name to group API keys. If not set, experiment name is used.",
+    )
+    team_max_budget: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="Maximum budget in USD for the team. Applied when creating or updating team.",
+    )
 
 
 class ResourceConfig(BaseModel):
@@ -680,6 +689,16 @@ class WorkerConfig(BaseModel):
     crs_configs_dir: Optional[Path] = Field(
         default=None,
         description="Override CRS configs directory for workers on different machines",
+    )
+    build_workers: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Override build_workers for workers on different machines",
+    )
+    verify_workers: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Override verify_workers for workers on different machines",
     )
     benchmarks_root: Optional[Path] = Field(
         default=None,
@@ -812,7 +831,8 @@ class ExperimentConfig(BaseModel):
     litellm_mode: Optional[Literal["passthrough", "proxy"]] = Field(
         default="passthrough",
         description="LiteLLM mode: 'passthrough' uses external LiteLLM (UPSTREAM_LITELLM_BASE_URL, LITELLM_API_KEY), "
-        "'proxy' uses self-hosted proxy (LITELLM_BASE_URL, LITELLM_MASTER_KEY). "
+        "'proxy' uses self-hosted proxy (LITELLM_BASE_URL, LITELLM_MASTER_KEY), "
+        "null skips LiteLLM entirely (for CRS that don't need LLM). "
         "Default is 'passthrough'.",
     )
     llm_tracking_enabled: bool = Field(
@@ -833,6 +853,11 @@ class ExperimentConfig(BaseModel):
     oss_fuzz_path: Path = Field(
         default=Path("oss-fuzz"),
         description="Path to oss-fuzz directory (default: oss-fuzz)",
+    )
+    source_mode: Literal["main_repo", "pkgs"] = Field(
+        default="main_repo",
+        description="Source mode: 'main_repo' clones from git (default), "
+        "'pkgs' uses bundled tarballs from pkgs/ directory.",
     )
     coverage_enabled: bool = Field(
         default=False,

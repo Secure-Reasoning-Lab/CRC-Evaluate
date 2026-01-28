@@ -236,6 +236,188 @@ class TestGenerateRefDiff:
             assert "ref/" not in diff_content
 
 
+class TestPrepareSource:
+    """Test _prepare_source creates single squashed commit."""
+
+    @pytest.mark.skipif(
+        not shutil.which("git"),
+        reason="git not available",
+    )
+    def test_prepare_source_has_single_commit(self):
+        """Test that _prepare_source creates 1 squashed commit."""
+        import os
+
+        from crsbench.benchmark.packaging.tarball import _prepare_source
+
+        git_env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Test",
+            "GIT_AUTHOR_EMAIL": "test@test.com",
+            "GIT_COMMITTER_NAME": "Test",
+            "GIT_COMMITTER_EMAIL": "test@test.com",
+        }
+
+        def run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+            full_args = ["-c", "commit.gpgsign=false", *args]
+            return subprocess.run(
+                ["git", *full_args],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                env=git_env,
+                check=True,
+            )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+
+            # Create a git repo with multiple commits
+            repo_dir = work_dir / "repo"
+            repo_dir.mkdir()
+            run_git(["init"], cwd=repo_dir)
+
+            # First commit
+            (repo_dir / "main.c").write_text("int main() { return 0; }")
+            run_git(["add", "-A"], cwd=repo_dir)
+            run_git(["commit", "-m", "Initial"], cwd=repo_dir)
+
+            # Second commit (target)
+            (repo_dir / "vuln.c").write_text("void vuln() { /* bug */ }")
+            run_git(["add", "-A"], cwd=repo_dir)
+            run_git(["commit", "-m", "Add vuln"], cwd=repo_dir)
+            target_commit = run_git(["rev-parse", "HEAD"], cwd=repo_dir).stdout.strip()
+
+            # Clone and prepare
+            prepared_dir = work_dir / "prepared"
+            shutil.copytree(repo_dir, prepared_dir, symlinks=True)
+            _prepare_source(prepared_dir, target_commit)
+
+            # Verify 1 commit
+            result = run_git(["rev-list", "--count", "HEAD"], cwd=prepared_dir)
+            commit_count = int(result.stdout.strip())
+            assert commit_count == 1, f"Expected 1 commit, got {commit_count}"
+
+            # Verify vuln.c exists (target state)
+            assert (prepared_dir / "vuln.c").exists()
+
+    @pytest.mark.skipif(
+        not shutil.which("git"),
+        reason="git not available",
+    )
+    def test_prepare_source_cannot_diff_parent(self):
+        """Test that CRS cannot use git diff HEAD~1 (no parent commit)."""
+        import os
+
+        from crsbench.benchmark.packaging.tarball import _prepare_source
+
+        git_env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Test",
+            "GIT_AUTHOR_EMAIL": "test@test.com",
+            "GIT_COMMITTER_NAME": "Test",
+            "GIT_COMMITTER_EMAIL": "test@test.com",
+        }
+
+        def run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+            full_args = ["-c", "commit.gpgsign=false", *args]
+            return subprocess.run(
+                ["git", *full_args],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                env=git_env,
+                check=True,
+            )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+
+            # Create repo
+            repo_dir = work_dir / "repo"
+            repo_dir.mkdir()
+            run_git(["init"], cwd=repo_dir)
+
+            (repo_dir / "main.c").write_text("int main() { return 0; }")
+            run_git(["add", "-A"], cwd=repo_dir)
+            run_git(["commit", "-m", "Initial"], cwd=repo_dir)
+            target_commit = run_git(["rev-parse", "HEAD"], cwd=repo_dir).stdout.strip()
+
+            # Clone and prepare
+            prepared_dir = work_dir / "prepared"
+            shutil.copytree(repo_dir, prepared_dir, symlinks=True)
+            _prepare_source(prepared_dir, target_commit)
+
+            # CRS should NOT be able to diff HEAD~1 (no parent)
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD~1"],
+                cwd=prepared_dir,
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode != 0, "HEAD~1 should not exist"
+
+    @pytest.mark.skipif(
+        not shutil.which("git"),
+        reason="git not available",
+    )
+    def test_prepare_source_has_crsbench_author(self):
+        """Test that commits show CRSBench as author."""
+        import os
+
+        from crsbench.benchmark.packaging.tarball import _prepare_source
+
+        git_env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Test",
+            "GIT_AUTHOR_EMAIL": "test@test.com",
+            "GIT_COMMITTER_NAME": "Test",
+            "GIT_COMMITTER_EMAIL": "test@test.com",
+        }
+
+        def run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+            full_args = ["-c", "commit.gpgsign=false", *args]
+            return subprocess.run(
+                ["git", *full_args],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                env=git_env,
+                check=True,
+            )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+
+            repo_dir = work_dir / "repo"
+            repo_dir.mkdir()
+            run_git(["init"], cwd=repo_dir)
+
+            (repo_dir / "main.c").write_text("int main() { return 0; }")
+            run_git(["add", "-A"], cwd=repo_dir)
+            run_git(["commit", "-m", "Initial"], cwd=repo_dir)
+            target_commit = run_git(["rev-parse", "HEAD"], cwd=repo_dir).stdout.strip()
+
+            prepared_dir = work_dir / "prepared"
+            shutil.copytree(repo_dir, prepared_dir, symlinks=True)
+            _prepare_source(prepared_dir, target_commit)
+
+            # Get author info
+            result = subprocess.run(
+                ["git", "log", "--format=%an <%ae>"],
+                cwd=prepared_dir,
+                capture_output=True,
+                text=True,
+            )
+            authors = [
+                line.strip()
+                for line in result.stdout.strip().split("\n")
+                if line.strip()
+            ]
+
+            for author in authors:
+                assert "CRSBench" in author or "crsbench" in author.lower()
+
+
 class TestCRLFLineEndings:
     """Test that CRLF line endings are preserved in tarball and ref.diff."""
 

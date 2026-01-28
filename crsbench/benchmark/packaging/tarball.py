@@ -27,14 +27,21 @@ def create_source_tarball(
     *,
     ref_commit: Optional[str] = None,
 ) -> tuple[Path, Optional[Path]]:
-    """Create source tarball with fresh git init.
+    """Create source tarball with single squashed commit.
+
+    Both modes produce a tarball with 1 squashed commit at the vulnerable state:
+    - Delta mode (ref_commit provided): 1 commit at ref_commit + ref.diff as hint
+    - Full-only mode (no ref_commit): 1 commit at base_commit (vulnerable state)
+
+    The ref.diff hint file is the canonical way for CRS to discover changes
+    in delta mode. Git history is not used to expose the vulnerability.
 
     Args:
         repo_url: Git repository URL
-        base_commit: Commit to checkout for base source
+        base_commit: Commit for full mode (vulnerable state) or delta mode base
         source_name: Directory name in tarball (from Dockerfile WORKDIR)
         output_dir: Directory to write tarball and ref.diff
-        ref_commit: If provided, generate ref.diff between base and ref
+        ref_commit: If provided, generate ref.diff and use ref_commit as vulnerable state
 
     Returns:
         Tuple of (tarball_path, ref_diff_path or None)
@@ -66,23 +73,13 @@ def create_source_tarball(
         # This ensures tarball content matches ref.diff exactly
         _run_git(["config", "core.autocrlf", "false"], cwd=repo_dir)
 
-        # 4. Checkout base commit for source tarball
-        _run_git(["checkout", base_commit], cwd=repo_dir)
+        # 4. Prepare source with single squashed commit at vulnerable state
+        # Delta mode: ref_commit is vulnerable state
+        # Full mode: base_commit is vulnerable state
+        vulnerable_commit = ref_commit if ref_commit else base_commit
+        _prepare_source(repo_dir, vulnerable_commit)
 
-        # 5. Initialize submodules (if any)
-        # Some projects like shadowsocks have submodules that must be fetched
-        gitmodules = repo_dir / ".gitmodules"
-        if gitmodules.exists():
-            logger.info("Initializing git submodules...")
-            _run_git(["submodule", "update", "--init", "--recursive"], cwd=repo_dir)
-
-        # 6. Clean up - remove git metadata and sensitive directories
-        _clean_source(repo_dir)
-
-        # 7. Fresh git init (CRS needs git commands to work)
-        _fresh_git_init(repo_dir)
-
-        # 8. Rename to expected name and create tarball
+        # 4. Rename to expected name and create tarball
         source_dir = work_dir / source_name
         repo_dir.rename(source_dir)
 
@@ -110,6 +107,34 @@ def create_source_tarball(
 
         logger.info(f"Created tarball: {tarball_path}")
         return tarball_path, ref_diff_path
+
+
+def _prepare_source(repo_dir: Path, target_commit: str) -> None:
+    """Prepare source with single squashed commit at target state.
+
+    Creates a single commit at the specified commit (vulnerable state).
+    CRS cannot use git history to discover what changed - ref.diff is the
+    canonical hint for delta mode.
+
+    Args:
+        repo_dir: Path to cloned repository
+        target_commit: Commit to checkout (vulnerable state)
+    """
+    logger.info(f"Creating 1-commit tarball at {target_commit[:8]}")
+
+    # 1. Checkout target commit (vulnerable state)
+    _run_git(["checkout", target_commit], cwd=repo_dir)
+
+    # Initialize submodules
+    if (repo_dir / ".gitmodules").exists():
+        logger.info("Initializing git submodules...")
+        _run_git(["submodule", "update", "--init", "--recursive"], cwd=repo_dir)
+
+    # 2. Clean and create single squashed commit
+    _clean_source(repo_dir)
+    _fresh_git_init(repo_dir)
+
+    logger.info("Created 1-commit tarball")
 
 
 def _generate_ref_diff(
@@ -234,8 +259,15 @@ def _clean_source(directory: Path) -> None:
             shutil.rmtree(git_path)
 
 
-def _fresh_git_init(directory: Path) -> None:
+def _fresh_git_init(
+    directory: Path,
+    commit_message: str = "Initial source",
+) -> None:
     """Initialize fresh git repo with single commit.
+
+    Args:
+        directory: Path to directory to initialize
+        commit_message: Message for the initial commit
 
     Uses fixed author/committer for reproducibility.
     """
@@ -276,15 +308,26 @@ def _fresh_git_init(directory: Path) -> None:
         env=env,
     )
     subprocess.run(
-        ["git", "commit", "--no-gpg-sign", "-m", "Initial source"],
+        ["git", "commit", "--no-gpg-sign", "-m", commit_message],
         cwd=directory,
         check=True,
         capture_output=True,
         stdin=subprocess.DEVNULL,
         env=env,
     )
-    # Pack all loose objects to prevent race conditions during tar
-    # This ensures git is done writing and all objects are in packfiles
+
+    _run_git_gc(directory)
+
+
+def _run_git_gc(directory: Path) -> None:
+    """Pack all loose objects to prevent race conditions during tar."""
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "CRSBench",
+        "GIT_AUTHOR_EMAIL": "crsbench@example.com",
+        "GIT_COMMITTER_NAME": "CRSBench",
+        "GIT_COMMITTER_EMAIL": "crsbench@example.com",
+    }
     result = subprocess.run(
         ["git", "gc", "--aggressive", "--prune=now"],
         cwd=directory,

@@ -6,7 +6,7 @@ patterns as VerificationEngine (POV) and PatchVerificationEngine.
 
 Architecture:
 - Uses OSSFuzzBuilder for building coverage variants (with build_workers)
-- Uses ThreadPoolExecutor for parallel corpus processing (with verify_workers)
+- Processes corpus files sequentially (parallelism handled by DAGExecutor)
 - Uses MetaYamlAdapter for consistent config loading
 - Provides cleanup() method for resource management
 
@@ -14,7 +14,6 @@ Usage:
     engine = CoverageEngine(
         oss_fuzz_path=Path("./oss-fuzz"),
         build_workers=4,
-        verify_workers=8,
     )
     try:
         report = engine.collect_coverage(
@@ -28,7 +27,7 @@ Usage:
 from __future__ import annotations
 
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -43,7 +42,7 @@ from crsbench.evaluation.coverage.strategy import (
     parse_llvm_cov_summary,
 )
 from crsbench.utils.logger import get_logger
-from crsbench.utils.workers import resolve_build_workers, resolve_verify_workers
+from crsbench.utils.workers import resolve_build_workers
 from crsbench.validation.meta_adapter import MetaYamlAdapter
 
 logger = get_logger(__name__)
@@ -55,20 +54,19 @@ class CoverageEngine:
     Coordinates the entire coverage workflow:
     1. Load benchmark configuration via MetaYamlAdapter
     2. Build coverage variant (with build_workers)
-    3. Collect coverage from corpus files (parallel with verify_workers)
+    3. Collect coverage from corpus files (sequentially)
     4. Merge and deduplicate coverage results
     5. Generate coverage reports
 
     This follows the same architectural pattern as VerificationEngine (POV)
-    and PatchVerificationEngine, enabling consistent parallelization and
-    configuration across all verification/analysis workflows.
+    and PatchVerificationEngine. Parallelism is handled by DAGExecutor at
+    the benchmark level, not within this engine.
 
     Attributes:
         oss_fuzz_path: Path to oss-fuzz directory.
         builder: OSSFuzzBuilder instance for building variants.
         infra: OSSFuzzInfrastructure for low-level operations.
         build_workers: Number of parallel workers for building.
-        verify_workers: Number of parallel workers for coverage collection.
     """
 
     def __init__(
@@ -76,7 +74,6 @@ class CoverageEngine:
         oss_fuzz_path: Path,
         *,
         build_workers: Optional[int] = None,
-        verify_workers: Optional[int] = None,
         work_dir: Optional[Path] = None,
         source_mode: str = "pkgs",
     ):
@@ -86,8 +83,6 @@ class CoverageEngine:
             oss_fuzz_path: Path to oss-fuzz directory.
             build_workers: Number of parallel workers for building (default: 4).
                 Priority: CLI > CRSBENCH_BUILD_WORKERS env > config > default.
-            verify_workers: Number of parallel workers for coverage (default: 4).
-                Priority: CLI > CRSBENCH_VERIFY_WORKERS env > config > default.
             work_dir: Working directory for isolated builds. If None, uses
                 default oss-fuzz/build/out/ location.
             source_mode: Source mode - "pkgs" (bundled, default) or "main_repo" (clone)
@@ -95,17 +90,16 @@ class CoverageEngine:
         self.oss_fuzz_path = Path(oss_fuzz_path)
         self.work_dir = Path(work_dir) if work_dir else None
         self.build_workers = resolve_build_workers(build_workers)
-        self.verify_workers = resolve_verify_workers(verify_workers)
         self.builder = OSSFuzzBuilder(
             oss_fuzz_path, max_workers=self.build_workers, source_mode=source_mode
         )
         self.infra = OSSFuzzInfrastructure(oss_fuzz_path, work_dir=work_dir)
 
         # Cache for strategies (keyed by variant_name)
-        # Note: Strategy creation happens before parallel execution, so no lock needed
         self._strategies: dict[str, CoverageStrategy] = {}
 
         # Thread safety for coverage merging and line set tracking
+        # (kept for external thread safety if engine is used from multiple threads)
         self._merge_lock = threading.Lock()
 
         # Track distinct line sets for corpus_unique calculation
@@ -119,6 +113,7 @@ class CoverageEngine:
         harness_filter: Optional[str] = None,
         *,
         force_rebuild: bool = False,
+        use_inc_build: bool = False,
     ) -> CoverageReport:
         """Collect coverage for a benchmark.
 
@@ -145,6 +140,7 @@ class CoverageEngine:
             return CoverageReport(
                 harness_name="",
                 final_summary=CoverageSummary(),
+                success=False,
             )
 
         # Determine harness
@@ -154,19 +150,25 @@ class CoverageEngine:
 
         if not harness_names:
             logger.error("No harnesses found in benchmark")
-            return CoverageReport(harness_name="", final_summary=CoverageSummary())
+            return CoverageReport(
+                harness_name="", final_summary=CoverageSummary(), success=False
+            )
 
         harness_name = harness_names[0]  # Use first harness
         logger.info(f"Using harness: {harness_name}")
 
         # Build coverage variant
+        build_start = time.time()
         variant_name = self._build_coverage_variant(
-            adapter, force_rebuild=force_rebuild
+            adapter, force_rebuild=force_rebuild, use_inc_build=use_inc_build
         )
+        build_elapsed = time.time() - build_start
         if not variant_name:
             logger.error("Failed to build coverage variant")
             return CoverageReport(
-                harness_name=harness_name, final_summary=CoverageSummary()
+                harness_name=harness_name,
+                final_summary=CoverageSummary(),
+                success=False,
             )
 
         # Verify harness exists in build
@@ -175,7 +177,9 @@ class CoverageEngine:
                 f"Harness '{harness_name}' not found in build output for {variant_name}"
             )
             return CoverageReport(
-                harness_name=harness_name, final_summary=CoverageSummary()
+                harness_name=harness_name,
+                final_summary=CoverageSummary(),
+                success=False,
             )
 
         # Create or get strategy
@@ -185,7 +189,9 @@ class CoverageEngine:
         if not corpus_dir.exists():
             logger.error(f"Corpus directory not found: {corpus_dir}")
             return CoverageReport(
-                harness_name=harness_name, final_summary=CoverageSummary()
+                harness_name=harness_name,
+                final_summary=CoverageSummary(),
+                success=False,
             )
 
         # Find corpus files
@@ -198,21 +204,22 @@ class CoverageEngine:
         if not corpus_files:
             logger.warning(f"No corpus files found in {corpus_dir}")
             return CoverageReport(
-                harness_name=harness_name, final_summary=CoverageSummary()
+                harness_name=harness_name,
+                final_summary=CoverageSummary(),
+                success=False,
             )
 
-        logger.info(
-            f"Collecting coverage for {len(corpus_files)} corpus files "
-            f"with {self.verify_workers} workers"
-        )
+        logger.info(f"Collecting coverage for {len(corpus_files)} corpus files")
 
-        # Collect coverage in parallel (for per-file contribution tracking)
+        # Collect coverage sequentially (parallelism handled by DAGExecutor)
+        verify_start = time.time()
         merged_coverage, success_count, contributing_count, unique_count = (
-            self._collect_coverage_parallel(corpus_files, strategy, harness_name)
+            self._collect_coverage_sequential(corpus_files, strategy, harness_name)
         )
 
         # Run batch coverage to get totals from summary.json
         totals = self._get_coverage_totals(strategy, harness_name, corpus_dir)
+        verify_elapsed = time.time() - verify_start
 
         # Compute summary with totals
         summary = self._compute_summary(
@@ -224,8 +231,8 @@ class CoverageEngine:
         )
 
         logger.info(
-            f"Coverage collection complete: {summary.lines_covered}/{summary.lines_total} lines, "
-            f"{summary.functions_covered}/{summary.functions_total} functions, "
+            f"Coverage collection complete: {summary.format_lines()} lines, "
+            f"{summary.format_functions()} functions, "
             f"{success_count}/{len(corpus_files)} corpus processed, "
             f"{contributing_count} contributing, {unique_count} unique"
         )
@@ -233,19 +240,20 @@ class CoverageEngine:
         return CoverageReport(
             harness_name=harness_name,
             final_summary=summary,
+            build_time=build_elapsed,
+            verify_time=verify_elapsed,
         )
 
-    def _collect_coverage_parallel(
+    def _collect_coverage_sequential(
         self,
         corpus_files: list[Path],
         strategy: CoverageStrategy,
         harness_name: str,
     ) -> tuple[dict, int, int, int]:
-        """Collect coverage for multiple corpus files in parallel.
+        """Collect coverage for multiple corpus files sequentially.
 
-        Uses ThreadPoolExecutor with verify_workers to process corpus files
-        concurrently. Each corpus file runs in an isolated Docker container
-        via the CoverageStrategy.
+        Parallelism is handled by DAGExecutor at the benchmark level,
+        not within this method.
 
         Args:
             corpus_files: List of corpus file paths.
@@ -264,42 +272,20 @@ class CoverageEngine:
         self._seen_line_sets.clear()
         self._covered_lines.clear()
 
-        with ThreadPoolExecutor(max_workers=self.verify_workers) as executor:
-            futures = {
-                executor.submit(
-                    self._collect_single_safe,
-                    strategy,
-                    harness_name,
-                    corpus_file,
-                ): corpus_file
-                for corpus_file in corpus_files
-            }
-
-            completed = 0
-            for future in as_completed(futures):
-                corpus_file = futures[future]
-                try:
-                    cov_data = future.result()
-                    if cov_data:
-                        # Track contributing and unique corpus
-                        is_contributing, is_unique = self._track_corpus_coverage(
-                            cov_data
-                        )
-                        if is_contributing:
-                            contributing_count += 1
-                        if is_unique:
-                            unique_count += 1
-
-                        self._merge_coverage_safe(merged, cov_data)
-                        success_count += 1
-                    completed += 1
-                    if completed % 100 == 0:
-                        logger.info(
-                            f"Processed {completed}/{len(corpus_files)} corpus files"
-                        )
-                except Exception as e:
-                    logger.warning(f"Failed to collect coverage for {corpus_file}: {e}")
-                    completed += 1
+        completed = 0
+        for corpus_file in corpus_files:
+            cov_data = self._collect_single_safe(strategy, harness_name, corpus_file)
+            if cov_data:
+                is_contributing, is_unique = self._track_corpus_coverage(cov_data)
+                if is_contributing:
+                    contributing_count += 1
+                if is_unique:
+                    unique_count += 1
+                self._merge_coverage_safe(merged, cov_data)
+                success_count += 1
+            completed += 1
+            if completed % 100 == 0:
+                logger.info(f"Processed {completed}/{len(corpus_files)} corpus files")
 
         return merged, success_count, contributing_count, unique_count
 
@@ -431,14 +417,20 @@ class CoverageEngine:
         adapter: MetaYamlAdapter,
         *,
         force_rebuild: bool = False,
+        use_inc_build: bool = False,
     ) -> Optional[str]:
         """Build coverage variant for benchmark.
 
         Uses OSSFuzzBuilder to build the coverage-instrumented variant.
 
+        Note: Coverage variants do not support inc-build (requires different
+        instrumentation). The use_inc_build parameter is accepted for
+        interface consistency but has no effect on coverage builds.
+
         Args:
             adapter: MetaYamlAdapter with benchmark configuration.
             force_rebuild: If True, clean and rebuild.
+            use_inc_build: Accepted for consistency but not used for coverage.
 
         Returns:
             Variant name if build succeeded, None otherwise.
@@ -455,6 +447,7 @@ class CoverageEngine:
             commit=commit,
             main_repo=adapter.main_repo,
             repo_name=adapter.repo_name,
+            use_inc_build=use_inc_build,
         )
 
         logger.info(f"Building coverage variant: {config.variant_name}")

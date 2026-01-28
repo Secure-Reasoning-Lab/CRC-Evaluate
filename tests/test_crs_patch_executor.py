@@ -67,8 +67,11 @@ class TestCRSPatchExecutor(unittest.TestCase):
         self.assertTrue(output_dir.is_dir())
 
     @patch("crsbench.utils.crs_helper.get_crs_registry_name")
+    @patch("crsbench.benchmark.runtime.loader.prepare_source_from_bundle")
     @patch("subprocess.run")
-    def test_build_crs_if_needed(self, mock_run, mock_get_registry_name):
+    def test_build_crs_if_needed(
+        self, mock_run, mock_prepare_source, mock_get_registry_name
+    ):
         """Test CRS build with bundled source (pkgs/)."""
         # Mock CRS registry name lookup
         mock_get_registry_name.return_value = "test-crs-registry"
@@ -90,6 +93,12 @@ class TestCRSPatchExecutor(unittest.TestCase):
         trial_registry_dir = Path(self.temp_dir) / "trial-registry"
         trial_registry_dir.mkdir()
 
+        # Configure executor to use pkgs mode (bundled source)
+        self.executor.configure_crs({"source_mode": "pkgs"})
+
+        # Mock prepare_source_from_bundle to return a path (bundled source has path now)
+        mock_prepare_source.return_value = trial_build_dir / "src" / "test-project"
+
         # Build CRS
         self.executor._build_crs_if_needed(
             benchmark_path,
@@ -110,8 +119,8 @@ class TestCRSPatchExecutor(unittest.TestCase):
         self.assertEqual(cmd[3], "test-project")
         self.assertIn("--oss-fuzz", cmd)
         self.assertIn("--project-path", cmd)
-        # With bundled source (pkgs/), --source-path is NOT passed
-        self.assertNotIn("--source-path", cmd)
+        # Both bundled and cloned sources now have paths, so --source-path is passed
+        self.assertIn("--source-path", cmd)
         self.assertIn("--registry", cmd)
         self.assertIn("--work-dir", cmd)
 

@@ -28,11 +28,25 @@ class TestVariantType:
     def test_variant_type_values(self):
         """Test VariantType enum values."""
         assert VariantType.FULL_BASE.value == "fullbase"
-        assert VariantType.DELTA_BASE.value == "deltabase"
         assert VariantType.DELTA_REF.value == "deltaref"
         assert VariantType.ALL_PATCHED.value == "allpatched"
         assert VariantType.CPV.value == "cpv"
         assert VariantType.COVERAGE.value == "coverage"
+
+    def test_variant_type_exact_members(self):
+        """Verify VariantType has exactly the expected members."""
+        expected = {
+            "FULL_BASE",
+            "DELTA_REF",
+            "ALL_PATCHED",
+            "CPV",
+            "PATCHED",
+            "COVERAGE",
+        }
+        actual = {v.name for v in VariantType}
+        assert actual == expected, (
+            f"VariantType members mismatch: {actual - expected} extra, {expected - actual} missing"
+        )
 
 
 class TestBenchmarkMode:
@@ -42,6 +56,25 @@ class TestBenchmarkMode:
         """Test BenchmarkMode enum values."""
         assert BenchmarkMode.FULL.value == "full"
         assert BenchmarkMode.DELTA.value == "delta"
+
+
+class TestPovVerificationStatus:
+    """Tests for PovVerificationStatus enum."""
+
+    def test_status_exact_members(self):
+        """Verify PovVerificationStatus has exactly the expected members."""
+        expected = {"NOT_VULNERABLE", "CPV", "UNINTENDED_CRASH", "ERROR"}
+        actual = {s.name for s in PovVerificationStatus}
+        assert actual == expected, (
+            f"Status members mismatch: {actual - expected} extra, {expected - actual} missing"
+        )
+
+    def test_status_values(self):
+        """Test PovVerificationStatus enum values."""
+        assert PovVerificationStatus.NOT_VULNERABLE.value == "not_vulnerable"
+        assert PovVerificationStatus.CPV.value == "cpv"
+        assert PovVerificationStatus.UNINTENDED_CRASH.value == "unintended_crash"
+        assert PovVerificationStatus.ERROR.value == "error"
 
 
 class TestVerificationModels:
@@ -72,11 +105,11 @@ class TestVerificationModels:
     def test_verification_result_to_dict(self):
         """Test PovVerificationResult serialization."""
         result = PovVerificationResult(
-            status=PovVerificationStatus.ZERODAY,
+            status=PovVerificationStatus.UNINTENDED_CRASH,
             benchmark="test-bench",
         )
         d = result.to_dict()
-        assert d["status"] == "zeroday"
+        assert d["status"] == "unintended_crash"
         assert d["benchmark"] == "test-bench"
 
 
@@ -87,7 +120,10 @@ class TestVerdictResolverFullMode:
         """Base doesn't crash -> NOT_VULNERABLE."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
-            crash_results={VariantType.FULL_BASE: False},
+            crash_results={
+                VariantType.FULL_BASE: False,
+                VariantType.ALL_PATCHED: False,
+            },
             cpv_crash_map={},
             benchmark_name="test",
         )
@@ -134,8 +170,8 @@ class TestVerdictResolverFullMode:
         assert result.status == PovVerificationStatus.CPV
         assert result.cpv_matched == ["cpv_0", "cpv_2"]
 
-    def test_full_mode_zeroday(self):
-        """Base crashes, allpatched ok, no cpv crashes -> ZERODAY."""
+    def test_full_mode_no_cpv_match_unintended(self):
+        """Base crashes, allpatched ok, no cpv crashes -> UNINTENDED_CRASH."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
             crash_results={
@@ -145,29 +181,22 @@ class TestVerdictResolverFullMode:
             cpv_crash_map={0: False, 1: False},
             benchmark_name="test",
         )
-        assert result.status == PovVerificationStatus.ZERODAY
+        assert result.status == PovVerificationStatus.UNINTENDED_CRASH
 
 
 class TestVerdictResolverDeltaMode:
-    """Tests for VerdictResolver in DELTA mode."""
+    """Tests for VerdictResolver in DELTA mode.
 
-    def test_delta_mode_zeroday_base_crashes(self):
-        """Base crashes in delta mode -> ZERODAY (pre-existing bug)."""
-        result = VerdictResolver.resolve(
-            mode=BenchmarkMode.DELTA,
-            crash_results={VariantType.DELTA_BASE: True},
-            cpv_crash_map={},
-            benchmark_name="test",
-        )
-        assert result.status == PovVerificationStatus.ZERODAY
+    DELTA mode uses DELTA_REF as the vulnerable version (same logic as FULL mode).
+    """
 
     def test_delta_mode_not_vulnerable(self):
-        """Base ok, ref doesn't crash -> NOT_VULNERABLE."""
+        """Ref doesn't crash -> NOT_VULNERABLE."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                VariantType.DELTA_BASE: False,
                 VariantType.DELTA_REF: False,
+                VariantType.ALL_PATCHED: False,
             },
             cpv_crash_map={},
             benchmark_name="test",
@@ -175,11 +204,10 @@ class TestVerdictResolverDeltaMode:
         assert result.status == PovVerificationStatus.NOT_VULNERABLE
 
     def test_delta_mode_unintended_crash_allpatched(self):
-        """Base ok, ref crashes, allpatched crashes -> UNINTENDED_CRASH."""
+        """Ref crashes, allpatched crashes -> UNINTENDED_CRASH."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                VariantType.DELTA_BASE: False,
                 VariantType.DELTA_REF: True,
                 VariantType.ALL_PATCHED: True,
             },
@@ -189,11 +217,10 @@ class TestVerdictResolverDeltaMode:
         assert result.status == PovVerificationStatus.UNINTENDED_CRASH
 
     def test_delta_mode_cpv(self):
-        """Base ok, ref crashes, cpv crashes -> CPV."""
+        """Ref crashes, cpv crashes -> CPV."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                VariantType.DELTA_BASE: False,
                 VariantType.DELTA_REF: True,
                 VariantType.ALL_PATCHED: False,
             },
@@ -203,12 +230,11 @@ class TestVerdictResolverDeltaMode:
         assert result.status == PovVerificationStatus.CPV
         assert result.cpv_matched == ["cpv_0"]
 
-    def test_delta_mode_unintended_no_cpv(self):
-        """Base ok, ref crashes, allpatched ok, no cpv -> UNINTENDED_CRASH."""
+    def test_delta_mode_no_cpv_unintended(self):
+        """Ref crashes, allpatched ok, no cpv -> UNINTENDED_CRASH (same as FULL mode)."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.DELTA,
             crash_results={
-                VariantType.DELTA_BASE: False,
                 VariantType.DELTA_REF: True,
                 VariantType.ALL_PATCHED: False,
             },
@@ -255,12 +281,12 @@ class TestDeduplication:
         dedup = PatchBasedDedup()
         results = [
             PovVerificationResult(
-                status=PovVerificationStatus.ZERODAY,
+                status=PovVerificationStatus.UNINTENDED_CRASH,
                 benchmark="test",
                 pov_id="pov1",
             ),
             PovVerificationResult(
-                status=PovVerificationStatus.ZERODAY,
+                status=PovVerificationStatus.UNINTENDED_CRASH,
                 benchmark="test",
                 pov_id="pov2",
             ),
@@ -293,12 +319,12 @@ class TestDeduplication:
         dedup = StatusBasedDedup()
         results = [
             PovVerificationResult(
-                status=PovVerificationStatus.ZERODAY,
+                status=PovVerificationStatus.UNINTENDED_CRASH,
                 benchmark="test",
                 pov_id="pov1",
             ),
             PovVerificationResult(
-                status=PovVerificationStatus.ZERODAY,
+                status=PovVerificationStatus.UNINTENDED_CRASH,
                 benchmark="test",
                 pov_id="pov2",
             ),
@@ -325,19 +351,20 @@ class TestDeduplication:
 class TestVerdictResolverEdgeCases:
     """Edge case tests for VerdictResolver."""
 
-    def test_missing_allpatched_defaults_to_true(self):
-        """Missing ALL_PATCHED should default to True (crashed)."""
+    def test_missing_allpatched_returns_error(self):
+        """Missing ALL_PATCHED should return ERROR (build/reproduce failed)."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
             crash_results={VariantType.FULL_BASE: True},  # No ALL_PATCHED
             cpv_crash_map={0: True},
             benchmark_name="test",
         )
-        # Should be UNINTENDED_CRASH since allpatched defaults to True
-        assert result.status == PovVerificationStatus.UNINTENDED_CRASH
+        # Should be ERROR since required variant is missing
+        assert result.status == PovVerificationStatus.ERROR
+        assert "allpatched" in result.details
 
     def test_empty_cpv_map(self):
-        """Empty CPV map should result in appropriate status."""
+        """Empty CPV map should result in UNINTENDED_CRASH."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
             crash_results={
@@ -347,13 +374,16 @@ class TestVerdictResolverEdgeCases:
             cpv_crash_map={},  # Empty
             benchmark_name="test",
         )
-        assert result.status == PovVerificationStatus.ZERODAY
+        assert result.status == PovVerificationStatus.UNINTENDED_CRASH
 
     def test_pov_id_preserved(self):
         """POV ID should be preserved in result."""
         result = VerdictResolver.resolve(
             mode=BenchmarkMode.FULL,
-            crash_results={VariantType.FULL_BASE: False},
+            crash_results={
+                VariantType.FULL_BASE: False,
+                VariantType.ALL_PATCHED: False,
+            },
             cpv_crash_map={},
             benchmark_name="test",
             pov_id="test_pov_123",

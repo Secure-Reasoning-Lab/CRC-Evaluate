@@ -37,10 +37,7 @@ class POVStore:
         │   └── {cpv_id}/                # Per-CPV POV storage
         │       ├── blobs/{hash}.blob    # POV files that trigger this CPV
         │       └── crash_logs/{hash}-{variant}.log
-        ├── zerodays/                    # Zero-day POVs (unknown vulnerabilities)
-        │   ├── blobs/{hash}.blob
-        │   └── crash_logs/{hash}-{variant}.log
-        ├── unintended/                  # Unintended crashes (NOT_VULNERABLE)
+        ├── unintended/                  # Unintended crashes (NOT_VULNERABLE, UNINTENDED_CRASH)
         │   ├── blobs/{hash}.blob
         │   └── crash_logs/{hash}-{variant}.log
         └── snapshots/                   # Per-snapshot summaries
@@ -75,8 +72,6 @@ class POVStore:
         self.store_dir.mkdir(parents=True, exist_ok=True)
         # Create base directories
         (self.store_dir / "cpvs").mkdir(exist_ok=True)
-        (self.store_dir / "zerodays" / "blobs").mkdir(parents=True, exist_ok=True)
-        (self.store_dir / "zerodays" / "crash_logs").mkdir(exist_ok=True)
         (self.store_dir / "unintended" / "blobs").mkdir(parents=True, exist_ok=True)
         (self.store_dir / "unintended" / "crash_logs").mkdir(exist_ok=True)
         (self.store_dir / "snapshots").mkdir(exist_ok=True)
@@ -91,7 +86,7 @@ class POVStore:
             cpv_matched: List of matched CPV IDs (used for CPV status)
 
         Returns:
-            Path to the category directory (e.g., cpvs/cpv_0, zerodays, unintended)
+            Path to the category directory (e.g., cpvs/cpv_0, unintended)
         """
         if status == PovVerificationStatus.CPV and cpv_matched:
             # Store under first matched CPV
@@ -102,10 +97,7 @@ class POVStore:
             (cpv_dir / "crash_logs").mkdir(exist_ok=True)
             return cpv_dir
 
-        if status == PovVerificationStatus.ZERODAY:
-            return self.store_dir / "zerodays"
-
-        # NOT_VULNERABLE, ERROR, or other -> unintended
+        # NOT_VULNERABLE, UNINTENDED_CRASH, ERROR, or other -> unintended
         return self.store_dir / "unintended"
 
     def add_pov(
@@ -324,19 +316,19 @@ class POVStore:
             Dictionary with statistics:
                 - total_povs: Total unique POVs
                 - cpvs_found: Number of CPVs discovered
-                - zerodays: Number of zeroday POVs
+                - unintended_crashes: Number of unintended crash POVs
                 - errors: Number of error status POVs
         """
         with self._lock:
             stats = {
                 "total_povs": len(self.povs),
                 "cpvs_found": len(self.cpv_to_first_pov),
-                "zerodays": 0,
+                "unintended_crashes": 0,
                 "errors": 0,
             }
             for entry in self.povs.values():
-                if entry.status == PovVerificationStatus.ZERODAY:
-                    stats["zerodays"] += 1
+                if entry.status == PovVerificationStatus.UNINTENDED_CRASH:
+                    stats["unintended_crashes"] += 1
                 elif entry.status == PovVerificationStatus.ERROR:
                     stats["errors"] += 1
             return stats

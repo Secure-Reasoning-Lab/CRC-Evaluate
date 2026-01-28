@@ -198,12 +198,14 @@ class TestSourceCodePreparation:
 class TestHintsPreparation:
     """Tests for hints preparation."""
 
-    def test_prepare_hints_disabled(self, preparer, mock_benchmark_with_hints):
-        """Test hints preparation when disabled in config."""
+    def test_prepare_hints_disabled_full_mode(
+        self, preparer, mock_benchmark_with_hints
+    ):
+        """Test hints preparation when disabled and mode is full."""
         trial_dir = preparer.experiment_dir / "trial-0"
         trial_dir.mkdir()
 
-        # Config has hints_enabled=False by default
+        # Config has hints_enabled=False by default and no mode set (defaults to full)
         hints_dir = preparer._prepare_hints("test-bench", trial_dir)
 
         assert hints_dir is None

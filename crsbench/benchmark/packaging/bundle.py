@@ -26,15 +26,15 @@ def bundle_benchmark(
     """Bundle benchmark by creating pkgs/ with source tarball.
 
     Bundling differs based on benchmark type:
-    - Delta mode benchmarks: tarball at base_commit (pre-vuln) + ref.diff
+    - Delta mode benchmarks: tarball at ref_commit (vulnerable) + ref.diff hint
     - Full-only benchmarks: tarball at base_commit (vulnerable), no ref.diff
 
     Workflow:
     1. Validate benchmark structure
     2. Extract repo info from project.yaml and meta.yaml
     3. Determine source name from Dockerfile WORKDIR
-    4. Clone repo, checkout base_commit, create tarball
-    5. Generate ref.diff if delta mode (has ref_commit)
+    4. Clone repo, checkout vulnerable commit, create tarball
+    5. Generate ref.diff if delta mode (base→ref diff as hint)
     6. Write pkg_refs.txt for provenance
 
     Args:

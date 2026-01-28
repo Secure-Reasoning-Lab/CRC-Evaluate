@@ -240,6 +240,16 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--source",
+        type=str,
+        choices=["main_repo", "pkgs"],
+        required=False,
+        metavar="SOURCE_MODE",
+        help="Source mode: 'main_repo' (git clone, default) or 'pkgs' (bundled tarballs). "
+        "Overrides config file if specified.",
+    )
+
+    parser.add_argument(
         "--registry-dir",
         type=str,
         required=False,
@@ -1018,7 +1028,10 @@ def build_variants_upfront(
     logger.info(f"Found {len(benchmark_modes)} unique (benchmark, mode) combinations")
 
     # Create builder
-    builder = OSSFuzzBuilder(oss_fuzz_path, max_workers=build_workers)
+    source_mode = getattr(config, "source_mode", "main_repo")
+    builder = OSSFuzzBuilder(
+        oss_fuzz_path, max_workers=build_workers, source_mode=source_mode
+    )
 
     # Collect all build configs
     all_configs: list = []
@@ -1258,6 +1271,11 @@ def enhance_config_with_cli_args(
         overrides["mode"] = args.mode
         logger.info(f"Using evaluation mode from CLI: {args.mode}")
 
+    # Source mode override
+    if hasattr(args, "source") and args.source is not None:
+        overrides["source_mode"] = args.source
+        logger.info(f"Using source mode from CLI: {args.source}")
+
     # Hint configuration overrides
     if args.hints_enabled:
         overrides["hints_enabled"] = True
@@ -1398,8 +1416,9 @@ def run_experiment_local(
         enhanced_config = enhance_config_with_cli_args(config, args)
 
         # Build trial_id with random suffix
+        # Must be lowercase for Docker Compose project name compatibility
         harness_name_stem = Path(bh.harness.name).stem
-        trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
+        trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}".lower()
 
         result = run_crs_trial(
             crs=trial.crs,
@@ -2017,8 +2036,9 @@ def run_experiment_distributed(
         memory_limit = crs_memory_limits.get(trial.crs)
 
         # Build trial_id at enqueue time with random suffix
+        # Must be lowercase for Docker Compose project name compatibility
         harness_name_stem = Path(bh.harness.name).stem
-        trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
+        trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}".lower()
 
         job = queue.enqueue(
             "crsbench.distributed.jobs.run_crs_trial",
@@ -2261,14 +2281,9 @@ def main() -> None:
         sys.exit(run_dashboard(args))
 
     if args.command == "ci":
-        # Handle ci command
-        from crsbench.benchmark_ci.cli import run_ci, run_ci_parse
+        from crsbench.benchmark_ci.cli import dispatch_ci
 
-        # Check for subcommand (parse)
-        if hasattr(args, "ci_subcommand") and args.ci_subcommand == "parse":
-            sys.exit(run_ci_parse(args))
-        else:
-            sys.exit(run_ci(args))
+        sys.exit(dispatch_ci(args))
 
     if args.command == "benchmark":
         # Handle benchmark command (bundle, validate, prepare-delta)

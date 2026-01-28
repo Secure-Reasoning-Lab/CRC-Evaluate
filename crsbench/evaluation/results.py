@@ -153,7 +153,7 @@ class ResultCollector:
 
         Note:
             Maps PovVerificationStatus to POV statistics:
-            - CPV, ZERODAY: POV found (triggers a vulnerability)
+            - CPV: POV found (triggers a known vulnerability)
             - NOT_VULNERABLE, UNINTENDED_CRASH: POV missed (doesn't trigger expected vuln)
             - ERROR: Error during verification
         """
@@ -163,9 +163,7 @@ class ResultCollector:
             verification_results
         )  # TODO: check total_povs; should from ground truth
         self.povs_found = sum(
-            1
-            for r in verification_results
-            if r.status in (PovVerificationStatus.CPV, PovVerificationStatus.ZERODAY)
+            1 for r in verification_results if r.status == PovVerificationStatus.CPV
         )
         self.povs_missed = sum(
             1

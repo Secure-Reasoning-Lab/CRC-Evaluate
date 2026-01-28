@@ -62,7 +62,7 @@ def check_verify(benchmark_path: Path, results_file: Path) -> bool:
         True if all expected CPVs were found
     """
     expected_cpvs = get_expected_cpvs(benchmark_path)
-    logger.info(f"Expected CPVs: {sorted(expected_cpvs)}")
+    logger.debug(f"Expected CPVs: {sorted(expected_cpvs)}")
 
     if not expected_cpvs:
         logger.error("No CPVs found in meta.yaml")
@@ -80,14 +80,14 @@ def check_verify(benchmark_path: Path, results_file: Path) -> bool:
     for r in results:
         found_cpvs.update(r.get("cpv_matched", []))
 
-    logger.info(f"Found CPVs: {sorted(found_cpvs)}")
+    logger.debug(f"Found CPVs: {sorted(found_cpvs)}")
 
     missing = expected_cpvs - found_cpvs
     if missing:
         logger.error(f"Missing CPVs: {sorted(missing)}")
         return False
 
-    logger.info("All expected CPVs found!")
+    logger.debug("All expected CPVs found!")
     return True
 
 
@@ -113,7 +113,7 @@ def check_patch_verify(results_file: Path) -> bool:
         logger.error("No results found")
         return False
 
-    logger.info(f"Total patches: {len(results)}")
+    logger.debug(f"Total patches: {len(results)}")
 
     all_pass = True
     for r in results:
@@ -133,10 +133,10 @@ def check_patch_verify(results_file: Path) -> bool:
             )
             all_pass = False
         else:
-            logger.info(f"  PASS: {patch_id} ({pov_id})")
+            logger.debug(f"  PASS: {patch_id} ({pov_id})")
 
     if all_pass:
-        logger.info("All patches passed!")
+        logger.debug("All patches passed!")
     else:
         logger.error("Some patches failed")
 
@@ -162,8 +162,8 @@ def check_coverage(results_file: Path) -> bool:
     lines_total = summary.get("lines_total", 0)
     lines_percent = summary.get("lines_percent", 0.0)
 
-    logger.info(f"Harness: {harness}")
-    logger.info(f"Lines covered: {lines_covered}/{lines_total} ({lines_percent:.1f}%)")
+    logger.debug(f"Harness: {harness}")
+    logger.debug(f"Lines covered: {lines_covered}/{lines_total} ({lines_percent:.1f}%)")
 
     if lines_total == 0:
         logger.error("No lines found in coverage report")
@@ -173,7 +173,7 @@ def check_coverage(results_file: Path) -> bool:
         logger.error("No lines covered")
         return False
 
-    logger.info("Coverage check passed!")
+    logger.debug("Coverage check passed!")
     return True
 
 

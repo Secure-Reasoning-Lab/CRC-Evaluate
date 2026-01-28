@@ -1,23 +1,27 @@
 """CLI command for POV verification.
 
 This module provides the `crsbench verify` CLI command for verifying
-POVs against benchmark variants.
+CRS-produced POVs against benchmark variants.
+
+Requires explicit POV input (--pov or --pov-dir). For validating
+benchmark ground-truth POVs, use `crsbench ci pov` instead.
 
 Usage:
-    crsbench verify <benchmark_path> [options]
+    crsbench verify <benchmark_path> --pov-dir ./povs/ [options]
+    crsbench verify <benchmark_path> --pov ./pov.blob [options]
 
 Examples:
-    # Verify all POVs in a benchmark
-    crsbench verify benchmarks/aixcc/c/afc-curl-delta-01
-
-    # Verify with specific harness
-    crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --harness curl_fuzzer_ws
-
-    # Verify from specific POV directory
+    # Verify POVs from a directory
     crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --pov-dir ./povs/
 
+    # Verify a single POV file
+    crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --pov ./pov.blob
+
+    # Verify with specific harness filter
+    crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --pov-dir ./povs/ --harness curl_fuzzer_ws
+
     # Output results to JSON file
-    crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --output results.json
+    crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --pov-dir ./povs/ --output results.json
 """
 
 import argparse
@@ -57,17 +61,17 @@ def add_verify_subparser(subparsers: argparse._SubParsersAction) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Verify all POVs in a benchmark
-  crsbench verify benchmarks/aixcc/c/afc-curl-delta-01
+  # Verify POVs from a directory
+  crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --pov-dir ./povs/
+
+  # Verify a single POV file (tests all harnesses)
+  crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --pov ./pov.blob
 
   # Verify with specific harness filter
-  crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --harness curl_fuzzer_ws
-
-  # Force rebuild of all variants
-  crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --force-rebuild
+  crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --pov-dir ./povs/ --harness curl_fuzzer_ws
 
   # Output results as JSON
-  crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --output results.json --format json
+  crsbench verify benchmarks/aixcc/c/afc-curl-delta-01 --pov-dir ./povs/ --output results.json
         """,
     )
 
@@ -78,27 +82,25 @@ Examples:
         help="Path to the benchmark project directory",
     )
 
+    # POV input options (mutually exclusive, one required)
+    pov_group = parser.add_mutually_exclusive_group(required=True)
+    pov_group.add_argument(
+        "--pov",
+        type=Path,
+        help="Single POV file to verify",
+    )
+    pov_group.add_argument(
+        "--pov-dir",
+        type=Path,
+        help="Directory containing POV files to verify",
+    )
+
     # Optional arguments
     parser.add_argument(
         "--harness",
         type=str,
         default=None,
-        help="Filter to a specific harness name (required when using --pov)",
-    )
-
-    # POV input options (mutually exclusive)
-    pov_group = parser.add_mutually_exclusive_group()
-    pov_group.add_argument(
-        "--pov",
-        type=Path,
-        default=None,
-        help="Single POV file to verify (requires --harness)",
-    )
-    pov_group.add_argument(
-        "--pov-dir",
-        type=Path,
-        default=None,
-        help="Directory containing POV files (default: <benchmark>/.aixcc/povs/)",
+        help="Filter to a specific harness name (default: test all harnesses)",
     )
     parser.add_argument(
         "--oss-fuzz",
@@ -194,16 +196,14 @@ def run_verify(args: argparse.Namespace) -> int:
         logger.error(f"Benchmark path not found: {args.benchmark_path}")
         return 1
 
-    # Validate single POV mode requires harness
     pov_file = getattr(args, "pov", None)
-    if pov_file and not args.harness:
-        logger.error(
-            "--harness is required when using --pov for single file verification"
-        )
-        return 1
-
     if pov_file and not pov_file.exists():
         logger.error(f"POV file not found: {pov_file}")
+        return 1
+
+    pov_dir = getattr(args, "pov_dir", None)
+    if pov_dir and not pov_dir.exists():
+        logger.error(f"POV directory not found: {pov_dir}")
         return 1
 
     # Determine oss-fuzz path
@@ -234,7 +234,6 @@ def run_verify(args: argparse.Namespace) -> int:
 
     # Handle single POV file vs directory
     if pov_file:
-        # Single POV file mode
         results = run_single_pov_verification(
             engine=engine,
             benchmark_path=args.benchmark_path,
@@ -243,14 +242,14 @@ def run_verify(args: argparse.Namespace) -> int:
             force_rebuild=args.force_rebuild,
         )
     else:
-        # Directory mode (original behavior)
-        results, _skipped = engine.verify_benchmark(
+        output = engine.verify_benchmark(
             benchmark_path=args.benchmark_path,
-            pov_dir=args.pov_dir,
+            pov_dir=pov_dir,
             harness_filter=args.harness,
             force_rebuild=args.force_rebuild,
             deduplicate=not args.no_dedup,
         )
+        results = output.results
 
     if not results:
         logger.warning("No verification results generated")
@@ -269,24 +268,24 @@ def run_single_pov_verification(
     engine: VerificationEngine,
     benchmark_path: Path,
     pov_file: Path,
-    harness: str,
+    harness: Optional[str],
     *,
     force_rebuild: bool,
 ) -> list[PovVerificationResult]:
     """Run verification for a single POV file.
 
+    When harness is None, tests against all harnesses from the benchmark.
+
     Args:
         engine: VerificationEngine instance
         benchmark_path: Path to benchmark directory
         pov_file: Path to single POV file
-        harness: Harness name to test against
+        harness: Harness name to test against, or None for all
         force_rebuild: Whether to force rebuild variants
 
     Returns:
-        List containing single VerificationResult
+        List of PovVerificationResult (one per harness tested)
     """
-    from crsbench.evaluation.verification.models import PovVerificationRequest
-
     # Load adapter
     adapter = engine._load_adapter(benchmark_path)
     if not adapter:
@@ -304,19 +303,17 @@ def run_single_pov_verification(
 
     # Read POV data
     pov_data = pov_file.read_bytes()
-    logger.info(f"Verifying POV: {pov_file.name} ({len(pov_data)} bytes)")
-    logger.info(f"Harness: {harness}")
 
-    # Create request and verify
-    request = PovVerificationRequest(
-        pov_data=pov_data,
-        harness=harness,
-        benchmark=adapter.benchmark_name,
-        pov_id=pov_file.name,
+    # Determine harnesses to test
+    harness_names = [harness] if harness else adapter.get_harness_names()
+    logger.info(
+        f"Verifying POV: {pov_file.name} ({len(pov_data)} bytes) "
+        f"against {len(harness_names)} harness(es)"
     )
 
-    result = engine.verify_pov(request, adapter, build_results)
-    return [result]
+    # Run against all harnesses via the parallel engine
+    pov_harness_pairs = [(pov_file.name, pov_data, h) for h in harness_names]
+    return engine.verify_povs_parallel(pov_harness_pairs, adapter, build_results)
 
 
 def output_results(

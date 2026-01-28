@@ -22,8 +22,6 @@ class TestPOVStoreInit:
 
         assert store_dir.exists()
         assert (store_dir / "cpvs").exists()
-        assert (store_dir / "zerodays" / "blobs").exists()
-        assert (store_dir / "zerodays" / "crash_logs").exists()
         assert (store_dir / "unintended" / "blobs").exists()
         assert (store_dir / "unintended" / "crash_logs").exists()
         assert (store_dir / "snapshots").exists()
@@ -156,18 +154,20 @@ class TestPOVStoreUniquePov:
         assert "cpvs" in str(stored_path)
         assert "cpv_0" in str(stored_path)
 
-    def test_store_unique_pov_zeroday(self, store: POVStore, tmp_path: Path) -> None:
-        """Test storing unique POV file for ZERODAY status."""
+    def test_store_unique_pov_unintended_crash(
+        self, store: POVStore, tmp_path: Path
+    ) -> None:
+        """Test storing unique POV file for UNINTENDED_CRASH status."""
         pov = tmp_path / "test.pov"
-        pov.write_bytes(b"zeroday content")
+        pov.write_bytes(b"unintended crash content")
         pov_hash = compute_content_hash(pov)
 
         stored_path = store.store_unique_pov(
-            pov, pov_hash, PovVerificationStatus.ZERODAY, []
+            pov, pov_hash, PovVerificationStatus.UNINTENDED_CRASH, []
         )
 
         assert stored_path.exists()
-        assert "zerodays" in str(stored_path)
+        assert "unintended" in str(stored_path)
 
     def test_store_unique_pov_idempotent(self, store: POVStore, tmp_path: Path) -> None:
         """Test storing same POV twice doesn't duplicate."""
@@ -211,19 +211,21 @@ class TestPOVStoreCrashLog:
         assert "cpvs" in str(log_path)
         assert "cpv_0" in str(log_path)
 
-    def test_store_crash_log_zeroday(self, store: POVStore, tmp_path: Path) -> None:
-        """Test storing crash log for ZERODAY status."""
+    def test_store_crash_log_unintended_crash(
+        self, store: POVStore, tmp_path: Path
+    ) -> None:
+        """Test storing crash log for UNINTENDED_CRASH status."""
         pov = tmp_path / "test.pov"
-        pov.write_bytes(b"zeroday content")
-        pov_hash, _ = store.add_pov(pov, PovVerificationStatus.ZERODAY, [])
+        pov.write_bytes(b"unintended crash content")
+        pov_hash, _ = store.add_pov(pov, PovVerificationStatus.UNINTENDED_CRASH, [])
 
         crash_log = "ASAN: use-after-free\n"
         log_path = store.store_crash_log(
-            pov_hash, crash_log, PovVerificationStatus.ZERODAY, []
+            pov_hash, crash_log, PovVerificationStatus.UNINTENDED_CRASH, []
         )
 
         assert log_path.exists()
-        assert "zerodays" in str(log_path)
+        assert "unintended" in str(log_path)
 
     def test_store_crash_log_updates_entry(
         self, store: POVStore, tmp_path: Path
@@ -310,7 +312,7 @@ class TestPOVStoreQueries:
         pov3.write_bytes(b"content_c")
 
         store.add_pov(pov1, PovVerificationStatus.CPV, ["cpv_0"])
-        store.add_pov(pov2, PovVerificationStatus.ZERODAY, [])
+        store.add_pov(pov2, PovVerificationStatus.UNINTENDED_CRASH, [])
         store.add_pov(pov3, PovVerificationStatus.NOT_VULNERABLE, [])
 
         return store
@@ -364,7 +366,7 @@ class TestPOVStoreQueries:
 
         assert stats["total_povs"] == 3
         assert stats["cpvs_found"] == 1
-        assert stats["zerodays"] == 1
+        assert stats["unintended_crashes"] == 1
         assert stats["errors"] == 0
 
 

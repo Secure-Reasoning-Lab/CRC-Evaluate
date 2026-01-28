@@ -10,28 +10,23 @@ class BenchmarkSource:
     """Represents loaded benchmark source for CRS execution.
 
     Attributes:
-        path: Path to source directory. None if using Docker's built-in
-              source (from pkgs/ tarball).
-        is_bundled: True if source is from pkgs/ (bundled in Docker image).
-                    When True, path is None and CRS should use Docker's source.
+        path: Path to source directory where source is available.
+        is_bundled: True if source originated from pkgs/ tarball (bundled).
+                    False if source was cloned from main_repo (git).
+
+    The is_bundled flag tracks the source origin, not how it's accessed.
+    Both bundled and cloned sources have a path where the source is available.
 
     Usage in executors:
-        source = load_benchmark_source(benchmark_path, dest_dir)
-        if source.path:
-            # Pass source path to CRS command
-            cmd.extend(["--source-path", str(source.path)])
-        # If source.is_bundled, don't pass --source-path (Docker has it)
+        source = load_benchmark_source(benchmark_path, dest_dir, source_mode="main_repo")
+        # source.path contains the source directory
+        # source.is_bundled indicates whether it came from pkgs/ or git
     """
 
     path: Optional[Path]
     is_bundled: bool
 
-    def __post_init__(self) -> None:
-        """Validate state consistency."""
-        if self.is_bundled and self.path is not None:
-            raise ValueError("Bundled source should have path=None")
-
     @property
     def requires_source_path(self) -> bool:
         """Check if CRS command needs --source-path argument."""
-        return not self.is_bundled and self.path is not None
+        return self.path is not None

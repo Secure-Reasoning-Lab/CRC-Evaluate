@@ -4,13 +4,22 @@ This module provides OSSFuzzInfrastructure, which wraps OSS-Fuzz's helper.py
 for building fuzzers and reproducing crashes.
 """
 
+import hashlib
+import json
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import Optional
 
-from crsbench.builder.types import BuildConfig, ReproduceOutput
+from crsbench.builder.types import (
+    BUILD_METADATA_FILE,
+    BuildConfig,
+    BuildMetadata,
+    FuzzerBuildResult,
+    ReproduceOutput,
+)
 from crsbench.utils.docker import fix_docker_ownership
 from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import clone_or_copy_cached_repo
@@ -88,6 +97,11 @@ class OSSFuzzInfrastructure:
         self.work_dir = Path(work_dir).resolve() if work_dir else None
         self.projects_base = self.oss_fuzz_path / "projects"
         self._helper_script = self.oss_fuzz_path / "infra" / "helper.py"
+
+        # Cache for inc-build image availability (project:sanitizer -> bool)
+        # Prevents redundant docker pull attempts during parallel builds
+        self._inc_image_cache: dict[str, bool] = {}
+        self._inc_image_lock = threading.Lock()
 
         # Ensure OSS-Fuzz is ready for parallel builds
         ensure_oss_fuzz_ready(self.oss_fuzz_path)
@@ -239,14 +253,22 @@ class OSSFuzzInfrastructure:
                 except Exception as e:
                     logger.warning(f"Failed to remove isolated build: {e}")
 
-    def is_variant_built(self, variant_name: str) -> bool:
+    def is_variant_built(
+        self,
+        variant_name: str,
+        *,
+        require_inc_build: Optional[bool] = None,
+    ) -> bool:
         """Check if a variant has been built.
 
         Args:
             variant_name: Variant name
+            require_inc_build: If specified, also verify the cached build
+                matches the requested inc-build mode. None means don't check.
+                When True, also rejects builds that used fallback.
 
         Returns:
-            True if built fuzzers exist
+            True if built fuzzers exist (and match required inc_build mode if specified)
         """
         build_path = self.get_build_output_path(variant_name)
         project_path = self.projects_base / variant_name
@@ -256,7 +278,107 @@ class OSSFuzzInfrastructure:
             return False
 
         # Check that build output has actual files
-        return any(build_path.iterdir())
+        if not any(build_path.iterdir()):
+            return False
+
+        # If require_inc_build is specified, verify the cached build matches
+        if require_inc_build is not None:
+            metadata = self.read_build_metadata(variant_name)
+            if metadata is None:
+                # No metadata = legacy build, treat as standard (non-inc) build
+                cached_is_inc = False
+                fallback_used = False
+            else:
+                cached_is_inc = metadata.inc_build
+                fallback_used = metadata.fallback_used
+
+            if cached_is_inc != require_inc_build:
+                logger.debug(
+                    f"Cache mismatch for {variant_name}: "
+                    f"cached inc_build={cached_is_inc}, required={require_inc_build}"
+                )
+                return False
+
+            # If inc-build is required, reject builds that used fallback
+            # A fallback build is not a true inc-build and shouldn't be used for CI validation
+            if require_inc_build and fallback_used:
+                logger.debug(
+                    f"Cache mismatch for {variant_name}: "
+                    f"cached build used fallback, but pure inc-build required"
+                )
+                return False
+
+        return True
+
+    def write_build_metadata(
+        self,
+        variant_name: str,
+        *,
+        inc_build: bool = False,
+        sanitizer: str = "address",
+        fallback_used: bool = False,
+    ) -> None:
+        """Write build metadata to the build output directory.
+
+        Uses atomic write (write to temp file, then rename) to prevent
+        race conditions when multiple workers might access the same file.
+
+        Args:
+            variant_name: Variant name
+            inc_build: Whether this was an incremental build
+            sanitizer: Sanitizer used for the build
+            fallback_used: Whether fallback to clean build was used
+        """
+        from datetime import datetime
+
+        build_path = self.get_build_output_path(variant_name)
+        if not build_path.exists():
+            logger.warning(f"Build path does not exist: {build_path}")
+            return
+
+        metadata = BuildMetadata(
+            inc_build=inc_build,
+            sanitizer=sanitizer,
+            timestamp=datetime.now().isoformat(),
+            fallback_used=fallback_used,
+        )
+
+        metadata_path = build_path / BUILD_METADATA_FILE
+        temp_path = metadata_path.with_suffix(".tmp")
+        try:
+            # Atomic write: write to temp file, then rename
+            with temp_path.open("w") as f:
+                json.dump(metadata.to_dict(), f, indent=2)
+            temp_path.replace(metadata_path)  # Atomic on POSIX
+            logger.debug(f"Wrote build metadata: {metadata_path}")
+        except Exception as e:
+            logger.warning(f"Failed to write build metadata: {e}")
+            # Clean up temp file if it exists
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
+
+    def read_build_metadata(self, variant_name: str) -> Optional[BuildMetadata]:
+        """Read build metadata from the build output directory.
+
+        Args:
+            variant_name: Variant name
+
+        Returns:
+            BuildMetadata if found, None otherwise
+        """
+        build_path = self.get_build_output_path(variant_name)
+        metadata_path = build_path / BUILD_METADATA_FILE
+
+        if not metadata_path.exists():
+            return None
+
+        try:
+            with metadata_path.open() as f:
+                data = json.load(f)
+            return BuildMetadata.from_dict(data)
+        except Exception as e:
+            logger.warning(f"Failed to read build metadata: {e}")
+            return None
 
     def has_harness(self, variant_name: str, harness_name: str) -> bool:
         """Check if a specific harness exists in the build output.
@@ -517,7 +639,7 @@ class OSSFuzzInfrastructure:
         *,
         use_inc_image: bool = False,
         inc_fallback: bool = False,
-    ) -> bool:
+    ) -> FuzzerBuildResult:
         """Build fuzzers for a variant.
 
         Args:
@@ -528,7 +650,10 @@ class OSSFuzzInfrastructure:
                 Use when incremental build fails due to incompatibility.
 
         Returns:
-            True if build succeeded
+            FuzzerBuildResult with success status and fallback tracking.
+            When inc_fallback=True is used, fallback_used will be True to indicate
+            that the build MAY have used fallback (we can't detect if it was actually
+            triggered, but we track the intent for correct cache metadata).
         """
         variant_name = config.variant_name
         logger.debug(f"Building {variant_name} ({config.language})")
@@ -565,8 +690,8 @@ class OSSFuzzInfrastructure:
         if src_path:
             cmd.append(str(src_path))
 
-        logger.info(f"Building {variant_name} with {config.sanitizer} sanitizer...")
-        logger.debug(f"Command: {' '.join(cmd)}")
+        logger.debug(f"Building {variant_name} with {config.sanitizer} sanitizer...")
+        logger.debug(f"Build command: {' '.join(cmd)}")
 
         try:
             result = subprocess.run(
@@ -579,24 +704,31 @@ class OSSFuzzInfrastructure:
             )
 
             if result.returncode == 0:
-                logger.info(f"Build succeeded for {variant_name}")
+                logger.debug(f"Build succeeded for {variant_name}")
+                # Log build output for debugging
+                if result.stdout:
+                    logger.debug(f"Build stdout: {result.stdout[:1000]}")
                 fix_docker_ownership(self.get_build_output_path(variant_name))
-                return True
+                # Track if fallback may have been used
+                # Only relevant when inc-build was attempted (use_inc_image=True)
+                # and fallback was enabled (inc_fallback=True)
+                actual_fallback = use_inc_image and inc_fallback
+                return FuzzerBuildResult(success=True, fallback_used=actual_fallback)
 
             logger.error(
                 f"Build failed for {variant_name}. "
                 f"Exit code: {result.returncode}\n"
-                f"stdout: {result.stdout[:2000]}...\n"
-                f"stderr: {result.stderr[:2000]}..."
+                f"stdout: {result.stdout[:2000] if result.stdout else 'None'}...\n"
+                f"stderr: {result.stderr[:2000] if result.stderr else 'None'}..."
             )
-            return False
+            return FuzzerBuildResult(success=False, fallback_used=False)
 
         except subprocess.TimeoutExpired:
             logger.error(f"Build timed out for {variant_name} ({config.timeout}s)")
-            return False
+            return FuzzerBuildResult(success=False, fallback_used=False)
         except Exception as e:
             logger.error(f"Build error for {variant_name}: {e}")
-            return False
+            return FuzzerBuildResult(success=False, fallback_used=False)
 
     def get_cpv_patches(self, benchmark_path: Path) -> dict[int, list[Path]]:
         """Get all CPV patches from a benchmark's .aixcc directory.
@@ -685,6 +817,9 @@ class OSSFuzzInfrastructure:
     def apply_patches_from_list(self, repo_path: Path, patches: list[Path]) -> bool:
         """Apply a list of patches to a repository.
 
+        Skips duplicate patches (identical content) to handle cases where
+        multiple CPVs share the same vulnerability fix.
+
         Args:
             repo_path: Path to repository
             patches: List of patch files to apply
@@ -693,12 +828,24 @@ class OSSFuzzInfrastructure:
             True if all patches applied successfully
         """
         success = True
+        applied_hashes: set[str] = set()
+
         for patch_file in patches:
+            # Hash patch content to detect duplicates
+            patch_content = patch_file.read_bytes()
+            patch_hash = hashlib.sha256(patch_content).hexdigest()
+
+            if patch_hash in applied_hashes:
+                logger.debug(f"Skipping duplicate patch: {patch_file.name}")
+                continue
+
             if not self._apply_single_patch(repo_path, patch_file):
                 logger.warning(f"Failed to apply patch: {patch_file}")
                 success = False
             else:
                 logger.debug(f"Applied patch: {patch_file.name}")
+                applied_hashes.add(patch_hash)
+
         return success
 
     def apply_patches(
@@ -776,7 +923,13 @@ class OSSFuzzInfrastructure:
         try:
             patch_file_abs = patch_file.resolve()
             result = subprocess.run(
-                ["git", "apply", "--whitespace=nowarn", str(patch_file_abs)],
+                [
+                    "git",
+                    "apply",
+                    "--whitespace=nowarn",
+                    "--verbose",
+                    str(patch_file_abs),
+                ],
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
@@ -785,7 +938,14 @@ class OSSFuzzInfrastructure:
             )
             if result.returncode == 0:
                 return True
-            logger.warning(f"Patch apply failed: {result.stderr}")
+            # Log verbose info for debugging patch failures
+            logger.warning(
+                f"Patch apply failed:\n"
+                f"  repo: {repo_path}\n"
+                f"  patch: {patch_file_abs}\n"
+                f"  stderr: {result.stderr}\n"
+                f"  stdout: {result.stdout}"
+            )
             return False
         except Exception as e:
             logger.error(f"Patch error: {e}")
@@ -883,7 +1043,7 @@ class OSSFuzzInfrastructure:
 
             # Handle exit codes explicitly
             if result.returncode == 0:
-                reproduce_logger.info(
+                reproduce_logger.debug(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} did not crash"
                 )
                 return ReproduceOutput(
@@ -893,7 +1053,7 @@ class OSSFuzzInfrastructure:
                     exit_code=0,
                 )
             if result.returncode == EXIT_CODE_TIMEOUT:
-                reproduce_logger.info(
+                reproduce_logger.debug(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} "
                     "timed out (exit code 124)"
                 )
@@ -903,7 +1063,7 @@ class OSSFuzzInfrastructure:
                     stderr=stderr,
                     exit_code=124,
                 )
-            logger.info(
+            logger.debug(
                 f"{req_prefix}{pov_prefix}{project_name}/{harness} crashed "
                 f"(exit code {result.returncode})"
             )
@@ -968,6 +1128,8 @@ class OSSFuzzInfrastructure:
             str(corpus_dir),
             "--fuzz-target",
             harness,
+            "--timeout",
+            f"{timeout}s",
             "--no-serve",
             project_name,
         ]
@@ -1182,17 +1344,17 @@ class OSSFuzzInfrastructure:
 
         # Check if source image exists locally
         if self._docker_image_exists(inc_image):
-            logger.info(f"Inc-build image available locally: {inc_image}")
+            logger.debug(f"Inc-build image available locally: {inc_image}")
             return self._retag_for_ossfuzz(inc_image, ossfuzz_image)
 
         # Fallback: check nested formats (legacy local builds)
         for nested_image in self._get_nested_image_names(project_name, sanitizer):
             if self._docker_image_exists(nested_image):
-                logger.info(f"Found nested format image locally: {nested_image}")
+                logger.debug(f"Found nested format image locally: {nested_image}")
                 return self._retag_for_ossfuzz(nested_image, ossfuzz_image)
 
         # Pull from registry
-        logger.info(f"Pulling inc-build image: {inc_image}")
+        logger.debug(f"Pulling inc-build image: {inc_image}")
         try:
             result = subprocess.run(
                 ["docker", "pull", inc_image],
@@ -1203,10 +1365,10 @@ class OSSFuzzInfrastructure:
             )
 
             if result.returncode == 0:
-                logger.info(f"Successfully pulled: {inc_image}")
+                logger.debug(f"Successfully pulled: {inc_image}")
                 return self._retag_for_ossfuzz(inc_image, ossfuzz_image)
 
-            logger.error(f"Failed to pull {inc_image}: {result.stderr}")
+            logger.debug(f"Inc-build image not available: {inc_image}")
             return False
 
         except subprocess.TimeoutExpired:
@@ -1227,7 +1389,7 @@ class OSSFuzzInfrastructure:
                 stdin=subprocess.DEVNULL,
             )
             if result.returncode == 0:
-                logger.info(f"Retagged {src_image} -> {dst_image}")
+                logger.debug(f"Retagged {src_image} -> {dst_image}")
                 return True
             logger.error(f"Failed to retag: {result.stderr}")
             return False
@@ -1293,24 +1455,33 @@ class OSSFuzzInfrastructure:
         Returns:
             True if inc-build image is available and ready for use
         """
-        # Check if already available locally
-        if self.is_inc_image_available(project_name, sanitizer, registry):
-            logger.debug(f"Inc-build image available for {project_name}")
-            return True
+        cache_key = f"{project_name}:{sanitizer}"
 
-        # Try to pull from registry
-        logger.info(
-            f"Inc-build image not found locally, trying to pull: {project_name}"
-        )
-        if self.pull_inc_build_image(project_name, sanitizer, registry):
-            logger.info(f"Successfully pulled inc-build image for {project_name}")
-            return True
+        with self._inc_image_lock:
+            if cache_key in self._inc_image_cache:
+                return self._inc_image_cache[cache_key]
 
-        logger.debug(
-            f"Inc-build image not available for {project_name}, "
-            "will fall back to standard build"
-        )
-        return False
+            # Check if already available locally
+            if self.is_inc_image_available(project_name, sanitizer, registry):
+                logger.debug(f"Inc-build image available for {project_name}")
+                self._inc_image_cache[cache_key] = True
+                return True
+
+            # Try to pull from registry
+            logger.debug(
+                f"Inc-build image not found locally, trying to pull: {project_name}"
+            )
+            if self.pull_inc_build_image(project_name, sanitizer, registry):
+                logger.debug(f"Successfully pulled inc-build image for {project_name}")
+                self._inc_image_cache[cache_key] = True
+                return True
+
+            logger.warning(
+                f"Inc-build image not available for {project_name}, "
+                "will fall back to standard build"
+            )
+            self._inc_image_cache[cache_key] = False
+            return False
 
     # =========================================================================
     # Unit test support for patch verification
@@ -1355,7 +1526,7 @@ class OSSFuzzInfrastructure:
         if docker_image_tag:
             cmd.extend(["--docker_image_tag", docker_image_tag])
 
-        logger.info(
+        logger.debug(
             f"Running unit tests for {project_name} "
             f"(rts={rts_mode}, sanitizer={sanitizer})"
         )
@@ -1373,7 +1544,7 @@ class OSSFuzzInfrastructure:
 
             passed = result.returncode == 0
             if passed:
-                logger.info(f"Unit tests passed for {project_name}")
+                logger.debug(f"Unit tests passed for {project_name}")
             else:
                 logger.warning(
                     f"Unit tests failed for {project_name} "

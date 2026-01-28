@@ -2048,31 +2048,29 @@ class TestPatchVerifyCLI:
         yield temp_path
         shutil.rmtree(temp_path)
 
-    def test_auto_discovery_mode(self, cli_module, temp_dir: Path):
-        """Test auto-discovery mode (default)."""
-        args = cli_module.parse_args(
-            [
-                "patch-verify",
-                str(temp_dir / "benchmark"),
-            ]
-        )
-        assert args.benchmark_path == temp_dir / "benchmark"
-        assert args.patch is None
-        assert args.patch_dir is None
-        assert args.harness is None
+    def test_patch_or_patch_dir_required(self, cli_module, temp_dir: Path):
+        """Test that --patch or --patch-dir is required."""
+        with pytest.raises(SystemExit):
+            cli_module.parse_args(
+                [
+                    "patch-verify",
+                    str(temp_dir / "benchmark"),
+                    "--pov-dir",
+                    str(temp_dir / "povs"),
+                ]
+            )
 
-    def test_auto_discovery_with_harness_filter(self, cli_module, temp_dir: Path):
-        """Test auto-discovery mode with --harness filter."""
-        args = cli_module.parse_args(
-            [
-                "patch-verify",
-                str(temp_dir / "benchmark"),
-                "--harness",
-                "fuzz_test",
-            ]
-        )
-        assert args.benchmark_path == temp_dir / "benchmark"
-        assert args.harness == "fuzz_test"
+    def test_pov_or_pov_dir_required(self, cli_module, temp_dir: Path):
+        """Test that --pov or --pov-dir is required."""
+        with pytest.raises(SystemExit):
+            cli_module.parse_args(
+                [
+                    "patch-verify",
+                    str(temp_dir / "benchmark"),
+                    "--patch-dir",
+                    str(temp_dir / "patches"),
+                ]
+            )
 
     def test_force_rebuild_flag(self, cli_module, temp_dir: Path):
         """Test --force-rebuild flag."""
@@ -2080,6 +2078,10 @@ class TestPatchVerifyCLI:
             [
                 "patch-verify",
                 str(temp_dir / "benchmark"),
+                "--patch-dir",
+                str(temp_dir / "patches"),
+                "--pov-dir",
+                str(temp_dir / "povs"),
                 "--force-rebuild",
             ]
         )
@@ -2091,6 +2093,10 @@ class TestPatchVerifyCLI:
             [
                 "patch-verify",
                 str(temp_dir / "benchmark"),
+                "--patch-dir",
+                str(temp_dir / "patches"),
+                "--pov-dir",
+                str(temp_dir / "povs"),
                 "--no-inc-build",
             ]
         )
@@ -2156,6 +2162,10 @@ class TestPatchVerifyCLI:
             [
                 "patch-verify",
                 str(temp_dir / "benchmark"),
+                "--patch-dir",
+                str(temp_dir / "patches"),
+                "--pov-dir",
+                str(temp_dir / "povs"),
                 "--output",
                 str(temp_dir / "results.json"),
                 "--format",
@@ -2171,6 +2181,10 @@ class TestPatchVerifyCLI:
             [
                 "patch-verify",
                 str(temp_dir / "benchmark"),
+                "--patch-dir",
+                str(temp_dir / "patches"),
+                "--pov-dir",
+                str(temp_dir / "povs"),
                 "--output",
                 str(temp_dir / "results.yaml"),
                 "--format",
@@ -2186,6 +2200,10 @@ class TestPatchVerifyCLI:
             [
                 "patch-verify",
                 str(temp_dir / "benchmark"),
+                "--patch-dir",
+                str(temp_dir / "patches"),
+                "--pov-dir",
+                str(temp_dir / "povs"),
                 "--test-mode",
                 "rts",
             ]
@@ -2198,6 +2216,10 @@ class TestPatchVerifyCLI:
             [
                 "patch-verify",
                 str(temp_dir / "benchmark"),
+                "--patch-dir",
+                str(temp_dir / "patches"),
+                "--pov-dir",
+                str(temp_dir / "povs"),
                 "--build-workers",
                 "8",
                 "--verify-workers",
@@ -2207,23 +2229,16 @@ class TestPatchVerifyCLI:
         assert args.build_workers == 8
         assert args.verify_workers == 16
 
-    def test_no_parallel_flag(self, cli_module, temp_dir: Path):
-        """Test --no-parallel flag."""
-        args = cli_module.parse_args(
-            [
-                "patch-verify",
-                str(temp_dir / "benchmark"),
-                "--no-parallel",
-            ]
-        )
-        assert args.no_parallel is True
-
     def test_no_variants_flag(self, cli_module, temp_dir: Path):
         """Test --no-variants flag."""
         args = cli_module.parse_args(
             [
                 "patch-verify",
                 str(temp_dir / "benchmark"),
+                "--patch-dir",
+                str(temp_dir / "patches"),
+                "--pov-dir",
+                str(temp_dir / "povs"),
                 "--no-variants",
             ]
         )
@@ -2253,6 +2268,10 @@ class TestPatchVerifyCLI:
             [
                 "patch-verify",
                 str(temp_dir / "benchmark"),
+                "--patch-dir",
+                str(temp_dir / "patches"),
+                "--pov-dir",
+                str(temp_dir / "povs"),
                 "--sanitizer",
                 "undefined",
             ]
@@ -2265,6 +2284,10 @@ class TestPatchVerifyCLI:
             [
                 "patch-verify",
                 str(temp_dir / "benchmark"),
+                "--patch-dir",
+                str(temp_dir / "patches"),
+                "--pov-dir",
+                str(temp_dir / "povs"),
                 "--timeout",
                 "60",
                 "--build-timeout",
@@ -2306,8 +2329,8 @@ class TestPatchVerifyCLIValidation:
         yield temp_path
         shutil.rmtree(temp_path)
 
-    def test_single_patch_requires_harness(self, temp_dir: Path):
-        """Test that single patch mode requires --harness."""
+    def test_nonexistent_patch_file(self, temp_dir: Path):
+        """Test error when patch file doesn't exist."""
         import argparse
 
         from crsbench.evaluation.verification.cli.patch_verify_command import (
@@ -2316,11 +2339,11 @@ class TestPatchVerifyCLIValidation:
 
         args = argparse.Namespace(
             benchmark_path=temp_dir / "benchmark",
-            patch=temp_dir / "patch.diff",
+            patch=temp_dir / "nonexistent.diff",
             patch_dir=None,
             pov=temp_dir / "pov.blob",
             pov_dir=None,
-            harness=None,  # Missing harness
+            harness="fuzz_test",
             oss_fuzz=temp_dir / "oss-fuzz",
             test_mode="full",
             sanitizer="address",
@@ -2329,18 +2352,19 @@ class TestPatchVerifyCLIValidation:
             test_timeout=1800,
             build_workers=None,
             verify_workers=None,
-            no_parallel=False,
             no_variants=False,
             force_rebuild=False,
+            no_inc_build=False,
+            source="main_repo",
             output=None,
             format="text",
             verbose=False,
         )
         result = run_patch_verify(args)
-        assert result == 1  # Error exit code
+        assert result == 1
 
-    def test_single_patch_requires_pov_or_pov_dir(self, temp_dir: Path):
-        """Test that single patch mode requires --pov or --pov-dir."""
+    def test_nonexistent_pov_file(self, temp_dir: Path):
+        """Test error when POV file doesn't exist."""
         import argparse
 
         from crsbench.evaluation.verification.cli.patch_verify_command import (
@@ -2351,8 +2375,8 @@ class TestPatchVerifyCLIValidation:
             benchmark_path=temp_dir / "benchmark",
             patch=temp_dir / "patch.diff",
             patch_dir=None,
-            pov=None,  # Missing
-            pov_dir=None,  # Missing
+            pov=temp_dir / "nonexistent.blob",
+            pov_dir=None,
             harness="fuzz_test",
             oss_fuzz=temp_dir / "oss-fuzz",
             test_mode="full",
@@ -2362,78 +2386,13 @@ class TestPatchVerifyCLIValidation:
             test_timeout=1800,
             build_workers=None,
             verify_workers=None,
-            no_parallel=False,
             no_variants=False,
             force_rebuild=False,
+            no_inc_build=False,
+            source="main_repo",
             output=None,
             format="text",
             verbose=False,
         )
         result = run_patch_verify(args)
-        assert result == 1  # Error exit code
-
-    def test_directory_mode_requires_harness(self, temp_dir: Path):
-        """Test that directory mode requires --harness."""
-        import argparse
-
-        from crsbench.evaluation.verification.cli.patch_verify_command import (
-            run_patch_verify,
-        )
-
-        args = argparse.Namespace(
-            benchmark_path=temp_dir / "benchmark",
-            patch=None,
-            patch_dir=temp_dir / "patches",
-            pov=None,
-            pov_dir=temp_dir / "povs",
-            harness=None,  # Missing
-            oss_fuzz=temp_dir / "oss-fuzz",
-            test_mode="full",
-            sanitizer="address",
-            timeout=120,
-            build_timeout=1200,
-            test_timeout=1800,
-            build_workers=None,
-            verify_workers=None,
-            no_parallel=False,
-            no_variants=False,
-            force_rebuild=False,
-            output=None,
-            format="text",
-            verbose=False,
-        )
-        result = run_patch_verify(args)
-        assert result == 1  # Error exit code
-
-    def test_directory_mode_requires_pov_dir(self, temp_dir: Path):
-        """Test that directory mode requires --pov-dir."""
-        import argparse
-
-        from crsbench.evaluation.verification.cli.patch_verify_command import (
-            run_patch_verify,
-        )
-
-        args = argparse.Namespace(
-            benchmark_path=temp_dir / "benchmark",
-            patch=None,
-            patch_dir=temp_dir / "patches",
-            pov=None,
-            pov_dir=None,  # Missing
-            harness="fuzz_test",
-            oss_fuzz=temp_dir / "oss-fuzz",
-            test_mode="full",
-            sanitizer="address",
-            timeout=120,
-            build_timeout=1200,
-            test_timeout=1800,
-            build_workers=None,
-            verify_workers=None,
-            no_parallel=False,
-            no_variants=False,
-            force_rebuild=False,
-            output=None,
-            format="text",
-            verbose=False,
-        )
-        result = run_patch_verify(args)
-        assert result == 1  # Error exit code
+        assert result == 1

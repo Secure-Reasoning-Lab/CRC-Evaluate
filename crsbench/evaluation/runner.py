@@ -93,6 +93,8 @@ class BenchmarkRunner:
         llm_tracker: Optional["LiteLLMTracker"] = None,
         llm_api_key: Optional[str] = None,
         llm_trial_id: Optional[str] = None,
+        build_workers: Optional[int] = None,
+        verify_workers: Optional[int] = None,
     ):
         """Initialize benchmark runner.
 
@@ -110,6 +112,8 @@ class BenchmarkRunner:
             llm_tracker: Optional LiteLLMTracker for querying LLM usage during snapshots
             llm_api_key: Optional trial-specific API key for LLM tracking
             llm_trial_id: Optional trial identifier for LLM usage files
+            build_workers: Number of parallel workers for building variants
+            verify_workers: Number of parallel workers for POV/patch verification
         """
         self.crs_executor = crs_executor or StubCRSExecutor()
         self.snapshot_period = snapshot_period
@@ -124,6 +128,8 @@ class BenchmarkRunner:
         self.llm_tracker = llm_tracker
         self.llm_api_key = llm_api_key
         self.llm_trial_id = llm_trial_id
+        self.build_workers = build_workers
+        self.verify_workers = verify_workers
         self.logger = get_logger(__name__)
 
         if coverage_early_stop:
@@ -443,7 +449,7 @@ class BenchmarkRunner:
                 f"POV verification report: "
                 f"cpvs={len(report.cpvs_found)}/{report.total_expected_cpvs}, "
                 f"povs={report.total_povs_processed}, "
-                f"zerodays={report.zerodays_detected}, "
+                f"unintended_crashes={report.unintended_crashes}, "
                 f"early_stopped={report.early_stopped}"
             )
 
@@ -784,6 +790,8 @@ class BenchmarkRunner:
                 oss_fuzz_path=self.oss_fuzz_path,
                 timeout=120,
                 dedup_strategy=PatchBasedDedup(),
+                build_workers=self.build_workers,
+                verify_workers=self.verify_workers,
             )
 
             # POV output directory (where CRS writes discovered POVs)
@@ -1009,16 +1017,18 @@ class BenchmarkRunner:
                 oss_fuzz_path=oss_fuzz_path,
                 timeout=120,
                 dedup_strategy=PatchBasedDedup(),  # TODO: make it configurable
+                build_workers=self.build_workers,
+                verify_workers=self.verify_workers,
             )
             pov_dir = crs_output_dir / "povs"
-            results, _skipped = engine.verify_benchmark(
+            output = engine.verify_benchmark(
                 benchmark_path=benchmark_path,
                 pov_dir=pov_dir,
                 deduplicate=True,  # TODO: configurable?
                 harness_filter=harness_name,
                 force_rebuild=False,  # Variants are pre-built at experiment start
             )
-            return results
+            return output.results
         except Exception as e:
             self.logger.error(
                 f"POV verification failed for harness '{harness_name}': {e}",
@@ -1070,6 +1080,8 @@ class BenchmarkRunner:
                 test_timeout=1800,
                 work_dir=work_dir,
                 force_rebuild=True,  # Always rebuild for fresh verification
+                build_workers=self.build_workers,
+                verify_workers=self.verify_workers,
             )
 
             # Run verification
@@ -1078,7 +1090,6 @@ class BenchmarkRunner:
                 patch_dir=patch_dir,
                 harness=harness_name,
                 pov_dir=pov_dir,
-                parallel=True,
             )
 
             # Log summary

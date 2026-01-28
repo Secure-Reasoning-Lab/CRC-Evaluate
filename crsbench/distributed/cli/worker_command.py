@@ -171,6 +171,8 @@ def run_worker(args: argparse.Namespace) -> int:
             "oss_fuzz_path",
             "registry_dir",
             "crs_configs_dir",
+            "build_workers",
+            "verify_workers",
             "benchmarks_root",
             "benchmark_suites_root",
             "experiment_filestore",

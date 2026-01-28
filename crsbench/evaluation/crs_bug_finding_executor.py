@@ -116,52 +116,18 @@ class CRSBugFindingExecutor(CRSExecutor):
     ) -> None:
         """Clean up files from harnesses other than the target.
 
+        NOTE: This function is intentionally a no-op. CRS may place arbitrary
+        files in /out (metadata, tarballs, etc.) and crsbench should not make
+        assumptions about what can be safely removed. The disk space optimization
+        is not worth the risk of breaking CRS functionality.
+
         Args:
             trial_output_dir: Trial directory containing CRS outputs
             target_harness: Name of the harness to keep
             project_name: Project name (for CRS output directory path)
             sanitizer: Sanitizer type (e.g., 'address', 'memory', 'undefined')
         """
-        # Clean OSS-Fuzz build output
-        build_out_dir = self._get_oss_fuzz_build_output_dir(
-            trial_output_dir, project_name
-        )
-        logger.debug(f"build_out_dir {build_out_dir}")
-
-        if build_out_dir.exists():
-            # Iterate subdirectories under build/out/
-            for subdir in build_out_dir.iterdir():
-                if not subdir.is_dir():
-                    continue
-                # Iterate files inside each subdirectory
-                for item in subdir.iterdir():
-                    # TODO: check this logic is enough that we don't remove neceesary files
-                    if target_harness not in item.name:
-                        logger.debug(f"Removing non-target harness file: {item}")
-                        if item.is_dir():
-                            shutil.rmtree(item)
-                        else:
-                            item.unlink()
-
-        # Clean up CRS output directories for each CRS in ensemble
-        from crsbench.utils.crs_helper import get_all_crs_registry_names
-
-        crs_names = get_all_crs_registry_names(
-            self.crs_config_name, self.crs_configs_dir
-        )
-        build_dir = trial_output_dir / "crs-build"
-
-        for crs_name in crs_names:
-            crs_out_dir = build_dir / "out" / crs_name / project_name / sanitizer
-            if not crs_out_dir.exists():
-                continue
-            for item in crs_out_dir.iterdir():
-                if target_harness not in item.name:
-                    logger.debug(f"Removing non-target harness file: {item}")
-                    if item.is_dir():
-                        shutil.rmtree(item)
-                    else:
-                        item.unlink()
+        # Intentionally disabled - CRS owns /out directory contents
 
     def build_crs(self, benchmark_path: Path, trial_output_dir: Path) -> None:
         """Pre-build CRS Docker image before running.
@@ -399,7 +365,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             if on_run_start:
                 on_run_start()
 
-            # 3. Verify source path exists after build (only if not using bundled source)
+            # 4. Verify source path exists after build (only if not using bundled source)
             from crsbench.benchmark.runtime import has_bundled_source
 
             if not has_bundled_source(benchmark_path):
@@ -410,17 +376,32 @@ class CRSBugFindingExecutor(CRSExecutor):
                         "Repository cloning or build preparation failed."
                     )
 
-            # 4. Prepare hints if enabled
+            # 5. Prepare hints if enabled
             hints_path = self._prepare_hints(
                 benchmark_path, harness_name, trial_output_dir
             )
 
-            # Detect ref.diff for delta mode
+            # 6. Detect ref.diff for delta mode (independent of hints)
+            # ref.diff is based on evaluation mode, not hints configuration
             diff_path = None
-            if hints_path and (hints_path / "ref.diff").exists():
-                diff_path = hints_path / "ref.diff"
+            mode = self.config.get("mode")
+            if mode == "delta":
+                # Check benchmark's .aixcc/ref.diff directly
+                benchmark_ref_diff = benchmark_path / ".aixcc" / "ref.diff"
+                if benchmark_ref_diff.exists():
+                    diff_path = benchmark_ref_diff
+                    logger.info(f"Using ref.diff for delta mode: {diff_path}")
+                # Also check if it was prepared in hints dir (backward compat)
+                elif hints_path and (hints_path / "ref.diff").exists():
+                    diff_path = hints_path / "ref.diff"
+                    logger.info(f"Using ref.diff from hints: {diff_path}")
+                else:
+                    # Fail fast - delta mode requires ref.diff
+                    raise ValueError(
+                        f"Delta mode requires .aixcc/ref.diff but not found in {benchmark_path}"
+                    )
 
-            # 5. Run CRS bug finding campaign
+            # 7. Run CRS bug finding campaign
             cmd = self._construct_run_command(
                 project_name=project_name,
                 harness_name=harness_name,
@@ -508,7 +489,7 @@ class CRSBugFindingExecutor(CRSExecutor):
 
             execution_time = time.time() - start_time
 
-            # 6. Store execution metadata
+            # 8. Store execution metadata
             self._store_execution_metadata(
                 trial_output_dir=trial_output_dir,
                 project_name=project_name,
@@ -522,7 +503,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 stderr=stderr,
             )
 
-            # 7. Return result
+            # 9. Return result
             # Timeout is considered success (CRS ran for full specified time)
             # Only other errors count as failure
             success = returncode == 0 or timed_out
@@ -652,19 +633,23 @@ class CRSBugFindingExecutor(CRSExecutor):
         build_start_time = time.time()
         logger.info(f"Building CRS for {build_key}")
 
-        # Load benchmark source (handles pkgs/ vs git clone)
+        # Load benchmark source (clone from main_repo or extract from pkgs/)
         from crsbench.benchmark.runtime import load_benchmark_source
 
         source_dest = trial_build_dir / "src" / project_name
         source = load_benchmark_source(
             benchmark_path,
             dest_dir=source_dest,
+            source_mode=self.config.get("source_mode", "main_repo"),
             mode=self.config.get("mode"),
             verbose=self.config.get("verbose", False),
         )
         source_path = source.path
 
         # Construct build command using trial-local paths
+        # Note: source_path is a positional arg in oss-bugfind-crs, so it must come
+        # right after the other positional args (config_dir, project_name), before
+        # any optional flags that follow.
         cmd = [
             "oss-bugfind-crs",
             "build",
@@ -678,9 +663,13 @@ class CRSBugFindingExecutor(CRSExecutor):
             str(benchmark_path),
             "--project-image-prefix",
             self.config.get("project_image_prefix", "aixcc-afc"),
-            str(trial_crs_config_dir),  # Use trial-local config
-            project_name,
+            str(trial_crs_config_dir),  # config_dir positional arg
+            project_name,  # project positional arg
         ]
+
+        # Add source_path right after positional args (it's also positional in CLI)
+        if source_path:
+            cmd.append(str(source_path))
 
         # Add run_id if configured
         run_id = self.config.get("run_id")
@@ -690,10 +679,6 @@ class CRSBugFindingExecutor(CRSExecutor):
         # Add sanitizer flag
         sanitizer = self.config.get("sanitizer", "address")
         cmd.extend(["--sanitizer", sanitizer])
-
-        # Only add source path if not using bundled source
-        if source_path:
-            cmd.append(str(source_path))
 
         # Add external LiteLLM flag if using external LiteLLM
         if self.litellm_mode is not None:
@@ -793,12 +778,8 @@ class CRSBugFindingExecutor(CRSExecutor):
             logger.info("Running without hints")
 
         # Add diff path if available (delta mode)
-        mode = self.config.get("mode")
         if diff_path and diff_path.exists():
             cmd.extend(["--diff", str(diff_path)])
-            logger.info(f"Using diff for delta mode: {diff_path}")
-        elif mode == "delta":
-            logger.error("Delta mode configured but no diff file available")
 
         # Add external LiteLLM flag if using external LiteLLM
         if self.litellm_mode is not None:

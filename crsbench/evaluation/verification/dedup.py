@@ -70,7 +70,7 @@ class PatchBasedDedup(DeduplicationStrategy):
         """Deduplicate results by CPV match set.
 
         Only results with status CPV are deduplicated based on their
-        cpv_matched list. Other statuses (ZERODAY, NOT_VULNERABLE, etc.)
+        cpv_matched list. Other statuses (NOT_VULNERABLE, UNINTENDED_CRASH, etc.)
         are kept as-is since they represent different outcomes.
 
         Args:
@@ -119,8 +119,8 @@ class StatusBasedDedup(DeduplicationStrategy):
     """Deduplicate by keeping only one result per status type.
 
     This is a simple strategy that keeps only the first POV for each
-    unique status (CPV, ZERODAY, etc.). Useful for getting a summary
-    of what types of vulnerabilities were found.
+    unique status (CPV, NOT_VULNERABLE, etc.). Useful for getting a summary
+    of what types of results were found.
     """
 
     @property
