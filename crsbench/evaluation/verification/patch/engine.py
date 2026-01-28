@@ -898,6 +898,15 @@ class PatchVerificationEngine:
             logger.warning(f"No test.sh in {variant_name}, skipping unit tests")
             return True, ""
 
+        # RTS tests require /rts_config_jvm.py which is only in inc-build images.
+        # Skip RTS tests when inc-build is not available to avoid false failures.
+        if self.test_mode == UnitTestMode.RTS and not use_inc_image:
+            logger.warning(
+                f"RTS tests require inc-build image, but inc-build not available. "
+                f"Skipping RTS tests for {variant_name}"
+            )
+            return True, ""
+
         # Use separate variant for test output to avoid overwriting ASAN binary
         # test.sh rebuilds with fuzz-shim which produces non-ASAN binaries
         test_suffix = "rts" if self.test_mode == UnitTestMode.RTS else "unittest"
