@@ -948,6 +948,8 @@ def run_crs_trial(
             llm_tracker=llm_tracker,
             llm_api_key=llm_api_key,
             llm_trial_id=trial_id,
+            build_workers=config.build_workers,
+            verify_workers=config.verify_workers,
         )
 
         # Resolve benchmark path

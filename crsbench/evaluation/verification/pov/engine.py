@@ -32,13 +32,12 @@ from crsbench.evaluation.verification.pov.verdict import VerdictResolver
 from crsbench.evaluation.verification.utils import compute_content_hash
 from crsbench.utils import strip_ansi
 from crsbench.utils.logger import get_logger
+from crsbench.utils.workers import resolve_build_workers, resolve_verify_workers
 
 if TYPE_CHECKING:
     from crsbench.validation.meta_adapter import MetaYamlAdapter
 
 logger = get_logger(__name__)
-
-DEFAULT_WORKERS = 4
 
 
 @dataclass
@@ -90,8 +89,8 @@ class VerificationEngine:
         oss_fuzz_path: Path,
         timeout: int = 180,
         dedup_strategy: DeduplicationStrategy | None = None,
-        build_workers: int = DEFAULT_WORKERS,
-        verify_workers: int = DEFAULT_WORKERS,
+        build_workers: Optional[int] = None,
+        verify_workers: Optional[int] = None,
         *,
         source_mode: str = "pkgs",
         max_povs_per_cpv: Optional[int] = None,
@@ -110,10 +109,12 @@ class VerificationEngine:
         """
         self.oss_fuzz_path = Path(oss_fuzz_path)
         self.timeout = timeout
-        self.verify_workers = verify_workers
+        self.verify_workers = resolve_verify_workers(verify_workers)
         self.max_povs_per_cpv = max_povs_per_cpv
         self.builder = OSSFuzzBuilder(
-            oss_fuzz_path, max_workers=build_workers, source_mode=source_mode
+            oss_fuzz_path,
+            max_workers=resolve_build_workers(build_workers),
+            source_mode=source_mode,
         )
         self.dedup_strategy = dedup_strategy if dedup_strategy else PatchBasedDedup()
         self._built_results: dict[str, dict[str, BuildResult]] = {}
