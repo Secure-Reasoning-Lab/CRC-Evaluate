@@ -322,6 +322,7 @@ def _build_dag(
                         pov_paths=pov_paths,
                         test_mode="FULL",
                         build_patch_job_id=build_patch_job.job_id,
+                        source_mode=source_mode,
                     )
                     all_jobs.append(test_full_job)
 
@@ -336,6 +337,7 @@ def _build_dag(
                             pov_paths=pov_paths,
                             test_mode="RTS",
                             build_patch_job_id=build_patch_job.job_id,
+                            source_mode=source_mode,
                         )
                         all_jobs.append(test_rts_job)
 
@@ -519,7 +521,8 @@ def run_all(args: argparse.Namespace) -> int:
     _log_dag_summary(all_jobs)
 
     output_dir = getattr(args, "output_dir", None)
-    context = JobContext(output_dir=Path(output_dir) if output_dir else None)
+    output_path = Path(output_dir) if output_dir else None
+    context = JobContext(output_dir=output_path)
     executor = DAGExecutor(
         type_limits={"build": build_workers, "verify": verify_workers}
     )

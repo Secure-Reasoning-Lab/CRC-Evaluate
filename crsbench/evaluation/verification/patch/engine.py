@@ -207,6 +207,7 @@ class PatchVerificationEngine:
         variant_name = build_config.variant_name
 
         # Check build cache (respect inc_build mode)
+        build_cached = False
         if self.force_rebuild:
             logger.info(f"Force rebuild: cleaning {variant_name}")
             self.infra.cleanup_build_outputs(variant_name)
@@ -218,6 +219,7 @@ class PatchVerificationEngine:
             logger.debug(f"Using cached build for {variant_name}")
             # Track variant (for _built_variants list)
             self._built_variants.append(variant_name)
+            build_cached = True
 
             # Build-only mode: build already exists, nothing to do
             if self.build_only:
@@ -225,19 +227,13 @@ class PatchVerificationEngine:
                 result.elapsed_seconds = time.time() - start_time
                 return result
 
-            # Skip to verification (build_time stays 0 for cached builds)
-            result.harness = harness
-            verified_result = self._run_verification(
-                result, variant_name, harness, benchmark_path, project_name
-            )
-            verified_result.elapsed_seconds = time.time() - start_time
-            return verified_result
+            # For verification mode, continue to prepare source for unit tests
 
-        # Step 1: Ensure inc-build image is available (if enabled)
-        if self.use_inc_build:
+        # Step 1: Ensure inc-build image is available (if enabled and not cached)
+        inc_available = False
+        if not build_cached and self.use_inc_build:
             inc_available = self._ensure_inc_build_image(project_name)
-        else:
-            inc_available = False
+        elif not build_cached:
             logger.debug(f"Inc-build disabled, using full build for {project_name}")
 
         # Step 2: Prepare source and apply patch
@@ -280,74 +276,80 @@ class PatchVerificationEngine:
             result.details = f"Failed to apply patch: {patch.patch_path}"
             return result
 
-        # Step 3: Build with inc-build image or regular build
-        # Create variant project directory (symlink to benchmark)
-        # All operations (build, reproduce, tests) use variant_name
-        variant_project = self.infra.create_variant_project(
-            benchmark_path=benchmark_path,
-            variant_name=variant_name,
-        )
-        if not variant_project:
-            result.status = PatchVerificationStatus.BUILD_FAILED
-            result.details = f"Failed to create variant project: {variant_name}"
-            return result
-
-        # Prepare variant inc-build image if using inc-build
-        if inc_available:
-            if not self.infra.prepare_inc_image_for_variant(
-                project_name, variant_name, self.sanitizer
-            ):
+        # Step 3: Build with inc-build image or regular build (skip if cached)
+        used_inc_build = False
+        if build_cached:
+            logger.debug(f"Skipping build for cached variant: {variant_name}")
+        else:
+            # Create variant project directory (symlink to benchmark)
+            # All operations (build, reproduce, tests) use variant_name
+            variant_project = self.infra.create_variant_project(
+                benchmark_path=benchmark_path,
+                variant_name=variant_name,
+            )
+            if not variant_project:
                 result.status = PatchVerificationStatus.BUILD_FAILED
-                result.details = "Failed to prepare inc-build image for variant"
+                result.details = f"Failed to create variant project: {variant_name}"
                 return result
 
-        # Try inc-build first (uses pre-compiled objects from /built-src)
-        build_result = self.infra.build_fuzzers(
-            build_config, repo_path, use_inc_image=inc_available, inc_fallback=False
-        )
-        # If inc-build fails, retry with fallback (full recompile from /src)
-        if not build_result.success and inc_available:
-            logger.info(f"Inc-build failed for {variant_name}, retrying with fallback")
+            # Prepare variant inc-build image if using inc-build
+            if inc_available:
+                if not self.infra.prepare_inc_image_for_variant(
+                    project_name, variant_name, self.sanitizer
+                ):
+                    result.status = PatchVerificationStatus.BUILD_FAILED
+                    result.details = "Failed to prepare inc-build image for variant"
+                    return result
+
+            # Try inc-build first (uses pre-compiled objects from /built-src)
             build_result = self.infra.build_fuzzers(
-                build_config, repo_path, use_inc_image=True, inc_fallback=True
+                build_config, repo_path, use_inc_image=inc_available, inc_fallback=False
             )
-        # Track if we actually used inc-build (not if fallback was triggered)
-        # When fallback_used=True, the build may have fallen back to standard build
-        used_inc_build = inc_available and not build_result.fallback_used
+            # If inc-build fails, retry with fallback (full recompile from /src)
+            if not build_result.success and inc_available:
+                logger.info(
+                    f"Inc-build failed for {variant_name}, retrying with fallback"
+                )
+                build_result = self.infra.build_fuzzers(
+                    build_config, repo_path, use_inc_image=True, inc_fallback=True
+                )
+            # Track if we actually used inc-build (not if fallback was triggered)
+            # When fallback_used=True, the build may have fallen back to standard build
+            used_inc_build = inc_available and not build_result.fallback_used
 
-        # Record build time
-        result.build_time = time.time() - start_time
+            # Record build time
+            result.build_time = time.time() - start_time
 
-        # Track variant for cleanup (even if build failed, we may have partial artifacts)
-        self._built_variants.append(variant_name)
+            # Track variant for cleanup (even if build failed, we may have partial artifacts)
+            self._built_variants.append(variant_name)
 
-        if not build_result.success:
-            result.status = PatchVerificationStatus.BUILD_FAILED
-            if not result.details:
-                result.details = "Build failed"
-            result.elapsed_seconds = time.time() - start_time
-            return result
+            if not build_result.success:
+                result.status = PatchVerificationStatus.BUILD_FAILED
+                if not result.details:
+                    result.details = "Build failed"
+                result.elapsed_seconds = time.time() - start_time
+                return result
 
-        # Write build metadata for cache validation
-        # Track fallback usage so cache can be properly invalidated
-        self.infra.write_build_metadata(
-            variant_name,
-            inc_build=inc_available,  # Was inc-build image used
-            sanitizer=self.sanitizer,
-            fallback_used=build_result.fallback_used,
-        )
+            # Write build metadata for cache validation
+            # Track fallback usage so cache can be properly invalidated
+            self.infra.write_build_metadata(
+                variant_name,
+                inc_build=inc_available,  # Was inc-build image used
+                sanitizer=self.sanitizer,
+                fallback_used=build_result.fallback_used,
+            )
 
-        # Track fallback status in result
-        # Mark as fallback if inc-build was expected but image wasn't available
-        result.fallback_used = build_result.fallback_used or (
-            self.use_inc_build and not inc_available
-        )
+            # Track fallback status in result
+            # Mark as fallback if inc-build was expected but image wasn't available
+            result.fallback_used = build_result.fallback_used or (
+                self.use_inc_build and not inc_available
+            )
 
-        # Build-only mode: skip verification, return after successful build
-        if self.build_only:
-            result.status = PatchVerificationStatus.VALID
-            result.elapsed_seconds = time.time() - start_time
-            return result
+            # Build-only mode: skip verification, return after successful build
+            if self.build_only:
+                result.status = PatchVerificationStatus.VALID
+                result.elapsed_seconds = time.time() - start_time
+                return result
 
         # Run verification (POV tests + unit tests)
         result.harness = harness
