@@ -909,15 +909,27 @@ class PatchVerificationEngine:
             variant_name=test_variant_name,
         )
 
-        # Prepare inc-build image for test variant if using inc-build
+        # Prepare Docker image for test variant
+        # Test variant uses a different name (-unittest or -rts suffix) to avoid
+        # overwriting ASAN binary from build_fuzzers.
         if use_inc_image:
-            # Get base project name (without patched suffix)
+            # For inc-build: retag inc-{sanitizer} image from base project
             base_project = variant_name.rsplit("-patched-", 1)[0]
             if "-patched-" in variant_name:
                 base_project = base_project.rsplit("-asan-", 1)[0]
             self.infra.prepare_inc_image_for_variant(
                 base_project, test_variant_name, self.sanitizer
             )
+        else:
+            # For standard build: retag :latest image from source variant
+            # Without this, run_tests fails with exit code 125 (image not found)
+            if not self.infra.prepare_image_for_variant(
+                variant_name, test_variant_name, docker_tag="latest"
+            ):
+                logger.warning(
+                    f"Failed to prepare test image for {test_variant_name}, "
+                    "tests may fail"
+                )
 
         # For inc-build: use inc-{sanitizer} tag
         # For standard build: use latest tag

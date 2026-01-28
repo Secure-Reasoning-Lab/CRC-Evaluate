@@ -1633,6 +1633,38 @@ class OSSFuzzInfrastructure:
 
         return self._retag_for_ossfuzz(src_image, dst_image)
 
+    def prepare_image_for_variant(
+        self,
+        source_variant: str,
+        target_variant: str,
+        docker_tag: str = "latest",
+    ) -> bool:
+        """Prepare Docker image for a derived variant by retagging.
+
+        This allows test execution with a separate variant name without rebuilding.
+        The source image is retagged to the target variant name.
+
+        Args:
+            source_variant: Source variant name (e.g., base patched variant)
+            target_variant: Target variant name (e.g., with -unittest suffix)
+            docker_tag: Docker image tag (default: "latest")
+
+        Returns:
+            True if image is ready for use
+        """
+        src_image = f"aixcc-afc/{source_variant}:{docker_tag}"
+        dst_image = f"aixcc-afc/{target_variant}:{docker_tag}"
+
+        if self._docker_image_exists(dst_image):
+            logger.debug(f"Target variant image already exists: {dst_image}")
+            return True
+
+        if not self._docker_image_exists(src_image):
+            logger.warning(f"Source variant image not found: {src_image}")
+            return False
+
+        return self._retag_for_ossfuzz(src_image, dst_image)
+
     def _get_inc_image_lock(self, cache_key: str) -> threading.Lock:
         """Get or create a per-project lock for inc-image operations.
 
