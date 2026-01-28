@@ -146,7 +146,7 @@ class TestVerifyCpvPovJob:
             benchmark_name="test-proj",
             cpv_id="cpv_0",
             harness="fuzz_target",
-            build_job_id="build-variants:test-proj",
+            build_job_ids=["build-variants:test-proj"],
         )
         assert job.job_id == "verify-cpv-pov:test-proj:cpv_0"
 
@@ -155,22 +155,22 @@ class TestVerifyCpvPovJob:
             benchmark_name="test-proj",
             cpv_id="cpv_0",
             harness="fuzz_target",
-            build_job_id="build-variants:test-proj",
+            build_job_ids=["build-variants:test-proj"],
         )
         assert job.job_type == "verify"
 
     def test_depends_on_build(self) -> None:
-        """Test legacy single build_job_id dependency."""
+        """Test build_job_ids dependency."""
         job = VerifyCpvPovJob(
             benchmark_name="test-proj",
             cpv_id="cpv_0",
             harness="fuzz_target",
-            build_job_id="build-variants:test-proj",
+            build_job_ids=["build-variants:test-proj"],
         )
         assert job.depends_on == ["build-variants:test-proj"]
 
     def test_depends_on_multiple_builds(self) -> None:
-        """Test new build_job_ids list dependency."""
+        """Test build_job_ids list dependency."""
         job = VerifyCpvPovJob(
             benchmark_name="test-proj",
             cpv_id="cpv_0",
@@ -184,26 +184,14 @@ class TestVerifyCpvPovJob:
         assert "build-single:test-proj:test-proj-deltaref" in job.depends_on
         assert "build-single:test-proj:test-proj-delta-allpatched" in job.depends_on
 
-    def test_build_job_ids_takes_precedence(self) -> None:
-        """build_job_ids should take precedence over build_job_id."""
+    def test_empty_pov_path_succeeds(self) -> None:
+        """Test that None pov_path succeeds with pov_count=0."""
         job = VerifyCpvPovJob(
             benchmark_name="test-proj",
             cpv_id="cpv_0",
             harness="fuzz_target",
-            build_job_id="build-variants:test-proj",  # legacy
-            build_job_ids=[
-                "build-single:test-proj:test-proj-deltaref",
-            ],  # new (takes precedence)
-        )
-        assert job.depends_on == ["build-single:test-proj:test-proj-deltaref"]
-
-    def test_empty_pov_paths_succeeds(self) -> None:
-        job = VerifyCpvPovJob(
-            benchmark_name="test-proj",
-            cpv_id="cpv_0",
-            harness="fuzz_target",
-            pov_paths=[],
-            build_job_id="build-variants:test-proj",
+            pov_path=None,
+            build_job_ids=["build-variants:test-proj"],
         )
         context = JobContext()
         result = job.execute(context)
@@ -354,15 +342,15 @@ class TestFlatDAGConstruction:
             benchmark_name="proj",
             cpv_id="cpv_0",
             harness="fuzz_target",
-            pov_paths=[Path("/pov_0.blob")],
-            build_job_id=build.job_id,
+            pov_path=Path("/pov_0.blob"),
+            build_job_ids=[build.job_id],
         )
         verify_1 = VerifyCpvPovJob(
             benchmark_name="proj",
             cpv_id="cpv_1",
             harness="fuzz_target",
-            pov_paths=[Path("/pov_0.blob")],
-            build_job_id=build.job_id,
+            pov_path=Path("/pov_0.blob"),
+            build_job_ids=[build.job_id],
         )
 
         jobs = [build, verify_0, verify_1]
@@ -416,8 +404,8 @@ class TestFlatDAGConstruction:
             benchmark_name="proj",
             cpv_id="cpv_0",
             harness="fuzz_target",
-            pov_paths=[Path("/pov.blob")],
-            build_job_id=build.job_id,
+            pov_path=Path("/pov.blob"),
+            build_job_ids=[build.job_id],
         )
         build_patch = BuildPatchVariantJob(
             benchmark_path=Path("/bench/proj"),
@@ -483,7 +471,7 @@ class TestFlatDAGConstruction:
             benchmark_name="proj",
             cpv_id="cpv_0",
             harness="fuzz_target",
-            pov_paths=[Path("/pov.blob")],
+            pov_path=Path("/pov.blob"),
             build_job_ids=[vulnerable_build.job_id, allpatched_build.job_id],
         )
 
