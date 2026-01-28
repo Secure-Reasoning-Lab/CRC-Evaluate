@@ -544,10 +544,9 @@ class BuildPatchVariantJob(Job):
         """Build patched variant using PatchVerificationEngine.
 
         Uses PatchVerificationEngine with build_only=True to ensure:
-        1. Source is properly prepared and preserved in work_dir
-        2. Patch is applied correctly
-        3. Build uses inc-build when available
-        4. Source path is available for downstream PatchVariantTestJob
+        1. Source is prepared in temp dir and patch is applied
+        2. Build uses inc-build when available
+        3. Build artifacts are cached for downstream PatchVariantTestJob
         """
         started_at = datetime.now()
         try:
@@ -787,6 +786,8 @@ class PatchVariantTestJob(Job):
             # - force_rebuild=False: use cached build from BuildPatchVariantJob
             # - build_only=False: run full verification (POV + unit tests)
             # - verify_variants=True: test all POV variants for this CPV
+            # Note: use_inc_build=True because fallback_used only affects build path
+            # (/src vs /built-src), not the image tag (:inc-{sanitizer})
             # Source is prepared in temp dir - each job is self-contained
             test_mode = (
                 UnitTestMode.RTS if self.test_mode == "RTS" else UnitTestMode.FULL
@@ -796,7 +797,7 @@ class PatchVariantTestJob(Job):
                 test_mode=test_mode,
                 sanitizer=sanitizer,
                 timeout=context.timeout,
-                use_inc_build=True,  # Use inc-build if available
+                use_inc_build=True,  # Always use inc-build image if available
                 force_rebuild=False,  # Use cached build
                 source_mode=self.source_mode,
                 build_only=False,  # Run full verification

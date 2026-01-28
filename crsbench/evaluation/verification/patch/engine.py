@@ -277,7 +277,8 @@ class PatchVerificationEngine:
             return result
 
         # Step 3: Build with inc-build image or regular build (skip if cached)
-        used_inc_build = False
+        # Initialize to None so _run_verification can detect inc-build for cached builds
+        used_inc_build = None
         if build_cached:
             logger.debug(f"Skipping build for cached variant: {variant_name}")
         else:
@@ -313,9 +314,10 @@ class PatchVerificationEngine:
                 build_result = self.infra.build_fuzzers(
                     build_config, repo_path, use_inc_image=True, inc_fallback=True
                 )
-            # Track if we actually used inc-build (not if fallback was triggered)
-            # When fallback_used=True, the build may have fallen back to standard build
-            used_inc_build = inc_available and not build_result.fallback_used
+            # Track if inc-build image was used (fallback is about source path, not image)
+            # When fallback_used=True, we still use inc-build image (:inc-{sanitizer}),
+            # but with /src instead of /built-src for the source path
+            used_inc_build = inc_available
 
             # Record build time
             result.build_time = time.time() - start_time
