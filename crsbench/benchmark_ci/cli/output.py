@@ -83,6 +83,17 @@ def _add_detail_rows(
         result: BenchmarkValidationResult with check results
         num_columns: Number of data columns (after Benchmark) to fill with ""
     """
+    # Format sub-check errors
+    for name, check in result.format_checks.items():
+        if check.status not in (CheckStatus.FAIL, CheckStatus.ERROR):
+            continue
+        if check.error:
+            table.add_row(
+                f"  [dim]fmt/{name}: {check.error}[/dim]",
+                *[""] * num_columns,
+            )
+
+    # Other check errors
     checks = [
         result.pov_check,
         result.patch_check,
@@ -124,6 +135,29 @@ def _add_format_columns(table: Table) -> None:
     table.add_column("Total", justify="center")
 
 
+def _add_format_detail_rows(
+    table: Table, result: BenchmarkValidationResult, num_columns: int
+) -> None:
+    """Add error detail rows for failed format sub-checks.
+
+    For each format sub-check that has FAIL or ERROR status with an error message,
+    adds an indented dimmed sub-row showing the error description.
+
+    Args:
+        table: Rich Table to add rows to
+        result: BenchmarkValidationResult with format_checks
+        num_columns: Number of data columns (after Benchmark) to fill with ""
+    """
+    for name, check in result.format_checks.items():
+        if check.status not in (CheckStatus.FAIL, CheckStatus.ERROR):
+            continue
+        if check.error:
+            table.add_row(
+                f"  [dim]{name}: {check.error}[/dim]",
+                *[""] * num_columns,
+            )
+
+
 def _add_format_rows(table: Table, summary: ValidationSummary) -> None:
     """Add rows for FORMAT check mode (per-check columns)."""
     check_names = ("struct", "schema", "harness", "cpv", "blob", "patch")
@@ -132,6 +166,7 @@ def _add_format_rows(table: Table, summary: ValidationSummary) -> None:
         table.add_row(
             r.benchmark, *cols, _format_storage(r), _format_total_status(r.total_status)
         )
+        _add_format_detail_rows(table, r, 8)  # 8 = 6 sub-checks + storage + total
 
 
 def _add_default_columns(table: Table) -> None:
