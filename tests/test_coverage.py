@@ -356,8 +356,8 @@ class TestOSSFuzzBuilderCoverage:
                 mode=BenchmarkMode.DELTA,
                 language="c",
             )
-            # Coverage variants include mode prefix
-            assert config.variant_name == "mock-c-delta-coverage"
+            # Coverage variants include sanitizer and mode: {benchmark}-coverage-{mode}-coverage
+            assert config.variant_name == "mock-c-coverage-delta-coverage"
 
             # Full mode variant
             config2 = BuildConfig(
@@ -369,7 +369,8 @@ class TestOSSFuzzBuilderCoverage:
                 mode=BenchmarkMode.FULL,
                 language="c",
             )
-            assert config2.variant_name == "sanity-mock-c-delta-01-full-coverage"
+            # Full mode coverage variant includes sanitizer
+            assert config2.variant_name == "sanity-mock-c-delta-01-coverage-full-coverage"
 
     def test_is_variant_built_returns_false_when_not_built(self):
         """Test is_variant_built returns False when no build exists."""
@@ -397,8 +398,8 @@ class TestOSSFuzzBuilderCoverage:
 
             builder = OSSFuzzBuilder(oss_fuzz)
 
-            # Create variant project directory (includes mode prefix)
-            variant_name = "mock-c-delta-coverage"
+            # Create variant project directory (includes sanitizer and mode)
+            variant_name = "mock-c-coverage-delta-coverage"
             (oss_fuzz / "projects" / variant_name).mkdir()
 
             # Create build output with a file
@@ -427,8 +428,8 @@ class TestOSSFuzzBuilderCoverage:
             builder = OSSFuzzBuilder(oss_fuzz)
 
             # Setup: create variant project and build output (simulating previous build)
-            # Variant name includes mode prefix
-            variant_name = "mock-c-delta-coverage"
+            # Variant name includes sanitizer and mode
+            variant_name = "mock-c-coverage-delta-coverage"
             (oss_fuzz / "projects" / variant_name).mkdir()
             build_path = oss_fuzz / "build" / "out" / variant_name
             build_path.mkdir(parents=True)
@@ -451,7 +452,8 @@ class TestOSSFuzzBuilderCoverage:
             assert result is not None
             assert result.success is True
             assert result.cached is True
-            assert result.variant_name == "mock-c-delta-coverage"
+            # Variant name includes sanitizer (coverage -> coverage)
+            assert result.variant_name == "mock-c-coverage-delta-coverage"
             assert result.build_path == build_path
 
 

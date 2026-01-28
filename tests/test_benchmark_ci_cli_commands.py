@@ -1541,6 +1541,9 @@ def _setup_all_cmd_mocks(
         adapter.main_repo = "https://github.com/test/repo.git"
         adapter.lang = "c"
         adapter.repo_name = None
+        # Multi-sanitizer support mocks
+        adapter.get_all_cpv_sanitizers.return_value = ["address"]
+        adapter.get_cpv_sanitizer.return_value = "address"
         mock_adapter.return_value = adapter
 
     results = {}

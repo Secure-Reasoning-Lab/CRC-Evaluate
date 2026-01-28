@@ -34,7 +34,8 @@ class TestBuildSingleVariantJob:
             main_repo="https://github.com/test/repo",
             mode=BenchmarkMode.DELTA,
         )
-        assert job.job_id == "build-single:test-proj:test-proj-deltaref"
+        # Job ID includes sanitizer in variant name (defaults to "address" -> "asan")
+        assert job.job_id == "build-single:test-proj:test-proj-asan-deltaref"
 
     def test_job_id_allpatched(self) -> None:
         """Test job_id for ALL_PATCHED variant."""
@@ -46,7 +47,8 @@ class TestBuildSingleVariantJob:
             main_repo="https://github.com/test/repo",
             mode=BenchmarkMode.DELTA,
         )
-        assert job.job_id == "build-single:test-proj:test-proj-delta-allpatched"
+        # Job ID includes sanitizer in variant name
+        assert job.job_id == "build-single:test-proj:test-proj-asan-delta-allpatched"
 
     def test_job_id_fullbase(self) -> None:
         """Test job_id for FULL_BASE variant."""
@@ -58,7 +60,8 @@ class TestBuildSingleVariantJob:
             main_repo="https://github.com/test/repo",
             mode=BenchmarkMode.FULL,
         )
-        assert job.job_id == "build-single:test-proj:test-proj-fullbase"
+        # Job ID includes sanitizer in variant name
+        assert job.job_id == "build-single:test-proj:test-proj-asan-fullbase"
 
     def test_job_id_coverage(self) -> None:
         """Test job_id for COVERAGE variant."""
@@ -71,7 +74,8 @@ class TestBuildSingleVariantJob:
             mode=BenchmarkMode.DELTA,
             sanitizer="coverage",
         )
-        assert job.job_id == "build-single:test-proj:test-proj-delta-coverage"
+        # Job ID includes sanitizer in variant name (coverage -> coverage)
+        assert job.job_id == "build-single:test-proj:test-proj-coverage-delta-coverage"
 
     def test_job_id_cpv(self) -> None:
         """Test job_id for CPV variant (all patches except one)."""
@@ -85,7 +89,8 @@ class TestBuildSingleVariantJob:
             cpv_num=0,
             patches=[Path("/patch1.diff")],  # All patches except cpv_0
         )
-        assert job.job_id == "build-single:test-proj:test-proj-full-cpv0"
+        # Job ID includes sanitizer in variant name
+        assert job.job_id == "build-single:test-proj:test-proj-asan-full-cpv0"
 
     def test_job_type(self) -> None:
         """Verify job_type is 'build' for DAGExecutor typed limits."""

@@ -65,10 +65,11 @@ class TestBuildConfig:
         )
         assert config.benchmark_name == "test-benchmark"
         assert config.variant_type == VariantType.DELTA_REF
-        assert config.variant_name == "test-benchmark-deltaref"
+        # Variant name includes sanitizer (defaults to "address" -> "asan")
+        assert config.variant_name == "test-benchmark-asan-deltaref"
 
     def test_cpv_variant_name(self):
-        """Test CPV variant naming (includes mode)."""
+        """Test CPV variant naming (includes sanitizer and mode)."""
         config = BuildConfig(
             benchmark_name="test-benchmark",
             variant_type=VariantType.CPV,
@@ -78,8 +79,8 @@ class TestBuildConfig:
             mode=BenchmarkMode.DELTA,
             cpv_num=0,
         )
-        # CPV variants include mode prefix: {benchmark}-{mode}-cpv{N}
-        assert config.variant_name == "test-benchmark-delta-cpv0"
+        # CPV variants include sanitizer and mode: {benchmark}-{san_short}-{mode}-cpv{N}
+        assert config.variant_name == "test-benchmark-asan-delta-cpv0"
 
     def test_cpv_requires_cpv_num(self):
         """Test that CPV variants require cpv_num."""
@@ -182,7 +183,8 @@ class TestBuildPlan:
             benchmark_path=Path("/tmp"),
         )
         plan.add_config(config)
-        plan.mark_cached("test-deltaref")
+        # Variant name includes sanitizer: test-asan-deltaref
+        plan.mark_cached("test-asan-deltaref")
 
         assert plan.total_count == 1
         assert plan.cached_count == 1
@@ -229,13 +231,13 @@ class TestOSSFuzzBuilder:
         )
 
         # Should have: deltaref, allpatched, cpv0, cpv1
-        # Shared variants include mode prefix: delta-allpatched, delta-cpv0, etc.
+        # Variant names include sanitizer: {benchmark}-{san_short}-{suffix}
         assert plan.total_count == 4
         variant_names = [c.variant_name for c in plan.configs]
-        assert "test-delta-01-deltaref" in variant_names
-        assert "test-delta-01-delta-allpatched" in variant_names
-        assert "test-delta-01-delta-cpv0" in variant_names
-        assert "test-delta-01-delta-cpv1" in variant_names
+        assert "test-delta-01-asan-deltaref" in variant_names
+        assert "test-delta-01-asan-delta-allpatched" in variant_names
+        assert "test-delta-01-asan-delta-cpv0" in variant_names
+        assert "test-delta-01-asan-delta-cpv1" in variant_names
 
     def test_create_build_plan_full_mode(
         self, mock_oss_fuzz_path: Path, tmp_path: Path
@@ -257,12 +259,12 @@ class TestOSSFuzzBuilder:
         )
 
         # Should have: fullbase, allpatched, cpv0
-        # Shared variants include mode prefix: full-allpatched, full-cpv0, etc.
+        # Variant names include sanitizer: {benchmark}-{san_short}-{suffix}
         assert plan.total_count == 3
         variant_names = [c.variant_name for c in plan.configs]
-        assert "test-full-01-fullbase" in variant_names
-        assert "test-full-01-full-allpatched" in variant_names
-        assert "test-full-01-full-cpv0" in variant_names
+        assert "test-full-01-asan-fullbase" in variant_names
+        assert "test-full-01-asan-full-allpatched" in variant_names
+        assert "test-full-01-asan-full-cpv0" in variant_names
 
     def test_create_build_plan_with_coverage(
         self, mock_oss_fuzz_path: Path, tmp_path: Path
@@ -283,9 +285,10 @@ class TestOSSFuzzBuilder:
             include_coverage=True,
         )
 
-        # Coverage variant includes mode prefix
+        # Coverage variant: {benchmark}-coverage-{mode}-coverage
+        # Note: Coverage sanitizer maps to "coverage" (not "cov")
         variant_names = [c.variant_name for c in plan.configs]
-        assert "test-delta-coverage" in variant_names
+        assert "test-coverage-delta-coverage" in variant_names
 
     def test_is_variant_built(self, mock_oss_fuzz_path: Path):
         """Test checking if variant is built."""
@@ -479,9 +482,10 @@ class TestOSSFuzzBuilderForceRebuild:
 class TestBuildConfigVariantNames:
     """Tests for variant name generation.
 
-    Naming convention:
-    - Base/ref variants include mode in type name: {benchmark}-fullbase, {benchmark}-deltaref
-    - Shared variants need mode prefix: {benchmark}-delta-allpatched
+    Naming convention (with multi-sanitizer support):
+    - Format: {benchmark}-{san_short}-{suffix}
+    - Base/ref variants: {benchmark}-{san_short}-fullbase, {benchmark}-{san_short}-deltaref
+    - Shared variants: {benchmark}-{san_short}-delta-allpatched
     """
 
     @pytest.mark.parametrize(
@@ -517,7 +521,12 @@ class TestBuildConfigVariantNames:
             mode=mode,
             cpv_num=cpv_num,
         )
-        assert config.variant_name == f"my-benchmark-{expected_suffix}"
+        # Variant names now include sanitizer
+        # Coverage variants use "coverage" as sanitizer, others default to "address" -> "asan"
+        if variant_type == VariantType.COVERAGE:
+            assert config.variant_name == f"my-benchmark-coverage-{expected_suffix}"
+        else:
+            assert config.variant_name == f"my-benchmark-asan-{expected_suffix}"
 
 
 class TestIncBuildSupport:
@@ -840,8 +849,8 @@ class TestBuildMetadataCaching:
         """Test builder uses cache when inc-build mode matches."""
         builder = OSSFuzzBuilder(oss_fuzz_path)
 
-        # Create inc-build cache
-        variant_name = "test-benchmark-deltaref"
+        # Create inc-build cache (variant name includes sanitizer)
+        variant_name = "test-benchmark-asan-deltaref"
         self._create_mock_build(infra, variant_name, inc_build=True)
 
         config = BuildConfig(
@@ -868,8 +877,8 @@ class TestBuildMetadataCaching:
         """Test builder rebuilds when inc-build mode doesn't match cache."""
         builder = OSSFuzzBuilder(oss_fuzz_path)
 
-        # Create non-inc cache
-        variant_name = "test-benchmark-deltaref"
+        # Create non-inc cache (variant name includes sanitizer)
+        variant_name = "test-benchmark-asan-deltaref"
         self._create_mock_build(infra, variant_name, inc_build=False)
 
         config = BuildConfig(
