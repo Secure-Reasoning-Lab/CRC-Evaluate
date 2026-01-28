@@ -370,7 +370,9 @@ class TestOSSFuzzBuilderCoverage:
                 language="c",
             )
             # Full mode coverage variant includes sanitizer
-            assert config2.variant_name == "sanity-mock-c-delta-01-coverage-full-coverage"
+            assert (
+                config2.variant_name == "sanity-mock-c-delta-01-coverage-full-coverage"
+            )
 
     def test_is_variant_built_returns_false_when_not_built(self):
         """Test is_variant_built returns False when no build exists."""
