@@ -173,6 +173,38 @@ def export_summary_csv(benchmarks: Sequence[BenchmarkInfo], output_path: Path) -
         )
         writer.writerow([])
 
+        # Vulns per Harness
+        writer.writerow(
+            [
+                "Vulns per Harness",
+                "Average",
+                "",
+                f"{stats.avg_vulns_per_harness:.2f}",
+                "",
+                "",
+            ]
+        )
+        writer.writerow(
+            ["Vulns per Harness", "Min", "", stats.min_vulns_per_harness, "", ""]
+        )
+        writer.writerow(
+            ["Vulns per Harness", "Max", "", stats.max_vulns_per_harness, "", ""]
+        )
+        # Histogram
+        for vuln_count in sorted(stats.vulns_per_harness_histogram.keys()):
+            num_harnesses = stats.vulns_per_harness_histogram[vuln_count]
+            writer.writerow(
+                [
+                    "Vulns per Harness Histogram",
+                    f"{vuln_count} vulns",
+                    "",
+                    num_harnesses,
+                    "",
+                    "",
+                ]
+            )
+        writer.writerow([])
+
         # By Source
         for source in ["AFC", "ASC", "Team-Atlanta"]:
             if source in stats.by_source:
@@ -420,6 +452,26 @@ def print_summary(benchmarks: Sequence[BenchmarkInfo]) -> None:
         f"  {'Total':<15} {'':<10} {'':<8} "
         f"{stats.total_benchmarks:>12} {stats.unique_projects:>10} {stats.total_vulns:>10}"
     )
+    logger.info("")
+
+    logger.info("-" * 70)
+    logger.info("Vulns per Harness:")
+    logger.info("-" * 70)
+    logger.info(f"  Average: {stats.avg_vulns_per_harness:.2f}")
+    logger.info(f"  Min:     {stats.min_vulns_per_harness}")
+    logger.info(f"  Max:     {stats.max_vulns_per_harness}")
+    logger.info("")
+    logger.info("  Histogram (vulns -> # harnesses):")
+    if stats.vulns_per_harness_histogram:
+        max_count = max(stats.vulns_per_harness_histogram.values())
+        max_bar_width = 40
+        for vuln_count in sorted(stats.vulns_per_harness_histogram.keys()):
+            num_harnesses = stats.vulns_per_harness_histogram[vuln_count]
+            bar_len = (
+                int((num_harnesses / max_count) * max_bar_width) if max_count else 0
+            )
+            bar = "█" * bar_len
+            logger.info(f"    {vuln_count:>3} vulns: {bar} ({num_harnesses})")
     logger.info("")
 
     logger.info("-" * 70)
