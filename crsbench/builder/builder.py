@@ -436,17 +436,24 @@ class OSSFuzzBuilder:
                         elapsed_seconds=time.time() - start_time,
                     )
 
-                # Try inc-build first (uses pre-compiled objects from /built-src)
+                # Try inc-build with apply_patch (true incremental)
+                # apply_patch: rsync to /built-src/ without --delete, preserving .o files
                 build_result = self.infra.build_fuzzers(
-                    config, repo_path, use_inc_image=True, inc_fallback=False
+                    config, repo_path, use_inc_image=True, apply_patch=True
                 )
-                # If inc-build fails, retry with fallback (full recompile from /src)
+
+                # If inc-build fails, fallback to full build (no inc-build)
+                fallback_used = False
                 if not build_result.success:
-                    logger.info(
-                        f"Inc-build failed for {variant_name}, retrying with fallback"
+                    logger.warning(
+                        f"Inc-build failed for {variant_name}, falling back to full build"
                     )
+                    fallback_used = True
+                    # Clean up failed build outputs before retry
+                    self.infra.cleanup_build_outputs(variant_name)
+                    # Full build without inc-build
                     build_result = self.infra.build_fuzzers(
-                        config, repo_path, use_inc_image=True, inc_fallback=True
+                        config, repo_path, use_inc_image=False, apply_patch=False
                     )
 
                 if not build_result.success:
@@ -454,7 +461,9 @@ class OSSFuzzBuilder:
                         config=config,
                         success=False,
                         variant_name=variant_name,
-                        error="Incremental build failed (both inc and fallback)",
+                        error="Build failed (inc-build and full build both failed)"
+                        if fallback_used
+                        else "Build failed",
                         elapsed_seconds=time.time() - start_time,
                         stdout=build_result.stdout,
                         stderr=build_result.stderr,
@@ -464,9 +473,9 @@ class OSSFuzzBuilder:
                 build_path = self.infra.get_build_output_path(variant_name)
                 self.infra.write_build_metadata(
                     variant_name,
-                    inc_build=True,
+                    inc_build=not fallback_used,  # True only if inc-build succeeded
                     sanitizer=config.sanitizer,
-                    fallback_used=build_result.fallback_used,
+                    fallback_used=fallback_used,
                 )
                 return BuildResult(
                     config=config,
@@ -474,7 +483,7 @@ class OSSFuzzBuilder:
                     variant_name=variant_name,
                     build_path=build_path,
                     elapsed_seconds=time.time() - start_time,
-                    fallback_used=build_result.fallback_used,
+                    fallback_used=fallback_used,
                     stdout=build_result.stdout,
                     stderr=build_result.stderr,
                 )
