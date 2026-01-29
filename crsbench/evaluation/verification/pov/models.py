@@ -21,6 +21,10 @@ class POVEntry(BaseModel):
 
     hash: str = Field(description="SHA256 hash (first 16 hex chars) of POV content")
     first_seen_ts: float = Field(description="Timestamp when POV was first discovered")
+    file_mtime: Optional[float] = Field(
+        default=None,
+        description="File modification time (mtime) from CRS - actual creation time",
+    )
     file_size: int = Field(description="Size of POV file in bytes")
     status: PovVerificationStatus = Field(description="Verification outcome")
     cpv_matched: list[str] = Field(

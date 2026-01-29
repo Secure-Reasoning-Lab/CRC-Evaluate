@@ -109,9 +109,11 @@ class POVVerificationManager:
         self.trial_start_time = trial_start_time or time.time()
         self._adapter = adapter
 
-        # POV store for persistence
+        # POV store for persistence (pass trial_start_time as crs_run_start_time)
         pov_store_dir = trial_dir / "povs"
-        self.store = store or POVStore(pov_store_dir)
+        self.store = store or POVStore(
+            pov_store_dir, crs_run_start_time=self.trial_start_time
+        )
 
         # Verification engine (lazy initialization)
         self._engine = engine
@@ -345,13 +347,18 @@ class POVVerificationManager:
             self._early_stop_time = datetime.now()
 
             logger.info(
-                f"Early stop triggered: found={len(self.found_cpvs)} "
-                f"total={self.total_expected_cpvs} "
-                f"elapsed={elapsed_time:.0f}s"
+                "=" * 60 + "\n"
+                f"[EARLY TERMINATION] All CPVs found - triggering early stop\n"
+                f"  harness: {self.harness_name}\n"
+                f"  benchmark: {self.benchmark_id}\n"
+                f"  cpvs_found: {len(self.found_cpvs)}/{self.total_expected_cpvs}\n"
+                f"  cpv_ids: {sorted(self.found_cpvs)}\n"
+                f"  elapsed_time: {elapsed_time:.1f}s\n" + "=" * 60
             )
 
             # Signal stop event if provided
             if self._stop_event is not None:
+                logger.info("[EARLY TERMINATION] Signaling stop event for CRS process")
                 self._stop_event.set()
 
         # Get remaining CPVs

@@ -49,19 +49,25 @@ class POVStore:
     Attributes:
         store_dir: Directory for storing POV data (trial-N/povs/)
         povs: Hash-to-POVEntry mapping
-        cpv_to_first_pov: Maps each CPV to the hash of first POV that triggered it
+        cpv_to_first_pov: Maps each CPV to discovery info {pov_hash, discovery_ts, relative_time}
+        crs_run_start_time: Timestamp when CRS started running (for relative time calculation)
     """
 
-    def __init__(self, store_dir: Path):
+    def __init__(self, store_dir: Path, *, crs_run_start_time: Optional[float] = None):
         """Initialize POV store.
 
         Args:
             store_dir: Directory for storing POV data.
                 Will create subdirectories if they don't exist.
+            crs_run_start_time: Timestamp when CRS started running.
+                Used for calculating relative time (time since CRS start).
+                Defaults to current time if not provided.
         """
         self.store_dir = store_dir
         self.povs: dict[str, POVEntry] = {}
-        self.cpv_to_first_pov: dict[str, str] = {}
+        # Maps CPV ID to discovery info: {pov_hash, discovery_ts, relative_time}
+        self.cpv_to_first_pov: dict[str, dict[str, str | float]] = {}
+        self.crs_run_start_time: float = crs_run_start_time or time.time()
         self._lock = threading.Lock()
 
         # Create directory structure
@@ -127,7 +133,15 @@ class POVStore:
         """
         if pov_hash is None:
             pov_hash = compute_content_hash(pov_path)
-        file_size = pov_path.stat().st_size if pov_path.exists() else 0
+
+        # Get file stats: size and mtime (CRS creation time)
+        file_size = 0
+        file_mtime: Optional[float] = None
+        if pov_path.exists():
+            stat = pov_path.stat()
+            file_size = stat.st_size
+            file_mtime = stat.st_mtime
+
         ts = timestamp if timestamp is not None else time.time()
 
         with self._lock:
@@ -139,6 +153,7 @@ class POVStore:
                     self.povs[pov_hash] = POVEntry(
                         hash=pov_hash,
                         first_seen_ts=ts,
+                        file_mtime=existing.file_mtime,  # Keep original mtime
                         file_size=file_size,
                         status=existing.status,
                         cpv_matched=existing.cpv_matched,
@@ -151,21 +166,35 @@ class POVStore:
             self.povs[pov_hash] = POVEntry(
                 hash=pov_hash,
                 first_seen_ts=ts,
+                file_mtime=file_mtime,
                 file_size=file_size,
                 status=status,
                 cpv_matched=cpv_matched,
                 verification_duration=verification_duration,
             )
 
-            # Track first POV for each CPV
+            # Track first POV for each CPV with discovery timestamp
             for cpv_id in cpv_matched:
                 if cpv_id not in self.cpv_to_first_pov:
-                    self.cpv_to_first_pov[cpv_id] = pov_hash
+                    self.cpv_to_first_pov[cpv_id] = {
+                        "pov_hash": pov_hash,
+                        "discovery_ts": ts,
+                        "relative_time": ts - self.crs_run_start_time,
+                    }
 
-            logger.debug(
-                f"Added POV {pov_hash}: status={status.value}, "
-                f"cpv_matched={cpv_matched}"
-            )
+            # Log with relative time from CRS start
+            if file_mtime is not None:
+                relative_time = file_mtime - self.crs_run_start_time
+                logger.debug(
+                    f"Added POV {pov_hash}: status={status.value}, "
+                    f"cpv_matched={cpv_matched}, "
+                    f"file_mtime={file_mtime}, relative_time={relative_time:.2f}s"
+                )
+            else:
+                logger.debug(
+                    f"Added POV {pov_hash}: status={status.value}, "
+                    f"cpv_matched={cpv_matched}"
+                )
 
             return pov_hash, True
 
@@ -236,6 +265,7 @@ class POVStore:
                     self.povs[pov_hash] = POVEntry(
                         hash=entry.hash,
                         first_seen_ts=entry.first_seen_ts,
+                        file_mtime=entry.file_mtime,
                         file_size=entry.file_size,
                         status=entry.status,
                         cpv_matched=entry.cpv_matched,
@@ -344,6 +374,7 @@ class POVStore:
 
         with self._lock:
             data = {
+                "crs_run_start_time": self.crs_run_start_time,
                 "povs": {h: p.model_dump(mode="json") for h, p in self.povs.items()},
                 "cpv_to_first_pov": dict(self.cpv_to_first_pov),
             }
@@ -369,6 +400,10 @@ class POVStore:
         data = json.loads(path.read_text())
 
         with self._lock:
+            # Load CRS run start time
+            if "crs_run_start_time" in data:
+                self.crs_run_start_time = data["crs_run_start_time"]
+
             # Load POV entries
             self.povs = {}
             for h, p_data in data.get("povs", {}).items():
