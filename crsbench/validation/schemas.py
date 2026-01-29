@@ -900,6 +900,12 @@ class ExperimentConfig(BaseModel):
         default=False,
         description="Terminate trial early when all CPVs for harness are found (default: False).",
     )
+    per_pov_verify_timeout: int = Field(
+        default=180,
+        ge=1,
+        description="Timeout in seconds for each single POV verification (default: 180 = 3 minutes). "
+        "This is the time allowed to run the harness binary with a POV input to check if it crashes.",
+    )
     build_workers: Optional[int] = Field(
         default=None,
         ge=1,

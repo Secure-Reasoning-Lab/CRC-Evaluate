@@ -91,6 +91,7 @@ class BenchmarkRunner:
         coverage_saturation_time: int = 21600,
         coverage_early_stop: bool = False,
         pov_early_stop: bool = False,
+        per_pov_verify_timeout: int = 180,
         oss_fuzz_path: Optional[Path] = None,
         on_build_start: Optional[Callable[[], None]] = None,
         on_run_start: Optional[Callable[[], None]] = None,
@@ -110,6 +111,7 @@ class BenchmarkRunner:
             coverage_saturation_time: Seconds without new coverage to detect saturation
             coverage_early_stop: Terminate trial early when coverage saturation is detected
             pov_early_stop: Terminate trial early when all CPVs for harness are found
+            per_pov_verify_timeout: Timeout in seconds for each single POV verification (default: 180)
             oss_fuzz_path: Path to oss-fuzz directory (required for coverage and POV verification)
             on_build_start: Callback invoked when CRS build phase starts
             on_run_start: Callback invoked when CRS run phase starts
@@ -126,6 +128,7 @@ class BenchmarkRunner:
         self.coverage_saturation_time = coverage_saturation_time
         self.coverage_early_stop = coverage_early_stop
         self.pov_early_stop = pov_early_stop
+        self.per_pov_verify_timeout = per_pov_verify_timeout
         self.oss_fuzz_path = oss_fuzz_path
         self.on_build_start = on_build_start
         self.on_run_start = on_run_start
@@ -795,7 +798,7 @@ class BenchmarkRunner:
             # Create verification engine
             engine = VerificationEngine(
                 oss_fuzz_path=self.oss_fuzz_path,
-                timeout=120,
+                timeout=self.per_pov_verify_timeout,
                 dedup_strategy=PatchBasedDedup(),
                 build_workers=self.build_workers,
                 verify_workers=self.verify_workers,
@@ -1022,7 +1025,7 @@ class BenchmarkRunner:
             self.logger.info(f"Starting POV verification for harness: {harness_name}")
             engine = VerificationEngine(
                 oss_fuzz_path=oss_fuzz_path,
-                timeout=120,
+                timeout=self.per_pov_verify_timeout,
                 dedup_strategy=PatchBasedDedup(),  # TODO: make it configurable
                 build_workers=self.build_workers,
                 verify_workers=self.verify_workers,
@@ -1082,7 +1085,7 @@ class BenchmarkRunner:
 
             engine = PatchVerificationEngine(
                 oss_fuzz_path=oss_fuzz_path,
-                timeout=120,
+                timeout=self.per_pov_verify_timeout,
                 build_timeout=1200,
                 test_timeout=1800,
                 work_dir=work_dir,

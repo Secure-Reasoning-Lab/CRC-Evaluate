@@ -934,6 +934,7 @@ def run_crs_trial(
             coverage_saturation_time=coverage_saturation_time,
             coverage_early_stop=coverage_early_stop,
             pov_early_stop=pov_early_stop,
+            per_pov_verify_timeout=config.per_pov_verify_timeout,
             oss_fuzz_path=oss_fuzz_path,
             on_build_start=on_build_start,
             on_run_start=on_run_start,
