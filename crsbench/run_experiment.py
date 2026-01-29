@@ -394,6 +394,16 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         help="Destination path for copying results (contains experiment-data/ and report-data/)",
     )
 
+    parser.add_argument(
+        "--split",
+        "-s",
+        type=str,
+        required=False,
+        metavar="A/N",
+        help="Split jobs into N slices and run slice A (1-indexed). "
+        "Format: 'A/N' (e.g., '1/2' for first half, '2/2' for second half)",
+    )
+
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments with subcommand support.
@@ -607,6 +617,73 @@ def parse_list_argument(arg_value: str) -> List[str]:
         List of stripped strings
     """
     return [item.strip() for item in arg_value.split(",") if item.strip()]
+
+
+def parse_split_argument(split_arg: str) -> tuple[int, int]:
+    """Parse split argument in A/N format.
+
+    Args:
+        split_arg: Split argument in format "A/N" (e.g., "1/2")
+
+    Returns:
+        Tuple of (slice_index, total_slices) - both 1-indexed
+
+    Raises:
+        ValueError: If split format is invalid
+    """
+    parts = split_arg.split("/")
+    if len(parts) != 2:
+        raise ValueError(f"Invalid split format: {split_arg}. Expected A/N (e.g., 1/2)")
+    try:
+        slice_index = int(parts[0])
+        total_slices = int(parts[1])
+    except ValueError as e:
+        raise ValueError(
+            f"Invalid split format: {split_arg}. A and N must be integers"
+        ) from e
+    if total_slices < 1:
+        raise ValueError(f"Total slices must be >= 1, got {total_slices}")
+    if slice_index < 1 or slice_index > total_slices:
+        raise ValueError(
+            f"Slice index must be between 1 and {total_slices}, got {slice_index}"
+        )
+    return slice_index, total_slices
+
+
+def apply_split_to_trials(
+    trials: List[Trial], slice_index: int, total_slices: int
+) -> List[Trial]:
+    """Split trials into contiguous slices and return the specified slice.
+
+    Uses contiguous ranges for better space locality.
+    Guarantees: union of all slices == original trials (no jobs lost).
+
+    Args:
+        trials: List of Trial objects to split
+        slice_index: 1-indexed slice to return (1 <= slice_index <= total_slices)
+        total_slices: Total number of slices to split into
+
+    Returns:
+        List of trials for the specified slice
+    """
+    if total_slices == 1:
+        return trials
+
+    n = len(trials)
+    # Calculate slice boundaries for even distribution
+    # Slice k gets indices [start_k, end_k) where sizes differ by at most 1
+    base_size = n // total_slices
+    remainder = n % total_slices
+
+    # First 'remainder' slices get (base_size + 1), rest get base_size
+    if slice_index <= remainder:
+        start = (slice_index - 1) * (base_size + 1)
+        end = start + base_size + 1
+    else:
+        start = remainder * (base_size + 1) + (slice_index - 1 - remainder) * base_size
+        end = start + base_size
+
+    return trials[start:end]
 
 
 def load_experiment_config(config_path: Path) -> ExperimentConfig:
@@ -1337,8 +1414,7 @@ def enhance_config_with_cli_args(
 def run_experiment_local(
     experiment_name: str,
     config,
-    benchmark_harnesses: List[BenchmarkHarness],
-    crses: List[str],
+    trials: List[Trial],
     args: argparse.Namespace,
 ) -> None:
     """Run experiment locally without Redis queue.
@@ -1348,28 +1424,19 @@ def run_experiment_local(
     Args:
         experiment_name: Experiment identifier
         config: Experiment configuration
-        benchmark_harnesses: List of BenchmarkHarness objects
-        crses: List of CRS identifiers
+        trials: List of Trial objects to execute
         args: CLI arguments for config overrides
     """
     log_section("Running CRSBench in Local Mode (No Redis)", width=60)
 
-    # Resolve CRS paths with defaults
+    # Resolve CRS paths with defaults (needed for _is_all_bug_fixing_crs check)
     registry_dir = Path(config.registry_dir or "crses/registry").resolve()
     crs_configs_dir = Path(config.crs_configs_dir or "crses/configs").resolve()
-
-    # Generate trial matrix
-    trials = generate_trial_matrix(
-        benchmark_harnesses, crses, config, registry_dir, crs_configs_dir
-    )
 
     # Dump trial matrix to JSON
     dump_trial_matrix(trials, config)
 
     logger.info(f"Total trials to execute: {len(trials)}")
-    logger.info(f"CRSes: {', '.join(crses)}")
-    logger.info(f"Benchmark-harness pairs: {len(benchmark_harnesses)}")
-    logger.info(f"Trials per combination: {config.trials}")
     logger.info("=" * 60)
 
     # Skip variant builds for bug-fixing CRS (built on-demand during patch verification)
@@ -1837,8 +1904,7 @@ def get_crs_memory(crs_name: str, crs_configs_dir: Path) -> str | None:
 def run_experiment_distributed(
     experiment_name: str,
     config: ExperimentConfig,
-    benchmark_harnesses: List[BenchmarkHarness],
-    crses: List[str],
+    trials: List[Trial],
     args: argparse.Namespace,
 ) -> None:
     """Run experiment using Redis queue-based distributed execution.
@@ -1846,8 +1912,7 @@ def run_experiment_distributed(
     Args:
         experiment_name: Experiment identifier
         config: Experiment configuration
-        benchmark_harnesses: List of BenchmarkHarness objects
-        crses: List of CRS identifiers
+        trials: List of Trial objects to execute
         args: CLI arguments for config overrides
     """
     from crsbench.distributed.queue import initialize_queue
@@ -1917,11 +1982,6 @@ def run_experiment_distributed(
             if failed_count > 0:
                 logger.info(f"Requeued {failed_count} failed jobs")
 
-    # Generate trial matrix
-    trials = generate_trial_matrix(
-        benchmark_harnesses, crses, config, registry_dir, crs_configs_dir
-    )
-
     # Filter trials if in continue mode
     if queue_mode == "continue" and has_existing:
         # Build set of existing trial keys
@@ -1947,9 +2007,6 @@ def run_experiment_distributed(
     dump_trial_matrix(trials, config)
 
     logger.info(f"Total trials to enqueue: {len(trials)}")
-    logger.info(f"CRSes: {', '.join(crses)}")
-    logger.info(f"Benchmark-harness pairs: {len(benchmark_harnesses)}")
-    logger.info(f"Trials per combination: {config.trials}")
     logger.info("=" * 60)
 
     # Skip variant builds for bug-fixing CRS (built on-demand during patch verification)
@@ -1982,6 +2039,9 @@ def run_experiment_distributed(
 
     # Enhance config with CLI arguments (highest precedence)
     enhanced_config = enhance_config_with_cli_args(config, args)
+
+    # Extract unique CRS names from trials
+    crses = sorted({t.crs for t in trials})
 
     # Get CPU counts for each CRS
     # Priority: experiment config > CRS resource config > default (4)
@@ -2417,6 +2477,16 @@ def main() -> None:
     trial_matrix = generate_trial_matrix(
         benchmark_harnesses, crses, config, registry_dir, crs_configs_dir
     )
+
+    # Apply split if specified
+    if hasattr(args, "split") and args.split:
+        slice_index, total_slices = parse_split_argument(args.split)
+        original_count = len(trial_matrix)
+        trial_matrix = apply_split_to_trials(trial_matrix, slice_index, total_slices)
+        logger.info(
+            f"Split {slice_index}/{total_slices}: {len(trial_matrix)} of {original_count} jobs"
+        )
+
     total_jobs = len(trial_matrix)
     logger.info(f"Total jobs to execute: {total_jobs}")
 
@@ -2431,11 +2501,9 @@ def main() -> None:
 
     # Run experiment in appropriate mode
     if use_distributed:
-        run_experiment_distributed(
-            experiment_name, config, benchmark_harnesses, crses, args
-        )
+        run_experiment_distributed(experiment_name, config, trial_matrix, args)
     else:
-        run_experiment_local(experiment_name, config, benchmark_harnesses, crses, args)
+        run_experiment_local(experiment_name, config, trial_matrix, args)
 
 
 if __name__ == "__main__":
