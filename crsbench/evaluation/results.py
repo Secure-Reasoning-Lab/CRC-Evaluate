@@ -27,6 +27,8 @@ class HarnessResult:
     execution_time: Optional[float] = None
     run_successful: bool = True
     run_output: Optional[str] = None
+    build_time: Optional[float] = None  # Time spent building CRS (seconds)
+    run_time: Optional[float] = None  # Time spent running CRS (seconds)
 
 
 @dataclass
@@ -273,6 +275,8 @@ class TrialMetadata(BaseModel):
     difficulty_level: Optional[int] = None
     timestamp_start: float
     timestamp_end: float
+    build_time: Optional[float] = None  # Time spent building CRS (seconds)
+    run_time: Optional[float] = None  # Time spent running CRS (seconds)
 
 
 class TrialResult(BaseModel):

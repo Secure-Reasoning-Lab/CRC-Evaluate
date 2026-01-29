@@ -600,6 +600,8 @@ class BenchmarkRunner:
                 execution_time=crs_result.execution_time,
                 run_successful=crs_result.success,
                 run_output=crs_result.output,
+                build_time=crs_result.build_time,
+                run_time=crs_result.run_time,
             )
 
         except Exception as e:

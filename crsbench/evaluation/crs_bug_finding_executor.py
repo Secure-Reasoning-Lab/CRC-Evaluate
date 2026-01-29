@@ -325,6 +325,8 @@ class CRSBugFindingExecutor(CRSExecutor):
             {{ build_dir }}/run/{{ crs_name }}/{{ project }}/{{ harness_name }}/{{ run_id }}
         """
         start_time = time.time()
+        build_time: Optional[float] = None
+        run_start_time: Optional[float] = None
         project_name = self._extract_project_name(benchmark_path)
 
         logger.info(
@@ -360,6 +362,10 @@ class CRSBugFindingExecutor(CRSExecutor):
             self.cleanup_other_harnesses(
                 trial_output_dir, harness_name, project_name, sanitizer
             )
+
+            # Record build time (time from start to run start)
+            build_time = time.time() - start_time
+            run_start_time = time.time()
 
             # Signal that CRS run is starting (after build)
             if on_run_start:
@@ -488,6 +494,10 @@ class CRSBugFindingExecutor(CRSExecutor):
                 )
 
             execution_time = time.time() - start_time
+            # Calculate run_time (time from run start to end)
+            run_time = (
+                time.time() - run_start_time if run_start_time is not None else None
+            )
 
             # 8. Store execution metadata
             self._store_execution_metadata(
@@ -516,6 +526,12 @@ class CRSBugFindingExecutor(CRSExecutor):
                 logger.debug(f"stdout: {stdout}")
                 logger.debug(f"stderr: {stderr}")
 
+            # Log timing breakdown
+            if build_time is not None and run_time is not None:
+                logger.info(
+                    f"Timing breakdown: build={build_time:.1f}s, run={run_time:.1f}s, total={execution_time:.1f}s"
+                )
+
             return CRSExecutionResult(
                 harness_name=harness.name,
                 execution_time=execution_time,
@@ -523,6 +539,8 @@ class CRSBugFindingExecutor(CRSExecutor):
                 output=stdout,
                 error=stderr if not success else None,
                 timed_out=timed_out,
+                build_time=build_time,
+                run_time=run_time,
             )
 
         except Exception as e:

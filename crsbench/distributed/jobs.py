@@ -1038,6 +1038,14 @@ def run_crs_trial(
 
         execution_time = time.time() - start_time
 
+        # Extract build/run timing from harness result (single harness per trial)
+        build_time = None
+        run_time = None
+        if result.report.harness_results:
+            harness_result = result.report.harness_results[0]
+            build_time = harness_result.build_time
+            run_time = harness_result.run_time
+
         # Create trial metadata
         metadata = TrialMetadata(
             experiment_filestore=str(config.experiment_filestore),
@@ -1045,6 +1053,8 @@ def run_crs_trial(
             difficulty_level=config.difficulty_level,
             timestamp_start=start_time,
             timestamp_end=time.time(),
+            build_time=build_time,
+            run_time=run_time,
         )
 
         # Create trial result using Pydantic model
