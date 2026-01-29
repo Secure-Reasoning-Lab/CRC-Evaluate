@@ -730,9 +730,17 @@ def run_crs_trial(
             logger.warning(f"Failed to get allocated resources from job metadata: {e}")
 
         # Fall back to config.resources for local execution (no RQ job)
+        # Note: In local mode, we use CPUs 0 to N-1 (e.g., cores_per_trial=16 -> cpuset "0-15").
+        # In distributed mode, workers allocate specific CPU cores via job metadata.
         if allocated_cpus is None and config.resources:
-            allocated_cpus = str(config.resources.cores_per_trial)
-            logger.info(f"Using cores_per_trial from config: {allocated_cpus}")
+            # Convert core count to cpuset range (e.g., 16 -> "0-15")
+            from crsbench.utils.cpu_pool import format_cpuset
+
+            cores = config.resources.cores_per_trial
+            allocated_cpus = format_cpuset(list(range(cores)))
+            logger.info(
+                f"Using cores_per_trial from config: {cores} cores -> cpuset {allocated_cpus}"
+            )
         if allocated_memory is None and config.resources:
             allocated_memory = config.resources.memory_per_trial
             logger.info(f"Using memory_per_trial from config: {allocated_memory}")
