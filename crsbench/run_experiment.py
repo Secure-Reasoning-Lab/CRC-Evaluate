@@ -52,6 +52,30 @@ load_dotenv()
 logger = get_logger(__name__)
 
 
+def sanitize_trial_id(raw_id: str) -> str:
+    """Sanitize trial_id for Docker Compose project name compatibility.
+
+    Docker Compose project names must be lowercase and can only contain
+    letters, numbers, underscores, and hyphens.
+
+    Equivalent to: tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '_' | sed 's/_*$//'
+
+    Args:
+        raw_id: Raw trial identifier string
+
+    Returns:
+        Sanitized trial_id safe for Docker Compose
+    """
+    import re
+
+    # Convert to lowercase
+    result = raw_id.lower()
+    # Replace any character that's NOT a-z, 0-9, underscore, or hyphen with underscore
+    result = re.sub(r"[^a-z0-9_-]", "_", result)
+    # Remove trailing underscores
+    return result.rstrip("_")
+
+
 def format_duration(seconds: int) -> str:
     """Format duration in seconds to human-readable string.
 
@@ -1485,7 +1509,8 @@ def run_experiment_local(
         # Build trial_id with random suffix
         # Must be lowercase for Docker Compose project name compatibility
         harness_name_stem = Path(bh.harness.name).stem
-        trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}".lower()
+        raw_trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
+        trial_id = sanitize_trial_id(raw_trial_id)
 
         result = run_crs_trial(
             crs=trial.crs,
@@ -2098,7 +2123,8 @@ def run_experiment_distributed(
         # Build trial_id at enqueue time with random suffix
         # Must be lowercase for Docker Compose project name compatibility
         harness_name_stem = Path(bh.harness.name).stem
-        trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}".lower()
+        raw_trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
+        trial_id = sanitize_trial_id(raw_trial_id)
 
         job = queue.enqueue(
             "crsbench.distributed.jobs.run_crs_trial",
