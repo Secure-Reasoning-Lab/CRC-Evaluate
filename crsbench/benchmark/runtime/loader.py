@@ -93,14 +93,14 @@ def _load_from_pkgs(
             "Use --source main_repo or run 'crsbench bundle' first."
         )
 
-    # Determine source name from tarball
-    pkgs_dir = benchmark_path / "pkgs"
-    tarballs = list(pkgs_dir.glob("*.tar.gz"))
-    if not tarballs:
-        raise RuntimeError(f"No tarballs found in {pkgs_dir}")
+    # Determine source tarball using Dockerfile WORKDIR
+    tarball = get_bundled_tarball_path(benchmark_path)
+    if not tarball:
+        raise RuntimeError(
+            f"Cannot find source tarball in {benchmark_path}/pkgs/. "
+            "Ensure tarball name matches Dockerfile WORKDIR."
+        )
 
-    # Use first tarball (assume single main source)
-    tarball = tarballs[0]
     source_name = tarball.stem
     if source_name.endswith(".tar"):
         source_name = source_name[:-4]
