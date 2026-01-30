@@ -26,7 +26,13 @@ from crsbench.run_experiment import (
     parse_list_argument,
     should_use_distributed_mode,
 )
-from crsbench.validation.schemas import BenchmarkHarness, ExperimentConfig, HarnessFile
+from crsbench.validation.schemas import (
+    POV,
+    BenchmarkHarness,
+    ExperimentConfig,
+    HarnessFile,
+    Vulnerability,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -180,6 +186,7 @@ class TestTrialMatrixGeneration:
             report_filestore="/tmp/rep",
             crses=["crs1", "crs2"],
             benchmarks=["bench1", "bench2"],
+            only_cpv_harnesses=False,
         )
 
         # Create BenchmarkHarness objects
@@ -229,6 +236,7 @@ class TestTrialMatrixGeneration:
             report_filestore="/tmp/rep",
             crses=["crs1", "crs2"],
             benchmarks=["bench1", "bench2"],
+            only_cpv_harnesses=False,
         )
 
         benchmark_harnesses = [
@@ -288,6 +296,7 @@ class TestTrialMatrixGeneration:
             report_filestore="/tmp/rep",
             crses=["crs1"],
             benchmarks=["bench1"],
+            only_cpv_harnesses=False,
         )
 
         benchmark_harness = BenchmarkHarness(
@@ -350,6 +359,7 @@ class TestTrialMatrixGeneration:
                 report_filestore="/tmp/rep",
                 crses=crses,
                 benchmarks=["dummy"],  # Not used, but required for config
+                only_cpv_harnesses=False,
             )
 
             trials = generate_trial_matrix(
@@ -404,7 +414,12 @@ class TestOnlyCpvHarnesses:
         # Mock MetaYamlAdapter to return harness with/without CPVs
         mock_adapter = MagicMock()
         mock_harness_with_cpv = MagicMock()
-        mock_harness_with_cpv.vulns = [{"id": "cpv-1"}]  # Has CPVs
+        mock_harness_with_cpv.vulns = [
+            Vulnerability(
+                vuln_keyword="cpv_1",
+                povs=[POV(id="pov_0", sanitizer="address")],
+            )
+        ]  # Has CPVs
         mock_harness_without_cpv = MagicMock()
         mock_harness_without_cpv.vulns = []  # No CPVs
 
@@ -529,7 +544,12 @@ class TestOnlyCpvHarnesses:
         # Mock MetaYamlAdapter
         mock_adapter = MagicMock()
         mock_harness_with_cpv = MagicMock()
-        mock_harness_with_cpv.vulns = [{"id": "cpv-1"}]
+        mock_harness_with_cpv.vulns = [
+            Vulnerability(
+                vuln_keyword="cpv_1",
+                povs=[POV(id="pov_0", sanitizer="address")],
+            )
+        ]
         mock_harness_without_cpv = MagicMock()
         mock_harness_without_cpv.vulns = []
 
@@ -783,6 +803,7 @@ benchmarks:
             report_filestore="/tmp/rep",
             crses=["atlantis-c"],
             benchmarks=["curl-delta-02"],
+            only_cpv_harnesses=False,
         )
 
         # Generate trial with BenchmarkHarness objects
@@ -908,6 +929,9 @@ class TestIntegrationWithSampleConfigs:
         # Load config
         config = load_experiment_config(config_path)
 
+        # Override only_cpv_harnesses to False for this test
+        config = config.model_copy(update={"only_cpv_harnesses": False})
+
         # Verify config loaded correctly
         assert config.experiment == "multi-crs-baseline-eval"
         assert config.trials == 3
@@ -974,6 +998,9 @@ class TestIntegrationWithSampleConfigs:
             pytest.skip("Sample config not found, skipping integration test")
 
         config = load_experiment_config(config_path)
+
+        # Override only_cpv_harnesses to False for this test
+        config = config.model_copy(update={"only_cpv_harnesses": False})
 
         # Apply CLI overrides
         cli_experiment_name = "custom-experiment-name"
