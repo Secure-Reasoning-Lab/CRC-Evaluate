@@ -44,7 +44,11 @@ from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.logger import configure_logger, get_logger
 from crsbench.utils.workers import resolve_build_workers
 from crsbench.validation.meta_adapter import MetaYamlAdapter
-from crsbench.validation.schemas import BenchmarkHarness, ExperimentConfig
+from crsbench.validation.schemas import (
+    BenchmarkHarness,
+    ExperimentConfig,
+    HarnessFile,
+)
 
 # Load environment variables from .env file if present
 load_dotenv()
@@ -920,6 +924,23 @@ def get_available_modes_for_benchmark(benchmark_path: Path) -> List[str]:
         return []
 
 
+def _harness_has_cpv_with_sanitizer(harness: HarnessFile, sanitizer: str) -> bool:
+    """Check if harness has any CPV requiring the specified sanitizer.
+
+    Args:
+        harness: HarnessFile object to check
+        sanitizer: Sanitizer type to match (e.g., 'address', 'undefined')
+
+    Returns:
+        True if any POV in the harness requires this sanitizer, False otherwise
+    """
+    if not harness.vulns:
+        return False
+    return any(
+        pov.sanitizer == sanitizer for vuln in harness.vulns for pov in vuln.povs
+    )
+
+
 def generate_trial_matrix(
     benchmark_harnesses: List["BenchmarkHarness"],
     crses: List[str],
@@ -953,6 +974,7 @@ def generate_trial_matrix(
             # - Bug-fixing CRS: always skip (required for POV-based operation)
             # - Bug-finding CRS: skip only when only_cpv_harnesses is enabled
             should_check_cpvs = is_bug_fixing or config.only_cpv_harnesses
+            harness = None
             if should_check_cpvs:
                 meta_path = Path(benchmark_harness.path) / ".aixcc" / "meta.yaml"
                 adapter = MetaYamlAdapter.from_meta_yaml(
@@ -1001,6 +1023,16 @@ def generate_trial_matrix(
             # Generate trials for each mode and sanitizer
             for mode in modes_to_run:
                 for sanitizer in config.sanitizers:
+                    # Skip sanitizers that don't match any CPV in this harness
+                    if should_check_cpvs and harness:
+                        if not _harness_has_cpv_with_sanitizer(
+                            harness, sanitizer.value
+                        ):
+                            logger.debug(
+                                f"Skipping {benchmark_harness.name}/{benchmark_harness.harness.name}: "
+                                f"no CPVs with sanitizer {sanitizer.value}"
+                            )
+                            continue
                     for trial_num in range(1, config.trials + 1):
                         trials.append(
                             Trial(
