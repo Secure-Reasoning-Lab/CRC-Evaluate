@@ -1,4 +1,4 @@
-"""Tests for seed corpus collector."""
+"""Tests for seed corpus collector and preparer."""
 
 import json
 from pathlib import Path
@@ -9,6 +9,7 @@ from crsbench.benchmark.seed.collector import (
     CorpusCollector,
     CorpusFile,
 )
+from crsbench.benchmark.seed.preparer import SeedCorpusPreparer
 
 
 class TestCorpusFile:
@@ -449,3 +450,144 @@ class TestCorpusCollectorIntegration:
         # File should be skipped due to negative relative time
         assert result.total_files == 0
         assert any("negative relative time" in w for w in result.warnings)
+
+
+class TestSeedCorpusPreparer:
+    """Tests for SeedCorpusPreparer class."""
+
+    def _create_corpus(self, benchmark_path: Path, harness_name: str) -> Path:
+        """Helper to create a test corpus with manifest."""
+        corpus_dir = benchmark_path / ".aixcc" / harness_name / "corpus"
+        corpus_dir.mkdir(parents=True)
+
+        # Create test files
+        (corpus_dir / "hash1").write_bytes(b"content1")
+        (corpus_dir / "hash2").write_bytes(b"content2")
+        (corpus_dir / "hash3").write_bytes(b"content3")
+
+        # Create manifest
+        manifest = {
+            "crs_run_start_time": 1000.0,
+            "files": {
+                "hash1": {"relative_time": 100.0, "original_name": "file1", "size": 8},
+                "hash2": {"relative_time": 500.0, "original_name": "file2", "size": 8},
+                "hash3": {"relative_time": 3600.0, "original_name": "file3", "size": 8},
+            },
+        }
+        with (corpus_dir / "manifest.json").open("w") as f:
+            json.dump(manifest, f)
+
+        return corpus_dir
+
+    def test_has_seed_corpus_true(self, tmp_path: Path):
+        """Test has_seed_corpus returns True when corpus exists."""
+        benchmark_path = tmp_path / "benchmark"
+        self._create_corpus(benchmark_path, "test-harness")
+
+        preparer = SeedCorpusPreparer(benchmark_path, "test-harness")
+        assert preparer.has_seed_corpus() is True
+
+    def test_has_seed_corpus_false_no_dir(self, tmp_path: Path):
+        """Test has_seed_corpus returns False when directory missing."""
+        benchmark_path = tmp_path / "benchmark"
+        benchmark_path.mkdir()
+
+        preparer = SeedCorpusPreparer(benchmark_path, "test-harness")
+        assert preparer.has_seed_corpus() is False
+
+    def test_has_seed_corpus_false_no_manifest(self, tmp_path: Path):
+        """Test has_seed_corpus returns False when manifest missing."""
+        benchmark_path = tmp_path / "benchmark"
+        corpus_dir = benchmark_path / ".aixcc" / "test-harness" / "corpus"
+        corpus_dir.mkdir(parents=True)
+        (corpus_dir / "hash1").write_bytes(b"test")
+
+        preparer = SeedCorpusPreparer(benchmark_path, "test-harness")
+        assert preparer.has_seed_corpus() is False
+
+    def test_prepare_all_files(self, tmp_path: Path):
+        """Test preparing all corpus files without time filter."""
+        benchmark_path = tmp_path / "benchmark"
+        self._create_corpus(benchmark_path, "test-harness")
+        output_dir = tmp_path / "output"
+
+        preparer = SeedCorpusPreparer(benchmark_path, "test-harness")
+        result = preparer.prepare(output_dir)
+
+        assert result.total_files == 3
+        assert result.copied_files == 3
+        assert result.output_dir == output_dir
+        assert result.max_time_filter is None
+        assert (output_dir / "hash1").exists()
+        assert (output_dir / "hash2").exists()
+        assert (output_dir / "hash3").exists()
+
+    def test_prepare_with_time_filter(self, tmp_path: Path):
+        """Test preparing corpus files with time filter."""
+        benchmark_path = tmp_path / "benchmark"
+        self._create_corpus(benchmark_path, "test-harness")
+        output_dir = tmp_path / "output"
+
+        preparer = SeedCorpusPreparer(benchmark_path, "test-harness")
+        # Filter to files with relative_time <= 600 (includes hash1 at 100s, hash2 at 500s)
+        result = preparer.prepare(output_dir, max_time=600)
+
+        assert result.total_files == 3
+        assert result.copied_files == 2
+        assert result.max_time_filter == 600
+        assert (output_dir / "hash1").exists()
+        assert (output_dir / "hash2").exists()
+        assert not (output_dir / "hash3").exists()
+
+    def test_prepare_strict_time_filter(self, tmp_path: Path):
+        """Test time filter that excludes most files."""
+        benchmark_path = tmp_path / "benchmark"
+        self._create_corpus(benchmark_path, "test-harness")
+        output_dir = tmp_path / "output"
+
+        preparer = SeedCorpusPreparer(benchmark_path, "test-harness")
+        # Filter to files with relative_time <= 50 (excludes all)
+        result = preparer.prepare(output_dir, max_time=50)
+
+        assert result.total_files == 3
+        assert result.copied_files == 0
+        assert result.max_time_filter == 50
+
+    def test_prepare_no_corpus_raises(self, tmp_path: Path):
+        """Test prepare raises when corpus not available."""
+        benchmark_path = tmp_path / "benchmark"
+        benchmark_path.mkdir()
+        output_dir = tmp_path / "output"
+
+        preparer = SeedCorpusPreparer(benchmark_path, "test-harness")
+
+        with pytest.raises(FileNotFoundError, match="No seed corpus found"):
+            preparer.prepare(output_dir)
+
+    def test_prepare_force_overwrite(self, tmp_path: Path):
+        """Test force overwrites existing output directory."""
+        benchmark_path = tmp_path / "benchmark"
+        self._create_corpus(benchmark_path, "test-harness")
+        output_dir = tmp_path / "output"
+
+        # Create existing output
+        output_dir.mkdir()
+        (output_dir / "old_file").write_bytes(b"old")
+
+        preparer = SeedCorpusPreparer(benchmark_path, "test-harness")
+        result = preparer.prepare(output_dir, force=True)
+
+        assert result.copied_files == 3
+        assert not (output_dir / "old_file").exists()
+
+    def test_prepare_existing_raises_without_force(self, tmp_path: Path):
+        """Test prepare raises when output exists and force=False."""
+        benchmark_path = tmp_path / "benchmark"
+        self._create_corpus(benchmark_path, "test-harness")
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        preparer = SeedCorpusPreparer(benchmark_path, "test-harness")
+
+        with pytest.raises(FileExistsError):
+            preparer.prepare(output_dir, force=False)
