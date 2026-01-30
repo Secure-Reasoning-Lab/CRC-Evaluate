@@ -1715,7 +1715,7 @@ class OSSFuzzInfrastructure:
     ) -> bool:
         """Check if inc-build image exists locally and ensure OSS-Fuzz format.
 
-        If image exists in registry or nested format but not in OSS-Fuzz format,
+        If image exists in registry format but not in OSS-Fuzz format,
         automatically retags it for OSS-Fuzz compatibility.
 
         Args:
@@ -1738,12 +1738,6 @@ class OSSFuzzInfrastructure:
             self._retag_for_ossfuzz(inc_image, ossfuzz_image)
             return True
 
-        # Check nested formats and retag if found
-        for nested_image in self._get_nested_image_names(project_name, sanitizer):
-            if self._docker_image_exists(nested_image):
-                self._retag_for_ossfuzz(nested_image, ossfuzz_image)
-                return True
-
         return False
 
     def _docker_image_exists(self, image_name: str) -> bool:
@@ -1759,29 +1753,6 @@ class OSSFuzzInfrastructure:
         except Exception as e:
             logger.debug(f"Error checking image {image_name}: {e}")
             return False
-
-    def _get_nested_image_names(
-        self,
-        project_name: str,
-        sanitizer: str = "address",
-    ) -> list[str]:
-        """Get all possible nested format image names (legacy local builds).
-
-        Some local builds use nested path format:
-        - C/C++: aixcc-afc/aixcc/c/{project}:inc-{sanitizer}
-        - JVM: aixcc-afc/aixcc/jvm/{project}:inc-{sanitizer}
-
-        Args:
-            project_name: OSS-Fuzz project name
-            sanitizer: Sanitizer type
-
-        Returns:
-            List of possible nested format image names
-        """
-        return [
-            f"aixcc-afc/aixcc/c/{project_name}:inc-{sanitizer}",
-            f"aixcc-afc/aixcc/jvm/{project_name}:inc-{sanitizer}",
-        ]
 
     def pull_inc_build_image(
         self,
@@ -1812,12 +1783,6 @@ class OSSFuzzInfrastructure:
         if self._docker_image_exists(inc_image):
             logger.debug(f"Inc-build image available locally: {inc_image}")
             return self._retag_for_ossfuzz(inc_image, ossfuzz_image)
-
-        # Fallback: check nested formats (legacy local builds)
-        for nested_image in self._get_nested_image_names(project_name, sanitizer):
-            if self._docker_image_exists(nested_image):
-                logger.debug(f"Found nested format image locally: {nested_image}")
-                return self._retag_for_ossfuzz(nested_image, ossfuzz_image)
 
         # Pull from registry
         logger.debug(f"Pulling inc-build image: {inc_image}")
@@ -1874,6 +1839,9 @@ class OSSFuzzInfrastructure:
         This allows parallel test execution with proper path isolation.
         The inc-build image is retagged from project name to variant name.
 
+        NOTE: Caller must ensure source image is available (via _ensure_inc_build_image)
+        before calling this method.
+
         Args:
             project_name: Original project name (source image)
             variant_name: Variant name (target image)
@@ -1882,9 +1850,7 @@ class OSSFuzzInfrastructure:
         Returns:
             True if image is ready for use
         """
-        # Source: inc-build image for the project
         src_image = self.get_ossfuzz_image_name(project_name, sanitizer)
-        # Target: same image tagged with variant name
         dst_image = f"aixcc-afc/{variant_name}:inc-{sanitizer}"
 
         if self._docker_image_exists(dst_image):
@@ -1892,7 +1858,7 @@ class OSSFuzzInfrastructure:
             return True
 
         if not self._docker_image_exists(src_image):
-            logger.warning(f"Source inc-build image not found: {src_image}")
+            logger.warning(f"Source inc-build image not available: {src_image}")
             return False
 
         return self._retag_for_ossfuzz(src_image, dst_image)
