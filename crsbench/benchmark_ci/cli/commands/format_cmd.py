@@ -15,12 +15,20 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 
 from crsbench.benchmark.packaging.validate import (
     validate_benchmark as structural_validate,
 )
+from crsbench.benchmark.packaging.validate import (
+    validate_tarball_naming,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 from crsbench.benchmark_ci.cli.benchmark_discovery import (
     discover_cpv_ids,
     discover_harness_names,
@@ -277,18 +285,55 @@ def _check_patch(path: Path) -> CheckResult:
     return CheckResult(status=CheckStatus.PASS, time_seconds=elapsed)
 
 
+def _check_tarball(path: Path) -> CheckResult:
+    """Check source tarball naming matches Dockerfile WORKDIR.
+
+    This validates TAR-04/VAL-01/VAL-03 requirements:
+    - Tarball name must match WORKDIR directory name
+    - Naming mismatches are errors (not warnings)
+    """
+    t0 = time.time()
+
+    result = validate_tarball_naming(path)
+    elapsed = time.time() - t0
+
+    if not result.valid:
+        return CheckResult(
+            status=CheckStatus.FAIL,
+            time_seconds=elapsed,
+            error="; ".join(result.errors[:3]),
+            details={
+                "issues": result.errors,
+                "expected": result.expected_name,
+                "found": result.found_tarballs,
+            },
+        )
+
+    # Include warnings as info but still pass
+    if result.warnings:
+        return CheckResult(
+            status=CheckStatus.PASS,
+            time_seconds=elapsed,
+            details={"warnings": result.warnings},
+        )
+
+    return CheckResult(status=CheckStatus.PASS, time_seconds=elapsed)
+
+
 def _validate_benchmark(
     path: Path, source_mode: str = "main_repo"
 ) -> BenchmarkValidationResult:
     """Run all format sub-checks for a single benchmark.
 
     Produces individual CheckResult per check type (struct, schema, harness,
-    cpv, blob, patch) and an overall format_check summary.
+    cpv, blob, patch, and optionally tarball) and an overall format_check summary.
+
+    When source_mode is "pkgs", also runs tarball naming validation (VAL-01).
     """
     start_dt = datetime.now()
     checks: dict[str, CheckResult] = {}
 
-    check_funcs = [
+    check_funcs: list[tuple[str, Callable[[], CheckResult]]] = [
         ("struct", lambda: _check_struct(path, source_mode)),
         ("schema", lambda: _check_schema(path)),
         ("harness", lambda: _check_harness(path)),
@@ -296,6 +341,10 @@ def _validate_benchmark(
         ("blob", lambda: _check_blob(path)),
         ("patch", lambda: _check_patch(path)),
     ]
+
+    # Add tarball naming check when source mode is "pkgs" (VAL-01)
+    if source_mode == "pkgs":
+        check_funcs.append(("tarball", lambda: _check_tarball(path)))
 
     for name, func in check_funcs:
         try:

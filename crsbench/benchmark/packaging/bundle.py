@@ -11,6 +11,7 @@ from crsbench.benchmark.packaging.tarball import create_source_tarball
 from crsbench.benchmark.packaging.validate import (
     get_benchmark_info,
     validate_benchmark,
+    validate_tarball_naming,
 )
 from crsbench.benchmark.packaging.workdir_parser import get_expected_source_dir
 from crsbench.utils.logger import get_logger
@@ -122,6 +123,21 @@ def bundle_benchmark(
             )
             return pkgs_dir
         logger.info(f"Overwriting existing source tarball: {source_tarball}")
+
+    # 4b. Check for tarball naming mismatch (VAL-03)
+    # Reject if pkgs/ has misnamed tarballs (unless --force)
+    if pkgs_dir.exists():
+        naming_result = validate_tarball_naming(benchmark_path)
+        if not naming_result.valid:
+            if not force:
+                raise ValueError(
+                    f"Tarball naming mismatch (VAL-03): {'; '.join(naming_result.errors)}. "
+                    "Fix the naming or use --force to override."
+                )
+            logger.warning(
+                f"Tarball naming mismatch detected, will be corrected: "
+                f"{'; '.join(naming_result.errors)}"
+            )
 
     # 5. Extract commit info
     main_repo = str(info["main_repo"])

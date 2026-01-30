@@ -12,7 +12,12 @@ Key components:
 
 from crsbench.benchmark.packaging.bundle import bundle_benchmark
 from crsbench.benchmark.packaging.tarball import create_source_tarball
-from crsbench.benchmark.packaging.validate import ValidationResult, validate_benchmark
+from crsbench.benchmark.packaging.validate import (
+    TarballValidationResult,
+    ValidationResult,
+    validate_benchmark,
+    validate_tarball_naming,
+)
 from crsbench.benchmark.packaging.workdir_parser import get_expected_source_dir
 
 __all__ = [
@@ -20,5 +25,7 @@ __all__ = [
     "create_source_tarball",
     "get_expected_source_dir",
     "validate_benchmark",
+    "validate_tarball_naming",
     "ValidationResult",
+    "TarballValidationResult",
 ]
