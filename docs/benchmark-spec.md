@@ -65,6 +65,10 @@ benchmarks/[project-name]/
 ├── build-pre.sh                 # Pre-build setup script
 ├── build-apply.sh               # Patch application script
 ├── Dockerfile                   # Docker build configuration
+├── project.yaml                 # OSS-Fuzz project configuration
+├── pkgs/                        # Bundled source tarballs (optional)
+│   ├── {source-name}.tar.gz     # Main source tarball
+│   └── pkg_refs.txt             # Provenance tracking
 ├── (Other files used in the Dockerfile)
 └── .aixcc/
     ├── meta.yaml                # Configuration metadata
@@ -83,6 +87,55 @@ benchmarks/[project-name]/
                 ├── {pov-variant-id}.blob  # Binary blob trigger crash
                 └── {pov-variant-id}.log   # Crash log
 ```
+
+### Bundled Source Tarballs (pkgs/)
+
+The `pkgs/` directory contains bundled source tarballs for offline benchmark execution. This enables reproducible builds without requiring network access to clone repositories.
+
+#### Tarball Naming Convention
+
+**Critical**: The source tarball name MUST match the Dockerfile's final `WORKDIR` directory name.
+
+```dockerfile
+# Example Dockerfile
+WORKDIR $SRC/curl    # WORKDIR is "curl"
+```
+
+The corresponding tarball must be named `curl.tar.gz` (not `libcurl.tar.gz` or any other name).
+
+#### Why This Matters
+
+- The build system extracts tarballs and expects the directory name to match WORKDIR
+- Mismatched names cause build failures when the Dockerfile cannot find the source
+- Validation tools enforce this convention to catch errors early
+
+#### Split Tarballs for Large Files
+
+For large source archives that exceed Git LFS limits, tarballs can be split:
+
+```
+pkgs/
+├── poi.tar.gz.partaa    # First part (80MB)
+├── poi.tar.gz.partab    # Second part (80MB)
+├── poi.tar.gz.partac    # Third part (remaining)
+└── pkg_refs.txt
+```
+
+Split tarballs are automatically reassembled during build. Create them with:
+
+```bash
+split -b 80M source.tar.gz source.tar.gz.part
+```
+
+#### pkg_refs.txt
+
+The `pkg_refs.txt` file tracks tarball provenance:
+
+```
+https://github.com/curl/curl@abc123def456
+```
+
+This records the repository URL and commit hash used to create the tarball.
 
 
 ### Configuration File (meta.yaml)
