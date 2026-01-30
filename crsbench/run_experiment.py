@@ -2625,11 +2625,6 @@ def main() -> None:
             f"Split {slice_index}/{total_slices}: {len(trial_matrix)} of {original_count} jobs"
         )
 
-    # Handle dry-run mode: display trials and exit without executing
-    if hasattr(args, "dry_run") and args.dry_run:
-        display_trial_matrix(trial_matrix, start_index)
-        return
-
     total_jobs = len(trial_matrix)
     logger.info(f"Total jobs to execute: {total_jobs}")
 
@@ -2641,6 +2636,11 @@ def main() -> None:
         display_estimated_runtime(total_jobs, config, worker_count=config.worker.jobs)
     else:
         display_estimated_runtime(total_jobs, config)
+
+    # Handle dry-run mode: display trials and exit without executing
+    if hasattr(args, "dry_run") and args.dry_run:
+        display_trial_matrix(trial_matrix, start_index)
+        return
 
     # Run experiment in appropriate mode
     if use_distributed:
