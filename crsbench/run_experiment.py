@@ -20,6 +20,7 @@ Usage:
 """
 
 import argparse
+import importlib.util
 import os
 import secrets
 import string
@@ -428,6 +429,12 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         "Format: 'A/N' (e.g., '1/2' for first half, '2/2' for second half)",
     )
 
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print trials that would be enqueued without executing them",
+    )
+
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments with subcommand support.
@@ -672,6 +679,29 @@ def parse_split_argument(split_arg: str) -> tuple[int, int]:
             f"Slice index must be between 1 and {total_slices}, got {slice_index}"
         )
     return slice_index, total_slices
+
+
+def _calculate_split_start(n: int, slice_index: int, total_slices: int) -> int:
+    """Calculate the starting index for a split slice.
+
+    Args:
+        n: Total number of trials
+        slice_index: 1-indexed slice to return (1 <= slice_index <= total_slices)
+        total_slices: Total number of slices to split into
+
+    Returns:
+        Starting index (0-indexed) for the specified slice
+    """
+    if total_slices == 1:
+        return 0
+
+    base_size = n // total_slices
+    remainder = n % total_slices
+
+    # First 'remainder' slices get (base_size + 1), rest get base_size
+    if slice_index <= remainder:
+        return (slice_index - 1) * (base_size + 1)
+    return remainder * (base_size + 1) + (slice_index - 1 - remainder) * base_size
 
 
 def apply_split_to_trials(
@@ -1033,6 +1063,85 @@ def dump_trial_matrix(
         json.dump(matrix, f, indent=2)
 
     logger.info(f"Trial matrix saved to {output_path}")
+
+
+def _display_trial_matrix_rich(trials: List[Trial], start_index: int) -> None:
+    """Display trial matrix using Rich Table."""
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    table = Table(title="Trials to be enqueued")
+
+    # Add columns with styles
+    table.add_column("Order", justify="right", style="cyan")
+    table.add_column("CRS", style="green")
+    table.add_column("Benchmark", style="yellow")
+    table.add_column("Harness", style="yellow")
+    table.add_column("Mode", style="blue")
+    table.add_column("Sanitizer", style="magenta")
+    table.add_column("Trial", justify="right")
+
+    # Add rows
+    for i, trial in enumerate(trials):
+        order = start_index + i + 1
+        bh = trial.benchmark_harness
+        table.add_row(
+            str(order),
+            trial.crs,
+            bh.name,
+            bh.harness.name,
+            trial.mode,
+            trial.sanitizer,
+            str(trial.trial_num),
+        )
+
+    console.print(table)
+    console.print(f"\nTotal trials: {len(trials)}")
+
+
+def _display_trial_matrix_basic(trials: List[Trial], start_index: int) -> None:
+    """Display trial matrix using basic text output."""
+    sys.stdout.write("\nTrials to be enqueued:\n")
+    sys.stdout.write("-" * 127 + "\n")
+    sys.stdout.write(
+        f"{'Order':<6} {'CRS':<35} {'Benchmark':<25} {'Harness':<20} "
+        f"{'Mode':<8} {'Sanitizer':<10} {'Trial':<5}\n"
+    )
+    sys.stdout.write("-" * 127 + "\n")
+
+    for i, trial in enumerate(trials):
+        order = start_index + i + 1
+        bh = trial.benchmark_harness
+        sys.stdout.write(
+            f"{order:<6} {trial.crs:<35} {bh.name:<25} {bh.harness.name:<20} "
+            f"{trial.mode:<8} {trial.sanitizer:<10} {trial.trial_num:<5}\n"
+        )
+
+    sys.stdout.write("-" * 127 + "\n")
+    sys.stdout.write(f"Total trials: {len(trials)}\n\n")
+
+
+def display_trial_matrix(trials: List[Trial], start_index: int = 0) -> None:
+    """Display trial matrix in table format for dry-run mode.
+
+    Uses Rich Table for better formatting when available, falls back to basic text.
+
+    Args:
+        trials: List of Trial objects to display
+        start_index: Starting index for trial order numbering (0-indexed)
+    """
+    if not trials:
+        sys.stdout.write("No trials to display.\n")
+        return
+
+    # Check if Rich is available
+    rich_available = importlib.util.find_spec("rich") is not None
+
+    if rich_available:
+        _display_trial_matrix_rich(trials, start_index)
+    else:
+        _display_trial_matrix_basic(trials, start_index)
 
 
 def _is_all_bug_fixing_crs(
@@ -2505,13 +2614,21 @@ def main() -> None:
     )
 
     # Apply split if specified
+    start_index = 0
     if hasattr(args, "split") and args.split:
         slice_index, total_slices = parse_split_argument(args.split)
         original_count = len(trial_matrix)
+        # Calculate start_index BEFORE applying split
+        start_index = _calculate_split_start(original_count, slice_index, total_slices)
         trial_matrix = apply_split_to_trials(trial_matrix, slice_index, total_slices)
         logger.info(
             f"Split {slice_index}/{total_slices}: {len(trial_matrix)} of {original_count} jobs"
         )
+
+    # Handle dry-run mode: display trials and exit without executing
+    if hasattr(args, "dry_run") and args.dry_run:
+        display_trial_matrix(trial_matrix, start_index)
+        return
 
     total_jobs = len(trial_matrix)
     logger.info(f"Total jobs to execute: {total_jobs}")
