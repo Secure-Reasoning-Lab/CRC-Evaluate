@@ -931,12 +931,29 @@ class PatchVerificationEngine:
         # overwriting ASAN binary from build_fuzzers.
         if use_inc_image:
             # For inc-build: retag inc-{sanitizer} image from base project
+            # Extract base project name by stripping sanitizer and mode suffixes
+            # Variant format: {benchmark}-{san_short}-{mode}-patched-{pov_id}-{patch_id}
             base_project = variant_name.rsplit("-patched-", 1)[0]
             if "-patched-" in variant_name:
-                base_project = base_project.rsplit("-asan-", 1)[0]
-            self.infra.prepare_inc_image_for_variant(
+                # Strip sanitizer suffix (asan, ubsan, msan, tsan, cov)
+                sanitizer_suffixes = [
+                    "-asan-",
+                    "-ubsan-",
+                    "-msan-",
+                    "-tsan-",
+                    "-cov-",
+                ]
+                for suffix in sanitizer_suffixes:
+                    if suffix in base_project:
+                        base_project = base_project.rsplit(suffix, 1)[0]
+                        break
+            if not self.infra.prepare_inc_image_for_variant(
                 base_project, test_variant_name, self.sanitizer
-            )
+            ):
+                logger.warning(
+                    f"Failed to prepare inc-build image for {test_variant_name}, "
+                    "tests may fail"
+                )
         else:
             # For standard build: retag :latest image from source variant
             # Without this, run_tests fails with exit code 125 (image not found)
