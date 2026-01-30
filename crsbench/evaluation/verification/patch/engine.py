@@ -918,6 +918,14 @@ class PatchVerificationEngine:
             variant_name=test_variant_name,
         )
 
+        # Copy build artifacts from base variant to test variant
+        # The test variant needs the binaries from the build to execute tests
+        if not self.infra.copy_build_output(variant_name, test_variant_name):
+            logger.warning(
+                f"Failed to copy build output from {variant_name} to "
+                f"{test_variant_name}, tests may fail"
+            )
+
         # Prepare Docker image for test variant
         # Test variant uses a different name (-unittest or -rts suffix) to avoid
         # overwriting ASAN binary from build_fuzzers.

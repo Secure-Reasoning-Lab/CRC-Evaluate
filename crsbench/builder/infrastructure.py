@@ -158,6 +158,52 @@ class OSSFuzzInfrastructure:
             return self.work_dir / variant_name / "build" / "work"
         return self.oss_fuzz_path / "build" / "work" / variant_name
 
+    def copy_build_output(
+        self,
+        source_variant: str,
+        target_variant: str,
+    ) -> bool:
+        """Copy build output from source variant to target variant.
+
+        This is needed for unit tests which run in a separate variant to avoid
+        overwriting the ASAN binary from build_fuzzers. The test variant needs
+        the binaries from the build variant to execute tests.
+
+        Args:
+            source_variant: Source variant name (has the binaries)
+            target_variant: Target variant name (needs the binaries)
+
+        Returns:
+            True if copy succeeded, False otherwise
+        """
+        import shutil
+
+        source_path = self.get_build_output_path(source_variant)
+        target_path = self.get_build_output_path(target_variant)
+
+        if not source_path.exists():
+            logger.warning(f"Source build output not found: {source_path}")
+            return False
+
+        # Create target directory if it doesn't exist
+        target_path.mkdir(parents=True, exist_ok=True)
+
+        # Copy all files from source to target
+        try:
+            for item in source_path.iterdir():
+                if item.is_file():
+                    shutil.copy2(item, target_path / item.name)
+                elif item.is_dir():
+                    dest = target_path / item.name
+                    if dest.exists():
+                        shutil.rmtree(dest)
+                    shutil.copytree(item, dest)
+            logger.debug(f"Copied build output: {source_variant} -> {target_variant}")
+            return True
+        except OSError as e:
+            logger.warning(f"Failed to copy build output: {e}")
+            return False
+
     def get_isolated_src_path(self, variant_name: str) -> Path:
         """Get the source directory path (isolated or shared).
 
