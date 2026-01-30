@@ -210,6 +210,62 @@ Registry stored at: ./canary-registry.json (repo root)
     )
     list_canary_parser.set_defaults(func=handle_list_canaries)
 
+    # crsbench benchmark seed-import
+    seed_import_parser = benchmark_subparsers.add_parser(
+        "seed-import",
+        help="Import corpus from experiment output as seed for benchmark",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Collects corpus files from CRS experiment output and stores them
+with metadata in the benchmark's .aixcc/{harness}/corpus/ directory.
+
+Files are named by content hash (deduplication). A manifest.json
+contains metadata including relative_time (seconds since CRS start).
+
+Output structure:
+  .aixcc/{harness}/corpus/
+  ├── manifest.json  # Metadata: crs_run_start_time, files info
+  ├── {hash1}        # Corpus files (named by content hash)
+  ├── {hash2}
+  └── ...
+
+Manifest format:
+  {
+    "crs_run_start_time": 1234567890.0,
+    "files": {
+      "abc123...": {"relative_time": 500.0, "original_name": "...", "size": 1234}
+    }
+  }
+
+Examples:
+  # Import corpus from experiment output
+  %(prog)s ./experiment-output/
+
+  # Specify custom benchmarks directory
+  %(prog)s ./experiment-output/ --benchmarks ./my-benchmarks/
+
+  # Force overwrite existing corpus
+  %(prog)s ./experiment-output/ --force
+        """,
+    )
+    seed_import_parser.add_argument(
+        "experiment_dir",
+        type=str,
+        help="Path to experiment output directory",
+    )
+    seed_import_parser.add_argument(
+        "--benchmarks",
+        type=str,
+        default="./benchmarks",
+        help="Directory containing benchmarks (default: ./benchmarks)",
+    )
+    seed_import_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing corpus directory",
+    )
+    seed_import_parser.set_defaults(func=handle_seed_import)
+
     benchmark_parser.set_defaults(command="benchmark", func=handle_benchmark_help)
 
 
@@ -482,6 +538,56 @@ def handle_list_canaries(args: argparse.Namespace) -> int:
     logger.info(f"\nTotal: {len(canaries)} prefix groups")
 
     return 0
+
+
+def handle_seed_import(args: argparse.Namespace) -> int:
+    """Handle 'crsbench benchmark seed-import' command.
+
+    Collects corpus files from experiment output and stores them
+    in the benchmark's .aixcc/{harness}/corpus/ directory with a manifest.
+    """
+    from crsbench.benchmark.seed import CollectionResult, CorpusCollector
+
+    experiment_dir = Path(args.experiment_dir)
+    benchmarks_dir = Path(args.benchmarks)
+
+    if not experiment_dir.is_dir():
+        logger.error(f"Experiment directory not found: {experiment_dir}")
+        return 1
+
+    if not benchmarks_dir.is_dir():
+        logger.error(f"Benchmarks directory not found: {benchmarks_dir}")
+        return 1
+
+    try:
+        collector = CorpusCollector(experiment_dir, benchmarks_dir)
+        result: CollectionResult = collector.collect(force=args.force)
+
+        # Display warnings
+        for warning in result.warnings:
+            logger.warning(warning)
+
+        # Summary
+        logger.info("=" * 50)
+        logger.info("SEED CORPUS IMPORT SUMMARY")
+        logger.info("=" * 50)
+        logger.info(f"Benchmark: {result.benchmark_name}")
+        logger.info(f"Harness: {result.harness_name}")
+        logger.info(f"Output: {result.output_dir}")
+        logger.info(f"Total files: {result.total_files}")
+
+        return 0
+
+    except FileExistsError as e:
+        logger.error(f"Corpus already exists: {e}")
+        logger.info("Use --force to overwrite existing corpus")
+        return 1
+    except ValueError as e:
+        logger.error(f"Import error: {e}")
+        return 1
+    except Exception as e:
+        logger.error(f"Seed import failed: {e}")
+        return 1
 
 
 def run_benchmark_command(args: argparse.Namespace) -> int:
