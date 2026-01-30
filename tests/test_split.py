@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from crsbench.run_experiment import (
     Trial,
+    _calculate_split_start,
     apply_split_to_trials,
     parse_split_argument,
 )
@@ -228,3 +229,49 @@ class TestApplySplitToTrials:
 
                 # Sum should equal total
                 assert sum(sizes) == n
+
+
+class TestCalculateSplitStart:
+    """Test _calculate_split_start function."""
+
+    def test_single_slice_returns_zero(self):
+        """Test single slice (no split) returns start index 0."""
+        assert _calculate_split_start(10, 1, 1) == 0
+        assert _calculate_split_start(100, 1, 1) == 0
+
+    def test_even_split_two_slices(self):
+        """Test even split into 2 slices."""
+        # 10 trials: first 5, second 5
+        assert _calculate_split_start(10, 1, 2) == 0
+        assert _calculate_split_start(10, 2, 2) == 5
+
+    def test_uneven_split_three_slices(self):
+        """Test uneven split into 3 slices."""
+        # 10 trials: 4, 3, 3 (first slice gets remainder)
+        assert _calculate_split_start(10, 1, 3) == 0
+        assert _calculate_split_start(10, 2, 3) == 4
+        assert _calculate_split_start(10, 3, 3) == 7
+
+    def test_consistency_with_apply_split(self):
+        """Test that _calculate_split_start is consistent with apply_split_to_trials."""
+        trials = [create_mock_trial(i) for i in range(20)]
+
+        for total_slices in [2, 3, 4, 5]:
+            for slice_index in range(1, total_slices + 1):
+                start_idx = _calculate_split_start(
+                    len(trials), slice_index, total_slices
+                )
+                slice_trials = apply_split_to_trials(trials, slice_index, total_slices)
+
+                # The first trial in the slice should have trial_num == start_idx
+                if slice_trials:
+                    assert slice_trials[0].trial_num == start_idx
+
+    def test_edge_case_fewer_trials_than_slices(self):
+        """Test edge case with fewer trials than requested slices."""
+        # 3 trials split into 5 slices
+        assert _calculate_split_start(3, 1, 5) == 0
+        assert _calculate_split_start(3, 2, 5) == 1
+        assert _calculate_split_start(3, 3, 5) == 2
+        assert _calculate_split_start(3, 4, 5) == 3  # Empty slice
+        assert _calculate_split_start(3, 5, 5) == 3  # Empty slice
