@@ -77,6 +77,11 @@ class EvaluationReport:
             return 0.0
         return self.povs_error / self.total_povs
 
+    @property
+    def success(self) -> bool:
+        """Return True if all harness runs were successful."""
+        return all(hr.run_successful for hr in self.harness_results)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert report to dictionary."""
         data = asdict(self)

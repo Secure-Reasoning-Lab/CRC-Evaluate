@@ -73,6 +73,11 @@ class EvaluationResult:
         """Number of POVs successfully detected."""
         return self.report.povs_found
 
+    @property
+    def success(self) -> bool:
+        """Return True if evaluation was successful."""
+        return self.report.success
+
 
 class BenchmarkRunner:
     """Main class for running benchmark evaluations."""

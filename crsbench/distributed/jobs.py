@@ -1053,7 +1053,7 @@ def run_crs_trial(
             harness=harness_name,
             trial_num=trial_num,
             crs_type=crs_type_enum,
-            success=True,  # Validation passed (exception raised if invalid)
+            success=result.success,
             execution_time=execution_time,
             povs_found=result.povs_found,
             total_povs=result.total_povs,
@@ -1067,7 +1067,7 @@ def run_crs_trial(
         logger.info(trial_result.log_summary())
 
         # Create success/fail marker file
-        marker_file = trial_output_dir / ".success"
+        marker_file = trial_output_dir / (".success" if result.success else ".fail")
         marker_file.touch()
 
         # Per-trial copy if enabled (before cleanup)
