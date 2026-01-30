@@ -1075,8 +1075,9 @@ class CRSBugFindingExecutor(CRSExecutor):
             result = preparer.prepare(seed_corpus_dir, max_time=max_time, force=True)
             logger.info(
                 f"Prepared seed corpus: {result.copied_files} files "
-                f"(max_time={max_time}s)" if max_time else
-                f"Prepared seed corpus: {result.copied_files} files (all)"
+                f"(max_time={max_time}s)"
+                if max_time
+                else f"Prepared seed corpus: {result.copied_files} files (all)"
             )
             return seed_corpus_dir
         except Exception as e:

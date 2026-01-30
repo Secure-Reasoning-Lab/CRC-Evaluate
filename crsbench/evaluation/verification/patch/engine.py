@@ -451,11 +451,16 @@ class PatchVerificationEngine:
         """
         # For cached builds, detect inc_build and find repo_path
         if used_inc_build is None:
-            # Check if inc-build image exists for the BASE project (not variant)
-            # Variant images might be stale from previous runs when inc-build was available
-            inc_image = f"aixcc-afc/{project_name}:inc-{self.sanitizer}"
-            used_inc_build = self.infra._docker_image_exists(inc_image)
-            logger.debug(f"Detected inc_build={used_inc_build} for {project_name}")
+            # Check if inc-build image is available for the BASE project
+            # Try to ensure it's available (pull if needed) when use_inc_build is enabled
+            if self.use_inc_build:
+                used_inc_build = self._ensure_inc_build_image(project_name)
+                logger.debug(
+                    f"Ensured inc_build={used_inc_build} for cached build {project_name}"
+                )
+            else:
+                used_inc_build = False
+                logger.debug(f"Inc-build disabled for {project_name}")
 
         if repo_path is None:
             # Find source path from infra
