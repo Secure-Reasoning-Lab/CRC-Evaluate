@@ -154,10 +154,13 @@ def has_bundled_source(benchmark_path: Path) -> bool:
         benchmark_path: Path to benchmark directory
 
     Returns:
-        True if pkgs/ exists with at least one tarball
+        True if pkgs/ exists with at least one tarball (regular or split)
     """
     pkgs_dir = benchmark_path / "pkgs"
-    return pkgs_dir.exists() and any(pkgs_dir.glob("*.tar.gz"))
+    if not pkgs_dir.exists():
+        return False
+    # Check for regular tarballs or split tarballs (.partaa)
+    return any(pkgs_dir.glob("*.tar.gz")) or any(pkgs_dir.glob("*.tar.gz.partaa"))
 
 
 def get_bundled_tarball_path(benchmark_path: Path) -> Optional[Path]:
