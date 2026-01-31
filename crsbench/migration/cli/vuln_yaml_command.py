@@ -232,7 +232,10 @@ def run_generate_vuln_yaml(args: argparse.Namespace) -> int:
     success_count = 0
     failed_count = 0
     skipped_count = 0
-    repos_dir = os.getenv("PROJECT_REPOS_DIR", ".crsbench-repos")
+    from crsbench.utils.paths import get_crsbench_root
+
+    default = str(get_crsbench_root() / ".crsbench-repos")
+    repos_dir = os.getenv("PROJECT_REPOS_DIR", default)
 
     # Filter tasks where vuln.yaml already exists
     tasks_to_process = []

@@ -455,7 +455,10 @@ def run_generate_test_sh(args: argparse.Namespace) -> int:
         logger.error("LITELLM_API_KEY must be set via --litellm-api-key or env var")
         return 1
 
-    repos_dir = os.getenv("PROJECT_REPOS_DIR", ".crsbench-repos")
+    from crsbench.utils.paths import get_crsbench_root
+
+    default = str(get_crsbench_root() / ".crsbench-repos")
+    repos_dir = os.getenv("PROJECT_REPOS_DIR", default)
 
     # Check if all-missing mode
     if args.all_missing:

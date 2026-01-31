@@ -18,31 +18,12 @@ logger = get_logger(__name__)
 def find_project_root() -> Path:
     """Find the CRSBench project root directory.
 
-    Searches upward from the current directory for a directory containing
-    both 'benchmarks' and 'crsbench' directories.
-
     Returns:
-        Path to project root, or current directory if not found
+        Path to project root
     """
-    current = Path.cwd()
+    from crsbench.utils.paths import get_crsbench_root
 
-    # Check current directory first
-    if (current / "benchmarks").exists() and (current / "crsbench").exists():
-        return current
-
-    # Search upward
-    for parent in current.parents:
-        if (parent / "benchmarks").exists() and (parent / "crsbench").exists():
-            return parent
-
-    # Fallback: check if we're inside the crsbench package
-    # e.g., /path/to/crsbench/crsbench/statistics -> /path/to/crsbench
-    script_path = Path(__file__).resolve()
-    for parent in script_path.parents:
-        if (parent / "benchmarks").exists() and (parent / "crsbench").exists():
-            return parent
-
-    return current
+    return get_crsbench_root()
 
 
 def get_default_benchmarks_dir() -> Path:

@@ -3,8 +3,10 @@
 import os
 from pathlib import Path
 
-# CRSBench repository root (auto-detected from this file's location)
-CRSBENCH_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+# CRSBench repository root (auto-detected by walking up to pyproject.toml)
+from crsbench.utils.paths import get_crsbench_root
+
+CRSBENCH_ROOT = str(get_crsbench_root())
 
 # Base directory for MCP operations (can be overridden by env var)
 # Default to .crsbench-mcp under the working directory instead of home directory
