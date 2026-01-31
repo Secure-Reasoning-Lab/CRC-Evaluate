@@ -900,6 +900,12 @@ class ExperimentConfig(BaseModel):
         default=False,
         description="Terminate trial early when all CPVs for harness are found (default: False).",
     )
+    per_pov_verify_timeout: int = Field(
+        default=180,
+        ge=1,
+        description="Timeout in seconds for each single POV verification (default: 180 = 3 minutes). "
+        "This is the time allowed to run the harness binary with a POV input to check if it crashes.",
+    )
     build_workers: Optional[int] = Field(
         default=None,
         ge=1,
@@ -938,6 +944,17 @@ class ExperimentConfig(BaseModel):
     results_filestore: Optional[Path] = Field(
         default=None,
         description="Destination path for copying results (contains experiment-data/ and report-data/)",
+    )
+    seed_corpus_enabled: bool = Field(
+        default=False,
+        description="Enable seed corpus from previous experiment runs. "
+        "Requires corpus to be imported via 'crsbench benchmark seed-import'.",
+    )
+    seed_corpus_max_time: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Maximum relative time (seconds) for seed corpus files. "
+        "Only files discovered within this time are used. None uses all available seeds.",
     )
 
     @field_validator("experiment")

@@ -79,13 +79,16 @@ class TestPOVStoreAddPov:
     def test_add_pov_tracks_cpv_first_pov(
         self, store: POVStore, pov_file: Path
     ) -> None:
-        """Test that first POV for each CPV is tracked."""
+        """Test that first POV for each CPV is tracked with discovery info."""
         pov_hash, _ = store.add_pov(
             pov_file, PovVerificationStatus.CPV, ["cpv_0", "cpv_1"]
         )
 
-        assert store.cpv_to_first_pov["cpv_0"] == pov_hash
-        assert store.cpv_to_first_pov["cpv_1"] == pov_hash
+        # Now cpv_to_first_pov stores {pov_hash, discovery_ts, relative_time}
+        assert store.cpv_to_first_pov["cpv_0"]["pov_hash"] == pov_hash
+        assert store.cpv_to_first_pov["cpv_1"]["pov_hash"] == pov_hash
+        assert "discovery_ts" in store.cpv_to_first_pov["cpv_0"]
+        assert "relative_time" in store.cpv_to_first_pov["cpv_0"]
 
     def test_add_pov_keeps_first_cpv_mapping(
         self, store: POVStore, tmp_path: Path
@@ -100,7 +103,7 @@ class TestPOVStoreAddPov:
         hash2, _ = store.add_pov(pov2, PovVerificationStatus.CPV, ["cpv_0"])
 
         # First POV should still be mapped
-        assert store.cpv_to_first_pov["cpv_0"] == hash1
+        assert store.cpv_to_first_pov["cpv_0"]["pov_hash"] == hash1
         assert hash1 != hash2
 
     def test_add_pov_with_custom_timestamp(
@@ -433,3 +436,190 @@ class TestPOVStorePersistence:
 
         with pytest.raises(FileNotFoundError):
             store.load(tmp_path / "nonexistent.json")
+
+
+class TestPOVStoreTimestamps:
+    """Tests for POVStore timestamp features."""
+
+    def test_crs_run_start_time_default(self, tmp_path: Path) -> None:
+        """Test that crs_run_start_time defaults to current time."""
+        import time
+
+        before = time.time()
+        store = POVStore(tmp_path / "povs")
+        after = time.time()
+
+        assert before <= store.crs_run_start_time <= after
+
+    def test_crs_run_start_time_explicit(self, tmp_path: Path) -> None:
+        """Test setting explicit crs_run_start_time."""
+        custom_time = 1700000000.0
+        store = POVStore(tmp_path / "povs", crs_run_start_time=custom_time)
+
+        assert store.crs_run_start_time == custom_time
+
+    def test_crs_run_start_time_persisted(self, tmp_path: Path) -> None:
+        """Test that crs_run_start_time is saved and loaded."""
+        custom_time = 1700000000.0
+        store = POVStore(tmp_path / "povs", crs_run_start_time=custom_time)
+
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"test content")
+        store.add_pov(pov, PovVerificationStatus.CPV, ["cpv_0"])
+        store.save()
+
+        # Load into new store
+        new_store = POVStore(tmp_path / "povs")
+        new_store.load()
+
+        assert new_store.crs_run_start_time == custom_time
+
+    def test_file_mtime_recorded(self, tmp_path: Path) -> None:
+        """Test that file_mtime is recorded when adding POV."""
+        import os
+
+        store = POVStore(tmp_path / "povs")
+
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"test content")
+
+        # Set a specific mtime
+        mtime = 1700000000.0
+        os.utime(pov, (mtime, mtime))
+
+        pov_hash, _ = store.add_pov(pov, PovVerificationStatus.CPV, ["cpv_0"])
+
+        entry = store.get_pov(pov_hash)
+        assert entry is not None
+        assert entry.file_mtime == mtime
+
+    def test_file_mtime_persisted(self, tmp_path: Path) -> None:
+        """Test that file_mtime is saved and loaded."""
+        import os
+
+        store = POVStore(tmp_path / "povs")
+
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"test content")
+
+        mtime = 1700000000.0
+        os.utime(pov, (mtime, mtime))
+
+        pov_hash, _ = store.add_pov(pov, PovVerificationStatus.CPV, ["cpv_0"])
+        store.save()
+
+        # Load into new store
+        new_store = POVStore(tmp_path / "povs")
+        new_store.load()
+
+        entry = new_store.get_pov(pov_hash)
+        assert entry is not None
+        assert entry.file_mtime == mtime
+
+    def test_relative_time_calculation(self, tmp_path: Path) -> None:
+        """Test that relative time can be calculated from file_mtime and crs_run_start_time."""
+        import os
+
+        crs_start = 1700000000.0
+        store = POVStore(tmp_path / "povs", crs_run_start_time=crs_start)
+
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"test content")
+
+        # POV created 10 seconds after CRS start
+        mtime = crs_start + 10.0
+        os.utime(pov, (mtime, mtime))
+
+        pov_hash, _ = store.add_pov(pov, PovVerificationStatus.CPV, ["cpv_0"])
+
+        entry = store.get_pov(pov_hash)
+        assert entry is not None
+        assert entry.file_mtime is not None
+
+        relative_time = entry.file_mtime - store.crs_run_start_time
+        assert relative_time == 10.0
+
+    def test_cpv_discovery_timestamps(self, tmp_path: Path) -> None:
+        """Test that per-CPV discovery timestamps are recorded."""
+        crs_start = 1700000000.0
+        store = POVStore(tmp_path / "povs", crs_run_start_time=crs_start)
+
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"test content")
+
+        # Add POV with specific timestamp (simulating discovery time)
+        discovery_ts = crs_start + 30.0
+        pov_hash, _ = store.add_pov(
+            pov,
+            PovVerificationStatus.CPV,
+            ["cpv_0"],
+            timestamp=discovery_ts,
+        )
+
+        # Verify per-CPV discovery info
+        cpv_info = store.cpv_to_first_pov["cpv_0"]
+        assert cpv_info["pov_hash"] == pov_hash
+        assert cpv_info["discovery_ts"] == discovery_ts
+        assert cpv_info["relative_time"] == 30.0  # discovery_ts - crs_start
+
+    def test_cpv_discovery_timestamps_persisted(self, tmp_path: Path) -> None:
+        """Test that per-CPV discovery timestamps are saved and loaded."""
+        crs_start = 1700000000.0
+        store = POVStore(tmp_path / "povs", crs_run_start_time=crs_start)
+
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"test content")
+
+        discovery_ts = crs_start + 45.0
+        pov_hash, _ = store.add_pov(
+            pov,
+            PovVerificationStatus.CPV,
+            ["cpv_0", "cpv_1"],
+            timestamp=discovery_ts,
+        )
+        store.save()
+
+        # Load into new store
+        new_store = POVStore(tmp_path / "povs")
+        new_store.load()
+
+        # Verify all CPV discovery info is preserved
+        for cpv_id in ["cpv_0", "cpv_1"]:
+            cpv_info = new_store.cpv_to_first_pov[cpv_id]
+            assert cpv_info["pov_hash"] == pov_hash
+            assert cpv_info["discovery_ts"] == discovery_ts
+            assert cpv_info["relative_time"] == 45.0
+
+    def test_multiple_cpv_discovery_order(self, tmp_path: Path) -> None:
+        """Test that discovery timestamps track each CPV's first discovery."""
+        crs_start = 1700000000.0
+        store = POVStore(tmp_path / "povs", crs_run_start_time=crs_start)
+
+        pov1 = tmp_path / "pov1.bin"
+        pov2 = tmp_path / "pov2.bin"
+        pov1.write_bytes(b"content_a")
+        pov2.write_bytes(b"content_b")
+
+        # First POV discovers cpv_0 at t+10
+        hash1, _ = store.add_pov(
+            pov1,
+            PovVerificationStatus.CPV,
+            ["cpv_0"],
+            timestamp=crs_start + 10.0,
+        )
+
+        # Second POV discovers cpv_1 at t+20 (also triggers cpv_0 but shouldn't override)
+        hash2, _ = store.add_pov(
+            pov2,
+            PovVerificationStatus.CPV,
+            ["cpv_0", "cpv_1"],
+            timestamp=crs_start + 20.0,
+        )
+
+        # cpv_0 should keep first discovery time
+        assert store.cpv_to_first_pov["cpv_0"]["pov_hash"] == hash1
+        assert store.cpv_to_first_pov["cpv_0"]["relative_time"] == 10.0
+
+        # cpv_1 should have second discovery time
+        assert store.cpv_to_first_pov["cpv_1"]["pov_hash"] == hash2
+        assert store.cpv_to_first_pov["cpv_1"]["relative_time"] == 20.0

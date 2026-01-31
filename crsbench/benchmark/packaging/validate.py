@@ -210,6 +210,120 @@ def _validate_pkgs_dir(pkgs_dir: Path, dockerfile: Path) -> list[str]:
     return warnings
 
 
+@dataclass
+class TarballValidationResult:
+    """Result of tarball naming validation."""
+
+    valid: bool
+    expected_name: Optional[str] = None
+    found_tarballs: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+def validate_tarball_naming(benchmark_path: Path) -> TarballValidationResult:
+    """Validate that source tarball name matches Dockerfile WORKDIR.
+
+    This is the strict validation for TAR-04/VAL-01/VAL-03 requirements.
+    Returns errors (not warnings) for naming mismatches.
+
+    Args:
+        benchmark_path: Path to benchmark directory
+
+    Returns:
+        TarballValidationResult with validation status and details
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    found_tarballs: list[str] = []
+
+    pkgs_dir = benchmark_path / "pkgs"
+    dockerfile = benchmark_path / "Dockerfile"
+
+    # No pkgs/ directory is not an error (might use main_repo mode)
+    if not pkgs_dir.exists():
+        return TarballValidationResult(
+            valid=True,
+            warnings=["No pkgs/ directory (bundled source not available)"],
+        )
+
+    # Get expected tarball name from WORKDIR
+    expected_name = get_expected_source_dir(dockerfile)
+    if not expected_name:
+        return TarballValidationResult(
+            valid=False,
+            errors=["Cannot determine expected tarball name from Dockerfile WORKDIR"],
+        )
+
+    # Find all source tarballs (exclude dependency tarballs by checking common patterns)
+    # Source tarball should match WORKDIR name
+    expected_tarball = pkgs_dir / f"{expected_name}.tar.gz"
+    expected_split = pkgs_dir / f"{expected_name}.tar.gz.partaa"
+
+    # Find all .tar.gz files (excluding split parts except .partaa)
+    all_tarballs = list(pkgs_dir.glob("*.tar.gz"))
+    split_first_parts = list(pkgs_dir.glob("*.tar.gz.partaa"))
+
+    # Collect tarball names
+    for tb in all_tarballs:
+        found_tarballs.append(tb.name)
+    for sp in split_first_parts:
+        # Extract base name (e.g., "poi.tar.gz" from "poi.tar.gz.partaa")
+        base_name = sp.name.replace(".partaa", "")
+        if base_name not in found_tarballs:
+            found_tarballs.append(f"{base_name} (split)")
+
+    # Check if expected tarball exists
+    has_expected = expected_tarball.exists() or expected_split.exists()
+
+    if not has_expected:
+        # Check for misnamed source tarball
+        # Look for tarballs that might be the source (excluding known dependencies)
+        dependency_patterns = [
+            "fuzzing",
+            "corpus",
+            "samples",
+            "testing",
+            "maven",
+            "jdk",
+            "openjdk",
+        ]
+
+        potential_source_tarballs = []
+        for tb in all_tarballs:
+            # e.g., "apache-poi" from "apache-poi.tar.gz"
+            name_lower = tb.stem.lower()
+            is_dependency = any(pat in name_lower for pat in dependency_patterns)
+            if not is_dependency:
+                potential_source_tarballs.append(tb.name)
+
+        for sp in split_first_parts:
+            base_name = sp.name.replace(".tar.gz.partaa", "")
+            name_lower = base_name.lower()
+            is_dependency = any(pat in name_lower for pat in dependency_patterns)
+            if (
+                not is_dependency
+                and f"{base_name}.tar.gz" not in potential_source_tarballs
+            ):
+                potential_source_tarballs.append(f"{base_name}.tar.gz (split)")
+
+        if potential_source_tarballs:
+            errors.append(
+                f"Tarball naming mismatch: expected '{expected_name}.tar.gz' "
+                f"but found: {', '.join(potential_source_tarballs)}"
+            )
+        else:
+            errors.append(f"Expected source tarball not found: {expected_name}.tar.gz")
+
+    return TarballValidationResult(
+        valid=len(errors) == 0,
+        expected_name=expected_name,
+        found_tarballs=found_tarballs,
+        errors=errors,
+        warnings=warnings,
+    )
+
+
 def _validate_ref_diff(benchmark_path: Path, meta_yaml: Path) -> list[str]:
     """Validate ref.diff exists for delta mode benchmarks.
 

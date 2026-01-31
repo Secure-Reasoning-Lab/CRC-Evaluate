@@ -325,6 +325,8 @@ class CRSBugFindingExecutor(CRSExecutor):
             {{ build_dir }}/run/{{ crs_name }}/{{ project }}/{{ harness_name }}/{{ run_id }}
         """
         start_time = time.time()
+        build_time: Optional[float] = None
+        run_start_time: Optional[float] = None
         project_name = self._extract_project_name(benchmark_path)
 
         logger.info(
@@ -361,6 +363,10 @@ class CRSBugFindingExecutor(CRSExecutor):
                 trial_output_dir, harness_name, project_name, sanitizer
             )
 
+            # Record build time (time from start to run start)
+            build_time = time.time() - start_time
+            run_start_time = time.time()
+
             # Signal that CRS run is starting (after build)
             if on_run_start:
                 on_run_start()
@@ -381,7 +387,12 @@ class CRSBugFindingExecutor(CRSExecutor):
                 benchmark_path, harness_name, trial_output_dir
             )
 
-            # 6. Detect ref.diff for delta mode (independent of hints)
+            # 6. Prepare seed corpus if enabled
+            seed_corpus_path = self._prepare_seed_corpus(
+                benchmark_path, harness_name, trial_output_dir
+            )
+
+            # 7. Detect ref.diff for delta mode (independent of hints)
             # ref.diff is based on evaluation mode, not hints configuration
             diff_path = None
             mode = self.config.get("mode")
@@ -401,7 +412,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                         f"Delta mode requires .aixcc/ref.diff but not found in {benchmark_path}"
                     )
 
-            # 7. Run CRS bug finding campaign
+            # 8. Run CRS bug finding campaign
             cmd = self._construct_run_command(
                 project_name=project_name,
                 harness_name=harness_name,
@@ -410,6 +421,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 trial_registry_dir=trial_registry_dir,
                 hints_path=hints_path,
                 diff_path=diff_path,
+                seed_corpus_path=seed_corpus_path,
             )
 
             logger.info(f"Run command: {' '.join(cmd)}")
@@ -488,6 +500,10 @@ class CRSBugFindingExecutor(CRSExecutor):
                 )
 
             execution_time = time.time() - start_time
+            # Calculate run_time (time from run start to end)
+            run_time = (
+                time.time() - run_start_time if run_start_time is not None else None
+            )
 
             # 8. Store execution metadata
             self._store_execution_metadata(
@@ -516,6 +532,12 @@ class CRSBugFindingExecutor(CRSExecutor):
                 logger.debug(f"stdout: {stdout}")
                 logger.debug(f"stderr: {stderr}")
 
+            # Log timing breakdown
+            if build_time is not None and run_time is not None:
+                logger.info(
+                    f"Timing breakdown: build={build_time:.1f}s, run={run_time:.1f}s, total={execution_time:.1f}s"
+                )
+
             return CRSExecutionResult(
                 harness_name=harness.name,
                 execution_time=execution_time,
@@ -523,6 +545,8 @@ class CRSBugFindingExecutor(CRSExecutor):
                 output=stdout,
                 error=stderr if not success else None,
                 timed_out=timed_out,
+                build_time=build_time,
+                run_time=run_time,
             )
 
         except Exception as e:
@@ -736,6 +760,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         trial_registry_dir: Path,
         hints_path: Optional[Path],
         diff_path: Optional[Path] = None,
+        seed_corpus_path: Optional[Path] = None,
     ) -> List[str]:
         """Construct oss-bugfind-crs run command.
 
@@ -747,6 +772,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             trial_registry_dir: Trial-local registry directory
             hints_path: Optional path to hints directory
             diff_path: Optional path to diff file (delta mode)
+            seed_corpus_path: Optional path to seed corpus directory
 
         Returns:
             Command as list of strings
@@ -780,6 +806,11 @@ class CRSBugFindingExecutor(CRSExecutor):
         # Add diff path if available (delta mode)
         if diff_path and diff_path.exists():
             cmd.extend(["--diff", str(diff_path)])
+
+        # Add seed corpus if available
+        if seed_corpus_path and seed_corpus_path.exists():
+            cmd.extend(["--corpus", str(seed_corpus_path)])
+            logger.info(f"Using seed corpus from: {seed_corpus_path}")
 
         # Add external LiteLLM flag if using external LiteLLM
         if self.litellm_mode is not None:
@@ -999,6 +1030,59 @@ class CRSBugFindingExecutor(CRSExecutor):
 
         logger.info(f"Prepared hints at: {hints_dir}")
         return hints_dir
+
+    def _prepare_seed_corpus(
+        self, benchmark_path: Path, harness_name: str, trial_output_dir: Path
+    ) -> Optional[Path]:
+        """Prepare seed corpus directory for CRS execution.
+
+        Creates trial-specific seed corpus directory by copying files from
+        the benchmark's collected corpus, filtered by time if configured.
+
+        Args:
+            benchmark_path: Path to benchmark directory
+            harness_name: Name of the harness
+            trial_output_dir: Trial-specific output directory
+
+        Returns:
+            Path to prepared seed corpus directory, or None if not available/enabled
+
+        Process:
+            1. Check if seed_corpus_enabled in config
+            2. Load manifest from benchmark .aixcc/<harness>/corpus/
+            3. Filter files by seed_corpus_max_time if configured
+            4. Copy selected files to trial_output_dir/seed_corpus/
+        """
+        if not self.config.get("seed_corpus_enabled", False):
+            logger.debug("Seed corpus disabled, skipping preparation")
+            return None
+
+        from crsbench.benchmark.seed import SeedCorpusPreparer
+
+        preparer = SeedCorpusPreparer(benchmark_path, harness_name)
+
+        if not preparer.has_seed_corpus():
+            logger.warning(
+                f"Seed corpus not found for harness {harness_name}. "
+                f"Run 'crsbench benchmark seed-import' to collect corpus."
+            )
+            return None
+
+        seed_corpus_dir = trial_output_dir / "seed_corpus"
+        max_time = self.config.get("seed_corpus_max_time")
+
+        try:
+            result = preparer.prepare(seed_corpus_dir, max_time=max_time, force=True)
+            logger.info(
+                f"Prepared seed corpus: {result.copied_files} files "
+                f"(max_time={max_time}s)"
+                if max_time
+                else f"Prepared seed corpus: {result.copied_files} files (all)"
+            )
+            return seed_corpus_dir
+        except Exception as e:
+            logger.warning(f"Failed to prepare seed corpus: {e}")
+            return None
 
     def _store_execution_metadata(
         self,

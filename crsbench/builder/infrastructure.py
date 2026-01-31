@@ -6,10 +6,12 @@ for building fuzzers and reproducing crashes.
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import tempfile
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -20,7 +22,7 @@ from crsbench.builder.types import (
     FuzzerBuildResult,
     ReproduceOutput,
 )
-from crsbench.utils.docker import fix_docker_ownership
+from crsbench.utils.docker import docker_rmtree, fix_docker_ownership
 from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import clone_or_copy_cached_repo
 
@@ -33,6 +35,192 @@ EXIT_CODE_TIMEOUT = 124  # Subprocess timeout in helper.py
 
 # Track initialized OSS-Fuzz paths to avoid redundant setup
 _initialized_oss_fuzz_paths: set[Path] = set()
+
+# Regex to match unified diff hunk header: @@ -start,count +start,count @@
+_HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@")
+
+
+@dataclass
+class PatchHunk:
+    """Represents a single hunk from a unified diff patch.
+
+    A hunk is one contiguous change within a file, starting with @@ header.
+    """
+
+    file_path: str  # The file being patched (from +++ line)
+    header: str  # The @@ line
+    content: list[str]  # Lines of the hunk (context, additions, deletions)
+
+    def hash_key(self) -> str:
+        """Return a hash key for deduplication.
+
+        Uses file path and normalized content (without line numbers) to detect
+        identical hunks even if they appear at different positions.
+        """
+        # Normalize: join content lines, strip trailing whitespace
+        normalized = "\n".join(line.rstrip() for line in self.content)
+        content_to_hash = f"{self.file_path}\n{normalized}"
+        return hashlib.sha256(content_to_hash.encode()).hexdigest()
+
+
+@dataclass
+class PatchFile:
+    """Represents a parsed unified diff patch file."""
+
+    file_path: str  # The file being patched
+    old_path: str  # --- line
+    new_path: str  # +++ line
+    hunks: list[PatchHunk]
+
+    def to_diff(self) -> str:
+        """Convert back to unified diff format."""
+        lines = [
+            f"diff --git a/{self.file_path} b/{self.file_path}",
+            self.old_path,
+            self.new_path,
+        ]
+        for hunk in self.hunks:
+            lines.append(hunk.header)
+            lines.extend(hunk.content)
+        return "\n".join(lines)
+
+
+def parse_patch_into_hunks(patch_content: str) -> list[PatchFile]:
+    """Parse a unified diff patch into individual file patches with hunks.
+
+    Args:
+        patch_content: The full patch file content
+
+    Returns:
+        List of PatchFile objects, each containing hunks for one file
+    """
+    lines = patch_content.splitlines()
+    patch_files: list[PatchFile] = []
+
+    current_file: Optional[PatchFile] = None
+    current_hunk: Optional[PatchHunk] = None
+    old_path = ""
+    new_path = ""
+    file_path = ""
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        # Start of a new file diff
+        if line.startswith("diff --git"):
+            # Save previous hunk and file
+            if current_hunk and current_file:
+                current_file.hunks.append(current_hunk)
+            if current_file and current_file.hunks:
+                patch_files.append(current_file)
+
+            current_hunk = None
+            current_file = None
+            file_path = ""
+            old_path = ""
+            new_path = ""
+            i += 1
+            continue
+
+        # Old file path
+        if line.startswith("--- "):
+            old_path = line
+            i += 1
+            continue
+
+        # New file path
+        if line.startswith("+++ "):
+            new_path = line
+            # Extract file path from +++ b/path or +++ path
+            if line.startswith("+++ b/"):
+                file_path = line[6:]
+            elif line.startswith("+++ a/"):
+                file_path = line[6:]
+            else:
+                file_path = line[4:].strip()
+
+            current_file = PatchFile(
+                file_path=file_path,
+                old_path=old_path,
+                new_path=new_path,
+                hunks=[],
+            )
+            i += 1
+            continue
+
+        # Hunk header
+        if _HUNK_HEADER_RE.match(line):
+            # Save previous hunk
+            if current_hunk and current_file:
+                current_file.hunks.append(current_hunk)
+
+            current_hunk = PatchHunk(
+                file_path=file_path,
+                header=line,
+                content=[],
+            )
+            i += 1
+            continue
+
+        # Hunk content (context, addition, deletion, or no-newline marker)
+        if current_hunk is not None and line.startswith((" ", "+", "-", "\\")):
+            current_hunk.content.append(line)
+            i += 1
+            continue
+
+        # Skip other lines (index, mode changes, etc.)
+        i += 1
+
+    # Don't forget the last hunk and file
+    if current_hunk and current_file:
+        current_file.hunks.append(current_hunk)
+    if current_file and current_file.hunks:
+        patch_files.append(current_file)
+
+    return patch_files
+
+
+def deduplicate_hunks(
+    patch_files: list[PatchFile],
+    applied_hashes: set[str],
+) -> tuple[list[PatchFile], set[str]]:
+    """Remove duplicate hunks from patch files.
+
+    Args:
+        patch_files: List of parsed patch files
+        applied_hashes: Set of already-applied hunk hashes
+
+    Returns:
+        Tuple of (deduplicated patch files, updated applied hashes)
+    """
+    result: list[PatchFile] = []
+    new_hashes = set(applied_hashes)
+
+    for pf in patch_files:
+        unique_hunks = []
+        for hunk in pf.hunks:
+            hunk_hash = hunk.hash_key()
+            if hunk_hash not in new_hashes:
+                unique_hunks.append(hunk)
+                new_hashes.add(hunk_hash)
+
+        if unique_hunks:
+            result.append(
+                PatchFile(
+                    file_path=pf.file_path,
+                    old_path=pf.old_path,
+                    new_path=pf.new_path,
+                    hunks=unique_hunks,
+                )
+            )
+
+    return result, new_hashes
+
+
+def write_patch_files_to_diff(patch_files: list[PatchFile]) -> str:
+    """Convert list of PatchFile objects back to unified diff format."""
+    return "\n".join(pf.to_diff() for pf in patch_files) + "\n"
 
 
 def ensure_oss_fuzz_ready(oss_fuzz_path: Path) -> None:
@@ -157,6 +345,52 @@ class OSSFuzzInfrastructure:
         if self.work_dir:
             return self.work_dir / variant_name / "build" / "work"
         return self.oss_fuzz_path / "build" / "work" / variant_name
+
+    def copy_build_output(
+        self,
+        source_variant: str,
+        target_variant: str,
+    ) -> bool:
+        """Copy build output from source variant to target variant.
+
+        This is needed for unit tests which run in a separate variant to avoid
+        overwriting the ASAN binary from build_fuzzers. The test variant needs
+        the binaries from the build variant to execute tests.
+
+        Args:
+            source_variant: Source variant name (has the binaries)
+            target_variant: Target variant name (needs the binaries)
+
+        Returns:
+            True if copy succeeded, False otherwise
+        """
+        import shutil
+
+        source_path = self.get_build_output_path(source_variant)
+        target_path = self.get_build_output_path(target_variant)
+
+        if not source_path.exists():
+            logger.warning(f"Source build output not found: {source_path}")
+            return False
+
+        # Create target directory if it doesn't exist
+        target_path.mkdir(parents=True, exist_ok=True)
+
+        # Copy all files from source to target
+        try:
+            for item in source_path.iterdir():
+                if item.is_file():
+                    shutil.copy2(item, target_path / item.name)
+                elif item.is_dir():
+                    dest = target_path / item.name
+                    if dest.exists():
+                        shutil.rmtree(dest)
+                    shutil.copytree(item, dest)
+            logger.debug(f"Copied build output: {source_variant} -> {target_variant}")
+            return True
+        except OSError as e:
+            logger.warning(f"Failed to copy build output: {e}")
+            return False
 
     def get_isolated_src_path(self, variant_name: str) -> Path:
         """Get the source directory path (isolated or shared).
@@ -425,34 +659,18 @@ class OSSFuzzInfrastructure:
             build_path.unlink()
             logger.debug(f"Removed build symlink: {build_path}")
         elif build_path.exists():
-            # Fix Docker ownership before removal (files may be owned by root)
-            fix_docker_ownership(build_path)
-            try:
-                shutil.rmtree(build_path)
-                logger.debug(f"Removed build output: {build_path}")
-            except Exception as e:
-                logger.warning(f"Failed to remove build output: {e}")
+            docker_rmtree(build_path)
 
         # Remove isolated build directory if using work_dir
         if self.work_dir:
             isolated_build = self.get_isolated_build_path(variant_name)
             if isolated_build.exists():
-                fix_docker_ownership(isolated_build)
-                try:
-                    shutil.rmtree(isolated_build)
-                    logger.debug(f"Removed isolated build: {isolated_build}")
-                except Exception as e:
-                    logger.warning(f"Failed to remove isolated build: {e}")
+                docker_rmtree(isolated_build)
 
         # Remove work directory
         work_path = self.get_isolated_work_path(variant_name)
         if work_path.exists():
-            fix_docker_ownership(work_path)
-            try:
-                shutil.rmtree(work_path)
-                logger.debug(f"Removed work dir: {work_path}")
-            except Exception as e:
-                logger.warning(f"Failed to remove work dir: {e}")
+            docker_rmtree(work_path)
 
     def cleanup_project_symlink(self, variant_name: str) -> None:
         """Clean up project symlink only.
@@ -486,13 +704,7 @@ class OSSFuzzInfrastructure:
         """
         src_path = self.get_isolated_src_path(variant_name)
         if src_path.exists():
-            # Fix Docker ownership before removal (files may be owned by root)
-            fix_docker_ownership(src_path)
-            try:
-                shutil.rmtree(src_path)
-                logger.debug(f"Removed source dir: {src_path}")
-            except Exception as e:
-                logger.warning(f"Failed to remove source dir: {e}")
+            docker_rmtree(src_path)
 
     def create_variant_project(
         self,
@@ -951,10 +1163,12 @@ class OSSFuzzInfrastructure:
         return self._apply_single_patch(repo_path, patch_file)
 
     def apply_patches_from_list(self, repo_path: Path, patches: list[Path]) -> bool:
-        """Apply a list of patches to a repository.
+        """Apply a list of patches to a repository with hunk-level deduplication.
 
-        Skips duplicate patches (identical content) to handle cases where
-        multiple CPVs share the same vulnerability fix.
+        Uses hunk-level deduplication to handle cases where multiple CPV patches
+        share identical hunks (e.g., same utility function added in multiple
+        version-specific files). This prevents duplicate code from being applied
+        when using fuzz mode.
 
         When applying multiple patches, uses fuzz mode for second and subsequent
         patches to handle context changes from earlier patches.
@@ -967,7 +1181,7 @@ class OSSFuzzInfrastructure:
             True if all patches applied successfully
         """
         success = True
-        applied_hashes: set[str] = set()
+        applied_hunk_hashes: set[str] = set()
         applied_count = 0
 
         # Debug: log all patches to be applied
@@ -979,25 +1193,53 @@ class OSSFuzzInfrastructure:
         logger.debug(f"Applying patches to {repo_path}: {patch_cpvs}")
 
         for patch_file in patches:
-            # Hash patch content to detect duplicates
-            patch_content = patch_file.read_bytes()
-            patch_hash = hashlib.sha256(patch_content).hexdigest()
+            # Parse patch into hunks
+            patch_content = patch_file.read_text()
+            patch_files = parse_patch_into_hunks(patch_content)
 
-            if patch_hash in applied_hashes:
-                logger.debug(f"Skipping duplicate patch: {patch_file.name}")
+            if not patch_files:
+                logger.debug(f"No hunks found in patch: {patch_file.name}")
                 continue
 
-            # Use fuzz for second and subsequent patches to handle
-            # context changes from earlier patches
-            use_fuzz = applied_count > 0
+            # Deduplicate hunks
+            unique_patch_files, applied_hunk_hashes = deduplicate_hunks(
+                patch_files, applied_hunk_hashes
+            )
 
-            if not self._apply_single_patch(repo_path, patch_file, use_fuzz=use_fuzz):
-                logger.warning(f"Failed to apply patch: {patch_file}")
-                success = False
-            else:
-                logger.debug(f"Applied patch: {patch_file.name}")
-                applied_hashes.add(patch_hash)
-                applied_count += 1
+            if not unique_patch_files:
+                logger.debug(f"All hunks already applied, skipping: {patch_file.name}")
+                continue
+
+            # Count unique hunks for logging
+            unique_hunk_count = sum(len(pf.hunks) for pf in unique_patch_files)
+            total_hunk_count = sum(len(pf.hunks) for pf in patch_files)
+            if unique_hunk_count < total_hunk_count:
+                logger.debug(
+                    f"Patch {patch_file.name}: {unique_hunk_count}/{total_hunk_count} "
+                    "unique hunks (duplicates skipped)"
+                )
+
+            # Write unique hunks to temp file
+            unique_diff = write_patch_files_to_diff(unique_patch_files)
+
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".diff", delete=False
+            ) as tmp:
+                tmp.write(unique_diff)
+                tmp_path = Path(tmp.name)
+
+            try:
+                # Use fuzz for second and subsequent patches
+                use_fuzz = applied_count > 0
+
+                if not self._apply_single_patch(repo_path, tmp_path, use_fuzz=use_fuzz):
+                    logger.warning(f"Failed to apply patch: {patch_file}")
+                    success = False
+                else:
+                    logger.debug(f"Applied patch: {patch_file.name}")
+                    applied_count += 1
+            finally:
+                tmp_path.unlink(missing_ok=True)
 
         return success
 
@@ -1451,7 +1693,7 @@ class OSSFuzzInfrastructure:
     ) -> bool:
         """Check if inc-build image exists locally and ensure OSS-Fuzz format.
 
-        If image exists in registry or nested format but not in OSS-Fuzz format,
+        If image exists in registry format but not in OSS-Fuzz format,
         automatically retags it for OSS-Fuzz compatibility.
 
         Args:
@@ -1474,12 +1716,6 @@ class OSSFuzzInfrastructure:
             self._retag_for_ossfuzz(inc_image, ossfuzz_image)
             return True
 
-        # Check nested formats and retag if found
-        for nested_image in self._get_nested_image_names(project_name, sanitizer):
-            if self._docker_image_exists(nested_image):
-                self._retag_for_ossfuzz(nested_image, ossfuzz_image)
-                return True
-
         return False
 
     def _docker_image_exists(self, image_name: str) -> bool:
@@ -1495,29 +1731,6 @@ class OSSFuzzInfrastructure:
         except Exception as e:
             logger.debug(f"Error checking image {image_name}: {e}")
             return False
-
-    def _get_nested_image_names(
-        self,
-        project_name: str,
-        sanitizer: str = "address",
-    ) -> list[str]:
-        """Get all possible nested format image names (legacy local builds).
-
-        Some local builds use nested path format:
-        - C/C++: aixcc-afc/aixcc/c/{project}:inc-{sanitizer}
-        - JVM: aixcc-afc/aixcc/jvm/{project}:inc-{sanitizer}
-
-        Args:
-            project_name: OSS-Fuzz project name
-            sanitizer: Sanitizer type
-
-        Returns:
-            List of possible nested format image names
-        """
-        return [
-            f"aixcc-afc/aixcc/c/{project_name}:inc-{sanitizer}",
-            f"aixcc-afc/aixcc/jvm/{project_name}:inc-{sanitizer}",
-        ]
 
     def pull_inc_build_image(
         self,
@@ -1548,12 +1761,6 @@ class OSSFuzzInfrastructure:
         if self._docker_image_exists(inc_image):
             logger.debug(f"Inc-build image available locally: {inc_image}")
             return self._retag_for_ossfuzz(inc_image, ossfuzz_image)
-
-        # Fallback: check nested formats (legacy local builds)
-        for nested_image in self._get_nested_image_names(project_name, sanitizer):
-            if self._docker_image_exists(nested_image):
-                logger.debug(f"Found nested format image locally: {nested_image}")
-                return self._retag_for_ossfuzz(nested_image, ossfuzz_image)
 
         # Pull from registry
         logger.debug(f"Pulling inc-build image: {inc_image}")
@@ -1610,6 +1817,9 @@ class OSSFuzzInfrastructure:
         This allows parallel test execution with proper path isolation.
         The inc-build image is retagged from project name to variant name.
 
+        NOTE: Caller must ensure source image is available (via _ensure_inc_build_image)
+        before calling this method.
+
         Args:
             project_name: Original project name (source image)
             variant_name: Variant name (target image)
@@ -1618,9 +1828,7 @@ class OSSFuzzInfrastructure:
         Returns:
             True if image is ready for use
         """
-        # Source: inc-build image for the project
         src_image = self.get_ossfuzz_image_name(project_name, sanitizer)
-        # Target: same image tagged with variant name
         dst_image = f"aixcc-afc/{variant_name}:inc-{sanitizer}"
 
         if self._docker_image_exists(dst_image):
@@ -1628,7 +1836,7 @@ class OSSFuzzInfrastructure:
             return True
 
         if not self._docker_image_exists(src_image):
-            logger.warning(f"Source inc-build image not found: {src_image}")
+            logger.warning(f"Source inc-build image not available: {src_image}")
             return False
 
         return self._retag_for_ossfuzz(src_image, dst_image)

@@ -97,6 +97,20 @@ hint_sarif_level: 3
 # Set to null to disable corpus hints
 # hint_corpus_level: null
 
+# ===== Seed Corpus Configuration =====
+
+# Enable seed corpus from previous experiment runs.
+# Requires corpus to be collected via 'crsbench benchmark seed-import' first.
+# Default: false
+seed_corpus_enabled: false
+
+# Maximum relative time (seconds) for seed corpus files.
+# Only files discovered within this time from CRS start are used.
+# Useful for replicating "first hour" findings from a longer run.
+# Set to null to use all available seeds.
+# Default: null (use all)
+# seed_corpus_max_time: 3600  # Use seeds from first hour only
+
 # ===== LiteLLM Configuration =====
 
 # LiteLLM mode: 'passthrough' or 'proxy'

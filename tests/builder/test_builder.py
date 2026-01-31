@@ -285,10 +285,10 @@ class TestOSSFuzzBuilder:
             include_coverage=True,
         )
 
-        # Coverage variant: {benchmark}-coverage-{mode}-coverage
+        # Coverage variant: {benchmark}-cov-{mode}-coverage
         # Note: Coverage sanitizer maps to "coverage" (not "cov")
         variant_names = [c.variant_name for c in plan.configs]
-        assert "test-coverage-delta-coverage" in variant_names
+        assert "test-cov-delta-coverage" in variant_names
 
     def test_is_variant_built(self, mock_oss_fuzz_path: Path):
         """Test checking if variant is built."""
@@ -524,7 +524,7 @@ class TestBuildConfigVariantNames:
         # Variant names now include sanitizer
         # Coverage variants use "coverage" as sanitizer, others default to "address" -> "asan"
         if variant_type == VariantType.COVERAGE:
-            assert config.variant_name == f"my-benchmark-coverage-{expected_suffix}"
+            assert config.variant_name == f"my-benchmark-cov-{expected_suffix}"
         else:
             assert config.variant_name == f"my-benchmark-asan-{expected_suffix}"
 

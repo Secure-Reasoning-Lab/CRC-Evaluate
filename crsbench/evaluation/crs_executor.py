@@ -64,6 +64,8 @@ class CRSExecutionResult:
     output: str
     error: Optional[str] = None
     timed_out: bool = False
+    build_time: Optional[float] = None  # Time spent building CRS (seconds)
+    run_time: Optional[float] = None  # Time spent running CRS (seconds)
 
 
 class CRSExecutor(ABC):

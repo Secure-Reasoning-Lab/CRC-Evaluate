@@ -26,7 +26,7 @@ def sanitizer_short_name(sanitizer: str) -> str:
         "undefined": "ubsan",
         "memory": "msan",
         "thread": "tsan",
-        "coverage": "coverage",
+        "coverage": "cov",
     }
     return mapping.get(sanitizer, sanitizer)
 
