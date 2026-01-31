@@ -5,6 +5,7 @@ and executes them via DAGExecutor. Build results are stored in JobContext.shared
 for downstream CRS trial jobs to consume.
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, cast
 
 from crsbench.benchmark_ci.jobs.base import Job, JobContext
@@ -19,12 +20,8 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-# Type alias for Trial-like objects with required fields
-type TrialLike = object
-
-
 def create_upfront_build_jobs(
-    trials: list[TrialLike],
+    trials: Sequence[object],
     *,
     use_inc_build: bool = True,
     force_rebuild: bool = False,

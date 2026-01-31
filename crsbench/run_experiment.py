@@ -34,8 +34,7 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
-from crsbench.builder import BuildResult, OSSFuzzBuilder
-from crsbench.builder.types import BenchmarkMode
+from crsbench.builder import BuildResult
 from crsbench.distributed.jobs import get_crs_type
 from crsbench.evaluation.cleanup import cleanup_trial_directory
 from crsbench.evaluation.results import CRSType, TrialResult
@@ -1229,11 +1228,8 @@ def build_variants_upfront(
 ) -> dict[str, BuildResult]:
     """Build all required variants upfront before trial execution.
 
-    This function:
-    1. Collects all unique (benchmark, mode) combinations from trials
-    2. Creates build plans for each combination using MetaYamlAdapter
-    3. Deduplicates across benchmarks (same variant only built once)
-    4. Builds all variants in parallel using OSSFuzzBuilder
+    Delegates to the build orchestrator which creates deduplicated
+    BuildVariantsJob instances and executes them in parallel via DAGExecutor.
 
     Args:
         trials: List of Trial namedtuples
@@ -1243,151 +1239,64 @@ def build_variants_upfront(
     Returns:
         Dict mapping variant names to their build results
     """
-    from crsbench.validation.meta_adapter import MetaYamlAdapter
+    from crsbench.experiment.build_orchestrator import (
+        create_upfront_build_jobs,
+        execute_upfront_builds,
+    )
 
     log_section("Building Variants Upfront", width=60)
 
-    # Get oss-fuzz path
+    # Resolve oss-fuzz path and export for BuildVariantsJob
     oss_fuzz_path = Path(
         args.oss_fuzz_path or config.oss_fuzz_path or (Path.cwd() / "oss-fuzz")
     ).resolve()
-
     if not oss_fuzz_path.exists():
-        logger.error(f"oss-fuzz directory not found: {oss_fuzz_path}")
         raise RuntimeError(f"oss-fuzz directory not found: {oss_fuzz_path}")
+    os.environ["OSS_FUZZ_ROOT"] = str(oss_fuzz_path)
 
-    # Get worker count
     build_workers = resolve_build_workers(
         getattr(args, "build_workers", None),
         config.build_workers,
     )
-    logger.info(f"Using {build_workers} build workers")
-
-    # Check if coverage is enabled
-    coverage_enabled = config.coverage_enabled
-
-    # Collect unique (benchmark_path, mode) combinations
-    benchmark_modes: dict[tuple[Path, str], None] = {}
-    for trial in trials:
-        key = (trial.benchmark_harness.path, trial.mode)
-        benchmark_modes[key] = None
-
-    logger.info(f"Found {len(benchmark_modes)} unique (benchmark, mode) combinations")
-
-    # Create builder
     source_mode = getattr(config, "source_mode", "main_repo")
-    builder = OSSFuzzBuilder(
-        oss_fuzz_path, max_workers=build_workers, source_mode=source_mode
+
+    # Create deduplicated build jobs (one per unique benchmark+sanitizer)
+    jobs = create_upfront_build_jobs(
+        trials,
+        use_inc_build=False,
+        force_rebuild=False,
+        source_mode=source_mode,
     )
 
-    # Collect all build configs
-    all_configs: list = []
-    seen_variants: set[str] = set()
-
-    for benchmark_path, mode in benchmark_modes:
-        # Load project.yaml for main_repo
-        project_yaml_path = benchmark_path / "project.yaml"
-        if not project_yaml_path.exists():
-            logger.warning(f"project.yaml not found: {project_yaml_path}, skipping")
-            continue
-
-        with project_yaml_path.open() as f:
-            project_data = yaml.safe_load(f)
-
-        main_repo = project_data.get("main_repo")
-        repo_name = project_data.get("repo_name")
-        language = project_data.get("language", "c")
-
-        if not main_repo:
-            logger.warning(f"main_repo not found in {project_yaml_path}, skipping")
-            continue
-
-        # Create adapter from meta.yaml
-        meta_yaml_path = benchmark_path / ".aixcc" / "meta.yaml"
-        if not meta_yaml_path.exists():
-            logger.warning(f"meta.yaml not found: {meta_yaml_path}, skipping")
-            continue
-
-        try:
-            adapter = MetaYamlAdapter.from_meta_yaml(
-                meta_yaml_path=meta_yaml_path,
-                benchmark_name=benchmark_path.name,
-                lang=language,
-                main_repo=main_repo,
-                benchmark_path=benchmark_path,
-                repo_name=repo_name,
-            )
-        except (FileNotFoundError, ValueError) as e:
-            logger.warning(f"Failed to load meta.yaml: {e}, skipping")
-            continue
-
-        # Determine mode and get commit info based on trial's mode (not adapter's default)
-        benchmark_mode = BenchmarkMode.DELTA if mode == "delta" else BenchmarkMode.FULL
-
-        if mode == "delta":
-            if not adapter.config.delta_mode:
-                logger.warning(
-                    f"Delta mode not configured for {benchmark_path}, skipping"
-                )
-                continue
-            base_commit = adapter.config.delta_mode.base_commit
-            ref_commit = adapter.config.delta_mode.ref_commit
-        else:
-            if not adapter.config.full_mode:
-                logger.warning(
-                    f"Full mode not configured for {benchmark_path}, skipping"
-                )
-                continue
-            base_commit = adapter.config.full_mode.base_commit
-            ref_commit = None
-
-        # Get CPV numbers from adapter
-        cpv_numbers = adapter.get_cpv_numbers()
-
-        # Create build plan
-        plan = builder.create_build_plan(
-            benchmark_name=benchmark_path.name,
-            benchmark_path=benchmark_path,
-            main_repo=main_repo,
-            mode=benchmark_mode,
-            base_commit=base_commit,
-            ref_commit=ref_commit,
-            cpv_numbers=cpv_numbers,
-            language=language,
-            repo_name=repo_name,
-            include_coverage=coverage_enabled,
-        )
-
-        # Add configs (deduplicate across benchmarks)
-        for cfg in plan.configs:
-            if cfg.variant_name not in seen_variants:
-                all_configs.append(cfg)
-                seen_variants.add(cfg.variant_name)
-
-    logger.info(f"Total unique variants to build: {len(all_configs)}")
-
-    # Build all variants
-    if not all_configs:
+    if not jobs:
         logger.warning("No variants to build")
         return {}
 
-    results = builder.build_variants(all_configs)
+    # Execute in parallel via DAGExecutor
+    executor_results, context = execute_upfront_builds(
+        jobs, build_workers=build_workers
+    )
 
-    # Report build results
-    successful = sum(1 for r in results.values() if r.success)
-    cached = sum(1 for r in results.values() if r.cached)
-    failed = sum(1 for r in results.values() if not r.success)
+    # Extract BuildResult dicts from context.shared
+    all_build_results: dict[str, BuildResult] = {}
+    for job in jobs:
+        shared_data = context.shared.get(job.job_id)
+        if shared_data and "build_results" in shared_data:
+            all_build_results.update(shared_data["build_results"])
 
+    # Report
+    successful = sum(1 for r in all_build_results.values() if r.success)
+    cached = sum(1 for r in all_build_results.values() if r.cached)
+    failed = sum(1 for r in all_build_results.values() if not r.success)
     logger.info(
         f"Build complete: {successful} succeeded ({cached} cached), {failed} failed"
     )
-
     if failed > 0:
-        for name, result in results.items():
+        for name, result in all_build_results.items():
             if not result.success:
                 logger.error(f"  Failed: {name} - {result.error}")
 
-    return results
+    return all_build_results
 
 
 def should_use_distributed_mode(
