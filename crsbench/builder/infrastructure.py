@@ -1476,7 +1476,7 @@ class OSSFuzzInfrastructure:
                 cmd,
                 cwd=self.oss_fuzz_path,
                 capture_output=True,
-                timeout=timeout + 30,  # Grace period for helper.py
+                timeout=timeout + 10,  # Grace period for helper.py
                 stdin=subprocess.DEVNULL,  # Prevent terminal issues
             )
 
