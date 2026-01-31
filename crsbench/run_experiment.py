@@ -556,6 +556,11 @@ Examples:
 
     add_benchmark_subparser(subparsers)
 
+    # 're-eval' subcommand - re-run verification on existing trials
+    from crsbench.evaluation.reeval.cli import add_reeval_subparser
+
+    add_reeval_subparser(subparsers)
+
     args = parser.parse_args()
 
     # Default to 'run' if no command specified (shouldn't happen due to legacy handling)
@@ -2519,6 +2524,11 @@ def main() -> None:
         )
 
         sys.exit(run_benchmark_command(args))
+
+    if args.command == "re-eval":
+        from crsbench.evaluation.reeval.cli import run_reeval
+
+        sys.exit(run_reeval(args))
 
     # Below is for 'run' command (experiment execution)
 
