@@ -2021,13 +2021,16 @@ class OSSFuzzInfrastructure:
                     f"(exit code: {result.returncode})"
                 )
 
+            fix_docker_ownership(self.get_build_output_path(project_name))
             return passed, result.stdout, result.stderr
 
         except subprocess.TimeoutExpired:
             logger.error(f"Test timeout for {project_name}")
+            fix_docker_ownership(self.get_build_output_path(project_name))
             return False, "", "Test execution timed out"
         except Exception as e:
             logger.error(f"Test execution error for {project_name}: {e}")
+            fix_docker_ownership(self.get_build_output_path(project_name))
             return False, "", str(e)
 
     def is_tests_available(self, project_name: str) -> bool:
