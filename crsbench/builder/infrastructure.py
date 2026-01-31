@@ -22,7 +22,7 @@ from crsbench.builder.types import (
     FuzzerBuildResult,
     ReproduceOutput,
 )
-from crsbench.utils.docker import fix_docker_ownership
+from crsbench.utils.docker import docker_rmtree, fix_docker_ownership
 from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import clone_or_copy_cached_repo
 
@@ -659,34 +659,18 @@ class OSSFuzzInfrastructure:
             build_path.unlink()
             logger.debug(f"Removed build symlink: {build_path}")
         elif build_path.exists():
-            # Fix Docker ownership before removal (files may be owned by root)
-            fix_docker_ownership(build_path)
-            try:
-                shutil.rmtree(build_path)
-                logger.debug(f"Removed build output: {build_path}")
-            except Exception as e:
-                logger.warning(f"Failed to remove build output: {e}")
+            docker_rmtree(build_path)
 
         # Remove isolated build directory if using work_dir
         if self.work_dir:
             isolated_build = self.get_isolated_build_path(variant_name)
             if isolated_build.exists():
-                fix_docker_ownership(isolated_build)
-                try:
-                    shutil.rmtree(isolated_build)
-                    logger.debug(f"Removed isolated build: {isolated_build}")
-                except Exception as e:
-                    logger.warning(f"Failed to remove isolated build: {e}")
+                docker_rmtree(isolated_build)
 
         # Remove work directory
         work_path = self.get_isolated_work_path(variant_name)
         if work_path.exists():
-            fix_docker_ownership(work_path)
-            try:
-                shutil.rmtree(work_path)
-                logger.debug(f"Removed work dir: {work_path}")
-            except Exception as e:
-                logger.warning(f"Failed to remove work dir: {e}")
+            docker_rmtree(work_path)
 
     def cleanup_project_symlink(self, variant_name: str) -> None:
         """Clean up project symlink only.
@@ -720,13 +704,7 @@ class OSSFuzzInfrastructure:
         """
         src_path = self.get_isolated_src_path(variant_name)
         if src_path.exists():
-            # Fix Docker ownership before removal (files may be owned by root)
-            fix_docker_ownership(src_path)
-            try:
-                shutil.rmtree(src_path)
-                logger.debug(f"Removed source dir: {src_path}")
-            except Exception as e:
-                logger.warning(f"Failed to remove source dir: {e}")
+            docker_rmtree(src_path)
 
     def create_variant_project(
         self,
