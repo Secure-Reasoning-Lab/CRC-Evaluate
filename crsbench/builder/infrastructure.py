@@ -164,7 +164,11 @@ def parse_patch_into_hunks(patch_content: str) -> list[PatchFile]:
             continue
 
         # Hunk content (context, addition, deletion, or no-newline marker)
-        if current_hunk is not None and line.startswith((" ", "+", "-", "\\")):
+        # Empty lines represent empty context lines (unchanged blank lines
+        # in source) — git diff omits the leading space for these.
+        if current_hunk is not None and (
+            line == "" or line.startswith((" ", "+", "-", "\\"))
+        ):
             current_hunk.content.append(line)
             i += 1
             continue
