@@ -75,7 +75,7 @@ class TestBuildSingleVariantJob:
             sanitizer="coverage",
         )
         # Job ID includes sanitizer in variant name (coverage -> coverage)
-        assert job.job_id == "build-single:test-proj:test-proj-coverage-delta-coverage"
+        assert job.job_id == "build-single:test-proj:test-proj-cov-delta-coverage"
 
     def test_job_id_cpv(self) -> None:
         """Test job_id for CPV variant (all patches except one)."""

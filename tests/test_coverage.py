@@ -356,8 +356,8 @@ class TestOSSFuzzBuilderCoverage:
                 mode=BenchmarkMode.DELTA,
                 language="c",
             )
-            # Coverage variants include sanitizer and mode: {benchmark}-coverage-{mode}-coverage
-            assert config.variant_name == "mock-c-coverage-delta-coverage"
+            # Coverage variants include sanitizer and mode: {benchmark}-cov-{mode}-coverage
+            assert config.variant_name == "mock-c-cov-delta-coverage"
 
             # Full mode variant
             config2 = BuildConfig(
@@ -371,7 +371,7 @@ class TestOSSFuzzBuilderCoverage:
             )
             # Full mode coverage variant includes sanitizer
             assert (
-                config2.variant_name == "sanity-mock-c-delta-01-coverage-full-coverage"
+                config2.variant_name == "sanity-mock-c-delta-01-cov-full-coverage"
             )
 
     def test_is_variant_built_returns_false_when_not_built(self):
@@ -401,7 +401,7 @@ class TestOSSFuzzBuilderCoverage:
             builder = OSSFuzzBuilder(oss_fuzz)
 
             # Create variant project directory (includes sanitizer and mode)
-            variant_name = "mock-c-coverage-delta-coverage"
+            variant_name = "mock-c-cov-delta-coverage"
             (oss_fuzz / "projects" / variant_name).mkdir()
 
             # Create build output with a file
@@ -431,7 +431,7 @@ class TestOSSFuzzBuilderCoverage:
 
             # Setup: create variant project and build output (simulating previous build)
             # Variant name includes sanitizer and mode
-            variant_name = "mock-c-coverage-delta-coverage"
+            variant_name = "mock-c-cov-delta-coverage"
             (oss_fuzz / "projects" / variant_name).mkdir()
             build_path = oss_fuzz / "build" / "out" / variant_name
             build_path.mkdir(parents=True)
@@ -455,7 +455,7 @@ class TestOSSFuzzBuilderCoverage:
             assert result.success is True
             assert result.cached is True
             # Variant name includes sanitizer (coverage -> coverage)
-            assert result.variant_name == "mock-c-coverage-delta-coverage"
+            assert result.variant_name == "mock-c-cov-delta-coverage"
             assert result.build_path == build_path
 
 

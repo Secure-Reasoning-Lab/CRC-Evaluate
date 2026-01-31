@@ -243,7 +243,7 @@ class TestOSSFuzzBuilderCoverageIntegration:
                 mode=BenchmarkMode.DELTA,
                 language="c",
             )
-            assert config.variant_name == "mock-c-delta-01-coverage-delta-coverage"
+            assert config.variant_name == "mock-c-delta-01-cov-delta-coverage"
 
             # Test build output path via infrastructure
             build_path = builder.infra.get_build_output_path(
