@@ -377,7 +377,11 @@ class OSSFuzzInfrastructure:
             logger.warning(f"Source build output not found: {source_path}")
             return False
 
-        # Create target directory if it doesn't exist
+        # Clean stale target — may have root-owned files from a previous
+        # Docker run (e.g. run_tests) that wasn't fully ownership-fixed.
+        if target_path.exists():
+            docker_rmtree(target_path)
+
         target_path.mkdir(parents=True, exist_ok=True)
 
         # Copy all files from source to target

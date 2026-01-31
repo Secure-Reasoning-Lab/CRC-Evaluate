@@ -344,7 +344,8 @@ class PatchVerificationEngine:
                 build_result = self.infra.build_fuzzers(
                     build_config,
                     repo_path,
-                    use_inc_image=True, inc_fallback=True,
+                    use_inc_image=True,
+                    inc_fallback=True,
                 )
 
             # Record build time and output

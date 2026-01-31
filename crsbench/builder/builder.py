@@ -454,8 +454,10 @@ class OSSFuzzBuilder:
                     fallback_used = True
                     self.infra.cleanup_build_outputs(variant_name)
                     build_result = self.infra.build_fuzzers(
-                        config, repo_path,
-                        use_inc_image=True, inc_fallback=True,
+                        config,
+                        repo_path,
+                        use_inc_image=True,
+                        inc_fallback=True,
                     )
 
                 if not build_result.success:
