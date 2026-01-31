@@ -320,8 +320,7 @@ class PatchVerificationEngine:
             fallback_to_full = self.use_inc_build and not inc_available
 
             logger.info(
-                f"Building {variant_name} via build_fuzzers "
-                f"(inc_build={inc_available})"
+                f"Building {variant_name} via build_fuzzers (inc_build={inc_available})"
             )
 
             build_result = self.infra.build_fuzzers(
@@ -330,21 +329,22 @@ class PatchVerificationEngine:
                 use_inc_image=inc_available,
             )
 
-            # If inc-build failed, automatically fallback to full build
+            # If inc-build failed, fallback to clean build from /src/
+            # using the same inc-build image (deps already installed)
             if inc_available and (not build_result or not build_result.success):
                 logger.warning(
-                    f"Inc-build failed for {variant_name}, falling back to full build"
+                    f"Inc-build failed for {variant_name}, "
+                    "falling back to clean build from /src/"
                 )
                 fallback_to_full = True
                 used_inc_build = False
 
-                # Clean up failed build outputs before retry
                 self.infra.cleanup_build_outputs(variant_name)
 
                 build_result = self.infra.build_fuzzers(
                     build_config,
                     repo_path,
-                    use_inc_image=False,
+                    use_inc_image=True, inc_fallback=True,
                 )
 
             # Record build time and output

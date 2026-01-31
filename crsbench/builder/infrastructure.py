@@ -944,11 +944,12 @@ class OSSFuzzInfrastructure:
                 )
 
             logger.error(
-                f"Build failed for {variant_name}. "
-                f"Exit code: {result.returncode}\n"
-                f"stdout: {result.stdout[:2000] if result.stdout else 'None'}...\n"
-                f"stderr: {result.stderr[:2000] if result.stderr else 'None'}..."
+                f"Build failed for {variant_name} (exit code {result.returncode})"
             )
+            if result.stdout:
+                logger.debug(f"Build stdout: {result.stdout[:2000]}...")
+            if result.stderr:
+                logger.debug(f"Build stderr: {result.stderr[:2000]}...")
             return FuzzerBuildResult(
                 success=False,
                 fallback_used=False,
