@@ -26,7 +26,13 @@ from crsbench.run_experiment import (
     parse_list_argument,
     should_use_distributed_mode,
 )
-from crsbench.validation.schemas import BenchmarkHarness, ExperimentConfig, HarnessFile
+from crsbench.validation.schemas import (
+    POV,
+    BenchmarkHarness,
+    ExperimentConfig,
+    HarnessFile,
+    Vulnerability,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -180,6 +186,7 @@ class TestTrialMatrixGeneration:
             report_filestore="/tmp/rep",
             crses=["crs1", "crs2"],
             benchmarks=["bench1", "bench2"],
+            only_cpv_harnesses=False,
         )
 
         # Create BenchmarkHarness objects
@@ -229,6 +236,7 @@ class TestTrialMatrixGeneration:
             report_filestore="/tmp/rep",
             crses=["crs1", "crs2"],
             benchmarks=["bench1", "bench2"],
+            only_cpv_harnesses=False,
         )
 
         benchmark_harnesses = [
@@ -288,6 +296,7 @@ class TestTrialMatrixGeneration:
             report_filestore="/tmp/rep",
             crses=["crs1"],
             benchmarks=["bench1"],
+            only_cpv_harnesses=False,
         )
 
         benchmark_harness = BenchmarkHarness(
@@ -350,6 +359,7 @@ class TestTrialMatrixGeneration:
                 report_filestore="/tmp/rep",
                 crses=crses,
                 benchmarks=["dummy"],  # Not used, but required for config
+                only_cpv_harnesses=False,
             )
 
             trials = generate_trial_matrix(
@@ -404,7 +414,12 @@ class TestOnlyCpvHarnesses:
         # Mock MetaYamlAdapter to return harness with/without CPVs
         mock_adapter = MagicMock()
         mock_harness_with_cpv = MagicMock()
-        mock_harness_with_cpv.vulns = [{"id": "cpv-1"}]  # Has CPVs
+        mock_harness_with_cpv.vulns = [
+            Vulnerability(
+                vuln_keyword="cpv_1",
+                povs=[POV(id="pov_0", sanitizer="address")],
+            )
+        ]  # Has CPVs
         mock_harness_without_cpv = MagicMock()
         mock_harness_without_cpv.vulns = []  # No CPVs
 
@@ -529,7 +544,12 @@ class TestOnlyCpvHarnesses:
         # Mock MetaYamlAdapter
         mock_adapter = MagicMock()
         mock_harness_with_cpv = MagicMock()
-        mock_harness_with_cpv.vulns = [{"id": "cpv-1"}]
+        mock_harness_with_cpv.vulns = [
+            Vulnerability(
+                vuln_keyword="cpv_1",
+                povs=[POV(id="pov_0", sanitizer="address")],
+            )
+        ]
         mock_harness_without_cpv = MagicMock()
         mock_harness_without_cpv.vulns = []
 
@@ -783,6 +803,7 @@ benchmarks:
             report_filestore="/tmp/rep",
             crses=["atlantis-c"],
             benchmarks=["curl-delta-02"],
+            only_cpv_harnesses=False,
         )
 
         # Generate trial with BenchmarkHarness objects
@@ -908,6 +929,9 @@ class TestIntegrationWithSampleConfigs:
         # Load config
         config = load_experiment_config(config_path)
 
+        # Override only_cpv_harnesses to False for this test
+        config = config.model_copy(update={"only_cpv_harnesses": False})
+
         # Verify config loaded correctly
         assert config.experiment == "multi-crs-baseline-eval"
         assert config.trials == 3
@@ -974,6 +998,9 @@ class TestIntegrationWithSampleConfigs:
             pytest.skip("Sample config not found, skipping integration test")
 
         config = load_experiment_config(config_path)
+
+        # Override only_cpv_harnesses to False for this test
+        config = config.model_copy(update={"only_cpv_harnesses": False})
 
         # Apply CLI overrides
         cli_experiment_name = "custom-experiment-name"
@@ -1213,3 +1240,215 @@ class UnitTestModeSelection:
             match="Cannot specify both --local-only and --distributed flags",
         ):
             should_use_distributed_mode(args, config, total_jobs)
+
+
+class TestSanitizerFiltering:
+    """Test sanitizer-based CPV filtering in trial generation."""
+
+    def test_harness_has_cpv_with_sanitizer(self):
+        """Test _harness_has_cpv_with_sanitizer helper function."""
+        from crsbench.run_experiment import _harness_has_cpv_with_sanitizer
+        from crsbench.validation.schemas import POV, Vulnerability
+
+        # Create a harness with CPVs for different sanitizers
+        harness = HarnessFile(
+            name="test-harness",
+            path="/src/test.c",
+            vulns=[
+                Vulnerability(
+                    vuln_keyword="cpv_1",
+                    povs=[
+                        POV(id="pov_0", sanitizer="undefined"),
+                        POV(id="pov_1", sanitizer="address"),
+                    ],
+                ),
+                Vulnerability(
+                    vuln_keyword="cpv_2",
+                    povs=[
+                        POV(id="pov_0", sanitizer="undefined"),
+                    ],
+                ),
+            ],
+        )
+
+        # Should find matching sanitizers
+        assert _harness_has_cpv_with_sanitizer(harness, "undefined")
+        assert _harness_has_cpv_with_sanitizer(harness, "address")
+
+        # Should not find non-existent sanitizer
+        assert not _harness_has_cpv_with_sanitizer(harness, "memory")
+        assert not _harness_has_cpv_with_sanitizer(harness, "thread")
+
+    def test_harness_has_cpv_with_sanitizer_no_vulns(self):
+        """Test _harness_has_cpv_with_sanitizer with harness without CPVs."""
+        from crsbench.run_experiment import _harness_has_cpv_with_sanitizer
+
+        # Harness with no vulnerabilities
+        harness = HarnessFile(name="test-harness", path="/src/test.c", vulns=None)
+        assert not _harness_has_cpv_with_sanitizer(harness, "address")
+
+        # Harness with empty vulnerabilities list
+        harness_empty = HarnessFile(name="test-harness", path="/src/test.c", vulns=[])
+        assert not _harness_has_cpv_with_sanitizer(harness_empty, "address")
+
+    def test_trial_generation_filters_by_sanitizer(self):
+        """Test that trial generation skips sanitizers without matching CPVs."""
+        from crsbench.validation.schemas import POV, Sanitizer, Vulnerability
+
+        # Create config with multiple sanitizers
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode="delta",
+            max_total_time=20000,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["crs1"],
+            benchmarks=["bench1"],
+            sanitizers=[Sanitizer.ADDRESS, Sanitizer.UNDEFINED],
+            only_cpv_harnesses=True,  # Enable CPV checking
+        )
+
+        # Create a harness with only undefined sanitizer CPVs
+        harness_file = HarnessFile(
+            name="harness1",
+            path="/src/harness1.c",
+            vulns=[
+                Vulnerability(
+                    vuln_keyword="cpv_1",
+                    povs=[POV(id="pov_0", sanitizer="undefined")],
+                ),
+            ],
+        )
+
+        benchmark_harness = BenchmarkHarness(
+            name="bench1",
+            path=Path("/tmp/bench1"),
+            harness=harness_file,
+        )
+
+        # Mock MetaYamlAdapter to return our harness with specific sanitizers
+        from unittest.mock import MagicMock
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_harness.return_value = harness_file
+
+        with patch(
+            "crsbench.run_experiment.MetaYamlAdapter.from_meta_yaml",
+            return_value=mock_adapter,
+        ):
+            trials = generate_trial_matrix(
+                [benchmark_harness],
+                ["crs1"],
+                config,
+                registry_dir=Path("/tmp/registry"),
+                crs_configs_dir=Path("/tmp/crs-configs"),
+            )
+
+        # Should only generate trials for undefined sanitizer
+        assert len(trials) == 1
+        assert trials[0].sanitizer == "undefined"
+
+    def test_trial_generation_multiple_sanitizers_match(self):
+        """Test trial generation when harness has CPVs for multiple sanitizers."""
+        from crsbench.validation.schemas import POV, Sanitizer, Vulnerability
+
+        config = ExperimentConfig(
+            experiment="test",
+            trials=2,
+            mode="delta",
+            max_total_time=20000,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["crs1"],
+            benchmarks=["bench1"],
+            sanitizers=[Sanitizer.ADDRESS, Sanitizer.UNDEFINED],
+            only_cpv_harnesses=True,
+        )
+
+        # Harness with CPVs for both sanitizers
+        harness_file = HarnessFile(
+            name="harness1",
+            path="/src/harness1.c",
+            vulns=[
+                Vulnerability(
+                    vuln_keyword="cpv_1",
+                    povs=[
+                        POV(id="pov_0", sanitizer="undefined"),
+                        POV(id="pov_1", sanitizer="address"),
+                    ],
+                ),
+            ],
+        )
+
+        benchmark_harness = BenchmarkHarness(
+            name="bench1",
+            path=Path("/tmp/bench1"),
+            harness=harness_file,
+        )
+
+        from unittest.mock import MagicMock
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_harness.return_value = harness_file
+
+        with patch(
+            "crsbench.run_experiment.MetaYamlAdapter.from_meta_yaml",
+            return_value=mock_adapter,
+        ):
+            trials = generate_trial_matrix(
+                [benchmark_harness],
+                ["crs1"],
+                config,
+                registry_dir=Path("/tmp/registry"),
+                crs_configs_dir=Path("/tmp/crs-configs"),
+            )
+
+        # Should generate trials for both sanitizers (2 trials each)
+        assert len(trials) == 4  # 2 sanitizers × 2 trials
+        sanitizers = [t.sanitizer for t in trials]
+        assert sanitizers.count("address") == 2
+        assert sanitizers.count("undefined") == 2
+
+    def test_trial_generation_no_filtering_when_only_cpv_harnesses_false(self):
+        """Test that sanitizer filtering is skipped when only_cpv_harnesses=False for bug-finding CRS."""
+        from crsbench.validation.schemas import Sanitizer
+
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode="delta",
+            max_total_time=20000,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["crs1"],
+            benchmarks=["bench1"],
+            sanitizers=[Sanitizer.ADDRESS, Sanitizer.UNDEFINED],
+            only_cpv_harnesses=False,  # Don't check CPVs
+        )
+
+        # Harness without CPVs
+        harness_file = HarnessFile(name="harness1", path="/src/harness1.c", vulns=None)
+
+        benchmark_harness = BenchmarkHarness(
+            name="bench1",
+            path=Path("/tmp/bench1"),
+            harness=harness_file,
+        )
+
+        # Should generate trials for both sanitizers even without CPV metadata
+        trials = generate_trial_matrix(
+            [benchmark_harness],
+            ["crs1"],
+            config,
+            registry_dir=Path("/tmp/registry"),
+            crs_configs_dir=Path("/tmp/crs-configs"),
+        )
+
+        # Should generate trials for both sanitizers
+        assert len(trials) == 2
+        sanitizers = {t.sanitizer for t in trials}
+        assert sanitizers == {"address", "undefined"}
