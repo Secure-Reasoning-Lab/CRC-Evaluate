@@ -109,48 +109,7 @@ def _setup_llm_tracking(
         if config.resources and config.resources.litellm:
             max_budget = config.resources.litellm.cost_budget
 
-        # Always assign to team: explicit config > experiment name
-        team_name = None
-        if (
-            config.resources
-            and config.resources.litellm
-            and config.resources.litellm.team
-        ):
-            team_name = config.resources.litellm.team
-        else:
-            team_name = config.experiment
-
-        # Extract team budget from config if present
-        team_max_budget = None
-        if (
-            config.resources
-            and config.resources.litellm
-            and config.resources.litellm.team_max_budget
-        ):
-            team_max_budget = config.resources.litellm.team_max_budget
-
-        """
-        team_id = tracker.get_or_create_team(team_name, max_budget=team_max_budget)
-
-        # Log team budget information
-        try:
-            team_info = tracker.get_team_info(team_id)
-            team_spend = team_info.get("spend", 0)
-            team_budget = team_info.get("max_budget")
-
-            if team_budget is not None:
-                remaining = team_budget - team_spend
-                logger.info(
-                    f"Team '{team_name}' budget: "
-                    f"used=${team_spend:.2f}, remaining=${remaining:.2f}, max=${team_budget:.2f}"
-                )
-            else:
-                logger.info(
-                    f"Team '{team_name}' budget: used=${team_spend:.2f}, max=unlimited"
-                )
-        except LiteLLMTrackerError as e:
-            logger.warning(f"Could not fetch team budget info: {e}")
-        """
+        # TODO(team-tracking): Re-enable team budget tracking once LiteLLM team API is integrated
 
         api_key = tracker.generate_key(
             experiment=config.experiment,

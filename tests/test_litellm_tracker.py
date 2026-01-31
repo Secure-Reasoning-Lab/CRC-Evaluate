@@ -1247,7 +1247,6 @@ class TestSetupLlmTrackingBudget:
             trial_num=1,
             mode="delta",
             sanitizer="address",
-            team_id="team-123",
             max_budget=50.0,
         )
 
@@ -1287,7 +1286,6 @@ class TestSetupLlmTrackingBudget:
             trial_num=1,
             mode="delta",
             sanitizer="address",
-            team_id="team-123",
             max_budget=None,
         )
 
@@ -1322,10 +1320,8 @@ class TestSetupLlmTrackingBudget:
             sanitizer="address",
         )
 
-        # Should use experiment name as team
-        mock_tracker.get_or_create_team.assert_called_once_with(
-            "test-exp", max_budget=None
-        )
+        # Team association disabled (LiteLLM bug #11962)
+        mock_tracker.get_or_create_team.assert_not_called()
 
         mock_tracker.generate_key.assert_called_once_with(
             experiment="test-exp",
@@ -1335,7 +1331,6 @@ class TestSetupLlmTrackingBudget:
             trial_num=1,
             mode="delta",
             sanitizer="address",
-            team_id="team-123",
             max_budget=None,
         )
 
@@ -1344,7 +1339,7 @@ class TestSetupLlmTrackingBudget:
     def test_team_from_config(
         self, mock_is_available, mock_tracker_class, base_config_dict
     ):
-        """Test that team name from config is used when specified."""
+        """Test that team config is accepted but team association is disabled."""
         from crsbench.distributed.jobs import _setup_llm_tracking
         from crsbench.validation.schemas import (
             ExperimentConfig,
@@ -1355,8 +1350,6 @@ class TestSetupLlmTrackingBudget:
         mock_is_available.return_value = True
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
-        mock_tracker.get_or_create_team.return_value = "team-456"
-        mock_tracker.get_team_info.return_value = {"spend": 25.0, "max_budget": None}
         mock_tracker_class.return_value = mock_tracker
 
         config = ExperimentConfig(
@@ -1376,10 +1369,8 @@ class TestSetupLlmTrackingBudget:
             sanitizer="address",
         )
 
-        # Should use custom team name
-        mock_tracker.get_or_create_team.assert_called_once_with(
-            "custom-team", max_budget=None
-        )
+        # Team association disabled (LiteLLM bug #11962)
+        mock_tracker.get_or_create_team.assert_not_called()
 
         mock_tracker.generate_key.assert_called_once_with(
             experiment="test-exp",
@@ -1389,7 +1380,6 @@ class TestSetupLlmTrackingBudget:
             trial_num=1,
             mode="delta",
             sanitizer="address",
-            team_id="team-456",
             max_budget=50.0,
         )
 
@@ -1398,15 +1388,13 @@ class TestSetupLlmTrackingBudget:
     def test_team_defaults_to_experiment_name(
         self, mock_is_available, mock_tracker_class, base_config_dict
     ):
-        """Test that team defaults to experiment name when not specified."""
+        """Test that keys are generated without team association."""
         from crsbench.distributed.jobs import _setup_llm_tracking
         from crsbench.validation.schemas import ExperimentConfig
 
         mock_is_available.return_value = True
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
-        mock_tracker.get_or_create_team.return_value = "team-789"
-        mock_tracker.get_team_info.return_value = {"spend": 5.0, "max_budget": None}
         mock_tracker_class.return_value = mock_tracker
 
         config = ExperimentConfig(**base_config_dict)
@@ -1421,10 +1409,8 @@ class TestSetupLlmTrackingBudget:
             sanitizer="address",
         )
 
-        # Should use experiment name as team
-        mock_tracker.get_or_create_team.assert_called_once_with(
-            "test-exp", max_budget=None
-        )
+        # Team association disabled (LiteLLM bug #11962)
+        mock_tracker.get_or_create_team.assert_not_called()
 
         mock_tracker.generate_key.assert_called_once_with(
             experiment="test-exp",
@@ -1434,16 +1420,15 @@ class TestSetupLlmTrackingBudget:
             trial_num=1,
             mode="delta",
             sanitizer="address",
-            team_id="team-789",
             max_budget=None,
         )
 
     @patch("crsbench.distributed.jobs.LiteLLMTracker")
     @patch("crsbench.distributed.jobs.is_tracking_available")
-    def test_team_max_budget_passed_to_get_or_create_team(
+    def test_team_config_ignored_key_generated_independently(
         self, mock_is_available, mock_tracker_class, base_config_dict
     ):
-        """Test that team_max_budget from config is passed to get_or_create_team()."""
+        """Test that team/team_max_budget config is ignored; key is independent."""
         from crsbench.distributed.jobs import _setup_llm_tracking
         from crsbench.validation.schemas import (
             ExperimentConfig,
@@ -1454,8 +1439,6 @@ class TestSetupLlmTrackingBudget:
         mock_is_available.return_value = True
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
-        mock_tracker.get_or_create_team.return_value = "team-999"
-        mock_tracker.get_team_info.return_value = {"spend": 150.0, "max_budget": 500.0}
         mock_tracker_class.return_value = mock_tracker
 
         config = ExperimentConfig(
@@ -1480,11 +1463,10 @@ class TestSetupLlmTrackingBudget:
         )
 
         assert api_key == "sk-test-key"
-        # Should pass team_max_budget to get_or_create_team
-        mock_tracker.get_or_create_team.assert_called_once_with(
-            "custom-team", max_budget=500.0
-        )
+        # Team association disabled (LiteLLM bug #11962)
+        mock_tracker.get_or_create_team.assert_not_called()
 
+        # Key generated independently without team_id
         mock_tracker.generate_key.assert_called_once_with(
             experiment="test-exp",
             crs="test-crs",
@@ -1493,6 +1475,5 @@ class TestSetupLlmTrackingBudget:
             trial_num=1,
             mode="delta",
             sanitizer="address",
-            team_id="team-999",
             max_budget=50.0,
         )
