@@ -3,14 +3,12 @@
 This module provides the main orchestrator for patch verification:
 1. Pull inc-build image (if available)
 2. Clone source and apply patch locally
-3. Build via build_fuzzers --apply-patch (true incremental with ASAN)
+3. Build via build_fuzzers with inc-build image (ASAN-instrumented)
 4. Run POV test via reproduce (should NOT crash)
 
-The key insight is that build_fuzzers with --apply-patch:
-- Rsyncs patched source directly to /built-src/ (not /src/)
-- Compiles incrementally (only changed files recompile)
-- Produces proper ASAN-instrumented binary for POV testing
-- Unlike run_tests which builds with fuzz-shim (no ASAN)
+Inc-build flow: rsyncs patched source to /src/, the image's OSS-PATCH
+in compile diffs /src/ against HEAD and applies to /built-src/ via
+git apply (preserves .o for unchanged files).
 """
 
 from __future__ import annotations
@@ -316,23 +314,20 @@ class PatchVerificationEngine:
                     return result
 
             # Use build_fuzzers for proper ASAN-instrumented binary
-            # - Inc-build available: Uses --apply-patch for true incremental build
-            # - Fallback: Full build without inc-build (automatic on inc-build failure)
+            # Inc-build: rsync to /src/, image's OSS-PATCH diffs and applies to /built-src/
+            # Fallback: Full build without inc-build (automatic on inc-build failure)
             used_inc_build = inc_available
-            # Track if we're falling back: either inc-build not available or will fail
             fallback_to_full = self.use_inc_build and not inc_available
 
             logger.info(
                 f"Building {variant_name} via build_fuzzers "
-                f"(inc_build={inc_available}, apply_patch={inc_available})"
+                f"(inc_build={inc_available})"
             )
 
-            # Build fuzzers with proper ASAN instrumentation
             build_result = self.infra.build_fuzzers(
                 build_config,
                 repo_path,
                 use_inc_image=inc_available,
-                apply_patch=inc_available,  # True incremental when inc-build available
             )
 
             # If inc-build failed, automatically fallback to full build
@@ -346,12 +341,10 @@ class PatchVerificationEngine:
                 # Clean up failed build outputs before retry
                 self.infra.cleanup_build_outputs(variant_name)
 
-                # Retry with full build (no inc-build, no apply-patch)
                 build_result = self.infra.build_fuzzers(
                     build_config,
                     repo_path,
                     use_inc_image=False,
-                    apply_patch=False,
                 )
 
             # Record build time and output
