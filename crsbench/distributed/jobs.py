@@ -109,8 +109,6 @@ def _setup_llm_tracking(
         if config.resources and config.resources.litellm:
             max_budget = config.resources.litellm.cost_budget
 
-        # TODO: Team budget tracking is disabled pending LiteLLM API support
-        """
         # Always assign to team: explicit config > experiment name
         team_name = None
         if (
@@ -131,6 +129,7 @@ def _setup_llm_tracking(
         ):
             team_max_budget = config.resources.litellm.team_max_budget
 
+        """
         team_id = tracker.get_or_create_team(team_name, max_budget=team_max_budget)
 
         # Log team budget information
