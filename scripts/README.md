@@ -4,6 +4,60 @@ This directory contains helper scripts for common CRSBench development and testi
 
 ## Available Scripts
 
+### merge_experiment_results.py
+
+Merges CRS evaluation results from multiple worker machines into a unified experiment-data directory.
+
+**Purpose**: When running distributed experiments, each worker creates its own timestamped result directory. This script combines them into a single unified directory for analysis.
+
+**Usage:**
+```bash
+# Option 1: Explicit input directories
+python scripts/merge_experiment_results.py \
+    --input-dirs /path/to/exp1 /path/to/exp2 ... \
+    --output-dir /path/to/merged/experiment-data
+
+# Option 2: Glob pattern
+python scripts/merge_experiment_results.py \
+    --input-pattern "/path/to/exp_*_*/experiment-data" \
+    --output-dir /path/to/merged/experiment-data
+```
+
+**Features:**
+- Detects and reports conflicts (multiple successful trials with same identity)
+- Filters out failed trials (marked with `.fail`)
+- Preserves directory structure
+- Validates trial identities based on metadata
+
+**Conflict Handling:**
+
+A trial's identity is defined as: `(crs, benchmark, harness, mode, sanitizer, trial_num)`
+
+- Multiple `.success` for same identity → **CONFLICT** (script exits with error)
+- One `.success` + any `.fail` for same identity → **OK** (keeps `.success`)
+- All `.fail` for same identity → **OK** (all skipped)
+
+When conflicts are detected, the script prints a detailed report showing the conflicting trial paths and exits. You must manually remove one of the conflicting sources before re-running.
+
+**Example:**
+```bash
+# Merge results from three workers
+python scripts/merge_experiment_results.py \
+    --input-pattern "/data/results/exp1_*_*/experiment-data" \
+    --output-dir /data/merged/experiment-data
+
+# Verify merged results
+python -m crsbench.reporting.discover_trials /data/merged/experiment-data
+```
+
+**Requirements:**
+- Python 3.11+
+- CRSBench package installed (for schemas)
+
+**See Also:**
+- [Distributed Execution Guide](../docs/distributed-execution.md)
+- [Reporting Module](../crsbench/reporting/)
+
 ### valkey-helper.py
 
 Valkey service management helper for distributed execution testing.
