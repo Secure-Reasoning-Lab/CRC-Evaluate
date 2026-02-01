@@ -147,6 +147,7 @@ class TimeSeriesPoint(BaseModel):
     """Single point in time series data."""
 
     elapsed_time: float
+    running_elapsed_time: float = 0.0
     cumulative_povs: int = 0
     cumulative_patches: int = 0
     llm_tokens: int = 0

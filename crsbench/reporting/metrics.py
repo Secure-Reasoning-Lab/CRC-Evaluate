@@ -216,12 +216,49 @@ class MetricsAggregator:
     ) -> list[TimeSeriesPoint]:
         """Compute time-series data from snapshots.
 
+        For snapshots with running_elapsed_time = 0 or None (build phase),
+        only keep the one with the largest elapsed_time (last snapshot before
+        CRS started running). Keep all snapshots with running_elapsed_time > 0.
+
         Args:
             snapshots: Sorted list of snapshots
 
         Returns:
             List of time series points
         """
+        if not snapshots:
+            return []
+
+        # Separate snapshots into two groups:
+        # 1. Snapshots with running_elapsed_time = 0 or None (build phase)
+        # 2. Snapshots with running_elapsed_time > 0 (CRS running phase)
+        build_snapshots = [
+            s
+            for s in snapshots
+            if s.running_elapsed_time is None or s.running_elapsed_time == 0
+        ]
+        running_snapshots = [
+            s
+            for s in snapshots
+            if s.running_elapsed_time is not None and s.running_elapsed_time > 0
+        ]
+
+        # Among build snapshots, only keep the one with largest elapsed_time
+        # (the last snapshot before CRS started running)
+        filtered_snapshots = []
+        if build_snapshots:
+            last_build_snapshot = max(build_snapshots, key=lambda s: s.elapsed_time)
+            filtered_snapshots.append(last_build_snapshot)
+        filtered_snapshots.extend(running_snapshots)
+
+        # Sort by elapsed_time to ensure correct order
+        filtered_snapshots.sort(key=lambda s: s.elapsed_time)
+
+        # Create a set of filtered snapshot cycles for quick lookup
+        filtered_cycles = {s.cycle for s in filtered_snapshots}
+
+        # Compute cumulative counts from ALL snapshots (not just filtered ones)
+        # But only create TimeSeriesPoint entries for filtered snapshots
         time_series: list[TimeSeriesPoint] = []
         cumulative_povs = 0
         cumulative_patches = 0
@@ -230,17 +267,22 @@ class MetricsAggregator:
             cumulative_povs += snapshot.pov_count
             cumulative_patches += snapshot.patch_count
 
-            point = TimeSeriesPoint(
-                elapsed_time=snapshot.elapsed_time,
-                cumulative_povs=cumulative_povs,
-                cumulative_patches=cumulative_patches,
-                llm_tokens=(
-                    snapshot.llm_usage.total_input_tokens
-                    + snapshot.llm_usage.total_output_tokens
-                ),
-                llm_cost=snapshot.llm_usage.total_cost_usd,
-            )
-            time_series.append(point)
+            # Only create time series point for filtered snapshots
+            if snapshot.cycle in filtered_cycles:
+                running_time = snapshot.running_elapsed_time or 0.0
+
+                point = TimeSeriesPoint(
+                    elapsed_time=snapshot.elapsed_time,
+                    running_elapsed_time=running_time,
+                    cumulative_povs=cumulative_povs,
+                    cumulative_patches=cumulative_patches,
+                    llm_tokens=(
+                        snapshot.llm_usage.total_input_tokens
+                        + snapshot.llm_usage.total_output_tokens
+                    ),
+                    llm_cost=snapshot.llm_usage.total_cost_usd,
+                )
+                time_series.append(point)
 
         return time_series
 
