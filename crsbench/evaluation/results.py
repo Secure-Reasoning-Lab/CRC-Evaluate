@@ -278,6 +278,12 @@ class TrialMetadata(BaseModel):
     build_time: Optional[float] = None  # Time spent building CRS (seconds)
     run_time: Optional[float] = None  # Time spent running CRS (seconds)
 
+    # Experiment-level fields
+    experiment_name: Optional[str] = None
+    litellm_budget: Optional[float] = None  # Cost budget in USD
+    cores_per_trial: Optional[int] = None
+    memory_per_trial: Optional[str] = None  # e.g., "8G"
+
 
 class TrialResult(BaseModel):
     """Result from a single trial execution.
@@ -294,6 +300,10 @@ class TrialResult(BaseModel):
     harness: str
     trial_num: int
     crs_type: CRSType
+
+    # Evaluation configuration
+    mode: Optional[str] = None  # "delta" or "full"
+    sanitizer: Optional[str] = None  # "address", "memory", "undefined"
 
     # Execution status
     success: bool

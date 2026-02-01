@@ -107,6 +107,17 @@ class TrialMetadata(BaseModel):
         default=None, description="CRSBench framework version and commit info"
     )
 
+    # Build configuration
+    build_mode: Optional[str] = None  # "delta" or "full" (evaluation mode)
+    sanitizer: Optional[str] = None
+
+    # Experiment-level fields
+    experiment_name: Optional[str] = None
+    litellm_budget: Optional[float] = None
+    cores_per_trial: Optional[int] = None
+    memory_per_trial: Optional[str] = None
+    experiment_config: Optional[dict[str, Any]] = None  # Full serialized config
+
 
 class SnapshotMetadata(BaseModel):
     """Snapshot metadata from metadata.json inside tar.gz archive.
