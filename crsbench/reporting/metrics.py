@@ -70,7 +70,6 @@ class MetricsAggregator:
         snapshots: list[SnapshotData],
         *,
         total_cpvs: int = 0,
-        cpv_ids: list[str] | None = None,
     ) -> TrialMetrics:
         """Aggregate metrics for a single trial.
 
@@ -78,7 +77,6 @@ class MetricsAggregator:
             trial_info: Trial information
             snapshots: List of snapshot data from the trial
             total_cpvs: Total CPVs for this harness from ground truth (default: 0)
-            cpv_ids: CPV IDs for fallback matching when pov_verification.json unavailable
 
         Returns:
             Aggregated trial metrics
@@ -104,14 +102,14 @@ class MetricsAggregator:
         # Collect all unique POV and patch names across snapshots
         all_pov_names: set[str] = set()
         all_patch_names: set[str] = set()
-        total_povs = 0
-        total_patches = 0
 
         for snap in sorted_snapshots:
             all_pov_names.update(snap.pov_names)
             all_patch_names.update(snap.patch_names)
-            total_povs += snap.pov_count
-            total_patches += snap.patch_count
+
+        # Count unique POVs and patches
+        total_povs = len(all_pov_names)
+        total_patches = len(all_patch_names)
 
         # Get final snapshot for cumulative LLM usage
         final_snapshot = sorted_snapshots[-1]
@@ -141,20 +139,14 @@ class MetricsAggregator:
 
         if total_cpvs > 0:
             # Find first snapshot where all CPVs were discovered
+            # Only triggers if pov_verification.json exists (cpvs_found non-empty)
             for snap in sorted_snapshots:
-                # Primary: use cpvs_found from pov_verification.json
-                if snap.cpvs_found:
-                    found_count = len(snap.cpvs_found)
-                # Fallback: match pov_names against cpv_ids from meta.yaml
-                elif cpv_ids:
-                    found_count = len(set(snap.pov_names) & set(cpv_ids))
-                else:
-                    found_count = 0
-
-                if found_count >= total_cpvs:
+                # NOTE: we assume we did have at least one ground truth cpv!!
+                if snap.cpvs_found and not snap.cpvs_remaining:
+                    # All CPVs found - cpvs_remaining is empty
                     early_stop_time = snap.running_elapsed_time or snap.elapsed_time
                     early_stop_cost = snap.llm_usage.total_cost_usd
-                    cpvs_found_count = found_count
+                    cpvs_found_count = len(snap.cpvs_found)
                     all_cpvs_found = True
                     logger.info(
                         f"Early stop detected: all {total_cpvs} CPVs found at "
@@ -162,15 +154,11 @@ class MetricsAggregator:
                     )
                     break
 
-            # If not all found, use last snapshot's CPV count
+            # If not all found, use last snapshot's CPV count (if pov_verification.json exists)
             if not all_cpvs_found and sorted_snapshots:
                 last_snap = sorted_snapshots[-1]
                 if last_snap.cpvs_found:
                     cpvs_found_count = len(last_snap.cpvs_found)
-                elif cpv_ids:
-                    cpvs_found_count = len(set(last_snap.pov_names) & set(cpv_ids))
-                else:
-                    cpvs_found_count = 0
 
         # Calculate savings
         time_saved: float | None = None

@@ -176,15 +176,14 @@ class ReportGenerator:
                     )
                     continue
 
-                # Load ground truth CPV count and IDs from meta.yaml
-                total_cpvs, cpv_ids = self._get_cpv_info(trial_info)
+                # Load ground truth CPV count from meta.yaml
+                total_cpvs, _ = self._get_cpv_info(trial_info)
 
                 # Aggregate metrics
                 trial_metrics = self.metrics_aggregator.aggregate_trial(
                     trial_info=trial_info,
                     snapshots=snapshots,
                     total_cpvs=total_cpvs,
-                    cpv_ids=cpv_ids,
                 )
                 trial_metrics_list.append(trial_metrics)
 
@@ -321,15 +320,14 @@ class ReportGenerator:
                 f"No snapshots found in trial directory: {trial_dir}"
             )
 
-        # Load ground truth CPV count and IDs from meta.yaml
-        total_cpvs, cpv_ids = self._get_cpv_info(trial_info)
+        # Load ground truth CPV count from meta.yaml
+        total_cpvs, _ = self._get_cpv_info(trial_info)
 
         # Aggregate metrics
         trial_metrics = self.metrics_aggregator.aggregate_trial(
             trial_info=trial_info,
             snapshots=snapshots,
             total_cpvs=total_cpvs,
-            cpv_ids=cpv_ids,
         )
 
         # Generate reports
@@ -393,14 +391,13 @@ class ReportGenerator:
             snapshots = self.snapshot_loader.load_trial_snapshots(trial_info.trial_dir)
 
             if snapshots:
-                # Load ground truth CPV count and IDs
-                total_cpvs, cpv_ids = self._get_cpv_info(trial_info)
+                # Load ground truth CPV count
+                total_cpvs, _ = self._get_cpv_info(trial_info)
 
                 trial_metrics = self.metrics_aggregator.aggregate_trial(
                     trial_info=trial_info,
                     snapshots=snapshots,
                     total_cpvs=total_cpvs,
-                    cpv_ids=cpv_ids,
                 )
                 trial_metrics_list.append(trial_metrics)
 
