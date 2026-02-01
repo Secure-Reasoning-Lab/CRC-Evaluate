@@ -63,6 +63,8 @@ class ReportGenerator:
     def _get_cpv_info(self, trial_info: TrialInfo) -> tuple[int, list[str]]:
         """Get CPV count and IDs for a trial from ground truth meta.yaml.
 
+        CPVs are filtered by sanitizer to match the trial's sanitizer.
+
         Args:
             trial_info: Trial information containing benchmark and harness
 
@@ -70,6 +72,23 @@ class ReportGenerator:
             Tuple of (total_cpvs, cpv_ids). Returns (0, []) if unable to load.
         """
         from crsbench.validation.meta_adapter import MetaYamlAdapter
+
+        # Extract sanitizer from trial directory path
+        # Path pattern: <experiment>/<config>/<harness>/<run_mode>/<sanitizer>/trial-N
+        trial_path = trial_info.trial_dir
+        parts = trial_path.parts
+        trial_sanitizer = None
+        if len(parts) >= 3:
+            sanitizer_candidate = parts[-2]
+            # Validate against known sanitizer types
+            if sanitizer_candidate in (
+                "address",
+                "memory",
+                "undefined",
+                "thread",
+                "leak",
+            ):
+                trial_sanitizer = sanitizer_candidate
 
         # Load meta.yaml for this benchmark
         benchmark_path = self.benchmarks_root / trial_info.benchmark
@@ -99,15 +118,29 @@ class ReportGenerator:
             )
             return 0, []
 
-        # Extract CPV IDs from vulns
+        # Extract CPV IDs from vulns, filtered by sanitizer
         if not harness.vulns:
             return 0, []
 
-        cpv_ids = [v.vuln_keyword for v in harness.vulns]
+        # Filter CPVs by sanitizer
+        cpv_ids = []
+        for vuln in harness.vulns:
+            # Check if any POV for this CPV matches the trial's sanitizer
+            if trial_sanitizer is None:
+                # No sanitizer in path, include all CPVs
+                cpv_ids.append(vuln.vuln_keyword)
+            else:
+                # Only include CPV if it has a POV with matching sanitizer
+                for pov in vuln.povs:
+                    if pov.sanitizer == trial_sanitizer:
+                        cpv_ids.append(vuln.vuln_keyword)
+                        break
+
         total_cpvs = len(cpv_ids)
         logger.debug(
             f"Trial {trial_info.trial_num}: "
-            f"{trial_info.benchmark}/{trial_info.harness} has {total_cpvs} CPVs "
+            f"{trial_info.benchmark}/{trial_info.harness} "
+            f"(sanitizer={trial_sanitizer}) has {total_cpvs} CPVs "
             f"({cpv_ids})"
         )
         return total_cpvs, cpv_ids

@@ -713,3 +713,123 @@ class TestDiscoverTrials:
         missing_trials = [t for t in trials if t.status == "missing_metadata"]
         assert len(valid_trials) == 1
         assert len(missing_trials) == 1
+
+
+class TestReportGeneratorCPVFiltering:
+    """Tests for ReportGenerator CPV filtering by sanitizer."""
+
+    def test_get_cpv_info_filters_by_sanitizer(self, temp_dir):
+        """Test that _get_cpv_info filters CPVs by sanitizer."""
+        from crsbench.reporting.orchestrator import ReportGenerator
+        from crsbench.validation.schemas import (
+            POV,
+            BenchmarkConfig,
+            HarnessFile,
+            Vulnerability,
+        )
+
+        # Create a benchmark directory with meta.yaml
+        benchmark_dir = temp_dir / "benchmarks" / "test-benchmark"
+        benchmark_dir.mkdir(parents=True)
+
+        # Create meta.yaml with CPVs having different sanitizers
+        from crsbench.validation.schemas import FullMode
+
+        config = BenchmarkConfig(
+            harness_files=[
+                HarnessFile(
+                    name="test_harness",
+                    path="/src/test_harness.c",
+                    vulns=[
+                        Vulnerability(
+                            vuln_keyword="cpv_0",
+                            povs=[
+                                POV(id="pov_0", sanitizer="address"),
+                            ],
+                        ),
+                        Vulnerability(
+                            vuln_keyword="cpv_1",
+                            povs=[
+                                POV(id="pov_1", sanitizer="undefined"),
+                            ],
+                        ),
+                        Vulnerability(
+                            vuln_keyword="cpv_2",
+                            povs=[
+                                POV(id="pov_2_asan", sanitizer="address"),
+                                POV(id="pov_2_ubsan", sanitizer="undefined"),
+                            ],
+                        ),
+                    ],
+                )
+            ],
+            full_mode=FullMode(base_commit="abc123def456"),
+        )
+
+        # Write meta.yaml
+        meta_yaml_path = benchmark_dir / ".aixcc" / "meta.yaml"
+        config.to_yaml(meta_yaml_path)
+
+        # Create trial directory with sanitizer in path
+        # Pattern: <experiment>/<config>/<harness>/<run_mode>/<sanitizer>/trial-N
+        trial_dir_address = (
+            temp_dir
+            / "test-exp"
+            / "ensemble-c"
+            / "test_harness"
+            / "full"
+            / "address"
+            / "trial-1"
+        )
+        trial_dir_address.mkdir(parents=True)
+
+        trial_dir_undefined = (
+            temp_dir
+            / "test-exp"
+            / "ensemble-c"
+            / "test_harness"
+            / "full"
+            / "undefined"
+            / "trial-2"
+        )
+        trial_dir_undefined.mkdir(parents=True)
+
+        # Create ReportGenerator
+        generator = ReportGenerator(
+            output_dir=temp_dir / "reports",
+            benchmarks_root=temp_dir / "benchmarks",
+        )
+
+        # Test address sanitizer trial
+        trial_info_address = TrialInfo(
+            trial_dir=trial_dir_address,
+            trial_num=1,
+            crs="ensemble-c",
+            benchmark="test-benchmark",
+            harness="test_harness",
+            mode="bug_finding",
+            status="valid",
+        )
+
+        total_cpvs, cpv_ids = generator._get_cpv_info(trial_info_address)
+
+        # Should only get CPVs with address sanitizer POVs (cpv_0, cpv_2)
+        assert total_cpvs == 2
+        assert set(cpv_ids) == {"cpv_0", "cpv_2"}
+
+        # Test undefined sanitizer trial
+        trial_info_undefined = TrialInfo(
+            trial_dir=trial_dir_undefined,
+            trial_num=2,
+            crs="ensemble-c",
+            benchmark="test-benchmark",
+            harness="test_harness",
+            mode="bug_finding",
+            status="valid",
+        )
+
+        total_cpvs, cpv_ids = generator._get_cpv_info(trial_info_undefined)
+
+        # Should only get CPVs with undefined sanitizer POVs (cpv_1, cpv_2)
+        assert total_cpvs == 2
+        assert set(cpv_ids) == {"cpv_1", "cpv_2"}
