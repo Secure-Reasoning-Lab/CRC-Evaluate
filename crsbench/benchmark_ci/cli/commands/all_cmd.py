@@ -104,6 +104,18 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Include coverage build and verification (expensive, disabled by default)",
     )
+    parser.add_argument(
+        "--distributed",
+        action="store_true",
+        default=False,
+        help="Distribute build phase to Redis/RQ workers (verify/patch runs locally)",
+    )
+    parser.add_argument(
+        "--redis-host",
+        type=str,
+        default="localhost",
+        help="Redis server hostname for distributed builds (default: localhost)",
+    )
     parser.set_defaults(ci_func=run_all)
 
 
@@ -603,13 +615,18 @@ def run_all(args: argparse.Namespace) -> int:
     verify_workers = getattr(args, "verify_workers", 4)
     use_inc_build = not getattr(args, "no_inc_build", False)
     force_rebuild = getattr(args, "force_rebuild", True)
+    distributed = getattr(args, "distributed", False)
+    redis_host = getattr(args, "redis_host", "localhost")
 
     build_mode = "inc-build" if use_inc_build else "full-build"
     rebuild_mode = "force-rebuild" if force_rebuild else "cached"
+    exec_mode = (
+        f", distributed (redis={redis_host})" if distributed else ""
+    )
     logger.info(
         f"Running all: {len(paths)} benchmark(s), "
         f"build-workers={build_workers}, verify-workers={verify_workers}, "
-        f"{build_mode}, {rebuild_mode}"
+        f"{build_mode}, {rebuild_mode}{exec_mode}"
     )
 
     start_dt = datetime.now()
@@ -638,10 +655,41 @@ def run_all(args: argparse.Namespace) -> int:
     output_dir = getattr(args, "output_dir", None)
     output_path = Path(output_dir) if output_dir else None
     context = JobContext(output_dir=output_path)
-    executor = DAGExecutor(
-        type_limits={"build": build_workers, "verify": verify_workers}
-    )
-    dag_results = executor.execute(all_jobs, context)
+
+    if distributed:
+        # Two-phase distributed execution:
+        # 1) Distribute build jobs to Redis/RQ workers
+        # 2) Run remaining verify/patch jobs locally with pre_results
+        from crsbench.benchmark_ci.cli.commands.build_cmd import (
+            _run_distributed_build,
+        )
+
+        build_jobs = [
+            j for j in all_jobs if isinstance(j, BuildSingleVariantJob)
+        ]
+        remaining_jobs = [
+            j for j in all_jobs if not isinstance(j, BuildSingleVariantJob)
+        ]
+
+        logger.info(
+            f"Distributed mode: {len(build_jobs)} build jobs via Redis, "
+            f"{len(remaining_jobs)} verify/patch jobs locally"
+        )
+
+        build_results = _run_distributed_build(build_jobs, redis_host)
+
+        executor = DAGExecutor(
+            type_limits={"build": build_workers, "verify": verify_workers}
+        )
+        remaining_results = executor.execute(
+            remaining_jobs, context, pre_results=build_results
+        )
+        dag_results = {**build_results, **remaining_results}
+    else:
+        executor = DAGExecutor(
+            type_limits={"build": build_workers, "verify": verify_workers}
+        )
+        dag_results = executor.execute(all_jobs, context)
 
     # Phase 3: Aggregate into ValidationSummary
     summary = ValidationSummary(started_at=start_dt, check_mode=CheckMode.ALL)
