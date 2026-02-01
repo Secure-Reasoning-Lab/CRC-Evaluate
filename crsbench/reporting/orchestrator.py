@@ -142,6 +142,11 @@ class ReportGenerator:
                     )
                     trial_html_paths.append(html_path)
 
+                if format in ("csv", "all"):
+                    self.csv_generator.generate_trial_report(
+                        trial_metrics.model_dump(), snapshots
+                    )
+
             except Exception as e:
                 logger.error(f"Failed to process trial {trial_info.trial_num}: {e}")
                 if not skip_incomplete:
