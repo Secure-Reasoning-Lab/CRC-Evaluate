@@ -86,6 +86,8 @@ class JSONReportGenerator:
             },
             "llm_usage": {
                 "total_tokens": trial_metrics.total_llm_tokens,
+                "total_input_tokens": trial_metrics.total_llm_input_tokens,
+                "total_output_tokens": trial_metrics.total_llm_output_tokens,
                 "total_cost": trial_metrics.total_llm_cost,
                 "by_model": trial_metrics.llm_usage_by_model,
             },
@@ -96,6 +98,8 @@ class JSONReportGenerator:
                     "cumulative_povs": p.cumulative_povs,
                     "cumulative_patches": p.cumulative_patches,
                     "llm_tokens": p.llm_tokens,
+                    "llm_input_tokens": p.llm_input_tokens,
+                    "llm_output_tokens": p.llm_output_tokens,
                     "llm_cost": p.llm_cost,
                 }
                 for p in trial_metrics.time_series

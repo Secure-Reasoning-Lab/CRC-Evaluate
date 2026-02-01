@@ -105,6 +105,8 @@ def sample_trial_metrics() -> TrialMetrics:
         unique_patch_names=["patch_001", "patch_002", "patch_003", "patch_004"],
         total_llm_cost=12.50,
         total_llm_tokens=50000,
+        total_llm_input_tokens=37000,
+        total_llm_output_tokens=13000,
         llm_usage_by_model={
             "claude-sonnet-4": {
                 "input_tokens": 30000,
@@ -122,6 +124,8 @@ def sample_trial_metrics() -> TrialMetrics:
                 cumulative_povs=4,
                 cumulative_patches=6,
                 llm_tokens=40000,
+                llm_input_tokens=30000,
+                llm_output_tokens=10000,
                 llm_cost=10.00,
             ),
             TimeSeriesPoint(
@@ -130,6 +134,8 @@ def sample_trial_metrics() -> TrialMetrics:
                 cumulative_povs=5,
                 cumulative_patches=8,
                 llm_tokens=50000,
+                llm_input_tokens=37000,
+                llm_output_tokens=13000,
                 llm_cost=12.50,
             ),
         ],

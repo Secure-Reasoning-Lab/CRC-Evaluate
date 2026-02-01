@@ -188,6 +188,8 @@ class CSVReportGenerator:
             "unique_patches": trial_metrics.get("unique_patches", 0),
             "total_llm_cost": trial_metrics.get("total_llm_cost", 0.0),
             "total_llm_tokens": trial_metrics.get("total_llm_tokens", 0),
+            "total_llm_input_tokens": trial_metrics.get("total_llm_input_tokens", 0),
+            "total_llm_output_tokens": trial_metrics.get("total_llm_output_tokens", 0),
             "total_time": trial_metrics.get("total_time", 0.0),
             "time_to_first_pov": trial_metrics.get("time_to_first_pov", ""),
             "snapshot_count": trial_metrics.get("snapshot_count", 0),
@@ -261,6 +263,8 @@ class CSVReportGenerator:
             "cumulative_povs": ts_point.get("cumulative_povs", 0),
             "cumulative_patches": ts_point.get("cumulative_patches", 0),
             "llm_tokens": ts_point.get("llm_tokens", 0),
+            "llm_input_tokens": ts_point.get("llm_input_tokens", 0),
+            "llm_output_tokens": ts_point.get("llm_output_tokens", 0),
             "llm_cost": ts_point.get("llm_cost", 0.0),
         }
 

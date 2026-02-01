@@ -151,6 +151,8 @@ class TimeSeriesPoint(BaseModel):
     cumulative_povs: int = 0
     cumulative_patches: int = 0
     llm_tokens: int = 0
+    llm_input_tokens: int = 0
+    llm_output_tokens: int = 0
     llm_cost: float = 0.0
 
 
@@ -182,6 +184,8 @@ class TrialMetrics(BaseModel):
     # Cost metrics
     total_llm_cost: float = 0.0
     total_llm_tokens: int = 0
+    total_llm_input_tokens: int = 0
+    total_llm_output_tokens: int = 0
     llm_usage_by_model: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     # Time metrics

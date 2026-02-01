@@ -32,6 +32,8 @@ def sample_trial_metrics():
         "unique_patches": 0,
         "total_llm_cost": 1.23,
         "total_llm_tokens": 1000,
+        "total_llm_input_tokens": 750,
+        "total_llm_output_tokens": 250,
         "total_time": 3600.0,
         "time_to_first_pov": 120.5,
         "snapshot_count": 2,
@@ -42,6 +44,8 @@ def sample_trial_metrics():
                 "cumulative_povs": 1,
                 "cumulative_patches": 0,
                 "llm_tokens": 200,
+                "llm_input_tokens": 150,
+                "llm_output_tokens": 50,
                 "llm_cost": 0.25,
             },
             {
@@ -50,6 +54,8 @@ def sample_trial_metrics():
                 "cumulative_povs": 3,
                 "cumulative_patches": 0,
                 "llm_tokens": 500,
+                "llm_input_tokens": 375,
+                "llm_output_tokens": 125,
                 "llm_cost": 0.60,
             },
         ],
@@ -76,6 +82,8 @@ def sample_experiment_metrics():
                 "unique_patches": 0,
                 "total_llm_cost": 1.23,
                 "total_llm_tokens": 1000,
+                "total_llm_input_tokens": 750,
+                "total_llm_output_tokens": 250,
                 "total_time": 3600.0,
                 "time_to_first_pov": 120.5,
                 "time_series": [
@@ -85,6 +93,8 @@ def sample_experiment_metrics():
                         "cumulative_povs": 1,
                         "cumulative_patches": 0,
                         "llm_tokens": 200,
+                        "llm_input_tokens": 150,
+                        "llm_output_tokens": 50,
                         "llm_cost": 0.25,
                     }
                 ],
@@ -104,6 +114,8 @@ def sample_experiment_metrics():
                 "unique_patches": 0,
                 "total_llm_cost": 0.80,
                 "total_llm_tokens": 600,
+                "total_llm_input_tokens": 450,
+                "total_llm_output_tokens": 150,
                 "total_time": 1800.0,
                 "time_to_first_pov": 90.0,
                 "time_series": [
@@ -113,6 +125,8 @@ def sample_experiment_metrics():
                         "cumulative_povs": 2,
                         "cumulative_patches": 0,
                         "llm_tokens": 600,
+                        "llm_input_tokens": 450,
+                        "llm_output_tokens": 150,
                         "llm_cost": 0.80,
                     }
                 ],

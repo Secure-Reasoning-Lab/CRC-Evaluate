@@ -144,6 +144,8 @@ class MetricsAggregator:
             total_llm_cost=llm_usage.total_cost_usd,
             total_llm_tokens=llm_usage.total_input_tokens
             + llm_usage.total_output_tokens,
+            total_llm_input_tokens=llm_usage.total_input_tokens,
+            total_llm_output_tokens=llm_usage.total_output_tokens,
             llm_usage_by_model=llm_usage_by_model,
             total_time=total_time,
             time_to_first_pov=time_to_first_pov,
@@ -280,6 +282,8 @@ class MetricsAggregator:
                         snapshot.llm_usage.total_input_tokens
                         + snapshot.llm_usage.total_output_tokens
                     ),
+                    llm_input_tokens=snapshot.llm_usage.total_input_tokens,
+                    llm_output_tokens=snapshot.llm_usage.total_output_tokens,
                     llm_cost=snapshot.llm_usage.total_cost_usd,
                 )
                 time_series.append(point)
