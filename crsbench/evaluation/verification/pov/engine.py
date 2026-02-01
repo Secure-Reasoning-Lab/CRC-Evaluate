@@ -277,7 +277,7 @@ class VerificationEngine:
         """
         # Get or build variants
         if build_results is None:
-            build_results = self._get_or_build_results(adapter)
+            build_results = self.get_or_build_results(adapter)
 
         if not build_results:
             return PovVerificationResult(
@@ -502,7 +502,7 @@ class VerificationEngine:
             Tuple of (list of verification results, number of POVs skipped due to hash)
         """
         # Build variants once
-        build_results = self._get_or_build_results(adapter)
+        build_results = self.get_or_build_results(adapter)
         if not build_results:
             logger.error(f"Failed to build variants for {adapter.benchmark_name}")
             return [], 0
@@ -607,7 +607,7 @@ class VerificationEngine:
             - fallback_used: True if any build used inc-build fallback
         """
         # Load benchmark configuration
-        adapter = self._load_adapter(benchmark_path)
+        adapter = self.load_adapter(benchmark_path)
         if not adapter:
             return PovBenchmarkOutput(results=[], skipped_count=0, fallback_used=False)
 
@@ -616,7 +616,7 @@ class VerificationEngine:
             self._built_results.pop(adapter.benchmark_name, None)
 
         build_start = time.time()
-        build_results = self._get_or_build_results(
+        build_results = self.get_or_build_results(
             adapter, force_rebuild=force_rebuild, use_inc_build=use_inc_build
         )
         build_elapsed = time.time() - build_start
@@ -756,7 +756,7 @@ class VerificationEngine:
             verify_time=verify_elapsed,
         )
 
-    def _get_or_build_results(
+    def get_or_build_results(
         self,
         adapter: MetaYamlAdapter,
         *,
@@ -815,7 +815,7 @@ class VerificationEngine:
         self._built_results[adapter.benchmark_name] = results
         return results
 
-    def _load_adapter(self, benchmark_path: Path) -> Optional[MetaYamlAdapter]:
+    def load_adapter(self, benchmark_path: Path) -> Optional[MetaYamlAdapter]:
         """Load MetaYamlAdapter from benchmark path.
 
         Args:

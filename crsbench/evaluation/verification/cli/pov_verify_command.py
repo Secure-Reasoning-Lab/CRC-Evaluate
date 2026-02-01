@@ -287,16 +287,13 @@ def run_single_pov_verification(
         List of PovVerificationResult (one per harness tested)
     """
     # Load adapter
-    adapter = engine._load_adapter(benchmark_path)
+    adapter = engine.load_adapter(benchmark_path)
     if not adapter:
         logger.error(f"Failed to load benchmark adapter for {benchmark_path}")
         return []
 
     # Build variants if needed
-    if force_rebuild:
-        engine._built_results.pop(adapter.benchmark_name, None)
-
-    build_results = engine._get_or_build_results(adapter)
+    build_results = engine.get_or_build_results(adapter, force_rebuild=force_rebuild)
     if not build_results:
         logger.error(f"Failed to build variants for {adapter.benchmark_name}")
         return []

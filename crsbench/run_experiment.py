@@ -525,6 +525,11 @@ Examples:
 
     add_worker_subparser(subparsers)
 
+    # 'evaluator' subcommand - distributed POV verification
+    from crsbench.distributed.cli.evaluator_command import add_evaluator_subparser
+
+    add_evaluator_subparser(subparsers)
+
     # 'migrate' subcommand - migration and generation tools
     from crsbench.migration.cli.converter_command import add_migrate_subparser
 
@@ -2400,6 +2405,12 @@ def main() -> None:
         from crsbench.distributed.cli.worker_command import run_worker
 
         sys.exit(run_worker(args))
+
+    if args.command == "evaluator":
+        # Handle evaluator command
+        from crsbench.distributed.cli.evaluator_command import run_evaluator
+
+        sys.exit(run_evaluator(args))
 
     if args.command == "migrate":
         # Handle migrate command (conversion and generation tools)

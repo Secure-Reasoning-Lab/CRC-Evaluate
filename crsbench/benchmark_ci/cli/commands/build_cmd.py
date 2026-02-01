@@ -25,7 +25,7 @@ from crsbench.benchmark_ci.cli.common_args import (
 from crsbench.benchmark_ci.cli.discovery import resolve_benchmark_paths
 from crsbench.benchmark_ci.cli.output import print_results_table, save_output_dir
 from crsbench.benchmark_ci.cli.result_aggregator import aggregate_pov_build_results
-from crsbench.benchmark_ci.jobs.base import Job, JobContext
+from crsbench.benchmark_ci.jobs.base import Job, JobContext, JobResult
 from crsbench.benchmark_ci.jobs.flat import BuildSingleVariantJob
 from crsbench.benchmark_ci.models import (
     BenchmarkValidationResult,
@@ -39,6 +39,8 @@ from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
     import argparse
+
+    from crsbench.executor.types import ExecutorResult
 
 logger = get_logger(__name__)
 
@@ -79,6 +81,18 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         "--no-inc-build",
         action="store_true",
         help="Force full build instead of incremental build (default uses inc-build)",
+    )
+    parser.add_argument(
+        "--distributed",
+        action="store_true",
+        default=False,
+        help="Enqueue builds to Redis/RQ workers instead of running locally",
+    )
+    parser.add_argument(
+        "--redis-host",
+        type=str,
+        default="localhost",
+        help="Redis server hostname for distributed builds (default: localhost)",
     )
     parser.set_defaults(ci_func=run_build)
 
@@ -258,6 +272,120 @@ def _aggregate_build(
     )
 
 
+def _run_distributed_build(
+    all_jobs: list[Job],
+    redis_host: str,
+) -> dict[str, "ExecutorResult"]:
+    """Enqueue build jobs to Redis/RQ workers and wait for results.
+
+    Each BuildSingleVariantJob is serialized and enqueued to the
+    ``crsbench_ci_build`` queue. Workers execute them via
+    ``crsbench.distributed.build_jobs.execute_ci_build``.
+
+    Args:
+        all_jobs: List of BuildSingleVariantJob instances
+        redis_host: Redis server hostname
+
+    Returns:
+        Dict mapping job_id to ExecutorResult (same format as DAGExecutor)
+    """
+    import os
+    import time
+
+    try:
+        import redis
+        import rq
+    except ImportError as exc:
+        raise RuntimeError(
+            "Redis and RQ packages are required for distributed builds. "
+            "Install with: pip install redis rq"
+        ) from exc
+
+    from crsbench.distributed.build_jobs import serialize_build_job
+    from crsbench.executor.types import ExecutorResult, JobStatus
+
+    redis_password = os.environ.get("REDIS_PASSWORD") or None
+    redis_conn = redis.Redis(
+        host=redis_host,
+        password=redis_password,
+        socket_connect_timeout=5,
+    )
+    redis_conn.ping()
+
+    queue = rq.Queue("crsbench_ci_build", connection=redis_conn)
+    logger.info(f"Connected to Redis at {redis_host}, queue: crsbench_ci_build")
+
+    # Enqueue all build jobs
+    rq_jobs: dict[str, tuple[str, rq.job.Job]] = {}
+    for job in all_jobs:
+        params = serialize_build_job(job)
+        rq_job = queue.enqueue(
+            "crsbench.distributed.build_jobs.execute_ci_build",
+            params,
+            job_timeout=3600,
+            result_ttl=-1,
+        )
+        rq_jobs[job.job_id] = (job.job_id, rq_job)
+        logger.info(f"Enqueued {job.job_id} as RQ job {rq_job.id[:8]}")
+
+    logger.info(f"Enqueued {len(rq_jobs)} build jobs, waiting for completion...")
+
+    # Poll for results
+    pending = set(rq_jobs.keys())
+    while pending:
+        for ci_job_id in list(pending):
+            _, rq_job = rq_jobs[ci_job_id]
+            rq_job.refresh()
+            status = rq_job.get_status()
+            if status in ("finished", "failed"):
+                pending.discard(ci_job_id)
+
+        if pending:
+            logger.info(
+                f"Waiting for {len(pending)}/{len(rq_jobs)} distributed build jobs..."
+            )
+            time.sleep(5)
+
+    # Convert RQ results to ExecutorResult format
+    results: dict[str, ExecutorResult] = {}
+    for ci_job_id, (_, rq_job) in rq_jobs.items():
+        rq_job.refresh()
+        status = rq_job.get_status()
+
+        if status == "finished" and rq_job.result:
+            r = rq_job.result
+            job_result = JobResult(
+                job_id=r["job_id"],
+                job_type=r.get("job_type", "build"),
+                success=r["success"],
+                started_at=datetime.fromisoformat(r["started_at"])
+                if r.get("started_at")
+                else datetime.now(),
+                finished_at=datetime.fromisoformat(r["finished_at"])
+                if r.get("finished_at")
+                else datetime.now(),
+                elapsed_seconds=r.get("elapsed_seconds", 0.0),
+                error=r.get("error"),
+                details=r.get("details", {}),
+            )
+            results[ci_job_id] = ExecutorResult(
+                job_id=ci_job_id,
+                status=JobStatus.SUCCESS if r["success"] else JobStatus.FAILED,
+                elapsed_seconds=r.get("elapsed_seconds", 0.0),
+                error=r.get("error"),
+                job_result=job_result,
+            )
+        else:
+            exc_info = rq_job.exc_info or "Unknown error"
+            results[ci_job_id] = ExecutorResult(
+                job_id=ci_job_id,
+                status=JobStatus.FAILED,
+                error=str(exc_info)[:500],
+            )
+
+    return results
+
+
 def run_build(args: argparse.Namespace) -> int:
     """Run build-only checks on resolved benchmarks."""
     paths = resolve_benchmark_paths(
@@ -272,12 +400,15 @@ def run_build(args: argparse.Namespace) -> int:
     build_workers = getattr(args, "build_workers", 4)
     use_inc_build = not getattr(args, "no_inc_build", False)
     force_rebuild = getattr(args, "force_rebuild", False)
+    distributed = getattr(args, "distributed", False)
+    redis_host = getattr(args, "redis_host", "localhost")
 
     build_mode = "inc-build" if use_inc_build else "full-build"
     rebuild_mode = "force-rebuild" if force_rebuild else "docker-cache"
+    exec_mode = f"distributed (redis={redis_host})" if distributed else "local"
     logger.info(
         f"Building: {len(paths)} benchmark(s), "
-        f"build-workers={build_workers}, {build_mode}, {rebuild_mode}"
+        f"build-workers={build_workers}, {build_mode}, {rebuild_mode}, {exec_mode}"
     )
 
     start_dt = datetime.now()
@@ -291,11 +422,15 @@ def run_build(args: argparse.Namespace) -> int:
 
     logger.info(f"DAG: {len(all_jobs)} build jobs")
 
-    output_dir = getattr(args, "output_dir", None)
-    output_path = Path(output_dir) if output_dir else None
-    context = JobContext(output_dir=output_path)
-    executor = DAGExecutor(type_limits={"build": build_workers})
-    dag_results = executor.execute(all_jobs, context)
+    dag_results: dict[str, ExecutorResult]
+    if distributed:
+        dag_results = _run_distributed_build(all_jobs, redis_host)
+    else:
+        output_dir = getattr(args, "output_dir", None)
+        output_path = Path(output_dir) if output_dir else None
+        context = JobContext(output_dir=output_path)
+        executor = DAGExecutor(type_limits={"build": build_workers})
+        dag_results = executor.execute(all_jobs, context)
 
     summary = ValidationSummary(started_at=start_dt, check_mode=CheckMode.BUILD)
     for path, supports_inc, rts_mode in benchmark_metadata:
@@ -311,6 +446,7 @@ def run_build(args: argparse.Namespace) -> int:
         no_color=getattr(args, "no_color", False),
     )
 
+    output_dir = getattr(args, "output_dir", None)
     if output_dir:
         save_output_dir(summary, Path(output_dir), check_mode=CheckMode.BUILD)
 

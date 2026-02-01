@@ -199,7 +199,7 @@ class TestVerifyAllPovsSkipHashes:
         from crsbench.evaluation.verification.pov.engine import VerificationEngine
 
         with (
-            patch.object(VerificationEngine, "_get_or_build_results") as mock_build,
+            patch.object(VerificationEngine, "get_or_build_results") as mock_build,
             patch.object(VerificationEngine, "verify_povs_parallel") as mock_verify,
         ):
             # Setup mocks
@@ -228,7 +228,7 @@ class TestVerifyAllPovsSkipHashes:
         from crsbench.evaluation.verification.pov.engine import VerificationEngine
 
         with (
-            patch.object(VerificationEngine, "_get_or_build_results") as mock_build,
+            patch.object(VerificationEngine, "get_or_build_results") as mock_build,
             patch.object(VerificationEngine, "verify_povs_parallel") as mock_verify,
         ):
             # Setup mocks
@@ -294,8 +294,8 @@ class TestVerifyBenchmarkSkipHashes:
         from crsbench.evaluation.verification.pov.engine import VerificationEngine
 
         with (
-            patch.object(VerificationEngine, "_load_adapter") as mock_adapter,
-            patch.object(VerificationEngine, "_get_or_build_results") as mock_build,
+            patch.object(VerificationEngine, "load_adapter") as mock_adapter,
+            patch.object(VerificationEngine, "get_or_build_results") as mock_build,
             patch.object(VerificationEngine, "verify_povs_parallel") as mock_verify,
         ):
             # Setup mocks

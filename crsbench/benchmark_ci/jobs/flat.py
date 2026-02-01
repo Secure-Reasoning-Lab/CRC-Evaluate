@@ -226,10 +226,10 @@ class BuildVariantsJob(Job):
                 oss_fuzz_path,
                 source_mode=self.source_mode,
             )
-            adapter = engine._load_adapter(self.benchmark_path)
+            adapter = engine.load_adapter(self.benchmark_path)
             if not adapter:
                 raise ValueError(f"Failed to load adapter for {self.benchmark_path}")
-            build_results = engine._get_or_build_results(
+            build_results = engine.get_or_build_results(
                 adapter,
                 force_rebuild=self.force_rebuild,
                 use_inc_build=self.use_inc_build,
@@ -415,7 +415,7 @@ class VerifyCpvPovJob(Job):
                     oss_fuzz_path,
                     source_mode=self.source_mode,
                 )
-                adapter = engine._load_adapter(self.benchmark_path)
+                adapter = engine.load_adapter(self.benchmark_path)
 
             if not build_results or not adapter:
                 raise ValueError(f"No build data from {self.build_job_ids}")
@@ -604,7 +604,7 @@ class VerifyCpvVarJob(Job):
                     oss_fuzz_path,
                     source_mode=self.source_mode,
                 )
-                adapter = engine._load_adapter(self.benchmark_path)
+                adapter = engine.load_adapter(self.benchmark_path)
 
             if not build_results or not adapter:
                 raise ValueError(f"No build data from {self.build_job_ids}")
@@ -742,7 +742,7 @@ class BuildPatchVariantJob(Job):
 
             # Load adapter to get sanitizer
             pov_engine = VerificationEngine(oss_fuzz_path, source_mode=self.source_mode)
-            adapter = pov_engine._load_adapter(self.benchmark_path)
+            adapter = pov_engine.load_adapter(self.benchmark_path)
 
             if not adapter:
                 raise ValueError(f"Failed to load adapter for {self.benchmark_path}")

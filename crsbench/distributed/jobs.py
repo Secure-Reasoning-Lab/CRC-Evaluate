@@ -1078,6 +1078,17 @@ def run_crs_trial(
         # Log completion message
         logger.info(trial_result.log_summary())
 
+        # Async POV verification: enqueue POVs to verify queue (fire-and-forget)
+        # This runs regardless of whether inline verification was skipped,
+        # allowing an evaluator to verify POVs on a separate machine.
+        _enqueue_async_verification(
+            config=config,
+            trial_id=trial_id,
+            benchmark=benchmark,
+            harness=harness_name,
+            trial_output_dir=trial_output_dir,
+        )
+
         # Create success/fail marker file
         marker_file = trial_output_dir / (".success" if result.success else ".fail")
         marker_file.touch()
@@ -1401,3 +1412,59 @@ def _ensure_project_symlink(
             logger.warning(f"Failed to create project symlink: {symlink_path}")
     except Exception as e:
         logger.warning(f"Error creating project symlink: {e}")
+
+
+def _enqueue_async_verification(
+    config: "ExperimentConfig",
+    trial_id: str,
+    benchmark: str,
+    harness: str,
+    trial_output_dir: Path,
+) -> None:
+    """Enqueue POVs for async verification by an evaluator (fire-and-forget).
+
+    This is called after a trial completes. It reads POV files from the
+    trial output directory and enqueues them to the Redis verify queue.
+    If Redis is unavailable or no POVs exist, this is a no-op.
+
+    Args:
+        config: ExperimentConfig with redis_host
+        trial_id: Trial identifier for result correlation
+        benchmark: Benchmark name
+        harness: Harness name
+        trial_output_dir: Trial output directory containing output/povs/
+    """
+    # Only enqueue if Redis is configured
+    if not config.redis_host:
+        return
+
+    try:
+        from crsbench.distributed.verify_queue import enqueue_trial_povs
+
+        verify_job_ids = enqueue_trial_povs(
+            redis_host=config.redis_host,
+            experiment_name=config.experiment,
+            trial_id=trial_id,
+            benchmark=benchmark,
+            harness=harness,
+            trial_output_dir=trial_output_dir,
+            job_timeout=config.max_total_time,
+        )
+
+        # Store verify job IDs in the current RQ job meta for tracking
+        if verify_job_ids:
+            try:
+                import rq
+
+                job = rq.get_current_job()
+                if job:
+                    existing_ids = job.meta.get("verify_job_ids", [])
+                    existing_ids.extend(verify_job_ids)
+                    job.meta["verify_job_ids"] = existing_ids
+                    job.save_meta()
+            except Exception as e:
+                logger.debug(f"Could not save verify job IDs to meta: {e}")
+
+    except Exception as e:
+        # Fire-and-forget: never fail the trial because of verify enqueue
+        logger.warning(f"Failed to enqueue async verification: {e}")

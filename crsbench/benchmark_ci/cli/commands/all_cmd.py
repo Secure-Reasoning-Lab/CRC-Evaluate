@@ -85,7 +85,7 @@ def _load_benchmark_adapter(path: Path, source_mode: str) -> MetaYamlAdapter | N
 
     oss_fuzz_path = Path(get_oss_fuzz_root())
     engine = VerificationEngine(oss_fuzz_path, source_mode=source_mode)
-    return engine._load_adapter(path)
+    return engine.load_adapter(path)
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
