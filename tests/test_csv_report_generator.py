@@ -160,19 +160,22 @@ def test_generate_trial_report(temp_output_dir, sample_trial_metrics):
 
     assert len(output_files) == 2
 
-    # Check for unique trial ID in filenames (skips first part "experiment")
+    # Check for unique trial ID in filenames (in trial-reports subdirectory)
+    trial_reports_dir = temp_output_dir / "trial-reports"
+    assert trial_reports_dir.exists()
+
     trial_id = "json-c__ensemble-c-fuzz_json-trial-1"
-    assert (temp_output_dir / f"{trial_id}_summary.csv").exists()
-    assert (temp_output_dir / f"{trial_id}_time_series.csv").exists()
+    assert (trial_reports_dir / f"{trial_id}_summary.csv").exists()
+    assert (trial_reports_dir / f"{trial_id}_time_series.csv").exists()
 
     # Verify trial summary content
-    trial_csv = temp_output_dir / f"{trial_id}_summary.csv"
+    trial_csv = trial_reports_dir / f"{trial_id}_summary.csv"
     content = trial_csv.read_text()
     assert "trial_num,crs,benchmark" in content
     assert "trial-1,ensemble-c,json-c" in content
 
     # Verify time series content
-    time_series_csv = temp_output_dir / f"{trial_id}_time_series.csv"
+    time_series_csv = trial_reports_dir / f"{trial_id}_time_series.csv"
     content = time_series_csv.read_text()
     assert "elapsed_time,cumulative_povs" in content
     assert "60.0,1" in content

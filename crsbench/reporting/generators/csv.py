@@ -36,14 +36,26 @@ class CSVReportGenerator:
         """
         output_files = []
 
+        # Create trial-reports subdirectory (consistent with JSON/HTML)
+        trial_reports_dir = self.output_dir / "trial-reports"
+        trial_reports_dir.mkdir(exist_ok=True)
+
         # Create unique filename prefix from trial path
         # e.g., "exp/afc-curl/curl_fuzzer/delta/trial-1" -> "afc-curl-curl_fuzzer-delta-trial-1"
-        trial_path = Path(trial_metrics["trial_dir"]) if isinstance(trial_metrics, dict) else Path(trial_metrics.trial_dir)
+        trial_path = (
+            Path(trial_metrics["trial_dir"])
+            if isinstance(trial_metrics, dict)
+            else Path(trial_metrics.trial_dir)
+        )
         # Skip experiment dir (first part) and join the rest
-        trial_id = "-".join(trial_path.parts[1:]) if len(trial_path.parts) > 1 else trial_path.name
+        trial_id = (
+            "-".join(trial_path.parts[1:])
+            if len(trial_path.parts) > 1
+            else trial_path.name
+        )
 
         # Generate trial summary CSV
-        trial_csv = self.output_dir / f"{trial_id}_summary.csv"
+        trial_csv = trial_reports_dir / f"{trial_id}_summary.csv"
         trial_row = self._format_trial_row(trial_metrics)
         self._write_csv_rows(trial_csv, [trial_row], list(trial_row.keys()))
         output_files.append(trial_csv)
@@ -51,7 +63,7 @@ class CSVReportGenerator:
 
         # Generate time series CSV
         if snapshots:
-            time_series_csv = self.output_dir / f"{trial_id}_time_series.csv"
+            time_series_csv = trial_reports_dir / f"{trial_id}_time_series.csv"
             time_series_rows = [
                 self._format_time_series_row(trial_metrics, snapshot)
                 for snapshot in snapshots

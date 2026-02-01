@@ -537,7 +537,11 @@ class HTMLReportGenerator:
         # e.g., "exp/afc-curl/curl_fuzzer/delta/trial-1" -> "afc-curl-curl_fuzzer-delta-trial-1"
         trial_path = Path(trial_metrics.trial_dir)
         # Skip experiment dir (first part) and join the rest
-        trial_id = "-".join(trial_path.parts[1:]) if len(trial_path.parts) > 1 else trial_path.name
+        trial_id = (
+            "-".join(trial_path.parts[1:])
+            if len(trial_path.parts) > 1
+            else trial_path.name
+        )
         output_path = trial_reports_dir / f"{trial_id}.html"
         output_path.write_text(html)
 
