@@ -37,6 +37,12 @@ Examples:
   # Generate HTML reports only
   %(prog)s --experiment test-experiment --format html
 
+  # Generate CSV reports only
+  %(prog)s --experiment test-experiment --format csv
+
+  # Generate all formats (JSON + HTML + CSV)
+  %(prog)s --experiment test-experiment --format all
+
   # Preview what would be generated (dry-run)
   %(prog)s --experiment test-experiment --dry-run
 
@@ -81,10 +87,10 @@ Examples:
     report_parser.add_argument(
         "--format",
         type=str,
-        choices=["json", "html", "both"],
+        choices=["json", "html", "csv", "both", "all"],
         default="both",
         metavar="FORMAT",
-        help="Report format: json, html, or both (default: both)",
+        help="Report format: json, html, csv, both (json+html), or all (json+html+csv) (default: both)",
     )
 
     report_parser.add_argument(
@@ -197,7 +203,12 @@ def _generate_experiment_report(
     logger.info("=" * 60)
 
     for report_type, path in result.items():
-        logger.info(f"  {report_type.upper()}: {path}")
+        if isinstance(path, list):
+            logger.info(f"  {report_type.upper()}:")
+            for p in path:
+                logger.info(f"    - {p}")
+        else:
+            logger.info(f"  {report_type.upper()}: {path}")
 
     return 0
 

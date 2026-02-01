@@ -1,9 +1,14 @@
 """Report generation orchestrator - coordinates all reporting components."""
 
 from pathlib import Path
+from typing import Any
 
 from crsbench.reporting.errors import ReportGenerationError
-from crsbench.reporting.generators import HTMLReportGenerator, JSONReportGenerator
+from crsbench.reporting.generators import (
+    CSVReportGenerator,
+    HTMLReportGenerator,
+    JSONReportGenerator,
+)
 from crsbench.reporting.metrics import MetricsAggregator
 from crsbench.reporting.models import ExperimentMetrics, TrialInfo, TrialMetrics
 from crsbench.reporting.snapshot_loader import SnapshotLoader, discover_trials
@@ -51,6 +56,7 @@ class ReportGenerator:
         self.validator = ExperimentValidator()
         self.json_generator = JSONReportGenerator(output_dir)
         self.html_generator = HTMLReportGenerator(output_dir)
+        self.csv_generator = CSVReportGenerator(output_dir)
 
     def generate_experiment_report(
         self,
@@ -58,16 +64,16 @@ class ReportGenerator:
         *,
         format: str = "both",
         skip_incomplete: bool = True,
-    ) -> dict[str, Path]:
+    ) -> dict[str, Path | list[Path]]:
         """Generate report for an entire experiment.
 
         Args:
             experiment_dir: Path to experiment directory
-            format: Report format ("json", "html", or "both")
+            format: Report format ("json", "html", "csv", "both", or "all")
             skip_incomplete: If True, skip incomplete trials
 
         Returns:
-            Dict mapping report type to file path
+            Dict mapping report type to file path (or list of paths for CSV)
 
         Raises:
             ReportGenerationError: If report generation fails
@@ -124,13 +130,13 @@ class ReportGenerator:
                 trial_metrics_list.append(trial_metrics)
 
                 # Generate trial reports
-                if format in ("json", "both"):
+                if format in ("json", "both", "all"):
                     json_path = self.json_generator.generate_trial_report(
                         trial_metrics, snapshots
                     )
                     trial_json_paths.append(json_path)
 
-                if format in ("html", "both"):
+                if format in ("html", "both", "all"):
                     html_path = self.html_generator.generate_trial_report(
                         trial_metrics, snapshots
                     )
@@ -153,19 +159,25 @@ class ReportGenerator:
         )
 
         # Generate experiment reports
-        result: dict[str, Path] = {}
+        result: dict[str, Path | list[Path]] = {}
 
-        if format in ("json", "both"):
+        if format in ("json", "both", "all"):
             json_path = self.json_generator.generate_experiment_report(
                 experiment_metrics, trial_json_paths
             )
             result["json"] = json_path
 
-        if format in ("html", "both"):
+        if format in ("html", "both", "all"):
             html_path = self.html_generator.generate_experiment_report(
                 experiment_metrics
             )
             result["html"] = html_path
+
+        if format in ("csv", "all"):
+            csv_paths = self.csv_generator.generate_experiment_report(
+                experiment_metrics.model_dump()
+            )
+            result["csv"] = csv_paths
 
         logger.info(
             f"Report generation complete. Processed {len(trial_metrics_list)} trials."
@@ -178,15 +190,15 @@ class ReportGenerator:
         trial_dir: Path,
         *,
         format: str = "both",
-    ) -> dict[str, Path]:
+    ) -> dict[str, Path | list[Path]]:
         """Generate report for a single trial.
 
         Args:
             trial_dir: Path to trial directory
-            format: Report format ("json", "html", or "both")
+            format: Report format ("json", "html", "csv", "both", or "all")
 
         Returns:
-            Dict mapping report type to file path
+            Dict mapping report type to file path (or list of paths for CSV)
 
         Raises:
             ReportGenerationError: If report generation fails
@@ -252,19 +264,25 @@ class ReportGenerator:
         )
 
         # Generate reports
-        result: dict[str, Path] = {}
+        result: dict[str, Path | list[Path]] = {}
 
-        if format in ("json", "both"):
+        if format in ("json", "both", "all"):
             json_path = self.json_generator.generate_trial_report(
                 trial_metrics, snapshots
             )
             result["json"] = json_path
 
-        if format in ("html", "both"):
+        if format in ("html", "both", "all"):
             html_path = self.html_generator.generate_trial_report(
                 trial_metrics, snapshots
             )
             result["html"] = html_path
+
+        if format in ("csv", "all"):
+            csv_paths = self.csv_generator.generate_trial_report(
+                trial_metrics.model_dump(), snapshots
+            )
+            result["csv"] = csv_paths
 
         logger.info(f"Trial report generation complete: trial-{trial_num}")
 
@@ -361,7 +379,10 @@ class ReportGenerator:
         benchmark_summary_count = unique_benchmarks
         time_series_count = total_snapshots
         combined_count = (
-            trial_count + crs_summary_count + benchmark_summary_count + time_series_count
+            trial_count
+            + crs_summary_count
+            + benchmark_summary_count
+            + time_series_count
         )
 
         return {
