@@ -213,6 +213,21 @@ class SnapshotLoader:
             except (json.JSONDecodeError, ValidationError) as e:
                 logger.warning(f"Invalid llm-usage.json in snapshot: {e}")
 
+        # Parse POV verification data
+        cpvs_found: list[str] = []
+        cpvs_remaining: list[str] = []
+        early_stop_triggered = False
+
+        pov_verification_path = extract_dir / "pov_verification.json"
+        if pov_verification_path.exists():
+            try:
+                pov_data = json.loads(pov_verification_path.read_text())
+                cpvs_found = pov_data.get("cpvs_found", [])
+                cpvs_remaining = pov_data.get("cpvs_remaining", [])
+                early_stop_triggered = pov_data.get("early_stop_triggered", False)
+            except (json.JSONDecodeError, ValidationError) as e:
+                logger.warning(f"Invalid pov_verification.json in snapshot: {e}")
+
         # Check for optional files
         has_config = (extract_dir / "config.yaml").exists()
         has_execution = (extract_dir / "execution.json").exists()
@@ -232,6 +247,9 @@ class SnapshotLoader:
             pov_names=pov_names,
             patch_names=patch_names,
             llm_usage=llm_usage,
+            cpvs_found=cpvs_found,
+            cpvs_remaining=cpvs_remaining,
+            early_stop_triggered=early_stop_triggered,
             has_config=has_config,
             has_execution_metadata=has_execution,
             has_crs_log=has_crs_log,

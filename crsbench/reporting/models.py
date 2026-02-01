@@ -96,6 +96,11 @@ class SnapshotData(BaseModel):
     # LLM usage (parsed from llm-usage.json)
     llm_usage: LLMUsage = Field(default_factory=LLMUsage)
 
+    # POV verification data (from pov_verification.json)
+    cpvs_found: list[str] = Field(default_factory=list)
+    cpvs_remaining: list[str] = Field(default_factory=list)
+    early_stop_triggered: bool = False
+
     # Flags indicating what was captured
     has_config: bool = False
     has_execution_metadata: bool = False
@@ -197,6 +202,15 @@ class TrialMetrics(BaseModel):
 
     # Snapshot info
     snapshot_count: int = 0
+
+    # Early stop analysis
+    total_cpvs: int = 0
+    cpvs_found_count: int = 0
+    all_cpvs_found: bool = False
+    early_stop_time: float | None = None
+    early_stop_cost: float | None = None
+    time_saved: float | None = None
+    cost_saved: float | None = None
 
     @property
     def unique_povs(self) -> int:

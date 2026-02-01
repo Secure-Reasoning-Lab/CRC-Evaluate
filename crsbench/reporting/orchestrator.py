@@ -60,6 +60,58 @@ class ReportGenerator:
         self.html_generator = HTMLReportGenerator(output_dir)
         self.csv_generator = CSVReportGenerator(output_dir)
 
+    def _get_cpv_info(self, trial_info: TrialInfo) -> tuple[int, list[str]]:
+        """Get CPV count and IDs for a trial from ground truth meta.yaml.
+
+        Args:
+            trial_info: Trial information containing benchmark and harness
+
+        Returns:
+            Tuple of (total_cpvs, cpv_ids). Returns (0, []) if unable to load.
+        """
+        from crsbench.validation.meta_adapter import MetaYamlAdapter
+
+        # Load meta.yaml for this benchmark
+        benchmark_path = self.benchmarks_root / trial_info.benchmark
+
+        if not benchmark_path.exists():
+            logger.warning(
+                f"Benchmark directory not found: {benchmark_path} "
+                f"(for trial {trial_info.trial_num})"
+            )
+            return 0, []
+
+        adapter = MetaYamlAdapter.from_benchmark_path(benchmark_path)
+        if adapter is None:
+            logger.warning(
+                f"Failed to load meta.yaml for benchmark: {trial_info.benchmark} "
+                f"(for trial {trial_info.trial_num})"
+            )
+            return 0, []
+
+        # Get harness and extract CPV IDs
+        harness = adapter.get_harness(trial_info.harness)
+        if harness is None:
+            logger.warning(
+                f"Harness not found in meta.yaml: {trial_info.harness} "
+                f"in benchmark {trial_info.benchmark} "
+                f"(for trial {trial_info.trial_num})"
+            )
+            return 0, []
+
+        # Extract CPV IDs from vulns
+        if not harness.vulns:
+            return 0, []
+
+        cpv_ids = [v.vuln_keyword for v in harness.vulns]
+        total_cpvs = len(cpv_ids)
+        logger.debug(
+            f"Trial {trial_info.trial_num}: "
+            f"{trial_info.benchmark}/{trial_info.harness} has {total_cpvs} CPVs "
+            f"({cpv_ids})"
+        )
+        return total_cpvs, cpv_ids
+
     def generate_experiment_report(
         self,
         experiment_dir: Path,
@@ -124,10 +176,15 @@ class ReportGenerator:
                     )
                     continue
 
+                # Load ground truth CPV count and IDs from meta.yaml
+                total_cpvs, cpv_ids = self._get_cpv_info(trial_info)
+
                 # Aggregate metrics
                 trial_metrics = self.metrics_aggregator.aggregate_trial(
                     trial_info=trial_info,
                     snapshots=snapshots,
+                    total_cpvs=total_cpvs,
+                    cpv_ids=cpv_ids,
                 )
                 trial_metrics_list.append(trial_metrics)
 
@@ -264,10 +321,15 @@ class ReportGenerator:
                 f"No snapshots found in trial directory: {trial_dir}"
             )
 
+        # Load ground truth CPV count and IDs from meta.yaml
+        total_cpvs, cpv_ids = self._get_cpv_info(trial_info)
+
         # Aggregate metrics
         trial_metrics = self.metrics_aggregator.aggregate_trial(
             trial_info=trial_info,
             snapshots=snapshots,
+            total_cpvs=total_cpvs,
+            cpv_ids=cpv_ids,
         )
 
         # Generate reports
@@ -331,9 +393,14 @@ class ReportGenerator:
             snapshots = self.snapshot_loader.load_trial_snapshots(trial_info.trial_dir)
 
             if snapshots:
+                # Load ground truth CPV count and IDs
+                total_cpvs, cpv_ids = self._get_cpv_info(trial_info)
+
                 trial_metrics = self.metrics_aggregator.aggregate_trial(
                     trial_info=trial_info,
                     snapshots=snapshots,
+                    total_cpvs=total_cpvs,
+                    cpv_ids=cpv_ids,
                 )
                 trial_metrics_list.append(trial_metrics)
 

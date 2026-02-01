@@ -201,6 +201,10 @@ def _generate_experiment_report(
         logger.error(f"Experiment directory not found: {experiment_dir}")
         return 1
 
+    if not benchmarks_root.exists():
+        logger.error(f"Benchmarks root directory not found: {benchmarks_root}")
+        return 1
+
     logger.info(f"Processing experiment: {experiment_name}")
     logger.info(f"Experiment directory: {experiment_dir}")
     logger.info(f"Output directory: {output_dir}")
@@ -293,6 +297,10 @@ def _generate_trial_report(args: argparse.Namespace) -> int:
 
     if not trial_dir.exists():
         logger.error(f"Trial directory not found: {trial_dir}")
+        return 1
+
+    if not benchmarks_root.exists():
+        logger.error(f"Benchmarks root directory not found: {benchmarks_root}")
         return 1
 
     logger.info(f"Processing trial: {trial_dir}")

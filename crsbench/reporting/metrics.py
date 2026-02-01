@@ -68,12 +68,17 @@ class MetricsAggregator:
         self,
         trial_info: TrialInfo,
         snapshots: list[SnapshotData],
+        *,
+        total_cpvs: int = 0,
+        cpv_ids: list[str] | None = None,
     ) -> TrialMetrics:
         """Aggregate metrics for a single trial.
 
         Args:
             trial_info: Trial information
             snapshots: List of snapshot data from the trial
+            total_cpvs: Total CPVs for this harness from ground truth (default: 0)
+            cpv_ids: CPV IDs for fallback matching when pov_verification.json unavailable
 
         Returns:
             Aggregated trial metrics
@@ -128,6 +133,49 @@ class MetricsAggregator:
         # Compute time-series data
         time_series = self._compute_time_series(sorted_snapshots)
 
+        # Early stop analysis
+        early_stop_time: float | None = None
+        early_stop_cost: float | None = None
+        cpvs_found_count = 0
+        all_cpvs_found = False
+
+        if total_cpvs > 0:
+            # Find first snapshot where all CPVs were discovered
+            for snap in sorted_snapshots:
+                # Primary: use cpvs_found from pov_verification.json
+                if snap.cpvs_found:
+                    found_count = len(snap.cpvs_found)
+                # Fallback: match pov_names against cpv_ids from meta.yaml
+                elif cpv_ids:
+                    found_count = len(set(snap.pov_names) & set(cpv_ids))
+                else:
+                    found_count = 0
+
+                if found_count >= total_cpvs:
+                    early_stop_time = snap.elapsed_time
+                    early_stop_cost = snap.llm_usage.total_cost_usd
+                    cpvs_found_count = found_count
+                    all_cpvs_found = True
+                    break
+
+            # If not all found, use last snapshot's CPV count
+            if not all_cpvs_found and sorted_snapshots:
+                last_snap = sorted_snapshots[-1]
+                if last_snap.cpvs_found:
+                    cpvs_found_count = len(last_snap.cpvs_found)
+                elif cpv_ids:
+                    cpvs_found_count = len(set(last_snap.pov_names) & set(cpv_ids))
+                else:
+                    cpvs_found_count = 0
+
+        # Calculate savings
+        time_saved: float | None = None
+        cost_saved: float | None = None
+        if early_stop_time is not None:
+            time_saved = total_time - early_stop_time
+        if early_stop_cost is not None:
+            cost_saved = llm_usage.total_cost_usd - early_stop_cost
+
         return TrialMetrics(
             trial_dir=str(trial_info.trial_dir),
             trial_num=trial_info.trial_num,
@@ -151,6 +199,13 @@ class MetricsAggregator:
             time_to_first_pov=time_to_first_pov,
             time_series=time_series,
             snapshot_count=len(sorted_snapshots),
+            total_cpvs=total_cpvs,
+            cpvs_found_count=cpvs_found_count,
+            all_cpvs_found=all_cpvs_found,
+            early_stop_time=early_stop_time,
+            early_stop_cost=early_stop_cost,
+            time_saved=time_saved,
+            cost_saved=cost_saved,
         )
 
     def aggregate_experiment(

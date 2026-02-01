@@ -194,6 +194,14 @@ class CSVReportGenerator:
             "total_time": trial_metrics.get("total_time", 0.0),
             "time_to_first_pov": trial_metrics.get("time_to_first_pov", ""),
             "snapshot_count": trial_metrics.get("snapshot_count", 0),
+            # Early stop analysis
+            "total_cpvs": trial_metrics.get("total_cpvs", 0),
+            "cpvs_found": trial_metrics.get("cpvs_found_count", 0),
+            "all_cpvs_found": trial_metrics.get("all_cpvs_found", False),
+            "early_stop_time": trial_metrics.get("early_stop_time", ""),
+            "early_stop_cost": trial_metrics.get("early_stop_cost", ""),
+            "time_saved": trial_metrics.get("time_saved", ""),
+            "cost_saved": trial_metrics.get("cost_saved", ""),
         }
 
     def _format_crs_row(
