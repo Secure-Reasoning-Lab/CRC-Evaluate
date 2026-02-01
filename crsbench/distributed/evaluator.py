@@ -12,6 +12,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 from crsbench.utils.logger import configure_logger, get_logger
 
@@ -90,6 +91,7 @@ def run_evaluator_main(
         experiment_name=experiment_name,
         max_jobs=max_jobs,
         use_cpuset=use_cpuset,
+        use_cgroups=use_cpuset,
     )
 
 
@@ -192,6 +194,7 @@ def _run_evaluator_supervisor(
     max_jobs: int,
     *,
     use_cpuset: bool = False,
+    use_cgroups: bool = False,
 ) -> int:
     """Supervisor that dequeues verify jobs and spawns child processes.
 
@@ -205,6 +208,9 @@ def _run_evaluator_supervisor(
         experiment_name: Experiment identifier
         max_jobs: Maximum concurrent verify jobs
         use_cpuset: Enable CPU affinity
+        use_cgroups: Create per-job cgroups with cpuset constraints
+            so Docker containers inherit CPU pinning via
+            OSS_FUZZ_CGROUP_PARENT (default: False)
 
     Returns:
         Exit code (0 for success)
@@ -220,8 +226,25 @@ def _run_evaluator_supervisor(
 
         cpu_pool = CPUPool()
 
-    workers: dict[int, tuple[multiprocessing.Process, list[int], str]] = {}
-    # pid -> (process, cpus, job_id)
+    # Cgroup initialization (if enabled)
+    cgroup_base: Optional[Path] = None
+    if use_cgroups:
+        from crsbench.utils.cgroup import (
+            cleanup_stale_cgroups,
+            run_preflight_checks,
+            setup_cgroup_hierarchy,
+        )
+
+        cgroup_base = run_preflight_checks()  # Raises CgroupError on failure
+        setup_cgroup_hierarchy(cgroup_base)
+        cleaned = cleanup_stale_cgroups(cgroup_base)
+        if cleaned > 0:
+            logger.info(f"Cleaned up {cleaned} stale cgroup(s)")
+
+    workers: dict[
+        int, tuple[multiprocessing.Process, list[int], str, Optional[Path]]
+    ] = {}
+    # pid -> (process, cpus, job_id, cgroup_path)
 
     try:
         # Connect to Redis
@@ -245,7 +268,7 @@ def _run_evaluator_supervisor(
         while True:
             # Cleanup finished workers
             for pid in list(workers.keys()):
-                proc, cpus, _job_id = workers[pid]
+                proc, cpus, _job_id, cgroup_path_entry = workers[pid]
                 if not proc.is_alive():
                     proc.join()
                     if cpu_pool and cpus:
@@ -253,6 +276,10 @@ def _run_evaluator_supervisor(
                         logger.info(
                             f"Verify worker (PID: {pid}) finished, released CPUs {cpus}"
                         )
+                    if cgroup_path_entry:
+                        from crsbench.utils.cgroup import cleanup_cgroup
+
+                        cleanup_cgroup(cgroup_path_entry)
                     del workers[pid]
 
             # Check for jobs and capacity
@@ -272,6 +299,7 @@ def _run_evaluator_supervisor(
                     cpus = cpu_pool.allocate(cpu_count) if cpu_pool else None
 
                     if cpu_pool is None or cpus is not None:
+                        cpuset_str = ""
                         if cpus:
                             from crsbench.utils.cpu_pool import format_cpuset
 
@@ -279,13 +307,53 @@ def _run_evaluator_supervisor(
                             job.meta["allocated_cpus"] = cpuset_str
                             job.save_meta()
 
+                        # Create cgroup for this verify job (if cgroups enabled)
+                        cgroup_path: Optional[Path] = None
+                        if cgroup_base is not None and cpuset_str:
+                            from crsbench.utils.cgroup import (
+                                cgroup_path_for_docker,
+                                create_cgroup,
+                            )
+
+                            cgroup_name = f"verify-{job.id[:8]}"
+                            cgroup_path = create_cgroup(
+                                cgroup_base,
+                                cgroup_name,
+                                cpuset=cpuset_str,
+                            )
+                            cgroup_parent = cgroup_path_for_docker(cgroup_path)
+                            job.meta["cgroup_parent"] = cgroup_parent
+                            job.save_meta()
+                            logger.info(
+                                f"Created cgroup {cgroup_name} "
+                                f"with cpuset={cpuset_str}"
+                            )
+
+                        # Set OSS_FUZZ_CGROUP_PARENT for child process
+                        if cgroup_path is not None:
+                            from crsbench.utils.cgroup import cgroup_path_for_docker
+
+                            os.environ["OSS_FUZZ_CGROUP_PARENT"] = (
+                                cgroup_path_for_docker(cgroup_path)
+                            )
+
                         p = multiprocessing.Process(
                             target=_run_single_verify_job,
                             args=(redis_host, job.id),
                         )
                         p.start()
+
+                        # Unset after spawning so it doesn't leak to the next job
+                        if cgroup_path is not None:
+                            os.environ.pop("OSS_FUZZ_CGROUP_PARENT", None)
+
                         if p.pid is not None:
-                            workers[p.pid] = (p, cpus or [], job.id)
+                            workers[p.pid] = (
+                                p,
+                                cpus or [],
+                                job.id,
+                                cgroup_path,
+                            )
 
                         logger.info(
                             f"Started verify job {job.id[:8]} (PID: {p.pid})"
@@ -304,10 +372,10 @@ def _run_evaluator_supervisor(
 
     except KeyboardInterrupt:
         logger.info("\nReceived interrupt signal, terminating verify workers...")
-        for _pid, (p, _cpus, _job_id) in workers.items():
+        for _pid, (p, _cpus, _job_id, _cg) in workers.items():
             if p.is_alive():
                 p.terminate()
-        for pid, (p, cpus, _job_id) in workers.items():
+        for pid, (p, cpus, _job_id, cgroup_path_entry) in workers.items():
             p.join(timeout=5)
             if p.is_alive():
                 logger.warning(f"Force killing verify worker (PID: {pid})")
@@ -315,6 +383,10 @@ def _run_evaluator_supervisor(
                 p.join()
             if cpu_pool and cpus:
                 cpu_pool.release(cpus)
+            if cgroup_path_entry:
+                from crsbench.utils.cgroup import cleanup_cgroup
+
+                cleanup_cgroup(cgroup_path_entry)
         return 0
     except Exception as e:
         logger.error(f"Evaluator supervisor error: {e}", exc_info=True)
