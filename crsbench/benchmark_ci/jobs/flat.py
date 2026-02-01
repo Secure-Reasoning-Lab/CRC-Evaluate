@@ -67,6 +67,7 @@ class BuildSingleVariantJob(Job):
     patches: list[Path] = field(default_factory=list)
     use_inc_build: bool = True
     force_rebuild: bool = False
+    skip_if_cached: bool = True
     source_mode: str = "main_repo"
     sanitizer: str = "address"
     repo_name: Optional[str] = None
@@ -127,7 +128,11 @@ class BuildSingleVariantJob(Job):
                 repo_name=self.repo_name,
             )
 
-            result = builder.build_single(config, force_rebuild=self.force_rebuild)
+            result = builder.build_single(
+                config,
+                force_rebuild=self.force_rebuild,
+                skip_if_cached=self.skip_if_cached,
+            )
 
             # Store in context.shared for downstream jobs
             context.shared[self.job_id] = {
