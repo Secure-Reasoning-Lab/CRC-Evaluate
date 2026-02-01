@@ -316,18 +316,29 @@ def _run_distributed_build(
     queue = rq.Queue("crsbench_ci_build", connection=redis_conn)
     logger.info(f"Connected to Redis at {redis_host}, queue: crsbench_ci_build")
 
-    # Enqueue all build jobs
+    # Enqueue all build jobs with cpu_count metadata and deterministic IDs
     rq_jobs: dict[str, tuple[str, rq.job.Job]] = {}
     for job in all_jobs:
         params = serialize_build_job(job)
-        rq_job = queue.enqueue(
-            "crsbench.distributed.build_jobs.execute_ci_build",
-            params,
-            job_timeout=3600,
-            result_ttl=-1,
-        )
-        rq_jobs[job.job_id] = (job.job_id, rq_job)
-        logger.info(f"Enqueued {job.job_id} as RQ job {rq_job.id[:8]}")
+        try:
+            rq_job = queue.enqueue(
+                "crsbench.distributed.build_jobs.execute_ci_build",
+                params,
+                job_timeout=3600,
+                result_ttl=-1,
+                meta={"cpu_count": 1},
+                job_id=job.job_id,
+            )
+            rq_jobs[job.job_id] = (job.job_id, rq_job)
+            logger.info(f"Enqueued {job.job_id} as RQ job {rq_job.id[:8]}")
+        except Exception:
+            # Job with same ID already exists -- fetch existing job
+            existing = rq.job.Job.fetch(job.job_id, connection=redis_conn)
+            rq_jobs[job.job_id] = (job.job_id, existing)
+            logger.info(
+                f"Job {job.job_id} already exists (dedup), "
+                f"status: {existing.get_status()}"
+            )
 
     logger.info(f"Enqueued {len(rq_jobs)} build jobs, waiting for completion...")
 
