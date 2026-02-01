@@ -332,6 +332,22 @@ class ReportGenerator:
                     f"cost=${m.early_stop_cost:.4f}"
                 )
 
+        # Log partial CPV discovery (found some but not all)
+        partial_cpv_trials = [
+            m
+            for m in trial_metrics_list
+            if m.cpvs_found_count > 0 and not m.all_cpvs_found
+        ]
+        if partial_cpv_trials:
+            logger.info(
+                f"Partial CPV discovery in {len(partial_cpv_trials)} trials "
+                f"(found some but not all):"
+            )
+            for m in partial_cpv_trials:
+                logger.info(
+                    f"  {m.trial_dir} - {m.cpvs_found_count}/{m.total_cpvs} CPVs found"
+                )
+
         if not trial_metrics_list:
             raise ReportGenerationError("No trials could be processed successfully")
 
