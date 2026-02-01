@@ -321,6 +321,17 @@ class ReportGenerator:
                             f"Failed to process trial {trial_info.trial_num}: {e}"
                         ) from e
 
+        # Log early stop summary
+        early_stop_trials = [m for m in trial_metrics_list if m.all_cpvs_found]
+        if early_stop_trials:
+            logger.info(f"Early stop detected in {len(early_stop_trials)} trials:")
+            for m in early_stop_trials:
+                logger.info(
+                    f"  {m.trial_dir} - all {m.total_cpvs} CPVs found at "
+                    f"run_elapsed_time={m.early_stop_time:.1f}s, "
+                    f"cost=${m.early_stop_cost:.4f}"
+                )
+
         if not trial_metrics_list:
             raise ReportGenerationError("No trials could be processed successfully")
 
