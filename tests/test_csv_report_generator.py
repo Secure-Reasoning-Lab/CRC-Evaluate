@@ -38,6 +38,7 @@ def sample_trial_metrics():
         "time_series": [
             {
                 "elapsed_time": 60.0,
+                "running_elapsed_time": 0.0,
                 "cumulative_povs": 1,
                 "cumulative_patches": 0,
                 "llm_tokens": 200,
@@ -45,6 +46,7 @@ def sample_trial_metrics():
             },
             {
                 "elapsed_time": 120.0,
+                "running_elapsed_time": 110.0,
                 "cumulative_povs": 3,
                 "cumulative_patches": 0,
                 "llm_tokens": 500,
@@ -79,6 +81,7 @@ def sample_experiment_metrics():
                 "time_series": [
                     {
                         "elapsed_time": 60.0,
+                        "running_elapsed_time": 55.0,
                         "cumulative_povs": 1,
                         "cumulative_patches": 0,
                         "llm_tokens": 200,
@@ -106,6 +109,7 @@ def sample_experiment_metrics():
                 "time_series": [
                     {
                         "elapsed_time": 90.0,
+                        "running_elapsed_time": 85.0,
                         "cumulative_povs": 2,
                         "cumulative_patches": 0,
                         "llm_tokens": 600,
@@ -185,9 +189,11 @@ def test_generate_trial_report(temp_output_dir, sample_trial_metrics):
     # Verify time series content
     time_series_csv = trial_reports_dir / f"{trial_id}_time_series.csv"
     content = time_series_csv.read_text()
-    assert "elapsed_time,cumulative_povs" in content
-    assert "60.0,1" in content
-    assert "120.0,3" in content
+    assert "elapsed_time" in content
+    assert "running_elapsed_time" in content
+    assert "cumulative_povs" in content
+    assert "60.0,0.0,1" in content
+    assert "120.0,110.0,3" in content
 
 
 def test_generate_experiment_report(temp_output_dir, sample_experiment_metrics):
@@ -299,6 +305,7 @@ def test_format_time_series_row(temp_output_dir, sample_trial_metrics):
     assert row["run_mode"] == "full"
     assert row["sanitizer"] == "address"
     assert row["elapsed_time"] == 60.0
+    assert row["running_elapsed_time"] == 0.0
     assert row["cumulative_povs"] == 1
     assert row["llm_tokens"] == 200
 
