@@ -105,6 +105,14 @@ Examples:
         help="Disable CPU affinity (not supported with -j > 1)",
     )
 
+    worker_parser.add_argument(
+        "--queue",
+        type=str,
+        default="trial",
+        choices=["trial", "ci-build"],
+        help="Queue type: 'trial' (CRS experiment jobs) or 'ci-build' (CI variant builds)",
+    )
+
     worker_parser.set_defaults(command="worker")
 
 
@@ -165,8 +173,15 @@ def run_worker(args: argparse.Namespace) -> int:
         args.experiment_name, experiment_name_from_config, "default"
     )
 
-    # Set worker override environment variables
-    if worker_config:
+    # Resolve queue name from --queue type
+    queue_type = getattr(args, "queue", "trial")
+    if queue_type == "ci-build":
+        queue_name = "crsbench_ci_build"
+    else:
+        queue_name = f"crsbench_{experiment_name}"
+
+    # Set worker override environment variables (skip for ci-build queue)
+    if worker_config and queue_type != "ci-build":
         override_fields = [
             "oss_fuzz_path",
             "registry_dir",
@@ -192,8 +207,10 @@ def run_worker(args: argparse.Namespace) -> int:
                 logger.info(f"Worker override: {field} = {value}")
 
     # Export experiment_filestore from main config if worker didn't override it
+    # (skip for ci-build queue — no experiment filestore needed)
     if (
-        args.experiment_config
+        queue_type != "ci-build"
+        and args.experiment_config
         and config is not None
         and "CRSBENCH_WORKER_EXPERIMENT_FILESTORE" not in os.environ
     ):
@@ -238,13 +255,14 @@ def run_worker(args: argparse.Namespace) -> int:
                 _timeout=args.timeout,
                 worker_name=args.worker_name,
                 num_workers=num_workers,
+                queue_name=queue_name,
                 use_cpuset=use_cpuset,
                 minimum_disk_size=minimum_disk_size,
                 disk_check_interval=disk_check_interval,
             )
             return 0
         # Run in burst mode (default)
-        return worker_main(**worker_args, use_cpuset=use_cpuset)
+        return worker_main(**worker_args, queue_name=queue_name, use_cpuset=use_cpuset)
 
     except KeyboardInterrupt:
         from crsbench.utils.logger import get_logger

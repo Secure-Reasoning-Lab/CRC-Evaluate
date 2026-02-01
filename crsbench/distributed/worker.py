@@ -95,6 +95,7 @@ def main(
     timeout: Optional[int] = None,
     worker_name: Optional[str] = None,
     num_workers: int = 1,
+    queue_name: Optional[str] = None,
     *,
     use_cpuset: bool = False,
 ) -> int:
@@ -150,6 +151,9 @@ def main(
         worker_name or os.environ.get("CRSBENCH_WORKER_NAME") or socket.gethostname()
     )
 
+    # Resolve queue name
+    queue_name = queue_name or f"crsbench_{experiment_name}"
+
     logger.info("=" * 60)
     logger.info("CRSBench Distributed Worker")
     logger.info("=" * 60)
@@ -157,6 +161,7 @@ def main(
     logger.info(f"Parallel workers: {num_workers}")
     logger.info(f"Redis host: {redis_host}")
     logger.info(f"Experiment: {experiment_name}")
+    logger.info(f"Queue: {queue_name}")
     logger.info(f"Worker timeout: {worker_timeout}s")
     logger.info("=" * 60)
 
@@ -164,7 +169,7 @@ def main(
     if num_workers == 1:
         try:
             with worker_lock(worker_name):
-                _run_worker(redis_host, experiment_name, worker_name)
+                _run_worker(redis_host, experiment_name, worker_name, queue_name)
             return 0
         except BlockingIOError:
             lock_file_path = LOCK_DIR / f"crsbench-worker-{worker_name}.lock"
@@ -178,12 +183,22 @@ def main(
     if use_cpuset:
         # Use supervisor mode for CPU affinity
         return _run_supervisor(
-            redis_host, experiment_name, worker_name, num_workers, use_cpuset=True
+            redis_host,
+            experiment_name,
+            worker_name,
+            num_workers,
+            queue_name=queue_name,
+            use_cpuset=True,
         )
 
     # Standard parallel workers
     return _spawn_workers(
-        redis_host, experiment_name, worker_name, num_workers, continuous=False
+        redis_host,
+        experiment_name,
+        worker_name,
+        num_workers,
+        queue_name=queue_name,
+        continuous=False,
     )
 
 
@@ -192,6 +207,7 @@ def _spawn_workers(
     experiment_name: str,
     worker_name: str,
     num_workers: int,
+    queue_name: Optional[str] = None,
     *,
     continuous: bool = False,
 ) -> int:
@@ -202,11 +218,13 @@ def _spawn_workers(
         experiment_name: Experiment identifier
         worker_name: Base worker name
         num_workers: Number of worker processes to spawn
+        queue_name: Redis queue name (default: crsbench_{experiment_name})
         continuous: Run in continuous mode
 
     Returns:
         Exit code (0 for success)
     """
+    queue_name = queue_name or f"crsbench_{experiment_name}"
     logger.info(f"Spawning {num_workers} worker processes...")
 
     processes = []
@@ -219,7 +237,7 @@ def _spawn_workers(
             p = multiprocessing.Process(
                 target=_run_single_worker,
                 args=(redis_host, experiment_name, name),
-                kwargs={"continuous": continuous},
+                kwargs={"continuous": continuous, "queue_name": queue_name},
                 name=f"worker-{i}",
             )
             p.start()
@@ -259,6 +277,7 @@ def _run_supervisor(
     experiment_name: str,
     worker_name: str,
     max_workers: int,
+    queue_name: Optional[str] = None,
     *,
     use_cpuset: bool = False,
     minimum_disk_size: str = "10GB",
@@ -328,7 +347,7 @@ def _run_supervisor(
         )
         redis_conn.ping()
 
-        queue_name = f"crsbench_{experiment_name}"
+        queue_name = queue_name or f"crsbench_{experiment_name}"
         queue = rq.Queue(queue_name, connection=redis_conn)  # type: ignore[attr-defined]
 
         logger.info(f"Supervisor connected to queue: {queue_name}")
@@ -641,7 +660,12 @@ def _run_single_job_worker(
 
 
 def _run_single_worker(
-    redis_host: str, experiment_name: str, worker_name: str, *, continuous: bool = False
+    redis_host: str,
+    experiment_name: str,
+    worker_name: str,
+    *,
+    continuous: bool = False,
+    queue_name: Optional[str] = None,
 ):
     """Run a single worker process (for multiprocessing).
 
@@ -650,6 +674,7 @@ def _run_single_worker(
         experiment_name: Experiment identifier
         worker_name: Worker name
         continuous: Run in continuous mode
+        queue_name: Redis queue name (default: crsbench_{experiment_name})
     """
     # Note: This runs in a subprocess, so we need to reconfigure logging
     configure_logger(level=os.environ.get("LOG_LEVEL", "INFO").upper(), sink=sys.stdout)
@@ -657,20 +682,30 @@ def _run_single_worker(
     if continuous:
         # Run continuous worker (without spawning more workers)
         run_worker_continuous(
-            redis_host, experiment_name, worker_name=worker_name, num_workers=1
+            redis_host,
+            experiment_name,
+            worker_name=worker_name,
+            num_workers=1,
+            queue_name=queue_name,
         )
     else:
         # Run burst mode worker
-        _run_worker(redis_host, experiment_name, worker_name)
+        _run_worker(redis_host, experiment_name, worker_name, queue_name)
 
 
-def _run_worker(redis_host: str, experiment_name: str, worker_name: str):
+def _run_worker(
+    redis_host: str,
+    experiment_name: str,
+    worker_name: str,
+    queue_name: Optional[str] = None,
+):
     """Internal helper to run the worker (separated for lock management).
 
     Args:
         redis_host: Redis server hostname
         experiment_name: Experiment identifier for queue naming
         worker_name: Worker name for identification
+        queue_name: Redis queue name (default: crsbench_{experiment_name})
     """
     try:
         # Connect to Redis
@@ -687,7 +722,7 @@ def _run_worker(redis_host: str, experiment_name: str, worker_name: str):
         logger.info("✓ Connected to Redis successfully")
 
         # Set up RQ queue and worker (RQ 2.x requires explicit connection)
-        queue_name = f"crsbench_{experiment_name}"
+        queue_name = queue_name or f"crsbench_{experiment_name}"
         queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
 
         # Store friendly worker name in environment for job metadata
@@ -754,6 +789,7 @@ def run_worker_continuous(
     _timeout: int = 3600,
     worker_name: Optional[str] = None,
     num_workers: int = 1,
+    queue_name: Optional[str] = None,
     *,
     use_cpuset: bool = False,
     minimum_disk_size: str = "10GB",
@@ -783,6 +819,9 @@ def run_worker_continuous(
         worker_name or os.environ.get("CRSBENCH_WORKER_NAME") or socket.gethostname()
     )
 
+    # Resolve queue name
+    queue_name = queue_name or f"crsbench_{experiment_name}"
+
     # Always use supervisor mode for consistent behavior
     if use_cpuset:
         # Use supervisor mode for CPU affinity
@@ -794,6 +833,7 @@ def run_worker_continuous(
             experiment_name,
             worker_name,
             num_workers,
+            queue_name=queue_name,
             use_cpuset=True,
             minimum_disk_size=minimum_disk_size,
             disk_check_interval=disk_check_interval,
@@ -804,7 +844,12 @@ def run_worker_continuous(
         )
         logger.info(f"Base worker name: {worker_name}")
         exit_code = _spawn_workers(
-            redis_host, experiment_name, worker_name, num_workers, continuous=True
+            redis_host,
+            experiment_name,
+            worker_name,
+            num_workers,
+            queue_name=queue_name,
+            continuous=True,
         )
 
     if exit_code != 0:
