@@ -34,7 +34,7 @@ class TestBuildSingleVariantJob:
             mode=BenchmarkMode.DELTA,
         )
         # Job ID includes sanitizer in variant name (defaults to "address" -> "asan")
-        assert job.job_id == "build-single:test-proj:test-proj-asan-deltaref"
+        assert job.job_id == "build-single/test-proj/test-proj-asan-deltaref"
 
     def test_job_id_allpatched(self) -> None:
         """Test job_id for ALL_PATCHED variant."""
@@ -47,7 +47,7 @@ class TestBuildSingleVariantJob:
             mode=BenchmarkMode.DELTA,
         )
         # Job ID includes sanitizer in variant name
-        assert job.job_id == "build-single:test-proj:test-proj-asan-delta-allpatched"
+        assert job.job_id == "build-single/test-proj/test-proj-asan-delta-allpatched"
 
     def test_job_id_fullbase(self) -> None:
         """Test job_id for FULL_BASE variant."""
@@ -60,7 +60,7 @@ class TestBuildSingleVariantJob:
             mode=BenchmarkMode.FULL,
         )
         # Job ID includes sanitizer in variant name
-        assert job.job_id == "build-single:test-proj:test-proj-asan-fullbase"
+        assert job.job_id == "build-single/test-proj/test-proj-asan-fullbase"
 
     def test_job_id_coverage(self) -> None:
         """Test job_id for COVERAGE variant."""
@@ -74,7 +74,7 @@ class TestBuildSingleVariantJob:
             sanitizer="coverage",
         )
         # Job ID includes sanitizer in variant name (coverage -> coverage)
-        assert job.job_id == "build-single:test-proj:test-proj-cov-delta-coverage"
+        assert job.job_id == "build-single/test-proj/test-proj-cov-delta-coverage"
 
     def test_job_id_cpv(self) -> None:
         """Test job_id for CPV variant (all patches except one)."""
@@ -89,7 +89,7 @@ class TestBuildSingleVariantJob:
             patches=[Path("/patch1.diff")],  # All patches except cpv_0
         )
         # Job ID includes sanitizer in variant name
-        assert job.job_id == "build-single:test-proj:test-proj-asan-full-cpv0"
+        assert job.job_id == "build-single/test-proj/test-proj-asan-full-cpv0"
 
     def test_job_type(self) -> None:
         """Verify job_type is 'build' for DAGExecutor typed limits."""
@@ -122,16 +122,16 @@ class TestVerifyCpvPovJob:
             benchmark_name="test-proj",
             cpv_id="cpv_0",
             harness="fuzz_target",
-            build_job_ids=["build-variants:test-proj"],
+            build_job_ids=["build-variants/test-proj"],
         )
-        assert job.job_id == "verify-cpv-pov:test-proj:cpv_0"
+        assert job.job_id == "verify-cpv-pov/test-proj/cpv_0"
 
     def test_job_type(self) -> None:
         job = VerifyCpvPovJob(
             benchmark_name="test-proj",
             cpv_id="cpv_0",
             harness="fuzz_target",
-            build_job_ids=["build-variants:test-proj"],
+            build_job_ids=["build-variants/test-proj"],
         )
         assert job.job_type == "verify"
 
@@ -141,9 +141,9 @@ class TestVerifyCpvPovJob:
             benchmark_name="test-proj",
             cpv_id="cpv_0",
             harness="fuzz_target",
-            build_job_ids=["build-variants:test-proj"],
+            build_job_ids=["build-variants/test-proj"],
         )
-        assert job.depends_on == ["build-variants:test-proj"]
+        assert job.depends_on == ["build-variants/test-proj"]
 
     def test_depends_on_multiple_builds(self) -> None:
         """Test build_job_ids list dependency."""
@@ -152,13 +152,13 @@ class TestVerifyCpvPovJob:
             cpv_id="cpv_0",
             harness="fuzz_target",
             build_job_ids=[
-                "build-single:test-proj:test-proj-deltaref",
-                "build-single:test-proj:test-proj-delta-allpatched",
+                "build-single/test-proj/test-proj-deltaref",
+                "build-single/test-proj/test-proj-delta-allpatched",
             ],
         )
         assert len(job.depends_on) == 2
-        assert "build-single:test-proj:test-proj-deltaref" in job.depends_on
-        assert "build-single:test-proj:test-proj-delta-allpatched" in job.depends_on
+        assert "build-single/test-proj/test-proj-deltaref" in job.depends_on
+        assert "build-single/test-proj/test-proj-delta-allpatched" in job.depends_on
 
     def test_empty_pov_path_succeeds(self) -> None:
         """Test that None pov_path succeeds with pov_count=0."""
@@ -167,7 +167,7 @@ class TestVerifyCpvPovJob:
             cpv_id="cpv_0",
             harness="fuzz_target",
             pov_path=None,
-            build_job_ids=["build-variants:test-proj"],
+            build_job_ids=["build-variants/test-proj"],
         )
         context = JobContext()
         result = job.execute(context)
@@ -183,9 +183,9 @@ class TestBuildPatchVariantJob:
             cpv_id="cpv_0",
             patch_id="patch_0",
             patch_path=Path("/bench/test-proj/patch_0.diff"),
-            build_job_id="build-variants:test-proj",
+            build_job_id="build-variants/test-proj",
         )
-        assert job.job_id == "build-patch:test-proj:cpv_0:patch_0"
+        assert job.job_id == "build-patch/test-proj/cpv_0/patch_0"
 
     def test_job_type(self) -> None:
         job = BuildPatchVariantJob(
@@ -204,9 +204,9 @@ class TestBuildPatchVariantJob:
             cpv_id="cpv_0",
             patch_id="patch_0",
             patch_path=Path("/patch.diff"),
-            build_job_id="build-variants:test-proj",
+            build_job_id="build-variants/test-proj",
         )
-        assert job.depends_on == ["build-variants:test-proj"]
+        assert job.depends_on == ["build-variants/test-proj"]
 
     def test_no_build_dep(self) -> None:
         job = BuildPatchVariantJob(
@@ -228,9 +228,9 @@ class TestPatchVariantTestJob:
             patch_id="patch_0",
             harness="fuzz_target",
             test_mode="FULL",
-            build_patch_job_id="build-patch:test-proj:cpv_0:patch_0",
+            build_patch_job_id="build-patch/test-proj/cpv_0/patch_0",
         )
-        assert job.job_id == "test-patch:test-proj:cpv_0:patch_0:FULL"
+        assert job.job_id == "test-patch/test-proj/cpv_0/patch_0/FULL"
 
     def test_job_id_rts(self) -> None:
         job = PatchVariantTestJob(
@@ -240,9 +240,9 @@ class TestPatchVariantTestJob:
             patch_id="patch_0",
             harness="fuzz_target",
             test_mode="RTS",
-            build_patch_job_id="build-patch:test-proj:cpv_0:patch_0",
+            build_patch_job_id="build-patch/test-proj/cpv_0/patch_0",
         )
-        assert job.job_id == "test-patch:test-proj:cpv_0:patch_0:RTS"
+        assert job.job_id == "test-patch/test-proj/cpv_0/patch_0/RTS"
 
     def test_job_type(self) -> None:
         job = PatchVariantTestJob(
@@ -261,9 +261,9 @@ class TestPatchVariantTestJob:
             cpv_id="cpv_0",
             patch_id="patch_0",
             harness="fuzz_target",
-            build_patch_job_id="build-patch:test-proj:cpv_0:patch_0",
+            build_patch_job_id="build-patch/test-proj/cpv_0/patch_0",
         )
-        assert job.depends_on == ["build-patch:test-proj:cpv_0:patch_0"]
+        assert job.depends_on == ["build-patch/test-proj/cpv_0/patch_0"]
 
 
 class TestFlatCollectCoverageJob:
@@ -272,9 +272,9 @@ class TestFlatCollectCoverageJob:
             benchmark_path=Path("/bench/test-proj"),
             benchmark_name="test-proj",
             harness="fuzz_target",
-            build_job_id="build-variants:test-proj",
+            build_job_id="build-variants/test-proj",
         )
-        assert job.job_id == "collect-coverage:test-proj"
+        assert job.job_id == "collect-coverage/test-proj"
 
     def test_job_type(self) -> None:
         job = FlatCollectCoverageJob(
@@ -290,9 +290,9 @@ class TestFlatCollectCoverageJob:
             benchmark_path=Path("/bench/test-proj"),
             benchmark_name="test-proj",
             harness="fuzz_target",
-            build_job_id="build-variants:test-proj",
+            build_job_id="build-variants/test-proj",
         )
-        assert job.depends_on == ["build-variants:test-proj"]
+        assert job.depends_on == ["build-variants/test-proj"]
 
     def test_depends_on_build_job_ids(self) -> None:
         """Test new build_job_ids list dependency."""
@@ -300,9 +300,9 @@ class TestFlatCollectCoverageJob:
             benchmark_path=Path("/bench/test-proj"),
             benchmark_name="test-proj",
             harness="fuzz_target",
-            build_job_ids=["build-single:test-proj:test-proj-delta-coverage"],
+            build_job_ids=["build-single/test-proj/test-proj-delta-coverage"],
         )
-        assert job.depends_on == ["build-single:test-proj:test-proj-delta-coverage"]
+        assert job.depends_on == ["build-single/test-proj/test-proj-delta-coverage"]
 
 
 class TestFlatDAGConstruction:
@@ -337,12 +337,12 @@ class TestFlatDAGConstruction:
         graph = {j.job_id: set(j.depends_on) for j in jobs}
 
         # Verify structure
-        assert graph["build-single:proj:proj-asan-deltaref"] == set()
-        assert graph["verify-cpv-pov:proj:cpv_0"] == {
-            "build-single:proj:proj-asan-deltaref"
+        assert graph["build-single/proj/proj-asan-deltaref"] == set()
+        assert graph["verify-cpv-pov/proj/cpv_0"] == {
+            "build-single/proj/proj-asan-deltaref"
         }
-        assert graph["verify-cpv-pov:proj:cpv_1"] == {
-            "build-single:proj:proj-asan-deltaref"
+        assert graph["verify-cpv-pov/proj/cpv_1"] == {
+            "build-single/proj/proj-asan-deltaref"
         }
 
     def test_patch_dag_structure(self) -> None:
@@ -376,12 +376,12 @@ class TestFlatDAGConstruction:
         jobs = [build, build_patch, test_patch]
         graph = {j.job_id: set(j.depends_on) for j in jobs}
 
-        assert graph["build-single:proj:proj-asan-deltaref"] == set()
-        assert graph["build-patch:proj:cpv_0:patch_0"] == {
-            "build-single:proj:proj-asan-deltaref"
+        assert graph["build-single/proj/proj-asan-deltaref"] == set()
+        assert graph["build-patch/proj/cpv_0/patch_0"] == {
+            "build-single/proj/proj-asan-deltaref"
         }
-        assert graph["test-patch:proj:cpv_0:patch_0:FULL"] == {
-            "build-patch:proj:cpv_0:patch_0"
+        assert graph["test-patch/proj/cpv_0/patch_0/FULL"] == {
+            "build-patch/proj/cpv_0/patch_0"
         }
 
     def test_all_cmd_shared_build(self) -> None:
@@ -530,7 +530,7 @@ class TestIncBuildAvailablePropagation:
         """Test that PatchVariantTestJob uses inc_build_available=True from build."""
         from unittest.mock import MagicMock, patch
 
-        build_job_id = "build-patch:test-proj:cpv_0:patch_0"
+        build_job_id = "build-patch/test-proj/cpv_0/patch_0"
         test_job = PatchVariantTestJob(
             benchmark_path=Path("/bench/test-proj"),
             benchmark_name="test-proj",
@@ -583,7 +583,7 @@ class TestIncBuildAvailablePropagation:
         """
         from unittest.mock import MagicMock, patch
 
-        build_job_id = "build-patch:test-proj:cpv_0:patch_0"
+        build_job_id = "build-patch/test-proj/cpv_0/patch_0"
         test_job = PatchVariantTestJob(
             benchmark_path=Path("/bench/test-proj"),
             benchmark_name="test-proj",
@@ -632,7 +632,7 @@ class TestIncBuildAvailablePropagation:
         """Test that PatchVariantTestJob defaults to use_inc_build=False if key missing."""
         from unittest.mock import MagicMock, patch
 
-        build_job_id = "build-patch:test-proj:cpv_0:patch_0"
+        build_job_id = "build-patch/test-proj/cpv_0/patch_0"
         test_job = PatchVariantTestJob(
             benchmark_path=Path("/bench/test-proj"),
             benchmark_name="test-proj",

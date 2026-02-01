@@ -371,7 +371,7 @@ class TestBuildSingleVariantJobPatched:
             pov_id="cpv_0",
             patches=[Path("/patches/patch_0.diff")],
         )
-        expected = "build-single:test-proj:test-proj-asan-delta-patched-cpv_0-patch_0"
+        expected = "build-single/test-proj/test-proj-asan-delta-patched-cpv_0-patch_0"
         assert job.job_id == expected
 
     def test_patched_job_type(self) -> None:

@@ -99,7 +99,7 @@ class BuildSingleVariantJob(Job):
             sanitizer=self.sanitizer,
             repo_name=self.repo_name,
         )
-        return f"build-single:{self.benchmark_name}:{config.variant_name}"
+        return f"build-single/{self.benchmark_name}/{config.variant_name}"
 
     @property
     def job_type(self) -> str:
@@ -217,7 +217,7 @@ class VerifyCpvPovJob(Job):
 
     @property
     def job_id(self) -> str:
-        return f"verify-cpv-pov:{self.benchmark_name}:{self.cpv_id}"
+        return f"verify-cpv-pov/{self.benchmark_name}/{self.cpv_id}"
 
     @property
     def job_type(self) -> str:
@@ -404,7 +404,7 @@ class VerifyCpvVarJob(Job):
 
     @property
     def job_id(self) -> str:
-        return f"verify-cpv-var:{self.benchmark_name}:{self.cpv_id}"
+        return f"verify-cpv-var/{self.benchmark_name}/{self.cpv_id}"
 
     @property
     def job_type(self) -> str:
@@ -602,7 +602,7 @@ class BuildPatchVariantJob(Job):
 
     @property
     def job_id(self) -> str:
-        return f"build-patch:{self.benchmark_name}:{self.cpv_id}:{self.patch_id}"
+        return f"build-patch/{self.benchmark_name}/{self.cpv_id}/{self.patch_id}"
 
     @property
     def job_type(self) -> str:
@@ -770,8 +770,8 @@ class PatchVariantTestJob(Job):
     @property
     def job_id(self) -> str:
         return (
-            f"test-patch:{self.benchmark_name}:{self.cpv_id}"
-            f":{self.patch_id}:{self.test_mode}"
+            f"test-patch/{self.benchmark_name}/{self.cpv_id}"
+            f"/{self.patch_id}/{self.test_mode}"
         )
 
     @property
@@ -1005,7 +1005,7 @@ class PatchPovTestJob(Job):
 
     @property
     def job_id(self) -> str:
-        return f"test-patch-pov:{self.benchmark_name}:{self.cpv_id}:{self.patch_id}"
+        return f"test-patch-pov/{self.benchmark_name}/{self.cpv_id}/{self.patch_id}"
 
     @property
     def job_type(self) -> str:
@@ -1160,7 +1160,7 @@ class PatchVarTestJob(Job):
 
     @property
     def job_id(self) -> str:
-        return f"test-patch-var:{self.benchmark_name}:{self.cpv_id}:{self.patch_id}"
+        return f"test-patch-var/{self.benchmark_name}/{self.cpv_id}/{self.patch_id}"
 
     @property
     def job_type(self) -> str:
@@ -1321,8 +1321,8 @@ class PatchUnitTestJob(Job):
     @property
     def job_id(self) -> str:
         return (
-            f"test-patch-unittest:{self.benchmark_name}:{self.cpv_id}"
-            f":{self.patch_id}:{self.test_mode}"
+            f"test-patch-unittest/{self.benchmark_name}/{self.cpv_id}"
+            f"/{self.patch_id}/{self.test_mode}"
         )
 
     @property
@@ -1479,7 +1479,7 @@ class FlatCollectCoverageJob(Job):
 
     @property
     def job_id(self) -> str:
-        return f"collect-coverage:{self.benchmark_name}"
+        return f"collect-coverage/{self.benchmark_name}"
 
     @property
     def job_type(self) -> str:
