@@ -1,6 +1,7 @@
 """CLI command for report generation."""
 
 import argparse
+import traceback
 from pathlib import Path
 
 from crsbench.reporting.errors import ReportError
@@ -159,6 +160,8 @@ def run_report(args: argparse.Namespace) -> int:
         return 1
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
+        logger.error("Full traceback:")
+        logger.error(traceback.format_exc())
         return 1
 
 
