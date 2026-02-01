@@ -91,6 +91,15 @@ class JSONReportGenerator:
                 "total_cost": trial_metrics.total_llm_cost,
                 "by_model": trial_metrics.llm_usage_by_model,
             },
+            "early_stop_analysis": {
+                "total_cpvs": getattr(trial_metrics, "total_cpvs", 0),
+                "cpvs_found": getattr(trial_metrics, "cpvs_found_count", 0),
+                "all_cpvs_found": getattr(trial_metrics, "all_cpvs_found", False),
+                "early_stop_time": getattr(trial_metrics, "early_stop_time", ""),
+                "early_stop_cost": getattr(trial_metrics, "early_stop_cost", ""),
+                "time_saved": getattr(trial_metrics, "time_saved", ""),
+                "cost_saved": getattr(trial_metrics, "cost_saved", ""),
+            },
             "time_series": [
                 {
                     "elapsed_time": p.elapsed_time,
