@@ -62,6 +62,8 @@ class JSONReportGenerator:
                 "benchmark": trial_metrics.benchmark,
                 "harness": trial_metrics.harness,
                 "mode": trial_metrics.mode,
+                "run_mode": trial_metrics.run_mode,
+                "sanitizer": trial_metrics.sanitizer,
             },
             "summary": {
                 "total_povs_discovered": trial_metrics.total_povs_discovered,

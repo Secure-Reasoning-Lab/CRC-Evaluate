@@ -174,6 +174,8 @@ class CSVReportGenerator:
             "benchmark": trial_metrics.get("benchmark", ""),
             "harness": trial_metrics.get("harness", ""),
             "mode": trial_metrics.get("mode", ""),
+            "run_mode": trial_metrics.get("run_mode", ""),
+            "sanitizer": trial_metrics.get("sanitizer", ""),
             "total_povs": trial_metrics.get("total_povs", 0),
             "unique_povs": trial_metrics.get("unique_povs", 0),
             "total_patches": trial_metrics.get("total_patches", 0),

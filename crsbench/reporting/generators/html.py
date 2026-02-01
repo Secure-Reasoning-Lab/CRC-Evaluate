@@ -92,6 +92,8 @@ TRIAL_REPORT_TEMPLATE = """<!DOCTYPE html>
         <span><strong>CRS:</strong> {crs}</span>
         <span><strong>Harness:</strong> {harness}</span>
         <span class="badge {mode_badge_class}">{mode_display}</span>
+        <span><strong>Run Mode:</strong> {run_mode}</span>
+        <span><strong>Sanitizer:</strong> {sanitizer}</span>
         <span class="ml-auto">Generated: {generated_at}</span>
       </div>
     </div>
@@ -522,6 +524,8 @@ class HTMLReportGenerator:
             harness=trial_metrics.harness,
             mode_display=trial_metrics.mode.value.replace("_", " ").title(),
             mode_badge_class=mode_badge_class,
+            run_mode=trial_metrics.run_mode or "N/A",
+            sanitizer=trial_metrics.sanitizer or "N/A",
             generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             shadcn_styles=SHADCN_STYLES,
             stat_cards=stat_cards,

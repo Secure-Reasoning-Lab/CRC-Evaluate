@@ -18,12 +18,14 @@ def temp_output_dir():
 def sample_trial_metrics():
     """Sample trial metrics for testing."""
     return {
-        "trial_dir": "experiment/json-c__ensemble-c/fuzz_json/trial-1",
+        "trial_dir": "experiment/json-c__ensemble-c/fuzz_json/full/address/trial-1",
         "trial_num": "trial-1",
         "crs": "ensemble-c",
         "benchmark": "json-c",
         "harness": "fuzz_json",
         "mode": "bug_finding",
+        "run_mode": "full",
+        "sanitizer": "address",
         "total_povs": 5,
         "unique_povs": 3,
         "total_patches": 0,
@@ -57,12 +59,14 @@ def sample_experiment_metrics():
     return {
         "trials": [
             {
-                "trial_dir": "experiment/json-c__ensemble-c/fuzz_json/trial-1",
+                "trial_dir": "experiment/json-c__ensemble-c/fuzz_json/full/address/trial-1",
                 "trial_num": "trial-1",
                 "crs": "ensemble-c",
                 "benchmark": "json-c",
                 "harness": "fuzz_json",
                 "mode": "bug_finding",
+                "run_mode": "full",
+                "sanitizer": "address",
                 "total_povs": 5,
                 "unique_povs": 3,
                 "total_patches": 0,
@@ -82,12 +86,14 @@ def sample_experiment_metrics():
                 ],
             },
             {
-                "trial_dir": "experiment/libxml2__atlantis-c/fuzz_xml/trial-2",
+                "trial_dir": "experiment/libxml2__atlantis-c/fuzz_xml/delta/undefined/trial-2",
                 "trial_num": "trial-2",
                 "crs": "atlantis-c",
                 "benchmark": "libxml2",
                 "harness": "fuzz_xml",
                 "mode": "bug_finding",
+                "run_mode": "delta",
+                "sanitizer": "undefined",
                 "total_povs": 2,
                 "unique_povs": 2,
                 "total_patches": 0,
@@ -164,7 +170,9 @@ def test_generate_trial_report(temp_output_dir, sample_trial_metrics):
     trial_reports_dir = temp_output_dir / "trial-reports"
     assert trial_reports_dir.exists()
 
-    trial_id = "json-c__ensemble-c-fuzz_json-trial-1"
+    # Path: experiment/json-c__ensemble-c/fuzz_json/full/address/trial-1
+    # Skip first part: json-c__ensemble-c-fuzz_json-full-address-trial-1
+    trial_id = "json-c__ensemble-c-fuzz_json-full-address-trial-1"
     assert (trial_reports_dir / f"{trial_id}_summary.csv").exists()
     assert (trial_reports_dir / f"{trial_id}_time_series.csv").exists()
 

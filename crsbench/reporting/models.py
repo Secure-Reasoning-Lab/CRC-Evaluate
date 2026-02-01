@@ -166,6 +166,10 @@ class TrialMetrics(BaseModel):
     harness: str
     mode: TrialMode
 
+    # Run configuration (extracted from trial path)
+    run_mode: str | None = None  # "full" or "delta"
+    sanitizer: str | None = None  # "address", "undefined", etc.
+
     # POV metrics
     total_povs_discovered: int = 0
     unique_pov_names: list[str] = Field(default_factory=list)

@@ -1,6 +1,7 @@
 """Metrics aggregation for the reporting module."""
 
 from collections import defaultdict
+from pathlib import Path
 
 from crsbench.reporting.models import (
     BenchmarkMetrics,
@@ -30,6 +31,39 @@ class MetricsAggregator:
         trial_metrics = aggregator.aggregate_trial(trial_info, snapshots)
     """
 
+    @staticmethod
+    def _extract_run_config(trial_dir: str | Path) -> tuple[str | None, str | None]:
+        """Extract run_mode and sanitizer from trial directory path.
+
+        Path pattern: <experiment>/<config>/<harness>/<run_mode>/<sanitizer>/trial-N
+
+        Args:
+            trial_dir: Trial directory path
+
+        Returns:
+            Tuple of (run_mode, sanitizer) or (None, None) if not found
+        """
+        path = Path(trial_dir)
+        parts = path.parts
+
+        # Need at least: mode/sanitizer/trial-N
+        if len(parts) < 3:
+            return None, None
+
+        try:
+            # run_mode is third from end (e.g., "full" or "delta")
+            run_mode = parts[-3]
+            # sanitizer is second from end (e.g., "address")
+            sanitizer = parts[-2]
+
+            # Validate run_mode is expected value
+            if run_mode not in ("full", "delta"):
+                return None, None
+
+            return run_mode, sanitizer
+        except (IndexError, ValueError):
+            return None, None
+
     def aggregate_trial(
         self,
         trial_info: TrialInfo,
@@ -44,6 +78,9 @@ class MetricsAggregator:
         Returns:
             Aggregated trial metrics
         """
+        # Extract run configuration from trial path
+        run_mode, sanitizer = self._extract_run_config(trial_info.trial_dir)
+
         if not snapshots:
             return TrialMetrics(
                 trial_dir=str(trial_info.trial_dir),
@@ -52,6 +89,8 @@ class MetricsAggregator:
                 benchmark=trial_info.benchmark,
                 harness=trial_info.harness,
                 mode=trial_info.mode,
+                run_mode=run_mode,
+                sanitizer=sanitizer,
             )
 
         # Sort snapshots by cycle
@@ -96,6 +135,8 @@ class MetricsAggregator:
             benchmark=trial_info.benchmark,
             harness=trial_info.harness,
             mode=trial_info.mode,
+            run_mode=run_mode,
+            sanitizer=sanitizer,
             total_povs_discovered=total_povs,
             unique_pov_names=sorted(all_pov_names),
             total_patches_generated=total_patches,
