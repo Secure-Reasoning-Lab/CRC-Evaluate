@@ -176,8 +176,7 @@ def run_evaluator(args: argparse.Namespace) -> int:
     cores = getattr(args, "cores", None)
     skip_cpus = getattr(args, "skip_cpus", None)
 
-    # Resolve build_workers and verify_workers
-    build_workers = getattr(args, "build_workers", None) or 4
+    # Resolve verify_workers (build_workers no longer needed — builds come via queue)
     verify_workers = getattr(args, "verify_workers", None) or args.jobs
 
     try:
@@ -189,7 +188,6 @@ def run_evaluator(args: argparse.Namespace) -> int:
             use_cpuset=use_cpuset,
             cores=cores,
             skip_cpus=skip_cpus,
-            build_workers=build_workers,
         )
     except KeyboardInterrupt:
         logger.info("Evaluator interrupted by user")

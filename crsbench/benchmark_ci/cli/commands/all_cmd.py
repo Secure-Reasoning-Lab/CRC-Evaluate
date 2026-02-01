@@ -610,7 +610,7 @@ def run_all(args: argparse.Namespace) -> int:
         filter_pattern=getattr(args, "filter", None),
     )
 
-    source_mode = getattr(args, "source", "main_repo")
+    source_mode = getattr(args, "source", "pkgs")
     build_workers = getattr(args, "build_workers", 4)
     verify_workers = getattr(args, "verify_workers", 4)
     use_inc_build = not getattr(args, "no_inc_build", False)
@@ -620,9 +620,7 @@ def run_all(args: argparse.Namespace) -> int:
 
     build_mode = "inc-build" if use_inc_build else "full-build"
     rebuild_mode = "force-rebuild" if force_rebuild else "cached"
-    exec_mode = (
-        f", distributed (redis={redis_host})" if distributed else ""
-    )
+    exec_mode = f", distributed (redis={redis_host})" if distributed else ""
     logger.info(
         f"Running all: {len(paths)} benchmark(s), "
         f"build-workers={build_workers}, verify-workers={verify_workers}, "
@@ -639,9 +637,31 @@ def run_all(args: argparse.Namespace) -> int:
             "format check not run"
         )
 
-    # Phase 2: Build and execute flat DAG
+    # Phase 2: Build via VariantPlanner + Redis, verify/test via DAG
     max_povs_per_cpv = getattr(args, "max_povs_per_cpv", None)
     inc_coverage = getattr(args, "inc_coverage", False)
+
+    # Step 2a: Create build jobs via VariantPlanner
+    from crsbench.executor.variant_planner import VariantPlanner
+
+    planner = VariantPlanner(oss_fuzz_path=Path("oss-fuzz"), source_mode=source_mode)
+    vp_build_jobs = planner.plan_all_builds(
+        list(paths),
+        use_inc_build=use_inc_build,
+        force_rebuild=force_rebuild,
+        skip_if_cached=False,
+        include_coverage=inc_coverage,
+    )
+
+    # Step 2b: Send builds to Redis
+    from crsbench.benchmark_ci.cli.commands.build_cmd import _run_distributed_build
+
+    logger.info(
+        f"VariantPlanner: {len(vp_build_jobs)} build jobs via Redis, redis={redis_host}"
+    )
+    build_results = _run_distributed_build(vp_build_jobs, redis_host)
+
+    # Step 2c: Build full DAG (includes build + verify/test jobs)
     all_jobs, benchmark_metadata = _build_dag(
         list(paths),
         use_inc_build=use_inc_build,
@@ -650,46 +670,27 @@ def run_all(args: argparse.Namespace) -> int:
         max_povs_per_cpv=max_povs_per_cpv,
         inc_coverage=inc_coverage,
     )
-    _log_dag_summary(all_jobs)
 
+    # Filter out build jobs (already completed via Redis)
+    remaining_jobs = [j for j in all_jobs if not isinstance(j, BuildSingleVariantJob)]
+    _log_dag_summary(all_jobs)
+    logger.info(
+        f"Build phase complete: {len(vp_build_jobs)} builds via Redis, "
+        f"{len(remaining_jobs)} verify/patch jobs locally"
+    )
+
+    # Step 2d: Execute remaining verify/test jobs with pre_results from builds
     output_dir = getattr(args, "output_dir", None)
     output_path = Path(output_dir) if output_dir else None
     context = JobContext(output_dir=output_path)
 
-    if distributed:
-        # Two-phase distributed execution:
-        # 1) Distribute build jobs to Redis/RQ workers
-        # 2) Run remaining verify/patch jobs locally with pre_results
-        from crsbench.benchmark_ci.cli.commands.build_cmd import (
-            _run_distributed_build,
-        )
-
-        build_jobs = [
-            j for j in all_jobs if isinstance(j, BuildSingleVariantJob)
-        ]
-        remaining_jobs = [
-            j for j in all_jobs if not isinstance(j, BuildSingleVariantJob)
-        ]
-
-        logger.info(
-            f"Distributed mode: {len(build_jobs)} build jobs via Redis, "
-            f"{len(remaining_jobs)} verify/patch jobs locally"
-        )
-
-        build_results = _run_distributed_build(build_jobs, redis_host)
-
-        executor = DAGExecutor(
-            type_limits={"build": build_workers, "verify": verify_workers}
-        )
-        remaining_results = executor.execute(
-            remaining_jobs, context, pre_results=build_results
-        )
-        dag_results = {**build_results, **remaining_results}
-    else:
-        executor = DAGExecutor(
-            type_limits={"build": build_workers, "verify": verify_workers}
-        )
-        dag_results = executor.execute(all_jobs, context)
+    executor = DAGExecutor(
+        type_limits={"build": build_workers, "verify": verify_workers}
+    )
+    remaining_results = executor.execute(
+        remaining_jobs, context, pre_results=build_results
+    )
+    dag_results = {**build_results, **remaining_results}
 
     # Phase 3: Aggregate into ValidationSummary
     summary = ValidationSummary(started_at=start_dt, check_mode=CheckMode.ALL)

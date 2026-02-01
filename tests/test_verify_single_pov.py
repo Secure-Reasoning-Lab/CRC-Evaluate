@@ -202,3 +202,83 @@ class TestVerifySinglePov:
         result = SinglePovResult.from_dict(result_dict)
         assert result.verdict.triggered_bug is False
         assert "Docker timeout" in result.verdict.error
+
+
+class TestLazyBuildCache:
+    """Test lazy build cache fallback in verify functions."""
+
+    def _make_payload(self, pov_data: bytes = b"crash") -> dict:
+        pov = EmbeddedPov.from_bytes("pov_0", pov_data)
+        return SinglePovPayload(
+            experiment_name="exp",
+            trial_id="trial-0",
+            benchmark="lazy-bench",
+            harness="fuzz_target",
+            pov=pov,
+            enqueued_at=time.time(),
+        ).to_dict()
+
+    @patch("crsbench.distributed.evaluator_jobs._built_results", {})
+    def test_lazy_load_succeeds(self) -> None:
+        """Lazy load populates cache when engine can load adapter."""
+        from crsbench.evaluation.verification.models import (
+            PovVerificationResult,
+            PovVerificationStatus,
+        )
+
+        mock_engine = MagicMock()
+        mock_adapter = MagicMock()
+        mock_engine.load_adapter.return_value = mock_adapter
+        mock_engine.get_or_build_results.return_value = {"variant-1": MagicMock()}
+        mock_engine.verify_pov.return_value = PovVerificationResult(
+            status=PovVerificationStatus.CPV,
+            benchmark="lazy-bench",
+            cpv_matched=["cpv_0"],
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator_jobs._verification_engine",
+                mock_engine,
+            ),
+            patch(
+                "crsbench.distributed.evaluator_jobs.Path",
+            ) as mock_path_cls,
+        ):
+            mock_path = MagicMock()
+            mock_path.exists.return_value = True
+            mock_path.__truediv__ = lambda _self, _other: mock_path
+            mock_path_cls.return_value = mock_path
+
+            result_dict = verify_single_pov(self._make_payload())
+
+        result = SinglePovResult.from_dict(result_dict)
+        # Should succeed via lazy load (not return "No built variants" error)
+        assert result.verdict.triggered_bug is True
+        assert result.verdict.cpv_matches == ["cpv_0"]
+
+    @patch("crsbench.distributed.evaluator_jobs._built_results", {})
+    def test_lazy_load_fails_gracefully(self) -> None:
+        """Lazy load failure still returns proper error."""
+        mock_engine = MagicMock()
+        mock_engine.load_adapter.return_value = None  # Adapter not found
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator_jobs._verification_engine",
+                mock_engine,
+            ),
+            patch(
+                "crsbench.distributed.evaluator_jobs.Path",
+            ) as mock_path_cls,
+        ):
+            mock_path = MagicMock()
+            mock_path.exists.return_value = True
+            mock_path.__truediv__ = lambda _self, _other: mock_path
+            mock_path_cls.return_value = mock_path
+
+            result_dict = verify_single_pov(self._make_payload())
+
+        result = SinglePovResult.from_dict(result_dict)
+        assert result.verdict.triggered_bug is False
+        assert "No built variants" in result.verdict.error

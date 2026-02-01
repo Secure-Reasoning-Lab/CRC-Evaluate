@@ -1,8 +1,8 @@
 """Build-only CI subcommand.
 
 Builds POV variants (vulnerable, allpatched, CPV) without patch variants
-or verification. Default behavior: always run Docker build (no cleanup,
-no skip), fully utilizing Docker cache layers.
+or verification. Uses VariantPlanner for build job creation and always
+enqueues to Redis via enqueue_and_poll_builds().
 
 Use --force-rebuild to clean up before building.
 """
@@ -14,10 +14,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from crsbench.benchmark_ci.cli.benchmark_discovery import (
-    discover_cpv_ids,
-    discover_harness_names,
-)
 from crsbench.benchmark_ci.cli.common_args import (
     create_benchmark_selection_parent,
     create_output_options_parent,
@@ -25,16 +21,12 @@ from crsbench.benchmark_ci.cli.common_args import (
 from crsbench.benchmark_ci.cli.discovery import resolve_benchmark_paths
 from crsbench.benchmark_ci.cli.output import print_results_table, save_output_dir
 from crsbench.benchmark_ci.cli.result_aggregator import aggregate_pov_build_results
-from crsbench.benchmark_ci.jobs.base import Job, JobContext, JobResult
-from crsbench.benchmark_ci.jobs.flat import BuildSingleVariantJob
 from crsbench.benchmark_ci.models import (
     BenchmarkValidationResult,
     CheckMode,
     ValidationSummary,
 )
 from crsbench.benchmark_ci.validator import _load_project_capabilities
-from crsbench.builder.types import BenchmarkMode, VariantType
-from crsbench.executor import DAGExecutor
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -74,8 +66,8 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         "--source",
         type=str,
         choices=["pkgs", "main_repo"],
-        default="main_repo",
-        help="Source mode: 'pkgs' (bundled tarballs) or 'main_repo' (git clone, default)",
+        default="pkgs",
+        help="Source mode: 'pkgs' (bundled tarballs, default) or 'main_repo' (git clone)",
     )
     parser.add_argument(
         "--inc-build",
@@ -84,157 +76,12 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="Use incremental build if available (default: off for build command)",
     )
     parser.add_argument(
-        "--distributed",
-        action="store_true",
-        default=False,
-        help="Enqueue builds to Redis/RQ workers instead of running locally",
-    )
-    parser.add_argument(
         "--redis-host",
         type=str,
         default="localhost",
-        help="Redis server hostname for distributed builds (default: localhost)",
+        help="Redis server hostname for builds (default: localhost)",
     )
     parser.set_defaults(ci_func=run_build)
-
-
-def _build_only_dag(
-    paths: list[Path],
-    *,
-    use_inc_build: bool,
-    force_rebuild: bool,
-    source_mode: str,
-) -> tuple[list[Job], list[BuildBenchmarkMeta]]:
-    """Build flat DAG with only BuildSingleVariantJob instances.
-
-    Creates build jobs for vulnerable, allpatched, and CPV variants
-    per sanitizer. No verify jobs, no patch jobs, no coverage.
-
-    All jobs have skip_if_cached=False so Docker build always runs
-    (relying on Docker layer cache for speed).
-
-    Returns:
-        Tuple of (all_jobs, benchmark_metadata)
-    """
-    from crsbench.benchmark_ci.cli.commands.all_cmd import _load_benchmark_adapter
-    from crsbench.builder.infrastructure import OSSFuzzInfrastructure
-
-    all_jobs: list[Job] = []
-    benchmark_metadata: list[BuildBenchmarkMeta] = []
-
-    for path in paths:
-        supports_inc, rts_mode = _load_project_capabilities(path)
-        effective_inc = use_inc_build and supports_inc
-        benchmark_name = path.name
-
-        adapter = _load_benchmark_adapter(path, source_mode)
-        if not adapter:
-            logger.warning(f"Failed to load adapter for {benchmark_name}, skipping")
-            continue
-
-        ref_commit = adapter.get_ref_commit()
-        base_commit = adapter.get_base_commit()
-
-        if ref_commit:
-            mode = BenchmarkMode.DELTA
-            commit = ref_commit
-        elif base_commit:
-            mode = BenchmarkMode.FULL
-            commit = base_commit
-        else:
-            logger.warning(f"No commit found for {benchmark_name}, skipping")
-            continue
-
-        main_repo = adapter.main_repo
-        language = adapter.lang
-        repo_name = adapter.repo_name
-
-        required_sanitizers = adapter.get_all_cpv_sanitizers()
-        infra = OSSFuzzInfrastructure(Path("oss-fuzz"))
-        all_patches = infra.get_all_patches(path)
-
-        is_delta = mode == BenchmarkMode.DELTA
-        vulnerable_variant_type = (
-            VariantType.DELTA_REF if is_delta else VariantType.FULL_BASE
-        )
-
-        for sanitizer in required_sanitizers:
-            # Vulnerable variant
-            all_jobs.append(
-                BuildSingleVariantJob(
-                    benchmark_path=path,
-                    benchmark_name=benchmark_name,
-                    variant_type=vulnerable_variant_type,
-                    commit=commit,
-                    main_repo=main_repo,
-                    mode=mode,
-                    language=language,
-                    use_inc_build=effective_inc,
-                    force_rebuild=force_rebuild,
-                    skip_if_cached=False,
-                    source_mode=source_mode,
-                    sanitizer=sanitizer,
-                    repo_name=repo_name,
-                )
-            )
-
-            # Allpatched variant
-            all_jobs.append(
-                BuildSingleVariantJob(
-                    benchmark_path=path,
-                    benchmark_name=benchmark_name,
-                    variant_type=VariantType.ALL_PATCHED,
-                    commit=commit,
-                    main_repo=main_repo,
-                    mode=mode,
-                    language=language,
-                    patches=all_patches,
-                    use_inc_build=effective_inc,
-                    force_rebuild=force_rebuild,
-                    skip_if_cached=False,
-                    source_mode=source_mode,
-                    sanitizer=sanitizer,
-                    repo_name=repo_name,
-                )
-            )
-
-        # CPV variants
-        harnesses = discover_harness_names(path)
-        seen_cpvs: set[str] = set()
-
-        for harness in harnesses:
-            for cpv_id in discover_cpv_ids(path, harness):
-                if cpv_id in seen_cpvs:
-                    continue
-                seen_cpvs.add(cpv_id)
-
-                cpv_num = int(cpv_id.split("_")[1])
-                cpv_sanitizer = adapter.get_cpv_sanitizer(harness, cpv_id)
-                cpv_variant_patches = infra.get_patches_except(path, cpv_num)
-
-                all_jobs.append(
-                    BuildSingleVariantJob(
-                        benchmark_path=path,
-                        benchmark_name=benchmark_name,
-                        variant_type=VariantType.CPV,
-                        commit=commit,
-                        main_repo=main_repo,
-                        mode=mode,
-                        language=language,
-                        cpv_num=cpv_num,
-                        patches=cpv_variant_patches,
-                        use_inc_build=effective_inc,
-                        force_rebuild=force_rebuild,
-                        skip_if_cached=False,
-                        source_mode=source_mode,
-                        sanitizer=cpv_sanitizer,
-                        repo_name=repo_name,
-                    )
-                )
-
-        benchmark_metadata.append((path, supports_inc, rts_mode))
-
-    return all_jobs, benchmark_metadata
 
 
 def _aggregate_build(
@@ -274,128 +121,30 @@ def _aggregate_build(
 
 
 def _run_distributed_build(
-    all_jobs: list[Job],
+    all_jobs: list,
     redis_host: str,
+    queue_name: str = "crsbench_ci_build",
 ) -> dict[str, "ExecutorResult"]:
-    """Enqueue build jobs to Redis/RQ workers and wait for results.
+    """Enqueue build jobs to Redis and return ExecutorResult dict.
 
-    Each BuildSingleVariantJob is serialized and enqueued to the
-    ``crsbench_ci_build`` queue. Workers execute them via
-    ``crsbench.distributed.build_jobs.execute_ci_build``.
+    Delegates to the shared enqueue_and_poll_builds() and converts
+    raw results to ExecutorResult format.
 
     Args:
         all_jobs: List of BuildSingleVariantJob instances
         redis_host: Redis server hostname
+        queue_name: Redis queue name
 
     Returns:
-        Dict mapping job_id to ExecutorResult (same format as DAGExecutor)
+        Dict mapping job_id to ExecutorResult
     """
-    import os
-    import time
-
-    try:
-        import redis
-        import rq
-    except ImportError as exc:
-        raise RuntimeError(
-            "Redis and RQ packages are required for distributed builds. "
-            "Install with: pip install redis rq"
-        ) from exc
-
-    from crsbench.distributed.build_jobs import serialize_build_job
-    from crsbench.executor.types import ExecutorResult, JobStatus
-
-    redis_password = os.environ.get("REDIS_PASSWORD") or None
-    redis_conn = redis.Redis(
-        host=redis_host,
-        password=redis_password,
-        socket_connect_timeout=5,
+    from crsbench.distributed.build_jobs import (
+        enqueue_and_poll_builds,
+        raw_results_to_executor_results,
     )
-    redis_conn.ping()
 
-    queue = rq.Queue("crsbench_ci_build", connection=redis_conn)
-    logger.info(f"Connected to Redis at {redis_host}, queue: crsbench_ci_build")
-
-    # Enqueue all build jobs with cpu_count metadata and deterministic IDs
-    rq_jobs: dict[str, tuple[str, rq.job.Job]] = {}
-    for job in all_jobs:
-        params = serialize_build_job(job)
-        try:
-            rq_job = queue.enqueue(
-                "crsbench.distributed.build_jobs.execute_ci_build",
-                params,
-                job_timeout=3600,
-                result_ttl=-1,
-                meta={"cpu_count": 1},
-                job_id=job.job_id,
-            )
-            rq_jobs[job.job_id] = (job.job_id, rq_job)
-            logger.info(f"Enqueued {job.job_id} as RQ job {rq_job.id[:8]}")
-        except Exception:
-            # Job with same ID already exists -- fetch existing job
-            existing = rq.job.Job.fetch(job.job_id, connection=redis_conn)
-            rq_jobs[job.job_id] = (job.job_id, existing)
-            logger.info(
-                f"Job {job.job_id} already exists (dedup), "
-                f"status: {existing.get_status()}"
-            )
-
-    logger.info(f"Enqueued {len(rq_jobs)} build jobs, waiting for completion...")
-
-    # Poll for results
-    pending = set(rq_jobs.keys())
-    while pending:
-        for ci_job_id in list(pending):
-            _, rq_job = rq_jobs[ci_job_id]
-            rq_job.refresh()
-            status = rq_job.get_status()
-            if status in ("finished", "failed"):
-                pending.discard(ci_job_id)
-
-        if pending:
-            logger.info(
-                f"Waiting for {len(pending)}/{len(rq_jobs)} distributed build jobs..."
-            )
-            time.sleep(5)
-
-    # Convert RQ results to ExecutorResult format
-    results: dict[str, ExecutorResult] = {}
-    for ci_job_id, (_, rq_job) in rq_jobs.items():
-        rq_job.refresh()
-        status = rq_job.get_status()
-
-        if status == "finished" and rq_job.result:
-            r = rq_job.result
-            job_result = JobResult(
-                job_id=r["job_id"],
-                job_type=r.get("job_type", "build"),
-                success=r["success"],
-                started_at=datetime.fromisoformat(r["started_at"])
-                if r.get("started_at")
-                else datetime.now(),
-                finished_at=datetime.fromisoformat(r["finished_at"])
-                if r.get("finished_at")
-                else datetime.now(),
-                elapsed_seconds=r.get("elapsed_seconds", 0.0),
-                error=r.get("error"),
-                details=r.get("details", {}),
-            )
-            results[ci_job_id] = ExecutorResult(
-                job_id=ci_job_id,
-                status=JobStatus.SUCCESS if r["success"] else JobStatus.FAILED,
-                elapsed_seconds=r.get("elapsed_seconds", 0.0),
-                error=r.get("error"),
-                job_result=job_result,
-            )
-        else:
-            exc_info = rq_job.exc_info or "Unknown error"
-            results[ci_job_id] = ExecutorResult(
-                job_id=ci_job_id,
-                status=JobStatus.FAILED,
-                error=str(exc_info)[:500],
-            )
-
-    return results
+    raw_results = enqueue_and_poll_builds(all_jobs, redis_host, queue_name)
+    return raw_results_to_executor_results(raw_results)
 
 
 def run_build(args: argparse.Namespace) -> int:
@@ -408,41 +157,41 @@ def run_build(args: argparse.Namespace) -> int:
         filter_pattern=getattr(args, "filter", None),
     )
 
-    source_mode = getattr(args, "source", "main_repo")
-    build_workers = getattr(args, "build_workers", 4)
+    source_mode = getattr(args, "source", "pkgs")
     use_inc_build = getattr(args, "inc_build", False)
     force_rebuild = getattr(args, "force_rebuild", False)
-    distributed = getattr(args, "distributed", False)
     redis_host = getattr(args, "redis_host", "localhost")
 
     build_mode = "inc-build" if use_inc_build else "full-build"
     rebuild_mode = "force-rebuild" if force_rebuild else "docker-cache"
-    exec_mode = f"distributed (redis={redis_host})" if distributed else "local"
     logger.info(
         f"Building: {len(paths)} benchmark(s), "
-        f"build-workers={build_workers}, {build_mode}, {rebuild_mode}, {exec_mode}"
+        f"{build_mode}, {rebuild_mode}, redis={redis_host}"
     )
 
     start_dt = datetime.now()
 
-    all_jobs, benchmark_metadata = _build_only_dag(
+    # Use VariantPlanner for build job creation
+    from crsbench.executor.variant_planner import VariantPlanner
+
+    planner = VariantPlanner(oss_fuzz_path=Path("oss-fuzz"), source_mode=source_mode)
+    build_jobs = planner.plan_all_builds(
         list(paths),
         use_inc_build=use_inc_build,
         force_rebuild=force_rebuild,
-        source_mode=source_mode,
+        skip_if_cached=False,
     )
 
-    logger.info(f"DAG: {len(all_jobs)} build jobs")
+    # Collect benchmark metadata for aggregation
+    benchmark_metadata: list[BuildBenchmarkMeta] = []
+    for path in paths:
+        supports_inc, rts_mode = _load_project_capabilities(path)
+        benchmark_metadata.append((path, supports_inc, rts_mode))
 
-    dag_results: dict[str, ExecutorResult]
-    if distributed:
-        dag_results = _run_distributed_build(all_jobs, redis_host)
-    else:
-        output_dir = getattr(args, "output_dir", None)
-        output_path = Path(output_dir) if output_dir else None
-        context = JobContext(output_dir=output_path)
-        executor = DAGExecutor(type_limits={"build": build_workers})
-        dag_results = executor.execute(all_jobs, context)
+    logger.info(f"VariantPlanner: {len(build_jobs)} build jobs")
+
+    # Always enqueue to Redis
+    dag_results = _run_distributed_build(build_jobs, redis_host)
 
     summary = ValidationSummary(started_at=start_dt, check_mode=CheckMode.BUILD)
     for path, supports_inc, rts_mode in benchmark_metadata:

@@ -1,10 +1,13 @@
-"""Evaluator process for distributed POV verification.
+"""Evaluator process for distributed build and verify execution.
 
 This module implements the evaluator process that:
-1. Builds all variant Docker images at startup
-2. Listens on the Redis verify queue for verification jobs
-3. Runs POV verification against pre-built variants
-4. Stores verdicts as RQ job results
+1. Listens on both build and verify Redis queues (build has priority)
+2. Runs build jobs to create variant Docker images
+3. Runs POV verification against built variants
+4. Stores results as RQ job results
+
+No startup build phase — builds arrive via the build queue from
+VariantPlanner in ci build, ci all, or crsbench run.
 """
 
 import multiprocessing
@@ -36,21 +39,20 @@ def run_evaluator_main(
     use_cpuset: bool = False,
     cores: Optional[str] = None,
     skip_cpus: Optional[str] = None,
-    build_workers: int = 4,
 ) -> int:
     """Main entry point for the evaluator process.
 
-    Builds all variant images, then starts the verification supervisor.
+    Starts the dual-queue supervisor that processes both build and verify
+    jobs. Build queue has priority over verify queue.
 
     Args:
         config: ExperimentConfig instance
         experiment_name: Experiment identifier for queue naming
         redis_host: Redis server hostname
-        max_jobs: Maximum number of parallel verify jobs
-        use_cpuset: Enable CPU affinity for verify jobs
+        max_jobs: Maximum number of parallel jobs
+        use_cpuset: Enable CPU affinity for jobs
         cores: CPU cores for evaluator pool (integer count or cpuset string)
         skip_cpus: CPUs to exclude from allocation (cpuset format)
-        build_workers: Number of parallel variant build workers
 
     Returns:
         Exit code (0 for success, non-zero for failure)
@@ -65,34 +67,33 @@ def run_evaluator_main(
     logger.info("=" * 60)
     logger.info(f"Experiment: {experiment_name}")
     logger.info(f"Redis host: {redis_host}")
-    logger.info(f"Parallel verify jobs: {max_jobs}")
+    logger.info(f"Parallel jobs: {max_jobs}")
     logger.info(f"CPU affinity: {'enabled' if use_cpuset else 'disabled'}")
+    logger.info("Queues: build (priority) + verify")
     logger.info("=" * 60)
 
-    # Phase 1: Build all variant images
-    logger.info(f"Phase 1: Building variant images ({build_workers} workers)...")
-    engine, built_results = _build_all_variants(config, build_workers=build_workers)
+    # Create verification engine for lazy verify use
+    from crsbench.evaluation.verification.pov.engine import VerificationEngine
 
-    if not built_results:
-        logger.error("No variants were built successfully. Exiting.")
-        return 1
-
-    # Report build results
-    total_benchmarks = len(built_results)
-    total_variants = sum(len(v) for v in built_results.values())
-    successful = sum(
-        1 for br in built_results.values() for r in br.values() if r.success
-    )
-    logger.info(
-        f"Build complete: {successful}/{total_variants} variants "
-        f"across {total_benchmarks} benchmarks"
+    oss_fuzz_path = Path(
+        os.environ.get("CRSBENCH_EVALUATOR_OSS_FUZZ_PATH") or str(config.oss_fuzz_path)
     )
 
-    # Phase 2: Start verification supervisor
-    logger.info("Phase 2: Starting verification supervisor...")
+    engine = VerificationEngine(
+        oss_fuzz_path=oss_fuzz_path,
+        timeout=config.reproduce_timeout
+        if hasattr(config, "reproduce_timeout")
+        else 180,
+    )
+
+    # Set empty build cache — builds come via Redis queue
+    from crsbench.distributed.evaluator_jobs import set_build_cache
+
+    set_build_cache(engine, {})
+
+    # Start dual-queue supervisor
+    logger.info("Starting dual-queue supervisor (build + verify)...")
     return _run_evaluator_supervisor(
-        engine=engine,
-        built_results=built_results,
         redis_host=redis_host,
         experiment_name=experiment_name,
         max_jobs=max_jobs,
@@ -101,100 +102,6 @@ def run_evaluator_main(
         cores=cores,
         skip_cpus=skip_cpus,
     )
-
-
-def _build_all_variants(config, *, build_workers: int = 4) -> tuple:
-    """Build all variant Docker images for benchmarks in the experiment config.
-
-    Args:
-        config: ExperimentConfig instance
-        build_workers: Number of parallel build workers
-
-    Returns:
-        Tuple of (VerificationEngine, dict of benchmark_name -> build_results)
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    from crsbench.evaluation.verification.pov.engine import VerificationEngine
-
-    # Resolve paths from evaluator overrides or config
-    oss_fuzz_path = Path(
-        os.environ.get("CRSBENCH_EVALUATOR_OSS_FUZZ_PATH") or str(config.oss_fuzz_path)
-    )
-    benchmarks_root = Path(
-        os.environ.get("CRSBENCH_EVALUATOR_BENCHMARKS_ROOT")
-        or str(config.benchmarks_root or "benchmarks")
-    )
-
-    logger.info(f"oss-fuzz path: {oss_fuzz_path}")
-    logger.info(f"Benchmarks root: {benchmarks_root}")
-
-    # Create verification engine
-    engine = VerificationEngine(
-        oss_fuzz_path=oss_fuzz_path,
-        timeout=config.reproduce_timeout
-        if hasattr(config, "reproduce_timeout")
-        else 180,
-    )
-
-    # Get benchmark list from config
-    benchmark_names = _get_benchmark_names(config)
-    if not benchmark_names:
-        logger.error("No benchmarks found in experiment config")
-        return engine, {}
-
-    logger.info(f"Building variants for {len(benchmark_names)} benchmarks:")
-    for name in benchmark_names:
-        logger.info(f"  - {name}")
-
-    # Build variants (parallel when build_workers > 1)
-    built_results: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=build_workers) as executor:
-        futures = {}
-        for benchmark_name in benchmark_names:
-            benchmark_path = benchmarks_root / benchmark_name
-            if not benchmark_path.exists():
-                logger.error(f"Benchmark path not found: {benchmark_path}")
-                continue
-            future = executor.submit(
-                _build_single_benchmark, engine, benchmark_path, benchmark_name
-            )
-            futures[future] = benchmark_name
-
-        for future in as_completed(futures):
-            name, results = future.result()
-            if results is not None:
-                built_results[name] = results
-
-    return engine, built_results
-
-
-def _build_single_benchmark(engine, benchmark_path: Path, benchmark_name: str):
-    """Build variants for a single benchmark.
-
-    Args:
-        engine: VerificationEngine instance
-        benchmark_path: Path to benchmark directory
-        benchmark_name: Name of benchmark
-
-    Returns:
-        Tuple of (benchmark_name, results dict or None)
-    """
-    adapter = engine.load_adapter(benchmark_path)
-    if adapter is None:
-        logger.error(f"Failed to load adapter for {benchmark_name}")
-        return benchmark_name, None
-
-    try:
-        logger.info(f"Building variants for {benchmark_name}...")
-        results = engine.get_or_build_results(adapter)
-        for variant_name, result in results.items():
-            status = "OK" if result.success else "FAILED"
-            logger.info(f"  {variant_name}: {status}")
-        return benchmark_name, results
-    except Exception as e:
-        logger.error(f"Failed to build variants for {benchmark_name}: {e}")
-        return benchmark_name, None
 
 
 def _get_benchmark_names(config) -> list[str]:
@@ -219,8 +126,6 @@ def _get_benchmark_names(config) -> list[str]:
 
 
 def _run_evaluator_supervisor(
-    engine,
-    built_results: dict[str, dict],
     redis_host: str,
     experiment_name: str,
     max_jobs: int,
@@ -230,30 +135,21 @@ def _run_evaluator_supervisor(
     cores: Optional[str] = None,
     skip_cpus: Optional[str] = None,
 ) -> int:
-    """Supervisor that dequeues verify jobs and spawns child processes.
+    """Supervisor that dequeues build and verify jobs and spawns children.
 
-    Follows the same pattern as worker.py _run_supervisor() but consumes
-    from the verify queue instead of the trial queue.
+    Listens on both build and verify queues. Build queue has priority:
+    when both queues have jobs, build jobs are dequeued first.
 
     Args:
-        engine: VerificationEngine instance
-        built_results: Pre-built variant results keyed by benchmark name
         redis_host: Redis server hostname
         experiment_name: Experiment identifier
-        max_jobs: Maximum concurrent verify jobs
+        max_jobs: Maximum concurrent jobs
         use_cpuset: Enable CPU affinity
         use_cgroups: Create per-job cgroups with cpuset constraints
-            so Docker containers inherit CPU pinning via
-            OSS_FUZZ_CGROUP_PARENT (default: False)
 
     Returns:
         Exit code (0 for success)
     """
-    from crsbench.distributed.evaluator_jobs import set_build_cache
-
-    # Set module-level build cache for job execution
-    set_build_cache(engine, built_results)
-
     cpu_pool = None
     if use_cpuset:
         from crsbench.utils.cpu_pool import CPUPool
@@ -297,14 +193,18 @@ def _run_evaluator_supervisor(
         )
         redis_conn.ping()
 
+        build_queue_name = f"crsbench_{experiment_name}_build"
         verify_queue_name = f"crsbench_{experiment_name}_verify"
+        build_queue = rq.Queue(build_queue_name, connection=redis_conn)
         verify_queue = rq.Queue(verify_queue_name, connection=redis_conn)
 
-        logger.info(f"Evaluator connected to verify queue: {verify_queue_name}")
+        logger.info(
+            f"Evaluator listening on queues: {build_queue_name} (priority), {verify_queue_name}"
+        )
         if cpu_pool:
             logger.info(f"CPU pool initialized with {cpu_pool.total_cpus} CPUs")
 
-        logger.info("Listening for verification jobs...")
+        logger.info("Listening for jobs...")
 
         while True:
             # Cleanup finished workers
@@ -315,7 +215,7 @@ def _run_evaluator_supervisor(
                     if cpu_pool and cpus:
                         cpu_pool.release(cpus)
                         logger.info(
-                            f"Verify worker (PID: {pid}) finished, released CPUs {cpus}"
+                            f"Worker (PID: {pid}) finished, released CPUs {cpus}"
                         )
                     if cgroup_path_entry:
                         from crsbench.utils.cgroup import cleanup_cgroup
@@ -324,16 +224,23 @@ def _run_evaluator_supervisor(
                     del workers[pid]
 
             # Check for jobs and capacity
-            queue_count = verify_queue.count
-            if queue_count > 0 and len(workers) < max_jobs:
+            build_count = build_queue.count
+            verify_count = verify_queue.count
+            total_queued = build_count + verify_count
+
+            if total_queued > 0 and len(workers) < max_jobs:
+                # Build queue has priority: dequeue from [build, verify] order
                 result = rq.Queue.dequeue_any(
-                    [verify_queue],
+                    [build_queue, verify_queue],
                     timeout=None,
                     connection=redis_conn,
                 )
 
                 if result:
-                    job, _ = result
+                    job, queue_obj = result
+                    queue_label = (
+                        "build" if queue_obj.name == build_queue_name else "verify"
+                    )
                     cpu_count = job.meta.get("cpu_count", 2)
 
                     # Allocate CPUs if using cpuset
@@ -348,7 +255,7 @@ def _run_evaluator_supervisor(
                             job.meta["allocated_cpus"] = cpuset_str
                             job.save_meta()
 
-                        # Create cgroup for this verify job (if cgroups enabled)
+                        # Create cgroup for this job (if cgroups enabled)
                         cgroup_path: Optional[Path] = None
                         if cgroup_base is not None and cpuset_str:
                             from crsbench.utils.cgroup import (
@@ -356,7 +263,7 @@ def _run_evaluator_supervisor(
                                 create_cgroup,
                             )
 
-                            cgroup_name = f"verify-{job.id[:8]}"
+                            cgroup_name = f"{queue_label}-{job.id[:8]}"
                             cgroup_path = create_cgroup(
                                 cgroup_base,
                                 cgroup_name,
@@ -378,7 +285,7 @@ def _run_evaluator_supervisor(
                             )
 
                         p = multiprocessing.Process(
-                            target=_run_single_verify_job,
+                            target=_run_single_job,
                             args=(redis_host, job.id),
                         )
                         p.start()
@@ -396,14 +303,14 @@ def _run_evaluator_supervisor(
                             )
 
                         logger.info(
-                            f"Started verify job {job.id[:8]} (PID: {p.pid})"
+                            f"Started {queue_label} job {job.id[:8]} (PID: {p.pid})"
                             + (f" with CPUs {cpus}" if cpus else "")
                         )
                     else:
-                        # Not enough CPUs, re-enqueue
-                        verify_queue.enqueue_job(job, at_front=True)
+                        # Not enough CPUs, re-enqueue to the original queue
+                        queue_obj.enqueue_job(job, at_front=True)
                         logger.debug(
-                            f"Verify job {job.id[:8]} needs {cpu_count} CPUs, "
+                            f"Job {job.id[:8]} needs {cpu_count} CPUs, "
                             f"only {cpu_pool.available_count()} available. Re-enqueued."
                         )
 
@@ -411,14 +318,14 @@ def _run_evaluator_supervisor(
             time.sleep(0.5)
 
     except KeyboardInterrupt:
-        logger.info("\nReceived interrupt signal, terminating verify workers...")
+        logger.info("\nReceived interrupt signal, terminating workers...")
         for _pid, (p, _cpus, _job_id, _cg) in workers.items():
             if p.is_alive():
                 p.terminate()
         for pid, (p, cpus, _job_id, cgroup_path_entry) in workers.items():
             p.join(timeout=5)
             if p.is_alive():
-                logger.warning(f"Force killing verify worker (PID: {pid})")
+                logger.warning(f"Force killing worker (PID: {pid})")
                 p.kill()
                 p.join()
             if cpu_pool and cpus:
@@ -433,13 +340,14 @@ def _run_evaluator_supervisor(
         return 3
 
 
-def _run_single_verify_job(
+def _run_single_job(
     redis_host: str,
     job_id: str,
 ) -> None:
-    """Execute a single verification job in a child process.
+    """Execute a single job (build or verify) in a child process.
 
-    This follows the same pattern as worker.py _run_single_job_worker().
+    Generic job runner that fetches an RQ job and calls perform().
+    Works for both build and verify jobs.
 
     Args:
         redis_host: Redis server hostname
@@ -463,7 +371,7 @@ def _run_single_verify_job(
         finished_registry = FinishedJobRegistry(queue=queue)
         failed_registry = FailedJobRegistry(queue=queue)
 
-        logger.info(f"Evaluator executing verify job {job_id}")
+        logger.info(f"Evaluator executing job {job_id}")
 
         # Create execution and mark as STARTED
         execution = None
@@ -493,7 +401,7 @@ def _run_single_verify_job(
                 finished_registry.add(job, ttl=-1, pipeline=pipeline)
                 pipeline.execute()
 
-            logger.info(f"Verify job {job_id} completed successfully")
+            logger.info(f"Job {job_id} completed successfully")
 
         except Exception as e:
             import traceback
@@ -519,7 +427,7 @@ def _run_single_verify_job(
                 )
                 pipeline.execute()
 
-            logger.error(f"Verify job {job_id} failed: {e}", exc_info=True)
+            logger.error(f"Job {job_id} failed: {e}", exc_info=True)
             raise
 
     except Exception as e:

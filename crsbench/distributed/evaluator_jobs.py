@@ -192,6 +192,44 @@ def set_build_cache(
     _built_results = built_results
 
 
+def _try_lazy_load_builds(benchmark_name: str) -> None:
+    """Attempt to lazily load build results for a benchmark.
+
+    When builds execute on the same evaluator machine before verify jobs
+    (build queue has priority), Docker images are already on disk.
+    ``engine.get_or_build_results()`` finds them without rebuilding.
+
+    Args:
+        benchmark_name: Name of the benchmark to load builds for
+    """
+    engine = _verification_engine
+    if engine is None:
+        return
+
+    benchmarks_root = Path(
+        os.environ.get("CRSBENCH_EVALUATOR_BENCHMARKS_ROOT", "benchmarks")
+    )
+    benchmark_path = benchmarks_root / benchmark_name
+
+    if not benchmark_path.exists():
+        logger.debug(f"Lazy load skipped: {benchmark_path} does not exist")
+        return
+
+    adapter = engine.load_adapter(benchmark_path)
+    if adapter is None:
+        logger.debug(f"Lazy load skipped: adapter not found for {benchmark_name}")
+        return
+
+    try:
+        results = engine.get_or_build_results(adapter)
+        _built_results[benchmark_name] = results
+        logger.info(
+            f"Lazy loaded build results for {benchmark_name} ({len(results)} variants)"
+        )
+    except Exception as e:
+        logger.warning(f"Lazy load failed for {benchmark_name}: {e}")
+
+
 def verify_povs(payload_dict: dict[str, Any]) -> dict[str, Any]:
     """Verify POVs from a job payload.
 
@@ -215,7 +253,10 @@ def verify_povs(payload_dict: dict[str, Any]) -> dict[str, Any]:
         f"benchmark {payload.benchmark}"
     )
 
-    # Check that we have builds for this benchmark
+    # Check that we have builds for this benchmark; try lazy load if missing
+    if payload.benchmark not in _built_results:
+        _try_lazy_load_builds(payload.benchmark)
+
     if payload.benchmark not in _built_results:
         error_msg = (
             f"No built variants for benchmark '{payload.benchmark}'. "
@@ -448,7 +489,10 @@ def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
         f"benchmark {payload.benchmark}"
     )
 
-    # Check that we have builds for this benchmark
+    # Check that we have builds for this benchmark; try lazy load if missing
+    if payload.benchmark not in _built_results:
+        _try_lazy_load_builds(payload.benchmark)
+
     if payload.benchmark not in _built_results:
         error_msg = (
             f"No built variants for benchmark '{payload.benchmark}'. "

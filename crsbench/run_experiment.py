@@ -41,7 +41,6 @@ from crsbench.evaluation.results import CRSType, TrialResult
 from crsbench.utils import log_progress, log_section, log_summary, set_gitcache
 from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.logger import configure_logger, get_logger
-from crsbench.utils.workers import resolve_build_workers
 from crsbench.validation.meta_adapter import MetaYamlAdapter
 from crsbench.validation.schemas import (
     BenchmarkHarness,
@@ -273,7 +272,7 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         choices=["main_repo", "pkgs"],
         required=False,
         metavar="SOURCE_MODE",
-        help="Source mode: 'main_repo' (git clone, default) or 'pkgs' (bundled tarballs). "
+        help="Source mode: 'pkgs' (bundled tarballs, default) or 'main_repo' (git clone). "
         "Overrides config file if specified.",
     )
 
@@ -1230,28 +1229,30 @@ def build_variants_upfront(
     trials: List[Trial],
     config,
     args: argparse.Namespace,
+    experiment_name: str = "",
+    redis_host: str = "localhost",
 ) -> dict[str, BuildResult]:
     """Build all required variants upfront before trial execution.
 
-    Delegates to the build orchestrator which creates deduplicated
-    BuildVariantsJob instances and executes them in parallel via DAGExecutor.
+    Uses VariantPlanner for build job creation and enqueues to Redis
+    via enqueue_and_poll_builds().
 
     Args:
         trials: List of Trial namedtuples
         config: Experiment configuration
         args: CLI arguments
+        experiment_name: Experiment identifier for queue naming
+        redis_host: Redis server hostname
 
     Returns:
         Dict mapping variant names to their build results
     """
-    from crsbench.experiment.build_orchestrator import (
-        create_upfront_build_jobs,
-        execute_upfront_builds,
-    )
+    from crsbench.distributed.build_jobs import enqueue_and_poll_builds
+    from crsbench.executor.variant_planner import VariantPlanner
 
     log_section("Building Variants Upfront", width=60)
 
-    # Resolve oss-fuzz path and export for BuildVariantsJob
+    # Resolve oss-fuzz path
     oss_fuzz_path = Path(
         args.oss_fuzz_path or config.oss_fuzz_path or (Path.cwd() / "oss-fuzz")
     ).resolve()
@@ -1259,35 +1260,71 @@ def build_variants_upfront(
         raise RuntimeError(f"oss-fuzz directory not found: {oss_fuzz_path}")
     os.environ["OSS_FUZZ_ROOT"] = str(oss_fuzz_path)
 
-    build_workers = resolve_build_workers(
-        getattr(args, "build_workers", None),
-        config.build_workers,
-    )
-    source_mode = getattr(config, "source_mode", "main_repo")
+    source_mode = getattr(config, "source_mode", "pkgs")
 
-    # Create deduplicated build jobs (one per unique benchmark+sanitizer)
-    jobs = create_upfront_build_jobs(
-        trials,
+    # Deduplicate benchmark paths from trials
+    unique_paths: list[Path] = []
+    seen_paths: set[str] = set()
+    for trial in trials:
+        path = trial.benchmark_harness.path
+        path_str = str(path)
+        if path_str not in seen_paths:
+            seen_paths.add(path_str)
+            unique_paths.append(path)
+
+    # Create build jobs via VariantPlanner
+    planner = VariantPlanner(oss_fuzz_path=oss_fuzz_path, source_mode=source_mode)
+    build_jobs = planner.plan_all_builds(
+        unique_paths,
         use_inc_build=False,
-        force_rebuild=False,
-        source_mode=source_mode,
     )
 
-    if not jobs:
+    if not build_jobs:
         logger.warning("No variants to build")
         return {}
 
-    # Execute in parallel via DAGExecutor
-    executor_results, context = execute_upfront_builds(
-        jobs, build_workers=build_workers
+    # Enqueue to experiment-specific build queue
+    queue_name = (
+        f"crsbench_{experiment_name}_build" if experiment_name else "crsbench_ci_build"
     )
+    logger.info(
+        f"Enqueuing {len(build_jobs)} build jobs to Redis "
+        f"(host={redis_host}, queue={queue_name})"
+    )
+    raw_results = enqueue_and_poll_builds(build_jobs, redis_host, queue_name)
 
-    # Extract BuildResult dicts from context.shared
+    # Convert raw results to BuildResult format for downstream compatibility
+    from crsbench.builder.types import BenchmarkMode, BuildConfig, VariantType
+
     all_build_results: dict[str, BuildResult] = {}
-    for job in jobs:
-        shared_data = context.shared.get(job.job_id)
-        if shared_data and "build_results" in shared_data:
-            all_build_results.update(shared_data["build_results"])
+    for job_id, r in raw_results.items():
+        # Create minimal BuildConfig for downstream compatibility
+        variant_name = r.get("job_id", job_id)
+        minimal_config = BuildConfig(
+            benchmark_name=variant_name,
+            variant_type=VariantType.FULL_BASE,
+            commit="",
+            main_repo="",
+            benchmark_path=Path(),
+            mode=BenchmarkMode.FULL,
+        )
+        if r.get("success"):
+            all_build_results[job_id] = BuildResult(
+                config=minimal_config,
+                success=True,
+                cached=False,
+                variant_name=variant_name,
+                elapsed_seconds=r.get("elapsed_seconds", 0.0),
+            )
+        else:
+            all_build_results[job_id] = BuildResult(
+                config=minimal_config,
+                success=False,
+                cached=False,
+                variant_name=variant_name,
+                error=r.get("error", "Unknown error"),
+                elapsed_seconds=r.get("elapsed_seconds", 0.0),
+            )
 
     # Report
     successful = sum(1 for r in all_build_results.values() if r.success)
@@ -1531,7 +1568,14 @@ def run_experiment_local(
         )
         build_results = {}
     else:
-        build_results = build_variants_upfront(trials, config, args)
+        redis_host = getattr(config, "redis_host", "localhost") or "localhost"
+        build_results = build_variants_upfront(
+            trials,
+            config,
+            args,
+            experiment_name=experiment_name,
+            redis_host=redis_host,
+        )
 
     # Check for critical build failures
     failed_builds = [
@@ -2106,10 +2150,14 @@ def run_experiment_distributed(
         )
         build_results = {}
     else:
-        # Build variants upfront (on coordinator machine)
-        # Workers will use the pre-built variants from oss-fuzz/build/out/
-        # TODO: workers on different machines
-        build_results = build_variants_upfront(trials, config, args)
+        # Build variants via VariantPlanner + Redis
+        build_results = build_variants_upfront(
+            trials,
+            config,
+            args,
+            experiment_name=experiment_name,
+            redis_host=config.redis_host,
+        )
 
     # Check for critical build failures
     failed_builds = [
