@@ -152,10 +152,14 @@ class MetricsAggregator:
                     found_count = 0
 
                 if found_count >= total_cpvs:
-                    early_stop_time = snap.elapsed_time
+                    early_stop_time = snap.running_elapsed_time or snap.elapsed_time
                     early_stop_cost = snap.llm_usage.total_cost_usd
                     cpvs_found_count = found_count
                     all_cpvs_found = True
+                    logger.info(
+                        f"Early stop detected: all {total_cpvs} CPVs found at "
+                        f"run_elapsed_time={early_stop_time:.1f}s, cost=${early_stop_cost:.4f}"
+                    )
                     break
 
             # If not all found, use last snapshot's CPV count
