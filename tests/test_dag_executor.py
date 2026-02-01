@@ -23,6 +23,7 @@ from crsbench.executor import (
     DependencyError,
     JobStatus,
 )
+from crsbench.executor.types import ExecutorResult
 
 # --- Helpers ---
 
@@ -656,3 +657,152 @@ class TestDAGExecutorTypeLimits:
         assert all(r.status == JobStatus.SUCCESS for r in results.values())
         # Both completed (order doesn't matter, but both ran)
         assert set(order) == {"b1", "b2"}
+
+
+# --- TestDAGExecutorPreResults ---
+
+
+class TestDAGExecutorPreResults:
+    """Tests for pre_results parameter (skipping pre-completed jobs)."""
+
+    def test_pre_completed_success_satisfies_deps(
+        self, mock_context: JobContext
+    ) -> None:
+        """Pre-completed successful job satisfies downstream dependencies."""
+        order: list[str] = []
+        lock = threading.Lock()
+
+        def track(name: str):
+            def fn():
+                with lock:
+                    order.append(name)
+
+            return fn
+
+        pre = {
+            "a": ExecutorResult(job_id="a", status=JobStatus.SUCCESS),
+        }
+        jobs: list[Job] = [
+            MockJob(job_id_val="a", deps=[], execute_fn=track("a")),
+            MockJob(job_id_val="b", deps=["a"], execute_fn=track("b")),
+        ]
+
+        executor = DAGExecutor(max_workers=2)
+        results = executor.execute(jobs, mock_context, pre_results=pre)
+
+        # "a" not re-executed, "b" runs because dep satisfied
+        assert "a" not in order
+        assert "b" in order
+        assert results["a"].status == JobStatus.SUCCESS
+        assert results["b"].status == JobStatus.SUCCESS
+
+    def test_pre_completed_failure_propagates_dep_failed(
+        self, mock_context: JobContext
+    ) -> None:
+        """Pre-completed failed job causes downstream DEP_FAILED."""
+        executed: list[str] = []
+        lock = threading.Lock()
+
+        def track(name: str):
+            def fn():
+                with lock:
+                    executed.append(name)
+
+            return fn
+
+        pre = {
+            "a": ExecutorResult(
+                job_id="a", status=JobStatus.FAILED, error="pre-failed"
+            ),
+        }
+        jobs: list[Job] = [
+            MockJob(job_id_val="a", deps=[], execute_fn=track("a")),
+            MockJob(job_id_val="b", deps=["a"], execute_fn=track("b")),
+        ]
+
+        executor = DAGExecutor(max_workers=2)
+        results = executor.execute(jobs, mock_context, pre_results=pre)
+
+        assert "a" not in executed
+        assert "b" not in executed
+        assert results["a"].status == JobStatus.FAILED
+        assert results["b"].status == JobStatus.DEP_FAILED
+
+    def test_mixed_pre_and_new_jobs(self, mock_context: JobContext) -> None:
+        """Mix of pre-completed and new jobs executes correctly."""
+        order: list[str] = []
+        lock = threading.Lock()
+
+        def track(name: str):
+            def fn():
+                with lock:
+                    order.append(name)
+
+            return fn
+
+        pre = {
+            "a": ExecutorResult(job_id="a", status=JobStatus.SUCCESS),
+        }
+        jobs: list[Job] = [
+            MockJob(job_id_val="a", deps=[], execute_fn=track("a")),
+            MockJob(job_id_val="b", deps=["a"], execute_fn=track("b")),
+            MockJob(job_id_val="c", deps=[], execute_fn=track("c")),
+            MockJob(job_id_val="d", deps=["b", "c"], execute_fn=track("d")),
+        ]
+
+        executor = DAGExecutor(max_workers=4)
+        results = executor.execute(jobs, mock_context, pre_results=pre)
+
+        assert "a" not in order
+        assert "b" in order
+        assert "c" in order
+        assert "d" in order
+        assert all(r.status == JobStatus.SUCCESS for r in results.values())
+        assert order.index("b") < order.index("d")
+        assert order.index("c") < order.index("d")
+
+    def test_all_jobs_pre_completed(self, mock_context: JobContext) -> None:
+        """When all jobs are pre-completed, returns immediately."""
+        pre = {
+            "a": ExecutorResult(job_id="a", status=JobStatus.SUCCESS),
+            "b": ExecutorResult(job_id="b", status=JobStatus.SUCCESS),
+        }
+        jobs: list[Job] = [
+            MockJob(job_id_val="a", deps=[]),
+            MockJob(job_id_val="b", deps=["a"]),
+        ]
+
+        executor = DAGExecutor(max_workers=2)
+        results = executor.execute(jobs, mock_context, pre_results=pre)
+
+        assert len(results) == 2
+        assert results["a"].status == JobStatus.SUCCESS
+        assert results["b"].status == JobStatus.SUCCESS
+
+    def test_empty_jobs_with_pre_results(self, mock_context: JobContext) -> None:
+        """Empty job list with pre_results returns pre_results."""
+        pre = {
+            "a": ExecutorResult(job_id="a", status=JobStatus.SUCCESS),
+        }
+        executor = DAGExecutor(max_workers=2)
+        results = executor.execute([], mock_context, pre_results=pre)
+
+        assert len(results) == 1
+        assert results["a"].status == JobStatus.SUCCESS
+
+    def test_pre_results_unknown_dep_resolved(
+        self, mock_context: JobContext
+    ) -> None:
+        """Dependency on ID only in pre_results does not raise DependencyError."""
+        pre = {
+            "ext": ExecutorResult(job_id="ext", status=JobStatus.SUCCESS),
+        }
+        jobs: list[Job] = [
+            MockJob(job_id_val="a", deps=["ext"]),
+        ]
+
+        executor = DAGExecutor(max_workers=2)
+        results = executor.execute(jobs, mock_context, pre_results=pre)
+
+        assert results["a"].status == JobStatus.SUCCESS
+        assert results["ext"].status == JobStatus.SUCCESS
