@@ -149,7 +149,8 @@ class MetricsAggregator:
                     cpvs_found_count = len(snap.cpvs_found)
                     all_cpvs_found = True
                     logger.info(
-                        f"Early stop detected: all {total_cpvs} CPVs found at "
+                        f"Early stop detected: {trial_info.trial_dir} - "
+                        f"all {total_cpvs} CPVs found at "
                         f"run_elapsed_time={early_stop_time:.1f}s, cost=${early_stop_cost:.4f}"
                     )
                     break
