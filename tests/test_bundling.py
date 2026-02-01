@@ -562,14 +562,15 @@ class TestBundleBenchmark:
         return tmp_path
 
     def test_skips_when_tarball_exists_without_force(self, tmp_path: Path) -> None:
-        """Test bundle skips when source tarball exists without --force."""
+        """Test bundle skips when source tarball and pkg_refs match."""
         benchmark = self._create_valid_benchmark(tmp_path)
 
-        # Pre-create pkgs/ with source tarball
+        # Pre-create pkgs/ with source tarball and matching pkg_refs.txt
         pkgs_dir = benchmark / "pkgs"
         pkgs_dir.mkdir()
         source_tarball = pkgs_dir / "test.tar.gz"
         source_tarball.write_text("existing tarball")
+        (pkgs_dir / "pkg_refs.txt").write_text("https://github.com/test/repo@def5678\n")
 
         # Mock create_source_tarball to ensure it's not called
         with patch(

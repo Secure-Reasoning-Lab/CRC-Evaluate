@@ -30,8 +30,9 @@ def _get_default_repos_dir() -> str:
 
     Uses PROJECT_REPOS_DIR env var, or .crsbench-repos in crsbench root.
     """
-    crsbench_root = Path(__file__).parent.parent.parent.resolve()
-    default_repos_dir = crsbench_root / ".crsbench-repos"
+    from crsbench.utils.paths import get_crsbench_root
+
+    default_repos_dir = get_crsbench_root() / ".crsbench-repos"
     return os.getenv("PROJECT_REPOS_DIR", str(default_repos_dir))
 
 

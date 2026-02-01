@@ -5,6 +5,7 @@ and executes them via DAGExecutor. Build results are stored in JobContext.shared
 for downstream CRS trial jobs to consume.
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, cast
 
 from crsbench.benchmark_ci.jobs.base import Job, JobContext
@@ -19,12 +20,8 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-# Type alias for Trial-like objects with required fields
-type TrialLike = object
-
-
 def create_upfront_build_jobs(
-    trials: list[TrialLike],
+    trials: Sequence[object],
     *,
     use_inc_build: bool = True,
     force_rebuild: bool = False,
@@ -76,10 +73,8 @@ def create_upfront_build_jobs(
     jobs = list(seen.values())
 
     logger.info(
-        "Created %d build jobs from %d trials (deduplication: %d unique builds)",
-        len(jobs),
-        len(trials),
-        len(jobs),
+        f"Created {len(jobs)} build jobs from {len(trials)} trials "
+        f"(deduplication: {len(jobs)} unique builds)"
     )
 
     return jobs
@@ -107,7 +102,7 @@ def execute_upfront_builds(
 
     executor = DAGExecutor(type_limits={"build": build_workers})
 
-    logger.info("Executing %d build jobs with %d workers", len(jobs), build_workers)
+    logger.info(f"Executing {len(jobs)} build jobs with {build_workers} workers")
 
     results = executor.execute(cast("list[Job]", jobs), context)
 
@@ -115,9 +110,7 @@ def execute_upfront_builds(
     failed_count = len(results) - success_count
 
     logger.info(
-        "Build execution complete: %d succeeded, %d failed",
-        success_count,
-        failed_count,
+        f"Build execution complete: {success_count} succeeded, {failed_count} failed"
     )
 
     return results, context

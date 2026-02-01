@@ -709,8 +709,9 @@ def get_commit_specific_cache_dir(
     repos_dir_path: Path
     if not repos_dir:
         # Try PROJECT_REPOS_DIR env var first, then default to .crsbench-repos
-        crsbench_root = Path(__file__).parent.parent.parent.resolve()
-        default_repos_dir = crsbench_root / ".crsbench-repos"
+        from crsbench.utils.paths import get_crsbench_root
+
+        default_repos_dir = get_crsbench_root() / ".crsbench-repos"
         repos_dir_path = Path(os.getenv("PROJECT_REPOS_DIR", str(default_repos_dir)))
     else:
         repos_dir_path = Path(repos_dir)
@@ -875,14 +876,10 @@ def clone_or_copy_cached_repo(
             # Determine repos_dir for reference repo
             effective_repos_dir = repos_dir
             if not effective_repos_dir:
-                crsbench_root = Path(__file__).parent.parent.parent.resolve()
-                effective_repos_dir = str(
-                    Path(
-                        os.getenv(
-                            "PROJECT_REPOS_DIR", str(crsbench_root / ".crsbench-repos")
-                        )
-                    )
-                )
+                from crsbench.utils.paths import get_crsbench_root
+
+                default = get_crsbench_root() / ".crsbench-repos"
+                effective_repos_dir = os.getenv("PROJECT_REPOS_DIR", str(default))
 
             success = clone_repository(
                 repo_url=repo_url,
@@ -904,14 +901,10 @@ def clone_or_copy_cached_repo(
         # Determine repos_dir for reference repo
         effective_repos_dir = repos_dir
         if not effective_repos_dir:
-            crsbench_root = Path(__file__).parent.parent.parent.resolve()
-            effective_repos_dir = str(
-                Path(
-                    os.getenv(
-                        "PROJECT_REPOS_DIR", str(crsbench_root / ".crsbench-repos")
-                    )
-                )
-            )
+            from crsbench.utils.paths import get_crsbench_root
+
+            default = get_crsbench_root() / ".crsbench-repos"
+            effective_repos_dir = os.getenv("PROJECT_REPOS_DIR", str(default))
 
         success = clone_repository(
             repo_url=repo_url,

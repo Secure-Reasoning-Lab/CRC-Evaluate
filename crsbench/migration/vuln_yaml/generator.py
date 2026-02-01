@@ -8,7 +8,6 @@ to analyze vulnerabilities and generate vuln.yaml files.
 import asyncio
 import json
 import os
-from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 from claude_agent_sdk import ClaudeAgentOptions, query
@@ -23,19 +22,14 @@ logger = get_logger(__name__)
 
 
 def _get_crsbench_repo_root() -> str:
-    """
-    Get the crsbench repository root directory.
-
-    This is where .claude/skills/ directory is located for skill loading.
+    """Get the crsbench repository root directory.
 
     Returns:
         Absolute path to crsbench repository root
     """
-    # Start from this file and go up to find the repo root
-    current = Path(__file__).resolve()
-    # Go up from crsbench/migration/vuln_yaml/generator.py to repo root
-    repo_root = current.parent.parent.parent.parent
-    return str(repo_root)
+    from crsbench.utils.paths import get_crsbench_root
+
+    return str(get_crsbench_root())
 
 
 class VulnYamlGenerator:

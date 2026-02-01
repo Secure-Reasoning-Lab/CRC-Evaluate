@@ -11,12 +11,18 @@ from crsbench.benchmark.packaging.tarball import create_source_tarball
 from crsbench.benchmark.packaging.validate import (
     get_benchmark_info,
     validate_benchmark,
-    validate_tarball_naming,
 )
 from crsbench.benchmark.packaging.workdir_parser import get_expected_source_dir
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _has_repo_in_pkg_refs(pkg_refs_path: Path, main_repo: str) -> bool:
+    """Check if main_repo URL is already recorded in pkg_refs.txt."""
+    if not pkg_refs_path.exists():
+        return False
+    return main_repo in pkg_refs_path.read_text()
 
 
 def _update_pkg_refs(
@@ -115,29 +121,14 @@ def bundle_benchmark(
     source_tarball = pkgs_dir / f"{source_name}.tar.gz"
     aixcc_ref_diff = benchmark_path / ".aixcc" / "ref.diff"
 
-    if source_tarball.exists():
-        if not force:
-            logger.warning(
-                f"Source tarball already exists: {source_tarball}. "
+    if not force and source_tarball.exists():
+        pkg_refs_path = pkgs_dir / "pkg_refs.txt"
+        if _has_repo_in_pkg_refs(pkg_refs_path, str(info["main_repo"])):
+            logger.info(
+                f"Source tarball already bundled: {source_tarball}. "
                 "Skipping. Use --force to overwrite."
             )
             return pkgs_dir
-        logger.info(f"Overwriting existing source tarball: {source_tarball}")
-
-    # 4b. Check for tarball naming mismatch (VAL-03)
-    # Reject if pkgs/ has misnamed tarballs (unless --force)
-    if pkgs_dir.exists():
-        naming_result = validate_tarball_naming(benchmark_path)
-        if not naming_result.valid:
-            if not force:
-                raise ValueError(
-                    f"Tarball naming mismatch (VAL-03): {'; '.join(naming_result.errors)}. "
-                    "Fix the naming or use --force to override."
-                )
-            logger.warning(
-                f"Tarball naming mismatch detected, will be corrected: "
-                f"{'; '.join(naming_result.errors)}"
-            )
 
     # 5. Extract commit info
     main_repo = str(info["main_repo"])

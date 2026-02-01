@@ -21,19 +21,14 @@ logger = get_logger(__name__)
 
 
 def _get_crsbench_repo_root() -> str:
-    """
-    Get the crsbench repository root directory.
-
-    This is where .claude/skills/ directory is located for skill loading.
+    """Get the crsbench repository root directory.
 
     Returns:
         Absolute path to crsbench repository root
     """
-    # This file is at crsbench/migration/test_sh/generator.py
-    # Repository root is three levels up
-    current_file = Path(__file__).resolve()
-    repo_root = current_file.parent.parent.parent.parent
-    return str(repo_root)
+    from crsbench.utils.paths import get_crsbench_root
+
+    return str(get_crsbench_root())
 
 
 class ShTestGenerator:

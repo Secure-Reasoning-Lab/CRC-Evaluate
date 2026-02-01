@@ -164,7 +164,11 @@ def parse_patch_into_hunks(patch_content: str) -> list[PatchFile]:
             continue
 
         # Hunk content (context, addition, deletion, or no-newline marker)
-        if current_hunk is not None and line.startswith((" ", "+", "-", "\\")):
+        # Empty lines represent empty context lines (unchanged blank lines
+        # in source) — git diff omits the leading space for these.
+        if current_hunk is not None and (
+            line == "" or line.startswith((" ", "+", "-", "\\"))
+        ):
             current_hunk.content.append(line)
             i += 1
             continue
@@ -373,7 +377,11 @@ class OSSFuzzInfrastructure:
             logger.warning(f"Source build output not found: {source_path}")
             return False
 
-        # Create target directory if it doesn't exist
+        # Clean stale target — may have root-owned files from a previous
+        # Docker run (e.g. run_tests) that wasn't fully ownership-fixed.
+        if target_path.exists():
+            docker_rmtree(target_path)
+
         target_path.mkdir(parents=True, exist_ok=True)
 
         # Copy all files from source to target
@@ -856,7 +864,6 @@ class OSSFuzzInfrastructure:
         use_inc_image: bool = False,
         inc_fallback: bool = False,
         inc_patch: Optional[Path] = None,
-        apply_patch: bool = False,
     ) -> FuzzerBuildResult:
         """Build fuzzers for a variant.
 
@@ -869,8 +876,6 @@ class OSSFuzzInfrastructure:
             inc_patch: Path to patch file to apply to /built-src/ for true incremental
                 builds. When provided with use_inc_image=True, applies patch to /built-src
                 and compiles incrementally.
-            apply_patch: If True, rsync source directly to /built-src for true
-                incremental build. Use with use_inc_image=True and src_path.
 
         Returns:
             FuzzerBuildResult with success status and fallback tracking.
@@ -910,9 +915,6 @@ class OSSFuzzInfrastructure:
             # Add inc-patch for true incremental patched builds
             if inc_patch:
                 cmd.extend(["--inc-patch", str(inc_patch)])
-            # Add apply-patch for true incremental with patched source
-            if apply_patch:
-                cmd.append("--apply-patch")
 
         cmd.append(variant_name)
         # Only add source path if provided (not using bundled pkgs/)
@@ -950,11 +952,12 @@ class OSSFuzzInfrastructure:
                 )
 
             logger.error(
-                f"Build failed for {variant_name}. "
-                f"Exit code: {result.returncode}\n"
-                f"stdout: {result.stdout[:2000] if result.stdout else 'None'}...\n"
-                f"stderr: {result.stderr[:2000] if result.stderr else 'None'}..."
+                f"Build failed for {variant_name} (exit code {result.returncode})"
             )
+            if result.stdout:
+                logger.debug(f"Build stdout: {result.stdout[:2000]}...")
+            if result.stderr:
+                logger.debug(f"Build stderr: {result.stderr[:2000]}...")
             return FuzzerBuildResult(
                 success=False,
                 fallback_used=False,
@@ -1477,7 +1480,7 @@ class OSSFuzzInfrastructure:
                 cmd,
                 cwd=self.oss_fuzz_path,
                 capture_output=True,
-                timeout=timeout + 30,  # Grace period for helper.py
+                timeout=timeout + 10,  # Grace period for helper.py
                 stdin=subprocess.DEVNULL,  # Prevent terminal issues
             )
 
@@ -2021,13 +2024,16 @@ class OSSFuzzInfrastructure:
                     f"(exit code: {result.returncode})"
                 )
 
+            fix_docker_ownership(self.get_build_output_path(project_name))
             return passed, result.stdout, result.stderr
 
         except subprocess.TimeoutExpired:
             logger.error(f"Test timeout for {project_name}")
+            fix_docker_ownership(self.get_build_output_path(project_name))
             return False, "", "Test execution timed out"
         except Exception as e:
             logger.error(f"Test execution error for {project_name}: {e}")
+            fix_docker_ownership(self.get_build_output_path(project_name))
             return False, "", str(e)
 
     def is_tests_available(self, project_name: str) -> bool:

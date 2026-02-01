@@ -40,6 +40,8 @@ def docker_rmtree(path: Path, *, timeout: int = 120) -> bool:
         pass
 
     # Fallback: root-owned files from a failed/interrupted build
+    # Use "sh -c" to remove contents without removing the mount point itself.
+    # "rm -rf /target" fails with "Resource busy" because /target is a bind mount.
     path = path.resolve()
     try:
         result = subprocess.run(
@@ -50,9 +52,9 @@ def docker_rmtree(path: Path, *, timeout: int = 120) -> bool:
                 "-v",
                 f"{path}:/target",
                 "alpine",
-                "rm",
-                "-rf",
-                "/target",
+                "sh",
+                "-c",
+                "rm -rf /target/* /target/.[!.]* /target/..?* 2>/dev/null; true",
             ],
             capture_output=True,
             text=True,
@@ -61,7 +63,12 @@ def docker_rmtree(path: Path, *, timeout: int = 120) -> bool:
         )
 
         if result.returncode == 0:
-            logger.debug(f"Removed {path} via Docker")
+            logger.debug(f"Removed contents of {path} via Docker")
+            # Remove the now-empty directory on the host
+            try:
+                path.rmdir()
+            except OSError:
+                pass  # OK if dir isn't fully empty or is still mounted
             return True
 
         logger.warning(f"Failed to remove {path} via Docker: {result.stderr}")

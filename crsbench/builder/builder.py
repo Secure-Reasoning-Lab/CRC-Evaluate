@@ -436,24 +436,28 @@ class OSSFuzzBuilder:
                         elapsed_seconds=time.time() - start_time,
                     )
 
-                # Try inc-build with apply_patch (true incremental)
-                # apply_patch: rsync to /built-src/ without --delete, preserving .o files
+                # Inc-build: rsync patched source to /src/, the image's
+                # OSS-PATCH in compile diffs /src/ against HEAD and applies
+                # to /built-src/ via git apply (preserves .o for unchanged files)
                 build_result = self.infra.build_fuzzers(
-                    config, repo_path, use_inc_image=True, apply_patch=True
+                    config, repo_path, use_inc_image=True
                 )
 
-                # If inc-build fails, fallback to full build (no inc-build)
+                # If inc-build fails, fallback to building from /src/
+                # using the same inc-build image (deps already installed)
                 fallback_used = False
                 if not build_result.success:
                     logger.warning(
-                        f"Inc-build failed for {variant_name}, falling back to full build"
+                        f"Inc-build failed for {variant_name}, "
+                        "falling back to clean build from /src/"
                     )
                     fallback_used = True
-                    # Clean up failed build outputs before retry
                     self.infra.cleanup_build_outputs(variant_name)
-                    # Full build without inc-build
                     build_result = self.infra.build_fuzzers(
-                        config, repo_path, use_inc_image=False, apply_patch=False
+                        config,
+                        repo_path,
+                        use_inc_image=True,
+                        inc_fallback=True,
                     )
 
                 if not build_result.success:
