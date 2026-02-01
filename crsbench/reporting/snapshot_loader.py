@@ -101,6 +101,10 @@ class SnapshotLoader:
                 continue
 
             # Extract cycle number
+            # Skip special snapshot files (final/latest are symlink-like markers)
+            if archive_path.name in ("snapshot-final.tar.gz", "snapshot-latest.tar.gz"):
+                continue
+
             try:
                 cycle = self._extract_cycle_from_filename(archive_path.name)
             except ValueError:
