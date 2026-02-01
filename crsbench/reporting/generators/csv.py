@@ -257,6 +257,7 @@ class CSVReportGenerator:
             "run_mode": trial_metrics.get("run_mode", ""),
             "sanitizer": trial_metrics.get("sanitizer", ""),
             "elapsed_time": ts_point.get("elapsed_time", 0.0),
+            "running_elapsed_time": ts_point.get("running_elapsed_time", 0.0),
             "cumulative_povs": ts_point.get("cumulative_povs", 0),
             "cumulative_patches": ts_point.get("cumulative_patches", 0),
             "llm_tokens": ts_point.get("llm_tokens", 0),

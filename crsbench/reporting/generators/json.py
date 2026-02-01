@@ -92,6 +92,7 @@ class JSONReportGenerator:
             "time_series": [
                 {
                     "elapsed_time": p.elapsed_time,
+                    "running_elapsed_time": p.running_elapsed_time,
                     "cumulative_povs": p.cumulative_povs,
                     "cumulative_patches": p.cumulative_patches,
                     "llm_tokens": p.llm_tokens,
