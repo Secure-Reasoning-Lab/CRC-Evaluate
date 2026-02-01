@@ -64,11 +64,13 @@ class BuildSingleVariantJob(Job):
     mode: BenchmarkMode
     language: str = "c"
     cpv_num: Optional[int] = None
+    patch_id: Optional[str] = None
+    pov_id: Optional[str] = None
     patches: list[Path] = field(default_factory=list)
     use_inc_build: bool = True
     force_rebuild: bool = False
     skip_if_cached: bool = True
-    source_mode: str = "main_repo"
+    source_mode: str = "pkgs"
     sanitizer: str = "address"
     repo_name: Optional[str] = None
     project_image_prefix: str = "aixcc-afc"
@@ -89,6 +91,8 @@ class BuildSingleVariantJob(Job):
             patches=self.patches,
             language=self.language,
             cpv_num=self.cpv_num,
+            patch_id=self.patch_id,
+            pov_id=self.pov_id,
             use_inc_build=self.use_inc_build,
             sanitizer=self.sanitizer,
             repo_name=self.repo_name,
@@ -123,6 +127,8 @@ class BuildSingleVariantJob(Job):
                 patches=self.patches,
                 language=self.language,
                 cpv_num=self.cpv_num,
+                patch_id=self.patch_id,
+                pov_id=self.pov_id,
                 use_inc_build=self.use_inc_build,
                 sanitizer=self.sanitizer,
                 repo_name=self.repo_name,
@@ -203,7 +209,7 @@ class BuildVariantsJob(Job):
     benchmark_name: str
     use_inc_build: bool = True
     force_rebuild: bool = False
-    source_mode: str = "main_repo"
+    source_mode: str = "pkgs"
     project_image_prefix: str = "aixcc-afc"
 
     @property
@@ -321,7 +327,7 @@ class VerifyCpvPovJob(Job):
     benchmark_path: Optional[Path] = None
     pov_path: Optional[Path] = None  # Single pov_0 path
     build_job_ids: list[str] = field(default_factory=list)
-    source_mode: str = "main_repo"
+    source_mode: str = "pkgs"
 
     @property
     def job_id(self) -> str:
@@ -508,7 +514,7 @@ class VerifyCpvVarJob(Job):
     benchmark_path: Optional[Path] = None
     pov_paths: list[Path] = field(default_factory=list)  # pov_1+ paths
     build_job_ids: list[str] = field(default_factory=list)
-    source_mode: str = "main_repo"
+    source_mode: str = "pkgs"
 
     @property
     def job_id(self) -> str:
@@ -706,7 +712,7 @@ class BuildPatchVariantJob(Job):
     use_inc_build: bool = True
     force_rebuild: bool = False
     build_job_id: str = ""
-    source_mode: str = "main_repo"
+    source_mode: str = "pkgs"
 
     @property
     def job_id(self) -> str:
@@ -873,7 +879,7 @@ class PatchVariantTestJob(Job):
     pov_paths: list[Path] = field(default_factory=list)
     test_mode: str = "FULL"
     build_patch_job_id: str = ""
-    source_mode: str = "main_repo"
+    source_mode: str = "pkgs"
 
     @property
     def job_id(self) -> str:
@@ -1109,7 +1115,7 @@ class PatchPovTestJob(Job):
     harness: str
     pov_path: Optional[Path] = None  # Single pov_0 path
     build_patch_job_id: str = ""
-    source_mode: str = "main_repo"
+    source_mode: str = "pkgs"
 
     @property
     def job_id(self) -> str:
@@ -1264,7 +1270,7 @@ class PatchVarTestJob(Job):
     harness: str
     pov_paths: list[Path] = field(default_factory=list)  # pov_1+ paths
     build_patch_job_id: str = ""
-    source_mode: str = "main_repo"
+    source_mode: str = "pkgs"
 
     @property
     def job_id(self) -> str:
@@ -1424,7 +1430,7 @@ class PatchUnitTestJob(Job):
     harness: str
     test_mode: str = "FULL"  # FULL or RTS
     build_patch_job_id: str = ""  # Dependency on build job
-    source_mode: str = "main_repo"
+    source_mode: str = "pkgs"
 
     @property
     def job_id(self) -> str:
@@ -1582,7 +1588,7 @@ class FlatCollectCoverageJob(Job):
     benchmark_name: str
     harness: str
     build_job_id: str = ""
-    source_mode: str = "main_repo"
+    source_mode: str = "pkgs"
     build_job_ids: list[str] = field(default_factory=list)
 
     @property

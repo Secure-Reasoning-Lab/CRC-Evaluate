@@ -330,3 +330,213 @@ def verify_povs(payload_dict: dict[str, Any]) -> dict[str, Any]:
         verdicts=verdicts,
         completed_at=time.time(),
     ).to_dict()
+
+
+# =============================================================================
+# Per-POV Verification (v2.2 — replaces batch verify_povs)
+# =============================================================================
+
+
+@dataclass
+class SinglePovPayload:
+    """Payload for verifying a single POV via Redis queue.
+
+    Lighter-weight than VerificationJobPayload: one POV per job for
+    finer granularity, better parallelism, and individual retry.
+
+    Attributes:
+        experiment_name: Experiment identifier for queue routing
+        trial_id: Trial identifier to correlate results
+        benchmark: Benchmark name (evaluator resolves path locally)
+        harness: Fuzz harness name
+        pov: Single embedded POV with content
+        enqueued_at: Timestamp when job was enqueued
+    """
+
+    experiment_name: str
+    trial_id: str
+    benchmark: str
+    harness: str
+    pov: EmbeddedPov
+    enqueued_at: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "experiment_name": self.experiment_name,
+            "trial_id": self.trial_id,
+            "benchmark": self.benchmark,
+            "harness": self.harness,
+            "pov": self.pov.to_dict(),
+            "enqueued_at": self.enqueued_at,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "SinglePovPayload":
+        return cls(
+            experiment_name=d["experiment_name"],
+            trial_id=d["trial_id"],
+            benchmark=d["benchmark"],
+            harness=d["harness"],
+            pov=EmbeddedPov.from_dict(d["pov"]),
+            enqueued_at=d["enqueued_at"],
+        )
+
+
+@dataclass
+class SinglePovResult:
+    """Result of verifying a single POV.
+
+    Attributes:
+        trial_id: Trial identifier
+        benchmark: Benchmark name
+        harness: Harness name
+        verdict: Single POV verdict
+        completed_at: Timestamp when verification completed
+    """
+
+    trial_id: str
+    benchmark: str
+    harness: str
+    verdict: PovVerdict
+    completed_at: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "trial_id": self.trial_id,
+            "benchmark": self.benchmark,
+            "harness": self.harness,
+            "verdict": self.verdict.to_dict(),
+            "completed_at": self.completed_at,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "SinglePovResult":
+        return cls(
+            trial_id=d["trial_id"],
+            benchmark=d["benchmark"],
+            harness=d["harness"],
+            verdict=PovVerdict.from_dict(d["verdict"]),
+            completed_at=d["completed_at"],
+        )
+
+
+def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
+    """Verify a single POV. RQ job function.
+
+    Per-POV counterpart to verify_povs(). Processes one POV at a time for
+    finer granularity, better parallelism across evaluator workers, and
+    individual retry without re-verifying an entire batch.
+
+    Uses the same module-level cache as verify_povs() for pre-built variants.
+
+    Args:
+        payload_dict: Serialized SinglePovPayload dict
+
+    Returns:
+        Serialized SinglePovResult dict
+    """
+    from crsbench.evaluation.verification.models import (
+        PovVerificationRequest,
+        PovVerificationStatus,
+    )
+
+    payload = SinglePovPayload.from_dict(payload_dict)
+    pov = payload.pov
+
+    logger.info(
+        f"Verifying POV {pov.pov_id} for trial {payload.trial_id} "
+        f"benchmark {payload.benchmark}"
+    )
+
+    # Check that we have builds for this benchmark
+    if payload.benchmark not in _built_results:
+        error_msg = (
+            f"No built variants for benchmark '{payload.benchmark}'. "
+            "Evaluator was not configured with this benchmark."
+        )
+        logger.error(error_msg)
+        return SinglePovResult(
+            trial_id=payload.trial_id,
+            benchmark=payload.benchmark,
+            harness=payload.harness,
+            verdict=PovVerdict(pov_id=pov.pov_id, triggered_bug=False, error=error_msg),
+            completed_at=time.time(),
+        ).to_dict()
+
+    build_results = _built_results[payload.benchmark]
+
+    engine = _verification_engine
+    if engine is None:
+        error_msg = "VerificationEngine not initialized"
+        logger.error(error_msg)
+        return SinglePovResult(
+            trial_id=payload.trial_id,
+            benchmark=payload.benchmark,
+            harness=payload.harness,
+            verdict=PovVerdict(pov_id=pov.pov_id, triggered_bug=False, error=error_msg),
+            completed_at=time.time(),
+        ).to_dict()
+
+    # Resolve benchmark path
+    benchmarks_root = Path(
+        os.environ.get("CRSBENCH_EVALUATOR_BENCHMARKS_ROOT", "benchmarks")
+    )
+    benchmark_path = benchmarks_root / payload.benchmark
+    adapter = engine.load_adapter(benchmark_path)
+
+    if adapter is None:
+        error_msg = f"Failed to load adapter for benchmark '{payload.benchmark}'"
+        logger.error(error_msg)
+        return SinglePovResult(
+            trial_id=payload.trial_id,
+            benchmark=payload.benchmark,
+            harness=payload.harness,
+            verdict=PovVerdict(pov_id=pov.pov_id, triggered_bug=False, error=error_msg),
+            completed_at=time.time(),
+        ).to_dict()
+
+    # Verify the single POV
+    try:
+        pov_data = pov.to_bytes()
+        request = PovVerificationRequest(
+            pov_data=pov_data,
+            harness=payload.harness,
+            benchmark=payload.benchmark,
+            pov_id=pov.pov_id,
+        )
+
+        result = engine.verify_pov(
+            request=request,
+            adapter=adapter,
+            build_results=build_results,
+        )
+
+        verdict = PovVerdict(
+            pov_id=pov.pov_id,
+            triggered_bug=result.status == PovVerificationStatus.CPV,
+            cpv_matches=result.cpv_matched,
+            variant_results={},
+            error=result.details
+            if result.status == PovVerificationStatus.ERROR
+            else None,
+        )
+
+        logger.info(
+            f"  POV {pov.pov_id}: {result.status.value} (CPVs: {result.cpv_matched})"
+        )
+
+    except Exception as e:
+        logger.error(f"  POV {pov.pov_id}: verification failed: {e}")
+        verdict = PovVerdict(
+            pov_id=pov.pov_id,
+            triggered_bug=False,
+            error=str(e),
+        )
+
+    return SinglePovResult(
+        trial_id=payload.trial_id,
+        benchmark=payload.benchmark,
+        harness=payload.harness,
+        verdict=verdict,
+        completed_at=time.time(),
+    ).to_dict()

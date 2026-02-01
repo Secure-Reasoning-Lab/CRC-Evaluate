@@ -1,0 +1,204 @@
+"""Tests for verify_single_pov() per-POV RQ job function."""
+
+import time
+from unittest.mock import MagicMock, patch
+
+from crsbench.distributed.evaluator_jobs import (
+    EmbeddedPov,
+    PovVerdict,
+    SinglePovPayload,
+    SinglePovResult,
+    verify_single_pov,
+)
+
+
+class TestSinglePovPayload:
+    """SinglePovPayload serialization."""
+
+    def test_to_dict_roundtrip(self) -> None:
+        pov = EmbeddedPov.from_bytes("pov_0", b"crash_input")
+        payload = SinglePovPayload(
+            experiment_name="exp-1",
+            trial_id="trial-0",
+            benchmark="test-bench",
+            harness="fuzz_target",
+            pov=pov,
+            enqueued_at=1000.0,
+        )
+
+        d = payload.to_dict()
+        restored = SinglePovPayload.from_dict(d)
+
+        assert restored.experiment_name == "exp-1"
+        assert restored.trial_id == "trial-0"
+        assert restored.benchmark == "test-bench"
+        assert restored.harness == "fuzz_target"
+        assert restored.pov.pov_id == "pov_0"
+        assert restored.pov.to_bytes() == b"crash_input"
+        assert restored.enqueued_at == 1000.0
+
+    def test_single_pov_not_list(self) -> None:
+        """SinglePovPayload has a single pov, not a list."""
+        pov = EmbeddedPov.from_bytes("pov_0", b"data")
+        payload = SinglePovPayload(
+            experiment_name="exp",
+            trial_id="t",
+            benchmark="b",
+            harness="h",
+            pov=pov,
+            enqueued_at=0.0,
+        )
+        d = payload.to_dict()
+        assert isinstance(d["pov"], dict)
+        assert "pov_id" in d["pov"]
+
+
+class TestSinglePovResult:
+    """SinglePovResult serialization."""
+
+    def test_to_dict_roundtrip(self) -> None:
+        verdict = PovVerdict(
+            pov_id="pov_0",
+            triggered_bug=True,
+            cpv_matches=["cpv_0"],
+        )
+        result = SinglePovResult(
+            trial_id="trial-0",
+            benchmark="test-bench",
+            harness="fuzz_target",
+            verdict=verdict,
+            completed_at=2000.0,
+        )
+
+        d = result.to_dict()
+        restored = SinglePovResult.from_dict(d)
+
+        assert restored.trial_id == "trial-0"
+        assert restored.verdict.pov_id == "pov_0"
+        assert restored.verdict.triggered_bug is True
+        assert restored.verdict.cpv_matches == ["cpv_0"]
+        assert restored.completed_at == 2000.0
+
+
+class TestVerifySinglePov:
+    """verify_single_pov() RQ job function."""
+
+    def _make_payload(self, pov_data: bytes = b"crash") -> dict:
+        pov = EmbeddedPov.from_bytes("pov_0", pov_data)
+        return SinglePovPayload(
+            experiment_name="exp",
+            trial_id="trial-0",
+            benchmark="test-bench",
+            harness="fuzz_target",
+            pov=pov,
+            enqueued_at=time.time(),
+        ).to_dict()
+
+    @patch("crsbench.distributed.evaluator_jobs._built_results", {})
+    def test_missing_benchmark_returns_error(self) -> None:
+        """Returns error verdict when benchmark not in build cache."""
+        result_dict = verify_single_pov(self._make_payload())
+        result = SinglePovResult.from_dict(result_dict)
+
+        assert result.verdict.pov_id == "pov_0"
+        assert result.verdict.triggered_bug is False
+        assert result.verdict.error is not None
+        assert "No built variants" in result.verdict.error
+
+    @patch("crsbench.distributed.evaluator_jobs._verification_engine", None)
+    @patch(
+        "crsbench.distributed.evaluator_jobs._built_results",
+        {"test-bench": {"v": "result"}},
+    )
+    def test_engine_not_initialized(self) -> None:
+        """Returns error when VerificationEngine is not initialized."""
+        result_dict = verify_single_pov(self._make_payload())
+        result = SinglePovResult.from_dict(result_dict)
+
+        assert result.verdict.triggered_bug is False
+        assert "not initialized" in result.verdict.error
+
+    @patch("crsbench.distributed.evaluator_jobs._built_results", {"test-bench": {}})
+    def test_adapter_load_failure(self) -> None:
+        """Returns error when adapter fails to load."""
+        mock_engine = MagicMock()
+        mock_engine.load_adapter.return_value = None
+
+        with patch(
+            "crsbench.distributed.evaluator_jobs._verification_engine", mock_engine
+        ):
+            result_dict = verify_single_pov(self._make_payload())
+
+        result = SinglePovResult.from_dict(result_dict)
+        assert result.verdict.triggered_bug is False
+        assert "Failed to load adapter" in result.verdict.error
+
+    @patch("crsbench.distributed.evaluator_jobs._built_results", {"test-bench": {}})
+    def test_successful_cpv_match(self) -> None:
+        """Successful verification with CPV match."""
+        from crsbench.evaluation.verification.models import (
+            PovVerificationResult,
+            PovVerificationStatus,
+        )
+
+        mock_engine = MagicMock()
+        mock_adapter = MagicMock()
+        mock_engine.load_adapter.return_value = mock_adapter
+        mock_engine.verify_pov.return_value = PovVerificationResult(
+            status=PovVerificationStatus.CPV,
+            benchmark="test-bench",
+            cpv_matched=["cpv_0"],
+        )
+
+        with patch(
+            "crsbench.distributed.evaluator_jobs._verification_engine", mock_engine
+        ):
+            result_dict = verify_single_pov(self._make_payload())
+
+        result = SinglePovResult.from_dict(result_dict)
+        assert result.verdict.triggered_bug is True
+        assert result.verdict.cpv_matches == ["cpv_0"]
+        assert result.verdict.error is None
+
+    @patch("crsbench.distributed.evaluator_jobs._built_results", {"test-bench": {}})
+    def test_not_vulnerable(self) -> None:
+        """POV does not trigger vulnerability."""
+        from crsbench.evaluation.verification.models import (
+            PovVerificationResult,
+            PovVerificationStatus,
+        )
+
+        mock_engine = MagicMock()
+        mock_adapter = MagicMock()
+        mock_engine.load_adapter.return_value = mock_adapter
+        mock_engine.verify_pov.return_value = PovVerificationResult(
+            status=PovVerificationStatus.NOT_VULNERABLE,
+            benchmark="test-bench",
+            cpv_matched=[],
+        )
+
+        with patch(
+            "crsbench.distributed.evaluator_jobs._verification_engine", mock_engine
+        ):
+            result_dict = verify_single_pov(self._make_payload())
+
+        result = SinglePovResult.from_dict(result_dict)
+        assert result.verdict.triggered_bug is False
+        assert result.verdict.cpv_matches == []
+
+    @patch("crsbench.distributed.evaluator_jobs._built_results", {"test-bench": {}})
+    def test_verification_exception(self) -> None:
+        """Exception during verification produces error verdict."""
+        mock_engine = MagicMock()
+        mock_adapter = MagicMock()
+        mock_engine.load_adapter.return_value = mock_adapter
+        mock_engine.verify_pov.side_effect = RuntimeError("Docker timeout")
+
+        with patch(
+            "crsbench.distributed.evaluator_jobs._verification_engine", mock_engine
+        ):
+            result_dict = verify_single_pov(self._make_payload())
+
+        result = SinglePovResult.from_dict(result_dict)
+        assert result.verdict.triggered_bug is False
+        assert "Docker timeout" in result.verdict.error
