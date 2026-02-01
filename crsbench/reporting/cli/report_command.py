@@ -6,7 +6,7 @@ from pathlib import Path
 
 from crsbench.reporting.errors import ReportError
 from crsbench.reporting.orchestrator import ReportGenerator
-from crsbench.utils.logger import get_logger
+from crsbench.utils.logger import configure_logger, get_logger
 
 logger = get_logger(__name__)
 
@@ -130,6 +130,12 @@ Examples:
         help="Preview trials and CSV columns that would be generated without creating reports",
     )
 
+    report_parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging (logs all commands executed with their working directories)",
+    )
+
     report_parser.set_defaults(command="report")
 
 
@@ -142,6 +148,11 @@ def run_report(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success, 1 for error)
     """
+    # Set debug logging if requested
+    if hasattr(args, "debug") and args.debug:
+        configure_logger(level="DEBUG")
+        logger.debug("Debug logging enabled")
+
     # Validate arguments
     has_experiment = args.experiment or args.experiment_dir
     if not has_experiment and not args.trial:
