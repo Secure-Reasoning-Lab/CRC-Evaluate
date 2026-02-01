@@ -49,7 +49,10 @@ class DAGExecutor:
             self.type_limits: dict[str, int] | None = None
 
     def execute(
-        self, jobs: list[Job], context: JobContext
+        self,
+        jobs: list[Job],
+        context: JobContext,
+        pre_results: dict[str, ExecutorResult] | None = None,
     ) -> dict[str, ExecutorResult]:
         """Execute jobs respecting dependencies with bounded parallelism.
 
@@ -59,6 +62,9 @@ class DAGExecutor:
         Args:
             jobs: List of jobs to execute. Each job declares depends_on.
             context: Shared context passed to each job's execute() method.
+            pre_results: Optional dict of already-completed job results.
+                Jobs present in pre_results are skipped (not re-executed).
+                Their results satisfy dependency resolution for downstream jobs.
 
         Returns:
             Dict mapping job_id to ExecutorResult for every job.
@@ -68,17 +74,42 @@ class DAGExecutor:
             DependencyError: If a job depends on an unknown job ID.
         """
         if not jobs:
-            return {}
+            return dict(pre_results) if pre_results else {}
 
-        job_map = {job.job_id: job for job in jobs}
-        graph = {job.job_id: set(job.depends_on) for job in jobs}
-
-        self._validate_dependencies(job_map, graph)
-
-        ts = self._prepare_sorter(graph)
-
+        # Initialize results with pre-completed jobs
         results: dict[str, ExecutorResult] = {}
+        if pre_results:
+            results.update(pre_results)
+
+        # Build job map excluding pre-completed jobs
+        job_map = {job.job_id: job for job in jobs if job.job_id not in results}
+
+        # If all jobs are pre-completed, return immediately
+        if not job_map:
+            return results
+
+        # Keep original deps for failure propagation (includes pre_results IDs)
+        full_graph = {jid: set(job.depends_on) for jid, job in job_map.items()}
+
+        self._validate_dependencies(job_map, full_graph, known_ids=set(results.keys()))
+
+        # Build a reduced graph for topological sorting with pre-completed
+        # dependencies removed (sorter must not wait for them)
+        sorter_graph = {jid: set(deps) for jid, deps in full_graph.items()}
+        if pre_results:
+            pre_ids = set(pre_results.keys())
+            for jid in sorter_graph:
+                sorter_graph[jid] -= pre_ids
+
+        ts = self._prepare_sorter(sorter_graph)
+
         failed_jobs: set[str] = set()
+
+        # Mark pre-completed failures so downstream jobs get DEP_FAILED
+        if pre_results:
+            for jid, r in pre_results.items():
+                if r.status != JobStatus.SUCCESS:
+                    failed_jobs.add(jid)
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
             in_flight: dict[str, Future[JobResult]] = {}
@@ -93,7 +124,7 @@ class DAGExecutor:
                 remaining: list[str] = []
                 dep_failed_processed = False
                 for job_id in ready_buffer:
-                    if self._has_failed_dep(job_id, graph, failed_jobs):
+                    if self._has_failed_dep(job_id, full_graph, failed_jobs):
                         results[job_id] = ExecutorResult(
                             job_id=job_id,
                             status=JobStatus.DEP_FAILED,
@@ -188,9 +219,18 @@ class DAGExecutor:
         self,
         job_map: dict[str, Job],
         graph: dict[str, set[str]],
+        known_ids: set[str] | None = None,
     ) -> None:
-        """Validate all dependencies reference existing jobs."""
+        """Validate all dependencies reference existing jobs.
+
+        Args:
+            job_map: Map of job_id to Job for jobs being executed.
+            graph: Dependency graph for jobs being executed.
+            known_ids: Additional valid IDs (e.g. from pre_results).
+        """
         all_ids = set(job_map.keys())
+        if known_ids:
+            all_ids |= known_ids
         for job_id, deps in graph.items():
             for dep in deps:
                 if dep not in all_ids:
