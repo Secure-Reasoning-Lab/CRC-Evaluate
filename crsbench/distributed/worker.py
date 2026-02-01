@@ -17,7 +17,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from dotenv import load_dotenv
 
@@ -98,6 +98,8 @@ def main(
     queue_name: Optional[str] = None,
     *,
     use_cpuset: bool = False,
+    cores: Optional[str] = None,
+    skip_cpus: Optional[str] = None,
 ) -> int:
     """
     Worker entry point - connects to Redis and processes jobs.
@@ -190,6 +192,8 @@ def main(
             queue_name=queue_name,
             use_cpuset=True,
             use_cgroups=use_cpuset,
+            cores=cores,
+            skip_cpus=skip_cpus,
         )
 
     # Standard parallel workers
@@ -284,6 +288,8 @@ def _run_supervisor(
     use_cgroups: bool = False,
     minimum_disk_size: str = "10GB",
     disk_check_interval: int = 60,
+    cores: Optional[str] = None,
+    skip_cpus: Optional[str] = None,
 ) -> int:
     """Supervisor that spawns workers based on job CPU requirements.
 
@@ -331,7 +337,17 @@ def _run_supervisor(
             exp_path.mkdir(parents=True, exist_ok=True)
             logger.info(f"Ensured filestore exists: {exp_path}")
 
-    cpu_pool = CPUPool() if use_cpuset else None
+    if use_cpuset:
+        # Parse cores: if it looks like an integer, pass as int
+        cores_arg: Union[str, int, None] = None
+        if cores is not None:
+            try:
+                cores_arg = int(cores)
+            except ValueError:
+                cores_arg = cores  # cpuset string
+        cpu_pool = CPUPool(cores=cores_arg, skip_cpus=skip_cpus)
+    else:
+        cpu_pool = None
 
     # Cgroup initialization (if enabled)
     cgroup_base: Optional[Path] = None
@@ -865,6 +881,8 @@ def run_worker_continuous(
     use_cpuset: bool = False,
     minimum_disk_size: str = "10GB",
     disk_check_interval: int = 60,
+    cores: Optional[str] = None,
+    skip_cpus: Optional[str] = None,
 ):
     """
     Run worker in continuous mode (polling indefinitely).
@@ -909,6 +927,8 @@ def run_worker_continuous(
             use_cgroups=use_cpuset,
             minimum_disk_size=minimum_disk_size,
             disk_check_interval=disk_check_interval,
+            cores=cores,
+            skip_cpus=skip_cpus,
         )
     else:
         logger.info(

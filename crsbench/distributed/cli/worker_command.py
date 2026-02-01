@@ -113,6 +113,22 @@ Examples:
         help="Queue type: 'trial' (CRS experiment jobs) or 'ci-build' (CI variant builds)",
     )
 
+    worker_parser.add_argument(
+        "--cores",
+        type=str,
+        default=None,
+        metavar="CORES",
+        help="CPU cores for worker pool. Integer count (e.g., '32') or cpuset range (e.g., '16-47')",
+    )
+
+    worker_parser.add_argument(
+        "--skip-cpus",
+        type=str,
+        default=None,
+        metavar="CPUSET",
+        help="CPUs to exclude from allocation (cpuset format, e.g., '0-3,8-11')",
+    )
+
     worker_parser.set_defaults(command="worker")
 
 
@@ -239,6 +255,15 @@ def run_worker(args: argparse.Namespace) -> int:
     minimum_disk_size = worker_config.minimum_disk_size if worker_config else "10GB"
     disk_check_interval = worker_config.disk_check_interval if worker_config else 60
 
+    # Resolve cores and skip_cpus: CLI > worker config > None
+    cores = getattr(args, "cores", None)
+    if cores is None and worker_config:
+        cores = worker_config.cores
+
+    skip_cpus = getattr(args, "skip_cpus", None)
+    if skip_cpus is None and worker_config:
+        skip_cpus = worker_config.skip_cpus
+
     # TODO: fix timeout too short
     # Prepare worker arguments with resolved values
     worker_args = {
@@ -262,10 +287,18 @@ def run_worker(args: argparse.Namespace) -> int:
                 use_cpuset=use_cpuset,
                 minimum_disk_size=minimum_disk_size,
                 disk_check_interval=disk_check_interval,
+                cores=cores,
+                skip_cpus=skip_cpus,
             )
             return 0
         # Run in burst mode (default)
-        return worker_main(**worker_args, queue_name=queue_name, use_cpuset=use_cpuset)
+        return worker_main(
+            **worker_args,
+            queue_name=queue_name,
+            use_cpuset=use_cpuset,
+            cores=cores,
+            skip_cpus=skip_cpus,
+        )
 
     except KeyboardInterrupt:
         from crsbench.utils.logger import get_logger

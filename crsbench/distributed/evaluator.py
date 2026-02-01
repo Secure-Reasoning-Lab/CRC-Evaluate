@@ -12,7 +12,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from crsbench.utils.logger import configure_logger, get_logger
 
@@ -34,6 +34,9 @@ def run_evaluator_main(
     max_jobs: int = 1,
     *,
     use_cpuset: bool = False,
+    cores: Optional[str] = None,
+    skip_cpus: Optional[str] = None,
+    build_workers: int = 4,
 ) -> int:
     """Main entry point for the evaluator process.
 
@@ -45,6 +48,9 @@ def run_evaluator_main(
         redis_host: Redis server hostname
         max_jobs: Maximum number of parallel verify jobs
         use_cpuset: Enable CPU affinity for verify jobs
+        cores: CPU cores for evaluator pool (integer count or cpuset string)
+        skip_cpus: CPUs to exclude from allocation (cpuset format)
+        build_workers: Number of parallel variant build workers
 
     Returns:
         Exit code (0 for success, non-zero for failure)
@@ -64,8 +70,8 @@ def run_evaluator_main(
     logger.info("=" * 60)
 
     # Phase 1: Build all variant images
-    logger.info("Phase 1: Building variant images...")
-    engine, built_results = _build_all_variants(config)
+    logger.info(f"Phase 1: Building variant images ({build_workers} workers)...")
+    engine, built_results = _build_all_variants(config, build_workers=build_workers)
 
     if not built_results:
         logger.error("No variants were built successfully. Exiting.")
@@ -92,18 +98,23 @@ def run_evaluator_main(
         max_jobs=max_jobs,
         use_cpuset=use_cpuset,
         use_cgroups=use_cpuset,
+        cores=cores,
+        skip_cpus=skip_cpus,
     )
 
 
-def _build_all_variants(config) -> tuple:
+def _build_all_variants(config, *, build_workers: int = 4) -> tuple:
     """Build all variant Docker images for benchmarks in the experiment config.
 
     Args:
         config: ExperimentConfig instance
+        build_workers: Number of parallel build workers
 
     Returns:
         Tuple of (VerificationEngine, dict of benchmark_name -> build_results)
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     from crsbench.evaluation.verification.pov.engine import VerificationEngine
 
     # Resolve paths from evaluator overrides or config
@@ -136,33 +147,54 @@ def _build_all_variants(config) -> tuple:
     for name in benchmark_names:
         logger.info(f"  - {name}")
 
-    # Build variants for each benchmark
+    # Build variants (parallel when build_workers > 1)
     built_results: dict[str, dict] = {}
-    for benchmark_name in benchmark_names:
-        benchmark_path = benchmarks_root / benchmark_name
-        if not benchmark_path.exists():
-            logger.error(f"Benchmark path not found: {benchmark_path}")
-            continue
+    with ThreadPoolExecutor(max_workers=build_workers) as executor:
+        futures = {}
+        for benchmark_name in benchmark_names:
+            benchmark_path = benchmarks_root / benchmark_name
+            if not benchmark_path.exists():
+                logger.error(f"Benchmark path not found: {benchmark_path}")
+                continue
+            future = executor.submit(
+                _build_single_benchmark, engine, benchmark_path, benchmark_name
+            )
+            futures[future] = benchmark_name
 
-        adapter = engine.load_adapter(benchmark_path)
-        if adapter is None:
-            logger.error(f"Failed to load adapter for {benchmark_name}")
-            continue
-
-        try:
-            logger.info(f"Building variants for {benchmark_name}...")
-            results = engine.get_or_build_results(adapter)
-            built_results[benchmark_name] = results
-
-            # Log per-variant results
-            for variant_name, result in results.items():
-                status = "OK" if result.success else "FAILED"
-                logger.info(f"  {variant_name}: {status}")
-
-        except Exception as e:
-            logger.error(f"Failed to build variants for {benchmark_name}: {e}")
+        for future in as_completed(futures):
+            name, results = future.result()
+            if results is not None:
+                built_results[name] = results
 
     return engine, built_results
+
+
+def _build_single_benchmark(engine, benchmark_path: Path, benchmark_name: str):
+    """Build variants for a single benchmark.
+
+    Args:
+        engine: VerificationEngine instance
+        benchmark_path: Path to benchmark directory
+        benchmark_name: Name of benchmark
+
+    Returns:
+        Tuple of (benchmark_name, results dict or None)
+    """
+    adapter = engine.load_adapter(benchmark_path)
+    if adapter is None:
+        logger.error(f"Failed to load adapter for {benchmark_name}")
+        return benchmark_name, None
+
+    try:
+        logger.info(f"Building variants for {benchmark_name}...")
+        results = engine.get_or_build_results(adapter)
+        for variant_name, result in results.items():
+            status = "OK" if result.success else "FAILED"
+            logger.info(f"  {variant_name}: {status}")
+        return benchmark_name, results
+    except Exception as e:
+        logger.error(f"Failed to build variants for {benchmark_name}: {e}")
+        return benchmark_name, None
 
 
 def _get_benchmark_names(config) -> list[str]:
@@ -195,6 +227,8 @@ def _run_evaluator_supervisor(
     *,
     use_cpuset: bool = False,
     use_cgroups: bool = False,
+    cores: Optional[str] = None,
+    skip_cpus: Optional[str] = None,
 ) -> int:
     """Supervisor that dequeues verify jobs and spawns child processes.
 
@@ -224,7 +258,14 @@ def _run_evaluator_supervisor(
     if use_cpuset:
         from crsbench.utils.cpu_pool import CPUPool
 
-        cpu_pool = CPUPool()
+        # Parse cores: if it looks like an integer, pass as int
+        cores_arg: Union[str, int, None] = None
+        if cores is not None:
+            try:
+                cores_arg = int(cores)
+            except ValueError:
+                cores_arg = cores  # cpuset string
+        cpu_pool = CPUPool(cores=cores_arg, skip_cpus=skip_cpus)
 
     # Cgroup initialization (if enabled)
     cgroup_base: Optional[Path] = None
@@ -325,8 +366,7 @@ def _run_evaluator_supervisor(
                             job.meta["cgroup_parent"] = cgroup_parent
                             job.save_meta()
                             logger.info(
-                                f"Created cgroup {cgroup_name} "
-                                f"with cpuset={cpuset_str}"
+                                f"Created cgroup {cgroup_name} with cpuset={cpuset_str}"
                             )
 
                         # Set OSS_FUZZ_CGROUP_PARENT for child process

@@ -98,6 +98,38 @@ Examples:
         help="Disable CPU affinity for verify jobs",
     )
 
+    evaluator_parser.add_argument(
+        "--cores",
+        type=str,
+        default=None,
+        metavar="CORES",
+        help="CPU cores for evaluator pool. Integer count (e.g., '32') or cpuset range (e.g., '16-47')",
+    )
+
+    evaluator_parser.add_argument(
+        "--skip-cpus",
+        type=str,
+        default=None,
+        metavar="CPUSET",
+        help="CPUs to exclude from allocation (cpuset format, e.g., '0-3,8-11')",
+    )
+
+    evaluator_parser.add_argument(
+        "--build-workers",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Number of parallel variant build workers (default: 4)",
+    )
+
+    evaluator_parser.add_argument(
+        "--verify-workers",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Number of parallel POV verification workers (overrides -j)",
+    )
+
     evaluator_parser.set_defaults(command="evaluator")
 
 
@@ -140,13 +172,24 @@ def run_evaluator(args: argparse.Namespace) -> int:
     # cpuset is enabled by default, disabled with --no-cpuset
     use_cpuset = not getattr(args, "no_cpuset", False)
 
+    # Resolve cores and skip_cpus
+    cores = getattr(args, "cores", None)
+    skip_cpus = getattr(args, "skip_cpus", None)
+
+    # Resolve build_workers and verify_workers
+    build_workers = getattr(args, "build_workers", None) or 4
+    verify_workers = getattr(args, "verify_workers", None) or args.jobs
+
     try:
         return run_evaluator_main(
             config=config,
             experiment_name=args.experiment_name,
             redis_host=args.redis_host,
-            max_jobs=args.jobs,
+            max_jobs=verify_workers,
             use_cpuset=use_cpuset,
+            cores=cores,
+            skip_cpus=skip_cpus,
+            build_workers=build_workers,
         )
     except KeyboardInterrupt:
         logger.info("Evaluator interrupted by user")
