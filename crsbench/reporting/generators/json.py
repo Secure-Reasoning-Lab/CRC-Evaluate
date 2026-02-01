@@ -168,6 +168,9 @@ class JSONReportGenerator:
                 "avg_povs_per_trial": experiment_metrics.avg_povs_per_trial,
                 "avg_patches_per_trial": experiment_metrics.avg_patches_per_trial,
                 "avg_cost_per_trial": experiment_metrics.avg_cost_per_trial,
+                "early_stop_count": sum(
+                    1 for m in experiment_metrics.trial_metrics if m.all_cpvs_found
+                ),
             },
             "by_crs": by_crs,
             "by_benchmark": by_benchmark,
@@ -188,6 +191,24 @@ class JSONReportGenerator:
                     "time_to_first_pov": m.time_to_first_pov,
                 }
                 for m in experiment_metrics.trial_metrics
+            ],
+            "early_stop_trials": [
+                {
+                    "trial_dir": m.trial_dir,
+                    "benchmark": m.benchmark,
+                    "crs": m.crs,
+                    "harness": m.harness,
+                    "sanitizer": m.sanitizer,
+                    "mode": m.mode,
+                    "early_stop_time": m.early_stop_time,
+                    "early_stop_cost": m.early_stop_cost,
+                    "time_saved": m.time_saved,
+                    "cost_saved": m.cost_saved,
+                    "total_cpvs": m.total_cpvs,
+                    "cpvs_found_count": m.cpvs_found_count,
+                }
+                for m in experiment_metrics.trial_metrics
+                if m.all_cpvs_found
             ],
         }
 
