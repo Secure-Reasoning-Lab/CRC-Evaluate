@@ -532,7 +532,13 @@ class HTMLReportGenerator:
 
         trial_reports_dir = self.output_dir / "trial-reports"
         trial_reports_dir.mkdir(exist_ok=True)
-        output_path = trial_reports_dir / f"trial-{trial_metrics.trial_num}.html"
+
+        # Create unique filename from trial path
+        # e.g., "exp/afc-curl/curl_fuzzer/delta/trial-1" -> "afc-curl-curl_fuzzer-delta-trial-1"
+        trial_path = Path(trial_metrics.trial_dir)
+        # Skip experiment dir (first part) and join the rest
+        trial_id = "-".join(trial_path.parts[1:]) if len(trial_path.parts) > 1 else trial_path.name
+        output_path = trial_reports_dir / f"{trial_id}.html"
         output_path.write_text(html)
 
         logger.info(f"Generated HTML trial report: {output_path}")

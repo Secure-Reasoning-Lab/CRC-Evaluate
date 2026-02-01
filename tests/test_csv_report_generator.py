@@ -18,6 +18,7 @@ def temp_output_dir():
 def sample_trial_metrics():
     """Sample trial metrics for testing."""
     return {
+        "trial_dir": "experiment/json-c__ensemble-c/fuzz_json/trial-1",
         "trial_num": "trial-1",
         "crs": "ensemble-c",
         "benchmark": "json-c",
@@ -56,6 +57,7 @@ def sample_experiment_metrics():
     return {
         "trials": [
             {
+                "trial_dir": "experiment/json-c__ensemble-c/fuzz_json/trial-1",
                 "trial_num": "trial-1",
                 "crs": "ensemble-c",
                 "benchmark": "json-c",
@@ -80,6 +82,7 @@ def sample_experiment_metrics():
                 ],
             },
             {
+                "trial_dir": "experiment/libxml2__atlantis-c/fuzz_xml/trial-2",
                 "trial_num": "trial-2",
                 "crs": "atlantis-c",
                 "benchmark": "libxml2",
@@ -156,17 +159,20 @@ def test_generate_trial_report(temp_output_dir, sample_trial_metrics):
     output_files = generator.generate_trial_report(sample_trial_metrics, snapshot_dicts)
 
     assert len(output_files) == 2
-    assert (temp_output_dir / "trial_summary.csv").exists()
-    assert (temp_output_dir / "time_series.csv").exists()
+
+    # Check for unique trial ID in filenames (skips first part "experiment")
+    trial_id = "json-c__ensemble-c-fuzz_json-trial-1"
+    assert (temp_output_dir / f"{trial_id}_summary.csv").exists()
+    assert (temp_output_dir / f"{trial_id}_time_series.csv").exists()
 
     # Verify trial summary content
-    trial_csv = temp_output_dir / "trial_summary.csv"
+    trial_csv = temp_output_dir / f"{trial_id}_summary.csv"
     content = trial_csv.read_text()
     assert "trial_num,crs,benchmark" in content
     assert "trial-1,ensemble-c,json-c" in content
 
     # Verify time series content
-    time_series_csv = temp_output_dir / "time_series.csv"
+    time_series_csv = temp_output_dir / f"{trial_id}_time_series.csv"
     content = time_series_csv.read_text()
     assert "elapsed_time,cumulative_povs" in content
     assert "60.0,1" in content
