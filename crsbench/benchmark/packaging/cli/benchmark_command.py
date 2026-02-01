@@ -358,10 +358,22 @@ def handle_bundle_all(args: argparse.Namespace) -> int:
         return 0
 
     # Categorize benchmarks
+    from crsbench.benchmark.packaging.workdir_parser import get_expected_source_dir
+
     to_bundle = []
     already_bundled = []
     for bench in benchmarks:
-        if (bench / "pkgs").exists() and not args.force:
+        pkgs_dir = bench / "pkgs"
+        dockerfile = bench / "Dockerfile"
+
+        # Determine expected tarball name (same logic as bundle_benchmark)
+        source_name = get_expected_source_dir(dockerfile)
+        if not source_name:
+            logger.error(f"Cannot parse WORKDIR from Dockerfile: {dockerfile}")
+            return 1
+
+        expected_tarball = pkgs_dir / f"{source_name}.tar.gz"
+        if expected_tarball.exists() and not args.force:
             already_bundled.append(bench)
         else:
             to_bundle.append(bench)
