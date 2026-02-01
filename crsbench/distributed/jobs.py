@@ -429,6 +429,8 @@ def _reconstruct_trial_result_from_success(
         harness=harness,
         trial_num=trial_num,
         crs_type=crs_type_enum,
+        mode=None,
+        sanitizer=None,
         success=True,
         execution_time=execution_time,
         povs_found=povs_found,
@@ -492,6 +494,8 @@ def _create_failed_trial_result(
         harness=harness,
         trial_num=trial_num,
         crs_type=crs_type_enum,
+        mode=None,
+        sanitizer=None,
         success=False,
         execution_time=0.0,
         error="Trial previously failed (marked for retry)",
@@ -973,6 +977,21 @@ def run_crs_trial(
                 hints_enabled=config.hints_enabled,
                 hints_corpus_level=config.hint_corpus_level,
             ),
+            build_mode=mode,
+            sanitizer=sanitizer,
+            experiment_name=config.experiment,
+            litellm_budget=(
+                config.resources.litellm.cost_budget
+                if config.resources and config.resources.litellm
+                else None
+            ),
+            cores_per_trial=config.resources.cores_per_trial
+            if config.resources
+            else None,
+            memory_per_trial=config.resources.memory_per_trial
+            if config.resources
+            else None,
+            experiment_config=config.model_dump(mode="json"),
         )
         metadata_file = trial_output_dir / "metadata.json"
         with metadata_file.open("w") as f:
@@ -1023,6 +1042,18 @@ def run_crs_trial(
             timestamp_end=time.time(),
             build_time=build_time,
             run_time=run_time,
+            experiment_name=config.experiment,
+            litellm_budget=(
+                config.resources.litellm.cost_budget
+                if config.resources and config.resources.litellm
+                else None
+            ),
+            cores_per_trial=config.resources.cores_per_trial
+            if config.resources
+            else None,
+            memory_per_trial=config.resources.memory_per_trial
+            if config.resources
+            else None,
         )
 
         # Create trial result using Pydantic model
@@ -1032,6 +1063,8 @@ def run_crs_trial(
             harness=harness_name,
             trial_num=trial_num,
             crs_type=crs_type_enum,
+            mode=mode,
+            sanitizer=sanitizer,
             success=result.success,
             execution_time=execution_time,
             povs_found=result.povs_found,
@@ -1102,6 +1135,8 @@ def run_crs_trial(
             harness=harness_name,
             trial_num=trial_num,
             crs_type=crs_type_enum,
+            mode=mode,
+            sanitizer=sanitizer,
             success=False,
             execution_time=execution_time,
             error=f"Benchmark not found: {e!s}",
@@ -1145,6 +1180,8 @@ def run_crs_trial(
             harness=harness_name,
             trial_num=trial_num,
             crs_type=crs_type_enum,
+            mode=mode,
+            sanitizer=sanitizer,
             success=False,
             execution_time=execution_time,
             error=f"Invalid benchmark format: {e!s}",
@@ -1190,6 +1227,8 @@ def run_crs_trial(
             harness=harness_name,
             trial_num=trial_num,
             crs_type=crs_type_enum,
+            mode=mode,
+            sanitizer=sanitizer,
             success=False,
             execution_time=execution_time,
             error=str(e),
