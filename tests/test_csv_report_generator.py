@@ -66,7 +66,7 @@ def sample_trial_metrics():
 def sample_experiment_metrics():
     """Sample experiment metrics for testing."""
     return {
-        "trials": [
+        "trial_metrics": [
             {
                 "trial_dir": "experiment/json-c__ensemble-c/fuzz_json/full/address/trial-1",
                 "trial_num": "trial-1",

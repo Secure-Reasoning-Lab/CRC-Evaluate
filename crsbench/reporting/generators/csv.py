@@ -98,7 +98,8 @@ class CSVReportGenerator:
         # Generate trial summary CSV
         trial_csv = self.output_dir / "trial_summary.csv"
         trial_rows = [
-            self._format_trial_row(trial) for trial in experiment_metrics["trials"]
+            self._format_trial_row(trial)
+            for trial in experiment_metrics["trial_metrics"]
         ]
         if trial_rows:
             self._write_csv_rows(trial_csv, trial_rows, list(trial_rows[0].keys()))
@@ -134,7 +135,7 @@ class CSVReportGenerator:
         # Generate time series CSV (all trials)
         time_series_csv = self.output_dir / "time_series.csv"
         time_series_rows = []
-        for trial in experiment_metrics["trials"]:
+        for trial in experiment_metrics["trial_metrics"]:
             # Use time_series (computed cumulative data) not raw snapshots
             for ts_point in trial.get("time_series", []):
                 time_series_rows.append(self._format_time_series_row(trial, ts_point))
