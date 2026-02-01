@@ -198,6 +198,9 @@ def run_worker(args: argparse.Namespace) -> int:
             "results_filestore",
             "minimum_disk_size",
             "disk_check_interval",
+            "skip_cpus",
+            "shared_cpus",
+            "cores",
         ]
         for field in override_fields:
             value = getattr(worker_config, field, None)

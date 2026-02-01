@@ -766,6 +766,21 @@ class WorkerConfig(BaseModel):
         ge=1,
         description="Interval (seconds) between disk space checks when paused",
     )
+    skip_cpus: Optional[str] = Field(
+        default=None,
+        description="CPUs to exclude from allocation (cpuset format, e.g., '0-3,8-11'). "
+        "These cores are skipped when building the CPU pool.",
+    )
+    shared_cpus: Optional[str] = Field(
+        default=None,
+        description="CPUs shared across all trials without exclusive allocation (cpuset format, e.g., '0-1'). "
+        "These cores are available to every container but not managed by the CPU pool.",
+    )
+    cores: Optional[str] = Field(
+        default=None,
+        description="Restrict CPU pool to these cores only (cpuset format, e.g., '16-47'). "
+        "If not set, all system cores are used. Accepts cpuset format.",
+    )
 
 
 class ExperimentConfig(BaseModel):
