@@ -78,17 +78,26 @@ export LOG_LEVEL=WARNING  # Only warnings and errors
 
 ```
 CRSBench/
-├── docs/
-│   └── benchmark-spec.md         # RFC specification for CRS benchmarks
-├── benchmarks/                   # Standard benchmark projects in RFC format
+├── docs/                        # User-facing documentation
+├── design-docs/                 # Internal architecture docs
+├── benchmarks/                  # Benchmark projects in RFC format
 ├── crsbench/                    # Main Python package
-│   ├── utils/                   # Shared utilities
-│   ├── validation/              # Benchmark format validation
-│   ├── migration/               # Format migration tools (Team-Atlanta to RFC)
-│   └── hint_generation/         # Progressive hint generation
-├── oss-crs-registry/            # Open-source CRS registry (development/testing)
-├── crses/                       # CRS configurations for evaluation (production)
-└── pyproject.toml               # Python project configuration
+│   ├── run_experiment.py        # CLI entry point
+│   ├── builder/                 # OSS-Fuzz variant building
+│   ├── evaluation/              # CRS execution & verification
+│   │   └── verification/        # POV & patch verification engines
+│   ├── benchmark_ci/            # Benchmark CI validation
+│   ├── distributed/             # Distributed execution (Redis/RQ)
+│   ├── benchmark/               # Benchmark packaging, canary, seed
+│   ├── validation/              # Format validation & schemas
+│   ├── migration/               # Format migration tools
+│   ├── hint_generation/         # Progressive hint generation
+│   ├── reporting/               # Report generation & dashboard
+│   ├── statistics/              # Benchmark statistics
+│   └── utils/                   # Shared utilities
+├── crses/                       # CRS configurations
+├── oss-fuzz/                    # OSS-Fuzz (submodule)
+└── pyproject.toml               # Project configuration
 ```
 
 ## CRS Configuration Structure
@@ -261,82 +270,73 @@ Runtime evaluation and verification:
 - **CRS Execution**: Run CRS implementations against benchmarks
 - Parallel verification with configurable workers
 
+### **Distributed Module** (`crsbench.distributed`)
+Multi-machine experiment execution via Redis/RQ:
+- Three-process model: orchestrator enqueues, workers execute trials, evaluator verifies
+- Automatic job distribution with worker-level config overrides
+- Fault-tolerant with Redis-backed job queue
+
+### **Benchmark CI Module** (`crsbench.benchmark_ci`)
+Automated benchmark validation pipeline:
+- Format, build, POV, and patch verification stages
+- Flat DAG execution with per-variant parallelism
+- Distributed builds via Redis for large benchmark sets
+
 ## CLI Interface
 
-CRSBench provides a unified CLI for all operations:
+CRSBench provides a unified CLI (`crsbench`) for running experiments, verifying results, and generating reports.
+
+### Running Experiments
 
 ```bash
-# Run CRS experiments
+# Run CRS experiments (local or distributed)
 crsbench run --experiment-config config.yaml --benchmarks bench1 --crses crs1
 
+# Process trial jobs from Redis queue (distributed worker)
+crsbench worker --experiment-config config.yaml -j 4
+
+# Verify POVs from completed trials (distributed evaluator)
+crsbench evaluator --experiment-config config.yaml --experiment-name my-exp
+```
+
+### Verification (Standalone)
+
+```bash
 # Verify POVs against benchmark variants
-crsbench verify benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
+crsbench verify benchmarks/project --pov-dir ./povs/
+
+# Verify CRS-generated patches
+crsbench patch-verify benchmarks/project --patch-dir ./patches --pov-dir ./povs
 
 # Collect code coverage
-crsbench coverage benchmarks/sanity-mock-c-delta-01 --corpus-dir ./corpus/
+crsbench coverage benchmarks/project --corpus-dir ./corpus/
+
+# Re-verify existing trial outputs
+crsbench re-eval --experiment-config config.yaml
 ```
 
-### Verify Command
-Verify POVs against benchmark variants to determine which CPVs are triggered:
+### Results & Reporting
 
 ```bash
-# Verify all POVs in a benchmark
-crsbench verify benchmarks/example-project
+# Generate reports (JSON/HTML)
+crsbench report --experiment my-exp
 
-# Verify with specific harness
-crsbench verify benchmarks/example-project --harness fuzz_parser
+# Launch web dashboard
+crsbench dashboard --base-dir ./experiments
 
-# Parallel verification with custom worker counts
-crsbench verify benchmarks/example-project --build-workers 8 --verify-workers 16
+# Export benchmark statistics
+crsbench stats --output stats.csv
 ```
 
-### Patch Verify Command
-Verify CRS-generated patches against benchmark POVs:
+## Distributed Execution
 
-```bash
-# Auto-discovery mode (discovers patches from .aixcc/<harness>/<cpv>/patches/)
-crsbench patch-verify benchmarks/example-project
+CRSBench supports multi-machine experiment execution using a three-process model backed by Redis/RQ:
 
-# Verify patches in a directory
-crsbench patch-verify benchmarks/example-project \
-    --harness fuzz_parser \
-    --patch-dir ./patches \
-    --pov-dir ./povs
+1. **Orchestrator** (`crsbench run`) — enqueues trial jobs onto the Redis queue
+2. **Worker** (`crsbench worker`) — pulls and executes trial jobs
+3. **Evaluator** (`crsbench evaluator`) — builds variants and verifies POVs from completed trials
 
-# Parallel builds with separate worker counts
-crsbench patch-verify benchmarks/example-project \
-    --build-workers 4 \
-    --verify-workers 8
-
-# Output results as JSON
-crsbench patch-verify benchmarks/example-project \
-    --output results.json --format json
-```
-
-**Patch directory structure (CRS output):**
-```
-patches/
-├── pov_0/
-│   └── patch.diff
-├── pov_1/
-│   └── patch.diff
-└── ...
-```
-
-**Ground truth patches (benchmark):**
-```
-.aixcc/<harness>/<cpv>/patches/
-├── patch_0.diff
-├── patch_1.diff
-└── ...
-```
-
-**Verification pipeline:**
-1. Clone source and apply patch
-2. Build with inc-build image (or fallback to standard build)
-3. Test against all CPV variants → must NOT crash
-4. Run unit tests (if available)
-5. Result: PASS (all CPVs fixed) or FAIL
+See [Distributed Execution Guide](docs/distributed-execution.md) for setup and usage details.
 
 ## AI Infrastructure
 
@@ -395,6 +395,55 @@ pre-commit install
 pre-commit run --all-files
 ```
 
+## For Developers
+
+### Benchmark Management (`crsbench benchmark`)
+
+```bash
+# Validate benchmark structure
+crsbench benchmark validate benchmarks/project
+
+# Create pkgs/ tarball
+crsbench benchmark bundle benchmarks/project
+
+# Bundle all benchmarks in parallel
+crsbench benchmark bundle-all benchmarks/ --workers 8
+
+# Generate ref.diff for delta-mode
+crsbench benchmark prepare-delta benchmarks/project
+
+# Add contamination detection canary
+crsbench benchmark inject-canary benchmarks/ --filter "atlanta-*"
+
+# List registered canary UUIDs
+crsbench benchmark list-canaries
+
+# Import corpus from experiment output as seeds
+crsbench benchmark seed-import --experiment-dir ./experiments/my-exp
+```
+
+### Benchmark CI (`crsbench ci`)
+
+```bash
+# Validate format (no Docker)
+crsbench ci format --all
+
+# Build variant images
+crsbench ci build --all
+
+# Verify ground-truth POVs
+crsbench ci pov --all
+
+# Verify ground-truth patches
+crsbench ci patch --all
+
+# Run all checks
+crsbench ci all --all
+
+# Distributed builds
+crsbench ci build --all --distributed --redis-host localhost
+```
+
 ## Contributing
 
 1. **Environment Setup**: Use `uv` as the package manager
@@ -413,6 +462,8 @@ pre-commit run --all-files
 - [Validation Module](crsbench/validation/README.md)
 - [Migration Module](crsbench/migration/README.md)
 - [Hint Generation Module](crsbench/hint_generation/README.md)
+- [Distributed Execution Guide](docs/distributed-execution.md)
+- [Distributed Evaluation Design](design-docs/distributed/distributed-evaluation.md)
 
 ---
 
