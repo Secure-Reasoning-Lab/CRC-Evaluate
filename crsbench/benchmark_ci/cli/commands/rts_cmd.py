@@ -1,20 +1,17 @@
 """Regression test selection check subcommand.
 
-Same structure as patch_cmd but uses test_mode="RTS" for PatchVariantTestJob.
+Uses _build_dag() from all_cmd to create jobs, then executes via Redis.
+Same structure as patch_cmd but uses test_mode="RTS" for PatchUnitTestJob.
 Skips benchmarks without rts_mode configured.
 """
 
-import argparse
+from __future__ import annotations
+
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from crsbench.benchmark_ci.cli.benchmark_discovery import (
-    discover_cpv_ids,
-    discover_harness_names,
-    discover_patch_paths,
-    discover_pov_paths,
-)
 from crsbench.benchmark_ci.cli.common_args import (
     create_benchmark_selection_parent,
     create_build_options_parent,
@@ -23,11 +20,10 @@ from crsbench.benchmark_ci.cli.common_args import (
 from crsbench.benchmark_ci.cli.discovery import resolve_benchmark_paths
 from crsbench.benchmark_ci.cli.output import print_results_table, save_output_dir
 from crsbench.benchmark_ci.cli.result_aggregator import aggregate_patch_results
-from crsbench.benchmark_ci.jobs.base import Job, JobContext
 from crsbench.benchmark_ci.jobs.flat import (
     BuildPatchVariantJob,
-    BuildVariantsJob,
-    PatchVariantTestJob,
+    BuildSingleVariantJob,
+    PatchUnitTestJob,
 )
 from crsbench.benchmark_ci.models import (
     BenchmarkValidationResult,
@@ -35,9 +31,10 @@ from crsbench.benchmark_ci.models import (
     CheckResult,
     ValidationSummary,
 )
-from crsbench.benchmark_ci.validator import _load_project_capabilities
-from crsbench.executor import DAGExecutor
 from crsbench.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    import argparse
 
 logger = get_logger(__name__)
 
@@ -57,7 +54,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
 
 def run_rts(args: argparse.Namespace) -> int:
-    """Run regression test selection checks via flat DAG."""
+    """Run regression test selection checks via Redis."""
     paths = resolve_benchmark_paths(
         benchmark_arg=getattr(args, "benchmark", None),
         benchmarks_list=getattr(args, "benchmarks", None),
@@ -66,108 +63,80 @@ def run_rts(args: argparse.Namespace) -> int:
         filter_pattern=getattr(args, "filter", None),
     )
 
-    source_mode = getattr(args, "source", "main_repo")
-    build_workers = getattr(args, "build_workers", 4)
-    verify_workers = getattr(args, "verify_workers", 4)
+    source_mode = getattr(args, "source", "pkgs")
     use_inc_build = not getattr(args, "no_inc_build", False)
     force_rebuild = getattr(args, "force_rebuild", True)
+    redis_host = getattr(args, "redis_host", "localhost")
 
     build_mode = "inc-build" if use_inc_build else "full-build"
     rebuild_mode = "force-rebuild" if force_rebuild else "cached"
     logger.info(
         f"Running rts: {len(paths)} benchmark(s), "
-        f"build-workers={build_workers}, verify-workers={verify_workers}, "
-        f"{build_mode}, {rebuild_mode}"
+        f"{build_mode}, {rebuild_mode}, redis={redis_host}"
     )
 
-    # Build flat DAG across all benchmarks
-    all_jobs: list[Job] = []
-    benchmark_metadata: list[tuple[Path, bool, str | None, list[tuple[str, str]]]] = []
+    # Create full job DAG (reuses all_cmd infrastructure)
+    from crsbench.benchmark_ci.cli.commands.all_cmd import _build_dag
 
-    for path in paths:
-        supports_inc, rts_mode = _load_project_capabilities(path)
-        effective_inc = use_inc_build and supports_inc
-        benchmark_name = path.name
+    all_jobs, benchmark_metadata = _build_dag(
+        list(paths),
+        use_inc_build=use_inc_build,
+        force_rebuild=force_rebuild,
+        source_mode=source_mode,
+    )
 
-        # Skip benchmarks without RTS mode
-        if not rts_mode:
-            benchmark_metadata.append((path, supports_inc, rts_mode, []))
-            continue
+    # Filter to build + RTS-relevant jobs
+    # RTS needs: BuildSingleVariantJob (base builds), BuildPatchVariantJob (patch builds),
+    # and PatchUnitTestJob with test_mode="RTS"
+    build_jobs = [j for j in all_jobs if isinstance(j, BuildSingleVariantJob)]
+    rts_jobs = [
+        j
+        for j in all_jobs
+        if isinstance(j, BuildPatchVariantJob)
+        or (isinstance(j, PatchUnitTestJob) and j.test_mode == "RTS")
+    ]
 
-        build_job = BuildVariantsJob(
-            benchmark_path=path,
-            benchmark_name=benchmark_name,
-            use_inc_build=effective_inc,
-            force_rebuild=force_rebuild,
-            source_mode=source_mode,
-        )
-        all_jobs.append(build_job)
-
-        # Discover patches and create per-patch build + RTS test jobs
-        patch_keys: list[tuple[str, str]] = []
-        harnesses = discover_harness_names(path)
-        for harness in harnesses:
-            for cpv_id in discover_cpv_ids(path, harness):
-                patches = discover_patch_paths(path, harness, cpv_id)
-                pov_paths = discover_pov_paths(path, harness, cpv_id)
-
-                for patch_id, patch_path in patches:
-                    patch_keys.append((cpv_id, patch_id))
-
-                    build_patch_job = BuildPatchVariantJob(
-                        benchmark_path=path,
-                        benchmark_name=benchmark_name,
-                        cpv_id=cpv_id,
-                        patch_id=patch_id,
-                        patch_path=patch_path,
-                        harness=harness,  # Pass harness for per-harness sanitizer
-                        use_inc_build=effective_inc,
-                        force_rebuild=force_rebuild,
-                        build_job_id=build_job.job_id,
-                        source_mode=source_mode,
-                    )
-                    all_jobs.append(build_patch_job)
-
-                    test_job = PatchVariantTestJob(
-                        benchmark_path=path,
-                        benchmark_name=benchmark_name,
-                        cpv_id=cpv_id,
-                        patch_id=patch_id,
-                        harness=harness,
-                        pov_paths=pov_paths,
-                        test_mode="RTS",
-                        build_patch_job_id=build_patch_job.job_id,
-                    )
-                    all_jobs.append(test_job)
-
-        benchmark_metadata.append((path, supports_inc, rts_mode, patch_keys))
-
-    # Log DAG summary
-    build_count = sum(1 for j in all_jobs if isinstance(j, BuildVariantsJob))
-    patch_build_count = sum(1 for j in all_jobs if isinstance(j, BuildPatchVariantJob))
-    patch_test_count = sum(1 for j in all_jobs if isinstance(j, PatchVariantTestJob))
     logger.info(
-        f"DAG: {len(all_jobs)} jobs — "
-        f"{build_count} build, {patch_build_count} patch-build, "
-        f"{patch_test_count} patch-test (RTS)"
+        f"Jobs: {len(build_jobs)} build, {len(rts_jobs)} RTS "
+        f"(filtered from {len(all_jobs)} total)"
     )
 
-    # Execute with typed concurrency
+    # Phase 1: Builds via Redis
     start_dt = datetime.now()
-    if all_jobs:
-        executor = DAGExecutor(
-            type_limits={"build": build_workers, "verify": verify_workers}
+    dag_results: dict = {}
+
+    if build_jobs:
+        from crsbench.benchmark_ci.cli.commands.build_cmd import (
+            _run_distributed_build,
         )
-        output_dir = getattr(args, "output_dir", None)
-        context = JobContext(output_dir=Path(output_dir) if output_dir else None)
-        dag_results = executor.execute(all_jobs, context)
-    else:
-        dag_results = {}
+
+        dag_results = _run_distributed_build(build_jobs, redis_host)
+
+    # Phase 2: Patch build + RTS test via Redis
+    from crsbench.distributed.ci_jobs import (
+        ci_results_to_executor_results,
+        enqueue_and_poll_ci_jobs,
+    )
+
+    if rts_jobs:
+        verify_queue_name = f"crsbench_ci_{redis_host}_verify"
+        raw_rts_results = enqueue_and_poll_ci_jobs(
+            rts_jobs, redis_host, queue_name=verify_queue_name
+        )
+        rts_results = ci_results_to_executor_results(raw_rts_results)
+        dag_results = {**dag_results, **rts_results}
 
     # Aggregate into ValidationSummary
     summary = ValidationSummary(started_at=start_dt, check_mode=CheckMode.ALL)
 
-    for path, supports_inc, rts_mode, patch_keys in benchmark_metadata:
+    for (
+        path,
+        supports_inc,
+        rts_mode,
+        _cpv_ids,
+        patch_keys,
+        build_job_ids,
+    ) in benchmark_metadata:
         if not rts_mode:
             patch_rts_result = CheckResult.skip("No RTS mode configured")
         else:
@@ -175,11 +144,19 @@ def run_rts(args: argparse.Namespace) -> int:
                 dag_results, path.name, patch_keys, test_mode="RTS"
             )
 
-        build_result = dag_results.get(f"build-variants:{path.name}")
-        shared_build = build_result.elapsed_seconds if build_result else 0.0
+        # Collect build time from BuildSingleVariantJob results
+        shared_build = 0.0
         storage_bytes = 0
-        if build_result and build_result.job_result:
-            storage_bytes = build_result.job_result.details.get("storage_bytes", 0)
+        for job_id in build_job_ids:
+            br = dag_results.get(job_id)
+            if br:
+                shared_build += br.elapsed_seconds
+                if br.job_result:
+                    storage_bytes = max(
+                        storage_bytes,
+                        br.job_result.details.get("storage_bytes", 0),
+                    )
+
         summary.add_result(
             BenchmarkValidationResult(
                 benchmark=path.name,

@@ -1,16 +1,13 @@
-"""DAG executor for parallel job scheduling.
+"""Executor types for job scheduling.
 
-Provides a single executor that schedules jobs with explicit dependency
-edges and bounded parallelism via --max-parallel.
+Provides shared result types used by Redis-based distributed execution.
 """
 
-from crsbench.executor.dag import DAGExecutor
 from crsbench.executor.errors import CycleError, DependencyError
 from crsbench.executor.types import ExecutorResult, JobStatus
 
 __all__ = [
     "CycleError",
-    "DAGExecutor",
     "DependencyError",
     "ExecutorResult",
     "JobStatus",

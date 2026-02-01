@@ -86,10 +86,10 @@ def run_evaluator_main(
         else 180,
     )
 
-    # Set empty build cache — builds come via Redis queue
-    from crsbench.distributed.evaluator_jobs import set_build_cache
+    # Set engine for lazy build loading — builds come via Redis queue
+    from crsbench.distributed.evaluator_jobs import set_engine
 
-    set_build_cache(engine, {})
+    set_engine(engine)
 
     # Start dual-queue supervisor
     logger.info("Starting dual-queue supervisor (build + verify)...")

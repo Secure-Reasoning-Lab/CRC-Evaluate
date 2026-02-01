@@ -139,13 +139,10 @@ def run_preflight_checks() -> Path:
     if not is_delegated:
         raise CgroupError(
             f"Cgroup delegation not configured. Missing controllers: "
-            f"{', '.join(missing)}\n\n"
-            + format_setup_instructions(base_path)
+            f"{', '.join(missing)}\n\n" + format_setup_instructions(base_path)
         )
 
-    logger.info(
-        f"Cgroup v2 preflight passed: driver={driver}, base={base_path}"
-    )
+    logger.info(f"Cgroup v2 preflight passed: driver={driver}, base={base_path}")
     return base_path
 
 
@@ -163,14 +160,11 @@ def get_user_cgroup_base() -> Path:
     """
     uid = os.getuid()
     return Path(
-        f"{CGROUP_FS_ROOT}/user.slice/user-{uid}.slice/"
-        f"user@{uid}.service/crsbench"
+        f"{CGROUP_FS_ROOT}/user.slice/user-{uid}.slice/user@{uid}.service/crsbench"
     )
 
 
-def ensure_controllers_enabled(
-    cgroup_path: Path, controllers: list[str]
-) -> None:
+def ensure_controllers_enabled(cgroup_path: Path, controllers: list[str]) -> None:
     """Enable controllers in cgroup.subtree_control if not already enabled.
 
     Args:
@@ -330,9 +324,7 @@ def cleanup_stale_cgroups(base_path: Path) -> int:
                 removed += 1
 
     if removed > 0:
-        logger.info(
-            f"Cleaned up {removed} stale cgroup(s) from {base_path}"
-        )
+        logger.info(f"Cleaned up {removed} stale cgroup(s) from {base_path}")
     return removed
 
 
@@ -355,7 +347,7 @@ def cgroup_path_for_docker(cgroup_path: Path) -> str:
     """
     path_str = str(cgroup_path)
     if path_str.startswith(CGROUP_FS_ROOT):
-        return path_str[len(CGROUP_FS_ROOT):]
+        return path_str[len(CGROUP_FS_ROOT) :]
     return path_str
 
 
@@ -400,10 +392,10 @@ def format_docker_cgroup_driver_instructions() -> str:
     return (
         "Docker must use the cgroupfs cgroup driver for cgroup-parent mode.\n\n"
         "To configure Docker to use cgroupfs driver:\n\n"
-        '1. Edit or create /etc/docker/daemon.json:\n'
-        '   {\n'
+        "1. Edit or create /etc/docker/daemon.json:\n"
+        "   {\n"
         '     "exec-opts": ["native.cgroupdriver=cgroupfs"]\n'
-        '   }\n\n'
+        "   }\n\n"
         "2. Restart Docker:\n"
         "   sudo systemctl restart docker\n\n"
         "3. Verify the change:\n"

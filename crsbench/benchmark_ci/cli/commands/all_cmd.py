@@ -43,7 +43,6 @@ from crsbench.benchmark_ci.cli.result_aggregator import (
 from crsbench.benchmark_ci.jobs.flat import (
     BuildPatchVariantJob,
     BuildSingleVariantJob,
-    BuildVariantsJob,
     FlatCollectCoverageJob,
     PatchPovTestJob,
     PatchUnitTestJob,
@@ -108,12 +107,6 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         default=False,
         help="Distribute build phase to Redis/RQ workers (verify/patch runs locally)",
-    )
-    parser.add_argument(
-        "--redis-host",
-        type=str,
-        default="localhost",
-        help="Redis server hostname for distributed builds (default: localhost)",
     )
     parser.set_defaults(ci_func=run_all)
 
@@ -452,8 +445,6 @@ def _log_dag_summary(all_jobs: list[Job]) -> None:
     build_single_count = sum(
         1 for j in all_jobs if isinstance(j, BuildSingleVariantJob)
     )
-    build_legacy_count = sum(1 for j in all_jobs if isinstance(j, BuildVariantsJob))
-
     # Count new split verify jobs (V:POV and V:VAR)
     pov_job_count = sum(1 for j in all_jobs if isinstance(j, VerifyCpvPovJob))
     var_job_count = sum(1 for j in all_jobs if isinstance(j, VerifyCpvVarJob))
@@ -470,12 +461,7 @@ def _log_dag_summary(all_jobs: list[Job]) -> None:
     patch_test_count = sum(1 for j in all_jobs if isinstance(j, PatchVariantTestJob))
     coverage_count = sum(1 for j in all_jobs if isinstance(j, FlatCollectCoverageJob))
 
-    # Report build-single if used, otherwise legacy build-variants
-    build_info = (
-        f"{build_single_count} build-single"
-        if build_single_count > 0
-        else f"{build_legacy_count} build"
-    )
+    build_info = f"{build_single_count} build-single"
 
     # Report new split verify structure
     verify_info = (
@@ -566,14 +552,6 @@ def _aggregate_benchmark(
                     storage_bytes,
                     build_result.job_result.details.get("storage_bytes", 0),
                 )
-
-    # Fallback to legacy BuildVariantsJob if no build_job_ids
-    if not build_job_ids:
-        build_job_id = f"build-variants:{benchmark_name}"
-        build_result = dag_results.get(build_job_id)
-        shared_build_time = build_result.elapsed_seconds if build_result else 0.0
-        if build_result and build_result.job_result:
-            storage_bytes = build_result.job_result.details.get("storage_bytes", 0)
 
     return BenchmarkValidationResult(
         benchmark=benchmark_name,

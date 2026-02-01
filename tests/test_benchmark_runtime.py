@@ -91,7 +91,9 @@ class TestLoadBenchmarkSource:
         ) as mock_ensure:
             mock_ensure.return_value = str(dest_dir)
 
-            source = load_benchmark_source(tmp_path, dest_dir=dest_dir)
+            source = load_benchmark_source(
+                tmp_path, dest_dir=dest_dir, source_mode="main_repo"
+            )
 
             mock_ensure.assert_called_once()
             assert source.is_bundled is False
@@ -107,7 +109,9 @@ class TestLoadBenchmarkSource:
             mock_ensure.return_value = None  # Simulate failure
 
             with pytest.raises(RuntimeError, match="Failed to obtain source code"):
-                load_benchmark_source(tmp_path, dest_dir=dest_dir)
+                load_benchmark_source(
+                    tmp_path, dest_dir=dest_dir, source_mode="main_repo"
+                )
 
     def test_passes_mode_and_verbose(self, tmp_path: Path) -> None:
         """Test that mode and verbose are passed to repo_manager."""
@@ -121,6 +125,7 @@ class TestLoadBenchmarkSource:
             load_benchmark_source(
                 tmp_path,
                 dest_dir=dest_dir,
+                source_mode="main_repo",
                 mode="delta",
                 verbose=True,
             )

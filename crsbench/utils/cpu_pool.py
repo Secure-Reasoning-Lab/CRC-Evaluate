@@ -168,9 +168,7 @@ class CPUPool:
 
         # 3. Validate the result
         if not base_set:
-            raise ValueError(
-                "No CPUs available after applying skip_cpus exclusion"
-            )
+            raise ValueError("No CPUs available after applying skip_cpus exclusion")
 
         # 4. Assign to instance variables
         self.total_cpus = len(base_set)

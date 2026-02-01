@@ -39,7 +39,7 @@ class TestAddReevalSubparser:
 
         args = parser.parse_args(["re-eval", "-c", "/tmp/config.yaml"])
         assert args.oss_fuzz is None
-        assert args.source == "main_repo"
+        assert args.source == "pkgs"
         assert args.build_workers is None
         assert args.verify_workers is None
         assert args.force_rebuild is False

@@ -28,7 +28,7 @@ def load_benchmark_source(
     benchmark_path: Path,
     dest_dir: Path,
     *,
-    source_mode: str = "main_repo",
+    source_mode: str = "pkgs",
     mode: Optional[str] = None,
     verbose: bool = False,
 ) -> BenchmarkSource:
@@ -101,9 +101,16 @@ def _load_from_pkgs(
             "Ensure tarball name matches Dockerfile WORKDIR."
         )
 
-    source_name = tarball.stem
-    if source_name.endswith(".tar"):
-        source_name = source_name[:-4]
+    # Extract source name from tarball path.
+    # Handles both whole tarballs (tika.tar.gz → tika)
+    # and split parts (tika.tar.gz.partaa → tika).
+    tarball_name = tarball.name
+    if ".tar.gz.part" in tarball_name:
+        source_name = tarball_name.split(".tar.gz")[0]
+    else:
+        source_name = tarball.stem
+        if source_name.endswith(".tar"):
+            source_name = source_name[:-4]
 
     logger.info(f"Extracting bundled source from {tarball.name}")
     source_path = prepare_source_from_bundle(

@@ -167,9 +167,7 @@ def test_delegation_base_not_exists():
 @patch("crsbench.utils.cgroup.get_user_cgroup_base")
 @patch("crsbench.utils.cgroup.check_docker_cgroup_driver")
 @patch("crsbench.utils.cgroup.check_cgroup_v2_available")
-def test_preflight_all_pass(
-    mock_v2, mock_docker, mock_base, mock_deleg
-):
+def test_preflight_all_pass(mock_v2, mock_docker, mock_base, mock_deleg):
     """Returns base path when all preflight checks pass."""
     mock_v2.return_value = True
     mock_docker.return_value = (True, "cgroupfs")
@@ -205,9 +203,7 @@ def test_preflight_wrong_docker_driver(mock_v2, mock_docker):
 @patch("crsbench.utils.cgroup.get_user_cgroup_base")
 @patch("crsbench.utils.cgroup.check_docker_cgroup_driver")
 @patch("crsbench.utils.cgroup.check_cgroup_v2_available")
-def test_preflight_no_delegation(
-    mock_v2, mock_docker, mock_base, mock_deleg
-):
+def test_preflight_no_delegation(mock_v2, mock_docker, mock_base, mock_deleg):
     """Raises CgroupError when cgroup delegation is not configured."""
     mock_v2.return_value = True
     mock_docker.return_value = (True, "cgroupfs")
@@ -228,8 +224,7 @@ def test_user_cgroup_base():
     with patch("crsbench.utils.cgroup.os.getuid", return_value=1000):
         result = get_user_cgroup_base()
     expected = Path(
-        "/sys/fs/cgroup/user.slice/user-1000.slice/"
-        "user@1000.service/crsbench"
+        "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/crsbench"
     )
     assert result == expected
 

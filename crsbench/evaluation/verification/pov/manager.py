@@ -260,9 +260,7 @@ class POVVerificationManager:
                     cpv_matched = []
 
                 # Add to store directly (no POV path — it was enqueued by content)
-                self.store.add_pov_by_id(
-                    result.verdict.pov_id, status, cpv_matched
-                )
+                self.store.add_pov_by_id(result.verdict.pov_id, status, cpv_matched)
 
                 if status == PovVerificationStatus.CPV:
                     for cpv_id in cpv_matched:
@@ -282,8 +280,7 @@ class POVVerificationManager:
 
         if completed:
             logger.info(
-                f"Processed {len(completed)} async verdicts, "
-                f"{len(remaining)} pending"
+                f"Processed {len(completed)} async verdicts, {len(remaining)} pending"
             )
 
     def _discover_new_povs(self) -> list[tuple[Path, str]]:

@@ -173,6 +173,8 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
             crs_configs_dir=self.crs_configs_dir,
             litellm_mode=None,  # Disable LiteLLM for testing
         )
+        # Explicitly use main_repo mode since test mocks git clone, not bundled pkgs
+        executor.config["source_mode"] = "main_repo"
 
         trial_build_dir = Path(self.temp_dir) / "trial-0" / "crs-build"
         trial_build_dir.mkdir(parents=True)
@@ -473,8 +475,8 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         # Mock graceful timeout for CRS run
         mock_graceful_timeout.return_value = ("Run successful", "", 0, False)
 
-        # Configure and run
-        executor.configure_crs({"hints_enabled": False})
+        # Configure and run (use main_repo since test mocks git clone, not bundled pkgs)
+        executor.configure_crs({"hints_enabled": False, "source_mode": "main_repo"})
         result = executor.run_crs(benchmark_path, harness, trial_dir)
 
         # Verify result
@@ -535,8 +537,10 @@ class TestCRSBugFindingExecutor(unittest.TestCase):
         # Returns (stdout, stderr, returncode, timed_out)
         mock_graceful_timeout.return_value = ("partial output", "", -9, True)
 
-        # Configure and run
-        executor.configure_crs({"hints_enabled": False, "run_timeout": 10})
+        # Configure and run (use main_repo since test mocks git clone, not bundled pkgs)
+        executor.configure_crs(
+            {"hints_enabled": False, "run_timeout": 10, "source_mode": "main_repo"}
+        )
         result = executor.run_crs(benchmark_path, harness, trial_dir)
 
         # Verify result

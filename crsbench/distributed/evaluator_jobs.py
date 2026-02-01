@@ -1,7 +1,10 @@
 """Evaluator job execution for distributed POV verification.
 
-This module contains the job function invoked by RQ when a verification job
-is dequeued, plus the data structures for job payloads and results.
+This module contains the RQ job functions invoked by evaluator workers,
+plus data structures for job payloads and results.
+
+verify_single_pov() is the per-POV verification function — one POV per job
+for fine-grained parallelism across evaluator workers.
 """
 
 import base64
@@ -51,48 +54,6 @@ class EmbeddedPov:
 
 
 @dataclass
-class VerificationJobPayload:
-    """Payload for a verification job enqueued to Redis.
-
-    Attributes:
-        experiment_name: Experiment identifier for queue routing
-        trial_id: Trial identifier to correlate results back
-        benchmark: Benchmark name (evaluator resolves path locally)
-        harness: Fuzz harness name
-        povs: List of POVs with embedded content
-        enqueued_at: Timestamp when job was enqueued
-    """
-
-    experiment_name: str
-    trial_id: str
-    benchmark: str
-    harness: str
-    povs: list[EmbeddedPov]
-    enqueued_at: float
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "experiment_name": self.experiment_name,
-            "trial_id": self.trial_id,
-            "benchmark": self.benchmark,
-            "harness": self.harness,
-            "povs": [p.to_dict() for p in self.povs],
-            "enqueued_at": self.enqueued_at,
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "VerificationJobPayload":
-        return cls(
-            experiment_name=d["experiment_name"],
-            trial_id=d["trial_id"],
-            benchmark=d["benchmark"],
-            harness=d["harness"],
-            povs=[EmbeddedPov.from_dict(p) for p in d["povs"]],
-            enqueued_at=d["enqueued_at"],
-        )
-
-
-@dataclass
 class PovVerdict:
     """Verdict for a single POV.
 
@@ -130,66 +91,25 @@ class PovVerdict:
         )
 
 
-@dataclass
-class VerificationResult:
-    """Result of a verification job.
-
-    Attributes:
-        trial_id: Trial identifier
-        benchmark: Benchmark name
-        harness: Harness name
-        verdicts: Per-POV verdicts
-        completed_at: Timestamp when verification completed
-    """
-
-    trial_id: str
-    benchmark: str
-    harness: str
-    verdicts: list[PovVerdict]
-    completed_at: float
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "trial_id": self.trial_id,
-            "benchmark": self.benchmark,
-            "harness": self.harness,
-            "verdicts": [v.to_dict() for v in self.verdicts],
-            "completed_at": self.completed_at,
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "VerificationResult":
-        return cls(
-            trial_id=d["trial_id"],
-            benchmark=d["benchmark"],
-            harness=d["harness"],
-            verdicts=[PovVerdict.from_dict(v) for v in d["verdicts"]],
-            completed_at=d["completed_at"],
-        )
-
-
 # =============================================================================
-# Job Function (invoked by RQ)
+# Module-level engine (set by evaluator at startup)
 # =============================================================================
 
-# Module-level cache populated by evaluator.py at startup
 _built_results: dict[str, dict] = {}
 _verification_engine: Optional[Any] = None
 
 
-def set_build_cache(
-    engine: Any,
-    built_results: dict[str, dict],
-) -> None:
-    """Set the module-level build cache (called by evaluator at startup).
+def set_engine(engine: Any) -> None:
+    """Set the verification engine (called by evaluator at startup).
+
+    Build results are populated lazily via _try_lazy_load_builds() when
+    verify jobs arrive for a benchmark.
 
     Args:
         engine: VerificationEngine instance with oss_fuzz_path set
-        built_results: Pre-built results keyed by benchmark name
     """
-    global _built_results, _verification_engine  # noqa: PLW0603
+    global _verification_engine  # noqa: PLW0603
     _verification_engine = engine
-    _built_results = built_results
 
 
 def _try_lazy_load_builds(benchmark_name: str) -> None:
@@ -230,151 +150,8 @@ def _try_lazy_load_builds(benchmark_name: str) -> None:
         logger.warning(f"Lazy load failed for {benchmark_name}: {e}")
 
 
-def verify_povs(payload_dict: dict[str, Any]) -> dict[str, Any]:
-    """Verify POVs from a job payload.
-
-    This is the RQ job function that evaluator workers execute.
-    It uses pre-built variant images from the module-level cache.
-
-    Args:
-        payload_dict: Serialized VerificationJobPayload dict
-
-    Returns:
-        Serialized VerificationResult dict
-    """
-    from crsbench.evaluation.verification.models import (
-        PovVerificationRequest,
-        PovVerificationStatus,
-    )
-
-    payload = VerificationJobPayload.from_dict(payload_dict)
-    logger.info(
-        f"Verifying {len(payload.povs)} POVs for trial {payload.trial_id} "
-        f"benchmark {payload.benchmark}"
-    )
-
-    # Check that we have builds for this benchmark; try lazy load if missing
-    if payload.benchmark not in _built_results:
-        _try_lazy_load_builds(payload.benchmark)
-
-    if payload.benchmark not in _built_results:
-        error_msg = (
-            f"No built variants for benchmark '{payload.benchmark}'. "
-            "Evaluator was not configured with this benchmark."
-        )
-        logger.error(error_msg)
-        verdicts = [
-            PovVerdict(
-                pov_id=pov.pov_id,
-                triggered_bug=False,
-                error=error_msg,
-            )
-            for pov in payload.povs
-        ]
-        return VerificationResult(
-            trial_id=payload.trial_id,
-            benchmark=payload.benchmark,
-            harness=payload.harness,
-            verdicts=verdicts,
-            completed_at=time.time(),
-        ).to_dict()
-
-    # Get pre-built results and adapter for this benchmark
-    build_results = _built_results[payload.benchmark]
-
-    # Load adapter for this benchmark
-    engine = _verification_engine
-    if engine is None:
-        error_msg = "VerificationEngine not initialized"
-        logger.error(error_msg)
-        return VerificationResult(
-            trial_id=payload.trial_id,
-            benchmark=payload.benchmark,
-            harness=payload.harness,
-            verdicts=[
-                PovVerdict(pov_id=p.pov_id, triggered_bug=False, error=error_msg)
-                for p in payload.povs
-            ],
-            completed_at=time.time(),
-        ).to_dict()
-
-    # Resolve benchmark path
-    benchmarks_root = Path(
-        os.environ.get("CRSBENCH_EVALUATOR_BENCHMARKS_ROOT", "benchmarks")
-    )
-    benchmark_path = benchmarks_root / payload.benchmark
-    adapter = engine.load_adapter(benchmark_path)
-
-    if adapter is None:
-        error_msg = f"Failed to load adapter for benchmark '{payload.benchmark}'"
-        logger.error(error_msg)
-        return VerificationResult(
-            trial_id=payload.trial_id,
-            benchmark=payload.benchmark,
-            harness=payload.harness,
-            verdicts=[
-                PovVerdict(pov_id=p.pov_id, triggered_bug=False, error=error_msg)
-                for p in payload.povs
-            ],
-            completed_at=time.time(),
-        ).to_dict()
-
-    # Verify each POV
-    verdicts = []
-    for pov in payload.povs:
-        try:
-            pov_data = pov.to_bytes()
-            request = PovVerificationRequest(
-                pov_data=pov_data,
-                harness=payload.harness,
-                benchmark=payload.benchmark,
-                pov_id=pov.pov_id,
-            )
-
-            result = engine.verify_pov(
-                request=request,
-                adapter=adapter,
-                build_results=build_results,
-            )
-
-            # Convert PovVerificationResult to PovVerdict
-            verdict = PovVerdict(
-                pov_id=pov.pov_id,
-                triggered_bug=result.status == PovVerificationStatus.CPV,
-                cpv_matches=result.cpv_matched,
-                variant_results={},
-                error=result.details
-                if result.status == PovVerificationStatus.ERROR
-                else None,
-            )
-            verdicts.append(verdict)
-
-            logger.info(
-                f"  POV {pov.pov_id}: {result.status.value} "
-                f"(CPVs: {result.cpv_matched})"
-            )
-
-        except Exception as e:
-            logger.error(f"  POV {pov.pov_id}: verification failed: {e}")
-            verdicts.append(
-                PovVerdict(
-                    pov_id=pov.pov_id,
-                    triggered_bug=False,
-                    error=str(e),
-                )
-            )
-
-    return VerificationResult(
-        trial_id=payload.trial_id,
-        benchmark=payload.benchmark,
-        harness=payload.harness,
-        verdicts=verdicts,
-        completed_at=time.time(),
-    ).to_dict()
-
-
 # =============================================================================
-# Per-POV Verification (v2.2 — replaces batch verify_povs)
+# Per-POV Verification (RQ job function)
 # =============================================================================
 
 
@@ -382,8 +159,8 @@ def verify_povs(payload_dict: dict[str, Any]) -> dict[str, Any]:
 class SinglePovPayload:
     """Payload for verifying a single POV via Redis queue.
 
-    Lighter-weight than VerificationJobPayload: one POV per job for
-    finer granularity, better parallelism, and individual retry.
+    Lighter-weight than batch payloads: one POV per job for finer
+    granularity, better parallelism, and individual retry.
 
     Attributes:
         experiment_name: Experiment identifier for queue routing
@@ -464,11 +241,11 @@ class SinglePovResult:
 def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
     """Verify a single POV. RQ job function.
 
-    Per-POV counterpart to verify_povs(). Processes one POV at a time for
-    finer granularity, better parallelism across evaluator workers, and
-    individual retry without re-verifying an entire batch.
+    Processes one POV at a time for finer granularity, better parallelism
+    across evaluator workers, and individual retry without re-verifying
+    an entire batch.
 
-    Uses the same module-level cache as verify_povs() for pre-built variants.
+    Uses module-level engine and lazy-loaded build cache.
 
     Args:
         payload_dict: Serialized SinglePovPayload dict

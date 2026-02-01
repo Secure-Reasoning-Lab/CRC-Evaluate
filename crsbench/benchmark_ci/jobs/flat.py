@@ -1,16 +1,18 @@
-"""Flat DAG jobs for per-CPV/per-patch atomic scheduling.
+"""Flat jobs for per-CPV/per-patch atomic scheduling.
 
-These jobs replace coarse validator wrappers (ci_checks.py) with fine-grained
-nodes that call builder/infra directly. The DAGExecutor becomes the single
-source of concurrency control via typed limits.
+These jobs are executed via Redis-based distributed workers. Each job is
+an atomic unit of work (build one variant, verify one CPV, test one patch).
 
 Job types:
 - BuildSingleVariantJob: Build a single variant for a benchmark (type="build")
-- BuildVariantsJob: Build all variants for a benchmark (type="build") [legacy]
 - VerifyCpvPovJob: Verify POVs for a single CPV (type="verify")
+- VerifyCpvVarJob: Verify variant POVs for a single CPV (type="verify")
 - BuildPatchVariantJob: Build a patched variant (type="build")
 - PatchVariantTestJob: Run POVs + unit tests on patch (type="verify")
-- CollectCoverageJob: Collect coverage data (type="verify")
+- PatchPovTestJob: Run POV test on patch (type="verify")
+- PatchVarTestJob: Run variant test on patch (type="verify")
+- PatchUnitTestJob: Run unit tests on patch (type="verify")
+- FlatCollectCoverageJob: Collect coverage data (type="verify")
 """
 
 from dataclasses import dataclass, field
@@ -195,122 +197,6 @@ class BuildSingleVariantJob(Job):
             )
             self._write_job_log(context, job_result)
             return job_result
-
-
-@dataclass
-class BuildVariantsJob(Job):
-    """Build all variants for a benchmark.
-
-    Creates build plan via OSSFuzzBuilder and executes it. Stores
-    build results in context.shared for downstream verify jobs.
-    """
-
-    benchmark_path: Path
-    benchmark_name: str
-    use_inc_build: bool = True
-    force_rebuild: bool = False
-    source_mode: str = "pkgs"
-    project_image_prefix: str = "aixcc-afc"
-
-    @property
-    def job_id(self) -> str:
-        return f"build-variants:{self.benchmark_name}"
-
-    @property
-    def job_type(self) -> str:
-        return "build"
-
-    def execute(self, context: JobContext) -> JobResult:
-        """Build all variants via OSSFuzzBuilder."""
-        started_at = datetime.now()
-        try:
-            from crsbench.evaluation.verification.pov import VerificationEngine
-            from crsbench.utils.run_helper import get_oss_fuzz_root
-
-            oss_fuzz_path = Path(get_oss_fuzz_root())
-            engine = VerificationEngine(
-                oss_fuzz_path,
-                source_mode=self.source_mode,
-            )
-            adapter = engine.load_adapter(self.benchmark_path)
-            if not adapter:
-                raise ValueError(f"Failed to load adapter for {self.benchmark_path}")
-            build_results = engine.get_or_build_results(
-                adapter,
-                force_rebuild=self.force_rebuild,
-                use_inc_build=self.use_inc_build,
-            )
-
-            success = any(r.success for r in build_results.values())
-            context.shared[self.job_id] = {
-                "build_results": build_results,
-                "adapter": adapter,
-            }
-
-            # Only consider inc-build target variants for fallback
-            fallback_used = any(
-                r.fallback_used
-                for r in build_results.values()
-                if r.config.variant_type.is_inc_build_target()
-            )
-
-            finished_at = datetime.now()
-            elapsed = (finished_at - started_at).total_seconds()
-
-            variants_info = [
-                {
-                    "name": name,
-                    "variant_type": r.config.variant_type.value,
-                    "success": r.success,
-                    "fallback": r.fallback_used,
-                    "cached": r.cached,
-                    "elapsed": f"{r.elapsed_seconds:.1f}s",
-                }
-                for name, r in build_results.items()
-            ]
-
-            # Collect storage metrics after build
-            storage_metrics = collect_benchmark_storage(
-                benchmark_name=self.benchmark_name,
-                benchmark_path=self.benchmark_path,
-                oss_fuzz_path=oss_fuzz_path,
-                project_image_prefix=self.project_image_prefix,
-            )
-            storage_bytes = storage_metrics.total_bytes
-
-            result = JobResult(
-                job_id=self.job_id,
-                job_type=self.job_type,
-                success=success,
-                started_at=started_at,
-                finished_at=finished_at,
-                elapsed_seconds=elapsed,
-                error=None if success else "No variants built successfully",
-                details={
-                    "variants_built": len(
-                        [r for r in build_results.values() if r.success]
-                    ),
-                    "variants_total": len(build_results),
-                    "fallback_used": fallback_used,
-                    "variants": variants_info,
-                    "storage_bytes": storage_bytes,
-                },
-            )
-            self._write_job_log(context, result)
-            return result
-        except Exception as e:
-            finished_at = datetime.now()
-            result = JobResult(
-                job_id=self.job_id,
-                job_type=self.job_type,
-                success=False,
-                started_at=started_at,
-                finished_at=finished_at,
-                elapsed_seconds=(finished_at - started_at).total_seconds(),
-                error=str(e),
-            )
-            self._write_job_log(context, result)
-            return result
 
 
 @dataclass

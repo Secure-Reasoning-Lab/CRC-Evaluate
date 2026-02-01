@@ -1,6 +1,6 @@
 # Distributed Execution Guide
 
-This guide explains how to run CRSBench experiments in distributed mode using multiple workers for parallel trial execution.
+This guide explains how to run CRSBench experiments in distributed mode using multiple workers for parallel trial execution and optional evaluators for POV verification.
 
 ## Overview
 
@@ -13,36 +13,46 @@ Distributed mode enables horizontal scaling for large experiments with many tria
 
 ## Architecture
 
+CRSBench uses a three-process architecture sharing a single Redis instance:
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   CRSBench Orchestrator                     │
-│                  (crsbench command)                         │
+│                  (crsbench run)                             │
 │                                                             │
 │  • Generates trial matrix (CRS × Benchmark × Trials)       │
-│  • Enqueues jobs to Redis                                  │
+│  • Enqueues trial jobs to Redis                            │
 │  • Monitors job progress                                   │
 │  • Collects results                                        │
 └──────────────────┬──────────────────────────────────────────┘
                    │
-                   │ Enqueue jobs
+                   │ Enqueue trial jobs
                    ▼
             ┌──────────────┐
             │ Redis Server │
-            │  (Queue)     │
-            └──────┬───────┘
-                   │
-                   │ Dequeue jobs
-                   ▼
-    ┌──────────────────────────────────────────┐
-    │         Workers (× N)                    │
-    │                                          │
-    │  Worker 1: Execute CRS trial             │
-    │  Worker 2: Execute CRS trial             │
-    │  Worker 3: Execute CRS trial             │
-    │  ...                                     │
-    │  Worker N: Execute CRS trial             │
-    └──────────────────────────────────────────┘
+            │  (Queues)    │
+            └──┬───────┬───┘
+               │       │
+    Trial jobs │       │ Verify jobs
+               ▼       ▼
+    ┌──────────────┐  ┌──────────────────────┐
+    │ Workers (×N) │  │ Evaluators (×M)      │
+    │              │  │       (optional)      │
+    │ Execute CRS  │──│ Build variants       │
+    │ trials       │  │ Verify POVs          │
+    └──────────────┘  └──────────────────────┘
+                │              ▲
+                └──────────────┘
+              Enqueue POVs for verify
 ```
+
+- **Orchestrator** (`crsbench run`): Generates trial matrix and enqueues CRS trial jobs
+- **Workers** (`crsbench worker`): Execute CRS trials, discover POVs, enqueue verification
+- **Evaluators** (`crsbench evaluator`, optional): Build variant images and verify POVs
+
+**Redis Queues (same instance):**
+- `crsbench_{experiment}`: CRS trial jobs (workers consume)
+- `crsbench_{experiment}_verify`: POV verification jobs (evaluators consume)
 
 ## Prerequisites
 
@@ -1026,8 +1036,135 @@ docker-compose -f services/valkey/docker-compose.yml down
 docker volume rm valkey_valkey-data
 ```
 
+## Evaluator (Optional POV Verification)
+
+The `crsbench evaluator` command runs a separate process that builds variant Docker images and verifies POVs discovered by workers. Evaluators are optional — without them, verification jobs queue harmlessly in Redis and can be processed later.
+
+### Why use an evaluator?
+
+- **Offload variant builds**: Variant Docker images (vulnerable, allpatched, CPV) are heavyweight. Workers can focus on CRS trials while evaluators handle builds.
+- **Cross-machine verification**: Evaluators build images locally on their machine, no shared Docker registry needed.
+- **Post-experiment evaluation**: Run an evaluator after the experiment to process all queued verifications.
+
+### Starting an evaluator
+
+```bash
+crsbench evaluator \
+  --experiment-config experiment-config.yaml \
+  --experiment-name my-distributed-exp \
+  --redis-host localhost \
+  -j 2
+```
+
+The evaluator:
+1. Builds all variant Docker images for benchmarks listed in the config
+2. Starts listening on the `crsbench_{experiment}_verify` queue
+3. Processes POV verification jobs as they arrive
+
+### Evaluator CLI arguments
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--experiment-config` | Path to experiment config YAML | Required |
+| `--experiment-name` | Experiment identifier (queue name) | Required |
+| `--redis-host` | Redis server hostname | `localhost` |
+| `-j`, `--jobs` | Number of parallel verify jobs | `1` |
+| `--no-cpuset` | Disable CPU affinity | False |
+
+### Evaluator path overrides
+
+Evaluators on different machines may have different filesystem layouts. Use environment variables:
+
+```bash
+export CRSBENCH_EVALUATOR_OSS_FUZZ_PATH=/opt/oss-fuzz
+export CRSBENCH_EVALUATOR_BENCHMARKS_ROOT=/data/benchmarks
+crsbench evaluator --experiment-config config.yaml --experiment-name my-exp
+```
+
+### Post-experiment evaluation
+
+If no evaluator was running during the experiment, verification jobs accumulate in Redis. Run an evaluator after the experiment to process them:
+
+```bash
+crsbench evaluator \
+  --experiment-config experiment-config.yaml \
+  --experiment-name my-distributed-exp \
+  -j 4
+```
+
+### Async POV verification flow
+
+When a worker discovers POVs during a CRS trial:
+1. Worker enqueues POV content (base64-encoded) to the verify queue
+2. Evaluator dequeues the job and runs `reproduce()` against pre-built variant images
+3. Results (pass/fail + CPV matches) are stored in Redis
+4. If no evaluator is running, jobs queue harmlessly — no worker errors or blocking
+
+## Multi-Machine Deployment with SSH Tunnels
+
+For running workers and evaluators on separate machines, use SSH port forwarding to connect to the orchestrator's Redis.
+
+### Setup SSH tunnel on each remote machine
+
+```bash
+# Forward local port 6379 to Machine A's Redis
+ssh -N -L 6379:localhost:6379 user@machine-a &
+
+# Verify connection
+redis-cli ping
+# Should return: PONG
+```
+
+### Persistent tunnel with autossh
+
+For long-running experiments:
+
+```bash
+apt install autossh
+
+autossh -M 0 -f -N -L 6379:localhost:6379 user@machine-a \
+  -o "ServerAliveInterval 30" -o "ServerAliveCountMax 3"
+```
+
+### Example: 3-machine deployment
+
+**Machine A** (Orchestrator + Redis):
+```bash
+redis-server --daemonize yes
+crsbench run --experiment-config config.yaml --distributed
+```
+
+**Machine B** (Worker):
+```bash
+ssh -N -L 6379:localhost:6379 user@machine-a &
+crsbench worker --experiment-config config.yaml --redis-host localhost -j 4
+```
+
+**Machine C** (Evaluator):
+```bash
+ssh -N -L 6379:localhost:6379 user@machine-a &
+crsbench evaluator --experiment-config config.yaml \
+  --experiment-name my-exp --redis-host localhost -j 2
+```
+
+## Distributed CI Builds
+
+The `crsbench ci build` command supports distributing variant builds to Redis workers:
+
+```bash
+# On Machine A (with Redis running)
+crsbench ci build --all --distributed --redis-host localhost
+
+# On Machine B (with SSH tunnel)
+rq worker crsbench_ci_build
+```
+
+This enqueues `BuildSingleVariantJob` instances to the `crsbench_ci_build` queue. Remote workers execute the builds and report results back.
+
 ## See Also
 
-- [Design Document: Distributed Job Queue](../design-docs/distributed/distributed-job-queue.md) - Technical architecture
+- [Design Document: Distributed Job Queue](../design-docs/distributed/distributed-job-queue.md) - Job queue architecture
+- [Design Document: Distributed Evaluation](../design-docs/distributed/distributed-evaluation.md) - Evaluator architecture
+- [Deployment Guide](../design-docs/distributed/deployment-guide.md) - Detailed multi-machine setup
 - [Snapshot System Guide](snapshot-examples.md) - Progress monitoring during trials
 - [Experiment Configuration](benchmark-spec.md) - Configuration file format

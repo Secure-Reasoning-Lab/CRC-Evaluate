@@ -690,9 +690,7 @@ class TestPOVStoreAsyncHelpers:
 
     def test_add_pov_by_id_not_vulnerable(self, store: POVStore) -> None:
         """add_pov_by_id with NOT_VULNERABLE does not track CPV discovery."""
-        store.add_pov_by_id(
-            "pov_miss.blob", PovVerificationStatus.NOT_VULNERABLE, []
-        )
+        store.add_pov_by_id("pov_miss.blob", PovVerificationStatus.NOT_VULNERABLE, [])
 
         assert "pov_miss.blob" in store.povs
         assert len(store.cpv_to_first_pov) == 0

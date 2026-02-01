@@ -23,10 +23,10 @@ class TestRunEvaluatorMain:
 
     @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
     @patch("crsbench.distributed.evaluator._run_evaluator_supervisor")
-    @patch("crsbench.distributed.evaluator_jobs.set_build_cache")
+    @patch("crsbench.distributed.evaluator_jobs.set_engine")
     def test_skips_phase1_builds(
         self,
-        mock_set_cache: MagicMock,
+        mock_set_engine: MagicMock,
         mock_supervisor: MagicMock,
     ) -> None:
         """Evaluator skips Phase 1 builds and goes directly to supervisor."""
@@ -45,10 +45,11 @@ class TestRunEvaluatorMain:
 
             result = run_evaluator_main(config, "exp-test")
 
-        # Should set empty build cache (not call _build_all_variants)
-        mock_set_cache.assert_called_once()
-        call_args = mock_set_cache.call_args
-        assert call_args[0][1] == {}  # empty built_results
+        # Should set engine (not call _build_all_variants)
+        mock_set_engine.assert_called_once()
+        call_args = mock_set_engine.call_args
+        # Verify it was called with just the engine argument (no built_results)
+        assert len(call_args[0]) == 1  # Only one positional argument
 
         # Should call supervisor directly
         mock_supervisor.assert_called_once()

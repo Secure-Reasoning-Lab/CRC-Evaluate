@@ -161,7 +161,7 @@ class BenchmarkValidationResult:
     patch_rts_check: Optional[CheckResult] = None
     patch_inc_rts_check: Optional[CheckResult] = None
     coverage_inc_check: Optional[CheckResult] = None
-    # Shared build time (BuildVariantsJob — one per benchmark)
+    # Shared build time (sum of BuildSingleVariantJob durations)
     shared_build_time: float = 0.0
     # Storage metrics (total bytes for build artifacts, Docker, git)
     storage_bytes: int = 0

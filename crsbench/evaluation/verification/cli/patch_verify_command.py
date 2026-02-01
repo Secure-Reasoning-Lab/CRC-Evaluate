@@ -146,10 +146,10 @@ Examples:
     parser.add_argument(
         "--source",
         type=str,
-        default="main_repo",
+        default="pkgs",
         choices=["pkgs", "main_repo"],
-        help="Source for benchmark code: 'main_repo' clones from repository (default), "
-        "'pkgs' uses bundled tarballs",
+        help="Source for benchmark code: 'pkgs' uses bundled tarballs (default), "
+        "'main_repo' clones from repository",
     )
 
     # Test mode

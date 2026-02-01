@@ -136,6 +136,113 @@ def create_source_tarball(
         return tarball_path, ref_diff_path
 
 
+# GitHub rejects files >100MB without git LFS. Use 80MB split threshold
+# to match the documented convention in docs/benchmark-spec.md.
+SPLIT_THRESHOLD_BYTES = 80 * 1024 * 1024  # 80MB
+
+
+def split_large_tarball(
+    tarball_path: Path,
+    *,
+    threshold: int = SPLIT_THRESHOLD_BYTES,
+    log_prefix: Optional[str] = None,
+) -> list[Path]:
+    """Split a tarball into 80MB parts if it exceeds the threshold.
+
+    Produces files like source.tar.gz.partaa, source.tar.gz.partab, etc.
+    matching the convention used in Dockerfiles and docs/benchmark-spec.md.
+
+    If the tarball is under the threshold, returns [tarball_path] unchanged.
+
+    Args:
+        tarball_path: Path to the tarball to split
+        threshold: Size threshold in bytes (default: 80MB)
+        log_prefix: Prefix for log messages
+
+    Returns:
+        List of paths (single tarball if small, or part files if split)
+    """
+    size = tarball_path.stat().st_size
+    if size <= threshold:
+        logger.debug(
+            _log_msg(
+                log_prefix,
+                f"Tarball {tarball_path.name} ({size // (1024 * 1024)}MB) "
+                f"under {threshold // (1024 * 1024)}MB threshold, no split needed",
+            )
+        )
+        return [tarball_path]
+
+    logger.info(
+        _log_msg(
+            log_prefix,
+            f"Splitting {tarball_path.name} ({size // (1024 * 1024)}MB) "
+            f"into {threshold // (1024 * 1024)}MB parts",
+        )
+    )
+
+    # split -b 80M source.tar.gz source.tar.gz.part
+    prefix = str(tarball_path) + ".part"
+    result = subprocess.run(
+        ["split", "-b", f"{threshold // (1024 * 1024)}M", str(tarball_path), prefix],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        stderr_msg = result.stderr.decode(errors="replace").strip()
+        raise RuntimeError(f"split failed (exit {result.returncode}): {stderr_msg}")
+
+    # Collect generated parts
+    parts = sorted(tarball_path.parent.glob(f"{tarball_path.name}.part*"))
+    if not parts:
+        raise RuntimeError(f"split produced no part files for {tarball_path}")
+
+    # Remove the original whole tarball
+    tarball_path.unlink()
+
+    logger.info(
+        _log_msg(
+            log_prefix,
+            f"Split into {len(parts)} parts, removed {tarball_path.name}",
+        )
+    )
+    return parts
+
+
+def clean_existing_tarball(
+    pkgs_dir: Path,
+    source_name: str,
+    *,
+    log_prefix: Optional[str] = None,
+) -> None:
+    """Remove existing tarball and split parts before re-bundling.
+
+    Prevents stale .part* files from mixing with a newly created tarball.
+
+    Args:
+        pkgs_dir: Path to pkgs/ directory
+        source_name: Source name (e.g., "tika")
+        log_prefix: Prefix for log messages
+    """
+    whole = pkgs_dir / f"{source_name}.tar.gz"
+    parts = sorted(pkgs_dir.glob(f"{source_name}.tar.gz.part*"))
+
+    removed = 0
+    if whole.exists():
+        whole.unlink()
+        removed += 1
+    for part in parts:
+        part.unlink()
+        removed += 1
+
+    if removed:
+        logger.info(
+            _log_msg(
+                log_prefix,
+                f"Cleaned {removed} existing tarball file(s) for {source_name}",
+            )
+        )
+
+
 def _prepare_source(
     repo_dir: Path,
     target_commit: str,

@@ -528,7 +528,7 @@ class CRSPatchExecutor(CRSExecutor):
         source = load_benchmark_source(
             benchmark_path,
             dest_dir=source_dest,
-            source_mode=self.config.get("source_mode", "main_repo"),
+            source_mode=self.config.get("source_mode", "pkgs"),
             mode=self.config.get("mode"),
             verbose=self.config.get("verbose", False),
         )

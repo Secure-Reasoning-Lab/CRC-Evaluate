@@ -1,18 +1,15 @@
 """Benchmark CI module for validating CRSBench benchmarks.
 
-This module provides benchmark validation using a DAG-based job executor:
+This module provides benchmark validation using Redis-based distributed execution:
 
 **Job-based architecture:**
-- BuildVariantsJob: Build all variants for a benchmark
+- BuildSingleVariantJob: Build a single variant for a benchmark
 - VerifyCpvPovJob: Verify POVs for a single CPV
 - BuildPatchVariantJob: Build a patched variant
 - PatchVariantTestJob: Run POVs + tests on a patched build
 - FlatCollectCoverageJob: Collect coverage for a benchmark
 
-Jobs are executed by DAGExecutor with explicit dependency tracking.
-
-**Legacy (still used by some commands):**
-- BenchmarkValidator: High-level orchestration using verification engines
+Jobs are executed via Redis queues processed by evaluator workers.
 
 CLI:
     crsbench ci --all
@@ -27,7 +24,6 @@ from crsbench.benchmark_ci.checks import (
 )
 from crsbench.benchmark_ci.jobs import (
     BuildPatchVariantJob,
-    BuildVariantsJob,
     FlatCollectCoverageJob,
     Job,
     JobContext,
@@ -47,7 +43,6 @@ __all__ = [
     "BenchmarkValidationResult",
     "BenchmarkValidator",
     "BuildPatchVariantJob",
-    "BuildVariantsJob",
     "CheckResult",
     "CheckStatus",
     "FlatCollectCoverageJob",

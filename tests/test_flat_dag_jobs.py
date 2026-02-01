@@ -1,4 +1,4 @@
-"""Tests for flat DAG jobs (BuildSingleVariantJob, BuildVariantsJob, VerifyCpvPovJob, etc.).
+"""Tests for flat DAG jobs (BuildSingleVariantJob, VerifyCpvPovJob, etc.).
 
 Tests verify:
 - Job IDs follow expected naming conventions
@@ -13,7 +13,6 @@ from crsbench.benchmark_ci.jobs.base import JobContext
 from crsbench.benchmark_ci.jobs.flat import (
     BuildPatchVariantJob,
     BuildSingleVariantJob,
-    BuildVariantsJob,
     FlatCollectCoverageJob,
     PatchVariantTestJob,
     VerifyCpvPovJob,
@@ -113,29 +112,6 @@ class TestBuildSingleVariantJob:
             commit="abc123",
             main_repo="https://github.com/test/repo",
             mode=BenchmarkMode.DELTA,
-        )
-        assert job.depends_on == []
-
-
-class TestBuildVariantsJob:
-    def test_job_id(self) -> None:
-        job = BuildVariantsJob(
-            benchmark_path=Path("/bench/test-proj"),
-            benchmark_name="test-proj",
-        )
-        assert job.job_id == "build-variants:test-proj"
-
-    def test_job_type(self) -> None:
-        job = BuildVariantsJob(
-            benchmark_path=Path("/bench/test-proj"),
-            benchmark_name="test-proj",
-        )
-        assert job.job_type == "build"
-
-    def test_no_dependencies(self) -> None:
-        job = BuildVariantsJob(
-            benchmark_path=Path("/bench/test-proj"),
-            benchmark_name="test-proj",
         )
         assert job.depends_on == []
 
@@ -333,10 +309,14 @@ class TestFlatDAGConstruction:
     """Test that a full flat DAG has proper structure."""
 
     def test_pov_dag_structure(self) -> None:
-        """BuildVariantsJob -> VerifyCpvPovJob per CPV."""
-        build = BuildVariantsJob(
+        """BuildSingleVariantJob -> VerifyCpvPovJob per CPV."""
+        build = BuildSingleVariantJob(
             benchmark_path=Path("/bench/proj"),
             benchmark_name="proj",
+            variant_type=VariantType.DELTA_REF,
+            commit="abc123",
+            main_repo="https://github.com/test/repo",
+            mode=BenchmarkMode.DELTA,
         )
         verify_0 = VerifyCpvPovJob(
             benchmark_name="proj",
@@ -357,15 +337,23 @@ class TestFlatDAGConstruction:
         graph = {j.job_id: set(j.depends_on) for j in jobs}
 
         # Verify structure
-        assert graph["build-variants:proj"] == set()
-        assert graph["verify-cpv-pov:proj:cpv_0"] == {"build-variants:proj"}
-        assert graph["verify-cpv-pov:proj:cpv_1"] == {"build-variants:proj"}
+        assert graph["build-single:proj:proj-asan-deltaref"] == set()
+        assert graph["verify-cpv-pov:proj:cpv_0"] == {
+            "build-single:proj:proj-asan-deltaref"
+        }
+        assert graph["verify-cpv-pov:proj:cpv_1"] == {
+            "build-single:proj:proj-asan-deltaref"
+        }
 
     def test_patch_dag_structure(self) -> None:
-        """BuildVariantsJob -> BuildPatchVariantJob -> PatchVariantTestJob."""
-        build = BuildVariantsJob(
+        """BuildSingleVariantJob -> BuildPatchVariantJob -> PatchVariantTestJob."""
+        build = BuildSingleVariantJob(
             benchmark_path=Path("/bench/proj"),
             benchmark_name="proj",
+            variant_type=VariantType.DELTA_REF,
+            commit="abc123",
+            main_repo="https://github.com/test/repo",
+            mode=BenchmarkMode.DELTA,
         )
         build_patch = BuildPatchVariantJob(
             benchmark_path=Path("/bench/proj"),
@@ -388,17 +376,23 @@ class TestFlatDAGConstruction:
         jobs = [build, build_patch, test_patch]
         graph = {j.job_id: set(j.depends_on) for j in jobs}
 
-        assert graph["build-variants:proj"] == set()
-        assert graph["build-patch:proj:cpv_0:patch_0"] == {"build-variants:proj"}
+        assert graph["build-single:proj:proj-asan-deltaref"] == set()
+        assert graph["build-patch:proj:cpv_0:patch_0"] == {
+            "build-single:proj:proj-asan-deltaref"
+        }
         assert graph["test-patch:proj:cpv_0:patch_0:FULL"] == {
             "build-patch:proj:cpv_0:patch_0"
         }
 
     def test_all_cmd_shared_build(self) -> None:
-        """ci all: ONE BuildVariantsJob shared by POV, patch, coverage (legacy)."""
-        build = BuildVariantsJob(
+        """ci all: BuildSingleVariantJob shared by POV, patch, coverage."""
+        build = BuildSingleVariantJob(
             benchmark_path=Path("/bench/proj"),
             benchmark_name="proj",
+            variant_type=VariantType.DELTA_REF,
+            commit="abc123",
+            main_repo="https://github.com/test/repo",
+            mode=BenchmarkMode.DELTA,
         )
         verify_pov = VerifyCpvPovJob(
             benchmark_name="proj",
@@ -431,11 +425,11 @@ class TestFlatDAGConstruction:
         assert build_patch in build_dependents
         assert coverage in build_dependents
 
-        # Only ONE build job exists
+        # BuildSingleVariantJob + BuildPatchVariantJob
         build_jobs = [j for j in jobs if j.job_type == "build"]
-        assert len(build_jobs) == 2  # BuildVariantsJob + BuildPatchVariantJob
-        build_variant_jobs = [j for j in jobs if isinstance(j, BuildVariantsJob)]
-        assert len(build_variant_jobs) == 1
+        assert len(build_jobs) == 2
+        build_single_jobs = [j for j in jobs if isinstance(j, BuildSingleVariantJob)]
+        assert len(build_single_jobs) == 1
 
     def test_per_variant_dag_structure(self) -> None:
         """ci all: Per-variant BuildSingleVariantJob enables parallel builds."""

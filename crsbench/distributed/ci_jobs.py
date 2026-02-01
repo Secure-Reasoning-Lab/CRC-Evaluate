@@ -19,15 +19,17 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # Job class names that we support serializing/deserializing
-_VERIFY_JOB_TYPES = frozenset({
-    "VerifyCpvPovJob",
-    "VerifyCpvVarJob",
-    "PatchPovTestJob",
-    "PatchVarTestJob",
-    "PatchUnitTestJob",
-    "FlatCollectCoverageJob",
-    "BuildPatchVariantJob",
-})
+_VERIFY_JOB_TYPES = frozenset(
+    {
+        "VerifyCpvPovJob",
+        "VerifyCpvVarJob",
+        "PatchPovTestJob",
+        "PatchVarTestJob",
+        "PatchUnitTestJob",
+        "FlatCollectCoverageJob",
+        "BuildPatchVariantJob",
+    }
+)
 
 
 def serialize_ci_job(job: Any) -> dict[str, Any]:
@@ -50,80 +52,98 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
 
     # Serialize dataclass fields based on job type
     if cls_name == "VerifyCpvPovJob":
-        params.update({
-            "benchmark_name": job.benchmark_name,
-            "cpv_id": job.cpv_id,
-            "harness": job.harness,
-            "benchmark_path": str(job.benchmark_path) if job.benchmark_path else None,
-            "pov_path": str(job.pov_path) if job.pov_path else None,
-            "build_job_ids": job.build_job_ids,
-            "source_mode": job.source_mode,
-        })
+        params.update(
+            {
+                "benchmark_name": job.benchmark_name,
+                "cpv_id": job.cpv_id,
+                "harness": job.harness,
+                "benchmark_path": str(job.benchmark_path)
+                if job.benchmark_path
+                else None,
+                "pov_path": str(job.pov_path) if job.pov_path else None,
+                "build_job_ids": job.build_job_ids,
+                "source_mode": job.source_mode,
+            }
+        )
     elif cls_name == "VerifyCpvVarJob":
-        params.update({
-            "benchmark_name": job.benchmark_name,
-            "cpv_id": job.cpv_id,
-            "harness": job.harness,
-            "benchmark_path": str(job.benchmark_path) if job.benchmark_path else None,
-            "pov_paths": [str(p) for p in job.pov_paths],
-            "build_job_ids": job.build_job_ids,
-            "source_mode": job.source_mode,
-        })
+        params.update(
+            {
+                "benchmark_name": job.benchmark_name,
+                "cpv_id": job.cpv_id,
+                "harness": job.harness,
+                "benchmark_path": str(job.benchmark_path)
+                if job.benchmark_path
+                else None,
+                "pov_paths": [str(p) for p in job.pov_paths],
+                "build_job_ids": job.build_job_ids,
+                "source_mode": job.source_mode,
+            }
+        )
     elif cls_name == "PatchPovTestJob":
-        params.update({
-            "benchmark_path": str(job.benchmark_path),
-            "benchmark_name": job.benchmark_name,
-            "cpv_id": job.cpv_id,
-            "patch_id": job.patch_id,
-            "harness": job.harness,
-            "pov_path": str(job.pov_path) if job.pov_path else None,
-            "build_patch_job_id": job.build_patch_job_id,
-            "source_mode": job.source_mode,
-        })
+        params.update(
+            {
+                "benchmark_path": str(job.benchmark_path),
+                "benchmark_name": job.benchmark_name,
+                "cpv_id": job.cpv_id,
+                "patch_id": job.patch_id,
+                "harness": job.harness,
+                "pov_path": str(job.pov_path) if job.pov_path else None,
+                "build_patch_job_id": job.build_patch_job_id,
+                "source_mode": job.source_mode,
+            }
+        )
     elif cls_name == "PatchVarTestJob":
-        params.update({
-            "benchmark_path": str(job.benchmark_path),
-            "benchmark_name": job.benchmark_name,
-            "cpv_id": job.cpv_id,
-            "patch_id": job.patch_id,
-            "harness": job.harness,
-            "pov_paths": [str(p) for p in job.pov_paths],
-            "build_patch_job_id": job.build_patch_job_id,
-            "source_mode": job.source_mode,
-        })
+        params.update(
+            {
+                "benchmark_path": str(job.benchmark_path),
+                "benchmark_name": job.benchmark_name,
+                "cpv_id": job.cpv_id,
+                "patch_id": job.patch_id,
+                "harness": job.harness,
+                "pov_paths": [str(p) for p in job.pov_paths],
+                "build_patch_job_id": job.build_patch_job_id,
+                "source_mode": job.source_mode,
+            }
+        )
     elif cls_name == "PatchUnitTestJob":
-        params.update({
-            "benchmark_path": str(job.benchmark_path),
-            "benchmark_name": job.benchmark_name,
-            "cpv_id": job.cpv_id,
-            "patch_id": job.patch_id,
-            "harness": job.harness,
-            "test_mode": job.test_mode,
-            "build_patch_job_id": job.build_patch_job_id,
-            "source_mode": job.source_mode,
-        })
+        params.update(
+            {
+                "benchmark_path": str(job.benchmark_path),
+                "benchmark_name": job.benchmark_name,
+                "cpv_id": job.cpv_id,
+                "patch_id": job.patch_id,
+                "harness": job.harness,
+                "test_mode": job.test_mode,
+                "build_patch_job_id": job.build_patch_job_id,
+                "source_mode": job.source_mode,
+            }
+        )
     elif cls_name == "FlatCollectCoverageJob":
-        params.update({
-            "benchmark_path": str(job.benchmark_path),
-            "benchmark_name": job.benchmark_name,
-            "harness": job.harness,
-            "build_job_id": job.build_job_id,
-            "source_mode": job.source_mode,
-            "build_job_ids": job.build_job_ids,
-        })
+        params.update(
+            {
+                "benchmark_path": str(job.benchmark_path),
+                "benchmark_name": job.benchmark_name,
+                "harness": job.harness,
+                "build_job_id": job.build_job_id,
+                "source_mode": job.source_mode,
+                "build_job_ids": job.build_job_ids,
+            }
+        )
     elif cls_name == "BuildPatchVariantJob":
-        params.update({
-            "benchmark_path": str(job.benchmark_path),
-            "benchmark_name": job.benchmark_name,
-            "cpv_id": job.cpv_id,
-            "patch_id": job.patch_id,
-            "patch_path": str(job.patch_path),
-            "harness": job.harness,
-            "use_inc_build": job.use_inc_build,
-            "force_rebuild": job.force_rebuild,
-            "build_job_id": job.build_job_id,
-            "source_mode": job.source_mode,
-        })
+        params.update(
+            {
+                "benchmark_path": str(job.benchmark_path),
+                "benchmark_name": job.benchmark_name,
+                "cpv_id": job.cpv_id,
+                "patch_id": job.patch_id,
+                "patch_path": str(job.patch_path),
+                "harness": job.harness,
+                "use_inc_build": job.use_inc_build,
+                "force_rebuild": job.force_rebuild,
+                "build_job_id": job.build_job_id,
+                "source_mode": job.source_mode,
+            }
+        )
 
     return params
 
@@ -154,7 +174,9 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             benchmark_name=params["benchmark_name"],
             cpv_id=params["cpv_id"],
             harness=params["harness"],
-            benchmark_path=Path(params["benchmark_path"]) if params.get("benchmark_path") else None,
+            benchmark_path=Path(params["benchmark_path"])
+            if params.get("benchmark_path")
+            else None,
             pov_path=Path(params["pov_path"]) if params.get("pov_path") else None,
             build_job_ids=params.get("build_job_ids", []),
             source_mode=params.get("source_mode", "pkgs"),
@@ -164,7 +186,9 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             benchmark_name=params["benchmark_name"],
             cpv_id=params["cpv_id"],
             harness=params["harness"],
-            benchmark_path=Path(params["benchmark_path"]) if params.get("benchmark_path") else None,
+            benchmark_path=Path(params["benchmark_path"])
+            if params.get("benchmark_path")
+            else None,
             pov_paths=[Path(p) for p in params.get("pov_paths", [])],
             build_job_ids=params.get("build_job_ids", []),
             source_mode=params.get("source_mode", "pkgs"),
@@ -282,8 +306,7 @@ def _load_build_context_from_disk(
                 break
 
     logger.info(
-        f"Loaded {len(context.shared)} build context entries "
-        f"for {benchmark_path.name}"
+        f"Loaded {len(context.shared)} build context entries for {benchmark_path.name}"
     )
 
 
@@ -338,10 +361,7 @@ def _load_patch_build_context(
         "inc_build_available": False,
     }
 
-    logger.info(
-        f"Loaded patch build context for {bid}: "
-        f"variant={config.variant_name}"
-    )
+    logger.info(f"Loaded patch build context for {bid}: variant={config.variant_name}")
 
 
 def execute_ci_job(params: dict[str, Any]) -> dict[str, Any]:
@@ -450,8 +470,7 @@ def enqueue_and_poll_ci_jobs(
             existing = rq.job.Job.fetch(job.job_id, connection=redis_conn)
             rq_jobs[job.job_id] = existing
             logger.info(
-                f"CI job {job.job_id} already exists, "
-                f"status: {existing.get_status()}"
+                f"CI job {job.job_id} already exists, status: {existing.get_status()}"
             )
 
     logger.info(
@@ -470,9 +489,7 @@ def enqueue_and_poll_ci_jobs(
                 pending.discard(job_id)
 
         if pending:
-            logger.info(
-                f"Waiting for {len(pending)}/{len(rq_jobs)} CI jobs..."
-            )
+            logger.info(f"Waiting for {len(pending)}/{len(rq_jobs)} CI jobs...")
             time.sleep(5)
 
     # Collect results

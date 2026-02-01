@@ -68,8 +68,8 @@ Examples:
     parser.add_argument(
         "--source",
         choices=["pkgs", "main_repo"],
-        default="main_repo",
-        help="Source mode for builds (default: main_repo)",
+        default="pkgs",
+        help="Source mode for builds (default: pkgs)",
     )
     parser.add_argument(
         "--build-workers",

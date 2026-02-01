@@ -69,8 +69,8 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         "--source",
         type=str,
         choices=["pkgs", "main_repo"],
-        default="main_repo",
-        help="Source mode: also validate pkgs/ when 'pkgs' (default: main_repo)",
+        default="pkgs",
+        help="Source mode: also validate pkgs/ when 'pkgs' (default: pkgs)",
     )
     parser.add_argument(
         "--parallel",
@@ -321,7 +321,7 @@ def _check_tarball(path: Path) -> CheckResult:
 
 
 def _validate_benchmark(
-    path: Path, source_mode: str = "main_repo"
+    path: Path, source_mode: str = "pkgs"
 ) -> BenchmarkValidationResult:
     """Run all format sub-checks for a single benchmark.
 
@@ -387,7 +387,7 @@ def run_format(args: argparse.Namespace) -> int:
     )
 
     parallel = getattr(args, "parallel", 1)
-    source_mode = getattr(args, "source", "main_repo")
+    source_mode = getattr(args, "source", "pkgs")
     summary = ValidationSummary(started_at=datetime.now(), check_mode=CheckMode.FORMAT)
 
     if parallel <= 1:

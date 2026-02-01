@@ -17,7 +17,9 @@ class TestSerializeCiJob:
             cpv_id="cpv_0",
             harness="fuzz_target",
             benchmark_path=Path("/benchmarks/test-bench"),
-            pov_path=Path("/benchmarks/test-bench/.aixcc/fuzz_target/cpv_0/blobs/pov_0.blob"),
+            pov_path=Path(
+                "/benchmarks/test-bench/.aixcc/fuzz_target/cpv_0/blobs/pov_0.blob"
+            ),
             build_job_ids=["build-single:test-bench:test-bench-asan-deltabase"],
             source_mode="pkgs",
         )
@@ -31,7 +33,9 @@ class TestSerializeCiJob:
             cpv_id="cpv_0",
             patch_id="patch_0",
             harness="fuzz_target",
-            pov_path=Path("/benchmarks/test-bench/.aixcc/fuzz_target/cpv_0/blobs/pov_0.blob"),
+            pov_path=Path(
+                "/benchmarks/test-bench/.aixcc/fuzz_target/cpv_0/blobs/pov_0.blob"
+            ),
             build_patch_job_id="build-patch:test-bench:cpv_0:patch_0",
             source_mode="pkgs",
         )
@@ -48,7 +52,9 @@ class TestSerializeCiJob:
         assert params["cpv_id"] == "cpv_0"
         assert params["harness"] == "fuzz_target"
         assert params["benchmark_path"] == "/benchmarks/test-bench"
-        assert params["build_job_ids"] == ["build-single:test-bench:test-bench-asan-deltabase"]
+        assert params["build_job_ids"] == [
+            "build-single:test-bench:test-bench-asan-deltabase"
+        ]
         assert params["source_mode"] == "pkgs"
 
     def test_serialize_patch_pov_test(self) -> None:

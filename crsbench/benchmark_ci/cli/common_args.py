@@ -66,8 +66,8 @@ def create_build_options_parent() -> argparse.ArgumentParser:
         "--source",
         type=str,
         choices=["pkgs", "main_repo"],
-        default="main_repo",
-        help="Source mode: 'pkgs' (bundled tarballs) or 'main_repo' (git clone, default)",
+        default="pkgs",
+        help="Source mode: 'pkgs' (bundled tarballs, default) or 'main_repo' (git clone)",
     )
     parser.add_argument(
         "--build-workers",
@@ -108,8 +108,14 @@ def create_build_options_parent() -> argparse.ArgumentParser:
         "--controller-cores",
         type=int,
         default=None,
-        help="CPU cores reserved for controller (DAGExecutor, monitoring). "
+        help="CPU cores reserved for controller (monitoring). "
         "Priority: CLI > CRSBENCH_CONTROLLER_CORES env > config (default: 2)",
+    )
+    parser.add_argument(
+        "--redis-host",
+        type=str,
+        default="localhost",
+        help="Redis server hostname for distributed execution (default: localhost)",
     )
     return parser
 
