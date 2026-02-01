@@ -58,7 +58,7 @@ class SnapshotLoader:
         # Sort by cycle number
         snapshots.sort(key=lambda s: s.cycle)
 
-        logger.info(f"Loaded {len(snapshots)} snapshots from {trial_dir}")
+        logger.debug(f"Loaded {len(snapshots)} snapshots from {trial_dir}")
         return snapshots
 
     def load_snapshot(self, archive_path: Path, trial_dir: Path) -> SnapshotData:

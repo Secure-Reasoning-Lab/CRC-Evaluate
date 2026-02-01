@@ -196,54 +196,130 @@ class ReportGenerator:
         trial_json_paths: list[Path] = []
         trial_html_paths: list[Path] = []
 
-        for trial_info in valid_trials:
-            try:
-                # Load snapshots
-                snapshots = self.snapshot_loader.load_trial_snapshots(
-                    trial_info.trial_dir
+        try:
+            from rich.progress import (
+                BarColumn,
+                Progress,
+                SpinnerColumn,
+                TaskProgressColumn,
+                TextColumn,
+            )
+
+            use_rich = True
+        except ImportError:
+            use_rich = False
+
+        if use_rich:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+            ) as progress:
+                task = progress.add_task(
+                    "Processing trials...", total=len(valid_trials)
                 )
+                for trial_info in valid_trials:
+                    try:
+                        # Load snapshots
+                        snapshots = self.snapshot_loader.load_trial_snapshots(
+                            trial_info.trial_dir
+                        )
 
-                if not snapshots:
-                    logger.warning(
-                        f"No snapshots found for trial {trial_info.trial_num}"
+                        if not snapshots:
+                            logger.warning(
+                                f"No snapshots found for trial {trial_info.trial_num}"
+                            )
+                            continue
+
+                        # Load ground truth CPV count from meta.yaml
+                        total_cpvs, _ = self._get_cpv_info(trial_info)
+
+                        # Aggregate metrics
+                        trial_metrics = self.metrics_aggregator.aggregate_trial(
+                            trial_info=trial_info,
+                            snapshots=snapshots,
+                            total_cpvs=total_cpvs,
+                        )
+                        trial_metrics_list.append(trial_metrics)
+
+                        # Generate trial reports
+                        if format in ("json", "both", "all"):
+                            json_path = self.json_generator.generate_trial_report(
+                                trial_metrics, snapshots
+                            )
+                            trial_json_paths.append(json_path)
+
+                        if format in ("html", "both", "all"):
+                            html_path = self.html_generator.generate_trial_report(
+                                trial_metrics, snapshots
+                            )
+                            trial_html_paths.append(html_path)
+
+                        if format in ("csv", "all"):
+                            self.csv_generator.generate_trial_report(
+                                trial_metrics.model_dump(), snapshots
+                            )
+
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to process trial {trial_info.trial_num}: {e}"
+                        )
+                        if not skip_incomplete:
+                            raise ReportGenerationError(
+                                f"Failed to process trial {trial_info.trial_num}: {e}"
+                            ) from e
+                    finally:
+                        progress.advance(task)
+        else:
+            for trial_info in valid_trials:
+                try:
+                    # Load snapshots
+                    snapshots = self.snapshot_loader.load_trial_snapshots(
+                        trial_info.trial_dir
                     )
-                    continue
 
-                # Load ground truth CPV count from meta.yaml
-                total_cpvs, _ = self._get_cpv_info(trial_info)
+                    if not snapshots:
+                        logger.warning(
+                            f"No snapshots found for trial {trial_info.trial_num}"
+                        )
+                        continue
 
-                # Aggregate metrics
-                trial_metrics = self.metrics_aggregator.aggregate_trial(
-                    trial_info=trial_info,
-                    snapshots=snapshots,
-                    total_cpvs=total_cpvs,
-                )
-                trial_metrics_list.append(trial_metrics)
+                    # Load ground truth CPV count from meta.yaml
+                    total_cpvs, _ = self._get_cpv_info(trial_info)
 
-                # Generate trial reports
-                if format in ("json", "both", "all"):
-                    json_path = self.json_generator.generate_trial_report(
-                        trial_metrics, snapshots
+                    # Aggregate metrics
+                    trial_metrics = self.metrics_aggregator.aggregate_trial(
+                        trial_info=trial_info,
+                        snapshots=snapshots,
+                        total_cpvs=total_cpvs,
                     )
-                    trial_json_paths.append(json_path)
+                    trial_metrics_list.append(trial_metrics)
 
-                if format in ("html", "both", "all"):
-                    html_path = self.html_generator.generate_trial_report(
-                        trial_metrics, snapshots
-                    )
-                    trial_html_paths.append(html_path)
+                    # Generate trial reports
+                    if format in ("json", "both", "all"):
+                        json_path = self.json_generator.generate_trial_report(
+                            trial_metrics, snapshots
+                        )
+                        trial_json_paths.append(json_path)
 
-                if format in ("csv", "all"):
-                    self.csv_generator.generate_trial_report(
-                        trial_metrics.model_dump(), snapshots
-                    )
+                    if format in ("html", "both", "all"):
+                        html_path = self.html_generator.generate_trial_report(
+                            trial_metrics, snapshots
+                        )
+                        trial_html_paths.append(html_path)
 
-            except Exception as e:
-                logger.error(f"Failed to process trial {trial_info.trial_num}: {e}")
-                if not skip_incomplete:
-                    raise ReportGenerationError(
-                        f"Failed to process trial {trial_info.trial_num}: {e}"
-                    ) from e
+                    if format in ("csv", "all"):
+                        self.csv_generator.generate_trial_report(
+                            trial_metrics.model_dump(), snapshots
+                        )
+
+                except Exception as e:
+                    logger.error(f"Failed to process trial {trial_info.trial_num}: {e}")
+                    if not skip_incomplete:
+                        raise ReportGenerationError(
+                            f"Failed to process trial {trial_info.trial_num}: {e}"
+                        ) from e
 
         if not trial_metrics_list:
             raise ReportGenerationError("No trials could be processed successfully")
@@ -420,19 +496,61 @@ class ReportGenerator:
 
         trial_metrics_list: list[TrialMetrics] = []
 
-        for trial_info in valid_trials:
-            snapshots = self.snapshot_loader.load_trial_snapshots(trial_info.trial_dir)
+        try:
+            from rich.progress import (
+                BarColumn,
+                Progress,
+                SpinnerColumn,
+                TaskProgressColumn,
+                TextColumn,
+            )
 
-            if snapshots:
-                # Load ground truth CPV count
-                total_cpvs, _ = self._get_cpv_info(trial_info)
+            use_rich = True
+        except ImportError:
+            use_rich = False
 
-                trial_metrics = self.metrics_aggregator.aggregate_trial(
-                    trial_info=trial_info,
-                    snapshots=snapshots,
-                    total_cpvs=total_cpvs,
+        if use_rich:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+            ) as progress:
+                task = progress.add_task(
+                    "Processing trials...", total=len(valid_trials)
                 )
-                trial_metrics_list.append(trial_metrics)
+                for trial_info in valid_trials:
+                    snapshots = self.snapshot_loader.load_trial_snapshots(
+                        trial_info.trial_dir
+                    )
+
+                    if snapshots:
+                        # Load ground truth CPV count
+                        total_cpvs, _ = self._get_cpv_info(trial_info)
+
+                        trial_metrics = self.metrics_aggregator.aggregate_trial(
+                            trial_info=trial_info,
+                            snapshots=snapshots,
+                            total_cpvs=total_cpvs,
+                        )
+                        trial_metrics_list.append(trial_metrics)
+                    progress.advance(task)
+        else:
+            for trial_info in valid_trials:
+                snapshots = self.snapshot_loader.load_trial_snapshots(
+                    trial_info.trial_dir
+                )
+
+                if snapshots:
+                    # Load ground truth CPV count
+                    total_cpvs, _ = self._get_cpv_info(trial_info)
+
+                    trial_metrics = self.metrics_aggregator.aggregate_trial(
+                        trial_info=trial_info,
+                        snapshots=snapshots,
+                        total_cpvs=total_cpvs,
+                    )
+                    trial_metrics_list.append(trial_metrics)
 
         return self.metrics_aggregator.aggregate_experiment(
             experiment_dir=str(experiment_dir),

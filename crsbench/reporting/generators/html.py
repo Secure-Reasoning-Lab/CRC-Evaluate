@@ -549,7 +549,7 @@ class HTMLReportGenerator:
         output_path = trial_reports_dir / f"{trial_id}.html"
         output_path.write_text(html)
 
-        logger.info(f"Generated HTML trial report: {output_path}")
+        logger.debug(f"Generated HTML trial report: {output_path}")
         return output_path
 
     def generate_experiment_report(self, experiment_metrics: ExperimentMetrics) -> Path:
@@ -599,7 +599,7 @@ class HTMLReportGenerator:
         output_path = self.output_dir / f"experiment-{experiment_name}.html"
         output_path.write_text(html)
 
-        logger.info(f"Generated HTML experiment report: {output_path}")
+        logger.debug(f"Generated HTML experiment report: {output_path}")
         return output_path
 
     def _build_stat_cards(self, stats: list[tuple[str, Any]]) -> str:

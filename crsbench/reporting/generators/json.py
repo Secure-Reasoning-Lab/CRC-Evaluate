@@ -132,7 +132,7 @@ class JSONReportGenerator:
         output_path = trial_reports_dir / f"{trial_id}.json"
         output_path.write_text(json.dumps(report, indent=2))
 
-        logger.info(f"Generated JSON trial report: {output_path}")
+        logger.debug(f"Generated JSON trial report: {output_path}")
         return output_path
 
     def generate_experiment_report(
@@ -220,7 +220,7 @@ class JSONReportGenerator:
         output_path = self.output_dir / f"experiment-{exp_name}.json"
         output_path.write_text(json.dumps(report, indent=2))
 
-        logger.info(f"Generated JSON experiment report: {output_path}")
+        logger.debug(f"Generated JSON experiment report: {output_path}")
         return output_path
 
     def _build_timeline(self, snapshots: list[SnapshotData]) -> dict[str, Any]:

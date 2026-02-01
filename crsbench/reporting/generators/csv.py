@@ -58,7 +58,7 @@ class CSVReportGenerator:
         trial_row = self._format_trial_row(trial_metrics)
         self._write_csv_rows(trial_csv, [trial_row], list(trial_row.keys()))
         output_files.append(trial_csv)
-        logger.info(f"Generated trial summary CSV: {trial_csv}")
+        logger.debug(f"Generated trial summary CSV: {trial_csv}")
 
         # Generate time series CSV
         # Use time_series (computed cumulative data) not raw snapshots
@@ -78,7 +78,7 @@ class CSVReportGenerator:
                     time_series_csv, time_series_rows, list(time_series_rows[0].keys())
                 )
                 output_files.append(time_series_csv)
-                logger.info(f"Generated time series CSV: {time_series_csv}")
+                logger.debug(f"Generated time series CSV: {time_series_csv}")
 
         return output_files
 
@@ -104,7 +104,7 @@ class CSVReportGenerator:
         if trial_rows:
             self._write_csv_rows(trial_csv, trial_rows, list(trial_rows[0].keys()))
             output_files.append(trial_csv)
-            logger.info(f"Generated trial summary CSV: {trial_csv}")
+            logger.debug(f"Generated trial summary CSV: {trial_csv}")
 
         # Generate CRS summary CSV
         crs_csv = self.output_dir / "crs_summary.csv"
@@ -115,7 +115,7 @@ class CSVReportGenerator:
         if crs_rows:
             self._write_csv_rows(crs_csv, crs_rows, list(crs_rows[0].keys()))
             output_files.append(crs_csv)
-            logger.info(f"Generated CRS summary CSV: {crs_csv}")
+            logger.debug(f"Generated CRS summary CSV: {crs_csv}")
 
         # Generate benchmark summary CSV
         benchmark_csv = self.output_dir / "benchmark_summary.csv"
@@ -130,7 +130,7 @@ class CSVReportGenerator:
                 benchmark_csv, benchmark_rows, list(benchmark_rows[0].keys())
             )
             output_files.append(benchmark_csv)
-            logger.info(f"Generated benchmark summary CSV: {benchmark_csv}")
+            logger.debug(f"Generated benchmark summary CSV: {benchmark_csv}")
 
         # Generate time series CSV (all trials)
         time_series_csv = self.output_dir / "time_series.csv"
@@ -144,7 +144,7 @@ class CSVReportGenerator:
                 time_series_csv, time_series_rows, list(time_series_rows[0].keys())
             )
             output_files.append(time_series_csv)
-            logger.info(f"Generated time series CSV: {time_series_csv}")
+            logger.debug(f"Generated time series CSV: {time_series_csv}")
 
         # Generate combined report CSV
         combined_csv = self.output_dir / "combined_report.csv"
@@ -162,7 +162,7 @@ class CSVReportGenerator:
             )
             self._write_csv_rows(combined_csv, combined_rows, sorted_columns)
             output_files.append(combined_csv)
-            logger.info(f"Generated combined report CSV: {combined_csv}")
+            logger.debug(f"Generated combined report CSV: {combined_csv}")
 
         return output_files
 
