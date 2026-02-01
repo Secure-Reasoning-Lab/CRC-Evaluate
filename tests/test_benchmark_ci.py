@@ -173,6 +173,50 @@ class TestBenchmarkValidationResult:
         # All checks skipped, so total should be SKIP
         assert result.total_status == CheckStatus.SKIP
 
+    def test_total_status_build_only_pass(self) -> None:
+        """Test total_status returns PASS when only pov_build_check is set (build-only mode)."""
+        result = BenchmarkValidationResult(
+            benchmark="test-bench",
+            benchmark_path=Path("/tmp/test"),
+            pov_build_check=CheckResult(status=CheckStatus.PASS, time_seconds=10.0),
+        )
+        assert result.total_status == CheckStatus.PASS
+
+    def test_total_status_build_only_fail(self) -> None:
+        """Test total_status returns FAIL when pov_build_check fails (build-only mode)."""
+        result = BenchmarkValidationResult(
+            benchmark="test-bench",
+            benchmark_path=Path("/tmp/test"),
+            pov_build_check=CheckResult(
+                status=CheckStatus.FAIL,
+                time_seconds=5.0,
+                error="Build failed",
+            ),
+        )
+        assert result.total_status == CheckStatus.FAIL
+
+    def test_total_status_build_only_error(self) -> None:
+        """Test total_status returns ERROR when pov_build_check errors (build-only mode)."""
+        result = BenchmarkValidationResult(
+            benchmark="test-bench",
+            benchmark_path=Path("/tmp/test"),
+            pov_build_check=CheckResult(
+                status=CheckStatus.ERROR,
+                time_seconds=1.0,
+                error="Build error",
+            ),
+        )
+        assert result.total_status == CheckStatus.ERROR
+
+    def test_total_time_includes_pov_build_check(self) -> None:
+        """Test total_time includes pov_build_check time."""
+        result = BenchmarkValidationResult(
+            benchmark="test-bench",
+            benchmark_path=Path("/tmp/test"),
+            pov_build_check=CheckResult(status=CheckStatus.PASS, time_seconds=15.0),
+        )
+        assert result.total_time == 15.0
+
     def test_total_time(self) -> None:
         """Test total_time calculation."""
         result = BenchmarkValidationResult(

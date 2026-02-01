@@ -27,6 +27,7 @@ class CheckMode(Enum):
     """
 
     FORMAT = "format"  # Format validation only (Fmt column)
+    BUILD = "build"  # Build only (no verification)
     DEFAULT = "default"  # Standard checks only (POV, Patch)
     INC = "inc"  # Inc-build variants only (POV:inc, Patch:inc)
     RTS = "rts"  # RTS variants only (Patch:rts)
@@ -183,6 +184,7 @@ class BenchmarkValidationResult:
             self.pov_check,
             self.patch_check,
             self.coverage_check,
+            self.pov_build_check,
             self.pov_inc_check,
             self.patch_inc_check,
             self.patch_rts_check,
@@ -216,6 +218,7 @@ class BenchmarkValidationResult:
             self.pov_check,
             self.patch_check,
             self.coverage_check,
+            self.pov_build_check,
             self.pov_inc_check,
             self.patch_inc_check,
             self.patch_rts_check,
