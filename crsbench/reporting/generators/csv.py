@@ -4,7 +4,6 @@ import csv
 from pathlib import Path
 from typing import Any
 
-from crsbench.reporting.models import SnapshotData
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -23,13 +22,13 @@ class CSVReportGenerator:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def generate_trial_report(
-        self, trial_metrics: dict[str, Any], snapshots: list[SnapshotData]
+        self, trial_metrics: dict[str, Any], _snapshots: list[Any] | None = None
     ) -> list[Path]:
         """Generate CSV report for a single trial.
 
         Args:
-            trial_metrics: Trial-level metrics
-            snapshots: List of snapshot data for this trial
+            trial_metrics: Trial-level metrics with time_series data
+            _snapshots: Unused (kept for API compatibility)
 
         Returns:
             List of generated CSV file paths
@@ -62,11 +61,17 @@ class CSVReportGenerator:
         logger.info(f"Generated trial summary CSV: {trial_csv}")
 
         # Generate time series CSV
-        if snapshots:
+        # Use time_series (computed cumulative data) not raw snapshots
+        time_series_data = (
+            trial_metrics.get("time_series", [])
+            if isinstance(trial_metrics, dict)
+            else trial_metrics.time_series
+        )
+        if time_series_data:
             time_series_csv = trial_reports_dir / f"{trial_id}_time_series.csv"
             time_series_rows = [
-                self._format_time_series_row(trial_metrics, snapshot)
-                for snapshot in snapshots
+                self._format_time_series_row(trial_metrics, ts_point)
+                for ts_point in time_series_data
             ]
             if time_series_rows:
                 self._write_csv_rows(
@@ -130,8 +135,9 @@ class CSVReportGenerator:
         time_series_csv = self.output_dir / "time_series.csv"
         time_series_rows = []
         for trial in experiment_metrics["trials"]:
-            for snapshot in trial.get("snapshots", []):
-                time_series_rows.append(self._format_time_series_row(trial, snapshot))
+            # Use time_series (computed cumulative data) not raw snapshots
+            for ts_point in trial.get("time_series", []):
+                time_series_rows.append(self._format_time_series_row(trial, ts_point))
         if time_series_rows:
             self._write_csv_rows(
                 time_series_csv, time_series_rows, list(time_series_rows[0].keys())
@@ -184,7 +190,7 @@ class CSVReportGenerator:
             "total_llm_tokens": trial_metrics.get("total_llm_tokens", 0),
             "total_time": trial_metrics.get("total_time", 0.0),
             "time_to_first_pov": trial_metrics.get("time_to_first_pov", ""),
-            "snapshot_count": len(trial_metrics.get("snapshots", [])),
+            "snapshot_count": trial_metrics.get("snapshot_count", 0),
         }
 
     def _format_crs_row(
@@ -231,32 +237,30 @@ class CSVReportGenerator:
         }
 
     def _format_time_series_row(
-        self, trial_metrics: dict[str, Any], snapshot: SnapshotData | dict[str, Any]
+        self, trial_metrics: dict[str, Any], ts_point: dict[str, Any]
     ) -> dict[str, Any]:
-        """Format time series snapshot into CSV row.
+        """Format time series point into CSV row.
 
         Args:
             trial_metrics: Trial-level metrics
-            snapshot: Snapshot data (SnapshotData object or dict)
+            ts_point: TimeSeriesPoint data dict
 
         Returns:
             Dictionary representing CSV row
         """
-        # Handle both SnapshotData objects and dicts
-        if isinstance(snapshot, SnapshotData):
-            snapshot_dict = snapshot.model_dump()
-        else:
-            snapshot_dict = snapshot
-
         return {
             "trial_num": trial_metrics.get("trial_num", ""),
             "crs": trial_metrics.get("crs", ""),
             "benchmark": trial_metrics.get("benchmark", ""),
-            "elapsed_time": snapshot_dict.get("elapsed_time", 0.0),
-            "cumulative_povs": snapshot_dict.get("cumulative_povs", 0),
-            "cumulative_patches": snapshot_dict.get("cumulative_patches", 0),
-            "llm_tokens": snapshot_dict.get("llm_tokens", 0),
-            "llm_cost": snapshot_dict.get("llm_cost", 0.0),
+            "harness": trial_metrics.get("harness", ""),
+            "mode": trial_metrics.get("mode", ""),
+            "run_mode": trial_metrics.get("run_mode", ""),
+            "sanitizer": trial_metrics.get("sanitizer", ""),
+            "elapsed_time": ts_point.get("elapsed_time", 0.0),
+            "cumulative_povs": ts_point.get("cumulative_povs", 0),
+            "cumulative_patches": ts_point.get("cumulative_patches", 0),
+            "llm_tokens": ts_point.get("llm_tokens", 0),
+            "llm_cost": ts_point.get("llm_cost", 0.0),
         }
 
     def _create_combined_rows(

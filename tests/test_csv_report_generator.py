@@ -34,7 +34,8 @@ def sample_trial_metrics():
         "total_llm_tokens": 1000,
         "total_time": 3600.0,
         "time_to_first_pov": 120.5,
-        "snapshots": [
+        "snapshot_count": 2,
+        "time_series": [
             {
                 "elapsed_time": 60.0,
                 "cumulative_povs": 1,
@@ -75,7 +76,7 @@ def sample_experiment_metrics():
                 "total_llm_tokens": 1000,
                 "total_time": 3600.0,
                 "time_to_first_pov": 120.5,
-                "snapshots": [
+                "time_series": [
                     {
                         "elapsed_time": 60.0,
                         "cumulative_povs": 1,
@@ -102,7 +103,7 @@ def sample_experiment_metrics():
                 "total_llm_tokens": 600,
                 "total_time": 1800.0,
                 "time_to_first_pov": 90.0,
-                "snapshots": [
+                "time_series": [
                     {
                         "elapsed_time": 90.0,
                         "cumulative_povs": 2,
@@ -160,9 +161,8 @@ def test_csv_generator_init(temp_output_dir):
 def test_generate_trial_report(temp_output_dir, sample_trial_metrics):
     """Test generating CSV report for a single trial."""
     generator = CSVReportGenerator(temp_output_dir)
-    # Convert dict snapshots to SnapshotData objects for proper typing
-    snapshot_dicts = sample_trial_metrics["snapshots"]
-    output_files = generator.generate_trial_report(sample_trial_metrics, snapshot_dicts)
+    # No need to pass snapshots - uses time_series from trial_metrics
+    output_files = generator.generate_trial_report(sample_trial_metrics)
 
     assert len(output_files) == 2
 
@@ -286,14 +286,18 @@ def test_format_benchmark_row(temp_output_dir):
 
 
 def test_format_time_series_row(temp_output_dir, sample_trial_metrics):
-    """Test formatting time series snapshot into CSV row."""
+    """Test formatting time series point into CSV row."""
     generator = CSVReportGenerator(temp_output_dir)
-    snapshot = sample_trial_metrics["snapshots"][0]
-    row = generator._format_time_series_row(sample_trial_metrics, snapshot)
+    ts_point = sample_trial_metrics["time_series"][0]
+    row = generator._format_time_series_row(sample_trial_metrics, ts_point)
 
     assert row["trial_num"] == "trial-1"
     assert row["crs"] == "ensemble-c"
     assert row["benchmark"] == "json-c"
+    assert row["harness"] == "fuzz_json"
+    assert row["mode"] == "bug_finding"
+    assert row["run_mode"] == "full"
+    assert row["sanitizer"] == "address"
     assert row["elapsed_time"] == 60.0
     assert row["cumulative_povs"] == 1
     assert row["llm_tokens"] == 200
