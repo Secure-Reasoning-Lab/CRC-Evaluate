@@ -4,7 +4,7 @@ Tests for crsbench/evaluation/verification/pov/manager.py.
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from crsbench.evaluation.verification.models import PovVerificationStatus
 from crsbench.evaluation.verification.pov.config import POVVerificationConfig
@@ -697,3 +697,167 @@ class TestGetReport:
         assert set(report.cpvs_found) == {"cpv_0", "cpv_1"}
         assert report.unintended_crashes == 1
         assert report.duplicates_skipped == 2
+
+
+class TestAsyncMode:
+    """Tests for POVVerificationManager async mode (VU-02/03/04)."""
+
+    def _make_manager(self, tmp_path: Path, *, redis_host=None):
+        from crsbench.evaluation.verification.pov.manager import (
+            POVVerificationManager,
+        )
+
+        trial_dir = tmp_path / "trial-1"
+        trial_dir.mkdir(exist_ok=True)
+        pov_output_dir = trial_dir / "pov_output"
+        pov_output_dir.mkdir(exist_ok=True)
+
+        config = POVVerificationConfig()
+        return POVVerificationManager(
+            trial_dir=trial_dir,
+            pov_output_dir=pov_output_dir,
+            config=config,
+            harness_name="fuzz_parser",
+            benchmark_id="test-benchmark",
+            expected_cpv_ids=["cpv_0", "cpv_1"],
+            redis_host=redis_host,
+            experiment_name="exp1",
+            trial_id="trial-1",
+        )
+
+    def test_async_mode_enabled_with_redis_host(self, tmp_path: Path) -> None:
+        """Manager in async mode when redis_host is provided."""
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+        assert manager._async_mode is True
+
+    def test_async_mode_disabled_without_redis_host(self, tmp_path: Path) -> None:
+        """Manager in inline mode when redis_host is None."""
+        manager = self._make_manager(tmp_path, redis_host=None)
+        assert manager._async_mode is False
+
+    @patch("crsbench.distributed.verify_queue.initialize_verify_queue")
+    def test_get_verify_queue_initializes_lazily(
+        self, mock_init_queue, tmp_path: Path
+    ) -> None:
+        """Verify queue is initialized lazily on first access."""
+        mock_queue = MagicMock()
+        mock_init_queue.return_value = mock_queue
+
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+
+        # Not initialized yet
+        assert manager._verify_queue is None
+
+        # First access triggers init
+        queue = manager._get_verify_queue()
+        assert queue is mock_queue
+        mock_init_queue.assert_called_once_with("redis.local", "exp1")
+
+        # Second access returns cached
+        queue2 = manager._get_verify_queue()
+        assert queue2 is mock_queue
+        # Still only called once
+        mock_init_queue.assert_called_once()
+
+    @patch("crsbench.distributed.verify_queue.enqueue_single_pov")
+    @patch("crsbench.distributed.verify_queue.initialize_verify_queue")
+    def test_enqueue_pov_calls_verify_queue(
+        self, mock_init_queue, mock_enqueue, tmp_path: Path
+    ) -> None:
+        """_enqueue_pov reads POV data and enqueues via verify_queue."""
+        mock_queue = MagicMock()
+        mock_init_queue.return_value = mock_queue
+        mock_enqueue.return_value = "job-123"
+
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+
+        pov_file = tmp_path / "trial-1" / "pov_output" / "test.blob"
+        pov_file.write_bytes(b"pov_data_content")
+
+        job_id = manager._enqueue_pov(pov_file)
+
+        assert job_id == "job-123"
+        mock_enqueue.assert_called_once()
+        call_kwargs = mock_enqueue.call_args
+        assert call_kwargs[1]["pov_id"] == "test.blob"
+
+    @patch("crsbench.distributed.verify_queue.poll_single_pov_verdicts")
+    def test_poll_pending_verdicts_processes_results(
+        self, mock_poll, tmp_path: Path
+    ) -> None:
+        """_poll_pending_verdicts processes completed results into store."""
+        from crsbench.distributed.evaluator_jobs import PovVerdict, SinglePovResult
+
+        verdict = PovVerdict(
+            pov_id="test.blob",
+            triggered_bug=True,
+            cpv_matches=["cpv_0"],
+        )
+        result = SinglePovResult(
+            trial_id="trial-1",
+            benchmark="test-benchmark",
+            harness="fuzz_parser",
+            verdict=verdict,
+            completed_at=1700000100.0,
+        )
+
+        mock_poll.return_value = ([result.to_dict()], [])
+
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+        manager._pending_job_ids = ["job-123"]
+
+        manager._poll_pending_verdicts()
+
+        # Pending should be cleared
+        assert manager._pending_job_ids == []
+        # CPV should be found
+        assert "cpv_0" in manager.found_cpvs
+
+    def test_on_snapshot_async_enqueues_and_polls(self, tmp_path: Path) -> None:
+        """In async mode, on_snapshot enqueues new POVs and polls verdicts."""
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+
+        # Create a POV file
+        pov_file = tmp_path / "trial-1" / "pov_output" / "pov1.blob"
+        pov_file.write_bytes(b"async_pov_content")
+
+        # Mock the enqueue and poll methods
+        manager._enqueue_pov = MagicMock(return_value="job-456")
+        manager._poll_pending_verdicts = MagicMock()
+
+        snapshot = manager.on_snapshot(cycle=1)
+
+        # Should have enqueued the POV
+        manager._enqueue_pov.assert_called_once()
+        # Should have polled for results
+        manager._poll_pending_verdicts.assert_called_once()
+        # POV hash should be marked tested in store
+        assert snapshot.povs_new == 1
+        assert len(manager._pending_job_ids) == 1
+
+    def test_on_snapshot_inline_verifies_directly(self, tmp_path: Path) -> None:
+        """In inline mode, on_snapshot verifies POVs synchronously."""
+        from crsbench.evaluation.verification.models import PovVerificationResult
+
+        manager = self._make_manager(tmp_path, redis_host=None)
+
+        # Create a POV file
+        pov_file = tmp_path / "trial-1" / "pov_output" / "pov1.blob"
+        pov_file.write_bytes(b"inline_pov_content")
+
+        # Mock the engine and adapter for inline verification
+        mock_result = PovVerificationResult(
+            status=PovVerificationStatus.NOT_VULNERABLE,
+            benchmark="test-benchmark",
+            pov_id="pov1.blob",
+            cpv_matched=[],
+        )
+        manager._engine = MagicMock()
+        manager._engine.verify_pov.return_value = mock_result
+        manager._adapter = MagicMock()
+
+        snapshot = manager.on_snapshot(cycle=1)
+
+        # Should have verified inline
+        manager._engine.verify_pov.assert_called_once()
+        assert snapshot.povs_new == 1

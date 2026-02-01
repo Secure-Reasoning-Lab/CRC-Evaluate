@@ -339,6 +339,73 @@ class POVStore:
         with self._lock:
             return pov_hash, pov_hash in self.povs
 
+    def mark_hash_tested(self, pov_hash: str) -> None:
+        """Mark a POV hash as tested (pending async result).
+
+        Used in async mode to prevent re-enqueue of POVs that have
+        already been sent to Redis but haven't returned results yet.
+
+        Args:
+            pov_hash: Content hash of the POV file
+        """
+        with self._lock:
+            if pov_hash not in self.povs:
+                self.povs[pov_hash] = POVEntry(
+                    hash=pov_hash,
+                    first_seen_ts=time.time(),
+                    file_mtime=None,
+                    file_size=0,
+                    status=PovVerificationStatus.ERROR,  # Placeholder
+                    cpv_matched=[],
+                )
+
+    def add_pov_by_id(
+        self,
+        pov_id: str,
+        status: PovVerificationStatus,
+        cpv_matched: list[str],
+    ) -> None:
+        """Add a POV result by ID (for async verification results).
+
+        Unlike add_pov() which takes a file path, this method accepts
+        a POV identifier string. Used when processing async Redis results
+        where the POV file may not be accessible.
+
+        Args:
+            pov_id: POV identifier (filename)
+            status: Verification result status
+            cpv_matched: List of CPV identifiers matched
+        """
+        # Use pov_id as a pseudo-hash for tracking
+        with self._lock:
+            # Find existing entry by scanning for matching pov_id
+            # or create new entry using pov_id as hash key
+            existing_hash = None
+            for h, entry in self.povs.items():
+                if h == pov_id or getattr(entry, "pov_id", None) == pov_id:
+                    existing_hash = h
+                    break
+
+            target_hash = existing_hash or pov_id
+
+            self.povs[target_hash] = POVEntry(
+                hash=target_hash,
+                first_seen_ts=time.time(),
+                file_mtime=None,
+                file_size=0,
+                status=status,
+                cpv_matched=cpv_matched,
+            )
+
+            # Track CPV discovery
+            for cpv_id in cpv_matched:
+                if cpv_id not in self.cpv_to_first_pov:
+                    self.cpv_to_first_pov[cpv_id] = {
+                        "pov_hash": target_hash,
+                        "first_seen_ts": time.time(),
+                        "discovery_elapsed": time.time() - self.crs_run_start_time,
+                    }
+
     def get_stats(self) -> dict:
         """Get store statistics.
 

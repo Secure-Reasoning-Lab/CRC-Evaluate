@@ -623,3 +623,76 @@ class TestPOVStoreTimestamps:
         # cpv_1 should have second discovery time
         assert store.cpv_to_first_pov["cpv_1"]["pov_hash"] == hash2
         assert store.cpv_to_first_pov["cpv_1"]["relative_time"] == 20.0
+
+
+class TestPOVStoreAsyncHelpers:
+    """Tests for POVStore async mode helpers (mark_hash_tested, add_pov_by_id)."""
+
+    @pytest.fixture
+    def store(self, tmp_path: Path) -> POVStore:
+        return POVStore(tmp_path / "povs")
+
+    def test_mark_hash_tested_creates_placeholder(self, store: POVStore) -> None:
+        """mark_hash_tested creates an entry so the hash is considered tested."""
+        store.mark_hash_tested("abc123")
+
+        assert "abc123" in store.povs
+        assert store.povs["abc123"].status == PovVerificationStatus.ERROR
+        assert store.povs["abc123"].cpv_matched == []
+
+    def test_mark_hash_tested_prevents_duplicate_enqueue(
+        self, store: POVStore, tmp_path: Path
+    ) -> None:
+        """After mark_hash_tested, the POV is seen as already tested."""
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"test content")
+        pov_hash = compute_content_hash(pov)
+
+        store.mark_hash_tested(pov_hash)
+        assert store.is_already_tested(pov)
+
+    def test_mark_hash_tested_does_not_overwrite_existing(
+        self, store: POVStore, tmp_path: Path
+    ) -> None:
+        """mark_hash_tested should not overwrite an existing real entry."""
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"test content")
+        pov_hash, _ = store.add_pov(pov, PovVerificationStatus.CPV, ["cpv_0"])
+
+        # Marking again should not overwrite
+        store.mark_hash_tested(pov_hash)
+        assert store.povs[pov_hash].status == PovVerificationStatus.CPV
+        assert store.povs[pov_hash].cpv_matched == ["cpv_0"]
+
+    def test_add_pov_by_id_creates_entry(self, store: POVStore) -> None:
+        """add_pov_by_id creates an entry using the ID as hash key."""
+        store.add_pov_by_id("pov_abc.blob", PovVerificationStatus.CPV, ["cpv_0"])
+
+        assert "pov_abc.blob" in store.povs
+        assert store.povs["pov_abc.blob"].status == PovVerificationStatus.CPV
+        assert store.povs["pov_abc.blob"].cpv_matched == ["cpv_0"]
+
+    def test_add_pov_by_id_tracks_cpv_discovery(self, store: POVStore) -> None:
+        """add_pov_by_id registers CPV discovery in cpv_to_first_pov."""
+        store.add_pov_by_id("pov1.blob", PovVerificationStatus.CPV, ["cpv_0", "cpv_1"])
+
+        assert "cpv_0" in store.cpv_to_first_pov
+        assert "cpv_1" in store.cpv_to_first_pov
+        assert store.cpv_to_first_pov["cpv_0"]["pov_hash"] == "pov1.blob"
+
+    def test_add_pov_by_id_updates_placeholder(self, store: POVStore) -> None:
+        """add_pov_by_id can update a placeholder created by mark_hash_tested."""
+        store.mark_hash_tested("pov1.blob")
+        assert store.povs["pov1.blob"].status == PovVerificationStatus.ERROR
+
+        store.add_pov_by_id("pov1.blob", PovVerificationStatus.CPV, ["cpv_0"])
+        assert store.povs["pov1.blob"].status == PovVerificationStatus.CPV
+
+    def test_add_pov_by_id_not_vulnerable(self, store: POVStore) -> None:
+        """add_pov_by_id with NOT_VULNERABLE does not track CPV discovery."""
+        store.add_pov_by_id(
+            "pov_miss.blob", PovVerificationStatus.NOT_VULNERABLE, []
+        )
+
+        assert "pov_miss.blob" in store.povs
+        assert len(store.cpv_to_first_pov) == 0

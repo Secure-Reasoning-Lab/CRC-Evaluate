@@ -101,6 +101,8 @@ class BenchmarkRunner:
         llm_trial_id: Optional[str] = None,
         build_workers: Optional[int] = None,
         verify_workers: Optional[int] = None,
+        redis_host: Optional[str] = None,
+        experiment_name: Optional[str] = None,
     ):
         """Initialize benchmark runner.
 
@@ -121,6 +123,8 @@ class BenchmarkRunner:
             llm_trial_id: Optional trial identifier for LLM usage files
             build_workers: Number of parallel workers for building variants
             verify_workers: Number of parallel workers for POV/patch verification
+            redis_host: Redis server hostname for async POV verification
+            experiment_name: Experiment name for async verify queue naming
         """
         self.crs_executor = crs_executor or StubCRSExecutor()
         self.snapshot_period = snapshot_period
@@ -138,6 +142,8 @@ class BenchmarkRunner:
         self.llm_trial_id = llm_trial_id
         self.build_workers = build_workers
         self.verify_workers = verify_workers
+        self.redis_host = redis_host
+        self.experiment_name = experiment_name
         self.logger = get_logger(__name__)
 
         if coverage_early_stop:
@@ -808,6 +814,9 @@ class BenchmarkRunner:
             pov_output_dir = trial_output_dir / "output" / "povs"
 
             # Create POV verification manager
+            # Derive trial_id from output dir name for async result correlation
+            trial_id = trial_output_dir.name
+
             manager = POVVerificationManager(
                 trial_dir=trial_output_dir,
                 pov_output_dir=pov_output_dir,
@@ -818,6 +827,9 @@ class BenchmarkRunner:
                 trial_start_time=trial_start_time,
                 engine=engine,
                 adapter=adapter,
+                redis_host=self.redis_host,
+                experiment_name=self.experiment_name,
+                trial_id=trial_id,
             )
 
             self.logger.info(

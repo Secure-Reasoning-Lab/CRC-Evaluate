@@ -40,7 +40,6 @@ from crsbench.benchmark_ci.cli.result_aggregator import (
     aggregate_pov_results,
     aggregate_pov_var_results,
 )
-from crsbench.benchmark_ci.jobs.base import Job, JobContext
 from crsbench.benchmark_ci.jobs.flat import (
     BuildPatchVariantJob,
     BuildSingleVariantJob,
@@ -61,12 +60,12 @@ from crsbench.benchmark_ci.models import (
 )
 from crsbench.benchmark_ci.validator import _load_project_capabilities
 from crsbench.builder.types import BenchmarkMode, VariantType
-from crsbench.executor import DAGExecutor
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
     import argparse
 
+    from crsbench.benchmark_ci.jobs.base import Job
     from crsbench.validation.meta_adapter import MetaYamlAdapter
 
 logger = get_logger(__name__)
@@ -676,21 +675,21 @@ def run_all(args: argparse.Namespace) -> int:
     _log_dag_summary(all_jobs)
     logger.info(
         f"Build phase complete: {len(vp_build_jobs)} builds via Redis, "
-        f"{len(remaining_jobs)} verify/patch jobs locally"
+        f"{len(remaining_jobs)} verify/patch jobs via Redis"
     )
 
-    # Step 2d: Execute remaining verify/test jobs with pre_results from builds
-    output_dir = getattr(args, "output_dir", None)
-    output_path = Path(output_dir) if output_dir else None
-    context = JobContext(output_dir=output_path)
+    # Step 2d: Execute remaining verify/test jobs via Redis
+    from crsbench.distributed.ci_jobs import (
+        ci_results_to_executor_results,
+        enqueue_and_poll_ci_jobs,
+    )
 
-    executor = DAGExecutor(
-        type_limits={"build": build_workers, "verify": verify_workers}
+    verify_queue_name = f"crsbench_ci_{redis_host}_verify"
+    raw_verify_results = enqueue_and_poll_ci_jobs(
+        remaining_jobs, redis_host, queue_name=verify_queue_name
     )
-    remaining_results = executor.execute(
-        remaining_jobs, context, pre_results=build_results
-    )
-    dag_results = {**build_results, **remaining_results}
+    verify_results = ci_results_to_executor_results(raw_verify_results)
+    dag_results = {**build_results, **verify_results}
 
     # Phase 3: Aggregate into ValidationSummary
     summary = ValidationSummary(started_at=start_dt, check_mode=CheckMode.ALL)

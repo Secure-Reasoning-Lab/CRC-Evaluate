@@ -915,6 +915,8 @@ def run_crs_trial(
             llm_trial_id=trial_id,
             build_workers=config.build_workers,
             verify_workers=config.verify_workers,
+            redis_host=getattr(config, "redis_host", None),
+            experiment_name=config.experiment,
         )
 
         # Resolve benchmark path
