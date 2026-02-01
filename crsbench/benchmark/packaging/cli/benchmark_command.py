@@ -7,6 +7,8 @@ Provides:
 - crsbench benchmark prepare-delta <path> - Generate ref.diff
 - crsbench benchmark inject-canary <dir> --filter <pattern> - Add canary for contamination detection
 - crsbench benchmark list-canaries - List registered canary UUIDs
+- crsbench benchmark pull-image <dir> - Pull inc-build Docker images
+- crsbench benchmark check-image <dir> - Check local vs remote image digests
 """
 
 import argparse
@@ -265,6 +267,92 @@ Examples:
         help="Overwrite existing corpus directory",
     )
     seed_import_parser.set_defaults(func=handle_seed_import)
+
+    # crsbench benchmark pull-image
+    pull_image_parser = benchmark_subparsers.add_parser(
+        "pull-image",
+        help="Pull inc-build Docker images for benchmarks",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Pre-pull inc-build Docker images for faster incremental builds.
+Only benchmarks with inc_build: true in project.yaml are processed.
+
+Examples:
+  # Pull all inc-build images
+  %(prog)s benchmarks/
+
+  # Filter by glob pattern
+  %(prog)s benchmarks/ --filter "afc-*"
+
+  # Dry-run to see what would be pulled
+  %(prog)s benchmarks/ --dry-run
+
+  # Use more parallel workers
+  %(prog)s benchmarks/ --workers 8
+        """,
+    )
+    pull_image_parser.add_argument(
+        "benchmarks_dir",
+        type=str,
+        nargs="?",
+        default="./benchmarks",
+        help="Directory containing benchmarks (default: ./benchmarks)",
+    )
+    pull_image_parser.add_argument(
+        "--filter",
+        type=str,
+        default=None,
+        help="Filter benchmarks by glob pattern (e.g., 'afc-*')",
+    )
+    pull_image_parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="Number of parallel workers (default: 4)",
+    )
+    pull_image_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be pulled without actually pulling",
+    )
+    pull_image_parser.set_defaults(func=handle_pull_image)
+
+    # crsbench benchmark check-image
+    check_image_parser = benchmark_subparsers.add_parser(
+        "check-image",
+        help="Check local vs remote inc-build image digests",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Compare local inc-build images against remote registry to detect outdated images.
+
+Status values:
+  UP-TO-DATE   - Local image matches remote
+  OUTDATED     - Local image differs from remote (needs pull)
+  LOCAL-ONLY   - Image exists locally but not in registry
+  REMOTE-ONLY  - Image exists in registry but not locally
+
+Examples:
+  # Check all inc-build images
+  %(prog)s benchmarks/
+
+  # Filter by glob pattern
+  %(prog)s benchmarks/ --filter "afc-*"
+        """,
+    )
+    check_image_parser.add_argument(
+        "benchmarks_dir",
+        type=str,
+        nargs="?",
+        default="./benchmarks",
+        help="Directory containing benchmarks (default: ./benchmarks)",
+    )
+    check_image_parser.add_argument(
+        "--filter",
+        type=str,
+        default=None,
+        help="Filter benchmarks by glob pattern (e.g., 'afc-*')",
+    )
+    check_image_parser.set_defaults(func=handle_check_image)
 
     benchmark_parser.set_defaults(command="benchmark", func=handle_benchmark_help)
 
@@ -600,6 +688,293 @@ def handle_seed_import(args: argparse.Namespace) -> int:
     except Exception as e:
         logger.error(f"Seed import failed: {e}")
         return 1
+
+
+def _discover_inc_build_benchmarks(
+    benchmarks_dir: Path,
+    filter_pattern: str | None,
+) -> list[tuple[str, list[str]]]:
+    """Discover benchmarks with inc_build: true.
+
+    Args:
+        benchmarks_dir: Directory containing benchmarks
+        filter_pattern: Optional glob pattern to filter benchmarks
+
+    Returns:
+        List of (project_name, sanitizers) tuples
+    """
+    import fnmatch
+
+    import yaml
+
+    results = []
+
+    for path in sorted(benchmarks_dir.iterdir()):
+        if not path.is_dir():
+            continue
+        # Skip hidden directories
+        if path.name.startswith("."):
+            continue
+        # Check for .aixcc directory (indicates a benchmark)
+        if not (path / ".aixcc").exists():
+            continue
+        # Apply filter
+        if filter_pattern and not fnmatch.fnmatch(path.name, filter_pattern):
+            continue
+
+        # Load project.yaml
+        project_yaml = path / "project.yaml"
+        if not project_yaml.exists():
+            continue
+
+        try:
+            with project_yaml.open() as f:
+                project_data = yaml.safe_load(f)
+        except Exception as e:
+            logger.warning(f"Failed to parse {project_yaml}: {e}")
+            continue
+
+        # Check inc_build flag (default: True per ProjectConfig schema)
+        inc_build = project_data.get("inc_build", True)
+        if not inc_build:
+            continue
+
+        # Get sanitizers (default: address)
+        sanitizers = project_data.get("sanitizers", ["address"])
+        if sanitizers:
+            results.append((path.name, sanitizers))
+
+    return results
+
+
+def handle_pull_image(args: argparse.Namespace) -> int:
+    """Handle 'crsbench benchmark pull-image' command.
+
+    Pre-pull inc-build Docker images for faster incremental builds.
+    Compares local and remote digests to detect outdated images.
+    """
+    from crsbench.benchmark.packaging.docker_utils import (
+        docker_image_exists,
+        docker_pull,
+        docker_retag,
+        get_inc_build_image_name,
+        get_local_image_digest,
+        get_ossfuzz_image_name,
+        get_remote_image_digest,
+    )
+
+    benchmarks_dir = Path(args.benchmarks_dir)
+
+    if not benchmarks_dir.is_dir():
+        logger.error(f"Benchmarks directory not found: {benchmarks_dir}")
+        return 1
+
+    # Discover inc-build benchmarks
+    benchmarks = _discover_inc_build_benchmarks(benchmarks_dir, args.filter)
+
+    if not benchmarks:
+        logger.warning(f"No inc-build enabled benchmarks found in {benchmarks_dir}")
+        return 0
+
+    # Build list of (project_name, sanitizer) pairs to pull
+    pull_targets: list[tuple[str, str]] = []
+    for project_name, sanitizers in benchmarks:
+        for sanitizer in sanitizers:
+            pull_targets.append((project_name, sanitizer))
+
+    logger.info(f"Found {len(benchmarks)} inc-build enabled benchmarks")
+    logger.info(f"Total images to process: {len(pull_targets)}")
+
+    if args.dry_run:
+        logger.info("\nDry run - would pull:")
+        for project_name, sanitizer in pull_targets:
+            image_name = get_inc_build_image_name(project_name, sanitizer)
+            logger.info(f"  {image_name}")
+        return 0
+
+    # Pull in parallel
+    results: dict[str, str] = {}  # "project:sanitizer" -> status
+    total = len(pull_targets)
+    completed_count = 0
+
+    def pull_one(target: tuple[str, str]) -> tuple[str, str]:
+        project_name, sanitizer = target
+        key = f"{project_name}:{sanitizer}"
+        inc_image = get_inc_build_image_name(project_name, sanitizer)
+        ossfuzz_image = get_ossfuzz_image_name(project_name, sanitizer)
+
+        # Get remote digest first
+        remote_digest = get_remote_image_digest(inc_image)
+        if not remote_digest:
+            return key, "not_available"
+
+        # Check if local image exists and compare digest
+        local_exists = docker_image_exists(ossfuzz_image) or docker_image_exists(
+            inc_image
+        )
+        if local_exists:
+            local_digest = get_local_image_digest(inc_image)
+            if local_digest and local_digest == remote_digest:
+                # Ensure OSS-Fuzz format exists
+                if not docker_image_exists(ossfuzz_image):
+                    docker_retag(inc_image, ossfuzz_image)
+                return key, "up_to_date"
+
+        # Pull from registry (new or outdated)
+        if docker_pull(inc_image):
+            if docker_retag(inc_image, ossfuzz_image):
+                if local_exists:
+                    return key, "updated"
+                return key, "pulled"
+            return key, "retag_failed"
+
+        return key, "pull_failed"
+
+    logger.info(f"Pulling images with {args.workers} workers...")
+
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        futures = {executor.submit(pull_one, target): target for target in pull_targets}
+
+        for future in as_completed(futures):
+            key, status = future.result()
+            results[key] = status
+            completed_count += 1
+
+            project_name, sanitizer = key.split(":", 1)
+            progress = f"[{completed_count}/{total}]"
+
+            if status == "pulled":
+                logger.info(f"{progress} PULLED: {project_name} ({sanitizer})")
+            elif status == "updated":
+                logger.info(f"{progress} UPDATED: {project_name} ({sanitizer})")
+            elif status == "up_to_date":
+                logger.info(f"{progress} UP-TO-DATE: {project_name} ({sanitizer})")
+            elif status == "not_available":
+                logger.warning(
+                    f"{progress} NOT IN REGISTRY: {project_name} ({sanitizer})"
+                )
+            else:
+                logger.warning(f"{progress} FAILED: {project_name} ({sanitizer})")
+
+    # Summary
+    pulled = sum(1 for s in results.values() if s == "pulled")
+    updated = sum(1 for s in results.values() if s == "updated")
+    up_to_date = sum(1 for s in results.values() if s == "up_to_date")
+    not_available = sum(1 for s in results.values() if s == "not_available")
+    failed = sum(1 for s in results.values() if s in ("retag_failed", "pull_failed"))
+
+    logger.info("\n" + "=" * 50)
+    logger.info("PULL SUMMARY")
+    logger.info("=" * 50)
+    logger.info(f"Total: {total}")
+    logger.info(f"Pulled (new): {pulled}")
+    logger.info(f"Updated (outdated): {updated}")
+    logger.info(f"Up-to-date (skipped): {up_to_date}")
+    logger.info(f"Not in registry: {not_available}")
+    if failed > 0:
+        logger.info(f"Failed: {failed}")
+
+    return 0
+
+
+def handle_check_image(args: argparse.Namespace) -> int:
+    """Handle 'crsbench benchmark check-image' command.
+
+    Compare local inc-build images against remote registry.
+    """
+    from crsbench.benchmark.packaging.docker_utils import (
+        docker_image_exists,
+        get_inc_build_image_name,
+        get_local_image_digest,
+        get_ossfuzz_image_name,
+        get_remote_image_digest,
+    )
+
+    benchmarks_dir = Path(args.benchmarks_dir)
+
+    if not benchmarks_dir.is_dir():
+        logger.error(f"Benchmarks directory not found: {benchmarks_dir}")
+        return 1
+
+    # Discover inc-build benchmarks
+    benchmarks = _discover_inc_build_benchmarks(benchmarks_dir, args.filter)
+
+    if not benchmarks:
+        logger.warning(f"No inc-build enabled benchmarks found in {benchmarks_dir}")
+        return 0
+
+    # Build list of (project_name, sanitizer) pairs to check
+    check_targets: list[tuple[str, str]] = []
+    for project_name, sanitizers in benchmarks:
+        for sanitizer in sanitizers:
+            check_targets.append((project_name, sanitizer))
+
+    logger.info(f"Checking {len(check_targets)} images...")
+
+    # Check each image
+    results: dict[str, str] = {}  # "project:sanitizer" -> status
+
+    for project_name, sanitizer in check_targets:
+        key = f"{project_name}:{sanitizer}"
+        inc_image = get_inc_build_image_name(project_name, sanitizer)
+        ossfuzz_image = get_ossfuzz_image_name(project_name, sanitizer)
+
+        # Check local image (prefer OSS-Fuzz format)
+        local_exists = docker_image_exists(ossfuzz_image) or docker_image_exists(
+            inc_image
+        )
+
+        # Get remote digest
+        remote_digest = get_remote_image_digest(inc_image)
+
+        if not local_exists and not remote_digest:
+            results[key] = "NOT_FOUND"
+        elif not local_exists:
+            results[key] = "REMOTE-ONLY"
+        elif not remote_digest:
+            results[key] = "LOCAL-ONLY"
+        else:
+            # Compare digests
+            local_digest = get_local_image_digest(inc_image)
+            if local_digest and remote_digest:
+                if local_digest == remote_digest:
+                    results[key] = "UP-TO-DATE"
+                else:
+                    results[key] = (
+                        f"OUTDATED (local: {local_digest[:16]}..., remote: {remote_digest[:16]}...)"
+                    )
+            else:
+                # Can't compare digests, assume outdated if we can't verify
+                results[key] = "UP-TO-DATE"  # Assume OK if local exists
+
+    # Output results
+    logger.info("\n" + "=" * 60)
+    logger.info("CHECK IMAGE SUMMARY")
+    logger.info("=" * 60)
+
+    # Sort by status for readability
+    for key, status in sorted(results.items(), key=lambda x: (x[1], x[0])):
+        project_name, sanitizer = key.split(":", 1)
+        image_display = f"{project_name}:inc-{sanitizer}"
+        logger.info(f"{image_display:50} {status}")
+
+    # Count by status
+    up_to_date = sum(1 for s in results.values() if s == "UP-TO-DATE")
+    outdated = sum(1 for s in results.values() if s.startswith("OUTDATED"))
+    remote_only = sum(1 for s in results.values() if s == "REMOTE-ONLY")
+    local_only = sum(1 for s in results.values() if s == "LOCAL-ONLY")
+    not_found = sum(1 for s in results.values() if s == "NOT_FOUND")
+
+    logger.info("\n" + "-" * 40)
+    logger.info(f"Total: {len(results)}")
+    logger.info(f"Up-to-date: {up_to_date}")
+    logger.info(f"Outdated: {outdated}")
+    logger.info(f"Remote-only: {remote_only}")
+    logger.info(f"Local-only: {local_only}")
+    if not_found > 0:
+        logger.info(f"Not found: {not_found}")
+
+    return 0
 
 
 def run_benchmark_command(args: argparse.Namespace) -> int:
