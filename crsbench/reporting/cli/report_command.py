@@ -28,8 +28,11 @@ reports with metrics, visualizations, and analysis.
         """,
         epilog="""
 Examples:
-  # Generate report for an experiment
+  # Generate report for an experiment (by name)
   %(prog)s --experiment test-experiment --output ./reports
+
+  # Generate report for an experiment (by directory path)
+  %(prog)s --experiment-dir ./experiment_filestore/test-experiment
 
   # Generate JSON reports only
   %(prog)s --experiment test-experiment --format json
@@ -58,7 +61,14 @@ Examples:
         "--experiment",
         type=str,
         metavar="EXPERIMENT_NAME",
-        help="Experiment name to generate report for",
+        help="Experiment name to generate report for (used with --experiment-filestore)",
+    )
+
+    report_parser.add_argument(
+        "--experiment-dir",
+        type=str,
+        metavar="EXPERIMENT_DIR",
+        help="Direct path to experiment directory (alternative to --experiment)",
     )
 
     report_parser.add_argument(
@@ -124,12 +134,17 @@ def run_report(args: argparse.Namespace) -> int:
         Exit code (0 for success, 1 for error)
     """
     # Validate arguments
-    if not args.experiment and not args.trial:
-        logger.error("Must specify either --experiment or --trial")
+    has_experiment = args.experiment or args.experiment_dir
+    if not has_experiment and not args.trial:
+        logger.error("Must specify --experiment, --experiment-dir, or --trial")
         return 1
 
-    if args.experiment and args.trial:
-        logger.error("Cannot specify both --experiment and --trial")
+    if args.experiment and args.experiment_dir:
+        logger.error("Cannot specify both --experiment and --experiment-dir")
+        return 1
+
+    if has_experiment and args.trial:
+        logger.error("Cannot specify both experiment and --trial")
         return 1
 
     # Determine skip_incomplete setting
@@ -159,9 +174,15 @@ def _generate_experiment_report(
     Returns:
         Exit code
     """
-    experiment_name = args.experiment
-    experiment_filestore = Path(args.experiment_filestore)
-    experiment_dir = experiment_filestore / experiment_name
+    # Determine experiment directory
+    if args.experiment_dir:
+        experiment_dir = Path(args.experiment_dir)
+        experiment_name = experiment_dir.name
+    else:
+        experiment_name = args.experiment
+        experiment_filestore = Path(args.experiment_filestore)
+        experiment_dir = experiment_filestore / experiment_name
+
     output_dir = args.output / experiment_name
 
     if not experiment_dir.exists():
