@@ -37,6 +37,9 @@ Examples:
   # Generate HTML reports only
   %(prog)s --experiment test-experiment --format html
 
+  # Preview what would be generated (dry-run)
+  %(prog)s --experiment test-experiment --dry-run
+
   # Validate experiment completeness only
   %(prog)s --experiment test-experiment --validate-only
 
@@ -94,6 +97,12 @@ Examples:
         "--include-incomplete",
         action="store_true",
         help="Include incomplete trials in report (default: skip incomplete)",
+    )
+
+    report_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview trials and CSV columns that would be generated without creating reports",
     )
 
     report_parser.set_defaults(command="report")
@@ -167,6 +176,13 @@ def _generate_experiment_report(
         logger.info("\n" + report)
         return 0
 
+    # Dry-run mode
+    if args.dry_run:
+        logger.info("Running dry-run preview...")
+        preview = generator.dry_run(experiment_dir)
+        _display_dry_run_preview(preview)
+        return 0
+
     # Generate reports
     logger.info(f"Generating {args.format} reports...")
     result = generator.generate_experiment_report(
@@ -184,6 +200,37 @@ def _generate_experiment_report(
         logger.info(f"  {report_type.upper()}: {path}")
 
     return 0
+
+
+def _display_dry_run_preview(preview: dict) -> None:
+    """Display dry-run preview information.
+
+    Args:
+        preview: Preview data from dry_run()
+    """
+    trials = preview["trials"]
+    csv_files = preview["csv_files"]
+
+    logger.info("\nDry-Run Report Preview")
+    logger.info("=" * 60)
+    logger.info("")
+    logger.info(f"Trials to include ({len(trials)}):")
+
+    for trial in trials:
+        logger.info(
+            f"  - {trial['trial_num']}: {trial['crs']} / "
+            f"{trial['benchmark']} / {trial['harness']} ({trial['mode']})"
+        )
+
+    logger.info("")
+    logger.info("CSV files that would be generated:")
+
+    for filename, file_info in csv_files.items():
+        logger.info(f"  - {filename} ({file_info['rows']} rows)")
+        logger.info(f"    Columns: {', '.join(file_info['columns'][:5])}...")
+
+    logger.info("")
+    logger.info("=" * 60)
 
 
 def _generate_trial_report(args: argparse.Namespace) -> int:

@@ -316,3 +316,142 @@ class ReportGenerator:
             experiment_dir=str(experiment_dir),
             trial_metrics_list=trial_metrics_list,
         )
+
+    def dry_run(self, experiment_dir: Path) -> dict[str, Any]:
+        """Preview what reports would be generated without actually generating them.
+
+        Args:
+            experiment_dir: Path to experiment directory
+
+        Returns:
+            Dictionary containing preview information
+        """
+
+        # Discover trials
+        trials = discover_trials(experiment_dir)
+        valid_trials = [t for t in trials if t.status == "valid"]
+
+        # Collect trial info
+        trial_previews = []
+        total_snapshots = 0
+
+        for trial_info in valid_trials:
+            snapshots = self.snapshot_loader.load_trial_snapshots(trial_info.trial_dir)
+            snapshot_count = len(snapshots)
+            total_snapshots += snapshot_count
+
+            trial_previews.append(
+                {
+                    "trial_num": f"trial-{trial_info.trial_num}",
+                    "crs": trial_info.crs or "unknown",
+                    "benchmark": trial_info.benchmark or "unknown",
+                    "harness": trial_info.harness or "unknown",
+                    "mode": trial_info.mode or "unknown",
+                    "snapshot_count": snapshot_count,
+                }
+            )
+
+        # Count unique CRS and benchmarks
+        unique_crs = len({t["crs"] for t in trial_previews})
+        unique_benchmarks = len({t["benchmark"] for t in trial_previews})
+
+        # Calculate CSV file row counts
+        trial_count = len(trial_previews)
+        crs_summary_count = unique_crs
+        benchmark_summary_count = unique_benchmarks
+        time_series_count = total_snapshots
+        combined_count = (
+            trial_count + crs_summary_count + benchmark_summary_count + time_series_count
+        )
+
+        return {
+            "trials": trial_previews,
+            "csv_files": {
+                "trial_summary.csv": {
+                    "rows": trial_count,
+                    "columns": [
+                        "trial_num",
+                        "crs",
+                        "benchmark",
+                        "harness",
+                        "mode",
+                        "total_povs",
+                        "unique_povs",
+                        "total_patches",
+                        "unique_patches",
+                        "total_llm_cost",
+                        "total_llm_tokens",
+                        "total_time",
+                        "time_to_first_pov",
+                        "snapshot_count",
+                    ],
+                },
+                "crs_summary.csv": {
+                    "rows": crs_summary_count,
+                    "columns": [
+                        "crs",
+                        "trial_count",
+                        "avg_povs",
+                        "avg_patches",
+                        "avg_cost",
+                        "total_cost",
+                        "total_povs",
+                    ],
+                },
+                "benchmark_summary.csv": {
+                    "rows": benchmark_summary_count,
+                    "columns": [
+                        "benchmark",
+                        "trial_count",
+                        "avg_povs",
+                        "avg_patches",
+                        "avg_time_to_first_pov",
+                        "total_cost",
+                    ],
+                },
+                "time_series.csv": {
+                    "rows": time_series_count,
+                    "columns": [
+                        "trial_num",
+                        "crs",
+                        "benchmark",
+                        "elapsed_time",
+                        "cumulative_povs",
+                        "cumulative_patches",
+                        "llm_tokens",
+                        "llm_cost",
+                    ],
+                },
+                "combined_report.csv": {
+                    "rows": combined_count,
+                    "columns": [
+                        "record_type",
+                        "trial_num",
+                        "crs",
+                        "benchmark",
+                        "harness",
+                        "mode",
+                        "total_povs",
+                        "unique_povs",
+                        "total_patches",
+                        "unique_patches",
+                        "total_llm_cost",
+                        "total_llm_tokens",
+                        "total_time",
+                        "time_to_first_pov",
+                        "snapshot_count",
+                        "trial_count",
+                        "avg_povs",
+                        "avg_patches",
+                        "avg_cost",
+                        "total_cost",
+                        "avg_time_to_first_pov",
+                        "elapsed_time",
+                        "cumulative_povs",
+                        "cumulative_patches",
+                        "llm_tokens",
+                        "llm_cost",
+                    ],
+                },
+            },
+        }
