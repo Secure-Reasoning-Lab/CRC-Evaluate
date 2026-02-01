@@ -42,13 +42,15 @@ class ReportGenerator:
         )
     """
 
-    def __init__(self, output_dir: Path):
+    def __init__(self, output_dir: Path, benchmarks_root: Path):
         """Initialize the report generator.
 
         Args:
             output_dir: Directory to write reports to
+            benchmarks_root: Path to benchmarks root directory for ground truth comparison
         """
         self.output_dir = output_dir
+        self.benchmarks_root = benchmarks_root
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.snapshot_loader = SnapshotLoader()

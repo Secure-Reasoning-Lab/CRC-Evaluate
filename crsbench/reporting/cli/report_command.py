@@ -96,6 +96,14 @@ Examples:
     )
 
     report_parser.add_argument(
+        "--benchmarks-root",
+        type=str,
+        default="benchmarks",
+        metavar="BENCHMARKS_ROOT",
+        help="Path to benchmarks root directory for ground truth comparison (default: benchmarks)",
+    )
+
+    report_parser.add_argument(
         "--format",
         type=str,
         choices=["json", "html", "csv", "both", "all"],
@@ -187,6 +195,7 @@ def _generate_experiment_report(
         experiment_dir = experiment_filestore / experiment_name
 
     output_dir = args.output / experiment_name
+    benchmarks_root = Path(args.benchmarks_root)
 
     if not experiment_dir.exists():
         logger.error(f"Experiment directory not found: {experiment_dir}")
@@ -195,9 +204,10 @@ def _generate_experiment_report(
     logger.info(f"Processing experiment: {experiment_name}")
     logger.info(f"Experiment directory: {experiment_dir}")
     logger.info(f"Output directory: {output_dir}")
+    logger.info(f"Benchmarks root: {benchmarks_root}")
 
     # Create report generator
-    generator = ReportGenerator(output_dir=output_dir)
+    generator = ReportGenerator(output_dir=output_dir, benchmarks_root=benchmarks_root)
 
     # Validate-only mode
     if args.validate_only:
@@ -279,6 +289,7 @@ def _generate_trial_report(args: argparse.Namespace) -> int:
     """
     trial_dir = Path(args.trial)
     output_dir = args.output
+    benchmarks_root = Path(args.benchmarks_root)
 
     if not trial_dir.exists():
         logger.error(f"Trial directory not found: {trial_dir}")
@@ -286,9 +297,10 @@ def _generate_trial_report(args: argparse.Namespace) -> int:
 
     logger.info(f"Processing trial: {trial_dir}")
     logger.info(f"Output directory: {output_dir}")
+    logger.info(f"Benchmarks root: {benchmarks_root}")
 
     # Create report generator
-    generator = ReportGenerator(output_dir=output_dir)
+    generator = ReportGenerator(output_dir=output_dir, benchmarks_root=benchmarks_root)
 
     # Generate reports
     logger.info(f"Generating {args.format} reports...")

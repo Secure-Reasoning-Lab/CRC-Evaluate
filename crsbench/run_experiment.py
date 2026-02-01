@@ -1968,6 +1968,7 @@ def _generate_html_json_reports(experiment_name: str, config) -> None:
 
     experiment_dir = Path(config.experiment_filestore) / experiment_name
     report_dir = Path(config.report_filestore) / experiment_name
+    benchmarks_root = Path(config.benchmarks_root or "benchmarks")
 
     # Check if experiment directory exists
     if not experiment_dir.exists():
@@ -1980,7 +1981,9 @@ def _generate_html_json_reports(experiment_name: str, config) -> None:
     try:
         logger.info("\nGenerating HTML/JSON reports from snapshots...")
 
-        generator = ReportGenerator(output_dir=report_dir)
+        generator = ReportGenerator(
+            output_dir=report_dir, benchmarks_root=benchmarks_root
+        )
         report_paths = generator.generate_experiment_report(
             experiment_dir=experiment_dir,
             format="both",
