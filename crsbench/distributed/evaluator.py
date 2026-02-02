@@ -280,9 +280,9 @@ def _run_evaluator_supervisor(
             logger.info(f"Cleaned up {cleaned} stale cgroup(s)")
 
     workers: dict[
-        int, tuple[multiprocessing.Process, list[int], str, Optional[Path]]
+        int, tuple[multiprocessing.Process, list[int], str, Optional[Path], str]
     ] = {}
-    # pid -> (process, cpus, job_id, cgroup_path)
+    # pid -> (process, cpus, job_id, cgroup_path, queue_label)
 
     try:
         # Connect to Redis
@@ -310,7 +310,7 @@ def _run_evaluator_supervisor(
         while True:
             # Cleanup finished workers
             for pid in list(workers.keys()):
-                proc, cpus, _job_id, cgroup_path_entry = workers[pid]
+                proc, cpus, _job_id, cgroup_path_entry, _qlabel = workers[pid]
                 if not proc.is_alive():
                     proc.join()
                     if cpu_pool and cpus:
@@ -401,6 +401,7 @@ def _run_evaluator_supervisor(
                                 cpus or [],
                                 job.id,
                                 cgroup_path,
+                                queue_label,
                             )
 
                         logger.info(
@@ -420,10 +421,10 @@ def _run_evaluator_supervisor(
 
     except KeyboardInterrupt:
         logger.info("\nReceived interrupt signal, terminating workers...")
-        for _pid, (p, _cpus, _job_id, _cg) in workers.items():
+        for _pid, (p, _cpus, _job_id, _cg, _ql) in workers.items():
             if p.is_alive():
                 p.terminate()
-        for pid, (p, cpus, _job_id, cgroup_path_entry) in workers.items():
+        for pid, (p, cpus, _job_id, cgroup_path_entry, _ql) in workers.items():
             p.join(timeout=5)
             if p.is_alive():
                 logger.warning(f"Force killing worker (PID: {pid})")

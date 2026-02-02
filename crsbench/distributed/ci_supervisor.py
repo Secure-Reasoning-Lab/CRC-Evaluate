@@ -121,6 +121,7 @@ def run_ci_supervisor(
 
     used_worker_nums: set[int] = set()
     max_total = build_jobs + verify_jobs
+    build_phase_complete = False
 
     # Disk space state
     minimum_disk_bytes = parse_size_to_bytes(minimum_disk_size)
@@ -158,6 +159,17 @@ def run_ci_supervisor(
             # --- Sweep deferred cgroup removals (non-blocking) ---
             if deferred_cgroup_cleanup:
                 _sweep_deferred_cgroups(deferred_cgroup_cleanup)
+
+            # --- Detect build phase completion ---
+            if not build_phase_complete and not build_active and build_queue.count == 0:
+                build_phase_complete = True
+                logger.info(
+                    "=" * 60
+                    + "\n  BUILD PHASE COMPLETE — all build jobs finished"
+                    + "\n  Switching to verify-only mode"
+                    + f"\n  Verify queue: {verify_queue.count} pending"
+                    + "\n" + "=" * 60
+                )
 
             # --- Disk space check ---
             current_time = time.time()
