@@ -288,7 +288,9 @@ def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
             trial_id=payload.trial_id,
             benchmark=payload.benchmark,
             harness=payload.harness,
-            verdict=PovVerdict(pov_id=pov.pov_id, triggered_bug=False, status="error", error=error_msg),
+            verdict=PovVerdict(
+                pov_id=pov.pov_id, triggered_bug=False, status="error", error=error_msg
+            ),
             completed_at=time.time(),
         ).to_dict()
 
@@ -302,7 +304,9 @@ def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
             trial_id=payload.trial_id,
             benchmark=payload.benchmark,
             harness=payload.harness,
-            verdict=PovVerdict(pov_id=pov.pov_id, triggered_bug=False, status="error", error=error_msg),
+            verdict=PovVerdict(
+                pov_id=pov.pov_id, triggered_bug=False, status="error", error=error_msg
+            ),
             completed_at=time.time(),
         ).to_dict()
 
@@ -320,7 +324,9 @@ def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
             trial_id=payload.trial_id,
             benchmark=payload.benchmark,
             harness=payload.harness,
-            verdict=PovVerdict(pov_id=pov.pov_id, triggered_bug=False, status="error", error=error_msg),
+            verdict=PovVerdict(
+                pov_id=pov.pov_id, triggered_bug=False, status="error", error=error_msg
+            ),
             completed_at=time.time(),
         ).to_dict()
 
