@@ -41,7 +41,7 @@ difficulty_level: 1
 # Resource Configuration
 resources:
   cores_per_trial: 16
-  memory_per_trial: "84G"
+  memory_per_trial: "64G"
 
 # Worker Configuration
 build_workers: 16

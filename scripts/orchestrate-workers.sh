@@ -47,7 +47,7 @@ HOSTNAMES[cerebros]="cerebros.gtisc.gatech.edu"
 HOSTNAMES[ramjet]="ramjet.gtisc.gatech.edu"
 
 # SSH options: no strict host key checking, connection timeout
-SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+SSH_OPTS="-A -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -118,7 +118,10 @@ cmd_setup() {
         local logfile="$logdir/$machine.log"
 
         log "  Starting setup on $machine ($host)..."
-        ssh $SSH_OPTS "$host" "bash -s $machine" < "$SETUP_SCRIPT" \
+        # Copy script to remote then execute (preserves SSH agent forwarding
+        # for git operations; piping via stdin breaks nested SSH)
+        scp -q $SSH_OPTS "$SETUP_SCRIPT" "$host:/tmp/setup-remote-worker.sh"
+        ssh $SSH_OPTS "$host" "bash /tmp/setup-remote-worker.sh $machine" \
             > "$logfile" 2>&1 &
         pids+=($!)
     done
