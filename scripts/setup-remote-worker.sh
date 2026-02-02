@@ -30,7 +30,7 @@ echo "============================================="
 
 # ----- Step 1: Check prerequisites -----
 echo ""
-echo "[1/10] Checking prerequisites..."
+echo "[1/9] Checking prerequisites..."
 
 if ! command -v git &>/dev/null; then
     echo "ERROR: git not found. Install git first."
@@ -51,22 +51,9 @@ fi
 echo "  git:    $(git --version)"
 echo "  docker: $(docker --version)"
 
-# ----- Step 2: Check NFS mount -----
+# ----- Step 2: Clone or update repo -----
 echo ""
-echo "[2/10] Checking NFS mount..."
-
-if mountpoint -q /mnt/crsbench_nfs 2>/dev/null; then
-    echo "  /mnt/crsbench_nfs is mounted"
-    df -h /mnt/crsbench_nfs | tail -1
-else
-    echo "WARNING: /mnt/crsbench_nfs is not mounted."
-    echo "  Results won't be copied to NFS after trial completion."
-    echo "  Mount with: sudo mount 128.61.240.177:/mnt/ssd1 /mnt/crsbench_nfs"
-fi
-
-# ----- Step 3: Clone or update repo -----
-echo ""
-echo "[3/10] Setting up CRSBench repo..."
+echo "[2/9] Setting up CRSBench repo..."
 
 if [ -d "$INSTALL_DIR/.git" ]; then
     echo "  Repo exists at $INSTALL_DIR, updating..."
@@ -81,9 +68,9 @@ else
     git checkout "$BRANCH"
 fi
 
-# ----- Step 4: Configure git for SSH-based submodule access -----
+# ----- Step 3: Configure git for SSH-based submodule access -----
 echo ""
-echo "[4/10] Configuring git SSH access for submodules..."
+echo "[3/9] Configuring git SSH access for submodules..."
 
 # Submodules are configured with HTTPS URLs but the repos may be private.
 # Rewrite HTTPS GitHub URLs to SSH so we can use SSH keys instead of PAT.
@@ -105,15 +92,15 @@ else
     echo "    3. Test: ssh -T git@github.com"
 fi
 
-# ----- Step 5: Init submodules -----
+# ----- Step 4: Init submodules -----
 echo ""
-echo "[5/10] Initializing submodules..."
+echo "[4/9] Initializing submodules..."
 git submodule update --init --recursive
 echo "  Submodules initialized"
 
-# ----- Step 6: Install uv and Python dependencies -----
+# ----- Step 5: Install uv and Python dependencies -----
 echo ""
-echo "[6/10] Installing Python environment..."
+echo "[5/9] Installing Python environment..."
 
 if ! command -v uv &>/dev/null; then
     echo "  Installing uv..."
@@ -127,21 +114,21 @@ uv sync --all-extras
 echo "  Installing CRSBench in editable mode..."
 uv pip install -e .
 
-# ----- Step 7: Bundle benchmarks -----
+# ----- Step 6: Bundle benchmarks -----
 echo ""
-echo "[7/10] Bundling benchmarks..."
+echo "[6/9] Bundling benchmarks..."
 uv run crsbench benchmark bundle-all --force --workers 20 benchmarks/
 echo "  Benchmarks bundled"
 
-# ----- Step 8: Prepare CRS Docker images -----
+# ----- Step 7: Prepare CRS Docker images -----
 echo ""
-echo "[8/10] Preparing CRS (atlantis-multilang-given_fuzzer)..."
+echo "[7/9] Preparing CRS (atlantis-multilang-given_fuzzer)..."
 uv run oss-bugfind-crs prepare atlantis-multilang-given_fuzzer
 echo "  CRS prepared"
 
-# ----- Step 9: Verify config file exists -----
+# ----- Step 8: Verify config file exists -----
 echo ""
-echo "[9/10] Checking experiment config..."
+echo "[8/9] Checking experiment config..."
 
 CONFIG_FILE="$INSTALL_DIR/experiment-configs/experiment-config-afc-${MACHINE_NAME}.yaml"
 if [ -f "$CONFIG_FILE" ]; then
@@ -152,9 +139,9 @@ else
     exit 1
 fi
 
-# ----- Step 10: Test Redis connectivity -----
+# ----- Step 9: Test Redis connectivity -----
 echo ""
-echo "[10/10] Testing Redis connectivity..."
+echo "[9/9] Testing Redis connectivity..."
 
 if uv run python -c "
 import redis, os

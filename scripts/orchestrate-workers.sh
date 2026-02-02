@@ -234,13 +234,6 @@ cmd_status() {
         # Disk usage
         ssh_cmd "$host" "df -h /home | tail -1 | awk '{print \"  Disk:   \" \$3 \" used / \" \$2 \" (\" \$5 \" full)\"}'" 2>/dev/null || true
 
-        # NFS status
-        if ssh_cmd "$host" "mountpoint -q /mnt/crsbench_nfs 2>/dev/null"; then
-            echo "  NFS:    mounted"
-        else
-            echo "  NFS:    NOT mounted"
-        fi
-
         # Docker containers
         local containers
         containers=$(ssh_cmd "$host" "docker ps -q 2>/dev/null | wc -l" 2>/dev/null || echo "?")
