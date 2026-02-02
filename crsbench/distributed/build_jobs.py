@@ -90,6 +90,9 @@ def execute_ci_build(params: dict[str, Any]) -> dict[str, Any]:
     )
 
     context = JobContext()
+    output_dir = params.get("output_dir")
+    if output_dir:
+        context.output_dir = Path(output_dir)
     result = job.execute(context)
 
     return {
@@ -108,6 +111,7 @@ def enqueue_and_poll_builds(
     jobs: list[Any],
     redis_host: str,
     queue_name: str = "crsbench_ci_build",
+    output_dir: str | None = None,
 ) -> dict[str, Any]:
     """Enqueue build jobs to Redis and poll until all complete.
 
@@ -118,6 +122,7 @@ def enqueue_and_poll_builds(
         jobs: List of BuildSingleVariantJob instances
         redis_host: Redis server hostname
         queue_name: Redis queue name (default: crsbench_ci_build)
+        output_dir: Optional directory for per-job stdout/stderr logs on worker
 
     Returns:
         Dict mapping job_id -> serialized result dict
@@ -146,6 +151,8 @@ def enqueue_and_poll_builds(
     rq_jobs: dict[str, rq.job.Job] = {}
     for job in jobs:
         params = serialize_build_job(job)
+        if output_dir:
+            params["output_dir"] = output_dir
         try:
             rq_job = queue.enqueue(
                 "crsbench.distributed.build_jobs.execute_ci_build",

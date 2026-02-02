@@ -99,6 +99,8 @@ def run_pov(args: argparse.Namespace) -> int:
         f"(filtered from {len(all_jobs)} total)"
     )
 
+    output_dir = getattr(args, "output_dir", None)
+
     start_dt = datetime.now()
 
     if distributed:
@@ -106,7 +108,9 @@ def run_pov(args: argparse.Namespace) -> int:
             _run_distributed_build,
         )
 
-        build_results = _run_distributed_build(build_jobs, redis_host)
+        build_results = _run_distributed_build(
+            build_jobs, redis_host, output_dir=output_dir
+        )
 
         from crsbench.distributed.ci_jobs import (
             ci_results_to_executor_results,
@@ -116,7 +120,10 @@ def run_pov(args: argparse.Namespace) -> int:
         if pov_jobs:
             verify_queue_name = "crsbench_ci_verify"
             raw_verify_results = enqueue_and_poll_ci_jobs(
-                pov_jobs, redis_host, queue_name=verify_queue_name
+                pov_jobs,
+                redis_host,
+                queue_name=verify_queue_name,
+                output_dir=output_dir,
             )
             verify_results = ci_results_to_executor_results(raw_verify_results)
         else:
@@ -127,7 +134,10 @@ def run_pov(args: argparse.Namespace) -> int:
         from crsbench.benchmark_ci.executor import execute_jobs_locally
 
         relevant_jobs = build_jobs + pov_jobs
-        dag_results = execute_jobs_locally(relevant_jobs)
+        dag_results = execute_jobs_locally(
+            relevant_jobs,
+            output_dir=Path(output_dir) if output_dir else None,
+        )
 
     # Aggregate into ValidationSummary
     summary = ValidationSummary(started_at=start_dt, check_mode=CheckMode.ALL)
@@ -177,7 +187,6 @@ def run_pov(args: argparse.Namespace) -> int:
         no_color=getattr(args, "no_color", False),
     )
 
-    output_dir = getattr(args, "output_dir", None)
     if output_dir:
         save_output_dir(summary, Path(output_dir), check_mode=CheckMode.ALL)
 

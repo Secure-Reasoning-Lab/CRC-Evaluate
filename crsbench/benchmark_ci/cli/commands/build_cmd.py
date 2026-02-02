@@ -102,6 +102,7 @@ def _run_distributed_build(
     all_jobs: list,
     redis_host: str,
     queue_name: str = "crsbench_ci_build",
+    output_dir: str | None = None,
 ) -> dict[str, "ExecutorResult"]:
     """Enqueue build jobs to Redis and return ExecutorResult dict.
 
@@ -112,6 +113,7 @@ def _run_distributed_build(
         all_jobs: List of BuildSingleVariantJob instances
         redis_host: Redis server hostname
         queue_name: Redis queue name
+        output_dir: Optional directory for per-job logs on worker
 
     Returns:
         Dict mapping job_id to ExecutorResult
@@ -121,7 +123,9 @@ def _run_distributed_build(
         raw_results_to_executor_results,
     )
 
-    raw_results = enqueue_and_poll_builds(all_jobs, redis_host, queue_name)
+    raw_results = enqueue_and_poll_builds(
+        all_jobs, redis_host, queue_name, output_dir=output_dir
+    )
     return raw_results_to_executor_results(raw_results)
 
 
@@ -169,12 +173,19 @@ def run_build(args: argparse.Namespace) -> int:
 
     logger.info(f"VariantPlanner: {len(build_jobs)} build jobs")
 
+    output_dir = getattr(args, "output_dir", None)
+
     if distributed:
-        dag_results = _run_distributed_build(build_jobs, redis_host)
+        dag_results = _run_distributed_build(
+            build_jobs, redis_host, output_dir=output_dir
+        )
     else:
         from crsbench.benchmark_ci.executor import execute_jobs_locally
 
-        dag_results = execute_jobs_locally(build_jobs)
+        dag_results = execute_jobs_locally(
+            build_jobs,
+            output_dir=Path(output_dir) if output_dir else None,
+        )
 
     summary = ValidationSummary(started_at=start_dt, check_mode=CheckMode.BUILD)
     for path, supports_inc, rts_mode in benchmark_metadata:
@@ -190,7 +201,6 @@ def run_build(args: argparse.Namespace) -> int:
         no_color=getattr(args, "no_color", False),
     )
 
-    output_dir = getattr(args, "output_dir", None)
     if output_dir:
         save_output_dir(summary, Path(output_dir), check_mode=CheckMode.BUILD)
 

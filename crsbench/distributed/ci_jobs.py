@@ -381,6 +381,9 @@ def execute_ci_job(params: dict[str, Any]) -> dict[str, Any]:
 
     job = _reconstruct_job(params)
     context = JobContext()
+    output_dir = params.get("output_dir")
+    if output_dir:
+        context.output_dir = Path(output_dir)
 
     # Pre-populate context.shared from disk so verify jobs find build results
     source_mode = params.get("source_mode", "pkgs")
@@ -403,6 +406,7 @@ def enqueue_and_poll_ci_jobs(
     jobs: list[Any],
     redis_host: str,
     queue_name: str = "crsbench_ci_verify",
+    output_dir: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Enqueue CI verify/test jobs to Redis and poll until all complete.
 
@@ -413,6 +417,7 @@ def enqueue_and_poll_ci_jobs(
         jobs: List of flat.py Job instances (verify, patch, coverage)
         redis_host: Redis server hostname
         queue_name: Redis queue name
+        output_dir: Optional directory for per-job stdout/stderr logs on worker
 
     Returns:
         Dict mapping job_id -> serialized JobResult dict
@@ -446,6 +451,8 @@ def enqueue_and_poll_ci_jobs(
     rq_jobs: dict[str, rq.job.Job] = {}
     for job in ordered_jobs:
         params = serialize_ci_job(job)
+        if output_dir:
+            params["output_dir"] = output_dir
 
         # Map depends_on to RQ dependency IDs
         depends_on_rq: Optional[list[rq.job.Job]] = None

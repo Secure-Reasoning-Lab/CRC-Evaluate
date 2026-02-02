@@ -95,6 +95,8 @@ def run_coverage(args: argparse.Namespace) -> int:
         f"(filtered from {len(all_jobs)} total)"
     )
 
+    output_dir = getattr(args, "output_dir", None)
+
     start_dt = datetime.now()
 
     if distributed:
@@ -102,7 +104,9 @@ def run_coverage(args: argparse.Namespace) -> int:
             _run_distributed_build,
         )
 
-        build_results = _run_distributed_build(build_jobs, redis_host)
+        build_results = _run_distributed_build(
+            build_jobs, redis_host, output_dir=output_dir
+        )
 
         from crsbench.distributed.ci_jobs import (
             ci_results_to_executor_results,
@@ -112,7 +116,10 @@ def run_coverage(args: argparse.Namespace) -> int:
         if coverage_jobs:
             verify_queue_name = "crsbench_ci_verify"
             raw_coverage_results = enqueue_and_poll_ci_jobs(
-                coverage_jobs, redis_host, queue_name=verify_queue_name
+                coverage_jobs,
+                redis_host,
+                queue_name=verify_queue_name,
+                output_dir=output_dir,
             )
             coverage_results = ci_results_to_executor_results(raw_coverage_results)
         else:
@@ -123,7 +130,10 @@ def run_coverage(args: argparse.Namespace) -> int:
         from crsbench.benchmark_ci.executor import execute_jobs_locally
 
         relevant_jobs = build_jobs + coverage_jobs
-        dag_results = execute_jobs_locally(relevant_jobs)
+        dag_results = execute_jobs_locally(
+            relevant_jobs,
+            output_dir=Path(output_dir) if output_dir else None,
+        )
 
     # Build summary from results
     summary = ValidationSummary(started_at=start_dt, check_mode=CheckMode.ALL)
@@ -171,7 +181,6 @@ def run_coverage(args: argparse.Namespace) -> int:
         no_color=getattr(args, "no_color", False),
     )
 
-    output_dir = getattr(args, "output_dir", None)
     if output_dir:
         save_output_dir(summary, Path(output_dir), check_mode=CheckMode.ALL)
 

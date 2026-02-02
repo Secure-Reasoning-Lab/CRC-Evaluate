@@ -608,6 +608,9 @@ def run_all(args: argparse.Namespace) -> int:
             "format check not run"
         )
 
+    # Read output_dir early so both local and distributed paths can use it
+    output_dir = getattr(args, "output_dir", None)
+
     # Phase 2: Build + verify/test
     max_povs_per_cpv = getattr(args, "max_povs_per_cpv", None)
     inc_coverage = getattr(args, "inc_coverage", False)
@@ -646,7 +649,9 @@ def run_all(args: argparse.Namespace) -> int:
             f"VariantPlanner: {len(vp_build_jobs)} build jobs via Redis, "
             f"redis={redis_host}"
         )
-        build_results = _run_distributed_build(vp_build_jobs, redis_host)
+        build_results = _run_distributed_build(
+            vp_build_jobs, redis_host, output_dir=output_dir
+        )
 
         remaining_jobs = [
             j for j in all_jobs if not isinstance(j, BuildSingleVariantJob)
@@ -663,7 +668,10 @@ def run_all(args: argparse.Namespace) -> int:
 
         verify_queue_name = "crsbench_ci_verify"
         raw_verify_results = enqueue_and_poll_ci_jobs(
-            remaining_jobs, redis_host, queue_name=verify_queue_name
+            remaining_jobs,
+            redis_host,
+            queue_name=verify_queue_name,
+            output_dir=output_dir,
         )
         verify_results = ci_results_to_executor_results(raw_verify_results)
         dag_results = {**build_results, **verify_results}
@@ -671,7 +679,10 @@ def run_all(args: argparse.Namespace) -> int:
         # Local: execute full DAG sequentially
         from crsbench.benchmark_ci.executor import execute_jobs_locally
 
-        dag_results = execute_jobs_locally(all_jobs)
+        dag_results = execute_jobs_locally(
+            all_jobs,
+            output_dir=Path(output_dir) if output_dir else None,
+        )
 
     # Phase 3: Aggregate into ValidationSummary
     summary = ValidationSummary(started_at=start_dt, check_mode=CheckMode.ALL)
@@ -706,7 +717,6 @@ def run_all(args: argparse.Namespace) -> int:
         no_color=getattr(args, "no_color", False),
     )
 
-    output_dir = getattr(args, "output_dir", None)
     if output_dir:
         save_output_dir(summary, Path(output_dir), check_mode=CheckMode.ALL)
 

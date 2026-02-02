@@ -7,6 +7,7 @@ execution path for CI commands; --distributed enables Redis instead.
 import time
 from collections import deque
 from collections.abc import Sequence
+from pathlib import Path
 
 from crsbench.benchmark_ci.jobs.base import Job, JobContext
 from crsbench.executor.types import ExecutorResult, JobStatus
@@ -18,6 +19,7 @@ logger = get_logger(__name__)
 def execute_jobs_locally(
     jobs: Sequence[Job],
     context: JobContext | None = None,
+    output_dir: Path | None = None,
 ) -> dict[str, ExecutorResult]:
     """Execute jobs locally in dependency order.
 
@@ -27,6 +29,7 @@ def execute_jobs_locally(
     Args:
         jobs: List of Job instances to execute
         context: Optional shared context; created if not provided
+        output_dir: Optional directory for per-job stdout/stderr logs
 
     Returns:
         Dict mapping job_id to ExecutorResult
@@ -36,6 +39,9 @@ def execute_jobs_locally(
 
     if context is None:
         context = JobContext()
+
+    if output_dir is not None:
+        context.output_dir = output_dir
 
     results: dict[str, ExecutorResult] = {}
     job_map = {j.job_id: j for j in jobs}
