@@ -343,6 +343,14 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--skip-litellm",
+        action="store_true",
+        default=None,
+        help="Skip LiteLLM/Postgres deployment inside oss-crs containers. "
+        "Use when CRS does not need LLM access. (overrides config file)",
+    )
+
+    parser.add_argument(
         "--project-image-prefix",
         type=str,
         required=False,
@@ -1374,6 +1382,11 @@ def enhance_config_with_cli_args(
     if args.litellm_mode is not None:
         overrides["litellm_mode"] = args.litellm_mode
         logger.info(f"Using LiteLLM mode from CLI: {args.litellm_mode}")
+
+    # Skip LiteLLM override
+    if args.skip_litellm is not None:
+        overrides["skip_litellm"] = args.skip_litellm
+        logger.info("Skip LiteLLM enabled via CLI")
 
     # Project image prefix override
     if args.project_image_prefix is not None:

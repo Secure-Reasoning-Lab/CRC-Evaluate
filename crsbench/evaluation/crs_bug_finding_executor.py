@@ -816,6 +816,10 @@ class CRSBugFindingExecutor(CRSExecutor):
         if self.litellm_mode is not None:
             cmd.append("--external-litellm")
 
+        # Skip LiteLLM/Postgres deployment entirely (run command only)
+        if self.config.get("skip_litellm", False):
+            cmd.append("--skip-litellm")
+
         # Add gitcache flag if enabled
         if USE_GITCACHE:
             cmd.append("--gitcache")

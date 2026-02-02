@@ -883,6 +883,12 @@ class ExperimentConfig(BaseModel):
         "null skips LiteLLM entirely (for CRS that don't need LLM). "
         "Default is 'passthrough'.",
     )
+    skip_litellm: bool = Field(
+        default=False,
+        description="Skip LiteLLM/Postgres deployment entirely inside oss-crs containers. "
+        "Use when CRS does not need LLM access (e.g., pure fuzzer). "
+        "Passed as --skip-litellm to oss-bugfind-crs.",
+    )
     llm_tracking_enabled: bool = Field(
         default=True,
         description="Enable LLM usage tracking via LiteLLM Virtual Keys. "
