@@ -115,19 +115,27 @@ Examples:
     )
 
     evaluator_parser.add_argument(
-        "--build-workers",
+        "--build-jobs",
         type=int,
         default=None,
         metavar="N",
-        help="Number of parallel variant build workers (default: 4)",
+        help="Max concurrent build jobs (default: value of -j)",
     )
 
     evaluator_parser.add_argument(
-        "--verify-workers",
+        "--build-cores-per-job",
+        type=int,
+        default=1,
+        metavar="M",
+        help="CPUs per build job (default: 1)",
+    )
+
+    evaluator_parser.add_argument(
+        "--verify-jobs",
         type=int,
         default=None,
-        metavar="N",
-        help="Number of parallel POV verification workers (overrides -j)",
+        metavar="K",
+        help="Max concurrent verify jobs, 1 CPU each (default: build-jobs * build-cores-per-job)",
     )
 
     evaluator_parser.set_defaults(command="evaluator")
@@ -176,18 +184,23 @@ def run_evaluator(args: argparse.Namespace) -> int:
     cores = getattr(args, "cores", None)
     skip_cpus = getattr(args, "skip_cpus", None)
 
-    # Resolve verify_workers (build_workers no longer needed — builds come via queue)
-    verify_workers = getattr(args, "verify_workers", None) or args.jobs
+    # Resolve dual-queue CI parameters
+    build_jobs = getattr(args, "build_jobs", None) or args.jobs
+    build_cores_per_job = getattr(args, "build_cores_per_job", 1)
+    verify_jobs = getattr(args, "verify_jobs", None) or build_jobs * build_cores_per_job
 
     try:
         return run_evaluator_main(
             config=config,
             experiment_name=args.experiment_name,
             redis_host=args.redis_host,
-            max_jobs=verify_workers,
+            max_jobs=args.jobs,
             use_cpuset=use_cpuset,
             cores=cores,
             skip_cpus=skip_cpus,
+            build_jobs=build_jobs,
+            build_cores_per_job=build_cores_per_job,
+            verify_jobs=verify_jobs,
         )
     except KeyboardInterrupt:
         logger.info("Evaluator interrupted by user")

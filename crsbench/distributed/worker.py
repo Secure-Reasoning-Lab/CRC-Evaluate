@@ -100,6 +100,9 @@ def main(
     use_cpuset: bool = False,
     cores: Optional[str] = None,
     skip_cpus: Optional[str] = None,
+    ci_build_jobs: Optional[int] = None,
+    ci_build_cores_per_job: Optional[int] = None,
+    ci_verify_jobs: Optional[int] = None,
 ) -> int:
     """
     Worker entry point - connects to Redis and processes jobs.
@@ -166,6 +169,25 @@ def main(
     logger.info(f"Queue: {queue_name}")
     logger.info(f"Worker timeout: {worker_timeout}s")
     logger.info("=" * 60)
+
+    # CI dual-queue mode
+    if ci_build_jobs is not None:
+        from crsbench.distributed.ci_supervisor import run_ci_supervisor
+
+        return run_ci_supervisor(
+            redis_host=redis_host,
+            build_queue_name="crsbench_ci_build",
+            verify_queue_name="crsbench_ci_verify",
+            worker_name=worker_name,
+            build_jobs=ci_build_jobs,
+            build_cores_per_job=ci_build_cores_per_job or 1,
+            verify_jobs=ci_verify_jobs or ci_build_jobs,
+            job_runner=_ci_job_runner,
+            use_cpuset=use_cpuset,
+            use_cgroups=use_cpuset,
+            cores=cores,
+            skip_cpus=skip_cpus,
+        )
 
     # Single worker mode (use lock)
     if num_workers == 1:
@@ -577,6 +599,15 @@ def _run_supervisor(
         return 3
 
 
+def _ci_job_runner(
+    redis_host: str,
+    child_name: str,
+    job_id: str,
+) -> None:
+    """Adapter for ci_supervisor: delegates to _run_single_job_worker."""
+    _run_single_job_worker(redis_host, "", child_name, job_id)
+
+
 def _run_single_job_worker(
     redis_host: str,
     _experiment_name: str,
@@ -883,6 +914,9 @@ def run_worker_continuous(
     disk_check_interval: int = 60,
     cores: Optional[str] = None,
     skip_cpus: Optional[str] = None,
+    ci_build_jobs: Optional[int] = None,
+    ci_build_cores_per_job: Optional[int] = None,
+    ci_verify_jobs: Optional[int] = None,
 ):
     """
     Run worker in continuous mode (polling indefinitely).
@@ -910,6 +944,31 @@ def run_worker_continuous(
 
     # Resolve queue name
     queue_name = queue_name or f"crsbench_{experiment_name}"
+
+    # CI dual-queue mode
+    if ci_build_jobs is not None:
+        from crsbench.distributed.ci_supervisor import run_ci_supervisor
+
+        logger.info(f"Starting CI dual-queue supervisor for: {experiment_name}")
+        exit_code = run_ci_supervisor(
+            redis_host=redis_host,
+            build_queue_name="crsbench_ci_build",
+            verify_queue_name="crsbench_ci_verify",
+            worker_name=worker_name,
+            build_jobs=ci_build_jobs,
+            build_cores_per_job=ci_build_cores_per_job or 1,
+            verify_jobs=ci_verify_jobs or ci_build_jobs,
+            job_runner=_ci_job_runner,
+            use_cpuset=use_cpuset,
+            use_cgroups=use_cpuset,
+            cores=cores,
+            skip_cpus=skip_cpus,
+            minimum_disk_size=minimum_disk_size,
+            disk_check_interval=disk_check_interval,
+        )
+        if exit_code != 0:
+            raise RuntimeError(f"CI supervisor failed with exit code {exit_code}")
+        return
 
     # Always use supervisor mode for consistent behavior
     if use_cpuset:

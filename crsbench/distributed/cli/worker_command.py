@@ -109,8 +109,32 @@ Examples:
         "--queue",
         type=str,
         default="trial",
-        choices=["trial", "ci-build"],
-        help="Queue type: 'trial' (CRS experiment jobs) or 'ci-build' (CI variant builds)",
+        choices=["trial", "ci"],
+        help="Queue type: 'trial' (CRS experiment jobs) or 'ci' (CI build+verify)",
+    )
+
+    worker_parser.add_argument(
+        "--build-jobs",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Max concurrent build jobs (CI queue only, default: value of -j)",
+    )
+
+    worker_parser.add_argument(
+        "--build-cores-per-job",
+        type=int,
+        default=1,
+        metavar="M",
+        help="CPUs per build job (CI queue only, default: 1)",
+    )
+
+    worker_parser.add_argument(
+        "--verify-jobs",
+        type=int,
+        default=None,
+        metavar="K",
+        help="Max concurrent verify jobs (CI queue only, default: build-jobs * build-cores-per-job)",
     )
 
     worker_parser.add_argument(
@@ -191,13 +215,34 @@ def run_worker(args: argparse.Namespace) -> int:
 
     # Resolve queue name from --queue type
     queue_type = getattr(args, "queue", "trial")
-    if queue_type == "ci-build":
+    if queue_type == "ci":
         queue_name = "crsbench_ci_build"
     else:
         queue_name = f"crsbench_{experiment_name}"
 
-    # Set worker override environment variables (skip for ci-build queue)
-    if worker_config and queue_type != "ci-build":
+    # Validate CI-only flags aren't used with trial queue
+    ci_only_flags = ["build_jobs", "verify_jobs"]
+    if queue_type == "trial":
+        for flag in ci_only_flags:
+            if getattr(args, flag, None) is not None:
+                flag_name = f"--{flag.replace('_', '-')}"
+                raise ValueError(f"{flag_name} is only valid with --queue ci")
+        if getattr(args, "build_cores_per_job", 1) != 1:
+            raise ValueError("--build-cores-per-job is only valid with --queue ci")
+
+    # Resolve CI dual-queue parameters
+    ci_build_jobs: int | None = None
+    ci_build_cores_per_job: int | None = None
+    ci_verify_jobs: int | None = None
+    if queue_type == "ci":
+        ci_build_jobs = getattr(args, "build_jobs", None) or num_workers
+        ci_build_cores_per_job = getattr(args, "build_cores_per_job", 1)
+        ci_verify_jobs = (
+            getattr(args, "verify_jobs", None) or ci_build_jobs * ci_build_cores_per_job
+        )
+
+    # Set worker override environment variables (skip for ci queue)
+    if worker_config and queue_type != "ci":
         override_fields = [
             "oss_fuzz_path",
             "registry_dir",
@@ -226,9 +271,9 @@ def run_worker(args: argparse.Namespace) -> int:
                 logger.info(f"Worker override: {field} = {value}")
 
     # Export experiment_filestore from main config if worker didn't override it
-    # (skip for ci-build queue — no experiment filestore needed)
+    # (skip for ci queue — no experiment filestore needed)
     if (
-        queue_type != "ci-build"
+        queue_type != "ci"
         and args.experiment_config
         and config is not None
         and "CRSBENCH_WORKER_EXPERIMENT_FILESTORE" not in os.environ
@@ -289,6 +334,9 @@ def run_worker(args: argparse.Namespace) -> int:
                 disk_check_interval=disk_check_interval,
                 cores=cores,
                 skip_cpus=skip_cpus,
+                ci_build_jobs=ci_build_jobs,
+                ci_build_cores_per_job=ci_build_cores_per_job,
+                ci_verify_jobs=ci_verify_jobs,
             )
             return 0
         # Run in burst mode (default)
@@ -298,6 +346,9 @@ def run_worker(args: argparse.Namespace) -> int:
             use_cpuset=use_cpuset,
             cores=cores,
             skip_cpus=skip_cpus,
+            ci_build_jobs=ci_build_jobs,
+            ci_build_cores_per_job=ci_build_cores_per_job,
+            ci_verify_jobs=ci_verify_jobs,
         )
 
     except KeyboardInterrupt:

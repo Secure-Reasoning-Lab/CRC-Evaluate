@@ -39,6 +39,9 @@ def run_evaluator_main(
     use_cpuset: bool = False,
     cores: Optional[str] = None,
     skip_cpus: Optional[str] = None,
+    build_jobs: Optional[int] = None,
+    build_cores_per_job: Optional[int] = None,
+    verify_jobs: Optional[int] = None,
 ) -> int:
     """Main entry point for the evaluator process.
 
@@ -92,6 +95,25 @@ def run_evaluator_main(
     set_engine(engine)
 
     # Start dual-queue supervisor
+    if build_jobs is not None:
+        from crsbench.distributed.ci_supervisor import run_ci_supervisor
+
+        logger.info("Starting CI dual-queue supervisor (build + verify)...")
+        return run_ci_supervisor(
+            redis_host=redis_host,
+            build_queue_name=f"crsbench_{experiment_name}_build",
+            verify_queue_name=f"crsbench_{experiment_name}_verify",
+            worker_name=f"evaluator-{experiment_name}",
+            build_jobs=build_jobs,
+            build_cores_per_job=build_cores_per_job or 1,
+            verify_jobs=verify_jobs or build_jobs,
+            job_runner=_evaluator_job_runner,
+            use_cpuset=use_cpuset,
+            use_cgroups=use_cpuset,
+            cores=cores,
+            skip_cpus=skip_cpus,
+        )
+
     logger.info("Starting dual-queue supervisor (build + verify)...")
     return _run_evaluator_supervisor(
         redis_host=redis_host,
@@ -338,6 +360,15 @@ def _run_evaluator_supervisor(
     except Exception as e:
         logger.error(f"Evaluator supervisor error: {e}", exc_info=True)
         return 3
+
+
+def _evaluator_job_runner(
+    redis_host: str,
+    _child_name: str,
+    job_id: str,
+) -> None:
+    """Adapter for ci_supervisor: delegates to _run_single_job."""
+    _run_single_job(redis_host, job_id)
 
 
 def _run_single_job(
