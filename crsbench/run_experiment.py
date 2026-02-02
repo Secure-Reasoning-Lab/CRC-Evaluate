@@ -2364,12 +2364,17 @@ def main() -> None:
     experiment_name = (
         args.experiment_name if args.experiment_name else config.experiment
     )
+    original_experiment = config.experiment
+    # Propagate CLI override into config so serialized config_dict
+    # (sent to workers) uses the correct experiment name everywhere
+    if experiment_name != config.experiment:
+        config.experiment = experiment_name
     logger.info("=" * 60)
     logger.info("CRSBench Experiment Runner")
     logger.info("=" * 60)
     logger.info(f"Experiment name: {experiment_name}")
     if args.experiment_name:
-        logger.info(f"  (overridden from CLI, config has: {config.experiment})")
+        logger.info(f"  (overridden from CLI, config had: {original_experiment})")
     logger.info(f"Configuration file: {args.experiment_config}")
 
     # Resolve CRSes (CLI overrides config)

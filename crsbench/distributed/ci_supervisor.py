@@ -168,7 +168,8 @@ def run_ci_supervisor(
                     + "\n  BUILD PHASE COMPLETE — all build jobs finished"
                     + "\n  Switching to verify-only mode"
                     + f"\n  Verify queue: {verify_queue.count} pending"
-                    + "\n" + "=" * 60
+                    + "\n"
+                    + "=" * 60
                 )
 
             # --- Disk space check ---

@@ -697,7 +697,9 @@ class TestPOVStoreAsyncHelpers:
 
     def test_extract_hash_from_filename_hash_format(self) -> None:
         """_extract_hash parses {filename}:{hash} format."""
-        assert POVStore._extract_hash("pov_0.blob:47107064ecc2b03b") == "47107064ecc2b03b"
+        assert (
+            POVStore._extract_hash("pov_0.blob:47107064ecc2b03b") == "47107064ecc2b03b"
+        )
 
     def test_extract_hash_plain_string(self) -> None:
         """_extract_hash returns plain string as-is when no colon."""
