@@ -10,7 +10,6 @@ fine-grained parallelism and individual retry.
 
 import os
 import time
-from pathlib import Path
 from typing import Any, Optional
 
 from crsbench.utils.logger import get_logger
@@ -128,79 +127,6 @@ def enqueue_single_pov(
     except Exception as e:
         logger.warning(f"Failed to enqueue single POV verify job: {e}")
         return None
-
-
-def enqueue_trial_povs(
-    redis_host: str,
-    experiment_name: str,
-    trial_id: str,
-    benchmark: str,
-    harness: str,
-    trial_output_dir: Path,
-    job_timeout: int = 3600,
-) -> list[str]:
-    """Enqueue all POVs from a completed trial for async verification.
-
-    Reads POV files from the trial output directory and enqueues each one
-    individually for per-POV verification.
-
-    Args:
-        redis_host: Redis server hostname
-        experiment_name: Experiment identifier
-        trial_id: Trial identifier
-        benchmark: Benchmark name
-        harness: Harness name
-        trial_output_dir: Trial output directory
-        job_timeout: Job execution timeout
-
-    Returns:
-        List of enqueued verify job IDs (may be empty)
-    """
-    verify_queue = initialize_verify_queue(redis_host, experiment_name)
-    if verify_queue is None:
-        return []
-
-    pov_dir = trial_output_dir / "output" / "povs"
-    if not pov_dir.exists():
-        logger.debug(f"No POV directory found: {pov_dir}")
-        return []
-
-    pov_files = sorted(f for f in pov_dir.iterdir() if f.is_file())
-    if not pov_files:
-        logger.debug(f"No POV files in {pov_dir}")
-        return []
-
-    job_ids: list[str] = []
-    for pov_file in pov_files:
-        file_size = pov_file.stat().st_size
-        if file_size > MAX_POV_SIZE_BYTES:
-            logger.warning(
-                f"Skipping POV {pov_file.name}: {file_size} bytes exceeds "
-                f"{MAX_POV_SIZE_BYTES} byte limit"
-            )
-            continue
-
-        pov_data = pov_file.read_bytes()
-        job_id = enqueue_single_pov(
-            verify_queue=verify_queue,
-            experiment_name=experiment_name,
-            trial_id=trial_id,
-            benchmark=benchmark,
-            harness=harness,
-            pov_id=pov_file.name,
-            pov_data=pov_data,
-            job_timeout=job_timeout,
-        )
-        if job_id:
-            job_ids.append(job_id)
-
-    if job_ids:
-        logger.info(
-            f"Enqueued {len(job_ids)} POV verify jobs for {benchmark}/{harness} "
-            f"(trial {trial_id})"
-        )
-
-    return job_ids
 
 
 def poll_single_pov_verdicts(
