@@ -8,16 +8,21 @@
 #   scripts/orchestrate-workers.sh <command> [machines...]
 #
 # Commands:
-#   push       Push feat/distributed branch to GitHub
-#   setup      Setup workers on remote machines (parallel)
-#   start      Start workers on remote machines via tmux
-#   stop       Stop workers on remote machines
-#   status     Check worker status on remote machines
-#   logs       Tail worker logs on a remote machine
-#   collect    Rsync experiment results from remote machines to cyclonus
-#   all        Push + setup + start (full deployment)
+#   push        Push feat/distributed branch to GitHub
+#   redis-setup Configure Redis on cyclonus with password auth
+#   setup       Setup workers on remote machines (parallel)
+#   start       Start workers on remote machines via tmux
+#   stop        Stop workers on remote machines
+#   status      Check worker status on remote machines
+#   logs        Tail worker logs on a remote machine
+#   collect     Rsync experiment results from remote machines to cyclonus
+#   all         Push + setup + start (full deployment)
+#
+# Environment:
+#   REDIS_PASSWORD  Override Redis password (default: read from ~/.crsbench-redis-password)
 #
 # Examples:
+#   scripts/orchestrate-workers.sh redis-setup            # One-time Redis setup
 #   scripts/orchestrate-workers.sh all                    # Deploy to all machines
 #   scripts/orchestrate-workers.sh setup cerebros ramjet  # Setup specific machines
 #   scripts/orchestrate-workers.sh start cerebros         # Start one machine
@@ -37,6 +42,7 @@ INSTALL_DIR="/home/dongkwan/CRSBench"
 TMUX_SESSION="crsbench-worker"
 REMOTE_EXPERIMENT_DIR="/home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc2"
 LOCAL_COLLECT_DIR="/home/dongkwan/crsbench_eval_given_fuzzer/collected-results"
+REDIS_PASSWORD_FILE="$HOME/.crsbench-redis-password"
 
 # Default worker machines
 ALL_MACHINES=(cerebros ramjet)
@@ -55,6 +61,20 @@ SSH_OPTS="-A -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
 
 log() { echo "[orchestrate] $*"; }
 err() { echo "[orchestrate] ERROR: $*" >&2; }
+
+get_redis_password() {
+    # Prefer env var, then password file
+    if [[ -n "${REDIS_PASSWORD:-}" ]]; then
+        echo "$REDIS_PASSWORD"
+        return
+    fi
+    if [[ -f "$REDIS_PASSWORD_FILE" ]]; then
+        cat "$REDIS_PASSWORD_FILE"
+        return
+    fi
+    err "Redis password not found. Set REDIS_PASSWORD or run: scripts/orchestrate-workers.sh redis-setup"
+    exit 1
+}
 
 get_hostname() {
     local machine="$1"
@@ -90,6 +110,54 @@ ssh_cmd() {
 # Commands
 # -----------------------------------------------------------------------------
 
+cmd_redis_setup() {
+    log "Setting up Redis with password authentication on localhost..."
+
+    # Generate a random password
+    local password
+    password=$(openssl rand -base64 24)
+
+    # Check if Redis is installed
+    if ! command -v redis-cli &>/dev/null; then
+        err "redis-cli not found. Install Redis first: sudo apt install redis-server"
+        exit 1
+    fi
+
+    # Find Redis config
+    local redis_conf=""
+    for candidate in /etc/redis/redis.conf /etc/redis.conf; do
+        if [[ -f "$candidate" ]]; then
+            redis_conf="$candidate"
+            break
+        fi
+    done
+
+    if [[ -z "$redis_conf" ]]; then
+        err "Redis config not found at /etc/redis/redis.conf or /etc/redis.conf"
+        exit 1
+    fi
+
+    log "  Redis config: $redis_conf"
+    log "  Configuring password and network binding..."
+
+    # Apply config via redis-cli (takes effect immediately, persists to config)
+    redis-cli CONFIG SET requirepass "$password"
+    # Authenticate with the new password for subsequent commands
+    redis-cli -a "$password" CONFIG SET bind "0.0.0.0"
+    redis-cli -a "$password" CONFIG SET protected-mode "no"
+    redis-cli -a "$password" CONFIG REWRITE 2>/dev/null || true
+
+    # Save password to file (used by get_redis_password helper)
+    echo -n "$password" > "$REDIS_PASSWORD_FILE"
+    chmod 600 "$REDIS_PASSWORD_FILE"
+
+    log "  Password saved to: $REDIS_PASSWORD_FILE"
+    log "  Redis is now accepting remote connections with password auth"
+    log ""
+    log "  Workers:  password is passed automatically by 'start' command"
+    log "  Cyclonus: export REDIS_PASSWORD=\$(cat $REDIS_PASSWORD_FILE)"
+}
+
 cmd_push() {
     log "Pushing $BRANCH to origin..."
     cd "$REPO_DIR"
@@ -121,7 +189,14 @@ cmd_setup() {
         # Copy script to remote then execute (preserves SSH agent forwarding
         # for git operations; piping via stdin breaks nested SSH)
         scp -q $SSH_OPTS "$SETUP_SCRIPT" "$host:/tmp/setup-remote-worker.sh"
-        ssh $SSH_OPTS "$host" "bash /tmp/setup-remote-worker.sh $machine" \
+        # Pass REDIS_PASSWORD if available so setup can test connectivity
+        local redis_env=""
+        if [[ -f "$REDIS_PASSWORD_FILE" ]]; then
+            redis_env="REDIS_PASSWORD=$(cat "$REDIS_PASSWORD_FILE")"
+        elif [[ -n "${REDIS_PASSWORD:-}" ]]; then
+            redis_env="REDIS_PASSWORD=$REDIS_PASSWORD"
+        fi
+        ssh $SSH_OPTS "$host" "$redis_env bash /tmp/setup-remote-worker.sh $machine" \
             > "$logfile" 2>&1 &
         pids+=($!)
     done
@@ -178,6 +253,9 @@ cmd_start() {
     local machines
     read -ra machines <<< "$(get_machines "$@")"
 
+    local redis_pass
+    redis_pass=$(get_redis_password)
+
     log "Starting workers on: ${machines[*]}"
 
     for machine in "${machines[@]}"; do
@@ -188,9 +266,9 @@ cmd_start() {
         # Kill existing tmux session if present
         ssh_cmd "$host" "tmux kill-session -t $TMUX_SESSION 2>/dev/null || true"
 
-        # Start worker in tmux (ensure ~/.local/bin is in PATH for uv)
+        # Start worker in tmux with REDIS_PASSWORD and PATH for uv
         ssh_cmd "$host" "tmux new-session -d -s $TMUX_SESSION \
-            'export PATH=\$HOME/.local/bin:\$PATH && cd $INSTALL_DIR && uv run crsbench worker --experiment-config $config 2>&1 | tee worker.log'"
+            'export PATH=\$HOME/.local/bin:\$PATH && export REDIS_PASSWORD=\"$redis_pass\" && cd $INSTALL_DIR && uv run crsbench worker --experiment-config $config 2>&1 | tee worker.log'"
 
         log "  $machine: worker started (tmux session: $TMUX_SESSION)"
     done
@@ -317,20 +395,21 @@ COMMAND="${1:-help}"
 shift || true
 
 case "$COMMAND" in
-    push)   cmd_push ;;
-    setup)  cmd_setup "$@" ;;
-    start)  cmd_start "$@" ;;
-    stop)   cmd_stop "$@" ;;
-    status) cmd_status "$@" ;;
-    logs)   cmd_logs "$@" ;;
-    collect) cmd_collect "$@" ;;
-    all)    cmd_all "$@" ;;
+    push)        cmd_push ;;
+    redis-setup) cmd_redis_setup ;;
+    setup)       cmd_setup "$@" ;;
+    start)       cmd_start "$@" ;;
+    stop)        cmd_stop "$@" ;;
+    status)      cmd_status "$@" ;;
+    logs)        cmd_logs "$@" ;;
+    collect)     cmd_collect "$@" ;;
+    all)         cmd_all "$@" ;;
     help|--help|-h)
-        head -27 "$0" | tail -25
+        head -32 "$0" | tail -30
         ;;
     *)
         err "Unknown command: $COMMAND"
-        head -27 "$0" | tail -25
+        head -32 "$0" | tail -30
         exit 1
         ;;
 esac
