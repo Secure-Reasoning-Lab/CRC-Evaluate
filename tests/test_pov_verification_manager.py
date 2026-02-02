@@ -814,6 +814,146 @@ class TestAsyncMode:
         # CPV should be found
         assert "cpv_0" in manager.found_cpvs
 
+    @patch("crsbench.distributed.verify_queue.enqueue_single_pov")
+    @patch("crsbench.distributed.verify_queue.initialize_verify_queue")
+    def test_enqueue_pov_records_hash_to_path(
+        self, mock_init_queue, mock_enqueue, tmp_path: Path
+    ) -> None:
+        """_enqueue_pov records pov_hash → pov_path mapping."""
+        mock_queue = MagicMock()
+        mock_init_queue.return_value = mock_queue
+        mock_enqueue.return_value = "job-1"
+
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+        pov_file = tmp_path / "trial-1" / "pov_output" / "pov.blob"
+        pov_file.write_bytes(b"test_content")
+
+        manager._enqueue_pov(pov_file, "hash123")
+
+        assert manager._pov_hash_to_path["hash123"] == pov_file
+
+    @patch("crsbench.distributed.verify_queue.poll_single_pov_verdicts")
+    def test_poll_stores_blob_and_crash_logs_for_cpv(
+        self, mock_poll, tmp_path: Path
+    ) -> None:
+        """_poll_pending_verdicts stores POV blob and crash logs for CPV matches."""
+        from crsbench.distributed.evaluator_jobs import PovVerdict, SinglePovResult
+
+        pov_hash = "abc123hash"
+        crash_logs = {
+            "base-asan": "ASAN: heap-buffer-overflow at ...",
+            "patched-asan": "no crash",
+        }
+
+        verdict = PovVerdict(
+            pov_id=f"test.blob:{pov_hash}",
+            triggered_bug=True,
+            cpv_matches=["cpv_0"],
+            crash_logs=crash_logs,
+        )
+        result = SinglePovResult(
+            trial_id="trial-1",
+            benchmark="test-benchmark",
+            harness="fuzz_parser",
+            verdict=verdict,
+            completed_at=1700000100.0,
+        )
+        mock_poll.return_value = ([result.to_dict()], [])
+
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+        manager._pending_job_ids = ["job-1"]
+
+        # Create POV file and register hash→path
+        pov_file = tmp_path / "trial-1" / "pov_output" / "test.blob"
+        pov_file.write_bytes(b"pov_blob_data")
+        manager._pov_hash_to_path[pov_hash] = pov_file
+
+        manager._poll_pending_verdicts()
+
+        # Verify blob was stored
+        cpv_blobs_dir = tmp_path / "trial-1" / "povs" / "cpvs" / "cpv_0" / "blobs"
+        stored_blobs = list(cpv_blobs_dir.glob("*.blob"))
+        assert len(stored_blobs) == 1
+        assert stored_blobs[0].read_bytes() == b"pov_blob_data"
+
+        # Verify crash logs were stored
+        cpv_logs_dir = tmp_path / "trial-1" / "povs" / "cpvs" / "cpv_0" / "crash_logs"
+        stored_logs = sorted(cpv_logs_dir.glob("*.log"))
+        assert len(stored_logs) == 2
+        log_names = {log.name for log in stored_logs}
+        assert f"{pov_hash}-base-asan.log" in log_names
+        assert f"{pov_hash}-patched-asan.log" in log_names
+
+    @patch("crsbench.distributed.verify_queue.poll_single_pov_verdicts")
+    def test_poll_skips_blob_when_file_missing(self, mock_poll, tmp_path: Path) -> None:
+        """Blob storage is skipped if POV file was deleted, but crash logs still stored."""
+        from crsbench.distributed.evaluator_jobs import PovVerdict, SinglePovResult
+
+        pov_hash = "deadbeef1234"
+        verdict = PovVerdict(
+            pov_id=f"test.blob:{pov_hash}",
+            triggered_bug=True,
+            cpv_matches=["cpv_0"],
+            crash_logs={"base-asan": "ASAN crash log"},
+        )
+        result = SinglePovResult(
+            trial_id="trial-1",
+            benchmark="test-benchmark",
+            harness="fuzz_parser",
+            verdict=verdict,
+            completed_at=1700000100.0,
+        )
+        mock_poll.return_value = ([result.to_dict()], [])
+
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+        manager._pending_job_ids = ["job-1"]
+        # No hash→path mapping (simulates file deleted or never recorded)
+
+        manager._poll_pending_verdicts()
+
+        # No blob stored (no file to copy from)
+        cpv_blobs_dir = tmp_path / "trial-1" / "povs" / "cpvs" / "cpv_0" / "blobs"
+        assert (
+            not cpv_blobs_dir.exists() or len(list(cpv_blobs_dir.glob("*.blob"))) == 0
+        )
+
+        # Crash logs should still be stored
+        cpv_logs_dir = tmp_path / "trial-1" / "povs" / "cpvs" / "cpv_0" / "crash_logs"
+        stored_logs = list(cpv_logs_dir.glob("*.log"))
+        assert len(stored_logs) == 1
+
+    @patch("crsbench.distributed.verify_queue.poll_single_pov_verdicts")
+    def test_poll_no_blob_or_logs_for_non_cpv(self, mock_poll, tmp_path: Path) -> None:
+        """Non-CPV verdicts do not store blobs or crash logs."""
+        from crsbench.distributed.evaluator_jobs import PovVerdict, SinglePovResult
+
+        verdict = PovVerdict(
+            pov_id="test.blob:hash456",
+            triggered_bug=False,
+            cpv_matches=[],
+            crash_logs={"base-asan": "no crash"},
+        )
+        result = SinglePovResult(
+            trial_id="trial-1",
+            benchmark="test-benchmark",
+            harness="fuzz_parser",
+            verdict=verdict,
+            completed_at=1700000100.0,
+        )
+        mock_poll.return_value = ([result.to_dict()], [])
+
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+        manager._pending_job_ids = ["job-1"]
+
+        manager._poll_pending_verdicts()
+
+        # No blobs or crash_logs should be stored for non-CPV results
+        povs_dir = tmp_path / "trial-1" / "povs"
+        stored_blobs = list(povs_dir.rglob("*.blob"))
+        stored_logs = list(povs_dir.rglob("*.log"))
+        assert len(stored_blobs) == 0
+        assert len(stored_logs) == 0
+
     def test_on_snapshot_async_enqueues_and_polls(self, tmp_path: Path) -> None:
         """In async mode, on_snapshot enqueues new POVs and polls verdicts."""
         manager = self._make_manager(tmp_path, redis_host="redis.local")

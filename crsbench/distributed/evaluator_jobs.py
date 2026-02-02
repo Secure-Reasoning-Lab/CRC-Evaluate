@@ -69,6 +69,7 @@ class PovVerdict:
     triggered_bug: bool
     cpv_matches: list[str] = field(default_factory=list)
     variant_results: dict[str, bool] = field(default_factory=dict)
+    crash_logs: dict[str, str] = field(default_factory=dict)
     error: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -77,6 +78,7 @@ class PovVerdict:
             "triggered_bug": self.triggered_bug,
             "cpv_matches": self.cpv_matches,
             "variant_results": self.variant_results,
+            "crash_logs": self.crash_logs,
             "error": self.error,
         }
 
@@ -87,6 +89,7 @@ class PovVerdict:
             triggered_bug=d["triggered_bug"],
             cpv_matches=d.get("cpv_matches", []),
             variant_results=d.get("variant_results", {}),
+            crash_logs=d.get("crash_logs", {}),
             error=d.get("error"),
         )
 
@@ -332,11 +335,16 @@ def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
             build_results=build_results,
         )
 
+        crash_logs: dict[str, str] = {}
+        if result.crash_info and "logs" in result.crash_info:
+            crash_logs = result.crash_info["logs"]
+
         verdict = PovVerdict(
             pov_id=pov.pov_id,
             triggered_bug=result.status == PovVerificationStatus.CPV,
             cpv_matches=result.cpv_matched,
             variant_results={},
+            crash_logs=crash_logs,
             error=result.details
             if result.status == PovVerificationStatus.ERROR
             else None,

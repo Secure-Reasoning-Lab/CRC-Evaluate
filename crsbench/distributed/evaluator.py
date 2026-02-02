@@ -468,6 +468,7 @@ def _run_single_job(
     from rq.executions import Execution
     from rq.job import JobStatus
     from rq.registry import FailedJobRegistry, FinishedJobRegistry
+    from rq.results import Result
 
     # Reconfigure logging in subprocess
     configure_logger(level=os.environ.get("LOG_LEVEL", "INFO").upper(), sink=sys.stdout)
@@ -494,7 +495,7 @@ def _run_single_job(
         try:
             result = job.perform()
 
-            # Mark as FINISHED
+            # Mark as FINISHED and persist result to Redis
             with redis_conn.pipeline() as pipeline:
                 job._status = JobStatus.FINISHED
                 job.ended_at = rq.utils.now()
@@ -506,6 +507,13 @@ def _run_single_job(
                         "status": JobStatus.FINISHED,
                         "ended_at": rq.utils.utcformat(job.ended_at),
                     },
+                )
+                Result.create(
+                    job,
+                    Result.Type.SUCCESSFUL,
+                    ttl=-1,
+                    return_value=result,
+                    pipeline=pipeline,
                 )
                 if execution:
                     execution.delete(job, pipeline=pipeline)

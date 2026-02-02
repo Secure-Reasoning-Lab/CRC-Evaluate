@@ -149,6 +149,7 @@ class POVVerificationManager:
         self._trial_id = trial_id
         self._verify_queue: Optional[object] = None  # Lazy-initialized RQ Queue
         self._pending_job_ids: list[str] = []  # Job IDs awaiting results
+        self._pov_hash_to_path: dict[str, Path] = {}  # hash → local file path
 
         async_mode = "async (Redis)" if redis_host else "inline"
         logger.info(
@@ -223,6 +224,7 @@ class POVVerificationManager:
             return None
 
         pov_data = pov_path.read_bytes()
+        self._pov_hash_to_path[pov_hash] = pov_path
         pov_id = f"{pov_path.name}:{pov_hash}"
         return enqueue_single_pov(
             verify_queue=queue,  # type: ignore[arg-type]
@@ -270,6 +272,24 @@ class POVVerificationManager:
                 self.store.add_pov_by_id(result.verdict.pov_id, status, cpv_matched)
 
                 if status == PovVerificationStatus.CPV:
+                    # Store POV blob from the local file still on disk
+                    pov_hash = self.store._extract_hash(result.verdict.pov_id)
+                    pov_path = self._pov_hash_to_path.get(pov_hash)
+                    if pov_path and pov_path.exists():
+                        self.store.store_unique_pov(
+                            pov_path, pov_hash, status, cpv_matched
+                        )
+
+                    # Store crash logs from verdict
+                    for variant_name, crash_log in result.verdict.crash_logs.items():
+                        self.store.store_crash_log(
+                            pov_hash,
+                            crash_log,
+                            status,
+                            cpv_matched,
+                            variant_name=variant_name,
+                        )
+
                     for cpv_id in cpv_matched:
                         logger.info(
                             f"CPV found (async): cpv_id={cpv_id} "

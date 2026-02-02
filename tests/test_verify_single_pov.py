@@ -53,6 +53,36 @@ class TestSinglePovPayload:
         assert "pov_id" in d["pov"]
 
 
+class TestPovVerdictCrashLogs:
+    """PovVerdict crash_logs field serialization."""
+
+    def test_crash_logs_default_empty(self) -> None:
+        """crash_logs defaults to empty dict."""
+        verdict = PovVerdict(pov_id="pov_0", triggered_bug=False)
+        assert verdict.crash_logs == {}
+
+    def test_crash_logs_roundtrip(self) -> None:
+        """crash_logs survives to_dict/from_dict roundtrip."""
+        logs = {"base-asan": "ASAN error at ...", "patched-asan": "no crash"}
+        verdict = PovVerdict(
+            pov_id="pov_0",
+            triggered_bug=True,
+            cpv_matches=["cpv_0"],
+            crash_logs=logs,
+        )
+        d = verdict.to_dict()
+        assert d["crash_logs"] == logs
+
+        restored = PovVerdict.from_dict(d)
+        assert restored.crash_logs == logs
+
+    def test_crash_logs_missing_in_dict(self) -> None:
+        """from_dict handles missing crash_logs (backward compat)."""
+        d = {"pov_id": "pov_0", "triggered_bug": False}
+        verdict = PovVerdict.from_dict(d)
+        assert verdict.crash_logs == {}
+
+
 class TestSinglePovResult:
     """SinglePovResult serialization."""
 
@@ -159,6 +189,68 @@ class TestVerifySinglePov:
         assert result.verdict.triggered_bug is True
         assert result.verdict.cpv_matches == ["cpv_0"]
         assert result.verdict.error is None
+
+    @patch("crsbench.distributed.evaluator_jobs._built_results", {"test-bench": {}})
+    def test_cpv_match_includes_crash_logs(self) -> None:
+        """Crash logs from engine result are propagated to verdict."""
+        from crsbench.evaluation.verification.models import (
+            PovVerificationResult,
+            PovVerificationStatus,
+        )
+
+        mock_engine = MagicMock()
+        mock_adapter = MagicMock()
+        mock_engine.load_adapter.return_value = mock_adapter
+        mock_engine.verify_pov.return_value = PovVerificationResult(
+            status=PovVerificationStatus.CPV,
+            benchmark="test-bench",
+            cpv_matched=["cpv_0"],
+            crash_info={
+                "logs": {
+                    "base-asan": "ASAN: heap-buffer-overflow",
+                    "patched-asan": "no crash",
+                },
+                "other_key": "ignored_by_our_code",
+            },
+        )
+
+        with patch(
+            "crsbench.distributed.evaluator_jobs._verification_engine", mock_engine
+        ):
+            result_dict = verify_single_pov(self._make_payload())
+
+        result = SinglePovResult.from_dict(result_dict)
+        assert result.verdict.triggered_bug is True
+        assert result.verdict.crash_logs == {
+            "base-asan": "ASAN: heap-buffer-overflow",
+            "patched-asan": "no crash",
+        }
+
+    @patch("crsbench.distributed.evaluator_jobs._built_results", {"test-bench": {}})
+    def test_no_crash_info_gives_empty_crash_logs(self) -> None:
+        """When crash_info is None, crash_logs should be empty."""
+        from crsbench.evaluation.verification.models import (
+            PovVerificationResult,
+            PovVerificationStatus,
+        )
+
+        mock_engine = MagicMock()
+        mock_adapter = MagicMock()
+        mock_engine.load_adapter.return_value = mock_adapter
+        mock_engine.verify_pov.return_value = PovVerificationResult(
+            status=PovVerificationStatus.CPV,
+            benchmark="test-bench",
+            cpv_matched=["cpv_0"],
+            crash_info=None,
+        )
+
+        with patch(
+            "crsbench.distributed.evaluator_jobs._verification_engine", mock_engine
+        ):
+            result_dict = verify_single_pov(self._make_payload())
+
+        result = SinglePovResult.from_dict(result_dict)
+        assert result.verdict.crash_logs == {}
 
     @patch("crsbench.distributed.evaluator_jobs._built_results", {"test-bench": {}})
     def test_not_vulnerable(self) -> None:
