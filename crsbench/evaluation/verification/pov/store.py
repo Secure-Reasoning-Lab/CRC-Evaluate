@@ -370,6 +370,23 @@ class POVStore:
                     cpv_matched=[],
                 )
 
+    @staticmethod
+    def _extract_hash(pov_id: str) -> str:
+        """Extract content hash from a pov_id.
+
+        Handles both ``{filename}:{hash}`` format (async mode)
+        and plain hash strings (legacy / inline).
+
+        Args:
+            pov_id: POV identifier, e.g. ``"pov_0.blob:47107064ecc2b03b"``
+
+        Returns:
+            The content hash portion
+        """
+        if ":" in pov_id:
+            return pov_id.rsplit(":", 1)[1]
+        return pov_id
+
     def add_pov_by_id(
         self,
         pov_id: str,
@@ -379,30 +396,26 @@ class POVStore:
         """Add a POV result by ID (for async verification results).
 
         Unlike add_pov() which takes a file path, this method accepts
-        a POV identifier string. Used when processing async Redis results
-        where the POV file may not be accessible.
+        a POV identifier string. Used when processing async Redis
+        results where the POV file may not be accessible.
 
-        Preserves file_mtime and first_seen_ts from the placeholder entry
-        created by mark_hash_tested() so that POV creation timestamps
-        are not overwritten by verdict arrival time.
+        The pov_id format is ``{filename}:{hash}`` (from _enqueue_pov).
+        The hash suffix is extracted and used as the store key to match
+        the placeholder entry created by mark_hash_tested().
+
+        Preserves file_mtime and first_seen_ts from the placeholder
+        entry so that POV creation timestamps are not overwritten by
+        verdict arrival time.
 
         Args:
-            pov_id: POV identifier (filename)
+            pov_id: POV identifier (``{filename}:{hash}`` or plain hash)
             status: Verification result status
             cpv_matched: List of CPV identifiers matched
         """
-        with self._lock:
-            # Find existing entry by scanning for matching pov_id
-            # or create new entry using pov_id as hash key
-            existing_hash = None
-            existing_entry: Optional[POVEntry] = None
-            for h, entry in self.povs.items():
-                if h == pov_id or getattr(entry, "pov_id", None) == pov_id:
-                    existing_hash = h
-                    existing_entry = entry
-                    break
+        pov_hash = self._extract_hash(pov_id)
 
-            target_hash = existing_hash or pov_id
+        with self._lock:
+            existing_entry = self.povs.get(pov_hash)
 
             # Preserve timestamps from mark_hash_tested() placeholder
             first_seen_ts = (
@@ -411,8 +424,8 @@ class POVStore:
             file_mtime = existing_entry.file_mtime if existing_entry else None
             file_size = existing_entry.file_size if existing_entry else 0
 
-            self.povs[target_hash] = POVEntry(
-                hash=target_hash,
+            self.povs[pov_hash] = POVEntry(
+                hash=pov_hash,
                 first_seen_ts=first_seen_ts,
                 file_mtime=file_mtime,
                 file_size=file_size,
@@ -424,7 +437,7 @@ class POVStore:
             for cpv_id in cpv_matched:
                 if cpv_id not in self.cpv_to_first_pov:
                     self.cpv_to_first_pov[cpv_id] = {
-                        "pov_hash": target_hash,
+                        "pov_hash": pov_hash,
                         "first_seen_ts": first_seen_ts,
                         "discovery_elapsed": first_seen_ts - self.crs_run_start_time,
                     }

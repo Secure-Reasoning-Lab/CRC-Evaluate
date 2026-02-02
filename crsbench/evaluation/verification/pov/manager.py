@@ -200,11 +200,17 @@ class POVVerificationManager:
         )
         return self._verify_queue
 
-    def _enqueue_pov(self, pov_path: Path) -> Optional[str]:
+    def _enqueue_pov(self, pov_path: Path, pov_hash: str) -> Optional[str]:
         """Enqueue a single POV for async verification via Redis.
+
+        The pov_id is formatted as ``{filename}:{hash}`` so the evaluator
+        logs show the human-readable filename, while the hash suffix
+        guarantees uniqueness even when the CRS reuses filenames
+        (e.g., always writes to ``pov_0.blob``).
 
         Args:
             pov_path: Path to the POV file
+            pov_hash: Content hash of the POV file
 
         Returns:
             Job ID if enqueued, None on error
@@ -217,13 +223,14 @@ class POVVerificationManager:
             return None
 
         pov_data = pov_path.read_bytes()
+        pov_id = f"{pov_path.name}:{pov_hash}"
         return enqueue_single_pov(
             verify_queue=queue,  # type: ignore[arg-type]
             experiment_name=self._experiment_name or "",
             trial_id=self._trial_id or "",
             benchmark=self.benchmark_id,
             harness=self.harness_name,
-            pov_id=pov_path.name,
+            pov_id=pov_id,
             pov_data=pov_data,
         )
 
@@ -456,7 +463,7 @@ class POVVerificationManager:
         if self._async_mode:
             # Async mode: enqueue new POVs to Redis, poll for results
             for pov_path, pov_hash in new_povs:
-                job_id = self._enqueue_pov(pov_path)
+                job_id = self._enqueue_pov(pov_path, pov_hash)
                 if job_id:
                     self._pending_job_ids.append(job_id)
                     # Capture file mtime now (POV creation time) before

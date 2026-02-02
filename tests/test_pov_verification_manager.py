@@ -774,12 +774,13 @@ class TestAsyncMode:
         pov_file = tmp_path / "trial-1" / "pov_output" / "test.blob"
         pov_file.write_bytes(b"pov_data_content")
 
-        job_id = manager._enqueue_pov(pov_file)
+        job_id = manager._enqueue_pov(pov_file, "abc123hash")
 
         assert job_id == "job-123"
         mock_enqueue.assert_called_once()
         call_kwargs = mock_enqueue.call_args
-        assert call_kwargs[1]["pov_id"] == "test.blob"
+        # pov_id format: {filename}:{hash}
+        assert call_kwargs[1]["pov_id"] == "test.blob:abc123hash"
 
     @patch("crsbench.distributed.verify_queue.poll_single_pov_verdicts")
     def test_poll_pending_verdicts_processes_results(
@@ -789,7 +790,7 @@ class TestAsyncMode:
         from crsbench.distributed.evaluator_jobs import PovVerdict, SinglePovResult
 
         verdict = PovVerdict(
-            pov_id="test.blob",
+            pov_id="test.blob:abc123hash",
             triggered_bug=True,
             cpv_matches=["cpv_0"],
         )

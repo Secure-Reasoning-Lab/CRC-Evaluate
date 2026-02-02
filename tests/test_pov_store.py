@@ -694,3 +694,52 @@ class TestPOVStoreAsyncHelpers:
 
         assert "pov_miss.blob" in store.povs
         assert len(store.cpv_to_first_pov) == 0
+
+    def test_extract_hash_from_filename_hash_format(self) -> None:
+        """_extract_hash parses {filename}:{hash} format."""
+        assert POVStore._extract_hash("pov_0.blob:47107064ecc2b03b") == "47107064ecc2b03b"
+
+    def test_extract_hash_plain_string(self) -> None:
+        """_extract_hash returns plain string as-is when no colon."""
+        assert POVStore._extract_hash("47107064ecc2b03b") == "47107064ecc2b03b"
+
+    def test_async_roundtrip_with_filename_hash_format(self, store: POVStore) -> None:
+        """Full async roundtrip: mark_hash_tested → add_pov_by_id with {filename}:{hash}."""
+        # Worker side: mark placeholder with content hash and mtime
+        store.mark_hash_tested("abc123def456", file_mtime=1000.5, file_size=4096)
+        assert "abc123def456" in store.povs
+        assert store.povs["abc123def456"].file_mtime == 1000.5
+
+        # Evaluator returns verdict with {filename}:{hash} pov_id
+        store.add_pov_by_id(
+            "pov_0.blob:abc123def456", PovVerificationStatus.CPV, ["cpv_0"]
+        )
+
+        # Entry should be keyed by content hash, not the full pov_id
+        assert "abc123def456" in store.povs
+        assert "pov_0.blob:abc123def456" not in store.povs
+        # Timestamps preserved from placeholder
+        assert store.povs["abc123def456"].file_mtime == 1000.5
+        assert store.povs["abc123def456"].status == PovVerificationStatus.CPV
+        assert store.povs["abc123def456"].cpv_matched == ["cpv_0"]
+
+    def test_filename_collision_different_hashes(self, store: POVStore) -> None:
+        """Same filename with different content hashes are tracked separately."""
+        # First POV: pov_0.blob with hash_a
+        store.mark_hash_tested("hash_a", file_mtime=100.0, file_size=512)
+        # Second POV: pov_0.blob overwritten with new content → hash_b
+        store.mark_hash_tested("hash_b", file_mtime=200.0, file_size=1024)
+
+        assert len(store.povs) == 2
+
+        # Verdicts arrive (both from same filename)
+        store.add_pov_by_id("pov_0.blob:hash_a", PovVerificationStatus.CPV, ["cpv_0"])
+        store.add_pov_by_id(
+            "pov_0.blob:hash_b", PovVerificationStatus.NOT_VULNERABLE, []
+        )
+
+        # Each resolved to correct entry
+        assert store.povs["hash_a"].status == PovVerificationStatus.CPV
+        assert store.povs["hash_a"].file_mtime == 100.0
+        assert store.povs["hash_b"].status == PovVerificationStatus.NOT_VULNERABLE
+        assert store.povs["hash_b"].file_mtime == 200.0
