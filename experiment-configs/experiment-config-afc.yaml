@@ -3,7 +3,8 @@
 # Testing bug finding pipeline with AFC final benchmarks
 
 # Experiment Identity
-experiment: "e2e-bugfind-afc"
+experiment: "e2e-bugfind-afc2"
+description: "E2E bug finding - AFC final round benchmarks"
 
 # Execution Configuration
 trials: 1
@@ -49,8 +50,8 @@ only_cpv_harnesses: true
 snapshot_period: 300
 
 # Storage Configuration
-experiment_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc
-report_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/report-data-afc
+experiment_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc2
+report_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/report-data-afc2
 
 # Hints Configuration (disabled)
 hints_enabled: false

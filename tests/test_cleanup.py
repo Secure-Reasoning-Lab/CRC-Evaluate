@@ -1,9 +1,6 @@
 """Tests for crsbench.evaluation.cleanup module."""
 
-import os
 from pathlib import Path
-
-import pytest
 
 from crsbench.evaluation.cleanup import (
     cleanup_trial_directory,
@@ -112,7 +109,9 @@ class TestCopyTrialResults:
         copy_trial_results(tmp_path / "nonexistent", dest)
         assert not dest.exists()
 
-    def test_symlink_not_pointing_to_excluded_is_preserved(self, tmp_path: Path) -> None:
+    def test_symlink_not_pointing_to_excluded_is_preserved(
+        self, tmp_path: Path
+    ) -> None:
         """Symlinks not pointing to excluded dirs are copied normally."""
         trial_dir = tmp_path / "trial-1"
         trial_dir.mkdir()
