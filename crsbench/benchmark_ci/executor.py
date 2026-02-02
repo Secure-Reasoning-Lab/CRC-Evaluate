@@ -111,7 +111,8 @@ def execute_jobs_locally(
             )
 
             # Store result in context.shared for downstream jobs
-            if job_result.success:
+            # Only if job didn't already store its own data during execute()
+            if job_result.success and jid not in context.shared:
                 context.shared[jid] = job_result.details
 
             logger.info(
