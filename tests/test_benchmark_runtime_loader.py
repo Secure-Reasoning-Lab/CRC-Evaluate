@@ -8,7 +8,6 @@ from crsbench.benchmark.runtime.loader import (
     get_bundled_tarball_path,
     has_bundled_source,
     load_benchmark_source,
-    prepare_source_from_bundle,
 )
 
 

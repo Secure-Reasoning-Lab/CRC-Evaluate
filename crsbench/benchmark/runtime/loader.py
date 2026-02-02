@@ -7,9 +7,6 @@ handling both:
 
 The loader abstracts the source resolution logic so executors don't need
 to duplicate pkgs/ detection code.
-
-For verification (verify/patch-verify), use prepare_source_from_bundle() to
-extract and prepare source from pkgs/ with optional ref.diff application.
 """
 
 import os
@@ -18,6 +15,7 @@ import tarfile
 from pathlib import Path
 from typing import Optional
 
+from crsbench.benchmark.packaging.workdir_parser import get_expected_source_dir
 from crsbench.benchmark.runtime.models import BenchmarkSource
 from crsbench.utils.logger import get_logger
 
@@ -155,7 +153,7 @@ def has_bundled_source(benchmark_path: Path) -> bool:
         benchmark_path: Path to benchmark directory
 
     Returns:
-        True if pkgs/ exists with at least one tarball (regular or split)
+        True if pkgs/ exists with at least one tarball
     """
     pkgs_dir = benchmark_path / "pkgs"
     if not pkgs_dir.exists():
@@ -183,7 +181,7 @@ def get_bundled_tarball_path(benchmark_path: Path) -> Optional[Path]:
 
     # Get source name from Dockerfile WORKDIR
     dockerfile_path = benchmark_path / "Dockerfile"
-    source_name = _get_source_name_from_dockerfile(dockerfile_path)
+    source_name = get_expected_source_dir(dockerfile_path)
 
     if not source_name:
         # Fallback: use first tarball found
@@ -200,49 +198,6 @@ def get_bundled_tarball_path(benchmark_path: Path) -> Optional[Path]:
     if tarball_path.exists():
         return tarball_path
 
-    return None
-
-
-def _get_source_name_from_dockerfile(dockerfile_path: Path) -> Optional[str]:
-    """Extract source directory name from Dockerfile WORKDIR directive.
-
-    Parses the last WORKDIR in Dockerfile to determine source directory name.
-    Handles common patterns like:
-    - WORKDIR $SRC/curl -> curl
-    - WORKDIR /src/curl -> curl
-    - WORKDIR libtiff -> libtiff
-
-    Args:
-        dockerfile_path: Path to Dockerfile
-
-    Returns:
-        Source directory name, or None if not found
-    """
-    import re
-
-    if not dockerfile_path.exists():
-        logger.debug(f"Dockerfile not found: {dockerfile_path}")
-        return None
-
-    lines = dockerfile_path.read_text().splitlines()
-
-    for line in reversed(lines):
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-
-        match = re.match(r"WORKDIR\s+(.+)", stripped, re.IGNORECASE)
-        if match:
-            workdir = match.group(1).strip()
-            # Normalize: remove common prefixes
-            for prefix in ["$SRC/", "${SRC}/", "/src/"]:
-                if workdir.startswith(prefix):
-                    workdir = workdir[len(prefix) :]
-                    break
-            # Return last path component
-            return Path(workdir).name
-
-    logger.debug(f"No WORKDIR found in {dockerfile_path}")
     return None
 
 
