@@ -1,13 +1,11 @@
 """Evaluator process for distributed build and verify execution.
 
 This module implements the evaluator process that:
-1. Listens on both build and verify Redis queues (build has priority)
-2. Runs build jobs to create variant Docker images
-3. Runs POV verification against built variants
-4. Stores results as RQ job results
-
-No startup build phase — builds arrive via the build queue from
-VariantPlanner in ci build, ci all, or crsbench run.
+1. Pre-builds benchmark variants at startup via _enqueue_pre_builds()
+2. Listens on both build and verify Redis queues (build has priority)
+3. Runs build jobs to create variant Docker images
+4. Runs POV verification against built variants
+5. Stores results as RQ job results
 """
 
 import multiprocessing
@@ -28,6 +26,77 @@ except ImportError:
     REDIS_AVAILABLE = False
 
 logger = get_logger(__name__)
+
+
+def _enqueue_pre_builds(
+    config,
+    experiment_name: str,
+    redis_host: str,
+    build_cores_per_job: int,
+) -> int:
+    """Enqueue build jobs for all experiment benchmarks at startup.
+
+    Uses VariantPlanner to create BuildSingleVariantJob instances,
+    then enqueues them to the evaluator's build queue so the supervisor
+    processes them with proper CPU allocation.
+
+    Args:
+        config: ExperimentConfig instance
+        experiment_name: Experiment identifier for queue naming
+        redis_host: Redis server hostname
+        build_cores_per_job: CPU cores to allocate per build job
+
+    Returns:
+        Number of build jobs enqueued
+    """
+    from crsbench.distributed.build_jobs import serialize_build_job
+    from crsbench.executor.variant_planner import VariantPlanner
+
+    benchmarks_root = Path(
+        os.environ.get("CRSBENCH_EVALUATOR_BENCHMARKS_ROOT", "benchmarks")
+    )
+
+    benchmark_names = config.get_benchmark_list()
+
+    oss_fuzz_path = Path(
+        os.environ.get("CRSBENCH_EVALUATOR_OSS_FUZZ_PATH") or str(config.oss_fuzz_path)
+    )
+    planner = VariantPlanner(oss_fuzz_path, source_mode="pkgs")
+
+    redis_password = os.environ.get("REDIS_PASSWORD") or None
+    redis_conn = redis.Redis(host=redis_host, password=redis_password)
+    build_queue = rq.Queue(f"crsbench_{experiment_name}_build", connection=redis_conn)
+
+    enqueued = 0
+    for name in benchmark_names:
+        benchmark_path = benchmarks_root / name
+        if not benchmark_path.exists():
+            logger.warning(f"Pre-build skip: {benchmark_path} not found")
+            continue
+
+        jobs = planner.plan_builds(
+            benchmark_path,
+            use_inc_build=False,
+            skip_if_cached=True,
+        )
+
+        for job in jobs:
+            params = serialize_build_job(job)
+            try:
+                build_queue.enqueue(
+                    "crsbench.distributed.build_jobs.execute_ci_build",
+                    params,
+                    job_timeout=3600,
+                    result_ttl=-1,
+                    meta={"cpu_count": build_cores_per_job},
+                    job_id=job.job_id,
+                )
+                enqueued += 1
+            except Exception:
+                # Job with same ID already exists (dedup)
+                logger.debug(f"Pre-build job {job.job_id} already exists, skipping")
+
+    return enqueued
 
 
 def run_evaluator_main(
@@ -93,6 +162,16 @@ def run_evaluator_main(
     from crsbench.distributed.evaluator_jobs import set_engine
 
     set_engine(engine)
+
+    # Pre-build: enqueue variant builds for all experiment benchmarks
+    if build_jobs is not None:
+        enqueued = _enqueue_pre_builds(
+            config,
+            experiment_name,
+            redis_host,
+            build_cores_per_job=build_cores_per_job or 1,
+        )
+        logger.info(f"Pre-build: enqueued {enqueued} build jobs")
 
     # Start dual-queue supervisor
     if build_jobs is not None:
