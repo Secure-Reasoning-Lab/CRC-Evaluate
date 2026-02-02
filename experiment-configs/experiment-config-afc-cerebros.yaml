@@ -3,14 +3,14 @@
 # Worker config for cerebros joining the distributed experiment.
 # Supervisor + Redis run on cyclonus; this config is for `crsbench worker`.
 #
-# Strategy: Execute on local /home (fast NVMe), copy results to NFS after
-# each trial, clean up local to conserve disk (694G free).
+# Strategy: Execute on local /home (fast NVMe), clean up build artifacts
+# after each trial to conserve disk (694G free). Results stay on local disk
+# and are collected via rsync after the experiment completes.
 #
 # Prerequisites on cerebros:
 #   1. Clone CRSBench repo (with oss-crs submodule)
-#   2. NFS mounted at /mnt/crsbench_nfs
-#   3. Redis on cyclonus reachable (check: redis-cli -h cyclonus ping)
-#   4. Docker installed and running
+#   2. Redis on cyclonus reachable (check: redis-cli -h cyclonus ping)
+#   3. Docker installed and running
 
 # Experiment Identity — MUST match cyclonus so jobs are shared
 experiment: "e2e-bugfind-afc2"
@@ -83,7 +83,6 @@ worker:
   # Execute on local NVMe for fast Docker I/O
   experiment_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc2
   report_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/report-data-afc2
-  # Copy results to shared NFS after each trial completes, then clean up local
-  copy_results_after_trial: true
-  results_filestore: /mnt/crsbench_nfs/finished-afc2
+  # Clean up build artifacts (crs-build/, .oss-bugfind/) after each trial
+  # Results (POVs, logs, metadata) stay on local disk for rsync collection
   cleanup_after_trial: true
