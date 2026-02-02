@@ -55,7 +55,7 @@ class BuildSingleVariantJob(Job):
     Creates a single BuildConfig and executes via OSSFuzzBuilder.build_single().
     Stores build result in context.shared for downstream jobs.
 
-    This job enables DAGExecutor to parallelize builds across variants.
+    This job enables Redis job queue to parallelize builds across variants.
     """
 
     benchmark_path: Path
@@ -1464,7 +1464,7 @@ class FlatCollectCoverageJob(Job):
     from the build results.
 
     Note: CoverageEngine processes corpus files sequentially.
-    Parallelism is controlled by DAGExecutor at the benchmark level.
+    Parallelism is controlled by Redis job queue at the benchmark level.
 
     Supports both legacy build_job_id (single BuildVariantsJob) and
     new build_job_ids (list of BuildSingleVariantJob IDs).

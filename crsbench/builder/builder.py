@@ -10,7 +10,7 @@ Features:
 - Support for both FULL and DELTA benchmark modes
 - Incremental builds using pre-built images (for patch verification)
 
-For parallel builds, use BuildSingleVariantJob with DAGExecutor.
+For parallel builds, use BuildSingleVariantJob with Redis job queue.
 """
 
 import tempfile
@@ -74,7 +74,7 @@ class OSSFuzzBuilder:
     ) -> dict[str, BuildResult]:
         """Build multiple variants sequentially.
 
-        For parallel builds, use BuildSingleVariantJob with DAGExecutor.
+        For parallel builds, use BuildSingleVariantJob with Redis job queue.
 
         Args:
             configs: List of build configurations
@@ -110,7 +110,7 @@ class OSSFuzzBuilder:
                 configs_to_build.append(config)
 
         # Build remaining variants sequentially
-        # For parallel builds, use BuildSingleVariantJob with DAGExecutor
+        # For parallel builds, use BuildSingleVariantJob with Redis job queue
         if configs_to_build:
             self._ensure_repos_cached(configs_to_build)
             for config in configs_to_build:

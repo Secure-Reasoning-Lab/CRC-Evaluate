@@ -6,7 +6,7 @@ patterns as VerificationEngine (POV) and PatchVerificationEngine.
 
 Architecture:
 - Uses OSSFuzzBuilder for building coverage variants (with build_workers)
-- Processes corpus files sequentially (parallelism handled by DAGExecutor)
+- Processes corpus files sequentially (parallelism handled by Redis job queue)
 - Uses MetaYamlAdapter for consistent config loading
 - Provides cleanup() method for resource management
 
@@ -59,7 +59,7 @@ class CoverageEngine:
     5. Generate coverage reports
 
     This follows the same architectural pattern as VerificationEngine (POV)
-    and PatchVerificationEngine. Parallelism is handled by DAGExecutor at
+    and PatchVerificationEngine. Parallelism is handled by Redis job queue at
     the benchmark level, not within this engine.
 
     Attributes:
@@ -211,7 +211,7 @@ class CoverageEngine:
 
         logger.info(f"Collecting coverage for {len(corpus_files)} corpus files")
 
-        # Collect coverage sequentially (parallelism handled by DAGExecutor)
+        # Collect coverage sequentially (parallelism handled by Redis job queue)
         verify_start = time.time()
         merged_coverage, success_count, contributing_count, unique_count = (
             self._collect_coverage_sequential(corpus_files, strategy, harness_name)
@@ -252,7 +252,7 @@ class CoverageEngine:
     ) -> tuple[dict, int, int, int]:
         """Collect coverage for multiple corpus files sequentially.
 
-        Parallelism is handled by DAGExecutor at the benchmark level,
+        Parallelism is handled by Redis job queue at the benchmark level,
         not within this method.
 
         Args:
