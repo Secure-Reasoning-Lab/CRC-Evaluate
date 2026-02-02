@@ -44,7 +44,7 @@ def create_post_trial_jobs(
     build_job_ids: dict[str, str],
     *,
     coverage_enabled: bool = True,
-    source_mode: str = "main_repo",
+    source_mode: str = "pkgs",
 ) -> list[Job]:
     """Create post-trial analysis jobs from trial results.
 

@@ -488,8 +488,8 @@ class TestExecutePostTrialAnalysis:
 class TestCreatePostTrialJobsSourceMode:
     """Tests for source_mode parameter."""
 
-    def test_source_mode_default_is_main_repo(self, tmp_path: Path) -> None:
-        """Default source_mode is 'main_repo'."""
+    def test_source_mode_default_is_pkgs(self, tmp_path: Path) -> None:
+        """Default source_mode is 'pkgs'."""
         patch_path = tmp_path / "cpv_0_patch.diff"
         patch_path.write_text("patch")
 
@@ -507,7 +507,7 @@ class TestCreatePostTrialJobsSourceMode:
 
         build_job = jobs[0]
         assert isinstance(build_job, BuildPatchVariantJob)
-        assert build_job.source_mode == "main_repo"
+        assert build_job.source_mode == "pkgs"
 
     def test_source_mode_pkgs_passed_to_patch_jobs(self, tmp_path: Path) -> None:
         """source_mode='pkgs' is passed to BuildPatchVariantJob."""
