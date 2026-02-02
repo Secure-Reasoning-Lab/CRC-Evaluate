@@ -575,6 +575,63 @@ class POVVerificationManager:
                 total_duration_seconds=total_duration,
             )
 
+    def drain_pending(self, timeout: float = 300.0, poll_interval: float = 2.0) -> None:
+        """Block until all pending async verdicts complete.
+
+        In async (Redis) mode, POV verification jobs may still be running.
+        This method polls until all pending jobs are resolved or timeout expires.
+
+        In inline mode, this is a no-op since all verifications are synchronous.
+
+        Args:
+            timeout: Maximum seconds to wait for pending results
+            poll_interval: Seconds between poll attempts
+        """
+        if not self._pending_job_ids or not self._async_mode:
+            return
+
+        deadline = time.time() + timeout
+        logger.info(
+            f"Draining {len(self._pending_job_ids)} pending async verdicts "
+            f"(timeout={timeout}s)"
+        )
+
+        while self._pending_job_ids and time.time() < deadline:
+            self._poll_pending_verdicts()
+            if self._pending_job_ids:
+                time.sleep(poll_interval)
+
+        if self._pending_job_ids:
+            logger.warning(
+                f"Drain timeout: {len(self._pending_job_ids)} verdicts still pending"
+            )
+        else:
+            logger.info("All pending async verdicts drained successfully")
+
+    def get_verification_results(self) -> list[PovVerificationResult]:
+        """Export stored POV verification data as PovVerificationResult list.
+
+        Converts the internal POVStore entries into the same result format
+        that VerificationEngine.verify_benchmark() returns. This allows
+        the runner to use manager results directly without a separate
+        verification pass.
+
+        Returns:
+            List of PovVerificationResult, one per verified POV
+        """
+        results: list[PovVerificationResult] = []
+        with self._lock:
+            for entry in self.store.povs.values():
+                results.append(
+                    PovVerificationResult(
+                        status=entry.status,
+                        benchmark=self.benchmark_id,
+                        cpv_matched=list(entry.cpv_matched),
+                        pov_id=entry.hash,
+                    )
+                )
+        return results
+
     def _save_snapshot_file(self, snapshot: POVSnapshot) -> None:
         """Save individual snapshot to file.
 

@@ -73,7 +73,7 @@ def create_build_options_parent() -> argparse.ArgumentParser:
         "--build-workers",
         type=int,
         default=4,
-        help="Number of parallel build workers (default: 6)",
+        help="Number of parallel build workers (default: 4)",
     )
     parser.add_argument(
         "--verify-workers",

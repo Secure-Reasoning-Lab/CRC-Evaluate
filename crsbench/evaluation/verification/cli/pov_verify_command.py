@@ -227,6 +227,8 @@ def run_verify(args: argparse.Namespace) -> int:
         oss_fuzz_path=oss_fuzz_path,
         timeout=args.timeout,
         dedup_strategy=dedup_strategy,
+        build_workers=args.build_workers,
+        verify_workers=args.verify_workers,
         source_mode=args.source,
     )
 

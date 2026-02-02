@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from crsbench.benchmark_ci.cli.common_args import (
     create_benchmark_selection_parent,
+    create_build_options_parent,
     create_output_options_parent,
 )
 from crsbench.benchmark_ci.cli.discovery import resolve_benchmark_paths
@@ -46,46 +47,17 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         "build",
         parents=[
             create_benchmark_selection_parent(),
+            create_build_options_parent(),
             create_output_options_parent(),
         ],
         help="Build POV variants only (no verification, no patch builds)",
     )
-    parser.add_argument(
-        "--build-workers",
-        type=int,
-        default=4,
-        help="Number of parallel build workers (default: 4)",
-    )
-    parser.add_argument(
-        "--force-rebuild",
-        action="store_true",
-        default=False,
-        help="Clean up before building (default: False, relies on Docker cache)",
-    )
-    parser.add_argument(
-        "--source",
-        type=str,
-        choices=["pkgs", "main_repo"],
-        default="pkgs",
-        help="Source mode: 'pkgs' (bundled tarballs, default) or 'main_repo' (git clone)",
-    )
-    parser.add_argument(
-        "--inc-build",
-        action="store_true",
-        default=False,
-        help="Use incremental build if available (default: off for build command)",
-    )
-    parser.add_argument(
-        "--distributed",
-        action="store_true",
-        default=False,
-        help="Use Redis workers for execution (default: local sequential)",
-    )
-    parser.add_argument(
-        "--redis-host",
-        type=str,
-        default="localhost",
-        help="Redis server hostname for builds (default: localhost)",
+    # Override defaults specific to build command:
+    # - force_rebuild=False: build relies on Docker cache by default
+    # - no_inc_build=True: build uses full-build by default (inc disabled)
+    parser.set_defaults(
+        force_rebuild=False,
+        no_inc_build=True,
     )
     parser.set_defaults(ci_func=run_build)
 
@@ -164,7 +136,7 @@ def run_build(args: argparse.Namespace) -> int:
     )
 
     source_mode = getattr(args, "source", "pkgs")
-    use_inc_build = getattr(args, "inc_build", False)
+    use_inc_build = not getattr(args, "no_inc_build", True)
     force_rebuild = getattr(args, "force_rebuild", False)
     distributed = getattr(args, "distributed", False)
     redis_host = getattr(args, "redis_host", "localhost")

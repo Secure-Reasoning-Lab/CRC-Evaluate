@@ -494,15 +494,40 @@ class BenchmarkRunner:
         if self.on_verification_start:
             self.on_verification_start()
 
-        # Run verification
-        pov_verification_results, patch_verification_results = self._run_verification(
-            harness_result=harness_result,
-            benchmark_path=benchmark_path,
-            trial_output_dir=trial_output_dir,
-            oss_fuzz_path=oss_fuzz_path,
-            harness_name=harness.name,
-            skip_verification=skip_verification,
-        )
+        # POV verification: use manager's final sweep + drain (unified path)
+        pov_verification_results: list[VerifResult] = []
+        if (
+            isinstance(self.crs_executor, CRSBugFindingExecutor)
+            and pov_verification_manager
+            and harness_result
+            and harness_result.run_successful
+            and not skip_verification
+            and oss_fuzz_path
+        ):
+            # Final sweep: discover any remaining POVs written after last snapshot
+            pov_verification_manager.on_snapshot(cycle=-1)
+            # Wait for all async (Redis) verdicts to complete
+            pov_verification_manager.drain_pending()
+            # Export results in the same format as VerificationEngine
+            pov_verification_results = (
+                pov_verification_manager.get_verification_results()
+            )
+
+        # Patch verification: run separately (bug-fixing CRS only)
+        patch_verification_results: list[PatchVerificationResult] = []
+        if (
+            isinstance(self.crs_executor, CRSPatchExecutor)
+            and harness_result
+            and harness_result.run_successful
+            and not skip_verification
+            and oss_fuzz_path
+        ):
+            patch_verification_results = self._verify_patches(
+                benchmark_path=benchmark_path,
+                trial_output_dir=trial_output_dir,
+                oss_fuzz_path=oss_fuzz_path,
+                harness_name=harness.name,
+            )
 
         return harness_result, pov_verification_results, patch_verification_results
 
@@ -967,96 +992,6 @@ class BenchmarkRunner:
                 coverage_thread.join(timeout=5.0)
                 if coverage_thread.is_alive():
                     self.logger.warning("Coverage thread did not stop within timeout")
-
-    def _run_verification(
-        self,
-        harness_result: Optional[HarnessResult],
-        benchmark_path: Path,
-        trial_output_dir: Path,
-        oss_fuzz_path: Optional[Path],
-        harness_name: str,
-        *,
-        skip_verification: bool,
-    ) -> tuple[list[VerifResult], list[PatchVerificationResult]]:
-        """Run verification based on CRS type."""
-        pov_verification_results: list[VerifResult] = []
-        patch_verification_results: list[PatchVerificationResult] = []
-
-        # Check if verification should run
-        if not harness_result or not harness_result.run_successful:
-            self.logger.info("Verification skipped: run unsuccessful")
-            return pov_verification_results, patch_verification_results
-
-        if skip_verification:
-            self.logger.info("Verification skipped: verification disabled")
-            return pov_verification_results, patch_verification_results
-
-        if not oss_fuzz_path:
-            self.logger.info("Verification skipped: oss-fuzz path not available")
-            return pov_verification_results, patch_verification_results
-
-        # Run verification based on CRS type
-        if isinstance(self.crs_executor, CRSBugFindingExecutor):
-            crs_output_dir = trial_output_dir / "output"
-            pov_verification_results = self._verify_povs(
-                benchmark_path=benchmark_path,
-                crs_output_dir=crs_output_dir,
-                oss_fuzz_path=oss_fuzz_path,
-                harness_name=harness_name,
-            )
-
-        elif isinstance(self.crs_executor, CRSPatchExecutor):
-            patch_verification_results = self._verify_patches(
-                benchmark_path=benchmark_path,
-                trial_output_dir=trial_output_dir,
-                oss_fuzz_path=oss_fuzz_path,
-                harness_name=harness_name,
-            )
-
-        return pov_verification_results, patch_verification_results
-
-    def _verify_povs(
-        self,
-        benchmark_path: Path,
-        crs_output_dir: Path,
-        oss_fuzz_path: Path,
-        harness_name: str,
-    ) -> list[VerifResult]:
-        """Verify CRS-generated POVs against benchmark variants for a specific harness.
-
-        Args:
-            benchmark_path: Path to benchmark directory
-            crs_output_dir: Path to CRS output directory containing POVs
-            oss_fuzz_path: Path to oss-fuzz directory
-            harness_name: Name of the harness to verify POVs for
-
-        Returns:
-            List of verification results for this harness
-        """
-        try:
-            self.logger.info(f"Starting POV verification for harness: {harness_name}")
-            engine = VerificationEngine(
-                oss_fuzz_path=oss_fuzz_path,
-                timeout=self.per_pov_verify_timeout,
-                dedup_strategy=PatchBasedDedup(),  # TODO: make it configurable
-                build_workers=self.build_workers,
-                verify_workers=self.verify_workers,
-            )
-            pov_dir = crs_output_dir / "povs"
-            output = engine.verify_benchmark(
-                benchmark_path=benchmark_path,
-                pov_dir=pov_dir,
-                deduplicate=True,  # TODO: configurable?
-                harness_filter=harness_name,
-                force_rebuild=False,  # Variants are pre-built at experiment start
-            )
-            return output.results
-        except Exception as e:
-            self.logger.error(
-                f"POV verification failed for harness '{harness_name}': {e}",
-                exc_info=True,
-            )
-            return []
 
     def _verify_patches(
         self,
