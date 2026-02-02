@@ -112,6 +112,12 @@ def create_build_options_parent() -> argparse.ArgumentParser:
         "Priority: CLI > CRSBENCH_CONTROLLER_CORES env > config (default: 2)",
     )
     parser.add_argument(
+        "--distributed",
+        action="store_true",
+        default=False,
+        help="Use Redis workers for execution (default: local sequential)",
+    )
+    parser.add_argument(
         "--redis-host",
         type=str,
         default="localhost",

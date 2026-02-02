@@ -76,6 +76,12 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="Use incremental build if available (default: off for build command)",
     )
     parser.add_argument(
+        "--distributed",
+        action="store_true",
+        default=False,
+        help="Use Redis workers for execution (default: local sequential)",
+    )
+    parser.add_argument(
         "--redis-host",
         type=str,
         default="localhost",
@@ -99,7 +105,7 @@ def _aggregate_build(
     # Collect storage from build results
     storage_bytes = 0
     for job_id, result in dag_results.items():
-        if not job_id.startswith(f"build-single:{benchmark_name}:"):
+        if not job_id.startswith(f"build-single/{benchmark_name}/"):
             continue
         if result.job_result:
             storage_bytes = max(
@@ -160,13 +166,14 @@ def run_build(args: argparse.Namespace) -> int:
     source_mode = getattr(args, "source", "pkgs")
     use_inc_build = getattr(args, "inc_build", False)
     force_rebuild = getattr(args, "force_rebuild", False)
+    distributed = getattr(args, "distributed", False)
     redis_host = getattr(args, "redis_host", "localhost")
 
     build_mode = "inc-build" if use_inc_build else "full-build"
     rebuild_mode = "force-rebuild" if force_rebuild else "docker-cache"
+    exec_mode = f", distributed (redis={redis_host})" if distributed else ", local"
     logger.info(
-        f"Building: {len(paths)} benchmark(s), "
-        f"{build_mode}, {rebuild_mode}, redis={redis_host}"
+        f"Building: {len(paths)} benchmark(s), {build_mode}, {rebuild_mode}{exec_mode}"
     )
 
     start_dt = datetime.now()
@@ -190,8 +197,12 @@ def run_build(args: argparse.Namespace) -> int:
 
     logger.info(f"VariantPlanner: {len(build_jobs)} build jobs")
 
-    # Always enqueue to Redis
-    dag_results = _run_distributed_build(build_jobs, redis_host)
+    if distributed:
+        dag_results = _run_distributed_build(build_jobs, redis_host)
+    else:
+        from crsbench.benchmark_ci.executor import execute_jobs_locally
+
+        dag_results = execute_jobs_locally(build_jobs)
 
     summary = ValidationSummary(started_at=start_dt, check_mode=CheckMode.BUILD)
     for path, supports_inc, rts_mode in benchmark_metadata:

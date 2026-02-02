@@ -66,13 +66,15 @@ def run_rts(args: argparse.Namespace) -> int:
     source_mode = getattr(args, "source", "pkgs")
     use_inc_build = not getattr(args, "no_inc_build", False)
     force_rebuild = getattr(args, "force_rebuild", True)
+    distributed = getattr(args, "distributed", False)
     redis_host = getattr(args, "redis_host", "localhost")
 
     build_mode = "inc-build" if use_inc_build else "full-build"
     rebuild_mode = "force-rebuild" if force_rebuild else "cached"
+    exec_mode = f", distributed (redis={redis_host})" if distributed else ", local"
     logger.info(
         f"Running rts: {len(paths)} benchmark(s), "
-        f"{build_mode}, {rebuild_mode}, redis={redis_host}"
+        f"{build_mode}, {rebuild_mode}{exec_mode}"
     )
 
     # Create full job DAG (reuses all_cmd infrastructure)
@@ -101,30 +103,35 @@ def run_rts(args: argparse.Namespace) -> int:
         f"(filtered from {len(all_jobs)} total)"
     )
 
-    # Phase 1: Builds via Redis
     start_dt = datetime.now()
-    dag_results: dict = {}
 
-    if build_jobs:
-        from crsbench.benchmark_ci.cli.commands.build_cmd import (
-            _run_distributed_build,
+    if distributed:
+        dag_results: dict = {}
+
+        if build_jobs:
+            from crsbench.benchmark_ci.cli.commands.build_cmd import (
+                _run_distributed_build,
+            )
+
+            dag_results = _run_distributed_build(build_jobs, redis_host)
+
+        from crsbench.distributed.ci_jobs import (
+            ci_results_to_executor_results,
+            enqueue_and_poll_ci_jobs,
         )
 
-        dag_results = _run_distributed_build(build_jobs, redis_host)
+        if rts_jobs:
+            verify_queue_name = f"crsbench_ci_{redis_host}_verify"
+            raw_rts_results = enqueue_and_poll_ci_jobs(
+                rts_jobs, redis_host, queue_name=verify_queue_name
+            )
+            rts_results = ci_results_to_executor_results(raw_rts_results)
+            dag_results = {**dag_results, **rts_results}
+    else:
+        from crsbench.benchmark_ci.executor import execute_jobs_locally
 
-    # Phase 2: Patch build + RTS test via Redis
-    from crsbench.distributed.ci_jobs import (
-        ci_results_to_executor_results,
-        enqueue_and_poll_ci_jobs,
-    )
-
-    if rts_jobs:
-        verify_queue_name = f"crsbench_ci_{redis_host}_verify"
-        raw_rts_results = enqueue_and_poll_ci_jobs(
-            rts_jobs, redis_host, queue_name=verify_queue_name
-        )
-        rts_results = ci_results_to_executor_results(raw_rts_results)
-        dag_results = {**dag_results, **rts_results}
+        relevant_jobs = build_jobs + rts_jobs
+        dag_results = execute_jobs_locally(relevant_jobs)
 
     # Aggregate into ValidationSummary
     summary = ValidationSummary(started_at=start_dt, check_mode=CheckMode.ALL)

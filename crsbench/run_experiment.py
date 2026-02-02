@@ -34,7 +34,6 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
-from crsbench.builder import BuildResult
 from crsbench.distributed.jobs import get_crs_type
 from crsbench.evaluation.cleanup import cleanup_trial_directory
 from crsbench.evaluation.results import CRSType, TrialResult
@@ -1225,122 +1224,6 @@ def _is_all_bug_fixing_crs(
     return True
 
 
-def build_variants_upfront(
-    trials: List[Trial],
-    config,
-    args: argparse.Namespace,
-    experiment_name: str = "",
-    redis_host: str = "localhost",
-) -> dict[str, BuildResult]:
-    """Build all required variants upfront before trial execution.
-
-    Uses VariantPlanner for build job creation and enqueues to Redis
-    via enqueue_and_poll_builds().
-
-    Args:
-        trials: List of Trial namedtuples
-        config: Experiment configuration
-        args: CLI arguments
-        experiment_name: Experiment identifier for queue naming
-        redis_host: Redis server hostname
-
-    Returns:
-        Dict mapping variant names to their build results
-    """
-    from crsbench.distributed.build_jobs import enqueue_and_poll_builds
-    from crsbench.executor.variant_planner import VariantPlanner
-
-    log_section("Building Variants Upfront", width=60)
-
-    # Resolve oss-fuzz path
-    oss_fuzz_path = Path(
-        args.oss_fuzz_path or config.oss_fuzz_path or (Path.cwd() / "oss-fuzz")
-    ).resolve()
-    if not oss_fuzz_path.exists():
-        raise RuntimeError(f"oss-fuzz directory not found: {oss_fuzz_path}")
-    os.environ["OSS_FUZZ_ROOT"] = str(oss_fuzz_path)
-
-    source_mode = getattr(config, "source_mode", "pkgs")
-
-    # Deduplicate benchmark paths from trials
-    unique_paths: list[Path] = []
-    seen_paths: set[str] = set()
-    for trial in trials:
-        path = trial.benchmark_harness.path
-        path_str = str(path)
-        if path_str not in seen_paths:
-            seen_paths.add(path_str)
-            unique_paths.append(path)
-
-    # Create build jobs via VariantPlanner
-    planner = VariantPlanner(oss_fuzz_path=oss_fuzz_path, source_mode=source_mode)
-    build_jobs = planner.plan_all_builds(
-        unique_paths,
-        use_inc_build=False,
-    )
-
-    if not build_jobs:
-        logger.warning("No variants to build")
-        return {}
-
-    # Enqueue to experiment-specific build queue
-    queue_name = (
-        f"crsbench_{experiment_name}_build" if experiment_name else "crsbench_ci_build"
-    )
-    logger.info(
-        f"Enqueuing {len(build_jobs)} build jobs to Redis "
-        f"(host={redis_host}, queue={queue_name})"
-    )
-    raw_results = enqueue_and_poll_builds(build_jobs, redis_host, queue_name)
-
-    # Convert raw results to BuildResult format for downstream compatibility
-    from crsbench.builder.types import BenchmarkMode, BuildConfig, VariantType
-
-    all_build_results: dict[str, BuildResult] = {}
-    for job_id, r in raw_results.items():
-        # Create minimal BuildConfig for downstream compatibility
-        variant_name = r.get("job_id", job_id)
-        minimal_config = BuildConfig(
-            benchmark_name=variant_name,
-            variant_type=VariantType.FULL_BASE,
-            commit="",
-            main_repo="",
-            benchmark_path=Path(),
-            mode=BenchmarkMode.FULL,
-        )
-        if r.get("success"):
-            all_build_results[job_id] = BuildResult(
-                config=minimal_config,
-                success=True,
-                cached=False,
-                variant_name=variant_name,
-                elapsed_seconds=r.get("elapsed_seconds", 0.0),
-            )
-        else:
-            all_build_results[job_id] = BuildResult(
-                config=minimal_config,
-                success=False,
-                cached=False,
-                variant_name=variant_name,
-                error=r.get("error", "Unknown error"),
-                elapsed_seconds=r.get("elapsed_seconds", 0.0),
-            )
-
-    # Report
-    successful = sum(1 for r in all_build_results.values() if r.success)
-    cached = sum(1 for r in all_build_results.values() if r.cached)
-    failed = sum(1 for r in all_build_results.values() if not r.success)
-    logger.info(
-        f"Build complete: {successful} succeeded ({cached} cached), {failed} failed"
-    )
-    if failed > 0:
-        for name, result in all_build_results.items():
-            if not result.success:
-                logger.error(f"  Failed: {name} - {result.error}")
-
-    return all_build_results
-
-
 def should_use_distributed_mode(
     args: argparse.Namespace, config, total_jobs: int
 ) -> bool:
@@ -1550,42 +1433,11 @@ def run_experiment_local(
     """
     log_section("Running CRSBench in Local Mode (No Redis)", width=60)
 
-    # Resolve CRS paths with defaults (needed for _is_all_bug_fixing_crs check)
-    registry_dir = Path(config.registry_dir or "crses/registry").resolve()
-    crs_configs_dir = Path(config.crs_configs_dir or "crses/configs").resolve()
-
     # Dump trial matrix to JSON
     dump_trial_matrix(trials, config)
 
     logger.info(f"Total trials to execute: {len(trials)}")
     logger.info("=" * 60)
-
-    # Skip variant builds for bug-fixing CRS (built on-demand during patch verification)
-    if _is_all_bug_fixing_crs(trials, registry_dir, crs_configs_dir):
-        logger.info(
-            "Skipping upfront variant builds for bug-fixing CRS "
-            "(PATCHED variants built on-demand during patch verification)"
-        )
-        build_results = {}
-    else:
-        redis_host = getattr(config, "redis_host", "localhost") or "localhost"
-        build_results = build_variants_upfront(
-            trials,
-            config,
-            args,
-            experiment_name=experiment_name,
-            redis_host=redis_host,
-        )
-
-    # Check for critical build failures
-    failed_builds = [
-        name for name, result in build_results.items() if not result.success
-    ]
-    if failed_builds:
-        logger.warning(
-            f"{len(failed_builds)} variant builds failed. "
-            "Trials requiring these variants may fail."
-        )
 
     log_section("Executing Trials", width=60)
 
@@ -2067,7 +1919,6 @@ def run_experiment_distributed(
         raise RuntimeError(f"Failed to initialize Redis queue at {config.redis_host}")
 
     # Resolve CRS paths with defaults
-    registry_dir = Path(config.registry_dir or "crses/registry").resolve()
     crs_configs_dir = Path(config.crs_configs_dir or "crses/configs").resolve()
 
     # Check for existing jobs in queue (queue sanity check)
@@ -2141,33 +1992,6 @@ def run_experiment_distributed(
 
     logger.info(f"Total trials to enqueue: {len(trials)}")
     logger.info("=" * 60)
-
-    # Skip variant builds for bug-fixing CRS (built on-demand during patch verification)
-    if _is_all_bug_fixing_crs(trials, registry_dir, crs_configs_dir):
-        logger.info(
-            "Skipping upfront variant builds for bug-fixing CRS "
-            "(PATCHED variants built on-demand during patch verification)"
-        )
-        build_results = {}
-    else:
-        # Build variants via VariantPlanner + Redis
-        build_results = build_variants_upfront(
-            trials,
-            config,
-            args,
-            experiment_name=experiment_name,
-            redis_host=config.redis_host,
-        )
-
-    # Check for critical build failures
-    failed_builds = [
-        name for name, result in build_results.items() if not result.success
-    ]
-    if failed_builds:
-        logger.warning(
-            f"{len(failed_builds)} variant builds failed. "
-            "Trials requiring these variants may fail."
-        )
 
     log_section("Enqueuing Trial Jobs", width=60)
 

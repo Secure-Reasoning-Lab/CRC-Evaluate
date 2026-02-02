@@ -102,12 +102,6 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Include coverage build and verification (expensive, disabled by default)",
     )
-    parser.add_argument(
-        "--distributed",
-        action="store_true",
-        default=False,
-        help="Distribute build phase to Redis/RQ workers (verify/patch runs locally)",
-    )
     parser.set_defaults(ci_func=run_all)
 
 
@@ -614,31 +608,11 @@ def run_all(args: argparse.Namespace) -> int:
             "format check not run"
         )
 
-    # Phase 2: Build via VariantPlanner + Redis, verify/test via DAG
+    # Phase 2: Build + verify/test
     max_povs_per_cpv = getattr(args, "max_povs_per_cpv", None)
     inc_coverage = getattr(args, "inc_coverage", False)
 
-    # Step 2a: Create build jobs via VariantPlanner
-    from crsbench.executor.variant_planner import VariantPlanner
-
-    planner = VariantPlanner(oss_fuzz_path=Path("oss-fuzz"), source_mode=source_mode)
-    vp_build_jobs = planner.plan_all_builds(
-        list(paths),
-        use_inc_build=use_inc_build,
-        force_rebuild=force_rebuild,
-        skip_if_cached=False,
-        include_coverage=inc_coverage,
-    )
-
-    # Step 2b: Send builds to Redis
-    from crsbench.benchmark_ci.cli.commands.build_cmd import _run_distributed_build
-
-    logger.info(
-        f"VariantPlanner: {len(vp_build_jobs)} build jobs via Redis, redis={redis_host}"
-    )
-    build_results = _run_distributed_build(vp_build_jobs, redis_host)
-
-    # Step 2c: Build full DAG (includes build + verify/test jobs)
+    # Build full DAG (includes build + verify/test jobs)
     all_jobs, benchmark_metadata = _build_dag(
         list(paths),
         use_inc_build=use_inc_build,
@@ -647,27 +621,57 @@ def run_all(args: argparse.Namespace) -> int:
         max_povs_per_cpv=max_povs_per_cpv,
         inc_coverage=inc_coverage,
     )
-
-    # Filter out build jobs (already completed via Redis)
-    remaining_jobs = [j for j in all_jobs if not isinstance(j, BuildSingleVariantJob)]
     _log_dag_summary(all_jobs)
-    logger.info(
-        f"Build phase complete: {len(vp_build_jobs)} builds via Redis, "
-        f"{len(remaining_jobs)} verify/patch jobs via Redis"
-    )
 
-    # Step 2d: Execute remaining verify/test jobs via Redis
-    from crsbench.distributed.ci_jobs import (
-        ci_results_to_executor_results,
-        enqueue_and_poll_ci_jobs,
-    )
+    if distributed:
+        # Distributed: build via VariantPlanner + Redis, verify via Redis
+        from crsbench.executor.variant_planner import VariantPlanner
 
-    verify_queue_name = f"crsbench_ci_{redis_host}_verify"
-    raw_verify_results = enqueue_and_poll_ci_jobs(
-        remaining_jobs, redis_host, queue_name=verify_queue_name
-    )
-    verify_results = ci_results_to_executor_results(raw_verify_results)
-    dag_results = {**build_results, **verify_results}
+        planner = VariantPlanner(
+            oss_fuzz_path=Path("oss-fuzz"), source_mode=source_mode
+        )
+        vp_build_jobs = planner.plan_all_builds(
+            list(paths),
+            use_inc_build=use_inc_build,
+            force_rebuild=force_rebuild,
+            skip_if_cached=False,
+            include_coverage=inc_coverage,
+        )
+
+        from crsbench.benchmark_ci.cli.commands.build_cmd import (
+            _run_distributed_build,
+        )
+
+        logger.info(
+            f"VariantPlanner: {len(vp_build_jobs)} build jobs via Redis, "
+            f"redis={redis_host}"
+        )
+        build_results = _run_distributed_build(vp_build_jobs, redis_host)
+
+        remaining_jobs = [
+            j for j in all_jobs if not isinstance(j, BuildSingleVariantJob)
+        ]
+        logger.info(
+            f"Build phase complete: {len(vp_build_jobs)} builds via Redis, "
+            f"{len(remaining_jobs)} verify/patch jobs via Redis"
+        )
+
+        from crsbench.distributed.ci_jobs import (
+            ci_results_to_executor_results,
+            enqueue_and_poll_ci_jobs,
+        )
+
+        verify_queue_name = f"crsbench_ci_{redis_host}_verify"
+        raw_verify_results = enqueue_and_poll_ci_jobs(
+            remaining_jobs, redis_host, queue_name=verify_queue_name
+        )
+        verify_results = ci_results_to_executor_results(raw_verify_results)
+        dag_results = {**build_results, **verify_results}
+    else:
+        # Local: execute full DAG sequentially
+        from crsbench.benchmark_ci.executor import execute_jobs_locally
+
+        dag_results = execute_jobs_locally(all_jobs)
 
     # Phase 3: Aggregate into ValidationSummary
     summary = ValidationSummary(started_at=start_dt, check_mode=CheckMode.ALL)

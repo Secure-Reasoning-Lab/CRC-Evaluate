@@ -286,9 +286,9 @@ def _load_build_context_from_disk(
         return
 
     # Populate context.shared for each build_job_id
-    # Build job IDs have format "build-single:{benchmark}:{variant_name}"
+    # Build job IDs have format "build-single/{benchmark}/{variant_name}"
     for bid in build_job_ids:
-        parts = bid.split(":")
+        parts = bid.split("/")
         variant_name = parts[2] if len(parts) > 2 else None
         if variant_name and variant_name in build_results:
             context.shared[bid] = {
