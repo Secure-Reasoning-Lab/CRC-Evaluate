@@ -110,7 +110,7 @@ def run_coverage(args: argparse.Namespace) -> int:
         )
 
         if coverage_jobs:
-            verify_queue_name = f"crsbench_ci_{redis_host}_verify"
+            verify_queue_name = "crsbench_ci_verify"
             raw_coverage_results = enqueue_and_poll_ci_jobs(
                 coverage_jobs, redis_host, queue_name=verify_queue_name
             )

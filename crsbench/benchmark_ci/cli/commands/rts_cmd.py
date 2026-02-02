@@ -121,7 +121,7 @@ def run_rts(args: argparse.Namespace) -> int:
         )
 
         if rts_jobs:
-            verify_queue_name = f"crsbench_ci_{redis_host}_verify"
+            verify_queue_name = "crsbench_ci_verify"
             raw_rts_results = enqueue_and_poll_ci_jobs(
                 rts_jobs, redis_host, queue_name=verify_queue_name
             )

@@ -661,7 +661,7 @@ def run_all(args: argparse.Namespace) -> int:
             enqueue_and_poll_ci_jobs,
         )
 
-        verify_queue_name = f"crsbench_ci_{redis_host}_verify"
+        verify_queue_name = "crsbench_ci_verify"
         raw_verify_results = enqueue_and_poll_ci_jobs(
             remaining_jobs, redis_host, queue_name=verify_queue_name
         )
