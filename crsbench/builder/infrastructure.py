@@ -505,7 +505,11 @@ class OSSFuzzInfrastructure:
         *,
         require_inc_build: Optional[bool] = None,
     ) -> bool:
-        """Check if a variant has been built.
+        """Check if a variant has been built successfully.
+
+        Requires `.build-meta.json` to exist as proof that the build
+        completed.  Interrupted builds leave partial files but no
+        metadata, so they are correctly rejected.
 
         Args:
             variant_name: Variant name
@@ -527,27 +531,28 @@ class OSSFuzzInfrastructure:
         if not any(build_path.iterdir()):
             return False
 
+        # Metadata must exist — it is written only after a successful build.
+        # A missing metadata file means the build was interrupted or incomplete.
+        metadata = self.read_build_metadata(variant_name)
+        if metadata is None:
+            logger.debug(
+                f"No build metadata for {variant_name}: "
+                "build may be incomplete, treating as not built"
+            )
+            return False
+
         # If require_inc_build is specified, verify the cached build matches
         if require_inc_build is not None:
-            metadata = self.read_build_metadata(variant_name)
-            if metadata is None:
-                # No metadata = legacy build, treat as standard (non-inc) build
-                cached_is_inc = False
-                fallback_used = False
-            else:
-                cached_is_inc = metadata.inc_build
-                fallback_used = metadata.fallback_used
-
-            if cached_is_inc != require_inc_build:
+            if metadata.inc_build != require_inc_build:
                 logger.debug(
                     f"Cache mismatch for {variant_name}: "
-                    f"cached inc_build={cached_is_inc}, required={require_inc_build}"
+                    f"cached inc_build={metadata.inc_build}, "
+                    f"required={require_inc_build}"
                 )
                 return False
 
             # If inc-build is required, reject builds that used fallback
-            # A fallback build is not a true inc-build and shouldn't be used for CI validation
-            if require_inc_build and fallback_used:
+            if require_inc_build and metadata.fallback_used:
                 logger.debug(
                     f"Cache mismatch for {variant_name}: "
                     f"cached build used fallback, but pure inc-build required"
