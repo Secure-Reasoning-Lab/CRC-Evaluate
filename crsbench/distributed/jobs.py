@@ -392,6 +392,8 @@ def _reconstruct_trial_result_from_success(
     total_povs = 0
     patches_generated = 0
     patches_valid = 0
+    build_time = None
+    run_time = None
 
     if metadata_file.exists():
         try:
@@ -409,6 +411,8 @@ def _reconstruct_trial_result_from_success(
             total_povs = metadata.get("total_povs", 0)
             patches_generated = metadata.get("patches_generated", 0)
             patches_valid = metadata.get("patches_valid", 0)
+            build_time = metadata.get("build_time")
+            run_time = metadata.get("run_time")
 
         except Exception as e:
             logger.warning(
@@ -441,6 +445,8 @@ def _reconstruct_trial_result_from_success(
         metadata=TrialMetadata(
             timestamp_start=0.0,
             timestamp_end=0.0,
+            build_time=build_time,
+            run_time=run_time,
         ),
     )
 
@@ -1080,6 +1086,13 @@ def run_crs_trial(
 
         # Log completion message
         logger.info(trial_result.log_summary())
+
+        # Update metadata.json with build/run timing
+        if build_time is not None or run_time is not None:
+            file_metadata.build_time = build_time
+            file_metadata.run_time = run_time
+            with metadata_file.open("w") as f:
+                json.dump(file_metadata.model_dump(mode="json"), f, indent=2)
 
         # Create success/fail marker file
         marker_file = trial_output_dir / (".success" if result.success else ".fail")

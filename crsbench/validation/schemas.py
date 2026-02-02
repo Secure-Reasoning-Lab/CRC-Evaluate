@@ -106,6 +106,12 @@ class TrialMetadata(BaseModel):
     framework: FrameworkInfo | None = Field(
         default=None, description="CRSBench framework version and commit info"
     )
+    build_time: float | None = Field(
+        default=None, description="CRS build time in seconds (written after trial)"
+    )
+    run_time: float | None = Field(
+        default=None, description="CRS run time in seconds (written after trial)"
+    )
 
     # Build configuration
     build_mode: Optional[str] = None  # "delta" or "full" (evaluation mode)
