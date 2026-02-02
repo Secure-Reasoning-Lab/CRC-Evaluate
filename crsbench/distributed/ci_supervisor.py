@@ -116,6 +116,8 @@ def run_ci_supervisor(
     verify_active: dict[
         int, tuple[multiprocessing.Process, list[int], str, int, Optional[Path]]
     ] = {}
+    # Cgroup paths that failed immediate removal (EBUSY from Docker shim)
+    deferred_cgroup_cleanup: list[Path] = []
 
     used_worker_nums: set[int] = set()
     max_total = build_jobs + verify_jobs
@@ -146,8 +148,16 @@ def run_ci_supervisor(
 
         while True:
             # --- Cleanup finished workers ---
-            _reap_finished(build_active, cpu_pool, used_worker_nums)
-            _reap_finished(verify_active, cpu_pool, used_worker_nums)
+            _reap_finished(
+                build_active, cpu_pool, used_worker_nums, deferred_cgroup_cleanup
+            )
+            _reap_finished(
+                verify_active, cpu_pool, used_worker_nums, deferred_cgroup_cleanup
+            )
+
+            # --- Sweep deferred cgroup removals (non-blocking) ---
+            if deferred_cgroup_cleanup:
+                _sweep_deferred_cgroups(deferred_cgroup_cleanup)
 
             # --- Disk space check ---
             current_time = time.time()
@@ -288,6 +298,26 @@ def run_ci_supervisor(
 # ---------------------------------------------------------------------------
 
 
+def _try_remove_cgroup(cgroup_path: Path) -> bool:
+    """Try once to remove a cgroup directory without blocking.
+
+    Returns True if removed (or absent), False if still busy.
+    """
+    import errno
+
+    if not cgroup_path.exists():
+        return True
+    try:
+        cgroup_path.rmdir()
+        return True
+    except OSError as e:
+        if e.errno == errno.EBUSY:
+            logger.debug(f"Cgroup {cgroup_path.name} busy, deferring cleanup")
+            return False
+        logger.error(f"Cgroup cleanup failed for {cgroup_path}: {e}")
+        return False
+
+
 def _next_worker_num(used: set[int], max_total: int) -> int:
     """Find the lowest available worker number."""
     for i in range(1, max_total + 1):
@@ -303,8 +333,14 @@ def _reap_finished(
     ],
     cpu_pool: Optional[object],
     used_worker_nums: set[int],
+    deferred_cgroup_cleanup: list[Path],
 ) -> None:
-    """Clean up finished child processes and release their resources."""
+    """Clean up finished child processes and release their resources.
+
+    Cgroup removal is attempted once without retries to avoid blocking
+    the supervisor loop.  If the cgroup is still busy (Docker shim
+    processes haven't exited yet), the path is deferred for later sweep.
+    """
     for pid in list(active.keys()):
         proc, cpus, _job_id, worker_num, cgroup_path_entry = active[pid]
         if not proc.is_alive():
@@ -313,11 +349,20 @@ def _reap_finished(
                 cpu_pool.release(cpus)  # type: ignore[union-attr]
                 logger.info(f"Worker (PID: {pid}) finished, released CPUs {cpus}")
             if cgroup_path_entry:
-                from crsbench.utils.cgroup import cleanup_cgroup
-
-                cleanup_cgroup(cgroup_path_entry)
+                if not _try_remove_cgroup(cgroup_path_entry):
+                    deferred_cgroup_cleanup.append(cgroup_path_entry)
             used_worker_nums.discard(worker_num)
             del active[pid]
+
+
+def _sweep_deferred_cgroups(deferred: list[Path]) -> None:
+    """Try to remove previously deferred cgroup paths (single silent attempt)."""
+    remaining: list[Path] = []
+    for cg_path in deferred:
+        if not _try_remove_cgroup(cg_path):
+            remaining.append(cg_path)
+    deferred.clear()
+    deferred.extend(remaining)
 
 
 def _terminate_all(
