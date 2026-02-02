@@ -792,6 +792,7 @@ class TestAsyncMode:
         verdict = PovVerdict(
             pov_id="test.blob:abc123hash",
             triggered_bug=True,
+            status="cpv",
             cpv_matches=["cpv_0"],
         )
         result = SinglePovResult(
@@ -848,6 +849,7 @@ class TestAsyncMode:
         verdict = PovVerdict(
             pov_id=f"test.blob:{pov_hash}",
             triggered_bug=True,
+            status="cpv",
             cpv_matches=["cpv_0"],
             crash_logs=crash_logs,
         )
@@ -893,6 +895,7 @@ class TestAsyncMode:
         verdict = PovVerdict(
             pov_id=f"test.blob:{pov_hash}",
             triggered_bug=True,
+            status="cpv",
             cpv_matches=["cpv_0"],
             crash_logs={"base-asan": "ASAN crash log"},
         )
@@ -953,6 +956,36 @@ class TestAsyncMode:
         stored_logs = list(povs_dir.rglob("*.log"))
         assert len(stored_blobs) == 0
         assert len(stored_logs) == 0
+
+    @patch("crsbench.distributed.verify_queue.poll_single_pov_verdicts")
+    def test_poll_handles_unintended_crash(self, mock_poll, tmp_path: Path) -> None:
+        """UNINTENDED_CRASH verdicts increment the unintended_crashes_count."""
+        from crsbench.distributed.evaluator_jobs import PovVerdict, SinglePovResult
+
+        verdict = PovVerdict(
+            pov_id="test.blob:unintended123",
+            triggered_bug=False,
+            status="unintended_crash",
+            cpv_matches=[],
+        )
+        result = SinglePovResult(
+            trial_id="trial-1",
+            benchmark="test-benchmark",
+            harness="fuzz_parser",
+            verdict=verdict,
+            completed_at=1700000100.0,
+        )
+        mock_poll.return_value = ([result.to_dict()], [])
+
+        manager = self._make_manager(tmp_path, redis_host="redis.local")
+        manager._pending_job_ids = ["job-1"]
+
+        assert manager._unintended_crashes_count == 0
+        manager._poll_pending_verdicts()
+
+        assert manager._unintended_crashes_count == 1
+        # No CPVs should be found
+        assert len(manager.found_cpvs) == 0
 
     def test_on_snapshot_async_enqueues_and_polls(self, tmp_path: Path) -> None:
         """In async mode, on_snapshot enqueues new POVs and polls verdicts."""

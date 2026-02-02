@@ -257,16 +257,9 @@ class POVVerificationManager:
         for result_dict in completed:
             try:
                 result = SinglePovResult.from_dict(result_dict)
-                # Map SinglePovResult verdict to PovVerificationResult-like state
-                if result.verdict.triggered_bug:
-                    status = PovVerificationStatus.CPV
-                    cpv_matched = result.verdict.cpv_matches
-                elif result.verdict.error:
-                    status = PovVerificationStatus.ERROR
-                    cpv_matched = []
-                else:
-                    status = PovVerificationStatus.NOT_VULNERABLE
-                    cpv_matched = []
+                # Use explicit status from verdict (handles all states correctly)
+                status = PovVerificationStatus(result.verdict.status)
+                cpv_matched = result.verdict.cpv_matches
 
                 # Add to store directly (no POV path — it was enqueued by content)
                 self.store.add_pov_by_id(result.verdict.pov_id, status, cpv_matched)
@@ -297,6 +290,12 @@ class POVVerificationManager:
                             f"found={len(self.found_cpvs)} "
                             f"total={self.total_expected_cpvs}"
                         )
+                elif status == PovVerificationStatus.UNINTENDED_CRASH:
+                    with self._lock:
+                        self._unintended_crashes_count += 1
+                    logger.info(
+                        f"Unintended crash (async): pov={result.verdict.pov_id}"
+                    )
                 elif status == PovVerificationStatus.ERROR:
                     with self._lock:
                         self._errors_count += 1

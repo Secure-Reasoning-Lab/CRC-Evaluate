@@ -53,6 +53,34 @@ class TestSinglePovPayload:
         assert "pov_id" in d["pov"]
 
 
+class TestPovVerdictStatus:
+    """PovVerdict status field serialization."""
+
+    def test_status_default(self) -> None:
+        """status defaults to 'not_vulnerable'."""
+        verdict = PovVerdict(pov_id="pov_0", triggered_bug=False)
+        assert verdict.status == "not_vulnerable"
+
+    def test_status_roundtrip(self) -> None:
+        """status survives to_dict/from_dict roundtrip."""
+        verdict = PovVerdict(
+            pov_id="pov_0",
+            triggered_bug=False,
+            status="unintended_crash",
+        )
+        d = verdict.to_dict()
+        assert d["status"] == "unintended_crash"
+
+        restored = PovVerdict.from_dict(d)
+        assert restored.status == "unintended_crash"
+
+    def test_status_missing_in_dict(self) -> None:
+        """from_dict handles missing status (backward compat)."""
+        d = {"pov_id": "pov_0", "triggered_bug": False}
+        verdict = PovVerdict.from_dict(d)
+        assert verdict.status == "not_vulnerable"
+
+
 class TestPovVerdictCrashLogs:
     """PovVerdict crash_logs field serialization."""
 
@@ -132,6 +160,7 @@ class TestVerifySinglePov:
 
         assert result.verdict.pov_id == "pov_0"
         assert result.verdict.triggered_bug is False
+        assert result.verdict.status == "error"
         assert result.verdict.error is not None
         assert "No built variants" in result.verdict.error
 
@@ -146,6 +175,7 @@ class TestVerifySinglePov:
         result = SinglePovResult.from_dict(result_dict)
 
         assert result.verdict.triggered_bug is False
+        assert result.verdict.status == "error"
         assert "not initialized" in result.verdict.error
 
     @patch("crsbench.distributed.evaluator_jobs._built_results", {"test-bench": {}})
@@ -161,6 +191,7 @@ class TestVerifySinglePov:
 
         result = SinglePovResult.from_dict(result_dict)
         assert result.verdict.triggered_bug is False
+        assert result.verdict.status == "error"
         assert "Failed to load adapter" in result.verdict.error
 
     @patch("crsbench.distributed.evaluator_jobs._built_results", {"test-bench": {}})
@@ -187,6 +218,7 @@ class TestVerifySinglePov:
 
         result = SinglePovResult.from_dict(result_dict)
         assert result.verdict.triggered_bug is True
+        assert result.verdict.status == "cpv"
         assert result.verdict.cpv_matches == ["cpv_0"]
         assert result.verdict.error is None
 
@@ -276,7 +308,36 @@ class TestVerifySinglePov:
 
         result = SinglePovResult.from_dict(result_dict)
         assert result.verdict.triggered_bug is False
+        assert result.verdict.status == "not_vulnerable"
         assert result.verdict.cpv_matches == []
+
+    @patch("crsbench.distributed.evaluator_jobs._built_results", {"test-bench": {}})
+    def test_unintended_crash_status(self) -> None:
+        """UNINTENDED_CRASH is correctly reflected in verdict status."""
+        from crsbench.evaluation.verification.models import (
+            PovVerificationResult,
+            PovVerificationStatus,
+        )
+
+        mock_engine = MagicMock()
+        mock_adapter = MagicMock()
+        mock_engine.load_adapter.return_value = mock_adapter
+        mock_engine.verify_pov.return_value = PovVerificationResult(
+            status=PovVerificationStatus.UNINTENDED_CRASH,
+            benchmark="test-bench",
+            cpv_matched=[],
+        )
+
+        with patch(
+            "crsbench.distributed.evaluator_jobs._verification_engine", mock_engine
+        ):
+            result_dict = verify_single_pov(self._make_payload())
+
+        result = SinglePovResult.from_dict(result_dict)
+        assert result.verdict.triggered_bug is False
+        assert result.verdict.status == "unintended_crash"
+        assert result.verdict.cpv_matches == []
+        assert result.verdict.error is None
 
     @patch("crsbench.distributed.evaluator_jobs._built_results", {"test-bench": {}})
     def test_verification_exception(self) -> None:
@@ -293,6 +354,7 @@ class TestVerifySinglePov:
 
         result = SinglePovResult.from_dict(result_dict)
         assert result.verdict.triggered_bug is False
+        assert result.verdict.status == "error"
         assert "Docker timeout" in result.verdict.error
 
 

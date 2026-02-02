@@ -172,6 +172,7 @@ def poll_single_pov_verdicts(
                             "verdict": {
                                 "pov_id": "unknown",
                                 "triggered_bug": False,
+                                "status": "error",
                                 "cpv_matches": [],
                                 "error": str(exc_info)[:500],
                             },
