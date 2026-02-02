@@ -170,6 +170,10 @@ def copy_trial_results(trial_dir: Path, dest_dir: Path) -> None:
 
     logger.info(f"Copying trial results from {trial_dir} to {dest_dir}")
 
+    # Resolve symlinks pointing to excluded directories (e.g., output/ -> crs-build/...)
+    # so their content is copied as real files instead of broken symlinks.
+    _resolve_symlinks_pointing_to_excluded(trial_dir)
+
     def ignore_patterns(_directory: str, files: list[str]) -> set[str]:
         """Return set of files/directories to ignore."""
         return {f for f in files if f in EXCLUDE_PATTERNS}

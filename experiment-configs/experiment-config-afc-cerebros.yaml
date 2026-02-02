@@ -1,0 +1,89 @@
+# AFC Final Round Experiment Configuration — CEREBROS
+#
+# Worker config for cerebros joining the distributed experiment.
+# Supervisor + Redis run on cyclonus; this config is for `crsbench worker`.
+#
+# Strategy: Execute on local /home (fast NVMe), copy results to NFS after
+# each trial, clean up local to conserve disk (694G free).
+#
+# Prerequisites on cerebros:
+#   1. Clone CRSBench repo (with oss-crs submodule)
+#   2. NFS mounted at /mnt/crsbench_nfs
+#   3. Redis on cyclonus reachable (check: redis-cli -h cyclonus ping)
+#   4. Docker installed and running
+
+# Experiment Identity — MUST match cyclonus so jobs are shared
+experiment: "e2e-bugfind-afc2"
+description: "E2E bug finding - AFC final round benchmarks"
+
+# Execution Configuration
+trials: 1
+mode: auto
+source_mode: pkgs
+
+# Timeout Configuration - 6 hours CRS run
+max_total_time: 46800  # 13 hours total (4h build + 6h run + 2h verify + 1h buffer)
+build_timeout: 14400   # 4 hours for building
+run_timeout: 21600     # 6 hours for CRS execution
+verify_timeout: 7200   # 2 hours for POV verification
+per_pov_verify_timeout: 180  # 3 minutes per individual POV
+
+# CRS Selection
+crses:
+  - atlantis-multilang-given_fuzzer
+
+# Benchmark Selection - AFC Final Suite
+benchmark_suite: afc-final
+
+# Difficulty Control
+difficulty_level: 1
+
+# Resource Configuration
+resources:
+  cores_per_trial: 16
+  memory_per_trial: "84G"
+
+# Worker Configuration
+build_workers: 16
+verify_workers: 16
+
+# Coverage Configuration - DISABLED
+coverage_enabled: false
+
+# POV Early Stop - terminate when all CPVs for harness are found
+pov_early_stop: true
+
+# Harness Selection - only run harnesses that have CPVs defined
+only_cpv_harnesses: true
+
+# Monitoring & Snapshots (5 min interval)
+snapshot_period: 300
+
+# Storage Configuration — local disk for execution speed
+experiment_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc2
+report_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/report-data-afc2
+
+# Hints Configuration (disabled)
+hints_enabled: false
+
+# LLM Configuration (given_fuzzer doesn't use external LLM)
+litellm_mode: null
+llm_tracking_enabled: false
+skip_litellm: true
+
+# Distributed mode configuration — point to cyclonus where Redis runs
+redis_host: cyclonus
+
+# Worker Configuration (for distributed mode)
+# 8 trial jobs × 16 cores = 128 cores; evaluator runs on cyclonus, not here
+worker:
+  jobs: 8
+  build_workers: 16
+  verify_workers: 16
+  # Execute on local NVMe for fast Docker I/O
+  experiment_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc2
+  report_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/report-data-afc2
+  # Copy results to shared NFS after each trial completes, then clean up local
+  copy_results_after_trial: true
+  results_filestore: /mnt/crsbench_nfs/finished-afc2
+  cleanup_after_trial: true
