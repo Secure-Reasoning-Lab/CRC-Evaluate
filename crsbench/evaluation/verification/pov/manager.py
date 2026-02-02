@@ -459,8 +459,14 @@ class POVVerificationManager:
                 job_id = self._enqueue_pov(pov_path)
                 if job_id:
                     self._pending_job_ids.append(job_id)
-                    # Mark as tested in store to avoid re-enqueue
-                    self.store.mark_hash_tested(pov_hash)
+                    # Capture file mtime now (POV creation time) before
+                    # the async verdict overwrites it with poll time
+                    stat = pov_path.stat()
+                    self.store.mark_hash_tested(
+                        pov_hash,
+                        file_mtime=stat.st_mtime,
+                        file_size=stat.st_size,
+                    )
                 povs_new += 1
 
             # Poll for completed async verdicts
