@@ -677,12 +677,18 @@ class TestPovSubcommand:
 
         # Mock _build_dag to return jobs + metadata
         mock_jobs = []
-        build_job_ids = ["build-vulnerable:bench1:address", "build-allpatched:bench1:address"]
-        mock_metadata = [(Path("/tmp/bench1"), True, None, ["cpv_0"], [], build_job_ids)]
+        build_job_ids = [
+            "build-vulnerable:bench1:address",
+            "build-allpatched:bench1:address",
+        ]
+        mock_metadata = [
+            (Path("/tmp/bench1"), True, None, ["cpv_0"], [], build_job_ids)
+        ]
         mock_build_dag.return_value = (mock_jobs, mock_metadata)
 
         # Mock build results (include the build jobs)
         from crsbench.executor.types import ExecutorResult, JobStatus
+
         build_results = {
             "build-vulnerable:bench1:address": ExecutorResult(
                 job_id="build-vulnerable:bench1:address",
@@ -732,7 +738,10 @@ class TestPovSubcommand:
         mock_build_dag.return_value = (mock_jobs, mock_metadata)
         mock_run_build.return_value = {}
         raw_verify_results = {
-            "verify-cpv-pov:bench1:cpv_0": {"success": True, "job_id": "verify-cpv-pov:bench1:cpv_0"}
+            "verify-cpv-pov:bench1:cpv_0": {
+                "success": True,
+                "job_id": "verify-cpv-pov:bench1:cpv_0",
+            }
         }
         mock_enqueue_verify.return_value = raw_verify_results
         verify_results = _make_pov_dag_results("bench1", ["cpv_0"], success=False)
@@ -766,7 +775,10 @@ class TestPovSubcommand:
         mock_build_dag.return_value = (mock_jobs, mock_metadata)
         mock_run_build.return_value = {}
         raw_verify_results = {
-            "verify-cpv-pov:bench1:cpv_0": {"success": True, "job_id": "verify-cpv-pov:bench1:cpv_0"}
+            "verify-cpv-pov:bench1:cpv_0": {
+                "success": True,
+                "job_id": "verify-cpv-pov:bench1:cpv_0",
+            }
         }
         mock_enqueue_verify.return_value = raw_verify_results
         verify_results = _make_pov_dag_results("bench1", ["cpv_0"])
@@ -935,7 +947,9 @@ class TestPatchSubcommand:
     ):
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_jobs = []
-        mock_metadata = [(Path("/tmp/bench1"), True, None, ["cpv_0"], [("cpv_0", "patch_0")], [])]
+        mock_metadata = [
+            (Path("/tmp/bench1"), True, None, ["cpv_0"], [("cpv_0", "patch_0")], [])
+        ]
         mock_build_dag.return_value = (mock_jobs, mock_metadata)
         mock_run_build.return_value = {}
         raw_verify_results = {}

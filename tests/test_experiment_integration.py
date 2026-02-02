@@ -177,8 +177,7 @@ class TestExperimentFlowMock:
 
         # Mock Redis execution
         mock_raw_results = {
-            j.job_id: {"job_id": j.job_id, "status": "SUCCESS"}
-            for j in post_trial_jobs
+            j.job_id: {"job_id": j.job_id, "status": "SUCCESS"} for j in post_trial_jobs
         }
         mock_enqueue_and_poll.return_value = mock_raw_results
 
