@@ -292,12 +292,14 @@ def prepare_source_from_bundle(
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     # Handle split tarball - reassemble parts first
+    reassembled_temp: Optional[Path] = None
     if not tarball_path.exists() and split_first.exists():
         logger.info(f"Reassembling split tarball: {source_name}.tar.gz")
         tarball_path = _reassemble_split_tarball(pkgs_dir, source_name)
         if not tarball_path:
             logger.error(f"Failed to reassemble split tarball: {source_name}")
             return None
+        reassembled_temp = tarball_path
 
     if not tarball_path.exists():
         logger.error(f"Tarball not found: {tarball_path}")
@@ -311,6 +313,11 @@ def prepare_source_from_bundle(
     except Exception as e:
         logger.error(f"Failed to extract tarball: {e}")
         return None
+    finally:
+        # Clean up reassembled temp file to avoid disk waste
+        if reassembled_temp and reassembled_temp.exists():
+            reassembled_temp.unlink()
+            logger.debug(f"Cleaned up reassembled temp file: {reassembled_temp}")
 
     # The extracted source is in dest_dir/source_name
     source_path = dest_dir / source_name
