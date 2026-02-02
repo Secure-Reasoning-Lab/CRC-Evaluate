@@ -101,16 +101,10 @@ def _load_from_pkgs(
             "Ensure tarball name matches Dockerfile WORKDIR."
         )
 
-    # Extract source name from tarball path.
-    # Handles both whole tarballs (tika.tar.gz → tika)
-    # and split parts (tika.tar.gz.partaa → tika).
-    tarball_name = tarball.name
-    if ".tar.gz.part" in tarball_name:
-        source_name = tarball_name.split(".tar.gz")[0]
-    else:
-        source_name = tarball.stem
-        if source_name.endswith(".tar"):
-            source_name = source_name[:-4]
+    # Extract source name from tarball path (e.g., tika.tar.gz → tika)
+    source_name = tarball.stem
+    if source_name.endswith(".tar"):
+        source_name = source_name[:-4]
 
     logger.info(f"Extracting bundled source from {tarball.name}")
     source_path = prepare_source_from_bundle(
@@ -166,8 +160,7 @@ def has_bundled_source(benchmark_path: Path) -> bool:
     pkgs_dir = benchmark_path / "pkgs"
     if not pkgs_dir.exists():
         return False
-    # Check for regular tarballs or split tarballs (.partaa)
-    return any(pkgs_dir.glob("*.tar.gz")) or any(pkgs_dir.glob("*.tar.gz.partaa"))
+    return any(pkgs_dir.glob("*.tar.gz"))
 
 
 def get_bundled_tarball_path(benchmark_path: Path) -> Optional[Path]:
@@ -206,12 +199,6 @@ def get_bundled_tarball_path(benchmark_path: Path) -> Optional[Path]:
     tarball_path = pkgs_dir / f"{source_name}.tar.gz"
     if tarball_path.exists():
         return tarball_path
-
-    # Check for split tarball (e.g., poi.tar.gz.partaa, poi.tar.gz.partab, ...)
-    split_first = pkgs_dir / f"{source_name}.tar.gz.partaa"
-    if split_first.exists():
-        # Return the first part - prepare_source_from_bundle will reassemble
-        return split_first
 
     return None
 
@@ -283,23 +270,11 @@ def prepare_source_from_bundle(
     benchmark_path = Path(benchmark_path)
     dest_dir = Path(dest_dir)
 
-    # Find tarball (regular or split)
     pkgs_dir = benchmark_path / "pkgs"
     tarball_path = pkgs_dir / f"{source_name}.tar.gz"
-    split_first = pkgs_dir / f"{source_name}.tar.gz.partaa"
 
     # Create destination directory
     dest_dir.mkdir(parents=True, exist_ok=True)
-
-    # Handle split tarball - reassemble parts first
-    reassembled_temp: Optional[Path] = None
-    if not tarball_path.exists() and split_first.exists():
-        logger.info(f"Reassembling split tarball: {source_name}.tar.gz")
-        tarball_path = _reassemble_split_tarball(pkgs_dir, source_name)
-        if not tarball_path:
-            logger.error(f"Failed to reassemble split tarball: {source_name}")
-            return None
-        reassembled_temp = tarball_path
 
     if not tarball_path.exists():
         logger.error(f"Tarball not found: {tarball_path}")
@@ -313,11 +288,6 @@ def prepare_source_from_bundle(
     except Exception as e:
         logger.error(f"Failed to extract tarball: {e}")
         return None
-    finally:
-        # Clean up reassembled temp file to avoid disk waste
-        if reassembled_temp and reassembled_temp.exists():
-            reassembled_temp.unlink()
-            logger.debug(f"Cleaned up reassembled temp file: {reassembled_temp}")
 
     # The extracted source is in dest_dir/source_name
     source_path = dest_dir / source_name
@@ -347,56 +317,6 @@ def get_ref_diff_path(benchmark_path: Path) -> Optional[Path]:
     """
     ref_diff = Path(benchmark_path) / ".aixcc" / "ref.diff"
     return ref_diff if ref_diff.exists() else None
-
-
-def _reassemble_split_tarball(pkgs_dir: Path, source_name: str) -> Optional[Path]:
-    """Reassemble split tarball parts into a single file.
-
-    Split tarballs are created with `split -b 80M` and have parts like:
-    - source.tar.gz.partaa
-    - source.tar.gz.partab
-    - source.tar.gz.partac
-
-    Args:
-        pkgs_dir: Path to pkgs/ directory containing split parts
-        source_name: Base name of source (e.g., "poi")
-
-    Returns:
-        Path to reassembled tarball, or None if failed
-    """
-    import tempfile
-
-    # Find all parts sorted alphabetically (partaa, partab, partac, ...)
-    pattern = f"{source_name}.tar.gz.part*"
-    parts = sorted(pkgs_dir.glob(pattern))
-
-    if not parts:
-        logger.error(f"No split parts found matching: {pattern}")
-        return None
-
-    # Create a unique temp file to avoid race conditions with parallel workers
-    temp_fd, temp_path_str = tempfile.mkstemp(
-        suffix=".tar.gz", prefix=f"{source_name}_"
-    )
-    output_path = Path(temp_path_str)
-
-    logger.info(f"Reassembling {len(parts)} parts into {output_path}")
-
-    try:
-        with os.fdopen(temp_fd, "wb") as outfile:
-            for part in parts:
-                logger.debug(f"  Adding part: {part.name}")
-                with part.open("rb") as infile:
-                    # Read and write in chunks to handle large files
-                    while chunk := infile.read(8 * 1024 * 1024):  # 8MB chunks
-                        outfile.write(chunk)
-        return output_path
-    except Exception as e:
-        logger.error(f"Failed to reassemble tarball: {e}")
-        # Clean up on failure
-        if output_path.exists():
-            output_path.unlink()
-        return None
 
 
 def _init_git_repo(repo_path: Path) -> bool:

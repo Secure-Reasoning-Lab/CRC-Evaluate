@@ -195,11 +195,8 @@ def _validate_pkgs_dir(pkgs_dir: Path, dockerfile: Path) -> list[str]:
         )
         return warnings
 
-    # Check for expected tarball (regular or split format)
     expected_tarball = pkgs_dir / f"{expected_name}.tar.gz"
-    expected_split = pkgs_dir / f"{expected_name}.tar.gz.partaa"
-
-    if not expected_tarball.exists() and not expected_split.exists():
+    if not expected_tarball.exists():
         warnings.append(f"Expected source tarball not found: {expected_name}.tar.gz")
 
     # Check pkg_refs.txt for provenance
@@ -255,28 +252,15 @@ def validate_tarball_naming(benchmark_path: Path) -> TarballValidationResult:
             errors=["Cannot determine expected tarball name from Dockerfile WORKDIR"],
         )
 
-    # Find all source tarballs (exclude dependency tarballs by checking common patterns)
     # Source tarball should match WORKDIR name
     expected_tarball = pkgs_dir / f"{expected_name}.tar.gz"
-    expected_split = pkgs_dir / f"{expected_name}.tar.gz.partaa"
-
-    # Find all .tar.gz files (excluding split parts except .partaa)
     all_tarballs = list(pkgs_dir.glob("*.tar.gz"))
-    split_first_parts = list(pkgs_dir.glob("*.tar.gz.partaa"))
 
     # Collect tarball names
     for tb in all_tarballs:
         found_tarballs.append(tb.name)
-    for sp in split_first_parts:
-        # Extract base name (e.g., "poi.tar.gz" from "poi.tar.gz.partaa")
-        base_name = sp.name.replace(".partaa", "")
-        if base_name not in found_tarballs:
-            found_tarballs.append(f"{base_name} (split)")
 
-    # Check if expected tarball exists
-    has_expected = expected_tarball.exists() or expected_split.exists()
-
-    if not has_expected:
+    if not expected_tarball.exists():
         # Check for misnamed source tarball
         # Look for tarballs that might be the source (excluding known dependencies)
         dependency_patterns = [
@@ -291,21 +275,10 @@ def validate_tarball_naming(benchmark_path: Path) -> TarballValidationResult:
 
         potential_source_tarballs = []
         for tb in all_tarballs:
-            # e.g., "apache-poi" from "apache-poi.tar.gz"
             name_lower = tb.stem.lower()
             is_dependency = any(pat in name_lower for pat in dependency_patterns)
             if not is_dependency:
                 potential_source_tarballs.append(tb.name)
-
-        for sp in split_first_parts:
-            base_name = sp.name.replace(".tar.gz.partaa", "")
-            name_lower = base_name.lower()
-            is_dependency = any(pat in name_lower for pat in dependency_patterns)
-            if (
-                not is_dependency
-                and f"{base_name}.tar.gz" not in potential_source_tarballs
-            ):
-                potential_source_tarballs.append(f"{base_name}.tar.gz (split)")
 
         if potential_source_tarballs:
             errors.append(

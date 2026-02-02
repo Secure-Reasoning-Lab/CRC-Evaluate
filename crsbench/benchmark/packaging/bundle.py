@@ -10,7 +10,6 @@ from pathlib import Path
 from crsbench.benchmark.packaging.tarball import (
     clean_existing_tarball,
     create_source_tarball,
-    split_large_tarball,
 )
 from crsbench.benchmark.packaging.validate import (
     get_benchmark_info,
@@ -125,14 +124,11 @@ def bundle_benchmark(
     source_tarball = pkgs_dir / f"{source_name}.tar.gz"
     aixcc_ref_diff = benchmark_path / ".aixcc" / "ref.diff"
 
-    split_first = pkgs_dir / f"{source_name}.tar.gz.partaa"
-    has_existing = source_tarball.exists() or split_first.exists()
-    if not force and has_existing:
+    if not force and source_tarball.exists():
         pkg_refs_path = pkgs_dir / "pkg_refs.txt"
         if _has_repo_in_pkg_refs(pkg_refs_path, str(info["main_repo"])):
-            existing = source_tarball.name if source_tarball.exists() else "split parts"
             logger.info(
-                f"Source tarball already bundled ({existing}). "
+                f"Source tarball already bundled: {source_tarball.name}. "
                 "Skipping. Use --force to overwrite."
             )
             return pkgs_dir
@@ -177,17 +173,14 @@ def bundle_benchmark(
         log_prefix=benchmark_name,
     )
 
-    # 10. Split large tarballs for GitHub compatibility (>80MB → .part* files)
-    split_large_tarball(tarball_path, log_prefix=benchmark_name)
-
-    # 11. Move ref.diff to .aixcc/ if generated (delta mode only)
+    # 10. Move ref.diff to .aixcc/ if generated (delta mode only)
     if ref_diff_path:
         # shutil.move behavior varies; explicitly remove dest to ensure overwrite
         if aixcc_ref_diff.exists():
             aixcc_ref_diff.unlink()
         shutil.move(str(ref_diff_path), str(aixcc_ref_diff))
 
-    # 12. Update pkg_refs.txt for provenance (preserves other package refs)
+    # 11. Update pkg_refs.txt for provenance (preserves other package refs)
     pkg_refs_path = pkgs_dir / "pkg_refs.txt"
     _update_pkg_refs(pkg_refs_path, main_repo, vulnerable_commit)
 
