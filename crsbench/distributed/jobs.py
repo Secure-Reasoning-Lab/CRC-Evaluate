@@ -46,6 +46,27 @@ from crsbench.validation.schemas import TrialMetadata as TrialMetadataFile
 logger = get_logger(__name__)
 
 
+def _resolve_redis_host(config: ExperimentConfig) -> Optional[str]:
+    """Resolve the Redis host for verify queue connections.
+
+    The config.redis_host may be 'localhost' because the orchestrator serialized
+    it from its own perspective. On remote workers, we need the actual Redis host.
+    Priority: RQ job connection > config.redis_host.
+    """
+    try:
+        import rq
+
+        job = rq.get_current_job()
+        if job and job.connection:
+            conn_kwargs = job.connection.connection_pool.connection_kwargs
+            host = conn_kwargs.get("host", "localhost")
+            if host != "localhost":
+                return host
+    except Exception:
+        pass
+    return getattr(config, "redis_host", None)
+
+
 def _generate_results_folder_name(
     experiment_name: str, timestamp: Optional[str] = None
 ) -> str:
@@ -922,7 +943,7 @@ def run_crs_trial(
             llm_trial_id=trial_id,
             build_workers=config.build_workers,
             verify_workers=config.verify_workers,
-            redis_host=getattr(config, "redis_host", None),
+            redis_host=_resolve_redis_host(config),
             experiment_name=config.experiment,
         )
 
