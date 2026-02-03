@@ -28,6 +28,19 @@ class CPVResult:
 
 
 @dataclass
+class POVStatusCounts:
+    """Per-status POV counts from pov_store."""
+    cpv: int = 0
+    unintended_crash: int = 0
+    not_vulnerable: int = 0
+    error: int = 0
+
+    @property
+    def total(self) -> int:
+        return self.cpv + self.unintended_crash + self.not_vulnerable + self.error
+
+
+@dataclass
 class TrialReport:
     benchmark: str
     harness: str
@@ -37,6 +50,7 @@ class TrialReport:
     found_cpvs: int
     cpv_results: list[CPVResult] = field(default_factory=list)
     last_pov_relative_time: float | None = None  # last POV mtime relative to CRS start
+    pov_counts: POVStatusCounts = field(default_factory=POVStatusCounts)
     success: bool = False
     failure_reason: str = ""  # e.g. "build_failure", "timeout", "no_povs", "runtime_error"
 
@@ -217,14 +231,26 @@ def analyze_trial(
         else:
             cpv_results.append(CPVResult(cpv_id=cpv_id, found=False))
 
-    # Last POV relative time (any POV, not just CPV-matching)
+    # Count POVs by verification status and find last POV time
+    pov_counts = POVStatusCounts()
     last_pov_time = None
-    if pov_store and crs_start:
+    if pov_store:
         mtimes = []
         for pov_entry in pov_store.get("povs", {}).values():
-            mtime = pov_entry.get("file_mtime")
-            if mtime:
-                mtimes.append(mtime - crs_start)
+            status = pov_entry.get("status", "")
+            if status == "cpv":
+                pov_counts.cpv += 1
+            elif status == "unintended_crash":
+                pov_counts.unintended_crash += 1
+            elif status == "not_vulnerable":
+                pov_counts.not_vulnerable += 1
+            elif status == "error":
+                pov_counts.error += 1
+
+            if crs_start:
+                mtime = pov_entry.get("file_mtime")
+                if mtime:
+                    mtimes.append(mtime - crs_start)
         if mtimes:
             last_pov_time = max(mtimes)
 
@@ -245,6 +271,7 @@ def analyze_trial(
         found_cpvs=found_count,
         cpv_results=cpv_results,
         last_pov_relative_time=last_pov_time,
+        pov_counts=pov_counts,
         success=has_success,
         failure_reason=failure_reason,
     )
@@ -301,6 +328,7 @@ def main():
             "benchmark", "harness", "crs", "trial",
             "cpv_id", "found", "failure_reason",
             "first_pov_time_seconds", "first_pov_time", "pov_hash",
+            "povs_total", "povs_cpv", "povs_unintended", "povs_not_vulnerable", "povs_error",
         ])
         for r in sorted(reports, key=lambda x: (x.benchmark, x.harness)):
             for cpv in r.cpv_results:
@@ -311,6 +339,9 @@ def main():
                     cpv.first_pov_relative_time or "",
                     fmt_time(cpv.first_pov_relative_time) if cpv.found else "",
                     cpv.pov_hash or "",
+                    r.pov_counts.total, r.pov_counts.cpv,
+                    r.pov_counts.unintended_crash, r.pov_counts.not_vulnerable,
+                    r.pov_counts.error,
                 ])
         return
 
@@ -318,16 +349,23 @@ def main():
     total_all = 0
     found_all = 0
 
-    print(f"\n{'Benchmark':<45} {'Harness':<35} {'CPVs':>6} {'Found':>6} {'Rate':>7} {'Last POV':>10}")
-    print("-" * 115)
+    header = (
+        f"{'Benchmark':<45} {'Harness':<35} {'CPVs':>6} {'Found':>6} {'Rate':>7} {'Last POV':>10}"
+        f"  {'POVs':>5} {'CPV':>5} {'Unint':>5} {'NotV':>5} {'Err':>5}"
+    )
+    print(f"\n{header}")
+    print("-" * len(header))
 
     for r in sorted(reports, key=lambda x: (x.benchmark, x.harness)):
         total_all += r.total_cpvs
         found_all += r.found_cpvs
-        rate = f"{r.found_cpvs}/{r.total_cpvs}"
         pct = f"{r.found_cpvs/r.total_cpvs*100:.0f}%" if r.total_cpvs else "-"
         last = fmt_time(r.last_pov_relative_time)
-        print(f"{r.benchmark:<45} {r.harness:<35} {r.total_cpvs:>6} {r.found_cpvs:>6} {pct:>7} {last:>10}")
+        c = r.pov_counts
+        print(
+            f"{r.benchmark:<45} {r.harness:<35} {r.total_cpvs:>6} {r.found_cpvs:>6} {pct:>7} {last:>10}"
+            f"  {c.total:>5} {c.cpv:>5} {c.unintended_crash:>5} {c.not_vulnerable:>5} {c.error:>5}"
+        )
 
         # Per-CPV details
         for cpv in r.cpv_results:
@@ -339,7 +377,7 @@ def main():
                 t = ""
             print(f"  {'':>43} {cpv.cpv_id:<15} {status:<25} {t}")
 
-    print("-" * 115)
+    print("-" * len(header))
     overall_pct = f"{found_all/total_all*100:.0f}%" if total_all else "-"
     print(f"{'TOTAL':<45} {'':35} {total_all:>6} {found_all:>6} {overall_pct:>7}")
     print()
