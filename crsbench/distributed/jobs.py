@@ -986,6 +986,8 @@ def run_crs_trial(
                 hints_enabled=config.hints_enabled,
                 hints_corpus_level=config.hint_corpus_level,
             ),
+            worker_machine=socket.gethostname(),
+            worker_trial_dir=str(trial_output_dir),
             build_mode=mode,
             sanitizer=sanitizer,
             experiment_name=config.experiment,
@@ -1063,6 +1065,8 @@ def run_crs_trial(
             memory_per_trial=config.resources.memory_per_trial
             if config.resources
             else None,
+            worker_machine=socket.gethostname(),
+            worker_trial_dir=str(trial_output_dir),
         )
 
         # Create trial result using Pydantic model

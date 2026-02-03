@@ -21,6 +21,7 @@ Usage:
 
 import argparse
 import importlib.util
+import json
 import os
 import secrets
 import string
@@ -34,7 +35,11 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
-from crsbench.distributed.jobs import get_crs_type
+from crsbench.distributed.jobs import (
+    _build_trial_output_path,
+    _check_existing_trial,
+    get_crs_type,
+)
 from crsbench.evaluation.cleanup import cleanup_trial_directory
 from crsbench.evaluation.results import CRSType, TrialResult
 from crsbench.utils import log_progress, log_section, log_summary, set_gitcache
@@ -1522,13 +1527,88 @@ def run_experiment_local(
         _cleanup_experiment_artifacts(experiment_name, config)
 
 
-def monitor_jobs(queue, job_list: List, experiment_name: str) -> List[TrialResult]:
+def _write_orchestrator_marker(
+    trial_result: TrialResult, config: ExperimentConfig
+) -> None:
+    """Write completion marker and metadata on the orchestrator's disk.
+
+    Creates .success/.fail marker and metadata.json in the orchestrator's
+    experiment_filestore so completed trials are skipped on re-launch.
+    Skips writing metadata.json if it already exists (worker on same machine
+    already wrote full metadata).
+
+    Args:
+        trial_result: Result from a completed trial
+        config: Experiment configuration
+    """
+    if not trial_result.mode or not trial_result.sanitizer:
+        logger.debug(
+            f"Skipping orchestrator marker for trial {trial_result.trial_num}: "
+            "missing mode or sanitizer"
+        )
+        return
+
+    trial_dir = _build_trial_output_path(
+        filestore=config.experiment_filestore.resolve(),
+        experiment_name=config.experiment,
+        crs=trial_result.crs,
+        benchmark=trial_result.benchmark,
+        harness=trial_result.harness,
+        mode=trial_result.mode,
+        sanitizer=trial_result.sanitizer,
+        trial_num=trial_result.trial_num,
+    )
+    trial_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write marker
+    marker_name = ".success" if trial_result.success else ".fail"
+    marker_path = trial_dir / marker_name
+    if not marker_path.exists():
+        marker_path.touch()
+
+    # Write metadata.json only if it doesn't already exist
+    # (local worker already wrote full metadata)
+    metadata_path = trial_dir / "metadata.json"
+    if not metadata_path.exists():
+        metadata_dict = {
+            "crs": trial_result.crs,
+            "benchmark": trial_result.benchmark,
+            "harness": trial_result.harness,
+            "trial_num": trial_result.trial_num,
+            "mode": trial_result.mode,
+            "sanitizer": trial_result.sanitizer,
+            "success": trial_result.success,
+            "execution_time": trial_result.execution_time,
+            "timestamp_start": trial_result.metadata.timestamp_start,
+            "timestamp_end": trial_result.metadata.timestamp_end,
+            "build_time": trial_result.metadata.build_time,
+            "run_time": trial_result.metadata.run_time,
+            "worker_machine": trial_result.metadata.worker_machine,
+            "worker_trial_dir": trial_result.metadata.worker_trial_dir,
+            "povs_found": trial_result.povs_found,
+            "total_povs": trial_result.total_povs,
+            "patches_generated": trial_result.patches_generated,
+            "patches_valid": trial_result.patches_valid,
+        }
+        with metadata_path.open("w") as f:
+            json.dump(metadata_dict, f, indent=2)
+
+    logger.debug(
+        f"Orchestrator marker written: {trial_dir / marker_name} "
+        f"(worker={trial_result.metadata.worker_machine})"
+    )
+
+
+def monitor_jobs(
+    queue, job_list: List, experiment_name: str, config: ExperimentConfig
+) -> List[TrialResult]:
     """Monitor job progress and display status.
 
     Args:
         queue: RQ queue instance
         job_list: List of enqueued RQ jobs
         experiment_name: Experiment identifier
+        config: Experiment configuration (for writing orchestrator markers)
 
     Returns:
         List of TrialResult objects
@@ -1540,18 +1620,21 @@ def monitor_jobs(queue, job_list: List, experiment_name: str) -> List[TrialResul
         logger.warning("Rich library not available, using basic progress display")
 
     if rich_available:
-        return _monitor_jobs_rich(queue, job_list, experiment_name)
-    return _monitor_jobs_basic(queue, job_list, experiment_name)
+        return _monitor_jobs_rich(queue, job_list, experiment_name, config)
+    return _monitor_jobs_basic(queue, job_list, experiment_name, config)
 
 
 def _monitor_jobs_basic(
-    queue, job_list: List, experiment_name: str
+    queue, job_list: List, experiment_name: str, config: ExperimentConfig
 ) -> List[TrialResult]:
     """Basic job monitoring without Rich UI."""
     from crsbench.distributed.queue import get_queue_stats
     from crsbench.evaluation.results import TrialMetadata
 
     logger.info(f"\nMonitoring {len(job_list)} jobs for experiment: {experiment_name}")
+
+    # Track jobs that have already had markers written
+    marked_jobs: set[str] = set()
 
     while True:
         stats = get_queue_stats(queue)
@@ -1598,15 +1681,45 @@ def _monitor_jobs_basic(
             for line in running_jobs:
                 logger.info(line)
 
-        # Check if all jobs completed
+        # Check if all jobs completed and write markers incrementally
         completed = 0
         failed = 0
         for job in job_list:
             job.refresh()
             if job.is_finished:
                 completed += 1
+                # Write orchestrator marker as soon as job finishes
+                if job.id not in marked_jobs and job.result:
+                    try:
+                        _write_orchestrator_marker(job.result, config)
+                        marked_jobs.add(job.id)
+                    except Exception as e:
+                        logger.warning(f"Failed to write orchestrator marker: {e}")
             elif job.is_failed:
                 failed += 1
+                # Write .fail marker for RQ-level failures
+                if job.id not in marked_jobs:
+                    kwargs = job.kwargs or {}
+                    fail_result = TrialResult(
+                        crs=kwargs.get("crs", "unknown"),
+                        benchmark=kwargs.get("benchmark", "unknown"),
+                        harness=kwargs.get("harness_name", "unknown"),
+                        trial_num=kwargs.get("trial_num", 0),
+                        crs_type=CRSType.BUG_FINDING,
+                        mode=kwargs.get("mode"),
+                        sanitizer=kwargs.get("sanitizer"),
+                        success=False,
+                        execution_time=0.0,
+                        error=f"Job failed: {job.exc_info}",
+                        error_type="RQJobFailure",
+                        report={},
+                        metadata=TrialMetadata(timestamp_start=0.0, timestamp_end=0.0),
+                    )
+                    try:
+                        _write_orchestrator_marker(fail_result, config)
+                    except Exception as e:
+                        logger.warning(f"Failed to write orchestrator fail marker: {e}")
+                    marked_jobs.add(job.id)
 
         log_progress(
             completed + failed,
@@ -1650,7 +1763,7 @@ def _monitor_jobs_basic(
 
 
 def _monitor_jobs_rich(
-    queue, job_list: List, experiment_name: str
+    queue, job_list: List, experiment_name: str, config: ExperimentConfig
 ) -> List[TrialResult]:
     """Monitor jobs with Rich UI."""
     from rich.console import Console, Group
@@ -1658,8 +1771,12 @@ def _monitor_jobs_rich(
     from rich.table import Table
 
     from crsbench.distributed.queue import get_queue_stats
+    from crsbench.evaluation.results import TrialMetadata
 
     console = Console()
+
+    # Track jobs that have already had markers written
+    marked_jobs: set[str] = set()
 
     def generate_status_table():
         stats = get_queue_stats(queue)
@@ -1724,15 +1841,47 @@ def _monitor_jobs_rich(
 
     with Live(generate_status_table(), refresh_per_second=1, console=console) as live:
         while True:
-            # Check if all jobs completed
+            # Check if all jobs completed and write markers incrementally
             completed = 0
             failed = 0
             for job in job_list:
                 job.refresh()
                 if job.is_finished:
                     completed += 1
+                    if job.id not in marked_jobs and job.result:
+                        try:
+                            _write_orchestrator_marker(job.result, config)
+                            marked_jobs.add(job.id)
+                        except Exception as e:
+                            logger.warning(f"Failed to write orchestrator marker: {e}")
                 elif job.is_failed:
                     failed += 1
+                    if job.id not in marked_jobs:
+                        kwargs = job.kwargs or {}
+                        fail_result = TrialResult(
+                            crs=kwargs.get("crs", "unknown"),
+                            benchmark=kwargs.get("benchmark", "unknown"),
+                            harness=kwargs.get("harness_name", "unknown"),
+                            trial_num=kwargs.get("trial_num", 0),
+                            crs_type=CRSType.BUG_FINDING,
+                            mode=kwargs.get("mode"),
+                            sanitizer=kwargs.get("sanitizer"),
+                            success=False,
+                            execution_time=0.0,
+                            error=f"Job failed: {job.exc_info}",
+                            error_type="RQJobFailure",
+                            report={},
+                            metadata=TrialMetadata(
+                                timestamp_start=0.0, timestamp_end=0.0
+                            ),
+                        )
+                        try:
+                            _write_orchestrator_marker(fail_result, config)
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to write orchestrator fail marker: {e}"
+                            )
+                        marked_jobs.add(job.id)
 
             if completed + failed >= len(job_list):
                 break
@@ -1741,8 +1890,6 @@ def _monitor_jobs_rich(
             time.sleep(1)
 
     # Collect results
-    from crsbench.evaluation.results import TrialMetadata
-
     results: List[TrialResult] = []
     for job in job_list:
         job.refresh()
@@ -2000,6 +2147,27 @@ def run_experiment_distributed(
                 f"Skipping {skipped_count} existing trials, enqueueing {len(trials)} new trials"
             )
 
+    # Disk-based filtering: skip trials with .success markers on orchestrator disk
+    # This catches trials completed by remote workers in previous runs
+    original_count = len(trials)
+    trials = [
+        t
+        for t in trials
+        if _check_existing_trial(
+            config,
+            t.crs,
+            t.benchmark_harness.name,
+            t.benchmark_harness.harness.name,
+            t.mode,
+            t.sanitizer,
+            t.trial_num,
+        )
+        is None
+    ]
+    disk_skipped = original_count - len(trials)
+    if disk_skipped > 0:
+        logger.info(f"Skipping {disk_skipped} trials already complete on disk")
+
     # Dump trial matrix to JSON
     dump_trial_matrix(trials, config)
 
@@ -2109,7 +2277,7 @@ def run_experiment_distributed(
 
     # Monitor progress
     logger.info("\nMonitoring job progress...")
-    results = monitor_jobs(queue, jobs, experiment_name)
+    results = monitor_jobs(queue, jobs, experiment_name, config)
 
     # Generate final report
     log_section("Experiment Complete - Generating Report", width=60)

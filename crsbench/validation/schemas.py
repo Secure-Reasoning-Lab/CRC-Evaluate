@@ -113,6 +113,10 @@ class TrialMetadata(BaseModel):
         default=None, description="CRS run time in seconds (written after trial)"
     )
 
+    # Worker identification (for distributed execution)
+    worker_machine: Optional[str] = None
+    worker_trial_dir: Optional[str] = None
+
     # Build configuration
     build_mode: Optional[str] = None  # "delta" or "full" (evaluation mode)
     sanitizer: Optional[str] = None
