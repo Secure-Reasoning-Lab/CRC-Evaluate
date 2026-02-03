@@ -33,6 +33,26 @@ reproduce_logger = get_logger("reproduce")
 # Exit code constants from helper.py
 EXIT_CODE_TIMEOUT = 124  # Subprocess timeout in helper.py
 
+_LEAK_MARKERS = (
+    "LeakSanitizer:",
+    "detected memory leaks",
+)
+
+
+def _is_leak_only_exit(stdout: str) -> bool:
+    """Check if reproduce output is a LeakSanitizer-only exit (not a real crash).
+
+    LeakSanitizer exits with non-zero code but memory leaks are diagnostic,
+    not POV-triggered crashes. We pass -detect_leaks=0 to libfuzzer, but the
+    Docker base image's ASAN_OPTIONS=detect_leaks=1 can override it.
+
+    In practice, real crashes (SEGV/ABRT) kill the process before ASAN's
+    atexit LeakSanitizer handler runs, so leak markers and real crashes
+    are mutually exclusive.
+    """
+    return any(marker in stdout for marker in _LEAK_MARKERS)
+
+
 # Track initialized OSS-Fuzz paths to avoid redundant setup
 _initialized_oss_fuzz_paths: set[Path] = set()
 
@@ -1515,6 +1535,21 @@ class OSSFuzzInfrastructure:
                     stderr=stderr,
                     exit_code=124,
                 )
+
+            # Check for LeakSanitizer-only exit (not a real crash)
+            # -detect_leaks=0 flag may not suppress ASAN_OPTIONS=detect_leaks=1
+            if _is_leak_only_exit(stdout):
+                reproduce_logger.debug(
+                    f"{req_prefix}{pov_prefix}{project_name}/{harness} "
+                    f"LeakSanitizer only (exit code {result.returncode}), not a crash"
+                )
+                return ReproduceOutput(
+                    crashed=False,
+                    stdout=stdout,
+                    stderr=stderr,
+                    exit_code=result.returncode,
+                )
+
             logger.debug(
                 f"{req_prefix}{pov_prefix}{project_name}/{harness} crashed "
                 f"(exit code {result.returncode})"

@@ -161,6 +161,38 @@ class TestCommandConstruction:
             assert "-detect_leaks=0" in cmd
 
 
+class TestLeakSanitizerHandling:
+    """Test LeakSanitizer-only exits are not treated as crashes."""
+
+    def test_leak_only_exit_not_crash(self, infra):
+        """LeakSanitizer-only exit → crashed=False."""
+        result = infra.reproduce(
+            project_name="test",
+            harness="fuzz",
+            pov_data=b"LEAK",
+            timeout=5,
+        )
+        assert result.crashed is False
+        assert result.exit_code == 1
+
+    def test_is_leak_only_exit_helper(self):
+        """Unit test for _is_leak_only_exit()."""
+        from crsbench.builder.infrastructure import _is_leak_only_exit
+
+        # Leak only → True
+        assert _is_leak_only_exit(
+            "==ERROR: LeakSanitizer: detected memory leaks\nSUMMARY: 5600 bytes leaked"
+        )
+
+        # No leak → False
+        assert not _is_leak_only_exit(
+            "AddressSanitizer:DEADLYSIGNAL\n==ERROR: AddressSanitizer: SEGV"
+        )
+
+        # No markers at all → False
+        assert not _is_leak_only_exit("INFO: Running with entropic power schedule")
+
+
 class TestEnsureOssFuzzReady:
     """Test race condition prevention in ensure_oss_fuzz_ready()."""
 

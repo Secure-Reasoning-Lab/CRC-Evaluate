@@ -24,6 +24,11 @@ def main():
         sys.exit(124)
     elif b"ASAN" in content:
         sys.exit(77)
+    elif b"LEAK" in content:
+        print("==18==ERROR: LeakSanitizer: detected memory leaks")
+        print("Direct leak of 5600 byte(s) in 100 object(s)")
+        print("SUMMARY: AddressSanitizer: 5600 byte(s) leaked in 100 allocation(s).")
+        sys.exit(1)
     elif b"CRASH" in content:
         sys.exit(1)
     else:
