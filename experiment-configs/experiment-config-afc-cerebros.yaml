@@ -18,7 +18,7 @@ description: "E2E bug finding - AFC final round benchmarks"
 
 # Execution Configuration
 trials: 1
-mode: auto
+mode: full
 source_mode: pkgs
 
 # Timeout Configuration - 6 hours CRS run
