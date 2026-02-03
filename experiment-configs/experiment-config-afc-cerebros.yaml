@@ -53,6 +53,11 @@ coverage_enabled: false
 # POV Early Stop - terminate when all CPVs for harness are found
 pov_early_stop: true
 
+# Sanitizer Configuration - address + undefined to cover all CPVs (e.g., dav1d needs undefined)
+sanitizers:
+  - address
+  - undefined
+
 # Harness Selection - only run harnesses that have CPVs defined
 only_cpv_harnesses: true
 
