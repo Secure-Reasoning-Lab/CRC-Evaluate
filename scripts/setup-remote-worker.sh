@@ -51,29 +51,13 @@ fi
 echo "  git:    $(git --version)"
 echo "  docker: $(docker --version)"
 
-# ----- Step 2: Clone or update repo -----
+# ----- Step 2: Configure git for SSH-based submodule access -----
 echo ""
-echo "[2/9] Setting up CRSBench repo..."
-
-if [ -d "$INSTALL_DIR/.git" ]; then
-    echo "  Repo exists at $INSTALL_DIR, updating..."
-    cd "$INSTALL_DIR"
-    git fetch origin
-    git checkout "$BRANCH"
-    git pull origin "$BRANCH"
-else
-    echo "  Cloning to $INSTALL_DIR..."
-    git clone "$REPO_URL" "$INSTALL_DIR"
-    cd "$INSTALL_DIR"
-    git checkout "$BRANCH"
-fi
-
-# ----- Step 3: Configure git for SSH-based submodule access -----
-echo ""
-echo "[3/9] Configuring git SSH access for submodules..."
+echo "[2/9] Configuring git SSH access for submodules..."
 
 # Submodules are configured with HTTPS URLs but the repos may be private.
 # Rewrite HTTPS GitHub URLs to SSH so we can use SSH keys instead of PAT.
+# Must be done BEFORE any git fetch/pull/clone so submodules use SSH too.
 if ! git config --global --get url."git@github.com:".insteadOf &>/dev/null; then
     git config --global url."git@github.com:".insteadOf "https://github.com/"
     echo "  Configured HTTPS→SSH URL rewrite for github.com"
@@ -90,6 +74,23 @@ else
     echo "    1. Generate key: ssh-keygen -t ed25519 -C \"$MACHINE_NAME@gatech\""
     echo "    2. Add to GitHub: https://github.com/settings/keys"
     echo "    3. Test: ssh -T git@github.com"
+fi
+
+# ----- Step 3: Clone or update repo -----
+echo ""
+echo "[3/9] Setting up CRSBench repo..."
+
+if [ -d "$INSTALL_DIR/.git" ]; then
+    echo "  Repo exists at $INSTALL_DIR, updating..."
+    cd "$INSTALL_DIR"
+    git fetch origin
+    git checkout "$BRANCH"
+    git pull origin "$BRANCH"
+else
+    echo "  Cloning to $INSTALL_DIR..."
+    git clone "$REPO_URL" "$INSTALL_DIR"
+    cd "$INSTALL_DIR"
+    git checkout "$BRANCH"
 fi
 
 # ----- Step 4: Init submodules -----
