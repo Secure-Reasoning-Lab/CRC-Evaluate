@@ -627,6 +627,7 @@ def _run_single_job_worker(
     from rq.executions import Execution
     from rq.job import JobStatus
     from rq.registry import FailedJobRegistry, FinishedJobRegistry
+    from rq.results import Result
 
     from crsbench.utils.logger import add_file_handler, remove_file_handler
 
@@ -702,11 +703,20 @@ def _run_single_job_worker(
                             "ended_at": rq.utils.utcformat(job.ended_at),  # type: ignore[attr-defined]
                         },
                     )
+                    # Store trial error as exc_string for failed registry
+                    exc_string = f"Trial failed: {result.error_type}: {result.error}"
+                    # Store result in Redis (RQ 2.x uses separate result keys)
+                    Result.create(
+                        job,
+                        Result.Type.FAILED,
+                        ttl=-1,
+                        return_value=result,
+                        exc_string=exc_string,
+                        pipeline=pipeline,
+                    )
                     # Remove from started registry and add to failed registry
                     if execution:
                         execution.delete(job, pipeline=pipeline)
-                    # Store trial error as exc_string for failed registry
-                    exc_string = f"Trial failed: {result.error_type}: {result.error}"
                     failed_registry.add(
                         job, ttl=-1, exc_string=exc_string, pipeline=pipeline
                     )
@@ -728,6 +738,14 @@ def _run_single_job_worker(
                             "status": JobStatus.FINISHED,
                             "ended_at": rq.utils.utcformat(job.ended_at),  # type: ignore[attr-defined]
                         },
+                    )
+                    # Store result in Redis (RQ 2.x uses separate result keys)
+                    Result.create(
+                        job,
+                        Result.Type.SUCCESSFUL,
+                        ttl=-1,
+                        return_value=result,
+                        pipeline=pipeline,
                     )
                     # Remove from started registry and add to finished registry
                     if execution:
@@ -754,6 +772,14 @@ def _run_single_job_worker(
                         "status": JobStatus.FAILED,
                         "ended_at": rq.utils.utcformat(job.ended_at),  # type: ignore[attr-defined]
                     },
+                )
+                # Store failure in Redis (RQ 2.x uses separate result keys)
+                Result.create(
+                    job,
+                    Result.Type.FAILED,
+                    ttl=-1,
+                    exc_string=exc_string,
+                    pipeline=pipeline,
                 )
                 # Remove from started registry and add to failed registry
                 if execution:

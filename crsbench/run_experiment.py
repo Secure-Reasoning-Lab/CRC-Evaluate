@@ -1592,7 +1592,7 @@ def _write_orchestrator_marker(
         with metadata_path.open("w") as f:
             json.dump(metadata_dict, f, indent=2)
 
-    logger.debug(
+    logger.info(
         f"Orchestrator marker written: {trial_dir / marker_name} "
         f"(worker={trial_result.metadata.worker_machine})"
     )
@@ -1707,12 +1707,21 @@ def _monitor_jobs_basic(
             if job.is_finished:
                 completed += 1
                 # Write orchestrator marker as soon as job finishes
-                if job.id not in marked_jobs and job.result:
+                if job.id not in marked_jobs:
                     try:
-                        _write_orchestrator_marker(job.result, config)
+                        result = job.result
+                        if result is None:
+                            logger.warning(
+                                f"Job {job.id[:8]} finished but result is None"
+                            )
+                        else:
+                            _write_orchestrator_marker(result, config)
                         marked_jobs.add(job.id)
                     except Exception as e:
-                        logger.warning(f"Failed to write orchestrator marker: {e}")
+                        logger.warning(
+                            f"Failed to write orchestrator marker for {job.id[:8]}: {e}"
+                        )
+                        marked_jobs.add(job.id)
             elif job.is_failed:
                 failed += 1
                 # Write .fail marker for RQ-level failures
@@ -1873,12 +1882,22 @@ def _monitor_jobs_rich(
                 job.refresh()
                 if job.is_finished:
                     completed += 1
-                    if job.id not in marked_jobs and job.result:
+                    if job.id not in marked_jobs:
                         try:
-                            _write_orchestrator_marker(job.result, config)
+                            result = job.result
+                            if result is None:
+                                logger.warning(
+                                    f"Job {job.id[:8]} finished but result is None"
+                                )
+                            else:
+                                _write_orchestrator_marker(result, config)
                             marked_jobs.add(job.id)
                         except Exception as e:
-                            logger.warning(f"Failed to write orchestrator marker: {e}")
+                            logger.warning(
+                                f"Failed to write orchestrator marker for "
+                                f"{job.id[:8]}: {e}"
+                            )
+                            marked_jobs.add(job.id)
                 elif job.is_failed:
                     failed += 1
                     if job.id not in marked_jobs:
