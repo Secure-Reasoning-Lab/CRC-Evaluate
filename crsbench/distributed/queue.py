@@ -4,6 +4,7 @@ This module provides utilities for initializing and managing Redis-backed RQ que
 for distributed CRS trial execution.
 """
 
+import os
 from typing import List, Optional
 
 from crsbench.utils.logger import get_logger
@@ -42,7 +43,12 @@ def check_redis_available(redis_host: str, timeout: int = 2) -> bool:
         return False
 
     try:
-        client = redis.Redis(host=redis_host, socket_connect_timeout=timeout)
+        redis_password = os.environ.get("REDIS_PASSWORD") or None
+        client = redis.Redis(
+            host=redis_host,
+            password=redis_password,
+            socket_connect_timeout=timeout,
+        )
         client.ping()
         logger.debug(f"Redis server at {redis_host} is reachable")
         return True
@@ -84,7 +90,8 @@ def initialize_queue(redis_host: str, experiment_name: str) -> Optional["rq.Queu
     logger.info(f"Initializing queue: {queue_name}")
 
     try:
-        redis_connection = redis.Redis(host=redis_host)
+        redis_password = os.environ.get("REDIS_PASSWORD") or None
+        redis_connection = redis.Redis(host=redis_host, password=redis_password)
         # Test connection
         redis_connection.ping()
 

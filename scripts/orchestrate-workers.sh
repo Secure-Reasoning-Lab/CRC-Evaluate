@@ -111,57 +111,57 @@ ssh_cmd() {
 # -----------------------------------------------------------------------------
 
 cmd_redis_setup() {
-    log "Setting up Redis with password authentication on localhost..."
+    log "Setting up Redis via Docker with password authentication..."
+
+    local container_name="redis-crsbench"
+
+    # Check prerequisites
+    if ! command -v docker &>/dev/null; then
+        err "docker not found. Install Docker first."
+        exit 1
+    fi
+    if ! command -v redis-cli &>/dev/null; then
+        err "redis-cli not found. Install redis-tools: sudo apt install redis-tools"
+        exit 1
+    fi
 
     # Generate a random password
     local password
     password=$(openssl rand -base64 24)
 
-    # Check if Redis is installed
-    if ! command -v redis-cli &>/dev/null; then
-        err "redis-cli not found. Install Redis first: sudo apt install redis-server"
-        exit 1
+    # Stop and remove existing container if present
+    if docker ps -a --format '{{.Names}}' | grep -q "^${container_name}$"; then
+        log "  Removing existing $container_name container..."
+        docker rm -f "$container_name" >/dev/null 2>&1 || true
     fi
 
-    # Ensure redis-server is running
-    if ! redis-cli ping &>/dev/null; then
-        log "  Redis not running, starting redis-server..."
-        sudo systemctl start redis-server 2>/dev/null \
-            || sudo service redis-server start 2>/dev/null \
-            || { err "Failed to start redis-server"; exit 1; }
-        sleep 1
-    fi
+    # Start Redis in Docker, bound to 0.0.0.0 for remote workers
+    log "  Starting Redis container ($container_name) on port 6379..."
+    docker run -d \
+        --name "$container_name" \
+        --restart unless-stopped \
+        -p 0.0.0.0:6379:6379 \
+        redis:latest \
+        redis-server --requirepass "$password"
 
-    # Find Redis config
-    local redis_conf=""
-    for candidate in /etc/redis/redis.conf /etc/redis.conf; do
-        if [[ -f "$candidate" ]]; then
-            redis_conf="$candidate"
-            break
+    # Wait for Redis to be ready
+    local retries=10
+    while ! redis-cli -a "$password" ping &>/dev/null; do
+        retries=$((retries - 1))
+        if [[ $retries -le 0 ]]; then
+            err "Redis container failed to become ready"
+            exit 1
         fi
+        sleep 1
     done
-
-    if [[ -z "$redis_conf" ]]; then
-        err "Redis config not found at /etc/redis/redis.conf or /etc/redis.conf"
-        exit 1
-    fi
-
-    log "  Redis config: $redis_conf"
-    log "  Configuring password and network binding..."
-
-    # Apply config via redis-cli (takes effect immediately, persists to config)
-    redis-cli CONFIG SET requirepass "$password"
-    # Authenticate with the new password for subsequent commands
-    redis-cli -a "$password" CONFIG SET bind "0.0.0.0"
-    redis-cli -a "$password" CONFIG SET protected-mode "no"
-    redis-cli -a "$password" CONFIG REWRITE 2>/dev/null || true
 
     # Save password to file (used by get_redis_password helper)
     echo -n "$password" > "$REDIS_PASSWORD_FILE"
     chmod 600 "$REDIS_PASSWORD_FILE"
 
-    log "  Password saved to: $REDIS_PASSWORD_FILE"
-    log "  Redis is now accepting remote connections with password auth"
+    log "  Container:  $container_name (redis:latest)"
+    log "  Listening:  0.0.0.0:6379"
+    log "  Password:   saved to $REDIS_PASSWORD_FILE"
     log ""
     log "  Workers:  password is passed automatically by 'start' command"
     log "  Cyclonus: export REDIS_PASSWORD=\$(cat $REDIS_PASSWORD_FILE)"
