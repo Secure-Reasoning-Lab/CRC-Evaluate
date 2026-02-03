@@ -445,8 +445,8 @@ class POVStore:
                 if cpv_id not in self.cpv_to_first_pov:
                     self.cpv_to_first_pov[cpv_id] = {
                         "pov_hash": pov_hash,
-                        "first_seen_ts": first_seen_ts,
-                        "discovery_elapsed": first_seen_ts - self.crs_run_start_time,
+                        "discovery_ts": first_seen_ts,
+                        "relative_time": first_seen_ts - self.crs_run_start_time,
                     }
 
     def get_stats(self) -> dict:
