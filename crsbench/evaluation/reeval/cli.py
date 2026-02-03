@@ -96,6 +96,12 @@ Examples:
         help="Disable incremental builds",
     )
     parser.add_argument(
+        "--per-pov-verify-timeout",
+        type=int,
+        default=None,
+        help="Timeout in seconds per POV verification (default: from config, or 180)",
+    )
+    parser.add_argument(
         "--output",
         "-o",
         type=Path,
@@ -231,6 +237,7 @@ def _reeval_bug_finding(
     source_mode: str,
     build_workers: Optional[int],
     verify_workers: Optional[int],
+    per_pov_verify_timeout: int = 180,
     *,
     force_rebuild: bool,
     use_inc_build: bool,
@@ -264,6 +271,7 @@ def _reeval_bug_finding(
 
     engine = VerificationEngine(
         oss_fuzz_path=oss_fuzz_path,
+        timeout=per_pov_verify_timeout,
         dedup_strategy=PatchBasedDedup(),
         build_workers=build_workers,
         verify_workers=verify_workers,
@@ -294,6 +302,7 @@ def _reeval_patch_generation(
     source_mode: str,
     build_workers: Optional[int],
     verify_workers: Optional[int],
+    per_pov_verify_timeout: int = 180,
     *,
     force_rebuild: bool,
     use_inc_build: bool,
@@ -334,6 +343,7 @@ def _reeval_patch_generation(
 
     engine = PatchVerificationEngine(
         oss_fuzz_path=oss_fuzz_path,
+        timeout=per_pov_verify_timeout,
         work_dir=work_dir,
         force_rebuild=force_rebuild,
         use_inc_build=use_inc_build,
@@ -392,6 +402,12 @@ def run_reeval(args: argparse.Namespace) -> int:
     source_mode = args.source
     use_inc_build = not args.no_inc_build
 
+    # Resolve per-POV verify timeout: CLI flag > config > default 180s
+    per_pov_verify_timeout = (
+        args.per_pov_verify_timeout or config.get("per_pov_verify_timeout") or 180
+    )
+    logger.info(f"Per-POV verify timeout: {per_pov_verify_timeout}s")
+
     # Discover trials
     trials = discover_trials(experiment_dir)
     if not trials:
@@ -437,6 +453,7 @@ def run_reeval(args: argparse.Namespace) -> int:
                     source_mode=source_mode,
                     build_workers=args.build_workers,
                     verify_workers=args.verify_workers,
+                    per_pov_verify_timeout=per_pov_verify_timeout,
                     force_rebuild=args.force_rebuild,
                     use_inc_build=use_inc_build,
                 )
@@ -452,6 +469,7 @@ def run_reeval(args: argparse.Namespace) -> int:
                     source_mode=source_mode,
                     build_workers=args.build_workers,
                     verify_workers=args.verify_workers,
+                    per_pov_verify_timeout=per_pov_verify_timeout,
                     force_rebuild=args.force_rebuild,
                     use_inc_build=use_inc_build,
                 )

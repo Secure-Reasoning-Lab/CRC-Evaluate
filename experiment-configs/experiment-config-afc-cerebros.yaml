@@ -26,7 +26,7 @@ max_total_time: 46800  # 13 hours total (4h build + 6h run + 2h verify + 1h buff
 build_timeout: 14400   # 4 hours for building
 run_timeout: 21600     # 6 hours for CRS execution
 verify_timeout: 7200   # 2 hours for POV verification
-per_pov_verify_timeout: 180  # 3 minutes per individual POV
+per_pov_verify_timeout: 300  # 5 minutes per individual POV
 
 # CRS Selection
 crses:
