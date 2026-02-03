@@ -3,7 +3,7 @@
 # Testing bug finding pipeline with AFC final benchmarks
 
 # Experiment Identity
-experiment: "e2e-bugfind-afc2"
+experiment: "afc-run2"
 description: "E2E bug finding - AFC final round benchmarks"
 
 # Execution Configuration

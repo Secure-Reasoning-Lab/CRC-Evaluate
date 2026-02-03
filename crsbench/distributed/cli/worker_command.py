@@ -202,7 +202,8 @@ def run_worker(args: argparse.Namespace) -> int:
 
     redis_host = resolve(
         args.redis_host,
-        worker_config.redis_host if worker_config else None,
+        (worker_config.redis_host if worker_config else None)
+        or (config.redis_host if config else None),
         "localhost",
     )
     num_workers = resolve(args.jobs, worker_config.jobs if worker_config else None, 1)

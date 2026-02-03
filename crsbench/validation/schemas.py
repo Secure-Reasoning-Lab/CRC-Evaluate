@@ -706,8 +706,10 @@ class WorkerConfig(BaseModel):
     """Distributed worker configuration."""
 
     jobs: int = Field(default=4, ge=1, description="Number of parallel jobs per worker")
-    redis_host: str = Field(
-        default="localhost", description="Redis server hostname or IP for workers"
+    redis_host: Optional[str] = Field(
+        default=None,
+        description="Redis server hostname or IP for workers. "
+        "Falls back to top-level redis_host if not set.",
     )
     continuous: bool = Field(
         default=True,
