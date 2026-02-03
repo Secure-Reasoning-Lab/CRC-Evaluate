@@ -19,7 +19,7 @@
 #   all         Push + setup + start (full deployment)
 #
 # Environment:
-#   REDIS_PASSWORD  Override Redis password (default: read from ~/.crsbench-redis-password)
+#   REDIS_PASSWORD  Override Redis password (default: read from .env)
 #
 # Examples:
 #   scripts/orchestrate-workers.sh redis-setup            # One-time Redis setup
@@ -42,7 +42,7 @@ INSTALL_DIR="/home/dongkwan/CRSBench"
 TMUX_SESSION="crsbench-worker"
 REMOTE_EXPERIMENT_DIR="/home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc2"
 LOCAL_COLLECT_DIR="/home/dongkwan/crsbench_eval_given_fuzzer/collected-results"
-REDIS_PASSWORD_FILE="$HOME/.crsbench-redis-password"
+ENV_FILE="$REPO_DIR/.env"
 
 # Default worker machines
 ALL_MACHINES=(cerebros ramjet)
@@ -62,17 +62,21 @@ SSH_OPTS="-A -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
 log() { echo "[orchestrate] $*"; }
 err() { echo "[orchestrate] ERROR: $*" >&2; }
 
+load_env() {
+    # Source .env if it exists and REDIS_PASSWORD not already set
+    if [[ -z "${REDIS_PASSWORD:-}" ]] && [[ -f "$ENV_FILE" ]]; then
+        # shellcheck disable=SC1090
+        source "$ENV_FILE"
+    fi
+}
+
 get_redis_password() {
-    # Prefer env var, then password file
+    load_env
     if [[ -n "${REDIS_PASSWORD:-}" ]]; then
         echo "$REDIS_PASSWORD"
         return
     fi
-    if [[ -f "$REDIS_PASSWORD_FILE" ]]; then
-        cat "$REDIS_PASSWORD_FILE"
-        return
-    fi
-    err "Redis password not found. Set REDIS_PASSWORD or run: scripts/orchestrate-workers.sh redis-setup"
+    err "Redis password not found. Run: scripts/orchestrate-workers.sh redis-setup"
     exit 1
 }
 
@@ -125,9 +129,15 @@ cmd_redis_setup() {
         exit 1
     fi
 
-    # Generate a random password
-    local password
-    password=$(openssl rand -base64 24)
+    # Reuse existing password from .env, or generate a new one
+    load_env
+    local password="${REDIS_PASSWORD:-}"
+    if [[ -z "$password" ]]; then
+        password=$(openssl rand -base64 24)
+        log "  Generated new Redis password"
+    else
+        log "  Reusing existing password from .env"
+    fi
 
     # Stop and remove existing container if present
     if docker ps -a --format '{{.Names}}' | grep -q "^${container_name}$"; then
@@ -155,16 +165,15 @@ cmd_redis_setup() {
         sleep 1
     done
 
-    # Save password to file (used by get_redis_password helper)
-    echo -n "$password" > "$REDIS_PASSWORD_FILE"
-    chmod 600 "$REDIS_PASSWORD_FILE"
+    # Save to .env
+    echo "REDIS_PASSWORD=$password" > "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
 
     log "  Container:  $container_name (redis:latest)"
     log "  Listening:  0.0.0.0:6379"
-    log "  Password:   saved to $REDIS_PASSWORD_FILE"
+    log "  Password:   saved to $ENV_FILE"
     log ""
-    log "  Workers:  password is passed automatically by 'start' command"
-    log "  Cyclonus: export REDIS_PASSWORD=\$(cat $REDIS_PASSWORD_FILE)"
+    log "  Usage:  uv run crsbench ...  (.env is loaded automatically)"
 }
 
 cmd_push() {
@@ -195,14 +204,15 @@ cmd_setup() {
         local logfile="$logdir/$machine.log"
 
         log "  Starting setup on $machine ($host)..."
-        # Copy script to remote then execute (preserves SSH agent forwarding
-        # for git operations; piping via stdin breaks nested SSH)
+        # Copy script and .env to remote
         scp -q $SSH_OPTS "$SETUP_SCRIPT" "$host:/tmp/setup-remote-worker.sh"
+        if [[ -f "$ENV_FILE" ]]; then
+            scp -q $SSH_OPTS "$ENV_FILE" "$host:$INSTALL_DIR/.env"
+        fi
         # Pass REDIS_PASSWORD if available so setup can test connectivity
+        load_env
         local redis_env=""
-        if [[ -f "$REDIS_PASSWORD_FILE" ]]; then
-            redis_env="REDIS_PASSWORD=$(cat "$REDIS_PASSWORD_FILE")"
-        elif [[ -n "${REDIS_PASSWORD:-}" ]]; then
+        if [[ -n "${REDIS_PASSWORD:-}" ]]; then
             redis_env="REDIS_PASSWORD=$REDIS_PASSWORD"
         fi
         ssh $SSH_OPTS "$host" "$redis_env bash /tmp/setup-remote-worker.sh $machine" \

@@ -2457,6 +2457,11 @@ def _generate_html_json_reports(experiment_name: str, config) -> None:
 
 def main() -> None:
     """Main entry point for the experiment runner."""
+    # Load .env file (REDIS_PASSWORD, etc.) if present
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
     # Parse arguments
     args = parse_arguments()
 
