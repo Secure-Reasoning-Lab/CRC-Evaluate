@@ -202,6 +202,32 @@ def _resolve_output_dir(
     return output_base / relative
 
 
+def _load_crs_run_start_time(store_dir: Path) -> Optional[float]:
+    """Load crs_run_start_time from an existing pov_store.json.
+
+    Re-eval creates a fresh POVStore but needs the original CRS start time
+    to compute correct relative_time values.
+
+    Args:
+        store_dir: Directory containing pov_store.json
+
+    Returns:
+        crs_run_start_time if found, None otherwise
+    """
+    store_path = store_dir / "pov_store.json"
+    if not store_path.exists():
+        return None
+    try:
+        data = json.loads(store_path.read_text())
+        ts = data.get("crs_run_start_time")
+        if ts is not None:
+            logger.debug(f"Loaded crs_run_start_time={ts} from {store_path}")
+        return ts
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"Failed to read crs_run_start_time from {store_path}: {e}")
+        return None
+
+
 def _save_pov_results(results: list, dest_dir: Path) -> Path:
     """Save POV verification results to JSON.
 
@@ -302,7 +328,10 @@ def _reeval_bug_finding(
         logger.info(f"Wrote {len(output.results)} POV results to {path}")
 
         # Populate POVStore with blobs and crash logs (same as live evaluator)
-        store = POVStore(dest_dir / "povs")
+        # Preserve crs_run_start_time from original run for correct relative_time
+        povs_dir = dest_dir / "povs"
+        crs_start = _load_crs_run_start_time(povs_dir)
+        store = POVStore(povs_dir, crs_run_start_time=crs_start)
         for result in output.results:
             if not result.pov_id:
                 continue
@@ -459,7 +488,10 @@ def _drain_all_async_results(
     for state in trials:
         tid = state.trial_id
         trial_id_map[tid] = state
-        trial_stores[tid] = POVStore(state.dest_dir / "povs")
+        # Preserve crs_run_start_time from original run
+        povs_dir = state.dest_dir / "povs"
+        crs_start = _load_crs_run_start_time(povs_dir)
+        trial_stores[tid] = POVStore(povs_dir, crs_run_start_time=crs_start)
         trial_results[tid] = []
         all_job_ids.extend(state.job_ids)
 
