@@ -1482,8 +1482,7 @@ def run_experiment_local(
 
         # Build trial_id with random suffix
         # Must be lowercase for Docker Compose project name compatibility
-        harness_name_stem = Path(bh.harness.name).stem
-        raw_trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
+        raw_trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{bh.harness.name}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
         trial_id = sanitize_trial_id(raw_trial_id)
 
         result = run_crs_trial(
@@ -2265,8 +2264,7 @@ def run_experiment_distributed(
 
         # Build trial_id at enqueue time with random suffix
         # Must be lowercase for Docker Compose project name compatibility
-        harness_name_stem = Path(bh.harness.name).stem
-        raw_trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
+        raw_trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{bh.harness.name}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
         trial_id = sanitize_trial_id(raw_trial_id)
 
         job = queue.enqueue(

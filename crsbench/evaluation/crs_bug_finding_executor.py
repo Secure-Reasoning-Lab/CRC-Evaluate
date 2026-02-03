@@ -357,7 +357,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             )
 
             # Cleanup other harness files to optimize disk usage
-            harness_name = Path(harness.name).stem
+            harness_name = harness.name
             sanitizer = self.config.get("sanitizer", "address")
             self.cleanup_other_harnesses(
                 trial_output_dir, harness_name, project_name, sanitizer
