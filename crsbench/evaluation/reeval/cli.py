@@ -19,6 +19,7 @@ import yaml
 
 from crsbench.evaluation.verification.models import (
     PatchVerificationOutput,
+    PovVerificationStatus,
 )
 from crsbench.utils.logger import get_logger
 
@@ -263,6 +264,8 @@ def _reeval_bug_finding(
         PatchBasedDedup,
         VerificationEngine,
     )
+    from crsbench.evaluation.verification.pov.store import POVStore
+    from crsbench.evaluation.verification.utils import compute_content_hash
 
     pov_dir = trial_dir / "output" / "povs"
     if not pov_dir.exists():
@@ -289,6 +292,43 @@ def _reeval_bug_finding(
     if output.results:
         path = _save_pov_results(output.results, dest_dir)
         logger.info(f"Wrote {len(output.results)} POV results to {path}")
+
+        # Populate POVStore with blobs and crash logs (same as live evaluator)
+        store = POVStore(dest_dir / "povs")
+        for result in output.results:
+            if not result.pov_id:
+                continue
+            pov_file = pov_dir / result.pov_id
+            if not pov_file.exists():
+                continue
+            pov_hash = compute_content_hash(pov_file)
+
+            store.add_pov(
+                pov_file, result.status, result.cpv_matched, pov_hash=pov_hash
+            )
+
+            # Store per-variant crash logs (for all statuses)
+            if result.crash_info and "logs" in result.crash_info:
+                for variant_name, crash_log in result.crash_info["logs"].items():
+                    store.store_crash_log(
+                        pov_hash,
+                        crash_log,
+                        result.status,
+                        result.cpv_matched,
+                        variant_name=variant_name,
+                    )
+
+            # Store POV blob for CPV matches only
+            if result.status == PovVerificationStatus.CPV:
+                store.store_unique_pov(
+                    pov_file, pov_hash, result.status, result.cpv_matched
+                )
+
+        store.save()
+        logger.info(
+            f"Stored POV results to {dest_dir / 'povs'}: "
+            f"{store.get_stats()}"
+        )
 
     return len(output.results)
 
