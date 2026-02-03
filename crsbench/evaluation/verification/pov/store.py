@@ -49,7 +49,9 @@ class POVStore:
     Attributes:
         store_dir: Directory for storing POV data (trial-N/povs/)
         povs: Hash-to-POVEntry mapping
-        cpv_to_first_pov: Maps each CPV to discovery info {pov_hash, discovery_ts, relative_time}
+        cpv_to_first_pov: Maps each CPV to {pov_hash, discovery_ts, relative_time}
+            discovery_ts/relative_time use file_mtime (CRS creation time) when available,
+            falling back to evaluator discovery time.
         crs_run_start_time: Timestamp when CRS started running (for relative time calculation)
     """
 
@@ -180,13 +182,15 @@ class POVStore:
                 verification_duration=verification_duration,
             )
 
-            # Track first POV for each CPV with discovery timestamp
+            # Track first POV for each CPV
+            # Prefer file_mtime (CRS creation time) over ts (discovery time)
+            cpv_ts = file_mtime if file_mtime is not None else ts
             for cpv_id in cpv_matched:
                 if cpv_id not in self.cpv_to_first_pov:
                     self.cpv_to_first_pov[cpv_id] = {
                         "pov_hash": pov_hash,
-                        "discovery_ts": ts,
-                        "relative_time": ts - self.crs_run_start_time,
+                        "discovery_ts": cpv_ts,
+                        "relative_time": cpv_ts - self.crs_run_start_time,
                     }
 
             # Log with relative time from CRS start
@@ -440,13 +444,15 @@ class POVStore:
                 cpv_matched=cpv_matched,
             )
 
-            # Track CPV discovery using original first_seen_ts
+            # Track CPV discovery
+            # Prefer file_mtime (CRS creation time) over first_seen_ts (poll time)
+            cpv_ts = file_mtime if file_mtime is not None else first_seen_ts
             for cpv_id in cpv_matched:
                 if cpv_id not in self.cpv_to_first_pov:
                     self.cpv_to_first_pov[cpv_id] = {
                         "pov_hash": pov_hash,
-                        "discovery_ts": first_seen_ts,
-                        "relative_time": first_seen_ts - self.crs_run_start_time,
+                        "discovery_ts": cpv_ts,
+                        "relative_time": cpv_ts - self.crs_run_start_time,
                     }
 
     def get_stats(self) -> dict:
