@@ -264,23 +264,23 @@ class POVVerificationManager:
                 # Add to store directly (no POV path — it was enqueued by content)
                 self.store.add_pov_by_id(result.verdict.pov_id, status, cpv_matched)
 
+                # Store crash logs for ALL statuses (not just CPV)
+                pov_hash = self.store._extract_hash(result.verdict.pov_id)
+                for variant_name, crash_log in result.verdict.crash_logs.items():
+                    self.store.store_crash_log(
+                        pov_hash,
+                        crash_log,
+                        status,
+                        cpv_matched,
+                        variant_name=variant_name,
+                    )
+
                 if status == PovVerificationStatus.CPV:
-                    # Store POV blob from the local file still on disk
-                    pov_hash = self.store._extract_hash(result.verdict.pov_id)
+                    # Store POV blob from the local file still on disk (CPV only)
                     pov_path = self._pov_hash_to_path.get(pov_hash)
                     if pov_path and pov_path.exists():
                         self.store.store_unique_pov(
                             pov_path, pov_hash, status, cpv_matched
-                        )
-
-                    # Store crash logs from verdict
-                    for variant_name, crash_log in result.verdict.crash_logs.items():
-                        self.store.store_crash_log(
-                            pov_hash,
-                            crash_log,
-                            status,
-                            cpv_matched,
-                            variant_name=variant_name,
                         )
 
                     for cpv_id in cpv_matched:
@@ -409,24 +409,23 @@ class POVVerificationManager:
             pov_path, result.status, result.cpv_matched, pov_hash=pov_hash
         )
 
-        # Store POV file and crash logs for successful CPV verifications
+        # Store per-variant crash logs for ALL statuses (not just CPV)
+        if result.crash_info and "logs" in result.crash_info:
+            crash_logs = result.crash_info["logs"]
+            for variant_name, crash_log in crash_logs.items():
+                self.store.store_crash_log(
+                    pov_hash,
+                    crash_log,
+                    result.status,
+                    result.cpv_matched,
+                    variant_name=variant_name,
+                )
+
+        # Store POV blob for CPV matches only
         if result.status == PovVerificationStatus.CPV:
-            # Copy POV file to category-specific blobs directory
             self.store.store_unique_pov(
                 pov_path, pov_hash, result.status, result.cpv_matched
             )
-
-            # Store per-variant crash logs if available
-            if result.crash_info and "logs" in result.crash_info:
-                crash_logs = result.crash_info["logs"]
-                for variant_name, crash_log in crash_logs.items():
-                    self.store.store_crash_log(
-                        pov_hash,
-                        crash_log,
-                        result.status,
-                        result.cpv_matched,
-                        variant_name=variant_name,
-                    )
 
         # Update counters based on result
         if result.status == PovVerificationStatus.CPV:

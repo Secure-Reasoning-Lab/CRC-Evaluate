@@ -355,7 +355,9 @@ def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
             triggered_bug=result.status == PovVerificationStatus.CPV,
             status=result.status.value,
             cpv_matches=result.cpv_matched,
-            variant_results={},
+            variant_results=result.crash_info.get("variant_crashed", {})
+            if result.crash_info
+            else {},
             crash_logs=crash_logs,
             error=result.details
             if result.status == PovVerificationStatus.ERROR

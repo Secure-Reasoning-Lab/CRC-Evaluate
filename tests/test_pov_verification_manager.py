@@ -926,8 +926,10 @@ class TestAsyncMode:
         assert len(stored_logs) == 1
 
     @patch("crsbench.distributed.verify_queue.poll_single_pov_verdicts")
-    def test_poll_no_blob_or_logs_for_non_cpv(self, mock_poll, tmp_path: Path) -> None:
-        """Non-CPV verdicts do not store blobs or crash logs."""
+    def test_poll_no_blob_for_non_cpv_but_logs_stored(
+        self, mock_poll, tmp_path: Path
+    ) -> None:
+        """Non-CPV verdicts do not store blobs but DO store crash logs."""
         from crsbench.distributed.evaluator_jobs import PovVerdict, SinglePovResult
 
         verdict = PovVerdict(
@@ -950,12 +952,12 @@ class TestAsyncMode:
 
         manager._poll_pending_verdicts()
 
-        # No blobs or crash_logs should be stored for non-CPV results
+        # No blobs for non-CPV, but crash logs ARE stored
         povs_dir = tmp_path / "trial-1" / "povs"
         stored_blobs = list(povs_dir.rglob("*.blob"))
         stored_logs = list(povs_dir.rglob("*.log"))
-        assert len(stored_blobs) == 0
-        assert len(stored_logs) == 0
+        assert len(stored_blobs) == 0  # No blobs for non-CPV
+        assert len(stored_logs) == 1  # Crash logs ARE stored for non-CPV
 
     @patch("crsbench.distributed.verify_queue.poll_single_pov_verdicts")
     def test_poll_handles_unintended_crash(self, mock_poll, tmp_path: Path) -> None:

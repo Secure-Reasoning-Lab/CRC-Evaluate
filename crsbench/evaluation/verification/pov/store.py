@@ -78,8 +78,9 @@ class POVStore:
         self.store_dir.mkdir(parents=True, exist_ok=True)
         # Create base directories
         (self.store_dir / "cpvs").mkdir(exist_ok=True)
-        (self.store_dir / "unintended" / "blobs").mkdir(parents=True, exist_ok=True)
-        (self.store_dir / "unintended" / "crash_logs").mkdir(exist_ok=True)
+        for status_dir in ("unintended", "not_vulnerable", "error"):
+            (self.store_dir / status_dir / "blobs").mkdir(parents=True, exist_ok=True)
+            (self.store_dir / status_dir / "crash_logs").mkdir(exist_ok=True)
         (self.store_dir / "snapshots").mkdir(exist_ok=True)
 
     def _get_category_dir(
@@ -103,8 +104,14 @@ class POVStore:
             (cpv_dir / "crash_logs").mkdir(exist_ok=True)
             return cpv_dir
 
-        # NOT_VULNERABLE, UNINTENDED_CRASH, ERROR, or other -> unintended
-        return self.store_dir / "unintended"
+        # Each status gets its own directory
+        status_dir_map = {
+            PovVerificationStatus.UNINTENDED_CRASH: "unintended",
+            PovVerificationStatus.NOT_VULNERABLE: "not_vulnerable",
+            PovVerificationStatus.ERROR: "error",
+        }
+        dirname = status_dir_map.get(status, status.value)
+        return self.store_dir / dirname
 
     def add_pov(
         self,

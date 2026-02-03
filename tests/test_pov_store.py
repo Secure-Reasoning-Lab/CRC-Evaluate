@@ -22,8 +22,9 @@ class TestPOVStoreInit:
 
         assert store_dir.exists()
         assert (store_dir / "cpvs").exists()
-        assert (store_dir / "unintended" / "blobs").exists()
-        assert (store_dir / "unintended" / "crash_logs").exists()
+        for status_dir in ("unintended", "not_vulnerable", "error"):
+            assert (store_dir / status_dir / "blobs").exists()
+            assert (store_dir / status_dir / "crash_logs").exists()
         assert (store_dir / "snapshots").exists()
 
     def test_initial_state_empty(self, tmp_path: Path) -> None:
