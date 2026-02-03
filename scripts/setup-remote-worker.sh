@@ -56,11 +56,14 @@ echo ""
 echo "[2/9] Configuring git SSH access for submodules..."
 
 # Submodules are configured with HTTPS URLs but the repos may be private.
-# Rewrite HTTPS GitHub URLs to SSH so we can use SSH keys instead of PAT.
+# Rewrite only our org's HTTPS URLs to SSH so we can use SSH keys.
+# Scoped to sslab-gatech so public repos from other orgs still use HTTPS.
 # Must be done BEFORE any git fetch/pull/clone so submodules use SSH too.
-if ! git config --global --get url."git@github.com:".insteadOf &>/dev/null; then
-    git config --global url."git@github.com:".insteadOf "https://github.com/"
-    echo "  Configured HTTPS→SSH URL rewrite for github.com"
+if ! git config --global --get url."git@github.com:sslab-gatech/".insteadOf &>/dev/null; then
+    # Remove old broad rewrite if present
+    git config --global --unset url."git@github.com:".insteadOf 2>/dev/null || true
+    git config --global url."git@github.com:sslab-gatech/".insteadOf "https://github.com/sslab-gatech/"
+    echo "  Configured HTTPS→SSH URL rewrite for sslab-gatech repos"
 else
     echo "  HTTPS→SSH URL rewrite already configured"
 fi

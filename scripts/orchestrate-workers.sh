@@ -41,7 +41,6 @@ SETUP_SCRIPT="$SCRIPT_DIR/setup-remote-worker.sh"
 INSTALL_DIR="/home/dongkwan/CRSBench"
 TMUX_SESSION="crsbench-worker"
 REMOTE_EXPERIMENT_DIR="/home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc2"
-LOCAL_COLLECT_DIR="/home/dongkwan/crsbench_eval_given_fuzzer/collected-results"
 ENV_FILE="$REPO_DIR/.env"
 
 # Default worker machines
@@ -365,32 +364,29 @@ cmd_collect() {
 
     log "Collecting results from: ${machines[*]}"
     log "  Remote source: $REMOTE_EXPERIMENT_DIR"
-    log "  Local dest:    $LOCAL_COLLECT_DIR"
+    log "  Local dest:    $REMOTE_EXPERIMENT_DIR (merged into orchestrator dir)"
 
-    mkdir -p "$LOCAL_COLLECT_DIR"
+    mkdir -p "$REMOTE_EXPERIMENT_DIR"
 
     for machine in "${machines[@]}"; do
         local host
         host=$(get_hostname "$machine")
-        local dest="$LOCAL_COLLECT_DIR/$machine"
 
-        mkdir -p "$dest"
         log "  Syncing $machine..."
 
-        # Rsync experiment data, excluding build artifacts
+        # Rsync experiment data into the orchestrator's experiment dir.
+        # Trial paths are unique per benchmark/harness/trial so no conflicts.
         rsync -az --progress \
             --exclude='crs-build/' \
             --exclude='.oss-bugfind/' \
             -e "ssh $SSH_OPTS" \
             "$host:$REMOTE_EXPERIMENT_DIR/" \
-            "$dest/"
+            "$REMOTE_EXPERIMENT_DIR/"
 
-        log "  $machine: sync complete → $dest"
+        log "  $machine: sync complete"
     done
 
-    # Show summary
-    log "Collection complete. Results in $LOCAL_COLLECT_DIR:"
-    du -sh "$LOCAL_COLLECT_DIR"/*/ 2>/dev/null || true
+    log "Collection complete. Results merged into $REMOTE_EXPERIMENT_DIR"
 }
 
 cmd_all() {
