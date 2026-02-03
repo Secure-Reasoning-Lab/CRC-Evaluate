@@ -123,6 +123,15 @@ cmd_redis_setup() {
         exit 1
     fi
 
+    # Ensure redis-server is running
+    if ! redis-cli ping &>/dev/null; then
+        log "  Redis not running, starting redis-server..."
+        sudo systemctl start redis-server 2>/dev/null \
+            || sudo service redis-server start 2>/dev/null \
+            || { err "Failed to start redis-server"; exit 1; }
+        sleep 1
+    fi
+
     # Find Redis config
     local redis_conf=""
     for candidate in /etc/redis/redis.conf /etc/redis.conf; do
