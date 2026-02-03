@@ -225,6 +225,7 @@ class TestRunReeval:
             verify_workers=None,
             force_rebuild=False,
             no_inc_build=False,
+            per_pov_verify_timeout=None,
             output=output,
             verbose=False,
         )
