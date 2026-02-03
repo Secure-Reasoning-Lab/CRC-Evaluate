@@ -15,6 +15,7 @@ import argparse
 import json
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -337,19 +338,31 @@ def _reeval_bug_finding(
     return len(output.results)
 
 
-def _reeval_bug_finding_async(
+@dataclass
+class _AsyncTrialState:
+    """Per-trial tracking data accumulated during the enqueue phase."""
+
+    trial_dir: Path
+    benchmark_name: str
+    harness: str
+    dest_dir: Path
+    job_ids: list[str] = field(default_factory=list)
+    pov_hash_to_path: dict[str, Path] = field(default_factory=dict)
+
+    @property
+    def trial_id(self) -> str:
+        return f"{self.benchmark_name}__{self.harness}__{self.trial_dir.name}"
+
+
+def _enqueue_trial_povs(
     trial_dir: Path,
     benchmark_name: str,
     harness: str,
     dest_dir: Path,
     verify_queue: rq.Queue,
-    redis_host: str,
     experiment_name: str,
-) -> int:
-    """Re-evaluate a bug_finding trial via async Redis verify queue.
-
-    Enqueues POVs to the same Redis queue used by live evaluator workers,
-    polls for results, and stores them via POVStore.
+) -> Optional[_AsyncTrialState]:
+    """Enqueue all POVs for a single trial without polling.
 
     Args:
         trial_dir: Trial directory with CRS outputs
@@ -357,26 +370,19 @@ def _reeval_bug_finding_async(
         harness: Harness name
         dest_dir: Where to write results
         verify_queue: RQ verify queue instance
-        redis_host: Redis server hostname
         experiment_name: Experiment identifier
 
     Returns:
-        Number of results produced
+        Trial state with enqueued job IDs, or None if nothing to enqueue
     """
-    from crsbench.distributed.evaluator_jobs import SinglePovResult
-    from crsbench.distributed.verify_queue import (
-        enqueue_single_pov,
-        poll_single_pov_verdicts,
-    )
-    from crsbench.evaluation.verification.pov.store import POVStore
+    from crsbench.distributed.verify_queue import enqueue_single_pov
     from crsbench.evaluation.verification.utils import compute_content_hash
 
     pov_dir = trial_dir / "output" / "povs"
     if not pov_dir.exists():
         logger.warning(f"No POV directory found: {pov_dir}")
-        return 0
+        return None
 
-    # Discover POV files
     pov_files = [
         p
         for p in sorted(pov_dir.iterdir())
@@ -384,20 +390,21 @@ def _reeval_bug_finding_async(
     ]
     if not pov_files:
         logger.warning(f"No POV files found in {pov_dir}")
-        return 0
+        return None
 
-    # Construct trial_id from directory structure
-    trial_id = f"{benchmark_name}__{harness}__{trial_dir.name}"
-
-    # Enqueue all POVs
-    pending_job_ids: list[str] = []
-    pov_hash_to_path: dict[str, Path] = {}
+    state = _AsyncTrialState(
+        trial_dir=trial_dir,
+        benchmark_name=benchmark_name,
+        harness=harness,
+        dest_dir=dest_dir,
+    )
+    trial_id = state.trial_id
 
     for pov_file in pov_files:
         pov_data = pov_file.read_bytes()
         pov_hash = compute_content_hash(pov_file)
         pov_id = f"{pov_file.name}:{pov_hash}"
-        pov_hash_to_path[pov_hash] = pov_file
+        state.pov_hash_to_path[pov_hash] = pov_file
 
         job_id = enqueue_single_pov(
             verify_queue=verify_queue,
@@ -409,24 +416,56 @@ def _reeval_bug_finding_async(
             pov_data=pov_data,
         )
         if job_id:
-            pending_job_ids.append(job_id)
+            state.job_ids.append(job_id)
             logger.debug(f"Enqueued POV {pov_id} as job {job_id}")
         else:
             logger.warning(f"Failed to enqueue POV {pov_file.name}")
 
-    if not pending_job_ids:
+    if not state.job_ids:
         logger.warning("No POVs were enqueued")
-        return 0
+        return None
 
     logger.info(
-        f"Enqueued {len(pending_job_ids)} POVs for async verification "
-        f"(trial {trial_id})"
+        f"Enqueued {len(state.job_ids)} POVs for async verification (trial {trial_id})"
     )
+    return state
 
-    # Poll for results until all jobs complete
-    store = POVStore(dest_dir / "povs")
-    verification_results: list[PovVerificationResult] = []
-    remaining = pending_job_ids
+
+def _drain_all_async_results(
+    trials: list[_AsyncTrialState],
+    redis_host: str,
+) -> int:
+    """Poll all enqueued trials in a single unified loop.
+
+    Routes completed results to the correct trial's POVStore via trial_id.
+
+    Args:
+        trials: All trial states with enqueued jobs
+        redis_host: Redis server hostname
+
+    Returns:
+        Total number of results processed across all trials
+    """
+    from crsbench.distributed.evaluator_jobs import SinglePovResult
+    from crsbench.distributed.verify_queue import poll_single_pov_verdicts
+    from crsbench.evaluation.verification.pov.store import POVStore
+
+    # Build trial_id → state lookup and per-trial stores
+    trial_id_map: dict[str, _AsyncTrialState] = {}
+    trial_stores: dict[str, POVStore] = {}
+    trial_results: dict[str, list[PovVerificationResult]] = {}
+
+    all_job_ids: list[str] = []
+    for state in trials:
+        tid = state.trial_id
+        trial_id_map[tid] = state
+        trial_stores[tid] = POVStore(state.dest_dir / "povs")
+        trial_results[tid] = []
+        all_job_ids.extend(state.job_ids)
+
+    logger.info(f"Draining {len(all_job_ids)} async jobs across {len(trials)} trials")
+
+    remaining = all_job_ids
 
     while remaining:
         completed, remaining = poll_single_pov_verdicts(redis_host, remaining)
@@ -434,17 +473,21 @@ def _reeval_bug_finding_async(
         for result_dict in completed:
             try:
                 result = SinglePovResult.from_dict(result_dict)
+                tid = result.trial_id
+                state = trial_id_map.get(tid)
+                if not state:
+                    logger.warning(f"Cannot route result for trial_id={tid}, skipping")
+                    continue
+
+                store = trial_stores[tid]
                 status = PovVerificationStatus(result.verdict.status)
                 cpv_matched = result.verdict.cpv_matches
                 pov_hash = POVStore._extract_hash(result.verdict.pov_id)
-                pov_path = pov_hash_to_path.get(pov_hash)
+                pov_path = state.pov_hash_to_path.get(pov_hash)
 
-                # Use add_pov (not add_pov_by_id) since we have local POV files
-                # This preserves file_mtime from the original CRS run
                 if pov_path and pov_path.exists():
                     store.add_pov(pov_path, status, cpv_matched, pov_hash=pov_hash)
 
-                # Store crash logs for all statuses
                 for variant_name, crash_log in result.verdict.crash_logs.items():
                     store.store_crash_log(
                         pov_hash,
@@ -454,20 +497,18 @@ def _reeval_bug_finding_async(
                         variant_name=variant_name,
                     )
 
-                # Store POV blob for CPV matches only
                 if status == PovVerificationStatus.CPV:
                     if pov_path and pov_path.exists():
                         store.store_unique_pov(pov_path, pov_hash, status, cpv_matched)
 
-                # Build PovVerificationResult for _save_pov_results
                 crash_info = None
                 if result.verdict.crash_logs:
                     crash_info = {"logs": result.verdict.crash_logs}
 
-                verification_results.append(
+                trial_results[tid].append(
                     PovVerificationResult(
                         status=status,
-                        benchmark=benchmark_name,
+                        benchmark=state.benchmark_name,
                         cpv_matched=cpv_matched,
                         pov_id=result.verdict.pov_id,
                         crash_info=crash_info,
@@ -484,15 +525,24 @@ def _reeval_bug_finding_async(
         if remaining:
             time.sleep(2)
 
-    # Save results
-    if verification_results:
-        path = _save_pov_results(verification_results, dest_dir)
-        logger.info(f"Wrote {len(verification_results)} POV results to {path}")
+    # Save per-trial results
+    total = 0
+    for state in trials:
+        tid = state.trial_id
+        results = trial_results[tid]
+        store = trial_stores[tid]
 
-        store.save()
-        logger.info(f"Stored POV results to {dest_dir / 'povs'}: {store.get_stats()}")
+        if results:
+            path = _save_pov_results(results, state.dest_dir)
+            logger.info(f"Wrote {len(results)} POV results to {path}")
+            store.save()
+            logger.info(
+                f"Stored POV results to {state.dest_dir / 'povs'}: {store.get_stats()}"
+            )
 
-    return len(verification_results)
+        total += len(results)
+
+    return total
 
 
 def _reeval_patch_generation(
@@ -641,6 +691,7 @@ def run_reeval(args: argparse.Namespace) -> int:
 
     total_results = 0
     errors = 0
+    async_trials: list[_AsyncTrialState] = []
 
     for trial in valid_trials:
         trial_dir = trial.trial_dir
@@ -664,29 +715,31 @@ def run_reeval(args: argparse.Namespace) -> int:
         try:
             if mode == TrialMode.bug_finding:
                 if verify_queue and redis_host:
-                    count = _reeval_bug_finding_async(
+                    # Phase 1: enqueue only, defer polling
+                    state = _enqueue_trial_povs(
                         trial_dir=trial_dir,
                         benchmark_name=benchmark_name,
                         harness=harness,
                         dest_dir=dest_dir,
                         verify_queue=verify_queue,
-                        redis_host=redis_host,
                         experiment_name=experiment_name,
                     )
-                else:
-                    count = _reeval_bug_finding(
-                        trial_dir=trial_dir,
-                        benchmark_path=benchmark_path,
-                        oss_fuzz_path=oss_fuzz_path,
-                        harness=harness,
-                        dest_dir=dest_dir,
-                        source_mode=source_mode,
-                        build_workers=args.build_workers,
-                        verify_workers=args.verify_workers,
-                        per_pov_verify_timeout=per_pov_verify_timeout,
-                        force_rebuild=args.force_rebuild,
-                        use_inc_build=use_inc_build,
-                    )
+                    if state:
+                        async_trials.append(state)
+                    continue
+                count = _reeval_bug_finding(
+                    trial_dir=trial_dir,
+                    benchmark_path=benchmark_path,
+                    oss_fuzz_path=oss_fuzz_path,
+                    harness=harness,
+                    dest_dir=dest_dir,
+                    source_mode=source_mode,
+                    build_workers=args.build_workers,
+                    verify_workers=args.verify_workers,
+                    per_pov_verify_timeout=per_pov_verify_timeout,
+                    force_rebuild=args.force_rebuild,
+                    use_inc_build=use_inc_build,
+                )
                 total_results += count
 
             elif mode == TrialMode.patch_generation:
@@ -713,6 +766,11 @@ def run_reeval(args: argparse.Namespace) -> int:
         except Exception:
             logger.exception(f"Error re-evaluating trial {trial_dir}")
             errors += 1
+
+    # Phase 2: drain all async results in a single unified poll loop
+    # async_trials is non-empty only when redis_host was truthy (str)
+    if async_trials and redis_host:
+        total_results += _drain_all_async_results(async_trials, redis_host)
 
     logger.info(
         f"Re-evaluation complete: {total_results} results from "
