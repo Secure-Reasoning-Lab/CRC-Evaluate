@@ -515,6 +515,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 diff_path=diff_path,
                 execution_time=execution_time,
                 returncode=returncode,
+                timed_out=timed_out,
                 stdout=stdout,
                 stderr=stderr,
             )
@@ -1100,6 +1101,8 @@ class CRSBugFindingExecutor(CRSExecutor):
         returncode: int,
         stdout: str,
         stderr: str,
+        *,
+        timed_out: bool = False,
     ) -> None:
         """Store execution metadata to trial directory.
 
@@ -1133,8 +1136,8 @@ class CRSBugFindingExecutor(CRSExecutor):
             "command": " ".join(cmd),
             "execution": {
                 "returncode": returncode,
-                "success": returncode == 0,
-                "timeout": returncode == 124,
+                "success": returncode == 0 or timed_out,
+                "timeout": timed_out,
             },
             "hints": {
                 "enabled": hints_path is not None,
