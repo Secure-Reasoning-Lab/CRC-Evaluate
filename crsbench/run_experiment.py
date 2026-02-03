@@ -1600,7 +1600,12 @@ def _write_orchestrator_marker(
 
 
 def monitor_jobs(
-    queue, job_list: List, experiment_name: str, config: ExperimentConfig
+    queue,
+    job_list: List,
+    experiment_name: str,
+    config: ExperimentConfig,
+    *,
+    disk_skipped: int = 0,
 ) -> List[TrialResult]:
     """Monitor job progress and display status.
 
@@ -1609,6 +1614,7 @@ def monitor_jobs(
         job_list: List of enqueued RQ jobs
         experiment_name: Experiment identifier
         config: Experiment configuration (for writing orchestrator markers)
+        disk_skipped: Number of trials skipped due to existing .success markers
 
     Returns:
         List of TrialResult objects
@@ -1620,12 +1626,21 @@ def monitor_jobs(
         logger.warning("Rich library not available, using basic progress display")
 
     if rich_available:
-        return _monitor_jobs_rich(queue, job_list, experiment_name, config)
-    return _monitor_jobs_basic(queue, job_list, experiment_name, config)
+        return _monitor_jobs_rich(
+            queue, job_list, experiment_name, config, disk_skipped=disk_skipped
+        )
+    return _monitor_jobs_basic(
+        queue, job_list, experiment_name, config, disk_skipped=disk_skipped
+    )
 
 
 def _monitor_jobs_basic(
-    queue, job_list: List, experiment_name: str, config: ExperimentConfig
+    queue,
+    job_list: List,
+    experiment_name: str,
+    config: ExperimentConfig,
+    *,
+    disk_skipped: int = 0,
 ) -> List[TrialResult]:
     """Basic job monitoring without Rich UI."""
     from crsbench.distributed.queue import get_queue_stats
@@ -1642,14 +1657,18 @@ def _monitor_jobs_basic(
         # Display stats
         log_section(f"Experiment: {experiment_name}", width=60)
         logger.info(f"Workers connected: {stats.get('workers', 0)}")
+        status_dict = {
+            "queued": stats["queued"],
+            "started": stats["started"],
+            "finished": stats["finished"],
+            "failed": stats["failed"],
+        }
+        if disk_skipped > 0:
+            status_dict["skipped (disk)"] = disk_skipped
+        status_dict["total"] = len(job_list) + disk_skipped
         log_summary(
             "Queue Status",
-            {
-                "queued": stats["queued"],
-                "started": stats["started"],
-                "finished": stats["finished"],
-                "failed": stats["failed"],
-            },
+            status_dict,
             show_percentage=False,
             level="debug",
         )
@@ -1763,7 +1782,12 @@ def _monitor_jobs_basic(
 
 
 def _monitor_jobs_rich(
-    queue, job_list: List, experiment_name: str, config: ExperimentConfig
+    queue,
+    job_list: List,
+    experiment_name: str,
+    config: ExperimentConfig,
+    *,
+    disk_skipped: int = 0,
 ) -> List[TrialResult]:
     """Monitor jobs with Rich UI."""
     from rich.console import Console, Group
@@ -1793,7 +1817,9 @@ def _monitor_jobs_rich(
         table.add_row("Started", str(stats["started"]))
         table.add_row("Finished", str(stats["finished"]), style="green")
         table.add_row("Failed", str(stats["failed"]), style="red")
-        table.add_row("Total", str(len(job_list)))
+        if disk_skipped > 0:
+            table.add_row("Skipped (disk)", str(disk_skipped), style="dim")
+        table.add_row("Total", str(len(job_list) + disk_skipped))
 
         # Running jobs table
         running_table = Table(title="Running Jobs")
@@ -2277,7 +2303,9 @@ def run_experiment_distributed(
 
     # Monitor progress
     logger.info("\nMonitoring job progress...")
-    results = monitor_jobs(queue, jobs, experiment_name, config)
+    results = monitor_jobs(
+        queue, jobs, experiment_name, config, disk_skipped=disk_skipped
+    )
 
     # Generate final report
     log_section("Experiment Complete - Generating Report", width=60)
