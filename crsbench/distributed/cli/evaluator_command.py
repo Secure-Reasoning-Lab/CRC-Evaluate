@@ -22,14 +22,17 @@ def add_evaluator_subparser(subparsers) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Run evaluator with experiment config
-  %(prog)s --experiment-config experiment-config.yaml --experiment-name my-exp
+  # Run evaluator (experiment name read from config)
+  %(prog)s --experiment-config experiment-config.yaml
 
   # Run evaluator with 4 parallel verify jobs
-  %(prog)s --experiment-config config.yaml --experiment-name exp1 -j 4
+  %(prog)s --experiment-config config.yaml -j 4
+
+  # Override experiment name from config
+  %(prog)s --experiment-config config.yaml --experiment-name custom-name
 
   # Run evaluator with custom paths
-  %(prog)s --experiment-config config.yaml --experiment-name exp1 \\
+  %(prog)s --experiment-config config.yaml \\
     --oss-fuzz-path /opt/oss-fuzz --benchmarks-root /data/benchmarks
         """,
     )
@@ -45,9 +48,9 @@ Examples:
     evaluator_parser.add_argument(
         "--experiment-name",
         type=str,
-        required=True,
+        default=None,
         metavar="NAME",
-        help="Experiment identifier for queue naming",
+        help="Override experiment name for queue naming (default: from config)",
     )
 
     evaluator_parser.add_argument(
@@ -168,6 +171,16 @@ def run_evaluator(args: argparse.Namespace) -> int:
     logger.info(f"Loading experiment config from: {config_path}")
     config = load_experiment_config(config_path)
 
+    # Resolve experiment name: CLI > config
+    experiment_name = args.experiment_name or config.experiment
+    logger.info(f"Experiment name: {experiment_name}")
+
+    # Resolve redis_host: CLI > config > default
+    redis_host = args.redis_host
+    if redis_host == "localhost" and config.redis_host:
+        redis_host = config.redis_host
+    logger.info(f"Redis host: {redis_host}")
+
     # Set evaluator override environment variables
     if args.oss_fuzz_path:
         os.environ["CRSBENCH_EVALUATOR_OSS_FUZZ_PATH"] = args.oss_fuzz_path
@@ -192,8 +205,8 @@ def run_evaluator(args: argparse.Namespace) -> int:
     try:
         return run_evaluator_main(
             config=config,
-            experiment_name=args.experiment_name,
-            redis_host=args.redis_host,
+            experiment_name=experiment_name,
+            redis_host=redis_host,
             max_jobs=args.jobs,
             use_cpuset=use_cpuset,
             cores=cores,
