@@ -1588,6 +1588,8 @@ def _write_orchestrator_marker(
             "total_povs": trial_result.total_povs,
             "patches_generated": trial_result.patches_generated,
             "patches_valid": trial_result.patches_valid,
+            "error": trial_result.error,
+            "error_type": trial_result.error_type,
         }
         with metadata_path.open("w") as f:
             json.dump(metadata_dict, f, indent=2)
@@ -1727,6 +1729,7 @@ def _monitor_jobs_basic(
                 # Write .fail marker for RQ-level failures
                 if job.id not in marked_jobs:
                     kwargs = job.kwargs or {}
+                    meta = job.meta or {}
                     fail_result = TrialResult(
                         crs=kwargs.get("crs", "unknown"),
                         benchmark=kwargs.get("benchmark", "unknown"),
@@ -1740,7 +1743,11 @@ def _monitor_jobs_basic(
                         error=f"Job failed: {job.exc_info}",
                         error_type="RQJobFailure",
                         report={},
-                        metadata=TrialMetadata(timestamp_start=0.0, timestamp_end=0.0),
+                        metadata=TrialMetadata(
+                            timestamp_start=0.0,
+                            timestamp_end=0.0,
+                            worker_machine=meta.get("worker_name"),
+                        ),
                     )
                     try:
                         _write_orchestrator_marker(fail_result, config)
@@ -1768,6 +1775,7 @@ def _monitor_jobs_basic(
         elif job.is_failed:
             # Create TrialResult for failed jobs using job kwargs
             kwargs = job.kwargs or {}
+            meta = job.meta or {}
             results.append(
                 TrialResult(
                     crs=kwargs.get("crs", "unknown"),
@@ -1782,7 +1790,11 @@ def _monitor_jobs_basic(
                     error=f"Job failed: {job.exc_info}",
                     error_type="RQJobFailure",
                     report={},
-                    metadata=TrialMetadata(timestamp_start=0.0, timestamp_end=0.0),
+                    metadata=TrialMetadata(
+                        timestamp_start=0.0,
+                        timestamp_end=0.0,
+                        worker_machine=meta.get("worker_name"),
+                    ),
                 )
             )
 
@@ -1902,6 +1914,7 @@ def _monitor_jobs_rich(
                     failed += 1
                     if job.id not in marked_jobs:
                         kwargs = job.kwargs or {}
+                        meta = job.meta or {}
                         fail_result = TrialResult(
                             crs=kwargs.get("crs", "unknown"),
                             benchmark=kwargs.get("benchmark", "unknown"),
@@ -1916,7 +1929,9 @@ def _monitor_jobs_rich(
                             error_type="RQJobFailure",
                             report={},
                             metadata=TrialMetadata(
-                                timestamp_start=0.0, timestamp_end=0.0
+                                timestamp_start=0.0,
+                                timestamp_end=0.0,
+                                worker_machine=meta.get("worker_name"),
                             ),
                         )
                         try:
@@ -1942,6 +1957,7 @@ def _monitor_jobs_rich(
         elif job.is_failed:
             # Create TrialResult for failed jobs using job kwargs
             kwargs = job.kwargs or {}
+            meta = job.meta or {}
             results.append(
                 TrialResult(
                     crs=kwargs.get("crs", "unknown"),
@@ -1956,7 +1972,11 @@ def _monitor_jobs_rich(
                     error=f"Job failed: {job.exc_info}",
                     error_type="RQJobFailure",
                     report={},
-                    metadata=TrialMetadata(timestamp_start=0.0, timestamp_end=0.0),
+                    metadata=TrialMetadata(
+                        timestamp_start=0.0,
+                        timestamp_end=0.0,
+                        worker_machine=meta.get("worker_name"),
+                    ),
                 )
             )
 
