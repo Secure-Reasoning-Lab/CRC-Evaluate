@@ -150,6 +150,7 @@ class POVVerificationManager:
         self._verify_queue: Optional[object] = None  # Lazy-initialized RQ Queue
         self._pending_job_ids: list[str] = []  # Job IDs awaiting results
         self._pov_hash_to_path: dict[str, Path] = {}  # hash → local file path
+        self._job_to_pov_id: dict[str, str] = {}  # job_id → pov_id for timeout marking
 
         async_mode = "async (Redis)" if redis_host else "inline"
         logger.info(
@@ -484,6 +485,8 @@ class POVVerificationManager:
                 job_id = self._enqueue_pov(pov_path, pov_hash)
                 if job_id:
                     self._pending_job_ids.append(job_id)
+                    pov_id = f"{pov_path.name}:{pov_hash}"
+                    self._job_to_pov_id[job_id] = pov_id
                     # Capture file mtime now (POV creation time) before
                     # the async verdict overwrites it with poll time
                     stat = pov_path.stat()
@@ -606,25 +609,43 @@ class POVVerificationManager:
                 total_duration_seconds=total_duration,
             )
 
-    def drain_pending(self, timeout: float = 300.0, poll_interval: float = 2.0) -> None:
+    def drain_pending(
+        self,
+        per_pov_timeout: int = 180,
+        verify_timeout: int = 7200,
+        poll_interval: float = 2.0,
+    ) -> None:
         """Block until all pending async verdicts complete.
 
         In async (Redis) mode, POV verification jobs may still be running.
         This method polls until all pending jobs are resolved or timeout expires.
 
+        The timeout is scaled based on the number of pending POVs: each could
+        take up to ``per_pov_timeout`` seconds for reproduce across all variants,
+        plus a 60s buffer for build overhead. The result is capped by
+        ``verify_timeout`` (the overall verification phase budget).
+
         In inline mode, this is a no-op since all verifications are synchronous.
 
         Args:
-            timeout: Maximum seconds to wait for pending results
+            per_pov_timeout: Max seconds a single POV verification takes
+            verify_timeout: Overall verification phase budget in seconds
             poll_interval: Seconds between poll attempts
         """
         if not self._pending_job_ids or not self._async_mode:
             return
 
+        n_pending = len(self._pending_job_ids)
+        # Floor: a single POV may run against multiple variants (each up to
+        # per_pov_timeout) plus Docker build overhead, so allow at least 2x.
+        single_pov_max = float(per_pov_timeout) * 2 + 120.0
+        scaled = max(single_pov_max, n_pending * per_pov_timeout + 120.0)
+        timeout = min(scaled, float(verify_timeout))
+
         deadline = time.time() + timeout
         logger.info(
-            f"Draining {len(self._pending_job_ids)} pending async verdicts "
-            f"(timeout={timeout}s)"
+            f"Draining {n_pending} pending async verdicts "
+            f"(timeout={timeout:.0f}s, per_pov={per_pov_timeout}s)"
         )
 
         while self._pending_job_ids and time.time() < deadline:
@@ -636,8 +657,27 @@ class POVVerificationManager:
             logger.warning(
                 f"Drain timeout: {len(self._pending_job_ids)} verdicts still pending"
             )
+            self._mark_pending_as_error()
         else:
             logger.info("All pending async verdicts drained successfully")
+
+    def _mark_pending_as_error(self) -> None:
+        """Mark POVs with pending async verdicts as error after drain timeout."""
+        for job_id in self._pending_job_ids:
+            pov_id = self._job_to_pov_id.get(job_id)
+            if pov_id:
+                self.store.add_pov_by_id(
+                    pov_id,
+                    PovVerificationStatus.ERROR,
+                    [],
+                )
+                logger.warning(f"Marked POV {pov_id} as error (async drain timeout)")
+            else:
+                logger.warning(f"Job {job_id} timed out but has no mapped pov_id")
+            with self._lock:
+                self._errors_count += 1
+        self._pending_job_ids.clear()
+        self.store.save()
 
     def get_verification_results(self) -> list[PovVerificationResult]:
         """Export stored POV verification data as PovVerificationResult list.

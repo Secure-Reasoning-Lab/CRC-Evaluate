@@ -92,6 +92,7 @@ class BenchmarkRunner:
         coverage_early_stop: bool = False,
         pov_early_stop: bool = False,
         per_pov_verify_timeout: int = 180,
+        verify_timeout: int = 7200,
         oss_fuzz_path: Optional[Path] = None,
         on_build_start: Optional[Callable[[], None]] = None,
         on_run_start: Optional[Callable[[], None]] = None,
@@ -114,6 +115,7 @@ class BenchmarkRunner:
             coverage_early_stop: Terminate trial early when coverage saturation is detected
             pov_early_stop: Terminate trial early when all CPVs for harness are found
             per_pov_verify_timeout: Timeout in seconds for each single POV verification (default: 180)
+            verify_timeout: Overall budget in seconds for the verification phase (default: 7200)
             oss_fuzz_path: Path to oss-fuzz directory (required for coverage and POV verification)
             on_build_start: Callback invoked when CRS build phase starts
             on_run_start: Callback invoked when CRS run phase starts
@@ -133,6 +135,7 @@ class BenchmarkRunner:
         self.coverage_early_stop = coverage_early_stop
         self.pov_early_stop = pov_early_stop
         self.per_pov_verify_timeout = per_pov_verify_timeout
+        self.verify_timeout = verify_timeout
         self.oss_fuzz_path = oss_fuzz_path
         self.on_build_start = on_build_start
         self.on_run_start = on_run_start
@@ -507,7 +510,10 @@ class BenchmarkRunner:
             # Final sweep: discover any remaining POVs written after last snapshot
             pov_verification_manager.on_snapshot(cycle=-1)
             # Wait for all async (Redis) verdicts to complete
-            pov_verification_manager.drain_pending()
+            pov_verification_manager.drain_pending(
+                per_pov_timeout=self.per_pov_verify_timeout,
+                verify_timeout=self.verify_timeout,
+            )
             # Export results in the same format as VerificationEngine
             pov_verification_results = (
                 pov_verification_manager.get_verification_results()
