@@ -13,7 +13,7 @@
 #   3. Docker installed and running
 
 # Experiment Identity — MUST match cyclonus so jobs are shared
-experiment: "afc-run3"
+experiment: "afc-run4"
 description: "E2E bug finding - AFC final round benchmarks"
 
 # Execution Configuration
@@ -65,8 +65,8 @@ only_cpv_harnesses: true
 snapshot_period: 300
 
 # Storage Configuration — local disk for execution speed
-experiment_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc3
-report_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/report-data-afc3
+experiment_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc4
+report_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/report-data-afc4
 
 # Hints Configuration (disabled)
 hints_enabled: false
@@ -86,8 +86,8 @@ worker:
   build_workers: 16
   verify_workers: 16
   # Execute on local NVMe for fast Docker I/O
-  experiment_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc3
-  report_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/report-data-afc3
+  experiment_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc4
+  report_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/report-data-afc4
   # Clean up build artifacts (crs-build/, .oss-bugfind/) after each trial
   # Results (POVs, logs, metadata) stay on local disk for rsync collection
   cleanup_after_trial: true
