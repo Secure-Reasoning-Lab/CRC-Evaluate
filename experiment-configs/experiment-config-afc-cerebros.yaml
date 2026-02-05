@@ -13,12 +13,12 @@
 #   3. Docker installed and running
 
 # Experiment Identity — MUST match cyclonus so jobs are shared
-experiment: "afc-run4"
+experiment: "afc-delta"
 description: "E2E bug finding - AFC final round benchmarks"
 
 # Execution Configuration
 trials: 1
-mode: full
+mode: delta
 source_mode: pkgs
 
 # Timeout Configuration - 6 hours CRS run
@@ -65,8 +65,8 @@ only_cpv_harnesses: true
 snapshot_period: 300
 
 # Storage Configuration — local disk for execution speed
-experiment_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc4
-report_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/report-data-afc4
+experiment_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc-delta
+report_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/report-data-afc-delta
 
 # Hints Configuration (disabled)
 hints_enabled: false
@@ -86,8 +86,8 @@ worker:
   build_workers: 16
   verify_workers: 16
   # Execute on local NVMe for fast Docker I/O
-  experiment_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc4
-  report_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/report-data-afc4
+  experiment_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc-delta
+  report_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/report-data-afc-delta
   # Clean up build artifacts (crs-build/, .oss-bugfind/) after each trial
   # Results (POVs, logs, metadata) stay on local disk for rsync collection
   cleanup_after_trial: true
