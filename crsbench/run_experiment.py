@@ -43,6 +43,10 @@ from crsbench.distributed.jobs import (
 from crsbench.evaluation.cleanup import cleanup_trial_directory
 from crsbench.evaluation.results import CRSType, TrialResult
 from crsbench.utils import log_progress, log_section, log_summary, set_gitcache
+from crsbench.utils.benchmark_utils import (
+    filter_benchmarks_by_mode,
+    get_available_modes_for_benchmark,
+)
 from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.logger import configure_logger, get_logger
 from crsbench.validation.meta_adapter import MetaYamlAdapter
@@ -910,38 +914,6 @@ def resolve_benchmark_harnesses(
         f"Resolved {len(harness_pairs)} BenchmarkHarness pairs from {len(benchmark_entries)} benchmarks"
     )
     return harness_pairs
-
-
-def get_available_modes_for_benchmark(benchmark_path: Path) -> List[str]:
-    """Get list of available evaluation modes (delta/full) for a benchmark.
-
-    Args:
-        benchmark_path: Path to benchmark directory
-
-    Returns:
-        List of available mode strings ('delta' and/or 'full')
-    """
-    import yaml
-
-    meta_yaml_path = benchmark_path / ".aixcc" / "meta.yaml"
-    if not meta_yaml_path.exists():
-        logger.warning(f"meta.yaml not found at {meta_yaml_path}")
-        return []
-
-    try:
-        with meta_yaml_path.open() as f:
-            meta_data = yaml.safe_load(f)
-
-        modes = []
-        if meta_data.get("delta_mode"):
-            modes.append("delta")
-        if meta_data.get("full_mode"):
-            modes.append("full")
-
-        return modes
-    except Exception as e:
-        logger.warning(f"Failed to read modes from {meta_yaml_path}: {e}")
-        return []
 
 
 def _harness_has_cpv_with_sanitizer(harness: HarnessFile, sanitizer: str) -> bool:
@@ -2684,6 +2656,23 @@ def main() -> None:
                     f"Benchmarks ({len(benchmark_names)}): {', '.join(benchmark_names)}"
                 )
 
+        # Filter benchmarks by mode early (before resolving harnesses)
+        benchmarks_root = Path(config.benchmarks_root or "benchmarks")
+        mode_str = config.mode.value  # Get string value from enum
+        if mode_str != "all":
+            original_count = len(benchmark_names)
+            benchmark_names = filter_benchmarks_by_mode(
+                benchmark_names, mode_str, benchmarks_root
+            )
+            # Also filter benchmark_entries to match
+            benchmark_entries = [
+                entry for entry in benchmark_entries if entry.name in benchmark_names
+            ]
+            if original_count != len(benchmark_names):
+                logger.info(
+                    f"Filtered by mode={mode_str}: {len(benchmark_names)} of {original_count} benchmarks"
+                )
+
     except ValueError as e:
         logger.error(f"Failed to resolve benchmarks: {e}")
         sys.exit(1)
@@ -2692,7 +2681,6 @@ def main() -> None:
 
     # Resolve BenchmarkHarness objects
     try:
-        benchmarks_root = Path(config.benchmarks_root or "benchmarks")
         benchmark_harnesses = resolve_benchmark_harnesses(
             benchmark_entries, benchmarks_root
         )
