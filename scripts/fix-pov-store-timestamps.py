@@ -78,10 +78,10 @@ def extract_build_time_from_log(trial_dir: Path) -> float | None:
     return None
 
 
-def fix_pov_store(
+def fix_trial_timestamps(
     trial_dir: Path, *, dry_run: bool = True, min_build_time: float = 1.0
 ) -> dict | None:
-    """Fix crs_run_start_time in a single pov_store.json.
+    """Fix timestamps in pov_store.json and build_time in metadata.json.
 
     Args:
         trial_dir: Path to trial directory
@@ -92,6 +92,7 @@ def fix_pov_store(
         Dict with fix details or None if no fix needed
     """
     pov_store_path = trial_dir / "povs" / "pov_store.json"
+    metadata_path = trial_dir / "metadata.json"
 
     # Extract actual build time from worker.log
     build_time = extract_build_time_from_log(trial_dir)
@@ -102,47 +103,82 @@ def fix_pov_store(
     if build_time < min_build_time:
         return None
 
+    # Load metadata to check/fix build_time
+    metadata = load_json(metadata_path) if metadata_path.exists() else None
+    old_metadata_build_time = metadata.get("build_time") if metadata else None
+
+    # Check if metadata.json already has correct build_time (within 1s tolerance)
+    metadata_already_fixed = (
+        old_metadata_build_time is not None
+        and abs(old_metadata_build_time - build_time) < 1.0
+    )
+
     # Load pov_store
-    pov_store = load_json(pov_store_path)
+    pov_store = load_json(pov_store_path) if pov_store_path.exists() else None
+    old_crs_run_start = pov_store.get("crs_run_start_time") if pov_store else None
 
-    old_crs_run_start = pov_store.get("crs_run_start_time")
-    if old_crs_run_start is None:
+    # Determine if pov_store needs fixing by checking if relative_times make sense
+    # If max relative_time < run_time, pov_store was likely already fixed
+    pov_store_already_fixed = False
+    if pov_store and metadata:
+        run_time = metadata.get("run_time", 0)
+        cpv_to_first_pov = pov_store.get("cpv_to_first_pov", {})
+        if cpv_to_first_pov and run_time > 0:
+            max_relative = max(
+                (info.get("relative_time", 0) for info in cpv_to_first_pov.values()),
+                default=0
+            )
+            # If relative_time is reasonable (within run_time + small buffer), already fixed
+            pov_store_already_fixed = max_relative < run_time + 60
+
+    pov_store_needs_fix = not pov_store_already_fixed and old_crs_run_start is not None
+
+    # Calculate correct crs_run_start_time (only if pov_store needs fixing)
+    new_crs_run_start = old_crs_run_start + build_time if pov_store_needs_fix else None
+
+    # Skip if nothing to fix
+    if metadata_already_fixed and not pov_store_needs_fix:
         return None
-
-    # Calculate correct crs_run_start_time
-    new_crs_run_start = old_crs_run_start + build_time
 
     # Track changes
     changes = {
         "trial_dir": str(trial_dir),
         "build_time": build_time,
-        "old_crs_run_start_time": old_crs_run_start,
+        "old_metadata_build_time": old_metadata_build_time,
+        "metadata_fixed": not metadata_already_fixed,
+        "old_crs_run_start_time": old_crs_run_start if pov_store_needs_fix else None,
         "new_crs_run_start_time": new_crs_run_start,
         "cpv_changes": [],
     }
 
-    # Update crs_run_start_time
-    pov_store["crs_run_start_time"] = new_crs_run_start
+    # Update metadata.json build_time (if not already correct)
+    if metadata and not metadata_already_fixed:
+        metadata["build_time"] = build_time
+        if not dry_run:
+            save_json(metadata_path, metadata)
 
-    # Update relative_time for each CPV in cpv_to_first_pov
-    cpv_to_first_pov = pov_store.get("cpv_to_first_pov", {})
-    for cpv_id, cpv_info in cpv_to_first_pov.items():
-        discovery_ts = cpv_info.get("discovery_ts")
-        if discovery_ts is not None:
-            old_relative = cpv_info.get("relative_time")
-            new_relative = discovery_ts - new_crs_run_start
-            cpv_info["relative_time"] = new_relative
+    # Update pov_store.json if needed
+    if pov_store and pov_store_needs_fix:
+        pov_store["crs_run_start_time"] = new_crs_run_start
 
-            changes["cpv_changes"].append({
-                "cpv_id": cpv_id,
-                "old_relative_time": old_relative,
-                "new_relative_time": new_relative,
-                "diff": old_relative - new_relative if old_relative else None,
-            })
+        # Update relative_time for each CPV in cpv_to_first_pov
+        cpv_to_first_pov = pov_store.get("cpv_to_first_pov", {})
+        for cpv_id, cpv_info in cpv_to_first_pov.items():
+            discovery_ts = cpv_info.get("discovery_ts")
+            if discovery_ts is not None:
+                old_relative = cpv_info.get("relative_time")
+                new_relative = discovery_ts - new_crs_run_start
+                cpv_info["relative_time"] = new_relative
 
-    # Save if not dry run
-    if not dry_run:
-        save_json(pov_store_path, pov_store)
+                changes["cpv_changes"].append({
+                    "cpv_id": cpv_id,
+                    "old_relative_time": old_relative,
+                    "new_relative_time": new_relative,
+                    "diff": old_relative - new_relative if old_relative else None,
+                })
+
+        if not dry_run:
+            save_json(pov_store_path, pov_store)
 
     return changes
 
@@ -211,7 +247,7 @@ def main():
     no_log_count = 0
 
     for trial_dir in trial_dirs:
-        changes = fix_pov_store(
+        changes = fix_trial_timestamps(
             trial_dir, dry_run=not args.fix, min_build_time=args.min_build_time
         )
 
@@ -229,8 +265,11 @@ def main():
         # Print changes
         rel_path = trial_dir.relative_to(args.experiment_dir)
         print(f"{'Fixed' if args.fix else 'Would fix'}: {rel_path}")
-        print(f"  build_time: {changes['build_time']:.1f}s")
-        print(f"  crs_run_start_time: {changes['old_crs_run_start_time']:.2f} -> {changes['new_crs_run_start_time']:.2f}")
+        old_meta_bt = changes.get('old_metadata_build_time')
+        if old_meta_bt is not None:
+            print(f"  metadata.json build_time: {old_meta_bt:.3f}s -> {changes['build_time']:.1f}s")
+        if changes.get('old_crs_run_start_time') is not None:
+            print(f"  pov_store crs_run_start_time: {changes['old_crs_run_start_time']:.2f} -> {changes['new_crs_run_start_time']:.2f}")
 
         for cpv_change in changes["cpv_changes"]:
             old_rt = cpv_change["old_relative_time"]
