@@ -64,6 +64,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         self.litellm_mode = litellm_mode
         self.config: Dict[str, Any] = {}
         self.built_projects: Set[str] = set()
+        self._project_build_times: Dict[str, float] = {}  # build_key -> build_time
         self._llm_api_key_override: Optional[str] = None
 
     @property
@@ -363,8 +364,10 @@ class CRSBugFindingExecutor(CRSExecutor):
                 trial_output_dir, harness_name, project_name, sanitizer
             )
 
-            # Record build time (time from start to run start)
-            build_time = time.time() - start_time
+            # Record build time: use stored time from pre-build if available,
+            # otherwise use time since start of run_crs()
+            build_key = f"{self.crs_config_name}:{project_name}"
+            build_time = self._project_build_times.get(build_key, time.time() - start_time)
             run_start_time = time.time()
 
             # Signal that CRS run is starting (after build)
@@ -747,6 +750,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             build_time = time.time() - build_start_time
             logger.info(f"Successfully built CRS for {build_key} in {build_time:.1f}s")
             self.built_projects.add(build_key)
+            self._project_build_times[build_key] = build_time
 
         except subprocess.TimeoutExpired as e:
             logger.error(f"Build timeout after {timeout}s")
