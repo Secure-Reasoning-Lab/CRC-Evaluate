@@ -53,6 +53,9 @@ class TrialReport:
     pov_counts: POVStatusCounts = field(default_factory=POVStatusCounts)
     success: bool = False
     failure_reason: str = ""  # e.g. "build_failure", "timeout", "no_povs", "runtime_error"
+    worker_machine: str = ""
+    build_time: float | None = None
+    run_time: float | None = None
 
 
 def load_ground_truth(benchmarks_dir: Path, benchmark_name: str) -> dict[str, list[str]]:
@@ -274,6 +277,9 @@ def analyze_trial(
         pov_counts=pov_counts,
         success=has_success,
         failure_reason=failure_reason,
+        worker_machine=metadata.get("worker_machine", ""),
+        build_time=metadata.get("build_time"),
+        run_time=metadata.get("run_time"),
     )
 
 
@@ -327,6 +333,7 @@ def main():
         writer.writerow([
             "benchmark", "harness", "crs", "trial",
             "cpv_id", "found", "failure_reason",
+            "worker_machine", "build_time", "run_time",
             "first_pov_time_seconds", "first_pov_time", "pov_hash",
             "povs_total", "povs_cpv", "povs_unintended", "povs_not_vulnerable", "povs_error",
         ])
@@ -336,6 +343,7 @@ def main():
                 writer.writerow([
                     r.benchmark, r.harness, r.crs, r.trial_num,
                     cpv.cpv_id, cpv.found, reason,
+                    r.worker_machine, r.build_time or "", r.run_time or "",
                     cpv.first_pov_relative_time or "",
                     fmt_time(cpv.first_pov_relative_time) if cpv.found else "",
                     cpv.pov_hash or "",

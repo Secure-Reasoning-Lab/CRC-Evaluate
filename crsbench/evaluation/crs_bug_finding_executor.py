@@ -367,7 +367,9 @@ class CRSBugFindingExecutor(CRSExecutor):
             # Record build time: use stored time from pre-build if available,
             # otherwise use time since start of run_crs()
             build_key = f"{self.crs_config_name}:{project_name}"
-            build_time = self._project_build_times.get(build_key, time.time() - start_time)
+            build_time = self._project_build_times.get(
+                build_key, time.time() - start_time
+            )
             run_start_time = time.time()
 
             # Signal that CRS run is starting (after build)
