@@ -3,10 +3,14 @@
 
 The crs_run_start_time was incorrectly set to trial start time (before build),
 but it should be set to CRS run start time (after build). This script corrects
-the timestamps by adding build_time from metadata.json.
+the timestamps by extracting the actual build time from worker.log.
+
+The metadata.json build_time field is often wrong (records ~0s when pre-build
+was done separately), so we extract the real build time from worker.log:
+    "Successfully built CRS for ... in 1078.7s"
 
 Formula:
-    correct_crs_run_start_time = old_crs_run_start_time + build_time
+    correct_crs_run_start_time = old_crs_run_start_time + actual_build_time
     correct_relative_time = discovery_ts - correct_crs_run_start_time
 
 Usage:
@@ -19,6 +23,7 @@ Usage:
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -44,9 +49,38 @@ def save_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2))
 
 
+def extract_build_time_from_log(trial_dir: Path) -> float | None:
+    """Extract actual build time from worker.log.
+
+    Looks for: "Successfully built CRS for ... in 1078.7s"
+
+    Args:
+        trial_dir: Path to trial directory
+
+    Returns:
+        Build time in seconds, or None if not found
+    """
+    worker_log = trial_dir / "worker.log"
+    if not worker_log.exists():
+        return None
+
+    # Pattern: "Successfully built CRS for ... in 1078.7s"
+    pattern = r"Successfully built CRS for .+ in (\d+\.?\d*)s"
+
+    try:
+        content = worker_log.read_text()
+        match = re.search(pattern, content)
+        if match:
+            return float(match.group(1))
+    except (OSError, ValueError):
+        pass
+
+    return None
+
+
 def fix_pov_store(
-    trial_dir: Path, dry_run: bool = True, min_build_time: float = 1.0
-) -> dict:
+    trial_dir: Path, *, dry_run: bool = True, min_build_time: float = 1.0
+) -> dict | None:
     """Fix crs_run_start_time in a single pov_store.json.
 
     Args:
@@ -57,12 +91,12 @@ def fix_pov_store(
     Returns:
         Dict with fix details or None if no fix needed
     """
-    metadata_path = trial_dir / "metadata.json"
     pov_store_path = trial_dir / "povs" / "pov_store.json"
 
-    # Load metadata
-    metadata = load_json(metadata_path)
-    build_time = metadata.get("build_time", 0.0)
+    # Extract actual build time from worker.log
+    build_time = extract_build_time_from_log(trial_dir)
+    if build_time is None:
+        return None
 
     # Skip if build_time is below threshold
     if build_time < min_build_time:
@@ -136,7 +170,7 @@ def main():
     parser.add_argument(
         "--show-stats",
         action="store_true",
-        help="Show build time statistics",
+        help="Show build time statistics from worker.log",
     )
     args = parser.parse_args()
 
@@ -157,22 +191,24 @@ def main():
     if args.show_stats:
         build_times = []
         for trial_dir in trial_dirs:
-            metadata = load_json(trial_dir / "metadata.json")
-            bt = metadata.get("build_time", 0.0)
-            build_times.append(bt)
+            bt = extract_build_time_from_log(trial_dir)
+            if bt is not None:
+                build_times.append(bt)
 
         if build_times:
-            print("Build time statistics:")
-            print(f"  Min:    {min(build_times):.3f}s")
-            print(f"  Max:    {max(build_times):.3f}s")
-            print(f"  Mean:   {sum(build_times) / len(build_times):.3f}s")
+            print("Build time statistics (from worker.log):")
+            print(f"  Found:  {len(build_times)}/{len(trial_dirs)} trials")
+            print(f"  Min:    {min(build_times):.1f}s")
+            print(f"  Max:    {max(build_times):.1f}s")
+            print(f"  Mean:   {sum(build_times) / len(build_times):.1f}s")
             print(f"  >= 1s:  {sum(1 for bt in build_times if bt >= 1.0)}")
-            print(f"  >= 10s: {sum(1 for bt in build_times if bt >= 10.0)}")
             print(f"  >= 60s: {sum(1 for bt in build_times if bt >= 60.0)}")
+            print(f"  >= 300s: {sum(1 for bt in build_times if bt >= 300.0)}")
             print()
 
     fixed_count = 0
     skipped_count = 0
+    no_log_count = 0
 
     for trial_dir in trial_dirs:
         changes = fix_pov_store(
@@ -180,7 +216,12 @@ def main():
         )
 
         if changes is None:
-            skipped_count += 1
+            # Check if it's because of missing log or low build time
+            bt = extract_build_time_from_log(trial_dir)
+            if bt is None:
+                no_log_count += 1
+            else:
+                skipped_count += 1
             continue
 
         fixed_count += 1
@@ -188,18 +229,21 @@ def main():
         # Print changes
         rel_path = trial_dir.relative_to(args.experiment_dir)
         print(f"{'Fixed' if args.fix else 'Would fix'}: {rel_path}")
-        print(f"  build_time: {changes['build_time']:.2f}s")
+        print(f"  build_time: {changes['build_time']:.1f}s")
         print(f"  crs_run_start_time: {changes['old_crs_run_start_time']:.2f} -> {changes['new_crs_run_start_time']:.2f}")
 
         for cpv_change in changes["cpv_changes"]:
             old_rt = cpv_change["old_relative_time"]
             new_rt = cpv_change["new_relative_time"]
             diff = cpv_change["diff"]
-            print(f"  {cpv_change['cpv_id']}: relative_time {old_rt:.2f}s -> {new_rt:.2f}s (diff: {diff:.2f}s)")
+            if old_rt is not None and diff is not None:
+                print(f"  {cpv_change['cpv_id']}: relative_time {old_rt:.1f}s -> {new_rt:.1f}s (diff: {diff:.1f}s)")
+            else:
+                print(f"  {cpv_change['cpv_id']}: relative_time -> {new_rt:.1f}s")
         print()
 
     print("=" * 60)
-    print(f"Summary: {fixed_count} fixed, {skipped_count} skipped")
+    print(f"Summary: {fixed_count} fixed, {skipped_count} skipped (build_time < {args.min_build_time}s), {no_log_count} no worker.log")
 
     if not args.fix and fixed_count > 0:
         print()
