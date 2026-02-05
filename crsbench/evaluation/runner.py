@@ -620,6 +620,8 @@ class BenchmarkRunner:
                     snapshot_manager.set_crs_run_start_time(run_start)
                 if coverage_manager:
                     coverage_manager.collector.set_run_start_time(run_start)
+                if pov_verification_manager:
+                    pov_verification_manager.set_crs_run_start_time(run_start)
                 # Call external callback for job metadata tracking
                 if self.on_run_start:
                     self.on_run_start()

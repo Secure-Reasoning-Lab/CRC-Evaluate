@@ -75,6 +75,19 @@ class POVStore:
         # Create directory structure
         self._create_directories()
 
+    def set_crs_run_start_time(self, start_time: float) -> None:
+        """Update CRS run start time (called after build completes).
+
+        This corrects the initial trial_start_time to the actual CRS run
+        start time, ensuring relative_time calculations exclude build time.
+
+        Args:
+            start_time: Unix timestamp when CRS run actually started
+        """
+        with self._lock:
+            self.crs_run_start_time = start_time
+        logger.info(f"POV store crs_run_start_time updated: {start_time}")
+
     def _create_directories(self) -> None:
         """Create store directory structure."""
         self.store_dir.mkdir(parents=True, exist_ok=True)

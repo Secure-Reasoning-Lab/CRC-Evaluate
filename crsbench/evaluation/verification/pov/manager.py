@@ -174,6 +174,19 @@ class POVVerificationManager:
         """Check if all expected CPVs have been found."""
         return self.expected_cpv_ids <= self.found_cpvs
 
+    def set_crs_run_start_time(self, start_time: float) -> None:
+        """Update CRS run start time (called after build completes).
+
+        Updates the POV store's crs_run_start_time so that relative_time
+        calculations exclude build time. Does NOT update self.trial_start_time
+        since that is used for elapsed_time in POVSnapshot (which should
+        include total time since trial started).
+
+        Args:
+            start_time: Unix timestamp when CRS run actually started
+        """
+        self.store.set_crs_run_start_time(start_time)
+
     def _get_remaining_cpvs(self) -> list[str]:
         """Get list of CPV IDs not yet found.
 

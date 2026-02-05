@@ -475,6 +475,49 @@ class TestPOVStoreTimestamps:
 
         assert new_store.crs_run_start_time == custom_time
 
+    def test_set_crs_run_start_time(self, tmp_path: Path) -> None:
+        """Test updating crs_run_start_time after initialization."""
+        initial_time = 1700000000.0
+        store = POVStore(tmp_path / "povs", crs_run_start_time=initial_time)
+
+        assert store.crs_run_start_time == initial_time
+
+        # Update to new time (simulating on_run_start callback)
+        new_time = 1700000600.0  # 10 minutes later
+        store.set_crs_run_start_time(new_time)
+
+        assert store.crs_run_start_time == new_time
+
+        # Verify persisted correctly
+        store.save()
+        new_store = POVStore(tmp_path / "povs")
+        new_store.load()
+        assert new_store.crs_run_start_time == new_time
+
+    def test_set_crs_run_start_time_affects_relative_time(self, tmp_path: Path) -> None:
+        """Test that updating crs_run_start_time affects relative_time calculations."""
+        import os
+
+        initial_time = 1700000000.0
+        store = POVStore(tmp_path / "povs", crs_run_start_time=initial_time)
+
+        # Update to actual run start (600s after initial)
+        run_start = 1700000600.0
+        store.set_crs_run_start_time(run_start)
+
+        # Create POV 10 seconds after run start
+        pov = tmp_path / "test.pov"
+        pov.write_bytes(b"test content")
+        pov_mtime = run_start + 10.0
+        os.utime(pov, (pov_mtime, pov_mtime))
+
+        store.add_pov(pov, PovVerificationStatus.CPV, ["cpv_0"])
+
+        # Check relative_time is calculated from run_start, not initial_time
+        cpv_info = store.cpv_to_first_pov.get("cpv_0")
+        assert cpv_info is not None
+        assert cpv_info["relative_time"] == 10.0  # Not 610.0
+
     def test_file_mtime_recorded(self, tmp_path: Path) -> None:
         """Test that file_mtime is recorded when adding POV."""
         import os

@@ -169,7 +169,10 @@ class CRSRunJob(Job):
             # 10. Define callbacks for CRS execution
             def on_run_start() -> None:
                 """Called when CRS run starts (after build)."""
-                snapshot_manager.set_crs_run_start_time(time.time())
+                run_start = time.time()
+                snapshot_manager.set_crs_run_start_time(run_start)
+                if pov_verification_manager:
+                    pov_verification_manager.set_crs_run_start_time(run_start)
                 logger.info("CRS run started, snapshot timing reset")
 
             # 11. Run CRS with stop_event
