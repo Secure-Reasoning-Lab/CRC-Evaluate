@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from typing import Optional, Union
 
+from crsbench.utils.benchmark_utils import filter_benchmarks_by_mode
 from crsbench.utils.logger import configure_logger, get_logger
 
 try:
@@ -57,6 +58,18 @@ def _enqueue_pre_builds(
     )
 
     benchmark_names = config.get_benchmark_list()
+
+    # Filter benchmarks by mode early
+    mode_str = config.mode.value
+    if mode_str != "all":
+        original_count = len(benchmark_names)
+        benchmark_names = filter_benchmarks_by_mode(
+            benchmark_names, mode_str, benchmarks_root
+        )
+        if original_count != len(benchmark_names):
+            logger.info(
+                f"Filtered by mode={mode_str}: {len(benchmark_names)} of {original_count} benchmarks"
+            )
 
     oss_fuzz_path = Path(
         os.environ.get("CRSBENCH_EVALUATOR_OSS_FUZZ_PATH") or str(config.oss_fuzz_path)
