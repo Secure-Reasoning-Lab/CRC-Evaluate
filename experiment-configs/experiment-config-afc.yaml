@@ -3,12 +3,12 @@
 # Testing bug finding pipeline with AFC final benchmarks
 
 # Experiment Identity
-experiment: "afc-delta"
+experiment: "afc-rest7"
 description: "E2E bug finding - AFC final round benchmarks"
 
 # Execution Configuration
-trials: 1
-mode: delta
+trials: 7
+mode: full
 source_mode: pkgs
 
 # Timeout Configuration - 6 hours CRS run
@@ -55,8 +55,8 @@ only_cpv_harnesses: true
 snapshot_period: 300
 
 # Storage Configuration
-experiment_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc-delta
-report_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/report-data-afc-delta
+experiment_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc-rest7
+report_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/report-data-afc-rest7
 
 # Hints Configuration (disabled)
 hints_enabled: false
