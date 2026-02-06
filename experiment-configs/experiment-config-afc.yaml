@@ -75,4 +75,5 @@ worker:
   jobs: 7
   build_workers: 16
   verify_workers: 16
+  cleanup_after_trial: true
 
