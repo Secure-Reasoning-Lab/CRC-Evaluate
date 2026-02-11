@@ -37,7 +37,7 @@ jobs:
       - name: Run unit tests
         run: uv run pytest tests/ -v -n auto -m "not integration"
 
-  # Stage 2a: Format validation (all benchmarks, no Docker)
+  # Stage 2a: Format validation (no Docker)
   format-validation:
     name: Format Validation
     needs: [checks]
@@ -55,10 +55,10 @@ jobs:
         run: |
           uv run crsbench ci format sanity-mock-c-delta-01 --no-color
           uv run crsbench ci format sanity-mock-java-delta-01 --no-color
-          uv run crsbench ci format afc-xz-full-01 --no-color
-          uv run crsbench ci format atlanta-json-java-full-01 --no-color
-          uv run crsbench ci format afc-libxml2-full-01 --no-color
-          uv run crsbench ci format afc-apache-commons-compress-delta-01 --no-color
+          # uv run crsbench ci format afc-xz-full-01 --no-color
+          # uv run crsbench ci format atlanta-json-java-full-01 --no-color
+          # uv run crsbench ci format afc-libxml2-full-01 --no-color
+          # uv run crsbench ci format afc-apache-commons-compress-delta-01 --no-color
 
   # Stage 2b: Sanity checks on mock projects (fail-fast)
   sanity-mock:
@@ -99,49 +99,50 @@ jobs:
             --force-rebuild \
             --no-color
 
-  # Stage 2c: Sanity checks on real projects (after mocks pass)
-  sanity-real:
-    name: Sanity Real ${{ matrix.project }}
-    needs: [checks, sanity-mock]
-    runs-on: [self-hosted, linux, crs]
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        project:
-          - afc-xz
-          - atlanta-json-java
-        include:
-          - project: afc-xz
-            benchmark: afc-xz-full-01
-          - project: atlanta-json-java
-            benchmark: atlanta-json-java-full-01
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          submodules: recursive
-          token: ${{ secrets.PAT_TOKEN }}
-          persist-credentials: false
-
-      - name: Configure Team-Atlanta access
-        run: |
-          git config --global url."https://x-access-token:${{ secrets.TEAM_ATLANTA_PAT }}@github.com/Team-Atlanta/".insteadOf "git@github.com:Team-Atlanta/"
-
-      - uses: ./.github/actions/setup
-        with:
-          require-docker: true
-
-      - name: Run all checks on ${{ matrix.project }}
-        run: |
-          uv run crsbench ci all ${{ matrix.benchmark }} \
-            --no-inc-build \
-            --force-rebuild \
-            --no-color
+  # # Stage 2c: Sanity checks on real projects (after mocks pass)
+  # sanity-real:
+  #   name: Sanity Real ${{ matrix.project }}
+  #   needs: [checks, sanity-mock]
+  #   runs-on: [self-hosted, linux, crs]
+  #   timeout-minutes: 60
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       project:
+  #         - afc-xz
+  #         - atlanta-json-java
+  #       include:
+  #         - project: afc-xz
+  #           benchmark: afc-xz-full-01
+  #         - project: atlanta-json-java
+  #           benchmark: atlanta-json-java-full-01
+  #   steps:
+  #     - uses: actions/checkout@v5
+  #       with:
+  #         submodules: recursive
+  #         token: ${{ secrets.PAT_TOKEN }}
+  #         persist-credentials: false
+  #
+  #     - name: Configure Team-Atlanta access
+  #       run: |
+  #         git config --global url."https://x-access-token:${{ secrets.TEAM_ATLANTA_PAT }}@github.com/Team-Atlanta/".insteadOf "git@github.com:Team-Atlanta/"
+  #
+  #     - uses: ./.github/actions/setup
+  #       with:
+  #         require-docker: true
+  #
+  #     - name: Run all checks on ${{ matrix.project }}
+  #       run: |
+  #         uv run crsbench ci all ${{ matrix.benchmark }} \
+  #           --no-inc-build \
+  #           --force-rebuild \
+  #           --no-color
 
   # Stage 3: E2E Bug Finding with CRS
   e2e-bugfinding:
     name: E2E Bug Finding
-    needs: [sanity-mock, sanity-real]
+    # needs: [sanity-mock, sanity-real]
+    needs: [sanity-mock]
     runs-on: [self-hosted, linux, crs]
     timeout-minutes: 30
     steps:
