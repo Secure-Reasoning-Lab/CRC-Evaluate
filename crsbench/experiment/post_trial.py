@@ -1,4 +1,4 @@
-"""Post-trial analysis orchestration using flat jobs + DAGExecutor.
+"""Post-trial analysis orchestration using flat jobs + Redis.
 
 After CRS trials complete, this module generates coverage collection and patch
 verification jobs from trial results. Reuses existing flat jobs for consistent
@@ -7,15 +7,13 @@ architecture with CI commands.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast
 
-from crsbench.benchmark_ci.jobs.base import Job, JobContext
+from crsbench.benchmark_ci.jobs.base import Job
 from crsbench.benchmark_ci.jobs.flat import (
     BuildPatchVariantJob,
     FlatCollectCoverageJob,
     PatchVariantTestJob,
 )
-from crsbench.executor.dag import DAGExecutor
 from crsbench.executor.types import ExecutorResult
 from crsbench.utils.logger import get_logger
 
@@ -46,7 +44,7 @@ def create_post_trial_jobs(
     build_job_ids: dict[str, str],
     *,
     coverage_enabled: bool = True,
-    source_mode: str = "main_repo",
+    source_mode: str = "pkgs",
 ) -> list[Job]:
     """Create post-trial analysis jobs from trial results.
 
@@ -149,18 +147,16 @@ def create_post_trial_jobs(
 
 def execute_post_trial_analysis(
     jobs: list[Job],
-    context: JobContext,
+    redis_host: str = "localhost",
     *,
-    build_workers: int = 2,
-    verify_workers: int = 4,
+    queue_name: str = "crsbench_post_trial_verify",
 ) -> dict[str, ExecutorResult]:
-    """Execute post-trial analysis jobs via DAGExecutor.
+    """Execute post-trial analysis jobs via Redis.
 
     Args:
         jobs: List of post-trial jobs from create_post_trial_jobs
-        context: JobContext with shared data from upfront builds
-        build_workers: Maximum concurrent build jobs (default 2)
-        verify_workers: Maximum concurrent verify jobs (default 4)
+        redis_host: Redis server hostname
+        queue_name: Redis queue name for post-trial jobs
 
     Returns:
         Dict mapping job_id to ExecutorResult for every job
@@ -169,18 +165,15 @@ def execute_post_trial_analysis(
         logger.info("No post-trial jobs to execute")
         return {}
 
-    executor = DAGExecutor(
-        type_limits={"build": build_workers, "verify": verify_workers}
+    from crsbench.distributed.ci_jobs import (
+        ci_results_to_executor_results,
+        enqueue_and_poll_ci_jobs,
     )
 
-    logger.info(
-        "Executing %d post-trial jobs (build_workers=%d, verify_workers=%d)",
-        len(jobs),
-        build_workers,
-        verify_workers,
-    )
+    logger.info("Executing %d post-trial jobs via Redis (%s)", len(jobs), redis_host)
 
-    results = executor.execute(cast("list[Job]", jobs), context)
+    raw_results = enqueue_and_poll_ci_jobs(jobs, redis_host, queue_name=queue_name)
+    results = ci_results_to_executor_results(raw_results)
 
     success_count = sum(1 for r in results.values() if r.success)
     failed_count = len(results) - success_count

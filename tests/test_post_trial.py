@@ -11,7 +11,6 @@ Tests verify:
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from crsbench.benchmark_ci.jobs.base import JobContext
 from crsbench.benchmark_ci.jobs.flat import (
     BuildPatchVariantJob,
     FlatCollectCoverageJob,
@@ -328,7 +327,9 @@ class TestCreatePostTrialJobsDependencies:
 
         jobs = create_post_trial_jobs([result], {})
 
+        assert len(jobs) == 1
         coverage_job = jobs[0]
+        assert isinstance(coverage_job, FlatCollectCoverageJob)
         assert coverage_job.build_job_id == ""
         assert coverage_job.depends_on == []
 
@@ -365,34 +366,62 @@ class TestExecutePostTrialAnalysis:
 
     def test_empty_jobs_returns_empty_results(self) -> None:
         """Empty job list returns empty results dict."""
-        context = JobContext()
-        results = execute_post_trial_analysis([], context)
+        results = execute_post_trial_analysis([], redis_host="localhost")
         assert results == {}
 
-    def test_executor_uses_typed_limits(self, tmp_path: Path) -> None:
-        """Executor created with correct type_limits."""
+    @patch("crsbench.distributed.ci_jobs.ci_results_to_executor_results")
+    @patch("crsbench.distributed.ci_jobs.enqueue_and_poll_ci_jobs")
+    def test_uses_redis_for_job_execution(
+        self,
+        mock_enqueue: MagicMock,
+        mock_convert: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Jobs are executed via Redis using enqueue_and_poll_ci_jobs."""
         job = FlatCollectCoverageJob(
             benchmark_path=tmp_path / "benchmark",
             benchmark_name="benchmark",
             harness="test_harness",
             build_job_id="",
         )
-        context = JobContext()
 
-        with patch("crsbench.experiment.post_trial.DAGExecutor") as mock_executor_cls:
-            mock_executor = MagicMock()
-            mock_executor_cls.return_value = mock_executor
-            mock_executor.execute.return_value = {}
+        # Mock raw results from Redis
+        mock_raw_results = {"raw": "results"}
+        mock_enqueue.return_value = mock_raw_results
 
-            execute_post_trial_analysis(
-                [job], context, build_workers=3, verify_workers=6
+        # Mock converted ExecutorResult dict
+        mock_executor_results = {
+            job.job_id: ExecutorResult(
+                job_id=job.job_id,
+                status=JobStatus.SUCCESS,
+                elapsed_seconds=5.0,
             )
+        }
+        mock_convert.return_value = mock_executor_results
 
-            mock_executor_cls.assert_called_once_with(
-                type_limits={"build": 3, "verify": 6}
-            )
+        results = execute_post_trial_analysis(
+            [job], redis_host="test-redis", queue_name="test-queue"
+        )
 
-    def test_results_track_success_failure(self, tmp_path: Path) -> None:
+        # Verify enqueue_and_poll_ci_jobs was called correctly
+        mock_enqueue.assert_called_once_with(
+            [job], "test-redis", queue_name="test-queue"
+        )
+
+        # Verify conversion was called with raw results
+        mock_convert.assert_called_once_with(mock_raw_results)
+
+        # Verify final results
+        assert results == mock_executor_results
+
+    @patch("crsbench.distributed.ci_jobs.ci_results_to_executor_results")
+    @patch("crsbench.distributed.ci_jobs.enqueue_and_poll_ci_jobs")
+    def test_results_track_success_failure(
+        self,
+        mock_enqueue: MagicMock,
+        mock_convert: MagicMock,
+        tmp_path: Path,
+    ) -> None:
         """Results correctly track success and failure."""
         job1 = FlatCollectCoverageJob(
             benchmark_path=tmp_path / "benchmark1",
@@ -406,7 +435,6 @@ class TestExecutePostTrialAnalysis:
             harness="harness2",
             build_job_id="",
         )
-        context = JobContext()
 
         mock_results = {
             job1.job_id: ExecutorResult(
@@ -422,51 +450,46 @@ class TestExecutePostTrialAnalysis:
             ),
         }
 
-        with patch("crsbench.experiment.post_trial.DAGExecutor") as mock_executor_cls:
-            mock_executor = MagicMock()
-            mock_executor_cls.return_value = mock_executor
-            mock_executor.execute.return_value = mock_results
+        mock_enqueue.return_value = {"raw": "results"}
+        mock_convert.return_value = mock_results
 
-            results = execute_post_trial_analysis([job1, job2], context)
+        results = execute_post_trial_analysis([job1, job2], redis_host="localhost")
 
         assert results[job1.job_id].success
         assert not results[job2.job_id].success
 
-    def test_uses_provided_context(self, tmp_path: Path) -> None:
-        """Executor uses provided context with shared data."""
+    @patch("crsbench.distributed.ci_jobs.ci_results_to_executor_results")
+    @patch("crsbench.distributed.ci_jobs.enqueue_and_poll_ci_jobs")
+    def test_default_redis_host_and_queue_name(
+        self,
+        mock_enqueue: MagicMock,
+        mock_convert: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Default redis_host and queue_name are used when not specified."""
         job = FlatCollectCoverageJob(
             benchmark_path=tmp_path / "benchmark",
             benchmark_name="benchmark",
             harness="test_harness",
-            build_job_id="build-variants:benchmark",
+            build_job_id="",
         )
 
-        shared_data = {
-            "build-variants:benchmark": {
-                "adapter": "mock_adapter",
-                "build_results": {},
-            }
-        }
-        context = JobContext(shared=shared_data)
+        mock_enqueue.return_value = {}
+        mock_convert.return_value = {}
 
-        with patch("crsbench.experiment.post_trial.DAGExecutor") as mock_executor_cls:
-            mock_executor = MagicMock()
-            mock_executor_cls.return_value = mock_executor
-            mock_executor.execute.return_value = {}
+        execute_post_trial_analysis([job])
 
-            execute_post_trial_analysis([job], context)
-
-            # Verify the same context was passed
-            call_args = mock_executor.execute.call_args
-            passed_context = call_args[0][1]
-            assert passed_context.shared == shared_data
+        # Verify default values
+        mock_enqueue.assert_called_once_with(
+            [job], "localhost", queue_name="crsbench_post_trial_verify"
+        )
 
 
 class TestCreatePostTrialJobsSourceMode:
     """Tests for source_mode parameter."""
 
-    def test_source_mode_default_is_main_repo(self, tmp_path: Path) -> None:
-        """Default source_mode is 'main_repo'."""
+    def test_source_mode_default_is_pkgs(self, tmp_path: Path) -> None:
+        """Default source_mode is 'pkgs'."""
         patch_path = tmp_path / "cpv_0_patch.diff"
         patch_path.write_text("patch")
 
@@ -484,7 +507,7 @@ class TestCreatePostTrialJobsSourceMode:
 
         build_job = jobs[0]
         assert isinstance(build_job, BuildPatchVariantJob)
-        assert build_job.source_mode == "main_repo"
+        assert build_job.source_mode == "pkgs"
 
     def test_source_mode_pkgs_passed_to_patch_jobs(self, tmp_path: Path) -> None:
         """source_mode='pkgs' is passed to BuildPatchVariantJob."""

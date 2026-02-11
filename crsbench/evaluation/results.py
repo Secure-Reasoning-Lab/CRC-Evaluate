@@ -284,6 +284,10 @@ class TrialMetadata(BaseModel):
     cores_per_trial: Optional[int] = None
     memory_per_trial: Optional[str] = None  # e.g., "8G"
 
+    # Worker identification (for distributed execution)
+    worker_machine: Optional[str] = None
+    worker_trial_dir: Optional[str] = None
+
 
 class TrialResult(BaseModel):
     """Result from a single trial execution.

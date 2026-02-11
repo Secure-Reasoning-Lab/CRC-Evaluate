@@ -1,15 +1,17 @@
 """Coverage validation subcommand.
 
-Constructs a flat DAG of BuildVariantsJob + FlatCollectCoverageJob,
-executed with typed concurrency limits.
+Uses _build_dag() from all_cmd to create jobs, then executes via Redis:
+Phase 1 — Build jobs (including coverage variant) via Redis build queue
+Phase 2 — FlatCollectCoverageJob via Redis verify queue
 """
 
-import argparse
+from __future__ import annotations
+
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from crsbench.benchmark_ci.cli.benchmark_discovery import discover_harness_names
 from crsbench.benchmark_ci.cli.common_args import (
     create_benchmark_selection_parent,
     create_build_options_parent,
@@ -18,16 +20,19 @@ from crsbench.benchmark_ci.cli.common_args import (
 from crsbench.benchmark_ci.cli.discovery import resolve_benchmark_paths
 from crsbench.benchmark_ci.cli.output import print_results_table, save_output_dir
 from crsbench.benchmark_ci.cli.result_aggregator import aggregate_coverage_result
-from crsbench.benchmark_ci.jobs.base import Job, JobContext
-from crsbench.benchmark_ci.jobs.flat import BuildVariantsJob, FlatCollectCoverageJob
+from crsbench.benchmark_ci.jobs.flat import (
+    BuildSingleVariantJob,
+    FlatCollectCoverageJob,
+)
 from crsbench.benchmark_ci.models import (
     BenchmarkValidationResult,
     CheckMode,
     ValidationSummary,
 )
-from crsbench.benchmark_ci.validator import _load_project_capabilities
-from crsbench.executor import DAGExecutor
 from crsbench.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    import argparse
 
 logger = get_logger(__name__)
 
@@ -47,7 +52,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
 
 def run_coverage(args: argparse.Namespace) -> int:
-    """Run coverage validation on resolved benchmarks via flat DAG."""
+    """Run coverage validation on resolved benchmarks via Redis."""
     paths = resolve_benchmark_paths(
         benchmark_arg=getattr(args, "benchmark", None),
         benchmarks_list=getattr(args, "benchmarks", None),
@@ -56,75 +61,106 @@ def run_coverage(args: argparse.Namespace) -> int:
         filter_pattern=getattr(args, "filter", None),
     )
 
-    source_mode = getattr(args, "source", "main_repo")
-    build_workers = getattr(args, "build_workers", 4)
-    verify_workers = getattr(args, "verify_workers", 4)
+    source_mode = getattr(args, "source", "pkgs")
     use_inc_build = not getattr(args, "no_inc_build", False)
     force_rebuild = getattr(args, "force_rebuild", True)
+    distributed = getattr(args, "distributed", False)
+    redis_host = getattr(args, "redis_host", "localhost")
 
     build_mode = "inc-build" if use_inc_build else "full-build"
     rebuild_mode = "force-rebuild" if force_rebuild else "cached"
+    exec_mode = f", distributed (redis={redis_host})" if distributed else ", local"
     logger.info(
         f"Running coverage: {len(paths)} benchmark(s), "
-        f"build-workers={build_workers}, verify-workers={verify_workers}, "
-        f"{build_mode}, {rebuild_mode}"
+        f"{build_mode}, {rebuild_mode}{exec_mode}"
     )
 
-    # Build flat DAG: BuildVariantsJob -> FlatCollectCoverageJob per benchmark
-    all_jobs: list[Job] = []
+    # Create full job DAG with coverage enabled
+    from crsbench.benchmark_ci.cli.commands.all_cmd import _build_dag
 
-    for path in paths:
-        supports_inc, _ = _load_project_capabilities(path)
-        effective_inc = use_inc_build and supports_inc
-        benchmark_name = path.name
+    all_jobs, benchmark_metadata = _build_dag(
+        list(paths),
+        use_inc_build=use_inc_build,
+        force_rebuild=force_rebuild,
+        source_mode=source_mode,
+        inc_coverage=True,
+    )
 
-        build_job = BuildVariantsJob(
-            benchmark_path=path,
-            benchmark_name=benchmark_name,
-            use_inc_build=effective_inc,
-            force_rebuild=force_rebuild,
-            source_mode=source_mode,
-        )
-        all_jobs.append(build_job)
+    # Filter to build + coverage jobs only
+    build_jobs = [j for j in all_jobs if isinstance(j, BuildSingleVariantJob)]
+    coverage_jobs = [j for j in all_jobs if isinstance(j, FlatCollectCoverageJob)]
 
-        harnesses = discover_harness_names(path)
-        harness = harnesses[0] if harnesses else ""
-
-        coverage_job = FlatCollectCoverageJob(
-            benchmark_path=path,
-            benchmark_name=benchmark_name,
-            harness=harness,
-            build_job_id=build_job.job_id,
-            source_mode=source_mode,
-        )
-        all_jobs.append(coverage_job)
-
-    # Log DAG summary
-    build_count = sum(1 for j in all_jobs if isinstance(j, BuildVariantsJob))
-    coverage_count = sum(1 for j in all_jobs if isinstance(j, FlatCollectCoverageJob))
     logger.info(
-        f"DAG: {len(all_jobs)} jobs — {build_count} build, {coverage_count} coverage"
+        f"Jobs: {len(build_jobs)} build, {len(coverage_jobs)} coverage "
+        f"(filtered from {len(all_jobs)} total)"
     )
 
-    # Execute with typed concurrency
-    start_dt = datetime.now()
-    executor = DAGExecutor(
-        type_limits={"build": build_workers, "verify": verify_workers}
-    )
     output_dir = getattr(args, "output_dir", None)
-    context = JobContext(output_dir=Path(output_dir) if output_dir else None)
-    dag_results = executor.execute(all_jobs, context)
 
-    # Build summary from DAG results
+    start_dt = datetime.now()
+
+    if distributed:
+        from crsbench.benchmark_ci.cli.commands.build_cmd import (
+            _run_distributed_build,
+        )
+
+        build_results = _run_distributed_build(
+            build_jobs, redis_host, output_dir=output_dir
+        )
+
+        from crsbench.distributed.ci_jobs import (
+            ci_results_to_executor_results,
+            enqueue_and_poll_ci_jobs,
+        )
+
+        if coverage_jobs:
+            verify_queue_name = "crsbench_ci_verify"
+            raw_coverage_results = enqueue_and_poll_ci_jobs(
+                coverage_jobs,
+                redis_host,
+                queue_name=verify_queue_name,
+                output_dir=output_dir,
+            )
+            coverage_results = ci_results_to_executor_results(raw_coverage_results)
+        else:
+            coverage_results = {}
+
+        dag_results = {**build_results, **coverage_results}
+    else:
+        from crsbench.benchmark_ci.executor import execute_jobs_locally
+
+        relevant_jobs = build_jobs + coverage_jobs
+        dag_results = execute_jobs_locally(
+            relevant_jobs,
+            output_dir=Path(output_dir) if output_dir else None,
+        )
+
+    # Build summary from results
     summary = ValidationSummary(started_at=start_dt, check_mode=CheckMode.ALL)
 
-    for path in paths:
+    for (
+        path,
+        _supports_inc,
+        _rts_mode,
+        _cpv_ids,
+        _patch_keys,
+        build_job_ids,
+    ) in benchmark_metadata:
         coverage_result = aggregate_coverage_result(dag_results, path.name)
-        build_result = dag_results.get(f"build-variants:{path.name}")
-        shared_build = build_result.elapsed_seconds if build_result else 0.0
+
+        # Collect build time from BuildSingleVariantJob results
+        shared_build = 0.0
         storage_bytes = 0
-        if build_result and build_result.job_result:
-            storage_bytes = build_result.job_result.details.get("storage_bytes", 0)
+        for job_id in build_job_ids:
+            br = dag_results.get(job_id)
+            if br:
+                shared_build += br.elapsed_seconds
+                if br.job_result:
+                    storage_bytes = max(
+                        storage_bytes,
+                        br.job_result.details.get("storage_bytes", 0),
+                    )
+
         summary.add_result(
             BenchmarkValidationResult(
                 benchmark=path.name,
@@ -145,7 +181,6 @@ def run_coverage(args: argparse.Namespace) -> int:
         no_color=getattr(args, "no_color", False),
     )
 
-    output_dir = getattr(args, "output_dir", None)
     if output_dir:
         save_output_dir(summary, Path(output_dir), check_mode=CheckMode.ALL)
 

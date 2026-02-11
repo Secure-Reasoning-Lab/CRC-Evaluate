@@ -16,7 +16,7 @@ def _get_build_fallback(
     benchmark_name: str,
 ) -> bool:
     """Extract fallback_used from the build-variants job details."""
-    build_job_id = f"build-variants:{benchmark_name}"
+    build_job_id = f"build-variants/{benchmark_name}"
     build_result = dag_results.get(build_job_id)
     if build_result and build_result.job_result:
         return build_result.job_result.details.get("fallback_used", False)
@@ -28,7 +28,7 @@ def _get_shared_build_time(
     benchmark_name: str,
 ) -> float:
     """Get elapsed time from the shared build-variants job."""
-    build_job_id = f"build-variants:{benchmark_name}"
+    build_job_id = f"build-variants/{benchmark_name}"
     build_result = dag_results.get(build_job_id)
     if build_result:
         return build_result.elapsed_seconds
@@ -51,7 +51,7 @@ def aggregate_pov_build_results(
 
     # Find all build-single jobs for this benchmark
     for job_id, result in dag_results.items():
-        if not job_id.startswith(f"build-single:{benchmark_name}:"):
+        if not job_id.startswith(f"build-single/{benchmark_name}/"):
             continue
 
         build_time += result.elapsed_seconds
@@ -113,7 +113,7 @@ def aggregate_pov_pov_results(
     errors: list[str] = []
 
     for cpv_id in cpv_ids:
-        job_id = f"verify-cpv-pov:{benchmark_name}:{cpv_id}"
+        job_id = f"verify-cpv-pov/{benchmark_name}/{cpv_id}"
         result = dag_results.get(job_id)
 
         if result is None:
@@ -185,7 +185,7 @@ def aggregate_pov_var_results(
 
     for cpv_id in cpv_ids:
         # Read from the new VerifyCpvVarJob
-        job_id = f"verify-cpv-var:{benchmark_name}:{cpv_id}"
+        job_id = f"verify-cpv-var/{benchmark_name}/{cpv_id}"
         result = dag_results.get(job_id)
 
         if result is None:
@@ -273,7 +273,7 @@ def aggregate_pov_results(
     errors: list[str] = []
 
     for cpv_id in cpv_ids:
-        job_id = f"verify-cpv-pov:{benchmark_name}:{cpv_id}"
+        job_id = f"verify-cpv-pov/{benchmark_name}/{cpv_id}"
         result = dag_results.get(job_id)
 
         if result is None:
@@ -354,7 +354,7 @@ def aggregate_patch_results(
 
     for cpv_id, patch_id in patch_keys:
         # Check build
-        build_job_id = f"build-patch:{benchmark_name}:{cpv_id}:{patch_id}"
+        build_job_id = f"build-patch/{benchmark_name}/{cpv_id}/{patch_id}"
         build_result = dag_results.get(build_job_id)
 
         # Only attribute build time to FULL mode — RTS reuses the same build
@@ -367,11 +367,11 @@ def aggregate_patch_results(
             continue
 
         # Try new job structure first (separate POV and unittest jobs)
-        pov_job_id = f"test-patch-pov:{benchmark_name}:{cpv_id}:{patch_id}"
+        pov_job_id = f"test-patch-pov/{benchmark_name}/{cpv_id}/{patch_id}"
         pov_result = dag_results.get(pov_job_id)
 
         unittest_job_id = (
-            f"test-patch-unittest:{benchmark_name}:{cpv_id}:{patch_id}:{test_mode}"
+            f"test-patch-unittest/{benchmark_name}/{cpv_id}/{patch_id}/{test_mode}"
         )
         unittest_result = dag_results.get(unittest_job_id)
 
@@ -422,7 +422,7 @@ def aggregate_patch_results(
             continue
 
         # Fallback to old job structure (combined test-patch job)
-        test_job_id = f"test-patch:{benchmark_name}:{cpv_id}:{patch_id}:{test_mode}"
+        test_job_id = f"test-patch/{benchmark_name}/{cpv_id}/{patch_id}/{test_mode}"
         test_result = dag_results.get(test_job_id)
 
         if test_result is None:
@@ -498,7 +498,7 @@ def aggregate_patch_build_results(
     build_time = 0.0
 
     for cpv_id, patch_id in patch_keys:
-        build_job_id = f"build-patch:{benchmark_name}:{cpv_id}:{patch_id}"
+        build_job_id = f"build-patch/{benchmark_name}/{cpv_id}/{patch_id}"
         build_result = dag_results.get(build_job_id)
 
         if build_result is None:
@@ -558,12 +558,12 @@ def aggregate_patch_pov_results(
 
     for cpv_id, patch_id in patch_keys:
         # Try new job ID format first (test-patch-pov)
-        test_job_id = f"test-patch-pov:{benchmark_name}:{cpv_id}:{patch_id}"
+        test_job_id = f"test-patch-pov/{benchmark_name}/{cpv_id}/{patch_id}"
         test_result = dag_results.get(test_job_id)
 
         # Fallback to old job ID format (test-patch:FULL) for compatibility
         if test_result is None:
-            test_job_id = f"test-patch:{benchmark_name}:{cpv_id}:{patch_id}:FULL"
+            test_job_id = f"test-patch/{benchmark_name}/{cpv_id}/{patch_id}/FULL"
             test_result = dag_results.get(test_job_id)
 
         if test_result is None:
@@ -636,7 +636,7 @@ def aggregate_patch_var_results(
 
     for cpv_id, patch_id in patch_keys:
         # Read from the new PatchVarTestJob
-        test_job_id = f"test-patch-var:{benchmark_name}:{cpv_id}:{patch_id}"
+        test_job_id = f"test-patch-var/{benchmark_name}/{cpv_id}/{patch_id}"
         test_result = dag_results.get(test_job_id)
 
         if test_result is None:
@@ -731,13 +731,13 @@ def aggregate_patch_unittest_results(
     for cpv_id, patch_id in patch_keys:
         # Try new job ID format first (test-patch-unittest)
         test_job_id = (
-            f"test-patch-unittest:{benchmark_name}:{cpv_id}:{patch_id}:{test_mode}"
+            f"test-patch-unittest/{benchmark_name}/{cpv_id}/{patch_id}/{test_mode}"
         )
         test_result = dag_results.get(test_job_id)
 
         # Fallback to old job ID format (test-patch) for compatibility
         if test_result is None:
-            test_job_id = f"test-patch:{benchmark_name}:{cpv_id}:{patch_id}:{test_mode}"
+            test_job_id = f"test-patch/{benchmark_name}/{cpv_id}/{patch_id}/{test_mode}"
             test_result = dag_results.get(test_job_id)
 
         if test_result is None:
@@ -799,7 +799,7 @@ def aggregate_coverage_result(
     benchmark_name: str,
 ) -> CheckResult:
     """Extract coverage result from DAG."""
-    job_id = f"collect-coverage:{benchmark_name}"
+    job_id = f"collect-coverage/{benchmark_name}"
     result = dag_results.get(job_id)
 
     if result is None:
@@ -839,7 +839,7 @@ def aggregate_build_result(
     benchmark_name: str,
 ) -> CheckResult:
     """Extract build result from DAG."""
-    job_id = f"build-variants:{benchmark_name}"
+    job_id = f"build-variants/{benchmark_name}"
     result = dag_results.get(job_id)
 
     if result is None:

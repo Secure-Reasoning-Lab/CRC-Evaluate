@@ -415,15 +415,15 @@ class TestVerificationEngineForceRebuild:
             adapter.get_mode.return_value.value = "delta"
 
             # First call - should build
-            engine._get_or_build_results(adapter, force_rebuild=False)
+            engine.get_or_build_results(adapter, force_rebuild=False)
             assert engine.builder.execute_plan.call_count == 1
 
             # Second call without force_rebuild - should use cache
-            engine._get_or_build_results(adapter, force_rebuild=False)
+            engine.get_or_build_results(adapter, force_rebuild=False)
             assert engine.builder.execute_plan.call_count == 1  # No new call
 
             # Third call with force_rebuild - should rebuild
-            engine._get_or_build_results(adapter, force_rebuild=True)
+            engine.get_or_build_results(adapter, force_rebuild=True)
             assert engine.builder.execute_plan.call_count == 2  # New call
 
     def test_get_or_build_results_passes_force_rebuild_to_builder(self):
@@ -448,7 +448,7 @@ class TestVerificationEngineForceRebuild:
             adapter.get_mode.return_value.value = "delta"
 
             # Call with force_rebuild=True
-            engine._get_or_build_results(adapter, force_rebuild=True)
+            engine.get_or_build_results(adapter, force_rebuild=True)
 
             # Verify force_rebuild=True was passed to execute_plan
             engine.builder.execute_plan.assert_called_once_with(
@@ -477,7 +477,7 @@ class TestVerificationEngineForceRebuild:
             adapter.get_mode.return_value.value = "delta"
 
             # Call without force_rebuild (should default to False)
-            engine._get_or_build_results(adapter)
+            engine.get_or_build_results(adapter)
 
             # Verify force_rebuild=False was passed to execute_plan
             engine.builder.execute_plan.assert_called_once_with(

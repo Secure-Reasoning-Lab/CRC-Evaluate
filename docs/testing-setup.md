@@ -175,14 +175,17 @@ sudo systemctl restart docker
 **Option 1: Using Helper Script (Recommended)**
 
 ```bash
-# Start Valkey
+# Docker network only (secure default)
 python scripts/valkey-helper.py start
 
-# Check status
-python scripts/valkey-helper.py status
+# With host access (local dev workers)
+python scripts/valkey-helper.py --bind-host start
 
-# View logs if needed
-python scripts/valkey-helper.py logs
+# With password auth (remote workers)
+python scripts/valkey-helper.py --password start
+
+# Check status (shows port binding + auth)
+python scripts/valkey-helper.py status
 ```
 
 **Option 2: Manual Docker Compose**
@@ -211,7 +214,7 @@ sudo systemctl enable valkey
 valkey-cli ping
 ```
 
-See [Distributed Execution Guide](distributed-execution.md) for complete Valkey documentation.
+See [Experiment Workflow](experiment-workflow.md) for complete Valkey documentation.
 
 ## Testing Workflows
 
@@ -546,7 +549,7 @@ python scripts/valkey-helper.py stats
 
 ## See Also
 
-- [Distributed Execution Guide](distributed-execution.md) - Full distributed setup
+- [Experiment Workflow](experiment-workflow.md) - Full experiment workflow
 - [Scripts README](../scripts/README.md) - Helper script documentation
 - [Valkey Service README](../services/valkey/README.md) - Valkey configuration
 - [Contributing Guide](../CONTRIBUTING.md) - Development workflow

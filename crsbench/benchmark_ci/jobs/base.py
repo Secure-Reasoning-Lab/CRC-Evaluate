@@ -85,11 +85,11 @@ class Job(ABC):
     def job_id(self) -> str:
         """Unique identifier for this job.
 
-        Format: {job_type}:{benchmark}-{sanitizer}-{variant}[:{pov_id}]
+        Format: {job_type}/{benchmark}-{sanitizer}-{variant}[/{pov_id}]
         Examples:
-            - build:curl-asan-deltabase
-            - verify-pov:curl-asan-deltaref:pov_0
-            - verify-patch:curl-asan-cpv0
+            - build-single/curl/curl-asan-deltabase
+            - verify-cpv-pov/curl/cpv_0
+            - test-patch-pov/curl/cpv_0/patch_0
         """
         ...
 
@@ -123,11 +123,11 @@ class Job(ABC):
         """Get log file path for this job, or None if no output_dir."""
         if not context.output_dir:
             return None
-        parts = self.job_id.split(":")
+        parts = self.job_id.split("/")
         benchmark_name = parts[1] if len(parts) > 1 else "unknown"
         job_dir = context.output_dir / benchmark_name / self.job_type
         job_dir.mkdir(parents=True, exist_ok=True)
-        safe_id = self.job_id.replace(":", "-")
+        safe_id = self.job_id.replace("/", "-")
         return job_dir / f"{safe_id}.log"
 
     def _write_job_log(self, context: JobContext, result: JobResult) -> None:

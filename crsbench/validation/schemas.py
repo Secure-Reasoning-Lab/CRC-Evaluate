@@ -106,6 +106,16 @@ class TrialMetadata(BaseModel):
     framework: FrameworkInfo | None = Field(
         default=None, description="CRSBench framework version and commit info"
     )
+    build_time: float | None = Field(
+        default=None, description="CRS build time in seconds (written after trial)"
+    )
+    run_time: float | None = Field(
+        default=None, description="CRS run time in seconds (written after trial)"
+    )
+
+    # Worker identification (for distributed execution)
+    worker_machine: Optional[str] = None
+    worker_trial_dir: Optional[str] = None
 
     # Build configuration
     build_mode: Optional[str] = None  # "delta" or "full" (evaluation mode)
@@ -696,8 +706,10 @@ class WorkerConfig(BaseModel):
     """Distributed worker configuration."""
 
     jobs: int = Field(default=4, ge=1, description="Number of parallel jobs per worker")
-    redis_host: str = Field(
-        default="localhost", description="Redis server hostname or IP for workers"
+    redis_host: Optional[str] = Field(
+        default=None,
+        description="Redis server hostname or IP for workers. "
+        "Falls back to top-level redis_host if not set.",
     )
     continuous: bool = Field(
         default=True,
@@ -765,6 +777,21 @@ class WorkerConfig(BaseModel):
         default=60,
         ge=1,
         description="Interval (seconds) between disk space checks when paused",
+    )
+    skip_cpus: Optional[str] = Field(
+        default=None,
+        description="CPUs to exclude from allocation (cpuset format, e.g., '0-3,8-11'). "
+        "These cores are skipped when building the CPU pool.",
+    )
+    shared_cpus: Optional[str] = Field(
+        default=None,
+        description="CPUs shared across all trials without exclusive allocation (cpuset format, e.g., '0-1'). "
+        "These cores are available to every container but not managed by the CPU pool.",
+    )
+    cores: Optional[str] = Field(
+        default=None,
+        description="Restrict CPU pool to these cores only (cpuset format, e.g., '16-47'). "
+        "If not set, all system cores are used. Accepts cpuset format.",
     )
 
 
@@ -868,6 +895,12 @@ class ExperimentConfig(BaseModel):
         "null skips LiteLLM entirely (for CRS that don't need LLM). "
         "Default is 'passthrough'.",
     )
+    skip_litellm: bool = Field(
+        default=False,
+        description="Skip LiteLLM/Postgres deployment entirely inside oss-crs containers. "
+        "Use when CRS does not need LLM access (e.g., pure fuzzer). "
+        "Passed as --skip-litellm to oss-bugfind-crs.",
+    )
     llm_tracking_enabled: bool = Field(
         default=True,
         description="Enable LLM usage tracking via LiteLLM Virtual Keys. "
@@ -888,9 +921,9 @@ class ExperimentConfig(BaseModel):
         description="Path to oss-fuzz directory (default: oss-fuzz)",
     )
     source_mode: Literal["main_repo", "pkgs"] = Field(
-        default="main_repo",
-        description="Source mode: 'main_repo' clones from git (default), "
-        "'pkgs' uses bundled tarballs from pkgs/ directory.",
+        default="pkgs",
+        description="Source mode: 'pkgs' uses bundled tarballs from pkgs/ directory (default), "
+        "'main_repo' clones from git.",
     )
     coverage_enabled: bool = Field(
         default=False,
@@ -1200,6 +1233,14 @@ class ExperimentConfig(BaseModel):
             raise ValueError(
                 "copy_results_after_trial=true requires results_filestore to be set"
             )
+        return self
+
+    @model_validator(mode="after")
+    def check_skip_litellm_overrides(self):
+        """When skip_litellm is true, disable litellm_mode and tracking."""
+        if self.skip_litellm:
+            self.litellm_mode = None
+            self.llm_tracking_enabled = False
         return self
 
     def get_benchmark_list(self) -> List[str]:

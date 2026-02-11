@@ -277,7 +277,7 @@ class VerificationEngine:
         """
         # Get or build variants
         if build_results is None:
-            build_results = self._get_or_build_results(adapter)
+            build_results = self.get_or_build_results(adapter)
 
         if not build_results:
             return PovVerificationResult(
@@ -308,6 +308,7 @@ class VerificationEngine:
         crash_results: dict[VariantType, bool] = {}
         cpv_crash_map: dict[int, bool] = {}
         crash_logs: dict[str, str] = {}  # variant_name -> crash_log
+        variant_crashed: dict[str, bool] = {}  # variant_name -> crashed
 
         for task in tasks:
             result = self._execute_reproduce(task)
@@ -316,9 +317,10 @@ class VerificationEngine:
             else:
                 crash_results[result.variant_type] = result.crashed
 
-            # Collect crash log if crashed
-            if result.crashed and result.crash_log:
+            # Collect crash log for all variants (not just crashed)
+            if result.crash_log:
                 crash_logs[result.variant_name] = result.crash_log
+            variant_crashed[result.variant_name] = result.crashed
 
             logger.debug(
                 f"{result.variant_name}: {'crashed' if result.crashed else 'ok'}"
@@ -337,9 +339,12 @@ class VerificationEngine:
             pov_id=request.pov_id,
         )
 
-        # Attach crash logs to result
+        # Attach crash logs and variant crash status to result
         if crash_logs:
-            verdict.crash_info = {"logs": crash_logs}
+            verdict.crash_info = {
+                "logs": crash_logs,
+                "variant_crashed": variant_crashed,
+            }
 
         return verdict
 
@@ -458,7 +463,7 @@ class VerificationEngine:
             # Attach stdout/stderr logs to result
             crash_info: dict[str, dict[str, str]] = {}
             if stdout_logs:
-                crash_info["stdout"] = stdout_logs
+                crash_info["logs"] = stdout_logs
             if stderr_logs:
                 crash_info["stderr"] = stderr_logs
             if crash_info:
@@ -502,7 +507,7 @@ class VerificationEngine:
             Tuple of (list of verification results, number of POVs skipped due to hash)
         """
         # Build variants once
-        build_results = self._get_or_build_results(adapter)
+        build_results = self.get_or_build_results(adapter)
         if not build_results:
             logger.error(f"Failed to build variants for {adapter.benchmark_name}")
             return [], 0
@@ -607,7 +612,7 @@ class VerificationEngine:
             - fallback_used: True if any build used inc-build fallback
         """
         # Load benchmark configuration
-        adapter = self._load_adapter(benchmark_path)
+        adapter = self.load_adapter(benchmark_path)
         if not adapter:
             return PovBenchmarkOutput(results=[], skipped_count=0, fallback_used=False)
 
@@ -616,7 +621,7 @@ class VerificationEngine:
             self._built_results.pop(adapter.benchmark_name, None)
 
         build_start = time.time()
-        build_results = self._get_or_build_results(
+        build_results = self.get_or_build_results(
             adapter, force_rebuild=force_rebuild, use_inc_build=use_inc_build
         )
         build_elapsed = time.time() - build_start
@@ -756,7 +761,7 @@ class VerificationEngine:
             verify_time=verify_elapsed,
         )
 
-    def _get_or_build_results(
+    def get_or_build_results(
         self,
         adapter: MetaYamlAdapter,
         *,
@@ -815,7 +820,7 @@ class VerificationEngine:
         self._built_results[adapter.benchmark_name] = results
         return results
 
-    def _load_adapter(self, benchmark_path: Path) -> Optional[MetaYamlAdapter]:
+    def load_adapter(self, benchmark_path: Path) -> Optional[MetaYamlAdapter]:
         """Load MetaYamlAdapter from benchmark path.
 
         Args:

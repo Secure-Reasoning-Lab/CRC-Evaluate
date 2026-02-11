@@ -64,6 +64,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         self.litellm_mode = litellm_mode
         self.config: Dict[str, Any] = {}
         self.built_projects: Set[str] = set()
+        self._project_build_times: Dict[str, float] = {}  # build_key -> build_time
         self._llm_api_key_override: Optional[str] = None
 
     @property
@@ -357,14 +358,18 @@ class CRSBugFindingExecutor(CRSExecutor):
             )
 
             # Cleanup other harness files to optimize disk usage
-            harness_name = Path(harness.name).stem
+            harness_name = harness.name
             sanitizer = self.config.get("sanitizer", "address")
             self.cleanup_other_harnesses(
                 trial_output_dir, harness_name, project_name, sanitizer
             )
 
-            # Record build time (time from start to run start)
-            build_time = time.time() - start_time
+            # Record build time: use stored time from pre-build if available,
+            # otherwise use time since start of run_crs()
+            build_key = f"{self.crs_config_name}:{project_name}"
+            build_time = self._project_build_times.get(
+                build_key, time.time() - start_time
+            )
             run_start_time = time.time()
 
             # Signal that CRS run is starting (after build)
@@ -515,6 +520,7 @@ class CRSBugFindingExecutor(CRSExecutor):
                 diff_path=diff_path,
                 execution_time=execution_time,
                 returncode=returncode,
+                timed_out=timed_out,
                 stdout=stdout,
                 stderr=stderr,
             )
@@ -664,7 +670,7 @@ class CRSBugFindingExecutor(CRSExecutor):
         source = load_benchmark_source(
             benchmark_path,
             dest_dir=source_dest,
-            source_mode=self.config.get("source_mode", "main_repo"),
+            source_mode=self.config.get("source_mode", "pkgs"),
             mode=self.config.get("mode"),
             verbose=self.config.get("verbose", False),
         )
@@ -746,6 +752,7 @@ class CRSBugFindingExecutor(CRSExecutor):
             build_time = time.time() - build_start_time
             logger.info(f"Successfully built CRS for {build_key} in {build_time:.1f}s")
             self.built_projects.add(build_key)
+            self._project_build_times[build_key] = build_time
 
         except subprocess.TimeoutExpired as e:
             logger.error(f"Build timeout after {timeout}s")
@@ -815,6 +822,10 @@ class CRSBugFindingExecutor(CRSExecutor):
         # Add external LiteLLM flag if using external LiteLLM
         if self.litellm_mode is not None:
             cmd.append("--external-litellm")
+
+        # Skip LiteLLM/Postgres deployment entirely (run command only)
+        if self.config.get("skip_litellm", False):
+            cmd.append("--skip-litellm")
 
         # Add gitcache flag if enabled
         if USE_GITCACHE:
@@ -1096,6 +1107,8 @@ class CRSBugFindingExecutor(CRSExecutor):
         returncode: int,
         stdout: str,
         stderr: str,
+        *,
+        timed_out: bool = False,
     ) -> None:
         """Store execution metadata to trial directory.
 
@@ -1129,8 +1142,8 @@ class CRSBugFindingExecutor(CRSExecutor):
             "command": " ".join(cmd),
             "execution": {
                 "returncode": returncode,
-                "success": returncode == 0,
-                "timeout": returncode == 124,
+                "success": returncode == 0 or timed_out,
+                "timeout": timed_out,
             },
             "hints": {
                 "enabled": hints_path is not None,

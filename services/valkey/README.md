@@ -21,30 +21,36 @@ python scripts/valkey-helper.py start
 python scripts/valkey-helper.py status
 ```
 
-**For host access (running workers on host):**
+**For host access (running workers on same machine):**
 ```bash
 # Start with host binding (localhost:6379)
-# Flag can be before or after the command
 python scripts/valkey-helper.py --bind-host start
-
-# Check status (shows port binding)
-python scripts/valkey-helper.py status
 
 # Now you can run workers on host
 export REDIS_HOST=localhost
 python -m crsbench.distributed.worker
 ```
 
+**For remote workers (password auth):**
+```bash
+# Start with password auth (binds 0.0.0.0, auto-generates password, saves to .env)
+python scripts/valkey-helper.py --password start
+
+# Copy .env to worker machines
+scp .env user@worker:/path/to/CRSBench/.env
+```
+
 **Other commands:**
 ```bash
+# Check status (shows port binding and password auth)
+python scripts/valkey-helper.py status
+
 # View logs
 python scripts/valkey-helper.py logs
 
-# Stop Valkey
+# Stop / restart (restart auto-detects password from .env)
 python scripts/valkey-helper.py stop
-
-# Restart (preserves bind-host setting if used)
-python scripts/valkey-helper.py restart --bind-host
+python scripts/valkey-helper.py restart
 ```
 
 See [scripts/README.md](../../scripts/README.md) for complete helper script documentation.
@@ -268,6 +274,6 @@ services:
 
 ## See Also
 
-- [Distributed Execution Guide](../../docs/distributed-execution.md)
+- [Experiment Workflow](../../docs/experiment-workflow.md)
 - [Distributed Job Queue Design](../../design-docs/distributed/distributed-job-queue.md)
 - [Valkey Documentation](https://valkey.io/)

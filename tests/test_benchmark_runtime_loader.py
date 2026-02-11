@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 from crsbench.benchmark.runtime.loader import (
+    get_bundled_tarball_path,
     has_bundled_source,
     load_benchmark_source,
 )
@@ -62,12 +63,10 @@ class TestLoadBenchmarkSourceMainRepo:
 
     def test_main_repo_ignores_pkgs(self, tmp_path: Path) -> None:
         """source_mode='main_repo' should ignore pkgs/ even if present."""
-        # Create pkgs/ with tarball (should be ignored)
         pkgs_dir = tmp_path / "pkgs"
         pkgs_dir.mkdir()
         (pkgs_dir / "mock-c.tar.gz").touch()
 
-        # Create minimal benchmark structure
         (tmp_path / "project.yaml").write_text(
             "main_repo: https://github.com/example/repo.git\n"
         )
@@ -86,7 +85,6 @@ class TestLoadBenchmarkSourceMainRepo:
                 tmp_path, dest_dir=dest_dir, source_mode="main_repo"
             )
 
-            # Should clone, not use bundled
             assert not source.is_bundled
             mock_ensure.assert_called_once()
 
@@ -129,7 +127,6 @@ class TestLoadBenchmarkSourcePkgs:
 
     def test_pkgs_mode_extracts_tarball(self, tmp_path: Path) -> None:
         """source_mode='pkgs' should extract tarball and return path."""
-        # Create pkgs/ with tarball
         pkgs_dir = tmp_path / "pkgs"
         pkgs_dir.mkdir()
         (pkgs_dir / "mock-c.tar.gz").touch()
@@ -150,14 +147,7 @@ class TestLoadBenchmarkSourcePkgs:
             mock_prepare.assert_called_once()
 
     def test_pkgs_mode_ignores_mode_parameter(self, tmp_path: Path) -> None:
-        """source_mode='pkgs' ignores mode - commit structure is from packaging.
-
-        The tarball already has the correct commit structure:
-        - Both modes: 1 squashed commit at vulnerable state
-        - Delta mode provides ref.diff as hint (not via git history)
-
-        No runtime post-processing needed.
-        """
+        """source_mode='pkgs' ignores mode - commit structure is from packaging."""
         pkgs_dir = tmp_path / "pkgs"
         pkgs_dir.mkdir()
         (pkgs_dir / "mock-c.tar.gz").touch()
@@ -169,19 +159,16 @@ class TestLoadBenchmarkSourcePkgs:
         ) as mock_prepare:
             mock_prepare.return_value = dest_dir / "mock-c"
 
-            # Call with mode="delta" - should be ignored
             load_benchmark_source(
                 tmp_path, dest_dir=dest_dir, source_mode="pkgs", mode="delta"
             )
 
-            # Verify no apply_ref_diff or squash_history params
             call_args, call_kwargs = mock_prepare.call_args
             assert "apply_ref_diff" not in call_kwargs
             assert "squash_history" not in call_kwargs
 
             mock_prepare.reset_mock()
 
-            # Call with mode="full" - should also be ignored
             load_benchmark_source(
                 tmp_path, dest_dir=dest_dir, source_mode="pkgs", mode="full"
             )
@@ -189,6 +176,35 @@ class TestLoadBenchmarkSourcePkgs:
             call_args, call_kwargs = mock_prepare.call_args
             assert "apply_ref_diff" not in call_kwargs
             assert "squash_history" not in call_kwargs
+
+
+class TestGetBundledTarballPath:
+    """Tests for get_bundled_tarball_path()."""
+
+    def test_returns_tarball_matching_workdir(self, tmp_path: Path) -> None:
+        """Returns tarball that matches Dockerfile WORKDIR."""
+        pkgs_dir = tmp_path / "pkgs"
+        pkgs_dir.mkdir()
+        (pkgs_dir / "curl.tar.gz").touch()
+
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM base\nWORKDIR $SRC/curl\n")
+
+        result = get_bundled_tarball_path(tmp_path)
+        assert result is not None
+        assert result.name == "curl.tar.gz"
+
+    def test_returns_none_when_no_match(self, tmp_path: Path) -> None:
+        """Returns None when tarball doesn't match WORKDIR."""
+        pkgs_dir = tmp_path / "pkgs"
+        pkgs_dir.mkdir()
+        (pkgs_dir / "other.tar.gz").touch()
+
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM base\nWORKDIR $SRC/curl\n")
+
+        result = get_bundled_tarball_path(tmp_path)
+        assert result is None
 
 
 class TestLoadBenchmarkSourceInvalidMode:

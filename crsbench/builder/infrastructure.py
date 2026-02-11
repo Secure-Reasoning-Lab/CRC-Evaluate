@@ -33,6 +33,26 @@ reproduce_logger = get_logger("reproduce")
 # Exit code constants from helper.py
 EXIT_CODE_TIMEOUT = 124  # Subprocess timeout in helper.py
 
+_LEAK_MARKERS = (
+    "LeakSanitizer:",
+    "detected memory leaks",
+)
+
+
+def _is_leak_only_exit(stdout: str) -> bool:
+    """Check if reproduce output is a LeakSanitizer-only exit (not a real crash).
+
+    LeakSanitizer exits with non-zero code but memory leaks are diagnostic,
+    not POV-triggered crashes. We pass -detect_leaks=0 to libfuzzer, but the
+    Docker base image's ASAN_OPTIONS=detect_leaks=1 can override it.
+
+    In practice, real crashes (SEGV/ABRT) kill the process before ASAN's
+    atexit LeakSanitizer handler runs, so leak markers and real crashes
+    are mutually exclusive.
+    """
+    return any(marker in stdout for marker in _LEAK_MARKERS)
+
+
 # Track initialized OSS-Fuzz paths to avoid redundant setup
 _initialized_oss_fuzz_paths: set[Path] = set()
 
@@ -505,7 +525,11 @@ class OSSFuzzInfrastructure:
         *,
         require_inc_build: Optional[bool] = None,
     ) -> bool:
-        """Check if a variant has been built.
+        """Check if a variant has been built successfully.
+
+        Requires `.build-meta.json` to exist as proof that the build
+        completed.  Interrupted builds leave partial files but no
+        metadata, so they are correctly rejected.
 
         Args:
             variant_name: Variant name
@@ -527,27 +551,28 @@ class OSSFuzzInfrastructure:
         if not any(build_path.iterdir()):
             return False
 
+        # Metadata must exist — it is written only after a successful build.
+        # A missing metadata file means the build was interrupted or incomplete.
+        metadata = self.read_build_metadata(variant_name)
+        if metadata is None:
+            logger.debug(
+                f"No build metadata for {variant_name}: "
+                "build may be incomplete, treating as not built"
+            )
+            return False
+
         # If require_inc_build is specified, verify the cached build matches
         if require_inc_build is not None:
-            metadata = self.read_build_metadata(variant_name)
-            if metadata is None:
-                # No metadata = legacy build, treat as standard (non-inc) build
-                cached_is_inc = False
-                fallback_used = False
-            else:
-                cached_is_inc = metadata.inc_build
-                fallback_used = metadata.fallback_used
-
-            if cached_is_inc != require_inc_build:
+            if metadata.inc_build != require_inc_build:
                 logger.debug(
                     f"Cache mismatch for {variant_name}: "
-                    f"cached inc_build={cached_is_inc}, required={require_inc_build}"
+                    f"cached inc_build={metadata.inc_build}, "
+                    f"required={require_inc_build}"
                 )
                 return False
 
             # If inc-build is required, reject builds that used fallback
-            # A fallback build is not a true inc-build and shouldn't be used for CI validation
-            if require_inc_build and fallback_used:
+            if require_inc_build and metadata.fallback_used:
                 logger.debug(
                     f"Cache mismatch for {variant_name}: "
                     f"cached build used fallback, but pure inc-build required"
@@ -1510,6 +1535,21 @@ class OSSFuzzInfrastructure:
                     stderr=stderr,
                     exit_code=124,
                 )
+
+            # Check for LeakSanitizer-only exit (not a real crash)
+            # -detect_leaks=0 flag may not suppress ASAN_OPTIONS=detect_leaks=1
+            if _is_leak_only_exit(stdout):
+                reproduce_logger.debug(
+                    f"{req_prefix}{pov_prefix}{project_name}/{harness} "
+                    f"LeakSanitizer only (exit code {result.returncode}), not a crash"
+                )
+                return ReproduceOutput(
+                    crashed=False,
+                    stdout=stdout,
+                    stderr=stderr,
+                    exit_code=result.returncode,
+                )
+
             logger.debug(
                 f"{req_prefix}{pov_prefix}{project_name}/{harness} crashed "
                 f"(exit code {result.returncode})"

@@ -10,7 +10,7 @@ Features:
 - Support for both FULL and DELTA benchmark modes
 - Incremental builds using pre-built images (for patch verification)
 
-For parallel builds, use BuildSingleVariantJob with DAGExecutor.
+For parallel builds, use BuildSingleVariantJob with Redis job queue.
 """
 
 import tempfile
@@ -74,7 +74,7 @@ class OSSFuzzBuilder:
     ) -> dict[str, BuildResult]:
         """Build multiple variants sequentially.
 
-        For parallel builds, use BuildSingleVariantJob with DAGExecutor.
+        For parallel builds, use BuildSingleVariantJob with Redis job queue.
 
         Args:
             configs: List of build configurations
@@ -110,7 +110,7 @@ class OSSFuzzBuilder:
                 configs_to_build.append(config)
 
         # Build remaining variants sequentially
-        # For parallel builds, use BuildSingleVariantJob with DAGExecutor
+        # For parallel builds, use BuildSingleVariantJob with Redis job queue
         if configs_to_build:
             self._ensure_repos_cached(configs_to_build)
             for config in configs_to_build:
@@ -158,12 +158,16 @@ class OSSFuzzBuilder:
         config: BuildConfig,
         *,
         force_rebuild: bool = False,
+        skip_if_cached: bool = True,
     ) -> BuildResult:
         """Build a single variant.
 
         Args:
             config: Build configuration
             force_rebuild: Force rebuild even if cached
+            skip_if_cached: If True (default), skip build when cached.
+                If False, always run Docker build even if cached
+                (but don't clean up first unless force_rebuild is set).
 
         Returns:
             Build result
@@ -176,9 +180,14 @@ class OSSFuzzBuilder:
             self.infra.cleanup_source(config.variant_name)
 
         # Check cache (skip if force_rebuild to ensure rebuild even if cleanup fails)
-        if not force_rebuild and self.infra.is_variant_built(
-            config.variant_name,
-            require_inc_build=config.use_inc_build,
+        # Also skip cache check if skip_if_cached=False (always build)
+        if (
+            not force_rebuild
+            and skip_if_cached
+            and self.infra.is_variant_built(
+                config.variant_name,
+                require_inc_build=config.use_inc_build,
+            )
         ):
             logger.debug(f"Using cached build for {config.variant_name}")
             build_path = self.infra.get_build_output_path(config.variant_name)

@@ -135,10 +135,10 @@ Examples:
     parser.add_argument(
         "--source",
         type=str,
-        default="main_repo",
+        default="pkgs",
         choices=["pkgs", "main_repo"],
-        help="Source for benchmark code: 'main_repo' clones from repository (default), "
-        "'pkgs' uses bundled tarballs",
+        help="Source for benchmark code: 'pkgs' uses bundled tarballs (default), "
+        "'main_repo' clones from repository",
     )
 
     parser.set_defaults(func=run_coverage)
@@ -189,7 +189,7 @@ def run_coverage(args: argparse.Namespace) -> int:
 
     # Create engine and collect coverage
     # Note: CoverageEngine processes corpus sequentially; verify_workers
-    # is used by DAGExecutor for benchmark-level parallelism
+    # is used by Redis job queue for benchmark-level parallelism
     engine = CoverageEngine(
         oss_fuzz_path=oss_fuzz_path,
         build_workers=args.build_workers,

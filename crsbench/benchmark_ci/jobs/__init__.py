@@ -2,12 +2,15 @@
 
 This module provides job abstractions for benchmark validation:
 
-Flat DAG jobs (used by CLI commands):
+Flat jobs (executed via Redis distributed workers):
 - BuildSingleVariantJob: Build a single variant for a benchmark (enables parallel builds)
-- BuildVariantsJob: Build all variants for a benchmark (legacy, sequential)
 - VerifyCpvPovJob: Verify POVs for a single CPV
+- VerifyCpvVarJob: Verify variant POVs for a single CPV
 - BuildPatchVariantJob: Build a patched variant
 - PatchVariantTestJob: Run POVs + tests on a patched build
+- PatchPovTestJob: Run POV test on patch
+- PatchVarTestJob: Run variant test on patch
+- PatchUnitTestJob: Run unit tests on patch
 - FlatCollectCoverageJob: Collect coverage for a benchmark
 
 Base classes:
@@ -20,7 +23,6 @@ from crsbench.benchmark_ci.jobs.base import Job, JobContext, JobResult
 from crsbench.benchmark_ci.jobs.flat import (
     BuildPatchVariantJob,
     BuildSingleVariantJob,
-    BuildVariantsJob,
     FlatCollectCoverageJob,
     PatchVariantTestJob,
     VerifyCpvPovJob,
@@ -29,7 +31,6 @@ from crsbench.benchmark_ci.jobs.flat import (
 __all__ = [
     "BuildPatchVariantJob",
     "BuildSingleVariantJob",
-    "BuildVariantsJob",
     "FlatCollectCoverageJob",
     "Job",
     "JobContext",

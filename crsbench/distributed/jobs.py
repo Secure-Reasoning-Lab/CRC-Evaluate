@@ -46,6 +46,27 @@ from crsbench.validation.schemas import TrialMetadata as TrialMetadataFile
 logger = get_logger(__name__)
 
 
+def _resolve_redis_host(config: ExperimentConfig) -> Optional[str]:
+    """Resolve the Redis host for verify queue connections.
+
+    The config.redis_host may be 'localhost' because the orchestrator serialized
+    it from its own perspective. On remote workers, we need the actual Redis host.
+    Priority: RQ job connection > config.redis_host.
+    """
+    try:
+        import rq
+
+        job = rq.get_current_job()
+        if job and job.connection:
+            conn_kwargs = job.connection.connection_pool.connection_kwargs
+            host = conn_kwargs.get("host", "localhost")
+            if host != "localhost":
+                return host
+    except Exception:
+        pass
+    return getattr(config, "redis_host", None)
+
+
 def _generate_results_folder_name(
     experiment_name: str, timestamp: Optional[str] = None
 ) -> str:
@@ -392,6 +413,8 @@ def _reconstruct_trial_result_from_success(
     total_povs = 0
     patches_generated = 0
     patches_valid = 0
+    build_time = None
+    run_time = None
 
     if metadata_file.exists():
         try:
@@ -409,6 +432,8 @@ def _reconstruct_trial_result_from_success(
             total_povs = metadata.get("total_povs", 0)
             patches_generated = metadata.get("patches_generated", 0)
             patches_valid = metadata.get("patches_valid", 0)
+            build_time = metadata.get("build_time")
+            run_time = metadata.get("run_time")
 
         except Exception as e:
             logger.warning(
@@ -441,6 +466,8 @@ def _reconstruct_trial_result_from_success(
         metadata=TrialMetadata(
             timestamp_start=0.0,
             timestamp_end=0.0,
+            build_time=build_time,
+            run_time=run_time,
         ),
     )
 
@@ -864,6 +891,7 @@ def run_crs_trial(
                 "allocated_memory": allocated_memory,
                 "run_id": trial_id,
                 "source_mode": config.source_mode,
+                "skip_litellm": config.skip_litellm,
             }
         )
 
@@ -906,6 +934,7 @@ def run_crs_trial(
             coverage_early_stop=coverage_early_stop,
             pov_early_stop=pov_early_stop,
             per_pov_verify_timeout=config.per_pov_verify_timeout,
+            verify_timeout=config.verify_timeout,
             oss_fuzz_path=oss_fuzz_path,
             on_build_start=on_build_start,
             on_run_start=on_run_start,
@@ -915,6 +944,8 @@ def run_crs_trial(
             llm_trial_id=trial_id,
             build_workers=config.build_workers,
             verify_workers=config.verify_workers,
+            redis_host=_resolve_redis_host(config),
+            experiment_name=config.experiment,
         )
 
         # Resolve benchmark path
@@ -977,6 +1008,8 @@ def run_crs_trial(
                 hints_enabled=config.hints_enabled,
                 hints_corpus_level=config.hint_corpus_level,
             ),
+            worker_machine=socket.gethostname(),
+            worker_trial_dir=str(trial_output_dir),
             build_mode=mode,
             sanitizer=sanitizer,
             experiment_name=config.experiment,
@@ -1054,6 +1087,8 @@ def run_crs_trial(
             memory_per_trial=config.resources.memory_per_trial
             if config.resources
             else None,
+            worker_machine=socket.gethostname(),
+            worker_trial_dir=str(trial_output_dir),
         )
 
         # Create trial result using Pydantic model
@@ -1077,6 +1112,13 @@ def run_crs_trial(
 
         # Log completion message
         logger.info(trial_result.log_summary())
+
+        # Update metadata.json with build/run timing
+        if build_time is not None or run_time is not None:
+            file_metadata.build_time = build_time
+            file_metadata.run_time = run_time
+            with metadata_file.open("w") as f:
+                json.dump(file_metadata.model_dump(mode="json"), f, indent=2)
 
         # Create success/fail marker file
         marker_file = trial_output_dir / (".success" if result.success else ".fail")

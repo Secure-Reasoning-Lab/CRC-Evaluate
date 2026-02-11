@@ -49,7 +49,9 @@ class POVStore:
     Attributes:
         store_dir: Directory for storing POV data (trial-N/povs/)
         povs: Hash-to-POVEntry mapping
-        cpv_to_first_pov: Maps each CPV to discovery info {pov_hash, discovery_ts, relative_time}
+        cpv_to_first_pov: Maps each CPV to {pov_hash, discovery_ts, relative_time}
+            discovery_ts/relative_time use file_mtime (CRS creation time) when available,
+            falling back to evaluator discovery time.
         crs_run_start_time: Timestamp when CRS started running (for relative time calculation)
     """
 
@@ -73,13 +75,27 @@ class POVStore:
         # Create directory structure
         self._create_directories()
 
+    def set_crs_run_start_time(self, start_time: float) -> None:
+        """Update CRS run start time (called after build completes).
+
+        This corrects the initial trial_start_time to the actual CRS run
+        start time, ensuring relative_time calculations exclude build time.
+
+        Args:
+            start_time: Unix timestamp when CRS run actually started
+        """
+        with self._lock:
+            self.crs_run_start_time = start_time
+        logger.info(f"POV store crs_run_start_time updated: {start_time}")
+
     def _create_directories(self) -> None:
         """Create store directory structure."""
         self.store_dir.mkdir(parents=True, exist_ok=True)
         # Create base directories
         (self.store_dir / "cpvs").mkdir(exist_ok=True)
-        (self.store_dir / "unintended" / "blobs").mkdir(parents=True, exist_ok=True)
-        (self.store_dir / "unintended" / "crash_logs").mkdir(exist_ok=True)
+        for status_dir in ("unintended", "not_vulnerable", "error"):
+            (self.store_dir / status_dir / "blobs").mkdir(parents=True, exist_ok=True)
+            (self.store_dir / status_dir / "crash_logs").mkdir(exist_ok=True)
         (self.store_dir / "snapshots").mkdir(exist_ok=True)
 
     def _get_category_dir(
@@ -103,8 +119,14 @@ class POVStore:
             (cpv_dir / "crash_logs").mkdir(exist_ok=True)
             return cpv_dir
 
-        # NOT_VULNERABLE, UNINTENDED_CRASH, ERROR, or other -> unintended
-        return self.store_dir / "unintended"
+        # Each status gets its own directory
+        status_dir_map = {
+            PovVerificationStatus.UNINTENDED_CRASH: "unintended",
+            PovVerificationStatus.NOT_VULNERABLE: "not_vulnerable",
+            PovVerificationStatus.ERROR: "error",
+        }
+        dirname = status_dir_map.get(status, status.value)
+        return self.store_dir / dirname
 
     def add_pov(
         self,
@@ -173,13 +195,15 @@ class POVStore:
                 verification_duration=verification_duration,
             )
 
-            # Track first POV for each CPV with discovery timestamp
+            # Track first POV for each CPV
+            # Prefer file_mtime (CRS creation time) over ts (discovery time)
+            cpv_ts = file_mtime if file_mtime is not None else ts
             for cpv_id in cpv_matched:
                 if cpv_id not in self.cpv_to_first_pov:
                     self.cpv_to_first_pov[cpv_id] = {
                         "pov_hash": pov_hash,
-                        "discovery_ts": ts,
-                        "relative_time": ts - self.crs_run_start_time,
+                        "discovery_ts": cpv_ts,
+                        "relative_time": cpv_ts - self.crs_run_start_time,
                     }
 
             # Log with relative time from CRS start
@@ -338,6 +362,111 @@ class POVStore:
         pov_hash = compute_content_hash(pov_path)
         with self._lock:
             return pov_hash, pov_hash in self.povs
+
+    def mark_hash_tested(
+        self,
+        pov_hash: str,
+        *,
+        file_mtime: Optional[float] = None,
+        file_size: int = 0,
+    ) -> None:
+        """Mark a POV hash as tested (pending async result).
+
+        Used in async mode to prevent re-enqueue of POVs that have
+        already been sent to Redis but haven't returned results yet.
+
+        Captures file_mtime at enqueue time so the original POV creation
+        timestamp is preserved when the async verdict arrives later.
+
+        Args:
+            pov_hash: Content hash of the POV file
+            file_mtime: File modification time (from stat) — POV creation time
+            file_size: File size in bytes
+        """
+        with self._lock:
+            if pov_hash not in self.povs:
+                self.povs[pov_hash] = POVEntry(
+                    hash=pov_hash,
+                    first_seen_ts=time.time(),
+                    file_mtime=file_mtime,
+                    file_size=file_size,
+                    status=PovVerificationStatus.ERROR,  # Placeholder
+                    cpv_matched=[],
+                )
+
+    @staticmethod
+    def _extract_hash(pov_id: str) -> str:
+        """Extract content hash from a pov_id.
+
+        Handles both ``{filename}:{hash}`` format (async mode)
+        and plain hash strings (legacy / inline).
+
+        Args:
+            pov_id: POV identifier, e.g. ``"pov_0.blob:47107064ecc2b03b"``
+
+        Returns:
+            The content hash portion
+        """
+        if ":" in pov_id:
+            return pov_id.rsplit(":", 1)[1]
+        return pov_id
+
+    def add_pov_by_id(
+        self,
+        pov_id: str,
+        status: PovVerificationStatus,
+        cpv_matched: list[str],
+    ) -> None:
+        """Add a POV result by ID (for async verification results).
+
+        Unlike add_pov() which takes a file path, this method accepts
+        a POV identifier string. Used when processing async Redis
+        results where the POV file may not be accessible.
+
+        The pov_id format is ``{filename}:{hash}`` (from _enqueue_pov).
+        The hash suffix is extracted and used as the store key to match
+        the placeholder entry created by mark_hash_tested().
+
+        Preserves file_mtime and first_seen_ts from the placeholder
+        entry so that POV creation timestamps are not overwritten by
+        verdict arrival time.
+
+        Args:
+            pov_id: POV identifier (``{filename}:{hash}`` or plain hash)
+            status: Verification result status
+            cpv_matched: List of CPV identifiers matched
+        """
+        pov_hash = self._extract_hash(pov_id)
+
+        with self._lock:
+            existing_entry = self.povs.get(pov_hash)
+
+            # Preserve timestamps from mark_hash_tested() placeholder
+            first_seen_ts = (
+                existing_entry.first_seen_ts if existing_entry else time.time()
+            )
+            file_mtime = existing_entry.file_mtime if existing_entry else None
+            file_size = existing_entry.file_size if existing_entry else 0
+
+            self.povs[pov_hash] = POVEntry(
+                hash=pov_hash,
+                first_seen_ts=first_seen_ts,
+                file_mtime=file_mtime,
+                file_size=file_size,
+                status=status,
+                cpv_matched=cpv_matched,
+            )
+
+            # Track CPV discovery
+            # Prefer file_mtime (CRS creation time) over first_seen_ts (poll time)
+            cpv_ts = file_mtime if file_mtime is not None else first_seen_ts
+            for cpv_id in cpv_matched:
+                if cpv_id not in self.cpv_to_first_pov:
+                    self.cpv_to_first_pov[cpv_id] = {
+                        "pov_hash": pov_hash,
+                        "discovery_ts": cpv_ts,
+                        "relative_time": cpv_ts - self.crs_run_start_time,
+                    }
 
     def get_stats(self) -> dict:
         """Get store statistics.

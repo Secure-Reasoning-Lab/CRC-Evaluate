@@ -4,6 +4,7 @@ import argparse
 
 from crsbench.benchmark_ci.cli.commands import (
     all_cmd,
+    build_cmd,
     coverage_cmd,
     format_cmd,
     parse_cmd,
@@ -24,6 +25,7 @@ def add_ci_subparser(subparsers: argparse._SubParsersAction) -> None:
         epilog="""
 Subcommands:
   format      Run format validation only (fast, no Docker)
+  build       Build POV variants only (no verification)
   pov         Run POV verification
   patch       Run patch verification
   coverage    Run coverage validation
@@ -40,6 +42,7 @@ Subcommands:
 
     # Register all subcommands
     format_cmd.register(ci_subparsers)
+    build_cmd.register(ci_subparsers)
     pov_cmd.register(ci_subparsers)
     patch_cmd.register(ci_subparsers)
     coverage_cmd.register(ci_subparsers)

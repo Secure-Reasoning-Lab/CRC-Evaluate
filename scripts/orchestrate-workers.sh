@@ -1,0 +1,430 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Worker Orchestration Script
+# =============================================================================
+# Run from cyclonus to push code, setup, and manage workers on remote machines.
+#
+# Usage:
+#   scripts/orchestrate-workers.sh <command> [machines...]
+#
+# Commands:
+#   push        Push feat/distributed branch to GitHub
+#   redis-setup Configure Redis on cyclonus with password auth
+#   setup       Setup workers on remote machines (parallel)
+#   start       Start workers on remote machines via tmux
+#   stop        Stop workers on remote machines
+#   status      Check worker status on remote machines
+#   logs        Tail worker logs on a remote machine
+#   collect     Rsync experiment results from remote machines to cyclonus
+#   all         Push + setup + start (full deployment)
+#
+# Environment:
+#   REDIS_PASSWORD  Override Redis password (default: read from .env)
+#
+# Examples:
+#   scripts/orchestrate-workers.sh redis-setup            # One-time Redis setup
+#   scripts/orchestrate-workers.sh all                    # Deploy to all machines
+#   scripts/orchestrate-workers.sh setup cerebros ramjet  # Setup specific machines
+#   scripts/orchestrate-workers.sh start cerebros         # Start one machine
+#   scripts/orchestrate-workers.sh status                 # Check all machines
+#   scripts/orchestrate-workers.sh logs ramjet            # Tail logs on ramjet
+#   scripts/orchestrate-workers.sh stop                   # Stop all workers
+#   scripts/orchestrate-workers.sh collect                # Rsync results to cyclonus
+# =============================================================================
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+BRANCH="feat/distributed"
+SETUP_SCRIPT="$SCRIPT_DIR/setup-remote-worker.sh"
+INSTALL_DIR="/home/dongkwan/CRSBench"
+TMUX_SESSION="crsbench-worker"
+REMOTE_EXPERIMENT_DIR="/home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc-rest7"
+ENV_FILE="$REPO_DIR/.env"
+
+# Default worker machines
+ALL_MACHINES=(cerebros ramjet)
+
+# Machine hostname mapping
+declare -A HOSTNAMES
+HOSTNAMES[cerebros]="cerebros.gtisc.gatech.edu"
+HOSTNAMES[ramjet]="ramjet.gtisc.gatech.edu"
+
+# SSH options: no strict host key checking, connection timeout
+SSH_OPTS="-A -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+
+# -----------------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------------
+
+log() { echo "[orchestrate] $*"; }
+err() { echo "[orchestrate] ERROR: $*" >&2; }
+
+load_env() {
+    # Source .env if it exists and REDIS_PASSWORD not already set
+    if [[ -z "${REDIS_PASSWORD:-}" ]] && [[ -f "$ENV_FILE" ]]; then
+        # shellcheck disable=SC1090
+        source "$ENV_FILE"
+    fi
+}
+
+get_redis_password() {
+    load_env
+    if [[ -n "${REDIS_PASSWORD:-}" ]]; then
+        echo "$REDIS_PASSWORD"
+        return
+    fi
+    err "Redis password not found. Run: scripts/orchestrate-workers.sh redis-setup"
+    exit 1
+}
+
+get_hostname() {
+    local machine="$1"
+    if [[ -z "${HOSTNAMES[$machine]+x}" ]]; then
+        err "Unknown machine: $machine (known: ${!HOSTNAMES[*]})"
+        exit 1
+    fi
+    echo "${HOSTNAMES[$machine]}"
+}
+
+get_machines() {
+    # Use provided machines or default to all
+    if [[ $# -gt 0 ]]; then
+        echo "$@"
+    else
+        echo "${ALL_MACHINES[@]}"
+    fi
+}
+
+ssh_cmd() {
+    local host="$1"
+    shift
+    # Separate SSH flags (starting with -) from the remote command
+    local ssh_flags=()
+    while [[ $# -gt 0 && "$1" == -* ]]; do
+        ssh_flags+=("$1")
+        shift
+    done
+    ssh $SSH_OPTS "${ssh_flags[@]+"${ssh_flags[@]}"}" "$host" "$@"
+}
+
+# -----------------------------------------------------------------------------
+# Commands
+# -----------------------------------------------------------------------------
+
+cmd_redis_setup() {
+    log "Setting up Redis via Docker with password authentication..."
+
+    local container_name="redis-crsbench"
+
+    # Check prerequisites
+    if ! command -v docker &>/dev/null; then
+        err "docker not found. Install Docker first."
+        exit 1
+    fi
+    if ! command -v redis-cli &>/dev/null; then
+        err "redis-cli not found. Install redis-tools: sudo apt install redis-tools"
+        exit 1
+    fi
+
+    # Reuse existing password from .env, or generate a new one
+    load_env
+    local password="${REDIS_PASSWORD:-}"
+    if [[ -z "$password" ]]; then
+        password=$(openssl rand -base64 24)
+        log "  Generated new Redis password"
+    else
+        log "  Reusing existing password from .env"
+    fi
+
+    # Stop and remove existing container if present
+    if docker ps -a --format '{{.Names}}' | grep -q "^${container_name}$"; then
+        log "  Removing existing $container_name container..."
+        docker rm -f "$container_name" >/dev/null 2>&1 || true
+    fi
+
+    # Start Redis in Docker, bound to 0.0.0.0 for remote workers
+    log "  Starting Redis container ($container_name) on port 6379..."
+    docker run -d \
+        --name "$container_name" \
+        --restart unless-stopped \
+        -p 0.0.0.0:6379:6379 \
+        redis:latest \
+        redis-server --requirepass "$password"
+
+    # Wait for Redis to be ready
+    local retries=10
+    while ! redis-cli -a "$password" ping &>/dev/null; do
+        retries=$((retries - 1))
+        if [[ $retries -le 0 ]]; then
+            err "Redis container failed to become ready"
+            exit 1
+        fi
+        sleep 1
+    done
+
+    # Save to .env
+    echo "REDIS_PASSWORD=$password" > "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+
+    log "  Container:  $container_name (redis:latest)"
+    log "  Listening:  0.0.0.0:6379"
+    log "  Password:   saved to $ENV_FILE"
+    log ""
+    log "  Usage:  uv run crsbench ...  (.env is loaded automatically)"
+}
+
+cmd_push() {
+    log "Pushing $BRANCH to origin..."
+    cd "$REPO_DIR"
+    git push origin "$BRANCH"
+    log "Push complete"
+}
+
+cmd_setup() {
+    local machines
+    read -ra machines <<< "$(get_machines "$@")"
+
+    if [[ ! -f "$SETUP_SCRIPT" ]]; then
+        err "Setup script not found: $SETUP_SCRIPT"
+        exit 1
+    fi
+
+    log "Setting up workers on: ${machines[*]}"
+
+    local pids=()
+    local logdir
+    logdir=$(mktemp -d)
+
+    for machine in "${machines[@]}"; do
+        local host
+        host=$(get_hostname "$machine")
+        local logfile="$logdir/$machine.log"
+
+        log "  Starting setup on $machine ($host)..."
+        # Copy script and .env to remote
+        scp -q $SSH_OPTS "$SETUP_SCRIPT" "$host:/tmp/setup-remote-worker.sh"
+        if [[ -f "$ENV_FILE" ]]; then
+            scp -q $SSH_OPTS "$ENV_FILE" "$host:$INSTALL_DIR/.env"
+        fi
+        # Pass REDIS_PASSWORD if available so setup can test connectivity
+        load_env
+        local redis_env=""
+        if [[ -n "${REDIS_PASSWORD:-}" ]]; then
+            redis_env="REDIS_PASSWORD=$REDIS_PASSWORD"
+        fi
+        ssh $SSH_OPTS "$host" "$redis_env bash /tmp/setup-remote-worker.sh $machine" \
+            > "$logfile" 2>&1 &
+        pids+=($!)
+    done
+
+    # Monitor progress while waiting
+    log "  Setup running in parallel. Tailing progress..."
+    local all_done=0
+    while [[ $all_done -eq 0 ]]; do
+        all_done=1
+        for pid in "${pids[@]}"; do
+            if kill -0 "$pid" 2>/dev/null; then
+                all_done=0
+                break
+            fi
+        done
+        if [[ $all_done -eq 0 ]]; then
+            # Show latest step from each machine
+            for machine in "${machines[@]}"; do
+                local last_step
+                last_step=$(grep -oP '\[\d+/\d+\].*' "$logdir/$machine.log" 2>/dev/null | tail -1 || true)
+                if [[ -n "$last_step" ]]; then
+                    echo "    $machine: $last_step"
+                fi
+            done
+            sleep 10
+        fi
+    done
+
+    # Collect exit codes
+    local failed=0
+    for i in "${!machines[@]}"; do
+        local machine="${machines[$i]}"
+        local pid="${pids[$i]}"
+        local logfile="$logdir/$machine.log"
+
+        if wait "$pid"; then
+            log "  $machine: setup OK"
+        else
+            err "  $machine: setup FAILED (see $logfile)"
+            failed=1
+        fi
+    done
+
+    if [[ $failed -eq 1 ]]; then
+        log "Log files in: $logdir"
+        exit 1
+    fi
+
+    rm -rf "$logdir"
+    log "All workers set up"
+}
+
+cmd_start() {
+    local machines
+    read -ra machines <<< "$(get_machines "$@")"
+
+    local redis_pass
+    redis_pass=$(get_redis_password)
+
+    log "Starting workers on: ${machines[*]}"
+
+    for machine in "${machines[@]}"; do
+        local host
+        host=$(get_hostname "$machine")
+        local config="$INSTALL_DIR/experiment-configs/experiment-config-afc-${machine}.yaml"
+
+        # Kill existing tmux session if present
+        ssh_cmd "$host" "tmux kill-session -t $TMUX_SESSION 2>/dev/null || true"
+
+        # Start worker in tmux with REDIS_PASSWORD and PATH for uv
+        ssh_cmd "$host" "tmux new-session -d -s $TMUX_SESSION \
+            'export PATH=\$HOME/.local/bin:\$PATH && export REDIS_PASSWORD=\"$redis_pass\" && cd $INSTALL_DIR && uv run crsbench worker --experiment-config $config 2>&1 | tee worker.log'"
+
+        log "  $machine: worker started (tmux session: $TMUX_SESSION)"
+    done
+
+    log "All workers started"
+}
+
+cmd_stop() {
+    local machines
+    read -ra machines <<< "$(get_machines "$@")"
+
+    log "Stopping workers on: ${machines[*]}"
+
+    for machine in "${machines[@]}"; do
+        local host
+        host=$(get_hostname "$machine")
+
+        if ssh_cmd "$host" "tmux kill-session -t $TMUX_SESSION 2>/dev/null"; then
+            log "  $machine: worker stopped"
+        else
+            log "  $machine: no worker running"
+        fi
+    done
+}
+
+cmd_status() {
+    local machines
+    read -ra machines <<< "$(get_machines "$@")"
+
+    for machine in "${machines[@]}"; do
+        local host
+        host=$(get_hostname "$machine")
+
+        echo ""
+        echo "=== $machine ($host) ==="
+
+        # Check if tmux session exists
+        if ssh_cmd "$host" "tmux has-session -t $TMUX_SESSION 2>/dev/null"; then
+            echo "  Worker: RUNNING"
+        else
+            echo "  Worker: STOPPED"
+        fi
+
+        # Disk usage
+        ssh_cmd "$host" "df -h /home | tail -1 | awk '{print \"  Disk:   \" \$3 \" used / \" \$2 \" (\" \$5 \" full)\"}'" 2>/dev/null || true
+
+        # Docker containers
+        local containers
+        containers=$(ssh_cmd "$host" "docker ps -q 2>/dev/null | wc -l" 2>/dev/null || echo "?")
+        echo "  Docker: $containers containers running"
+    done
+    echo ""
+}
+
+cmd_logs() {
+    local machines
+    read -ra machines <<< "$(get_machines "$@")"
+
+    if [[ ${#machines[@]} -ne 1 ]]; then
+        err "logs command requires exactly one machine (got: ${machines[*]})"
+        exit 1
+    fi
+
+    local machine="${machines[0]}"
+    local host
+    host=$(get_hostname "$machine")
+
+    log "Attaching to $machine worker logs (Ctrl+C to detach)..."
+    ssh_cmd "$host" -t "tmux attach -t $TMUX_SESSION"
+}
+
+cmd_collect() {
+    local machines
+    read -ra machines <<< "$(get_machines "$@")"
+
+    log "Collecting results from: ${machines[*]}"
+    log "  Remote source: $REMOTE_EXPERIMENT_DIR"
+    log "  Local dest:    $REMOTE_EXPERIMENT_DIR (merged into orchestrator dir)"
+
+    mkdir -p "$REMOTE_EXPERIMENT_DIR"
+
+    for machine in "${machines[@]}"; do
+        local host
+        host=$(get_hostname "$machine")
+
+        log "  Syncing $machine..."
+
+        # Rsync experiment data into the orchestrator's experiment dir.
+        # Trial paths are unique per benchmark/harness/trial so no conflicts.
+        rsync -az --progress \
+            --exclude='crs-build/' \
+            --exclude='.oss-bugfind/' \
+            -e "ssh $SSH_OPTS" \
+            "$host:$REMOTE_EXPERIMENT_DIR/" \
+            "$REMOTE_EXPERIMENT_DIR/"
+
+        log "  $machine: sync complete"
+    done
+
+    log "Collection complete. Results merged into $REMOTE_EXPERIMENT_DIR"
+}
+
+cmd_all() {
+    local machines
+    read -ra machines <<< "$(get_machines "$@")"
+
+    cmd_push
+    echo ""
+    cmd_setup "${machines[@]}"
+    echo ""
+    cmd_start "${machines[@]}"
+    echo ""
+    cmd_status "${machines[@]}"
+}
+
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
+
+COMMAND="${1:-help}"
+shift || true
+
+case "$COMMAND" in
+    push)        cmd_push ;;
+    redis-setup) cmd_redis_setup ;;
+    setup)       cmd_setup "$@" ;;
+    start)       cmd_start "$@" ;;
+    stop)        cmd_stop "$@" ;;
+    status)      cmd_status "$@" ;;
+    logs)        cmd_logs "$@" ;;
+    collect)     cmd_collect "$@" ;;
+    all)         cmd_all "$@" ;;
+    help|--help|-h)
+        head -32 "$0" | tail -30
+        ;;
+    *)
+        err "Unknown command: $COMMAND"
+        head -32 "$0" | tail -30
+        exit 1
+        ;;
+esac

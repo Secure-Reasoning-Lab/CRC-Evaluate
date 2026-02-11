@@ -8,7 +8,7 @@ This module provides utilities for:
 
 import os
 import threading
-from typing import Optional
+from typing import Optional, Union
 
 
 def parse_cpuset(cpuset_str: str) -> list[int]:
@@ -127,16 +127,52 @@ class CPUPool:
         >>> pool.release(cpus)  # Return CPUs to pool
         >>> pool.available_count()
         16
+        >>> pool = CPUPool(cores="16-47")  # Only use cores 16-47
+        >>> pool = CPUPool(skip_cpus="0-3")  # Skip system cores
+        >>> pool = CPUPool(cores="0-47", skip_cpus="0-3")  # Cores 4-47
+        >>> pool = CPUPool(cores=32)  # First 32 cores (0-31)
     """
 
-    def __init__(self, total_cpus: Optional[int] = None):
+    def __init__(
+        self,
+        total_cpus: Optional[int] = None,
+        *,
+        skip_cpus: Optional[str] = None,
+        cores: Optional[Union[str, int]] = None,
+    ):
         """Initialize CPU pool.
 
         Args:
-            total_cpus: Total number of CPUs (default: from os.cpu_count())
+            total_cpus: Total number of CPUs (default: from os.cpu_count()).
+                Ignored if ``cores`` is provided.
+            skip_cpus: CPUs to exclude from allocation (cpuset format,
+                e.g., ``"0-3,8-11"``).
+            cores: Restrict pool to these cores. Accepts a cpuset string
+                (e.g., ``"16-47"``) or an integer count (first N cores).
+                Takes precedence over ``total_cpus``.
         """
-        self.total_cpus = total_cpus or os.cpu_count() or 1
-        self.available = set(range(self.total_cpus))
+        # 1. Determine the base set of cores
+        if isinstance(cores, str):
+            base_set = set(parse_cpuset(cores))
+        elif isinstance(cores, int):
+            base_set = set(range(cores))
+        elif total_cpus is not None:
+            base_set = set(range(total_cpus))
+        else:
+            base_set = set(range(os.cpu_count() or 1))
+
+        # 2. Apply skip_cpus exclusion
+        if skip_cpus is not None:
+            skip_set = set(parse_cpuset(skip_cpus))
+            base_set -= skip_set
+
+        # 3. Validate the result
+        if not base_set:
+            raise ValueError("No CPUs available after applying skip_cpus exclusion")
+
+        # 4. Assign to instance variables
+        self.total_cpus = len(base_set)
+        self.available = base_set
         self.lock = threading.Lock()
 
     def allocate(self, count: int) -> Optional[list[int]]:

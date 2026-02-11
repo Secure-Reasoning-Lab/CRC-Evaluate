@@ -40,11 +40,9 @@ from crsbench.benchmark_ci.cli.result_aggregator import (
     aggregate_pov_results,
     aggregate_pov_var_results,
 )
-from crsbench.benchmark_ci.jobs.base import Job, JobContext
 from crsbench.benchmark_ci.jobs.flat import (
     BuildPatchVariantJob,
     BuildSingleVariantJob,
-    BuildVariantsJob,
     FlatCollectCoverageJob,
     PatchPovTestJob,
     PatchUnitTestJob,
@@ -61,12 +59,12 @@ from crsbench.benchmark_ci.models import (
 )
 from crsbench.benchmark_ci.validator import _load_project_capabilities
 from crsbench.builder.types import BenchmarkMode, VariantType
-from crsbench.executor import DAGExecutor
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
     import argparse
 
+    from crsbench.benchmark_ci.jobs.base import Job
     from crsbench.validation.meta_adapter import MetaYamlAdapter
 
 logger = get_logger(__name__)
@@ -85,7 +83,7 @@ def _load_benchmark_adapter(path: Path, source_mode: str) -> MetaYamlAdapter | N
 
     oss_fuzz_path = Path(get_oss_fuzz_root())
     engine = VerificationEngine(oss_fuzz_path, source_mode=source_mode)
-    return engine._load_adapter(path)
+    return engine.load_adapter(path)
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
@@ -441,8 +439,6 @@ def _log_dag_summary(all_jobs: list[Job]) -> None:
     build_single_count = sum(
         1 for j in all_jobs if isinstance(j, BuildSingleVariantJob)
     )
-    build_legacy_count = sum(1 for j in all_jobs if isinstance(j, BuildVariantsJob))
-
     # Count new split verify jobs (V:POV and V:VAR)
     pov_job_count = sum(1 for j in all_jobs if isinstance(j, VerifyCpvPovJob))
     var_job_count = sum(1 for j in all_jobs if isinstance(j, VerifyCpvVarJob))
@@ -459,12 +455,7 @@ def _log_dag_summary(all_jobs: list[Job]) -> None:
     patch_test_count = sum(1 for j in all_jobs if isinstance(j, PatchVariantTestJob))
     coverage_count = sum(1 for j in all_jobs if isinstance(j, FlatCollectCoverageJob))
 
-    # Report build-single if used, otherwise legacy build-variants
-    build_info = (
-        f"{build_single_count} build-single"
-        if build_single_count > 0
-        else f"{build_legacy_count} build"
-    )
+    build_info = f"{build_single_count} build-single"
 
     # Report new split verify structure
     verify_info = (
@@ -481,7 +472,7 @@ def _log_dag_summary(all_jobs: list[Job]) -> None:
         patch_info = f"{patch_build_count} patch-build, {patch_test_count} patch-test"
 
     logger.info(
-        f"DAG: {len(all_jobs)} jobs — "
+        f"Jobs: {len(all_jobs)} — "
         f"{build_info}, {verify_info}, "
         f"{patch_info}, {coverage_count} coverage"
     )
@@ -556,14 +547,6 @@ def _aggregate_benchmark(
                     build_result.job_result.details.get("storage_bytes", 0),
                 )
 
-    # Fallback to legacy BuildVariantsJob if no build_job_ids
-    if not build_job_ids:
-        build_job_id = f"build-variants:{benchmark_name}"
-        build_result = dag_results.get(build_job_id)
-        shared_build_time = build_result.elapsed_seconds if build_result else 0.0
-        if build_result and build_result.job_result:
-            storage_bytes = build_result.job_result.details.get("storage_bytes", 0)
-
     return BenchmarkValidationResult(
         benchmark=benchmark_name,
         benchmark_path=path,
@@ -598,18 +581,21 @@ def run_all(args: argparse.Namespace) -> int:
         filter_pattern=getattr(args, "filter", None),
     )
 
-    source_mode = getattr(args, "source", "main_repo")
+    source_mode = getattr(args, "source", "pkgs")
     build_workers = getattr(args, "build_workers", 4)
     verify_workers = getattr(args, "verify_workers", 4)
     use_inc_build = not getattr(args, "no_inc_build", False)
     force_rebuild = getattr(args, "force_rebuild", True)
+    distributed = getattr(args, "distributed", False)
+    redis_host = getattr(args, "redis_host", "localhost")
 
     build_mode = "inc-build" if use_inc_build else "full-build"
     rebuild_mode = "force-rebuild" if force_rebuild else "cached"
+    exec_mode = f", distributed (redis={redis_host})" if distributed else ""
     logger.info(
         f"Running all: {len(paths)} benchmark(s), "
         f"build-workers={build_workers}, verify-workers={verify_workers}, "
-        f"{build_mode}, {rebuild_mode}"
+        f"{build_mode}, {rebuild_mode}{exec_mode}"
     )
 
     start_dt = datetime.now()
@@ -622,9 +608,14 @@ def run_all(args: argparse.Namespace) -> int:
             "format check not run"
         )
 
-    # Phase 2: Build and execute flat DAG
+    # Read output_dir early so both local and distributed paths can use it
+    output_dir = getattr(args, "output_dir", None)
+
+    # Phase 2: Build + verify/test
     max_povs_per_cpv = getattr(args, "max_povs_per_cpv", None)
     inc_coverage = getattr(args, "inc_coverage", False)
+
+    # Build full DAG (includes build + verify/test jobs)
     all_jobs, benchmark_metadata = _build_dag(
         list(paths),
         use_inc_build=use_inc_build,
@@ -635,13 +626,63 @@ def run_all(args: argparse.Namespace) -> int:
     )
     _log_dag_summary(all_jobs)
 
-    output_dir = getattr(args, "output_dir", None)
-    output_path = Path(output_dir) if output_dir else None
-    context = JobContext(output_dir=output_path)
-    executor = DAGExecutor(
-        type_limits={"build": build_workers, "verify": verify_workers}
-    )
-    dag_results = executor.execute(all_jobs, context)
+    if distributed:
+        # Distributed: build via VariantPlanner + Redis, verify via Redis
+        from crsbench.executor.variant_planner import VariantPlanner
+
+        planner = VariantPlanner(
+            oss_fuzz_path=Path("oss-fuzz"), source_mode=source_mode
+        )
+        vp_build_jobs = planner.plan_all_builds(
+            list(paths),
+            use_inc_build=use_inc_build,
+            force_rebuild=force_rebuild,
+            skip_if_cached=False,
+            include_coverage=inc_coverage,
+        )
+
+        from crsbench.benchmark_ci.cli.commands.build_cmd import (
+            _run_distributed_build,
+        )
+
+        logger.info(
+            f"VariantPlanner: {len(vp_build_jobs)} build jobs via Redis, "
+            f"redis={redis_host}"
+        )
+        build_results = _run_distributed_build(
+            vp_build_jobs, redis_host, output_dir=output_dir
+        )
+
+        remaining_jobs = [
+            j for j in all_jobs if not isinstance(j, BuildSingleVariantJob)
+        ]
+        logger.info(
+            f"Build phase complete: {len(vp_build_jobs)} builds via Redis, "
+            f"{len(remaining_jobs)} verify/patch jobs via Redis"
+        )
+
+        from crsbench.distributed.ci_jobs import (
+            ci_results_to_executor_results,
+            enqueue_and_poll_ci_jobs,
+        )
+
+        verify_queue_name = "crsbench_ci_verify"
+        raw_verify_results = enqueue_and_poll_ci_jobs(
+            remaining_jobs,
+            redis_host,
+            queue_name=verify_queue_name,
+            output_dir=output_dir,
+        )
+        verify_results = ci_results_to_executor_results(raw_verify_results)
+        dag_results = {**build_results, **verify_results}
+    else:
+        # Local: execute full DAG sequentially
+        from crsbench.benchmark_ci.executor import execute_jobs_locally
+
+        dag_results = execute_jobs_locally(
+            all_jobs,
+            output_dir=Path(output_dir) if output_dir else None,
+        )
 
     # Phase 3: Aggregate into ValidationSummary
     summary = ValidationSummary(started_at=start_dt, check_mode=CheckMode.ALL)
@@ -676,7 +717,6 @@ def run_all(args: argparse.Namespace) -> int:
         no_color=getattr(args, "no_color", False),
     )
 
-    output_dir = getattr(args, "output_dir", None)
     if output_dir:
         save_output_dir(summary, Path(output_dir), check_mode=CheckMode.ALL)
 

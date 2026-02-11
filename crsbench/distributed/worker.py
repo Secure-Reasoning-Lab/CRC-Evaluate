@@ -17,7 +17,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from dotenv import load_dotenv
 
@@ -95,8 +95,14 @@ def main(
     timeout: Optional[int] = None,
     worker_name: Optional[str] = None,
     num_workers: int = 1,
+    queue_name: Optional[str] = None,
     *,
     use_cpuset: bool = False,
+    cores: Optional[str] = None,
+    skip_cpus: Optional[str] = None,
+    ci_build_jobs: Optional[int] = None,
+    ci_build_cores_per_job: Optional[int] = None,
+    ci_verify_jobs: Optional[int] = None,
 ) -> int:
     """
     Worker entry point - connects to Redis and processes jobs.
@@ -150,6 +156,9 @@ def main(
         worker_name or os.environ.get("CRSBENCH_WORKER_NAME") or socket.gethostname()
     )
 
+    # Resolve queue name
+    queue_name = queue_name or f"crsbench_{experiment_name}"
+
     logger.info("=" * 60)
     logger.info("CRSBench Distributed Worker")
     logger.info("=" * 60)
@@ -157,14 +166,34 @@ def main(
     logger.info(f"Parallel workers: {num_workers}")
     logger.info(f"Redis host: {redis_host}")
     logger.info(f"Experiment: {experiment_name}")
+    logger.info(f"Queue: {queue_name}")
     logger.info(f"Worker timeout: {worker_timeout}s")
     logger.info("=" * 60)
+
+    # CI dual-queue mode
+    if ci_build_jobs is not None:
+        from crsbench.distributed.ci_supervisor import run_ci_supervisor
+
+        return run_ci_supervisor(
+            redis_host=redis_host,
+            build_queue_name="crsbench_ci_build",
+            verify_queue_name="crsbench_ci_verify",
+            worker_name=worker_name,
+            build_jobs=ci_build_jobs,
+            build_cores_per_job=ci_build_cores_per_job or 1,
+            verify_jobs=ci_verify_jobs or ci_build_jobs,
+            job_runner=_ci_job_runner,
+            use_cpuset=use_cpuset,
+            use_cgroups=use_cpuset,
+            cores=cores,
+            skip_cpus=skip_cpus,
+        )
 
     # Single worker mode (use lock)
     if num_workers == 1:
         try:
             with worker_lock(worker_name):
-                _run_worker(redis_host, experiment_name, worker_name)
+                _run_worker(redis_host, experiment_name, worker_name, queue_name)
             return 0
         except BlockingIOError:
             lock_file_path = LOCK_DIR / f"crsbench-worker-{worker_name}.lock"
@@ -178,12 +207,25 @@ def main(
     if use_cpuset:
         # Use supervisor mode for CPU affinity
         return _run_supervisor(
-            redis_host, experiment_name, worker_name, num_workers, use_cpuset=True
+            redis_host,
+            experiment_name,
+            worker_name,
+            num_workers,
+            queue_name=queue_name,
+            use_cpuset=True,
+            use_cgroups=use_cpuset,
+            cores=cores,
+            skip_cpus=skip_cpus,
         )
 
     # Standard parallel workers
     return _spawn_workers(
-        redis_host, experiment_name, worker_name, num_workers, continuous=False
+        redis_host,
+        experiment_name,
+        worker_name,
+        num_workers,
+        queue_name=queue_name,
+        continuous=False,
     )
 
 
@@ -192,6 +234,7 @@ def _spawn_workers(
     experiment_name: str,
     worker_name: str,
     num_workers: int,
+    queue_name: Optional[str] = None,
     *,
     continuous: bool = False,
 ) -> int:
@@ -202,11 +245,13 @@ def _spawn_workers(
         experiment_name: Experiment identifier
         worker_name: Base worker name
         num_workers: Number of worker processes to spawn
+        queue_name: Redis queue name (default: crsbench_{experiment_name})
         continuous: Run in continuous mode
 
     Returns:
         Exit code (0 for success)
     """
+    queue_name = queue_name or f"crsbench_{experiment_name}"
     logger.info(f"Spawning {num_workers} worker processes...")
 
     processes = []
@@ -219,7 +264,7 @@ def _spawn_workers(
             p = multiprocessing.Process(
                 target=_run_single_worker,
                 args=(redis_host, experiment_name, name),
-                kwargs={"continuous": continuous},
+                kwargs={"continuous": continuous, "queue_name": queue_name},
                 name=f"worker-{i}",
             )
             p.start()
@@ -259,10 +304,14 @@ def _run_supervisor(
     experiment_name: str,
     worker_name: str,
     max_workers: int,
+    queue_name: Optional[str] = None,
     *,
     use_cpuset: bool = False,
+    use_cgroups: bool = False,
     minimum_disk_size: str = "10GB",
     disk_check_interval: int = 60,
+    cores: Optional[str] = None,
+    skip_cpus: Optional[str] = None,
 ) -> int:
     """Supervisor that spawns workers based on job CPU requirements.
 
@@ -279,6 +328,9 @@ def _run_supervisor(
         worker_name: Base worker name
         max_workers: Maximum number of concurrent workers
         use_cpuset: Enable CPU affinity (default: False)
+        use_cgroups: Create per-worker cgroups with cpuset constraints
+            so Docker containers inherit CPU pinning via
+            OSS_FUZZ_CGROUP_PARENT (default: False)
 
     Returns:
         Exit code (0 for success)
@@ -307,10 +359,36 @@ def _run_supervisor(
             exp_path.mkdir(parents=True, exist_ok=True)
             logger.info(f"Ensured filestore exists: {exp_path}")
 
-    cpu_pool = CPUPool() if use_cpuset else None
+    if use_cpuset:
+        # Parse cores: if it looks like an integer, pass as int
+        cores_arg: Union[str, int, None] = None
+        if cores is not None:
+            try:
+                cores_arg = int(cores)
+            except ValueError:
+                cores_arg = cores  # cpuset string
+        cpu_pool = CPUPool(cores=cores_arg, skip_cpus=skip_cpus)
+    else:
+        cpu_pool = None
+
+    # Cgroup initialization (if enabled)
+    cgroup_base: Optional[Path] = None
+    if use_cgroups:
+        from crsbench.utils.cgroup import (
+            cleanup_stale_cgroups,
+            run_preflight_checks,
+            setup_cgroup_hierarchy,
+        )
+
+        cgroup_base = run_preflight_checks()  # Raises CgroupError on failure
+        setup_cgroup_hierarchy(cgroup_base)
+        cleaned = cleanup_stale_cgroups(cgroup_base)
+        if cleaned > 0:
+            logger.info(f"Cleaned up {cleaned} stale cgroup(s)")
+
     workers: dict[
-        int, tuple[multiprocessing.Process, list[int], str, int]
-    ] = {}  # pid -> (process, cpus, job_id, worker_num)
+        int, tuple[multiprocessing.Process, list[int], str, int, Optional[Path]]
+    ] = {}  # pid -> (process, cpus, job_id, worker_num, cgroup_path)
     used_worker_nums: set[int] = set()  # Track which worker numbers are in use
 
     # Disk space checking state
@@ -328,7 +406,7 @@ def _run_supervisor(
         )
         redis_conn.ping()
 
-        queue_name = f"crsbench_{experiment_name}"
+        queue_name = queue_name or f"crsbench_{experiment_name}"
         queue = rq.Queue(queue_name, connection=redis_conn)  # type: ignore[attr-defined]
 
         logger.info(f"Supervisor connected to queue: {queue_name}")
@@ -338,7 +416,7 @@ def _run_supervisor(
         while True:
             # Cleanup finished workers
             for pid in list(workers.keys()):
-                proc, cpus, _job_id, worker_num = workers[pid]
+                proc, cpus, _job_id, worker_num, cgroup_path_entry = workers[pid]
                 if not proc.is_alive():
                     proc.join()
                     if cpu_pool and cpus:
@@ -346,6 +424,10 @@ def _run_supervisor(
                         logger.info(
                             f"Worker (PID: {pid}) finished, released CPUs {cpus}"
                         )
+                    if cgroup_path_entry:
+                        from crsbench.utils.cgroup import cleanup_cgroup
+
+                        cleanup_cgroup(cgroup_path_entry)
                     # Free up the worker number for reuse
                     used_worker_nums.discard(worker_num)
                     del workers[pid]
@@ -401,6 +483,7 @@ def _run_supervisor(
 
                     if cpu_pool is None or cpus is not None:
                         # Update job metadata with allocated CPUs (as cpuset string)
+                        cpuset_str = ""
                         if cpus:
                             # Convert CPU list to cpuset string format (e.g., [0,1,2,3] -> "0-3")
                             cpuset_str = format_cpuset(cpus)
@@ -421,14 +504,55 @@ def _run_supervisor(
                         used_worker_nums.add(worker_num)
                         name = f"{worker_name}-{worker_num}"
 
+                        # Create cgroup for this worker (if cgroups enabled)
+                        cgroup_path: Optional[Path] = None
+                        if cgroup_base is not None and cpuset_str:
+                            from crsbench.utils.cgroup import (
+                                cgroup_path_for_docker,
+                                create_cgroup,
+                            )
+
+                            cgroup_name = f"worker-{worker_num}"
+                            cgroup_path = create_cgroup(
+                                cgroup_base,
+                                cgroup_name,
+                                cpuset=cpuset_str,
+                            )
+                            cgroup_parent = cgroup_path_for_docker(cgroup_path)
+                            job.meta["cgroup_parent"] = cgroup_parent
+                            job.save_meta()
+                            logger.info(
+                                f"Created cgroup {cgroup_name} with cpuset={cpuset_str}"
+                            )
+
+                        # Set OSS_FUZZ_CGROUP_PARENT env var so the child process
+                        # (and its Docker containers) inherit the constraint.
+                        if cgroup_path is not None:
+                            from crsbench.utils.cgroup import cgroup_path_for_docker
+
+                            os.environ["OSS_FUZZ_CGROUP_PARENT"] = (
+                                cgroup_path_for_docker(cgroup_path)
+                            )
+
                         p = multiprocessing.Process(
                             target=_run_single_job_worker,
                             args=(redis_host, experiment_name, name, job.id),
                             name=f"worker-{worker_num}",
                         )
                         p.start()
+
+                        # Unset after spawning so it doesn't leak to the next worker
+                        if cgroup_path is not None:
+                            os.environ.pop("OSS_FUZZ_CGROUP_PARENT", None)
+
                         if p.pid is not None:
-                            workers[p.pid] = (p, cpus or [], job.id, worker_num)
+                            workers[p.pid] = (
+                                p,
+                                cpus or [],
+                                job.id,
+                                worker_num,
+                                cgroup_path,
+                            )
 
                         if cpus:
                             logger.info(
@@ -454,10 +578,10 @@ def _run_supervisor(
 
     except KeyboardInterrupt:
         logger.info("\nReceived interrupt signal, terminating workers...")
-        for _pid, (p, _cpus, _job_id, _worker_num) in workers.items():
+        for _pid, (p, _cpus, _job_id, _wn, _cg) in workers.items():
             if p.is_alive():
                 p.terminate()
-        for pid, (p, cpus, _job_id, _worker_num) in workers.items():
+        for pid, (p, cpus, _job_id, _wn, cgroup_path_entry) in workers.items():
             p.join(timeout=5)
             if p.is_alive():
                 logger.warning(f"Force killing worker (PID: {pid})")
@@ -465,10 +589,23 @@ def _run_supervisor(
                 p.join()
             if cpu_pool and cpus:
                 cpu_pool.release(cpus)
+            if cgroup_path_entry:
+                from crsbench.utils.cgroup import cleanup_cgroup
+
+                cleanup_cgroup(cgroup_path_entry)
         return 0
     except Exception as e:
         logger.error(f"Supervisor error: {e}", exc_info=True)
         return 3
+
+
+def _ci_job_runner(
+    redis_host: str,
+    child_name: str,
+    job_id: str,
+) -> None:
+    """Adapter for ci_supervisor: delegates to _run_single_job_worker."""
+    _run_single_job_worker(redis_host, "", child_name, job_id)
 
 
 def _run_single_job_worker(
@@ -490,6 +627,7 @@ def _run_single_job_worker(
     from rq.executions import Execution
     from rq.job import JobStatus
     from rq.registry import FailedJobRegistry, FinishedJobRegistry
+    from rq.results import Result
 
     from crsbench.utils.logger import add_file_handler, remove_file_handler
 
@@ -565,11 +703,20 @@ def _run_single_job_worker(
                             "ended_at": rq.utils.utcformat(job.ended_at),  # type: ignore[attr-defined]
                         },
                     )
+                    # Store trial error as exc_string for failed registry
+                    exc_string = f"Trial failed: {result.error_type}: {result.error}"
+                    # Store result in Redis (RQ 2.x uses separate result keys)
+                    Result.create(
+                        job,
+                        Result.Type.FAILED,
+                        ttl=-1,
+                        return_value=result,
+                        exc_string=exc_string,
+                        pipeline=pipeline,
+                    )
                     # Remove from started registry and add to failed registry
                     if execution:
                         execution.delete(job, pipeline=pipeline)
-                    # Store trial error as exc_string for failed registry
-                    exc_string = f"Trial failed: {result.error_type}: {result.error}"
                     failed_registry.add(
                         job, ttl=-1, exc_string=exc_string, pipeline=pipeline
                     )
@@ -591,6 +738,14 @@ def _run_single_job_worker(
                             "status": JobStatus.FINISHED,
                             "ended_at": rq.utils.utcformat(job.ended_at),  # type: ignore[attr-defined]
                         },
+                    )
+                    # Store result in Redis (RQ 2.x uses separate result keys)
+                    Result.create(
+                        job,
+                        Result.Type.SUCCESSFUL,
+                        ttl=-1,
+                        return_value=result,
+                        pipeline=pipeline,
                     )
                     # Remove from started registry and add to finished registry
                     if execution:
@@ -618,6 +773,14 @@ def _run_single_job_worker(
                         "ended_at": rq.utils.utcformat(job.ended_at),  # type: ignore[attr-defined]
                     },
                 )
+                # Store failure in Redis (RQ 2.x uses separate result keys)
+                Result.create(
+                    job,
+                    Result.Type.FAILED,
+                    ttl=-1,
+                    exc_string=exc_string,
+                    pipeline=pipeline,
+                )
                 # Remove from started registry and add to failed registry
                 if execution:
                     execution.delete(job, pipeline=pipeline)
@@ -641,7 +804,12 @@ def _run_single_job_worker(
 
 
 def _run_single_worker(
-    redis_host: str, experiment_name: str, worker_name: str, *, continuous: bool = False
+    redis_host: str,
+    experiment_name: str,
+    worker_name: str,
+    *,
+    continuous: bool = False,
+    queue_name: Optional[str] = None,
 ):
     """Run a single worker process (for multiprocessing).
 
@@ -650,6 +818,7 @@ def _run_single_worker(
         experiment_name: Experiment identifier
         worker_name: Worker name
         continuous: Run in continuous mode
+        queue_name: Redis queue name (default: crsbench_{experiment_name})
     """
     # Note: This runs in a subprocess, so we need to reconfigure logging
     configure_logger(level=os.environ.get("LOG_LEVEL", "INFO").upper(), sink=sys.stdout)
@@ -657,20 +826,30 @@ def _run_single_worker(
     if continuous:
         # Run continuous worker (without spawning more workers)
         run_worker_continuous(
-            redis_host, experiment_name, worker_name=worker_name, num_workers=1
+            redis_host,
+            experiment_name,
+            worker_name=worker_name,
+            num_workers=1,
+            queue_name=queue_name,
         )
     else:
         # Run burst mode worker
-        _run_worker(redis_host, experiment_name, worker_name)
+        _run_worker(redis_host, experiment_name, worker_name, queue_name)
 
 
-def _run_worker(redis_host: str, experiment_name: str, worker_name: str):
+def _run_worker(
+    redis_host: str,
+    experiment_name: str,
+    worker_name: str,
+    queue_name: Optional[str] = None,
+):
     """Internal helper to run the worker (separated for lock management).
 
     Args:
         redis_host: Redis server hostname
         experiment_name: Experiment identifier for queue naming
         worker_name: Worker name for identification
+        queue_name: Redis queue name (default: crsbench_{experiment_name})
     """
     try:
         # Connect to Redis
@@ -687,7 +866,7 @@ def _run_worker(redis_host: str, experiment_name: str, worker_name: str):
         logger.info("✓ Connected to Redis successfully")
 
         # Set up RQ queue and worker (RQ 2.x requires explicit connection)
-        queue_name = f"crsbench_{experiment_name}"
+        queue_name = queue_name or f"crsbench_{experiment_name}"
         queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
 
         # Store friendly worker name in environment for job metadata
@@ -754,10 +933,16 @@ def run_worker_continuous(
     _timeout: int = 3600,
     worker_name: Optional[str] = None,
     num_workers: int = 1,
+    queue_name: Optional[str] = None,
     *,
     use_cpuset: bool = False,
     minimum_disk_size: str = "10GB",
     disk_check_interval: int = 60,
+    cores: Optional[str] = None,
+    skip_cpus: Optional[str] = None,
+    ci_build_jobs: Optional[int] = None,
+    ci_build_cores_per_job: Optional[int] = None,
+    ci_verify_jobs: Optional[int] = None,
 ):
     """
     Run worker in continuous mode (polling indefinitely).
@@ -783,6 +968,34 @@ def run_worker_continuous(
         worker_name or os.environ.get("CRSBENCH_WORKER_NAME") or socket.gethostname()
     )
 
+    # Resolve queue name
+    queue_name = queue_name or f"crsbench_{experiment_name}"
+
+    # CI dual-queue mode
+    if ci_build_jobs is not None:
+        from crsbench.distributed.ci_supervisor import run_ci_supervisor
+
+        logger.info(f"Starting CI dual-queue supervisor for: {experiment_name}")
+        exit_code = run_ci_supervisor(
+            redis_host=redis_host,
+            build_queue_name="crsbench_ci_build",
+            verify_queue_name="crsbench_ci_verify",
+            worker_name=worker_name,
+            build_jobs=ci_build_jobs,
+            build_cores_per_job=ci_build_cores_per_job or 1,
+            verify_jobs=ci_verify_jobs or ci_build_jobs,
+            job_runner=_ci_job_runner,
+            use_cpuset=use_cpuset,
+            use_cgroups=use_cpuset,
+            cores=cores,
+            skip_cpus=skip_cpus,
+            minimum_disk_size=minimum_disk_size,
+            disk_check_interval=disk_check_interval,
+        )
+        if exit_code != 0:
+            raise RuntimeError(f"CI supervisor failed with exit code {exit_code}")
+        return
+
     # Always use supervisor mode for consistent behavior
     if use_cpuset:
         # Use supervisor mode for CPU affinity
@@ -794,9 +1007,13 @@ def run_worker_continuous(
             experiment_name,
             worker_name,
             num_workers,
+            queue_name=queue_name,
             use_cpuset=True,
+            use_cgroups=use_cpuset,
             minimum_disk_size=minimum_disk_size,
             disk_check_interval=disk_check_interval,
+            cores=cores,
+            skip_cpus=skip_cpus,
         )
     else:
         logger.info(
@@ -804,7 +1021,12 @@ def run_worker_continuous(
         )
         logger.info(f"Base worker name: {worker_name}")
         exit_code = _spawn_workers(
-            redis_host, experiment_name, worker_name, num_workers, continuous=True
+            redis_host,
+            experiment_name,
+            worker_name,
+            num_workers,
+            queue_name=queue_name,
+            continuous=True,
         )
 
     if exit_code != 0:

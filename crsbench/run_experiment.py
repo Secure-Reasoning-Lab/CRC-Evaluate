@@ -21,6 +21,7 @@ Usage:
 
 import argparse
 import importlib.util
+import json
 import os
 import secrets
 import string
@@ -34,14 +35,20 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
-from crsbench.builder import BuildResult
-from crsbench.distributed.jobs import get_crs_type
+from crsbench.distributed.jobs import (
+    _build_trial_output_path,
+    _check_existing_trial,
+    get_crs_type,
+)
 from crsbench.evaluation.cleanup import cleanup_trial_directory
 from crsbench.evaluation.results import CRSType, TrialResult
 from crsbench.utils import log_progress, log_section, log_summary, set_gitcache
+from crsbench.utils.benchmark_utils import (
+    filter_benchmarks_by_mode,
+    get_available_modes_for_benchmark,
+)
 from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.logger import configure_logger, get_logger
-from crsbench.utils.workers import resolve_build_workers
 from crsbench.validation.meta_adapter import MetaYamlAdapter
 from crsbench.validation.schemas import (
     BenchmarkHarness,
@@ -273,7 +280,7 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         choices=["main_repo", "pkgs"],
         required=False,
         metavar="SOURCE_MODE",
-        help="Source mode: 'main_repo' (git clone, default) or 'pkgs' (bundled tarballs). "
+        help="Source mode: 'pkgs' (bundled tarballs, default) or 'main_repo' (git clone). "
         "Overrides config file if specified.",
     )
 
@@ -342,6 +349,14 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         help="LiteLLM mode: 'passthrough' uses external LiteLLM (UPSTREAM_LITELLM_BASE_URL, LITELLM_API_KEY), "
         "'proxy' uses self-hosted proxy (LITELLM_BASE_URL, LITELLM_MASTER_KEY). "
         "If not set, CRS deploys its own LiteLLM instance. (overrides config file)",
+    )
+
+    parser.add_argument(
+        "--skip-litellm",
+        action="store_true",
+        default=None,
+        help="Skip LiteLLM/Postgres deployment inside oss-crs containers. "
+        "Use when CRS does not need LLM access. (overrides config file)",
     )
 
     parser.add_argument(
@@ -524,6 +539,11 @@ Examples:
     from crsbench.distributed.cli.worker_command import add_worker_subparser
 
     add_worker_subparser(subparsers)
+
+    # 'evaluator' subcommand - distributed POV verification
+    from crsbench.distributed.cli.evaluator_command import add_evaluator_subparser
+
+    add_evaluator_subparser(subparsers)
 
     # 'migrate' subcommand - migration and generation tools
     from crsbench.migration.cli.converter_command import add_migrate_subparser
@@ -896,38 +916,6 @@ def resolve_benchmark_harnesses(
     return harness_pairs
 
 
-def get_available_modes_for_benchmark(benchmark_path: Path) -> List[str]:
-    """Get list of available evaluation modes (delta/full) for a benchmark.
-
-    Args:
-        benchmark_path: Path to benchmark directory
-
-    Returns:
-        List of available mode strings ('delta' and/or 'full')
-    """
-    import yaml
-
-    meta_yaml_path = benchmark_path / ".aixcc" / "meta.yaml"
-    if not meta_yaml_path.exists():
-        logger.warning(f"meta.yaml not found at {meta_yaml_path}")
-        return []
-
-    try:
-        with meta_yaml_path.open() as f:
-            meta_data = yaml.safe_load(f)
-
-        modes = []
-        if meta_data.get("delta_mode"):
-            modes.append("delta")
-        if meta_data.get("full_mode"):
-            modes.append("full")
-
-        return modes
-    except Exception as e:
-        logger.warning(f"Failed to read modes from {meta_yaml_path}: {e}")
-        return []
-
-
 def _harness_has_cpv_with_sanitizer(harness: HarnessFile, sanitizer: str) -> bool:
     """Check if harness has any CPV requiring the specified sanitizer.
 
@@ -1221,84 +1209,6 @@ def _is_all_bug_fixing_crs(
     return True
 
 
-def build_variants_upfront(
-    trials: List[Trial],
-    config,
-    args: argparse.Namespace,
-) -> dict[str, BuildResult]:
-    """Build all required variants upfront before trial execution.
-
-    Delegates to the build orchestrator which creates deduplicated
-    BuildVariantsJob instances and executes them in parallel via DAGExecutor.
-
-    Args:
-        trials: List of Trial namedtuples
-        config: Experiment configuration
-        args: CLI arguments
-
-    Returns:
-        Dict mapping variant names to their build results
-    """
-    from crsbench.experiment.build_orchestrator import (
-        create_upfront_build_jobs,
-        execute_upfront_builds,
-    )
-
-    log_section("Building Variants Upfront", width=60)
-
-    # Resolve oss-fuzz path and export for BuildVariantsJob
-    oss_fuzz_path = Path(
-        args.oss_fuzz_path or config.oss_fuzz_path or (Path.cwd() / "oss-fuzz")
-    ).resolve()
-    if not oss_fuzz_path.exists():
-        raise RuntimeError(f"oss-fuzz directory not found: {oss_fuzz_path}")
-    os.environ["OSS_FUZZ_ROOT"] = str(oss_fuzz_path)
-
-    build_workers = resolve_build_workers(
-        getattr(args, "build_workers", None),
-        config.build_workers,
-    )
-    source_mode = getattr(config, "source_mode", "main_repo")
-
-    # Create deduplicated build jobs (one per unique benchmark+sanitizer)
-    jobs = create_upfront_build_jobs(
-        trials,
-        use_inc_build=False,
-        force_rebuild=False,
-        source_mode=source_mode,
-    )
-
-    if not jobs:
-        logger.warning("No variants to build")
-        return {}
-
-    # Execute in parallel via DAGExecutor
-    executor_results, context = execute_upfront_builds(
-        jobs, build_workers=build_workers
-    )
-
-    # Extract BuildResult dicts from context.shared
-    all_build_results: dict[str, BuildResult] = {}
-    for job in jobs:
-        shared_data = context.shared.get(job.job_id)
-        if shared_data and "build_results" in shared_data:
-            all_build_results.update(shared_data["build_results"])
-
-    # Report
-    successful = sum(1 for r in all_build_results.values() if r.success)
-    cached = sum(1 for r in all_build_results.values() if r.cached)
-    failed = sum(1 for r in all_build_results.values() if not r.success)
-    logger.info(
-        f"Build complete: {successful} succeeded ({cached} cached), {failed} failed"
-    )
-    if failed > 0:
-        for name, result in all_build_results.items():
-            if not result.success:
-                logger.error(f"  Failed: {name} - {result.error}")
-
-    return all_build_results
-
-
 def should_use_distributed_mode(
     args: argparse.Namespace, config, total_jobs: int
 ) -> bool:
@@ -1450,6 +1360,11 @@ def enhance_config_with_cli_args(
         overrides["litellm_mode"] = args.litellm_mode
         logger.info(f"Using LiteLLM mode from CLI: {args.litellm_mode}")
 
+    # Skip LiteLLM override
+    if args.skip_litellm is not None:
+        overrides["skip_litellm"] = args.skip_litellm
+        logger.info("Skip LiteLLM enabled via CLI")
+
     # Project image prefix override
     if args.project_image_prefix is not None:
         overrides["project_image_prefix"] = args.project_image_prefix
@@ -1508,35 +1423,11 @@ def run_experiment_local(
     """
     log_section("Running CRSBench in Local Mode (No Redis)", width=60)
 
-    # Resolve CRS paths with defaults (needed for _is_all_bug_fixing_crs check)
-    registry_dir = Path(config.registry_dir or "crses/registry").resolve()
-    crs_configs_dir = Path(config.crs_configs_dir or "crses/configs").resolve()
-
     # Dump trial matrix to JSON
     dump_trial_matrix(trials, config)
 
     logger.info(f"Total trials to execute: {len(trials)}")
     logger.info("=" * 60)
-
-    # Skip variant builds for bug-fixing CRS (built on-demand during patch verification)
-    if _is_all_bug_fixing_crs(trials, registry_dir, crs_configs_dir):
-        logger.info(
-            "Skipping upfront variant builds for bug-fixing CRS "
-            "(PATCHED variants built on-demand during patch verification)"
-        )
-        build_results = {}
-    else:
-        build_results = build_variants_upfront(trials, config, args)
-
-    # Check for critical build failures
-    failed_builds = [
-        name for name, result in build_results.items() if not result.success
-    ]
-    if failed_builds:
-        logger.warning(
-            f"{len(failed_builds)} variant builds failed. "
-            "Trials requiring these variants may fail."
-        )
 
     log_section("Executing Trials", width=60)
 
@@ -1563,8 +1454,7 @@ def run_experiment_local(
 
         # Build trial_id with random suffix
         # Must be lowercase for Docker Compose project name compatibility
-        harness_name_stem = Path(bh.harness.name).stem
-        raw_trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
+        raw_trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{bh.harness.name}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
         trial_id = sanitize_trial_id(raw_trial_id)
 
         result = run_crs_trial(
@@ -1608,13 +1498,96 @@ def run_experiment_local(
         _cleanup_experiment_artifacts(experiment_name, config)
 
 
-def monitor_jobs(queue, job_list: List, experiment_name: str) -> List[TrialResult]:
+def _write_orchestrator_marker(
+    trial_result: TrialResult, config: ExperimentConfig
+) -> None:
+    """Write completion marker and metadata on the orchestrator's disk.
+
+    Creates .success/.fail marker and metadata.json in the orchestrator's
+    experiment_filestore so completed trials are skipped on re-launch.
+    Skips writing metadata.json if it already exists (worker on same machine
+    already wrote full metadata).
+
+    Args:
+        trial_result: Result from a completed trial
+        config: Experiment configuration
+    """
+    if not trial_result.mode or not trial_result.sanitizer:
+        logger.debug(
+            f"Skipping orchestrator marker for trial {trial_result.trial_num}: "
+            "missing mode or sanitizer"
+        )
+        return
+
+    trial_dir = _build_trial_output_path(
+        filestore=config.experiment_filestore.resolve(),
+        experiment_name=config.experiment,
+        crs=trial_result.crs,
+        benchmark=trial_result.benchmark,
+        harness=trial_result.harness,
+        mode=trial_result.mode,
+        sanitizer=trial_result.sanitizer,
+        trial_num=trial_result.trial_num,
+    )
+    trial_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write marker
+    marker_name = ".success" if trial_result.success else ".fail"
+    marker_path = trial_dir / marker_name
+    if not marker_path.exists():
+        marker_path.touch()
+
+    # Write metadata.json only if it doesn't already exist
+    # (local worker already wrote full metadata)
+    metadata_path = trial_dir / "metadata.json"
+    if not metadata_path.exists():
+        metadata_dict = {
+            "crs": trial_result.crs,
+            "benchmark": trial_result.benchmark,
+            "harness": trial_result.harness,
+            "trial_num": trial_result.trial_num,
+            "mode": trial_result.mode,
+            "sanitizer": trial_result.sanitizer,
+            "success": trial_result.success,
+            "execution_time": trial_result.execution_time,
+            "timestamp_start": trial_result.metadata.timestamp_start,
+            "timestamp_end": trial_result.metadata.timestamp_end,
+            "build_time": trial_result.metadata.build_time,
+            "run_time": trial_result.metadata.run_time,
+            "worker_machine": trial_result.metadata.worker_machine,
+            "worker_trial_dir": trial_result.metadata.worker_trial_dir,
+            "povs_found": trial_result.povs_found,
+            "total_povs": trial_result.total_povs,
+            "patches_generated": trial_result.patches_generated,
+            "patches_valid": trial_result.patches_valid,
+            "error": trial_result.error,
+            "error_type": trial_result.error_type,
+        }
+        with metadata_path.open("w") as f:
+            json.dump(metadata_dict, f, indent=2)
+
+    logger.info(
+        f"Orchestrator marker written: {trial_dir / marker_name} "
+        f"(worker={trial_result.metadata.worker_machine})"
+    )
+
+
+def monitor_jobs(
+    queue,
+    job_list: List,
+    experiment_name: str,
+    config: ExperimentConfig,
+    *,
+    disk_skipped: int = 0,
+) -> List[TrialResult]:
     """Monitor job progress and display status.
 
     Args:
         queue: RQ queue instance
         job_list: List of enqueued RQ jobs
         experiment_name: Experiment identifier
+        config: Experiment configuration (for writing orchestrator markers)
+        disk_skipped: Number of trials skipped due to existing .success markers
 
     Returns:
         List of TrialResult objects
@@ -1626,12 +1599,21 @@ def monitor_jobs(queue, job_list: List, experiment_name: str) -> List[TrialResul
         logger.warning("Rich library not available, using basic progress display")
 
     if rich_available:
-        return _monitor_jobs_rich(queue, job_list, experiment_name)
-    return _monitor_jobs_basic(queue, job_list, experiment_name)
+        return _monitor_jobs_rich(
+            queue, job_list, experiment_name, config, disk_skipped=disk_skipped
+        )
+    return _monitor_jobs_basic(
+        queue, job_list, experiment_name, config, disk_skipped=disk_skipped
+    )
 
 
 def _monitor_jobs_basic(
-    queue, job_list: List, experiment_name: str
+    queue,
+    job_list: List,
+    experiment_name: str,
+    config: ExperimentConfig,
+    *,
+    disk_skipped: int = 0,
 ) -> List[TrialResult]:
     """Basic job monitoring without Rich UI."""
     from crsbench.distributed.queue import get_queue_stats
@@ -1639,20 +1621,27 @@ def _monitor_jobs_basic(
 
     logger.info(f"\nMonitoring {len(job_list)} jobs for experiment: {experiment_name}")
 
+    # Track jobs that have already had markers written
+    marked_jobs: set[str] = set()
+
     while True:
         stats = get_queue_stats(queue)
 
         # Display stats
         log_section(f"Experiment: {experiment_name}", width=60)
         logger.info(f"Workers connected: {stats.get('workers', 0)}")
+        status_dict = {
+            "queued": stats["queued"],
+            "started": stats["started"],
+            "finished": stats["finished"],
+            "failed": stats["failed"],
+        }
+        if disk_skipped > 0:
+            status_dict["skipped (disk)"] = disk_skipped
+        status_dict["total"] = len(job_list) + disk_skipped
         log_summary(
             "Queue Status",
-            {
-                "queued": stats["queued"],
-                "started": stats["started"],
-                "finished": stats["finished"],
-                "failed": stats["failed"],
-            },
+            status_dict,
             show_percentage=False,
             level="debug",
         )
@@ -1684,15 +1673,59 @@ def _monitor_jobs_basic(
             for line in running_jobs:
                 logger.info(line)
 
-        # Check if all jobs completed
+        # Check if all jobs completed and write markers incrementally
         completed = 0
         failed = 0
         for job in job_list:
             job.refresh()
             if job.is_finished:
                 completed += 1
+                # Write orchestrator marker as soon as job finishes
+                if job.id not in marked_jobs:
+                    try:
+                        result = job.result
+                        if result is None:
+                            logger.warning(
+                                f"Job {job.id[:8]} finished but result is None"
+                            )
+                        else:
+                            _write_orchestrator_marker(result, config)
+                        marked_jobs.add(job.id)
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to write orchestrator marker for {job.id[:8]}: {e}"
+                        )
+                        marked_jobs.add(job.id)
             elif job.is_failed:
                 failed += 1
+                # Write .fail marker for RQ-level failures
+                if job.id not in marked_jobs:
+                    kwargs = job.kwargs or {}
+                    meta = job.meta or {}
+                    fail_result = TrialResult(
+                        crs=kwargs.get("crs", "unknown"),
+                        benchmark=kwargs.get("benchmark", "unknown"),
+                        harness=kwargs.get("harness_name", "unknown"),
+                        trial_num=kwargs.get("trial_num", 0),
+                        crs_type=CRSType.BUG_FINDING,
+                        mode=kwargs.get("mode"),
+                        sanitizer=kwargs.get("sanitizer"),
+                        success=False,
+                        execution_time=0.0,
+                        error=f"Job failed: {job.exc_info}",
+                        error_type="RQJobFailure",
+                        report={},
+                        metadata=TrialMetadata(
+                            timestamp_start=0.0,
+                            timestamp_end=0.0,
+                            worker_machine=meta.get("worker_name"),
+                        ),
+                    )
+                    try:
+                        _write_orchestrator_marker(fail_result, config)
+                    except Exception as e:
+                        logger.warning(f"Failed to write orchestrator fail marker: {e}")
+                    marked_jobs.add(job.id)
 
         log_progress(
             completed + failed,
@@ -1714,6 +1747,7 @@ def _monitor_jobs_basic(
         elif job.is_failed:
             # Create TrialResult for failed jobs using job kwargs
             kwargs = job.kwargs or {}
+            meta = job.meta or {}
             results.append(
                 TrialResult(
                     crs=kwargs.get("crs", "unknown"),
@@ -1728,7 +1762,11 @@ def _monitor_jobs_basic(
                     error=f"Job failed: {job.exc_info}",
                     error_type="RQJobFailure",
                     report={},
-                    metadata=TrialMetadata(timestamp_start=0.0, timestamp_end=0.0),
+                    metadata=TrialMetadata(
+                        timestamp_start=0.0,
+                        timestamp_end=0.0,
+                        worker_machine=meta.get("worker_name"),
+                    ),
                 )
             )
 
@@ -1736,7 +1774,12 @@ def _monitor_jobs_basic(
 
 
 def _monitor_jobs_rich(
-    queue, job_list: List, experiment_name: str
+    queue,
+    job_list: List,
+    experiment_name: str,
+    config: ExperimentConfig,
+    *,
+    disk_skipped: int = 0,
 ) -> List[TrialResult]:
     """Monitor jobs with Rich UI."""
     from rich.console import Console, Group
@@ -1744,8 +1787,12 @@ def _monitor_jobs_rich(
     from rich.table import Table
 
     from crsbench.distributed.queue import get_queue_stats
+    from crsbench.evaluation.results import TrialMetadata
 
     console = Console()
+
+    # Track jobs that have already had markers written
+    marked_jobs: set[str] = set()
 
     def generate_status_table():
         stats = get_queue_stats(queue)
@@ -1762,7 +1809,9 @@ def _monitor_jobs_rich(
         table.add_row("Started", str(stats["started"]))
         table.add_row("Finished", str(stats["finished"]), style="green")
         table.add_row("Failed", str(stats["failed"]), style="red")
-        table.add_row("Total", str(len(job_list)))
+        if disk_skipped > 0:
+            table.add_row("Skipped (disk)", str(disk_skipped), style="dim")
+        table.add_row("Total", str(len(job_list) + disk_skipped))
 
         # Running jobs table
         running_table = Table(title="Running Jobs")
@@ -1810,15 +1859,60 @@ def _monitor_jobs_rich(
 
     with Live(generate_status_table(), refresh_per_second=1, console=console) as live:
         while True:
-            # Check if all jobs completed
+            # Check if all jobs completed and write markers incrementally
             completed = 0
             failed = 0
             for job in job_list:
                 job.refresh()
                 if job.is_finished:
                     completed += 1
+                    if job.id not in marked_jobs:
+                        try:
+                            result = job.result
+                            if result is None:
+                                logger.warning(
+                                    f"Job {job.id[:8]} finished but result is None"
+                                )
+                            else:
+                                _write_orchestrator_marker(result, config)
+                            marked_jobs.add(job.id)
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to write orchestrator marker for "
+                                f"{job.id[:8]}: {e}"
+                            )
+                            marked_jobs.add(job.id)
                 elif job.is_failed:
                     failed += 1
+                    if job.id not in marked_jobs:
+                        kwargs = job.kwargs or {}
+                        meta = job.meta or {}
+                        fail_result = TrialResult(
+                            crs=kwargs.get("crs", "unknown"),
+                            benchmark=kwargs.get("benchmark", "unknown"),
+                            harness=kwargs.get("harness_name", "unknown"),
+                            trial_num=kwargs.get("trial_num", 0),
+                            crs_type=CRSType.BUG_FINDING,
+                            mode=kwargs.get("mode"),
+                            sanitizer=kwargs.get("sanitizer"),
+                            success=False,
+                            execution_time=0.0,
+                            error=f"Job failed: {job.exc_info}",
+                            error_type="RQJobFailure",
+                            report={},
+                            metadata=TrialMetadata(
+                                timestamp_start=0.0,
+                                timestamp_end=0.0,
+                                worker_machine=meta.get("worker_name"),
+                            ),
+                        )
+                        try:
+                            _write_orchestrator_marker(fail_result, config)
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to write orchestrator fail marker: {e}"
+                            )
+                        marked_jobs.add(job.id)
 
             if completed + failed >= len(job_list):
                 break
@@ -1827,8 +1921,6 @@ def _monitor_jobs_rich(
             time.sleep(1)
 
     # Collect results
-    from crsbench.evaluation.results import TrialMetadata
-
     results: List[TrialResult] = []
     for job in job_list:
         job.refresh()
@@ -1837,6 +1929,7 @@ def _monitor_jobs_rich(
         elif job.is_failed:
             # Create TrialResult for failed jobs using job kwargs
             kwargs = job.kwargs or {}
+            meta = job.meta or {}
             results.append(
                 TrialResult(
                     crs=kwargs.get("crs", "unknown"),
@@ -1851,7 +1944,11 @@ def _monitor_jobs_rich(
                     error=f"Job failed: {job.exc_info}",
                     error_type="RQJobFailure",
                     report={},
-                    metadata=TrialMetadata(timestamp_start=0.0, timestamp_end=0.0),
+                    metadata=TrialMetadata(
+                        timestamp_start=0.0,
+                        timestamp_end=0.0,
+                        worker_machine=meta.get("worker_name"),
+                    ),
                 )
             )
 
@@ -2018,7 +2115,6 @@ def run_experiment_distributed(
         raise RuntimeError(f"Failed to initialize Redis queue at {config.redis_host}")
 
     # Resolve CRS paths with defaults
-    registry_dir = Path(config.registry_dir or "crses/registry").resolve()
     crs_configs_dir = Path(config.crs_configs_dir or "crses/configs").resolve()
 
     # Check for existing jobs in queue (queue sanity check)
@@ -2087,34 +2183,32 @@ def run_experiment_distributed(
                 f"Skipping {skipped_count} existing trials, enqueueing {len(trials)} new trials"
             )
 
+    # Disk-based filtering: skip trials with .success markers on orchestrator disk
+    # This catches trials completed by remote workers in previous runs
+    original_count = len(trials)
+    trials = [
+        t
+        for t in trials
+        if _check_existing_trial(
+            config,
+            t.crs,
+            t.benchmark_harness.name,
+            t.benchmark_harness.harness.name,
+            t.mode,
+            t.sanitizer,
+            t.trial_num,
+        )
+        is None
+    ]
+    disk_skipped = original_count - len(trials)
+    if disk_skipped > 0:
+        logger.info(f"Skipping {disk_skipped} trials already complete on disk")
+
     # Dump trial matrix to JSON
     dump_trial_matrix(trials, config)
 
     logger.info(f"Total trials to enqueue: {len(trials)}")
     logger.info("=" * 60)
-
-    # Skip variant builds for bug-fixing CRS (built on-demand during patch verification)
-    if _is_all_bug_fixing_crs(trials, registry_dir, crs_configs_dir):
-        logger.info(
-            "Skipping upfront variant builds for bug-fixing CRS "
-            "(PATCHED variants built on-demand during patch verification)"
-        )
-        build_results = {}
-    else:
-        # Build variants upfront (on coordinator machine)
-        # Workers will use the pre-built variants from oss-fuzz/build/out/
-        # TODO: workers on different machines
-        build_results = build_variants_upfront(trials, config, args)
-
-    # Check for critical build failures
-    failed_builds = [
-        name for name, result in build_results.items() if not result.success
-    ]
-    if failed_builds:
-        logger.warning(
-            f"{len(failed_builds)} variant builds failed. "
-            "Trials requiring these variants may fail."
-        )
 
     log_section("Enqueuing Trial Jobs", width=60)
 
@@ -2181,8 +2275,7 @@ def run_experiment_distributed(
 
         # Build trial_id at enqueue time with random suffix
         # Must be lowercase for Docker Compose project name compatibility
-        harness_name_stem = Path(bh.harness.name).stem
-        raw_trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{harness_name_stem}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
+        raw_trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{bh.harness.name}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
         trial_id = sanitize_trial_id(raw_trial_id)
 
         job = queue.enqueue(
@@ -2219,7 +2312,9 @@ def run_experiment_distributed(
 
     # Monitor progress
     logger.info("\nMonitoring job progress...")
-    results = monitor_jobs(queue, jobs, experiment_name)
+    results = monitor_jobs(
+        queue, jobs, experiment_name, config, disk_skipped=disk_skipped
+    )
 
     # Generate final report
     log_section("Experiment Complete - Generating Report", width=60)
@@ -2371,6 +2466,12 @@ def _generate_html_json_reports(experiment_name: str, config) -> None:
 
 def main() -> None:
     """Main entry point for the experiment runner."""
+    # Load .env file (REDIS_PASSWORD, etc.) if present.
+    # override=True ensures .env is the source of truth over stale shell exports.
+    from dotenv import load_dotenv
+
+    load_dotenv(override=True)
+
     # Parse arguments
     args = parse_arguments()
 
@@ -2400,6 +2501,12 @@ def main() -> None:
         from crsbench.distributed.cli.worker_command import run_worker
 
         sys.exit(run_worker(args))
+
+    if args.command == "evaluator":
+        # Handle evaluator command
+        from crsbench.distributed.cli.evaluator_command import run_evaluator
+
+        sys.exit(run_evaluator(args))
 
     if args.command == "migrate":
         # Handle migrate command (conversion and generation tools)
@@ -2468,12 +2575,17 @@ def main() -> None:
     experiment_name = (
         args.experiment_name if args.experiment_name else config.experiment
     )
+    original_experiment = config.experiment
+    # Propagate CLI override into config so serialized config_dict
+    # (sent to workers) uses the correct experiment name everywhere
+    if experiment_name != config.experiment:
+        config.experiment = experiment_name
     logger.info("=" * 60)
     logger.info("CRSBench Experiment Runner")
     logger.info("=" * 60)
     logger.info(f"Experiment name: {experiment_name}")
     if args.experiment_name:
-        logger.info(f"  (overridden from CLI, config has: {config.experiment})")
+        logger.info(f"  (overridden from CLI, config had: {original_experiment})")
     logger.info(f"Configuration file: {args.experiment_config}")
 
     # Resolve CRSes (CLI overrides config)
@@ -2544,6 +2656,23 @@ def main() -> None:
                     f"Benchmarks ({len(benchmark_names)}): {', '.join(benchmark_names)}"
                 )
 
+        # Filter benchmarks by mode early (before resolving harnesses)
+        benchmarks_root = Path(config.benchmarks_root or "benchmarks")
+        mode_str = config.mode.value  # Get string value from enum
+        if mode_str != "all":
+            original_count = len(benchmark_names)
+            benchmark_names = filter_benchmarks_by_mode(
+                benchmark_names, mode_str, benchmarks_root
+            )
+            # Also filter benchmark_entries to match
+            benchmark_entries = [
+                entry for entry in benchmark_entries if entry.name in benchmark_names
+            ]
+            if original_count != len(benchmark_names):
+                logger.info(
+                    f"Filtered by mode={mode_str}: {len(benchmark_names)} of {original_count} benchmarks"
+                )
+
     except ValueError as e:
         logger.error(f"Failed to resolve benchmarks: {e}")
         sys.exit(1)
@@ -2552,7 +2681,6 @@ def main() -> None:
 
     # Resolve BenchmarkHarness objects
     try:
-        benchmarks_root = Path(config.benchmarks_root or "benchmarks")
         benchmark_harnesses = resolve_benchmark_harnesses(
             benchmark_entries, benchmarks_root
         )

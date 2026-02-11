@@ -105,6 +105,54 @@ Examples:
         help="Disable CPU affinity (not supported with -j > 1)",
     )
 
+    worker_parser.add_argument(
+        "--queue",
+        type=str,
+        default="trial",
+        choices=["trial", "ci"],
+        help="Queue type: 'trial' (CRS experiment jobs) or 'ci' (CI build+verify)",
+    )
+
+    worker_parser.add_argument(
+        "--build-jobs",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Max concurrent build jobs (CI queue only, default: value of -j)",
+    )
+
+    worker_parser.add_argument(
+        "--build-cores-per-job",
+        type=int,
+        default=1,
+        metavar="M",
+        help="CPUs per build job (CI queue only, default: 1)",
+    )
+
+    worker_parser.add_argument(
+        "--verify-jobs",
+        type=int,
+        default=None,
+        metavar="K",
+        help="Max concurrent verify jobs (CI queue only, default: build-jobs * build-cores-per-job)",
+    )
+
+    worker_parser.add_argument(
+        "--cores",
+        type=str,
+        default=None,
+        metavar="CORES",
+        help="CPU cores for worker pool. Integer count (e.g., '32') or cpuset range (e.g., '16-47')",
+    )
+
+    worker_parser.add_argument(
+        "--skip-cpus",
+        type=str,
+        default=None,
+        metavar="CPUSET",
+        help="CPUs to exclude from allocation (cpuset format, e.g., '0-3,8-11')",
+    )
+
     worker_parser.set_defaults(command="worker")
 
 
@@ -154,7 +202,8 @@ def run_worker(args: argparse.Namespace) -> int:
 
     redis_host = resolve(
         args.redis_host,
-        worker_config.redis_host if worker_config else None,
+        (worker_config.redis_host if worker_config else None)
+        or (config.redis_host if config else None),
         "localhost",
     )
     num_workers = resolve(args.jobs, worker_config.jobs if worker_config else None, 1)
@@ -165,8 +214,36 @@ def run_worker(args: argparse.Namespace) -> int:
         args.experiment_name, experiment_name_from_config, "default"
     )
 
-    # Set worker override environment variables
-    if worker_config:
+    # Resolve queue name from --queue type
+    queue_type = getattr(args, "queue", "trial")
+    if queue_type == "ci":
+        queue_name = "crsbench_ci_build"
+    else:
+        queue_name = f"crsbench_{experiment_name}"
+
+    # Validate CI-only flags aren't used with trial queue
+    ci_only_flags = ["build_jobs", "verify_jobs"]
+    if queue_type == "trial":
+        for flag in ci_only_flags:
+            if getattr(args, flag, None) is not None:
+                flag_name = f"--{flag.replace('_', '-')}"
+                raise ValueError(f"{flag_name} is only valid with --queue ci")
+        if getattr(args, "build_cores_per_job", 1) != 1:
+            raise ValueError("--build-cores-per-job is only valid with --queue ci")
+
+    # Resolve CI dual-queue parameters
+    ci_build_jobs: int | None = None
+    ci_build_cores_per_job: int | None = None
+    ci_verify_jobs: int | None = None
+    if queue_type == "ci":
+        ci_build_jobs = getattr(args, "build_jobs", None) or num_workers
+        ci_build_cores_per_job = getattr(args, "build_cores_per_job", 1)
+        ci_verify_jobs = (
+            getattr(args, "verify_jobs", None) or ci_build_jobs * ci_build_cores_per_job
+        )
+
+    # Set worker override environment variables (skip for ci queue)
+    if worker_config and queue_type != "ci":
         override_fields = [
             "oss_fuzz_path",
             "registry_dir",
@@ -183,6 +260,9 @@ def run_worker(args: argparse.Namespace) -> int:
             "results_filestore",
             "minimum_disk_size",
             "disk_check_interval",
+            "skip_cpus",
+            "shared_cpus",
+            "cores",
         ]
         for field in override_fields:
             value = getattr(worker_config, field, None)
@@ -192,8 +272,10 @@ def run_worker(args: argparse.Namespace) -> int:
                 logger.info(f"Worker override: {field} = {value}")
 
     # Export experiment_filestore from main config if worker didn't override it
+    # (skip for ci queue — no experiment filestore needed)
     if (
-        args.experiment_config
+        queue_type != "ci"
+        and args.experiment_config
         and config is not None
         and "CRSBENCH_WORKER_EXPERIMENT_FILESTORE" not in os.environ
     ):
@@ -219,6 +301,15 @@ def run_worker(args: argparse.Namespace) -> int:
     minimum_disk_size = worker_config.minimum_disk_size if worker_config else "10GB"
     disk_check_interval = worker_config.disk_check_interval if worker_config else 60
 
+    # Resolve cores and skip_cpus: CLI > worker config > None
+    cores = getattr(args, "cores", None)
+    if cores is None and worker_config:
+        cores = worker_config.cores
+
+    skip_cpus = getattr(args, "skip_cpus", None)
+    if skip_cpus is None and worker_config:
+        skip_cpus = worker_config.skip_cpus
+
     # TODO: fix timeout too short
     # Prepare worker arguments with resolved values
     worker_args = {
@@ -238,13 +329,28 @@ def run_worker(args: argparse.Namespace) -> int:
                 _timeout=args.timeout,
                 worker_name=args.worker_name,
                 num_workers=num_workers,
+                queue_name=queue_name,
                 use_cpuset=use_cpuset,
                 minimum_disk_size=minimum_disk_size,
                 disk_check_interval=disk_check_interval,
+                cores=cores,
+                skip_cpus=skip_cpus,
+                ci_build_jobs=ci_build_jobs,
+                ci_build_cores_per_job=ci_build_cores_per_job,
+                ci_verify_jobs=ci_verify_jobs,
             )
             return 0
         # Run in burst mode (default)
-        return worker_main(**worker_args, use_cpuset=use_cpuset)
+        return worker_main(
+            **worker_args,
+            queue_name=queue_name,
+            use_cpuset=use_cpuset,
+            cores=cores,
+            skip_cpus=skip_cpus,
+            ci_build_jobs=ci_build_jobs,
+            ci_build_cores_per_job=ci_build_cores_per_job,
+            ci_verify_jobs=ci_verify_jobs,
+        )
 
     except KeyboardInterrupt:
         from crsbench.utils.logger import get_logger

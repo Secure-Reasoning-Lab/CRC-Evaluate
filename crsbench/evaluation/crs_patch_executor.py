@@ -351,7 +351,7 @@ class CRSPatchExecutor(CRSExecutor):
         # Prepare base output directory (CRS creates subdirectories)
         self._prepare_output_directory(trial_output_dir)
 
-        harness_name = Path(harness.name).stem
+        harness_name = harness.name
 
         # Prepare POVs directory (required for patch generation)
         povs_path = self._prepare_povs(benchmark_path, harness_name, trial_output_dir)
@@ -528,7 +528,7 @@ class CRSPatchExecutor(CRSExecutor):
         source = load_benchmark_source(
             benchmark_path,
             dest_dir=source_dest,
-            source_mode=self.config.get("source_mode", "main_repo"),
+            source_mode=self.config.get("source_mode", "pkgs"),
             mode=self.config.get("mode"),
             verbose=self.config.get("verbose", False),
         )

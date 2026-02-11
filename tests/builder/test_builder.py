@@ -294,12 +294,16 @@ class TestOSSFuzzBuilder:
         """Test checking if variant is built."""
         builder = OSSFuzzBuilder(mock_oss_fuzz_path)
 
-        # Create fake built variant
+        # Create fake built variant with metadata (success marker)
         variant_name = "test-deltaref"
         (mock_oss_fuzz_path / "projects" / variant_name).mkdir()
         build_out = mock_oss_fuzz_path / "build" / "out" / variant_name
         build_out.mkdir(parents=True)
         (build_out / "fuzzer").touch()
+        (build_out / ".build-meta.json").write_text(
+            '{"inc_build": false, "sanitizer": "address", '
+            '"timestamp": "2026-01-01T00:00:00", "fallback_used": false}'
+        )
 
         assert builder.is_variant_built(variant_name)
         assert not builder.is_variant_built("nonexistent-variant")
@@ -827,21 +831,18 @@ class TestBuildMetadataCaching:
         # Should reject because cached build is inc-build but non-inc required
         assert infra.is_variant_built("test-variant", require_inc_build=False) is False
 
-    def test_is_variant_built_treats_no_metadata_as_non_inc(self, infra):
-        """Test legacy builds without metadata are treated as non-inc."""
-        # Create build without metadata (legacy)
+    def test_is_variant_built_rejects_no_metadata_as_incomplete(self, infra):
+        """Test builds without metadata are rejected as incomplete."""
+        # Create build without metadata (interrupted or legacy)
         self._create_mock_build(
             infra, "test-variant", inc_build=False, with_metadata=False
         )
 
-        # Should accept without requirement
-        assert infra.is_variant_built("test-variant") is True
-
-        # Should reject when inc-build required (no metadata = non-inc)
+        # Should reject — missing metadata means build did not complete
+        assert infra.is_variant_built("test-variant") is False
+        assert infra.is_variant_built("test-variant", require_inc_build=None) is False
         assert infra.is_variant_built("test-variant", require_inc_build=True) is False
-
-        # Should accept when non-inc required
-        assert infra.is_variant_built("test-variant", require_inc_build=False) is True
+        assert infra.is_variant_built("test-variant", require_inc_build=False) is False
 
     def test_builder_uses_cache_when_inc_build_matches(
         self, oss_fuzz_path: Path, infra, tmp_path: Path

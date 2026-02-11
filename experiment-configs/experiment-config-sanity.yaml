@@ -1,0 +1,63 @@
+# Experiment Configuration - Sanity Test
+#
+# Lightweight config for quick end-to-end validation using mock benchmarks.
+# Tests the full pipeline (enqueue → worker → execute → verify) without long CRS runs.
+#
+# Usage:
+#   # 1. Start Valkey
+#   python scripts/valkey-helper.py start --bind-host
+#
+#   # 2. (Optional) Start evaluator for POV verification
+#   crsbench evaluator \
+#       --experiment-config experiment-configs/experiment-config-sanity.yaml \
+#       -j 2
+#
+#   # 3. Run orchestrator (enqueues jobs)
+#   crsbench run --experiment-config experiment-configs/experiment-config-sanity.yaml
+#
+#   # 4. Start worker (executes CRS trials)
+#   crsbench worker \
+#       --experiment-config experiment-configs/experiment-config-sanity.yaml \
+#       -j 2 --continuous
+
+experiment: sanity-test
+
+trials: 1
+
+mode: delta
+
+# Short timeout — sanity benchmarks are fast
+max_total_time: 1200  # 20 minutes
+build_timeout: 300    # 5 minutes
+run_timeout: 300      # 5 minutes
+verify_timeout: 300   # 5 minutes
+
+difficulty_level: 1
+
+experiment_filestore: /tmp/crsbench/sanity/experiment-data
+report_filestore: /tmp/crsbench/sanity/report-data
+
+crses:
+  - atlantis-multilang-given_fuzzer
+
+# Uses sanity suite: sanity-mock-c-delta-01, sanity-mock-java-delta-01
+benchmark_suite: sanity
+
+# Distributed execution
+redis_host: localhost
+
+# No LLM needed for given_fuzzer CRS
+skip_litellm: true
+
+resources:
+  cores_per_trial: 2
+  memory_per_trial: "4G"
+  litellm:
+    max_concurrent_requests: 5
+    cost_budget: 0
+
+# Worker configuration (for distributed mode)
+# 3 trial jobs × 2 cores = 6 cores
+worker:
+  jobs: 3
+  cleanup_after_trial: true

@@ -78,6 +78,9 @@ class POVVerificationManager:
         engine: Optional[VerificationEngine] = None,
         stop_event: Optional[threading.Event] = None,
         adapter: Optional["MetaYamlAdapter"] = None,
+        redis_host: Optional[str] = None,
+        experiment_name: Optional[str] = None,
+        trial_id: Optional[str] = None,
     ):
         """Initialize POV verification manager.
 
@@ -93,6 +96,9 @@ class POVVerificationManager:
             engine: Optional VerificationEngine (creates new if None)
             stop_event: Optional threading.Event for signaling early stop
             adapter: Optional MetaYamlAdapter for verification engine
+            redis_host: Redis server hostname for async mode (None = inline mode)
+            experiment_name: Experiment name for async verify queue naming
+            trial_id: Trial identifier for async result correlation
 
         Raises:
             ValueError: If trial_dir doesn't exist
@@ -137,10 +143,20 @@ class POVVerificationManager:
         self._early_stop_triggered = False
         self._early_stop_time: Optional[datetime] = None
 
+        # Async verification via Redis (VU-02/03/04)
+        self._redis_host = redis_host
+        self._experiment_name = experiment_name
+        self._trial_id = trial_id
+        self._verify_queue: Optional[object] = None  # Lazy-initialized RQ Queue
+        self._pending_job_ids: list[str] = []  # Job IDs awaiting results
+        self._pov_hash_to_path: dict[str, Path] = {}  # hash → local file path
+        self._job_to_pov_id: dict[str, str] = {}  # job_id → pov_id for timeout marking
+
+        async_mode = "async (Redis)" if redis_host else "inline"
         logger.info(
             f"POVVerificationManager initialized: trial_dir={trial_dir}, "
             f"harness={harness_name}, benchmark={benchmark_id}, "
-            f"expected_cpvs={len(expected_cpv_ids)}"
+            f"expected_cpvs={len(expected_cpv_ids)}, mode={async_mode}"
         )
 
     @property
@@ -158,6 +174,19 @@ class POVVerificationManager:
         """Check if all expected CPVs have been found."""
         return self.expected_cpv_ids <= self.found_cpvs
 
+    def set_crs_run_start_time(self, start_time: float) -> None:
+        """Update CRS run start time (called after build completes).
+
+        Updates the POV store's crs_run_start_time so that relative_time
+        calculations exclude build time. Does NOT update self.trial_start_time
+        since that is used for elapsed_time in POVSnapshot (which should
+        include total time since trial started).
+
+        Args:
+            start_time: Unix timestamp when CRS run actually started
+        """
+        self.store.set_crs_run_start_time(start_time)
+
     def _get_remaining_cpvs(self) -> list[str]:
         """Get list of CPV IDs not yet found.
 
@@ -165,6 +194,134 @@ class POVVerificationManager:
             List of CPV identifiers that haven't been discovered yet, sorted.
         """
         return sorted(self.expected_cpv_ids - self.found_cpvs)
+
+    @property
+    def _async_mode(self) -> bool:
+        """Whether async verification via Redis is enabled."""
+        return self._redis_host is not None
+
+    def _get_verify_queue(self) -> Optional[object]:
+        """Get or create the Redis verify queue (lazy initialization)."""
+        if self._verify_queue is not None:
+            return self._verify_queue
+
+        if not self._redis_host or not self._experiment_name:
+            return None
+
+        from crsbench.distributed.verify_queue import initialize_verify_queue
+
+        self._verify_queue = initialize_verify_queue(
+            self._redis_host, self._experiment_name
+        )
+        return self._verify_queue
+
+    def _enqueue_pov(self, pov_path: Path, pov_hash: str) -> Optional[str]:
+        """Enqueue a single POV for async verification via Redis.
+
+        The pov_id is formatted as ``{filename}:{hash}`` so the evaluator
+        logs show the human-readable filename, while the hash suffix
+        guarantees uniqueness even when the CRS reuses filenames
+        (e.g., always writes to ``pov_0.blob``).
+
+        Args:
+            pov_path: Path to the POV file
+            pov_hash: Content hash of the POV file
+
+        Returns:
+            Job ID if enqueued, None on error
+        """
+        from crsbench.distributed.verify_queue import enqueue_single_pov
+
+        queue = self._get_verify_queue()
+        if queue is None:
+            logger.warning("Verify queue not available, skipping async enqueue")
+            return None
+
+        pov_data = pov_path.read_bytes()
+        self._pov_hash_to_path[pov_hash] = pov_path
+        pov_id = f"{pov_path.name}:{pov_hash}"
+        return enqueue_single_pov(
+            verify_queue=queue,  # type: ignore[arg-type]
+            experiment_name=self._experiment_name or "",
+            trial_id=self._trial_id or "",
+            benchmark=self.benchmark_id,
+            harness=self.harness_name,
+            pov_id=pov_id,
+            pov_data=pov_data,
+        )
+
+    def _poll_pending_verdicts(self) -> None:
+        """Poll Redis for completed async verification results.
+
+        Updates internal state (store, counters) based on completed verdicts.
+        Non-blocking: processes whatever results are available.
+        """
+        if not self._pending_job_ids or not self._redis_host:
+            return
+
+        from crsbench.distributed.verify_queue import poll_single_pov_verdicts
+
+        completed, remaining = poll_single_pov_verdicts(
+            self._redis_host, self._pending_job_ids
+        )
+        self._pending_job_ids = remaining
+
+        from crsbench.distributed.evaluator_jobs import SinglePovResult
+
+        for result_dict in completed:
+            try:
+                result = SinglePovResult.from_dict(result_dict)
+                # Use explicit status from verdict (handles all states correctly)
+                status = PovVerificationStatus(result.verdict.status)
+                cpv_matched = result.verdict.cpv_matches
+
+                # Add to store directly (no POV path — it was enqueued by content)
+                self.store.add_pov_by_id(result.verdict.pov_id, status, cpv_matched)
+
+                # Store crash logs for ALL statuses (not just CPV)
+                pov_hash = self.store._extract_hash(result.verdict.pov_id)
+                for variant_name, crash_log in result.verdict.crash_logs.items():
+                    self.store.store_crash_log(
+                        pov_hash,
+                        crash_log,
+                        status,
+                        cpv_matched,
+                        variant_name=variant_name,
+                    )
+
+                if status == PovVerificationStatus.CPV:
+                    # Store POV blob from the local file still on disk (CPV only)
+                    pov_path = self._pov_hash_to_path.get(pov_hash)
+                    if pov_path and pov_path.exists():
+                        self.store.store_unique_pov(
+                            pov_path, pov_hash, status, cpv_matched
+                        )
+
+                    for cpv_id in cpv_matched:
+                        logger.info(
+                            f"CPV found (async): cpv_id={cpv_id} "
+                            f"pov={result.verdict.pov_id} "
+                            f"found={len(self.found_cpvs)} "
+                            f"total={self.total_expected_cpvs}"
+                        )
+                elif status == PovVerificationStatus.UNINTENDED_CRASH:
+                    with self._lock:
+                        self._unintended_crashes_count += 1
+                    logger.info(
+                        f"Unintended crash (async): pov={result.verdict.pov_id}"
+                    )
+                elif status == PovVerificationStatus.ERROR:
+                    with self._lock:
+                        self._errors_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to process async verdict: {e}")
+                with self._lock:
+                    self._errors_count += 1
+
+        if completed:
+            logger.info(
+                f"Processed {len(completed)} async verdicts, {len(remaining)} pending"
+            )
 
     def _discover_new_povs(self) -> list[tuple[Path, str]]:
         """Discover new POV files in the output directory.
@@ -266,24 +423,23 @@ class POVVerificationManager:
             pov_path, result.status, result.cpv_matched, pov_hash=pov_hash
         )
 
-        # Store POV file and crash logs for successful CPV verifications
+        # Store per-variant crash logs for ALL statuses (not just CPV)
+        if result.crash_info and "logs" in result.crash_info:
+            crash_logs = result.crash_info["logs"]
+            for variant_name, crash_log in crash_logs.items():
+                self.store.store_crash_log(
+                    pov_hash,
+                    crash_log,
+                    result.status,
+                    result.cpv_matched,
+                    variant_name=variant_name,
+                )
+
+        # Store POV blob for CPV matches only
         if result.status == PovVerificationStatus.CPV:
-            # Copy POV file to category-specific blobs directory
             self.store.store_unique_pov(
                 pov_path, pov_hash, result.status, result.cpv_matched
             )
-
-            # Store per-variant crash logs if available
-            if result.crash_info and "logs" in result.crash_info:
-                crash_logs = result.crash_info["logs"]
-                for variant_name, crash_log in crash_logs.items():
-                    self.store.store_crash_log(
-                        pov_hash,
-                        crash_log,
-                        result.status,
-                        result.cpv_matched,
-                        variant_name=variant_name,
-                    )
 
         # Update counters based on result
         if result.status == PovVerificationStatus.CPV:
@@ -332,14 +488,36 @@ class POVVerificationManager:
         timestamp = time.time()
         elapsed_time = timestamp - self.trial_start_time
 
-        # Discover and verify new POVs (returns tuples of path, hash)
+        # Discover new POVs (returns tuples of path, hash)
         new_povs = self._discover_new_povs()
         povs_new = 0
 
-        for pov_path, pov_hash in new_povs:
-            result = self._verify_pov(pov_path)
-            self._update_state(pov_path, result, pov_hash=pov_hash)
-            povs_new += 1
+        if self._async_mode:
+            # Async mode: enqueue new POVs to Redis, poll for results
+            for pov_path, pov_hash in new_povs:
+                job_id = self._enqueue_pov(pov_path, pov_hash)
+                if job_id:
+                    self._pending_job_ids.append(job_id)
+                    pov_id = f"{pov_path.name}:{pov_hash}"
+                    self._job_to_pov_id[job_id] = pov_id
+                    # Capture file mtime now (POV creation time) before
+                    # the async verdict overwrites it with poll time
+                    stat = pov_path.stat()
+                    self.store.mark_hash_tested(
+                        pov_hash,
+                        file_mtime=stat.st_mtime,
+                        file_size=stat.st_size,
+                    )
+                povs_new += 1
+
+            # Poll for completed async verdicts
+            self._poll_pending_verdicts()
+        else:
+            # Inline mode: verify POVs synchronously
+            for pov_path, pov_hash in new_povs:
+                result = self._verify_pov(pov_path)
+                self._update_state(pov_path, result, pov_hash=pov_hash)
+                povs_new += 1
 
         # Check for early termination
         if self._should_terminate() and not self._early_stop_triggered:
@@ -443,6 +621,100 @@ class POVVerificationManager:
                 early_stop_time=self._early_stop_time,
                 total_duration_seconds=total_duration,
             )
+
+    def drain_pending(
+        self,
+        per_pov_timeout: int = 180,
+        verify_timeout: int = 7200,
+        poll_interval: float = 2.0,
+    ) -> None:
+        """Block until all pending async verdicts complete.
+
+        In async (Redis) mode, POV verification jobs may still be running.
+        This method polls until all pending jobs are resolved or timeout expires.
+
+        The timeout is scaled based on the number of pending POVs: each could
+        take up to ``per_pov_timeout`` seconds for reproduce across all variants,
+        plus a 60s buffer for build overhead. The result is capped by
+        ``verify_timeout`` (the overall verification phase budget).
+
+        In inline mode, this is a no-op since all verifications are synchronous.
+
+        Args:
+            per_pov_timeout: Max seconds a single POV verification takes
+            verify_timeout: Overall verification phase budget in seconds
+            poll_interval: Seconds between poll attempts
+        """
+        if not self._pending_job_ids or not self._async_mode:
+            return
+
+        n_pending = len(self._pending_job_ids)
+        # Floor: a single POV may run against multiple variants (each up to
+        # per_pov_timeout) plus Docker build overhead, so allow at least 2x.
+        single_pov_max = float(per_pov_timeout) * 2 + 120.0
+        scaled = max(single_pov_max, n_pending * per_pov_timeout + 120.0)
+        timeout = min(scaled, float(verify_timeout))
+
+        deadline = time.time() + timeout
+        logger.info(
+            f"Draining {n_pending} pending async verdicts "
+            f"(timeout={timeout:.0f}s, per_pov={per_pov_timeout}s)"
+        )
+
+        while self._pending_job_ids and time.time() < deadline:
+            self._poll_pending_verdicts()
+            if self._pending_job_ids:
+                time.sleep(poll_interval)
+
+        if self._pending_job_ids:
+            logger.warning(
+                f"Drain timeout: {len(self._pending_job_ids)} verdicts still pending"
+            )
+            self._mark_pending_as_error()
+        else:
+            logger.info("All pending async verdicts drained successfully")
+
+    def _mark_pending_as_error(self) -> None:
+        """Mark POVs with pending async verdicts as error after drain timeout."""
+        for job_id in self._pending_job_ids:
+            pov_id = self._job_to_pov_id.get(job_id)
+            if pov_id:
+                self.store.add_pov_by_id(
+                    pov_id,
+                    PovVerificationStatus.ERROR,
+                    [],
+                )
+                logger.warning(f"Marked POV {pov_id} as error (async drain timeout)")
+            else:
+                logger.warning(f"Job {job_id} timed out but has no mapped pov_id")
+            with self._lock:
+                self._errors_count += 1
+        self._pending_job_ids.clear()
+        self.store.save()
+
+    def get_verification_results(self) -> list[PovVerificationResult]:
+        """Export stored POV verification data as PovVerificationResult list.
+
+        Converts the internal POVStore entries into the same result format
+        that VerificationEngine.verify_benchmark() returns. This allows
+        the runner to use manager results directly without a separate
+        verification pass.
+
+        Returns:
+            List of PovVerificationResult, one per verified POV
+        """
+        results: list[PovVerificationResult] = []
+        with self._lock:
+            for entry in self.store.povs.values():
+                results.append(
+                    PovVerificationResult(
+                        status=entry.status,
+                        benchmark=self.benchmark_id,
+                        cpv_matched=list(entry.cpv_matched),
+                        pov_id=entry.hash,
+                    )
+                )
+        return results
 
     def _save_snapshot_file(self, snapshot: POVSnapshot) -> None:
         """Save individual snapshot to file.

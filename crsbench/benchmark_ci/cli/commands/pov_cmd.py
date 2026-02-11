@@ -1,19 +1,17 @@
 """POV verification subcommand.
 
-Constructs a flat DAG of BuildVariantsJob + VerifyCpvPovJob per CPV,
-executed with typed concurrency limits.
+Uses _build_dag() from all_cmd to create jobs, then executes via Redis:
+Phase 1 — Build jobs via VariantPlanner + Redis build queue
+Phase 2 — VerifyCpvPovJob/VerifyCpvVarJob via Redis verify queue
 """
 
-import argparse
+from __future__ import annotations
+
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from crsbench.benchmark_ci.cli.benchmark_discovery import (
-    discover_cpv_ids,
-    discover_harness_names,
-    discover_pov_paths,
-)
 from crsbench.benchmark_ci.cli.common_args import (
     create_benchmark_selection_parent,
     create_build_options_parent,
@@ -22,9 +20,8 @@ from crsbench.benchmark_ci.cli.common_args import (
 from crsbench.benchmark_ci.cli.discovery import resolve_benchmark_paths
 from crsbench.benchmark_ci.cli.output import print_results_table, save_output_dir
 from crsbench.benchmark_ci.cli.result_aggregator import aggregate_pov_results
-from crsbench.benchmark_ci.jobs.base import Job, JobContext
 from crsbench.benchmark_ci.jobs.flat import (
-    BuildVariantsJob,
+    BuildSingleVariantJob,
     VerifyCpvPovJob,
     VerifyCpvVarJob,
 )
@@ -33,9 +30,10 @@ from crsbench.benchmark_ci.models import (
     CheckMode,
     ValidationSummary,
 )
-from crsbench.benchmark_ci.validator import _load_project_capabilities
-from crsbench.executor import DAGExecutor
 from crsbench.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    import argparse
 
 logger = get_logger(__name__)
 
@@ -55,7 +53,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
 
 def run_pov(args: argparse.Namespace) -> int:
-    """Run POV verification on resolved benchmarks via flat DAG."""
+    """Run POV verification on resolved benchmarks via Redis."""
     paths = resolve_benchmark_paths(
         benchmark_arg=getattr(args, "benchmark", None),
         benchmarks_list=getattr(args, "benchmarks", None),
@@ -64,123 +62,109 @@ def run_pov(args: argparse.Namespace) -> int:
         filter_pattern=getattr(args, "filter", None),
     )
 
-    source_mode = getattr(args, "source", "main_repo")
-    build_workers = getattr(args, "build_workers", 4)
-    verify_workers = getattr(args, "verify_workers", 4)
+    source_mode = getattr(args, "source", "pkgs")
     use_inc_build = not getattr(args, "no_inc_build", False)
     force_rebuild = getattr(args, "force_rebuild", True)
     max_povs_per_cpv = getattr(args, "max_povs_per_cpv", None)
+    distributed = getattr(args, "distributed", False)
+    redis_host = getattr(args, "redis_host", "localhost")
 
     build_mode = "inc-build" if use_inc_build else "full-build"
     rebuild_mode = "force-rebuild" if force_rebuild else "cached"
+    exec_mode = f", distributed (redis={redis_host})" if distributed else ", local"
     logger.info(
         f"Running pov: {len(paths)} benchmark(s), "
-        f"build-workers={build_workers}, verify-workers={verify_workers}, "
-        f"{build_mode}, {rebuild_mode}"
+        f"{build_mode}, {rebuild_mode}{exec_mode}"
     )
 
-    # Build flat DAG across all benchmarks
-    all_jobs: list[Job] = []
-    benchmark_metadata: list[tuple[Path, bool, str | None, list[str]]] = []
+    # Create full job DAG (reuses all_cmd infrastructure)
+    from crsbench.benchmark_ci.cli.commands.all_cmd import _build_dag
 
-    for path in paths:
-        supports_inc, rts_mode = _load_project_capabilities(path)
-        effective_inc = use_inc_build and supports_inc
-        benchmark_name = path.name
-
-        build_job = BuildVariantsJob(
-            benchmark_path=path,
-            benchmark_name=benchmark_name,
-            use_inc_build=effective_inc,
-            force_rebuild=force_rebuild,
-            source_mode=source_mode,
-        )
-        all_jobs.append(build_job)
-
-        # Discover CPVs and create per-CPV verify jobs
-        harnesses = discover_harness_names(path)
-        cpv_ids: list[str] = []
-        for harness in harnesses:
-            for cpv_id in discover_cpv_ids(path, harness):
-                if cpv_id in cpv_ids:
-                    continue
-                cpv_ids.append(cpv_id)
-                pov_paths = discover_pov_paths(path, harness, cpv_id)
-                # Apply max_povs_per_cpv limit (paths already sorted by pov number)
-                if max_povs_per_cpv and len(pov_paths) > max_povs_per_cpv:
-                    pov_paths = pov_paths[:max_povs_per_cpv]
-                if not pov_paths:
-                    continue
-
-                # Split pov_0 (ground truth) from variants (pov_1+)
-                pov_0_path: Path | None = None
-                var_pov_paths: list[Path] = []
-                for p in pov_paths:
-                    if p.stem in ("pov_0", "pov"):
-                        pov_0_path = p
-                    else:
-                        var_pov_paths.append(p)
-
-                # V:POV job - tests only pov_0 (ground truth)
-                if pov_0_path:
-                    verify_job = VerifyCpvPovJob(
-                        benchmark_name=benchmark_name,
-                        cpv_id=cpv_id,
-                        harness=harness,
-                        benchmark_path=path,
-                        pov_path=pov_0_path,
-                        build_job_ids=[build_job.job_id],
-                        source_mode=source_mode,
-                    )
-                    all_jobs.append(verify_job)
-
-                # V:VAR job - tests only variants (pov_1+)
-                if var_pov_paths:
-                    var_job = VerifyCpvVarJob(
-                        benchmark_name=benchmark_name,
-                        cpv_id=cpv_id,
-                        harness=harness,
-                        benchmark_path=path,
-                        pov_paths=var_pov_paths,
-                        build_job_ids=[build_job.job_id],
-                        source_mode=source_mode,
-                    )
-                    all_jobs.append(var_job)
-
-        benchmark_metadata.append((path, supports_inc, rts_mode, cpv_ids))
-
-    # Log DAG summary
-    build_count = sum(1 for j in all_jobs if isinstance(j, BuildVariantsJob))
-    pov_job_count = sum(1 for j in all_jobs if isinstance(j, VerifyCpvPovJob))
-    var_job_count = sum(1 for j in all_jobs if isinstance(j, VerifyCpvVarJob))
-    var_pov_count = sum(
-        len(j.pov_paths) for j in all_jobs if isinstance(j, VerifyCpvVarJob)
+    all_jobs, benchmark_metadata = _build_dag(
+        list(paths),
+        use_inc_build=use_inc_build,
+        force_rebuild=force_rebuild,
+        source_mode=source_mode,
+        max_povs_per_cpv=max_povs_per_cpv,
     )
+
+    # Filter to build + POV verify jobs only
+    build_jobs = [j for j in all_jobs if isinstance(j, BuildSingleVariantJob)]
+    pov_jobs = [
+        j for j in all_jobs if isinstance(j, (VerifyCpvPovJob, VerifyCpvVarJob))
+    ]
+
     logger.info(
-        f"DAG: {len(all_jobs)} jobs — "
-        f"{build_count} build, {pov_job_count} V:POV, "
-        f"{var_job_count} V:VAR ({var_pov_count} blobs)"
+        f"Jobs: {len(build_jobs)} build, {len(pov_jobs)} verify "
+        f"(filtered from {len(all_jobs)} total)"
     )
 
-    # Execute with typed concurrency
-    start_dt = datetime.now()
-    executor = DAGExecutor(
-        type_limits={"build": build_workers, "verify": verify_workers}
-    )
     output_dir = getattr(args, "output_dir", None)
-    context = JobContext(output_dir=Path(output_dir) if output_dir else None)
-    dag_results = executor.execute(all_jobs, context)
+
+    start_dt = datetime.now()
+
+    if distributed:
+        from crsbench.benchmark_ci.cli.commands.build_cmd import (
+            _run_distributed_build,
+        )
+
+        build_results = _run_distributed_build(
+            build_jobs, redis_host, output_dir=output_dir
+        )
+
+        from crsbench.distributed.ci_jobs import (
+            ci_results_to_executor_results,
+            enqueue_and_poll_ci_jobs,
+        )
+
+        if pov_jobs:
+            verify_queue_name = "crsbench_ci_verify"
+            raw_verify_results = enqueue_and_poll_ci_jobs(
+                pov_jobs,
+                redis_host,
+                queue_name=verify_queue_name,
+                output_dir=output_dir,
+            )
+            verify_results = ci_results_to_executor_results(raw_verify_results)
+        else:
+            verify_results = {}
+
+        dag_results = {**build_results, **verify_results}
+    else:
+        from crsbench.benchmark_ci.executor import execute_jobs_locally
+
+        relevant_jobs = build_jobs + pov_jobs
+        dag_results = execute_jobs_locally(
+            relevant_jobs,
+            output_dir=Path(output_dir) if output_dir else None,
+        )
 
     # Aggregate into ValidationSummary
     summary = ValidationSummary(started_at=start_dt, check_mode=CheckMode.ALL)
 
-    for path, supports_inc, rts_mode, cpv_ids in benchmark_metadata:
+    for (
+        path,
+        supports_inc,
+        rts_mode,
+        cpv_ids,
+        _patch_keys,
+        build_job_ids,
+    ) in benchmark_metadata:
         pov_result = aggregate_pov_results(dag_results, path.name, cpv_ids)
-        build_result = dag_results.get(f"build-variants:{path.name}")
-        shared_build = build_result.elapsed_seconds if build_result else 0.0
+
+        # Collect build time from BuildSingleVariantJob results
+        shared_build = 0.0
         storage_bytes = 0
-        if build_result and build_result.job_result:
-            storage_bytes = build_result.job_result.details.get("storage_bytes", 0)
+        for job_id in build_job_ids:
+            br = dag_results.get(job_id)
+            if br:
+                shared_build += br.elapsed_seconds
+                if br.job_result:
+                    storage_bytes = max(
+                        storage_bytes,
+                        br.job_result.details.get("storage_bytes", 0),
+                    )
+
         summary.add_result(
             BenchmarkValidationResult(
                 benchmark=path.name,
@@ -203,7 +187,6 @@ def run_pov(args: argparse.Namespace) -> int:
         no_color=getattr(args, "no_color", False),
     )
 
-    output_dir = getattr(args, "output_dir", None)
     if output_dir:
         save_output_dir(summary, Path(output_dir), check_mode=CheckMode.ALL)
 

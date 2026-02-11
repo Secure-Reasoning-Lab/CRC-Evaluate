@@ -402,10 +402,14 @@ class TestOSSFuzzBuilderCoverage:
             variant_name = "mock-c-cov-delta-coverage"
             (oss_fuzz / "projects" / variant_name).mkdir()
 
-            # Create build output with a file
+            # Create build output with a file and metadata (success marker)
             build_path = oss_fuzz / "build" / "out" / variant_name
             build_path.mkdir(parents=True)
             (build_path / "fuzz_target").touch()
+            (build_path / ".build-meta.json").write_text(
+                '{"inc_build": false, "sanitizer": "coverage", '
+                '"timestamp": "2026-01-01T00:00:00", "fallback_used": false}'
+            )
 
             assert builder.is_variant_built(variant_name) is True
 
@@ -434,6 +438,10 @@ class TestOSSFuzzBuilderCoverage:
             build_path = oss_fuzz / "build" / "out" / variant_name
             build_path.mkdir(parents=True)
             (build_path / "fuzz_target").touch()
+            (build_path / ".build-meta.json").write_text(
+                '{"inc_build": false, "sanitizer": "coverage", '
+                '"timestamp": "2026-01-01T00:00:00", "fallback_used": false}'
+            )
 
             # Create config with mode
             config = BuildConfig(

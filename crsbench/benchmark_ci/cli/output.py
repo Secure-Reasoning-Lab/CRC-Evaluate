@@ -196,6 +196,34 @@ def _add_format_rows(table: Table, summary: ValidationSummary) -> None:
         _add_format_detail_rows(table, r, 8)  # 8 = 6 sub-checks + storage + total
 
 
+def _add_build_columns(table: Table) -> None:
+    """Add columns for BUILD check mode (build-only, no verification)."""
+    table.add_column("Build", justify="center")
+    table.add_column("Storage", justify="right")
+    table.add_column("Total", justify="center")
+
+
+def _add_build_rows(table: Table, summary: ValidationSummary) -> None:
+    """Add rows for BUILD check mode (build-only results)."""
+    for r in summary.results:
+        table.add_row(
+            r.benchmark,
+            format_status(r.pov_build_check),
+            _format_storage(r),
+            _format_total_status(r.total_status),
+        )
+        # Add detail rows for failed builds
+        if r.pov_build_check and r.pov_build_check.status in (
+            CheckStatus.FAIL,
+            CheckStatus.ERROR,
+        ):
+            if r.pov_build_check.error:
+                table.add_row(
+                    f"  [dim]{r.pov_build_check.error}[/dim]",
+                    *[""] * 3,
+                )
+
+
 def _add_default_columns(table: Table) -> None:
     """Add columns for DEFAULT check mode."""
     table.add_column("Format", justify="center")
@@ -338,6 +366,9 @@ def print_results_table(
     if check_mode == CheckMode.FORMAT:
         _add_format_columns(table)
         _add_format_rows(table, summary)
+    elif check_mode == CheckMode.BUILD:
+        _add_build_columns(table)
+        _add_build_rows(table, summary)
     elif check_mode == CheckMode.DEFAULT:
         _add_default_columns(table)
         _add_default_rows(table, summary)
@@ -420,6 +451,9 @@ def _save_results_txt(
         if check_mode == CheckMode.FORMAT:
             _add_format_columns(table)
             _add_format_rows(table, summary)
+        elif check_mode == CheckMode.BUILD:
+            _add_build_columns(table)
+            _add_build_rows(table, summary)
         elif check_mode == CheckMode.DEFAULT:
             _add_default_columns(table)
             _add_default_rows(table, summary)
@@ -521,6 +555,16 @@ def write_summary_csv(
             f.write(
                 f"{r.benchmark},{','.join(cols)},"
                 f"{r.total_status.value},{fmt_time:.1f},{r.storage_bytes}\n"
+            )
+    elif check_mode == CheckMode.BUILD:
+        f.write("benchmark,build,build_time_s,total,storage_bytes\n")
+        for r in summary.results:
+            build_t = _check_build_time(r.pov_build_check)
+            f.write(
+                f"{r.benchmark},"
+                f"{_plain_status(r.pov_build_check)},"
+                f"{build_t:.1f},"
+                f"{r.total_status.value},{r.storage_bytes}\n"
             )
     elif check_mode == CheckMode.DEFAULT:
         f.write(

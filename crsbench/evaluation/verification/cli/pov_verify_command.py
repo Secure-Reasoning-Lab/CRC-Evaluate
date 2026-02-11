@@ -111,10 +111,10 @@ Examples:
     parser.add_argument(
         "--source",
         type=str,
-        default="main_repo",
+        default="pkgs",
         choices=["pkgs", "main_repo"],
-        help="Source for benchmark code: 'main_repo' clones from repository (default), "
-        "'pkgs' uses bundled tarballs",
+        help="Source for benchmark code: 'pkgs' uses bundled tarballs (default), "
+        "'main_repo' clones from repository",
     )
     parser.add_argument(
         "--force-rebuild",
@@ -227,6 +227,8 @@ def run_verify(args: argparse.Namespace) -> int:
         oss_fuzz_path=oss_fuzz_path,
         timeout=args.timeout,
         dedup_strategy=dedup_strategy,
+        build_workers=args.build_workers,
+        verify_workers=args.verify_workers,
         source_mode=args.source,
     )
 
@@ -287,16 +289,13 @@ def run_single_pov_verification(
         List of PovVerificationResult (one per harness tested)
     """
     # Load adapter
-    adapter = engine._load_adapter(benchmark_path)
+    adapter = engine.load_adapter(benchmark_path)
     if not adapter:
         logger.error(f"Failed to load benchmark adapter for {benchmark_path}")
         return []
 
     # Build variants if needed
-    if force_rebuild:
-        engine._built_results.pop(adapter.benchmark_name, None)
-
-    build_results = engine._get_or_build_results(adapter)
+    build_results = engine.get_or_build_results(adapter, force_rebuild=force_rebuild)
     if not build_results:
         logger.error(f"Failed to build variants for {adapter.benchmark_name}")
         return []

@@ -61,7 +61,7 @@ class TestBuildOptionsParent:
     def test_defaults(self):
         parser = create_build_options_parent()
         ns = parser.parse_args([])
-        assert ns.source == "main_repo"
+        assert ns.source == "pkgs"
         assert ns.build_workers == 4
         assert ns.verify_workers == 4
         assert ns.exit_on_error is False

@@ -206,8 +206,8 @@ Examples:
         "--source",
         type=str,
         choices=["pkgs", "main_repo"],
-        default="main_repo",
-        help="Source mode: 'pkgs' (bundled tarballs) or 'main_repo' (git clone, default)",
+        default="pkgs",
+        help="Source mode: 'pkgs' (bundled tarballs, default) or 'main_repo' (git clone)",
     )
 
     # Parallelism options
@@ -1220,8 +1220,8 @@ def main(args: Optional[list[str]] = None) -> int:
         "--source",
         type=str,
         choices=["pkgs", "main_repo"],
-        default="main_repo",
-        help="Source mode: 'pkgs' (bundled tarballs) or 'main_repo' (git clone, default)",
+        default="pkgs",
+        help="Source mode: 'pkgs' (bundled tarballs, default) or 'main_repo' (git clone)",
     )
 
     # Parallelism options

@@ -136,6 +136,41 @@ def create_source_tarball(
         return tarball_path, ref_diff_path
 
 
+def clean_existing_tarball(
+    pkgs_dir: Path,
+    source_name: str,
+    *,
+    log_prefix: Optional[str] = None,
+) -> None:
+    """Remove existing tarball and split parts before re-bundling.
+
+    Prevents stale .part* files from mixing with a newly created tarball.
+
+    Args:
+        pkgs_dir: Path to pkgs/ directory
+        source_name: Source name (e.g., "tika")
+        log_prefix: Prefix for log messages
+    """
+    whole = pkgs_dir / f"{source_name}.tar.gz"
+    parts = sorted(pkgs_dir.glob(f"{source_name}.tar.gz.part*"))
+
+    removed = 0
+    if whole.exists():
+        whole.unlink()
+        removed += 1
+    for part in parts:
+        part.unlink()
+        removed += 1
+
+    if removed:
+        logger.info(
+            _log_msg(
+                log_prefix,
+                f"Cleaned {removed} existing tarball file(s) for {source_name}",
+            )
+        )
+
+
 def _prepare_source(
     repo_dir: Path,
     target_commit: str,
