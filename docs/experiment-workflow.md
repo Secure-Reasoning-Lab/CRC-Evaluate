@@ -175,7 +175,7 @@ crsbench run --experiment-config config.yaml --experiment-name my-exp \
 scp user@machine-a:/path/to/CRSBench/.env /path/to/CRSBench/.env
 
 # Start worker (set REDIS_HOST to Machine A's IP)
-crsbench worker --experiment-config config.yaml --redis-host <machine-a-ip> -j 4 --continuous
+crsbench worker --experiment-config config.yaml --redis-host <machine-a-host> -j 4 --continuous
 ```
 
 ### Option B: SSH Tunnels
