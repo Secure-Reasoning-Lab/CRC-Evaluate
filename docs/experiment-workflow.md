@@ -1,10 +1,10 @@
 # Experiment Workflow
 
-End-to-end guide for running CRSBench experiments: start Valkey, launch workers, run experiment, optionally evaluate POVs, and generate reports.
+End-to-end guide for running CRSBench experiments.
 
 ## Architecture
 
-CRSBench uses a three-process model backed by a Redis-compatible queue (Valkey):
+CRSBench uses a distributed model backed by a Redis-compatible queue (Valkey):
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -37,19 +37,24 @@ CRSBench uses a three-process model backed by a Redis-compatible queue (Valkey):
               Enqueue POVs for verify
 ```
 
+**Required processes:**
 - **Orchestrator** (`crsbench run`): generates trial matrix and enqueues CRS trial jobs
-- **Workers** (`crsbench worker`): execute CRS trials, discover POVs, enqueue verification
-- **Evaluators** (`crsbench evaluator`, optional): build variant images and verify POVs
+- **Workers** (`crsbench worker`): execute CRS trials, discover POVs
+
+**Optional processes:**
+- **Evaluator** (`crsbench evaluator`): build variant images and verify discovered POVs
+- **Remote workers**: scale out to additional machines
 
 **Queue names (same Redis instance):**
 - `crsbench_{experiment}` — CRS trial jobs (workers consume)
+- `crsbench_{experiment}_build` — variant build jobs (evaluators consume)
 - `crsbench_{experiment}_verify` — POV verification jobs (evaluators consume)
 
 ## Prerequisites
 
 1. **Docker** installed and running
 2. **CRSBench** installed (`uv pip install -e .`)
-3. **Valkey** (Redis-compatible server) — start with Docker:
+3. **Valkey** (Redis-compatible server):
 
 ```bash
 # Local development (host access, no auth)
@@ -57,73 +62,81 @@ python scripts/valkey-helper.py start --bind-host
 
 # Remote workers (password auth, binds 0.0.0.0)
 python scripts/valkey-helper.py start --password
-scp .env user@worker-machine:/path/to/CRSBench/.env
 ```
 
-4. **Experiment config** — see [experiment-config-distributed-example.yaml](experiment-config-distributed-example.yaml) for all options.
+4. **Experiment config** — YAML file defining CRSes, benchmarks, timeouts, and resources.
 
-## Quick Start
-
-### Step 1: Start Valkey
+## Quick Start (Single Machine)
 
 ```bash
+# 1. Start Valkey
 python scripts/valkey-helper.py start --bind-host
-python scripts/valkey-helper.py status
-```
 
-### Step 2: Start workers
+# 2. Run orchestrator (enqueues jobs and monitors)
+crsbench run --experiment-config config.yaml
 
-```bash
-# Start a worker with 4 parallel jobs (in a separate terminal)
+# 3. Start worker (separate terminal)
 crsbench worker --experiment-config config.yaml -j 4 --continuous
+
+# 4. (Optional) Start evaluator for POV verification (separate terminal)
+crsbench evaluator --experiment-config config.yaml -j 4
+
+# 5. (Optional) Generate report after completion
+python scripts/cpv_report.py /path/to/experiment-data --csv
 ```
 
-### Step 3: Run experiment
+The orchestrator and evaluator can be started in any order. The evaluator is optional — without it, POV verification jobs queue harmlessly and can be processed later via `crsbench re-eval`.
+
+## Full Workflow Example (Production)
+
+A realistic example on a 128-core machine running 7 trial jobs with an evaluator:
 
 ```bash
-crsbench run \
-  --experiment-config config.yaml \
-  --experiment-name my-exp \
-  --crses atlantis-c,atlantis-multilang \
-  --benchmarks libjpeg-turbo,libxml2
-```
+# 1. Start Valkey with password auth (for remote workers)
+python scripts/valkey-helper.py start --password
 
-The orchestrator enqueues all trial jobs and monitors progress until completion.
-
-### Step 4 (optional): Start evaluator
-
-```bash
+# 2. Start evaluator (cores 112-127, 16 cores)
+#    --build-jobs 4: up to 4 parallel variant builds
+#    --build-cores-per-job 4: 4 cores per build = 16 cores total
+#    --verify-jobs 16: up to 16 parallel POV verifications (1 core each)
 crsbench evaluator \
-  --experiment-config config.yaml \
-  --experiment-name my-exp \
-  -j 2
+    --experiment-config experiment-configs/experiment-config-afc.yaml \
+    --build-jobs 4 \
+    --build-cores-per-job 4 \
+    --verify-jobs 16 \
+    --cores 112-127
+
+# 3. Run orchestrator (enqueues jobs, monitors progress)
+crsbench run --experiment-config experiment-configs/experiment-config-afc.yaml
+
+# 4. Start worker (cores 0-111, 7 jobs × 16 cores each)
+crsbench worker \
+    --experiment-config experiment-configs/experiment-config-afc.yaml \
+    -j 7 \
+    --cores 0-111
+
+# 5. (After completion) Generate CPV report
+python scripts/cpv_report.py /path/to/experiment-data --csv
 ```
 
-Evaluators build variant Docker images and verify POVs from the verify queue. If no evaluator runs, verification jobs queue harmlessly and can be processed later.
-
-### Step 5 (optional): Re-evaluate
-
-```bash
-crsbench re-eval -c config.yaml -v
+**Core allocation breakdown:**
 ```
-
-Re-runs POV/patch verification on completed trials without re-running CRS. Useful after fixing verification logic or adding new variants.
-
-### Step 6: Generate report
-
-```bash
-crsbench report --experiment my-exp
+Cores 0-111  (112 cores) → Worker: 7 jobs × 16 cores/trial
+Cores 112-127 (16 cores) → Evaluator: 4 build jobs × 4 cores + 16 verify jobs × 1 core
 ```
 
 ## Configuration
 
-Minimal experiment config:
+### Minimal experiment config
 
 ```yaml
 experiment: my-exp
 trials: 3
 mode: delta
 max_total_time: 28800
+build_timeout: 300
+run_timeout: 300
+verify_timeout: 300
 experiment_filestore: /data/experiments
 report_filestore: /data/reports
 
@@ -134,8 +147,11 @@ crses:
 benchmarks:
   - libjpeg-turbo
 
+# No LLM needed for pure fuzzers
+skip_litellm: true
+
 resources:
-  cores_per_trial: 8
+  cores_per_trial: 16
   memory_per_trial: "16G"
   litellm:
     max_concurrent_requests: 50
@@ -158,33 +174,111 @@ worker:
 
 All path overrides are optional. See [experiment-config-distributed-example.yaml](experiment-config-distributed-example.yaml) for the full list.
 
+## Evaluator
+
+The evaluator builds variant Docker images (vulnerable, allpatched, CPV) and verifies POVs discovered by workers.
+
+```bash
+crsbench evaluator \
+  --experiment-config config.yaml \
+  -j 4 \
+  --build-jobs 4 \
+  --build-cores-per-job 4 \
+  --verify-jobs 16 \
+  --cores 112-127
+```
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--experiment-config` | Path to experiment config YAML | Required |
+| `--experiment-name` | Override experiment name (queue name) | From config |
+| `--redis-host` | Redis server hostname | `localhost` |
+| `-j`, `--jobs` | Number of parallel jobs | `1` |
+| `--build-jobs` | Max concurrent build jobs | Value of `-j` |
+| `--build-cores-per-job` | CPUs per build job | `1` |
+| `--verify-jobs` | Max concurrent verify jobs | `build-jobs × build-cores-per-job` |
+| `--cores` | CPU cores (count or range, e.g., `112-127`) | All available |
+| `--skip-cpus` | CPUs to exclude (e.g., `0-3,8-11`) | None |
+| `--no-cpuset` | Disable CPU affinity | `false` |
+
+The evaluator is optional. Without it:
+- Workers still run CRS trials and discover POVs
+- Verification jobs queue in Redis and can be processed later
+- Use `crsbench re-eval` to verify POVs after the fact
+
+## Worker
+
+Workers pull trial jobs from the queue and execute CRS against benchmarks.
+
+```bash
+crsbench worker \
+  --experiment-config config.yaml \
+  -j 7 \
+  --cores 0-111 \
+  --continuous
+```
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--experiment-config` | Path to experiment config YAML | Required |
+| `--experiment-name` | Override experiment name | From config |
+| `--redis-host` | Redis server hostname | `localhost` |
+| `-j`, `--jobs` | Number of parallel worker processes | `1` |
+| `--cores` | CPU cores (count or range, e.g., `0-111`) | All available |
+| `--skip-cpus` | CPUs to exclude | None |
+| `--continuous` | Keep running after queue empties | `false` |
+| `--worker-name` | Worker name for identification | Hostname |
+| `--no-cpuset` | Disable CPU affinity (only with `-j 1`) | `false` |
+
 ## Multi-Machine Setup
 
 ### Option A: Password Auth (recommended)
 
-**Machine A** (Valkey + Orchestrator):
+**Machine A** (Valkey + Orchestrator + Evaluator):
 ```bash
+# Start Valkey with password auth
 python scripts/valkey-helper.py start --password
-crsbench run --experiment-config config.yaml --experiment-name my-exp \
-  --crses atlantis-c --benchmarks bench1,bench2
+
+# Start evaluator
+crsbench evaluator --experiment-config config.yaml \
+    --build-jobs 4 --build-cores-per-job 4 --verify-jobs 16 --cores 112-127
+
+# Run orchestrator
+crsbench run --experiment-config config.yaml
+
+# Start local worker
+crsbench worker --experiment-config config.yaml -j 7 --cores 0-111
 ```
 
-**Machine B..N** (Workers):
+**Machine B..N** (Remote Workers):
 ```bash
 # Copy .env from Machine A (contains REDIS_PASSWORD)
 scp user@machine-a:/path/to/CRSBench/.env /path/to/CRSBench/.env
 
-# Start worker (set REDIS_HOST to Machine A's IP)
-crsbench worker --experiment-config config.yaml --redis-host <machine-a-host> -j 4 --continuous
+# Setup: bundle packages and prepare environment
+scripts/orchestrate-workers.sh setup
+
+# Start worker (redis_host points to Machine A)
+crsbench worker --experiment-config config.yaml \
+    --redis-host <machine-a-host> --continuous
 ```
+
+After all trials complete, collect experiment data back to the orchestrator:
+```bash
+# From Machine A: collect results from remote workers
+scripts/orchestrate-workers.sh collect
+```
+
+> **TODO**: Generalize `scripts/orchestrate-workers.sh setup` and `collect` into
+> a standalone `crsbench` subcommand or reusable script that works across
+> different machine configurations without hard-coded hostnames.
 
 ### Option B: SSH Tunnels
 
 **Machine A** (Valkey + Orchestrator):
 ```bash
 python scripts/valkey-helper.py start --bind-host
-crsbench run --experiment-config config.yaml --experiment-name my-exp \
-  --crses atlantis-c --benchmarks bench1,bench2
+crsbench run --experiment-config config.yaml
 ```
 
 **Machine B..N** (Workers):
@@ -193,7 +287,7 @@ crsbench run --experiment-config config.yaml --experiment-name my-exp \
 ssh -N -L 6379:localhost:6379 user@machine-a &
 
 # Start worker (redis_host=localhost via tunnel)
-crsbench worker --experiment-config config.yaml --redis-host localhost -j 4 --continuous
+crsbench worker --experiment-config config.yaml --redis-host localhost --continuous
 ```
 
 For persistent tunnels during long experiments:
@@ -202,47 +296,25 @@ autossh -M 0 -f -N -L 6379:localhost:6379 user@machine-a \
   -o "ServerAliveInterval 30" -o "ServerAliveCountMax 3"
 ```
 
-## Evaluator
-
-The evaluator builds variant Docker images (vulnerable, allpatched, CPV) and verifies POVs discovered by workers.
-
-```bash
-crsbench evaluator \
-  --experiment-config config.yaml \
-  --experiment-name my-exp \
-  --redis-host localhost \
-  -j 2
-```
-
-| Argument | Description | Default |
-|----------|-------------|---------|
-| `--experiment-config` | Path to experiment config YAML | Required |
-| `--experiment-name` | Experiment identifier (queue name) | Required |
-| `--redis-host` | Redis server hostname | `localhost` |
-| `-j`, `--jobs` | Number of parallel verify jobs | `1` |
-| `--no-cpuset` | Disable CPU affinity | `false` |
-
-Evaluators on different machines can use environment variable overrides:
-```bash
-export CRSBENCH_EVALUATOR_OSS_FUZZ_PATH=/opt/oss-fuzz
-export CRSBENCH_EVALUATOR_BENCHMARKS_ROOT=/data/benchmarks
-crsbench evaluator --experiment-config config.yaml --experiment-name my-exp
-```
-
 ## Re-evaluation
 
-Re-runs POV/patch verification on completed experiment trials without re-running CRS.
+Re-runs POV/patch verification on completed experiment trials without re-running CRS. Useful when:
+- Evaluator wasn't running during the experiment
+- Verification logic was updated
+- Need to re-collect crash logs
 
 ```bash
-# Basic re-evaluation
-crsbench re-eval -c config.yaml
+# Basic re-evaluation with verbose output
+crsbench re-eval -c config.yaml -v
 
-# With verbose output and custom timeout
-crsbench re-eval -c config.yaml -v --per-pov-verify-timeout 300
+# With custom timeout and forced rebuild
+crsbench re-eval -c config.yaml --force-rebuild --per-pov-verify-timeout 300
 
-# Force rebuild variants and write to separate output
-crsbench re-eval -c config.yaml --force-rebuild --output /tmp/reeval-results
+# Write to separate output directory
+crsbench re-eval -c config.yaml --output /tmp/reeval-results
 ```
+
+Re-eval preserves `metadata.json` and relative POV discovery times, but re-runs verification and collects crash logs.
 
 | Flag | Description |
 |------|-------------|
@@ -254,22 +326,43 @@ crsbench re-eval -c config.yaml --force-rebuild --output /tmp/reeval-results
 | `--verify-workers` | Number of parallel verify workers |
 | `-v`, `--verbose` | Enable verbose logging |
 
-## Valkey Cleanup
+## Reporting
 
-Clean queues between experiments to avoid stale data:
+After experiments complete, generate CPV detection reports:
 
 ```bash
-# Clean specific experiment
+# Generate CSV report
+python scripts/cpv_report.py /path/to/experiment-data --csv
+
+# Generate report with benchmark metadata
+python scripts/cpv_report.py /path/to/experiment-data --benchmarks-dir benchmarks/
+```
+
+HTML/JSON reports are auto-generated by the orchestrator at completion and saved to the `report_filestore` directory.
+
+## Valkey Management
+
+```bash
+# Check status
+python scripts/valkey-helper.py status
+
+# Clean specific experiment queues
 python scripts/valkey-helper.py clean my-old-exp
 
-# Clean all experiments (with confirmation)
+# Clean all data (with confirmation)
 python scripts/valkey-helper.py clean-all
 
 # Check queue state
 python scripts/valkey-helper.py list-queues
+
+# View queue details
+python scripts/valkey-helper.py queue-info my-exp
+
+# View statistics
+python scripts/valkey-helper.py stats
 ```
 
-Always clean before re-running an experiment with the same name or after an interrupted run. See `services/valkey/` for advanced Valkey management.
+Always clean queues before re-running an experiment with the same name or after an interrupted run.
 
 ## Troubleshooting
 
@@ -279,7 +372,7 @@ Always clean before re-running an experiment with the same name or after an inte
 | "Redis not available" | Valkey not running or wrong host | `python scripts/valkey-helper.py status`; check `redis_host` in config |
 | Workers exit immediately | Queue is empty (burst mode) | Use `--continuous` flag to keep workers running |
 | Stale jobs from previous run | Queue not cleaned | `python scripts/valkey-helper.py clean <experiment>` |
-| Jobs failing silently | Check failed job registry | `valkey-cli SMEMBERS rq:failed:crsbench_<exp>` |
+| `UPSTREAM_LITELLM_BASE_URL not set` | LiteLLM not needed but `litellm_mode` still active | Set `skip_litellm: true` in experiment config |
 
 ## CLI Reference
 
@@ -300,6 +393,5 @@ Always clean before re-running an experiment with the same name or after an inte
 - [Experiment Config Example](experiment-config-distributed-example.yaml) — full configuration reference
 - [Design: Distributed Job Queue](../design-docs/distributed/distributed-job-queue.md) — job queue architecture
 - [Design: Distributed Evaluation](../design-docs/distributed/distributed-evaluation.md) — evaluator architecture
-- [Deployment Guide](../design-docs/distributed/deployment-guide.md) — detailed multi-machine setup
 - [Environment Setup](environment-setup.md) — environment variables and .env configuration
 - [Snapshot System](snapshot-examples.md) — progress monitoring during trials

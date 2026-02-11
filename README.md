@@ -330,13 +330,33 @@ crsbench stats --output stats.csv
 
 ## Distributed Execution
 
-CRSBench supports multi-machine experiment execution using a three-process model backed by Redis/RQ:
+CRSBench supports multi-machine experiment execution using a distributed model backed by Redis/RQ:
 
-1. **Orchestrator** (`crsbench run`) — enqueues trial jobs onto the Redis queue
-2. **Worker** (`crsbench worker`) — pulls and executes trial jobs
-3. **Evaluator** (`crsbench evaluator`) — builds variants and verifies POVs from completed trials
+**Required:**
+1. **Orchestrator** (`crsbench run`) — enqueues trial jobs and monitors progress
+2. **Worker** (`crsbench worker`) — pulls and executes CRS trial jobs
 
-See [Experiment Workflow](docs/experiment-workflow.md) for setup and usage details.
+**Optional:**
+- **Evaluator** (`crsbench evaluator`) — builds variants and verifies POVs in real-time
+- **Remote workers** — scale out to additional machines
+- **Re-eval** (`crsbench re-eval`) — re-verify POVs after the fact
+
+```bash
+# Quick start (single machine)
+python scripts/valkey-helper.py start --bind-host
+crsbench run --experiment-config config.yaml
+crsbench worker --experiment-config config.yaml -j 4 --continuous
+
+# Production (128-core machine with evaluator)
+python scripts/valkey-helper.py start --password
+crsbench evaluator --experiment-config config.yaml \
+    --build-jobs 4 --build-cores-per-job 4 --verify-jobs 16 --cores 112-127
+crsbench run --experiment-config config.yaml
+crsbench worker --experiment-config config.yaml -j 7 --cores 0-111
+python scripts/cpv_report.py /path/to/experiment-data --csv
+```
+
+See [Experiment Workflow](docs/experiment-workflow.md) for the full guide including multi-machine setup, core pinning, re-evaluation, and reporting.
 
 ## AI Infrastructure
 
