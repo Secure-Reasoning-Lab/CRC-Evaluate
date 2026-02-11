@@ -55,7 +55,7 @@ python -m crsbench.reporting.discover_trials /data/merged/experiment-data
 - CRSBench package installed (for schemas)
 
 **See Also:**
-- [Distributed Execution Guide](../docs/distributed-execution.md)
+- [Experiment Workflow](../docs/experiment-workflow.md)
 - [Reporting Module](../crsbench/reporting/)
 
 ### valkey-helper.py
@@ -69,11 +69,10 @@ Valkey service management helper for distributed execution testing.
 # Service management
 python scripts/valkey-helper.py start                    # Docker network only (secure)
 python scripts/valkey-helper.py --bind-host start        # Bind to localhost for host access
-python scripts/valkey-helper.py start --bind-host        # Alternative: flag after command
+python scripts/valkey-helper.py --password start         # Password auth for remote workers
 python scripts/valkey-helper.py stop
-python scripts/valkey-helper.py restart
-python scripts/valkey-helper.py --bind-host restart      # Restart with host access
-python scripts/valkey-helper.py status                   # Shows port binding status
+python scripts/valkey-helper.py restart                  # Auto-detects password from .env
+python scripts/valkey-helper.py status                   # Shows port binding + auth status
 python scripts/valkey-helper.py logs
 
 # Queue management
@@ -92,25 +91,26 @@ python scripts/valkey-helper.py stats
 ```bash
 # Start Valkey (secure, no host access)
 python scripts/valkey-helper.py start
-
-# Check it's running
 python scripts/valkey-helper.py status
 ```
 
-**For host-based workers:**
+**For host-based workers (same machine):**
 ```bash
-# Start with host access (flag before or after command)
+# Start with host access
 python scripts/valkey-helper.py --bind-host start
 
 # Run workers on host
 export REDIS_HOST=localhost
 python -m crsbench.distributed.worker
+```
 
-# Run experiment
-crsbench --experiment-name test-exp ...
+**For remote workers (multi-machine):**
+```bash
+# Start with password auth (auto-generates password, binds 0.0.0.0, saves to .env)
+python scripts/valkey-helper.py --password start
 
-# Clean up after testing
-python scripts/valkey-helper.py clean test-exp
+# Copy .env to worker machines
+scp .env user@worker:/path/to/CRSBench/.env
 ```
 
 **Common Testing Workflows:**
@@ -171,7 +171,7 @@ python scripts/valkey-helper.py logs
 - Valkey docker-compose setup in `services/valkey/`
 
 **See Also:**
-- [Distributed Execution Guide](../docs/distributed-execution.md) - Full distributed execution documentation
+- [Experiment Workflow](../docs/experiment-workflow.md) - Full distributed execution documentation
 - [Testing Setup Guide](../docs/testing-setup.md) - Complete testing environment setup
 - [Valkey Service README](../services/valkey/README.md) - Valkey service details
 

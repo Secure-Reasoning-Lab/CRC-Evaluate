@@ -168,55 +168,43 @@ ports:
 - NOT accessible from network or internet
 - Suitable for local development
 
-### ❌ Insecure: Bind to all interfaces (0.0.0.0)
+### ⚠️ Bind to all interfaces (0.0.0.0) — requires password
 
 ```yaml
 ports:
-  - "6379:6379"  # Accessible from network!
+  - "6379:6379"  # Accessible from network — must use password auth!
 ```
 
-**Why insecure:**
-- Accessible from any network interface
-- May be exposed to local network or internet
-- Risk of unauthorized access
-- **NEVER use this configuration**
+**Without password:** Insecure — anyone on the network can connect. Never do this.
 
-### Adding Authentication (Production)
-
-For production or shared development environments, enable authentication:
-
-**Step 1: Update docker-compose.yml**
-
-```yaml
-services:
-  valkey:
-    image: valkey/valkey:8.0-alpine
-    container_name: crsbench-valkey
-    ports:
-      - "127.0.0.1:6379:6379"
-    environment:
-      - VALKEY_PASSWORD=${VALKEY_PASSWORD:-changeme}
-    command: >
-      valkey-server
-      --appendonly yes
-      --requirepass ${VALKEY_PASSWORD:-changeme}
-    # ... rest of config
+**With password:** Required for remote workers. Use `--password` flag:
+```bash
+python scripts/valkey-helper.py --password start
+# Auto-generates password, binds 0.0.0.0, saves REDIS_PASSWORD to .env
 ```
 
-**Step 2: Set password in .env**
+### Adding Authentication
+
+For multi-machine setups or shared environments, use the helper script:
 
 ```bash
-echo "VALKEY_PASSWORD=your_secure_password" >> .env
+# Automatically generates password, starts with --requirepass, saves to .env
+python scripts/valkey-helper.py --password start
+
+# Copy .env to worker machines
+scp .env user@worker:/path/to/CRSBench/.env
 ```
 
-**Step 3: Connect with authentication**
+Or manually:
 
 ```bash
-# From host
+# Set password in .env
+echo "REDIS_PASSWORD=your_secure_password" >> .env
+
+# Connect with authentication
 redis-cli -h localhost -p 6379 -a your_secure_password ping
 
-# In Python worker
-export REDIS_PASSWORD=your_secure_password
+# Workers read REDIS_PASSWORD from .env automatically
 python -m crsbench.distributed.worker
 ```
 
@@ -375,11 +363,11 @@ python scripts/valkey-helper.py restart
 
 ## Best Practices
 
-1. **Development**: Enable localhost binding (`127.0.0.1:6379`) when needed
+1. **Development**: Use `--bind-host` (localhost binding) for single-machine dev
 2. **Testing**: Use localhost binding for integration tests
-3. **Production**: Use Docker network, NO port exposure
-4. **Shared Dev**: Add authentication even with localhost binding
-5. **Never**: Bind to `0.0.0.0` or expose to public networks
+3. **Multi-machine**: Use `--password` (binds 0.0.0.0 with auth) for remote workers
+4. **Production**: Use Docker network with authentication
+5. **Never**: Bind to `0.0.0.0` without password authentication
 6. **Cleanup**: Disable port exposure when not actively developing
 
 ## Summary
@@ -392,13 +380,13 @@ python scripts/valkey-helper.py restart
 4. Run your experiments and workers from host
 
 **Security checklist:**
-- ✅ Bind to `127.0.0.1` (localhost) only
-- ✅ Never bind to `0.0.0.0` (all interfaces)
-- ✅ Consider adding password authentication
+- ✅ Use `--bind-host` for localhost-only access
+- ✅ Use `--password` when binding to `0.0.0.0` (remote workers)
+- ✅ Never bind to `0.0.0.0` without password auth
 - ✅ Disable port exposure when not needed
 - ✅ Use firewall rules if exposing beyond localhost
 
 See also:
 - [Valkey Service README](README.md) - Main documentation
-- [Distributed Execution Guide](../../docs/distributed-execution.md) - Full guide
+- [Experiment Workflow](../../docs/experiment-workflow.md) - Full guide
 - [Testing Setup Guide](../../docs/testing-setup.md) - Development environment
