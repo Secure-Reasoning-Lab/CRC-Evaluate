@@ -1,0 +1,45 @@
+# Experiment Configuration - Sanity Test
+#
+# Lightweight config for quick end-to-end validation using mock benchmarks.
+# Tests the full pipeline (enqueue → worker → execute) without long CRS runs.
+#
+# Usage:
+#   # Local (single machine)
+#   crsbench run --experiment-config experiment-configs/experiment-config-sanity.yaml
+#
+#   # Distributed (with Valkey)
+#   python scripts/valkey-helper.py --password start
+#   crsbench run --experiment-config experiment-configs/experiment-config-sanity.yaml
+#   crsbench worker --experiment-config experiment-configs/experiment-config-sanity.yaml -j 2
+
+experiment: sanity-test
+
+trials: 1
+
+mode: delta
+
+# Short timeout — sanity benchmarks are fast
+max_total_time: 600  # 10 minutes
+build_timeout: 300   # 5 minutes
+run_timeout: 300     # 5 minutes
+
+difficulty_level: 1
+
+experiment_filestore: /tmp/crsbench/sanity/experiment-data
+report_filestore: /tmp/crsbench/sanity/report-data
+
+crses:
+  - ensemble-c
+
+# Uses sanity suite: sanity-mock-c-delta-01, sanity-mock-java-delta-01
+benchmark_suite: sanity
+
+# Distributed execution (uncomment for multi-machine)
+# redis_host: localhost
+
+resources:
+  cores_per_trial: 2
+  memory_per_trial: "4G"
+  litellm:
+    max_concurrent_requests: 5
+    cost_budget: 10.0
