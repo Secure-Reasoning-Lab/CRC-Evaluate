@@ -1235,6 +1235,14 @@ class ExperimentConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def check_skip_litellm_overrides(self):
+        """When skip_litellm is true, disable litellm_mode and tracking."""
+        if self.skip_litellm:
+            self.litellm_mode = None
+            self.llm_tracking_enabled = False
+        return self
+
     def get_benchmark_list(self) -> List[str]:
         """Get the list of benchmarks, resolving benchmark_suite if necessary.
 
