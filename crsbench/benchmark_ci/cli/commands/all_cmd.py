@@ -472,7 +472,7 @@ def _log_dag_summary(all_jobs: list[Job]) -> None:
         patch_info = f"{patch_build_count} patch-build, {patch_test_count} patch-test"
 
     logger.info(
-        f"DAG: {len(all_jobs)} jobs — "
+        f"Jobs: {len(all_jobs)} — "
         f"{build_info}, {verify_info}, "
         f"{patch_info}, {coverage_count} coverage"
     )
