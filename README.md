@@ -336,7 +336,7 @@ CRSBench supports multi-machine experiment execution using a three-process model
 2. **Worker** (`crsbench worker`) — pulls and executes trial jobs
 3. **Evaluator** (`crsbench evaluator`) — builds variants and verifies POVs from completed trials
 
-See [Distributed Execution Guide](docs/distributed-execution.md) for setup and usage details.
+See [Experiment Workflow](docs/experiment-workflow.md) for setup and usage details.
 
 ## AI Infrastructure
 
@@ -462,7 +462,7 @@ crsbench ci build --all --distributed --redis-host localhost
 - [Validation Module](crsbench/validation/README.md)
 - [Migration Module](crsbench/migration/README.md)
 - [Hint Generation Module](crsbench/hint_generation/README.md)
-- [Distributed Execution Guide](docs/distributed-execution.md)
+- [Experiment Workflow](docs/experiment-workflow.md)
 - [Distributed Evaluation Design](design-docs/distributed/distributed-evaluation.md)
 
 ---
