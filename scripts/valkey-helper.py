@@ -316,9 +316,15 @@ def cmd_stop(args: argparse.Namespace) -> None:
 
     print_info("Stopping Valkey service...")
 
-    # Try docker-compose first
+    # Try docker-compose first, fall back to docker stop
     compose_file = get_compose_file_path()
-    result = run_command(docker_compose_cmd(compose_file, "down"), check=False, capture_output=True)
+    try:
+        subprocess.run(
+            docker_compose_cmd(compose_file, "down"),
+            capture_output=True, text=True, check=False,
+        )
+    except FileNotFoundError:
+        pass  # docker-compose not installed, fall through to docker stop
 
     # If that didn't work, try stopping container directly
     if is_valkey_running():
