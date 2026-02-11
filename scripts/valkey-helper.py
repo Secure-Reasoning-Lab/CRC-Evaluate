@@ -181,8 +181,22 @@ def _save_env_password(password: str) -> None:
     env_file.chmod(0o600)
 
 
+def _server_requires_password() -> bool:
+    """Check if the running Valkey container was started with --requirepass."""
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "crsbench-valkey", "--format", "{{join .Args \" \"}}"],
+            capture_output=True, text=True, check=True,
+        )
+        return "--requirepass" in result.stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
 def _get_active_password() -> str | None:
-    """Check os.environ first, then .env file for REDIS_PASSWORD."""
+    """Return password only if the running server actually requires it."""
+    if not _server_requires_password():
+        return None
     env_val = os.environ.get("REDIS_PASSWORD")
     if env_val:
         return env_val
