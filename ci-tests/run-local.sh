@@ -1,18 +1,19 @@
 #!/bin/bash
 # Run CI checks locally
 #
-# CI runs: checks → format → sanity-mock → sanity-real → e2e
-# Local adds: integration (libxml2, apache-commons-compress)
+# CI runs: checks → format → sanity-mock → e2e
 #
 # Usage:
-#   ./ci-tests/run-local.sh              # Run full CI pipeline (checks + format + mock + real + e2e)
-#   ./ci-tests/run-local.sh all          # Run all stages including integration
+#   ./ci-tests/run-local.sh              # Run full CI pipeline (checks + format + mock + e2e)
 #   ./ci-tests/run-local.sh checks       # Stage 1: typecheck, lint, format, unit tests
-#   ./ci-tests/run-local.sh format       # Stage 2a: format validation (CI + integration benchmarks)
+#   ./ci-tests/run-local.sh format       # Stage 2a: format validation (sanity benchmarks)
 #   ./ci-tests/run-local.sh sanity       # Stage 2b: all checks (mock-c + mock-java)
+#   ./ci-tests/run-local.sh e2e          # Stage 3: bug finding E2E
+#
+# TODO: re-enable after adding HuggingFace download to CI
+#   ./ci-tests/run-local.sh all          # Run all stages including integration
 #   ./ci-tests/run-local.sh sanity-real  # Stage 2c: all checks (afc-xz + json-java)
 #   ./ci-tests/run-local.sh integration  # Local only: real projects (libxml2, commons-compress)
-#   ./ci-tests/run-local.sh e2e          # Stage 3: bug finding E2E
 
 set -e
 
@@ -69,11 +70,12 @@ run_format() {
 
     for benchmark in \
         sanity-mock-c-delta-01 \
-        sanity-mock-java-delta-01 \
-        afc-xz-full-01 \
-        atlanta-json-java-full-01 \
-        afc-libxml2-full-01 \
-        afc-apache-commons-compress-delta-01; do
+        sanity-mock-java-delta-01; do
+        # TODO: add HuggingFace download for non-sanity benchmarks
+        # afc-xz-full-01 \
+        # atlanta-json-java-full-01 \
+        # afc-libxml2-full-01 \
+        # afc-apache-commons-compress-delta-01; do
         uv run crsbench ci format "$benchmark" || fail "Format validation failed for $benchmark"
     done
 
@@ -96,32 +98,34 @@ run_sanity() {
 }
 
 # Stage 2c: Sanity checks (real projects)
-run_sanity_real() {
-    run_stage "Stage 2c: Sanity Checks (real projects)"
-
-    for benchmark in afc-xz-full-01 atlanta-json-java-full-01; do
-        echo -e "\n${YELLOW}--- $benchmark ---${NC}"
-        uv run crsbench ci all "$benchmark" \
-            --force-rebuild || fail "All checks failed for $benchmark"
-        success "$benchmark passed"
-    done
-
-    success "Stage 2c completed!"
-}
+# TODO: add HuggingFace download for non-sanity benchmarks
+# run_sanity_real() {
+#     run_stage "Stage 2c: Sanity Checks (real projects)"
+#
+#     for benchmark in afc-xz-full-01 atlanta-json-java-full-01; do
+#         echo -e "\n${YELLOW}--- $benchmark ---${NC}"
+#         uv run crsbench ci all "$benchmark" \
+#             --force-rebuild || fail "All checks failed for $benchmark"
+#         success "$benchmark passed"
+#     done
+#
+#     success "Stage 2c completed!"
+# }
 
 # Integration tests (local only)
-run_integration() {
-    run_stage "Integration Tests (Real Projects)"
-
-    for benchmark in afc-libxml2-full-01 afc-apache-commons-compress-delta-01; do
-        echo -e "\n${YELLOW}--- $benchmark ---${NC}"
-        uv run crsbench ci all "$benchmark" \
-            --force-rebuild || fail "All checks failed for $benchmark"
-        success "$benchmark passed"
-    done
-
-    success "Integration tests completed!"
-}
+# TODO: add HuggingFace download for non-sanity benchmarks
+# run_integration() {
+#     run_stage "Integration Tests (Real Projects)"
+#
+#     for benchmark in afc-libxml2-full-01 afc-apache-commons-compress-delta-01; do
+#         echo -e "\n${YELLOW}--- $benchmark ---${NC}"
+#         uv run crsbench ci all "$benchmark" \
+#             --force-rebuild || fail "All checks failed for $benchmark"
+#         success "$benchmark passed"
+#     done
+#
+#     success "Integration tests completed!"
+# }
 
 # Stage 3: E2E Bug Finding
 run_e2e() {
@@ -205,42 +209,42 @@ main() {
         sanity)
             run_sanity
             ;;
-        sanity-real)
-            run_sanity_real
-            ;;
-        integration)
-            run_integration
-            ;;
+        # TODO: re-enable after adding HuggingFace download
+        # sanity-real)
+        #     run_sanity_real
+        #     ;;
+        # integration)
+        #     run_integration
+        #     ;;
         e2e)
             run_e2e
             ;;
         default)
-            # Default: matches CI pipeline (checks → format → mock → real → e2e)
+            # Default: matches CI pipeline (checks → format → mock → e2e)
             run_checks
             run_format
             run_sanity
-            run_sanity_real
+            # TODO: re-enable after adding HuggingFace download
+            # run_sanity_real
             run_e2e
             ;;
         all)
             run_checks
             run_format
             run_sanity
-            run_sanity_real
-            run_integration
+            # TODO: re-enable after adding HuggingFace download
+            # run_sanity_real
+            # run_integration
             run_e2e
             ;;
         *)
-            echo "Usage: $0 [checks|format|sanity|sanity-real|integration|e2e|all]"
+            echo "Usage: $0 [checks|format|sanity|e2e]"
             echo ""
-            echo "  (default)    Run checks + format + sanity-mock + sanity-real + e2e (matches CI)"
+            echo "  (default)    Run checks + format + sanity-mock + e2e (matches CI)"
             echo "  checks       Stage 1: typecheck, lint, format, unit tests"
-            echo "  format       Stage 2a: format validation (CI + integration benchmarks)"
+            echo "  format       Stage 2a: format validation (sanity benchmarks)"
             echo "  sanity       Stage 2b: all checks (mock-c + mock-java)"
-            echo "  sanity-real  Stage 2c: all checks (afc-xz + json-java)"
-            echo "  integration  Local only: real projects (libxml2, commons-compress)"
             echo "  e2e          Stage 3: bug finding E2E"
-            echo "  all          Run all stages"
             exit 1
             ;;
     esac
