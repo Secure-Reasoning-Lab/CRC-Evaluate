@@ -76,9 +76,7 @@ class TestRunCoverage:
         (corpus / "input").write_bytes(b"test")
         output = tmp_path / "out"
 
-        with patch(
-            "crsbench.builder.infrastructure.run_with_timeout"
-        ) as mock_run:
+        with patch("crsbench.builder.infrastructure.run_with_timeout") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             infra = OSSFuzzInfrastructure(mock_oss_fuzz)
             infra.run_coverage("proj", "fuzz", corpus, output)

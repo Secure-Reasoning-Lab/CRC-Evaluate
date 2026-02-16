@@ -18,6 +18,7 @@ from crsbench.evaluation.verification import PovVerificationResult as VerifResul
 from crsbench.evaluation.verification.models import (
     PatchVerificationOutput,
     PatchVerificationResult,
+    PatchVerificationStatus,
 )
 from crsbench.evaluation.verification.patch import (
     PatchVerificationEngine,
@@ -1010,6 +1011,46 @@ class BenchmarkRunner:
     ) -> list[PatchVerificationResult]:
         """Verify CRS-generated patches for a specific harness.
 
+        Dispatches to distributed verification when Redis is available,
+        otherwise falls back to local PatchVerificationEngine.
+
+        Args:
+            benchmark_path: Path to benchmark directory
+            trial_output_dir: Path to trial output directory containing patches
+            oss_fuzz_path: Path to oss-fuzz directory
+            harness_name: Name of the harness
+
+        Returns:
+            List of patch verification results
+        """
+        # Distributed path: enqueue to evaluator queues when Redis is available
+        if self.redis_host and self.experiment_name:
+            return self._verify_patches_distributed(
+                benchmark_path=benchmark_path,
+                trial_output_dir=trial_output_dir,
+                harness_name=harness_name,
+            )
+
+        # Local fallback: use PatchVerificationEngine directly
+        return self._verify_patches_local(
+            benchmark_path=benchmark_path,
+            trial_output_dir=trial_output_dir,
+            oss_fuzz_path=oss_fuzz_path,
+            harness_name=harness_name,
+        )
+
+    def _verify_patches_local(
+        self,
+        benchmark_path: Path,
+        trial_output_dir: Path,
+        oss_fuzz_path: Path,
+        harness_name: str,
+    ) -> list[PatchVerificationResult]:
+        """Verify patches locally using PatchVerificationEngine.
+
+        This is the original verification path that runs everything on the
+        local machine. Used when Redis is not available.
+
         Args:
             benchmark_path: Path to benchmark directory
             trial_output_dir: Path to trial output directory containing patches
@@ -1020,7 +1061,9 @@ class BenchmarkRunner:
             List of patch verification results
         """
         try:
-            self.logger.info(f"Starting patch verification for harness: {harness_name}")
+            self.logger.info(
+                f"Starting local patch verification for harness: {harness_name}"
+            )
 
             # Patches are in trial_output_dir/output/patches/
             patch_dir = trial_output_dir / "output" / "patches"
@@ -1071,6 +1114,204 @@ class BenchmarkRunner:
         except Exception as e:
             self.logger.error(
                 f"Patch verification failed for harness '{harness_name}': {e}",
+                exc_info=True,
+            )
+            return []
+
+    def _verify_patches_distributed(
+        self,
+        benchmark_path: Path,
+        trial_output_dir: Path,
+        harness_name: str,
+    ) -> list[PatchVerificationResult]:
+        """Verify patches via distributed evaluator queues.
+
+        Enqueues patch build jobs to the BUILD queue (multi-CPU) and verify
+        jobs to the VERIFY queue (1 CPU) with RQ dependency. Drains results
+        and converts them to PatchVerificationResult format.
+
+        Falls back to local verification if Redis is unreachable or enqueue
+        fails.
+
+        Args:
+            benchmark_path: Path to benchmark directory
+            trial_output_dir: Path to trial output directory containing patches
+            harness_name: Name of the harness
+
+        Returns:
+            List of patch verification results
+        """
+        from crsbench.distributed.patch_queue import (
+            drain_patch_verdicts,
+            enqueue_patch_jobs,
+            initialize_patch_queues,
+        )
+
+        # Narrow Optional types -- caller already checked these are non-None
+        redis_host: str = self.redis_host  # type: ignore[assignment]
+        experiment_name: str = self.experiment_name  # type: ignore[assignment]
+
+        try:
+            self.logger.info(
+                f"Starting distributed patch verification for harness: {harness_name}"
+            )
+
+            # Discover patches in trial_output_dir/output/patches/
+            patch_dir = trial_output_dir / "output" / "patches"
+            if not patch_dir.exists():
+                self.logger.warning(f"No patches directory found: {patch_dir}")
+                return []
+
+            patches: list[tuple[str, str, Path]] = []
+            if patch_dir.is_dir():
+                for idx, subdir in enumerate(sorted(patch_dir.iterdir())):
+                    if not subdir.is_dir():
+                        continue
+                    patch_file = subdir / "patch.diff"
+                    if patch_file.exists():
+                        cpv_id = subdir.name
+                        patch_id = f"patch_{idx}"
+                        patches.append((cpv_id, patch_id, patch_file))
+
+            if not patches:
+                self.logger.info("No patches found for distributed verification")
+                return []
+
+            # Initialize queues
+            build_queue, verify_queue = initialize_patch_queues(
+                redis_host, experiment_name
+            )
+            if build_queue is None or verify_queue is None:
+                self.logger.warning(
+                    "Redis unavailable for patch verification, falling back to local"
+                )
+                return self._verify_patches_local(
+                    benchmark_path=benchmark_path,
+                    trial_output_dir=trial_output_dir,
+                    oss_fuzz_path=self.oss_fuzz_path or Path(),
+                    harness_name=harness_name,
+                )
+
+            # Derive trial_id from output dir name
+            trial_id = trial_output_dir.name
+
+            # Enqueue all patch jobs
+            job_ids = enqueue_patch_jobs(
+                build_queue,
+                verify_queue,
+                experiment_name,
+                trial_id,
+                benchmark_path.name,
+                harness_name,
+                patches,
+            )
+
+            if not job_ids:
+                self.logger.warning("All patch enqueues failed, falling back to local")
+                return self._verify_patches_local(
+                    benchmark_path=benchmark_path,
+                    trial_output_dir=trial_output_dir,
+                    oss_fuzz_path=self.oss_fuzz_path or Path(),
+                    harness_name=harness_name,
+                )
+
+            # Drain results (blocking poll)
+            raw_results = drain_patch_verdicts(
+                redis_host,
+                job_ids,
+                timeout=self.verify_timeout,
+            )
+
+            # Convert results to PatchVerificationResult
+            results: list[PatchVerificationResult] = []
+            for result in raw_results:
+                try:
+                    # Map status string to PatchVerificationStatus enum
+                    status_str = result.get("status", "error")
+                    try:
+                        status = PatchVerificationStatus(status_str)
+                    except ValueError:
+                        status = PatchVerificationStatus.ERROR
+
+                    patch_path_str = result.get("patch_path", "")
+                    patch_path = Path(patch_path_str) if patch_path_str else Path()
+
+                    pvr = PatchVerificationResult(
+                        status=status,
+                        patch_id=result.get("patch_id", ""),
+                        pov_id=result.get("cpv_id", ""),
+                        benchmark=result.get("benchmark", ""),
+                        patch_path=patch_path,
+                        harness=result.get("harness", ""),
+                        details=result.get("details", ""),
+                        pov_test_passed=result.get("pov_test_passed"),
+                        unit_tests_passed=result.get("unit_test_passed"),
+                        build_time=result.get("build_time", 0.0),
+                        pov_test_time=result.get("pov_test_time", 0.0),
+                        unit_test_time=result.get("unit_test_time", 0.0),
+                        elapsed_seconds=result.get("elapsed_seconds", 0.0),
+                        cpv_fixed=result.get("cpv_fixed", []),
+                        security_verdict=result.get("security_verdict", "FAIL"),
+                        failed_tests=result.get("failed_tests", []),
+                    )
+
+                    # Handle optional complex types
+                    cpv_stats_raw = result.get("cpv_stats")
+                    if cpv_stats_raw and isinstance(cpv_stats_raw, dict):
+                        from crsbench.evaluation.verification.models import CpvStats
+
+                        for cpv_id, stats_data in cpv_stats_raw.items():
+                            if isinstance(stats_data, dict):
+                                pvr.cpv_stats[cpv_id] = CpvStats(
+                                    cpv_id=stats_data.get("cpv_id", cpv_id),
+                                    variants_tested=stats_data.get(
+                                        "variants_tested", 0
+                                    ),
+                                    variants_matched=stats_data.get(
+                                        "variants_matched", 0
+                                    ),
+                                    variant_results=stats_data.get(
+                                        "variant_results", {}
+                                    ),
+                                )
+
+                    scores_raw = result.get("scores")
+                    if scores_raw and isinstance(scores_raw, dict):
+                        from crsbench.evaluation.verification.models import (
+                            VerificationScores,
+                        )
+
+                        pvr.scores = VerificationScores(
+                            cpvs_complete=scores_raw.get("cpvs_complete", 0),
+                            cpvs_partial=scores_raw.get("cpvs_partial", 0),
+                            cpvs_none=scores_raw.get("cpvs_none", 0),
+                            total_variants_tested=scores_raw.get(
+                                "total_variants_tested", 0
+                            ),
+                            total_variants_matched=scores_raw.get(
+                                "total_variants_matched", 0
+                            ),
+                        )
+
+                    results.append(pvr)
+
+                except Exception as e:
+                    self.logger.warning(
+                        f"Failed to convert distributed patch result: {e}"
+                    )
+
+            valid_count = sum(1 for r in results if r.is_valid)
+            self.logger.info(
+                f"Distributed patch verification completed: "
+                f"{valid_count}/{len(results)} patches valid"
+            )
+
+            return results
+
+        except Exception as e:
+            self.logger.error(
+                f"Distributed patch verification failed for harness "
+                f"'{harness_name}': {e}",
                 exc_info=True,
             )
             return []
