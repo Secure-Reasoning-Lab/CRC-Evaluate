@@ -1,0 +1,8 @@
+language: jvm
+main_repo: 'git@github.com:Team-Atlanta/mock-java.git'
+fuzzing_engines:
+  - libfuzzer
+sanitizers:
+  - address
+rts_mode: none
+inc_build: true

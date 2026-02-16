@@ -1,0 +1,42 @@
+OpenJDK 64-Bit Server VM warning: Option CriticalJNINatives was deprecated in version 16.0 and will likely be removed in a future release.
+OpenJDK 64-Bit Server VM warning: Sharing is only supported for boot loader classes because bootstrap classpath has been appended
+INFO: Loaded 272 hooks from com.code_intelligence.jazzer.runtime.TraceCmpHooks
+INFO: Loaded 5 hooks from com.code_intelligence.jazzer.runtime.TraceDivHooks
+INFO: Loaded 2 hooks from com.code_intelligence.jazzer.runtime.TraceIndirHooks
+INFO: Loaded 4 hooks from com.code_intelligence.jazzer.runtime.NativeLibHooks
+INFO: Loaded 2 hooks from com.code_intelligence.jazzer.sanitizers.ClojureLangHooks
+INFO: Loaded 5 hooks from com.code_intelligence.jazzer.sanitizers.Deserialization
+INFO: Loaded 5 hooks from com.code_intelligence.jazzer.sanitizers.ExpressionLanguageInjection
+INFO: Loaded 70 hooks from com.code_intelligence.jazzer.sanitizers.LdapInjection
+INFO: Loaded 46 hooks from com.code_intelligence.jazzer.sanitizers.NamingContextLookup
+INFO: Loaded 1 hooks from com.code_intelligence.jazzer.sanitizers.OsCommandInjection
+INFO: Loaded 48 hooks from com.code_intelligence.jazzer.sanitizers.ReflectiveCall
+INFO: Loaded 8 hooks from com.code_intelligence.jazzer.sanitizers.RegexInjection
+INFO: Loaded 16 hooks from com.code_intelligence.jazzer.sanitizers.RegexRoadblocks
+INFO: Loaded 12 hooks from com.code_intelligence.jazzer.sanitizers.ScriptEngineInjection
+INFO: Loaded 3 hooks from com.code_intelligence.jazzer.sanitizers.ServerSideRequestForgery
+INFO: Loaded 19 hooks from com.code_intelligence.jazzer.sanitizers.SqlInjection
+INFO: Loaded 6 hooks from com.code_intelligence.jazzer.sanitizers.XPathInjection
+INFO: Instrumented OssFuzz1 (took 48 ms, size +17%)
+INFO: using inputs from: /testcase
+INFO: found LLVMFuzzerCustomMutator (0x7f0a227b4a00). Disabling -len_control by default.
+INFO: libFuzzer ignores flags that start with '--'
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 1058169892
+INFO: Loaded 1 modules   (512 inline 8-bit counters): 512 [0x564507849c20, 0x564507849e20),
+INFO: Loaded 1 PC tables (512 PCs): 512 [0x5645077b5460,0x5645077b7460),
+jazzer: Running 1 inputs 100 time(s) each.
+Running: /testcase
+INFO: Instrumented com.aixcc.mock_java.App (took 5 ms, size +13%)
+
+== Java Exception: com.code_intelligence.jazzer.api.FuzzerSecurityIssueCritical: OS Command Injection
+Executing OS commands with attacker-controlled data can lead to remote code execution.
+        at com.code_intelligence.jazzer.sanitizers.OsCommandInjection.processImplStartHook(OsCommandInjection.kt:54)
+        at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1110)
+        at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1073)
+        at com.aixcc.mock_java.App.executeCommand(App.java:14)
+        at OssFuzz1.fuzzerTestOneInput(OssFuzz1.java:13)
+DEDUP_TOKEN: d728c2eccb34a9b8
+== libFuzzer crashing input ==
+reproducer_path='.'; Java reproducer written to ./Crash_a2450695a3964c3c16971128ffc8cab9c67f0d75.java
+

@@ -1,0 +1,115 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "CRSBench-HintGenerator",
+          "version": "1.0.0",
+          "informationUri": "https://github.com/your-org/crsbench",
+          "rules": [
+            {
+              "id": "CWE-78",
+              "name": "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')",
+              "shortDescription": {
+                "text": "Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+              },
+              "fullDescription": {
+                "text": "Specific vulnerability type: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+              }
+            },
+            {
+              "id": "CWE-77",
+              "name": "CWE-77: Improper Neutralization of Special Elements used in a Command ('Command Injection')",
+              "shortDescription": {
+                "text": "Improper Neutralization of Special Elements used in a Command ('Command Injection')"
+              },
+              "fullDescription": {
+                "text": "Specific vulnerability type: Improper Neutralization of Special Elements used in a Command ('Command Injection')"
+              }
+            },
+            {
+              "id": "CWE-88",
+              "name": "CWE-88: Unknown vulnerability type",
+              "shortDescription": {
+                "text": "Unknown vulnerability type"
+              },
+              "fullDescription": {
+                "text": "Specific vulnerability type: Unknown vulnerability type"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "CWE-78",
+          "level": "warning",
+          "message": {
+            "text": "CWE-78 - Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection') in function(s): executeCommand"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/main/java/com/aixcc/mock_java/App.java"
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "executeCommand",
+                  "kind": "function"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "ruleId": "CWE-77",
+          "level": "warning",
+          "message": {
+            "text": "CWE-77 - Improper Neutralization of Special Elements used in a Command ('Command Injection') in function(s): executeCommand"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/main/java/com/aixcc/mock_java/App.java"
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "executeCommand",
+                  "kind": "function"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "ruleId": "CWE-88",
+          "level": "warning",
+          "message": {
+            "text": "CWE-88 - Unknown vulnerability type in function(s): executeCommand"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/main/java/com/aixcc/mock_java/App.java"
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "executeCommand",
+                  "kind": "function"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

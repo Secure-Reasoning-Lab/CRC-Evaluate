@@ -1,0 +1,78 @@
+INFO:__main__:Running: docker run --privileged --shm-size=2g --platform linux/amd64 --rm -i -e HELPER=True -e ARCHITECTURE=x86_64 -v /home/jhkim/1.AIxCC/oss-fuzz/build/out/aixcc/c/mock-c:/out -v /home/jhkim/1.AIxCC/oss-fuzz/projects/aixcc/c/mock-c/.aixcc/povs/fuzz_process_input_header/cpv_0:/testcase -t ghcr.io/aixcc-finals/base-runner:v1.2.0 reproduce fuzz_process_input_header -runs=100.
++ FUZZER=fuzz_process_input_header
++ shift
++ '[' '!' -v TESTCASE ']'
++ TESTCASE=/testcase
++ '[' '!' -f /testcase ']'
++ export RUN_FUZZER_MODE=interactive
++ RUN_FUZZER_MODE=interactive
++ export FUZZING_ENGINE=libfuzzer
++ FUZZING_ENGINE=libfuzzer
++ export SKIP_SEED_CORPUS=1
++ SKIP_SEED_CORPUS=1
++ run_fuzzer fuzz_process_input_header -runs=100 /testcase
+vm.mmap_rnd_bits = 28
+/out/fuzz_process_input_header -rss_limit_mb=2560 -timeout=25 -runs=100 /testcase < /dev/null
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 640420731
+INFO: Loaded 1 modules   (10 inline 8-bit counters): 10 [0x55edd736bff8, 0x55edd736c002),
+INFO: Loaded 1 PC tables (10 PCs): 10 [0x55edd736c008,0x55edd736c0a8),
+/out/fuzz_process_input_header: Running 1 inputs 100 time(s) each.
+Running: /testcase
+=================================================================
+==14==ERROR: AddressSanitizer: stack-buffer-overflow on address 0x7fe51015f860 at pc 0x55edd72c4034 bp 0x7ffc4abd3db0 sp 0x7ffc4abd3570
+WRITE of size 256 at 0x7fe51015f860 thread T0
+SCARINESS: 60 (multi-byte-write-stack-buffer-overflow)
+    #0 0x55edd72c4033 in __asan_memcpy /src/llvm-project/compiler-rt/lib/asan/asan_interceptors_memintrinsics.cpp:63:3
+    #1 0x55edd730595c in process_input_header /src/mock-c/mock.c:11:7
+    #2 0x55edd730578f in LLVMFuzzerTestOneInput /src/fuzz/fuzz_process_input_header.c:4:3
+    #3 0x55edd71ba2e0 in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) /src/llvm-project/compiler-rt/lib/fuzzer/FuzzerLoop.cpp:614:13
+    #4 0x55edd71a5555 in fuzzer::RunOneTest(fuzzer::Fuzzer*, char const*, unsigned long) /src/llvm-project/compiler-rt/lib/fuzzer/FuzzerDriver.cpp:327:6
+    #5 0x55edd71aafef in fuzzer::FuzzerDriver(int*, char***, int (*)(unsigned char const*, unsigned long)) /src/llvm-project/compiler-rt/lib/fuzzer/FuzzerDriver.cpp:862:9
+    #6 0x55edd71d6292 in main /src/llvm-project/compiler-rt/lib/fuzzer/FuzzerMain.cpp:20:10
+    #7 0x7fe510841082 in __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x24082) (BuildId: 5792732f783158c66fb4f3756458ca24e46e827d)
+    #8 0x55edd719d73d in _start (/out/fuzz_process_input_header+0x3d73d)
+
+DEDUP_TOKEN: __asan_memcpy--process_input_header--LLVMFuzzerTestOneInput
+Address 0x7fe51015f860 is located in stack of thread T0 at offset 96 in frame
+    #0 0x55edd730580f in process_input_header /src/mock-c/mock.c:8
+
+DEDUP_TOKEN: process_input_header
+  This frame has 1 object(s):
+    [32, 96) 'buf' (line 9) <== Memory access at offset 96 overflows this variable
+HINT: this may be a false positive if your program uses some custom stack unwind mechanism, swapcontext or vfork
+      (longjmp and C++ exceptions *are* supported)
+SUMMARY: AddressSanitizer: stack-buffer-overflow /src/mock-c/mock.c:11:7 in process_input_header
+Shadow bytes around the buggy address:
+  0x7fe51015f580: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x7fe51015f600: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x7fe51015f680: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x7fe51015f700: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x7fe51015f780: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+=>0x7fe51015f800: f1 f1 f1 f1 00 00 00 00 00 00 00 00[f3]f3 f3 f3
+  0x7fe51015f880: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x7fe51015f900: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x7fe51015f980: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x7fe51015fa00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x7fe51015fa80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Shadow byte legend (one shadow byte represents 8 application bytes):
+  Addressable:           00
+  Partially addressable: 01 02 03 04 05 06 07
+  Heap left redzone:       fa
+  Freed heap region:       fd
+  Stack left redzone:      f1
+  Stack mid redzone:       f2
+  Stack right redzone:     f3
+  Stack after return:      f5
+  Stack use after scope:   f8
+  Global redzone:          f9
+  Global init order:       f6
+  Poisoned by user:        f7
+  Container overflow:      fc
+  Array cookie:            ac
+  Intra object redzone:    bb
+  ASan internal:           fe
+  Left alloca redzone:     ca
+  Right alloca redzone:    cb
+==14==ABORTING
+subprocess command returned a non-zero exit status: 1

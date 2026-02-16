@@ -1,0 +1,70 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "CRSBench-HintGenerator",
+          "version": "1.0.0",
+          "informationUri": "https://github.com/your-org/crsbench",
+          "rules": [
+            {
+              "id": "CWE-122",
+              "name": "CWE-122: Heap-based Buffer Overflow",
+              "shortDescription": {
+                "text": "Heap-based Buffer Overflow"
+              },
+              "fullDescription": {
+                "text": "Specific vulnerability type: Heap-based Buffer Overflow"
+              }
+            },
+            {
+              "id": "CWE-787",
+              "name": "CWE-787: Out-of-bounds Write",
+              "shortDescription": {
+                "text": "Out-of-bounds Write"
+              },
+              "fullDescription": {
+                "text": "Specific vulnerability type: Out-of-bounds Write"
+              }
+            },
+            {
+              "id": "CWE-119",
+              "name": "CWE-119: Improper Restriction of Operations within the Bounds of a Memory Buffer",
+              "shortDescription": {
+                "text": "Improper Restriction of Operations within the Bounds of a Memory Buffer"
+              },
+              "fullDescription": {
+                "text": "Specific vulnerability type: Improper Restriction of Operations within the Bounds of a Memory Buffer"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "CWE-122",
+          "level": "warning",
+          "message": {
+            "text": "CWE-122 - Heap-based Buffer Overflow"
+          }
+        },
+        {
+          "ruleId": "CWE-787",
+          "level": "warning",
+          "message": {
+            "text": "CWE-787 - Out-of-bounds Write"
+          }
+        },
+        {
+          "ruleId": "CWE-119",
+          "level": "warning",
+          "message": {
+            "text": "CWE-119 - Improper Restriction of Operations within the Bounds of a Memory Buffer"
+          }
+        }
+      ]
+    }
+  ]
+}

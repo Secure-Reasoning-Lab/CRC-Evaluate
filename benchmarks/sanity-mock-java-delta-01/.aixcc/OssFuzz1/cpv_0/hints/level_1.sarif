@@ -1,0 +1,53 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "CRSBench-HintGenerator",
+          "version": "1.0.0",
+          "informationUri": "https://github.com/your-org/crsbench",
+          "rules": [
+            {
+              "id": "input-validation-issue",
+              "name": "Input Validation Issue",
+              "shortDescription": {
+                "text": "Input Validation Issue detected"
+              },
+              "fullDescription": {
+                "text": "A input validation issue was detected in the code."
+              }
+            },
+            {
+              "id": "unknown-vulnerability",
+              "name": "Unknown Vulnerability",
+              "shortDescription": {
+                "text": "Unknown Vulnerability detected"
+              },
+              "fullDescription": {
+                "text": "A unknown vulnerability was detected in the code."
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "input-validation-issue",
+          "level": "warning",
+          "message": {
+            "text": "Input Validation Issue"
+          }
+        },
+        {
+          "ruleId": "unknown-vulnerability",
+          "level": "warning",
+          "message": {
+            "text": "Unknown Vulnerability"
+          }
+        }
+      ]
+    }
+  ]
+}

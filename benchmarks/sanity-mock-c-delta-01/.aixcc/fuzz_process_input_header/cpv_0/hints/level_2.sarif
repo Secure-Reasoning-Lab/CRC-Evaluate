@@ -1,0 +1,70 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "CRSBench-HintGenerator",
+          "version": "1.0.0",
+          "informationUri": "https://github.com/your-org/crsbench",
+          "rules": [
+            {
+              "id": "CWE-121",
+              "name": "CWE-121: Stack-based Buffer Overflow",
+              "shortDescription": {
+                "text": "Stack-based Buffer Overflow"
+              },
+              "fullDescription": {
+                "text": "Specific vulnerability type: Stack-based Buffer Overflow"
+              }
+            },
+            {
+              "id": "CWE-787",
+              "name": "CWE-787: Out-of-bounds Write",
+              "shortDescription": {
+                "text": "Out-of-bounds Write"
+              },
+              "fullDescription": {
+                "text": "Specific vulnerability type: Out-of-bounds Write"
+              }
+            },
+            {
+              "id": "CWE-805",
+              "name": "CWE-805: Unknown vulnerability type",
+              "shortDescription": {
+                "text": "Unknown vulnerability type"
+              },
+              "fullDescription": {
+                "text": "Specific vulnerability type: Unknown vulnerability type"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "CWE-121",
+          "level": "warning",
+          "message": {
+            "text": "CWE-121 - Stack-based Buffer Overflow"
+          }
+        },
+        {
+          "ruleId": "CWE-787",
+          "level": "warning",
+          "message": {
+            "text": "CWE-787 - Out-of-bounds Write"
+          }
+        },
+        {
+          "ruleId": "CWE-805",
+          "level": "warning",
+          "message": {
+            "text": "CWE-805 - Unknown vulnerability type"
+          }
+        }
+      ]
+    }
+  ]
+}

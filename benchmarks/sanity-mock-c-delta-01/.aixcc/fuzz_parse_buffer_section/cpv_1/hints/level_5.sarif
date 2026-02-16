@@ -1,0 +1,133 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "CRSBench-HintGenerator",
+          "version": "1.0.0",
+          "informationUri": "https://github.com/your-org/crsbench",
+          "rules": [
+            {
+              "id": "CWE-122",
+              "name": "CWE-122: Heap-based Buffer Overflow",
+              "shortDescription": {
+                "text": "Heap-based Buffer Overflow"
+              },
+              "fullDescription": {
+                "text": "Specific vulnerability type: Heap-based Buffer Overflow"
+              }
+            },
+            {
+              "id": "CWE-787",
+              "name": "CWE-787: Out-of-bounds Write",
+              "shortDescription": {
+                "text": "Out-of-bounds Write"
+              },
+              "fullDescription": {
+                "text": "Specific vulnerability type: Out-of-bounds Write"
+              }
+            },
+            {
+              "id": "CWE-119",
+              "name": "CWE-119: Improper Restriction of Operations within the Bounds of a Memory Buffer",
+              "shortDescription": {
+                "text": "Improper Restriction of Operations within the Bounds of a Memory Buffer"
+              },
+              "fullDescription": {
+                "text": "Specific vulnerability type: Improper Restriction of Operations within the Bounds of a Memory Buffer"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "CWE-122",
+          "level": "warning",
+          "message": {
+            "text": "CWE-122 - Heap-based Buffer Overflow\nVulnerability: Unchecked Index Heap Buffer Overflow in parse_buffer_section\nDescription: A heap buffer overflow vulnerability exists in the parse_buffer_section function\nin mock.c at line 22. The function allocates a heap buffer of buf_size bytes but\nuses an unchecked idx value as an offset when copying data via memcpy. When idx\nis greater than 0, the memcpy operation writes beyond the allocated buffer\nboundaries. For example, if buf_size=16 and idx=16, memcpy writes to buf[16]\nthrough buf[31], but only buf[0] through buf[15] were allocated. This allows an\nattacker to corrupt adjacent heap memory, potentially leading to arbitrary code\nexecution, denial of service, or information disclosure.\n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "mock.c"
+                },
+                "region": {
+                  "startLine": 22,
+                  "endLine": 22,
+                  "startColumn": 3,
+                  "endColumn": 3
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "parse_buffer_section",
+                  "kind": "function"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "ruleId": "CWE-787",
+          "level": "warning",
+          "message": {
+            "text": "CWE-787 - Out-of-bounds Write\nVulnerability: Unchecked Index Heap Buffer Overflow in parse_buffer_section\nDescription: A heap buffer overflow vulnerability exists in the parse_buffer_section function\nin mock.c at line 22. The function allocates a heap buffer of buf_size bytes but\nuses an unchecked idx value as an offset when copying data via memcpy. When idx\nis greater than 0, the memcpy operation writes beyond the allocated buffer\nboundaries. For example, if buf_size=16 and idx=16, memcpy writes to buf[16]\nthrough buf[31], but only buf[0] through buf[15] were allocated. This allows an\nattacker to corrupt adjacent heap memory, potentially leading to arbitrary code\nexecution, denial of service, or information disclosure.\n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "mock.c"
+                },
+                "region": {
+                  "startLine": 22,
+                  "endLine": 22,
+                  "startColumn": 3,
+                  "endColumn": 3
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "parse_buffer_section",
+                  "kind": "function"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "ruleId": "CWE-119",
+          "level": "warning",
+          "message": {
+            "text": "CWE-119 - Improper Restriction of Operations within the Bounds of a Memory Buffer\nVulnerability: Unchecked Index Heap Buffer Overflow in parse_buffer_section\nDescription: A heap buffer overflow vulnerability exists in the parse_buffer_section function\nin mock.c at line 22. The function allocates a heap buffer of buf_size bytes but\nuses an unchecked idx value as an offset when copying data via memcpy. When idx\nis greater than 0, the memcpy operation writes beyond the allocated buffer\nboundaries. For example, if buf_size=16 and idx=16, memcpy writes to buf[16]\nthrough buf[31], but only buf[0] through buf[15] were allocated. This allows an\nattacker to corrupt adjacent heap memory, potentially leading to arbitrary code\nexecution, denial of service, or information disclosure.\n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "mock.c"
+                },
+                "region": {
+                  "startLine": 22,
+                  "endLine": 22,
+                  "startColumn": 3,
+                  "endColumn": 3
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "parse_buffer_section",
+                  "kind": "function"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

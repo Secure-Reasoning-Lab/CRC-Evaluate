@@ -1,0 +1,36 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "CRSBench-HintGenerator",
+          "version": "1.0.0",
+          "informationUri": "https://github.com/your-org/crsbench",
+          "rules": [
+            {
+              "id": "memory-safety-issue",
+              "name": "Memory Safety Issue",
+              "shortDescription": {
+                "text": "Memory Safety Issue detected"
+              },
+              "fullDescription": {
+                "text": "A memory safety issue was detected in the code."
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "memory-safety-issue",
+          "level": "warning",
+          "message": {
+            "text": "Memory Safety Issue"
+          }
+        }
+      ]
+    }
+  ]
+}
