@@ -230,7 +230,7 @@ crsbench evaluator --ci --redis-host redis.internal \
 |------|-------------|---------|
 | `--ci` | Use CI queue mode (build + verify) | Required |
 | `--redis-host HOST` | Redis server hostname | localhost |
-| `--build-jobs N` | Max concurrent build jobs | value of -j |
+| `--build-jobs N` | Max concurrent build jobs | 1 |
 | `--build-cores-per-job M` | CPUs per build job | 1 |
 | `--verify-jobs K` | Max concurrent verify/test jobs | build-jobs * build-cores / verify-cores |
 | `--verify-cores-per-job M` | CPUs per verify/test job | 1 |

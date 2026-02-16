@@ -126,8 +126,7 @@ ssh -N -L 6379:localhost:6379 user@machine-a &
 crsbench evaluator \
   --experiment-config experiment-config.yaml \
   --experiment-name my-distributed-exp \
-  --redis-host localhost \
-  -j 2
+  --redis-host localhost
 ```
 
 The evaluator:
@@ -145,7 +144,6 @@ ssh -N -L 6379:localhost:6379 user@machine-a &
 crsbench worker \
   --experiment-name my-distributed-exp \
   --redis-host localhost \
-  -j 4 \
   --oss-fuzz-path /opt/oss-fuzz \
   --benchmarks-root /home/user/CRSBench/benchmarks
 ```
@@ -229,8 +227,7 @@ If no evaluator was running during the experiment, verification jobs accumulate 
 # After experiment completes, start evaluator to drain verify queue
 crsbench evaluator \
   --experiment-config experiment-config.yaml \
-  --experiment-name my-distributed-exp \
-  -j 4
+  --experiment-name my-distributed-exp
 ```
 
 The evaluator builds variants, then processes all queued verification jobs.

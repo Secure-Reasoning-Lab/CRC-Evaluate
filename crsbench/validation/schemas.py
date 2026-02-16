@@ -712,7 +712,7 @@ class WorkerConfig(BaseModel):
         "Falls back to top-level redis_host if not set.",
     )
     continuous: bool = Field(
-        default=True,
+        default=False,
         description="Whether workers should run continuously or exit after one job",
     )
     experiment_filestore: Optional[Path] = Field(

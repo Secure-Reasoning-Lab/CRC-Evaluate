@@ -29,11 +29,8 @@ Examples:
   # Run evaluator (experiment name read from config)
   %(prog)s --experiment-config experiment-config.yaml
 
-  # Run evaluator with 4 parallel verify jobs
-  %(prog)s --experiment-config config.yaml -j 4
-
   # Run evaluator in CI mode (no experiment config needed)
-  %(prog)s --ci -j 8
+  %(prog)s --ci --build-jobs 4
 
   # Run evaluator in CI mode with CPU settings
   %(prog)s --ci --build-jobs 4 --build-cores-per-job 2 --verify-jobs 8
@@ -69,15 +66,6 @@ Examples:
         default="localhost",
         metavar="HOST",
         help="Redis server hostname or IP address (default: localhost)",
-    )
-
-    evaluator_parser.add_argument(
-        "-j",
-        "--jobs",
-        type=int,
-        default=1,
-        metavar="N",
-        help="Number of parallel verify jobs (default: 1)",
     )
 
     evaluator_parser.add_argument(
@@ -205,7 +193,7 @@ def run_evaluator(args: argparse.Namespace) -> int:
         cores = getattr(args, "cores", None)
         skip_cpus = getattr(args, "skip_cpus", None)
 
-        build_jobs = getattr(args, "build_jobs", None) or args.jobs
+        build_jobs = getattr(args, "build_jobs", None) or 1
         build_cores_per_job = getattr(args, "build_cores_per_job", 1)
         verify_cores_per_job = getattr(args, "verify_cores_per_job", 1)
         verify_jobs = (
@@ -270,7 +258,7 @@ def run_evaluator(args: argparse.Namespace) -> int:
     skip_cpus = getattr(args, "skip_cpus", None)
 
     # Resolve dual-queue CI parameters
-    build_jobs = getattr(args, "build_jobs", None) or args.jobs
+    build_jobs = getattr(args, "build_jobs", None) or 1
     build_cores_per_job = getattr(args, "build_cores_per_job", 1)
     verify_cores_per_job = getattr(args, "verify_cores_per_job", 1)
     verify_jobs = (
@@ -283,7 +271,7 @@ def run_evaluator(args: argparse.Namespace) -> int:
             config=config,
             experiment_name=experiment_name,
             redis_host=redis_host,
-            max_jobs=args.jobs,
+            max_jobs=build_jobs,
             use_cpuset=use_cpuset,
             cores=cores,
             skip_cpus=skip_cpus,

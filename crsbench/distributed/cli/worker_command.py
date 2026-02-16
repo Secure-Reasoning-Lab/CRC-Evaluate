@@ -93,18 +93,9 @@ Examples:
     )
 
     worker_parser.add_argument(
-        "-j",
-        "--jobs",
-        type=int,
-        default=1,
-        metavar="N",
-        help="Number of parallel worker processes (default: 1)",
-    )
-
-    worker_parser.add_argument(
         "--no-cpuset",
         action="store_true",
-        help="Disable CPU affinity (not supported with -j > 1)",
+        help="Disable CPU affinity (not supported with multiple workers)",
     )
 
     worker_parser.add_argument(
@@ -175,7 +166,7 @@ def run_worker(args: argparse.Namespace) -> int:
         or (config.redis_host if config else None),
         "localhost",
     )
-    num_workers = resolve(args.jobs, worker_config.jobs if worker_config else None, 1)
+    num_workers = worker_config.jobs if worker_config else 1
     continuous = args.continuous or (
         worker_config.continuous if worker_config else False
     )
@@ -233,7 +224,7 @@ def run_worker(args: argparse.Namespace) -> int:
 
     # Validate --no-cpuset with multiple workers
     if getattr(args, "no_cpuset", False) and num_workers > 1:
-        raise ValueError("--no-cpuset is not supported with multiple workers (-j > 1)")
+        raise ValueError("--no-cpuset is not supported with multiple workers")
 
     # cpuset is enabled by default, disabled with --no-cpuset
     use_cpuset = not getattr(args, "no_cpuset", False)
@@ -251,14 +242,6 @@ def run_worker(args: argparse.Namespace) -> int:
     if skip_cpus is None and worker_config:
         skip_cpus = worker_config.skip_cpus
 
-    # Prepare worker arguments with resolved values
-    worker_args = {
-        "redis_host": redis_host,
-        "experiment_name": experiment_name,
-        "worker_name": args.worker_name,
-        "num_workers": num_workers,
-    }
-
     try:
         if continuous:
             run_worker_continuous(
@@ -275,7 +258,10 @@ def run_worker(args: argparse.Namespace) -> int:
             )
             return 0
         return worker_main(
-            **worker_args,
+            redis_host=redis_host,
+            experiment_name=experiment_name,
+            worker_name=args.worker_name,
+            num_workers=num_workers,
             queue_name=queue_name,
             use_cpuset=use_cpuset,
             cores=cores,
