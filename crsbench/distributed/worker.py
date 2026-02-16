@@ -533,6 +533,8 @@ def _run_supervisor(
                             os.environ["OSS_FUZZ_CGROUP_PARENT"] = (
                                 cgroup_path_for_docker(cgroup_path)
                             )
+                        if cpuset_str:
+                            os.environ["OSS_FUZZ_CPUSET_CPUS"] = cpuset_str
 
                         p = multiprocessing.Process(
                             target=_run_single_job_worker,
@@ -544,6 +546,7 @@ def _run_supervisor(
                         # Unset after spawning so it doesn't leak to the next worker
                         if cgroup_path is not None:
                             os.environ.pop("OSS_FUZZ_CGROUP_PARENT", None)
+                        os.environ.pop("OSS_FUZZ_CPUSET_CPUS", None)
 
                         if p.pid is not None:
                             workers[p.pid] = (

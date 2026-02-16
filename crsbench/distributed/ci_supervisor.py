@@ -272,6 +272,8 @@ def run_ci_supervisor(
                 os.environ["OSS_FUZZ_CGROUP_PARENT"] = cgroup_path_for_docker(
                     cgroup_path
                 )
+            if cpuset_str:
+                os.environ["OSS_FUZZ_CPUSET_CPUS"] = cpuset_str
 
             # Spawn child process
             p = multiprocessing.Process(
@@ -283,6 +285,7 @@ def run_ci_supervisor(
 
             if cgroup_path is not None:
                 os.environ.pop("OSS_FUZZ_CGROUP_PARENT", None)
+            os.environ.pop("OSS_FUZZ_CPUSET_CPUS", None)
 
             if p.pid is not None:
                 entry = (p, cpus or [], job.id, worker_num, cgroup_path)

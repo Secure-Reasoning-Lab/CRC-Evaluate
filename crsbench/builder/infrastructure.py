@@ -1814,7 +1814,7 @@ class OSSFuzzInfrastructure:
                 ["docker", "pull", inc_image],
                 capture_output=True,
                 text=True,
-                timeout=600,  # 10 minutes for large images
+                timeout=1200,  # 20 minutes for large images (20GB+)
                 stdin=subprocess.DEVNULL,
             )
 

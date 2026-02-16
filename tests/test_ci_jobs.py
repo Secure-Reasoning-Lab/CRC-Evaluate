@@ -1,7 +1,7 @@
 """Tests for CI verify/test job serialization and execution."""
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -187,11 +187,30 @@ class TestSerializeAllJobTypes:
             patch_id="p0",
             patch_path=Path("/patch.diff"),
             harness="h",
+            sanitizer="undefined",
         )
         params = serialize_ci_job(job)
+        assert params["sanitizer"] == "undefined"
         restored = _reconstruct_job(params)
         assert type(restored).__name__ == "BuildPatchVariantJob"
         assert restored.patch_path == Path("/patch.diff")
+        assert restored.sanitizer == "undefined"
+
+    def test_build_patch_variant_default_sanitizer(self) -> None:
+        """BuildPatchVariantJob defaults sanitizer to 'address' on deserialize."""
+        from crsbench.distributed.ci_jobs import _reconstruct_job
+
+        params = {
+            "_job_class": "BuildPatchVariantJob",
+            "benchmark_path": "/b",
+            "benchmark_name": "bench",
+            "cpv_id": "cpv_0",
+            "patch_id": "p0",
+            "patch_path": "/patch.diff",
+            "harness": "h",
+        }
+        restored = _reconstruct_job(params)
+        assert restored.sanitizer == "address"
 
 
 class TestCiResultsToExecutorResults:
@@ -251,3 +270,367 @@ class TestReconstructUnknown:
 
         with pytest.raises(ValueError, match="Unknown job class"):
             _reconstruct_job({"_job_class": "NonExistentJob"})
+
+
+class TestRecoverOrphanedDeferredJobs:
+    """Test _recover_orphaned_deferred_jobs() deferred-job recovery."""
+
+    def _make_mock_rq_job(self, job_id, status, dependency_ids=None):
+        """Create a mock RQ job with the given status and dependency_ids."""
+        job = MagicMock()
+        job.id = job_id
+        job.get_status.return_value = status
+        job.dependency_ids = dependency_ids or []
+        job._dependency_ids = list(dependency_ids or [])
+        job.dependencies_key = f"rq:job:{job_id}:dependencies"
+        return job
+
+    @staticmethod
+    def _mock_registry_factory(mock_registry):
+        """Return a callable that ignores args and returns mock_registry."""
+
+        def factory(**_kwargs):
+            return mock_registry
+
+        return factory
+
+    @staticmethod
+    def _mock_fetch_returning(dep_job):
+        """Return a Job.fetch mock that always returns dep_job."""
+
+        def fetch(_dep_id, **_kwargs):
+            return dep_job
+
+        return fetch
+
+    def test_no_deferred_jobs_returns_zero(self) -> None:
+        """When no jobs are in the deferred registry, returns 0."""
+        from crsbench.distributed.ci_jobs import _recover_orphaned_deferred_jobs
+
+        queue = MagicMock()
+        queue.connection = MagicMock()
+
+        with pytest.MonkeyPatch.context() as mp:
+            mock_registry = MagicMock()
+            mock_registry.get_job_ids.return_value = []
+            mp.setattr(
+                "rq.registry.DeferredJobRegistry",
+                self._mock_registry_factory(mock_registry),
+            )
+            result = _recover_orphaned_deferred_jobs(
+                queue,
+                {"job-1": self._make_mock_rq_job("job-1", "queued")},
+                {"job-1"},
+            )
+        assert result == 0
+
+    def test_deferred_job_not_in_pending_is_ignored(self) -> None:
+        """Deferred jobs not in the pending set are skipped."""
+        from crsbench.distributed.ci_jobs import _recover_orphaned_deferred_jobs
+
+        queue = MagicMock()
+        queue.connection = MagicMock()
+
+        with pytest.MonkeyPatch.context() as mp:
+            mock_registry = MagicMock()
+            mock_registry.get_job_ids.return_value = ["other-job"]
+            mp.setattr(
+                "rq.registry.DeferredJobRegistry",
+                self._mock_registry_factory(mock_registry),
+            )
+            result = _recover_orphaned_deferred_jobs(
+                queue,
+                {"job-1": self._make_mock_rq_job("job-1", "queued")},
+                {"job-1"},
+            )
+        assert result == 0
+
+    def test_recovers_orphaned_deferred_job(self) -> None:
+        """A deferred job with all deps finished gets force-enqueued via pipeline."""
+        from crsbench.distributed.ci_jobs import _recover_orphaned_deferred_jobs
+        from rq.job import JobStatus
+
+        queue = MagicMock()
+        mock_pipe = MagicMock()
+        queue.connection.pipeline.return_value = mock_pipe
+
+        dep_job = self._make_mock_rq_job("build-1", JobStatus.FINISHED)
+        orphan = self._make_mock_rq_job(
+            "verify-1", JobStatus.DEFERRED, dependency_ids=["build-1"]
+        )
+
+        rq_jobs = {"verify-1": orphan}
+        pending = {"verify-1"}
+
+        with pytest.MonkeyPatch.context() as mp:
+            mock_registry = MagicMock()
+            mock_registry.get_job_ids.return_value = ["verify-1"]
+            mp.setattr(
+                "rq.registry.DeferredJobRegistry",
+                self._mock_registry_factory(mock_registry),
+            )
+            mp.setattr(
+                "rq.job.Job.fetch",
+                self._mock_fetch_returning(dep_job),
+            )
+
+            result = _recover_orphaned_deferred_jobs(queue, rq_jobs, pending)
+
+        assert result == 1
+        # Verify pipeline-based atomic operations
+        queue.connection.pipeline.assert_called_once()
+        mock_registry.remove.assert_called_once_with(orphan, pipeline=mock_pipe)
+        orphan.set_status.assert_called_once_with(JobStatus.QUEUED, pipeline=mock_pipe)
+        orphan.save.assert_called_once_with(pipeline=mock_pipe)
+        mock_pipe.delete.assert_called_once_with(orphan.dependencies_key)
+        queue.push_job_id.assert_called_once_with("verify-1", pipeline=mock_pipe)
+        mock_pipe.execute.assert_called_once()
+        assert orphan._dependency_ids == []
+
+    def test_skips_deferred_job_with_unfinished_deps(self) -> None:
+        """A deferred job whose deps are not all finished is NOT recovered."""
+        from crsbench.distributed.ci_jobs import _recover_orphaned_deferred_jobs
+        from rq.job import JobStatus
+
+        queue = MagicMock()
+        queue.connection = MagicMock()
+
+        dep_job = self._make_mock_rq_job("build-1", JobStatus.STARTED)
+        orphan = self._make_mock_rq_job(
+            "verify-1", JobStatus.DEFERRED, dependency_ids=["build-1"]
+        )
+
+        rq_jobs = {"verify-1": orphan}
+        pending = {"verify-1"}
+
+        with pytest.MonkeyPatch.context() as mp:
+            mock_registry = MagicMock()
+            mock_registry.get_job_ids.return_value = ["verify-1"]
+            mp.setattr(
+                "rq.registry.DeferredJobRegistry",
+                self._mock_registry_factory(mock_registry),
+            )
+            mp.setattr(
+                "rq.job.Job.fetch",
+                self._mock_fetch_returning(dep_job),
+            )
+
+            result = _recover_orphaned_deferred_jobs(queue, rq_jobs, pending)
+
+        assert result == 0
+        mock_registry.remove.assert_not_called()
+        queue.connection.pipeline.assert_not_called()
+
+    def test_skips_job_no_longer_deferred(self) -> None:
+        """A job in the deferred registry but already queued is skipped."""
+        from crsbench.distributed.ci_jobs import _recover_orphaned_deferred_jobs
+        from rq.job import JobStatus
+
+        queue = MagicMock()
+        queue.connection = MagicMock()
+
+        # Job is in deferred registry but refresh shows it's already queued
+        job = self._make_mock_rq_job(
+            "verify-1", JobStatus.QUEUED, dependency_ids=["build-1"]
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mock_registry = MagicMock()
+            mock_registry.get_job_ids.return_value = ["verify-1"]
+            mp.setattr(
+                "rq.registry.DeferredJobRegistry",
+                self._mock_registry_factory(mock_registry),
+            )
+
+            result = _recover_orphaned_deferred_jobs(
+                queue, {"verify-1": job}, {"verify-1"}
+            )
+
+        assert result == 0
+        mock_registry.remove.assert_not_called()
+
+    def test_dep_fetch_nosuchjob_skips_recovery(self) -> None:
+        """If a dependency is missing from Redis, the job is NOT recovered."""
+        from crsbench.distributed.ci_jobs import _recover_orphaned_deferred_jobs
+        from rq.exceptions import NoSuchJobError
+        from rq.job import JobStatus
+
+        queue = MagicMock()
+        queue.connection = MagicMock()
+
+        orphan = self._make_mock_rq_job(
+            "verify-1", JobStatus.DEFERRED, dependency_ids=["build-gone"]
+        )
+
+        def fetch_raises(_dep_id, **_kwargs):
+            raise NoSuchJobError("No such job")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mock_registry = MagicMock()
+            mock_registry.get_job_ids.return_value = ["verify-1"]
+            mp.setattr(
+                "rq.registry.DeferredJobRegistry",
+                self._mock_registry_factory(mock_registry),
+            )
+            mp.setattr("rq.job.Job.fetch", fetch_raises)
+
+            result = _recover_orphaned_deferred_jobs(
+                queue, {"verify-1": orphan}, {"verify-1"}
+            )
+
+        assert result == 0
+        queue.connection.pipeline.assert_not_called()
+
+    def test_multiple_jobs_mixed_recovery(self) -> None:
+        """Only the orphaned job with all deps finished is recovered."""
+        from crsbench.distributed.ci_jobs import _recover_orphaned_deferred_jobs
+        from rq.job import JobStatus
+
+        queue = MagicMock()
+        mock_pipe = MagicMock()
+        queue.connection.pipeline.return_value = mock_pipe
+
+        finished_dep = self._make_mock_rq_job("build-1", JobStatus.FINISHED)
+        started_dep = self._make_mock_rq_job("build-2", JobStatus.STARTED)
+
+        orphan_ready = self._make_mock_rq_job(
+            "verify-1", JobStatus.DEFERRED, dependency_ids=["build-1"]
+        )
+        orphan_blocked = self._make_mock_rq_job(
+            "verify-2", JobStatus.DEFERRED, dependency_ids=["build-2"]
+        )
+
+        rq_jobs = {"verify-1": orphan_ready, "verify-2": orphan_blocked}
+        pending = {"verify-1", "verify-2"}
+
+        def fetch_dep(dep_id, **_kwargs):
+            return {"build-1": finished_dep, "build-2": started_dep}[dep_id]
+
+        with pytest.MonkeyPatch.context() as mp:
+            mock_registry = MagicMock()
+            mock_registry.get_job_ids.return_value = ["verify-1", "verify-2"]
+            mp.setattr(
+                "rq.registry.DeferredJobRegistry",
+                self._mock_registry_factory(mock_registry),
+            )
+            mp.setattr("rq.job.Job.fetch", fetch_dep)
+
+            result = _recover_orphaned_deferred_jobs(queue, rq_jobs, pending)
+
+        assert result == 1
+        queue.push_job_id.assert_called_once_with("verify-1", pipeline=mock_pipe)
+
+
+class TestLoadBuildContextMultiSanitizer:
+    """Test _load_build_context_from_disk with multiple sanitizers."""
+
+    @patch("crsbench.utils.run_helper.get_oss_fuzz_root", return_value="/oss-fuzz")
+    @patch("crsbench.evaluation.verification.pov.VerificationEngine")
+    def test_loads_all_sanitizer_variants(
+        self, mock_engine_cls: MagicMock, mock_root: MagicMock
+    ) -> None:
+        """Multi-sanitizer benchmark loads build results for each sanitizer."""
+        from crsbench.distributed.ci_jobs import _load_build_context_from_disk
+
+        assert mock_root.return_value == "/oss-fuzz"
+
+        # Set up mock adapter with two sanitizers (asan + ubsan)
+        mock_adapter = MagicMock()
+        mock_adapter.get_all_cpv_sanitizers.return_value = ["address", "undefined"]
+
+        mock_engine = MagicMock()
+        mock_engine_cls.return_value = mock_engine
+        mock_engine.load_adapter.return_value = mock_adapter
+
+        # Simulate per-sanitizer build results
+        asan_results = {
+            "bench-asan-deltabase": MagicMock(name="asan-deltabase"),
+            "bench-asan-deltaref": MagicMock(name="asan-deltaref"),
+        }
+        ubsan_results = {
+            "bench-ubsan-deltabase": MagicMock(name="ubsan-deltabase"),
+            "bench-ubsan-deltaref": MagicMock(name="ubsan-deltaref"),
+            "bench-ubsan-deltaref2": MagicMock(name="ubsan-deltaref2"),
+        }
+
+        def fake_get_or_build(_adapter, *, sanitizer=None):
+            if sanitizer == "address":
+                return asan_results
+            if sanitizer == "undefined":
+                return ubsan_results
+            return {}
+
+        mock_engine.get_or_build_results.side_effect = fake_get_or_build
+
+        context = MagicMock()
+        context.shared = {}
+
+        build_job_ids = [
+            "build-single/bench/bench-asan-deltabase",
+            "build-single/bench/bench-asan-deltaref",
+            "build-single/bench/bench-ubsan-deltabase",
+            "build-single/bench/bench-ubsan-deltaref",
+            "build-single/bench/bench-ubsan-deltaref2",
+        ]
+
+        _load_build_context_from_disk(
+            context, build_job_ids, Path("/benchmarks/bench"), "pkgs"
+        )
+
+        # All 5 variants should be in context.shared
+        assert len(context.shared) == 5
+
+        # Verify asan variants got asan results
+        assert (
+            context.shared["build-single/bench/bench-asan-deltabase"]["build_result"]
+            is asan_results["bench-asan-deltabase"]
+        )
+        # Verify ubsan variants got ubsan results
+        assert (
+            context.shared["build-single/bench/bench-ubsan-deltaref2"]["build_result"]
+            is ubsan_results["bench-ubsan-deltaref2"]
+        )
+
+        # get_or_build_results called once per sanitizer
+        assert mock_engine.get_or_build_results.call_count == 2
+        mock_engine.get_or_build_results.assert_any_call(
+            mock_adapter, sanitizer="address"
+        )
+        mock_engine.get_or_build_results.assert_any_call(
+            mock_adapter, sanitizer="undefined"
+        )
+
+    @patch("crsbench.utils.run_helper.get_oss_fuzz_root", return_value="/oss-fuzz")
+    @patch("crsbench.evaluation.verification.pov.VerificationEngine")
+    def test_missing_variant_logs_warning_not_fallback(
+        self, mock_engine_cls: MagicMock, mock_root: MagicMock
+    ) -> None:
+        """Missing variant logs warning instead of silently using wrong sanitizer."""
+        from crsbench.distributed.ci_jobs import _load_build_context_from_disk
+
+        assert mock_root.return_value == "/oss-fuzz"
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_all_cpv_sanitizers.return_value = ["address"]
+
+        mock_engine = MagicMock()
+        mock_engine_cls.return_value = mock_engine
+        mock_engine.load_adapter.return_value = mock_adapter
+        mock_engine.get_or_build_results.return_value = {
+            "bench-asan-deltabase": MagicMock(),
+        }
+
+        context = MagicMock()
+        context.shared = {}
+
+        # Request a variant that doesn't exist in build results
+        build_job_ids = [
+            "build-single/bench/bench-ubsan-deltaref",
+        ]
+
+        _load_build_context_from_disk(
+            context, build_job_ids, Path("/benchmarks/bench"), "pkgs"
+        )
+
+        # Should NOT populate context.shared with wrong-sanitizer fallback
+        assert len(context.shared) == 0

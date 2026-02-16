@@ -12,9 +12,16 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from crsbench.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    import rq
+    import rq.job
+    import rq.registry
+
+    from crsbench.builder import BuildResult
 
 logger = get_logger(__name__)
 
@@ -138,6 +145,7 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 "patch_id": job.patch_id,
                 "patch_path": str(job.patch_path),
                 "harness": job.harness,
+                "sanitizer": job.sanitizer,
                 "use_inc_build": job.use_inc_build,
                 "force_rebuild": job.force_rebuild,
                 "build_job_id": job.build_job_id,
@@ -243,6 +251,7 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             patch_id=params["patch_id"],
             patch_path=Path(params["patch_path"]),
             harness=params.get("harness", ""),
+            sanitizer=params.get("sanitizer", "address"),
             use_inc_build=params.get("use_inc_build", True),
             force_rebuild=params.get("force_rebuild", False),
             build_job_id=params.get("build_job_id", ""),
@@ -280,7 +289,12 @@ def _load_build_context_from_disk(
         logger.warning(f"Failed to load adapter for {benchmark_path}")
         return
 
-    build_results = engine.get_or_build_results(adapter)
+    # Get build results for ALL sanitizers this benchmark uses
+    build_results: dict[str, BuildResult] = {}
+    for san in adapter.get_all_cpv_sanitizers():
+        results = engine.get_or_build_results(adapter, sanitizer=san)
+        build_results.update(results)
+
     if not build_results:
         logger.warning(f"No build results found for {benchmark_path.name}")
         return
@@ -296,14 +310,10 @@ def _load_build_context_from_disk(
                 "adapter": adapter,
             }
         else:
-            # Fallback: put first available result (better than nothing)
-            for name, br in build_results.items():
-                context.shared[bid] = {"build_result": br, "adapter": adapter}
-                logger.debug(
-                    f"Fallback: mapped {bid} to {name} "
-                    f"(variant not found: {variant_name})"
-                )
-                break
+            logger.warning(
+                f"Build result not found for {bid} (variant: {variant_name}). "
+                f"Available: {list(build_results.keys())}"
+            )
 
     logger.info(
         f"Loaded {len(context.shared)} build context entries for {benchmark_path.name}"
@@ -402,6 +412,71 @@ def execute_ci_job(params: dict[str, Any]) -> dict[str, Any]:
     return result.to_dict()
 
 
+def _recover_orphaned_deferred_jobs(
+    queue: "rq.Queue",
+    rq_jobs: dict[str, rq.job.Job],
+    pending: set[str],
+) -> int:
+    """Recover deferred jobs whose dependencies are all satisfied.
+
+    RQ 2.x has a race condition where finished jobs clear their dependents'
+    dependency sets but fail to move them from the deferred registry to the
+    queue. This function detects such orphaned jobs and force-enqueues them.
+
+    Returns number of recovered jobs.
+    """
+    import rq.registry
+    from rq.exceptions import NoSuchJobError
+    from rq.job import Job as RqJob
+    from rq.job import JobStatus
+
+    deferred_registry = rq.registry.DeferredJobRegistry(queue=queue)
+    deferred_ids = set(deferred_registry.get_job_ids())
+
+    # Only check jobs we're tracking
+    orphaned_ids = deferred_ids & pending
+    if not orphaned_ids:
+        return 0
+
+    recovered = 0
+    for job_id in orphaned_ids:
+        rq_job = rq_jobs[job_id]
+        rq_job.refresh()
+        if rq_job.get_status() != JobStatus.DEFERRED:
+            continue
+
+        # Check if all dependencies are finished
+        all_deps_done = True
+        for dep_id in rq_job.dependency_ids:
+            try:
+                dep_job = RqJob.fetch(dep_id, connection=queue.connection)
+                if dep_job.get_status() != JobStatus.FINISHED:
+                    all_deps_done = False
+                    break
+            except NoSuchJobError:
+                logger.debug(f"Dependency {dep_id} not found in Redis")
+                all_deps_done = False
+                break
+
+        if all_deps_done:
+            # Force-enqueue atomically via pipeline to prevent partial state
+            # if the process crashes between steps
+            pipe = queue.connection.pipeline()
+            deferred_registry.remove(rq_job, pipeline=pipe)
+            rq_job.set_status(JobStatus.QUEUED, pipeline=pipe)
+            # Clear internal dep list so RQ doesn't re-defer when processing
+            rq_job._dependency_ids = []
+            rq_job.save(pipeline=pipe)
+            pipe.delete(rq_job.dependencies_key)
+            queue.push_job_id(job_id, pipeline=pipe)
+            pipe.execute()
+            recovered += 1
+
+    if recovered:
+        logger.info(f"Recovered {recovered} orphaned deferred jobs")
+    return recovered
+
+
 def enqueue_and_poll_ci_jobs(
     jobs: list[Any],
     redis_host: str,
@@ -485,8 +560,11 @@ def enqueue_and_poll_ci_jobs(
         f"{len(verify_type_jobs)} verify/test), waiting for completion..."
     )
 
-    # Poll for results
+    # Poll for results with deferred job recovery
     pending = set(rq_jobs.keys())
+    recovery_interval = 30  # seconds between recovery sweeps
+    last_recovery = time.monotonic()
+
     while pending:
         for job_id in list(pending):
             rq_job = rq_jobs[job_id]
@@ -494,6 +572,18 @@ def enqueue_and_poll_ci_jobs(
             status = rq_job.get_status()
             if status in ("finished", "failed"):
                 pending.discard(job_id)
+
+        # Periodically recover orphaned deferred jobs (RQ race condition)
+        now = time.monotonic()
+        if pending and (now - last_recovery) >= recovery_interval:
+            try:
+                _recover_orphaned_deferred_jobs(queue, rq_jobs, pending)
+            except Exception:
+                logger.warning(
+                    "Recovery sweep failed, will retry next interval",
+                    exc_info=True,
+                )
+            last_recovery = now
 
         if pending:
             logger.info(f"Waiting for {len(pending)}/{len(rq_jobs)} CI jobs...")

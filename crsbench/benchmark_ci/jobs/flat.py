@@ -595,6 +595,7 @@ class BuildPatchVariantJob(Job):
     patch_id: str
     patch_path: Path
     harness: str = ""  # Harness name for per-harness sanitizer
+    sanitizer: str = "address"
     use_inc_build: bool = True
     force_rebuild: bool = False
     build_job_id: str = ""
@@ -632,21 +633,14 @@ class BuildPatchVariantJob(Job):
 
             oss_fuzz_path = Path(get_oss_fuzz_root())
 
-            # Load adapter to get sanitizer
+            sanitizer = self.sanitizer
+
+            # Load adapter for BuildConfig metadata (mode, language, commit)
             pov_engine = VerificationEngine(oss_fuzz_path, source_mode=self.source_mode)
             adapter = pov_engine.load_adapter(self.benchmark_path)
 
             if not adapter:
                 raise ValueError(f"Failed to load adapter for {self.benchmark_path}")
-
-            # Get sanitizer for this specific CPV
-            if not self.harness or not self.cpv_id:
-                raise ValueError(
-                    f"BuildPatchVariantJob requires both harness and cpv_id: "
-                    f"harness={self.harness}, cpv_id={self.cpv_id}"
-                )
-
-            sanitizer = adapter.get_cpv_sanitizer(self.harness, self.cpv_id)
 
             # Create PatchVerificationEngine with build_only=True
             # Source is prepared in temp dir - each job is self-contained

@@ -340,7 +340,8 @@ def _build_dag(
                         cpv_id=cpv_id,
                         patch_id=patch_id,
                         patch_path=patch_path,
-                        harness=harness,  # Pass harness for per-CPV sanitizer
+                        harness=harness,
+                        sanitizer=cpv_sanitizer,
                         use_inc_build=effective_inc,
                         force_rebuild=force_rebuild,
                         build_job_id=cpv_vulnerable_job_id,
