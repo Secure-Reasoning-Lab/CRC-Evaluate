@@ -2396,7 +2396,8 @@ class TestRtsJobCreationConditional:
         rts_mode: str | None,
     ):
         """Build a DAG via _build_dag with the given parameters."""
-        from unittest.mock import MagicMock, patch as mock_patch
+        from unittest.mock import MagicMock
+        from unittest.mock import patch as mock_patch
 
         from crsbench.benchmark_ci.cli.commands.all_cmd import _build_dag
 
@@ -2441,9 +2442,7 @@ class TestRtsJobCreationConditional:
             adapter.get_cpv_sanitizer.return_value = "address"
             mock_adapter.return_value = adapter
 
-            mock_infra.return_value.get_all_patches.return_value = [
-                Path("/tmp/p.diff")
-            ]
+            mock_infra.return_value.get_all_patches.return_value = [Path("/tmp/p.diff")]
             mock_infra.return_value.get_patches_except.return_value = []
 
             jobs, metadata = _build_dag(
@@ -2462,11 +2461,11 @@ class TestRtsJobCreationConditional:
             use_inc_build=True, supports_inc=True, rts_mode="jcgeks"
         )
         rts_jobs = [
-            j
-            for j in jobs
-            if isinstance(j, PatchUnitTestJob) and j.test_mode == "RTS"
+            j for j in jobs if isinstance(j, PatchUnitTestJob) and j.test_mode == "RTS"
         ]
-        assert len(rts_jobs) > 0, "RTS jobs should be created when inc-build is effective"
+        assert len(rts_jobs) > 0, (
+            "RTS jobs should be created when inc-build is effective"
+        )
 
     def test_no_rts_jobs_when_no_inc_build_flag(self):
         """No RTS jobs when --no-inc-build is used, even if project supports RTS."""
@@ -2476,9 +2475,7 @@ class TestRtsJobCreationConditional:
             use_inc_build=False, supports_inc=True, rts_mode="jcgeks"
         )
         rts_jobs = [
-            j
-            for j in jobs
-            if isinstance(j, PatchUnitTestJob) and j.test_mode == "RTS"
+            j for j in jobs if isinstance(j, PatchUnitTestJob) and j.test_mode == "RTS"
         ]
         assert len(rts_jobs) == 0, "RTS jobs should NOT be created with --no-inc-build"
 
@@ -2490,9 +2487,7 @@ class TestRtsJobCreationConditional:
             use_inc_build=True, supports_inc=False, rts_mode="jcgeks"
         )
         rts_jobs = [
-            j
-            for j in jobs
-            if isinstance(j, PatchUnitTestJob) and j.test_mode == "RTS"
+            j for j in jobs if isinstance(j, PatchUnitTestJob) and j.test_mode == "RTS"
         ]
         assert len(rts_jobs) == 0, "RTS jobs should NOT be created without inc support"
 
@@ -2504,9 +2499,7 @@ class TestRtsJobCreationConditional:
             use_inc_build=True, supports_inc=True, rts_mode=None
         )
         rts_jobs = [
-            j
-            for j in jobs
-            if isinstance(j, PatchUnitTestJob) and j.test_mode == "RTS"
+            j for j in jobs if isinstance(j, PatchUnitTestJob) and j.test_mode == "RTS"
         ]
         assert len(rts_jobs) == 0, "RTS jobs should NOT be created without rts_mode"
 
@@ -2518,9 +2511,7 @@ class TestRtsJobCreationConditional:
             use_inc_build=False, supports_inc=False, rts_mode=None
         )
         full_jobs = [
-            j
-            for j in jobs
-            if isinstance(j, PatchUnitTestJob) and j.test_mode == "FULL"
+            j for j in jobs if isinstance(j, PatchUnitTestJob) and j.test_mode == "FULL"
         ]
         assert len(full_jobs) > 0, "FULL unit test jobs should always be created"
 

@@ -613,7 +613,8 @@ class PatchVerificationEngine:
                 result.unit_tests_passed = test_passed
                 result.unit_test_time = time.time() - unit_test_start_time
 
-                if not test_passed:
+                # None = skipped (e.g., RTS without inc-build); only fail on False
+                if test_passed is False:
                     result.status = PatchVerificationStatus.TEST_FAILED
                     result.details = test_details or "Unit tests failed"
                     result.security_verdict = "FAIL"
@@ -629,7 +630,8 @@ class PatchVerificationEngine:
             result.unit_tests_passed = test_passed
             result.unit_test_time = time.time() - unit_test_start_time
 
-            if not test_passed:
+            # None = skipped (e.g., RTS without inc-build); only fail on False
+            if test_passed is False:
                 result.status = PatchVerificationStatus.TEST_FAILED
                 result.details = test_details or "Unit tests failed"
                 result.security_verdict = "FAIL"
@@ -878,7 +880,7 @@ class PatchVerificationEngine:
         benchmark_path: Path,
         *,
         use_inc_image: bool = False,
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool | None, str]:
         """Run unit tests on patched code.
 
         Uses a separate test variant (variant_name-unittest or variant_name-rts)
@@ -900,12 +902,15 @@ class PatchVerificationEngine:
 
         # RTS tests require /rts_config_jvm.py which is only in inc-build images.
         # Skip RTS tests when inc-build is not available to avoid false failures.
+        # Return None (not True) to indicate skipped, not passed. The caller at
+        # flat.py PatchUnitTestJob.execute() uses `unit_tests_passed is True` which
+        # correctly treats None as not-success, propagating skip status.
         if self.test_mode == UnitTestMode.RTS and not use_inc_image:
             logger.warning(
                 f"RTS tests require inc-build image, but inc-build not available. "
                 f"Skipping RTS tests for {variant_name}"
             )
-            return True, ""
+            return None, "RTS skipped: inc-build not available"
 
         # Use separate variant for test output to avoid overwriting ASAN binary
         # test.sh rebuilds with fuzz-shim which produces non-ASAN binaries
