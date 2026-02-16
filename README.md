@@ -89,6 +89,7 @@ CRSBench/
 │   ├── benchmark_ci/            # Benchmark CI validation
 │   ├── distributed/             # Distributed execution (Redis/RQ)
 │   ├── benchmark/               # Benchmark packaging, canary, seed
+│   ├── dataset/                 # HuggingFace dataset upload/download
 │   ├── validation/              # Format validation & schemas
 │   ├── migration/               # Format migration tools
 │   ├── hint_generation/         # Progressive hint generation
@@ -282,6 +283,13 @@ Automated benchmark validation pipeline:
 - Flat DAG execution with per-variant parallelism
 - Distributed builds via Redis for large benchmark sets
 
+### **Dataset Module** (`crsbench.dataset`)
+Upload and download benchmarks from HuggingFace:
+- Single HF repo (`sslab-gatech/crsbench-dataset`) with 134 benchmarks
+- Gated access with Data Use Agreement and canary strings
+- Extensible backend dispatch (HuggingFace, S3, Azure)
+- Benchmark suite integration for selective downloads
+
 ## CLI Interface
 
 CRSBench provides a unified CLI (`crsbench`) for running experiments, verifying results, and generating reports.
@@ -327,6 +335,21 @@ crsbench dashboard --base-dir ./experiments
 # Export benchmark statistics
 crsbench stats --output stats.csv
 ```
+
+### Dataset Download
+
+```bash
+# Download all benchmarks from HuggingFace
+crsbench download --all
+
+# Download a specific benchmark suite
+crsbench download --benchmark-suite sanity
+
+# Download specific benchmarks
+crsbench download --dataset crsbench --benchmarks afc-curl-delta-01
+```
+
+Requires `pip install 'crsbench[dataset]'` for the `huggingface_hub` dependency.
 
 ## Distributed Execution
 
@@ -440,6 +463,12 @@ crsbench benchmark list-canaries
 
 # Import corpus from experiment output as seeds
 crsbench benchmark seed-import --experiment-dir ./experiments/my-exp
+
+# Upload benchmarks to HuggingFace (maintainer only)
+crsbench benchmark upload --dataset crsbench
+
+# Dry-run upload (list what would be uploaded)
+crsbench benchmark upload --dataset crsbench --dry-run
 ```
 
 ### Benchmark CI (`crsbench ci`)
@@ -474,7 +503,31 @@ crsbench ci build --all --distributed --redis-host localhost
 
 ## License
 
-[To be determined]
+CRSBench is licensed under [MIT](LICENSE). Bundled upstream source code retains
+its original license — see [LICENSE-THIRD-PARTY.md](LICENSE-THIRD-PARTY.md).
+
+## Citation
+
+If you use CRSBench, please cite it. See [CITATION.cff](CITATION.cff) for
+machine-readable metadata, or use:
+
+```bibtex
+@software{crsbench2026,
+  title     = {CRSBench: A Benchmark for Cyber Reasoning Systems},
+  author    = {Kim, Youngjoon and Fu, Yu-Fu and Kim, Dongkwan and
+               Kim, Jiho and Chin, Andrew and Park, Younggi and
+               Zhang, Cen and Lee, Junekyu and Fleischer, Fabian and
+               Jeong, Dae R. and Xu, Qingxiao and Sheng, Ze and
+               Silliman, Jonathan and Mcdaniel, Mikel and
+               Casavant, Jefferson and Goldthwaite, Isaac and
+               Vidovich, Nicholas and Lehman, Matthew and
+               Kim, Taesoo},
+  year      = {2026},
+  url       = {https://github.com/sslab-gatech/CRSBench},
+  license   = {MIT},
+  note      = {Youngjoon Kim, Yu-Fu Fu, and Dongkwan Kim contributed equally},
+}
+```
 
 ## References
 
@@ -484,6 +537,7 @@ crsbench ci build --all --distributed --redis-host localhost
 - [Hint Generation Module](crsbench/hint_generation/README.md)
 - [Experiment Workflow](docs/experiment-workflow.md)
 - [Distributed Evaluation Design](design-docs/distributed/distributed-evaluation.md)
+- [Dataset Module Design](design-docs/dataset/dataset.md)
 
 ---
 

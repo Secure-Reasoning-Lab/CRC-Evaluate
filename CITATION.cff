@@ -1,0 +1,85 @@
+cff-version: 1.2.0
+title: "CRSBench: A Benchmark for Cyber Reasoning Systems"
+message: "If you use CRSBench, please cite it using this metadata."
+type: software
+license: MIT
+url: "https://github.com/sslab-gatech/CRSBench"
+authors:
+  # Co-first authors (equal contribution)
+  - given-names: Youngjoon
+    family-names: Kim
+    email: youngjoon.kim@gatech.edu
+    affiliation: Georgia Institute of Technology
+  - given-names: Yu-Fu
+    family-names: Fu
+    email: yufu@gatech.edu
+    affiliation: Georgia Institute of Technology
+  - given-names: Dongkwan
+    family-names: Kim
+    email: dongkwan@gatech.edu
+    affiliation: Georgia Institute of Technology
+  # Other authors
+  - given-names: Jiho
+    family-names: Kim
+    email: jkim4050@gatech.edu
+    affiliation: Georgia Institute of Technology
+  - given-names: Andrew
+    family-names: Chin
+    email: achin34@gatech.edu
+    affiliation: Georgia Institute of Technology
+  - given-names: Younggi
+    family-names: Park
+    email: grill66@korea.ac.kr
+    affiliation: Independent Researcher
+  - given-names: Cen
+    family-names: Zhang
+    email: czhang887@gatech.edu
+    affiliation: Georgia Institute of Technology
+  - given-names: Junekyu
+    family-names: Lee
+    email: hibrian827@snu.ac.kr
+    affiliation: Georgia Institute of Technology
+  - given-names: Fabian
+    family-names: Fleischer
+    email: fleischer@gatech.edu
+    affiliation: Georgia Institute of Technology
+  - given-names: Dae R.
+    family-names: Jeong
+    email: dae.r.jeong@snu.ac.kr
+    affiliation: Seoul National University
+  - given-names: Qingxiao
+    family-names: Xu
+    email: qingxiao@tamu.edu
+    affiliation: Texas A&M University
+  - given-names: Ze
+    family-names: Sheng
+    email: zesheng@tamu.edu
+    affiliation: Texas A&M University
+  - given-names: Jonathan
+    family-names: Silliman
+    email: jon.silliman@gmail.com
+    affiliation: Kudu Dynamics
+  - given-names: Mikel
+    family-names: Mcdaniel
+    email: ripe.sand5749@fastmail.com
+    affiliation: Kudu Dynamics
+  - given-names: Jefferson
+    family-names: Casavant
+    email: jeff.casavant@gmail.com
+    affiliation: Kudu Dynamics
+  - given-names: Isaac
+    family-names: Goldthwaite
+    email: isaac@kududyn.com
+    affiliation: Kudu Dynamics
+  - given-names: Nicholas
+    family-names: Vidovich
+    email: nvidovich@kududyn.com
+    affiliation: Kudu Dynamics
+  - given-names: Matthew
+    family-names: Lehman
+    email: mlehman@kududyn.com
+    affiliation: Kudu Dynamics
+  - given-names: Taesoo
+    family-names: Kim
+    email: taesoo@gatech.edu
+    affiliation: Georgia Institute of Technology and Microsoft

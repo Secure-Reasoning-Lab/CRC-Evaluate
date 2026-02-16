@@ -63,8 +63,7 @@ CRSBench ground truth data (patches, POVs, vulnerability info) must be protected
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  HuggingFace (GATED)                                                    │
 │                                                                         │
-│  • sslab-gatech/crsbench-dataset-team-atlanta                           │
-│  • sslab-gatech/crsbench-dataset-afc                                    │
+│  • sslab-gatech/crsbench-dataset                                        │
 │  • Flat structure: libpng/, nginx/, etc. (no subdirectories)            │
 │  • Contains: benchmark defs + source (in pkgs/) + .aixcc                │
 │  • Users request access, agree to DUA terms                             │
@@ -343,7 +342,7 @@ crsbench benchmark bundle ./libpng-vuln-001 --output ./dist/
 crsbench dataset bundle ./benchmarks/ --output ./dist/ --name team-atlanta
 
 # Upload to HuggingFace
-crsbench dataset upload ./dist/team-atlanta --repo sslab-gatech/crsbench-dataset-team-atlanta
+crsbench upload --dataset crsbench
 ```
 
 ### 4.4 Bundle Implementation Details
@@ -706,21 +705,20 @@ crsbench benchmark bundle --all
 crsbench dataset validate ./benchmarks/
 
 # 3. Upload to HuggingFace
-crsbench dataset upload ./benchmarks/ \
-    --repo sslab-gatech/crsbench-dataset-team-atlanta
+crsbench upload --dataset crsbench
 ```
 
 ### 6.3 Using Benchmarks (Public User)
 
 ```bash
 # 1. Install framework
-pip install crsbench
+pip install 'crsbench[dataset]'
 
 # 2. Request HF access (one-time)
-# Visit: https://huggingface.co/datasets/sslab-gatech/crsbench-dataset-team-atlanta
+# Visit: https://huggingface.co/datasets/sslab-gatech/crsbench-dataset
 
 # 3. Download benchmarks
-crsbench download --dataset team-atlanta
+crsbench download --all
 
 # 4. Run evaluation
 crsbench run --experiment-config config.yaml
