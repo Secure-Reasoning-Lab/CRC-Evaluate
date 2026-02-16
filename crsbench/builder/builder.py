@@ -249,8 +249,12 @@ class OSSFuzzBuilder:
         """Build a variant using standard OSS-Fuzz build process.
 
         Supports two source modes:
-        1. Bundled source (pkgs/): Extract tarball, apply ref.diff if needed
-        2. Git clone: Clone from main_repo and checkout commit
+        1. Bundled source (pkgs/): Extract tarball, mount via source_path
+        2. Git clone: Clone from main_repo, mount via source_path
+
+        Always uses source_path to mount extracted source into the container.
+        In pkgs mode the Docker image also has the source (via COPY pkgs/),
+        but source_path ensures patches are applied consistently.
 
         Args:
             config: Build configuration
@@ -275,7 +279,10 @@ class OSSFuzzBuilder:
                 elapsed_seconds=time.time() - start_time,
             )
 
-        # Prepare source (from pkgs/ or git clone)
+        # Always prepare source and mount via source_path for consistency.
+        # In pkgs mode this extracts the bundled tarball; in main_repo mode
+        # it clones from git. Patches (if any) are applied to the extracted
+        # source before mounting.
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
                 repo_path = self._prepare_source(config, Path(temp_dir))

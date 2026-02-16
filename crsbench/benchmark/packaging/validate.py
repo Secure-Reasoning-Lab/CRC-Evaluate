@@ -3,6 +3,7 @@
 Ensures benchmarks have required files and valid pkgs/ structure.
 """
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -84,11 +85,24 @@ def validate_benchmark(benchmark_path: Path) -> ValidationResult:
     errors.extend(meta_errors)
     warnings.extend(meta_warnings)
 
-    # Check pkgs/ structure if exists
+    # VAL-01: Check Dockerfile has COPY/ADD pkgs/ pattern
+    dockerfile_errors = _validate_dockerfile_pkgs_pattern(dockerfile)
+    errors.extend(dockerfile_errors)
+
+    # VAL-02: Check pkgs/ exists and has correct tarballs
     pkgs_dir = benchmark_path / "pkgs"
-    if pkgs_dir.exists():
-        pkgs_warnings = _validate_pkgs_dir(pkgs_dir, dockerfile)
+    if not pkgs_dir.exists():
+        errors.append("Missing pkgs/ directory (bundled source tarballs required)")
+    else:
+        pkgs_errors, pkgs_warnings = _validate_pkgs_dir(pkgs_dir, dockerfile)
+        errors.extend(pkgs_errors)
         warnings.extend(pkgs_warnings)
+
+        # Also run strict tarball naming validation
+        tarball_result = validate_tarball_naming(benchmark_path)
+        if not tarball_result.valid:
+            errors.extend(tarball_result.errors)
+        warnings.extend(tarball_result.warnings)
 
     # Check ref.diff for delta mode benchmarks
     ref_diff_warnings = _validate_ref_diff(benchmark_path, meta_yaml)
@@ -184,8 +198,32 @@ def _validate_meta_yaml(meta_yaml: Path) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
-def _validate_pkgs_dir(pkgs_dir: Path, dockerfile: Path) -> list[str]:
-    """Validate pkgs/ directory structure."""
+def _validate_dockerfile_pkgs_pattern(dockerfile: Path) -> list[str]:
+    """Check that Dockerfile contains COPY pkgs/ or ADD pkgs/ pattern.
+
+    Standard Docker syntax is case-sensitive (COPY/ADD uppercase).
+    """
+    errors: list[str] = []
+
+    content = dockerfile.read_text()
+    # Match uncommented COPY/ADD pkgs/ lines
+    pattern = re.compile(r"^(?!#)\s*(?:COPY|ADD)\s+pkgs/", re.MULTILINE)
+    if not pattern.search(content):
+        errors.append(
+            "Dockerfile missing COPY/ADD pkgs/ pattern "
+            "(source must be embedded from pkgs/)"
+        )
+
+    return errors
+
+
+def _validate_pkgs_dir(pkgs_dir: Path, dockerfile: Path) -> tuple[list[str], list[str]]:
+    """Validate pkgs/ directory structure.
+
+    Returns:
+        Tuple of (errors, warnings).
+    """
+    errors: list[str] = []
     warnings: list[str] = []
 
     expected_name = get_expected_source_dir(dockerfile)
@@ -193,18 +231,18 @@ def _validate_pkgs_dir(pkgs_dir: Path, dockerfile: Path) -> list[str]:
         warnings.append(
             "Could not determine expected tarball name from Dockerfile WORKDIR"
         )
-        return warnings
+        return errors, warnings
 
     expected_tarball = pkgs_dir / f"{expected_name}.tar.gz"
     if not expected_tarball.exists():
-        warnings.append(f"Expected source tarball not found: {expected_name}.tar.gz")
+        errors.append(f"Expected source tarball not found: {expected_name}.tar.gz")
 
     # Check pkg_refs.txt for provenance
     pkg_refs = pkgs_dir / "pkg_refs.txt"
     if not pkg_refs.exists():
         warnings.append("pkgs/pkg_refs.txt not found (provenance tracking)")
 
-    return warnings
+    return errors, warnings
 
 
 @dataclass
@@ -237,11 +275,11 @@ def validate_tarball_naming(benchmark_path: Path) -> TarballValidationResult:
     pkgs_dir = benchmark_path / "pkgs"
     dockerfile = benchmark_path / "Dockerfile"
 
-    # No pkgs/ directory is not an error (might use main_repo mode)
+    # pkgs/ directory is required for bundled source
     if not pkgs_dir.exists():
         return TarballValidationResult(
-            valid=True,
-            warnings=["No pkgs/ directory (bundled source not available)"],
+            valid=False,
+            errors=["Missing pkgs/ directory (bundled source tarballs required)"],
         )
 
     # Get expected tarball name from WORKDIR

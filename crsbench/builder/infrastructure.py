@@ -942,7 +942,9 @@ class OSSFuzzInfrastructure:
                 cmd.extend(["--inc-patch", str(inc_patch)])
 
         cmd.append(variant_name)
-        # Only add source path if provided (not using bundled pkgs/)
+        # source_path mounts local extracted source into the container via
+        # helper.py's read-only mount + rsync. When None, the build uses
+        # in-image source from COPY pkgs/ (default CMD ["compile"]).
         if src_path:
             cmd.append(str(src_path))
 

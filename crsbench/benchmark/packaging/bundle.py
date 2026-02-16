@@ -11,14 +11,33 @@ from crsbench.benchmark.packaging.tarball import (
     clean_existing_tarball,
     create_source_tarball,
 )
-from crsbench.benchmark.packaging.validate import (
-    get_benchmark_info,
-    validate_benchmark,
-)
+from crsbench.benchmark.packaging.validate import get_benchmark_info
 from crsbench.benchmark.packaging.workdir_parser import get_expected_source_dir
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _validate_bundle_prerequisites(benchmark_path: Path) -> None:
+    """Check that minimum structure exists for bundling.
+
+    Unlike validate_benchmark() which checks for complete bundled state,
+    this only checks prerequisites needed before creating pkgs/.
+
+    Raises:
+        ValueError: If required files are missing.
+    """
+    missing = []
+    if not (benchmark_path / "Dockerfile").exists():
+        missing.append("Dockerfile")
+    if not (benchmark_path / "project.yaml").exists():
+        missing.append("project.yaml")
+    if not (benchmark_path / ".aixcc" / "meta.yaml").exists():
+        missing.append(".aixcc/meta.yaml")
+    if missing:
+        raise ValueError(
+            f"Cannot bundle {benchmark_path.name}: missing {', '.join(missing)}"
+        )
 
 
 def _has_repo_in_pkg_refs(pkg_refs_path: Path, main_repo: str) -> bool:
@@ -95,10 +114,8 @@ def bundle_benchmark(
     """
     benchmark_path = Path(benchmark_path).resolve()
 
-    # 1. Validate benchmark
-    result = validate_benchmark(benchmark_path)
-    if not result.valid:
-        raise ValueError(f"Invalid benchmark: {result}")
+    # 1. Validate benchmark structure (lightweight — pkgs/ may not exist yet)
+    _validate_bundle_prerequisites(benchmark_path)
 
     # 2. Get benchmark info first (needed to determine source tarball name)
     info = get_benchmark_info(benchmark_path)

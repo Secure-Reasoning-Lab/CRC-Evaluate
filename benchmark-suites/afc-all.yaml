@@ -3,6 +3,8 @@ Description: All AFC benchmarks from DARPA AIxCC competition (R2 + R3 + Final).
 Release date: 12.21.2025
 benchmark_list:
   # === C/C++ benchmarks ===
+  # dav1d
+  - afc-dav1d-full-01
   # curl
   - afc-curl-delta-01
   - afc-curl-delta-02
