@@ -115,7 +115,7 @@ def run_command(cmd: list[str], capture_output: bool = False, check: bool = True
         sys.exit(1)
     except FileNotFoundError:
         print_error(f"Command not found: {cmd[0]}")
-        print_info("Make sure Docker and docker-compose are installed")
+        print_info("Make sure Docker is installed")
         sys.exit(1)
 
 
@@ -133,8 +133,8 @@ def get_compose_file_path() -> Path:
 
 
 def docker_compose_cmd(compose_file: Path, *args: str) -> list[str]:
-    """Build docker-compose command with file path."""
-    return ["docker-compose", "-f", str(compose_file), *args]
+    """Build docker compose (v2 plugin) command with file path."""
+    return ["docker", "compose", "-f", str(compose_file), *args]
 
 
 def _get_env_file_path() -> Path:

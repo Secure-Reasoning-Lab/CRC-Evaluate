@@ -15,6 +15,7 @@ Used by:
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 from collections import deque
@@ -435,12 +436,23 @@ def run_cmd(
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                start_new_session=True,
             )
 
             stdout, stderr = process.communicate(timeout=timeout)
             process_returncode = process.returncode
         except subprocess.TimeoutExpired:
-            process.kill()
+            # Kill entire process group to avoid orphaned Docker containers
+            try:
+                pgid = os.getpgid(process.pid)
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            # Fallback: kill direct child if killpg missed it
+            try:
+                process.kill()
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
             stdout, stderr = process.communicate()
             process_returncode = -1
             if return_code:
@@ -504,28 +516,39 @@ def run_cmd_with_logging(
     returncode = 0
 
     with log_path.open("w", encoding="utf-8") as log_stdout:
+        process = None
         try:
-            result = subprocess.run(
+            process = subprocess.Popen(
                 cmd,
                 cwd=cwd,
                 stdout=log_stdout,
                 stderr=subprocess.STDOUT,
-                timeout=timeout,
-                stdin=subprocess.DEVNULL,  # Prevent terminal issues
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
             )
-            returncode = result.returncode
+            process.communicate(timeout=timeout)
+            returncode = process.returncode
             if returncode == 0:
                 log_stdout.write("\n\nCommand succeeded.\n")
             else:
                 log_stdout.write(f"\n\nCommand failed with exit code {returncode}\n")
         except subprocess.TimeoutExpired:
+            # Kill entire process group to avoid orphaned Docker containers
+            if process is not None:
+                try:
+                    pgid = os.getpgid(process.pid)
+                    os.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                try:
+                    process.kill()
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+                process.wait()
             logger.warning(f"Command timed out after {timeout}s")
             log_stdout.write(f"\n\nCommand timed out after {timeout} seconds.\n")
             returncode = -1
             timed_out = True
-        except subprocess.CalledProcessError as e:
-            log_stdout.write(f"\n\nCommand failed with exit code {e.returncode}\n")
-            returncode = e.returncode
 
     logs = log_path.read_text(encoding="utf-8")
 
@@ -1651,12 +1674,11 @@ def run_command_in_container(
     ]
 
     try:
-        result = subprocess.run(
+        from crsbench.utils.subprocess_utils import run_with_timeout
+
+        result = run_with_timeout(
             docker_cmd_parts,
-            capture_output=True,
-            text=True,
             timeout=timeout,
-            stdin=subprocess.DEVNULL,  # Prevent terminal issues
         )
 
         output = result.stdout + result.stderr

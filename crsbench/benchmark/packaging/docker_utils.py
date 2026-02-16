@@ -97,12 +97,12 @@ def docker_retag(src_image: str, dst_image: str) -> bool:
         return False
 
 
-def docker_pull(image_name: str, timeout: int = 1200) -> bool:
+def docker_pull(image_name: str, timeout: int = 300) -> bool:
     """Pull Docker image from registry.
 
     Args:
         image_name: Full Docker image name
-        timeout: Timeout in seconds (default: 1200 = 20 minutes)
+        timeout: Timeout in seconds (default: 300 = 5 minutes)
 
     Returns:
         True if pull succeeded

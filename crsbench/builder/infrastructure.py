@@ -25,6 +25,7 @@ from crsbench.builder.types import (
 from crsbench.utils.docker import docker_rmtree, fix_docker_ownership
 from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import clone_or_copy_cached_repo
+from crsbench.utils.subprocess_utils import run_with_timeout
 
 logger = get_logger(__name__)
 # Separate logger for crash reproduction results
@@ -952,13 +953,10 @@ class OSSFuzzInfrastructure:
         logger.debug(f"Build command: {' '.join(cmd)}")
 
         try:
-            result = subprocess.run(
+            result = run_with_timeout(
                 cmd,
-                cwd=self.oss_fuzz_path,
-                capture_output=True,
-                text=True,
                 timeout=config.timeout,
-                stdin=subprocess.DEVNULL,  # Prevent terminal issues
+                cwd=self.oss_fuzz_path,
             )
 
             if result.returncode == 0:
@@ -1503,12 +1501,11 @@ class OSSFuzzInfrastructure:
 
             # Use slightly longer subprocess timeout to let helper.py handle it
             # Use binary mode to handle fuzzer output that may contain non-UTF-8 bytes
-            result = subprocess.run(
+            result = run_with_timeout(
                 cmd,
-                cwd=self.oss_fuzz_path,
-                capture_output=True,
                 timeout=timeout + 10,  # Grace period for helper.py
-                stdin=subprocess.DEVNULL,  # Prevent terminal issues
+                cwd=self.oss_fuzz_path,
+                text=False,
             )
 
             # Decode output with error handling for binary content
@@ -1626,13 +1623,10 @@ class OSSFuzzInfrastructure:
         logger.debug(f"Running coverage: {' '.join(cmd)}")
 
         try:
-            result = subprocess.run(
+            result = run_with_timeout(
                 cmd,
-                cwd=self.oss_fuzz_path,
-                capture_output=True,
-                text=True,
                 timeout=timeout,
-                stdin=subprocess.DEVNULL,  # Prevent terminal issues
+                cwd=self.oss_fuzz_path,
             )
 
             if result.returncode != 0:
@@ -1810,12 +1804,9 @@ class OSSFuzzInfrastructure:
         # Pull from registry
         logger.debug(f"Pulling inc-build image: {inc_image}")
         try:
-            result = subprocess.run(
+            result = run_with_timeout(
                 ["docker", "pull", inc_image],
-                capture_output=True,
-                text=True,
-                timeout=1200,  # 20 minutes for large images (20GB+)
-                stdin=subprocess.DEVNULL,
+                timeout=300,
             )
 
             if result.returncode == 0:
@@ -2048,13 +2039,10 @@ class OSSFuzzInfrastructure:
         logger.debug(f"Command: {' '.join(cmd)}")
 
         try:
-            result = subprocess.run(
+            result = run_with_timeout(
                 cmd,
-                cwd=self.oss_fuzz_path,
-                capture_output=True,
-                text=True,
                 timeout=timeout,
-                stdin=subprocess.DEVNULL,
+                cwd=self.oss_fuzz_path,
             )
 
             passed = result.returncode == 0
