@@ -213,7 +213,9 @@ class TestPackagingValidationIntegration:
 
     def test_validate_existing_benchmark_no_regression(self) -> None:
         """Run validate_benchmark() on a real benchmark to ensure no false positives."""
-        benchmark_path = Path("/home/dongkwan/CRSBench/benchmarks/afc-curl-delta-01")
+        benchmark_path = (
+            Path(__file__).parent.parent / "benchmarks" / "afc-curl-delta-01"
+        )
 
         if not benchmark_path.exists():
             pytest.skip("Benchmark afc-curl-delta-01 not available")
