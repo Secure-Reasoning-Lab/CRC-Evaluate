@@ -14,6 +14,7 @@ Functions:
 
 import errno
 import os
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -256,11 +257,103 @@ def create_cgroup(
 # ---------------------------------------------------------------------------
 
 
+def _kill_cgroup_processes(cgroup_path: Path) -> bool:
+    """Kill all processes inside a cgroup (and its children) before removal.
+
+    Tries the atomic ``cgroup.kill`` interface first (Linux 5.14+),
+    which recursively kills all processes in the entire subtree.
+    Falls back to reading ``cgroup.procs`` and sending SIGKILL
+    to each PID individually.
+
+    Args:
+        cgroup_path: Path to the cgroup directory.
+
+    Returns:
+        True if any processes were killed (or cgroup.kill succeeded),
+        False if the cgroup was empty or does not exist.
+    """
+    if not cgroup_path.exists():
+        return False
+
+    # Primary: atomic cgroup.kill (Linux 5.14+) — kills entire subtree
+    kill_file = cgroup_path / "cgroup.kill"
+    try:
+        kill_file.write_text("1")
+        logger.debug(f"Sent cgroup.kill to {cgroup_path}")
+        time.sleep(0.5)
+        return True
+    except OSError:
+        # ENOENT on older kernels, EPERM on permission issues — fall through
+        pass
+
+    # Fallback: read cgroup.procs and kill each PID
+    procs_file = cgroup_path / "cgroup.procs"
+    try:
+        content = procs_file.read_text().strip()
+    except OSError:
+        return False
+
+    if not content:
+        return False
+
+    killed_any = False
+    for line in content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            pid = int(line)
+            os.kill(pid, signal.SIGKILL)
+            logger.debug(f"Killed PID {pid} in cgroup {cgroup_path}")
+            killed_any = True
+        except ProcessLookupError:
+            # Process already exited between read and kill
+            killed_any = True
+        except (ValueError, OSError):
+            pass
+
+    if killed_any:
+        time.sleep(0.5)
+    return killed_any
+
+
+def _remove_cgroup_children(cgroup_path: Path) -> None:
+    """Recursively remove empty child cgroup directories (bottom-up).
+
+    Docker creates nested cgroup hierarchies (e.g.,
+    ``worker-1/docker/<container-id>/``). The kernel refuses to remove
+    a cgroup that still has children (returns EBUSY), so we must walk
+    the tree depth-first and remove leaves before parents.
+
+    Only removes empty cgroups (no processes). If a child cgroup still
+    has live processes, its ``rmdir`` will fail with EBUSY and it is
+    silently skipped. This makes the function safe to call even when
+    other supervisors have active workers.
+
+    Args:
+        cgroup_path: Root cgroup directory whose children should be removed.
+    """
+    if not cgroup_path.exists():
+        return
+
+    # Collect all child cgroup directories (only dirs, skip cgroup control files)
+    children = [p for p in cgroup_path.iterdir() if p.is_dir()]
+    for child in children:
+        # Recurse first (depth-first, remove leaves before parents)
+        _remove_cgroup_children(child)
+        try:
+            child.rmdir()
+            logger.debug(f"Removed child cgroup {child}")
+        except OSError as e:
+            logger.debug(f"Could not remove child cgroup {child}: {e}")
+
+
 def cleanup_cgroup(
     cgroup_path: Path,
     *,
     max_retries: int = 3,
     retry_delay: float = 2.0,
+    force: bool = False,
 ) -> bool:
     """Remove a cgroup directory, retrying on EBUSY.
 
@@ -268,6 +361,11 @@ def cleanup_cgroup(
         cgroup_path: Path to the cgroup to remove.
         max_retries: Maximum number of retry attempts for EBUSY errors.
         retry_delay: Seconds to wait between retries.
+        force: If True, kill all processes before removal. Only use when
+            the cgroup is owned by the caller (e.g., our worker finished
+            or Ctrl+C shutdown). When False (default), only removes empty
+            child directories — safe for stale cleanup when other
+            supervisors may have active workers.
 
     Returns:
         True if the cgroup was removed (or did not exist), False otherwise.
@@ -281,18 +379,24 @@ def cleanup_cgroup(
             return True
         except OSError as e:
             if e.errno == errno.EBUSY:
-                logger.warning(
-                    f"Cgroup {cgroup_path} busy, retrying in "
-                    f"{retry_delay}s ({attempt}/{max_retries})"
-                )
+                if force:
+                    _kill_cgroup_processes(cgroup_path)
+                # Always safe: only removes empty child dirs
+                _remove_cgroup_children(cgroup_path)
+                # Retry rmdir immediately after cleanup
+                try:
+                    cgroup_path.rmdir()
+                    return True
+                except OSError:
+                    pass
                 if attempt < max_retries:
                     time.sleep(retry_delay)
                     continue
-                # Final attempt exhausted
-                logger.warning(
-                    f"Could not remove cgroup {cgroup_path} after "
-                    f"{max_retries} retries, may need manual cleanup"
-                )
+                if force:
+                    logger.warning(
+                        f"Could not remove cgroup {cgroup_path} after "
+                        f"{max_retries} retries, may need manual cleanup"
+                    )
                 return False
             # Non-EBUSY error: no point retrying
             logger.error(f"Failed to remove cgroup {cgroup_path}: {e}")

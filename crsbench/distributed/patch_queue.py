@@ -8,7 +8,6 @@ unit test) go to the VERIFY queue (1 CPU) with RQ dependency on the build.
 Follows the same pattern as verify_queue.py for POV verification.
 """
 
-import os
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -16,7 +15,6 @@ from typing import Any, Optional
 from crsbench.utils.logger import get_logger
 
 try:
-    import redis
     import rq
     import rq.job
 
@@ -52,13 +50,9 @@ def initialize_patch_queues(
     verify_queue_name = f"crsbench_{experiment_name}_verify"
 
     try:
-        redis_password = os.environ.get("REDIS_PASSWORD") or None
-        redis_conn = redis.Redis(
-            host=redis_host,
-            password=redis_password,
-            socket_connect_timeout=5,
-        )
-        redis_conn.ping()
+        from crsbench.distributed.queue import create_redis_connection
+
+        redis_conn = create_redis_connection(redis_host)
 
         build_queue = rq.Queue(build_queue_name, connection=redis_conn)
         verify_queue = rq.Queue(verify_queue_name, connection=redis_conn)
@@ -199,8 +193,9 @@ def poll_patch_verdicts(
     remaining: list[str] = []
 
     try:
-        redis_password = os.environ.get("REDIS_PASSWORD") or None
-        redis_conn = redis.Redis(host=redis_host, password=redis_password)
+        from crsbench.distributed.queue import create_redis_connection
+
+        redis_conn = create_redis_connection(redis_host)
 
         for job_id in job_ids:
             try:
@@ -311,8 +306,9 @@ def _try_recover_deferred_jobs(redis_host: str, job_ids: list[str]) -> None:
         job_ids: Job IDs that are still pending
     """
     try:
-        redis_password = os.environ.get("REDIS_PASSWORD") or None
-        redis_conn = redis.Redis(host=redis_host, password=redis_password)
+        from crsbench.distributed.queue import create_redis_connection
+
+        redis_conn = create_redis_connection(redis_host)
 
         # Fetch jobs and find which queues they belong to
         rq_jobs: dict[str, rq.job.Job] = {}

@@ -5,31 +5,43 @@ Tests that:
 2. Build queue has priority over verify queue
 3. Per-queue concurrency limits are enforced
 4. Worker and evaluator adapters exist and are callable
+5. Continuous vs non-continuous exit behavior
 """
 
 from unittest.mock import MagicMock, patch
+
+import pytest
+
+rq = pytest.importorskip("rq")
+
+
+def _make_mock_queue(name: str, count: int = 0, deferred: int = 0):
+    """Create a mock RQ queue with configurable counts."""
+    q = MagicMock()
+    q.name = name
+    q.count = count
+    q.deferred_job_registry = MagicMock()
+    q.deferred_job_registry.count = deferred
+    return q
+
+
+def _patch_supervisor():
+    """Return a context manager that patches create_redis_connection."""
+    return patch(
+        "crsbench.distributed.queue.create_redis_connection",
+        return_value=MagicMock(),
+    )
 
 
 class TestCiSupervisorQueues:
     """Test run_ci_supervisor dual-queue setup."""
 
-    @patch("crsbench.distributed.ci_supervisor.redis")
-    @patch("crsbench.distributed.ci_supervisor.rq")
-    def test_creates_both_queues(
-        self, mock_rq: MagicMock, mock_redis: MagicMock
-    ) -> None:
+    def test_creates_both_queues(self) -> None:
         """Supervisor creates both build and verify queues."""
         from crsbench.distributed.ci_supervisor import run_ci_supervisor
 
-        mock_conn = MagicMock()
-        mock_redis.Redis.return_value = mock_conn
-
-        mock_build_queue = MagicMock()
-        mock_verify_queue = MagicMock()
-        mock_build_queue.count = 0
-        mock_verify_queue.count = 0
-        mock_build_queue.name = "crsbench_ci_build"
-        mock_verify_queue.name = "crsbench_ci_verify"
+        mock_build_queue = _make_mock_queue("crsbench_ci_build")
+        mock_verify_queue = _make_mock_queue("crsbench_ci_verify")
 
         queues_created = []
 
@@ -39,15 +51,15 @@ class TestCiSupervisorQueues:
                 return mock_build_queue
             return mock_verify_queue
 
-        mock_rq.Queue.side_effect = track_queue_creation
-
-        def break_loop(_seconds):
-            raise KeyboardInterrupt
-
-        with patch(
-            "crsbench.distributed.ci_supervisor.time.sleep",
-            side_effect=break_loop,
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor.time.sleep",
+                side_effect=KeyboardInterrupt,
+            ),
         ):
+            mock_rq.Queue.side_effect = track_queue_creation
             result = run_ci_supervisor(
                 redis_host="localhost",
                 build_queue_name="crsbench_ci_build",
@@ -63,30 +75,17 @@ class TestCiSupervisorQueues:
         assert "crsbench_ci_verify" in queues_created
         assert result == 0
 
-    @patch("crsbench.distributed.ci_supervisor.redis")
-    @patch("crsbench.distributed.ci_supervisor.rq")
-    def test_build_queue_priority(
-        self, mock_rq: MagicMock, mock_redis: MagicMock
-    ) -> None:
+    def test_build_queue_priority(self) -> None:
         """Build queue is listed first for dequeue priority."""
         from crsbench.distributed.ci_supervisor import run_ci_supervisor
 
-        mock_conn = MagicMock()
-        mock_redis.Redis.return_value = mock_conn
-
-        mock_build_queue = MagicMock()
-        mock_verify_queue = MagicMock()
-        mock_build_queue.count = 1
-        mock_verify_queue.count = 1
-        mock_build_queue.name = "crsbench_ci_build"
-        mock_verify_queue.name = "crsbench_ci_verify"
+        mock_build_queue = _make_mock_queue("crsbench_ci_build", count=1)
+        mock_verify_queue = _make_mock_queue("crsbench_ci_verify", count=1)
 
         def queue_factory(name, **_kwargs):
             if "build" in name:
                 return mock_build_queue
             return mock_verify_queue
-
-        mock_rq.Queue.side_effect = queue_factory
 
         dequeue_calls = []
 
@@ -94,56 +93,46 @@ class TestCiSupervisorQueues:
             dequeue_calls.append([q.name for q in queues])
             raise KeyboardInterrupt
 
-        mock_rq.Queue.dequeue_any = track_dequeue_any
-
-        run_ci_supervisor(
-            redis_host="localhost",
-            build_queue_name="crsbench_ci_build",
-            verify_queue_name="crsbench_ci_verify",
-            worker_name="test-worker",
-            build_jobs=2,
-            build_cores_per_job=4,
-            verify_jobs=8,
-            job_runner=lambda _h, _n, _j: None,
-        )
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            mock_rq.Queue.dequeue_any = track_dequeue_any
+            run_ci_supervisor(
+                redis_host="localhost",
+                build_queue_name="crsbench_ci_build",
+                verify_queue_name="crsbench_ci_verify",
+                worker_name="test-worker",
+                build_jobs=2,
+                build_cores_per_job=4,
+                verify_jobs=8,
+                job_runner=lambda _h, _n, _j: None,
+            )
 
         assert len(dequeue_calls) > 0
         assert dequeue_calls[0][0] == "crsbench_ci_build"
         assert dequeue_calls[0][1] == "crsbench_ci_verify"
 
-    @patch("crsbench.distributed.ci_supervisor.redis")
-    @patch("crsbench.distributed.ci_supervisor.rq")
-    def test_respects_per_queue_capacity(
-        self, mock_rq: MagicMock, mock_redis: MagicMock
-    ) -> None:
+    def test_respects_per_queue_capacity(self) -> None:
         """Only queues with remaining capacity are included in dequeue."""
         from crsbench.distributed.ci_supervisor import run_ci_supervisor
 
-        mock_conn = MagicMock()
-        mock_redis.Redis.return_value = mock_conn
-
-        mock_build_queue = MagicMock()
-        mock_verify_queue = MagicMock()
-        mock_build_queue.count = 1
-        mock_verify_queue.count = 1
-        mock_build_queue.name = "crsbench_ci_build"
-        mock_verify_queue.name = "crsbench_ci_verify"
+        mock_build_queue = _make_mock_queue("crsbench_ci_build", count=1)
+        mock_verify_queue = _make_mock_queue("crsbench_ci_verify", count=1)
 
         def queue_factory(name, **_kwargs):
             if "build" in name:
                 return mock_build_queue
             return mock_verify_queue
 
-        mock_rq.Queue.side_effect = queue_factory
-
-        # First dequeue returns a build job, second should skip build
-        # (build_jobs=1, so after one build, only verify has capacity)
         dequeue_iteration = [0]
         dequeue_calls = []
 
         mock_job = MagicMock()
         mock_job.id = "test-job-12345678"
         mock_job.meta = {}
+        mock_job.get_status.return_value = "queued"
         mock_process = MagicMock()
         mock_process.pid = 12345
         mock_process.is_alive.return_value = True
@@ -155,11 +144,15 @@ class TestCiSupervisorQueues:
                 raise KeyboardInterrupt
             return (mock_job, mock_build_queue)
 
-        mock_rq.Queue.dequeue_any = track_dequeue_any
-
-        with patch(
-            "crsbench.distributed.ci_supervisor.multiprocessing.Process"
-        ) as mock_proc_cls:
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor.multiprocessing.Process"
+            ) as mock_proc_cls,
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            mock_rq.Queue.dequeue_any = track_dequeue_any
             mock_proc_cls.return_value = mock_process
             run_ci_supervisor(
                 redis_host="localhost",
@@ -172,10 +165,8 @@ class TestCiSupervisorQueues:
                 job_runner=lambda _h, _n, _j: None,
             )
 
-        # First dequeue: both queues have capacity
         assert len(dequeue_calls) >= 2
         assert "crsbench_ci_build" in dequeue_calls[0]
-        # Second dequeue: build at capacity (1/1), only verify should remain
         assert "crsbench_ci_build" not in dequeue_calls[1]
         assert "crsbench_ci_verify" in dequeue_calls[1]
 
@@ -403,6 +394,142 @@ class TestEvaluatorCommandCiFlags:
                     "8",
                 ]
             )
+
+
+class TestSupervisorExitCondition:
+    """Test continuous vs non-continuous exit behavior."""
+
+    def _run_supervisor(
+        self,
+        build_count: int = 0,
+        verify_count: int = 0,
+        build_deferred: int = 0,
+        verify_deferred: int = 0,
+        *,
+        continuous: bool = True,
+        max_iterations: int = 5,
+    ) -> tuple[int, int]:
+        """Run supervisor and return (exit_code, loop_iterations).
+
+        Uses time.sleep side_effect to count iterations and break the loop.
+        """
+        from crsbench.distributed.ci_supervisor import run_ci_supervisor
+
+        mock_build_queue = _make_mock_queue(
+            "crsbench_ci_build", build_count, build_deferred
+        )
+        mock_verify_queue = _make_mock_queue(
+            "crsbench_ci_verify", verify_count, verify_deferred
+        )
+
+        def queue_factory(name, **_kwargs):
+            if "build" in name:
+                return mock_build_queue
+            return mock_verify_queue
+
+        iterations = [0]
+
+        def count_and_break(_seconds):
+            iterations[0] += 1
+            if iterations[0] >= max_iterations:
+                raise KeyboardInterrupt
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor.time.sleep",
+                side_effect=count_and_break,
+            ),
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            result = run_ci_supervisor(
+                redis_host="localhost",
+                build_queue_name="crsbench_ci_build",
+                verify_queue_name="crsbench_ci_verify",
+                worker_name="test-worker",
+                build_jobs=2,
+                build_cores_per_job=1,
+                verify_jobs=8,
+                job_runner=lambda _h, _n, _j: None,
+                continuous=continuous,
+            )
+
+        return result, iterations[0]
+
+    def test_non_continuous_exits_when_empty(self) -> None:
+        """Non-continuous mode exits immediately when all queues are empty."""
+        result, iterations = self._run_supervisor(continuous=False)
+        assert result == 0
+        # Should exit before reaching sleep (0 iterations)
+        assert iterations == 0
+
+    def test_non_continuous_waits_for_deferred(self) -> None:
+        """Non-continuous mode does NOT exit while deferred jobs exist."""
+        result, iterations = self._run_supervisor(verify_deferred=3, continuous=False)
+        # Should loop until KeyboardInterrupt (5 iterations)
+        assert result == 0
+        assert iterations == 5
+
+    def test_non_continuous_waits_for_queued(self) -> None:
+        """Non-continuous mode does NOT exit while queued jobs exist."""
+        from crsbench.distributed.ci_supervisor import run_ci_supervisor
+
+        mock_build_queue = _make_mock_queue("crsbench_ci_build")
+        mock_verify_queue = _make_mock_queue("crsbench_ci_verify", count=2)
+
+        def queue_factory(name, **_kwargs):
+            if "build" in name:
+                return mock_build_queue
+            return mock_verify_queue
+
+        iterations = [0]
+
+        def count_and_break(_seconds):
+            iterations[0] += 1
+            if iterations[0] >= 5:
+                raise KeyboardInterrupt
+
+        def dequeue_noop(_queues, **_kwargs):
+            # Simulate no job ready yet — returns None
+            return None
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor.time.sleep",
+                side_effect=count_and_break,
+            ),
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            mock_rq.Queue.dequeue_any = dequeue_noop
+            result = run_ci_supervisor(
+                redis_host="localhost",
+                build_queue_name="crsbench_ci_build",
+                verify_queue_name="crsbench_ci_verify",
+                worker_name="test-worker",
+                build_jobs=2,
+                build_cores_per_job=1,
+                verify_jobs=8,
+                job_runner=lambda _h, _n, _j: None,
+                continuous=False,
+            )
+
+        assert result == 0
+        assert iterations[0] == 5
+
+    def test_continuous_does_not_exit_when_empty(self) -> None:
+        """Continuous mode keeps running even when all queues are empty."""
+        result, iterations = self._run_supervisor(continuous=True)
+        # Should loop until KeyboardInterrupt (5 iterations)
+        assert result == 0
+        assert iterations == 5
+
+    def test_default_is_continuous(self) -> None:
+        """Default mode is continuous (does not exit when empty)."""
+        result, iterations = self._run_supervisor()
+        assert iterations == 5  # Ran until KeyboardInterrupt
 
 
 class TestHelperFunctions:

@@ -7,9 +7,8 @@ operations for testing and development workflows.
 
 Usage:
     # Service management
-    python scripts/valkey-helper.py start
-    python scripts/valkey-helper.py --bind-host start   # Enable host access
-    python scripts/valkey-helper.py --password start     # Enable password auth (remote workers)
+    python scripts/valkey-helper.py start                # localhost:6379
+    python scripts/valkey-helper.py --password start     # 0.0.0.0:6379 with auth (remote workers)
     python scripts/valkey-helper.py stop
     python scripts/valkey-helper.py restart
     python scripts/valkey-helper.py status
@@ -25,14 +24,9 @@ Usage:
     python scripts/valkey-helper.py stats
 
 Examples:
-    # Quick start for testing (Docker network only)
+    # Quick start (binds to localhost:6379)
     $ python scripts/valkey-helper.py start
     $ python scripts/valkey-helper.py status
-
-    # Start with host access (for running workers on host)
-    $ python scripts/valkey-helper.py --bind-host start
-    $ export REDIS_HOST=localhost
-    $ python -m crsbench.distributed.worker
 
     # Start with password auth (for remote workers)
     $ python scripts/valkey-helper.py --password start
@@ -265,27 +259,21 @@ def cmd_start(args: argparse.Namespace) -> None:
 
         _save_env_password(password)
 
-    elif args.bind_host:
-        # --bind-host mode: bind localhost, no auth
-        print_info("Starting Valkey service with host binding (localhost:6379)...")
-        print_warning("Port 6379 will be accessible from host machine")
+    else:
+        # Default: bind to localhost (127.0.0.1:6379)
+        print_info("Starting Valkey service (localhost:6379)...")
 
-        # Stop any existing container first
+        # Create external volume if it doesn't exist (idempotent)
+        run_command(
+            ["docker", "volume", "create", "valkey_valkey-data"],
+            check=False,
+            capture_output=True,
+        )
+
+        # Clean up any stopped containers to avoid name conflicts
         run_command(["docker", "stop", "crsbench-valkey"], check=False, capture_output=True)
         run_command(["docker", "rm", "crsbench-valkey"], check=False, capture_output=True)
 
-        run_command([
-            "docker", "run", "-d",
-            "--name", "crsbench-valkey",
-            "-p", "127.0.0.1:6379:6379",
-            "-v", "valkey_valkey-data:/data",
-            "--restart", "unless-stopped",
-            "valkey/valkey:8.0-alpine",
-            "valkey-server", "--appendonly", "yes",
-        ])
-    else:
-        # Default: Docker network only, no host access
-        print_info("Starting Valkey service (Docker network only, no host access)...")
         run_command(docker_compose_cmd(compose_file, "up", "-d"))
 
     # Wait a moment and check status
@@ -300,12 +288,8 @@ def cmd_start(args: argparse.Namespace) -> None:
             print_success("Host access enabled at 0.0.0.0:6379")
             print_info(f"Password saved to {_get_env_file_path()}")
             print_info("Copy .env to worker machines: scp .env user@worker:/path/to/CRSBench/.env")
-        elif args.bind_host:
-            print_success("Host access enabled at localhost:6379")
-            print_info("Workers can connect with: REDIS_HOST=localhost")
         else:
-            print_info("No host access (Docker network only)")
-            print_info("To enable host access, use: --bind-host flag")
+            print_success("Host access enabled at localhost:6379")
 
         # Test connection
         try:
@@ -363,7 +347,6 @@ def cmd_status(args: argparse.Namespace) -> None:
     if not is_valkey_running():
         print_error("Valkey is not running")
         print_info("Start it with: python scripts/valkey-helper.py start")
-        print_info("Start with host access: python scripts/valkey-helper.py start --bind-host")
         sys.exit(1)
 
     password = _get_active_password()
@@ -648,9 +631,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s start              Start Valkey service (Docker network only)
-  %(prog)s --bind-host start  Start with host access (localhost)
-  %(prog)s --password start   Start with password auth (remote workers)
+  %(prog)s start              Start Valkey (localhost:6379)
+  %(prog)s --password start   Start with password auth (0.0.0.0:6379)
   %(prog)s status             Check if running
   %(prog)s clean my-exp       Clean specific experiment
   %(prog)s clean-all          Flush entire database
@@ -659,8 +641,6 @@ Examples:
     )
 
     # Add global flags
-    parser.add_argument('--bind-host', action='store_true',
-                        help='Bind to localhost (127.0.0.1:6379) for host access (for start/restart commands)')
     parser.add_argument('--password', action='store_true',
                         help='Enable password auth (auto-generates, binds 0.0.0.0, saves to .env)')
 

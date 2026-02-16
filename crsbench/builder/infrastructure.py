@@ -674,7 +674,7 @@ class OSSFuzzInfrastructure:
     # =========================================================================
 
     def cleanup_build_outputs(self, variant_name: str) -> None:
-        """Clean up build outputs only (for force rebuild).
+        """Clean up build outputs only (for force rebuild or fallback retry).
 
         Removes:
         - Build output directory (or symlink) at oss-fuzz/build/out/{variant}
@@ -683,6 +683,7 @@ class OSSFuzzInfrastructure:
 
         Does NOT remove:
         - Project symlink (read-only, reusable)
+        - Docker images (use cleanup_docker_images separately for force rebuild)
 
         Args:
             variant_name: Variant name
@@ -705,6 +706,46 @@ class OSSFuzzInfrastructure:
         work_path = self.get_isolated_work_path(variant_name)
         if work_path.exists():
             docker_rmtree(work_path)
+
+    def cleanup_docker_images(self, variant_name: str) -> None:
+        """Remove Docker images for a variant to force full rebuild.
+
+        Removes both the normal build image and all inc-build sanitizer images.
+        Missing images are skipped silently. Failed removals are logged as
+        warnings but do not raise exceptions (cleanup failures should not
+        block the build).
+
+        Args:
+            variant_name: Variant name (e.g., "benchmark-asan-deltaref")
+        """
+        image_names = [
+            f"aixcc-afc/{variant_name}:latest",
+            f"aixcc-afc/{variant_name}:inc-address",
+            f"aixcc-afc/{variant_name}:inc-undefined",
+            f"aixcc-afc/{variant_name}:inc-memory",
+        ]
+
+        for image_name in image_names:
+            if not self._docker_image_exists(image_name):
+                logger.debug(f"Image not found, skipping: {image_name}")
+                continue
+
+            try:
+                result = subprocess.run(
+                    ["docker", "rmi", image_name],
+                    capture_output=True,
+                    timeout=60,
+                    stdin=subprocess.DEVNULL,
+                )
+                if result.returncode == 0:
+                    logger.debug(f"Removed Docker image: {image_name}")
+                else:
+                    logger.warning(
+                        f"Failed to remove Docker image {image_name}: "
+                        f"exit code {result.returncode}"
+                    )
+            except Exception as e:
+                logger.warning(f"Error removing Docker image {image_name}: {e}")
 
     def cleanup_project_symlink(self, variant_name: str) -> None:
         """Clean up project symlink only.

@@ -1,15 +1,9 @@
-version: "3.8"
-
 services:
   valkey:
     image: valkey/valkey:8.0-alpine
     container_name: crsbench-valkey
-    # NOTE: Ports are NOT exposed to host by default for security
-    # Uncomment the line below ONLY for local development if you need direct access
-    # ports:
-    #   - "127.0.0.1:6379:6379"  # Bind to localhost only
-    expose:
-      - "6379"  # Expose to other Docker containers only
+    ports:
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
@@ -22,4 +16,5 @@ services:
 
 volumes:
   valkey-data:
-    driver: local
+    external: true
+    name: valkey_valkey-data

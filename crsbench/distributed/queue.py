@@ -23,6 +23,74 @@ except ImportError:
 logger = get_logger(__name__)
 
 
+def create_redis_connection(
+    redis_host: str,
+    *,
+    socket_connect_timeout: int = 5,
+) -> "redis.Redis":
+    """Create a Redis connection with auto-detection of password requirement.
+
+    Reads REDIS_PASSWORD from environment. If set but the server doesn't
+    require auth (stale .env), retries without password. If not set but
+    the server requires auth, raises a clear error.
+
+    Args:
+        redis_host: Redis server hostname or IP address
+        socket_connect_timeout: Connection timeout in seconds
+
+    Returns:
+        Connected and pinged Redis client
+
+    Raises:
+        redis.AuthenticationError: If server requires a password but
+            REDIS_PASSWORD is not set
+        redis.ConnectionError: If server is unreachable
+    """
+    if not REDIS_AVAILABLE:
+        raise RuntimeError(
+            "Redis and RQ packages are required for distributed execution. "
+            "Install with: pip install redis rq"
+        )
+
+    password = os.environ.get("REDIS_PASSWORD") or None
+
+    if password:
+        # Try with password first
+        try:
+            conn = redis.Redis(
+                host=redis_host,
+                password=password,
+                socket_connect_timeout=socket_connect_timeout,
+            )
+            conn.ping()
+            return conn
+        except redis.AuthenticationError:
+            # Server doesn't need auth — stale REDIS_PASSWORD in env
+            logger.info(
+                "REDIS_PASSWORD is set but server requires no auth, "
+                "connecting without password"
+            )
+            conn = redis.Redis(
+                host=redis_host,
+                socket_connect_timeout=socket_connect_timeout,
+            )
+            conn.ping()
+            return conn
+
+    # No password in env — connect without
+    try:
+        conn = redis.Redis(
+            host=redis_host,
+            socket_connect_timeout=socket_connect_timeout,
+        )
+        conn.ping()
+        return conn
+    except redis.AuthenticationError:
+        raise redis.AuthenticationError(
+            "Redis server requires authentication. Set REDIS_PASSWORD environment variable."
+        ) from None
+
+
 def check_redis_available(redis_host: str, timeout: int = 2) -> bool:
     """
     Check if Redis server is reachable.
@@ -43,13 +111,7 @@ def check_redis_available(redis_host: str, timeout: int = 2) -> bool:
         return False
 
     try:
-        redis_password = os.environ.get("REDIS_PASSWORD") or None
-        client = redis.Redis(
-            host=redis_host,
-            password=redis_password,
-            socket_connect_timeout=timeout,
-        )
-        client.ping()
+        create_redis_connection(redis_host, socket_connect_timeout=timeout)
         logger.debug(f"Redis server at {redis_host} is reachable")
         return True
     except (redis.ConnectionError, redis.TimeoutError) as e:
@@ -90,10 +152,7 @@ def initialize_queue(redis_host: str, experiment_name: str) -> Optional["rq.Queu
     logger.info(f"Initializing queue: {queue_name}")
 
     try:
-        redis_password = os.environ.get("REDIS_PASSWORD") or None
-        redis_connection = redis.Redis(host=redis_host, password=redis_password)
-        # Test connection
-        redis_connection.ping()
+        redis_connection = create_redis_connection(redis_host)
 
         queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
         logger.info(f"Queue initialized successfully: {queue_name}")

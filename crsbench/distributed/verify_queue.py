@@ -8,14 +8,12 @@ All verification uses per-POV granularity (verify_single_pov) for
 fine-grained parallelism and individual retry.
 """
 
-import os
 import time
 from typing import Any, Optional
 
 from crsbench.utils.logger import get_logger
 
 try:
-    import redis
     import rq
     import rq.job
 
@@ -47,13 +45,9 @@ def initialize_verify_queue(
 
     queue_name = f"crsbench_{experiment_name}_verify"
     try:
-        redis_password = os.environ.get("REDIS_PASSWORD") or None
-        redis_conn = redis.Redis(
-            host=redis_host,
-            password=redis_password,
-            socket_connect_timeout=5,
-        )
-        redis_conn.ping()
+        from crsbench.distributed.queue import create_redis_connection
+
+        redis_conn = create_redis_connection(redis_host)
         queue = rq.Queue(queue_name, connection=redis_conn)
         logger.info(f"Verify queue initialized: {queue_name}")
         return queue
@@ -152,8 +146,9 @@ def poll_single_pov_verdicts(
     remaining: list[str] = []
 
     try:
-        redis_password = os.environ.get("REDIS_PASSWORD") or None
-        redis_conn = redis.Redis(host=redis_host, password=redis_password)
+        from crsbench.distributed.queue import create_redis_connection
+
+        redis_conn = create_redis_connection(redis_host)
 
         for job_id in job_ids:
             try:

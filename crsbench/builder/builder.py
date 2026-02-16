@@ -92,8 +92,9 @@ class OSSFuzzBuilder:
 
         for config in configs:
             if force_rebuild:
-                # Clean up existing build outputs for force rebuild
+                # Clean up existing build outputs and Docker images for force rebuild
                 logger.debug(f"Force rebuild: cleaning {config.variant_name}")
+                self.infra.cleanup_docker_images(config.variant_name)
                 self.infra.cleanup_build_outputs(config.variant_name)
                 self.infra.cleanup_source(config.variant_name)
                 configs_to_build.append(config)
@@ -172,10 +173,11 @@ class OSSFuzzBuilder:
         Returns:
             Build result
         """
-        # Clean up existing build outputs if force rebuild
+        # Clean up existing build outputs and Docker images if force rebuild
         # This ensures stale data (coverage dumps, etc.) is removed
         if force_rebuild:
             logger.info(f"Force rebuild: cleaning {config.variant_name}")
+            self.infra.cleanup_docker_images(config.variant_name)
             self.infra.cleanup_build_outputs(config.variant_name)
             self.infra.cleanup_source(config.variant_name)
 

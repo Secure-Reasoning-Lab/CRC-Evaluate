@@ -7,21 +7,25 @@ concurrency limits and per-queue CPU allocations.
 This module extracts that common loop so both commands reuse it.
 """
 
+from __future__ import annotations
+
 import multiprocessing
 import os
 import time
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import TYPE_CHECKING, Callable, Optional, Union
 
 from crsbench.utils.logger import get_logger
 
 try:
-    import redis
     import rq
 
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
+
+if TYPE_CHECKING:
+    from redis import Redis
 
 logger = get_logger(__name__)
 
@@ -45,6 +49,7 @@ def run_ci_supervisor(
     skip_cpus: Optional[str] = None,
     minimum_disk_size: str = "10GB",
     disk_check_interval: int = 60,
+    continuous: bool = True,
 ) -> int:
     """Dual-queue supervisor shared by worker and evaluator.
 
@@ -129,13 +134,9 @@ def run_ci_supervisor(
     last_disk_check = 0.0
 
     try:
-        redis_password = os.environ.get("REDIS_PASSWORD") or None
-        redis_conn = redis.Redis(
-            host=redis_host,
-            password=redis_password,
-            socket_connect_timeout=5,
-        )
-        redis_conn.ping()
+        from crsbench.distributed.queue import create_redis_connection
+
+        redis_conn = create_redis_connection(redis_host)
 
         build_queue = rq.Queue(build_queue_name, connection=redis_conn)
         verify_queue = rq.Queue(verify_queue_name, connection=redis_conn)
@@ -150,10 +151,18 @@ def run_ci_supervisor(
         while True:
             # --- Cleanup finished workers ---
             _reap_finished(
-                build_active, cpu_pool, used_worker_nums, deferred_cgroup_cleanup
+                build_active,
+                cpu_pool,
+                used_worker_nums,
+                deferred_cgroup_cleanup,
+                redis_conn=redis_conn,
             )
             _reap_finished(
-                verify_active, cpu_pool, used_worker_nums, deferred_cgroup_cleanup
+                verify_active,
+                cpu_pool,
+                used_worker_nums,
+                deferred_cgroup_cleanup,
+                redis_conn=redis_conn,
             )
 
             # --- Sweep deferred cgroup removals (non-blocking) ---
@@ -200,6 +209,18 @@ def run_ci_supervisor(
                 time.sleep(0.5)
                 continue
 
+            # --- Exit when all work is done (non-continuous mode only) ---
+            if not continuous:
+                no_queued = build_queue.count == 0 and verify_queue.count == 0
+                no_deferred = (
+                    build_queue.deferred_job_registry.count == 0
+                    and verify_queue.deferred_job_registry.count == 0
+                )
+                no_active_workers = not build_active and not verify_active
+                if no_queued and no_deferred and no_active_workers:
+                    logger.info("All queues empty and no active workers — exiting")
+                    break
+
             # --- Determine which queues have capacity ---
             queues_with_capacity: list[rq.Queue] = []
             if len(build_active) < build_jobs and build_queue.count > 0:
@@ -223,6 +244,13 @@ def run_ci_supervisor(
                 continue
 
             job, queue_obj = result
+
+            # Skip jobs that are already finished or failed (stale queue entries)
+            job_status = job.get_status()
+            if job_status in ("finished", "failed"):
+                logger.debug(f"Skipping stale job {job.id[:30]} (status={job_status})")
+                continue
+
             is_build = queue_obj.name == build_queue_name
             queue_label = "build" if is_build else "verify"
             cpu_count = build_cores_per_job if is_build else 1
@@ -308,14 +336,36 @@ def run_ci_supervisor(
         logger.error(f"CI supervisor error: {e}", exc_info=True)
         return 3
 
+    return 0
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
 
+def _enqueue_dependents_for_job(redis_conn: Redis, job_id: str) -> None:
+    """Enqueue dependent jobs after a job finishes.
+
+    Uses RQ's ``Queue.enqueue_dependents()`` to move jobs from the
+    deferred registry to their target queues.  Works cross-queue:
+    a build job finishing can trigger verify jobs on a different queue.
+    """
+    try:
+        job = rq.job.Job.fetch(job_id, connection=redis_conn)
+        if job.get_status() != "finished":
+            return
+        queue = rq.Queue(job.origin, connection=redis_conn)
+        queue.enqueue_dependents(job)
+    except Exception:
+        logger.debug(f"Failed to enqueue dependents for {job_id}", exc_info=True)
+
+
 def _try_remove_cgroup(cgroup_path: Path) -> bool:
     """Try once to remove a cgroup directory without blocking.
+
+    Called after our worker has finished, so the cgroup should be empty.
+    Removes leftover Docker child cgroup directories and retries.
 
     Returns True if removed (or absent), False if still busy.
     """
@@ -328,8 +378,15 @@ def _try_remove_cgroup(cgroup_path: Path) -> bool:
         return True
     except OSError as e:
         if e.errno == errno.EBUSY:
-            logger.debug(f"Cgroup {cgroup_path.name} busy, deferring cleanup")
-            return False
+            from crsbench.utils.cgroup import _remove_cgroup_children
+
+            _remove_cgroup_children(cgroup_path)
+            try:
+                cgroup_path.rmdir()
+                return True
+            except OSError:
+                logger.debug(f"Cgroup {cgroup_path.name} still busy, deferring")
+                return False
         logger.error(f"Cgroup cleanup failed for {cgroup_path}: {e}")
         return False
 
@@ -350,17 +407,27 @@ def _reap_finished(
     cpu_pool: Optional[object],
     used_worker_nums: set[int],
     deferred_cgroup_cleanup: list[Path],
+    redis_conn: Optional[Redis] = None,
 ) -> None:
     """Clean up finished child processes and release their resources.
+
+    After a child completes, enqueues any dependent jobs via RQ's
+    ``Queue.enqueue_dependents()`` so cross-queue dependencies resolve
+    immediately rather than waiting for periodic recovery sweeps.
 
     Cgroup removal is attempted once without retries to avoid blocking
     the supervisor loop.  If the cgroup is still busy (Docker shim
     processes haven't exited yet), the path is deferred for later sweep.
     """
     for pid in list(active.keys()):
-        proc, cpus, _job_id, worker_num, cgroup_path_entry = active[pid]
+        proc, cpus, job_id, worker_num, cgroup_path_entry = active[pid]
         if not proc.is_alive():
             proc.join()
+
+            # Enqueue dependents so cross-queue dependencies resolve immediately
+            if redis_conn is not None:
+                _enqueue_dependents_for_job(redis_conn, job_id)
+
             if cpu_pool and cpus:
                 cpu_pool.release(cpus)  # type: ignore[union-attr]
                 logger.info(f"Worker (PID: {pid}) finished, released CPUs {cpus}")
@@ -403,4 +470,4 @@ def _terminate_all(
         if cgroup_path_entry:
             from crsbench.utils.cgroup import cleanup_cgroup
 
-            cleanup_cgroup(cgroup_path_entry)
+            cleanup_cgroup(cgroup_path_entry, force=True)

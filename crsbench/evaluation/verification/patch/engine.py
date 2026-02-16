@@ -218,6 +218,7 @@ class PatchVerificationEngine:
         build_cached = False
         if self.force_rebuild:
             logger.info(f"Force rebuild: cleaning {variant_name}")
+            self.infra.cleanup_docker_images(variant_name)
             self.infra.cleanup_build_outputs(variant_name)
             self.infra.cleanup_source(variant_name)
         elif self.infra.is_variant_built(

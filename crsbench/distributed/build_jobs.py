@@ -7,7 +7,6 @@ remotely via Redis workers. Used by all commands that need builds:
 
 from __future__ import annotations
 
-import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -128,7 +127,6 @@ def enqueue_and_poll_builds(
         Dict mapping job_id -> serialized result dict
     """
     try:
-        import redis
         import rq
     except ImportError as exc:
         raise RuntimeError(
@@ -136,13 +134,9 @@ def enqueue_and_poll_builds(
             "Install with: pip install redis rq"
         ) from exc
 
-    redis_password = os.environ.get("REDIS_PASSWORD") or None
-    redis_conn = redis.Redis(
-        host=redis_host,
-        password=redis_password,
-        socket_connect_timeout=5,
-    )
-    redis_conn.ping()
+    from crsbench.distributed.queue import create_redis_connection
+
+    redis_conn = create_redis_connection(redis_host)
 
     queue = rq.Queue(queue_name, connection=redis_conn)
     logger.info(f"Connected to Redis at {redis_host}, queue: {queue_name}")
@@ -159,19 +153,31 @@ def enqueue_and_poll_builds(
                 params,
                 job_timeout=3600,
                 result_ttl=-1,
-                meta={"cpu_count": 1},
                 job_id=job.job_id,
             )
             rq_jobs[job.job_id] = rq_job
             logger.info(f"Enqueued {job.job_id} as RQ job {rq_job.id[:8]}")
         except Exception:
-            # Job with same ID already exists -- fetch existing job
             existing = rq.job.Job.fetch(job.job_id, connection=redis_conn)
-            rq_jobs[job.job_id] = existing
-            logger.info(
-                f"Job {job.job_id} already exists (dedup), "
-                f"status: {existing.get_status()}"
-            )
+            status = existing.get_status()
+            if status in ("finished", "failed"):
+                rq_jobs[job.job_id] = existing
+                logger.info(f"Job {job.job_id} already done (status: {status})")
+            else:
+                # Stale job from previous run — delete and re-enqueue
+                logger.warning(
+                    f"Job {job.job_id} stale (status: {status}), "
+                    f"deleting and re-enqueuing"
+                )
+                existing.delete()
+                rq_job = queue.enqueue(
+                    "crsbench.distributed.build_jobs.execute_ci_build",
+                    params,
+                    job_timeout=3600,
+                    result_ttl=-1,
+                    job_id=job.job_id,
+                )
+                rq_jobs[job.job_id] = rq_job
 
     logger.info(f"Enqueued {len(rq_jobs)} build jobs, waiting for completion...")
 

@@ -32,7 +32,6 @@ DEFAULT_LOCK_DIR = "/tmp"
 LOCK_DIR = Path(os.environ.get("CRSBENCH_WORKER_LOCK_DIR", DEFAULT_LOCK_DIR))
 
 try:
-    import redis
     import rq
 
     REDIS_AVAILABLE = True
@@ -313,14 +312,13 @@ def _run_supervisor(
     cores: Optional[str] = None,
     skip_cpus: Optional[str] = None,
 ) -> int:
-    """Supervisor that spawns workers based on job CPU requirements.
+    """Supervisor that spawns workers with fixed CPU allocation per job.
 
     Instead of spawning a fixed number of workers upfront, the supervisor:
     1. Peeks at next job in queue
-    2. Reads cpu_count from job metadata
-    3. Allocates CPUs from pool
-    4. Spawns worker with CPU affinity
-    5. Cleans up and releases CPUs when worker finishes
+    2. Allocates CPUs from pool (4 per job)
+    3. Spawns worker with CPU affinity
+    4. Cleans up and releases CPUs when worker finishes
 
     Args:
         redis_host: Redis server hostname
@@ -398,13 +396,9 @@ def _run_supervisor(
 
     try:
         # Connect to Redis
-        redis_password = os.environ.get("REDIS_PASSWORD") or None
-        redis_conn = redis.Redis(
-            host=redis_host,
-            password=redis_password,
-            socket_connect_timeout=5,
-        )
-        redis_conn.ping()
+        from crsbench.distributed.queue import create_redis_connection
+
+        redis_conn = create_redis_connection(redis_host)
 
         queue_name = queue_name or f"crsbench_{experiment_name}"
         queue = rq.Queue(queue_name, connection=redis_conn)  # type: ignore[attr-defined]
@@ -416,9 +410,17 @@ def _run_supervisor(
         while True:
             # Cleanup finished workers
             for pid in list(workers.keys()):
-                proc, cpus, _job_id, worker_num, cgroup_path_entry = workers[pid]
+                proc, cpus, job_id, worker_num, cgroup_path_entry = workers[pid]
                 if not proc.is_alive():
                     proc.join()
+
+                    # Enqueue dependents so dependencies resolve immediately
+                    from crsbench.distributed.ci_supervisor import (
+                        _enqueue_dependents_for_job,
+                    )
+
+                    _enqueue_dependents_for_job(redis_conn, job_id)
+
                     if cpu_pool and cpus:
                         cpu_pool.release(cpus)
                         logger.info(
@@ -427,7 +429,7 @@ def _run_supervisor(
                     if cgroup_path_entry:
                         from crsbench.utils.cgroup import cleanup_cgroup
 
-                        cleanup_cgroup(cgroup_path_entry)
+                        cleanup_cgroup(cgroup_path_entry, force=True)
                     # Free up the worker number for reuse
                     used_worker_nums.discard(worker_num)
                     del workers[pid]
@@ -476,6 +478,15 @@ def _run_supervisor(
 
                 if result:
                     job, _ = result
+
+                    # Skip jobs that are already finished or failed (stale queue entries)
+                    job_status = job.get_status()
+                    if job_status in ("finished", "failed"):
+                        logger.debug(
+                            f"Skipping stale job {job.id[:30]} (status={job_status})"
+                        )
+                        continue
+
                     cpu_count = job.meta.get("cpu_count", 4)
 
                     # Try to allocate CPUs
@@ -595,7 +606,7 @@ def _run_supervisor(
             if cgroup_path_entry:
                 from crsbench.utils.cgroup import cleanup_cgroup
 
-                cleanup_cgroup(cgroup_path_entry)
+                cleanup_cgroup(cgroup_path_entry, force=True)
         return 0
     except Exception as e:
         logger.error(f"Supervisor error: {e}", exc_info=True)
@@ -655,11 +666,12 @@ def _run_single_job_worker(
         )
         logger.info(f"Per-worker logging enabled: {worker_log_path}")
 
-    # Connect to Redis
-    redis_password = os.environ.get("REDIS_PASSWORD") or None
-    redis_conn = redis.Redis(host=redis_host, password=redis_password)
-
     try:
+        # Connect to Redis
+        from crsbench.distributed.queue import create_redis_connection
+
+        redis_conn = create_redis_connection(redis_host)
+
         # Store friendly worker name in environment for job metadata
         os.environ["CRSBENCH_WORKER_DISPLAY_NAME"] = worker_name
 
@@ -857,16 +869,10 @@ def _run_worker(
     try:
         # Connect to Redis
         logger.info(f"Connecting to Redis at {redis_host}...")
-        redis_password = os.environ.get("REDIS_PASSWORD") or None
-        redis_connection = redis.Redis(
-            host=redis_host,
-            password=redis_password,
-            socket_connect_timeout=5,
-        )
+        from crsbench.distributed.queue import create_redis_connection
 
-        # Test connection
-        redis_connection.ping()
-        logger.info("✓ Connected to Redis successfully")
+        redis_connection = create_redis_connection(redis_host)
+        logger.info("Connected to Redis successfully")
 
         # Set up RQ queue and worker (RQ 2.x requires explicit connection)
         queue_name = queue_name or f"crsbench_{experiment_name}"
