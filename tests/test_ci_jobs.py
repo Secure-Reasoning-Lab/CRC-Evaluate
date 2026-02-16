@@ -212,6 +212,52 @@ class TestSerializeAllJobTypes:
         restored = _reconstruct_job(params)
         assert restored.sanitizer == "address"
 
+    def test_build_single_variant_roundtrip(self) -> None:
+        """BuildSingleVariantJob serializes and reconstructs correctly."""
+        from crsbench.benchmark_ci.jobs.flat import BuildSingleVariantJob
+        from crsbench.builder.types import BenchmarkMode, VariantType
+        from crsbench.distributed.ci_jobs import _reconstruct_job, serialize_ci_job
+
+        job = BuildSingleVariantJob(
+            benchmark_path=Path("/benchmarks/test-bench"),
+            benchmark_name="test-bench",
+            variant_type=VariantType.DELTA_REF,
+            commit="abc123",
+            main_repo="https://github.com/test/repo",
+            mode=BenchmarkMode.DELTA,
+            language="c",
+            cpv_num=0,
+            patch_id="patch_0",
+            pov_id="cpv_0",
+            patches=[Path("/patches/p1.diff")],
+            use_inc_build=True,
+            force_rebuild=False,
+            skip_if_cached=True,
+            source_mode="pkgs",
+            sanitizer="address",
+            repo_name="test-repo",
+            project_image_prefix="aixcc-afc",
+        )
+        params = serialize_ci_job(job)
+
+        assert params["_job_class"] == "BuildSingleVariantJob"
+        assert params["variant_type"] == "deltaref"
+        assert params["mode"] == "delta"
+        assert params["benchmark_path"] == "/benchmarks/test-bench"
+        assert params["patches"] == ["/patches/p1.diff"]
+        assert params["patch_id"] == "patch_0"
+        assert params["pov_id"] == "cpv_0"
+
+        restored = _reconstruct_job(params)
+        assert type(restored).__name__ == "BuildSingleVariantJob"
+        assert restored.benchmark_name == "test-bench"
+        assert restored.variant_type == VariantType.DELTA_REF
+        assert restored.mode == BenchmarkMode.DELTA
+        assert restored.commit == "abc123"
+        assert restored.patches == [Path("/patches/p1.diff")]
+        assert restored.sanitizer == "address"
+        assert restored.repo_name == "test-repo"
+
 
 class TestCiResultsToExecutorResults:
     """Test ci_results_to_executor_results() conversion."""
@@ -254,6 +300,37 @@ class TestCiResultsToExecutorResults:
         r = results["verify-cpv:bench:cpv_0"]
         assert r.status.value == "failed"
         assert "Docker image not found" in r.error
+        # job_result should be preserved even for failed results
+        assert r.job_result is not None
+        assert r.job_result.success is False
+
+    def test_failed_result_preserves_details(self) -> None:
+        """Failed job result preserves job_result details for aggregation."""
+        from crsbench.distributed.ci_jobs import ci_results_to_executor_results
+
+        raw = {
+            "verify-cpv-var/bench/cpv_0": {
+                "job_id": "verify-cpv-var/bench/cpv_0",
+                "job_type": "verify",
+                "success": False,
+                "error": "26/29 variants passed",
+                "elapsed_seconds": 2026.4,
+                "started_at": "2026-02-13T14:26:10.414759",
+                "finished_at": "2026-02-13T15:00:00.000000",
+                "details": {
+                    "var_passed": 26,
+                    "var_total": 29,
+                },
+            }
+        }
+        results = ci_results_to_executor_results(raw)
+        r = results["verify-cpv-var/bench/cpv_0"]
+        assert r.status.value == "failed"
+        assert r.elapsed_seconds == 2026.4
+        assert r.job_result is not None
+        assert r.job_result.details["var_passed"] == 26
+        assert r.job_result.details["var_total"] == 29
+        assert r.job_result.elapsed_seconds == 2026.4
 
     def test_empty_input_returns_empty(self) -> None:
         """Empty raw results produce empty output."""

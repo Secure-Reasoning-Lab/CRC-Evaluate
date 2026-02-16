@@ -1,6 +1,6 @@
 """Shared dual-queue CI supervisor for worker and evaluator.
 
-Both ``crsbench worker --queue ci`` and ``crsbench evaluator`` share the same
+Both ``crsbench worker`` and ``crsbench evaluator --ci`` share the same
 core loop: dequeue from a *build* queue and a *verify* queue with independent
 concurrency limits and per-queue CPU allocations.
 
@@ -11,18 +11,17 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import shutil
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Optional, Union
+from typing import TYPE_CHECKING, Callable, NamedTuple, Optional, Union
 
+from crsbench.distributed.queue import REDIS_AVAILABLE
 from crsbench.utils.logger import get_logger
 
-try:
+if REDIS_AVAILABLE:
     import rq
-
-    REDIS_AVAILABLE = True
-except ImportError:
-    REDIS_AVAILABLE = False
+    import rq.job
 
 if TYPE_CHECKING:
     from redis import Redis
@@ -31,6 +30,39 @@ logger = get_logger(__name__)
 
 # job_runner(redis_host, child_name, job_id) -> None
 type JobRunner = Callable[[str, str, str], None]
+
+
+class WorkerEntry(NamedTuple):
+    """Metadata for an active child worker process."""
+
+    process: multiprocessing.Process
+    cpus: list[int]
+    job_id: str
+    worker_num: int
+    cgroup_path: Optional[Path]
+
+
+def check_disk_space(path: Path) -> int:
+    """Check available disk space at given path.
+
+    Args:
+        path: Path to check disk space for
+
+    Returns:
+        Available disk space in bytes
+    """
+    # Walk up to find an existing directory (handles case where path doesn't exist yet)
+    check_path = path
+    while not check_path.exists():
+        parent = check_path.parent
+        if parent == check_path:
+            # Reached root without finding existing dir, fall back to cwd
+            check_path = Path.cwd()
+            break
+        check_path = parent
+
+    stat = shutil.disk_usage(check_path)
+    return stat.free
 
 
 def run_ci_supervisor(
@@ -43,6 +75,7 @@ def run_ci_supervisor(
     verify_jobs: int,
     job_runner: JobRunner,
     *,
+    verify_cores_per_job: int = 1,
     use_cpuset: bool = False,
     use_cgroups: bool = False,
     cores: Optional[str] = None,
@@ -63,7 +96,8 @@ def run_ci_supervisor(
         worker_name: Base worker name for child processes.
         build_jobs: Max concurrent build jobs.
         build_cores_per_job: CPUs allocated per build job.
-        verify_jobs: Max concurrent verify jobs (1 CPU each).
+        verify_cores_per_job: CPUs allocated per verify job.
+        verify_jobs: Max concurrent verify jobs.
         job_runner: Callable ``(redis_host, child_name, job_id) -> None``
             spawned in a child process to execute a single job.
         use_cpuset: Enable CPU affinity via CPUPool.
@@ -76,7 +110,6 @@ def run_ci_supervisor(
     Returns:
         Exit code (0 for success).
     """
-    from crsbench.distributed.worker import check_disk_space
     from crsbench.utils.cpu_pool import CPUPool, format_cpuset
     from crsbench.utils.size_parser import parse_size_to_bytes
 
@@ -85,7 +118,9 @@ def run_ci_supervisor(
     logger.info(
         f"Build concurrency: {build_jobs} jobs x {build_cores_per_job} CPUs each"
     )
-    logger.info(f"Verify concurrency: {verify_jobs} jobs x 1 CPU each")
+    logger.info(
+        f"Verify concurrency: {verify_jobs} jobs x {verify_cores_per_job} CPUs each"
+    )
 
     # CPU pool setup
     cpu_pool: Optional[CPUPool] = None
@@ -114,13 +149,8 @@ def run_ci_supervisor(
             logger.info(f"Cleaned up {cleaned} stale cgroup(s)")
 
     # Separate tracking for build vs verify workers.
-    # pid -> (process, cpus, job_id, worker_num, cgroup_path)
-    build_active: dict[
-        int, tuple[multiprocessing.Process, list[int], str, int, Optional[Path]]
-    ] = {}
-    verify_active: dict[
-        int, tuple[multiprocessing.Process, list[int], str, int, Optional[Path]]
-    ] = {}
+    build_active: dict[int, WorkerEntry] = {}
+    verify_active: dict[int, WorkerEntry] = {}
     # Cgroup paths that failed immediate removal (EBUSY from Docker shim)
     deferred_cgroup_cleanup: list[Path] = []
 
@@ -210,16 +240,21 @@ def run_ci_supervisor(
                 continue
 
             # --- Exit when all work is done (non-continuous mode only) ---
+            # Check cheapest condition first (local dict) then LLEN then ZCARD
             if not continuous:
-                no_queued = build_queue.count == 0 and verify_queue.count == 0
-                no_deferred = (
-                    build_queue.deferred_job_registry.count == 0
-                    and verify_queue.deferred_job_registry.count == 0
-                )
                 no_active_workers = not build_active and not verify_active
-                if no_queued and no_deferred and no_active_workers:
-                    logger.info("All queues empty and no active workers — exiting")
-                    break
+                if no_active_workers:
+                    no_queued = build_queue.count == 0 and verify_queue.count == 0
+                    if no_queued:
+                        no_deferred = (
+                            build_queue.deferred_job_registry.count == 0
+                            and verify_queue.deferred_job_registry.count == 0
+                        )
+                        if no_deferred:
+                            logger.info(
+                                "All queues empty and no active workers — exiting"
+                            )
+                            break
 
             # --- Determine which queues have capacity ---
             queues_with_capacity: list[rq.Queue] = []
@@ -253,7 +288,7 @@ def run_ci_supervisor(
 
             is_build = queue_obj.name == build_queue_name
             queue_label = "build" if is_build else "verify"
-            cpu_count = build_cores_per_job if is_build else 1
+            cpu_count = build_cores_per_job if is_build else verify_cores_per_job
 
             # Allocate CPUs
             cpus = cpu_pool.allocate(cpu_count) if cpu_pool else None
@@ -279,53 +314,72 @@ def run_ci_supervisor(
             used_worker_nums.add(worker_num)
             child_name = f"{worker_name}-{worker_num}"
 
-            # Cgroup
-            cgroup_path: Optional[Path] = None
-            if cgroup_base is not None and cpuset_str:
-                from crsbench.utils.cgroup import (
-                    cgroup_path_for_docker,
-                    create_cgroup,
+            # Cgroup + spawn — wrapped so a stale root-owned cgroup
+            # doesn't crash the entire supervisor (re-enqueue and retry).
+            try:
+                cgroup_path: Optional[Path] = None
+                if cgroup_base is not None and cpuset_str:
+                    from crsbench.utils.cgroup import (
+                        cgroup_path_for_docker,
+                        create_cgroup,
+                    )
+
+                    cgroup_name = f"{queue_label}-{worker_num}"
+                    cgroup_path = create_cgroup(
+                        cgroup_base, cgroup_name, cpuset=cpuset_str
+                    )
+                    cgroup_parent = cgroup_path_for_docker(cgroup_path)
+                    job.meta["cgroup_parent"] = cgroup_parent
+                    job.save_meta()
+                    logger.info(f"Created cgroup {cgroup_name} cpuset={cpuset_str}")
+
+                if cgroup_path is not None:
+                    os.environ["OSS_FUZZ_CGROUP_PARENT"] = cgroup_path_for_docker(
+                        cgroup_path
+                    )
+                if cpuset_str:
+                    os.environ["OSS_FUZZ_CPUSET_CPUS"] = cpuset_str
+
+                # Spawn child process
+                p = multiprocessing.Process(
+                    target=job_runner,
+                    args=(redis_host, child_name, job.id),
+                    name=f"ci-{queue_label}-{worker_num}",
                 )
+                p.start()
 
-                cgroup_name = f"{queue_label}-{worker_num}"
-                cgroup_path = create_cgroup(cgroup_base, cgroup_name, cpuset=cpuset_str)
-                cgroup_parent = cgroup_path_for_docker(cgroup_path)
-                job.meta["cgroup_parent"] = cgroup_parent
-                job.save_meta()
-                logger.info(f"Created cgroup {cgroup_name} cpuset={cpuset_str}")
+                if cgroup_path is not None:
+                    os.environ.pop("OSS_FUZZ_CGROUP_PARENT", None)
+                os.environ.pop("OSS_FUZZ_CPUSET_CPUS", None)
 
-            if cgroup_path is not None:
-                from crsbench.utils.cgroup import cgroup_path_for_docker
+                if p.pid is not None:
+                    entry = WorkerEntry(p, cpus or [], job.id, worker_num, cgroup_path)
+                    if is_build:
+                        build_active[p.pid] = entry
+                    else:
+                        verify_active[p.pid] = entry
 
-                os.environ["OSS_FUZZ_CGROUP_PARENT"] = cgroup_path_for_docker(
-                    cgroup_path
+                logger.info(
+                    f"Started {queue_label} job {job.id[:8]} (PID: {p.pid})"
+                    + (f" with {len(cpus)} CPUs: {cpuset_str}" if cpus else "")
                 )
-            if cpuset_str:
-                os.environ["OSS_FUZZ_CPUSET_CPUS"] = cpuset_str
-
-            # Spawn child process
-            p = multiprocessing.Process(
-                target=job_runner,
-                args=(redis_host, child_name, job.id),
-                name=f"ci-{queue_label}-{worker_num}",
-            )
-            p.start()
-
-            if cgroup_path is not None:
+            except OSError as spawn_err:
+                # Cgroup permission error (e.g. stale root-owned cgroup from
+                # a previous Docker run). Release resources and re-enqueue.
+                logger.warning(
+                    f"Failed to spawn worker {worker_num}: {spawn_err}. "
+                    "Re-enqueuing job."
+                )
+                # Clean up env vars that may have been set before the error
                 os.environ.pop("OSS_FUZZ_CGROUP_PARENT", None)
-            os.environ.pop("OSS_FUZZ_CPUSET_CPUS", None)
-
-            if p.pid is not None:
-                entry = (p, cpus or [], job.id, worker_num, cgroup_path)
-                if is_build:
-                    build_active[p.pid] = entry
-                else:
-                    verify_active[p.pid] = entry
-
-            logger.info(
-                f"Started {queue_label} job {job.id[:8]} (PID: {p.pid})"
-                + (f" with {len(cpus)} CPUs: {cpuset_str}" if cpus else "")
-            )
+                os.environ.pop("OSS_FUZZ_CPUSET_CPUS", None)
+                # Keep worker_num in used_worker_nums so it's skipped on
+                # retry (the stale cgroup won't go away by itself).
+                if cpu_pool and cpus:
+                    cpu_pool.release(cpus)
+                queue_obj.enqueue_job(job, at_front=True)
+                time.sleep(0.5)
+                continue
 
     except KeyboardInterrupt:
         logger.info("\nCI supervisor interrupted, terminating workers...")
@@ -400,10 +454,7 @@ def _next_worker_num(used: set[int], max_total: int) -> int:
 
 
 def _reap_finished(
-    active: dict[
-        int,
-        tuple[multiprocessing.Process, list[int], str, int, Optional[Path]],
-    ],
+    active: dict[int, WorkerEntry],
     cpu_pool: Optional[object],
     used_worker_nums: set[int],
     deferred_cgroup_cleanup: list[Path],
@@ -420,21 +471,21 @@ def _reap_finished(
     processes haven't exited yet), the path is deferred for later sweep.
     """
     for pid in list(active.keys()):
-        proc, cpus, job_id, worker_num, cgroup_path_entry = active[pid]
-        if not proc.is_alive():
-            proc.join()
+        entry = active[pid]
+        if not entry.process.is_alive():
+            entry.process.join()
 
             # Enqueue dependents so cross-queue dependencies resolve immediately
             if redis_conn is not None:
-                _enqueue_dependents_for_job(redis_conn, job_id)
+                _enqueue_dependents_for_job(redis_conn, entry.job_id)
 
-            if cpu_pool and cpus:
-                cpu_pool.release(cpus)  # type: ignore[union-attr]
-                logger.info(f"Worker (PID: {pid}) finished, released CPUs {cpus}")
-            if cgroup_path_entry:
-                if not _try_remove_cgroup(cgroup_path_entry):
-                    deferred_cgroup_cleanup.append(cgroup_path_entry)
-            used_worker_nums.discard(worker_num)
+            if cpu_pool and entry.cpus:
+                cpu_pool.release(entry.cpus)  # type: ignore[union-attr]
+                logger.info(f"Worker (PID: {pid}) finished, released CPUs {entry.cpus}")
+            if entry.cgroup_path:
+                if not _try_remove_cgroup(entry.cgroup_path):
+                    deferred_cgroup_cleanup.append(entry.cgroup_path)
+            used_worker_nums.discard(entry.worker_num)
             del active[pid]
 
 
@@ -449,25 +500,22 @@ def _sweep_deferred_cgroups(deferred: list[Path]) -> None:
 
 
 def _terminate_all(
-    active: dict[
-        int,
-        tuple[multiprocessing.Process, list[int], str, int, Optional[Path]],
-    ],
+    active: dict[int, WorkerEntry],
     cpu_pool: Optional[object],
 ) -> None:
     """Terminate and clean up all active workers."""
-    for _pid, (p, _cpus, _job_id, _wn, _cg) in active.items():
-        if p.is_alive():
-            p.terminate()
-    for pid, (p, cpus, _job_id, _wn, cgroup_path_entry) in active.items():
-        p.join(timeout=5)
-        if p.is_alive():
+    for entry in active.values():
+        if entry.process.is_alive():
+            entry.process.terminate()
+    for pid, entry in active.items():
+        entry.process.join(timeout=5)
+        if entry.process.is_alive():
             logger.warning(f"Force killing worker (PID: {pid})")
-            p.kill()
-            p.join()
-        if cpu_pool and cpus:
-            cpu_pool.release(cpus)  # type: ignore[union-attr]
-        if cgroup_path_entry:
+            entry.process.kill()
+            entry.process.join()
+        if cpu_pool and entry.cpus:
+            cpu_pool.release(entry.cpus)  # type: ignore[union-attr]
+        if entry.cgroup_path:
             from crsbench.utils.cgroup import cleanup_cgroup
 
-            cleanup_cgroup(cgroup_path_entry, force=True)
+            cleanup_cgroup(entry.cgroup_path, force=True)

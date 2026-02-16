@@ -10,17 +10,17 @@ Follows the same pattern as verify_queue.py for POV verification.
 
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
+from crsbench.distributed.queue import REDIS_AVAILABLE
 from crsbench.utils.logger import get_logger
 
-try:
+if REDIS_AVAILABLE:
     import rq
     import rq.job
 
-    REDIS_AVAILABLE = True
-except ImportError:
-    REDIS_AVAILABLE = False
+if TYPE_CHECKING:
+    import redis
 
 logger = get_logger(__name__)
 
@@ -46,6 +46,9 @@ def initialize_patch_queues(
         logger.debug("Redis/RQ packages not installed, patch queues unavailable")
         return None, None
 
+    from crsbench.distributed.queue import validate_queue_name_component
+
+    validate_queue_name_component(experiment_name)
     build_queue_name = f"crsbench_{experiment_name}_build"
     verify_queue_name = f"crsbench_{experiment_name}_verify"
 
@@ -173,6 +176,7 @@ def enqueue_patch_jobs(
 def poll_patch_verdicts(
     redis_host: str,
     job_ids: list[str],
+    redis_conn: Optional["redis.Redis"] = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Poll for completed patch verification verdicts.
 
@@ -182,6 +186,7 @@ def poll_patch_verdicts(
     Args:
         redis_host: Redis server hostname
         job_ids: List of verify job IDs to check
+        redis_conn: Existing Redis connection (avoids reconnect per call)
 
     Returns:
         Tuple of (completed_results, remaining_job_ids)
@@ -193,9 +198,10 @@ def poll_patch_verdicts(
     remaining: list[str] = []
 
     try:
-        from crsbench.distributed.queue import create_redis_connection
+        if redis_conn is None:
+            from crsbench.distributed.queue import create_redis_connection
 
-        redis_conn = create_redis_connection(redis_host)
+            redis_conn = create_redis_connection(redis_host)
 
         for job_id in job_ids:
             try:
@@ -253,6 +259,10 @@ def drain_patch_verdicts(
     Returns:
         List of all completed result dicts (may be partial on timeout)
     """
+    from crsbench.distributed.queue import create_redis_connection
+
+    redis_conn = create_redis_connection(redis_host)
+
     all_completed: list[dict[str, Any]] = []
     remaining = list(job_ids)
     total = len(job_ids)
@@ -272,13 +282,15 @@ def drain_patch_verdicts(
             )
             break
 
-        completed, remaining = poll_patch_verdicts(redis_host, remaining)
+        completed, remaining = poll_patch_verdicts(
+            redis_host, remaining, redis_conn=redis_conn
+        )
         all_completed.extend(completed)
 
         # Periodically recover orphaned deferred jobs
         now = time.monotonic()
         if remaining and (now - last_recovery) >= recovery_interval:
-            _try_recover_deferred_jobs(redis_host, remaining)
+            _try_recover_deferred_jobs(redis_host, remaining, redis_conn=redis_conn)
             last_recovery = now
 
         if remaining:
@@ -294,7 +306,11 @@ def drain_patch_verdicts(
     return all_completed
 
 
-def _try_recover_deferred_jobs(redis_host: str, job_ids: list[str]) -> None:
+def _try_recover_deferred_jobs(
+    redis_host: str,
+    job_ids: list[str],
+    redis_conn: Optional["redis.Redis"] = None,
+) -> None:
     """Attempt to recover orphaned deferred patch verify jobs.
 
     Uses _recover_orphaned_deferred_jobs from ci_jobs.py to handle the
@@ -304,11 +320,13 @@ def _try_recover_deferred_jobs(redis_host: str, job_ids: list[str]) -> None:
     Args:
         redis_host: Redis server hostname
         job_ids: Job IDs that are still pending
+        redis_conn: Existing Redis connection (avoids reconnect per call)
     """
     try:
-        from crsbench.distributed.queue import create_redis_connection
+        if redis_conn is None:
+            from crsbench.distributed.queue import create_redis_connection
 
-        redis_conn = create_redis_connection(redis_host)
+            redis_conn = create_redis_connection(redis_host)
 
         # Fetch jobs and find which queues they belong to
         rq_jobs: dict[str, rq.job.Job] = {}

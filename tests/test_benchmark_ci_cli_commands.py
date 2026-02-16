@@ -96,8 +96,14 @@ class TestDispatchCi:
             patch(
                 "crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate"
             ) as mock_schema,
+            patch(
+                "crsbench.benchmark_ci.cli.commands.format_cmd.validate_tarball_naming"
+            ) as mock_tarball,
             patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table"),
         ):
+            from crsbench.benchmark.packaging.validate import (
+                TarballValidationResult,
+            )
             from crsbench.benchmark.packaging.validate import (
                 ValidationResult as StructResult,
             )
@@ -106,6 +112,7 @@ class TestDispatchCi:
             mock_discover.return_value = [Path("/tmp/bench1")]
             mock_structural.return_value = StructResult(valid=True)
             mock_schema.return_value = ValidationResult(is_valid=True, issues=[])
+            mock_tarball.return_value = TarballValidationResult(valid=True)
             result = dispatch_ci(args)
             assert result == 0
 
@@ -324,12 +331,16 @@ class TestFormatSubcommand:
     """Integration tests for the format subcommand."""
 
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.validate_tarball_naming")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.structural_validate")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.resolve_benchmark_paths")
     def test_format_all_pass_returns_0(
-        self, mock_discover, mock_structural, mock_schema, mock_table
+        self, mock_discover, mock_structural, mock_schema, mock_tarball, mock_table
     ):
+        from crsbench.benchmark.packaging.validate import (
+            TarballValidationResult,
+        )
         from crsbench.benchmark.packaging.validate import (
             ValidationResult as StructResult,
         )
@@ -338,6 +349,7 @@ class TestFormatSubcommand:
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_structural.return_value = StructResult(valid=True)
         mock_schema.return_value = ValidationResult(is_valid=True, issues=[])
+        mock_tarball.return_value = TarballValidationResult(valid=True)
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "format", "--all"])
@@ -452,12 +464,22 @@ class TestFormatSubcommand:
         assert result == 1
 
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.validate_tarball_naming")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.structural_validate")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.resolve_benchmark_paths")
     def test_format_output_writes_json(
-        self, mock_discover, mock_structural, mock_schema, mock_table, tmp_path
+        self,
+        mock_discover,
+        mock_structural,
+        mock_schema,
+        mock_tarball,
+        mock_table,
+        tmp_path,
     ):
+        from crsbench.benchmark.packaging.validate import (
+            TarballValidationResult,
+        )
         from crsbench.benchmark.packaging.validate import (
             ValidationResult as StructResult,
         )
@@ -466,6 +488,7 @@ class TestFormatSubcommand:
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_structural.return_value = StructResult(valid=True)
         mock_schema.return_value = ValidationResult(is_valid=True, issues=[])
+        mock_tarball.return_value = TarballValidationResult(valid=True)
 
         output_file = tmp_path / "out.json"
         parser = _make_parser()
@@ -577,12 +600,22 @@ class TestFormatSubcommand:
         assert result == 1
 
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.validate_tarball_naming")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.structural_validate")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.resolve_benchmark_paths")
     def test_format_cpv_complete_structure_passes(
-        self, mock_discover, mock_structural, mock_schema, mock_table, tmp_path
+        self,
+        mock_discover,
+        mock_structural,
+        mock_schema,
+        mock_tarball,
+        mock_table,
+        tmp_path,
     ):
+        from crsbench.benchmark.packaging.validate import (
+            TarballValidationResult,
+        )
         from crsbench.benchmark.packaging.validate import (
             ValidationResult as StructResult,
         )
@@ -618,6 +651,7 @@ class TestFormatSubcommand:
         mock_discover.return_value = [bench]
         mock_structural.return_value = StructResult(valid=True)
         mock_schema.return_value = ValidationResult(is_valid=True, issues=[])
+        mock_tarball.return_value = TarballValidationResult(valid=True)
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "format", "--all"])

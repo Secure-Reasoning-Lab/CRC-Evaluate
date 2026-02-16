@@ -18,6 +18,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from crsbench.distributed.evaluator_jobs import (
+    get_evaluator_benchmarks_root,
+    resolve_benchmark_path,
+)
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -297,10 +301,8 @@ def execute_patch_build(payload_dict: dict[str, Any]) -> dict[str, Any]:
         f"trial={payload.trial_id}"
     )
 
-    benchmarks_root = Path(
-        os.environ.get("CRSBENCH_EVALUATOR_BENCHMARKS_ROOT", "benchmarks")
-    )
-    benchmark_path = benchmarks_root / payload.benchmark
+    benchmarks_root = get_evaluator_benchmarks_root()
+    benchmark_path = resolve_benchmark_path(benchmarks_root, payload.benchmark)
 
     temp_patch_path: Optional[Path] = None
     try:
@@ -386,10 +388,8 @@ def execute_patch_verify(payload_dict: dict[str, Any]) -> dict[str, Any]:
         f"trial={payload.trial_id}"
     )
 
-    benchmarks_root = Path(
-        os.environ.get("CRSBENCH_EVALUATOR_BENCHMARKS_ROOT", "benchmarks")
-    )
-    benchmark_path = benchmarks_root / payload.benchmark
+    benchmarks_root = get_evaluator_benchmarks_root()
+    benchmark_path = resolve_benchmark_path(benchmarks_root, payload.benchmark)
 
     # Discover POV path from benchmark directory
     pov_path = (

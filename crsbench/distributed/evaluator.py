@@ -13,15 +13,10 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from crsbench.distributed.queue import REDIS_AVAILABLE
+from crsbench.evaluation.results import TrialResult
 from crsbench.utils.benchmark_utils import filter_benchmarks_by_mode
 from crsbench.utils.logger import configure_logger, get_logger
-
-try:
-    import rq
-
-    REDIS_AVAILABLE = True
-except ImportError:
-    REDIS_AVAILABLE = False
 
 logger = get_logger(__name__)
 
@@ -45,12 +40,13 @@ def _enqueue_pre_builds(
     Returns:
         Number of build jobs enqueued
     """
-    from crsbench.distributed.build_jobs import serialize_build_job
+    import rq
+
+    from crsbench.distributed.ci_jobs import serialize_ci_job
+    from crsbench.distributed.evaluator_jobs import get_evaluator_benchmarks_root
     from crsbench.executor.variant_planner import VariantPlanner
 
-    benchmarks_root = Path(
-        os.environ.get("CRSBENCH_EVALUATOR_BENCHMARKS_ROOT", "benchmarks")
-    )
+    benchmarks_root = get_evaluator_benchmarks_root()
 
     benchmark_names = config.get_benchmark_list()
 
@@ -71,7 +67,12 @@ def _enqueue_pre_builds(
     )
     planner = VariantPlanner(oss_fuzz_path, source_mode="pkgs")
 
-    from crsbench.distributed.queue import create_redis_connection
+    from crsbench.distributed.queue import (
+        create_redis_connection,
+        validate_queue_name_component,
+    )
+
+    validate_queue_name_component(experiment_name)
 
     redis_conn = create_redis_connection(redis_host)
     build_queue = rq.Queue(f"crsbench_{experiment_name}_build", connection=redis_conn)
@@ -90,7 +91,7 @@ def _enqueue_pre_builds(
         )
 
         for job in jobs:
-            params = serialize_build_job(job)
+            params = serialize_ci_job(job)
             try:
                 build_queue.enqueue(
                     "crsbench.distributed.build_jobs.execute_ci_build",
@@ -118,6 +119,7 @@ def run_evaluator_main(
     skip_cpus: Optional[str] = None,
     build_jobs: Optional[int] = None,
     build_cores_per_job: Optional[int] = None,
+    verify_cores_per_job: Optional[int] = None,
     verify_jobs: Optional[int] = None,
 ) -> int:
     """Main entry point for the evaluator process.
@@ -141,6 +143,10 @@ def run_evaluator_main(
         logger.error("Redis and RQ packages are required for evaluator execution")
         logger.error("Install with: pip install redis rq")
         return 1
+
+    from crsbench.distributed.queue import validate_queue_name_component
+
+    validate_queue_name_component(experiment_name)
 
     logger.info("=" * 60)
     logger.info("CRSBench Distributed Evaluator")
@@ -191,6 +197,7 @@ def run_evaluator_main(
         worker_name=f"evaluator-{experiment_name}",
         build_jobs=build_jobs or max_jobs,
         build_cores_per_job=build_cores_per_job or 1,
+        verify_cores_per_job=verify_cores_per_job or 1,
         verify_jobs=verify_jobs or (build_jobs or max_jobs),
         job_runner=_evaluator_job_runner,
         use_cpuset=use_cpuset,
@@ -202,16 +209,17 @@ def run_evaluator_main(
 
 def _evaluator_job_runner(
     redis_host: str,
-    _child_name: str,
+    child_name: str,
     job_id: str,
 ) -> None:
     """Adapter for ci_supervisor: delegates to _run_single_job."""
-    _run_single_job(redis_host, job_id)
+    _run_single_job(redis_host, job_id, child_name=child_name)
 
 
 def _run_single_job(
     redis_host: str,
     job_id: str,
+    child_name: str = "",
 ) -> None:
     """Execute a single job (build or verify) in a child process.
 
@@ -221,7 +229,10 @@ def _run_single_job(
     Args:
         redis_host: Redis server hostname
         job_id: RQ job ID to execute
+        child_name: Worker name assigned by the supervisor (for log context)
     """
+    import rq
+    import rq.job
     import rq.utils
     from rq.executions import Execution
     from rq.job import JobStatus
@@ -242,7 +253,8 @@ def _run_single_job(
         finished_registry = FinishedJobRegistry(queue=queue)
         failed_registry = FailedJobRegistry(queue=queue)
 
-        logger.info(f"Evaluator executing job {job_id}")
+        label = f"[{child_name}] " if child_name else ""
+        logger.info(f"{label}Evaluator executing job {job_id}")
 
         # Create execution and mark as STARTED
         execution = None
@@ -254,32 +266,65 @@ def _run_single_job(
         try:
             result = job.perform()
 
-            # Mark as FINISHED and persist result to Redis
-            with redis_conn.pipeline() as pipeline:
-                job._status = JobStatus.FINISHED
-                job.ended_at = rq.utils.now()
-                job._result = result
-                job.save_meta()
-                pipeline.hset(
-                    job.key,
-                    mapping={
-                        "status": JobStatus.FINISHED,
-                        "ended_at": rq.utils.utcformat(job.ended_at),
-                    },
-                )
-                Result.create(
-                    job,
-                    Result.Type.SUCCESSFUL,
-                    ttl=-1,
-                    return_value=result,
-                    pipeline=pipeline,
-                )
-                if execution:
-                    execution.delete(job, pipeline=pipeline)
-                finished_registry.add(job, ttl=-1, pipeline=pipeline)
-                pipeline.execute()
+            # Check if this is a TrialResult with success=False
+            if isinstance(result, TrialResult) and not result.success:
+                # Treat as failed job
+                with redis_conn.pipeline() as pipeline:
+                    job._status = JobStatus.FAILED
+                    job.ended_at = rq.utils.now()
+                    job._result = result
+                    job.save_meta()
+                    pipeline.hset(
+                        job.key,
+                        mapping={
+                            "status": JobStatus.FAILED,
+                            "ended_at": rq.utils.utcformat(job.ended_at),
+                        },
+                    )
+                    exc_string = f"Trial failed: {result.error_type}: {result.error}"
+                    Result.create(
+                        job,
+                        Result.Type.FAILED,
+                        ttl=-1,
+                        return_value=result,
+                        exc_string=exc_string,
+                        pipeline=pipeline,
+                    )
+                    if execution:
+                        execution.delete(job, pipeline=pipeline)
+                    failed_registry.add(
+                        job, ttl=-1, exc_string=exc_string, pipeline=pipeline
+                    )
+                    pipeline.execute()
 
-            logger.info(f"Job {job_id} completed successfully")
+                logger.warning(f"Job {job_id} failed: {result.error}")
+            else:
+                # Mark as FINISHED and persist result to Redis
+                with redis_conn.pipeline() as pipeline:
+                    job._status = JobStatus.FINISHED
+                    job.ended_at = rq.utils.now()
+                    job._result = result
+                    job.save_meta()
+                    pipeline.hset(
+                        job.key,
+                        mapping={
+                            "status": JobStatus.FINISHED,
+                            "ended_at": rq.utils.utcformat(job.ended_at),
+                        },
+                    )
+                    Result.create(
+                        job,
+                        Result.Type.SUCCESSFUL,
+                        ttl=-1,
+                        return_value=result,
+                        pipeline=pipeline,
+                    )
+                    if execution:
+                        execution.delete(job, pipeline=pipeline)
+                    finished_registry.add(job, ttl=-1, pipeline=pipeline)
+                    pipeline.execute()
+
+                logger.info(f"Job {job_id} completed successfully")
 
         except Exception as e:
             import traceback
@@ -311,3 +356,68 @@ def _run_single_job(
     except Exception as e:
         logger.error(f"Evaluator worker error: {e}", exc_info=True)
         raise
+
+
+def run_evaluator_ci_mode(
+    redis_host: str = "localhost",
+    worker_name: str = "ci-evaluator",
+    build_jobs: int = 1,
+    build_cores_per_job: int = 1,
+    verify_cores_per_job: int = 1,
+    verify_jobs: Optional[int] = None,
+    *,
+    use_cpuset: bool = False,
+    cores: Optional[str] = None,
+    skip_cpus: Optional[str] = None,
+) -> int:
+    """Run evaluator in CI mode (no experiment config required).
+
+    Listens on crsbench_ci_build and crsbench_ci_verify queues.
+
+    Args:
+        redis_host: Redis server hostname.
+        worker_name: Worker name for identification.
+        build_jobs: Max concurrent build jobs.
+        build_cores_per_job: CPUs per build job.
+        verify_cores_per_job: CPUs per verify job.
+        verify_jobs: Max concurrent verify jobs (default: build_jobs).
+        use_cpuset: Enable CPU affinity.
+        cores: CPU cores for pool (integer count or cpuset string).
+        skip_cpus: CPUs to exclude (cpuset format).
+
+    Returns:
+        Exit code (0 for success, non-zero for failure).
+    """
+    if not REDIS_AVAILABLE:
+        logger.error("Redis and RQ packages are required for evaluator execution")
+        logger.error("Install with: pip install redis rq")
+        return 1
+
+    logger.info("=" * 60)
+    logger.info("CRSBench Evaluator — CI Mode")
+    logger.info("=" * 60)
+    logger.info(f"Redis host: {redis_host}")
+    logger.info(f"Build jobs: {build_jobs} x {build_cores_per_job} CPUs")
+    logger.info(
+        f"Verify jobs: {verify_jobs or build_jobs} x {verify_cores_per_job} CPUs"
+    )
+    logger.info("Queues: crsbench_ci_build + crsbench_ci_verify")
+    logger.info("=" * 60)
+
+    from crsbench.distributed.ci_supervisor import run_ci_supervisor
+
+    return run_ci_supervisor(
+        redis_host=redis_host,
+        build_queue_name="crsbench_ci_build",
+        verify_queue_name="crsbench_ci_verify",
+        worker_name=worker_name,
+        build_jobs=build_jobs,
+        build_cores_per_job=build_cores_per_job,
+        verify_cores_per_job=verify_cores_per_job,
+        verify_jobs=verify_jobs or build_jobs,
+        job_runner=_evaluator_job_runner,
+        use_cpuset=use_cpuset,
+        use_cgroups=use_cpuset,
+        cores=cores,
+        skip_cpus=skip_cpus,
+    )

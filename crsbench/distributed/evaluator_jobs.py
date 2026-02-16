@@ -19,6 +19,37 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def get_evaluator_benchmarks_root() -> Path:
+    """Return the benchmarks root directory for the evaluator.
+
+    Reads from ``CRSBENCH_EVALUATOR_BENCHMARKS_ROOT`` env var,
+    defaulting to ``benchmarks`` (relative to cwd).
+    """
+    return Path(os.environ.get("CRSBENCH_EVALUATOR_BENCHMARKS_ROOT", "benchmarks"))
+
+
+def resolve_benchmark_path(benchmarks_root: Path, benchmark_name: str) -> Path:
+    """Resolve and validate a benchmark path from a name.
+
+    Guards against path traversal by ensuring the resolved path stays
+    within ``benchmarks_root``.
+
+    Args:
+        benchmarks_root: Root directory for benchmarks
+        benchmark_name: Benchmark name (from Redis payload)
+
+    Returns:
+        Resolved benchmark path
+
+    Raises:
+        ValueError: If the benchmark name attempts path traversal
+    """
+    benchmark_path = (benchmarks_root / benchmark_name).resolve()
+    if not benchmark_path.is_relative_to(benchmarks_root.resolve()):
+        raise ValueError(f"Invalid benchmark path: {benchmark_name!r}")
+    return benchmark_path
+
+
 # =============================================================================
 # Job Payload / Result Structures
 # =============================================================================
@@ -134,10 +165,8 @@ def _try_lazy_load_builds(benchmark_name: str) -> None:
     if engine is None:
         return
 
-    benchmarks_root = Path(
-        os.environ.get("CRSBENCH_EVALUATOR_BENCHMARKS_ROOT", "benchmarks")
-    )
-    benchmark_path = benchmarks_root / benchmark_name
+    benchmarks_root = get_evaluator_benchmarks_root()
+    benchmark_path = resolve_benchmark_path(benchmarks_root, benchmark_name)
 
     if not benchmark_path.exists():
         logger.debug(f"Lazy load skipped: {benchmark_path} does not exist")
@@ -310,11 +339,9 @@ def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
             completed_at=time.time(),
         ).to_dict()
 
-    # Resolve benchmark path
-    benchmarks_root = Path(
-        os.environ.get("CRSBENCH_EVALUATOR_BENCHMARKS_ROOT", "benchmarks")
-    )
-    benchmark_path = benchmarks_root / payload.benchmark
+    # Resolve benchmark path (validates against path traversal)
+    benchmarks_root = get_evaluator_benchmarks_root()
+    benchmark_path = resolve_benchmark_path(benchmarks_root, payload.benchmark)
     adapter = engine.load_adapter(benchmark_path)
 
     if adapter is None:

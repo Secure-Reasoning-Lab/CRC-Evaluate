@@ -243,16 +243,15 @@ class TestPollPatchVerdicts:
 
     @patch("crsbench.distributed.patch_queue.REDIS_AVAILABLE", new=True)
     @patch("crsbench.distributed.patch_queue.rq")
-    @patch("crsbench.distributed.patch_queue.redis")
+    @patch("crsbench.distributed.queue.create_redis_connection")
     def test_poll_patch_verdicts_completed(
-        self, mock_redis: MagicMock, mock_rq: MagicMock
+        self, mock_create_conn: MagicMock, mock_rq: MagicMock
     ) -> None:
         """Completed job returns result in completed list."""
         from crsbench.distributed.patch_queue import poll_patch_verdicts
 
-        # Mock Redis connection
         mock_conn = MagicMock()
-        mock_redis.Redis.return_value = mock_conn
+        mock_create_conn.return_value = mock_conn
 
         # Mock a finished job with result
         result_dict = {
@@ -278,15 +277,15 @@ class TestPollPatchVerdicts:
 
     @patch("crsbench.distributed.patch_queue.REDIS_AVAILABLE", new=True)
     @patch("crsbench.distributed.patch_queue.rq")
-    @patch("crsbench.distributed.patch_queue.redis")
+    @patch("crsbench.distributed.queue.create_redis_connection")
     def test_poll_patch_verdicts_pending(
-        self, mock_redis: MagicMock, mock_rq: MagicMock
+        self, mock_create_conn: MagicMock, mock_rq: MagicMock
     ) -> None:
         """Pending job returns empty completed, job ID in remaining."""
         from crsbench.distributed.patch_queue import poll_patch_verdicts
 
         mock_conn = MagicMock()
-        mock_redis.Redis.return_value = mock_conn
+        mock_create_conn.return_value = mock_conn
 
         mock_job = MagicMock()
         mock_job.get_status.return_value = "started"
@@ -299,15 +298,15 @@ class TestPollPatchVerdicts:
 
     @patch("crsbench.distributed.patch_queue.REDIS_AVAILABLE", new=True)
     @patch("crsbench.distributed.patch_queue.rq")
-    @patch("crsbench.distributed.patch_queue.redis")
+    @patch("crsbench.distributed.queue.create_redis_connection")
     def test_poll_patch_verdicts_failed(
-        self, mock_redis: MagicMock, mock_rq: MagicMock
+        self, mock_create_conn: MagicMock, mock_rq: MagicMock
     ) -> None:
         """Failed job returns error result in completed list."""
         from crsbench.distributed.patch_queue import poll_patch_verdicts
 
         mock_conn = MagicMock()
-        mock_redis.Redis.return_value = mock_conn
+        mock_create_conn.return_value = mock_conn
 
         mock_job = MagicMock()
         mock_job.get_status.return_value = "failed"

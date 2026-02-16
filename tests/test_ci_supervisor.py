@@ -171,22 +171,22 @@ class TestCiSupervisorQueues:
         assert "crsbench_ci_verify" in dequeue_calls[1]
 
 
-class TestWorkerCiAdapter:
-    """Test that the worker CI adapter exists and works."""
+class TestWorkerTrialAdapter:
+    """Test that the worker trial adapter exists and works."""
 
-    def test_ci_job_runner_exists(self) -> None:
-        """_ci_job_runner adapter exists in worker module."""
-        from crsbench.distributed.worker import _ci_job_runner
+    def test_trial_job_runner_exists(self) -> None:
+        """_trial_job_runner adapter exists in worker module."""
+        from crsbench.distributed.worker import _trial_job_runner
 
-        assert callable(_ci_job_runner)
+        assert callable(_trial_job_runner)
 
-    def test_ci_job_runner_signature(self) -> None:
-        """_ci_job_runner has the expected 3-arg signature."""
+    def test_trial_job_runner_signature(self) -> None:
+        """_trial_job_runner has the expected 3-arg signature."""
         import inspect
 
-        from crsbench.distributed.worker import _ci_job_runner
+        from crsbench.distributed.worker import _trial_job_runner
 
-        sig = inspect.signature(_ci_job_runner)
+        sig = inspect.signature(_trial_job_runner)
         params = list(sig.parameters.keys())
         assert params == ["redis_host", "child_name", "job_id"]
 
@@ -208,14 +208,14 @@ class TestEvaluatorCiAdapter:
 
         sig = inspect.signature(_evaluator_job_runner)
         params = list(sig.parameters.keys())
-        assert params == ["redis_host", "_child_name", "job_id"]
+        assert params == ["redis_host", "child_name", "job_id"]
 
 
-class TestWorkerCommandCiFlags:
-    """Test worker CLI flag validation."""
+class TestCiCliFlags:
+    """Test CLI flag changes for worker and evaluator."""
 
-    def test_ci_queue_choice_available(self) -> None:
-        """--queue accepts 'ci' as a valid choice."""
+    def test_queue_flag_removed(self) -> None:
+        """Worker no longer has --queue flag."""
         import argparse
 
         from crsbench.distributed.cli.worker_command import (
@@ -225,59 +225,11 @@ class TestWorkerCommandCiFlags:
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers()
         add_worker_subparser(subparsers)
-
-        # Should not raise
-        args = parser.parse_args(["worker", "--queue", "ci"])
-        assert args.queue == "ci"
-
-    def test_ci_build_queue_choice_removed(self) -> None:
-        """--queue no longer accepts 'ci-build'."""
-        import argparse
-
-        import pytest
-        from crsbench.distributed.cli.worker_command import (
-            add_worker_subparser,
-        )
-
-        parser = argparse.ArgumentParser()
-        subparsers = parser.add_subparsers()
-        add_worker_subparser(subparsers)
-
-        with pytest.raises(SystemExit):
-            parser.parse_args(["worker", "--queue", "ci-build"])
-
-    def test_build_jobs_flag_exists(self) -> None:
-        """--build-jobs flag is available."""
-        import argparse
-
-        from crsbench.distributed.cli.worker_command import (
-            add_worker_subparser,
-        )
-
-        parser = argparse.ArgumentParser()
-        subparsers = parser.add_subparsers()
-        add_worker_subparser(subparsers)
-
-        args = parser.parse_args(["worker", "--build-jobs", "32"])
-        assert args.build_jobs == 32
-
-    def test_build_cores_per_job_default(self) -> None:
-        """--build-cores-per-job defaults to 1."""
-        import argparse
-
-        from crsbench.distributed.cli.worker_command import (
-            add_worker_subparser,
-        )
-
-        parser = argparse.ArgumentParser()
-        subparsers = parser.add_subparsers()
-        add_worker_subparser(subparsers)
-
         args = parser.parse_args(["worker"])
-        assert args.build_cores_per_job == 1
+        assert not hasattr(args, "queue")
 
-    def test_verify_jobs_flag_exists(self) -> None:
-        """--verify-jobs flag is available."""
+    def test_build_jobs_removed_from_worker(self) -> None:
+        """Worker no longer has --build-jobs flag."""
         import argparse
 
         from crsbench.distributed.cli.worker_command import (
@@ -287,9 +239,50 @@ class TestWorkerCommandCiFlags:
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers()
         add_worker_subparser(subparsers)
+        args = parser.parse_args(["worker"])
+        assert not hasattr(args, "build_jobs")
 
-        args = parser.parse_args(["worker", "--verify-jobs", "128"])
-        assert args.verify_jobs == 128
+    def test_verify_jobs_removed_from_worker(self) -> None:
+        """Worker no longer has --verify-jobs flag."""
+        import argparse
+
+        from crsbench.distributed.cli.worker_command import (
+            add_worker_subparser,
+        )
+
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers()
+        add_worker_subparser(subparsers)
+        args = parser.parse_args(["worker"])
+        assert not hasattr(args, "verify_jobs")
+
+    def test_evaluator_ci_flag(self) -> None:
+        """Evaluator accepts --ci flag."""
+        import argparse
+
+        from crsbench.distributed.cli.evaluator_command import (
+            add_evaluator_subparser,
+        )
+
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers()
+        add_evaluator_subparser(subparsers)
+        args = parser.parse_args(["evaluator", "--ci"])
+        assert args.ci is True
+
+    def test_evaluator_experiment_config_optional(self) -> None:
+        """Evaluator --experiment-config is optional (for --ci mode)."""
+        import argparse
+
+        from crsbench.distributed.cli.evaluator_command import (
+            add_evaluator_subparser,
+        )
+
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers()
+        add_evaluator_subparser(subparsers)
+        args = parser.parse_args(["evaluator", "--ci"])
+        assert args.experiment_config is None
 
 
 class TestEvaluatorCommandCiFlags:
@@ -549,3 +542,13 @@ class TestHelperFunctions:
         from crsbench.distributed.ci_supervisor import _next_worker_num
 
         assert _next_worker_num({1, 2, 3}, 3) == 4
+
+    def test_check_disk_space_in_ci_supervisor(self) -> None:
+        """check_disk_space is importable from ci_supervisor."""
+        from pathlib import Path
+
+        from crsbench.distributed.ci_supervisor import check_disk_space
+
+        result = check_disk_space(Path("/tmp"))
+        assert isinstance(result, int)
+        assert result > 0

@@ -65,7 +65,6 @@ if TYPE_CHECKING:
     import argparse
 
     from crsbench.benchmark_ci.jobs.base import Job
-    from crsbench.executor.types import ExecutorResult
     from crsbench.validation.meta_adapter import MetaYamlAdapter
 
 logger = get_logger(__name__)
@@ -629,65 +628,24 @@ def run_all(args: argparse.Namespace) -> int:
     _log_dag_summary(all_jobs)
 
     if distributed:
-        # Distributed: 3-phase execution so all builds get full CPU allocation
-        from crsbench.benchmark_ci.cli.commands.build_cmd import (
-            _run_distributed_build,
-        )
+        # Single enqueue with per-job queue routing via RQ depends_on
         from crsbench.distributed.ci_jobs import (
             ci_results_to_executor_results,
             enqueue_and_poll_ci_jobs,
         )
-        from crsbench.executor.variant_planner import VariantPlanner
 
-        # --- Phase 1: Build all POV variants (build queue, multi-CPU) ---
-        planner = VariantPlanner(
-            oss_fuzz_path=Path("oss-fuzz"), source_mode=source_mode
-        )
-        vp_build_jobs = planner.plan_all_builds(
-            list(paths),
-            use_inc_build=use_inc_build,
-            force_rebuild=force_rebuild,
-            skip_if_cached=False,
-            include_coverage=inc_coverage,
-        )
-        logger.info(f"Phase 1/3: {len(vp_build_jobs)} POV variant builds")
-        build_results = _run_distributed_build(
-            vp_build_jobs, redis_host, output_dir=output_dir
-        )
-
-        # Separate patch builds from verify/test jobs
-        patch_build_jobs = [j for j in all_jobs if isinstance(j, BuildPatchVariantJob)]
-        verify_jobs = [
-            j
-            for j in all_jobs
-            if not isinstance(j, (BuildSingleVariantJob, BuildPatchVariantJob))
-        ]
-
-        # --- Phase 2: Build patch variants (build queue, multi-CPU) ---
-        patch_build_results: dict[str, ExecutorResult] = {}
-        if patch_build_jobs:
-            logger.info(f"Phase 2/3: {len(patch_build_jobs)} patch variant builds")
-            raw_patch = enqueue_and_poll_ci_jobs(
-                patch_build_jobs,
-                redis_host,
-                queue_name="crsbench_ci_build",
-                output_dir=output_dir,
+        def route_job(job: Job) -> str:
+            return (
+                "crsbench_ci_build" if job.job_type == "build" else "crsbench_ci_verify"
             )
-            patch_build_results = ci_results_to_executor_results(raw_patch)
-        else:
-            logger.info("Phase 2/3: no patch variant builds (skipped)")
 
-        # --- Phase 3: POV verification + patch testing (verify queue, 1 CPU) ---
-        logger.info(f"Phase 3/3: {len(verify_jobs)} verification/test jobs")
-        raw_verify = enqueue_and_poll_ci_jobs(
-            verify_jobs,
+        raw_results = enqueue_and_poll_ci_jobs(
+            all_jobs,
             redis_host,
-            queue_name="crsbench_ci_verify",
+            queue_name=route_job,
             output_dir=output_dir,
         )
-        verify_results = ci_results_to_executor_results(raw_verify)
-
-        dag_results = {**build_results, **patch_build_results, **verify_results}
+        dag_results = ci_results_to_executor_results(raw_results)
     else:
         # Local: execute full DAG sequentially
         from crsbench.benchmark_ci.executor import execute_jobs_locally

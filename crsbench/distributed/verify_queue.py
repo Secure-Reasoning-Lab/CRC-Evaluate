@@ -11,15 +11,12 @@ fine-grained parallelism and individual retry.
 import time
 from typing import Any, Optional
 
+from crsbench.distributed.queue import REDIS_AVAILABLE
 from crsbench.utils.logger import get_logger
 
-try:
+if REDIS_AVAILABLE:
     import rq
     import rq.job
-
-    REDIS_AVAILABLE = True
-except ImportError:
-    REDIS_AVAILABLE = False
 
 logger = get_logger(__name__)
 
@@ -43,6 +40,9 @@ def initialize_verify_queue(
         logger.debug("Redis/RQ packages not installed, verify queue unavailable")
         return None
 
+    from crsbench.distributed.queue import validate_queue_name_component
+
+    validate_queue_name_component(experiment_name)
     queue_name = f"crsbench_{experiment_name}_verify"
     try:
         from crsbench.distributed.queue import create_redis_connection
