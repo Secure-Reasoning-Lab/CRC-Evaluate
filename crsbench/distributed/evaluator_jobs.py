@@ -374,8 +374,8 @@ def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
         )
 
         crash_logs: dict[str, str] = {}
-        if result.crash_info and "logs" in result.crash_info:
-            crash_logs = result.crash_info["logs"]
+        if result.crash_info and "stdout" in result.crash_info:
+            crash_logs = result.crash_info["stdout"]
 
         verdict = PovVerdict(
             pov_id=pov.pov_id,

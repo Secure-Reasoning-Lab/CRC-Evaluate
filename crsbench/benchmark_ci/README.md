@@ -173,15 +173,28 @@ polls until all complete. Workers dequeue and execute jobs independently.
 
 ### Step-by-Step Setup
 
-#### 1. Start Redis
+#### 1. Start Valkey (Redis)
+
+CRSBench uses Valkey (Redis-compatible) for job queues. Use the helper script:
 
 ```bash
-# Using Docker
-docker run -d --name redis -p 6379:6379 redis:7
+# Local development (localhost:6379, no auth)
+python scripts/valkey-helper.py start
 
-# Or system Redis
-redis-server
+# Multi-machine setup (0.0.0.0:6379, password auth)
+python scripts/valkey-helper.py --password start
+# Copy .env to worker machines: scp .env user@worker:/path/to/CRSBench/.env
+
+# Check status
+python scripts/valkey-helper.py status
+
+# Queue management
+python scripts/valkey-helper.py list-queues
+python scripts/valkey-helper.py clean my-experiment
+python scripts/valkey-helper.py clean-all
 ```
+
+For manual Redis setup: `docker run -d --name redis -p 6379:6379 redis:7`
 
 #### 2. Start Worker(s)
 
@@ -219,7 +232,8 @@ crsbench evaluator --ci --redis-host redis.internal \
 | `--redis-host HOST` | Redis server hostname | localhost |
 | `--build-jobs N` | Max concurrent build jobs | value of -j |
 | `--build-cores-per-job M` | CPUs per build job | 1 |
-| `--verify-jobs K` | Max concurrent verify/test jobs | build-jobs * cores |
+| `--verify-jobs K` | Max concurrent verify/test jobs | build-jobs * build-cores / verify-cores |
+| `--verify-cores-per-job M` | CPUs per verify/test job | 1 |
 | `--cores CORES` | CPU count or cpuset range (e.g., `0-63`) | all |
 | `--skip-cpus CPUSET` | CPUs to exclude (e.g., `0-3`) | none |
 | `--continuous` | Keep running after queue drains | off |
@@ -275,7 +289,7 @@ crsbench ci all --all --distributed
 
 | Variable | Description |
 |----------|-------------|
-| `REDIS_PASSWORD` | Redis password (if auth enabled) |
+| `REDIS_PASSWORD` | Redis password (if auth enabled; auto-loaded from `.env` when using valkey-helper) |
 | `CRSBENCH_BUILD_WORKERS` | Default build workers (overridden by CLI) |
 | `CRSBENCH_VERIFY_WORKERS` | Default verify workers (overridden by CLI) |
 | `CRSBENCH_CONTROLLER_CORES` | CPU cores for controller monitoring |

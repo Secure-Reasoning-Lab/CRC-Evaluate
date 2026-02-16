@@ -391,7 +391,9 @@ def _build_dag(
                     all_jobs.append(unittest_full_job)
 
                     # Step 2d: P:RTS - RTS unit tests (if available, parallel to others)
-                    if rts_mode:
+                    # RTS requires inc-build images with /rts_config_jvm.py;
+                    # skip job creation when inc-build is disabled (--no-inc-build)
+                    if rts_mode and effective_inc:
                         unittest_rts_job = PatchUnitTestJob(
                             benchmark_path=path,
                             benchmark_name=benchmark_name,
@@ -491,6 +493,7 @@ def _aggregate_benchmark(
     build_job_ids: list[str],
     *,
     inc_coverage: bool = False,
+    use_inc_build: bool = True,
 ) -> BenchmarkValidationResult:
     """Aggregate DAG results into a single BenchmarkValidationResult."""
     benchmark_name = path.name
@@ -523,10 +526,13 @@ def _aggregate_benchmark(
         dag_results, benchmark_name, patch_keys, test_mode="FULL"
     )
 
-    if rts_mode:
+    effective_inc = supports_inc and use_inc_build
+    if rts_mode and effective_inc:
         rts_result = aggregate_patch_results(
             dag_results, benchmark_name, patch_keys, test_mode="RTS"
         )
+    elif rts_mode:
+        rts_result = CheckResult.skip("RTS skipped: inc-build disabled")
     else:
         rts_result = CheckResult.skip("No RTS mode")
 
@@ -677,6 +683,7 @@ def run_all(args: argparse.Namespace) -> int:
                 start_dt,
                 build_job_ids,
                 inc_coverage=inc_coverage,
+                use_inc_build=use_inc_build,
             )
         )
 

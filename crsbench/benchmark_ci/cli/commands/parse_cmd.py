@@ -201,6 +201,78 @@ def _reparse_split_pov_results(
     return pov_build_check, pov_pov_check
 
 
+def _reparse_pov_var_results(
+    output_dir: Path, benchmark_name: str
+) -> Optional[CheckResult]:
+    """Re-parse job logs to extract POV variant results (pov_1+).
+
+    Scans verify/ directory for verify-cpv-var logs.
+
+    Args:
+        output_dir: CI output directory
+        benchmark_name: Name of the benchmark
+
+    Returns:
+        pov_var_check CheckResult or None
+    """
+    verify_dir = output_dir / benchmark_name / "verify"
+    if not verify_dir.exists():
+        return None
+
+    var_passed = 0
+    var_total = 0
+    failures: list[str] = []
+    verify_time = 0.0
+    has_results = False
+
+    for log_path in verify_dir.glob("verify-cpv-var-*.log"):
+        if ".stdout" in log_path.name or ".stderr" in log_path.name:
+            continue
+
+        content = log_path.read_text()
+        elapsed_match = re.search(r"Elapsed:\s*([\d.]+)s", content)
+        if elapsed_match:
+            verify_time += float(elapsed_match.group(1))
+
+        details = _parse_job_log(log_path)
+        if details is None:
+            continue
+
+        cpv_var_passed = details.get("var_passed", 0)
+        cpv_var_total = details.get("var_total", 0)
+        if cpv_var_total > 0:
+            has_results = True
+            var_passed += cpv_var_passed
+            var_total += cpv_var_total
+            if cpv_var_passed < cpv_var_total:
+                cpv_match = re.search(r"cpv_\d+", log_path.name)
+                cpv_id = cpv_match.group() if cpv_match else "unknown"
+                failures.append(f"{cpv_id}: {cpv_var_passed}/{cpv_var_total} variants")
+
+    if not has_results or var_total == 0:
+        return None
+
+    if failures:
+        return CheckResult(
+            status=CheckStatus.FAIL,
+            time_seconds=verify_time,
+            verify_time=verify_time,
+            error="; ".join(failures[:3]),
+            details={
+                "var_passed": var_passed,
+                "var_total": var_total,
+                "failures": failures,
+            },
+        )
+
+    return CheckResult(
+        status=CheckStatus.PASS,
+        time_seconds=verify_time,
+        verify_time=verify_time,
+        details={"var_passed": var_passed, "var_total": var_total},
+    )
+
+
 def _reparse_split_patch_results(
     output_dir: Path, benchmark_name: str
 ) -> tuple[Optional[CheckResult], Optional[CheckResult], Optional[CheckResult]]:
@@ -266,41 +338,79 @@ def _reparse_split_patch_results(
                 cpv_id = details.get("cpv_id", "unknown")
                 build_errors.append(f"{cpv_id}: build failed")
 
-    # Parse test-patch FULL logs
+    # Parse patch test logs from verify/ directory
     if verify_dir.exists():
-        for log_path in verify_dir.glob("test-patch-*-FULL.log"):
-            details = _parse_job_log(log_path)
-            if details is None:
-                continue
+        # Try new split format first: test-patch-pov-*.log
+        pov_logs = list(verify_dir.glob("test-patch-pov-*.log"))
+        unittest_logs = list(verify_dir.glob("test-patch-unittest-*-FULL.log"))
 
-            # Extract elapsed time from header
-            content = log_path.read_text()
-            elapsed_match = re.search(r"Elapsed:\s*([\d.]+)s", content)
-            elapsed = float(elapsed_match.group(1)) if elapsed_match else 0.0
+        if pov_logs:
+            # New split format
+            for log_path in pov_logs:
+                if ".stdout" in log_path.name or ".stderr" in log_path.name:
+                    continue
+                details = _parse_job_log(log_path)
+                if details is None:
+                    continue
 
-            cpv_id = details.get("cpv_id", "unknown")
+                content = log_path.read_text()
+                elapsed_match = re.search(r"Elapsed:\s*([\d.]+)s", content)
+                elapsed = float(elapsed_match.group(1)) if elapsed_match else 0.0
 
-            # POV test result - use specific time if available
-            pov_passed = details.get("pov_test_passed", False)
-            pov_results.append(pov_passed)
-            if not pov_passed:
-                pov_errors.append(f"{cpv_id}: POV still triggers")
-            # Use pov_test_time if available, otherwise fall back to elapsed
-            pov_test_time = details.get("pov_test_time", 0.0)
-            pov_time += pov_test_time if pov_test_time > 0 else elapsed
+                cpv_id = details.get("cpv_id", "unknown")
+                pov_passed = details.get("pov_0_passed", False)
+                pov_results.append(pov_passed)
+                if not pov_passed:
+                    pov_errors.append(f"{cpv_id}: POV still triggers")
+                pov_test_time = details.get("pov_test_time", 0.0)
+                pov_time += pov_test_time if pov_test_time > 0 else elapsed
 
-            # Unit test result (may be null if POV failed first)
-            unittest_value = details.get("unit_tests_passed")
-            if unittest_value is None:
-                # Unit tests weren't run (POV failed first) - skip this
-                pass
-            else:
-                unittest_results.append(unittest_value)
-                if not unittest_value:
-                    unittest_errors.append(f"{cpv_id}: unit tests failed")
-                # Use unit_test_time if available
-                unit_test_time = details.get("unit_test_time", 0.0)
-                unittest_time += unit_test_time if unit_test_time > 0 else elapsed
+            for log_path in unittest_logs:
+                if ".stdout" in log_path.name or ".stderr" in log_path.name:
+                    continue
+                details = _parse_job_log(log_path)
+                if details is None:
+                    continue
+
+                content = log_path.read_text()
+                elapsed_match = re.search(r"Elapsed:\s*([\d.]+)s", content)
+                elapsed = float(elapsed_match.group(1)) if elapsed_match else 0.0
+
+                cpv_id = details.get("cpv_id", "unknown")
+                unittest_value = details.get("unit_tests_passed")
+                if unittest_value is not None:
+                    unittest_results.append(unittest_value)
+                    if not unittest_value:
+                        unittest_errors.append(f"{cpv_id}: unit tests failed")
+                    unit_test_time = details.get("unit_test_time", 0.0)
+                    unittest_time += unit_test_time if unit_test_time > 0 else elapsed
+        else:
+            # Fallback: old combined format test-patch-*-FULL.log
+            for log_path in verify_dir.glob("test-patch-*-FULL.log"):
+                details = _parse_job_log(log_path)
+                if details is None:
+                    continue
+
+                content = log_path.read_text()
+                elapsed_match = re.search(r"Elapsed:\s*([\d.]+)s", content)
+                elapsed = float(elapsed_match.group(1)) if elapsed_match else 0.0
+
+                cpv_id = details.get("cpv_id", "unknown")
+
+                pov_passed = details.get("pov_test_passed", False)
+                pov_results.append(pov_passed)
+                if not pov_passed:
+                    pov_errors.append(f"{cpv_id}: POV still triggers")
+                pov_test_time = details.get("pov_test_time", 0.0)
+                pov_time += pov_test_time if pov_test_time > 0 else elapsed
+
+                unittest_value = details.get("unit_tests_passed")
+                if unittest_value is not None:
+                    unittest_results.append(unittest_value)
+                    if not unittest_value:
+                        unittest_errors.append(f"{cpv_id}: unit tests failed")
+                    unit_test_time = details.get("unit_test_time", 0.0)
+                    unittest_time += unit_test_time if unit_test_time > 0 else elapsed
 
     # Build CheckResults from aggregated data
     patch_build_check = None
@@ -361,6 +471,80 @@ def _reparse_split_patch_results(
         patch_unittest_check = CheckResult.skip("POV failed, unit tests skipped")
 
     return patch_build_check, patch_pov_check, patch_unittest_check
+
+
+def _reparse_patch_var_results(
+    output_dir: Path, benchmark_name: str
+) -> Optional[CheckResult]:
+    """Re-parse job logs to extract patch variant results (pov_1+).
+
+    Scans verify/ directory for test-patch-var logs.
+
+    Args:
+        output_dir: CI output directory
+        benchmark_name: Name of the benchmark
+
+    Returns:
+        patch_var_check CheckResult or None
+    """
+    verify_dir = output_dir / benchmark_name / "verify"
+    if not verify_dir.exists():
+        return None
+
+    var_passed = 0
+    var_total = 0
+    failures: list[str] = []
+    verify_time = 0.0
+    has_results = False
+
+    for log_path in verify_dir.glob("test-patch-var-*.log"):
+        if ".stdout" in log_path.name or ".stderr" in log_path.name:
+            continue
+
+        content = log_path.read_text()
+        elapsed_match = re.search(r"Elapsed:\s*([\d.]+)s", content)
+        if elapsed_match:
+            verify_time += float(elapsed_match.group(1))
+
+        details = _parse_job_log(log_path)
+        if details is None:
+            continue
+
+        cpv_var_passed = details.get("var_passed", 0)
+        cpv_var_total = details.get("var_total", 0)
+        if cpv_var_total > 0:
+            has_results = True
+            var_passed += cpv_var_passed
+            var_total += cpv_var_total
+            if cpv_var_passed < cpv_var_total:
+                cpv_id = details.get("cpv_id", "unknown")
+                patch_id = details.get("patch_id", "unknown")
+                failures.append(
+                    f"{cpv_id}/{patch_id}: {cpv_var_passed}/{cpv_var_total} variants"
+                )
+
+    if not has_results or var_total == 0:
+        return None
+
+    if failures:
+        return CheckResult(
+            status=CheckStatus.FAIL,
+            time_seconds=verify_time,
+            verify_time=verify_time,
+            error="; ".join(failures[:3]),
+            details={
+                "var_passed": var_passed,
+                "var_total": var_total,
+                "failures": failures,
+            },
+        )
+
+    return CheckResult(
+        status=CheckStatus.PASS,
+        time_seconds=verify_time,
+        verify_time=verify_time,
+        details={"var_passed": var_passed, "var_total": var_total},
+    )
 
 
 def _load_summary_from_output_dir(
@@ -425,9 +609,14 @@ def _load_summary_from_output_dir(
             if patch_unittest_check is None:
                 patch_unittest_check = reparsed_patch[2]
 
-        # Parse POV variant check result from JSON
+        # Parse POV variant check result from JSON, reparse if missing
         pov_var_check = _parse_check_result(r.get("pov_var_check"))
+        if reparse_logs and pov_var_check is None:
+            pov_var_check = _reparse_pov_var_results(output_dir, benchmark_name)
+
         patch_var_check = _parse_check_result(r.get("patch_var_check"))
+        if reparse_logs and patch_var_check is None:
+            patch_var_check = _reparse_patch_var_results(output_dir, benchmark_name)
 
         # Parse variant check results
         pov_inc_check = _parse_check_result(r.get("pov_inc_check"))

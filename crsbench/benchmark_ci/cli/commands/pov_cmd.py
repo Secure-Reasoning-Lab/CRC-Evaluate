@@ -19,7 +19,11 @@ from crsbench.benchmark_ci.cli.common_args import (
 )
 from crsbench.benchmark_ci.cli.discovery import resolve_benchmark_paths
 from crsbench.benchmark_ci.cli.output import print_results_table, save_output_dir
-from crsbench.benchmark_ci.cli.result_aggregator import aggregate_pov_results
+from crsbench.benchmark_ci.cli.result_aggregator import (
+    aggregate_pov_build_results,
+    aggregate_pov_pov_results,
+    aggregate_pov_var_results,
+)
 from crsbench.benchmark_ci.jobs.flat import (
     BuildSingleVariantJob,
     VerifyCpvPovJob,
@@ -150,7 +154,9 @@ def run_pov(args: argparse.Namespace) -> int:
         _patch_keys,
         build_job_ids,
     ) in benchmark_metadata:
-        pov_result = aggregate_pov_results(dag_results, path.name, cpv_ids)
+        pov_build = aggregate_pov_build_results(dag_results, path.name)
+        pov_pov = aggregate_pov_pov_results(dag_results, path.name, cpv_ids)
+        pov_var = aggregate_pov_var_results(dag_results, path.name, cpv_ids)
 
         # Collect build time from BuildSingleVariantJob results
         shared_build = 0.0
@@ -169,7 +175,9 @@ def run_pov(args: argparse.Namespace) -> int:
             BenchmarkValidationResult(
                 benchmark=path.name,
                 benchmark_path=path,
-                pov_check=pov_result,
+                pov_build_check=pov_build,
+                pov_pov_check=pov_pov,
+                pov_var_check=pov_var,
                 shared_build_time=shared_build,
                 storage_bytes=storage_bytes,
                 supports_inc_build=supports_inc,

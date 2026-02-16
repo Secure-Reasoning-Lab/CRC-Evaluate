@@ -1,10 +1,8 @@
-"""Shared dual-queue CI supervisor for worker and evaluator.
+"""Dual-queue CI supervisor for evaluator.
 
-Both ``crsbench worker`` and ``crsbench evaluator --ci`` share the same
-core loop: dequeue from a *build* queue and a *verify* queue with independent
-concurrency limits and per-queue CPU allocations.
-
-This module extracts that common loop so both commands reuse it.
+``crsbench evaluator --ci`` uses this supervisor to dequeue from a *build*
+queue and a *verify* queue with independent concurrency limits and per-queue
+CPU allocations.
 """
 
 from __future__ import annotations
@@ -84,7 +82,7 @@ def run_ci_supervisor(
     disk_check_interval: int = 60,
     continuous: bool = True,
 ) -> int:
-    """Dual-queue supervisor shared by worker and evaluator.
+    """Dual-queue supervisor for evaluator CI mode.
 
     Dequeues from *build_queue_name* (priority) and *verify_queue_name*,
     enforcing separate concurrency limits and CPU-per-job allocations.

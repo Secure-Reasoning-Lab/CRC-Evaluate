@@ -477,7 +477,7 @@ class VerificationEngine:
             # Attach stdout/stderr logs to result
             crash_info: dict[str, dict[str, str]] = {}
             if stdout_logs:
-                crash_info["logs"] = stdout_logs
+                crash_info["stdout"] = stdout_logs
             if stderr_logs:
                 crash_info["stderr"] = stderr_logs
             if crash_info:

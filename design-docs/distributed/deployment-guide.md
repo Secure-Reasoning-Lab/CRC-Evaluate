@@ -204,7 +204,7 @@ crsbench evaluator --experiment-config config.yaml --experiment-name my-exp
 
 ## Distributed CI Builds
 
-The `crsbench ci build` command supports distributing builds to remote workers:
+The `crsbench ci` command supports distributing builds to remote evaluators:
 
 ```bash
 # On Machine A (with Redis running)
@@ -213,11 +213,13 @@ crsbench ci build --all \
   --redis-host localhost
 
 # On Machine B (with SSH tunnel)
-# Start a generic RQ worker that can process build jobs
-rq worker crsbench_ci_build
+crsbench evaluator --ci --redis-host localhost \
+  --build-jobs 8 --build-cores-per-job 4 \
+  --verify-cores-per-job 2 \
+  --continuous
 ```
 
-This enqueues `BuildSingleVariantJob` instances to the `crsbench_ci_build` queue. Remote workers execute the builds and report results back.
+The submitter enqueues jobs to Redis build/verify queues. Evaluators running `crsbench evaluator --ci` dequeue and execute them. See `crsbench/benchmark_ci/README.md` for full worker options.
 
 ## Post-Experiment Evaluation
 
