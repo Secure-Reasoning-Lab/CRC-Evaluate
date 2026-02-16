@@ -272,8 +272,5 @@ crsbench/_submodule_commits.py
 #benchmarks/*/pkgs/
 #ref.diff
 
-# Downloaded HuggingFace benchmark datasets (keep sanity-* in git)
-benchmarks/afc-*
-benchmarks/atlanta-*
-benchmarks/asc-*
-benchmarks/cp-*
+# Benchmarks are distributed via HuggingFace (sanity-mock-* tracked in git)
+benchmarks/
