@@ -269,8 +269,8 @@ crsbench/_submodule_commits.py
 *.old
 
 # Benchmark artifacts
-benchmarks/*/pkgs/
-ref.diff
+#benchmarks/*/pkgs/
+#ref.diff
 
 # Downloaded HuggingFace benchmark datasets (keep sanity-* in git)
 benchmarks/afc-*

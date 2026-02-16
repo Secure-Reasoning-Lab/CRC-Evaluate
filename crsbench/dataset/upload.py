@@ -1,8 +1,10 @@
 """Upload CRSBench benchmarks to storage backends."""
 
+import tempfile
 from pathlib import Path
 
 from crsbench.dataset.backends import upload
+from crsbench.dataset.bundle import bundle_all_benchmarks
 from crsbench.dataset.registry import DatasetConfig, get_dataset
 from crsbench.utils.logger import get_logger
 
@@ -15,23 +17,20 @@ def upload_dataset(
     *,
     dry_run: bool = False,
 ) -> None:
-    """Upload benchmark directories to the configured backend.
+    """Bundle and upload benchmark directories to the configured backend.
+
+    Each benchmark is split into 3 tarballs (benchmark.tar.gz, pkgs.tar.gz,
+    ground-truth.tar.gz) before upload to minimize HuggingFace API calls.
 
     Args:
-        dataset: Dataset short name (e.g., "team-atlanta", "afc")
+        dataset: Dataset short name (e.g., "crsbench")
         benchmarks_dir: Path to the benchmarks/ directory
         dry_run: If True, only list what would be uploaded
     """
     config = get_dataset(dataset)
 
-    # Build allow_patterns from prefixes
-    allow_patterns = [f"{prefix}*/**" for prefix in config.prefixes]
-
     # List matching directories for logging
-    matching = []
-    for prefix in config.prefixes:
-        matching.extend(sorted(benchmarks_dir.glob(f"{prefix}*")))
-    matching = [d for d in matching if d.is_dir()]
+    matching = _find_matching_benchmarks(benchmarks_dir, config.prefixes)
 
     logger.info(f"Dataset: {dataset} -> {config.location} ({config.backend})")
     logger.info(f"Matching benchmarks: {len(matching)}")
@@ -42,18 +41,35 @@ def upload_dataset(
 
     if dry_run:
         for d in matching:
-            logger.info(f"  [dry-run] would upload: {d.name}")
+            logger.info(f"  [dry-run] would bundle and upload: {d.name}")
         if config.cards_dir:
             _upload_card_files(config, Path(config.cards_dir), dry_run=True)
         return
 
-    logger.info(f"Uploading {len(matching)} benchmarks to {config.location}...")
-    upload(config, benchmarks_dir, allow_patterns=allow_patterns)
+    # Bundle into a temp staging directory, then upload
+    with tempfile.TemporaryDirectory(prefix="crsbench-upload-") as tmpdir:
+        staging_dir = Path(tmpdir)
+        logger.info(f"Bundling {len(matching)} benchmarks...")
+        count = bundle_all_benchmarks(
+            benchmarks_dir, staging_dir, prefixes=config.prefixes
+        )
+        logger.info(f"Bundled {count} benchmarks, uploading to {config.location}...")
+
+        upload(config, staging_dir)
+
     logger.info(f"Upload complete: {config.location}")
 
     # Upload dataset card files (README.md, LICENSE-THIRD-PARTY.md, etc.)
     if config.cards_dir:
         _upload_card_files(config, Path(config.cards_dir))
+
+
+def _find_matching_benchmarks(benchmarks_dir: Path, prefixes: list[str]) -> list[Path]:
+    """Find benchmark directories matching any of the given prefixes."""
+    matching = []
+    for prefix in prefixes:
+        matching.extend(sorted(benchmarks_dir.glob(f"{prefix}*")))
+    return [d for d in matching if d.is_dir()]
 
 
 def _upload_card_files(

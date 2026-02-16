@@ -29,6 +29,7 @@ Examples:
   crsbench download --dataset crsbench
   crsbench download --dataset crsbench --benchmarks afc-curl-delta-01
   crsbench download --benchmark-suite sanity
+  crsbench download --all --no-ground-truth  # skip .aixcc/ ground truth
   crsbench download --all --output-dir /tmp/benchmarks
         """,
     )
@@ -68,6 +69,13 @@ Examples:
     )
 
     parser.add_argument(
+        "--no-ground-truth",
+        action="store_true",
+        dest="no_ground_truth",
+        help="Skip downloading ground-truth.tar.gz (.aixcc/ directory)",
+    )
+
+    parser.add_argument(
         "--benchmark-suites-root",
         type=Path,
         default=Path("benchmark-suites"),
@@ -102,7 +110,10 @@ def run_download(args: argparse.Namespace) -> int:
     if args.download_all:
         from crsbench.dataset.download import download_all
 
-        download_all(args.output_dir)
+        download_all(
+            args.output_dir,
+            no_ground_truth=args.no_ground_truth,
+        )
     elif args.benchmark_suite:
         from crsbench.dataset.download import download_suite
 
@@ -110,10 +121,16 @@ def run_download(args: argparse.Namespace) -> int:
             args.benchmark_suite,
             args.output_dir,
             args.benchmark_suites_root,
+            no_ground_truth=args.no_ground_truth,
         )
     else:
         from crsbench.dataset.download import download_dataset
 
-        download_dataset(args.dataset, args.output_dir, benchmarks=args.benchmarks)
+        download_dataset(
+            args.dataset,
+            args.output_dir,
+            benchmarks=args.benchmarks,
+            no_ground_truth=args.no_ground_truth,
+        )
 
     return 0

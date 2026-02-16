@@ -1,9 +1,11 @@
 """Download CRSBench benchmarks from HuggingFace."""
 
+import tempfile
 from pathlib import Path
 from typing import Optional
 
 from crsbench.dataset.backends import download
+from crsbench.dataset.bundle import ALL_ARCHIVES, unbundle_all
 from crsbench.dataset.registry import get_dataset, get_dataset_names, resolve_prefix
 from crsbench.utils.logger import get_logger
 
@@ -63,49 +65,119 @@ def _group_by_dataset(benchmarks: list[str]) -> dict[str, list[str]]:
     return grouped
 
 
+def _is_bundled_dataset(download_dir: Path) -> bool:
+    """Check if a downloaded dataset uses the bundled format.
+
+    A bundled dataset has per-benchmark directories containing
+    benchmark.tar.gz, pkgs.tar.gz, and/or ground-truth.tar.gz.
+    """
+    for subdir in download_dir.iterdir():
+        if not subdir.is_dir():
+            continue
+        if any((subdir / name).exists() for name in ALL_ARCHIVES):
+            return True
+    return False
+
+
 def download_dataset(
     dataset: str,
     output_dir: Path,
     *,
     benchmarks: Optional[list[str]] = None,
+    no_ground_truth: bool = False,
 ) -> Path:
-    """Download a benchmark dataset.
+    """Download a benchmark dataset and extract bundles.
+
+    Downloads per-benchmark bundles from HuggingFace, then extracts them
+    into the output directory.
 
     Args:
-        dataset: Dataset short name (e.g., "team-atlanta", "afc")
-        output_dir: Directory to download benchmarks into
+        dataset: Dataset short name (e.g., "crsbench")
+        output_dir: Directory to place extracted benchmarks
         benchmarks: Optional list of specific benchmark names to download
+        no_ground_truth: If True, skip downloading ground-truth.tar.gz
 
     Returns:
-        Path to the downloaded dataset directory
+        Path to the output directory
     """
     config = get_dataset(dataset)
     logger.info(f"Downloading dataset {dataset!r} from {config.location}")
 
-    allow_patterns = None
+    # Build allow_patterns for selective download
+    allow_patterns = _build_allow_patterns(benchmarks, no_ground_truth=no_ground_truth)
+
     if benchmarks:
-        allow_patterns = [f"{name}/**" for name in benchmarks]
         logger.info(f"Downloading {len(benchmarks)} benchmarks")
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Download bundles to a temp directory, then extract
+    with tempfile.TemporaryDirectory(prefix="crsbench-download-") as tmpdir:
+        staging_dir = Path(tmpdir)
+        download(config, staging_dir, allow_patterns=allow_patterns)
 
-    result = download(config, output_dir, allow_patterns=allow_patterns)
-    logger.info(f"Downloaded to: {result}")
-    return result
+        if _is_bundled_dataset(staging_dir):
+            logger.info("Extracting bundles...")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            count = unbundle_all(staging_dir, output_dir)
+            logger.info(f"Extracted {count} benchmarks to {output_dir}")
+        else:
+            # Legacy flat format — move files directly
+            logger.info("Legacy format detected, copying files...")
+            _copy_tree(staging_dir, output_dir)
+
+    return output_dir
 
 
-def download_all(output_dir: Path) -> list[Path]:
+def _build_allow_patterns(
+    benchmarks: Optional[list[str]],
+    *,
+    no_ground_truth: bool = False,
+) -> list[str]:
+    """Build HuggingFace allow_patterns for selective download."""
+    patterns = []
+
+    if benchmarks:
+        prefixes = benchmarks
+    else:
+        prefixes = ["*"]
+
+    for prefix in prefixes:
+        patterns.append(f"{prefix}/benchmark.tar.gz")
+        if not no_ground_truth:
+            patterns.append(f"{prefix}/ground-truth.tar.gz")
+
+    return patterns
+
+
+def _copy_tree(src: Path, dst: Path) -> None:
+    """Copy directory tree, handling the legacy flat download format."""
+    import shutil
+
+    dst.mkdir(parents=True, exist_ok=True)
+    for item in src.iterdir():
+        target = dst / item.name
+        if item.is_dir():
+            shutil.copytree(str(item), str(target), dirs_exist_ok=True)
+        else:
+            shutil.copy2(str(item), str(target))
+
+
+def download_all(
+    output_dir: Path,
+    *,
+    no_ground_truth: bool = False,
+) -> list[Path]:
     """Download all benchmark datasets.
 
     Args:
         output_dir: Directory to download benchmarks into
+        no_ground_truth: If True, skip downloading ground-truth.tar.gz
 
     Returns:
         List of paths to downloaded dataset directories
     """
     results = []
     for name in get_dataset_names():
-        path = download_dataset(name, output_dir)
+        path = download_dataset(name, output_dir, no_ground_truth=no_ground_truth)
         results.append(path)
     return results
 
@@ -114,6 +186,8 @@ def download_suite(
     suite_name: str,
     output_dir: Path,
     suites_root: Path,
+    *,
+    no_ground_truth: bool = False,
 ) -> list[Path]:
     """Download benchmarks specified in a benchmark suite.
 
@@ -121,6 +195,7 @@ def download_suite(
         suite_name: Suite name (e.g., "afc-all", "sanity")
         output_dir: Directory to download benchmarks into
         suites_root: Root directory containing suite YAML files
+        no_ground_truth: If True, skip downloading ground-truth.tar.gz
 
     Returns:
         List of paths to downloaded dataset directories
@@ -133,6 +208,11 @@ def download_suite(
     results = []
     for dataset, names in sorted(grouped.items()):
         logger.info(f"Downloading {len(names)} benchmarks from {dataset}")
-        path = download_dataset(dataset, output_dir, benchmarks=names)
+        path = download_dataset(
+            dataset,
+            output_dir,
+            benchmarks=names,
+            no_ground_truth=no_ground_truth,
+        )
         results.append(path)
     return results
