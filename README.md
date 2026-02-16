@@ -18,6 +18,7 @@ uv sync
 uv sync --extra dataset
 huggingface-cli login
 crsbench download --all                     # all 134 benchmarks (~12GB)
+crsbench download --all --no-ground-truth   # skip .aixcc/ ground truth
 crsbench download --benchmark-suite sanity  # small test suite
 
 # Run an experiment (requires Valkey/Redis for job queue)
@@ -53,9 +54,14 @@ crsbench stats     --output stats.csv
 
 ```bash
 crsbench download --all                                        # all benchmarks
+crsbench download --all --no-ground-truth                      # skip .aixcc/ ground truth
 crsbench download --dataset crsbench --benchmarks afc-curl-delta-01  # specific
 crsbench download --benchmark-suite sanity                     # suite
 ```
+
+Each benchmark is stored as two tarballs: `benchmark.tar.gz` (project files, build scripts,
+source packages) and `ground-truth.tar.gz` (`.aixcc/` vulnerability metadata and patches).
+Use `--no-ground-truth` for blind CRS evaluation without vulnerability answers.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for developer commands (`crsbench benchmark`, `crsbench ci`).
 

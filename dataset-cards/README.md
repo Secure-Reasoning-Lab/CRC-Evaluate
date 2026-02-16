@@ -65,18 +65,37 @@ Install CRSBench and download:
 
 ```bash
 pip install 'crsbench[dataset]'
-crsbench download --all
+crsbench download --all                     # all benchmarks with ground truth
+crsbench download --all --no-ground-truth   # skip .aixcc/ ground truth
+crsbench download --benchmark-suite sanity  # download a suite
+crsbench download --dataset crsbench --benchmarks afc-curl-delta-01  # specific benchmark
 ```
+
+Each benchmark is stored as two tarballs:
+- `benchmark.tar.gz` — project files, build scripts, and source packages
+- `ground-truth.tar.gz` — `.aixcc/` vulnerability metadata and patches
+
+Use `--no-ground-truth` to download only the project files without
+vulnerability answers (useful for blind CRS evaluation).
 
 Or use `huggingface_hub` directly:
 
 ```python
 from huggingface_hub import snapshot_download
 
+# All benchmarks with ground truth
 snapshot_download(
     repo_id="sslab-gatech/crsbench-dataset",
     repo_type="dataset",
     local_dir="benchmarks/",
+)
+
+# Without ground truth
+snapshot_download(
+    repo_id="sslab-gatech/crsbench-dataset",
+    repo_type="dataset",
+    local_dir="benchmarks/",
+    allow_patterns=["*/benchmark.tar.gz"],
 )
 ```
 

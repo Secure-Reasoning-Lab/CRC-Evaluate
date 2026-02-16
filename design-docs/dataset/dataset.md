@@ -23,30 +23,53 @@ crsbench/dataset/
 ├── __init__.py
 ├── registry.py      # DatasetConfig + DATASET_REGISTRY
 ├── backends.py      # Backend dispatch (HuggingFace, S3, Azure)
+├── bundle.py        # Bundle/unbundle benchmarks into tarballs
 ├── download.py      # download_dataset, download_all, download_suite
 ├── upload.py        # upload_dataset with dry-run + card file upload
 └── cli.py           # CLI: crsbench download (top-level command)
 ```
 
-### 2.1 Data Flow
+### 2.1 Bundle Format
+
+Each benchmark is stored as two tarballs on HuggingFace:
+
+- **`benchmark.tar.gz`** — Everything except `.aixcc/` (Dockerfile, build scripts,
+  `pkgs/` source tarballs, harnesses, etc.)
+- **`ground-truth.tar.gz`** — `.aixcc/` directory (vulnerability metadata, patches,
+  POVs)
+
+This separation allows downloading benchmarks without ground truth answers
+(`--no-ground-truth`) for blind CRS evaluation.
+
+### 2.2 Data Flow
 
 ```
 Upload (maintainer, via `crsbench benchmark upload`):
-  benchmarks/ ──► upload.py ──► backends.py ──► HuggingFace API
-                       │              │
-                       │              └── upload_large_folder (reliable large uploads)
-                       ├── registry.py (resolve dataset → backend + location)
-                       └── _upload_card_files() → dataset-cards/ to repo root
+  benchmarks/ ──► bundle.py ──► upload.py ──► backends.py ──► HuggingFace API
+                     │               │              │
+                     │               │              └── upload_large_folder
+                     │               ├── registry.py (resolve dataset → backend)
+                     ▼               └── _upload_card_files() → dataset-cards/ to repo root
+                 staging/
+                 ├── bench-1/
+                 │   ├── benchmark.tar.gz
+                 │   └── ground-truth.tar.gz
+                 └── bench-2/
+                     ├── benchmark.tar.gz
+                     └── ground-truth.tar.gz
 
 Download (user):
   CLI args ──► cli.py ──► download.py ──► backends.py ──► HuggingFace API
                               │                                 │
                               ├── registry.py (resolve)         │
-                              └── _load_suite() (optional)      ▼
+                              ├── _load_suite() (optional)      ▼
+                              │                           staging/ (tarballs)
+                              └── unbundle_all()                │
+                                                                ▼
                                                           benchmarks/
 ```
 
-### 2.2 Registry Design
+### 2.3 Registry Design
 
 Each dataset is a `DatasetConfig` dataclass:
 
@@ -77,7 +100,7 @@ DATASET_REGISTRY = {
 Prefix-to-dataset resolution is used by `download_suite()` to route
 benchmarks from a suite file to the correct backend automatically.
 
-### 2.3 Backend Dispatch
+### 2.4 Backend Dispatch
 
 Backends are plain functions registered in dispatch tables:
 
@@ -96,7 +119,7 @@ Adding a backend requires:
 
 No changes needed to CLI, download.py, or upload.py.
 
-### 2.4 Benchmark Suite Integration
+### 2.5 Benchmark Suite Integration
 
 Download supports the same benchmark suite YAML files used by
 `crsbench run --benchmark-suite`:
@@ -132,6 +155,9 @@ Download is a user-facing top-level command:
 # Download everything
 crsbench download --all
 
+# Download without ground truth (blind CRS evaluation)
+crsbench download --all --no-ground-truth
+
 # Download specific dataset
 crsbench download --dataset crsbench
 
@@ -146,6 +172,10 @@ crsbench download --all --output-dir /data/benchmarks
 ```
 
 `--dataset`, `--benchmark-suite`, and `--all` are mutually exclusive.
+
+`--no-ground-truth` skips downloading `ground-truth.tar.gz` (the `.aixcc/`
+directory with vulnerability metadata and patches). Useful for blind CRS
+evaluation where the system should discover vulnerabilities without answers.
 
 ### Upload
 
