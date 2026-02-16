@@ -66,7 +66,7 @@ benchmarks/[project-name]/
 ├── build-apply.sh               # Patch application script
 ├── Dockerfile                   # Docker build configuration
 ├── project.yaml                 # OSS-Fuzz project configuration
-├── pkgs/                        # Bundled source tarballs (optional)
+├── pkgs/                        # Bundled source tarballs
 │   ├── {source-name}.tar.gz     # Main source tarball
 │   └── pkg_refs.txt             # Provenance tracking
 ├── (Other files used in the Dockerfile)
@@ -92,6 +92,45 @@ benchmarks/[project-name]/
 
 The `pkgs/` directory contains bundled source tarballs for offline benchmark execution. This enables reproducible builds without requiring network access to clone repositories.
 
+#### Dockerfile Source Embedding Pattern
+
+Every benchmark Dockerfile MUST embed its source code from the `pkgs/` directory. This ensures benchmarks are self-contained and can build with a plain `docker build` without external source mounts.
+
+**Standard pattern (COPY + extract):**
+
+```dockerfile
+# Copy source tarball from pkgs/
+COPY pkgs/{source-name}.tar.gz $SRC/{source-name}.tar.gz
+RUN tar -xzf $SRC/{source-name}.tar.gz && rm $SRC/{source-name}.tar.gz
+
+WORKDIR $SRC/{source-name}
+```
+
+The COPY + extract lines MUST appear before the `WORKDIR` directive that sets the working directory to the source.
+
+**Alternative pattern (ADD auto-extract):**
+
+```dockerfile
+ADD pkgs/{source-name}.tar.gz $SRC/
+```
+
+Docker's `ADD` instruction auto-extracts `.tar.gz` files. Both patterns are accepted by validation.
+
+**JVM benchmarks with nested source paths:**
+
+Some JVM benchmarks use `$SRC/src/{name}` as their source directory:
+
+```dockerfile
+COPY pkgs/{source-name}.tar.gz $SRC/src/{source-name}.tar.gz
+RUN tar -xzf $SRC/src/{source-name}.tar.gz -C $SRC/src/ && rm $SRC/src/{source-name}.tar.gz
+
+WORKDIR $SRC/src/{source-name}
+```
+
+**Validation enforcement:**
+
+`crsbench benchmark validate` checks that every Dockerfile contains a `COPY pkgs/` or `ADD pkgs/` instruction and that the referenced tarball exists in `pkgs/`. Missing patterns are reported as errors.
+
 #### Tarball Naming Convention
 
 **Critical**: The source tarball name MUST match the Dockerfile's final `WORKDIR` directory name.
@@ -109,23 +148,9 @@ The corresponding tarball must be named `curl.tar.gz` (not `libcurl.tar.gz` or a
 - Mismatched names cause build failures when the Dockerfile cannot find the source
 - Validation tools enforce this convention to catch errors early
 
-#### Split Tarballs for Large Files
+#### Large Source Archives
 
-For large source archives that exceed Git LFS limits, tarballs can be split:
-
-```
-pkgs/
-├── poi.tar.gz.partaa    # First part (80MB)
-├── poi.tar.gz.partab    # Second part (80MB)
-├── poi.tar.gz.partac    # Third part (remaining)
-└── pkg_refs.txt
-```
-
-Split tarballs are automatically reassembled during build. Create them with:
-
-```bash
-split -b 80M source.tar.gz source.tar.gz.part
-```
+Large source tarballs are stored using Git LFS. No split files are needed.
 
 #### pkg_refs.txt
 

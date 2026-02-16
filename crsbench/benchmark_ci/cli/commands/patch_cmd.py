@@ -19,7 +19,12 @@ from crsbench.benchmark_ci.cli.common_args import (
 )
 from crsbench.benchmark_ci.cli.discovery import resolve_benchmark_paths
 from crsbench.benchmark_ci.cli.output import print_results_table, save_output_dir
-from crsbench.benchmark_ci.cli.result_aggregator import aggregate_patch_results
+from crsbench.benchmark_ci.cli.result_aggregator import (
+    aggregate_patch_build_results,
+    aggregate_patch_pov_results,
+    aggregate_patch_unittest_results,
+    aggregate_patch_var_results,
+)
 from crsbench.benchmark_ci.jobs.flat import (
     BuildPatchVariantJob,
     BuildSingleVariantJob,
@@ -156,7 +161,10 @@ def run_patch(args: argparse.Namespace) -> int:
         patch_keys,
         build_job_ids,
     ) in benchmark_metadata:
-        patch_result = aggregate_patch_results(
+        patch_build = aggregate_patch_build_results(dag_results, path.name, patch_keys)
+        patch_pov = aggregate_patch_pov_results(dag_results, path.name, patch_keys)
+        patch_var = aggregate_patch_var_results(dag_results, path.name, patch_keys)
+        patch_unittest = aggregate_patch_unittest_results(
             dag_results, path.name, patch_keys, test_mode="FULL"
         )
 
@@ -177,7 +185,10 @@ def run_patch(args: argparse.Namespace) -> int:
             BenchmarkValidationResult(
                 benchmark=path.name,
                 benchmark_path=path,
-                patch_check=patch_result,
+                patch_build_check=patch_build,
+                patch_pov_check=patch_pov,
+                patch_var_check=patch_var,
+                patch_unittest_check=patch_unittest,
                 shared_build_time=shared_build,
                 storage_bytes=storage_bytes,
                 supports_inc_build=supports_inc,

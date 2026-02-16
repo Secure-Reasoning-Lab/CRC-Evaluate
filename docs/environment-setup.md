@@ -160,7 +160,7 @@ crsbench --experiment-config config.yaml \
          --crses all-crses
 
 # On workers (in separate terminals)
-crsbench worker --experiment-config config.yaml -j 4 --continuous
+crsbench worker --experiment-config config.yaml --continuous
 ```
 
 ---

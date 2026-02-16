@@ -10,7 +10,7 @@ scripts/orchestrate-workers.sh redis-setup
 crsbench evaluator --experiment-config config.yaml
 
 # 3. Start local workers
-crsbench worker --experiment-config config.yaml -j 7 --cores 0-111
+crsbench worker --experiment-config config.yaml --cores 0-111
 
 # 4. Enqueue jobs
 crsbench run --experiment-config config.yaml --distributed
@@ -155,7 +155,7 @@ crsbench redis start
 crsbench evaluator --experiment-config config.yaml &
 
 # 3. Start local workers (background)
-crsbench worker --experiment-config config.yaml -j 7 &
+crsbench worker --experiment-config config.yaml &
 
 # 4. Enqueue jobs
 crsbench run --experiment-config config.yaml --distributed

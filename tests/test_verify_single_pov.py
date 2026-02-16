@@ -238,7 +238,7 @@ class TestVerifySinglePov:
             benchmark="test-bench",
             cpv_matched=["cpv_0"],
             crash_info={
-                "logs": {
+                "stdout": {
                     "base-asan": "ASAN: heap-buffer-overflow",
                     "patched-asan": "no crash",
                 },

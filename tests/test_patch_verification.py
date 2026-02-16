@@ -606,9 +606,9 @@ class TestPatchDiscovery:
         assert pov_subdir.is_dir(), f"POV subdirectory should exist: {pov_subdir}"
         assert patch_file.exists(), f"Patch file should exist: {patch_file}"
 
-        # Verify patch content
+        # Verify patch content (may have canary header before diff)
         content = patch_file.read_text()
-        assert content.startswith("diff --git"), "Patch should start with diff header"
+        assert "diff --git" in content, "Patch should contain diff header"
 
     def test_discovers_patches_in_expected_structure(self, patch_dir: Path):
         """Test discovery finds patches in expected structure."""
@@ -1996,6 +1996,92 @@ class TestUnitTestExecution:
         docker_tag = f"inc-{sanitizer}" if use_inc_image else None
 
         assert docker_tag == "inc-address"
+
+
+class TestRtsSkipReturnValue:
+    """Tests that RTS skip returns None (not True) when inc-build unavailable."""
+
+    def test_rts_skip_returns_none_when_no_inc_image(self, tmp_path: Path):
+        """RTS tests return None when inc-build is not available."""
+        from unittest.mock import MagicMock
+
+        from crsbench.evaluation.verification.models import UnitTestMode
+        from crsbench.evaluation.verification.patch.engine import (
+            PatchVerificationEngine,
+        )
+
+        # Setup minimal oss-fuzz directory
+        oss_fuzz = tmp_path / "oss-fuzz"
+        infra_dir = oss_fuzz / "infra"
+        infra_dir.mkdir(parents=True)
+        (infra_dir / "helper.py").write_text("# mock")
+        project = oss_fuzz / "projects" / "test-proj"
+        project.mkdir(parents=True)
+        (project / "test.sh").write_text("#!/bin/bash\necho test")
+
+        engine = PatchVerificationEngine(
+            oss_fuzz,
+            test_mode=UnitTestMode.RTS,
+            use_inc_build=False,
+        )
+
+        # Mock infra.is_tests_available to return True (test.sh exists)
+        engine.infra = MagicMock()
+        engine.infra.is_tests_available.return_value = True
+
+        # Call _run_unit_tests with use_inc_image=False (RTS without inc-build)
+        passed, details = engine._run_unit_tests(
+            variant_name="test-proj",
+            src_path=tmp_path / "src",
+            benchmark_path=tmp_path / "bench",
+            use_inc_image=False,
+        )
+
+        assert passed is None, "RTS skip should return None, not True"
+        assert "RTS skipped" in details
+        assert "inc-build not available" in details
+
+    def test_rts_runs_normally_when_inc_image_available(self, tmp_path: Path):
+        """RTS tests proceed when inc-build is available (use_inc_image=True)."""
+        from unittest.mock import MagicMock
+
+        from crsbench.evaluation.verification.models import UnitTestMode
+        from crsbench.evaluation.verification.patch.engine import (
+            PatchVerificationEngine,
+        )
+
+        oss_fuzz = tmp_path / "oss-fuzz"
+        infra_dir = oss_fuzz / "infra"
+        infra_dir.mkdir(parents=True)
+        (infra_dir / "helper.py").write_text("# mock")
+        project = oss_fuzz / "projects" / "test-proj"
+        project.mkdir(parents=True)
+        (project / "test.sh").write_text("#!/bin/bash\necho test")
+
+        engine = PatchVerificationEngine(
+            oss_fuzz,
+            test_mode=UnitTestMode.RTS,
+            use_inc_build=True,
+        )
+
+        # Mock infra to simulate normal test execution
+        engine.infra = MagicMock()
+        engine.infra.is_tests_available.return_value = True
+        engine.infra.create_variant_project.return_value = True
+        engine.infra.copy_build_output.return_value = True
+        engine.infra.prepare_inc_image_for_variant.return_value = True
+        engine.infra.run_tests.return_value = (True, "tests passed", "")
+
+        # Call _run_unit_tests with use_inc_image=True (RTS with inc-build)
+        passed, details = engine._run_unit_tests(
+            variant_name="test-proj",
+            src_path=tmp_path / "src",
+            benchmark_path=tmp_path / "bench",
+            use_inc_image=True,
+        )
+
+        # Should proceed normally and return True (tests passed)
+        assert passed is True, "RTS should run and pass with inc-build available"
 
 
 # =============================================================================

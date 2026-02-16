@@ -74,7 +74,7 @@ class PovVerificationResult:
         """Convert result to dictionary for serialization.
 
         Args:
-            include_logs: If False, omit crash_info.logs to reduce output size
+            include_logs: If False, omit crash_info.stdout to reduce output size
         """
         result: dict[str, Any] = {
             "status": self.status.value,
@@ -92,10 +92,10 @@ class PovVerificationResult:
             else:
                 # Omit logs for summary output
                 crash_info_summary = {
-                    k: v for k, v in self.crash_info.items() if k != "logs"
+                    k: v for k, v in self.crash_info.items() if k != "stdout"
                 }
-                if "logs" in self.crash_info:
-                    crash_info_summary["logs_count"] = len(self.crash_info["logs"])
+                if "stdout" in self.crash_info:
+                    crash_info_summary["stdout_count"] = len(self.crash_info["stdout"])
                 if crash_info_summary:
                     result["crash_info"] = crash_info_summary
         return result

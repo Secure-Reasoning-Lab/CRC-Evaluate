@@ -340,7 +340,8 @@ def _build_dag(
                         cpv_id=cpv_id,
                         patch_id=patch_id,
                         patch_path=patch_path,
-                        harness=harness,  # Pass harness for per-CPV sanitizer
+                        harness=harness,
+                        sanitizer=cpv_sanitizer,
                         use_inc_build=effective_inc,
                         force_rebuild=force_rebuild,
                         build_job_id=cpv_vulnerable_job_id,
@@ -390,7 +391,9 @@ def _build_dag(
                     all_jobs.append(unittest_full_job)
 
                     # Step 2d: P:RTS - RTS unit tests (if available, parallel to others)
-                    if rts_mode:
+                    # RTS requires inc-build images with /rts_config_jvm.py;
+                    # skip job creation when inc-build is disabled (--no-inc-build)
+                    if rts_mode and effective_inc:
                         unittest_rts_job = PatchUnitTestJob(
                             benchmark_path=path,
                             benchmark_name=benchmark_name,
@@ -490,6 +493,7 @@ def _aggregate_benchmark(
     build_job_ids: list[str],
     *,
     inc_coverage: bool = False,
+    use_inc_build: bool = True,
 ) -> BenchmarkValidationResult:
     """Aggregate DAG results into a single BenchmarkValidationResult."""
     benchmark_name = path.name
@@ -522,10 +526,13 @@ def _aggregate_benchmark(
         dag_results, benchmark_name, patch_keys, test_mode="FULL"
     )
 
-    if rts_mode:
+    effective_inc = supports_inc and use_inc_build
+    if rts_mode and effective_inc:
         rts_result = aggregate_patch_results(
             dag_results, benchmark_name, patch_keys, test_mode="RTS"
         )
+    elif rts_mode:
+        rts_result = CheckResult.skip("RTS skipped: inc-build disabled")
     else:
         rts_result = CheckResult.skip("No RTS mode")
 
@@ -627,54 +634,24 @@ def run_all(args: argparse.Namespace) -> int:
     _log_dag_summary(all_jobs)
 
     if distributed:
-        # Distributed: build via VariantPlanner + Redis, verify via Redis
-        from crsbench.executor.variant_planner import VariantPlanner
-
-        planner = VariantPlanner(
-            oss_fuzz_path=Path("oss-fuzz"), source_mode=source_mode
-        )
-        vp_build_jobs = planner.plan_all_builds(
-            list(paths),
-            use_inc_build=use_inc_build,
-            force_rebuild=force_rebuild,
-            skip_if_cached=False,
-            include_coverage=inc_coverage,
-        )
-
-        from crsbench.benchmark_ci.cli.commands.build_cmd import (
-            _run_distributed_build,
-        )
-
-        logger.info(
-            f"VariantPlanner: {len(vp_build_jobs)} build jobs via Redis, "
-            f"redis={redis_host}"
-        )
-        build_results = _run_distributed_build(
-            vp_build_jobs, redis_host, output_dir=output_dir
-        )
-
-        remaining_jobs = [
-            j for j in all_jobs if not isinstance(j, BuildSingleVariantJob)
-        ]
-        logger.info(
-            f"Build phase complete: {len(vp_build_jobs)} builds via Redis, "
-            f"{len(remaining_jobs)} verify/patch jobs via Redis"
-        )
-
+        # Single enqueue with per-job queue routing via RQ depends_on
         from crsbench.distributed.ci_jobs import (
             ci_results_to_executor_results,
             enqueue_and_poll_ci_jobs,
         )
 
-        verify_queue_name = "crsbench_ci_verify"
-        raw_verify_results = enqueue_and_poll_ci_jobs(
-            remaining_jobs,
+        def route_job(job: Job) -> str:
+            return (
+                "crsbench_ci_build" if job.job_type == "build" else "crsbench_ci_verify"
+            )
+
+        raw_results = enqueue_and_poll_ci_jobs(
+            all_jobs,
             redis_host,
-            queue_name=verify_queue_name,
+            queue_name=route_job,
             output_dir=output_dir,
         )
-        verify_results = ci_results_to_executor_results(raw_verify_results)
-        dag_results = {**build_results, **verify_results}
+        dag_results = ci_results_to_executor_results(raw_results)
     else:
         # Local: execute full DAG sequentially
         from crsbench.benchmark_ci.executor import execute_jobs_locally
@@ -706,6 +683,7 @@ def run_all(args: argparse.Namespace) -> int:
                 start_dt,
                 build_job_ids,
                 inc_coverage=inc_coverage,
+                use_inc_build=use_inc_build,
             )
         )
 

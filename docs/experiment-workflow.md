@@ -75,11 +75,11 @@ python scripts/valkey-helper.py start --bind-host
 # 2. Run orchestrator (enqueues jobs and monitors)
 crsbench run --experiment-config config.yaml
 
-# 3. Start worker (separate terminal)
-crsbench worker --experiment-config config.yaml -j 4 --continuous
+# 3. Start worker (separate terminal; job count configured in experiment config under worker.jobs)
+crsbench worker --experiment-config config.yaml --continuous
 
 # 4. (Optional) Start evaluator for POV verification (separate terminal)
-crsbench evaluator --experiment-config config.yaml -j 4
+crsbench evaluator --experiment-config config.yaml
 
 # 5. (Optional) Generate report after completion
 python scripts/cpv_report.py /path/to/experiment-data --csv
@@ -109,10 +109,9 @@ crsbench evaluator \
 # 3. Run orchestrator (enqueues jobs, monitors progress)
 crsbench run --experiment-config experiment-configs/experiment-config-afc.yaml
 
-# 4. Start worker (cores 0-111, 7 jobs × 16 cores each)
+# 4. Start worker (cores 0-111; job count configured in experiment config under worker.jobs)
 crsbench worker \
     --experiment-config experiment-configs/experiment-config-afc.yaml \
-    -j 7 \
     --cores 0-111
 
 # 5. (After completion) Generate CPV report
@@ -181,7 +180,6 @@ The evaluator builds variant Docker images (vulnerable, allpatched, CPV) and ver
 ```bash
 crsbench evaluator \
   --experiment-config config.yaml \
-  -j 4 \
   --build-jobs 4 \
   --build-cores-per-job 4 \
   --verify-jobs 16 \
@@ -193,8 +191,7 @@ crsbench evaluator \
 | `--experiment-config` | Path to experiment config YAML | Required |
 | `--experiment-name` | Override experiment name (queue name) | From config |
 | `--redis-host` | Redis server hostname | `localhost` |
-| `-j`, `--jobs` | Number of parallel jobs | `1` |
-| `--build-jobs` | Max concurrent build jobs | Value of `-j` |
+| `--build-jobs` | Max concurrent build jobs | `1` |
 | `--build-cores-per-job` | CPUs per build job | `1` |
 | `--verify-jobs` | Max concurrent verify jobs | `build-jobs × build-cores-per-job` |
 | `--cores` | CPU cores (count or range, e.g., `112-127`) | All available |
@@ -213,22 +210,22 @@ Workers pull trial jobs from the queue and execute CRS against benchmarks.
 ```bash
 crsbench worker \
   --experiment-config config.yaml \
-  -j 7 \
   --cores 0-111 \
   --continuous
 ```
+
+Job count is configured in the experiment config YAML under `worker.jobs`.
 
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `--experiment-config` | Path to experiment config YAML | Required |
 | `--experiment-name` | Override experiment name | From config |
 | `--redis-host` | Redis server hostname | `localhost` |
-| `-j`, `--jobs` | Number of parallel worker processes | `1` |
 | `--cores` | CPU cores (count or range, e.g., `0-111`) | All available |
 | `--skip-cpus` | CPUs to exclude | None |
 | `--continuous` | Keep running after queue empties | `false` |
 | `--worker-name` | Worker name for identification | Hostname |
-| `--no-cpuset` | Disable CPU affinity (only with `-j 1`) | `false` |
+| `--no-cpuset` | Disable CPU affinity (only with single job) | `false` |
 
 ## Multi-Machine Setup
 
@@ -247,7 +244,7 @@ crsbench evaluator --experiment-config config.yaml \
 crsbench run --experiment-config config.yaml
 
 # Start local worker
-crsbench worker --experiment-config config.yaml -j 7 --cores 0-111
+crsbench worker --experiment-config config.yaml --cores 0-111
 ```
 
 **Machine B..N** (Remote Workers):

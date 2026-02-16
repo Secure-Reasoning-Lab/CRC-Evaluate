@@ -83,6 +83,10 @@ from crsbench.utils.run_helper import (
     strip_ansi,
     verify_bad_patch,
 )
+from crsbench.utils.subprocess_utils import (
+    docker_kill_orphans,
+    run_with_timeout,
+)
 
 __all__ = [
     # Core logging functions
@@ -164,4 +168,7 @@ __all__ = [
     "run_command_in_container",
     # Run helper - Benchmark info
     "get_benchmark_info",
+    # Subprocess utilities
+    "run_with_timeout",
+    "docker_kill_orphans",
 ]

@@ -7,6 +7,7 @@ architecture with CI commands.
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Optional
 
 from crsbench.benchmark_ci.jobs.base import Job
 from crsbench.benchmark_ci.jobs.flat import (
@@ -16,6 +17,9 @@ from crsbench.benchmark_ci.jobs.flat import (
 )
 from crsbench.executor.types import ExecutorResult
 from crsbench.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from crsbench.validation.meta_adapter import MetaYamlAdapter
 
 logger = get_logger(__name__)
 
@@ -98,9 +102,19 @@ def create_post_trial_jobs(
 
         # Create patch jobs for bug-fixing CRS with patches
         if result.crs_type == "bug_fixing" and result.patches:
+            # Load adapter once per benchmark to resolve per-CPV sanitizers
+            adapter = _load_adapter(result.benchmark_path, source_mode)
+
             for patch_path in result.patches:
                 patch_id = patch_path.stem
                 cpv_id = _extract_cpv_id(result, patch_path)
+
+                # Resolve sanitizer for this CPV
+                cpv_sanitizer = "address"
+                if adapter:
+                    cpv_sanitizer = adapter.get_cpv_sanitizer(
+                        result.harness_name, cpv_id
+                    )
 
                 # Create build job for patched variant
                 build_patch_job = BuildPatchVariantJob(
@@ -109,6 +123,8 @@ def create_post_trial_jobs(
                     cpv_id=cpv_id,
                     patch_id=patch_id,
                     patch_path=patch_path,
+                    harness=result.harness_name,
+                    sanitizer=cpv_sanitizer,
                     use_inc_build=True,
                     force_rebuild=False,
                     build_job_id=build_job_id,
@@ -185,6 +201,27 @@ def execute_post_trial_analysis(
     )
 
     return results
+
+
+def _load_adapter(
+    benchmark_path: Path, source_mode: str
+) -> Optional["MetaYamlAdapter"]:
+    """Load benchmark adapter for sanitizer lookup.
+
+    Returns None (with warning) if adapter cannot be loaded.
+    """
+    from crsbench.evaluation.verification.pov import VerificationEngine
+    from crsbench.utils.run_helper import get_oss_fuzz_root
+
+    oss_fuzz_path = Path(get_oss_fuzz_root())
+    engine = VerificationEngine(oss_fuzz_path, source_mode=source_mode)
+    adapter = engine.load_adapter(benchmark_path)
+    if not adapter:
+        logger.warning(
+            "Failed to load adapter for %s, using default sanitizer",
+            benchmark_path,
+        )
+    return adapter
 
 
 def _extract_cpv_id(result: TrialResult, patch_path: Path) -> str:

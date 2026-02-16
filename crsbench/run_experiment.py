@@ -580,6 +580,11 @@ Examples:
 
     add_reeval_subparser(subparsers)
 
+    # 'download' subcommand - HuggingFace dataset download
+    from crsbench.dataset.cli import add_dataset_subparser
+
+    add_dataset_subparser(subparsers)
+
     args = parser.parse_args()
 
     # Default to 'run' if no command specified (shouldn't happen due to legacy handling)
@@ -2549,6 +2554,11 @@ def main() -> None:
         from crsbench.evaluation.reeval.cli import run_reeval
 
         sys.exit(run_reeval(args))
+
+    if args.command == "download":
+        from crsbench.dataset.cli import run_download
+
+        sys.exit(run_download(args))
 
     # Below is for 'run' command (experiment execution)
 

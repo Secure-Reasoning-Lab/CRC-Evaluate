@@ -1,7 +1,8 @@
 """Tests for the OSSFuzzBuilder module."""
 
+import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from crsbench.builder import (
@@ -481,6 +482,119 @@ class TestOSSFuzzBuilderForceRebuild:
             mock_cleanup_source.assert_not_called()
             # Should return cached result
             assert results[configs[0].variant_name].cached
+
+    def test_build_single_force_rebuild_triggers_docker_cleanup(
+        self, builder: OSSFuzzBuilder, config: BuildConfig
+    ):
+        """Test that force_rebuild=True calls cleanup_docker_images directly."""
+        with (
+            patch.object(builder.infra, "cleanup_docker_images") as mock_docker_cleanup,
+            patch.object(builder.infra, "cleanup_build_outputs"),
+            patch.object(builder.infra, "cleanup_source"),
+            patch.object(builder.infra, "is_variant_built", return_value=True),
+            patch.object(
+                builder,
+                "_build_single",
+                return_value=BuildResult.from_cache(config, Path("/tmp/build")),
+            ),
+        ):
+            builder.build_single(config, force_rebuild=True)
+
+            # cleanup_docker_images should be called directly (not via cleanup_build_outputs)
+            mock_docker_cleanup.assert_called_once_with(config.variant_name)
+
+
+class TestCleanupDockerImages:
+    """Tests for Docker image cleanup during force rebuild."""
+
+    @pytest.fixture
+    def mock_oss_fuzz_path(self, tmp_path: Path) -> Path:
+        """Create a mock oss-fuzz directory."""
+        oss_fuzz = tmp_path / "oss-fuzz"
+        oss_fuzz.mkdir()
+        (oss_fuzz / "infra").mkdir()
+        (oss_fuzz / "infra" / "helper.py").touch()
+        (oss_fuzz / "projects").mkdir()
+        (oss_fuzz / "build" / "out").mkdir(parents=True)
+        return oss_fuzz
+
+    @pytest.fixture
+    def infra(self, mock_oss_fuzz_path: Path):
+        """Create OSSFuzzInfrastructure instance."""
+        from crsbench.builder.infrastructure import OSSFuzzInfrastructure
+
+        return OSSFuzzInfrastructure(mock_oss_fuzz_path)
+
+    def test_cleanup_docker_images_removes_existing_images(self, infra):
+        """Test that existing Docker images are removed via docker rmi."""
+        variant = "test-variant"
+        expected_images = [
+            f"aixcc-afc/{variant}:latest",
+            f"aixcc-afc/{variant}:inc-address",
+            f"aixcc-afc/{variant}:inc-undefined",
+            f"aixcc-afc/{variant}:inc-memory",
+        ]
+
+        mock_run = MagicMock(return_value=MagicMock(returncode=0))
+
+        with (
+            patch.object(infra, "_docker_image_exists", return_value=True),
+            patch("subprocess.run", mock_run),
+        ):
+            infra.cleanup_docker_images(variant)
+
+            # Should call docker rmi for each image
+            assert mock_run.call_count == len(expected_images)
+            for image_name in expected_images:
+                mock_run.assert_any_call(
+                    ["docker", "rmi", image_name],
+                    capture_output=True,
+                    timeout=60,
+                    stdin=subprocess.DEVNULL,
+                )
+
+    def test_cleanup_docker_images_skips_nonexistent_images(self, infra):
+        """Test that non-existent Docker images are skipped."""
+        mock_run = MagicMock()
+
+        with (
+            patch.object(infra, "_docker_image_exists", return_value=False),
+            patch("subprocess.run", mock_run),
+        ):
+            infra.cleanup_docker_images("test-variant")
+
+            # subprocess.run should NOT be called (no docker rmi)
+            mock_run.assert_not_called()
+
+    def test_cleanup_docker_images_handles_rmi_failure_gracefully(self, infra):
+        """Test that docker rmi failure does not raise exceptions."""
+        mock_run = MagicMock(return_value=MagicMock(returncode=1))
+
+        with (
+            patch.object(infra, "_docker_image_exists", return_value=True),
+            patch("subprocess.run", mock_run),
+        ):
+            # Should NOT raise even though docker rmi fails
+            infra.cleanup_docker_images("test-variant")
+
+            # docker rmi was attempted for all images
+            assert mock_run.call_count == 4
+
+    def test_cleanup_build_outputs_does_not_call_cleanup_docker_images(
+        self, infra, mock_oss_fuzz_path: Path
+    ):
+        """Test that cleanup_build_outputs does NOT call cleanup_docker_images.
+
+        Docker image cleanup is called separately from force_rebuild sites,
+        not from cleanup_build_outputs, because cleanup_build_outputs is also
+        used in inc-build fallback paths where the Docker image is still needed.
+        """
+        variant = "test-variant"
+
+        with patch.object(infra, "cleanup_docker_images") as mock_docker_cleanup:
+            infra.cleanup_build_outputs(variant)
+
+            mock_docker_cleanup.assert_not_called()
 
 
 class TestBuildConfigVariantNames:

@@ -15,7 +15,7 @@ This document describes the design of the Benchmark CI module for validating ben
 ### Non-Goals
 
 - Running CRS experiments (handled by `crsbench/evaluation/`)
-- Distributed execution across machines (handled by `crsbench/distributed/`)
+- Distributed execution across machines (use `crsbench evaluator --ci`, see `crsbench/distributed/`)
 
 ## Architecture
 

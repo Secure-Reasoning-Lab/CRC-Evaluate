@@ -22,7 +22,7 @@ class TestRunEvaluatorMain:
         assert result == 1
 
     @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
-    @patch("crsbench.distributed.evaluator._run_evaluator_supervisor")
+    @patch("crsbench.distributed.ci_supervisor.run_ci_supervisor")
     @patch("crsbench.distributed.evaluator_jobs.set_engine")
     def test_skips_phase1_builds(
         self,
@@ -51,7 +51,7 @@ class TestRunEvaluatorMain:
         # Verify it was called with just the engine argument (no built_results)
         assert len(call_args[0]) == 1  # Only one positional argument
 
-        # Should call supervisor directly
+        # Should call supervisor directly (now via ci_supervisor)
         mock_supervisor.assert_called_once()
         assert result == 0
 
@@ -66,100 +66,58 @@ class TestRunEvaluatorMain:
 
 
 class TestEvaluatorSupervisorQueues:
-    """Test _run_evaluator_supervisor dual-queue setup."""
+    """Test evaluator delegates to ci_supervisor for dual-queue setup.
 
-    @patch("crsbench.distributed.evaluator.redis")
-    @patch("crsbench.distributed.evaluator.rq")
+    Detailed dual-queue tests are in test_ci_supervisor.py. These tests
+    verify the evaluator correctly delegates to run_ci_supervisor.
+    """
+
+    @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
+    @patch("crsbench.distributed.ci_supervisor.run_ci_supervisor")
+    @patch("crsbench.distributed.evaluator_jobs.set_engine")
     def test_creates_both_queues(
-        self, mock_rq: MagicMock, mock_redis: MagicMock
+        self,
+        mock_set_engine: MagicMock,
+        mock_supervisor: MagicMock,
     ) -> None:
-        """Supervisor creates both build and verify queues."""
-        from crsbench.distributed.evaluator import _run_evaluator_supervisor
+        """Evaluator passes build and verify queue names to ci_supervisor."""
+        from crsbench.distributed.evaluator import run_evaluator_main
 
-        mock_conn = MagicMock()
-        mock_redis.Redis.return_value = mock_conn
+        mock_supervisor.return_value = 0
+        config = MagicMock()
+        config.oss_fuzz_path = "/tmp/oss-fuzz"
+        config.reproduce_timeout = 180
 
-        # Make the queue counts return 0 and then raise to break loop
-        mock_build_queue = MagicMock()
-        mock_verify_queue = MagicMock()
-        mock_build_queue.count = 0
-        mock_verify_queue.count = 0
-        mock_build_queue.name = "crsbench_test_build"
-        mock_verify_queue.name = "crsbench_test_verify"
+        with patch("crsbench.evaluation.verification.pov.engine.VerificationEngine"):
+            run_evaluator_main(config, "exp-test")
 
-        queues_created = []
+        # ci_supervisor should receive both queue names
+        call_kwargs = mock_supervisor.call_args
+        assert "crsbench_exp-test_build" in str(call_kwargs)
+        assert "crsbench_exp-test_verify" in str(call_kwargs)
 
-        def track_queue_creation(name, **_kwargs):
-            queues_created.append(name)
-            if "build" in name:
-                return mock_build_queue
-            return mock_verify_queue
-
-        mock_rq.Queue.side_effect = track_queue_creation
-
-        # Use KeyboardInterrupt to break out of the infinite loop
-        def break_after_first_iteration(_seconds):
-            raise KeyboardInterrupt
-
-        with patch(
-            "crsbench.distributed.evaluator.time.sleep",
-            side_effect=break_after_first_iteration,
-        ):
-            result = _run_evaluator_supervisor(
-                redis_host="localhost",
-                experiment_name="test",
-                max_jobs=1,
-            )
-
-        # Both queues should be created
-        assert "crsbench_test_build" in queues_created
-        assert "crsbench_test_verify" in queues_created
-        assert result == 0  # KeyboardInterrupt returns 0
-
-    @patch("crsbench.distributed.evaluator.redis")
-    @patch("crsbench.distributed.evaluator.rq")
+    @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
+    @patch("crsbench.distributed.ci_supervisor.run_ci_supervisor")
+    @patch("crsbench.distributed.evaluator_jobs.set_engine")
     def test_build_queue_priority(
-        self, mock_rq: MagicMock, mock_redis: MagicMock
+        self,
+        mock_set_engine: MagicMock,
+        mock_supervisor: MagicMock,
     ) -> None:
-        """Build queue is listed first for dequeue priority."""
-        from crsbench.distributed.evaluator import _run_evaluator_supervisor
+        """Build queue name is passed before verify queue name."""
+        from crsbench.distributed.evaluator import run_evaluator_main
 
-        mock_conn = MagicMock()
-        mock_redis.Redis.return_value = mock_conn
+        mock_supervisor.return_value = 0
+        config = MagicMock()
+        config.oss_fuzz_path = "/tmp/oss-fuzz"
+        config.reproduce_timeout = 180
 
-        mock_build_queue = MagicMock()
-        mock_verify_queue = MagicMock()
-        mock_build_queue.count = 1  # Has a build job
-        mock_verify_queue.count = 1  # Also has a verify job
-        mock_build_queue.name = "crsbench_test_build"
-        mock_verify_queue.name = "crsbench_test_verify"
+        with patch("crsbench.evaluation.verification.pov.engine.VerificationEngine"):
+            run_evaluator_main(config, "exp-test")
 
-        def queue_factory(name, **_kwargs):
-            if "build" in name:
-                return mock_build_queue
-            return mock_verify_queue
-
-        mock_rq.Queue.side_effect = queue_factory
-
-        # Track the order of queues passed to dequeue_any
-        dequeue_calls = []
-
-        def track_dequeue_any(queues, **_kwargs):
-            dequeue_calls.append([q.name for q in queues])
-            raise KeyboardInterrupt  # Break after first dequeue attempt
-
-        mock_rq.Queue.dequeue_any = track_dequeue_any
-
-        _run_evaluator_supervisor(
-            redis_host="localhost",
-            experiment_name="test",
-            max_jobs=1,
-        )
-
-        # Build queue should be first in the dequeue list
-        assert len(dequeue_calls) > 0
-        assert dequeue_calls[0][0] == "crsbench_test_build"
-        assert dequeue_calls[0][1] == "crsbench_test_verify"
+        call_kwargs = mock_supervisor.call_args[1]
+        assert call_kwargs["build_queue_name"] == "crsbench_exp-test_build"
+        assert call_kwargs["verify_queue_name"] == "crsbench_exp-test_verify"
 
 
 class TestRunSingleJob:

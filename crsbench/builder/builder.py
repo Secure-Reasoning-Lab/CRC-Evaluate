@@ -92,8 +92,9 @@ class OSSFuzzBuilder:
 
         for config in configs:
             if force_rebuild:
-                # Clean up existing build outputs for force rebuild
+                # Clean up existing build outputs and Docker images for force rebuild
                 logger.debug(f"Force rebuild: cleaning {config.variant_name}")
+                self.infra.cleanup_docker_images(config.variant_name)
                 self.infra.cleanup_build_outputs(config.variant_name)
                 self.infra.cleanup_source(config.variant_name)
                 configs_to_build.append(config)
@@ -172,10 +173,11 @@ class OSSFuzzBuilder:
         Returns:
             Build result
         """
-        # Clean up existing build outputs if force rebuild
+        # Clean up existing build outputs and Docker images if force rebuild
         # This ensures stale data (coverage dumps, etc.) is removed
         if force_rebuild:
             logger.info(f"Force rebuild: cleaning {config.variant_name}")
+            self.infra.cleanup_docker_images(config.variant_name)
             self.infra.cleanup_build_outputs(config.variant_name)
             self.infra.cleanup_source(config.variant_name)
 
@@ -249,8 +251,12 @@ class OSSFuzzBuilder:
         """Build a variant using standard OSS-Fuzz build process.
 
         Supports two source modes:
-        1. Bundled source (pkgs/): Extract tarball, apply ref.diff if needed
-        2. Git clone: Clone from main_repo and checkout commit
+        1. Bundled source (pkgs/): Extract tarball, mount via source_path
+        2. Git clone: Clone from main_repo, mount via source_path
+
+        Always uses source_path to mount extracted source into the container.
+        In pkgs mode the Docker image also has the source (via COPY pkgs/),
+        but source_path ensures patches are applied consistently.
 
         Args:
             config: Build configuration
@@ -275,7 +281,10 @@ class OSSFuzzBuilder:
                 elapsed_seconds=time.time() - start_time,
             )
 
-        # Prepare source (from pkgs/ or git clone)
+        # Always prepare source and mount via source_path for consistency.
+        # In pkgs mode this extracts the bundled tarball; in main_repo mode
+        # it clones from git. Patches (if any) are applied to the extracted
+        # source before mounting.
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
                 repo_path = self._prepare_source(config, Path(temp_dir))

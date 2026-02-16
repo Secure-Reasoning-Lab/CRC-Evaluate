@@ -1,8 +1,8 @@
 """Build-only CI subcommand.
 
 Builds POV variants (vulnerable, allpatched, CPV) without patch variants
-or verification. Uses VariantPlanner for build job creation and always
-enqueues to Redis via enqueue_and_poll_builds().
+or verification. Uses VariantPlanner for build job creation and the
+unified enqueue_and_poll_ci_jobs() for distributed execution.
 
 Use --force-rebuild to clean up before building.
 """
@@ -106,8 +106,7 @@ def _run_distributed_build(
 ) -> dict[str, "ExecutorResult"]:
     """Enqueue build jobs to Redis and return ExecutorResult dict.
 
-    Delegates to the shared enqueue_and_poll_builds() and converts
-    raw results to ExecutorResult format.
+    Uses the unified enqueue_and_poll_ci_jobs path for all job types.
 
     Args:
         all_jobs: List of BuildSingleVariantJob instances
@@ -118,15 +117,15 @@ def _run_distributed_build(
     Returns:
         Dict mapping job_id to ExecutorResult
     """
-    from crsbench.distributed.build_jobs import (
-        enqueue_and_poll_builds,
-        raw_results_to_executor_results,
+    from crsbench.distributed.ci_jobs import (
+        ci_results_to_executor_results,
+        enqueue_and_poll_ci_jobs,
     )
 
-    raw_results = enqueue_and_poll_builds(
+    raw_results = enqueue_and_poll_ci_jobs(
         all_jobs, redis_host, queue_name, output_dir=output_dir
     )
-    return raw_results_to_executor_results(raw_results)
+    return ci_results_to_executor_results(raw_results)
 
 
 def run_build(args: argparse.Namespace) -> int:

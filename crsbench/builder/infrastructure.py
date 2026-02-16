@@ -25,6 +25,7 @@ from crsbench.builder.types import (
 from crsbench.utils.docker import docker_rmtree, fix_docker_ownership
 from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import clone_or_copy_cached_repo
+from crsbench.utils.subprocess_utils import run_with_timeout
 
 logger = get_logger(__name__)
 # Separate logger for crash reproduction results
@@ -673,7 +674,7 @@ class OSSFuzzInfrastructure:
     # =========================================================================
 
     def cleanup_build_outputs(self, variant_name: str) -> None:
-        """Clean up build outputs only (for force rebuild).
+        """Clean up build outputs only (for force rebuild or fallback retry).
 
         Removes:
         - Build output directory (or symlink) at oss-fuzz/build/out/{variant}
@@ -682,6 +683,7 @@ class OSSFuzzInfrastructure:
 
         Does NOT remove:
         - Project symlink (read-only, reusable)
+        - Docker images (use cleanup_docker_images separately for force rebuild)
 
         Args:
             variant_name: Variant name
@@ -704,6 +706,46 @@ class OSSFuzzInfrastructure:
         work_path = self.get_isolated_work_path(variant_name)
         if work_path.exists():
             docker_rmtree(work_path)
+
+    def cleanup_docker_images(self, variant_name: str) -> None:
+        """Remove Docker images for a variant to force full rebuild.
+
+        Removes both the normal build image and all inc-build sanitizer images.
+        Missing images are skipped silently. Failed removals are logged as
+        warnings but do not raise exceptions (cleanup failures should not
+        block the build).
+
+        Args:
+            variant_name: Variant name (e.g., "benchmark-asan-deltaref")
+        """
+        image_names = [
+            f"aixcc-afc/{variant_name}:latest",
+            f"aixcc-afc/{variant_name}:inc-address",
+            f"aixcc-afc/{variant_name}:inc-undefined",
+            f"aixcc-afc/{variant_name}:inc-memory",
+        ]
+
+        for image_name in image_names:
+            if not self._docker_image_exists(image_name):
+                logger.debug(f"Image not found, skipping: {image_name}")
+                continue
+
+            try:
+                result = subprocess.run(
+                    ["docker", "rmi", image_name],
+                    capture_output=True,
+                    timeout=60,
+                    stdin=subprocess.DEVNULL,
+                )
+                if result.returncode == 0:
+                    logger.debug(f"Removed Docker image: {image_name}")
+                else:
+                    logger.warning(
+                        f"Failed to remove Docker image {image_name}: "
+                        f"exit code {result.returncode}"
+                    )
+            except Exception as e:
+                logger.warning(f"Error removing Docker image {image_name}: {e}")
 
     def cleanup_project_symlink(self, variant_name: str) -> None:
         """Clean up project symlink only.
@@ -942,7 +984,9 @@ class OSSFuzzInfrastructure:
                 cmd.extend(["--inc-patch", str(inc_patch)])
 
         cmd.append(variant_name)
-        # Only add source path if provided (not using bundled pkgs/)
+        # source_path mounts local extracted source into the container via
+        # helper.py's read-only mount + rsync. When None, the build uses
+        # in-image source from COPY pkgs/ (default CMD ["compile"]).
         if src_path:
             cmd.append(str(src_path))
 
@@ -950,13 +994,10 @@ class OSSFuzzInfrastructure:
         logger.debug(f"Build command: {' '.join(cmd)}")
 
         try:
-            result = subprocess.run(
+            result = run_with_timeout(
                 cmd,
-                cwd=self.oss_fuzz_path,
-                capture_output=True,
-                text=True,
                 timeout=config.timeout,
-                stdin=subprocess.DEVNULL,  # Prevent terminal issues
+                cwd=self.oss_fuzz_path,
             )
 
             if result.returncode == 0:
@@ -1501,12 +1542,11 @@ class OSSFuzzInfrastructure:
 
             # Use slightly longer subprocess timeout to let helper.py handle it
             # Use binary mode to handle fuzzer output that may contain non-UTF-8 bytes
-            result = subprocess.run(
+            result = run_with_timeout(
                 cmd,
-                cwd=self.oss_fuzz_path,
-                capture_output=True,
                 timeout=timeout + 10,  # Grace period for helper.py
-                stdin=subprocess.DEVNULL,  # Prevent terminal issues
+                cwd=self.oss_fuzz_path,
+                text=False,
             )
 
             # Decode output with error handling for binary content
@@ -1624,13 +1664,10 @@ class OSSFuzzInfrastructure:
         logger.debug(f"Running coverage: {' '.join(cmd)}")
 
         try:
-            result = subprocess.run(
+            result = run_with_timeout(
                 cmd,
-                cwd=self.oss_fuzz_path,
-                capture_output=True,
-                text=True,
                 timeout=timeout,
-                stdin=subprocess.DEVNULL,  # Prevent terminal issues
+                cwd=self.oss_fuzz_path,
             )
 
             if result.returncode != 0:
@@ -1808,12 +1845,9 @@ class OSSFuzzInfrastructure:
         # Pull from registry
         logger.debug(f"Pulling inc-build image: {inc_image}")
         try:
-            result = subprocess.run(
+            result = run_with_timeout(
                 ["docker", "pull", inc_image],
-                capture_output=True,
-                text=True,
-                timeout=600,  # 10 minutes for large images
-                stdin=subprocess.DEVNULL,
+                timeout=300,
             )
 
             if result.returncode == 0:
@@ -2046,13 +2080,10 @@ class OSSFuzzInfrastructure:
         logger.debug(f"Command: {' '.join(cmd)}")
 
         try:
-            result = subprocess.run(
+            result = run_with_timeout(
                 cmd,
-                cwd=self.oss_fuzz_path,
-                capture_output=True,
-                text=True,
                 timeout=timeout,
-                stdin=subprocess.DEVNULL,
+                cwd=self.oss_fuzz_path,
             )
 
             passed = result.returncode == 0

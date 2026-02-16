@@ -9,6 +9,7 @@ import pytest
 from crsbench.utils.cgroup import (
     CGROUP_FS_ROOT,
     CgroupError,
+    _kill_cgroup_processes,
     cgroup_path_for_docker,
     check_cgroup_delegation,
     check_cgroup_v2_available,
@@ -350,6 +351,128 @@ def test_create_cgroup_returns_path():
 
 
 # ---------------------------------------------------------------------------
+# _kill_cgroup_processes
+# ---------------------------------------------------------------------------
+
+
+@patch("crsbench.utils.cgroup.time.sleep")
+def test_kill_cgroup_processes_via_cgroup_kill(mock_sleep):
+    """Uses cgroup.kill when available (Linux 5.14+)."""
+    cgroup_path = MagicMock(spec=Path)
+    cgroup_path.exists.return_value = True
+
+    kill_file = MagicMock(spec=Path)
+    cgroup_path.__truediv__ = MagicMock(return_value=kill_file)
+
+    result = _kill_cgroup_processes(cgroup_path)
+
+    assert result is True
+    kill_file.write_text.assert_called_once_with("1")
+    mock_sleep.assert_called_once_with(0.5)
+
+
+@patch("crsbench.utils.cgroup.os.kill")
+@patch("crsbench.utils.cgroup.time.sleep")
+def test_kill_cgroup_processes_fallback_to_procs(mock_sleep, mock_kill):
+    """Falls back to cgroup.procs when cgroup.kill is not available."""
+    import signal
+
+    cgroup_path = MagicMock(spec=Path)
+    cgroup_path.exists.return_value = True
+
+    kill_file = MagicMock(spec=Path)
+    kill_file.write_text.side_effect = OSError(errno.ENOENT, "No such file")
+
+    procs_file = MagicMock(spec=Path)
+    procs_file.read_text.return_value = "123\n456\n"
+
+    def truediv_handler(name):
+        if name == "cgroup.kill":
+            return kill_file
+        if name == "cgroup.procs":
+            return procs_file
+        return MagicMock(spec=Path)
+
+    cgroup_path.__truediv__ = MagicMock(side_effect=truediv_handler)
+
+    result = _kill_cgroup_processes(cgroup_path)
+
+    assert result is True
+    assert mock_kill.call_count == 2
+    mock_kill.assert_any_call(123, signal.SIGKILL)
+    mock_kill.assert_any_call(456, signal.SIGKILL)
+    mock_sleep.assert_called_once_with(0.5)
+
+
+@patch("crsbench.utils.cgroup.os.kill")
+@patch("crsbench.utils.cgroup.time.sleep")
+def test_kill_cgroup_processes_empty(mock_sleep, mock_kill):
+    """Returns False when cgroup has no processes."""
+    cgroup_path = MagicMock(spec=Path)
+    cgroup_path.exists.return_value = True
+
+    kill_file = MagicMock(spec=Path)
+    kill_file.write_text.side_effect = OSError(errno.ENOENT, "No such file")
+
+    procs_file = MagicMock(spec=Path)
+    procs_file.read_text.return_value = ""
+
+    def truediv_handler(name):
+        if name == "cgroup.kill":
+            return kill_file
+        if name == "cgroup.procs":
+            return procs_file
+        return MagicMock(spec=Path)
+
+    cgroup_path.__truediv__ = MagicMock(side_effect=truediv_handler)
+
+    result = _kill_cgroup_processes(cgroup_path)
+
+    assert result is False
+    mock_kill.assert_not_called()
+    mock_sleep.assert_not_called()
+
+
+@patch("crsbench.utils.cgroup.os.kill")
+@patch("crsbench.utils.cgroup.time.sleep")
+def test_kill_cgroup_processes_esrch(mock_sleep, mock_kill):
+    """Handles ProcessLookupError gracefully when process already exited."""
+    cgroup_path = MagicMock(spec=Path)
+    cgroup_path.exists.return_value = True
+
+    kill_file = MagicMock(spec=Path)
+    kill_file.write_text.side_effect = OSError(errno.ENOENT, "No such file")
+
+    procs_file = MagicMock(spec=Path)
+    procs_file.read_text.return_value = "789\n"
+
+    def truediv_handler(name):
+        if name == "cgroup.kill":
+            return kill_file
+        if name == "cgroup.procs":
+            return procs_file
+        return MagicMock(spec=Path)
+
+    cgroup_path.__truediv__ = MagicMock(side_effect=truediv_handler)
+    mock_kill.side_effect = ProcessLookupError("No such process")
+
+    result = _kill_cgroup_processes(cgroup_path)
+
+    assert result is True
+    mock_sleep.assert_called_once_with(0.5)
+
+
+def test_kill_cgroup_processes_nonexistent_path():
+    """Returns False when cgroup path does not exist."""
+    cgroup_path = MagicMock(spec=Path)
+    cgroup_path.exists.return_value = False
+
+    result = _kill_cgroup_processes(cgroup_path)
+
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
 # cleanup_cgroup
 # ---------------------------------------------------------------------------
 
@@ -372,9 +495,10 @@ def test_cleanup_success():
     mock_path.rmdir.assert_called_once()
 
 
+@patch("crsbench.utils.cgroup._remove_cgroup_children")
 @patch("crsbench.utils.cgroup.time.sleep")
-def test_cleanup_ebusy_then_success(mock_sleep):
-    """Retries on EBUSY and succeeds on second attempt."""
+def test_cleanup_ebusy_then_success_default(mock_sleep, mock_remove_children):
+    """Default (force=False): removes children, immediate retry succeeds."""
     mock_path = MagicMock(spec=Path)
     mock_path.exists.return_value = True
 
@@ -382,21 +506,45 @@ def test_cleanup_ebusy_then_success(mock_sleep):
     mock_path.rmdir.side_effect = [ebusy, None]
 
     assert cleanup_cgroup(mock_path) is True
-    mock_sleep.assert_called_once_with(2.0)
+    mock_remove_children.assert_called_once_with(mock_path)
+    mock_sleep.assert_not_called()
 
 
+@patch("crsbench.utils.cgroup._remove_cgroup_children")
+@patch("crsbench.utils.cgroup._kill_cgroup_processes")
 @patch("crsbench.utils.cgroup.time.sleep")
-def test_cleanup_ebusy_all_retries(mock_sleep):
+def test_cleanup_ebusy_then_success_force(
+    mock_sleep, mock_kill_procs, mock_remove_children
+):
+    """force=True: kills processes + removes children, immediate retry succeeds."""
+    mock_path = MagicMock(spec=Path)
+    mock_path.exists.return_value = True
+
+    ebusy = OSError(errno.EBUSY, "Device or resource busy")
+    mock_path.rmdir.side_effect = [ebusy, None]
+    mock_kill_procs.return_value = True
+
+    assert cleanup_cgroup(mock_path, force=True) is True
+    mock_kill_procs.assert_called_once_with(mock_path)
+    mock_remove_children.assert_called_once_with(mock_path)
+    mock_sleep.assert_not_called()
+
+
+@patch("crsbench.utils.cgroup._remove_cgroup_children")
+@patch("crsbench.utils.cgroup.time.sleep")
+def test_cleanup_ebusy_all_retries(mock_sleep, mock_remove_children):
     """Returns False after exhausting all retries on EBUSY."""
     mock_path = MagicMock(spec=Path)
     mock_path.exists.return_value = True
 
     ebusy = OSError(errno.EBUSY, "Device or resource busy")
-    mock_path.rmdir.side_effect = [ebusy, ebusy, ebusy]
+    # Each attempt: rmdir(EBUSY) + immediate retry(EBUSY) = 2 calls per attempt
+    # 3 attempts = 6 rmdir calls
+    mock_path.rmdir.side_effect = [ebusy, ebusy, ebusy, ebusy, ebusy, ebusy]
 
     assert cleanup_cgroup(mock_path) is False
-    # sleep is called between retries, not after the last one
     assert mock_sleep.call_count == 2
+    assert mock_remove_children.call_count == 3
 
 
 @patch("crsbench.utils.cgroup.time.sleep")
@@ -409,6 +557,25 @@ def test_cleanup_permission_error(mock_sleep):
     mock_path.rmdir.side_effect = eperm
 
     assert cleanup_cgroup(mock_path) is False
+    mock_sleep.assert_not_called()
+
+
+@patch("crsbench.utils.cgroup._remove_cgroup_children")
+@patch("crsbench.utils.cgroup._kill_cgroup_processes")
+@patch("crsbench.utils.cgroup.time.sleep")
+def test_cleanup_force_false_does_not_kill(
+    mock_sleep, mock_kill_procs, mock_remove_children
+):
+    """force=False never calls _kill_cgroup_processes."""
+    mock_path = MagicMock(spec=Path)
+    mock_path.exists.return_value = True
+
+    ebusy = OSError(errno.EBUSY, "Device or resource busy")
+    mock_path.rmdir.side_effect = [ebusy, ebusy]
+
+    assert cleanup_cgroup(mock_path, max_retries=1) is False
+    mock_kill_procs.assert_not_called()
+    mock_remove_children.assert_called_once_with(mock_path)
     mock_sleep.assert_not_called()
 
 

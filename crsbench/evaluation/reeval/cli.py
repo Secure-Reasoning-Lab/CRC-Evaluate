@@ -345,8 +345,8 @@ def _reeval_bug_finding(
             )
 
             # Store per-variant crash logs (for all statuses)
-            if result.crash_info and "logs" in result.crash_info:
-                for variant_name, crash_log in result.crash_info["logs"].items():
+            if result.crash_info and "stdout" in result.crash_info:
+                for variant_name, crash_log in result.crash_info["stdout"].items():
                     store.store_crash_log(
                         pov_hash,
                         crash_log,
@@ -535,7 +535,7 @@ def _drain_all_async_results(
 
                 crash_info = None
                 if result.verdict.crash_logs:
-                    crash_info = {"logs": result.verdict.crash_logs}
+                    crash_info = {"stdout": result.verdict.crash_logs}
 
                 trial_results[tid].append(
                     PovVerificationResult(

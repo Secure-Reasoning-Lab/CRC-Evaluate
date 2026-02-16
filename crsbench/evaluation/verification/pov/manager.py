@@ -424,8 +424,8 @@ class POVVerificationManager:
         )
 
         # Store per-variant crash logs for ALL statuses (not just CPV)
-        if result.crash_info and "logs" in result.crash_info:
-            crash_logs = result.crash_info["logs"]
+        if result.crash_info and "stdout" in result.crash_info:
+            crash_logs = result.crash_info["stdout"]
             for variant_name, crash_log in crash_logs.items():
                 self.store.store_crash_log(
                     pov_hash,

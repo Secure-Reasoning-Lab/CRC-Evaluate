@@ -120,10 +120,25 @@ class TestNormalizeWorkdir:
 class TestValidateBenchmark:
     """Tests for benchmark validation."""
 
+    # Standard Dockerfile with COPY pkgs/ pattern for valid benchmarks
+    VALID_DOCKERFILE = (
+        "FROM base\n"
+        "COPY pkgs/test.tar.gz $SRC/test.tar.gz\n"
+        "RUN tar -xzf $SRC/test.tar.gz && rm $SRC/test.tar.gz\n"
+        "WORKDIR $SRC/test\n"
+    )
+
+    def _add_pkgs(self, path: Path) -> None:
+        """Add pkgs/ directory with test.tar.gz and pkg_refs.txt."""
+        pkgs = path / "pkgs"
+        pkgs.mkdir(exist_ok=True)
+        (pkgs / "test.tar.gz").write_text("dummy")
+        (pkgs / "pkg_refs.txt").write_text("https://github.com/test/repo@abc123\n")
+
     def test_valid_benchmark(self, tmp_path: Path) -> None:
         """Test validation of valid benchmark."""
         # Create minimal valid benchmark (ref_commit is required for all)
-        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        (tmp_path / "Dockerfile").write_text(self.VALID_DOCKERFILE)
         (tmp_path / "project.yaml").write_text(
             "main_repo: https://github.com/test/repo\n"
         )
@@ -131,6 +146,7 @@ class TestValidateBenchmark:
         (tmp_path / ".aixcc" / "meta.yaml").write_text(
             "base_commit: abc123\nref_commit: def456\n"
         )
+        self._add_pkgs(tmp_path)
 
         result = validate_benchmark(tmp_path)
         assert result.valid
@@ -167,12 +183,13 @@ class TestValidateBenchmark:
 
     def test_warns_missing_main_repo(self, tmp_path: Path) -> None:
         """Test validation warns about missing main_repo."""
-        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        (tmp_path / "Dockerfile").write_text(self.VALID_DOCKERFILE)
         (tmp_path / "project.yaml").write_text("language: c\n")  # No main_repo
         (tmp_path / ".aixcc").mkdir()
         (tmp_path / ".aixcc" / "meta.yaml").write_text(
             "base_commit: abc123\nref_commit: def456\n"
         )
+        self._add_pkgs(tmp_path)
 
         result = validate_benchmark(tmp_path)
         assert result.valid  # Still valid, but warning
@@ -180,10 +197,11 @@ class TestValidateBenchmark:
 
     def test_warns_missing_ref_commit_flat_format(self, tmp_path: Path) -> None:
         """Test validation warns when ref_commit is missing in flat format (full-only mode)."""
-        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        (tmp_path / "Dockerfile").write_text(self.VALID_DOCKERFILE)
         (tmp_path / "project.yaml").write_text("main_repo: test\n")
         (tmp_path / ".aixcc").mkdir()
         (tmp_path / ".aixcc" / "meta.yaml").write_text("base_commit: abc123\n")
+        self._add_pkgs(tmp_path)
 
         result = validate_benchmark(tmp_path)
         # Flat format without ref_commit is valid but treated as full-only
@@ -191,8 +209,8 @@ class TestValidateBenchmark:
         assert any("ref_commit" in w for w in result.warnings)
 
     def test_validates_pkgs_structure(self, tmp_path: Path) -> None:
-        """Test validation of pkgs/ directory structure."""
-        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        """Test validation of pkgs/ directory structure with wrong tarball name."""
+        (tmp_path / "Dockerfile").write_text(self.VALID_DOCKERFILE)
         (tmp_path / "project.yaml").write_text("main_repo: test\n")
         (tmp_path / ".aixcc").mkdir()
         (tmp_path / ".aixcc" / "meta.yaml").write_text(
@@ -203,15 +221,16 @@ class TestValidateBenchmark:
         (tmp_path / "pkgs" / "wrong.tar.gz").write_text("dummy")
 
         result = validate_benchmark(tmp_path)
-        assert result.valid  # pkgs issues are warnings, not errors
+        # Missing tarball is now an error (VAL-02)
+        assert not result.valid
         assert any(
-            "expected tarball" in w.lower() or "test.tar.gz" in w
-            for w in result.warnings
+            "expected" in e.lower() and "test.tar.gz" in e.lower()
+            for e in result.errors
         )
 
     def test_warns_missing_pkg_refs(self, tmp_path: Path) -> None:
         """Test validation warns about missing pkg_refs.txt."""
-        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        (tmp_path / "Dockerfile").write_text(self.VALID_DOCKERFILE)
         (tmp_path / "project.yaml").write_text("main_repo: test\n")
         (tmp_path / ".aixcc").mkdir()
         (tmp_path / ".aixcc" / "meta.yaml").write_text(
@@ -374,14 +393,25 @@ class TestGetBenchmarkInfo:
 class TestValidateNestedMetaYaml:
     """Tests for nested meta.yaml format validation."""
 
+    VALID_DOCKERFILE = (
+        "FROM base\nCOPY pkgs/test.tar.gz $SRC/test.tar.gz\nWORKDIR $SRC/test\n"
+    )
+
+    def _add_pkgs(self, path: Path) -> None:
+        pkgs = path / "pkgs"
+        pkgs.mkdir(exist_ok=True)
+        (pkgs / "test.tar.gz").write_text("dummy")
+        (pkgs / "pkg_refs.txt").write_text("ref\n")
+
     def test_valid_delta_mode(self, tmp_path: Path) -> None:
         """Test validation of valid delta_mode section."""
-        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        (tmp_path / "Dockerfile").write_text(self.VALID_DOCKERFILE)
         (tmp_path / "project.yaml").write_text("main_repo: test\n")
         (tmp_path / ".aixcc").mkdir()
         (tmp_path / ".aixcc" / "meta.yaml").write_text(
             "delta_mode:\n  base_commit: abc123\n  ref_commit: def456\n"
         )
+        self._add_pkgs(tmp_path)
 
         result = validate_benchmark(tmp_path)
         assert result.valid
@@ -389,24 +419,26 @@ class TestValidateNestedMetaYaml:
 
     def test_valid_full_mode(self, tmp_path: Path) -> None:
         """Test validation of valid full_mode section (no ref_commit needed)."""
-        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        (tmp_path / "Dockerfile").write_text(self.VALID_DOCKERFILE)
         (tmp_path / "project.yaml").write_text("main_repo: test\n")
         (tmp_path / ".aixcc").mkdir()
         (tmp_path / ".aixcc" / "meta.yaml").write_text(
             "full_mode:\n  base_commit: abc123\n"
         )
+        self._add_pkgs(tmp_path)
 
         result = validate_benchmark(tmp_path)
         assert result.valid
 
     def test_delta_mode_missing_base_commit(self, tmp_path: Path) -> None:
         """Test validation catches missing base_commit in delta_mode."""
-        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        (tmp_path / "Dockerfile").write_text(self.VALID_DOCKERFILE)
         (tmp_path / "project.yaml").write_text("main_repo: test\n")
         (tmp_path / ".aixcc").mkdir()
         (tmp_path / ".aixcc" / "meta.yaml").write_text(
             "delta_mode:\n  ref_commit: def456\n"
         )
+        self._add_pkgs(tmp_path)
 
         result = validate_benchmark(tmp_path)
         assert not result.valid
@@ -414,12 +446,13 @@ class TestValidateNestedMetaYaml:
 
     def test_delta_mode_missing_ref_commit(self, tmp_path: Path) -> None:
         """Test validation catches missing ref_commit in delta_mode."""
-        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        (tmp_path / "Dockerfile").write_text(self.VALID_DOCKERFILE)
         (tmp_path / "project.yaml").write_text("main_repo: test\n")
         (tmp_path / ".aixcc").mkdir()
         (tmp_path / ".aixcc" / "meta.yaml").write_text(
             "delta_mode:\n  base_commit: abc123\n"
         )
+        self._add_pkgs(tmp_path)
 
         result = validate_benchmark(tmp_path)
         assert not result.valid
@@ -427,12 +460,13 @@ class TestValidateNestedMetaYaml:
 
     def test_full_mode_valid_without_ref_commit(self, tmp_path: Path) -> None:
         """Test validation accepts full_mode without ref_commit (base IS the vulnerable state)."""
-        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        (tmp_path / "Dockerfile").write_text(self.VALID_DOCKERFILE)
         (tmp_path / "project.yaml").write_text("main_repo: test\n")
         (tmp_path / ".aixcc").mkdir()
         (tmp_path / ".aixcc" / "meta.yaml").write_text(
             "full_mode:\n  base_commit: abc123\n"
         )
+        self._add_pkgs(tmp_path)
 
         result = validate_benchmark(tmp_path)
         # Full mode doesn't need ref_commit - base_commit IS the vulnerable state
@@ -441,7 +475,7 @@ class TestValidateNestedMetaYaml:
 
     def test_both_modes_valid(self, tmp_path: Path) -> None:
         """Test validation passes with both modes defined."""
-        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        (tmp_path / "Dockerfile").write_text(self.VALID_DOCKERFILE)
         (tmp_path / "project.yaml").write_text("main_repo: test\n")
         (tmp_path / ".aixcc").mkdir()
         (tmp_path / ".aixcc" / "meta.yaml").write_text(
@@ -451,6 +485,7 @@ class TestValidateNestedMetaYaml:
             "full_mode:\n"
             "  base_commit: full_base\n"
         )
+        self._add_pkgs(tmp_path)
 
         result = validate_benchmark(tmp_path)
         assert result.valid
@@ -459,15 +494,26 @@ class TestValidateNestedMetaYaml:
 class TestValidateRefDiff:
     """Tests for ref.diff validation in delta mode benchmarks."""
 
+    VALID_DOCKERFILE = (
+        "FROM base\nCOPY pkgs/test.tar.gz $SRC/test.tar.gz\nWORKDIR $SRC/test\n"
+    )
+
+    def _add_pkgs(self, path: Path) -> None:
+        pkgs = path / "pkgs"
+        pkgs.mkdir(exist_ok=True)
+        (pkgs / "test.tar.gz").write_text("dummy")
+        (pkgs / "pkg_refs.txt").write_text("ref\n")
+
     def test_delta_mode_with_ref_diff_no_warning(self, tmp_path: Path) -> None:
         """Test delta mode benchmark with ref.diff has no warning."""
-        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        (tmp_path / "Dockerfile").write_text(self.VALID_DOCKERFILE)
         (tmp_path / "project.yaml").write_text("main_repo: test\n")
         (tmp_path / ".aixcc").mkdir()
         (tmp_path / ".aixcc" / "meta.yaml").write_text(
             "delta_mode:\n  base_commit: abc123\n  ref_commit: def456\n"
         )
         (tmp_path / ".aixcc" / "ref.diff").write_text("--- a/file\n+++ b/file\n")
+        self._add_pkgs(tmp_path)
 
         result = validate_benchmark(tmp_path)
         assert result.valid
@@ -475,13 +521,14 @@ class TestValidateRefDiff:
 
     def test_delta_mode_without_ref_diff_warns(self, tmp_path: Path) -> None:
         """Test delta mode benchmark without ref.diff emits warning."""
-        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        (tmp_path / "Dockerfile").write_text(self.VALID_DOCKERFILE)
         (tmp_path / "project.yaml").write_text("main_repo: test\n")
         (tmp_path / ".aixcc").mkdir()
         (tmp_path / ".aixcc" / "meta.yaml").write_text(
             "delta_mode:\n  base_commit: abc123\n  ref_commit: def456\n"
         )
         # No ref.diff file
+        self._add_pkgs(tmp_path)
 
         result = validate_benchmark(tmp_path)
         assert result.valid  # Missing ref.diff is warning, not error
@@ -490,13 +537,14 @@ class TestValidateRefDiff:
 
     def test_full_mode_no_ref_diff_check(self, tmp_path: Path) -> None:
         """Test full mode benchmark doesn't require ref.diff."""
-        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        (tmp_path / "Dockerfile").write_text(self.VALID_DOCKERFILE)
         (tmp_path / "project.yaml").write_text("main_repo: test\n")
         (tmp_path / ".aixcc").mkdir()
         (tmp_path / ".aixcc" / "meta.yaml").write_text(
             "full_mode:\n  base_commit: abc123\n"
         )
         # No ref.diff file - should be fine for full mode
+        self._add_pkgs(tmp_path)
 
         result = validate_benchmark(tmp_path)
         assert result.valid
@@ -507,7 +555,7 @@ class TestValidateRefDiff:
         self, tmp_path: Path
     ) -> None:
         """Test flat format with ref_commit (legacy delta) warns about missing ref.diff."""
-        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        (tmp_path / "Dockerfile").write_text(self.VALID_DOCKERFILE)
         (tmp_path / "project.yaml").write_text("main_repo: test\n")
         (tmp_path / ".aixcc").mkdir()
         # Flat format with ref_commit indicates delta mode
@@ -515,6 +563,7 @@ class TestValidateRefDiff:
             "base_commit: abc123\nref_commit: def456\n"
         )
         # No ref.diff file
+        self._add_pkgs(tmp_path)
 
         result = validate_benchmark(tmp_path)
         assert result.valid
@@ -524,12 +573,13 @@ class TestValidateRefDiff:
         self, tmp_path: Path
     ) -> None:
         """Test flat format without ref_commit (full-only) doesn't warn about ref.diff."""
-        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        (tmp_path / "Dockerfile").write_text(self.VALID_DOCKERFILE)
         (tmp_path / "project.yaml").write_text("main_repo: test\n")
         (tmp_path / ".aixcc").mkdir()
         # Flat format without ref_commit is full-only mode
         (tmp_path / ".aixcc" / "meta.yaml").write_text("base_commit: abc123\n")
         # No ref.diff file - should be fine for full-only
+        self._add_pkgs(tmp_path)
 
         result = validate_benchmark(tmp_path)
         assert result.valid
@@ -548,7 +598,9 @@ class TestBundleBenchmark:
 
     def _create_valid_benchmark(self, tmp_path: Path) -> Path:
         """Create a valid benchmark structure for testing."""
-        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        (tmp_path / "Dockerfile").write_text(
+            "FROM base\nCOPY pkgs/test.tar.gz $SRC/test.tar.gz\nWORKDIR $SRC/test\n"
+        )
         (tmp_path / "project.yaml").write_text(
             "main_repo: https://github.com/test/repo\n"
         )
@@ -709,7 +761,9 @@ class TestBundleBenchmark:
 
     def test_full_mode_no_ref_diff_generated(self, tmp_path: Path) -> None:
         """Test bundle for full-mode benchmark (no ref.diff)."""
-        (tmp_path / "Dockerfile").write_text("FROM base\nWORKDIR $SRC/test\n")
+        (tmp_path / "Dockerfile").write_text(
+            "FROM base\nCOPY pkgs/test.tar.gz $SRC/test.tar.gz\nWORKDIR $SRC/test\n"
+        )
         (tmp_path / "project.yaml").write_text(
             "main_repo: https://github.com/test/repo\n"
         )

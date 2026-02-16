@@ -9,18 +9,27 @@ Pattern: Same as build_jobs.py — serialize → enqueue → execute on evaluato
 
 from __future__ import annotations
 
-import os
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from crsbench.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    import rq
+    import rq.job
+    import rq.registry
+
+    from crsbench.builder import BuildResult
 
 logger = get_logger(__name__)
 
 # Job class names that we support serializing/deserializing
-_VERIFY_JOB_TYPES = frozenset(
+_SUPPORTED_JOB_TYPES = frozenset(
     {
+        "BuildSingleVariantJob",
         "VerifyCpvPovJob",
         "VerifyCpvVarJob",
         "PatchPovTestJob",
@@ -45,13 +54,36 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
         Dict suitable for passing to ``execute_ci_job()``
     """
     cls_name = type(job).__name__
-    if cls_name not in _VERIFY_JOB_TYPES:
+    if cls_name not in _SUPPORTED_JOB_TYPES:
         raise ValueError(f"Unsupported job type for serialization: {cls_name}")
 
     params: dict[str, Any] = {"_job_class": cls_name}
 
     # Serialize dataclass fields based on job type
-    if cls_name == "VerifyCpvPovJob":
+    if cls_name == "BuildSingleVariantJob":
+        params.update(
+            {
+                "benchmark_path": str(job.benchmark_path),
+                "benchmark_name": job.benchmark_name,
+                "variant_type": job.variant_type.value,
+                "commit": job.commit,
+                "main_repo": job.main_repo,
+                "mode": job.mode.value,
+                "language": job.language,
+                "cpv_num": job.cpv_num,
+                "patch_id": job.patch_id,
+                "pov_id": job.pov_id,
+                "patches": [str(p) for p in job.patches],
+                "use_inc_build": job.use_inc_build,
+                "force_rebuild": job.force_rebuild,
+                "skip_if_cached": job.skip_if_cached,
+                "source_mode": job.source_mode,
+                "sanitizer": job.sanitizer,
+                "repo_name": job.repo_name,
+                "project_image_prefix": job.project_image_prefix,
+            }
+        )
+    elif cls_name == "VerifyCpvPovJob":
         params.update(
             {
                 "benchmark_name": job.benchmark_name,
@@ -138,6 +170,7 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 "patch_id": job.patch_id,
                 "patch_path": str(job.patch_path),
                 "harness": job.harness,
+                "sanitizer": job.sanitizer,
                 "use_inc_build": job.use_inc_build,
                 "force_rebuild": job.force_rebuild,
                 "build_job_id": job.build_job_id,
@@ -159,6 +192,7 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
     """
     from crsbench.benchmark_ci.jobs.flat import (
         BuildPatchVariantJob,
+        BuildSingleVariantJob,
         FlatCollectCoverageJob,
         PatchPovTestJob,
         PatchUnitTestJob,
@@ -166,9 +200,31 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
         VerifyCpvPovJob,
         VerifyCpvVarJob,
     )
+    from crsbench.builder.types import BenchmarkMode, VariantType
 
     cls_name = params["_job_class"]
 
+    if cls_name == "BuildSingleVariantJob":
+        return BuildSingleVariantJob(
+            benchmark_path=Path(params["benchmark_path"]),
+            benchmark_name=params["benchmark_name"],
+            variant_type=VariantType(params["variant_type"]),
+            commit=params["commit"],
+            main_repo=params["main_repo"],
+            mode=BenchmarkMode(params["mode"]),
+            language=params.get("language", "c"),
+            cpv_num=params.get("cpv_num"),
+            patch_id=params.get("patch_id"),
+            pov_id=params.get("pov_id"),
+            patches=[Path(p) for p in params.get("patches", [])],
+            use_inc_build=params.get("use_inc_build", True),
+            force_rebuild=params.get("force_rebuild", False),
+            skip_if_cached=params.get("skip_if_cached", False),
+            source_mode=params.get("source_mode", "pkgs"),
+            sanitizer=params.get("sanitizer", "address"),
+            repo_name=params.get("repo_name"),
+            project_image_prefix=params.get("project_image_prefix", "aixcc-afc"),
+        )
     if cls_name == "VerifyCpvPovJob":
         return VerifyCpvPovJob(
             benchmark_name=params["benchmark_name"],
@@ -243,6 +299,7 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             patch_id=params["patch_id"],
             patch_path=Path(params["patch_path"]),
             harness=params.get("harness", ""),
+            sanitizer=params.get("sanitizer", "address"),
             use_inc_build=params.get("use_inc_build", True),
             force_rebuild=params.get("force_rebuild", False),
             build_job_id=params.get("build_job_id", ""),
@@ -280,7 +337,12 @@ def _load_build_context_from_disk(
         logger.warning(f"Failed to load adapter for {benchmark_path}")
         return
 
-    build_results = engine.get_or_build_results(adapter)
+    # Get build results for ALL sanitizers this benchmark uses
+    build_results: dict[str, BuildResult] = {}
+    for san in adapter.get_all_cpv_sanitizers():
+        results = engine.get_or_build_results(adapter, sanitizer=san)
+        build_results.update(results)
+
     if not build_results:
         logger.warning(f"No build results found for {benchmark_path.name}")
         return
@@ -296,14 +358,10 @@ def _load_build_context_from_disk(
                 "adapter": adapter,
             }
         else:
-            # Fallback: put first available result (better than nothing)
-            for name, br in build_results.items():
-                context.shared[bid] = {"build_result": br, "adapter": adapter}
-                logger.debug(
-                    f"Fallback: mapped {bid} to {name} "
-                    f"(variant not found: {variant_name})"
-                )
-                break
+            logger.warning(
+                f"Build result not found for {bid} (variant: {variant_name}). "
+                f"Available: {list(build_results.keys())}"
+            )
 
     logger.info(
         f"Loaded {len(context.shared)} build context entries for {benchmark_path.name}"
@@ -377,6 +435,14 @@ def execute_ci_job(params: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Dict with job result fields (from JobResult.to_dict())
     """
+    cls_name = params.get("_job_class", "")
+
+    # BuildSingleVariantJob uses its own execution path (no context pre-population)
+    if cls_name == "BuildSingleVariantJob":
+        from crsbench.distributed.build_jobs import execute_ci_build
+
+        return execute_ci_build(params)
+
     from crsbench.benchmark_ci.jobs.base import JobContext
 
     job = _reconstruct_job(params)
@@ -402,28 +468,94 @@ def execute_ci_job(params: dict[str, Any]) -> dict[str, Any]:
     return result.to_dict()
 
 
+def _recover_orphaned_deferred_jobs(
+    queue: "rq.Queue",
+    rq_jobs: dict[str, rq.job.Job],
+    pending: set[str],
+) -> int:
+    """Recover deferred jobs whose dependencies are all satisfied.
+
+    RQ 2.x has a race condition where finished jobs clear their dependents'
+    dependency sets but fail to move them from the deferred registry to the
+    queue. This function detects such orphaned jobs and force-enqueues them.
+
+    Returns number of recovered jobs.
+    """
+    import rq.registry
+    from rq.exceptions import NoSuchJobError
+    from rq.job import Job as RqJob
+    from rq.job import JobStatus
+
+    deferred_registry = rq.registry.DeferredJobRegistry(queue=queue)
+    deferred_ids = set(deferred_registry.get_job_ids())
+
+    # Only check jobs we're tracking
+    orphaned_ids = deferred_ids & pending
+    if not orphaned_ids:
+        return 0
+
+    recovered = 0
+    for job_id in orphaned_ids:
+        rq_job = rq_jobs[job_id]
+        rq_job.refresh()
+        if rq_job.get_status() != JobStatus.DEFERRED:
+            continue
+
+        # Check if all dependencies are finished
+        all_deps_done = True
+        for dep_id in rq_job.dependency_ids:
+            try:
+                dep_job = RqJob.fetch(dep_id, connection=queue.connection)
+                if dep_job.get_status() != JobStatus.FINISHED:
+                    all_deps_done = False
+                    break
+            except NoSuchJobError:
+                logger.debug(f"Dependency {dep_id} not found in Redis")
+                all_deps_done = False
+                break
+
+        if all_deps_done:
+            # Force-enqueue atomically via pipeline to prevent partial state
+            # if the process crashes between steps
+            pipe = queue.connection.pipeline()
+            deferred_registry.remove(rq_job, pipeline=pipe)
+            rq_job.set_status(JobStatus.QUEUED, pipeline=pipe)
+            # Clear internal dep list so RQ doesn't re-defer when processing
+            rq_job._dependency_ids = []
+            rq_job.save(pipeline=pipe)
+            pipe.delete(rq_job.dependencies_key)
+            queue.push_job_id(job_id, pipeline=pipe)
+            pipe.execute()
+            recovered += 1
+
+    if recovered:
+        logger.info(f"Recovered {recovered} orphaned deferred jobs")
+    return recovered
+
+
 def enqueue_and_poll_ci_jobs(
     jobs: list[Any],
     redis_host: str,
-    queue_name: str = "crsbench_ci_verify",
+    queue_name: str | Callable[[Any], str] = "crsbench_ci_verify",
     output_dir: str | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Enqueue CI verify/test jobs to Redis and poll until all complete.
+    """Enqueue CI jobs to Redis and poll until all complete.
 
-    Follows same pattern as build_jobs.enqueue_and_poll_builds().
-    Jobs are executed by evaluator workers where Docker images exist.
+    Supports per-job queue routing via a callable ``queue_name``.
+    When ``queue_name`` is a string, all jobs go to that queue.
+    When ``queue_name`` is a callable, it receives each job and
+    returns the queue name for that job.
 
     Args:
-        jobs: List of flat.py Job instances (verify, patch, coverage)
+        jobs: List of flat.py Job instances (build, verify, patch, coverage)
         redis_host: Redis server hostname
-        queue_name: Redis queue name
+        queue_name: Redis queue name (str) or callable(job) -> queue name
         output_dir: Optional directory for per-job stdout/stderr logs on worker
 
     Returns:
         Dict mapping job_id -> serialized JobResult dict
     """
     try:
-        import redis
         import rq
     except ImportError as exc:
         raise RuntimeError(
@@ -431,28 +563,40 @@ def enqueue_and_poll_ci_jobs(
             "Install with: pip install redis rq"
         ) from exc
 
-    redis_password = os.environ.get("REDIS_PASSWORD") or None
-    redis_conn = redis.Redis(
-        host=redis_host,
-        password=redis_password,
-        socket_connect_timeout=5,
-    )
-    redis_conn.ping()
+    from crsbench.distributed.queue import create_redis_connection
 
-    queue = rq.Queue(queue_name, connection=redis_conn)
-    logger.info(f"Connected to Redis at {redis_host}, queue: {queue_name}")
+    redis_conn = create_redis_connection(redis_host)
+    logger.info(f"Connected to Redis at {redis_host}")
 
     # Serialize and enqueue jobs respecting dependency order
-    # Build-type jobs (BuildPatchVariantJob) go first, then verify jobs
+    # Build-type jobs go first, then verify jobs
     build_type_jobs = [j for j in jobs if j.job_type == "build"]
     verify_type_jobs = [j for j in jobs if j.job_type != "build"]
     ordered_jobs = build_type_jobs + verify_type_jobs
+
+    # Per-job queue routing: lazily create queues as needed
+    queues: dict[str, rq.Queue] = {}
+
+    # Resolve routing function once upfront for type safety
+    if callable(queue_name):
+        _route_fn: Callable[[Any], str] = cast("Callable[[Any], str]", queue_name)
+    else:
+        _fixed_name = cast("str", queue_name)
+        _route_fn = lambda _job: _fixed_name  # noqa: E731
+
+    def _get_queue(job: Any) -> "rq.Queue":
+        name = _route_fn(job)
+        if name not in queues:
+            queues[name] = rq.Queue(name, connection=redis_conn)
+        return queues[name]
 
     rq_jobs: dict[str, rq.job.Job] = {}
     for job in ordered_jobs:
         params = serialize_ci_job(job)
         if output_dir:
             params["output_dir"] = output_dir
+
+        job_queue = _get_queue(job)
 
         # Map depends_on to RQ dependency IDs
         depends_on_rq: Optional[list[rq.job.Job]] = None
@@ -462,38 +606,75 @@ def enqueue_and_poll_ci_jobs(
                 depends_on_rq = dep_rq_jobs
 
         try:
-            rq_job = queue.enqueue(
+            rq_job = job_queue.enqueue(
                 "crsbench.distributed.ci_jobs.execute_ci_job",
                 params,
                 job_timeout=3600,
                 result_ttl=-1,
-                meta={"cpu_count": 1},
                 job_id=job.job_id,
                 depends_on=depends_on_rq,
             )
             rq_jobs[job.job_id] = rq_job
-            logger.info(f"Enqueued CI job {job.job_id}")
+            logger.info(f"Enqueued CI job {job.job_id} -> {job_queue.name}")
         except Exception:
             existing = rq.job.Job.fetch(job.job_id, connection=redis_conn)
-            rq_jobs[job.job_id] = existing
-            logger.info(
-                f"CI job {job.job_id} already exists, status: {existing.get_status()}"
-            )
+            status = existing.get_status()
+            if status in ("finished", "failed"):
+                rq_jobs[job.job_id] = existing
+                logger.info(f"CI job {job.job_id} already done (status: {status})")
+            else:
+                # Stale job from previous run — delete and re-enqueue
+                logger.warning(
+                    f"CI job {job.job_id} stale (status: {status}), "
+                    f"deleting and re-enqueuing"
+                )
+                existing.delete()
+                rq_job = job_queue.enqueue(
+                    "crsbench.distributed.ci_jobs.execute_ci_job",
+                    params,
+                    job_timeout=3600,
+                    result_ttl=-1,
+                    job_id=job.job_id,
+                    depends_on=depends_on_rq,
+                )
+                rq_jobs[job.job_id] = rq_job
 
     logger.info(
         f"Enqueued {len(rq_jobs)} CI jobs ({len(build_type_jobs)} build, "
-        f"{len(verify_type_jobs)} verify/test), waiting for completion..."
+        f"{len(verify_type_jobs)} verify/test) across {len(queues)} queue(s), "
+        f"waiting for completion..."
     )
 
-    # Poll for results
+    # Poll for results with deferred job recovery
     pending = set(rq_jobs.keys())
+    recovery_interval = 30  # seconds between recovery sweeps
+    last_recovery = time.monotonic()
+
     while pending:
-        for job_id in list(pending):
-            rq_job = rq_jobs[job_id]
-            rq_job.refresh()
+        # Batch-fetch all pending jobs in one Redis pipeline round-trip
+        pending_ids = list(pending)
+        fetched = rq.job.Job.fetch_many(pending_ids, connection=redis_conn)
+        for rq_job in fetched:
+            if rq_job is None:
+                continue
+            rq_jobs[rq_job.id] = rq_job
             status = rq_job.get_status()
             if status in ("finished", "failed"):
-                pending.discard(job_id)
+                pending.discard(rq_job.id)
+
+        # Periodically recover orphaned deferred jobs (RQ race condition)
+        now = time.monotonic()
+        if pending and (now - last_recovery) >= recovery_interval:
+            for q in queues.values():
+                try:
+                    _recover_orphaned_deferred_jobs(q, rq_jobs, pending)
+                except Exception:
+                    logger.warning(
+                        f"Recovery sweep failed for queue {q.name}, "
+                        f"will retry next interval",
+                        exc_info=True,
+                    )
+            last_recovery = now
 
         if pending:
             logger.info(f"Waiting for {len(pending)}/{len(rq_jobs)} CI jobs...")
@@ -511,7 +692,7 @@ def enqueue_and_poll_ci_jobs(
             exc_info = rq_job.exc_info or "Unknown error"
             raw_results[job_id] = {
                 "job_id": job_id,
-                "job_type": "verify",
+                "job_type": "unknown",
                 "success": False,
                 "error": str(exc_info)[:500],
                 "elapsed_seconds": 0.0,
@@ -563,10 +744,26 @@ def ci_results_to_executor_results(
                 job_result=job_result,
             )
         else:
+            job_result = JobResult(
+                job_id=r.get("job_id", job_id),
+                job_type=r.get("job_type", "verify"),
+                success=False,
+                started_at=datetime.fromisoformat(r["started_at"])
+                if r.get("started_at")
+                else datetime.now(),
+                finished_at=datetime.fromisoformat(r["finished_at"])
+                if r.get("finished_at")
+                else datetime.now(),
+                elapsed_seconds=r.get("elapsed_seconds", 0.0),
+                error=r.get("error", "Unknown error"),
+                details=r.get("details", {}),
+            )
             results[job_id] = ExecutorResult(
                 job_id=job_id,
                 status=JobStatus.FAILED,
+                elapsed_seconds=r.get("elapsed_seconds", 0.0),
                 error=r.get("error", "Unknown error"),
+                job_result=job_result,
             )
 
     return results

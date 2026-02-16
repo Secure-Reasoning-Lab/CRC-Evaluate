@@ -5,6 +5,7 @@ for distributed CRS trial execution.
 """
 
 import os
+import re
 from typing import List, Optional
 
 from crsbench.utils.logger import get_logger
@@ -21,6 +22,131 @@ except ImportError:
     rq = None  # type: ignore[assignment]
 
 logger = get_logger(__name__)
+
+# Regex for valid queue name components (alphanumeric, underscores, hyphens)
+_VALID_QUEUE_COMPONENT = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+
+
+def validate_queue_name_component(name: str) -> str:
+    """Validate that a name is safe for use in Redis queue names.
+
+    Queue names are built as ``crsbench_{experiment_name}_build`` etc.
+    This validates the user-supplied component to prevent injection of
+    unexpected characters into queue names.
+
+    Args:
+        name: Experiment or queue name component
+
+    Returns:
+        The validated name (unchanged)
+
+    Raises:
+        ValueError: If name contains invalid characters
+    """
+    if not _VALID_QUEUE_COMPONENT.match(name):
+        raise ValueError(
+            f"Invalid name for queue component: {name!r}. "
+            "Must start with alphanumeric and contain only [a-zA-Z0-9_-]."
+        )
+    return name
+
+
+# Cache for auth detection: avoids extra connection attempt per call.
+# None = not determined yet, True = password required, False = no password.
+_auth_required: Optional[bool] = None
+
+
+def create_redis_connection(
+    redis_host: str,
+    *,
+    socket_connect_timeout: int = 5,
+) -> "redis.Redis":
+    """Create a Redis connection with auto-detection of password requirement.
+
+    Reads REDIS_PASSWORD from environment. If set but the server doesn't
+    require auth (stale .env), retries without password. If not set but
+    the server requires auth, raises a clear error.
+
+    Caches the auth detection result so subsequent calls skip the
+    unnecessary auth probe.
+
+    Args:
+        redis_host: Redis server hostname or IP address
+        socket_connect_timeout: Connection timeout in seconds
+
+    Returns:
+        Connected and pinged Redis client
+
+    Raises:
+        redis.AuthenticationError: If server requires a password but
+            REDIS_PASSWORD is not set
+        redis.ConnectionError: If server is unreachable
+    """
+    global _auth_required  # noqa: PLW0603
+
+    if not REDIS_AVAILABLE:
+        raise RuntimeError(
+            "Redis and RQ packages are required for distributed execution. "
+            "Install with: pip install redis rq"
+        )
+
+    password = os.environ.get("REDIS_PASSWORD") or None
+
+    # Fast path: use cached auth decision
+    if _auth_required is True and password:
+        conn = redis.Redis(
+            host=redis_host,
+            password=password,
+            socket_connect_timeout=socket_connect_timeout,
+        )
+        conn.ping()
+        return conn
+    if _auth_required is False:
+        conn = redis.Redis(
+            host=redis_host,
+            socket_connect_timeout=socket_connect_timeout,
+        )
+        conn.ping()
+        return conn
+
+    # First call: probe auth requirement
+    if password:
+        try:
+            conn = redis.Redis(
+                host=redis_host,
+                password=password,
+                socket_connect_timeout=socket_connect_timeout,
+            )
+            conn.ping()
+            _auth_required = True
+            return conn
+        except redis.AuthenticationError:
+            # Server doesn't need auth — stale REDIS_PASSWORD in env
+            logger.info(
+                "REDIS_PASSWORD is set but server requires no auth, "
+                "connecting without password"
+            )
+            conn = redis.Redis(
+                host=redis_host,
+                socket_connect_timeout=socket_connect_timeout,
+            )
+            conn.ping()
+            _auth_required = False
+            return conn
+
+    # No password in env — connect without
+    try:
+        conn = redis.Redis(
+            host=redis_host,
+            socket_connect_timeout=socket_connect_timeout,
+        )
+        conn.ping()
+        _auth_required = False
+        return conn
+    except redis.AuthenticationError:
+        raise redis.AuthenticationError(
+            "Redis server requires authentication. Set REDIS_PASSWORD environment variable."
+        ) from None
 
 
 def check_redis_available(redis_host: str, timeout: int = 2) -> bool:
@@ -43,13 +169,7 @@ def check_redis_available(redis_host: str, timeout: int = 2) -> bool:
         return False
 
     try:
-        redis_password = os.environ.get("REDIS_PASSWORD") or None
-        client = redis.Redis(
-            host=redis_host,
-            password=redis_password,
-            socket_connect_timeout=timeout,
-        )
-        client.ping()
+        create_redis_connection(redis_host, socket_connect_timeout=timeout)
         logger.debug(f"Redis server at {redis_host} is reachable")
         return True
     except (redis.ConnectionError, redis.TimeoutError) as e:
@@ -86,14 +206,12 @@ def initialize_queue(redis_host: str, experiment_name: str) -> Optional["rq.Queu
             "Install with: pip install redis rq"
         )
 
+    validate_queue_name_component(experiment_name)
     queue_name = f"crsbench_{experiment_name}"
     logger.info(f"Initializing queue: {queue_name}")
 
     try:
-        redis_password = os.environ.get("REDIS_PASSWORD") or None
-        redis_connection = redis.Redis(host=redis_host, password=redis_password)
-        # Test connection
-        redis_connection.ping()
+        redis_connection = create_redis_connection(redis_host)
 
         queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
         logger.info(f"Queue initialized successfully: {queue_name}")

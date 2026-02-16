@@ -354,6 +354,48 @@ Examples:
     )
     check_image_parser.set_defaults(func=handle_check_image)
 
+    # crsbench benchmark upload
+    from crsbench.dataset.registry import get_dataset_names
+
+    dataset_names = ", ".join(get_dataset_names())
+    upload_parser = benchmark_subparsers.add_parser(
+        "upload",
+        help="Upload benchmark datasets to HuggingFace",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=f"""
+Available datasets: {dataset_names}
+
+Examples:
+  %(prog)s --dataset crsbench
+  %(prog)s --dataset crsbench --dry-run
+  %(prog)s --dataset crsbench --benchmarks-dir ./benchmarks
+        """,
+    )
+    upload_parser.add_argument(
+        "--dataset",
+        type=str,
+        required=True,
+        choices=get_dataset_names(),
+        help="Dataset to upload",
+    )
+    upload_parser.add_argument(
+        "--benchmarks-dir",
+        type=Path,
+        default=Path("benchmarks"),
+        help="Path to benchmarks directory (default: benchmarks/)",
+    )
+    upload_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only list what would be uploaded, don't actually upload",
+    )
+    upload_parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging",
+    )
+    upload_parser.set_defaults(func=handle_upload)
+
     benchmark_parser.set_defaults(command="benchmark", func=handle_benchmark_help)
 
 
@@ -974,6 +1016,23 @@ def handle_check_image(args: argparse.Namespace) -> int:
     if not_found > 0:
         logger.info(f"Not found: {not_found}")
 
+    return 0
+
+
+def handle_upload(args: argparse.Namespace) -> int:
+    """Handle 'crsbench benchmark upload' command."""
+    from crsbench.utils.logger import configure_logger
+
+    if hasattr(args, "debug") and args.debug:
+        configure_logger(level="DEBUG")
+
+    from crsbench.dataset.upload import upload_dataset
+
+    upload_dataset(
+        args.dataset,
+        args.benchmarks_dir,
+        dry_run=args.dry_run,
+    )
     return 0
 
 

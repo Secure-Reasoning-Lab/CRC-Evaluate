@@ -121,6 +121,20 @@ class VerificationEngine:
         self.dedup_strategy = dedup_strategy if dedup_strategy else PatchBasedDedup()
         self._built_results: dict[str, dict[str, BuildResult]] = {}
 
+    def _clear_build_cache(self, benchmark_name: str) -> None:
+        """Clear all cached build results for a benchmark.
+
+        Removes both bare keys ('name') and sanitizer-qualified keys
+        ('name:address', 'name:undefined').
+        """
+        keys_to_remove = [
+            k
+            for k in self._built_results
+            if k == benchmark_name or k.startswith(f"{benchmark_name}:")
+        ]
+        for k in keys_to_remove:
+            del self._built_results[k]
+
     def _log_crash_summary(
         self, pov_id: str, crash_logs: dict[str, str], max_lines: int = 30
     ) -> None:
@@ -463,7 +477,7 @@ class VerificationEngine:
             # Attach stdout/stderr logs to result
             crash_info: dict[str, dict[str, str]] = {}
             if stdout_logs:
-                crash_info["logs"] = stdout_logs
+                crash_info["stdout"] = stdout_logs
             if stderr_logs:
                 crash_info["stderr"] = stderr_logs
             if crash_info:
@@ -618,7 +632,7 @@ class VerificationEngine:
 
         # Build variants if needed
         if force_rebuild:
-            self._built_results.pop(adapter.benchmark_name, None)
+            self._clear_build_cache(adapter.benchmark_name)
 
         build_start = time.time()
         build_results = self.get_or_build_results(
@@ -767,6 +781,7 @@ class VerificationEngine:
         *,
         force_rebuild: bool = False,
         use_inc_build: Optional[bool] = None,
+        sanitizer: Optional[str] = None,
     ) -> dict[str, BuildResult]:
         """Get cached build results or build new ones.
 
@@ -774,12 +789,18 @@ class VerificationEngine:
             adapter: MetaYamlAdapter for benchmark config
             force_rebuild: Force rebuild even if cached
             use_inc_build: Override incremental build setting (None uses adapter default)
+            sanitizer: Explicit sanitizer to use (skips auto-detect when provided)
 
         Returns:
             Dict mapping variant names to BuildResult
         """
-        if not force_rebuild and adapter.benchmark_name in self._built_results:
-            return self._built_results[adapter.benchmark_name]
+        # Cache key includes sanitizer to avoid cross-sanitizer collisions
+        cache_key = adapter.benchmark_name
+        if sanitizer:
+            cache_key = f"{adapter.benchmark_name}:{sanitizer}"
+
+        if not force_rebuild and cache_key in self._built_results:
+            return self._built_results[cache_key]
 
         # Determine mode
         mode_str = adapter.get_mode().value
@@ -788,16 +809,16 @@ class VerificationEngine:
         # Use override if provided, otherwise use adapter's setting
         inc_build = use_inc_build if use_inc_build is not None else adapter.inc_build
 
-        # Get sanitizer(s) from meta.yaml POV definitions
-        # If multiple sanitizers, use the first one (CI handles multi-sanitizer properly)
-        sanitizers = adapter.get_all_cpv_sanitizers()
-        sanitizer = sanitizers[0]
-        if len(sanitizers) > 1:
-            logger.warning(
-                f"{adapter.benchmark_name} uses multiple sanitizers: {sanitizers}. "
-                f"POV verification will use {sanitizer}. "
-                "Use 'crsbench ci' for full multi-sanitizer support."
-            )
+        # Use explicit sanitizer if provided, otherwise auto-detect
+        if sanitizer is None:
+            sanitizers = adapter.get_all_cpv_sanitizers()
+            sanitizer = sanitizers[0]
+            if len(sanitizers) > 1:
+                logger.warning(
+                    f"{adapter.benchmark_name} uses multiple sanitizers: "
+                    f"{sanitizers}. POV verification will use {sanitizer}. "
+                    "Use 'crsbench ci' for full multi-sanitizer support."
+                )
 
         # Create build plan
         plan = self.builder.create_build_plan(
@@ -817,7 +838,7 @@ class VerificationEngine:
 
         # Build variants
         results = self.builder.execute_plan(plan, force_rebuild=force_rebuild)
-        self._built_results[adapter.benchmark_name] = results
+        self._built_results[cache_key] = results
         return results
 
     def load_adapter(self, benchmark_path: Path) -> Optional[MetaYamlAdapter]:
@@ -875,4 +896,4 @@ class VerificationEngine:
             adapter: MetaYamlAdapter for benchmark config
         """
         self.builder.cleanup_variants(adapter.benchmark_name)
-        self._built_results.pop(adapter.benchmark_name, None)
+        self._clear_build_cache(adapter.benchmark_name)

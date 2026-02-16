@@ -9,16 +9,14 @@
 #
 #   # 2. (Optional) Start evaluator for POV verification
 #   crsbench evaluator \
-#       --experiment-config experiment-configs/experiment-config-sanity.yaml \
-#       -j 2
+#       --experiment-config experiment-configs/experiment-config-sanity.yaml
 #
 #   # 3. Run orchestrator (enqueues jobs)
 #   crsbench run --experiment-config experiment-configs/experiment-config-sanity.yaml
 #
 #   # 4. Start worker (executes CRS trials)
 #   crsbench worker \
-#       --experiment-config experiment-configs/experiment-config-sanity.yaml \
-#       -j 2 --continuous
+#       --experiment-config experiment-configs/experiment-config-sanity.yaml --continuous
 
 experiment: sanity-test
 

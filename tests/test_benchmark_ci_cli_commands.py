@@ -96,8 +96,14 @@ class TestDispatchCi:
             patch(
                 "crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate"
             ) as mock_schema,
+            patch(
+                "crsbench.benchmark_ci.cli.commands.format_cmd.validate_tarball_naming"
+            ) as mock_tarball,
             patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table"),
         ):
+            from crsbench.benchmark.packaging.validate import (
+                TarballValidationResult,
+            )
             from crsbench.benchmark.packaging.validate import (
                 ValidationResult as StructResult,
             )
@@ -106,6 +112,7 @@ class TestDispatchCi:
             mock_discover.return_value = [Path("/tmp/bench1")]
             mock_structural.return_value = StructResult(valid=True)
             mock_schema.return_value = ValidationResult(is_valid=True, issues=[])
+            mock_tarball.return_value = TarballValidationResult(valid=True)
             result = dispatch_ci(args)
             assert result == 0
 
@@ -324,12 +331,16 @@ class TestFormatSubcommand:
     """Integration tests for the format subcommand."""
 
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.validate_tarball_naming")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.structural_validate")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.resolve_benchmark_paths")
     def test_format_all_pass_returns_0(
-        self, mock_discover, mock_structural, mock_schema, mock_table
+        self, mock_discover, mock_structural, mock_schema, mock_tarball, mock_table
     ):
+        from crsbench.benchmark.packaging.validate import (
+            TarballValidationResult,
+        )
         from crsbench.benchmark.packaging.validate import (
             ValidationResult as StructResult,
         )
@@ -338,6 +349,7 @@ class TestFormatSubcommand:
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_structural.return_value = StructResult(valid=True)
         mock_schema.return_value = ValidationResult(is_valid=True, issues=[])
+        mock_tarball.return_value = TarballValidationResult(valid=True)
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "format", "--all"])
@@ -452,12 +464,22 @@ class TestFormatSubcommand:
         assert result == 1
 
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.validate_tarball_naming")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.structural_validate")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.resolve_benchmark_paths")
     def test_format_output_writes_json(
-        self, mock_discover, mock_structural, mock_schema, mock_table, tmp_path
+        self,
+        mock_discover,
+        mock_structural,
+        mock_schema,
+        mock_tarball,
+        mock_table,
+        tmp_path,
     ):
+        from crsbench.benchmark.packaging.validate import (
+            TarballValidationResult,
+        )
         from crsbench.benchmark.packaging.validate import (
             ValidationResult as StructResult,
         )
@@ -466,6 +488,7 @@ class TestFormatSubcommand:
         mock_discover.return_value = [Path("/tmp/bench1")]
         mock_structural.return_value = StructResult(valid=True)
         mock_schema.return_value = ValidationResult(is_valid=True, issues=[])
+        mock_tarball.return_value = TarballValidationResult(valid=True)
 
         output_file = tmp_path / "out.json"
         parser = _make_parser()
@@ -577,12 +600,22 @@ class TestFormatSubcommand:
         assert result == 1
 
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.print_results_table")
+    @patch("crsbench.benchmark_ci.cli.commands.format_cmd.validate_tarball_naming")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.schema_validate")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.structural_validate")
     @patch("crsbench.benchmark_ci.cli.commands.format_cmd.resolve_benchmark_paths")
     def test_format_cpv_complete_structure_passes(
-        self, mock_discover, mock_structural, mock_schema, mock_table, tmp_path
+        self,
+        mock_discover,
+        mock_structural,
+        mock_schema,
+        mock_tarball,
+        mock_table,
+        tmp_path,
     ):
+        from crsbench.benchmark.packaging.validate import (
+            TarballValidationResult,
+        )
         from crsbench.benchmark.packaging.validate import (
             ValidationResult as StructResult,
         )
@@ -618,6 +651,7 @@ class TestFormatSubcommand:
         mock_discover.return_value = [bench]
         mock_structural.return_value = StructResult(valid=True)
         mock_schema.return_value = ValidationResult(is_valid=True, issues=[])
+        mock_tarball.return_value = TarballValidationResult(valid=True)
 
         parser = _make_parser()
         args = parser.parse_args(["ci", "format", "--all"])
@@ -2346,3 +2380,189 @@ class TestAllSubcommand:
         assert adapter.get_cpv_sanitizer.call_count == 2
         adapter.get_cpv_sanitizer.assert_any_call("harness_addr", "cpv_0")
         adapter.get_cpv_sanitizer.assert_any_call("harness_undef", "cpv_1")
+
+
+# --- Test RTS job creation conditional on effective_inc ---
+
+
+class TestRtsJobCreationConditional:
+    """Test that RTS jobs are only created when inc-build is effective."""
+
+    @staticmethod
+    def _build_dag_with_params(
+        *,
+        use_inc_build: bool,
+        supports_inc: bool,
+        rts_mode: str | None,
+    ):
+        """Build a DAG via _build_dag with the given parameters."""
+        from unittest.mock import MagicMock
+        from unittest.mock import patch as mock_patch
+
+        from crsbench.benchmark_ci.cli.commands.all_cmd import _build_dag
+
+        path = Path("/tmp/bench1")
+
+        with (
+            mock_patch(
+                "crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names"
+            ) as mock_harness,
+            mock_patch(
+                "crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids"
+            ) as mock_cpvs,
+            mock_patch(
+                "crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths"
+            ) as mock_patches,
+            mock_patch(
+                "crsbench.benchmark_ci.cli.commands.all_cmd.discover_pov_paths"
+            ) as mock_povs,
+            mock_patch(
+                "crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities"
+            ) as mock_caps,
+            mock_patch(
+                "crsbench.benchmark_ci.cli.commands.all_cmd._load_benchmark_adapter"
+            ) as mock_adapter,
+            mock_patch(
+                "crsbench.builder.infrastructure.OSSFuzzInfrastructure"
+            ) as mock_infra,
+        ):
+            mock_caps.return_value = (supports_inc, rts_mode)
+            mock_harness.return_value = ["fuzz_target"]
+            mock_cpvs.return_value = ["cpv_0"]
+            mock_patches.return_value = [("patch_0", Path("/tmp/patch_0.diff"))]
+            mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+
+            adapter = MagicMock()
+            adapter.get_ref_commit.return_value = "abc123"
+            adapter.get_base_commit.return_value = "base123"
+            adapter.main_repo = "https://github.com/test/repo.git"
+            adapter.lang = "c"
+            adapter.repo_name = None
+            adapter.get_all_cpv_sanitizers.return_value = ["address"]
+            adapter.get_cpv_sanitizer.return_value = "address"
+            mock_adapter.return_value = adapter
+
+            mock_infra.return_value.get_all_patches.return_value = [Path("/tmp/p.diff")]
+            mock_infra.return_value.get_patches_except.return_value = []
+
+            jobs, metadata = _build_dag(
+                [path],
+                use_inc_build=use_inc_build,
+                force_rebuild=False,
+                source_mode="pkgs",
+            )
+        return jobs, metadata
+
+    def test_rts_jobs_created_when_inc_build_and_rts_mode(self):
+        """RTS jobs created when both rts_mode and effective_inc are True."""
+        from crsbench.benchmark_ci.jobs.flat import PatchUnitTestJob
+
+        jobs, _ = self._build_dag_with_params(
+            use_inc_build=True, supports_inc=True, rts_mode="jcgeks"
+        )
+        rts_jobs = [
+            j for j in jobs if isinstance(j, PatchUnitTestJob) and j.test_mode == "RTS"
+        ]
+        assert len(rts_jobs) > 0, (
+            "RTS jobs should be created when inc-build is effective"
+        )
+
+    def test_no_rts_jobs_when_no_inc_build_flag(self):
+        """No RTS jobs when --no-inc-build is used, even if project supports RTS."""
+        from crsbench.benchmark_ci.jobs.flat import PatchUnitTestJob
+
+        jobs, _ = self._build_dag_with_params(
+            use_inc_build=False, supports_inc=True, rts_mode="jcgeks"
+        )
+        rts_jobs = [
+            j for j in jobs if isinstance(j, PatchUnitTestJob) and j.test_mode == "RTS"
+        ]
+        assert len(rts_jobs) == 0, "RTS jobs should NOT be created with --no-inc-build"
+
+    def test_no_rts_jobs_when_project_no_inc_support(self):
+        """No RTS jobs when project doesn't support inc-build."""
+        from crsbench.benchmark_ci.jobs.flat import PatchUnitTestJob
+
+        jobs, _ = self._build_dag_with_params(
+            use_inc_build=True, supports_inc=False, rts_mode="jcgeks"
+        )
+        rts_jobs = [
+            j for j in jobs if isinstance(j, PatchUnitTestJob) and j.test_mode == "RTS"
+        ]
+        assert len(rts_jobs) == 0, "RTS jobs should NOT be created without inc support"
+
+    def test_no_rts_jobs_when_no_rts_mode(self):
+        """No RTS jobs when project has no rts_mode."""
+        from crsbench.benchmark_ci.jobs.flat import PatchUnitTestJob
+
+        jobs, _ = self._build_dag_with_params(
+            use_inc_build=True, supports_inc=True, rts_mode=None
+        )
+        rts_jobs = [
+            j for j in jobs if isinstance(j, PatchUnitTestJob) and j.test_mode == "RTS"
+        ]
+        assert len(rts_jobs) == 0, "RTS jobs should NOT be created without rts_mode"
+
+    def test_full_unit_test_jobs_always_created(self):
+        """FULL unit test jobs are created regardless of inc-build."""
+        from crsbench.benchmark_ci.jobs.flat import PatchUnitTestJob
+
+        jobs, _ = self._build_dag_with_params(
+            use_inc_build=False, supports_inc=False, rts_mode=None
+        )
+        full_jobs = [
+            j for j in jobs if isinstance(j, PatchUnitTestJob) and j.test_mode == "FULL"
+        ]
+        assert len(full_jobs) > 0, "FULL unit test jobs should always be created"
+
+
+class TestRtsAggregationConditional:
+    """Test that RTS aggregation respects inc-build availability."""
+
+    def test_rts_aggregation_skip_when_no_inc_build(self):
+        """RTS aggregation returns skip when inc-build is disabled."""
+        from datetime import datetime
+
+        from crsbench.benchmark_ci.cli.commands.all_cmd import _aggregate_benchmark
+        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
+
+        result = _aggregate_benchmark(
+            dag_results={},
+            path=Path("/tmp/bench1"),
+            supports_inc=True,
+            rts_mode="jcgeks",
+            cpv_ids=[],
+            patch_keys=[],
+            format_results={
+                "bench1": CheckResult(status=CheckStatus.PASS, time_seconds=0.1)
+            },
+            start_dt=datetime.now(),
+            build_job_ids=[],
+            use_inc_build=False,
+        )
+        assert result.patch_rts_check.status == CheckStatus.SKIP
+        assert "inc-build disabled" in result.patch_rts_check.error
+
+    def test_rts_aggregation_skip_when_no_rts_mode(self):
+        """RTS aggregation returns skip when no rts_mode."""
+        from datetime import datetime
+
+        from crsbench.benchmark_ci.cli.commands.all_cmd import _aggregate_benchmark
+        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
+
+        result = _aggregate_benchmark(
+            dag_results={},
+            path=Path("/tmp/bench1"),
+            supports_inc=True,
+            rts_mode=None,
+            cpv_ids=[],
+            patch_keys=[],
+            format_results={
+                "bench1": CheckResult(status=CheckStatus.PASS, time_seconds=0.1)
+            },
+            start_dt=datetime.now(),
+            build_job_ids=[],
+            use_inc_build=True,
+        )
+        assert result.patch_rts_check.status == CheckStatus.SKIP
+        assert "No RTS mode" in result.patch_rts_check.error

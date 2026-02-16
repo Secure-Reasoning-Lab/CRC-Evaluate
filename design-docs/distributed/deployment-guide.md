@@ -126,8 +126,7 @@ ssh -N -L 6379:localhost:6379 user@machine-a &
 crsbench evaluator \
   --experiment-config experiment-config.yaml \
   --experiment-name my-distributed-exp \
-  --redis-host localhost \
-  -j 2
+  --redis-host localhost
 ```
 
 The evaluator:
@@ -145,7 +144,6 @@ ssh -N -L 6379:localhost:6379 user@machine-a &
 crsbench worker \
   --experiment-name my-distributed-exp \
   --redis-host localhost \
-  -j 4 \
   --oss-fuzz-path /opt/oss-fuzz \
   --benchmarks-root /home/user/CRSBench/benchmarks
 ```
@@ -204,7 +202,7 @@ crsbench evaluator --experiment-config config.yaml --experiment-name my-exp
 
 ## Distributed CI Builds
 
-The `crsbench ci build` command supports distributing builds to remote workers:
+The `crsbench ci` command supports distributing builds to remote evaluators:
 
 ```bash
 # On Machine A (with Redis running)
@@ -213,11 +211,13 @@ crsbench ci build --all \
   --redis-host localhost
 
 # On Machine B (with SSH tunnel)
-# Start a generic RQ worker that can process build jobs
-rq worker crsbench_ci_build
+crsbench evaluator --ci --redis-host localhost \
+  --build-jobs 8 --build-cores-per-job 4 \
+  --verify-cores-per-job 2 \
+  --continuous
 ```
 
-This enqueues `BuildSingleVariantJob` instances to the `crsbench_ci_build` queue. Remote workers execute the builds and report results back.
+The submitter enqueues jobs to Redis build/verify queues. Evaluators running `crsbench evaluator --ci` dequeue and execute them. See `crsbench/benchmark_ci/README.md` for full worker options.
 
 ## Post-Experiment Evaluation
 
@@ -227,8 +227,7 @@ If no evaluator was running during the experiment, verification jobs accumulate 
 # After experiment completes, start evaluator to drain verify queue
 crsbench evaluator \
   --experiment-config experiment-config.yaml \
-  --experiment-name my-distributed-exp \
-  -j 4
+  --experiment-name my-distributed-exp
 ```
 
 The evaluator builds variants, then processes all queued verification jobs.

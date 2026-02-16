@@ -83,7 +83,7 @@ class TestTimeoutHandling:
 
         infra = OSSFuzzInfrastructure(mock_oss_fuzz)
 
-        with patch("crsbench.builder.infrastructure.subprocess.run") as mock_run:
+        with patch("crsbench.builder.infrastructure.run_with_timeout") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="test", timeout=1)
             result = infra.reproduce(
                 project_name="test",
@@ -103,8 +103,8 @@ class TestCommandConstruction:
 
         infra = OSSFuzzInfrastructure(mock_oss_fuzz)
 
-        with patch("crsbench.builder.infrastructure.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+        with patch("crsbench.builder.infrastructure.run_with_timeout") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
             infra.reproduce(
                 project_name="test",
                 harness="fuzz",
@@ -123,8 +123,8 @@ class TestCommandConstruction:
 
         infra = OSSFuzzInfrastructure(mock_oss_fuzz)
 
-        with patch("crsbench.builder.infrastructure.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+        with patch("crsbench.builder.infrastructure.run_with_timeout") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
             infra.reproduce(
                 project_name="test",
                 harness="fuzz",
@@ -146,8 +146,8 @@ class TestCommandConstruction:
 
         infra = OSSFuzzInfrastructure(mock_oss_fuzz)
 
-        with patch("crsbench.builder.infrastructure.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+        with patch("crsbench.builder.infrastructure.run_with_timeout") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
             infra.reproduce(
                 project_name="test",
                 harness="fuzz",

@@ -3,6 +3,10 @@
 This module provides the 'crsbench evaluator' subcommand for running
 distributed evaluators that build variant images and process POV verification
 jobs from the Redis verify queue.
+
+The evaluator supports two modes:
+  - Experiment mode: --experiment-config (default) - runs with experiment config
+  - CI mode: --ci - standalone CI worker, no experiment config needed
 """
 
 import argparse
@@ -25,24 +29,27 @@ Examples:
   # Run evaluator (experiment name read from config)
   %(prog)s --experiment-config experiment-config.yaml
 
-  # Run evaluator with 4 parallel verify jobs
-  %(prog)s --experiment-config config.yaml -j 4
+  # Run evaluator in CI mode (no experiment config needed)
+  %(prog)s --ci --build-jobs 4
 
-  # Override experiment name from config
-  %(prog)s --experiment-config config.yaml --experiment-name custom-name
-
-  # Run evaluator with custom paths
-  %(prog)s --experiment-config config.yaml \\
-    --oss-fuzz-path /opt/oss-fuzz --benchmarks-root /data/benchmarks
+  # Run evaluator in CI mode with CPU settings
+  %(prog)s --ci --build-jobs 4 --build-cores-per-job 2 --verify-jobs 8
         """,
     )
 
     evaluator_parser.add_argument(
         "--experiment-config",
         type=str,
-        required=True,
+        required=False,
+        default=None,
         metavar="CONFIG_FILE",
         help="Path to experiment configuration YAML file",
+    )
+
+    evaluator_parser.add_argument(
+        "--ci",
+        action="store_true",
+        help="Run in CI mode (standalone CI worker, no experiment config needed)",
     )
 
     evaluator_parser.add_argument(
@@ -59,15 +66,6 @@ Examples:
         default="localhost",
         metavar="HOST",
         help="Redis server hostname or IP address (default: localhost)",
-    )
-
-    evaluator_parser.add_argument(
-        "-j",
-        "--jobs",
-        type=int,
-        default=1,
-        metavar="N",
-        help="Number of parallel verify jobs (default: 1)",
     )
 
     evaluator_parser.add_argument(
@@ -138,7 +136,23 @@ Examples:
         type=int,
         default=None,
         metavar="K",
-        help="Max concurrent verify jobs, 1 CPU each (default: build-jobs * build-cores-per-job)",
+        help="Max concurrent verify jobs (default: build-jobs * build-cores-per-job / verify-cores-per-job)",
+    )
+
+    evaluator_parser.add_argument(
+        "--verify-cores-per-job",
+        type=int,
+        default=1,
+        metavar="M",
+        help="CPUs per verify job (default: 1)",
+    )
+
+    evaluator_parser.add_argument(
+        "--worker-name",
+        type=str,
+        default=None,
+        metavar="NAME",
+        help="Worker name for identification (default: auto-generated)",
     )
 
     evaluator_parser.set_defaults(command="evaluator")
@@ -147,8 +161,9 @@ Examples:
 def run_evaluator(args: argparse.Namespace) -> int:
     """Execute the evaluator command.
 
-    Loads experiment config, builds all variant images, then starts
-    listening on the Redis verification queue.
+    Supports two modes:
+      - Experiment mode: loads config, builds variants, runs verification
+      - CI mode (--ci): standalone CI worker on crsbench_ci_build/verify queues
 
     Args:
         args: Parsed command line arguments
@@ -156,17 +171,62 @@ def run_evaluator(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success, non-zero for failure)
     """
-    from pathlib import Path
-
-    from crsbench.distributed.evaluator import run_evaluator_main
-    from crsbench.run_experiment import load_experiment_config
     from crsbench.utils.logger import configure_logger, get_logger
 
     # Configure logging
     configure_logger(level=args.log_level, sink=sys.stdout)
     logger = get_logger(__name__)
 
-    # Load experiment config
+    ci_mode = getattr(args, "ci", False)
+
+    # Validate: at least one of --ci or --experiment-config is required
+    if not ci_mode and not args.experiment_config:
+        logger.error("Either --ci or --experiment-config is required")
+        return 1
+
+    # CI mode: no experiment config needed
+    if ci_mode and not args.experiment_config:
+        from crsbench.distributed.evaluator import run_evaluator_ci_mode
+
+        # cpuset is enabled by default, disabled with --no-cpuset
+        use_cpuset = not getattr(args, "no_cpuset", False)
+        cores = getattr(args, "cores", None)
+        skip_cpus = getattr(args, "skip_cpus", None)
+
+        build_jobs = getattr(args, "build_jobs", None) or 1
+        build_cores_per_job = getattr(args, "build_cores_per_job", 1)
+        verify_cores_per_job = getattr(args, "verify_cores_per_job", 1)
+        verify_jobs = (
+            getattr(args, "verify_jobs", None)
+            or (build_jobs * build_cores_per_job) // verify_cores_per_job
+        )
+        worker_name = getattr(args, "worker_name", None) or "ci-evaluator"
+
+        try:
+            return run_evaluator_ci_mode(
+                redis_host=args.redis_host,
+                worker_name=worker_name,
+                build_jobs=build_jobs,
+                build_cores_per_job=build_cores_per_job,
+                verify_jobs=verify_jobs,
+                verify_cores_per_job=verify_cores_per_job,
+                use_cpuset=use_cpuset,
+                cores=cores,
+                skip_cpus=skip_cpus,
+            )
+        except KeyboardInterrupt:
+            logger.info("Evaluator interrupted by user")
+            return 0
+        except Exception as e:
+            logger.error(f"Evaluator failed: {e}")
+            return 1
+
+    # Experiment mode: load config and run
+    from pathlib import Path
+
+    from crsbench.distributed.evaluator import run_evaluator_main
+    from crsbench.run_experiment import load_experiment_config
+
     config_path = Path(args.experiment_config)
     logger.info(f"Loading experiment config from: {config_path}")
     config = load_experiment_config(config_path)
@@ -198,21 +258,26 @@ def run_evaluator(args: argparse.Namespace) -> int:
     skip_cpus = getattr(args, "skip_cpus", None)
 
     # Resolve dual-queue CI parameters
-    build_jobs = getattr(args, "build_jobs", None) or args.jobs
+    build_jobs = getattr(args, "build_jobs", None) or 1
     build_cores_per_job = getattr(args, "build_cores_per_job", 1)
-    verify_jobs = getattr(args, "verify_jobs", None) or build_jobs * build_cores_per_job
+    verify_cores_per_job = getattr(args, "verify_cores_per_job", 1)
+    verify_jobs = (
+        getattr(args, "verify_jobs", None)
+        or (build_jobs * build_cores_per_job) // verify_cores_per_job
+    )
 
     try:
         return run_evaluator_main(
             config=config,
             experiment_name=experiment_name,
             redis_host=redis_host,
-            max_jobs=args.jobs,
+            max_jobs=build_jobs,
             use_cpuset=use_cpuset,
             cores=cores,
             skip_cpus=skip_cpus,
             build_jobs=build_jobs,
             build_cores_per_job=build_cores_per_job,
+            verify_cores_per_job=verify_cores_per_job,
             verify_jobs=verify_jobs,
         )
     except KeyboardInterrupt:

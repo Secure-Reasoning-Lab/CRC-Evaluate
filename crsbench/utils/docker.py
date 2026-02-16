@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 from crsbench.utils.logger import get_logger
+from crsbench.utils.subprocess_utils import run_with_timeout
 
 logger = get_logger(__name__)
 
@@ -44,7 +45,7 @@ def docker_rmtree(path: Path, *, timeout: int = 120) -> bool:
     # "rm -rf /target" fails with "Resource busy" because /target is a bind mount.
     path = path.resolve()
     try:
-        result = subprocess.run(
+        result = run_with_timeout(
             [
                 "docker",
                 "run",
@@ -56,10 +57,7 @@ def docker_rmtree(path: Path, *, timeout: int = 120) -> bool:
                 "-c",
                 "rm -rf /target/* /target/.[!.]* /target/..?* 2>/dev/null; true",
             ],
-            capture_output=True,
-            text=True,
             timeout=timeout,
-            stdin=subprocess.DEVNULL,
         )
 
         if result.returncode == 0:
@@ -105,7 +103,7 @@ def fix_docker_ownership(path: Path, *, timeout: int = 300) -> bool:
     gid = os.getgid()
 
     try:
-        result = subprocess.run(
+        result = run_with_timeout(
             [
                 "docker",
                 "run",
@@ -118,10 +116,7 @@ def fix_docker_ownership(path: Path, *, timeout: int = 300) -> bool:
                 f"{uid}:{gid}",
                 "/target",
             ],
-            capture_output=True,
-            text=True,
             timeout=timeout,
-            stdin=subprocess.DEVNULL,  # Prevent terminal issues
         )
 
         if result.returncode == 0:
