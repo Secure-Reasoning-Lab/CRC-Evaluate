@@ -787,7 +787,7 @@ class TestExperimentConfigSchema:
         assert config_dict["max_total_time"] == 86400
         assert config_dict["difficulty_level"] == 2
         assert config_dict["redis_host"] == "redis-server"
-        assert config_dict["benchmarks_root"] == Path("benchmarks")
+        assert config_dict["benchmarks_root"] == Path("benchmarks").resolve()
         # Verify new timeout fields are included
         assert "build_timeout" in config_dict
         assert "run_timeout" in config_dict

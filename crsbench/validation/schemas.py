@@ -1236,6 +1236,34 @@ class ExperimentConfig(BaseModel):
             self.llm_tracking_enabled = False
         return self
 
+    @model_validator(mode="after")
+    def resolve_path_fields(self):
+        """Resolve relative Path fields to absolute paths.
+
+        Config YAML often specifies relative paths (e.g., ``benchmarks_root: benchmarks``).
+        These must be resolved to absolute paths so that downstream code (CRS executors,
+        build commands) can use them regardless of CWD changes.
+        """
+        path_fields = [
+            "experiment_filestore",
+            "report_filestore",
+            "benchmarks_root",
+            "benchmark_suites_root",
+            "registry_dir",
+            "crs_configs_dir",
+            "oss_fuzz_path",
+        ]
+        for field_name in path_fields:
+            value = getattr(self, field_name, None)
+            if isinstance(value, Path) and not value.is_absolute():
+                setattr(self, field_name, value.resolve())
+
+        # Optional path field
+        if self.results_filestore and not self.results_filestore.is_absolute():
+            self.results_filestore = self.results_filestore.resolve()
+
+        return self
+
     def get_benchmark_list(self) -> List[str]:
         """Get the list of benchmarks, resolving benchmark_suite if necessary.
 
