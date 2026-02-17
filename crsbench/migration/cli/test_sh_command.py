@@ -8,8 +8,8 @@ Usage:
     python generate_test_sh.py --benchmark apache-commons-compress-delta-01 --project-dir /path/to/commons-compress
 
     # Multiple benchmarks (parallel execution)
-    python generate_test_sh.py --benchmarks bench1,bench2,bench3
-    python generate_test_sh.py --benchmarks libxml2-delta-01,libxml2-delta-03 --parallel 2
+    python generate_test_sh.py --benchmarks bench1 bench2 bench3
+    python generate_test_sh.py --benchmarks libxml2-delta-01 libxml2-delta-03 --parallel 2
 """
 
 import argparse
@@ -347,7 +347,8 @@ def _add_arguments(
     )
     benchmark_group.add_argument(
         "--benchmarks",
-        help="Comma-separated list of benchmark names (e.g., bench1,bench2,bench3)",
+        nargs="+",
+        help="Benchmark names (e.g., bench1 bench2 bench3)",
     )
     benchmark_group.add_argument(
         "--all-missing",
@@ -366,6 +367,7 @@ def _add_arguments(
     )
     parser.add_argument(
         "--output",
+        type=Path,
         help="Custom output path for test.sh (only for single benchmark mode)",
     )
     parser.add_argument(
@@ -417,7 +419,7 @@ Examples:
   %(prog)s --benchmark apache-commons-compress-delta-01
 
   # Generate for multiple benchmarks
-  %(prog)s --benchmarks bench1,bench2 --parallel 2
+  %(prog)s --benchmarks bench1 bench2 --parallel 2
 
   # Generate for all benchmarks without test.sh
   %(prog)s --all-missing
@@ -493,7 +495,7 @@ def run_generate_test_sh(args: argparse.Namespace) -> int:
 
     # Multiple benchmarks mode
     if args.benchmarks:
-        benchmark_names = [name.strip() for name in args.benchmarks.split(",")]
+        benchmark_names = args.benchmarks
 
         if args.output:
             logger.warning("--output is ignored in multiple benchmarks mode")
@@ -522,7 +524,7 @@ def run_generate_test_sh(args: argparse.Namespace) -> int:
         logger.error(str(e))
         return 1
 
-    test_sh_path = Path(args.output) if args.output else Path(benchmark_dir) / "test.sh"
+    test_sh_path = args.output if args.output else Path(benchmark_dir) / "test.sh"
     if test_sh_path.exists() and not args.force:
         logger.error(f"test.sh already exists at {test_sh_path}")
         logger.info("Use --force to overwrite")

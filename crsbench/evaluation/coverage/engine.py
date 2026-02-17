@@ -82,7 +82,6 @@ class CoverageEngine:
         Args:
             oss_fuzz_path: Path to oss-fuzz directory.
             build_workers: Number of parallel workers for building (default: 4).
-                Priority: CLI > CRSBENCH_BUILD_WORKERS env > config > default.
             work_dir: Working directory for isolated builds. If None, uses
                 default oss-fuzz/build/out/ location.
             source_mode: Source mode - "pkgs" (bundled, default) or "main_repo" (clone)

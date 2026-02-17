@@ -89,7 +89,7 @@ Examples:
         help="Specific harness name to test (default: first available)",
     )
     parser.add_argument(
-        "--oss-fuzz",
+        "--oss-fuzz-path",
         type=Path,
         default=None,
         help="Path to oss-fuzz directory (default: ./oss-fuzz)",
@@ -122,15 +122,13 @@ Examples:
         "--build-workers",
         type=int,
         default=None,
-        help="Number of parallel workers for building coverage variants (default: 4). "
-        "Priority: CLI > CRSBENCH_BUILD_WORKERS env.",
+        help="Number of parallel workers for building coverage variants (default: 4).",
     )
     parser.add_argument(
         "--verify-workers",
         type=int,
         default=None,
-        help="Number of parallel workers for coverage collection (default: 4). "
-        "Priority: CLI > CRSBENCH_VERIFY_WORKERS env.",
+        help="Number of parallel workers for coverage collection (default: 4).",
     )
     parser.add_argument(
         "--source",
@@ -179,7 +177,7 @@ def run_coverage(args: argparse.Namespace) -> int:
         return 1
 
     # Determine oss-fuzz path
-    oss_fuzz_path = args.oss_fuzz or Path("./oss-fuzz")
+    oss_fuzz_path = args.oss_fuzz_path or Path("./oss-fuzz")
     if not oss_fuzz_path.exists():
         logger.error(f"OSS-Fuzz directory not found: {oss_fuzz_path}")
         return 1

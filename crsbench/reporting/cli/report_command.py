@@ -69,8 +69,8 @@ Examples:
 
     report_parser.add_argument(
         "--output",
-        type=str,
-        default="report_filestore",
+        type=Path,
+        default=Path("report_filestore"),
         metavar="OUTPUT_DIR",
         help="Output directory for reports (default: report_filestore)",
     )
@@ -91,16 +91,9 @@ Examples:
     )
 
     report_parser.add_argument(
-        "--skip-incomplete",
-        action="store_true",
-        default=True,
-        help="Skip incomplete trials (default: True)",
-    )
-
-    report_parser.add_argument(
         "--include-incomplete",
         action="store_true",
-        help="Include incomplete trials in report (overrides --skip-incomplete)",
+        help="Include incomplete trials in report (default: skip incomplete)",
     )
 
     report_parser.set_defaults(command="report")
@@ -154,7 +147,7 @@ def _generate_experiment_report(
     experiment_name = args.experiment
     experiment_filestore = Path(args.experiment_filestore)
     experiment_dir = experiment_filestore / experiment_name
-    output_dir = Path(args.output) / experiment_name
+    output_dir = args.output / experiment_name
 
     if not experiment_dir.exists():
         logger.error(f"Experiment directory not found: {experiment_dir}")
@@ -203,7 +196,7 @@ def _generate_trial_report(args: argparse.Namespace) -> int:
         Exit code
     """
     trial_dir = Path(args.trial)
-    output_dir = Path(args.output)
+    output_dir = args.output
 
     if not trial_dir.exists():
         logger.error(f"Trial directory not found: {trial_dir}")

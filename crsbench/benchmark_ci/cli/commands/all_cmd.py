@@ -392,7 +392,7 @@ def _build_dag(
 
                     # Step 2d: P:RTS - RTS unit tests (if available, parallel to others)
                     # RTS requires inc-build images with /rts_config_jvm.py;
-                    # skip job creation when inc-build is disabled (--no-inc-build)
+                    # skip job creation when inc-build is not enabled (requires --inc-build)
                     if rts_mode and effective_inc:
                         unittest_rts_job = PatchUnitTestJob(
                             benchmark_path=path,
@@ -591,7 +591,7 @@ def run_all(args: argparse.Namespace) -> int:
     source_mode = getattr(args, "source", "pkgs")
     build_workers = getattr(args, "build_workers", 4)
     verify_workers = getattr(args, "verify_workers", 4)
-    use_inc_build = not getattr(args, "no_inc_build", False)
+    use_inc_build = getattr(args, "inc_build", False)
     force_rebuild = getattr(args, "force_rebuild", True)
     distributed = getattr(args, "distributed", False)
     redis_host = getattr(args, "redis_host", "localhost")

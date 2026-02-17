@@ -139,7 +139,7 @@ def run_retry(args: argparse.Namespace) -> int:
     # We need to set the benchmark selection to use our failed list
     retry_args = argparse.Namespace(**vars(args))
     retry_args.benchmark = None
-    retry_args.benchmarks = ",".join(failed_benchmarks)
+    retry_args.benchmarks = failed_benchmarks
     retry_args.benchmark_suite = None
     retry_args.all = False
     retry_args.filter = None

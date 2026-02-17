@@ -1,7 +1,7 @@
 """Simplified CLI for benchmark CI validation.
 
 Usage:
-    crsbench ci --benchmarks bench1,bench2
+    crsbench ci --benchmarks bench1 bench2
     crsbench ci --all
     crsbench ci --all --include-coverage
 
@@ -105,7 +105,7 @@ def add_ci_subparser(subparsers: argparse._SubParsersAction) -> None:
         epilog="""
 Examples:
   # Validate specific benchmarks
-  crsbench ci --benchmarks sanity-mock-c-delta-01,sanity-mock-c-full-01
+  crsbench ci --benchmarks sanity-mock-c-delta-01 sanity-mock-c-full-01
 
   # Validate all benchmarks
   crsbench ci --all
@@ -135,7 +135,8 @@ Examples:
         "--benchmarks",
         "-b",
         type=str,
-        help="Comma-separated list of benchmark names to validate",
+        nargs="+",
+        help="Benchmark names to validate",
     )
     ci_parser.add_argument(
         "--all",
@@ -223,12 +224,12 @@ Examples:
     ci_parser.add_argument(
         "--output",
         "-o",
-        type=str,
+        type=Path,
         help="Path to save results JSON",
     )
     ci_parser.add_argument(
         "--output-dir",
-        type=str,
+        type=Path,
         help="Directory for detailed logs (creates per-benchmark subdirs with logs)",
     )
 
@@ -846,7 +847,7 @@ def run_ci(args: argparse.Namespace) -> int:
     if args.all:
         benchmark_paths = discover_benchmarks(benchmarks_root, args.filter)
     elif args.benchmarks:
-        benchmark_names = [b.strip() for b in args.benchmarks.split(",")]
+        benchmark_names = args.benchmarks
         benchmark_paths = [benchmarks_root / name for name in benchmark_names]
         # Validate paths exist
         for path in benchmark_paths:
@@ -864,7 +865,7 @@ def run_ci(args: argparse.Namespace) -> int:
     logger.info(f"Validating {len(benchmark_paths)} benchmarks")
 
     # Setup output directory for logs if requested
-    output_dir = Path(args.output_dir) if args.output_dir else None
+    output_dir = args.output_dir
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
         logger.debug(f"Per-phase logs will be saved to: {output_dir}/<benchmark>/")
@@ -1002,7 +1003,7 @@ def run_ci(args: argparse.Namespace) -> int:
 
     # Save results if requested
     if args.output:
-        output_path = Path(args.output)
+        output_path = args.output
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with output_path.open("w") as f:
             json.dump(summary.to_dict(), f, indent=2)
@@ -1043,7 +1044,7 @@ Examples:
     parse_parser.add_argument(
         "--output-dir",
         "-d",
-        type=str,
+        type=Path,
         required=True,
         help="Directory containing CI results (summary.json)",
     )
@@ -1078,12 +1079,11 @@ def run_ci_parse(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success, 1 for failure)
     """
-    output_dir = Path(args.output_dir)
-    if not output_dir.exists():
-        logger.error(f"Output directory not found: {output_dir}")
+    if not args.output_dir.exists():
+        logger.error(f"Output directory not found: {args.output_dir}")
         return 1
 
-    summary = _load_summary_from_output_dir(output_dir)
+    summary = _load_summary_from_output_dir(args.output_dir)
     if summary is None:
         return 1
 
@@ -1149,7 +1149,8 @@ def main(args: Optional[list[str]] = None) -> int:
         "--benchmarks",
         "-b",
         type=str,
-        help="Comma-separated list of benchmark names to validate",
+        nargs="+",
+        help="Benchmark names to validate",
     )
     parser.add_argument(
         "--all",
@@ -1237,12 +1238,12 @@ def main(args: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--output",
         "-o",
-        type=str,
+        type=Path,
         help="Path to save results JSON",
     )
     parser.add_argument(
         "--output-dir",
-        type=str,
+        type=Path,
         help="Directory for detailed logs (creates per-benchmark subdirs)",
     )
 

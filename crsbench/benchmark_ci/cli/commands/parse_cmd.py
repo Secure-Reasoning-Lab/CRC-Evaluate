@@ -739,7 +739,7 @@ Examples:
     parser.add_argument(
         "--output-dir",
         "-d",
-        type=str,
+        type=Path,
         required=True,
         help="Directory containing CI results (summary.json)",
     )
@@ -778,7 +778,7 @@ def run_parse(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success, 1 for failure)
     """
-    output_dir = Path(args.output_dir)
+    output_dir = args.output_dir
     if not output_dir.exists():
         logger.error(f"Output directory not found: {output_dir}")
         return 1

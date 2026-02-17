@@ -10,7 +10,6 @@ The evaluator supports two modes:
 """
 
 import argparse
-import os
 import sys
 
 
@@ -120,7 +119,7 @@ Examples:
         type=int,
         default=None,
         metavar="N",
-        help="Max concurrent build jobs (default: value of -j)",
+        help="Max concurrent build jobs (default: 1)",
     )
 
     evaluator_parser.add_argument(
@@ -241,13 +240,13 @@ def run_evaluator(args: argparse.Namespace) -> int:
         redis_host = config.redis_host
     logger.info(f"Redis host: {redis_host}")
 
-    # Set evaluator override environment variables
+    # Apply CLI overrides directly to config
     if args.oss_fuzz_path:
-        os.environ["CRSBENCH_EVALUATOR_OSS_FUZZ_PATH"] = args.oss_fuzz_path
+        config.oss_fuzz_path = Path(args.oss_fuzz_path)
         logger.info(f"Evaluator override: oss_fuzz_path = {args.oss_fuzz_path}")
 
     if args.benchmarks_root:
-        os.environ["CRSBENCH_EVALUATOR_BENCHMARKS_ROOT"] = args.benchmarks_root
+        config.benchmarks_root = Path(args.benchmarks_root)
         logger.info(f"Evaluator override: benchmarks_root = {args.benchmarks_root}")
 
     # cpuset is enabled by default, disabled with --no-cpuset
@@ -271,7 +270,6 @@ def run_evaluator(args: argparse.Namespace) -> int:
             config=config,
             experiment_name=experiment_name,
             redis_host=redis_host,
-            max_jobs=build_jobs,
             use_cpuset=use_cpuset,
             cores=cores,
             skip_cpus=skip_cpus,

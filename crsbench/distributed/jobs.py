@@ -610,6 +610,63 @@ def _check_existing_trial(
     return None
 
 
+def _apply_worker_overrides(config: ExperimentConfig) -> None:
+    """Apply worker config overrides to the experiment config.
+
+    In distributed execution, the orchestrator serializes the full
+    ExperimentConfig (via ``config.model_dump()``) into each Redis job.
+    Workers on different machines deserialize this config, but the paths
+    (oss_fuzz_path, benchmarks_root, etc.) reflect the orchestrator's
+    filesystem — which may differ from the worker's.
+
+    The ``worker:`` section in the experiment YAML provides
+    machine-specific overrides for workers. Since this section is
+    included in the serialized config, workers can apply it at
+    deserialization time to fix paths for their local filesystem.
+
+    Note: All workers sharing the same config get the same overrides.
+    For heterogeneous clusters where each worker needs different paths,
+    use shared storage with consistent mount points instead.
+    """
+    wc = config.worker
+    if wc is None:
+        return
+
+    path_fields = [
+        "oss_fuzz_path",
+        "registry_dir",
+        "crs_configs_dir",
+        "benchmarks_root",
+        "benchmark_suites_root",
+        "experiment_filestore",
+        "report_filestore",
+        "results_filestore",
+    ]
+    for field in path_fields:
+        value = getattr(wc, field, None)
+        if value is not None:
+            setattr(config, field, value)
+            logger.info(f"Worker override applied: {field} = {value}")
+
+    int_fields = ["build_workers", "verify_workers"]
+    for field in int_fields:
+        value = getattr(wc, field, None)
+        if value is not None:
+            setattr(config, field, value)
+            logger.info(f"Worker override applied: {field} = {value}")
+
+    bool_fields = [
+        "keep_only_results",
+        "cleanup_after_trial",
+        "copy_results_after_trial",
+    ]
+    for field in bool_fields:
+        value = getattr(wc, field, None)
+        if value is not None:
+            setattr(config, field, value)
+            logger.info(f"Worker override applied: {field} = {value}")
+
+
 def run_crs_trial(
     crs: str,
     benchmark: str,
@@ -660,6 +717,9 @@ def run_crs_trial(
     """
     # Reconstruct ExperimentConfig from dict - Pydantic will convert strings to Paths
     config = ExperimentConfig(**config_dict)
+
+    # Apply worker overrides from config.worker section (if present)
+    _apply_worker_overrides(config)
 
     # Check for existing trial markers before any heavy setup
     existing_result = _check_existing_trial(
@@ -735,113 +795,12 @@ def run_crs_trial(
             allocated_memory = config.resources.memory_per_trial
             logger.info(f"Using memory_per_trial from config: {allocated_memory}")
 
-        # Helper function to get worker override from environment variable
-        def get_worker_override(field: str) -> Optional[str]:
-            """Get worker override from environment variable."""
-            return os.environ.get(f"CRSBENCH_WORKER_{field.upper()}")
-
-        # Initialize CRS executor
         # Get required paths from config
         # Resolve to absolute paths to avoid issues with relative paths
-        # Apply worker overrides if available (via environment variables)
-        oss_fuzz_override = get_worker_override("oss_fuzz_path")
-        oss_fuzz_path = (
-            Path(oss_fuzz_override).resolve()
-            if oss_fuzz_override
-            else config.oss_fuzz_path.resolve()
-        )
-
-        registry_override = get_worker_override("registry_dir")
-        registry_dir = (
-            Path(registry_override).resolve()
-            if registry_override
-            else (config.registry_dir or (Path.cwd() / "crses" / "registry")).resolve()
-        )
-
-        benchmarks_override = get_worker_override("benchmarks_root")
-        benchmarks_root = (
-            Path(benchmarks_override).resolve()
-            if benchmarks_override
-            else (config.benchmarks_root or (Path.cwd() / "benchmarks")).resolve()
-        )
-
-        crs_configs_override = get_worker_override("crs_configs_dir")
-        crs_configs_dir = (
-            Path(crs_configs_override).resolve()
-            if crs_configs_override
-            else (
-                config.crs_configs_dir or (Path.cwd() / "crses" / "configs")
-            ).resolve()
-        )
-
-        # Also apply overrides to filestore paths (used throughout config)
-        experiment_filestore_override = get_worker_override("experiment_filestore")
-        if experiment_filestore_override:
-            config.experiment_filestore = Path(experiment_filestore_override).resolve()
-            logger.info(
-                f"Worker override applied: experiment_filestore = {config.experiment_filestore}"
-            )
-
-        report_filestore_override = get_worker_override("report_filestore")
-        if report_filestore_override:
-            config.report_filestore = Path(report_filestore_override).resolve()
-            logger.info(
-                f"Worker override applied: report_filestore = {config.report_filestore}"
-            )
-
-        benchmark_suites_override = get_worker_override("benchmark_suites_root")
-        if benchmark_suites_override:
-            config.benchmark_suites_root = Path(benchmark_suites_override).resolve()
-            logger.info(
-                f"Worker override applied: benchmark_suites_root = {config.benchmark_suites_root}"
-            )
-
-        # Apply cleanup configuration overrides
-        keep_only_results_override = get_worker_override("keep_only_results")
-        if keep_only_results_override:
-            config.keep_only_results = keep_only_results_override.lower() == "true"
-            logger.info(
-                f"Worker override applied: keep_only_results = {config.keep_only_results}"
-            )
-
-        cleanup_after_trial_override = get_worker_override("cleanup_after_trial")
-        if cleanup_after_trial_override:
-            config.cleanup_after_trial = cleanup_after_trial_override.lower() == "true"
-            logger.info(
-                f"Worker override applied: cleanup_after_trial = {config.cleanup_after_trial}"
-            )
-
-        copy_results_after_trial_override = get_worker_override(
-            "copy_results_after_trial"
-        )
-        if copy_results_after_trial_override:
-            config.copy_results_after_trial = (
-                copy_results_after_trial_override.lower() == "true"
-            )
-            logger.info(
-                f"Worker override applied: copy_results_after_trial = {config.copy_results_after_trial}"
-            )
-
-        results_filestore_override = get_worker_override("results_filestore")
-        if results_filestore_override:
-            config.results_filestore = Path(results_filestore_override).resolve()
-            logger.info(
-                f"Worker override applied: results_filestore = {config.results_filestore}"
-            )
-
-        build_workers_override = get_worker_override("build_workers")
-        if build_workers_override:
-            config.build_workers = int(build_workers_override)
-            logger.info(
-                f"Worker override applied: build_workers = {config.build_workers}"
-            )
-
-        verify_workers_override = get_worker_override("verify_workers")
-        if verify_workers_override:
-            config.verify_workers = int(verify_workers_override)
-            logger.info(
-                f"Worker override applied: verify_workers = {config.verify_workers}"
-            )
+        oss_fuzz_path = config.oss_fuzz_path.resolve()
+        registry_dir = config.registry_dir.resolve()
+        benchmarks_root = config.benchmarks_root.resolve()
+        crs_configs_dir = config.crs_configs_dir.resolve()
 
         # Resolve CRS config name to registry name
         registry_name = get_crs_registry_name(crs, crs_configs_dir)

@@ -83,9 +83,10 @@ Examples:
     )
 
     parser.add_argument(
-        "--debug",
+        "--verbose",
+        "-v",
         action="store_true",
-        help="Enable debug logging",
+        help="Enable verbose/debug logging",
     )
 
     parser.set_defaults(command="download")
@@ -100,7 +101,7 @@ def run_download(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success)
     """
-    if hasattr(args, "debug") and args.debug:
+    if hasattr(args, "verbose") and args.verbose:
         configure_logger(level="DEBUG")
 
     if args.benchmarks and not args.dataset:

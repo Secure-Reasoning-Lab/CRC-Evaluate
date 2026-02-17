@@ -62,7 +62,7 @@ def run_coverage(args: argparse.Namespace) -> int:
     )
 
     source_mode = getattr(args, "source", "pkgs")
-    use_inc_build = not getattr(args, "no_inc_build", False)
+    use_inc_build = getattr(args, "inc_build", False)
     force_rebuild = getattr(args, "force_rebuild", True)
     distributed = getattr(args, "distributed", False)
     redis_host = getattr(args, "redis_host", "localhost")

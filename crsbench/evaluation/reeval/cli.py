@@ -69,7 +69,7 @@ Examples:
         help="Path to experiment config YAML",
     )
     parser.add_argument(
-        "--oss-fuzz",
+        "--oss-fuzz-path",
         type=Path,
         default=None,
         help="Path to oss-fuzz directory (default: ./oss-fuzz)",
@@ -95,14 +95,12 @@ Examples:
     parser.add_argument(
         "--force-rebuild",
         action="store_true",
-        default=False,
         help="Force rebuild of variants",
     )
     parser.add_argument(
-        "--no-inc-build",
+        "--inc-build",
         action="store_true",
-        default=False,
-        help="Disable incremental builds",
+        help="Use incremental build instead of full build",
     )
     parser.add_argument(
         "--per-pov-verify-timeout",
@@ -121,7 +119,6 @@ Examples:
         "--verbose",
         "-v",
         action="store_true",
-        default=False,
         help="Enable verbose logging",
     )
 
@@ -678,7 +675,7 @@ def run_reeval(args: argparse.Namespace) -> int:
         logger.error(f"Experiment directory not found: {experiment_dir}")
         return 1
 
-    oss_fuzz_path = args.oss_fuzz or Path("./oss-fuzz")
+    oss_fuzz_path = args.oss_fuzz_path or Path("./oss-fuzz")
     if not oss_fuzz_path.exists():
         logger.error(f"OSS-Fuzz directory not found: {oss_fuzz_path}")
         return 1
@@ -688,7 +685,7 @@ def run_reeval(args: argparse.Namespace) -> int:
         benchmarks_root = Path(benchmarks_root)
 
     source_mode = args.source
-    use_inc_build = not args.no_inc_build
+    use_inc_build = args.inc_build
 
     # Resolve per-POV verify timeout: CLI flag > config > default 180s
     per_pov_verify_timeout = (

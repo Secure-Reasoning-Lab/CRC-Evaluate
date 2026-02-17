@@ -10,7 +10,6 @@ This module implements the evaluator process that:
 
 import os
 import sys
-from pathlib import Path
 from typing import Optional
 
 from crsbench.distributed.queue import REDIS_AVAILABLE
@@ -43,10 +42,9 @@ def _enqueue_pre_builds(
     import rq
 
     from crsbench.distributed.ci_jobs import serialize_ci_job
-    from crsbench.distributed.evaluator_jobs import get_evaluator_benchmarks_root
     from crsbench.executor.variant_planner import VariantPlanner
 
-    benchmarks_root = get_evaluator_benchmarks_root()
+    benchmarks_root = config.benchmarks_root
 
     benchmark_names = config.get_benchmark_list()
 
@@ -62,9 +60,7 @@ def _enqueue_pre_builds(
                 f"Filtered by mode={mode_str}: {len(benchmark_names)} of {original_count} benchmarks"
             )
 
-    oss_fuzz_path = Path(
-        os.environ.get("CRSBENCH_EVALUATOR_OSS_FUZZ_PATH") or str(config.oss_fuzz_path)
-    )
+    oss_fuzz_path = config.oss_fuzz_path
     planner = VariantPlanner(oss_fuzz_path, source_mode="pkgs")
 
     from crsbench.distributed.queue import (
@@ -112,7 +108,6 @@ def run_evaluator_main(
     config,
     experiment_name: str,
     redis_host: str = "localhost",
-    max_jobs: int = 1,
     *,
     use_cpuset: bool = False,
     cores: Optional[str] = None,
@@ -131,10 +126,13 @@ def run_evaluator_main(
         config: ExperimentConfig instance
         experiment_name: Experiment identifier for queue naming
         redis_host: Redis server hostname
-        max_jobs: Maximum number of parallel jobs
         use_cpuset: Enable CPU affinity for jobs
         cores: CPU cores for evaluator pool (integer count or cpuset string)
         skip_cpus: CPUs to exclude from allocation (cpuset format)
+        build_jobs: Max concurrent build jobs
+        build_cores_per_job: CPUs per build job
+        verify_cores_per_job: CPUs per verify job
+        verify_jobs: Max concurrent verify jobs
 
     Returns:
         Exit code (0 for success, non-zero for failure)
@@ -153,7 +151,7 @@ def run_evaluator_main(
     logger.info("=" * 60)
     logger.info(f"Experiment: {experiment_name}")
     logger.info(f"Redis host: {redis_host}")
-    logger.info(f"Parallel jobs: {max_jobs}")
+    logger.info(f"Build jobs: {build_jobs or 1}")
     logger.info(f"CPU affinity: {'enabled' if use_cpuset else 'disabled'}")
     logger.info("Queues: build (priority) + verify")
     logger.info("=" * 60)
@@ -161,9 +159,7 @@ def run_evaluator_main(
     # Create verification engine for lazy verify use
     from crsbench.evaluation.verification.pov.engine import VerificationEngine
 
-    oss_fuzz_path = Path(
-        os.environ.get("CRSBENCH_EVALUATOR_OSS_FUZZ_PATH") or str(config.oss_fuzz_path)
-    )
+    oss_fuzz_path = config.oss_fuzz_path
 
     engine = VerificationEngine(
         oss_fuzz_path=oss_fuzz_path,
@@ -172,10 +168,11 @@ def run_evaluator_main(
         else 180,
     )
 
-    # Set engine for lazy build loading — builds come via Redis queue
-    from crsbench.distributed.evaluator_jobs import set_engine
+    # Set engine and benchmarks root for lazy build loading
+    from crsbench.distributed.evaluator_jobs import set_benchmarks_root, set_engine
 
     set_engine(engine)
+    set_benchmarks_root(config.benchmarks_root)
 
     # Pre-build: enqueue variant builds for all experiment benchmarks
     if build_jobs is not None:
@@ -195,10 +192,10 @@ def run_evaluator_main(
         build_queue_name=f"crsbench_{experiment_name}_build",
         verify_queue_name=f"crsbench_{experiment_name}_verify",
         worker_name=f"evaluator-{experiment_name}",
-        build_jobs=build_jobs or max_jobs,
+        build_jobs=build_jobs or 1,
         build_cores_per_job=build_cores_per_job or 1,
         verify_cores_per_job=verify_cores_per_job or 1,
-        verify_jobs=verify_jobs or (build_jobs or max_jobs),
+        verify_jobs=verify_jobs or (build_jobs or 1),
         job_runner=_evaluator_job_runner,
         use_cpuset=use_cpuset,
         use_cgroups=use_cpuset,

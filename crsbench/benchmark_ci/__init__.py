@@ -13,7 +13,7 @@ Jobs are executed via Redis queues processed by evaluator workers.
 
 CLI:
     crsbench ci --all
-    crsbench ci --benchmarks bench1,bench2
+    crsbench ci --benchmarks bench1 bench2
 """
 
 from crsbench.benchmark_ci.checks import (

@@ -329,7 +329,7 @@ Examples:
         epilog="""
 Examples:
   crsbench migrate generate-test-sh --benchmark apache-commons-compress-delta-01
-  crsbench migrate generate-test-sh --benchmarks bench1,bench2 --parallel 2
+  crsbench migrate generate-test-sh --benchmarks bench1 bench2 --parallel 2
   crsbench migrate generate-test-sh --all-missing
         """,
     )
