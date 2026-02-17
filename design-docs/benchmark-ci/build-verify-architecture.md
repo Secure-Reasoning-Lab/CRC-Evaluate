@@ -2,20 +2,21 @@
 
 ## Overview
 
-This document defines how builds and verification work across all CRSBench commands. The core principle: **inc-build by default, full build as fallback, cache by default**.
+This document defines how builds and verification work across all CRSBench commands. The core principle: **full build by default, inc-build opt-in via `--inc-build`, cache by default**.
 
 ## Build Modes
 
-### Inc-Build (Default)
+### Full Build (Default)
 
-Uses pre-built Docker images (`ghcr.io/team-atlanta/crsbench/{project}:inc-{sanitizer}`) with pre-compiled dependencies. Only recompiles changed files.
+Builds everything from scratch using base OSS-Fuzz images. This is the default mode.
 
-### Full Build (Fallback)
+### Inc-Build (Opt-In)
 
-Builds everything from scratch using base OSS-Fuzz images. Used when:
+Uses pre-built Docker images (`ghcr.io/team-atlanta/crsbench/{project}:inc-{sanitizer}`) with pre-compiled dependencies. Only recompiles changed files. Enable with `--inc-build`.
+
+Falls back to full build when:
 - Inc-build image not available
 - Inc-build fails (automatic fallback → PASS-FB)
-- User explicitly requests via `--no-inc-build`
 
 ### Cache
 
@@ -25,22 +26,30 @@ Builds are cached in `oss-fuzz/build/out/{variant_name}/`. By default, if a cach
 
 | Command | Build Mode | Cache | Force Rebuild | Fallback |
 |---------|-----------|-------|---------------|----------|
-| `crsbench verify` | inc-build | ON | `--force-rebuild` | inc→full |
-| `crsbench patch-verify` | inc-build | ON | `--force-rebuild` | inc→full |
-| `crsbench coverage` | inc-build | ON | `--force-rebuild` | inc→full |
-| `crsbench run` | inc-build | ON | `--force-rebuild` | inc→full |
-| `crsbench ci *` | inc-build | **OFF** | always | inc→full (PASS-FB) |
+| `crsbench verify` | full | ON | `--force-rebuild` | N/A |
+| `crsbench patch-verify` | full | ON | `--force-rebuild` | N/A |
+| `crsbench coverage` | full | ON | `--force-rebuild` | N/A |
+| `crsbench run` | full | ON | `--force-rebuild` | N/A |
+| `crsbench ci *` | full | **OFF** | always | N/A |
 
-All commands support `--no-inc-build` to force full build mode.
+All commands support `--inc-build` to use incremental build mode (falls back to full build on failure).
 
 ### Standalone Commands
 
 ```
---no-inc-build    Use full build instead of inc-build
+--inc-build       Use incremental build instead of full build
 --force-rebuild   Ignore cache, rebuild from scratch
 ```
 
-Default behavior:
+Default behavior (full build):
+```
+Has cached build? ──yes──→ Use cached build
+       │no
+       ▼
+Full build
+```
+
+With `--inc-build`:
 ```
 Has cached build? ──yes──→ Use cached build
        │no
@@ -48,7 +57,7 @@ Has cached build? ──yes──→ Use cached build
 Inc-image available? ──yes──→ Build with inc-image
        │no                          │
        ▼                       Build failed?
-Full build (slow)                   │yes
+Full build (fallback)               │yes
                                     ▼
                               Fallback to full build (PASS-FB)
 ```
@@ -57,13 +66,13 @@ Full build (slow)                   │yes
 
 CI always uses `force_rebuild=True` because it validates that the build process itself works.
 
-CI defaults to inc-build (same as standalone). To test full build mode, use `--no-inc-build`. To compare both modes, run CI twice:
+CI defaults to full build (same as standalone). To test inc-build mode, use `--inc-build`. To compare both modes, run CI twice:
 ```bash
-# Test with inc-build (default)
-crsbench ci all --all --output-dir results-inc
+# Test with full build (default)
+crsbench ci all --all --output-dir results-full
 
-# Test with full build
-crsbench ci all --all --no-inc-build --output-dir results-full
+# Test with inc-build
+crsbench ci all --all --inc-build --output-dir results-inc
 
 # Compare results externally
 diff results-inc/summary.json results-full/summary.json
@@ -73,7 +82,7 @@ diff results-inc/summary.json results-full/summary.json
 
 ### Single-Mode Execution
 
-Each CI invocation runs **one build mode** (inc-build by default). All checks fan out in parallel after the initial build.
+Each CI invocation runs **one build mode** (full build by default). All checks fan out in parallel after the initial build.
 
 ```
 START ── build ──┬── verify-pov(pov1)
@@ -112,8 +121,8 @@ RTS runs alongside patch tests on the same build. It compares test selection str
 
 ### Removed CI Subcommands and Flags
 
-- **`ci inc-build`**: Removed — redundant since `ci all` defaults to inc-build
-- **`--check-inc` on `ci pov`/`ci patch`**: Removed — use `ci all` (inc-build default) or `--no-inc-build`
+- **`ci inc-build`**: Removed — use `ci all --inc-build` instead
+- **`--check-inc` on `ci pov`/`ci patch`**: Removed — use `ci all` (full build default) or `--inc-build`
 - **`--check-rts` on `ci patch`**: Removed — RTS always runs as part of `ci all`
 
 ## Timing Breakdown

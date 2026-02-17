@@ -89,7 +89,6 @@ run_sanity() {
     for benchmark in sanity-mock-c-delta-01 sanity-mock-java-delta-01; do
         echo -e "\n${YELLOW}--- $benchmark ---${NC}"
         uv run crsbench ci all "$benchmark" \
-            --no-inc-build \
             --force-rebuild || fail "All checks failed for $benchmark"
         success "$benchmark passed"
     done

@@ -6,6 +6,8 @@
 # - atlantis-vincent CRS (patch generation)
 # - sanity-mock-c-delta-01 benchmark
 # - Minimal time limits for fast testing
+#
+# All configuration is in the experiment config YAML file.
 
 set -e  # Exit on error
 
@@ -15,13 +17,6 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Configuration
 CONFIG_FILE="$SCRIPT_DIR/test-experiment-config-patch-vincent-sanity.yaml"
-EXPERIMENT_NAME="integration-test-patch-vincent-sanity"
-
-# Path overrides (CLI arguments have highest precedence)
-OSS_FUZZ_PATH="${OSS_FUZZ_PATH:-$PROJECT_ROOT/oss-fuzz}"
-REGISTRY_DIR="${REGISTRY_DIR:-$PROJECT_ROOT/crses/registry}"
-CRS_CONFIGS_DIR="${CRS_CONFIGS_DIR:-$PROJECT_ROOT/crses/configs}"
-BENCHMARKS_ROOT="${BENCHMARKS_ROOT:-$PROJECT_ROOT/benchmarks}"
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -40,12 +35,7 @@ fi
 
 echo -e "${GREEN}Configuration:${NC}"
 echo "  Config file: $CONFIG_FILE"
-echo "  Experiment name: $EXPERIMENT_NAME"
 echo "  Mode: Local (no distributed execution)"
-echo "  OSS-Fuzz path: $OSS_FUZZ_PATH"
-echo "  Registry directory: $REGISTRY_DIR"
-echo "  CRS configs directory: $CRS_CONFIGS_DIR"
-echo "  Benchmarks root: $BENCHMARKS_ROOT"
 echo ""
 
 # Set up virtual environment
@@ -76,14 +66,9 @@ echo ""
 echo -e "${GREEN}Running CRSBench experiment...${NC}"
 echo ""
 
-crsbench \
+crsbench run \
    --experiment-config "$CONFIG_FILE" \
-   --crses atlantis-vincent \
-   --oss-fuzz-path "$OSS_FUZZ_PATH" \
-   --registry-dir "$REGISTRY_DIR" \
-   --crs-configs-dir "$CRS_CONFIGS_DIR" \
-   --benchmarks-root "$BENCHMARKS_ROOT" \
-   --debug
+   --verbose
 
 # Check exit status
 if [ $? -eq 0 ]; then

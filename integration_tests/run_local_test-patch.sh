@@ -77,11 +77,7 @@ EXPERIMENT_NAME="integration-test-patch-$CRS_NAME"
 CONFIG_DIR="$SCRIPT_DIR/.generated-configs"
 CONFIG_FILE="$CONFIG_DIR/test-experiment-config-patch-$CRS_NAME.yaml"
 
-# Path overrides (environment variables or defaults)
-OSS_FUZZ_PATH="${OSS_FUZZ_PATH:-$PROJECT_ROOT/oss-fuzz}"
-REGISTRY_DIR="${REGISTRY_DIR:-$PROJECT_ROOT/crses/registry}"
-CRS_CONFIGS_DIR="${CRS_CONFIGS_DIR:-$PROJECT_ROOT/crses/configs}"
-BENCHMARKS_ROOT="${BENCHMARKS_ROOT:-$PROJECT_ROOT/benchmarks}"
+# All paths are configured in the experiment config YAML
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -99,10 +95,6 @@ echo "  Experiment name: $EXPERIMENT_NAME"
 echo "  Max total time: ${MAX_TOTAL_TIME}s"
 echo "  Trials: $TRIALS"
 echo "  Mode: Local (no distributed execution)"
-echo "  OSS-Fuzz path: $OSS_FUZZ_PATH"
-echo "  Registry directory: $REGISTRY_DIR"
-echo "  CRS configs directory: $CRS_CONFIGS_DIR"
-echo "  Benchmarks root: $BENCHMARKS_ROOT"
 echo ""
 
 # Create config directory if it doesn't exist
@@ -203,16 +195,9 @@ trap cleanup EXIT
 echo -e "${GREEN}Running CRSBench patch CRS experiment...${NC}"
 echo ""
 
-crsbench \
+crsbench run \
    --experiment-config "$CONFIG_FILE" \
-   --experiment-name "$EXPERIMENT_NAME" \
-   --benchmarks "$BENCHMARK" \
-   --crses "$FULL_CRS_NAME" \
-   --oss-fuzz-path "$OSS_FUZZ_PATH" \
-   --registry-dir "$REGISTRY_DIR" \
-   --crs-configs-dir "$CRS_CONFIGS_DIR" \
-   --benchmarks-root "$BENCHMARKS_ROOT" \
-   --debug
+   --verbose
 
 # Check exit status
 if [ $? -eq 0 ]; then

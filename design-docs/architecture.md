@@ -185,20 +185,20 @@ uv pip install -e .
 
 **Command Structure**:
 ```bash
-crsbench \
+crsbench run \
   --experiment-config <YAML config> \
   [--experiment-name <identifier>] \
-  [--crses <list of CRS implementations>] \
-  [--benchmarks <list of benchmarks>] \
-  [--benchmark-suite <suite name>] \
-  [--local-only]
+  [--local-only] \
+  [--distributed] \
+  [--dry-run] \
+  [--verbose]
 ```
 
 **Key Features**:
-- All arguments except `--experiment-config` are optional
-- CLI arguments override config file values
+- Benchmarks, CRSes, and other experiment settings are configured in the YAML
+- Only execution-control flags on the CLI (9 total)
+- `--experiment-name` is the only config override available from CLI
 - Automatic local vs. distributed mode selection
-- Supports benchmark suites or direct benchmark lists
 
 **Configuration**: Defined in `pyproject.toml`:
 ```toml
@@ -326,7 +326,6 @@ benchmark_suite: crsbench-afc-c  # Option 2: Suite name (mutually exclusive)
 - Each suite is a YAML file containing a curated list of benchmarks
 - Suites provide consistency for standardized evaluations
 - Validation enforces mutual exclusivity between `benchmarks` and `benchmark_suite`
-- CLI `--benchmarks` arg overrides config if provided
 
 ### pkg.yaml (CRS Package Configuration)
 Location: `crses/[crs-name]/pkg.yaml`

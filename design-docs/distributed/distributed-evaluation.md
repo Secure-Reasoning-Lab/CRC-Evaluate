@@ -115,8 +115,12 @@ def add_evaluator_subparser(subparsers) -> None:
         help="Redis server hostname (default: localhost)",
     )
     evaluator_parser.add_argument(
-        "-j", "--jobs", type=int, default=1,
-        help="Number of parallel verify jobs (default: 1)",
+        "--build-jobs", type=int, default=1,
+        help="Max concurrent build jobs (default: 1)",
+    )
+    evaluator_parser.add_argument(
+        "--verify-jobs", type=int, default=None,
+        help="Max concurrent verify jobs (default: build-jobs)",
     )
     evaluator_parser.add_argument(
         "--benchmarks-root", type=str, default=None,
@@ -397,12 +401,12 @@ Worker config flag `skip_verification: true` skips inline verification entirely 
 
 ### 11.1 Evaluator Config Overrides
 
-The evaluator uses the `WorkerConfig` overrides pattern (`CRSBENCH_EVALUATOR_*` env vars) for:
+The evaluator reads paths from the experiment config YAML, with CLI flag overrides:
 
-| Field | Env Var | Purpose |
-|-------|---------|---------|
-| `oss_fuzz_path` | `CRSBENCH_EVALUATOR_OSS_FUZZ_PATH` | Path to oss-fuzz checkout |
-| `benchmarks_root` | `CRSBENCH_EVALUATOR_BENCHMARKS_ROOT` | Path to benchmarks directory |
+| Field | CLI Flag | Purpose |
+|-------|----------|---------|
+| `oss_fuzz_path` | `--oss-fuzz-path` | Path to oss-fuzz checkout |
+| `benchmarks_root` | `--benchmarks-root` | Path to benchmarks directory |
 
 ### 11.2 Experiment Config
 
@@ -413,7 +417,7 @@ No new fields needed in `ExperimentConfig`. The evaluator reads the same config 
 
 ### 11.3 Evaluator-Specific CLI Args
 
-`-j/--jobs` controls parallel verify job count (number of verify jobs executing concurrently). This maps to the evaluator supervisor's `max_workers` parameter.
+`--build-jobs` and `--verify-jobs` control parallel build and verify job counts respectively. These map to the evaluator supervisor's concurrency parameters.
 
 ## 12. Error Handling
 

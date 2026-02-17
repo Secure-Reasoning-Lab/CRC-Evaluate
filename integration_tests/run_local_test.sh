@@ -6,6 +6,9 @@
 # - Mock CRS
 # - atlanta-nasm-delta-01 benchmark
 # - Minimal time limits for fast testing
+#
+# All configuration is in the experiment config YAML file.
+# Path overrides (oss_fuzz_path, registry_dir, etc.) should be set in the YAML.
 
 set -e  # Exit on error
 
@@ -15,13 +18,6 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Configuration
 CONFIG_FILE="$SCRIPT_DIR/test-experiment-config.yaml"
-EXPERIMENT_NAME="integration-test-local"
-
-# Path overrides (CLI arguments have highest precedence)
-OSS_FUZZ_PATH="${OSS_FUZZ_PATH:-$PROJECT_ROOT/oss-fuzz}"
-REGISTRY_DIR="${REGISTRY_DIR:-$PROJECT_ROOT/crses/registry}"
-CRS_CONFIGS_DIR="${CRS_CONFIGS_DIR:-$PROJECT_ROOT/crses/configs}"
-BENCHMARKS_ROOT="${BENCHMARKS_ROOT:-$PROJECT_ROOT/benchmarks}"
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -40,12 +36,7 @@ fi
 
 echo -e "${GREEN}Configuration:${NC}"
 echo "  Config file: $CONFIG_FILE"
-echo "  Experiment name: $EXPERIMENT_NAME"
 echo "  Mode: Local (no distributed execution)"
-echo "  OSS-Fuzz path: $OSS_FUZZ_PATH"
-echo "  Registry directory: $REGISTRY_DIR"
-echo "  CRS configs directory: $CRS_CONFIGS_DIR"
-echo "  Benchmarks root: $BENCHMARKS_ROOT"
 echo ""
 
 # Set up virtual environment
@@ -64,7 +55,6 @@ echo ""
 echo -e "${YELLOW}Cleaning up previous test data...${NC}"
 TEST_DIR="/tmp/crsbench-integration-test/"
 if [ -n "$TEST_DIR" ] && [ -d "$TEST_DIR" ]; then
-    # sudo rm -rf "$TEST_DIR"
     rm -rf "$TEST_DIR"
 fi
 
@@ -77,17 +67,9 @@ echo ""
 echo -e "${GREEN}Running CRSBench experiment...${NC}"
 echo ""
 
-crsbench \
+crsbench run \
    --experiment-config "$CONFIG_FILE" \
-   --experiment-name "$EXPERIMENT_NAME" \
-   --benchmarks atlanta-nasm-delta-01 \
-   --crses mock-crs \
-   --oss-fuzz-path "$OSS_FUZZ_PATH" \
-   --registry-dir "$REGISTRY_DIR" \
-   --crs-configs-dir "$CRS_CONFIGS_DIR" \
-   --benchmarks-root "$BENCHMARKS_ROOT" \
-   --gitcache \
-   --debug
+   --verbose
 
 # Check exit status
 if [ $? -eq 0 ]; then

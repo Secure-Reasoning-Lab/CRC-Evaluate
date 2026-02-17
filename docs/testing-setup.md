@@ -94,20 +94,16 @@ python scripts/valkey-helper.py status
 ### 4. Run a Test Experiment
 
 ```bash
-# Run a simple local test (no distributed execution)
-crsbench \
+# Run a simple local test (benchmarks, crses configured in YAML)
+crsbench run \
   --experiment-config example-config.yaml \
-  --experiment-name test-local \
-  --benchmarks test-benchmark \
-  --crses example-crs
+  --experiment-name test-local
 
 # Or test distributed execution
 python -m crsbench.distributed.worker &  # Start worker in background
-crsbench \
+crsbench run \
   --experiment-config distributed-config.yaml \
-  --experiment-name test-distributed \
-  --benchmarks test-benchmark \
-  --crses example-crs
+  --experiment-name test-distributed
 ```
 
 ## Detailed Setup
@@ -223,12 +219,10 @@ See [Experiment Workflow](experiment-workflow.md) for complete Valkey documentat
 Test without distributed execution:
 
 ```bash
-# No Valkey needed for local mode
-crsbench \
+# No Valkey needed for local mode (benchmarks, crses configured in YAML)
+crsbench run \
   --experiment-config config.yaml \
-  --experiment-name quick-test \
-  --benchmarks test-benchmark \
-  --crses test-crs
+  --experiment-name quick-test
 ```
 
 ### Workflow 2: Distributed Execution Test
@@ -246,12 +240,10 @@ export EXPERIMENT_NAME=dist-test
 python -m crsbench.distributed.worker &
 python -m crsbench.distributed.worker &
 
-# 3. Run experiment
-crsbench \
+# 3. Run experiment (benchmarks, crses configured in YAML)
+crsbench run \
   --experiment-config distributed-config.yaml \
-  --experiment-name dist-test \
-  --benchmarks bench1,bench2 \
-  --crses crs1,crs2
+  --experiment-name dist-test
 
 # 4. Clean up
 python scripts/valkey-helper.py clean dist-test
@@ -277,7 +269,7 @@ uv run pytest tests/test_myfeature.py -v
 
 # 4. Test with real experiment
 export REDIS_HOST=localhost
-crsbench --experiment-name dev-test ...
+crsbench run --experiment-config config.yaml --experiment-name dev-test
 
 # 5. Clean up between runs
 python scripts/valkey-helper.py clean dev-test
@@ -301,7 +293,7 @@ python scripts/valkey-helper.py restart
 uv run pytest tests/test_integration.py -v
 
 # 4. Run real experiment
-crsbench --experiment-config full-config.yaml ...
+crsbench run --experiment-config full-config.yaml
 
 # 5. Verify results
 python scripts/valkey-helper.py stats
@@ -323,11 +315,10 @@ oss-crs build example_configs/my-new-crs test-benchmark
 # 3. Test run
 oss-crs run example_configs/my-new-crs test-benchmark test-harness
 
-# 4. Test with CRSBench
-crsbench \
-  --experiment-name test-new-crs \
-  --crses my-new-crs \
-  --benchmarks test-benchmark
+# 4. Test with CRSBench (crses, benchmarks configured in experiment config YAML)
+crsbench run \
+  --experiment-config config.yaml \
+  --experiment-name test-new-crs
 ```
 
 ### Testing Benchmark Changes
@@ -339,11 +330,10 @@ crsbench \
 # 2. Validate benchmark metadata
 python -m crsbench.validation.validate_benchmark benchmarks/my-benchmark
 
-# 3. Test with CRS
-crsbench \
-  --experiment-name test-benchmark \
-  --benchmarks my-benchmark \
-  --crses test-crs
+# 3. Test with CRS (crses, benchmarks configured in experiment config YAML)
+crsbench run \
+  --experiment-config config.yaml \
+  --experiment-name test-benchmark
 ```
 
 ### Testing Distributed Execution Changes
@@ -356,11 +346,10 @@ python scripts/valkey-helper.py start
 REDIS_HOST=localhost EXPERIMENT_NAME=debug-test \
   python -m crsbench.distributed.worker
 
-# 3. In another terminal, run experiment
-crsbench \
+# 3. In another terminal, run experiment (benchmarks configured in YAML)
+crsbench run \
   --experiment-config config.yaml \
-  --experiment-name debug-test \
-  --benchmarks test-benchmark
+  --experiment-name debug-test
 
 # 4. Monitor queue
 python scripts/valkey-helper.py queue-info debug-test
@@ -569,7 +558,7 @@ python scripts/valkey-helper.py clean <experiment>
 
 # Testing
 uv run pytest tests/ -v
-crsbench --experiment-name test ...
+crsbench run --experiment-config config.yaml --experiment-name test
 
 # Cleanup
 python scripts/valkey-helper.py clean-all

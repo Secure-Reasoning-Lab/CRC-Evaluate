@@ -51,10 +51,9 @@ python scripts/litellm-helper.py start
 
 **Run experiment:**
 ```bash
-crsbench --experiment-config config.yaml \
-         --experiment-name local-test \
-         --benchmarks test-bench \
-         --crses test-crs
+# benchmarks, crses, and other settings are configured in config.yaml
+crsbench run --experiment-config config.yaml \
+             --experiment-name local-test
 ```
 
 ---
@@ -91,10 +90,9 @@ python scripts/litellm-helper.py status
 
 **Run experiment:**
 ```bash
-crsbench --experiment-config config.yaml \
-         --experiment-name my-experiment \
-         --benchmarks bench1,bench2 \
-         --crses crs1,crs2
+# benchmarks, crses, and other settings are configured in config.yaml
+crsbench run --experiment-config config.yaml \
+             --experiment-name my-experiment
 ```
 
 ---
@@ -153,11 +151,9 @@ ANTHROPIC_API_KEY=sk-ant-your-key
 
 **Run experiment:**
 ```bash
-# On orchestrator
-crsbench --experiment-config config.yaml \
-         --experiment-name large-experiment \
-         --benchmarks all-benchmarks \
-         --crses all-crses
+# On orchestrator (benchmarks, crses configured in config.yaml)
+crsbench run --experiment-config config.yaml \
+             --experiment-name large-experiment
 
 # On workers (in separate terminals)
 crsbench worker --experiment-config config.yaml --continuous

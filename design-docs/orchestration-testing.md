@@ -183,6 +183,10 @@ benchmark_list:
 
 ### 3. CLI Override Testing
 
+> **Note**: `--crses`, `--benchmarks`, and `--benchmark-suite` have been removed
+> from the `crsbench run` CLI. These are now config-only settings in the
+> experiment YAML. Only `--experiment-name` can be overridden from the CLI.
+
 #### Test: Override Experiment Name
 
 ```python
@@ -214,11 +218,11 @@ benchmarks: [bench1]
 
 **Success Criteria**: CLI value takes precedence, original config unchanged
 
-#### Test: Override CRSes List
+#### Test: CRSes and Benchmarks Read from Config
 
 ```python
-def test_cli_override_crses(tmp_path):
-    """Test CLI override of CRS list."""
+def test_crses_from_config(tmp_path):
+    """Test CRS list is read from config (no CLI override)."""
     config_path = tmp_path / "config.yaml"
     config_path.write_text("""
 experiment: test
@@ -235,23 +239,11 @@ benchmarks: [bench1]
 
     config = load_experiment_config(config_path)
 
-    # Simulate CLI override
-    cli_crses = "custom-crs1,custom-crs2"
+    # CRSes are always from config (no CLI override)
+    assert config.crses == ["atlantis-c", "ensemble-c"]
 
-    # Resolution logic
-    resolved_crses = parse_list_argument(cli_crses) if cli_crses else config.crses
-
-    assert resolved_crses == ["custom-crs1", "custom-crs2"]
-    assert config.crses == ["atlantis-c", "ensemble-c"]  # Original unchanged
-```
-
-**Success Criteria**: CLI CRS list overrides config
-
-#### Test: Override Benchmarks
-
-```python
-def test_cli_override_benchmarks(tmp_path):
-    """Test CLI override of benchmarks list."""
+def test_benchmarks_from_config(tmp_path):
+    """Test benchmarks list is read from config (no CLI override)."""
     config_path = tmp_path / "config.yaml"
     config_path.write_text("""
 experiment: test
@@ -268,23 +260,17 @@ benchmarks:
 
     config = load_experiment_config(config_path)
 
-    # Simulate CLI override
-    cli_benchmarks = "custom-bench1,custom-bench2,custom-bench3"
-
-    # Resolution logic
-    resolved_benchmarks = parse_list_argument(cli_benchmarks) if cli_benchmarks else config.benchmarks
-
-    assert resolved_benchmarks == ["custom-bench1", "custom-bench2", "custom-bench3"]
-    assert config.benchmarks == ["bench1", "bench2"]  # Original unchanged
+    # Benchmarks are always from config (no CLI override)
+    assert config.benchmarks == ["bench1", "bench2"]
 ```
 
-**Success Criteria**: CLI benchmark list overrides config
+**Success Criteria**: Config values are used directly without CLI override
 
-#### Test: Override Benchmark Suite
+#### Test: Benchmark Suite from Config
 
 ```python
-def test_cli_override_benchmark_suite(tmp_path):
-    """Test CLI override with benchmark suite."""
+def test_benchmark_suite_from_config(tmp_path):
+    """Test benchmark suite is read from config."""
     config_path = tmp_path / "config.yaml"
     config_path.write_text("""
 experiment: test
@@ -294,57 +280,53 @@ difficulty_level: 1
 experiment_filestore: /tmp/crsbench/exp
 report_filestore: /tmp/crsbench/rep
 crses: [crs1]
-benchmarks:
-  - bench1
-  - bench2
+benchmark_suite: crsbench-afc-c
 """)
 
     config = load_experiment_config(config_path)
 
-    # Simulate CLI override with suite (takes precedence over config.benchmarks)
-    cli_suite = "crsbench-afc-c"
-
-    # Resolution logic (suite overrides benchmarks list)
-    if cli_suite:
-        suite_config = load_benchmark_suite(f"benchmark-suites/{cli_suite}.yaml")
-        resolved_benchmarks = suite_config["benchmark_list"]
-    else:
-        resolved_benchmarks = config.benchmarks
-
-    assert len(resolved_benchmarks) > 2  # Suite has more benchmarks
+    assert config.benchmark_suite == "crsbench-afc-c"
+    assert config.benchmarks is None  # Not set when using suite
 ```
 
-**Success Criteria**: CLI suite overrides config benchmarks list
+**Success Criteria**: Suite is read from config
 
-#### Test: Mutual Exclusivity
+#### Test: Config Mutual Exclusivity
 
 ```python
-def test_cli_mutual_exclusivity_error():
-    """Test error when both --benchmarks and --benchmark-suite specified."""
-    # Simulate CLI args
-    cli_benchmarks = "bench1,bench2"
-    cli_suite = "crsbench-afc-c"
+def test_config_mutual_exclusivity_error(tmp_path):
+    """Test error when config specifies both benchmarks and benchmark_suite."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("""
+experiment: test
+trials: 1
+max_total_time: 3600
+difficulty_level: 1
+experiment_filestore: /tmp/crsbench/exp
+report_filestore: /tmp/crsbench/rep
+crses: [crs1]
+benchmarks: [bench1]
+benchmark_suite: crsbench-afc-c
+""")
 
-    # Should raise error
-    if cli_benchmarks and cli_suite:
-        with pytest.raises(ValueError, match="Cannot specify both"):
-            raise ValueError("Cannot specify both --benchmarks and --benchmark-suite")
+    with pytest.raises(ValidationError, match="Cannot specify both"):
+        load_experiment_config(config_path)
 ```
 
-**Success Criteria**: Error raised when both specified
+**Success Criteria**: Validation error raised when both specified in config
 
 ### 4. Config Storage in Trial Directory
 
 #### Test: Store Resolved Config
 
-**CRITICAL**: This is the key test for reproducibility. The config.yaml stored in trial_output_dir MUST contain the resolved (overridden) values, NOT the original config file values.
+**CRITICAL**: This is the key test for reproducibility. The config.yaml stored in trial_output_dir MUST contain the resolved values including any experiment name override from CLI.
 
 ```python
 def test_store_resolved_config_in_trial_dir(tmp_path):
     """Test that orchestrator stores RESOLVED config in trial directory.
 
-    CRITICAL: The stored config.yaml must contain overridden values from CLI,
-    not the original values from the experiment config file.
+    The stored config.yaml must contain the experiment name override from CLI
+    (if provided) and the config values for crses/benchmarks.
     """
     # Create original config
     config_path = tmp_path / "config.yaml"
@@ -366,10 +348,8 @@ benchmarks:
     # Load config
     config = load_experiment_config(config_path)
 
-    # Simulate CLI overrides
+    # Only experiment_name can be overridden from CLI
     cli_experiment_name = "overridden-experiment"
-    cli_crses = "custom-crs1,custom-crs2"
-    cli_benchmarks = "custom-bench1,custom-bench2,custom-bench3"
 
     # Resolve configuration (what orchestrator would do)
     resolved_config = {
@@ -379,8 +359,8 @@ benchmarks:
         "difficulty_level": config.difficulty_level,
         "experiment_filestore": config.experiment_filestore,
         "report_filestore": config.report_filestore,
-        "crses": parse_list_argument(cli_crses),
-        "benchmarks": parse_list_argument(cli_benchmarks),
+        "crses": config.crses,
+        "benchmarks": config.benchmarks,
     }
 
     # Store resolved config (what orchestrator does)
@@ -391,20 +371,21 @@ benchmarks:
     with open(config_yaml_path, "w") as f:
         yaml.dump(resolved_config, f)
 
-    # Load stored config and verify it has OVERRIDDEN values
+    # Load stored config and verify
     with open(config_yaml_path) as f:
         stored_config = yaml.safe_load(f)
 
-    # CRITICAL ASSERTIONS: Stored config must have overridden values
-    assert stored_config["experiment"] == "overridden-experiment"  # NOT "original-experiment"
-    assert stored_config["crses"] == ["custom-crs1", "custom-crs2"]  # NOT ["atlantis-c", "ensemble-c"]
-    assert stored_config["benchmarks"] == ["custom-bench1", "custom-bench2", "custom-bench3"]  # NOT ["bench1", "bench2"]
+    # Experiment name overridden from CLI
+    assert stored_config["experiment"] == "overridden-experiment"
+    # CRSes and benchmarks from config (no CLI override)
+    assert stored_config["crses"] == ["atlantis-c", "ensemble-c"]
+    assert stored_config["benchmarks"] == ["bench1", "bench2"]
 
-    print("✓ Stored config contains RESOLVED (overridden) values")
+    print("✓ Stored config contains RESOLVED values")
 ```
 
 **Success Criteria**:
-- config.yaml in trial_output_dir contains overridden values
+- config.yaml in trial_output_dir contains resolved values
 - Reproducibility: Someone can rerun the exact experiment from stored config
 - Stored config reflects what was actually executed
 
@@ -520,30 +501,26 @@ def test_e2e_with_sample_config_multi_crs(tmp_path):
 - Correct number of trials generated
 - Each trial directory gets correct config
 
-#### Test: End-to-End with CLI Overrides
+#### Test: End-to-End with Experiment Name Override
 
 ```python
-def test_e2e_with_cli_overrides(tmp_path):
-    """Test end-to-end workflow with CLI overrides applied."""
+def test_e2e_with_experiment_name_override(tmp_path):
+    """Test end-to-end workflow with experiment name CLI override."""
     # Use sample config
     config_path = Path("experiment-configs/experiment-config-multi-crs.yaml")
     config = load_experiment_config(config_path)
 
-    # Apply CLI overrides
+    # Only experiment_name can be overridden from CLI
     cli_experiment_name = "custom-experiment-name"
-    cli_crses = "custom-crs1,custom-crs2"
-    cli_benchmarks = "bench1,bench2"
 
-    # Resolve
+    # CRSes and benchmarks come from config
     resolved_experiment = cli_experiment_name
-    resolved_crses = parse_list_argument(cli_crses)
-    resolved_benchmarks = parse_list_argument(cli_benchmarks)
 
-    # Generate trial matrix with resolved values
-    trials = generate_trial_matrix(resolved_benchmarks, resolved_crses, config)
+    # Generate trial matrix with config values
+    trials = generate_trial_matrix(config.benchmarks, config.crses, config)
 
-    # Expected: 2 CRSes × 2 benchmarks × 3 trials = 12 total
-    assert len(trials) == 12
+    # Expected: 3 CRSes × 6 benchmarks × 3 trials = 54 total
+    assert len(trials) == 54
 
     # Store config in trial directory
     trial_dir = tmp_path / "trial_0"
@@ -554,8 +531,8 @@ def test_e2e_with_cli_overrides(tmp_path):
         "trials": config.trials,
         "max_total_time": config.max_total_time,
         "difficulty_level": config.difficulty_level,
-        "crses": resolved_crses,
-        "benchmarks": resolved_benchmarks,
+        "crses": config.crses,
+        "benchmarks": config.benchmarks,
         "trial_crs": trials[0].crs,
         "trial_benchmark": trials[0].benchmark,
         "trial_num": trials[0].trial_num,
@@ -564,21 +541,21 @@ def test_e2e_with_cli_overrides(tmp_path):
     with open(trial_dir / "config.yaml", "w") as f:
         yaml.dump(stored_config, f)
 
-    # Verify stored config has OVERRIDDEN values
+    # Verify stored config
     with open(trial_dir / "config.yaml") as f:
         stored = yaml.safe_load(f)
 
     assert stored["experiment"] == "custom-experiment-name"  # CLI override
-    assert stored["crses"] == ["custom-crs1", "custom-crs2"]  # CLI override
-    assert stored["benchmarks"] == ["bench1", "bench2"]  # CLI override
+    assert stored["crses"] == config.crses  # From config
+    assert stored["benchmarks"] == config.benchmarks  # From config
 
-    print("✓ CLI overrides correctly propagated to stored config")
+    print("✓ Experiment name override correctly propagated to stored config")
 ```
 
 **Success Criteria**:
-- CLI overrides applied correctly
-- Trial matrix reflects overridden values
-- Stored config contains overridden values (NOT original)
+- Experiment name override applied correctly
+- Trial matrix uses config values for crses/benchmarks
+- Stored config contains correct values
 
 ### 6. Benchmark Suite Expansion Testing
 
@@ -743,19 +720,18 @@ def verify_reproducibility(trial_dir):
 
 ## Common Test Pitfalls
 
-### 1. Testing Original Config Instead of Resolved Config
+### 1. Expecting CLI Overrides for Removed Flags
 
-**Wrong**:
+**Wrong** (these CLI overrides no longer exist):
 ```python
-# Testing that original config is stored (WRONG!)
-assert stored_config["crses"] == config.crses
+# CLI --crses override was removed
+resolved_crses = cli_crses if cli_crses else config.crses
 ```
 
-**Right**:
+**Right** (crses/benchmarks always from config):
 ```python
-# Testing that RESOLVED config is stored (CORRECT!)
-resolved_crses = cli_crses if cli_crses else config.crses
-assert stored_config["crses"] == resolved_crses
+# CRSes are always from config
+assert stored_config["crses"] == config.crses
 ```
 
 ### 2. Not Verifying Trial Count Calculation
@@ -775,7 +751,7 @@ trials = generate_trial_matrix(benchmarks, crses, config)
 assert len(trials) == expected
 ```
 
-### 3. Not Testing CLI Overrides
+### 3. Not Testing Experiment Name Override
 
 **Wrong**:
 ```python
@@ -786,7 +762,7 @@ assert config.experiment == "test"
 
 **Right**:
 ```python
-# Test CLI override takes precedence (COMPLETE!)
+# Test experiment name CLI override (the only CLI override for crsbench run)
 config = load_experiment_config(config_path)
 cli_name = "overridden"
 resolved = cli_name if cli_name else config.experiment

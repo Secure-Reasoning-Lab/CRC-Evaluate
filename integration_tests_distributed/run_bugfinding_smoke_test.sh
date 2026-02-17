@@ -14,7 +14,7 @@
 #   -j, --workers <n>       Number of parallel workers (default: 1)
 #   --tmux                  Launch worker in tmux vertical pane
 #   --kill-pane             Kill the worker pane after test (with --tmux)
-#   --debug                 Enable debug output from crsbench
+#   --verbose               Enable verbose output from crsbench
 #   --skip-cleanup          Don't restore original resource configs after test
 #   -h, --help              Show this help message
 
@@ -24,7 +24,7 @@ set -e
 NUM_WORKERS=1
 USE_TMUX=false
 KILL_PANE=false
-DEBUG=false
+VERBOSE=false
 SKIP_CLEANUP=false
 
 # Resource constraints
@@ -46,8 +46,8 @@ while [[ $# -gt 0 ]]; do
             KILL_PANE=true
             shift
             ;;
-        --debug)
-            DEBUG=true
+        --verbose)
+            VERBOSE=true
             shift
             ;;
         --skip-cleanup)
@@ -227,7 +227,7 @@ echo "  CPU cores: $CPU_CORES (8 cores)"
 echo "  Memory: $MEMORY"
 echo "  Mode: Distributed (Redis-based job queue)"
 echo "  Parallel workers: $NUM_WORKERS"
-echo "  Debug mode: $DEBUG"
+echo "  Verbose mode: $VERBOSE"
 if [ "$USE_TMUX" = true ]; then
     echo "  Worker display: tmux vertical pane"
 else
@@ -273,7 +273,7 @@ echo -e "${YELLOW}Starting distributed worker in continuous mode...${NC}"
 
 # Build worker command
 if [ "$NUM_WORKERS" -gt 1 ]; then
-    WORKER_BASE_CMD="crsbench worker -j$NUM_WORKERS --redis-host localhost --experiment-name '$EXPERIMENT_NAME' --log-level INFO --continuous"
+    WORKER_BASE_CMD="crsbench worker --cores $NUM_WORKERS --redis-host localhost --experiment-name '$EXPERIMENT_NAME' --log-level INFO --continuous"
 else
     WORKER_BASE_CMD="crsbench worker --redis-host localhost --experiment-name '$EXPERIMENT_NAME' --log-level INFO --continuous"
 fi
@@ -310,15 +310,10 @@ EXPERIMENT_EXIT_CODE=0
 
 CRSBENCH_CMD="crsbench run \
     --experiment-config \"$EXPERIMENT_CONFIG\" \
-    --oss-fuzz-path \"$OSS_FUZZ_PATH\" \
-    --registry-dir \"$REGISTRY_DIR\" \
-    --crs-configs-dir \"$CRS_CONFIGS_DIR\" \
-    --benchmarks-root \"$BENCHMARKS_ROOT\" \
-    --distributed \
-    --gitcache"
+    --distributed"
 
-if [ "$DEBUG" = true ]; then
-    CRSBENCH_CMD="$CRSBENCH_CMD --debug"
+if [ "$VERBOSE" = true ]; then
+    CRSBENCH_CMD="$CRSBENCH_CMD --verbose"
 fi
 
 eval $CRSBENCH_CMD || EXPERIMENT_EXIT_CODE=$?

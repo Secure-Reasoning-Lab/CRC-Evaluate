@@ -105,12 +105,12 @@ This starts a Valkey instance and saves the connection password to `.env`.
 # Submit all benchmarks (enqueues build + verify jobs to Redis)
 crsbench ci all --all --distributed --output-dir ci-results
 
-# Skip incremental build, always do full builds
-crsbench ci all --all --distributed --output-dir ci-results --no-inc-build
+# Enable incremental build (full build is default)
+crsbench ci all --all --distributed --output-dir ci-results --inc-build
 
 # Also skip force-rebuild (reuse existing Docker images)
 crsbench ci all --all --distributed --output-dir ci-results \
-  --no-inc-build --no-force-rebuild
+  --inc-build --no-force-rebuild
 ```
 
 **Terminal 2 — Start evaluator to process jobs:**

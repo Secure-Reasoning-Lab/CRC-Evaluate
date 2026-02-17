@@ -31,7 +31,7 @@ python -m crsbench.statistics.cli --summary-only
 |--------|-------------|
 | `--summary-only` | Print summary only, no CSV export |
 | `--output`, `-o` | Output CSV file path (default: benchmark_stats.csv) |
-| `--benchmarks` | Comma-separated list of specific benchmarks |
+| `--benchmarks` | Specific benchmarks to analyze (space-separated) |
 | `--benchmarks-dir` | Path to benchmarks directory |
 | `--include-no-vulns` | Include benchmarks with no vulnerabilities |
 | `--verbose`, `-v` | Enable verbose logging |

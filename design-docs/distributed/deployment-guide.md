@@ -140,17 +140,17 @@ The evaluator:
 # Set up SSH tunnel first
 ssh -N -L 6379:localhost:6379 user@machine-a &
 
-# Run worker
+# Run worker (paths come from experiment config YAML worker: section)
 crsbench worker \
+  --experiment-config experiment-config.yaml \
   --experiment-name my-distributed-exp \
-  --redis-host localhost \
-  --oss-fuzz-path /opt/oss-fuzz \
-  --benchmarks-root /home/user/CRSBench/benchmarks
+  --redis-host localhost
 ```
 
 ### Step 5: Start orchestrator (Machine A)
 
 ```bash
+# benchmarks, crses configured in experiment-config.yaml
 crsbench run \
   --experiment-config experiment-config.yaml \
   --distributed
@@ -172,32 +172,38 @@ redis-cli smembers rq:workers
 
 ## Worker Config Overrides
 
-Workers and evaluators on different machines may have different filesystem layouts. Use command-line flags or environment variables to override paths:
+In distributed mode, the orchestrator serializes the full experiment config
+into each Redis job. Workers deserialize it, but the paths (oss_fuzz_path,
+benchmarks_root, etc.) reflect the orchestrator's filesystem — which may
+differ from the worker's.
 
-### Command-line overrides
+The `worker:` section in the experiment YAML provides machine-specific
+overrides. Since this section is included in the serialized config, workers
+apply it automatically at job execution time. All workers sharing the same
+config get the same overrides — for heterogeneous clusters where each worker
+needs different paths, use shared storage with consistent mount points.
+
+### Worker config override example
+
+```yaml
+# Experiment config with worker overrides
+oss_fuzz_path: /home/orchestrator/oss-fuzz    # orchestrator's path
+benchmarks_root: /home/orchestrator/benchmarks
+
+worker:
+  oss_fuzz_path: /opt/oss-fuzz                # worker's path
+  benchmarks_root: /data/benchmarks
+  experiment_filestore: /data/experiments
+```
+
+### Evaluator CLI overrides
+
+Evaluators accept CLI flags to override config paths directly:
 
 ```bash
-crsbench worker \
+crsbench evaluator --experiment-config config.yaml \
   --oss-fuzz-path /opt/oss-fuzz \
-  --benchmarks-root /data/benchmarks \
-  --experiment-filestore /data/experiments
-```
-
-### Environment variable overrides
-
-```bash
-export CRSBENCH_WORKER_OSS_FUZZ_PATH=/opt/oss-fuzz
-export CRSBENCH_WORKER_BENCHMARKS_ROOT=/data/benchmarks
-export CRSBENCH_WORKER_EXPERIMENT_FILESTORE=/data/experiments
-crsbench worker --experiment-name my-exp
-```
-
-For evaluators:
-
-```bash
-export CRSBENCH_EVALUATOR_OSS_FUZZ_PATH=/opt/oss-fuzz
-export CRSBENCH_EVALUATOR_BENCHMARKS_ROOT=/data/benchmarks
-crsbench evaluator --experiment-config config.yaml --experiment-name my-exp
+  --benchmarks-root /data/benchmarks
 ```
 
 ## Distributed CI Builds
@@ -261,8 +267,7 @@ Error: Benchmark not found: /home/orchestrator/benchmarks/...
 ```
 
 - The serialized config contains the orchestrator's paths. Workers on different machines need overrides.
-- Set `--benchmarks-root`, `--oss-fuzz-path`, etc. on the worker command.
-- Or use `CRSBENCH_WORKER_*` environment variables.
+- Set `benchmarks_root`, `oss_fuzz_path`, etc. in the `worker:` section of the experiment YAML.
 
 ### Evaluator not processing jobs
 

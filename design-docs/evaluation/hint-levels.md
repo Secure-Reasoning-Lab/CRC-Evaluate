@@ -62,16 +62,10 @@ def check_hints_config(self):
     return self
 ```
 
-### CLI Arguments (Optional Override)
+### Configuration (Config YAML Only)
 
-File: `crsbench/run_experiment.py`
-
-Add:
-```
---hints-enabled         Enable hints
---hint-sarif-level N    Override SARIF hint level (1-5)
---hint-corpus-level N   Override corpus hint level (1-5) [placeholder]
-```
+`hints_enabled` and `hint_sarif_level` are configured in the experiment config YAML.
+These settings are no longer available as `crsbench run` CLI flags.
 
 ### Trial Hints Preparation
 

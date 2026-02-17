@@ -446,7 +446,7 @@ def get_all_jobs(queue: rq.Queue) -> List[rq.job.Job]:
 ### 4.2 Trial Matrix Generation
 
 ```python
-def generate_trial_matrix(args, config):
+def generate_trial_matrix(config):
     """
     Generate all trial combinations.
 
@@ -463,8 +463,9 @@ def generate_trial_matrix(args, config):
     ...
     (crs2, bench2, trial=2)
     """
-    benchmarks = parse_list_argument(args.benchmarks)
-    crses = parse_list_argument(args.crses)
+    # CRSes and benchmarks are always from the experiment config YAML
+    benchmarks = config.get_benchmark_list()
+    crses = config.crses
 
     trials = []
     for crs in crses:
@@ -542,11 +543,13 @@ report_filestore: /var/lib/crsbench/reports
 benchmarks_root: /opt/crsbench/benchmarks
 ```
 
-**Benchmark Argument Resolution**:
+**Benchmark Path Resolution**:
 
 ```python
-# Command line
-crsbench --benchmarks bench1,bench2 --experiment-config config.yaml
+# Benchmarks are specified in the experiment config YAML:
+#   benchmarks:
+#     - bench1
+#     - bench2
 
 # Resolution for benchmark "bench1":
 # 1. Check if "bench1" is absolute path: No
@@ -555,10 +558,6 @@ crsbench --benchmarks bench1,bench2 --experiment-config config.yaml
 #    - If not set: ./benchmarks/bench1
 # 3. If found: Use that path
 # 4. If not found: Raise FileNotFoundError
-
-# Using absolute path (bypasses benchmarks_root)
-crsbench --benchmarks /abs/path/to/bench1 --experiment-config config.yaml
-# Resolution: Use /abs/path/to/bench1 directly
 ```
 
 ### 5.2 Schema Validation Update
@@ -644,11 +643,9 @@ services:
       - experiment-data:/tmp/experiment-data
       - report-data:/tmp/report-data
     command: >
-      crsbench
+      crsbench run
       --experiment-config /config/experiment-config.yaml
-      --benchmarks ${BENCHMARKS}
       --experiment-name ${EXPERIMENT_NAME}
-      --crses ${CRSES}
 
   worker:
     build:
@@ -1011,9 +1008,9 @@ def should_use_distributed_mode(args, config) -> bool:
     Returns:
         bool: True if should use distributed mode
     """
-    # Calculate total number of jobs
-    benchmarks = parse_list_argument(args.benchmarks)
-    crses = parse_list_argument(args.crses)
+    # Calculate total number of jobs (from config)
+    benchmarks = config.get_benchmark_list()
+    crses = config.crses
     total_jobs = len(benchmarks) * len(crses) * config.trials
 
     # User explicitly disabled distributed mode
@@ -1062,11 +1059,12 @@ def run_experiment_local(args, config) -> None:
     logger.info("Running CRSBench in Local Mode (No Redis)")
     logger.info("="*60)
 
-    benchmarks = parse_list_argument(args.benchmarks)
-    crses = parse_list_argument(args.crses)
+    # CRSes and benchmarks from config YAML
+    benchmarks = config.get_benchmark_list()
+    crses = config.crses
 
     # Generate trial matrix
-    trials = generate_trial_matrix(args, config)
+    trials = generate_trial_matrix(config)
 
     logger.info(f"Total trials to execute: {len(trials)}")
     logger.info(f"CRSes: {', '.join(crses)}")
@@ -1174,31 +1172,26 @@ class ExperimentConfig(BaseModel):
 
 ```bash
 # Single job - automatically uses local mode
-crsbench --experiment-config config.yaml \
-         --benchmarks bench1 \
-         --experiment-name test \
-         --crses crs1
+# (config.yaml has 1 benchmark, 1 CRS, 1 trial)
+crsbench run --experiment-config config.yaml
 
 # Output:
 # [INFO] Single job detected (1 jobs total), using local mode
 # [INFO] Running CRSBench in Local Mode (No Redis)
 
 # Multiple jobs - automatically uses distributed mode (if Redis available)
-crsbench --experiment-config config.yaml \
-         --benchmarks bench1,bench2,bench3 \
-         --experiment-name multi-test \
-         --crses crs1,crs2
+# (config.yaml has 3 benchmarks, 2 CRSes)
+crsbench run --experiment-config config.yaml \
+             --experiment-name multi-test
 
 # Output:
 # [INFO] Multiple jobs detected (6 jobs total), using distributed mode
 # [INFO] Connecting to Redis at queue-server
 
 # Force local mode even with multiple jobs
-crsbench --local-only \
-         --experiment-config config.yaml \
-         --benchmarks bench1,bench2 \
-         --experiment-name local-multi \
-         --crses crs1,crs2
+crsbench run --local-only \
+             --experiment-config config.yaml \
+             --experiment-name local-multi
 
 # Output:
 # [INFO] Local mode explicitly requested via --local-only flag
