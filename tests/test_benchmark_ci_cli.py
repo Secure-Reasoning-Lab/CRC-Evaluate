@@ -103,12 +103,12 @@ class TestOutputOptionsParent:
     def test_output_path(self):
         parser = create_output_options_parent()
         ns = parser.parse_args(["--output", "results.json"])
-        assert ns.output == "results.json"
+        assert ns.output == Path("results.json")
 
     def test_output_dir(self):
         parser = create_output_options_parent()
         ns = parser.parse_args(["--output-dir", "/tmp/results"])
-        assert ns.output_dir == "/tmp/results"
+        assert ns.output_dir == Path("/tmp/results")
 
 
 class TestParentsComposition:
@@ -140,7 +140,7 @@ class TestParentsComposition:
         )
         assert ns.benchmark == "benchmarks/test"
         assert ns.build_workers == 16
-        assert ns.output == "out.json"
+        assert ns.output == Path("out.json")
 
 
 # ===== Tests for discovery.py =====

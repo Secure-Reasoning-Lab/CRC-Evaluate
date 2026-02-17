@@ -864,7 +864,7 @@ class TestPovSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.build_cmd._run_distributed_build")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._build_dag")
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.resolve_benchmark_paths")
-    def test_pov_default_uses_inc_build(
+    def test_pov_default_no_inc_build(
         self,
         mock_discover,
         mock_build_dag,
@@ -885,9 +885,9 @@ class TestPovSubcommand:
         args = parser.parse_args(["ci", "pov", "--all"])
         dispatch_ci(args)
 
-        # Check that _build_dag was called with use_inc_build=True
+        # Check that _build_dag was called with use_inc_build=False (default)
         call_args = mock_build_dag.call_args
-        assert call_args.kwargs["use_inc_build"] is True
+        assert call_args.kwargs["use_inc_build"] is False
         assert call_args.kwargs["force_rebuild"] is True
 
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.print_results_table")
@@ -896,7 +896,7 @@ class TestPovSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.build_cmd._run_distributed_build")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._build_dag")
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.resolve_benchmark_paths")
-    def test_pov_no_inc_build_flag(
+    def test_pov_inc_build_flag(
         self,
         mock_discover,
         mock_build_dag,
@@ -914,12 +914,12 @@ class TestPovSubcommand:
         mock_convert_results.return_value = _make_pov_dag_results("bench1", ["cpv_0"])
 
         parser = _make_parser()
-        args = parser.parse_args(["ci", "pov", "--all", "--no-inc-build"])
+        args = parser.parse_args(["ci", "pov", "--all", "--inc-build"])
         dispatch_ci(args)
 
-        # Check that _build_dag was called with use_inc_build=False
+        # Check that _build_dag was called with use_inc_build=True
         call_args = mock_build_dag.call_args
-        assert call_args.kwargs["use_inc_build"] is False
+        assert call_args.kwargs["use_inc_build"] is True
 
 
 # --- Test Patch subcommand integration ---
@@ -1090,7 +1090,7 @@ class TestPatchSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.resolve_benchmark_paths")
-    def test_patch_default_uses_inc_build(
+    def test_patch_default_no_inc_build(
         self,
         mock_discover,
         mock_caps,
@@ -1118,7 +1118,7 @@ class TestPatchSubcommand:
         call_args = mock_executor_cls.return_value.execute.call_args
         jobs = call_args[0][0]
         build_job = next(j for j in jobs if j.job_id == "build-variants:bench1")
-        assert build_job.use_inc_build is True
+        assert build_job.use_inc_build is False
         assert build_job.force_rebuild is True
 
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.print_results_table")
@@ -1132,7 +1132,7 @@ class TestPatchSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.resolve_benchmark_paths")
-    def test_patch_no_inc_build_flag(
+    def test_patch_inc_build_flag(
         self,
         mock_discover,
         mock_caps,
@@ -1154,13 +1154,13 @@ class TestPatchSubcommand:
         )
 
         parser = _make_parser()
-        args = parser.parse_args(["ci", "patch", "--all", "--no-inc-build"])
+        args = parser.parse_args(["ci", "patch", "--all", "--inc-build"])
         dispatch_ci(args)
 
         call_args = mock_executor_cls.return_value.execute.call_args
         jobs = call_args[0][0]
         build_job = next(j for j in jobs if j.job_id == "build-variants:bench1")
-        assert build_job.use_inc_build is False
+        assert build_job.use_inc_build is True
 
 
 # --- Test RTS subcommand integration ---
@@ -1503,7 +1503,7 @@ class TestCoverageSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.resolve_benchmark_paths")
-    def test_coverage_default_uses_inc_build(
+    def test_coverage_default_no_inc_build(
         self, mock_discover, mock_caps, mock_harness, mock_executor_cls, mock_table
     ):
         mock_discover.return_value = [Path("/tmp/bench1")]
@@ -1520,7 +1520,7 @@ class TestCoverageSubcommand:
         call_args = mock_executor_cls.return_value.execute.call_args
         jobs = call_args[0][0]
         build_job = next(j for j in jobs if j.job_id == "build-variants:bench1")
-        assert build_job.use_inc_build is True
+        assert build_job.use_inc_build is False
         assert build_job.force_rebuild is True
 
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.print_results_table")
@@ -1531,7 +1531,7 @@ class TestCoverageSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.resolve_benchmark_paths")
-    def test_coverage_no_inc_build_flag(
+    def test_coverage_inc_build_flag(
         self, mock_discover, mock_caps, mock_harness, mock_executor_cls, mock_table
     ):
         mock_discover.return_value = [Path("/tmp/bench1")]
@@ -1542,13 +1542,13 @@ class TestCoverageSubcommand:
         )
 
         parser = _make_parser()
-        args = parser.parse_args(["ci", "coverage", "--all", "--no-inc-build"])
+        args = parser.parse_args(["ci", "coverage", "--all", "--inc-build"])
         dispatch_ci(args)
 
         call_args = mock_executor_cls.return_value.execute.call_args
         jobs = call_args[0][0]
         build_job = next(j for j in jobs if j.job_id == "build-variants:bench1")
-        assert build_job.use_inc_build is False
+        assert build_job.use_inc_build is True
 
 
 # --- Test All subcommand integration ---
@@ -2070,7 +2070,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
-    def test_all_default_uses_inc_build_and_force_rebuild(
+    def test_all_default_no_inc_build_and_force_rebuild(
         self,
         mock_discover,
         mock_fmt,
@@ -2109,8 +2109,8 @@ class TestAllSubcommand:
             for j in jobs
             if isinstance(j, BuildSingleVariantJob) and "bench1" in j.job_id
         )
-        # ci all: inc-build by default when project supports it
-        assert build_job.use_inc_build is True
+        # ci all: inc-build off by default (opt-in via --inc-build)
+        assert build_job.use_inc_build is False
         # ci all: always force-rebuild by default
         assert build_job.force_rebuild is True
 
@@ -2127,7 +2127,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
-    def test_all_no_inc_build_flag(
+    def test_all_inc_build_flag(
         self,
         mock_discover,
         mock_fmt,
@@ -2153,7 +2153,7 @@ class TestAllSubcommand:
         )
 
         parser = _make_parser()
-        args = parser.parse_args(["ci", "all", "--all", "--no-inc-build"])
+        args = parser.parse_args(["ci", "all", "--all", "--inc-build"])
         dispatch_ci(args)
 
         call_args = mock_executor_cls.return_value.execute.call_args
@@ -2166,7 +2166,7 @@ class TestAllSubcommand:
             for j in jobs
             if isinstance(j, BuildSingleVariantJob) and "bench1" in j.job_id
         )
-        assert build_job.use_inc_build is False
+        assert build_job.use_inc_build is True
 
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
     @patch("crsbench.distributed.ci_jobs.ci_results_to_executor_results")
@@ -2467,8 +2467,8 @@ class TestRtsJobCreationConditional:
             "RTS jobs should be created when inc-build is effective"
         )
 
-    def test_no_rts_jobs_when_no_inc_build_flag(self):
-        """No RTS jobs when --no-inc-build is used, even if project supports RTS."""
+    def test_no_rts_jobs_when_inc_build_not_enabled(self):
+        """No RTS jobs when --inc-build is not used, even if project supports RTS."""
         from crsbench.benchmark_ci.jobs.flat import PatchUnitTestJob
 
         jobs, _ = self._build_dag_with_params(
@@ -2477,7 +2477,7 @@ class TestRtsJobCreationConditional:
         rts_jobs = [
             j for j in jobs if isinstance(j, PatchUnitTestJob) and j.test_mode == "RTS"
         ]
-        assert len(rts_jobs) == 0, "RTS jobs should NOT be created with --no-inc-build"
+        assert len(rts_jobs) == 0, "RTS jobs should NOT be created without --inc-build"
 
     def test_no_rts_jobs_when_project_no_inc_support(self):
         """No RTS jobs when project doesn't support inc-build."""

@@ -749,48 +749,21 @@ class TestExperimentConfigSchema:
             # Should return absolute path as Path object
             assert config.benchmarks_root == Path(tmpdir).absolute()
 
-    def test_experiment_config_invalid_benchmarks_root(self):
-        """Test experiment config with non-existent benchmarks_root."""
-        with pytest.raises(PydanticValidationError) as exc_info:
-            ExperimentConfig(
-                experiment="test",
-                trials=1,
-                mode=EvaluationMode.DELTA,
-                max_total_time=86400,
-                difficulty_level=1,
-                experiment_filestore="/tmp/exp",
-                report_filestore="/tmp/rep",
-                crses=["test-crs"],
-                benchmarks=["test-bench"],
-                benchmarks_root="/nonexistent/path",
-            )
-        assert "does not exist" in str(exc_info.value).lower()
-
-    def test_experiment_config_benchmarks_root_not_directory(self):
-        """Test experiment config with benchmarks_root pointing to a file."""
-        import tempfile
-
-        # Create a temporary file (not directory)
-        with tempfile.NamedTemporaryFile(delete=False) as tmpfile:
-            tmpfile_path = tmpfile.name
-
-        try:
-            with pytest.raises(PydanticValidationError) as exc_info:
-                ExperimentConfig(
-                    experiment="test",
-                    trials=1,
-                    mode=EvaluationMode.DELTA,
-                    max_total_time=86400,
-                    difficulty_level=1,
-                    experiment_filestore="/tmp/exp",
-                    report_filestore="/tmp/rep",
-                    crses=["test-crs"],
-                    benchmarks=["test-bench"],
-                    benchmarks_root=tmpfile_path,
-                )
-            assert "must be a directory" in str(exc_info.value).lower()
-        finally:
-            Path(tmpfile_path).unlink()
+    def test_experiment_config_benchmarks_root_custom(self):
+        """Test experiment config with custom benchmarks_root."""
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode=EvaluationMode.DELTA,
+            max_total_time=86400,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["test-crs"],
+            benchmarks=["test-bench"],
+            benchmarks_root="/custom/benchmarks",
+        )
+        assert config.benchmarks_root == Path("/custom/benchmarks")
 
     def test_experiment_config_model_dump(self):
         """Test experiment config model_dump() method (Pydantic V2)."""
@@ -814,7 +787,7 @@ class TestExperimentConfigSchema:
         assert config_dict["max_total_time"] == 86400
         assert config_dict["difficulty_level"] == 2
         assert config_dict["redis_host"] == "redis-server"
-        assert config_dict["benchmarks_root"] is None
+        assert config_dict["benchmarks_root"] == Path("benchmarks")
         # Verify new timeout fields are included
         assert "build_timeout" in config_dict
         assert "run_timeout" in config_dict
