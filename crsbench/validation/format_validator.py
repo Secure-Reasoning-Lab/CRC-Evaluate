@@ -17,6 +17,7 @@ from crsbench.validation.errors import (
     ValidationResult,
 )
 from crsbench.validation.schemas import (
+    AdapterType,
     BenchmarkConfig,
     BenchmarkSuiteConfig,
     EvaluationMode,
@@ -483,6 +484,7 @@ def _validate_experiment_schema(
             experiment="dummy",
             trials=1,
             mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=0,
             experiment_filestore=Path("/tmp"),
@@ -500,6 +502,7 @@ def _validate_experiment_schema(
             experiment="dummy",
             trials=1,
             mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
             max_total_time=1,
             difficulty_level=0,
             experiment_filestore=Path("/tmp"),

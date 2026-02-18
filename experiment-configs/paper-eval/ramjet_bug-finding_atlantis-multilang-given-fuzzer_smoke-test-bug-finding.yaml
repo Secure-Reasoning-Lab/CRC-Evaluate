@@ -18,6 +18,7 @@ crses:
   - atlantis-multilang-given_fuzzer
 
 mode: all
+adapter: oss-crs
 
 benchmark_suite: smoke-test-bug-finding-2
 

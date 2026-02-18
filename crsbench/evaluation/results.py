@@ -3,7 +3,6 @@
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -16,6 +15,20 @@ if TYPE_CHECKING:
         PatchVerificationResult,
         PovVerificationResult,
     )
+
+
+@dataclass
+class CRSExecutionResult:
+    """Result from CRS execution."""
+
+    harness_name: str
+    execution_time: float
+    success: bool
+    output: str
+    error: Optional[str] = None
+    timed_out: bool = False
+    build_time: Optional[float] = None  # Time spent building CRS (seconds)
+    run_time: Optional[float] = None  # Time spent running CRS (seconds)
 
 
 @dataclass
@@ -258,13 +271,6 @@ class ResultCollector:
         )
 
 
-class CRSType(str, Enum):
-    """Type of CRS being evaluated."""
-
-    BUG_FINDING = "bug-finding"
-    BUG_FIXING = "bug-fixing"
-
-
 class TrialMetadata(BaseModel):
     """Metadata for a trial execution."""
 
@@ -303,7 +309,7 @@ class TrialResult(BaseModel):
     benchmark: str
     harness: str
     trial_num: int
-    crs_type: CRSType
+    crs_type: str
 
     # Evaluation configuration
     mode: Optional[str] = None  # "delta" or "full"
@@ -349,7 +355,7 @@ class TrialResult(BaseModel):
             f"[Trial {self.trial_num}] Completed {self.crs} on "
             f"{self.benchmark}/{self.harness}: "
         )
-        if self.crs_type == CRSType.BUG_FIXING:
+        if self.crs_type == "bug-fixing":
             return (
                 f"{base}{self.patches_generated} patches generated, "
                 f"{self.patches_valid} valid in {self.execution_time:.1f}s"
@@ -366,7 +372,7 @@ class TrialResult(BaseModel):
         benchmark: str,
         harness: str,
         trial_num: int,
-        crs_type: CRSType,
+        crs_type: str,
         result: "EvaluationResult",
         execution_time: float,
         metadata: TrialMetadata,
@@ -378,7 +384,7 @@ class TrialResult(BaseModel):
             benchmark: Benchmark name
             harness: Harness name
             trial_num: Trial number
-            crs_type: Type of CRS (bug-finding or bug-fixing)
+            crs_type: CRS mode string ("bug-finding" or "bug-fixing")
             result: EvaluationResult from runner
             execution_time: Total execution time in seconds
             metadata: Trial metadata

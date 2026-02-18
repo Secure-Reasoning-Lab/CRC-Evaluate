@@ -38,7 +38,7 @@ from crsbench.distributed.jobs import (
     get_crs_type,
 )
 from crsbench.evaluation.cleanup import cleanup_trial_directory
-from crsbench.evaluation.results import CRSType, TrialResult
+from crsbench.evaluation.results import TrialResult
 from crsbench.utils import log_progress, log_section, log_summary
 from crsbench.utils.benchmark_utils import (
     filter_benchmarks_by_mode,
@@ -616,7 +616,7 @@ def generate_trial_matrix(
         # Detect CRS type
         registry_name = get_crs_registry_name(crs, crs_configs_dir)
         crs_type = get_crs_type(registry_name, registry_dir)
-        is_bug_fixing = crs_type == CRSType.BUG_FIXING.value
+        is_bug_fixing = crs_type == "bug-fixing"
 
         for benchmark_harness in benchmark_harnesses:
             # Skip harnesses without CPVs:
@@ -1010,7 +1010,7 @@ def run_experiment_local(
 
         # Log result and raise exception on failure
         if result.success:
-            if result.crs_type == CRSType.BUG_FIXING:
+            if result.crs_type == "bug-fixing":
                 logger.info(
                     f"  ✓ Success: {result.patches_generated} patches generated, "
                     f"{result.patches_valid} valid"
@@ -1244,7 +1244,7 @@ def _monitor_jobs_basic(
                         benchmark=kwargs.get("benchmark", "unknown"),
                         harness=kwargs.get("harness_name", "unknown"),
                         trial_num=kwargs.get("trial_num", 0),
-                        crs_type=CRSType.BUG_FINDING,
+                        crs_type="bug-finding",
                         mode=kwargs.get("mode"),
                         sanitizer=kwargs.get("sanitizer"),
                         success=False,
@@ -1291,7 +1291,7 @@ def _monitor_jobs_basic(
                     benchmark=kwargs.get("benchmark", "unknown"),
                     harness=kwargs.get("harness_name", "unknown"),
                     trial_num=kwargs.get("trial_num", 0),
-                    crs_type=CRSType.BUG_FINDING,
+                    crs_type="bug-finding",
                     mode=kwargs.get("mode"),
                     sanitizer=kwargs.get("sanitizer"),
                     success=False,
@@ -1429,7 +1429,7 @@ def _monitor_jobs_rich(
                             benchmark=kwargs.get("benchmark", "unknown"),
                             harness=kwargs.get("harness_name", "unknown"),
                             trial_num=kwargs.get("trial_num", 0),
-                            crs_type=CRSType.BUG_FINDING,
+                            crs_type="bug-finding",
                             mode=kwargs.get("mode"),
                             sanitizer=kwargs.get("sanitizer"),
                             success=False,
@@ -1473,7 +1473,7 @@ def _monitor_jobs_rich(
                     benchmark=kwargs.get("benchmark", "unknown"),
                     harness=kwargs.get("harness_name", "unknown"),
                     trial_num=kwargs.get("trial_num", 0),
-                    crs_type=CRSType.BUG_FINDING,
+                    crs_type="bug-finding",
                     mode=kwargs.get("mode"),
                     sanitizer=kwargs.get("sanitizer"),
                     success=False,

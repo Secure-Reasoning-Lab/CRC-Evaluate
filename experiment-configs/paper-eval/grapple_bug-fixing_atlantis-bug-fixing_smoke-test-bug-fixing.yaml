@@ -20,6 +20,7 @@ crses:
   - atlantis-claude-code
 
 mode: all
+adapter: oss-crs
 
 benchmark_suite: smoke-test-bug-fixing
 

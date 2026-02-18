@@ -18,6 +18,7 @@ crses:
   - atlantis-claude-code
 
 mode: all
+adapter: oss-crs
 
 benchmark_suite: usenix-r1
 

@@ -19,6 +19,7 @@ description: "E2E bug finding - AFC final round benchmarks"
 # Execution Configuration
 trials: 7
 mode: full
+adapter: oss-crs
 source_mode: pkgs
 
 # Timeout Configuration - 6 hours CRS run

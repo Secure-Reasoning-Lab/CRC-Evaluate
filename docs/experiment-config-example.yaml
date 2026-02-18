@@ -16,6 +16,14 @@ trials: 1
 # - all: Run all available modes for each benchmark (multiplies trials)
 mode: delta
 
+# CRS adapter type specifying interface format and CRS mode.
+# Possible values:
+#   - oss-bugfind: Legacy bug-finding CRS (oss-bugfind-crs interface)
+#   - oss-bugfix: Legacy bug-fixing CRS (oss-bugfix-crs interface)
+#   - crs-compose-bugfind: New compose-based bug-finding CRS
+#   - crs-compose-bugfix: New compose-based bug-fixing CRS
+adapter: oss-crs
+
 # The maximum time in seconds for the entire trial.
 # IMPORTANT: Must be greater than build_timeout + run_timeout + verify_timeout
 # Default: 86400 (24 hours)

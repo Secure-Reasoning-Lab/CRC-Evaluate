@@ -15,6 +15,10 @@ trials: 3
 # "all" means evaluating both delta-mode and full-mode challenges
 mode: delta
 
+# CRS adapter type specifying interface format and CRS mode.
+# Possible values: "oss-bugfind" | "oss-bugfix" | "crs-compose-bugfind" | "crs-compose-bugfix"
+adapter: oss-crs
+
 # Maximum time in seconds per trial. Must be > build + run + verify timeouts.
 max_total_time: 28800  # 8 hours
 

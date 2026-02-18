@@ -9,6 +9,7 @@ description: "E2E bug finding - libavif original fuzztest harness"
 # Execution Configuration
 trials: 5
 mode: full
+adapter: oss-crs
 source_mode: pkgs
 
 # Timeout Configuration - 6 hours CRS run

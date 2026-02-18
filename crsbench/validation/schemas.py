@@ -203,6 +203,17 @@ class RtsMode(str, Enum):
     BINARYRTS = "binaryrts"
 
 
+class AdapterType(str, Enum):
+    """CRS adapter type.
+
+    Single value representing the unified crs-compose adapter.
+    The mode (bug-finding vs bug-fixing) is specified separately on
+    the adapter instance.
+    """
+
+    OSS_CRS = "oss-crs"
+
+
 @dataclass
 class BenchmarkEntry:
     """Represents a benchmark with optional harness specification.
@@ -804,6 +815,31 @@ class WorkerConfig(BaseModel):
     )
 
 
+class CrsComposeConfig(BaseModel):
+    """Configuration for crs-compose adapter."""
+
+    docker_registry: str = Field(
+        ...,
+        description="Docker registry for CRS images (e.g., ghcr.io/team-atlanta/test)",
+    )
+    oss_crs_infra_cpuset: str = Field(
+        default="0-3",
+        description="CPU set for oss-crs infrastructure services",
+    )
+    oss_crs_infra_memory: str = Field(
+        default="8G",
+        description="Memory limit for oss-crs infrastructure services",
+    )
+    crs_compose_cmd: str = Field(
+        default="crs-compose",
+        description="Path to crs-compose executable (default: assumes on PATH)",
+    )
+    work_dir: Optional[Path] = Field(
+        default=None,
+        description="Base work directory for crs-compose (default: trial_output_dir/crs-compose-workdir)",
+    )
+
+
 class ExperimentConfig(BaseModel):
     """Experiment configuration schema."""
 
@@ -814,6 +850,10 @@ class ExperimentConfig(BaseModel):
     mode: EvaluationMode = Field(
         ...,
         description="Evaluation mode: 'delta', 'full', 'all' (run all available), or 'auto' (single mode, delta preferred)",
+    )
+    adapter: AdapterType = Field(
+        default=AdapterType.OSS_CRS,
+        description="CRS adapter type (only oss-crs supported)",
     )
     max_total_time: int = Field(
         ..., ge=1, description="Maximum time in seconds per trial (must be >= 1)"
@@ -979,6 +1019,10 @@ class ExperimentConfig(BaseModel):
     )
     worker: Optional[WorkerConfig] = Field(
         default=None, description="Distributed worker configuration"
+    )
+    crs_compose: Optional[CrsComposeConfig] = Field(
+        default=None,
+        description="Configuration for crs-compose adapter (used at runtime by OssCrsAdapter)",
     )
     keep_only_results: bool = Field(
         default=False,

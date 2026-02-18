@@ -13,14 +13,11 @@ from crsbench.evaluation.analysis import (
     AnalysisResult,
     AnalyzerInterface,
 )
-from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
-from crsbench.evaluation.crs_executor import (
+from crsbench.evaluation.results import (
     CRSExecutionResult,
-    CRSExecutor,
-    StubCRSExecutor,
+    EvaluationReport,
+    ResultCollector,
 )
-from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
-from crsbench.evaluation.results import EvaluationReport, ResultCollector
 from crsbench.evaluation.runner import (
     BenchmarkRunner,
     EvaluationError,
@@ -56,13 +53,8 @@ __all__ = [
     "BenchmarkRunner",
     "EvaluationResult",
     "EvaluationError",
-    # Executors
-    "CRSExecutor",
-    "CRSExecutionResult",
-    "StubCRSExecutor",
-    "CRSBugFindingExecutor",
-    "CRSPatchExecutor",
     # Results
+    "CRSExecutionResult",
     "ResultCollector",
     "EvaluationReport",
     # Snapshots
