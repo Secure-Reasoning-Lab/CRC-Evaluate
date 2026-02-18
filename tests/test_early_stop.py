@@ -7,9 +7,20 @@ These tests verify that:
 
 import threading
 import time
+from pathlib import Path
 from unittest.mock import MagicMock
 
+from crsbench.evaluation.adapter import OssCrsAdapter
 from crsbench.evaluation.process_utils import run_with_graceful_timeout
+
+_STUB_ADAPTER = OssCrsAdapter(
+    crs_config_name="stub",
+    oss_fuzz_path=Path("/tmp/fake/oss-fuzz"),
+    registry_dir=Path("/tmp/fake/registry"),
+    benchmarks_root=Path("/tmp/fake/benchmarks"),
+    crs_configs_dir=Path("/tmp/fake/configs"),
+    mode="bug-finding",
+)
 
 
 class TestRunWithGracefulTimeoutStopEvent:
@@ -115,6 +126,7 @@ class TestSaturationMonitorIntegration:
 
         # Create runner with early stop enabled
         runner = BenchmarkRunner(
+            _STUB_ADAPTER,
             coverage_enabled=True,
             coverage_early_stop=True,
             coverage_saturation_time=60,
@@ -151,6 +163,7 @@ class TestSaturationMonitorIntegration:
         mock_coverage_manager.is_saturated.side_effect = is_saturated_impl
 
         runner = BenchmarkRunner(
+            _STUB_ADAPTER,
             coverage_enabled=True,
             coverage_early_stop=True,
             coverage_saturation_time=60,
@@ -181,6 +194,7 @@ class TestSaturationMonitorIntegration:
         mock_coverage_manager.is_saturated.return_value = False
 
         runner = BenchmarkRunner(
+            _STUB_ADAPTER,
             coverage_enabled=True,
             coverage_early_stop=True,
         )
@@ -204,6 +218,7 @@ class TestEarlyStopDisabled:
         from crsbench.evaluation.runner import BenchmarkRunner
 
         runner = BenchmarkRunner(
+            _STUB_ADAPTER,
             coverage_enabled=True,
             coverage_early_stop=False,  # Disabled
             coverage_saturation_time=60,
@@ -218,6 +233,7 @@ class TestEarlyStopDisabled:
         from crsbench.evaluation.runner import BenchmarkRunner
 
         runner = BenchmarkRunner(
+            _STUB_ADAPTER,
             coverage_enabled=False,  # Disabled
             coverage_early_stop=True,
         )

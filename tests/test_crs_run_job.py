@@ -64,37 +64,37 @@ class TestCRSRunJobProperties:
 class TestCRSRunJobSnapshotIntegration:
     """Test SnapshotManager integration in CRSRunJob."""
 
-    @patch("crsbench.experiment.jobs.crs_run.CRSBugFindingExecutor")
+    @patch("crsbench.experiment.jobs.crs_run.OssCrsAdapter")
     @patch("crsbench.experiment.jobs.crs_run.SnapshotManager")
     @patch("crsbench.experiment.jobs.crs_run.MetaYamlAdapter")
     def test_snapshot_manager_stop_called_after_execution(
         self,
-        mock_adapter_cls: MagicMock,
+        mock_meta_adapter_cls: MagicMock,
         mock_snapshot_cls: MagicMock,
-        mock_executor_cls: MagicMock,
+        mock_adapter_cls: MagicMock,
         base_job_params: dict,
         tmp_path: Path,
     ) -> None:
         """Verify SnapshotManager.stop() called after execution."""
         # Setup mocks
-        mock_adapter = MagicMock()
-        mock_adapter.get_harness.return_value = MagicMock(name="test_harness")
-        mock_adapter.get_harness.return_value.vulns = []
-        mock_adapter_cls.from_benchmark_path.return_value = mock_adapter
+        mock_meta_adapter = MagicMock()
+        mock_meta_adapter.get_harness.return_value = MagicMock(name="test_harness")
+        mock_meta_adapter.get_harness.return_value.vulns = []
+        mock_meta_adapter_cls.from_benchmark_path.return_value = mock_meta_adapter
 
         mock_snapshot_mgr = MagicMock()
         mock_snapshot_mgr.cycle = 5
         mock_snapshot_cls.return_value = mock_snapshot_mgr
 
-        mock_executor = MagicMock()
-        mock_executor.run_crs.return_value = MagicMock(
+        mock_crs_adapter = MagicMock()
+        mock_crs_adapter.run.return_value = MagicMock(
             success=True,
             error=None,
             output="test output",
             execution_time=100.0,
             timed_out=False,
         )
-        mock_executor_cls.return_value = mock_executor
+        mock_adapter_cls.return_value = mock_crs_adapter
 
         # Create trial output dir
         base_job_params["trial_output_dir"].mkdir(parents=True, exist_ok=True)
@@ -116,27 +116,27 @@ class TestCRSRunJobSnapshotIntegration:
 class TestCRSRunJobEarlyTermination:
     """Test early termination support via stop_event."""
 
-    @patch("crsbench.experiment.jobs.crs_run.CRSBugFindingExecutor")
+    @patch("crsbench.experiment.jobs.crs_run.OssCrsAdapter")
     @patch("crsbench.experiment.jobs.crs_run.SnapshotManager")
     @patch("crsbench.experiment.jobs.crs_run.POVVerificationManager")
     @patch("crsbench.experiment.jobs.crs_run.MetaYamlAdapter")
     def test_stop_event_passed_to_run_crs(
         self,
-        mock_adapter_cls: MagicMock,
+        mock_meta_adapter_cls: MagicMock,
         mock_pov_mgr_cls: MagicMock,
         mock_snapshot_cls: MagicMock,
-        mock_executor_cls: MagicMock,
+        mock_adapter_cls: MagicMock,
         base_job_params: dict,
     ) -> None:
-        """Verify stop_event is passed to run_crs."""
+        """Verify stop_event is passed to adapter.run()."""
         import threading
 
         # Setup mocks
-        mock_adapter = MagicMock()
+        mock_meta_adapter = MagicMock()
         mock_harness = MagicMock()
         mock_harness.vulns = [MagicMock(vuln_keyword="cpv_0")]
-        mock_adapter.get_harness.return_value = mock_harness
-        mock_adapter_cls.from_benchmark_path.return_value = mock_adapter
+        mock_meta_adapter.get_harness.return_value = mock_harness
+        mock_meta_adapter_cls.from_benchmark_path.return_value = mock_meta_adapter
 
         mock_pov_mgr = MagicMock()
         mock_pov_mgr.found_cpvs = {"cpv_0"}
@@ -147,15 +147,15 @@ class TestCRSRunJobEarlyTermination:
         mock_snapshot_mgr.cycle = 3
         mock_snapshot_cls.return_value = mock_snapshot_mgr
 
-        mock_executor = MagicMock()
-        mock_executor.run_crs.return_value = MagicMock(
+        mock_crs_adapter = MagicMock()
+        mock_crs_adapter.run.return_value = MagicMock(
             success=True,
             error=None,
             output="",
             execution_time=60.0,
             timed_out=False,
         )
-        mock_executor_cls.return_value = mock_executor
+        mock_adapter_cls.return_value = mock_crs_adapter
 
         # Create trial output dir
         base_job_params["trial_output_dir"].mkdir(parents=True, exist_ok=True)
@@ -168,8 +168,8 @@ class TestCRSRunJobEarlyTermination:
         # Execute
         result = job.execute(context)
 
-        # Verify run_crs was called with stop_event
-        call_kwargs = mock_executor.run_crs.call_args.kwargs
+        # Verify adapter.run() was called with stop_event
+        call_kwargs = mock_crs_adapter.run.call_args.kwargs
         assert "stop_event" in call_kwargs
         assert isinstance(call_kwargs["stop_event"], threading.Event)
 
@@ -181,37 +181,37 @@ class TestCRSRunJobEarlyTermination:
 class TestCRSRunJobBugFixingMode:
     """Test bug-fixing CRS mode (skip internal verification)."""
 
-    @patch("crsbench.experiment.jobs.crs_run.CRSBugFindingExecutor")
+    @patch("crsbench.experiment.jobs.crs_run.OssCrsAdapter")
     @patch("crsbench.experiment.jobs.crs_run.SnapshotManager")
     @patch("crsbench.experiment.jobs.crs_run.MetaYamlAdapter")
     def test_bug_fixing_skips_pov_verification(
         self,
-        mock_adapter_cls: MagicMock,
+        mock_meta_adapter_cls: MagicMock,
         mock_snapshot_cls: MagicMock,
-        mock_executor_cls: MagicMock,
+        mock_adapter_cls: MagicMock,
         base_job_params: dict,
     ) -> None:
         """Bug-fixing CRS should skip POVVerificationManager setup."""
         # Setup mocks
-        mock_adapter = MagicMock()
+        mock_meta_adapter = MagicMock()
         mock_harness = MagicMock()
         mock_harness.vulns = [MagicMock(vuln_keyword="cpv_0")]
-        mock_adapter.get_harness.return_value = mock_harness
-        mock_adapter_cls.from_benchmark_path.return_value = mock_adapter
+        mock_meta_adapter.get_harness.return_value = mock_harness
+        mock_meta_adapter_cls.from_benchmark_path.return_value = mock_meta_adapter
 
         mock_snapshot_mgr = MagicMock()
         mock_snapshot_mgr.cycle = 2
         mock_snapshot_cls.return_value = mock_snapshot_mgr
 
-        mock_executor = MagicMock()
-        mock_executor.run_crs.return_value = MagicMock(
+        mock_crs_adapter = MagicMock()
+        mock_crs_adapter.run.return_value = MagicMock(
             success=True,
             error=None,
             output="",
             execution_time=120.0,
             timed_out=False,
         )
-        mock_executor_cls.return_value = mock_executor
+        mock_adapter_cls.return_value = mock_crs_adapter
 
         # Create trial output dir
         base_job_params["trial_output_dir"].mkdir(parents=True, exist_ok=True)
@@ -237,34 +237,34 @@ class TestCRSRunJobBugFixingMode:
 class TestCRSRunJobContextShared:
     """Test context.shared integration for build results."""
 
-    @patch("crsbench.experiment.jobs.crs_run.CRSBugFindingExecutor")
+    @patch("crsbench.experiment.jobs.crs_run.OssCrsAdapter")
     @patch("crsbench.experiment.jobs.crs_run.SnapshotManager")
     def test_adapter_from_context_shared(
         self,
         mock_snapshot_cls: MagicMock,
-        mock_executor_cls: MagicMock,
+        mock_adapter_cls: MagicMock,
         base_job_params: dict,
     ) -> None:
         """Verify adapter is retrieved from context.shared when build_job_id set."""
         # Setup mocks
-        mock_adapter = MagicMock()
+        mock_meta_adapter = MagicMock()
         mock_harness = MagicMock()
         mock_harness.vulns = []
-        mock_adapter.get_harness.return_value = mock_harness
+        mock_meta_adapter.get_harness.return_value = mock_harness
 
         mock_snapshot_mgr = MagicMock()
         mock_snapshot_mgr.cycle = 1
         mock_snapshot_cls.return_value = mock_snapshot_mgr
 
-        mock_executor = MagicMock()
-        mock_executor.run_crs.return_value = MagicMock(
+        mock_crs_adapter = MagicMock()
+        mock_crs_adapter.run.return_value = MagicMock(
             success=True,
             error=None,
             output="",
             execution_time=50.0,
             timed_out=False,
         )
-        mock_executor_cls.return_value = mock_executor
+        mock_adapter_cls.return_value = mock_crs_adapter
 
         # Create trial output dir
         base_job_params["trial_output_dir"].mkdir(parents=True, exist_ok=True)
@@ -276,18 +276,18 @@ class TestCRSRunJobContextShared:
         context = JobContext(
             shared={
                 "build:test-project": {
-                    "adapter": mock_adapter,
+                    "adapter": mock_meta_adapter,
                     "build_results": {},
                 }
             }
         )
 
-        # Execute - should use adapter from context.shared
+        # Execute - should use MetaYamlAdapter from context.shared
         with patch(
             "crsbench.experiment.jobs.crs_run.MetaYamlAdapter"
-        ) as mock_adapter_cls:
+        ) as mock_meta_adapter_cls:
             result = job.execute(context)
             # from_benchmark_path should NOT be called since adapter is in shared
-            mock_adapter_cls.from_benchmark_path.assert_not_called()
+            mock_meta_adapter_cls.from_benchmark_path.assert_not_called()
 
         assert result.success is True
