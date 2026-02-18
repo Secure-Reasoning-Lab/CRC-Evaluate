@@ -382,9 +382,8 @@ def create_adapter(
 ) -> OssCrsAdapter:
     """Create an OssCrsAdapter from experiment configuration.
 
-    This replaces AdapterFactory.create() as the single entry point for
-    adapter construction. Used by runner.py, distributed/jobs.py, and
-    experiment/jobs/crs_run.py.
+    Single entry point for adapter construction. Used by runner.py,
+    distributed/jobs.py, and experiment/jobs/crs_run.py.
     """
     return OssCrsAdapter(
         crs_config_name=crs_config_name,

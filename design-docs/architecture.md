@@ -66,8 +66,8 @@ See [design-docs/validation/validation.md](./validation/validation.md) for detai
 
 **Key Features**:
 - BenchmarkRunner for orchestrating evaluations
-- CRSExecutor interface for CRS implementations
-- StubCRSExecutor for testing
+- OssCrsAdapter for CRS execution (bug-finding and bug-fixing modes)
+- create_adapter() factory function for adapter creation
 - Result aggregation and reporting
 
 ### 3. migration/
@@ -369,7 +369,7 @@ Defines CRS-specific runtime parameters and settings.
 ### Test Fixtures
 - `test_benchmark/`: Sample benchmark for testing
 - `example_*.py`: Example scripts demonstrating usage
-- Mock CRS implementations (StubCRSExecutor)
+- Mock CRS adapters (MagicMock with CRSExecutionResult)
 
 ## Performance Considerations
 

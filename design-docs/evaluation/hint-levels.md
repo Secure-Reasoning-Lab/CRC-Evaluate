@@ -118,7 +118,7 @@ File: `crsbench/distributed/jobs.py`
 
 Update `run_crs_trial()`:
 ```python
-crs_executor.configure_crs({
+adapter.configure({
     'build_timeout': config.get('build_timeout', 3600),
     'run_timeout': config.get('max_total_time', 7200),
     'hints_enabled': config.get('hints_enabled', False),

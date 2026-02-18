@@ -855,13 +855,12 @@ def run_crs_trial(
                 "run_id": trial_id,
                 "source_mode": config.source_mode,
                 "skip_litellm": config.skip_litellm,
-                # Spread crs_compose fields when present (compose adapters
-                # extract these; legacy adapters ignore them)
+                # Spread crs_compose fields when present
                 **(config.crs_compose.model_dump() if config.crs_compose else {}),
             }
         )
 
-        # Initialize benchmark runner with CRS executor and snapshot configuration
+        # Initialize benchmark runner with adapter and snapshot configuration
         coverage_enabled = config.coverage_enabled
         coverage_saturation_time = config.coverage_saturation_time
         coverage_early_stop = config.coverage_early_stop

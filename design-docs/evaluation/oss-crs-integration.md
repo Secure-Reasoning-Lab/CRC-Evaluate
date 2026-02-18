@@ -474,28 +474,21 @@ crs_registry_mode: production
 ### Implementation
 
 ```python
-class CRSExecutor:
-    def __init__(self, experiment_config):
-        self.registry_mode = experiment_config.get("crs_registry_mode", "testing")
-        self.registry_dir = self._get_registry_dir()
+from crsbench.evaluation.adapter import create_adapter
 
-    def _get_registry_dir(self):
-        if self.registry_mode == "production":
-            return CRSBENCH_ROOT / "crses"
-        else:
-            return CRSBENCH_ROOT / "oss-crs-registry"
+adapter = create_adapter(
+    config=config,
+    crs_config_name=crs,
+    oss_fuzz_path=oss_fuzz_path,
+    registry_dir=registry_dir,      # resolves to crses/ or oss-crs-registry/
+    benchmarks_root=benchmarks_root,
+    crs_configs_dir=crs_configs_dir,
+    mode=crs_type,                   # "bug-finding" or "bug-fixing"
+)
 
-    def build_crs(self, trial_dir, crs_config, project_name, source_path):
-        """Build CRS using appropriate registry."""
-        cmd = [
-            "oss-crs", "build",
-            "--build-dir", str(trial_dir / "build"),
-            "--oss-fuzz-dir", str(CRSBENCH_ROOT / "oss-fuzz"),
-            "--registry-dir", str(self.registry_dir),
-            "--project-path", str(self.benchmark_dir),
-            crs_config, project_name, str(source_path)
-        ]
-        subprocess.run(cmd, check=True)
+# OssCrsAdapter uses crs-compose lifecycle:
+#   prepare (once per CRS) → build-target (once per project) → run (per harness)
+adapter.configure({...})
 ```
 
 ## Source Code Management

@@ -223,7 +223,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Any
 from crsbench.evaluation.runner import BenchmarkRunner
-from crsbench.evaluation.crs_executor import StubCRSExecutor
+from crsbench.evaluation.adapter import create_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -271,10 +271,9 @@ def run_crs_trial(
     logger.info(f"Running trial {trial_num} for {crs} on {benchmark}")
 
     try:
-        # Initialize benchmark runner with CRS executor
-        # TODO: Replace StubCRSExecutor with actual CRS executor
-        crs_executor = StubCRSExecutor()
-        runner = BenchmarkRunner(crs_executor)
+        # Initialize benchmark runner with CRS adapter
+        adapter = create_adapter(config, crs, ...)
+        runner = BenchmarkRunner(adapter=adapter)
 
         # Resolve benchmark path
         benchmark_path = resolve_benchmark_path(benchmark, config)
@@ -431,7 +430,7 @@ def get_all_jobs(queue: rq.Queue) -> List[rq.job.Job]:
    └─> worker.work(burst=True)
        └─> Import and execute 'crsbench.distributed.jobs.run_crs_trial'
            └─> BenchmarkRunner.run_benchmark()
-               └─> CRSExecutor.run_crs()
+               └─> OssCrsAdapter.run()
                    └─> Generate results
 
 4. Job Completion (Worker → Redis)
@@ -720,7 +719,7 @@ python -m crsbench.distributed.worker
 
 **Evaluation Module** (`crsbench/evaluation/`):
 - Use `BenchmarkRunner` for trial execution
-- Use `CRSExecutor` interface for CRS abstraction
+- Use `OssCrsAdapter` via `create_adapter()` for CRS execution
 - Use `ResultCollector` and `EvaluationReport` for results
 
 **Validation Module** (`crsbench/validation/`):

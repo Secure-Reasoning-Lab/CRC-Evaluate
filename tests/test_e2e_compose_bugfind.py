@@ -430,7 +430,7 @@ class TestBugFindE2ECompose:
 
 
 class TestResultFormatInterchangeability:
-    """Verify compose adapter results match legacy evaluation format."""
+    """Verify compose adapter results match expected evaluation format."""
 
     @patch(_PATCH_RESOURCE_CTX)
     @patch(_PATCH_RWGT)
@@ -442,7 +442,7 @@ class TestResultFormatInterchangeability:
         mock_resource_ctx: MagicMock,
         e2e_bugfind_env: Path,
     ) -> None:
-        """TrialResult from compose adapter has all legacy-required fields."""
+        """TrialResult from compose adapter has all required fields."""
         env = e2e_bugfind_env
         config_dict = _build_config_dict(env)
 
@@ -494,7 +494,7 @@ class TestResultFormatInterchangeability:
         assert metadata_file.exists()
         metadata = json.loads(metadata_file.read_text())
 
-        # Verify all legacy-required fields exist
+        # Verify all required fields exist
         required_fields = [
             "timestamp",
             "trial_num",

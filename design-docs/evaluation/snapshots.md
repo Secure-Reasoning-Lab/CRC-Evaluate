@@ -172,7 +172,7 @@ Orchestrator (Main Process)
 
 3. **CRS Subprocess**:
    - **Not a thread** - it's a separate process (Docker container)
-   - Spawned by BenchmarkRunner via CRSExecutor
+   - Spawned by BenchmarkRunner via OssCrsAdapter
    - Writes outputs to trial_output_dir
    - BenchmarkRunner waits for subprocess to complete
    - Snapshot thread reads outputs while subprocess runs
@@ -946,7 +946,7 @@ See full implementation in `crsbench/evaluation/snapshot_manager.py`.
 **Integration pattern:**
 ```python
 class BenchmarkRunner:
-    def __init__(self, crs_executor, snapshot_period=None):
+    def __init__(self, adapter, snapshot_period=None):
         self.snapshot_period = snapshot_period
 
     def run_benchmark(self, ..., trial_output_dir=None):
@@ -991,8 +991,9 @@ def run_experiment_local(experiment_name, config, benchmarks, crses):
                 )
 
                 # Create runner with snapshot support
+                adapter = create_adapter(config, crs_name, oss_fuzz_path, registry_dir, benchmarks_root)
                 runner = BenchmarkRunner(
-                    crs_executor=create_crs_executor(crs_name),
+                    adapter=adapter,
                     snapshot_period=config.snapshot_period
                 )
 
@@ -1035,8 +1036,9 @@ For distributed execution, snapshot manager runs on each worker:
 def run_trial_job(trial_config):
     """Run a single trial (executed on worker)."""
 
+    adapter = create_adapter(trial_config.config, trial_config.crs, ...)
     runner = BenchmarkRunner(
-        crs_executor=create_crs_executor(trial_config.crs),
+        adapter=adapter,
         snapshot_period=trial_config.snapshot_period  # From job config
     )
 
@@ -1161,8 +1163,10 @@ def test_snapshot_capture_with_benchmark_runner():
     with tempfile.TemporaryDirectory() as tmpdir:
         trial_dir = Path(tmpdir)
 
+        mock_adapter = MagicMock()
+        mock_adapter.mode = "bug-finding"
         runner = BenchmarkRunner(
-            crs_executor=StubCRSExecutor(),
+            adapter=mock_adapter,
             snapshot_period=2  # 2 seconds for fast testing
         )
 
