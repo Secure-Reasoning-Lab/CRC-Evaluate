@@ -5,13 +5,15 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
+from crsbench.evaluation.adapter import OssCrsAdapter
 
 if TYPE_CHECKING:
     from crsbench.evaluation.litellm_tracker import LiteLLMTracker
-from crsbench.evaluation.crs_executor import CRSExecutor, StubCRSExecutor
-from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
-from crsbench.evaluation.results import EvaluationReport, HarnessResult, ResultCollector
+from crsbench.evaluation.results import (
+    EvaluationReport,
+    HarnessResult,
+    ResultCollector,
+)
 from crsbench.evaluation.snapshot_manager import SnapshotManager
 from crsbench.evaluation.verification import PatchBasedDedup, VerificationEngine
 from crsbench.evaluation.verification import PovVerificationResult as VerifResult
@@ -85,7 +87,7 @@ class BenchmarkRunner:
 
     def __init__(
         self,
-        crs_executor: Optional[CRSExecutor] = None,
+        adapter: OssCrsAdapter,
         snapshot_period: Optional[int] = None,
         *,
         coverage_enabled: bool = False,
@@ -109,7 +111,7 @@ class BenchmarkRunner:
         """Initialize benchmark runner.
 
         Args:
-            crs_executor: CRS executor instance. If None, uses stub executor.
+            adapter: CRS adapter for running evaluation (required).
             snapshot_period: Snapshot interval in seconds (0 or None to disable)
             coverage_enabled: Enable coverage collection during trials
             coverage_saturation_time: Seconds without new coverage to detect saturation
@@ -129,7 +131,7 @@ class BenchmarkRunner:
             redis_host: Redis server hostname for async POV verification
             experiment_name: Experiment name for async verify queue naming
         """
-        self.crs_executor = crs_executor or StubCRSExecutor()
+        self.adapter = adapter
         self.snapshot_period = snapshot_period
         self.coverage_enabled = coverage_enabled
         self.coverage_saturation_time = coverage_saturation_time
@@ -172,6 +174,11 @@ class BenchmarkRunner:
                 self.logger.info(
                     "POV early stop enabled: will terminate when all CPVs for harness are found"
                 )
+
+    @property
+    def _crs_type(self) -> str:
+        """Return CRS type from adapter mode ('bug-finding' or 'bug-fixing')."""
+        return self.adapter.mode
 
     def run_benchmark(
         self,
@@ -275,10 +282,6 @@ class BenchmarkRunner:
         """Set up result collector with configuration."""
         self.logger.info(f"Evaluation mode: {evaluation_mode}")
 
-        if crs_config:
-            self.logger.info("Configuring CRS...")
-            self.crs_executor.configure_crs(crs_config)
-
         collector = ResultCollector(str(benchmark_path), evaluation_mode)
 
         if evaluation_mode == "delta" and config.delta_mode:
@@ -297,15 +300,11 @@ class BenchmarkRunner:
         self, benchmark_path: Path, trial_output_dir: Optional[Path]
     ) -> None:
         """Pre-build CRS before snapshot starts."""
-        if (
-            isinstance(self.crs_executor, (CRSBugFindingExecutor, CRSPatchExecutor))
-            and trial_output_dir
-        ):
+        if trial_output_dir:
             self.logger.info("Pre-building CRS before snapshot period...")
-            # Signal that CRS build is starting (idempotent)
             if self.on_build_start:
                 self.on_build_start()
-            self.crs_executor.build_crs(benchmark_path, trial_output_dir)
+            self.adapter.build(benchmark_path, trial_output_dir)
 
     def _collect_crs_results(
         self,
@@ -319,11 +318,11 @@ class BenchmarkRunner:
         Similar to how POV stats are derived from verification results,
         patch stats are also derived from verification results.
         """
-        if isinstance(self.crs_executor, CRSBugFindingExecutor):
+        if self._crs_type == "bug-finding":
             if pov_verification_results:
                 collector.set_pov_stats(pov_verification_results)
 
-        elif isinstance(self.crs_executor, CRSPatchExecutor) and trial_output_dir:
+        elif self._crs_type == "bug-fixing" and trial_output_dir:
             if patch_verification_results:
                 # Get total_input_povs from input directory
                 povs_dir = trial_output_dir / "crs-input" / "povs"
@@ -342,7 +341,7 @@ class BenchmarkRunner:
 
     def _log_evaluation_summary(self, report: EvaluationReport) -> None:
         """Log evaluation summary based on CRS type."""
-        if isinstance(self.crs_executor, CRSPatchExecutor):
+        if self._crs_type == "bug-fixing":
             verification_info = ""
             if report.patches_valid > 0 or report.patches_build_failed > 0:
                 verification_info = (
@@ -486,7 +485,7 @@ class BenchmarkRunner:
             and self.oss_fuzz_path
             and harness_result
             and harness_result.run_successful
-            and isinstance(self.crs_executor, CRSBugFindingExecutor)
+            and self._crs_type == "bug-finding"
         ):
             self._run_post_experiment_coverage(
                 benchmark_path=benchmark_path,
@@ -501,7 +500,7 @@ class BenchmarkRunner:
         # POV verification: use manager's final sweep + drain (unified path)
         pov_verification_results: list[VerifResult] = []
         if (
-            isinstance(self.crs_executor, CRSBugFindingExecutor)
+            self._crs_type == "bug-finding"
             and pov_verification_manager
             and harness_result
             and harness_result.run_successful
@@ -523,7 +522,7 @@ class BenchmarkRunner:
         # Patch verification: run separately (bug-fixing CRS only)
         patch_verification_results: list[PatchVerificationResult] = []
         if (
-            isinstance(self.crs_executor, CRSPatchExecutor)
+            self._crs_type == "bug-fixing"
             and harness_result
             and harness_result.run_successful
             and not skip_verification
@@ -628,7 +627,7 @@ class BenchmarkRunner:
                     self.on_run_start()
 
             # Run CRS
-            crs_result = self.crs_executor.run_crs(
+            crs_result = self.adapter.run(
                 benchmark_path=benchmark_path,
                 harness=harness,
                 trial_output_dir=trial_output_dir,
@@ -646,6 +645,18 @@ class BenchmarkRunner:
                 build_time=crs_result.build_time,
                 run_time=crs_result.run_time,
             )
+
+            # Collect adapter results (copies SUBMIT_DIR artifacts to trial_output_dir/output/)
+            if crs_result.success:
+                try:
+                    collect_meta = self.adapter.collect_results(
+                        trial_output_dir, harness.name
+                    )
+                    self.logger.info("Adapter collect_results: %s", collect_meta)
+                except Exception as collect_err:
+                    self.logger.warning(
+                        "Failed to collect adapter results: %s", collect_err
+                    )
 
         except Exception as e:
             self.logger.error(f"Failed to evaluate harness '{harness.name}': {str(e)}")
@@ -721,7 +732,7 @@ class BenchmarkRunner:
     ) -> tuple[Optional[POVVerificationManager], Optional[threading.Event]]:
         """Start POV verification manager if enabled.
 
-        Only creates manager for bug-finding CRS (CRSBugFindingExecutor).
+        Only creates manager for bug-finding CRS.
         Bug-fixing CRS uses POVs as input, not output.
 
         Args:
@@ -734,7 +745,7 @@ class BenchmarkRunner:
             Tuple of (POVVerificationManager, stop_event) or (None, None) if not applicable
         """
         # Only create POV verification manager for bug-finding CRS
-        if not isinstance(self.crs_executor, CRSBugFindingExecutor):
+        if self._crs_type != "bug-finding":
             return None, None
 
         if not self.oss_fuzz_path:
@@ -888,7 +899,7 @@ class BenchmarkRunner:
     ) -> Optional[PatchVerificationManager]:
         """Start patch verification manager for bug-fixing CRS.
 
-        Only creates manager for bug-fixing CRS (CRSPatchExecutor).
+        Only creates manager for bug-fixing CRS.
         Bug-finding CRS uses POVVerificationManager instead.
 
         Args:
@@ -901,7 +912,7 @@ class BenchmarkRunner:
             PatchVerificationManager or None if not applicable
         """
         # Only create patch verification manager for bug-fixing CRS
-        if not isinstance(self.crs_executor, CRSPatchExecutor):
+        if self._crs_type != "bug-fixing":
             return None
 
         try:

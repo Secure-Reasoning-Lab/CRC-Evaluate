@@ -14,15 +14,14 @@ from typing import Any, Dict, Optional
 
 import yaml
 
+from crsbench.evaluation.adapter import create_adapter
 from crsbench.evaluation.cleanup import cleanup_trial_directory, copy_trial_results
-from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
-from crsbench.evaluation.crs_patch_executor import CRSPatchExecutor
 from crsbench.evaluation.litellm_tracker import (
     LiteLLMTracker,
     LiteLLMTrackerError,
     is_tracking_available,
 )
-from crsbench.evaluation.results import CRSType, TrialMetadata, TrialResult
+from crsbench.evaluation.results import TrialMetadata, TrialResult
 from crsbench.evaluation.runner import BenchmarkFormatError, BenchmarkRunner
 from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.logger import (
@@ -407,7 +406,7 @@ def _reconstruct_trial_result_from_success(
     metadata_file = trial_dir / "metadata.json"
 
     # Default values
-    crs_type_enum = CRSType.BUG_FINDING
+    crs_type = "bug-finding"
     execution_time = 0.0
     povs_found = 0
     total_povs = 0
@@ -424,7 +423,7 @@ def _reconstruct_trial_result_from_success(
             # Extract CRS type from metadata
             mode_str = metadata.get("mode", "bug_finding")
             if mode_str == "patch_generation":
-                crs_type_enum = CRSType.BUG_FIXING
+                crs_type = "bug-fixing"
 
             # Try to extract results from metadata if available
             # (These may not be in the standard metadata.json format)
@@ -453,7 +452,7 @@ def _reconstruct_trial_result_from_success(
         benchmark=benchmark,
         harness=harness,
         trial_num=trial_num,
-        crs_type=crs_type_enum,
+        crs_type=crs_type,
         mode=None,
         sanitizer=None,
         success=True,
@@ -494,7 +493,7 @@ def _create_failed_trial_result(
     metadata_file = trial_dir / "metadata.json"
 
     # Default values
-    crs_type_enum = CRSType.BUG_FINDING
+    crs_type = "bug-finding"
 
     if metadata_file.exists():
         try:
@@ -504,7 +503,7 @@ def _create_failed_trial_result(
             # Extract CRS type from metadata
             mode_str = metadata.get("mode", "bug_finding")
             if mode_str == "patch_generation":
-                crs_type_enum = CRSType.BUG_FIXING
+                crs_type = "bug-fixing"
 
         except Exception as e:
             logger.warning(
@@ -520,7 +519,7 @@ def _create_failed_trial_result(
         benchmark=benchmark,
         harness=harness,
         trial_num=trial_num,
-        crs_type=crs_type_enum,
+        crs_type=crs_type,
         mode=None,
         sanitizer=None,
         success=False,
@@ -738,7 +737,7 @@ def run_crs_trial(
         f"[Trial {trial_num}] Starting CRS '{crs}' on benchmark '{benchmark}' harness '{harness_name}'"
     )
     start_time = time.time()
-    crs_type_enum = CRSType.BUG_FINDING  # Default, updated after detection
+    crs_type = "bug-finding"  # Default, updated after detection
 
     # Update runtime job metadata for monitoring (RQ 2.x)
     # Note: Static fields (crs, benchmark, harness, mode, trial_num) are set at enqueue time
@@ -795,6 +794,24 @@ def run_crs_trial(
             allocated_memory = config.resources.memory_per_trial
             logger.info(f"Using memory_per_trial from config: {allocated_memory}")
 
+        # Determine whether to create a local cgroup for this trial.
+        # If ci_supervisor already created a cgroup (distributed mode),
+        # job.meta will have "cgroup_parent" -- skip local creation.
+        # Otherwise, always attempt local cgroup (ResourceContext handles
+        # graceful degradation internally).
+        use_local_cgroup = True
+        try:
+            import rq as _rq
+
+            _current_job = _rq.get_current_job()
+            if _current_job and _current_job.meta.get("cgroup_parent"):
+                use_local_cgroup = False
+                logger.info(
+                    "Supervisor cgroup detected, skipping local cgroup creation"
+                )
+        except Exception:
+            pass
+
         # Get required paths from config
         # Resolve to absolute paths to avoid issues with relative paths
         oss_fuzz_path = config.oss_fuzz_path.resolve()
@@ -808,35 +825,21 @@ def run_crs_trial(
 
         # Detect CRS type from registry
         crs_type = get_crs_type(registry_name, registry_dir)
-        crs_type_enum = (
-            CRSType.BUG_FIXING if crs_type == "bug-fixing" else CRSType.BUG_FINDING
-        )
         logger.info(f"Detected CRS type '{crs_type}' for CRS '{crs}'")
 
-        # Create appropriate executor based on CRS type
-        if crs_type == "bug-fixing":
-            # Patch generation CRS
-            crs_executor = CRSPatchExecutor(
-                crs_config_name=crs,
-                oss_fuzz_path=oss_fuzz_path,
-                registry_dir=registry_dir,
-                benchmarks_root=benchmarks_root,
-                crs_configs_dir=crs_configs_dir,
-                litellm_mode=config.litellm_mode,
-            )
-        else:
-            # Bug finding CRS
-            crs_executor = CRSBugFindingExecutor(
-                crs_config_name=crs,
-                oss_fuzz_path=oss_fuzz_path,
-                registry_dir=registry_dir,
-                benchmarks_root=benchmarks_root,
-                crs_configs_dir=crs_configs_dir,
-                litellm_mode=config.litellm_mode,
-            )
+        # Create adapter
+        adapter = create_adapter(
+            config=config,
+            crs_config_name=crs,
+            oss_fuzz_path=oss_fuzz_path,
+            registry_dir=registry_dir,
+            benchmarks_root=benchmarks_root,
+            crs_configs_dir=crs_configs_dir,
+            mode=crs_type,
+        )
 
-        # Configure executor
-        crs_executor.configure_crs(
+        # Configure adapter
+        adapter.configure(
             {
                 "build_timeout": config.build_timeout,
                 "run_timeout": config.run_timeout,
@@ -848,9 +851,13 @@ def run_crs_trial(
                 "sanitizer": sanitizer,
                 "allocated_cpus": allocated_cpus,
                 "allocated_memory": allocated_memory,
+                "oss_crs_infra_cpuset": allocated_cpus,
                 "run_id": trial_id,
                 "source_mode": config.source_mode,
                 "skip_litellm": config.skip_litellm,
+                # Spread crs_compose fields when present (compose adapters
+                # extract these; legacy adapters ignore them)
+                **(config.crs_compose.model_dump() if config.crs_compose else {}),
             }
         )
 
@@ -882,11 +889,31 @@ def run_crs_trial(
 
         # If tracking is enabled, pass the trial-specific API key to executor
         if llm_api_key:
-            crs_executor.set_llm_api_key(llm_api_key)
-            logger.info("Configured executor with trial-specific LLM API key")
+            set_key = getattr(adapter, "set_llm_api_key", None)
+            if set_key is not None:
+                set_key(llm_api_key)
+                logger.info("Configured adapter with trial-specific LLM API key")
+
+        # When LLM tracking is enabled, enable external_litellm so
+        # CRS containers route traffic through CRSBench's upstream LiteLLM proxy
+        if llm_api_key:
+            litellm_base_url = os.environ.get("LITELLM_BASE_URL") or os.environ.get(
+                "UPSTREAM_LITELLM_BASE_URL", ""
+            )
+            if litellm_base_url:
+                adapter.configure(
+                    {
+                        "external_litellm": True,
+                        "litellm_url": litellm_base_url,
+                        "litellm_api_key": llm_api_key,
+                    }
+                )
+                logger.info(
+                    "Configured compose adapter with external LiteLLM for tracking"
+                )
 
         runner = BenchmarkRunner(
-            crs_executor,
+            adapter=adapter,
             snapshot_period=snapshot_period,
             coverage_enabled=coverage_enabled,
             coverage_saturation_time=coverage_saturation_time,
@@ -990,30 +1017,48 @@ def run_crs_trial(
             json.dump(file_metadata.model_dump(mode="json"), f, indent=2)
         logger.debug(f"Wrote trial metadata to {metadata_file}")
 
-        # Run benchmark evaluation for this specific harness
-        # Note: CRS is already configured via executor.configure_crs() above
-        try:
-            result = runner.run_benchmark(
-                benchmark_harness=benchmark_harness,
-                mode=mode,  # Use mode from trial
-                crs_config={},  # Empty config - executor already configured
-                trial_output_dir=trial_output_dir,
-                oss_fuzz_path=oss_fuzz_path,
-                skip_verification=config.skip_verification,
-            )
-        finally:
-            # Clean up per-trial logging
-            if "trial_log_handler" in locals() and trial_log_handler is not None:
-                remove_file_handler(trial_log_handler)
-            set_trial_context(None)
+        # Compute memory bytes for cgroup enforcement
+        memory_bytes = 0
+        if allocated_memory:
+            try:
+                from crsbench.utils.size_parser import parse_size_to_bytes
 
-            # Clean up LLM tracking (write usage file and delete key)
-            _cleanup_llm_tracking(
-                tracker=llm_tracker,
-                api_key=llm_api_key,
-                trial_output_dir=trial_output_dir,
-                trial_id=trial_id,
-            )
+                memory_bytes = parse_size_to_bytes(allocated_memory)
+            except ValueError:
+                logger.warning(f"Could not parse memory_per_trial: {allocated_memory}")
+
+        # Run benchmark evaluation wrapped with cgroup lifecycle
+        # Note: CRS is already configured via executor.configure_crs() above
+        from crsbench.evaluation.resource_context import ResourceContext
+
+        with ResourceContext(
+            trial_name=trial_id,
+            cpuset=allocated_cpus,
+            memory_bytes=memory_bytes,
+            use_cgroups=use_local_cgroup,
+        ):
+            try:
+                result = runner.run_benchmark(
+                    benchmark_harness=benchmark_harness,
+                    mode=mode,  # Use mode from trial
+                    crs_config={},  # Empty config - executor already configured
+                    trial_output_dir=trial_output_dir,
+                    oss_fuzz_path=oss_fuzz_path,
+                    skip_verification=config.skip_verification,
+                )
+            finally:
+                # Clean up per-trial logging
+                if "trial_log_handler" in locals() and trial_log_handler is not None:
+                    remove_file_handler(trial_log_handler)
+                set_trial_context(None)
+
+                # Clean up LLM tracking (write usage file and delete key)
+                _cleanup_llm_tracking(
+                    tracker=llm_tracker,
+                    api_key=llm_api_key,
+                    trial_output_dir=trial_output_dir,
+                    trial_id=trial_id,
+                )
 
         execution_time = time.time() - start_time
 
@@ -1056,7 +1101,7 @@ def run_crs_trial(
             benchmark=benchmark,
             harness=harness_name,
             trial_num=trial_num,
-            crs_type=crs_type_enum,
+            crs_type=crs_type,
             mode=mode,
             sanitizer=sanitizer,
             success=result.success,
@@ -1135,7 +1180,7 @@ def run_crs_trial(
             benchmark=benchmark,
             harness=harness_name,
             trial_num=trial_num,
-            crs_type=crs_type_enum,
+            crs_type=crs_type,
             mode=mode,
             sanitizer=sanitizer,
             success=False,
@@ -1180,7 +1225,7 @@ def run_crs_trial(
             benchmark=benchmark,
             harness=harness_name,
             trial_num=trial_num,
-            crs_type=crs_type_enum,
+            crs_type=crs_type,
             mode=mode,
             sanitizer=sanitizer,
             success=False,
@@ -1227,7 +1272,7 @@ def run_crs_trial(
             benchmark=benchmark,
             harness=harness_name,
             trial_num=trial_num,
-            crs_type=crs_type_enum,
+            crs_type=crs_type,
             mode=mode,
             sanitizer=sanitizer,
             success=False,

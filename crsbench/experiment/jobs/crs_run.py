@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from crsbench.benchmark_ci.jobs.base import Job, JobContext, JobResult
-from crsbench.evaluation.crs_bug_finding_executor import CRSBugFindingExecutor
+from crsbench.evaluation.adapter import OssCrsAdapter
 from crsbench.evaluation.snapshot_manager import SnapshotManager
 from crsbench.evaluation.verification.pov.config import POVVerificationConfig
 from crsbench.evaluation.verification.pov.manager import POVVerificationManager
@@ -139,22 +139,23 @@ class CRSRunJob(Job):
                 pov_verification_manager=pov_verification_manager,
             )
 
-            # 7. Create CRS executor
-            executor = CRSBugFindingExecutor(
+            # 7. Create CRS adapter
+            crs_adapter = OssCrsAdapter(
                 crs_config_name=self.crs_config_name,
                 oss_fuzz_path=self.oss_fuzz_path,
                 registry_dir=self.registry_dir,
                 benchmarks_root=self.benchmarks_root,
                 crs_configs_dir=self.crs_configs_dir,
-                litellm_mode=self.litellm_mode,
+                litellm_mode=self.litellm_mode or "passthrough",
+                mode=self.crs_type,
             )
 
-            # Configure executor with merged config
+            # Configure adapter with merged config
             executor_config = {
                 "run_timeout": self.run_timeout,
                 **self.executor_config,
             }
-            executor.configure_crs(executor_config)
+            crs_adapter.configure(executor_config)
 
             # 8. Get harness from adapter
             harness = adapter.get_harness(self.harness_name)
@@ -176,7 +177,7 @@ class CRSRunJob(Job):
                 logger.info("CRS run started, snapshot timing reset")
 
             # 11. Run CRS with stop_event
-            crs_result = executor.run_crs(
+            crs_result = crs_adapter.run(
                 benchmark_path=self.benchmark_path,
                 harness=harness,
                 trial_output_dir=self.trial_output_dir,
