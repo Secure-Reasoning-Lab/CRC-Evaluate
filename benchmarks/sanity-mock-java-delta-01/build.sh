@@ -65,5 +65,4 @@ done
 
 cp -r $SRC/src $OUT/src
 if [ "${CRS_TEST:-False}" == "True" ]; then
-    cp -r $SRC/.aixcc $OUT/.aixcc
 fi

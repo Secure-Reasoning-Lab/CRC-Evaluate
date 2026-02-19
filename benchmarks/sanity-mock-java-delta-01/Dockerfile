@@ -27,4 +27,3 @@ WORKDIR $SRC/src/mock_java
 
 COPY fuzz $SRC/src/fuzz
 COPY build.sh $SRC/
-COPY .aixcc $SRC/.aixcc

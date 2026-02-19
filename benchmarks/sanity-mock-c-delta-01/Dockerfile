@@ -9,4 +9,4 @@ WORKDIR $SRC/mock-c
 
 COPY fuzz $SRC/fuzz
 COPY build.sh $SRC/
-COPY .aixcc $SRC/.aixcc
+COPY tests $SRC/tests
