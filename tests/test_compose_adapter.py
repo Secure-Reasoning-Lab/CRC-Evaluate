@@ -1097,7 +1097,7 @@ class TestCollectResultsWiring:
 
 
 class TestStageBenchmark:
-    """Tests for _stage_benchmark() dotfile filtering and symlink creation."""
+    """Tests for _stage_benchmark() dotfile filtering and file staging."""
 
     def _make_adapter(self, tmp_path: Path) -> OssCrsAdapter:
         registry = tmp_path / "registry"
@@ -1182,6 +1182,18 @@ class TestStageBenchmark:
         content = dockerignore.read_text()
         assert ".aixcc" in content
         assert ".agent" in content
+
+    def test_preserves_benchmark_name(self, tmp_path: Path) -> None:
+        adapter = self._make_adapter(tmp_path)
+        bench = self._make_benchmark(tmp_path)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        staged = adapter._stage_benchmark(bench, trial)
+
+        # Staged dir must end with the benchmark name so oss-crs Target
+        # extracts the correct project name for Docker image tagging.
+        assert staged.name == bench.name
 
     def test_recreates_fresh(self, tmp_path: Path) -> None:
         adapter = self._make_adapter(tmp_path)
