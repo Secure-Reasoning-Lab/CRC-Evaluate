@@ -1156,7 +1156,7 @@ class TestStageBenchmark:
         assert ".agent" not in entries
         assert ".git" not in entries
 
-    def test_creates_valid_symlinks(self, tmp_path: Path) -> None:
+    def test_copies_files(self, tmp_path: Path) -> None:
         adapter = self._make_adapter(tmp_path)
         bench = self._make_benchmark(tmp_path)
         trial = tmp_path / "trial"
@@ -1164,9 +1164,10 @@ class TestStageBenchmark:
 
         staged = adapter._stage_benchmark(bench, trial)
 
-        dockerfile_link = staged / "Dockerfile"
-        assert dockerfile_link.is_symlink()
-        assert dockerfile_link.resolve() == (bench / "Dockerfile").resolve()
+        dockerfile = staged / "Dockerfile"
+        assert dockerfile.is_file()
+        assert not dockerfile.is_symlink()
+        assert dockerfile.read_text() == (bench / "Dockerfile").read_text()
 
     def test_adds_dockerignore(self, tmp_path: Path) -> None:
         adapter = self._make_adapter(tmp_path)
@@ -1196,7 +1197,7 @@ class TestStageBenchmark:
         # Second staging should recreate fresh
         staged2 = adapter._stage_benchmark(bench, trial)
         assert not (staged2 / "stale.txt").exists()
-        assert (staged2 / "Dockerfile").is_symlink()
+        assert (staged2 / "Dockerfile").is_file()
 
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
     def test_build_passes_staged_path(

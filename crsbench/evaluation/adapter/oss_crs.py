@@ -117,23 +117,24 @@ class OssCrsAdapter:
         if "litellm_api_key" in config:
             self._litellm_api_key = str(config["litellm_api_key"])
 
+    @staticmethod
+    def _ignore_dotfiles(_directory: str, contents: list[str]) -> list[str]:
+        """Return dotfile/dotdir names to exclude from copytree."""
+        return [c for c in contents if c.startswith(".")]
+
     def _stage_benchmark(self, benchmark_path: Path, trial_output_dir: Path) -> Path:
         """Create a staging directory that excludes dotfiles/dotdirs.
 
         This prevents ground truth (e.g. ``.aixcc/``, ``.agent/``) from
-        leaking into Docker build context.  Uses symlinks to avoid copying
-        large benchmark files.  A ``.dockerignore`` is written as
-        defense-in-depth.
+        leaking into Docker build context.  Uses ``copytree`` because
+        Docker buildx does not follow symlinks in build context.
+        A ``.dockerignore`` is written as defense-in-depth.
         """
         staged = trial_output_dir / "staged-benchmark"
         if staged.exists():
             shutil.rmtree(staged)
-        staged.mkdir(parents=True, exist_ok=True)
 
-        for entry in benchmark_path.iterdir():
-            if entry.name.startswith("."):
-                continue
-            (staged / entry.name).symlink_to(entry.resolve())
+        shutil.copytree(benchmark_path, staged, ignore=self._ignore_dotfiles)
 
         # Defense-in-depth: prevent accidental COPY of ground truth
         (staged / ".dockerignore").write_text(".aixcc\n**/.aixcc\n.agent\n**/.agent\n")
