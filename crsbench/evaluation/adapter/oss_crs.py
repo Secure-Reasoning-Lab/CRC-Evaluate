@@ -130,7 +130,7 @@ class OssCrsAdapter:
         Docker buildx does not follow symlinks in build context.
         A ``.dockerignore`` is written as defense-in-depth.
         """
-        staged = trial_output_dir / "staged-benchmark"
+        staged = trial_output_dir / "staged" / benchmark_path.name
         if staged.exists():
             shutil.rmtree(staged)
 

@@ -1218,7 +1218,7 @@ class TestStageBenchmark:
         build_target_cmd = mock_run.call_args_list[1][0][0]
         target_path_idx = build_target_cmd.index("--target-proj-path") + 1
         target_path = build_target_cmd[target_path_idx]
-        assert "staged-benchmark" in target_path
+        assert "/staged/" in target_path
         assert target_path != str(bench)
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
@@ -1249,5 +1249,5 @@ class TestStageBenchmark:
         run_cmd = mock_rwgt.call_args[0][0]
         target_path_idx = run_cmd.index("--target-proj-path") + 1
         target_path = run_cmd[target_path_idx]
-        assert "staged-benchmark" in target_path
+        assert "/staged/" in target_path
         assert target_path != str(bench)
