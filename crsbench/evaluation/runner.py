@@ -652,7 +652,7 @@ class BenchmarkRunner:
                     collect_meta = self.adapter.collect_results(
                         trial_output_dir, harness.name
                     )
-                    self.logger.info("Adapter collect_results: %s", collect_meta)
+                    self.logger.info(f"Adapter collect_results: {collect_meta}")
                 except Exception as collect_err:
                     self.logger.warning(
                         "Failed to collect adapter results: %s", collect_err

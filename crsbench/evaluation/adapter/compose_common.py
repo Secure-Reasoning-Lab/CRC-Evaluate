@@ -93,7 +93,7 @@ def run_crs_compose_prepare(
         "--work-dir",
         str(work_dir),
     ]
-    logger.debug("Running crs-compose prepare: %s", " ".join(cmd))
+    logger.debug(f"Running crs-compose prepare: {' '.join(cmd)}")
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -117,7 +117,6 @@ def run_crs_compose_build_target(
     *,
     crs_compose_cmd: str = "crs-compose",
     timeout: int = 3600,
-    no_checkout: bool = False,
     target_repo_path: Optional[Path] = None,
 ) -> tuple[str, str, int]:
     """Run ``crs-compose build-target`` to compile the target.
@@ -128,7 +127,6 @@ def run_crs_compose_build_target(
         target_proj_path: Path to the benchmark project directory.
         crs_compose_cmd: Path to the crs-compose executable.
         timeout: Maximum time in seconds.
-        no_checkout: If True, skip git checkout (source already prepared).
         target_repo_path: Path to pre-prepared source repository.
 
     Returns:
@@ -148,13 +146,10 @@ def run_crs_compose_build_target(
         str(target_proj_path),
     ]
 
-    if no_checkout:
-        cmd.append("--no-checkout")
-
     if target_repo_path is not None:
         cmd.extend(["--target-repo-path", str(target_repo_path)])
 
-    logger.debug("Running crs-compose build-target: %s", " ".join(cmd))
+    logger.debug(f"Running crs-compose build-target: {' '.join(cmd)}")
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -256,7 +251,7 @@ def run_crs_compose_run(
                 litellm_api_key[-4:] if len(litellm_api_key) > 4 else "****",
             )
 
-    logger.debug("Running crs-compose run: %s", " ".join(cmd))
+    logger.debug(f"Running crs-compose run: {' '.join(cmd)}")
 
     return run_with_graceful_timeout(
         cmd,
@@ -284,7 +279,7 @@ def docker_compose_down_cleanup(work_dir: Path) -> None:
 
         for compose_file in compose_files:
             try:
-                logger.debug("Running docker compose down for %s", compose_file)
+                logger.debug(f"Running docker compose down for {compose_file}")
                 subprocess.run(
                     [
                         "docker",
@@ -305,9 +300,9 @@ def docker_compose_down_cleanup(work_dir: Path) -> None:
                 subprocess.SubprocessError,
                 OSError,
             ):
-                logger.warning("Failed to run docker compose down for %s", compose_file)
+                logger.warning(f"Failed to run docker compose down for {compose_file}")
     except Exception:
-        logger.warning("Failed during Docker cleanup for work_dir %s", work_dir)
+        logger.warning(f"Failed during Docker cleanup for work_dir {work_dir}")
 
 
 def find_submit_dir(

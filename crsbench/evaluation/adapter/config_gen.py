@@ -84,4 +84,4 @@ class CrsComposeYaml(BaseModel):
             data["llm_config"] = self.llm_config.model_dump()
 
         path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
-        logger.debug("Wrote crs-compose config to %s", path)
+        logger.debug(f"Wrote crs-compose config to {path}")
