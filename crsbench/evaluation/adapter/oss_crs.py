@@ -117,6 +117,28 @@ class OssCrsAdapter:
         if "litellm_api_key" in config:
             self._litellm_api_key = str(config["litellm_api_key"])
 
+    def _stage_benchmark(self, benchmark_path: Path, trial_output_dir: Path) -> Path:
+        """Create a staging directory that excludes dotfiles/dotdirs.
+
+        This prevents ground truth (e.g. ``.aixcc/``, ``.agent/``) from
+        leaking into Docker build context.  Uses symlinks to avoid copying
+        large benchmark files.  A ``.dockerignore`` is written as
+        defense-in-depth.
+        """
+        staged = trial_output_dir / "staged-benchmark"
+        if staged.exists():
+            shutil.rmtree(staged)
+        staged.mkdir(parents=True, exist_ok=True)
+
+        for entry in benchmark_path.iterdir():
+            if entry.name.startswith("."):
+                continue
+            (staged / entry.name).symlink_to(entry.resolve())
+
+        # Defense-in-depth: prevent accidental COPY of ground truth
+        (staged / ".dockerignore").write_text(".aixcc\n**/.aixcc\n.agent\n**/.agent\n")
+        return staged
+
     def _generate_compose_yaml(self, trial_output_dir: Path) -> Path:
         """Generate crs-compose.yaml for this adapter's CRS.
 
@@ -147,7 +169,7 @@ class OssCrsAdapter:
         compose_yaml.to_yaml(compose_path)
 
         self._compose_file = compose_path
-        logger.info("Generated crs-compose.yaml at %s", compose_path)
+        logger.info(f"Generated crs-compose.yaml at {compose_path}")
         return compose_path
 
     def _ensure_compose_state(self) -> tuple[Path, Path]:
@@ -161,7 +183,7 @@ class OssCrsAdapter:
         """Build CRS for the given benchmark via crs-compose prepare + build-target."""
         project_name = benchmark_path.name
         if project_name in self._built_projects:
-            logger.debug("Project %s already built, skipping", project_name)
+            logger.debug(f"Project {project_name} already built, skipping")
             return
 
         if self._compose_file is None:
@@ -173,33 +195,40 @@ class OssCrsAdapter:
 
         compose_file, work_dir = self._ensure_compose_state()
 
+        # Stage benchmark to exclude ground truth dotfiles
+        staged_path = self._stage_benchmark(benchmark_path, trial_output_dir)
+
         # Phase 1: prepare (build CRS Docker images)
-        logger.info("crs-compose prepare for %s", project_name)
-        _stdout, stderr, rc = run_crs_compose_prepare(
+        logger.info(f"crs-compose prepare for {project_name}")
+        stdout, stderr, rc = run_crs_compose_prepare(
             compose_file,
             work_dir,
             crs_compose_cmd=self._crs_compose_cmd,
             timeout=self._build_timeout,
         )
         if rc != 0:
-            msg = f"crs-compose prepare failed (rc={rc}): {stderr}"
+            # crs-compose outputs errors via rich console to stdout
+            detail = stderr or stdout
+            msg = f"crs-compose prepare failed (rc={rc}): {detail}"
             raise RuntimeError(msg)
 
         # Phase 2: build-target (compile the target project)
-        logger.info("crs-compose build-target for %s", project_name)
-        _stdout, stderr, rc = run_crs_compose_build_target(
+        logger.info(f"crs-compose build-target for {project_name}")
+        stdout, stderr, rc = run_crs_compose_build_target(
             compose_file,
             work_dir,
-            benchmark_path,
+            staged_path,
             crs_compose_cmd=self._crs_compose_cmd,
             timeout=self._build_timeout,
         )
         if rc != 0:
-            msg = f"crs-compose build-target failed (rc={rc}): {stderr}"
+            # crs-compose outputs errors via rich console to stdout
+            detail = stderr or stdout
+            msg = f"crs-compose build-target failed (rc={rc}): {detail}"
             raise RuntimeError(msg)
 
         self._built_projects.add(project_name)
-        logger.info("Build complete for %s", project_name)
+        logger.info(f"Build complete for {project_name}")
 
     def _find_pov_dir(self, trial_output_dir: Path) -> Optional[Path]:
         """Locate POV directory in trial output (povs/ or pov/)."""
@@ -232,6 +261,9 @@ class OssCrsAdapter:
         if on_run_start is not None:
             on_run_start()
 
+        # Stage benchmark to exclude ground truth dotfiles
+        staged_path = self._stage_benchmark(benchmark_path, trial_output_dir)
+
         # Bug-fixing inputs (only used when mode is bug-fixing)
         pov_dir: Optional[Path] = None
         diff: Optional[Path] = None
@@ -254,7 +286,7 @@ class OssCrsAdapter:
             stdout, stderr, rc, timed_out = run_crs_compose_run(
                 compose_file,
                 work_dir,
-                benchmark_path,
+                staged_path,
                 harness.name,
                 timeout=self._run_timeout,
                 crs_compose_cmd=self._crs_compose_cmd,
@@ -321,12 +353,12 @@ class OssCrsAdapter:
             pov_src = submit_dir / "pov"
             if pov_src.exists():
                 shutil.copytree(pov_src, output_dir / "povs", dirs_exist_ok=True)
-                logger.info("Copied POVs from %s", pov_src)
+                logger.info(f"Copied POVs from {pov_src}")
 
             seed_src = submit_dir / "seed"
             if seed_src.exists():
                 shutil.copytree(seed_src, output_dir / "seed", dirs_exist_ok=True)
-                logger.info("Copied seeds from %s", seed_src)
+                logger.info(f"Copied seeds from {seed_src}")
 
         return {
             "type": "bug-finding",
@@ -347,13 +379,13 @@ class OssCrsAdapter:
             patch_src = submit_dir / "patch"
             if patch_src.exists():
                 shutil.copytree(patch_src, output_dir / "patches", dirs_exist_ok=True)
-                logger.info("Copied patches from %s", patch_src)
+                logger.info(f"Copied patches from {patch_src}")
 
             # Also copy POVs if present (CRS may find new vulnerabilities)
             pov_src = submit_dir / "pov"
             if pov_src.exists():
                 shutil.copytree(pov_src, output_dir / "povs", dirs_exist_ok=True)
-                logger.info("Copied POVs from %s", pov_src)
+                logger.info(f"Copied POVs from {pov_src}")
 
         # List collected patches
         patch_output = output_dir / "patches"

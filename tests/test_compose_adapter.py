@@ -283,22 +283,6 @@ class TestComposeCommon:
             str(target),
         ]
 
-    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
-    def test_build_target_appends_no_checkout(
-        self, mock_run: MagicMock, tmp_path: Path
-    ) -> None:
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="ok", stderr=""
-        )
-        compose_file = tmp_path / "crs-compose.yaml"
-        work_dir = tmp_path / "work"
-        target = tmp_path / "benchmark"
-
-        run_crs_compose_build_target(compose_file, work_dir, target, no_checkout=True)
-
-        args = mock_run.call_args[0][0]
-        assert "--no-checkout" in args
-
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
     def test_run_builds_correct_command(
         self, mock_rwgt: MagicMock, tmp_path: Path
@@ -1105,3 +1089,164 @@ class TestCollectResultsWiring:
         harness_result = result[0]
         assert harness_result.run_successful is True
         adapter.collect_results.assert_called_once()
+
+
+# ===========================================================================
+# Benchmark Staging (Ground Truth Leakage Prevention)
+# ===========================================================================
+
+
+class TestStageBenchmark:
+    """Tests for _stage_benchmark() dotfile filtering and symlink creation."""
+
+    def _make_adapter(self, tmp_path: Path) -> OssCrsAdapter:
+        registry = tmp_path / "registry"
+        crs_dir = registry / "test-crs"
+        crs_dir.mkdir(parents=True)
+        (crs_dir / "pkg.yaml").write_text(
+            yaml.dump(
+                {
+                    "source": {
+                        "url": "https://github.com/team/crs.git",
+                        "ref": "main",
+                    }
+                }
+            )
+        )
+        return OssCrsAdapter(
+            crs_config_name="test-crs",
+            oss_fuzz_path=tmp_path / "oss-fuzz",
+            registry_dir=registry,
+            benchmarks_root=tmp_path / "benchmarks",
+            crs_configs_dir=tmp_path / "configs",
+            mode="bug-finding",
+        )
+
+    def _make_benchmark(self, tmp_path: Path) -> Path:
+        bench = tmp_path / "bench-proj"
+        bench.mkdir()
+        (bench / "Dockerfile").write_text("FROM ubuntu:22.04\n")
+        (bench / "build.sh").write_text("#!/bin/bash\n")
+        (bench / "test.sh").write_text("#!/bin/bash\n")
+        (bench / "project.yaml").write_text("language: c\n")
+        # Ground truth dirs that should be excluded
+        (bench / ".aixcc").mkdir()
+        (bench / ".aixcc" / "vuln.yaml").write_text("secret\n")
+        (bench / ".agent").mkdir()
+        (bench / ".agent" / "config.json").write_text("{}\n")
+        (bench / ".git").mkdir()
+        (bench / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+        return bench
+
+    def test_excludes_dotfiles(self, tmp_path: Path) -> None:
+        adapter = self._make_adapter(tmp_path)
+        bench = self._make_benchmark(tmp_path)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        staged = adapter._stage_benchmark(bench, trial)
+
+        entries = {e.name for e in staged.iterdir()}
+        assert "Dockerfile" in entries
+        assert "build.sh" in entries
+        assert "test.sh" in entries
+        assert "project.yaml" in entries
+        # Dotfiles/dirs must be absent (except .dockerignore)
+        assert ".aixcc" not in entries
+        assert ".agent" not in entries
+        assert ".git" not in entries
+
+    def test_creates_valid_symlinks(self, tmp_path: Path) -> None:
+        adapter = self._make_adapter(tmp_path)
+        bench = self._make_benchmark(tmp_path)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        staged = adapter._stage_benchmark(bench, trial)
+
+        dockerfile_link = staged / "Dockerfile"
+        assert dockerfile_link.is_symlink()
+        assert dockerfile_link.resolve() == (bench / "Dockerfile").resolve()
+
+    def test_adds_dockerignore(self, tmp_path: Path) -> None:
+        adapter = self._make_adapter(tmp_path)
+        bench = self._make_benchmark(tmp_path)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        staged = adapter._stage_benchmark(bench, trial)
+
+        dockerignore = staged / ".dockerignore"
+        assert dockerignore.exists()
+        content = dockerignore.read_text()
+        assert ".aixcc" in content
+        assert ".agent" in content
+
+    def test_recreates_fresh(self, tmp_path: Path) -> None:
+        adapter = self._make_adapter(tmp_path)
+        bench = self._make_benchmark(tmp_path)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        # First staging
+        staged = adapter._stage_benchmark(bench, trial)
+        # Add a stale file
+        (staged / "stale.txt").write_text("old")
+
+        # Second staging should recreate fresh
+        staged2 = adapter._stage_benchmark(bench, trial)
+        assert not (staged2 / "stale.txt").exists()
+        assert (staged2 / "Dockerfile").is_symlink()
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_build_passes_staged_path(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = self._make_benchmark(tmp_path)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        adapter.build(bench, trial)
+
+        # build-target is the second subprocess.run call
+        build_target_cmd = mock_run.call_args_list[1][0][0]
+        target_path_idx = build_target_cmd.index("--target-proj-path") + 1
+        target_path = build_target_cmd[target_path_idx]
+        assert "staged-benchmark" in target_path
+        assert target_path != str(bench)
+
+    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_run_passes_staged_path(
+        self,
+        mock_subprocess: MagicMock,
+        mock_rwgt: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        mock_rwgt.return_value = ("output", "", 0, False)
+
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = self._make_benchmark(tmp_path)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        adapter.build(bench, trial)
+        harness = MagicMock()
+        harness.name = "fuzz_target"
+
+        adapter.run(bench, harness, trial)
+
+        run_cmd = mock_rwgt.call_args[0][0]
+        target_path_idx = run_cmd.index("--target-proj-path") + 1
+        target_path = run_cmd[target_path_idx]
+        assert "staged-benchmark" in target_path
+        assert target_path != str(bench)
