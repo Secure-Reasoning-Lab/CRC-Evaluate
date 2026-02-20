@@ -6,14 +6,18 @@ standardized experiment configurations, CRS integration, and benchmark suite
 management.
 
 Usage:
-    # Run experiments
-    crsbench run --experiment-config experiment-config.yaml
+    # Download benchmarks and run experiments
+    crsbench download --all
+    crsbench run --experiment-config config.yaml
 
-    # Verify POVs
-    crsbench verify benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
+    # Verify POVs / patches / coverage
+    crsbench verify benchmarks/afc-curl-delta-01 --pov-dir ./povs/
+    crsbench patch-verify benchmarks/afc-curl-delta-01 --patch-dir ./patches --pov-dir ./povs
+    crsbench coverage benchmarks/afc-curl-delta-01 --corpus-dir ./corpus/
 
-    # Collect coverage
-    crsbench coverage benchmarks/sanity-mock-c-delta-01 --corpus-dir ./corpus/
+    # Benchmark management (validate, bundle, CI, stats)
+    crsbench benchmark validate ./benchmarks/afc-curl-delta-01
+    crsbench benchmark ci all --all
 """
 
 import argparse
@@ -247,11 +251,33 @@ def parse_arguments() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Download benchmarks from HuggingFace
+  %(prog)s download --all
+
   # Run CRS experiments
   %(prog)s run --experiment-config config.yaml
 
+  # Start distributed worker / evaluator
+  %(prog)s worker --experiment-config config.yaml
+  %(prog)s evaluator --experiment-config config.yaml
+
   # Verify POVs against benchmark variants
-  %(prog)s verify benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
+  %(prog)s verify benchmarks/afc-curl-delta-01 --pov-dir ./povs/
+
+  # Verify CRS-generated patches
+  %(prog)s patch-verify benchmarks/afc-curl-delta-01 --patch-dir ./patches --pov-dir ./povs
+
+  # Collect code coverage
+  %(prog)s coverage benchmarks/afc-curl-delta-01 --corpus-dir ./corpus/
+
+  # Generate reports and start dashboard
+  %(prog)s report --experiment my-experiment
+  %(prog)s dashboard --base-dir ./experiments
+
+  # Benchmark management (validate, bundle, CI, stats, migrate)
+  %(prog)s benchmark validate ./benchmarks/afc-curl-delta-01
+  %(prog)s benchmark ci all --all
+  %(prog)s benchmark stats --summary-only
         """,
     )
 
@@ -263,11 +289,6 @@ Examples:
     from crsbench.dataset.cli import add_dataset_subparser
 
     add_dataset_subparser(subparsers)
-
-    # 'benchmark' subcommand - benchmark management including migrate, stats, ci
-    from crsbench.benchmark.packaging.cli import add_benchmark_subparser
-
-    add_benchmark_subparser(subparsers)
 
     # 'run' subcommand - experiment execution
     run_parser = subparsers.add_parser(
@@ -329,6 +350,11 @@ Examples:
     from crsbench.evaluation.reeval.cli import add_reeval_subparser
 
     add_reeval_subparser(subparsers)
+
+    # 'benchmark' subcommand - benchmark management including migrate, stats, ci
+    from crsbench.benchmark.packaging.cli import add_benchmark_subparser
+
+    add_benchmark_subparser(subparsers)
 
     args = parser.parse_args()
 

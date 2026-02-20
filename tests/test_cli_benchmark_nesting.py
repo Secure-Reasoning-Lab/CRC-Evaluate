@@ -236,7 +236,6 @@ class TestOldTopLevelCommandsRemoved:
         subs = parser.add_subparsers(dest="command")
 
         add_dataset_subparser(subs)
-        add_benchmark_subparser(subs)
         add_worker_subparser(subs)
         add_evaluator_subparser(subs)
         add_verify_subparser(subs)
@@ -245,6 +244,7 @@ class TestOldTopLevelCommandsRemoved:
         add_report_subparser(subs)
         add_dashboard_subparser(subs)
         add_reeval_subparser(subs)
+        add_benchmark_subparser(subs)
 
         return parser
 
