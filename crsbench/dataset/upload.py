@@ -99,13 +99,7 @@ def _upload_card_files(
             logger.info(f"  [dry-run] would upload card: {f.name}")
         return
 
-    try:
-        from huggingface_hub import HfApi
-    except ImportError:
-        raise ImportError(
-            "huggingface_hub is required for HuggingFace uploads. "
-            "Install it with: pip install 'crsbench[dataset]'"
-        ) from None
+    from huggingface_hub import HfApi
 
     api = HfApi()
     for f in card_files:

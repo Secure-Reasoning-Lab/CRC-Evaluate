@@ -21,13 +21,7 @@ def check_hf_token() -> tuple[bool, str]:
     Returns:
         (is_valid, message) tuple
     """
-    try:
-        from huggingface_hub import HfApi
-    except ImportError:
-        return False, (
-            "huggingface_hub not installed. "
-            "Install with: uv pip install 'crsbench[dataset]'"
-        )
+    from huggingface_hub import HfApi
 
     api = HfApi()
     token = api.token
@@ -50,13 +44,7 @@ def _download_huggingface(
     allow_patterns: Optional[list[str]] = None,
 ) -> Path:
     """Download from HuggingFace using snapshot_download."""
-    try:
-        from huggingface_hub import snapshot_download
-    except ImportError:
-        raise ImportError(
-            "huggingface_hub is required for HuggingFace downloads. "
-            "Install it with: pip install 'crsbench[dataset]'"
-        ) from None
+    from huggingface_hub import snapshot_download
 
     result = snapshot_download(
         repo_id=config.location,
@@ -74,13 +62,7 @@ def _upload_huggingface(
     allow_patterns: Optional[list[str]] = None,
 ) -> None:
     """Upload to HuggingFace using upload_large_folder for reliability."""
-    try:
-        from huggingface_hub import HfApi
-    except ImportError:
-        raise ImportError(
-            "huggingface_hub is required for HuggingFace uploads. "
-            "Install it with: pip install 'crsbench[dataset]'"
-        ) from None
+    from huggingface_hub import HfApi
 
     api = HfApi()
     api.upload_large_folder(
