@@ -64,5 +64,3 @@ LD_LIBRARY_PATH=\"$JVM_LD_LIBRARY_PATH\":\$this_dir \
 done
 
 cp -r $SRC/src $OUT/src
-if [ "${CRS_TEST:-False}" == "True" ]; then
-fi
