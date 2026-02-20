@@ -558,7 +558,7 @@ class TrialDirectoryPreparer:
         sarif_count = len(list(hints_dir.glob("*.sarif")))
 
         # Corpus support placeholder
-        corpus_dir = hints_dir / "corpus"
+        corpus_dir = hints_dir / "seeds"
         corpus_count = len(list(corpus_dir.iterdir())) if corpus_dir.exists() else 0
 
         # Check for ref.diff (delta mode)

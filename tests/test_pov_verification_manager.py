@@ -1043,7 +1043,7 @@ class TestExchangeDirScanning:
     """Tests for EXCHANGE_DIR POV discovery."""
 
     def _make_exchange_dir(self, work_dir: Path, harness_name: str) -> Path:
-        """Create a mock EXCHANGE_DIR structure and return the pov/ path."""
+        """Create a mock EXCHANGE_DIR structure and return the povs/ path."""
         exchange = (
             work_dir
             / "crs_compose"
@@ -1054,7 +1054,7 @@ class TestExchangeDirScanning:
             / "EXCHANGE_DIR"
             / "target_1"
             / harness_name
-            / "pov"
+            / "povs"
         )
         exchange.mkdir(parents=True)
         return exchange

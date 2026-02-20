@@ -73,13 +73,16 @@ def _create_submit_dir(
         work_dir
         / "crs_compose"
         / "abc123hash"
+        / "address"
+        / "runs"
+        / "run-0"
         / "crs"
         / crs_name
         / "target_img"
         / "SUBMIT_DIR"
         / harness_name
     )
-    pov_dir = submit / "pov"
+    pov_dir = submit / "povs"
     pov_dir.mkdir(parents=True)
 
     for name in pov_filenames or ["crash-001", "crash-002"]:

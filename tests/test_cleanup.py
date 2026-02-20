@@ -24,82 +24,82 @@ class TestCopyTrialResults:
         assert (dest / "metadata.json").read_text() == '{"status": "ok"}'
         assert (dest / "log.txt").read_text() == "some log"
 
-    def test_excludes_crs_build(self, tmp_path: Path) -> None:
-        """crs-build/ directory is excluded from copy."""
+    def test_excludes_crs_compose_workdir(self, tmp_path: Path) -> None:
+        """oss-crs-workdir/ directory is excluded from copy."""
         trial_dir = tmp_path / "trial-1"
         trial_dir.mkdir()
         (trial_dir / "metadata.json").write_text("{}")
-        crs_build = trial_dir / "crs-build"
-        crs_build.mkdir()
-        (crs_build / "big-artifact").write_text("x" * 1000)
+        workdir = trial_dir / "oss-crs-workdir"
+        workdir.mkdir()
+        (workdir / "big-artifact").write_text("x" * 1000)
 
         dest = tmp_path / "dest"
         copy_trial_results(trial_dir, dest)
 
         assert (dest / "metadata.json").exists()
-        assert not (dest / "crs-build").exists()
+        assert not (dest / "oss-crs-workdir").exists()
 
-    def test_excludes_oss_bugfind(self, tmp_path: Path) -> None:
-        """.oss-bugfind/ directory is excluded from copy."""
+    def test_excludes_staged(self, tmp_path: Path) -> None:
+        """staged/ directory is excluded from copy."""
         trial_dir = tmp_path / "trial-1"
         trial_dir.mkdir()
         (trial_dir / "metadata.json").write_text("{}")
-        oss_dir = trial_dir / ".oss-bugfind"
-        oss_dir.mkdir()
-        (oss_dir / "build-log").write_text("build output")
+        staged = trial_dir / "staged"
+        staged.mkdir()
+        (staged / "benchmark-copy").write_text("benchmark data")
 
         dest = tmp_path / "dest"
         copy_trial_results(trial_dir, dest)
 
         assert (dest / "metadata.json").exists()
-        assert not (dest / ".oss-bugfind").exists()
+        assert not (dest / "staged").exists()
 
     def test_resolves_symlink_to_excluded_dir(self, tmp_path: Path) -> None:
         """Symlinks pointing into excluded dirs are resolved and copied as real files."""
         trial_dir = tmp_path / "trial-1"
         trial_dir.mkdir()
 
-        # Create crs-build/out/ with actual content
-        crs_build = trial_dir / "crs-build"
-        crs_build.mkdir()
-        out_real = crs_build / "out"
+        # Create oss-crs-workdir/out/ with actual content
+        workdir = trial_dir / "oss-crs-workdir"
+        workdir.mkdir()
+        out_real = workdir / "out"
         out_real.mkdir()
         (out_real / "fuzzer_output.txt").write_text("crash data")
-        (out_real / "corpus").mkdir()
-        (out_real / "corpus" / "seed1").write_text("seed")
+        (out_real / "seeds").mkdir()
+        (out_real / "seeds" / "seed1").write_text("seed")
 
-        # output/ is a symlink to crs-build/out/
+        # output/ is a symlink to oss-crs-workdir/out/
         output_link = trial_dir / "output"
         output_link.symlink_to(out_real)
 
         dest = tmp_path / "dest"
         copy_trial_results(trial_dir, dest)
 
-        # crs-build/ excluded
-        assert not (dest / "crs-build").exists()
+        # oss-crs-workdir/ excluded
+        assert not (dest / "oss-crs-workdir").exists()
         # output/ copied as real directory with content
         assert (dest / "output").exists()
         assert not (dest / "output").is_symlink()
         assert (dest / "output" / "fuzzer_output.txt").read_text() == "crash data"
-        assert (dest / "output" / "corpus" / "seed1").read_text() == "seed"
+        assert (dest / "output" / "seeds" / "seed1").read_text() == "seed"
 
     def test_resolves_file_symlink_to_excluded_dir(self, tmp_path: Path) -> None:
         """File symlinks pointing into excluded dirs are resolved and copied."""
         trial_dir = tmp_path / "trial-1"
         trial_dir.mkdir()
 
-        crs_build = trial_dir / "crs-build"
-        crs_build.mkdir()
-        (crs_build / "result.log").write_text("log content")
+        workdir = trial_dir / "oss-crs-workdir"
+        workdir.mkdir()
+        (workdir / "result.log").write_text("log content")
 
-        # Symlink a file into crs-build/
+        # Symlink a file into oss-crs-workdir/
         link = trial_dir / "result.log"
-        link.symlink_to(crs_build / "result.log")
+        link.symlink_to(workdir / "result.log")
 
         dest = tmp_path / "dest"
         copy_trial_results(trial_dir, dest)
 
-        assert not (dest / "crs-build").exists()
+        assert not (dest / "oss-crs-workdir").exists()
         assert (dest / "result.log").read_text() == "log content"
         assert not (dest / "result.log").is_symlink()
 
@@ -139,24 +139,24 @@ class TestCleanupTrialDirectory:
         trial_dir = tmp_path / "trial-1"
         trial_dir.mkdir()
         (trial_dir / "metadata.json").write_text("{}")
-        (trial_dir / "crs-build").mkdir()
-        (trial_dir / "crs-build" / "artifact").write_text("big")
-        (trial_dir / ".oss-bugfind").mkdir()
+        (trial_dir / "oss-crs-workdir").mkdir()
+        (trial_dir / "oss-crs-workdir" / "artifact").write_text("big")
+        (trial_dir / "staged").mkdir()
 
         cleanup_trial_directory(trial_dir)
 
         assert (trial_dir / "metadata.json").exists()
-        assert not (trial_dir / "crs-build").exists()
-        assert not (trial_dir / ".oss-bugfind").exists()
+        assert not (trial_dir / "oss-crs-workdir").exists()
+        assert not (trial_dir / "staged").exists()
 
     def test_resolves_symlink_before_cleanup(self, tmp_path: Path) -> None:
         """Symlinks to excluded dirs are resolved before excluded dirs are deleted."""
         trial_dir = tmp_path / "trial-1"
         trial_dir.mkdir()
 
-        crs_build = trial_dir / "crs-build"
-        crs_build.mkdir()
-        out_real = crs_build / "out"
+        workdir = trial_dir / "oss-crs-workdir"
+        workdir.mkdir()
+        out_real = workdir / "out"
         out_real.mkdir()
         (out_real / "result.txt").write_text("important")
 
@@ -165,8 +165,8 @@ class TestCleanupTrialDirectory:
 
         cleanup_trial_directory(trial_dir)
 
-        # crs-build deleted
-        assert not (trial_dir / "crs-build").exists()
+        # oss-crs-workdir deleted
+        assert not (trial_dir / "oss-crs-workdir").exists()
         # output/ resolved to real dir and preserved
         assert (trial_dir / "output" / "result.txt").read_text() == "important"
         assert not (trial_dir / "output").is_symlink()

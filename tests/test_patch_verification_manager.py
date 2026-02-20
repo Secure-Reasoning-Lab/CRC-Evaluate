@@ -102,7 +102,7 @@ class TestExchangeDirScanning:
 
     @staticmethod
     def _make_exchange_dir(work_dir: Path, harness_name: str) -> Path:
-        """Create a mock EXCHANGE_DIR structure and return the patch/ path."""
+        """Create a mock EXCHANGE_DIR structure and return the patches/ path."""
         exchange = (
             work_dir
             / "crs_compose"
@@ -113,7 +113,7 @@ class TestExchangeDirScanning:
             / "EXCHANGE_DIR"
             / "target_1"
             / harness_name
-            / "patch"
+            / "patches"
         )
         exchange.mkdir(parents=True)
         return exchange

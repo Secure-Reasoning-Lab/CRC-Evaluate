@@ -2,7 +2,7 @@
 
 Pydantic models mirroring the crs-compose.yaml schema. The to_yaml() method
 serializes CRS entries as top-level keys (NOT nested under a ``crs_entries``
-key), matching the format that crs-compose expects.
+key), matching the format that oss-crs expects.
 """
 
 from __future__ import annotations

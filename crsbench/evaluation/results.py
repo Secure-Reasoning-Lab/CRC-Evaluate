@@ -96,7 +96,7 @@ class EvaluationReport:
     def success(self) -> bool:
         """Return True if evaluation completed (harness results exist).
 
-        Note: ``HarnessResult.run_successful`` reflects the ``crs-compose run``
+        Note: ``HarnessResult.run_successful`` reflects the ``oss-crs run``
         exit code, which is non-zero when Docker containers exit non-zero
         (e.g. fuzzer killed by timeout).  This is normal — POVs/patches may
         still be present.  Therefore ``success`` is based on whether the

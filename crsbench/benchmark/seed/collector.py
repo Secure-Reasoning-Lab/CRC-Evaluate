@@ -146,8 +146,8 @@ class CorpusCollector:
         if not benchmark_dir.exists():
             raise FileNotFoundError(f"Benchmark not found: {benchmark_dir}")
 
-        # 6. Write to benchmark/.aixcc/{harness}/corpus/
-        output_dir = benchmark_dir / ".aixcc" / harness_name / "corpus"
+        # 6. Write to benchmark/.aixcc/{harness}/seeds/
+        output_dir = benchmark_dir / ".aixcc" / harness_name / "seeds"
 
         if output_dir.exists() and not force:
             raise FileExistsError(
@@ -232,8 +232,8 @@ class CorpusCollector:
         """Find the corpus directory within a trial.
 
         Handles multiple locations:
-        1. trial_dir/output/corpus/
-        2. trial_dir/crs-build/run/.../corpus/ (nested in run directory)
+        1. trial_dir/output/seeds/
+        2. trial_dir/crs-build/run/.../seeds/ (nested in run directory)
 
         Args:
             trial_dir: Path to trial directory
@@ -245,21 +245,21 @@ class CorpusCollector:
             FileNotFoundError: If corpus directory not found
         """
         # Try direct path first
-        direct_corpus = trial_dir / "output" / "corpus"
+        direct_corpus = trial_dir / "output" / "seeds"
         if direct_corpus.exists():
             return direct_corpus
 
         # Search in crs-build/run/ subdirectories
         crs_build_run = trial_dir / "crs-build" / "run"
         if crs_build_run.exists():
-            for corpus_dir in crs_build_run.rglob("corpus"):
+            for corpus_dir in crs_build_run.rglob("seeds"):
                 if corpus_dir.is_dir():
                     # Verify it has files (not just an empty directory)
                     if any(corpus_dir.iterdir()):
                         return corpus_dir
 
         # As a last resort, search anywhere under trial_dir
-        for corpus_dir in trial_dir.rglob("corpus"):
+        for corpus_dir in trial_dir.rglob("seeds"):
             if corpus_dir.is_dir() and any(corpus_dir.iterdir()):
                 return corpus_dir
 

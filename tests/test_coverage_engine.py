@@ -68,7 +68,7 @@ def mock_benchmark(tmp_path: Path) -> Path:
 @pytest.fixture
 def mock_corpus(tmp_path: Path) -> Path:
     """Create mock corpus directory with 3 files."""
-    corpus = tmp_path / "corpus"
+    corpus = tmp_path / "seeds"
     corpus.mkdir()
     for i in range(3):
         (corpus / f"input_{i}").write_bytes(f"content{i}".encode())

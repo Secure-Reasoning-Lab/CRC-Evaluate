@@ -502,7 +502,7 @@ class BenchmarkRunner:
             self.on_verification_start()
 
         # POV verification: use manager's final sweep + drain (unified path)
-        # Always verify regardless of run exit code — crs-compose run may
+        # Always verify regardless of run exit code — oss-crs run may
         # return non-zero (e.g. fuzzer killed by timeout) while POVs exist.
         pov_verification_results: list[VerifResult] = []
         if (
@@ -652,7 +652,7 @@ class BenchmarkRunner:
             )
 
             # Collect adapter results (copies SUBMIT_DIR artifacts to trial_output_dir/output/)
-            # Always collect regardless of exit code — crs-compose run returns
+            # Always collect regardless of exit code — oss-crs run returns
             # non-zero when Docker containers exit non-zero (e.g. fuzzer killed
             # by timeout), but POVs/patches may still be present in SUBMIT_DIR.
             try:
@@ -1467,7 +1467,7 @@ class BenchmarkRunner:
             # Corpus directory (where CRS puts corpus files)
             # Use symlink path - don't create directory as it blocks the symlink
             # The "output" symlink is created by CRS run pointing to artifacts
-            corpus_dir = trial_output_dir / "output" / "corpus"
+            corpus_dir = trial_output_dir / "output" / "seeds"
 
             # Create manager
             manager = CoverageManager(
@@ -1508,7 +1508,7 @@ class BenchmarkRunner:
         if not self.oss_fuzz_path:
             return
 
-        corpus_dir = trial_output_dir / "output" / "corpus"
+        corpus_dir = trial_output_dir / "output" / "seeds"
         if not corpus_dir.exists() or not any(corpus_dir.iterdir()):
             self.logger.info("No corpus files for post-experiment coverage")
             return

@@ -100,7 +100,7 @@ class POVVerificationManager:
             redis_host: Redis server hostname for async mode (None = inline mode)
             experiment_name: Experiment name for async verify queue naming
             trial_id: Trial identifier for async result correlation
-            work_dir: crs-compose working directory for EXCHANGE_DIR scanning
+            work_dir: oss-crs working directory for EXCHANGE_DIR scanning
 
         Raises:
             ValueError: If trial_dir doesn't exist
@@ -356,7 +356,7 @@ class POVVerificationManager:
         if exchange_dir is None:
             return None
 
-        pov_dir = exchange_dir / "pov"
+        pov_dir = exchange_dir / "povs"
         if not pov_dir.exists():
             return None
 

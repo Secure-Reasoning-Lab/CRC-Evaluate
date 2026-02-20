@@ -206,7 +206,7 @@ class CoverageStore:
         """
         with self._lock:
             data = {
-                "corpus": {h: c.model_dump() for h, c in self.corpus.items()},
+                "seeds": {h: c.model_dump() for h, c in self.corpus.items()},
                 "covered_lines": [
                     {"src": src, "line": line}
                     for src, line in sorted(self.covered_lines)
@@ -239,7 +239,7 @@ class CoverageStore:
         with self._lock:
             # Load corpus metadata (ignore old coverage field if present)
             self.corpus = {}
-            for h, c_data in data.get("corpus", {}).items():
+            for h, c_data in data.get("seeds", data.get("corpus", {})).items():
                 # Remove old coverage field if present (backward compatibility)
                 c_data.pop("coverage", None)
                 self.corpus[h] = CorpusCoverage(**c_data)

@@ -206,7 +206,7 @@ class RtsMode(str, Enum):
 class AdapterType(str, Enum):
     """CRS adapter type.
 
-    Single value representing the unified crs-compose adapter.
+    Single value representing the unified oss-crs adapter.
     The mode (bug-finding vs bug-fixing) is specified separately on
     the adapter instance.
     """
@@ -816,7 +816,7 @@ class WorkerConfig(BaseModel):
 
 
 class CrsComposeConfig(BaseModel):
-    """Configuration for crs-compose adapter."""
+    """Configuration for oss-crs adapter."""
 
     docker_registry: str = Field(
         ...,
@@ -830,13 +830,13 @@ class CrsComposeConfig(BaseModel):
         default="8G",
         description="Memory limit for oss-crs infrastructure services",
     )
-    crs_compose_cmd: str = Field(
-        default="crs-compose",
-        description="Path to crs-compose executable (default: assumes on PATH)",
+    oss_crs_cmd: str = Field(
+        default="oss-crs",
+        description="Path to oss-crs executable (default: assumes on PATH)",
     )
     work_dir: Optional[Path] = Field(
         default=None,
-        description="Base work directory for crs-compose (default: trial_output_dir/crs-compose-workdir)",
+        description="Base work directory for oss-crs (default: trial_output_dir/oss-crs-workdir)",
     )
 
 
@@ -1022,7 +1022,7 @@ class ExperimentConfig(BaseModel):
     )
     crs_compose: Optional[CrsComposeConfig] = Field(
         default=None,
-        description="Configuration for crs-compose adapter (used at runtime by OssCrsAdapter)",
+        description="Configuration for oss-crs adapter (used at runtime by OssCrsAdapter)",
     )
     keep_only_results: bool = Field(
         default=False,

@@ -1,6 +1,6 @@
 """CRS adapter module.
 
-Provides the unified OssCrsAdapter for crs-compose based CRS evaluation
+Provides the unified OssCrsAdapter for oss-crs based CRS evaluation
 and a create_adapter() helper for constructing adapter instances.
 """
 

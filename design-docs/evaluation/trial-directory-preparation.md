@@ -86,7 +86,7 @@ Trial Directory (Ready for CRS Execution)
 - `trial-N/build/artifacts/` - Build artifacts
 - `trial-N/output/povs/` - POVs discovered (bug finding)
 - `trial-N/output/patches/` - Patches generated (patch gen)
-- `trial-N/output/corpus/` - Fuzzing corpus
+- `trial-N/output/seeds/` - Fuzzing seeds
 - `trial-N/output/crs-data/` - CRS-specific data
 
 **Created by Orchestrator/Executor**:

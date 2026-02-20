@@ -853,7 +853,7 @@ def run_crs_trial(
                 "run_id": trial_id,
                 "source_mode": config.source_mode,
                 "skip_litellm": config.skip_litellm,
-                # Spread crs_compose fields when present
+                # Spread crs_compose config fields when present
                 **(config.crs_compose.model_dump() if config.crs_compose else {}),
             }
         )

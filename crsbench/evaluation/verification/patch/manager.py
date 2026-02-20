@@ -73,7 +73,7 @@ class PatchVerificationManager:
             benchmark_id: Benchmark identifier
             input_cpvs_total: Number of input CPVs to generate patches for
             trial_start_time: Trial start timestamp (defaults to current time)
-            work_dir: crs-compose working directory for EXCHANGE_DIR scanning
+            work_dir: oss-crs working directory for EXCHANGE_DIR scanning
 
         Raises:
             ValueError: If trial_dir doesn't exist
@@ -138,7 +138,7 @@ class PatchVerificationManager:
         if exchange_dir is None:
             return None
 
-        patch_dir = exchange_dir / "patch"
+        patch_dir = exchange_dir / "patches"
         if not patch_dir.exists():
             return None
 

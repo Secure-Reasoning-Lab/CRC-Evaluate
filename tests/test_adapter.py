@@ -88,12 +88,12 @@ class TestOssCrsAdapter:
         adapter.configure(
             {
                 "docker_registry": "ghcr.io/test",
-                "crs_compose_cmd": "/usr/local/bin/crs-compose",
+                "oss_crs_cmd": "/usr/local/bin/oss-crs",
                 "oss_crs_infra_cpuset": "0-7",
                 "oss_crs_infra_memory": "16G",
             }
         )
-        assert adapter._crs_compose_cmd == "/usr/local/bin/crs-compose"
+        assert adapter._oss_crs_cmd == "/usr/local/bin/oss-crs"
         assert adapter._oss_crs_infra_cpuset == "0-7"
         assert adapter._oss_crs_infra_memory == "16G"
 

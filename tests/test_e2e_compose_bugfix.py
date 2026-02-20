@@ -67,13 +67,16 @@ def _create_patch_submit_dir(work_dir: Path, crs_name: str, harness: str) -> Pat
         work_dir
         / "crs_compose"
         / "abc123hash"
+        / "address"
+        / "runs"
+        / "run-0"
         / "crs"
         / crs_name
         / "target_img"
         / "SUBMIT_DIR"
         / harness
     )
-    patch_dir = submit / "patch"
+    patch_dir = submit / "patches"
     patch_dir.mkdir(parents=True)
     (patch_dir / "fix.patch").write_text("--- a/bug.c\n+++ b/bug.c\n@@ -1 +1 @@\n")
     return submit
@@ -82,14 +85,14 @@ def _create_patch_submit_dir(work_dir: Path, crs_name: str, harness: str) -> Pat
 def _make_run_side_effect_with_patches(tmp_path: Path, crs_name: str, harness: str):
     """Return a side_effect callable that creates SUBMIT_DIR patches during run.
 
-    The side_effect finds the crs-compose-workdir under the filestore and creates
+    The side_effect finds the oss-crs-workdir under the filestore and creates
     the SUBMIT_DIR/patch/ directory with a mock patch file.
     """
 
     def side_effect(*_args: Any, **_kwargs: Any) -> tuple[str, str, int, bool]:
-        # Look for the crs-compose-workdir directory under filestore
+        # Look for the oss-crs-workdir directory under filestore
         filestore = tmp_path / "filestore"
-        work_dirs = list(filestore.rglob("crs-compose-workdir"))
+        work_dirs = list(filestore.rglob("oss-crs-workdir"))
         if work_dirs:
             work_dir = work_dirs[0]
             _create_patch_submit_dir(work_dir, crs_name, harness)

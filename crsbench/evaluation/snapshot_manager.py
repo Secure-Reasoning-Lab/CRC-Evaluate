@@ -489,13 +489,13 @@ class SnapshotManager:
             True if corpus was captured, False otherwise
         """
         output_dir = self._get_crs_output_dir()
-        corpus_dir = output_dir / "corpus"
+        corpus_dir = output_dir / "seeds"
 
         if not corpus_dir.exists():
             return False
 
         # Copy entire corpus directory (both files and directories)
-        snapshot_corpus_dir = temp_dir / "corpus"
+        snapshot_corpus_dir = temp_dir / "seeds"
 
         try:
             shutil.copytree(corpus_dir, snapshot_corpus_dir, dirs_exist_ok=True)

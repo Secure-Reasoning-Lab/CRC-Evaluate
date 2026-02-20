@@ -611,7 +611,7 @@ class TestCollectorHiddenFiles:
             tmp_path = Path(tmp_dir)
 
             # Create corpus directory with hidden and regular files
-            corpus_dir = tmp_path / "corpus"
+            corpus_dir = tmp_path / "seeds"
             corpus_dir.mkdir()
 
             # Regular files
@@ -658,7 +658,7 @@ class TestCollectorHiddenFiles:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
 
-            corpus_dir = tmp_path / "corpus"
+            corpus_dir = tmp_path / "seeds"
             corpus_dir.mkdir()
 
             # Only hidden files
@@ -928,7 +928,7 @@ class TestPerInputProcessing:
             tmp_path = Path(tmp_dir)
 
             # Create corpus directory with multiple files
-            corpus_dir = tmp_path / "corpus"
+            corpus_dir = tmp_path / "seeds"
             corpus_dir.mkdir()
             (corpus_dir / "input1").write_bytes(b"content1")
             (corpus_dir / "input2").write_bytes(b"content2")
@@ -971,7 +971,7 @@ class TestPerInputProcessing:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
 
-            corpus_dir = tmp_path / "corpus"
+            corpus_dir = tmp_path / "seeds"
             corpus_dir.mkdir()
             (corpus_dir / "input1").write_bytes(b"content1")
             (corpus_dir / "input2").write_bytes(b"content2")
@@ -1009,7 +1009,7 @@ class TestPerInputProcessing:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
 
-            corpus_dir = tmp_path / "corpus"
+            corpus_dir = tmp_path / "seeds"
             corpus_dir.mkdir()
             (corpus_dir / "input1").write_bytes(b"content1")
 
@@ -1052,7 +1052,7 @@ class TestPerInputProcessing:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
 
-            corpus_dir = tmp_path / "corpus"
+            corpus_dir = tmp_path / "seeds"
             corpus_dir.mkdir()
             # Create 3 corpus files
             (corpus_dir / "input1").write_bytes(b"content1")
@@ -1110,7 +1110,7 @@ class TestPerInputProcessing:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
 
-            corpus_dir = tmp_path / "corpus"
+            corpus_dir = tmp_path / "seeds"
             corpus_dir.mkdir()
 
             import hashlib
@@ -1351,7 +1351,7 @@ class TestManagerSnapshotCoverage:
                 collector=mock_collector,
                 config=config,
                 harness_name="fuzz_test",
-                corpus_dir=tmp_path / "corpus",
+                corpus_dir=tmp_path / "seeds",
                 store=store,
             )
 
@@ -1394,7 +1394,7 @@ class TestManagerSnapshotCoverage:
                 collector=mock_collector,
                 config=config,
                 harness_name="fuzz_test",
-                corpus_dir=tmp_path / "corpus",
+                corpus_dir=tmp_path / "seeds",
                 store=store,
             )
 
@@ -1437,7 +1437,7 @@ class TestManagerSnapshotCoverage:
                 collector=mock_collector,
                 config=config,
                 harness_name="fuzz_test",
-                corpus_dir=tmp_path / "corpus",
+                corpus_dir=tmp_path / "seeds",
                 store=store,
             )
 

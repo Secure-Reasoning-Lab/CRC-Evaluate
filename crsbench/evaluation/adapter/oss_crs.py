@@ -1,6 +1,6 @@
 """Unified OSS CRS adapter for bug-finding and bug-fixing.
 
-Implements the crs-compose interface for both modes. Orchestrates the
+Implements the oss-crs interface for both modes. Orchestrates the
 3-phase lifecycle (prepare, build-target, run) and collects artifacts
 from SUBMIT_DIR after execution.
 """
@@ -15,9 +15,9 @@ from crsbench.evaluation.adapter.compose_common import (
     docker_compose_down_cleanup,
     find_submit_dir,
     read_crs_source_from_registry,
-    run_crs_compose_build_target,
-    run_crs_compose_prepare,
-    run_crs_compose_run,
+    run_oss_crs_build_target,
+    run_oss_crs_prepare,
+    run_oss_crs_run,
 )
 from crsbench.evaluation.adapter.config_gen import (
     CrsComposeCrsEntry,
@@ -38,9 +38,9 @@ logger = get_logger(__name__)
 
 
 class OssCrsAdapter:
-    """Adapter for crs-compose interface supporting both bug-finding and bug-fixing.
+    """Adapter for oss-crs interface supporting both bug-finding and bug-fixing.
 
-    Orchestrates CRS through crs-compose prepare/build-target/run phases,
+    Orchestrates CRS through oss-crs prepare/build-target/run phases,
     then collects POVs (bug-finding) or patches (bug-fixing) from SUBMIT_DIR.
     The ``mode`` parameter selects the lifecycle variant.
     """
@@ -67,12 +67,13 @@ class OssCrsAdapter:
 
         self._compose_file: Optional[Path] = None
         self._work_dir: Optional[Path] = None
-        self._crs_compose_cmd: str = "crs-compose"
+        self._oss_crs_cmd: str = "oss-crs"
         self._docker_registry: str = ""
         self._oss_crs_infra_cpuset: str = "0-3"
         self._oss_crs_infra_memory: str = "8G"
         self._build_timeout: int = 3600
         self._run_timeout: int = 7200
+        self._sanitizer: str = "address"
         self._external_litellm: bool = False
         self._litellm_url: str = ""
         self._litellm_api_key: str = ""
@@ -84,7 +85,7 @@ class OssCrsAdapter:
 
     @property
     def work_dir(self) -> Optional[Path]:
-        """Return the crs-compose working directory, or None if not yet set."""
+        """Return the oss-crs working directory, or None if not yet set."""
         return self._work_dir
 
     @property
@@ -96,15 +97,15 @@ class OssCrsAdapter:
         """Configure the adapter with experiment parameters.
 
         Extracts standard fields (build_timeout, run_timeout) and
-        compose-specific fields (docker_registry, crs_compose_cmd, etc.)
+        oss-crs-specific fields (docker_registry, oss_crs_cmd, etc.)
         from the flat config dict passed by the caller.
         """
         if "build_timeout" in config:
             self._build_timeout = int(config["build_timeout"])
         if "run_timeout" in config:
             self._run_timeout = int(config["run_timeout"])
-        if "crs_compose_cmd" in config:
-            self._crs_compose_cmd = str(config["crs_compose_cmd"])
+        if "oss_crs_cmd" in config:
+            self._oss_crs_cmd = str(config["oss_crs_cmd"])
         if "docker_registry" in config:
             self._docker_registry = str(config["docker_registry"])
         if "oss_crs_infra_cpuset" in config:
@@ -115,6 +116,8 @@ class OssCrsAdapter:
             from pathlib import Path as _Path
 
             self._work_dir = _Path(config["work_dir"])
+        if "sanitizer" in config:
+            self._sanitizer = str(config["sanitizer"])
         if "external_litellm" in config:
             self._external_litellm = bool(config["external_litellm"])
         if "litellm_url" in config:
@@ -186,7 +189,7 @@ class OssCrsAdapter:
         return self._compose_file, self._work_dir
 
     def build(self, benchmark_path: Path, trial_output_dir: Path) -> None:
-        """Build CRS for the given benchmark via crs-compose prepare + build-target."""
+        """Build CRS for the given benchmark via oss-crs prepare + build-target."""
         project_name = benchmark_path.name
         if project_name in self._built_projects:
             logger.debug(f"Project {project_name} already built, skipping")
@@ -196,7 +199,7 @@ class OssCrsAdapter:
             self._generate_compose_yaml(trial_output_dir)
 
         if self._work_dir is None:
-            self._work_dir = trial_output_dir / "crs-compose-workdir"
+            self._work_dir = trial_output_dir / "oss-crs-workdir"
         self._work_dir.mkdir(parents=True, exist_ok=True)
 
         compose_file, work_dir = self._ensure_compose_state()
@@ -205,43 +208,43 @@ class OssCrsAdapter:
         staged_path = self._stage_benchmark(benchmark_path, trial_output_dir)
 
         # Phase 1: prepare (build CRS Docker images)
-        logger.info(f"crs-compose prepare for {project_name}")
-        stdout, stderr, rc = run_crs_compose_prepare(
+        logger.info(f"oss-crs prepare for {project_name}")
+        stdout, stderr, rc = run_oss_crs_prepare(
             compose_file,
             work_dir,
-            crs_compose_cmd=self._crs_compose_cmd,
+            oss_crs_cmd=self._oss_crs_cmd,
             timeout=self._build_timeout,
         )
         if rc != 0:
-            # crs-compose outputs errors via rich console to stdout
+            # oss-crs outputs errors via rich console to stdout
             detail = stderr or stdout
-            msg = f"crs-compose prepare failed (rc={rc}): {detail}"
+            msg = f"oss-crs prepare failed (rc={rc}): {detail}"
             raise RuntimeError(msg)
 
         # Phase 2: build-target (compile the target project)
-        logger.info(f"crs-compose build-target for {project_name}")
-        stdout, stderr, rc = run_crs_compose_build_target(
+        logger.info(f"oss-crs build-target for {project_name}")
+        stdout, stderr, rc = run_oss_crs_build_target(
             compose_file,
             work_dir,
             staged_path,
-            crs_compose_cmd=self._crs_compose_cmd,
+            oss_crs_cmd=self._oss_crs_cmd,
             timeout=self._build_timeout,
+            sanitizer=self._sanitizer,
         )
         if rc != 0:
-            # crs-compose outputs errors via rich console to stdout
+            # oss-crs outputs errors via rich console to stdout
             detail = stderr or stdout
-            msg = f"crs-compose build-target failed (rc={rc}): {detail}"
+            msg = f"oss-crs build-target failed (rc={rc}): {detail}"
             raise RuntimeError(msg)
 
         self._built_projects.add(project_name)
         logger.info(f"Build complete for {project_name}")
 
     def _find_pov_dir(self, trial_output_dir: Path) -> Optional[Path]:
-        """Locate POV directory in trial output (povs/ or pov/)."""
-        for name in ("povs", "pov"):
-            candidate = trial_output_dir / name
-            if candidate.exists():
-                return candidate
+        """Locate POV directory in trial output."""
+        candidate = trial_output_dir / "povs"
+        if candidate.exists():
+            return candidate
         return None
 
     def run(
@@ -254,10 +257,10 @@ class OssCrsAdapter:
         on_run_start: Optional[Callable[[], None]] = None,
         stop_event: Optional[threading.Event] = None,
     ) -> CRSExecutionResult:
-        """Execute CRS against a harness via crs-compose run.
+        """Execute CRS against a harness via oss-crs run.
 
-        For bug-finding: runs without pov_dir/diff/corpus_dir.
-        For bug-fixing: locates pov_dir, diff, and corpus_dir from
+        For bug-finding: runs without pov_dir/diff/seed_dir.
+        For bug-fixing: locates pov_dir, diff, and seed_dir from
         trial_output_dir before running.
         """
         compose_file, work_dir = self._ensure_compose_state()
@@ -273,14 +276,14 @@ class OssCrsAdapter:
         # Bug-fixing inputs (only used when mode is bug-fixing)
         pov_dir: Optional[Path] = None
         diff: Optional[Path] = None
-        corpus_dir: Optional[Path] = None
+        seed_dir: Optional[Path] = None
 
         if self._mode == "bug-fixing":
             pov_dir = self._find_pov_dir(trial_output_dir)
             diff_path = trial_output_dir / "ref.diff"
             diff = diff_path if diff_path.exists() else None
-            corpus_path = trial_output_dir / "corpus"
-            corpus_dir = corpus_path if corpus_path.exists() else None
+            seed_path = trial_output_dir / "seeds"
+            seed_dir = seed_path if seed_path.exists() else None
 
         start_time = time.time()
         stdout = ""
@@ -289,17 +292,18 @@ class OssCrsAdapter:
         timed_out = False
 
         try:
-            stdout, stderr, rc, timed_out = run_crs_compose_run(
+            stdout, stderr, rc, timed_out = run_oss_crs_run(
                 compose_file,
                 work_dir,
                 staged_path,
                 harness.name,
                 timeout=self._run_timeout,
-                crs_compose_cmd=self._crs_compose_cmd,
+                oss_crs_cmd=self._oss_crs_cmd,
+                sanitizer=self._sanitizer,
                 stop_event=stop_event,
                 pov_dir=pov_dir,
                 diff=diff,
-                corpus_dir=corpus_dir,
+                seed_dir=seed_dir,
                 external_litellm=self._external_litellm,
                 litellm_url=self._litellm_url,
                 litellm_api_key=self._litellm_api_key,
@@ -356,14 +360,14 @@ class OssCrsAdapter:
     ) -> dict[str, Any]:
         """Collect bug-finding artifacts (POVs and seeds)."""
         if submit_dir is not None:
-            pov_src = submit_dir / "pov"
+            pov_src = submit_dir / "povs"
             if pov_src.exists():
                 shutil.copytree(pov_src, output_dir / "povs", dirs_exist_ok=True)
                 logger.info(f"Copied POVs from {pov_src}")
 
-            seed_src = submit_dir / "seed"
+            seed_src = submit_dir / "seeds"
             if seed_src.exists():
-                shutil.copytree(seed_src, output_dir / "seed", dirs_exist_ok=True)
+                shutil.copytree(seed_src, output_dir / "seeds", dirs_exist_ok=True)
                 logger.info(f"Copied seeds from {seed_src}")
 
         return {
@@ -382,13 +386,13 @@ class OssCrsAdapter:
         """Collect bug-fixing artifacts (patches and POVs)."""
         if submit_dir is not None:
             # Copy patches (primary artifact for bug-fixing)
-            patch_src = submit_dir / "patch"
+            patch_src = submit_dir / "patches"
             if patch_src.exists():
                 shutil.copytree(patch_src, output_dir / "patches", dirs_exist_ok=True)
                 logger.info(f"Copied patches from {patch_src}")
 
             # Also copy POVs if present (CRS may find new vulnerabilities)
-            pov_src = submit_dir / "pov"
+            pov_src = submit_dir / "povs"
             if pov_src.exists():
                 shutil.copytree(pov_src, output_dir / "povs", dirs_exist_ok=True)
                 logger.info(f"Copied POVs from {pov_src}")

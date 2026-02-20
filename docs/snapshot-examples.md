@@ -104,7 +104,7 @@ Each snapshot archive contains:
 ### Trial Outputs (Incremental - Only New Data)
 - `povs/` - New POVs discovered since last snapshot
 - `patches/pov_N/` - New patches organized by POV ID
-- `corpus/` - New/modified corpus files
+- `seeds/` - New/modified seed files
 - `crs-data/` - CRS-specific outputs (if any)
 
 ## Example Configurations

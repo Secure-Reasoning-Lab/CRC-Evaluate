@@ -64,7 +64,7 @@ class TestSnapshotCapture:
         patches_dir = output_dir / "patches"
         patches_dir.mkdir()
 
-        corpus_dir = output_dir / "corpus"
+        corpus_dir = output_dir / "seeds"
         corpus_dir.mkdir()
 
         # Create some test files
@@ -148,7 +148,7 @@ class TestSnapshotCapture:
         assert (extract_dir / "patches" / "pov_0" / "patch.diff").exists()
 
         # Check corpus
-        assert (extract_dir / "corpus" / "input-001").exists()
+        assert (extract_dir / "seeds" / "input-001").exists()
 
     def test_full_pov_capture(self, tmp_path):
         """Test all POVs are captured in each snapshot (full capture)."""
@@ -388,7 +388,7 @@ class TestEdgeCases:
         output_dir.mkdir()
         (output_dir / "povs").mkdir()
         (output_dir / "patches").mkdir()
-        (output_dir / "corpus").mkdir()
+        (output_dir / "seeds").mkdir()
 
         manager = SnapshotManager(trial_dir, snapshot_period=60)
         manager.capture_snapshot()

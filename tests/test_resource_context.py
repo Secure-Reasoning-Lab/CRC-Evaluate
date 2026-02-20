@@ -4,7 +4,7 @@ Covers:
 - ResourceContext env var management and cgroup lifecycle (mock-based)
 - Graceful degradation when cgroup v2 is unavailable
 - Compose adapter external_litellm configuration
-- run_crs_compose_run env var passthrough to subprocess
+- run_oss_crs_run env var passthrough to subprocess
 """
 
 import os
@@ -268,15 +268,15 @@ class TestComposeLLMIntegration:
         assert adapter._litellm_api_key == "sk-bugfix-key"
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
-    def test_run_crs_compose_run_passes_env_when_external_litellm(
+    def test_run_oss_crs_run_passes_env_when_external_litellm(
         self, mock_run: MagicMock
     ) -> None:
         """When external_litellm=True, env dict should contain LITELLM_URL/KEY."""
         mock_run.return_value = ("stdout", "stderr", 0, False)
 
-        from crsbench.evaluation.adapter.compose_common import run_crs_compose_run
+        from crsbench.evaluation.adapter.compose_common import run_oss_crs_run
 
-        run_crs_compose_run(
+        run_oss_crs_run(
             compose_file=Path("/tmp/compose.yaml"),
             work_dir=Path("/tmp/work"),
             target_proj_path=Path("/tmp/proj"),
@@ -299,15 +299,15 @@ class TestComposeLLMIntegration:
         assert "--external-litellm" in cmd
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
-    def test_run_crs_compose_run_no_env_when_external_litellm_false(
+    def test_run_oss_crs_run_no_env_when_external_litellm_false(
         self, mock_run: MagicMock
     ) -> None:
         """When external_litellm=False, env should be None."""
         mock_run.return_value = ("stdout", "stderr", 0, False)
 
-        from crsbench.evaluation.adapter.compose_common import run_crs_compose_run
+        from crsbench.evaluation.adapter.compose_common import run_oss_crs_run
 
-        run_crs_compose_run(
+        run_oss_crs_run(
             compose_file=Path("/tmp/compose.yaml"),
             work_dir=Path("/tmp/work"),
             target_proj_path=Path("/tmp/proj"),
@@ -326,15 +326,13 @@ class TestComposeLLMIntegration:
         assert "--external-litellm" not in cmd
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
-    def test_run_crs_compose_run_no_env_when_url_missing(
-        self, mock_run: MagicMock
-    ) -> None:
+    def test_run_oss_crs_run_no_env_when_url_missing(self, mock_run: MagicMock) -> None:
         """When external_litellm=True but url/key are missing, env should be None."""
         mock_run.return_value = ("stdout", "stderr", 0, False)
 
-        from crsbench.evaluation.adapter.compose_common import run_crs_compose_run
+        from crsbench.evaluation.adapter.compose_common import run_oss_crs_run
 
-        run_crs_compose_run(
+        run_oss_crs_run(
             compose_file=Path("/tmp/compose.yaml"),
             work_dir=Path("/tmp/work"),
             target_proj_path=Path("/tmp/proj"),

@@ -1,6 +1,6 @@
-"""Shared subprocess wrappers for crs-compose CLI and registry reader.
+"""Shared subprocess wrappers for oss-crs CLI and registry reader.
 
-Provides functions for all three crs-compose lifecycle phases
+Provides functions for all three oss-crs lifecycle phases
 (prepare, build-target, run), Docker cleanup, CRS source resolution
 from the registry, and artifact directory discovery.
 """
@@ -64,79 +64,81 @@ def read_crs_source_from_registry(
     )
 
 
-def run_crs_compose_prepare(
+def run_oss_crs_prepare(
     compose_file: Path,
     work_dir: Path,
     *,
-    crs_compose_cmd: str = "crs-compose",
+    oss_crs_cmd: str = "oss-crs",
     timeout: int = 3600,
 ) -> tuple[str, str, int]:
-    """Run ``crs-compose prepare`` to build CRS Docker images.
+    """Run ``oss-crs prepare`` to build CRS Docker images.
 
     Args:
         compose_file: Path to the crs-compose.yaml file.
-        work_dir: Working directory for crs-compose.
-        crs_compose_cmd: Path to the crs-compose executable.
+        work_dir: Working directory for oss-crs.
+        oss_crs_cmd: Path to the oss-crs executable.
         timeout: Maximum time in seconds.
 
     Returns:
         Tuple of (stdout, stderr, returncode).
 
     Raises:
-        RuntimeError: If crs-compose executable is not found.
+        RuntimeError: If oss-crs executable is not found.
     """
     cmd = [
-        crs_compose_cmd,
+        oss_crs_cmd,
         "prepare",
         "--compose-file",
         str(compose_file),
         "--work-dir",
         str(work_dir),
     ]
-    logger.debug(f"Running crs-compose prepare: {' '.join(cmd)}")
+    logger.debug(f"Running oss-crs prepare: {' '.join(cmd)}")
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        logger.warning(f"crs-compose prepare timed out after {timeout}s")
-        return ("", f"crs-compose prepare timed out after {timeout}s", -1)
+        logger.warning(f"oss-crs prepare timed out after {timeout}s")
+        return ("", f"oss-crs prepare timed out after {timeout}s", -1)
     except FileNotFoundError as exc:
         msg = (
-            f"crs-compose executable not found: '{crs_compose_cmd}'. "
-            "Set crs_compose_cmd in crs_compose config to the full path."
+            f"oss-crs executable not found: '{oss_crs_cmd}'. "
+            "Set oss_crs_cmd in crs_compose config to the full path."
         )
         raise RuntimeError(msg) from exc
 
     return result.stdout, result.stderr, result.returncode
 
 
-def run_crs_compose_build_target(
+def run_oss_crs_build_target(
     compose_file: Path,
     work_dir: Path,
     target_proj_path: Path,
     *,
-    crs_compose_cmd: str = "crs-compose",
+    oss_crs_cmd: str = "oss-crs",
     timeout: int = 3600,
     target_repo_path: Optional[Path] = None,
+    sanitizer: Optional[str] = None,
 ) -> tuple[str, str, int]:
-    """Run ``crs-compose build-target`` to compile the target.
+    """Run ``oss-crs build-target`` to compile the target.
 
     Args:
         compose_file: Path to the crs-compose.yaml file.
-        work_dir: Working directory for crs-compose.
+        work_dir: Working directory for oss-crs.
         target_proj_path: Path to the benchmark project directory.
-        crs_compose_cmd: Path to the crs-compose executable.
+        oss_crs_cmd: Path to the oss-crs executable.
         timeout: Maximum time in seconds.
         target_repo_path: Path to pre-prepared source repository.
+        sanitizer: Sanitizer to use (e.g., "address", "undefined").
 
     Returns:
         Tuple of (stdout, stderr, returncode).
 
     Raises:
-        RuntimeError: If crs-compose executable is not found.
+        RuntimeError: If oss-crs executable is not found.
     """
     cmd = [
-        crs_compose_cmd,
+        oss_crs_cmd,
         "build-target",
         "--compose-file",
         str(compose_file),
@@ -148,60 +150,64 @@ def run_crs_compose_build_target(
 
     if target_repo_path is not None:
         cmd.extend(["--target-repo-path", str(target_repo_path)])
+    if sanitizer is not None:
+        cmd.extend(["--sanitizer", sanitizer])
 
-    logger.debug(f"Running crs-compose build-target: {' '.join(cmd)}")
+    logger.debug(f"Running oss-crs build-target: {' '.join(cmd)}")
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        logger.warning(f"crs-compose build-target timed out after {timeout}s")
-        return ("", f"crs-compose build-target timed out after {timeout}s", -1)
+        logger.warning(f"oss-crs build-target timed out after {timeout}s")
+        return ("", f"oss-crs build-target timed out after {timeout}s", -1)
     except FileNotFoundError as exc:
         msg = (
-            f"crs-compose executable not found: '{crs_compose_cmd}'. "
-            "Set crs_compose_cmd in crs_compose config to the full path."
+            f"oss-crs executable not found: '{oss_crs_cmd}'. "
+            "Set oss_crs_cmd in crs_compose config to the full path."
         )
         raise RuntimeError(msg) from exc
 
     return result.stdout, result.stderr, result.returncode
 
 
-def run_crs_compose_run(
+def run_oss_crs_run(
     compose_file: Path,
     work_dir: Path,
     target_proj_path: Path,
     target_harness: str,
     *,
     timeout: int,
-    crs_compose_cmd: str = "crs-compose",
+    oss_crs_cmd: str = "oss-crs",
+    sanitizer: Optional[str] = None,
     grace_period: int = 60,
     stop_event: Optional[threading.Event] = None,
     pov: Optional[Path] = None,
     pov_dir: Optional[Path] = None,
     diff: Optional[Path] = None,
-    corpus_dir: Optional[Path] = None,
+    seed_dir: Optional[Path] = None,
     external_litellm: bool = False,
     litellm_url: Optional[str] = None,
     litellm_api_key: Optional[str] = None,
 ) -> tuple[str, str, int, bool]:
-    """Run ``crs-compose run`` with timeout and graceful shutdown.
+    """Run ``oss-crs run`` with timeout and graceful shutdown.
 
     Delegates to ``run_with_graceful_timeout()`` for SIGTERM/SIGKILL
     lifecycle management.
 
     Args:
         compose_file: Path to the crs-compose.yaml file.
-        work_dir: Working directory for crs-compose.
+        work_dir: Working directory for oss-crs.
         target_proj_path: Path to the benchmark project directory.
         target_harness: Name of the harness to run.
         timeout: Maximum time in seconds for the run phase.
-        crs_compose_cmd: Path to the crs-compose executable.
+        oss_crs_cmd: Path to the oss-crs executable.
+        sanitizer: Sanitizer to use (e.g., "address", "undefined").
         grace_period: Seconds to wait after SIGTERM before SIGKILL.
         stop_event: Threading event for early termination.
         pov: Path to a single POV file (bug-fixing).
         pov_dir: Path to a directory of POVs (bug-fixing).
         diff: Path to a reference diff file (bug-fixing).
-        corpus_dir: Path to seed corpus directory.
+        seed_dir: Path to seed corpus directory.
         external_litellm: When True, pass ``--external-litellm`` flag and
             inject ``LITELLM_URL`` / ``LITELLM_KEY`` env vars so the CRS
             routes LLM traffic through CRSBench's upstream proxy.
@@ -212,7 +218,7 @@ def run_crs_compose_run(
         Tuple of (stdout, stderr, returncode, timed_out).
     """
     cmd = [
-        crs_compose_cmd,
+        oss_crs_cmd,
         "run",
         "--compose-file",
         str(compose_file),
@@ -226,14 +232,16 @@ def run_crs_compose_run(
         str(timeout),
     ]
 
+    if sanitizer is not None:
+        cmd.extend(["--sanitizer", sanitizer])
     if pov is not None:
         cmd.extend(["--pov", str(pov)])
     if pov_dir is not None:
         cmd.extend(["--pov-dir", str(pov_dir)])
     if diff is not None:
         cmd.extend(["--diff", str(diff)])
-    if corpus_dir is not None:
-        cmd.extend(["--corpus", str(corpus_dir)])
+    if seed_dir is not None:
+        cmd.extend(["--seed-dir", str(seed_dir)])
 
     # Build subprocess environment for external LiteLLM proxy routing
     run_env: Optional[dict[str, str]] = None
@@ -250,7 +258,7 @@ def run_crs_compose_run(
                 f"External LiteLLM enabled: URL={litellm_url}, key=...{key_suffix}"
             )
 
-    logger.debug(f"Running crs-compose run: {' '.join(cmd)}")
+    logger.debug(f"Running oss-crs run: {' '.join(cmd)}")
 
     return run_with_graceful_timeout(
         cmd,
@@ -262,9 +270,9 @@ def run_crs_compose_run(
 
 
 def docker_compose_down_cleanup(work_dir: Path) -> None:
-    """Belt-and-suspenders Docker cleanup after crs-compose execution.
+    """Belt-and-suspenders Docker cleanup after oss-crs execution.
 
-    crs-compose handles its own cleanup via TmpDockerCompose, but if the
+    oss-crs handles its own cleanup via TmpDockerCompose, but if the
     process is killed before cleanup completes, containers may remain.
     This function scans the work directory for docker-compose files and
     runs ``docker compose down --remove-orphans`` on each.
@@ -301,7 +309,7 @@ def docker_compose_down_cleanup(work_dir: Path) -> None:
             ):
                 logger.warning(f"Failed to run docker compose down for {compose_file}")
 
-        # Prune dangling Docker networks left by killed crs-compose processes
+        # Prune dangling Docker networks left by killed oss-crs processes
         try:
             subprocess.run(
                 ["docker", "network", "prune", "-f"],
@@ -330,7 +338,7 @@ def find_exchange_dir(
         <work_dir>/crs_compose/<config_hash>/<sanitizer>/runs/<run_id>/EXCHANGE_DIR/<target_key>/<harness>/
 
     Args:
-        work_dir: crs-compose working directory.
+        work_dir: oss-crs working directory.
         harness_name: Name of the harness.
 
     Returns:
@@ -370,7 +378,7 @@ def find_submit_dir(
     matching the wrong path.
 
     Args:
-        work_dir: crs-compose working directory.
+        work_dir: oss-crs working directory.
         crs_name: Name of the CRS.
         harness_name: Name of the harness.
 

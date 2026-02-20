@@ -1,4 +1,4 @@
-"""Unit tests for crs-compose adapter modules.
+"""Unit tests for oss-crs adapter modules.
 
 Tests config_gen.py, compose_common.py, OssCrsAdapter (both modes),
 and ExperimentConfig crs_compose validation.
@@ -22,9 +22,9 @@ from crsbench.evaluation.adapter.compose_common import (
     find_exchange_dir,
     find_submit_dir,
     read_crs_source_from_registry,
-    run_crs_compose_build_target,
-    run_crs_compose_prepare,
-    run_crs_compose_run,
+    run_oss_crs_build_target,
+    run_oss_crs_prepare,
+    run_oss_crs_run,
 )
 from crsbench.evaluation.adapter.config_gen import (
     CrsComposeCrsEntry,
@@ -247,11 +247,11 @@ class TestComposeCommon:
         compose_file = tmp_path / "crs-compose.yaml"
         work_dir = tmp_path / "work"
 
-        run_crs_compose_prepare(compose_file, work_dir)
+        run_oss_crs_prepare(compose_file, work_dir)
 
         args = mock_run.call_args[0][0]
         assert args == [
-            "crs-compose",
+            "oss-crs",
             "prepare",
             "--compose-file",
             str(compose_file),
@@ -270,11 +270,11 @@ class TestComposeCommon:
         work_dir = tmp_path / "work"
         target = tmp_path / "benchmark"
 
-        run_crs_compose_build_target(compose_file, work_dir, target)
+        run_oss_crs_build_target(compose_file, work_dir, target)
 
         args = mock_run.call_args[0][0]
         assert args == [
-            "crs-compose",
+            "oss-crs",
             "build-target",
             "--compose-file",
             str(compose_file),
@@ -293,13 +293,11 @@ class TestComposeCommon:
         work_dir = tmp_path / "work"
         target = tmp_path / "benchmark"
 
-        run_crs_compose_run(
-            compose_file, work_dir, target, "test_harness", timeout=3600
-        )
+        run_oss_crs_run(compose_file, work_dir, target, "test_harness", timeout=3600)
 
         cmd = mock_rwgt.call_args[0][0]
         assert cmd == [
-            "crs-compose",
+            "oss-crs",
             "run",
             "--compose-file",
             str(compose_file),
@@ -323,9 +321,9 @@ class TestComposeCommon:
         target = tmp_path / "benchmark"
         pov_dir = tmp_path / "povs"
         diff = tmp_path / "ref.diff"
-        corpus = tmp_path / "corpus"
+        seeds = tmp_path / "seeds"
 
-        run_crs_compose_run(
+        run_oss_crs_run(
             compose_file,
             work_dir,
             target,
@@ -333,7 +331,7 @@ class TestComposeCommon:
             timeout=3600,
             pov_dir=pov_dir,
             diff=diff,
-            corpus_dir=corpus,
+            seed_dir=seeds,
         )
 
         cmd = mock_rwgt.call_args[0][0]
@@ -341,8 +339,8 @@ class TestComposeCommon:
         assert str(pov_dir) in cmd
         assert "--diff" in cmd
         assert str(diff) in cmd
-        assert "--corpus" in cmd
-        assert str(corpus) in cmd
+        assert "--seed-dir" in cmd
+        assert str(seeds) in cmd
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
     def test_run_omits_optional_args_when_none(
@@ -351,7 +349,7 @@ class TestComposeCommon:
         mock_rwgt.return_value = ("out", "err", 0, False)
         compose_file = tmp_path / "crs-compose.yaml"
 
-        run_crs_compose_run(
+        run_oss_crs_run(
             compose_file,
             tmp_path / "work",
             tmp_path / "bench",
@@ -362,14 +360,14 @@ class TestComposeCommon:
         cmd = mock_rwgt.call_args[0][0]
         assert "--pov-dir" not in cmd
         assert "--diff" not in cmd
-        assert "--corpus" not in cmd
+        assert "--seed-dir" not in cmd
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
     def test_run_passes_stop_event(self, mock_rwgt: MagicMock, tmp_path: Path) -> None:
         mock_rwgt.return_value = ("out", "err", 0, False)
         stop = threading.Event()
 
-        run_crs_compose_run(
+        run_oss_crs_run(
             tmp_path / "compose.yaml",
             tmp_path / "work",
             tmp_path / "bench",
@@ -434,8 +432,8 @@ class TestComposeCommon:
             / "handler_ber"  # harness
         )
         submit.mkdir(parents=True)
-        (submit / "pov").mkdir()
-        (submit / "pov" / "pov_0.bin").write_bytes(b"\x00")
+        (submit / "povs").mkdir()
+        (submit / "povs" / "pov_0.bin").write_bytes(b"\x00")
 
         result = find_submit_dir(tmp_path, "my-crs", "handler_ber")
         assert result is not None
@@ -484,8 +482,8 @@ class TestComposeCommon:
             / "handler_ber"
         )
         exchange.mkdir(parents=True)
-        (exchange / "pov").mkdir()
-        (exchange / "pov" / "pov_0.bin").write_bytes(b"\x00")
+        (exchange / "povs").mkdir()
+        (exchange / "povs" / "pov_0.bin").write_bytes(b"\x00")
 
         result = find_exchange_dir(tmp_path, "handler_ber")
         assert result is not None
@@ -554,7 +552,7 @@ class TestOssCrsAdapterBugFindFull:
                 "build_timeout": 900,
                 "run_timeout": 1800,
                 "docker_registry": "ghcr.io/team",
-                "crs_compose_cmd": "/opt/crs-compose",
+                "oss_crs_cmd": "/opt/oss-crs",
                 "oss_crs_infra_cpuset": "0-15",
                 "oss_crs_infra_memory": "32G",
             }
@@ -562,7 +560,7 @@ class TestOssCrsAdapterBugFindFull:
         assert adapter._build_timeout == 900
         assert adapter._run_timeout == 1800
         assert adapter._docker_registry == "ghcr.io/team"
-        assert adapter._crs_compose_cmd == "/opt/crs-compose"
+        assert adapter._oss_crs_cmd == "/opt/oss-crs"
         assert adapter._oss_crs_infra_cpuset == "0-15"
         assert adapter._oss_crs_infra_memory == "32G"
 
@@ -662,7 +660,7 @@ class TestOssCrsAdapterBugFindFull:
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
-    def test_run_calls_crs_compose_run(
+    def test_run_calls_oss_crs_run(
         self,
         mock_subprocess: MagicMock,
         mock_rwgt: MagicMock,
@@ -817,7 +815,7 @@ class TestOssCrsAdapterBugFindFull:
             / "SUBMIT_DIR"
             / "harness1"
         )
-        pov_dir = submit / "pov"
+        pov_dir = submit / "povs"
         pov_dir.mkdir(parents=True)
         (pov_dir / "crash-001").write_bytes(b"\x00" * 16)
         (pov_dir / "crash-002").write_bytes(b"\xff" * 8)
@@ -996,7 +994,7 @@ class TestOssCrsAdapterBugFixFull:
             / "SUBMIT_DIR"
             / "harness1"
         )
-        patch_dir = submit / "patch"
+        patch_dir = submit / "patches"
         patch_dir.mkdir(parents=True)
         (patch_dir / "fix.patch").write_text("--- a/bug.c\n+++ b/bug.c\n")
 
@@ -1027,7 +1025,7 @@ class TestOssCrsAdapterBugFixFull:
             / "SUBMIT_DIR"
             / "harness1"
         )
-        patch_dir = submit / "patch"
+        patch_dir = submit / "patches"
         patch_dir.mkdir(parents=True)
         (patch_dir / "fix1.patch").write_text("patch1")
         (patch_dir / "fix2.patch").write_text("patch2")
@@ -1149,7 +1147,7 @@ class TestCollectResultsWiring:
     def test_collect_results_called_even_on_failed_run(self, tmp_path: Path) -> None:
         """collect_results() is always called regardless of exit code.
 
-        crs-compose run returns non-zero when Docker containers exit non-zero
+        oss-crs run returns non-zero when Docker containers exit non-zero
         (e.g. fuzzer killed by timeout), but POVs/patches may still exist in
         SUBMIT_DIR and must be collected.
         """
