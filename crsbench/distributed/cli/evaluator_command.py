@@ -149,9 +149,9 @@ Examples:
     evaluator_parser.add_argument(
         "--idle-timeout",
         type=int,
-        default=300,
+        default=0,
         metavar="SECONDS",
-        help="Exit after N seconds idle post-build-phase with empty verify queue (0=disabled, default: 300)",
+        help="Exit after N seconds idle post-build-phase with empty verify queue (0=disabled/infinite, default: 0)",
     )
 
     evaluator_parser.add_argument(
@@ -208,7 +208,7 @@ def run_evaluator(args: argparse.Namespace) -> int:
             or (build_jobs * build_cores_per_job) // verify_cores_per_job
         )
         worker_name = getattr(args, "worker_name", None) or "ci-evaluator"
-        idle_timeout = getattr(args, "idle_timeout", 300)
+        idle_timeout = getattr(args, "idle_timeout", 0)
 
         try:
             return run_evaluator_ci_mode(
@@ -274,7 +274,7 @@ def run_evaluator(args: argparse.Namespace) -> int:
         getattr(args, "verify_jobs", None)
         or (build_jobs * build_cores_per_job) // verify_cores_per_job
     )
-    idle_timeout = getattr(args, "idle_timeout", 300)
+    idle_timeout = getattr(args, "idle_timeout", 0)
 
     try:
         return run_evaluator_main(
