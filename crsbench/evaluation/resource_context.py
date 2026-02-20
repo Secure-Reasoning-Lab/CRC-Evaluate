@@ -95,15 +95,13 @@ class ResourceContext:
                 "OSS_FUZZ_CPUSET_CPUS": self._cpuset,
             }
 
+            mem_str = "unlimited" if self._memory_bytes == 0 else self._memory_bytes
             logger.info(
-                "ResourceContext: cgroup created for %s (cpuset=%s, mem=%s)",
-                self._trial_name,
-                self._cpuset,
-                "unlimited" if self._memory_bytes == 0 else self._memory_bytes,
+                f"ResourceContext: cgroup created for {self._trial_name} (cpuset={self._cpuset}, mem={mem_str})"
             )
         except CgroupError as exc:
             logger.warning(
-                "Cgroup v2 unavailable, continuing without enforcement: %s", exc
+                f"Cgroup v2 unavailable, continuing without enforcement: {exc}"
             )
             self._cgroup_path = None
 
@@ -119,6 +117,6 @@ class ResourceContext:
             from crsbench.utils.cgroup import cleanup_cgroup
 
             cleanup_cgroup(self._cgroup_path, force=True)
-            logger.info("ResourceContext: cleaned up cgroup %s", self._cgroup_path)
+            logger.info(f"ResourceContext: cleaned up cgroup {self._cgroup_path}")
 
         return False

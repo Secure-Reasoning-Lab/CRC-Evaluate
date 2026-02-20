@@ -98,7 +98,7 @@ def run_crs_compose_prepare(
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        logger.warning("crs-compose prepare timed out after %ds", timeout)
+        logger.warning(f"crs-compose prepare timed out after {timeout}s")
         return ("", f"crs-compose prepare timed out after {timeout}s", -1)
     except FileNotFoundError as exc:
         msg = (
@@ -154,7 +154,7 @@ def run_crs_compose_build_target(
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        logger.warning("crs-compose build-target timed out after %ds", timeout)
+        logger.warning(f"crs-compose build-target timed out after {timeout}s")
         return ("", f"crs-compose build-target timed out after {timeout}s", -1)
     except FileNotFoundError as exc:
         msg = (
@@ -245,10 +245,9 @@ def run_crs_compose_run(
                 "LITELLM_URL": litellm_url,
                 "LITELLM_KEY": litellm_api_key,
             }
+            key_suffix = litellm_api_key[-4:] if len(litellm_api_key) > 4 else "****"
             logger.debug(
-                "External LiteLLM enabled: URL=%s, key=...%s",
-                litellm_url,
-                litellm_api_key[-4:] if len(litellm_api_key) > 4 else "****",
+                f"External LiteLLM enabled: URL={litellm_url}, key=...{key_suffix}"
             )
 
     logger.debug(f"Running crs-compose run: {' '.join(cmd)}")
@@ -332,19 +331,13 @@ def find_submit_dir(
 
     if not matches:
         logger.warning(
-            "No SUBMIT_DIR found for CRS '%s', harness '%s' in %s",
-            crs_name,
-            harness_name,
-            work_dir,
+            f"No SUBMIT_DIR found for CRS '{crs_name}', harness '{harness_name}' in {work_dir}"
         )
         return None
 
     if len(matches) > 1:
         logger.warning(
-            "Multiple SUBMIT_DIRs found for CRS '%s', harness '%s': %s. Using first.",
-            crs_name,
-            harness_name,
-            matches,
+            f"Multiple SUBMIT_DIRs found for CRS '{crs_name}', harness '{harness_name}': {matches}. Using first."
         )
 
     return matches[0]

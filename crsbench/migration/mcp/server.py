@@ -67,7 +67,7 @@ async def build_benchmark(benchmark_name: str) -> dict:
     Returns:
         Dictionary with 'success' (bool) and 'logs' (str) keys
     """
-    logger.info("Building benchmark '%s' using OSS-Fuzz helper.py", benchmark_name)
+    logger.info(f"Building benchmark '{benchmark_name}' using OSS-Fuzz helper.py")
 
     result = build_benchmark_with_logging(
         benchmark_name=benchmark_name,
@@ -91,7 +91,7 @@ async def check_test_sh(benchmark_name: str) -> dict:
     Returns:
         Dictionary with 'returncode' (int), 'output' (str), 'success' (bool), 'timed_out' (bool)
     """
-    logger.info("Checking test.sh for benchmark '%s'...", benchmark_name)
+    logger.info(f"Checking test.sh for benchmark '{benchmark_name}'...")
 
     result = run_test_sh(
         benchmark=benchmark_name,
@@ -130,7 +130,7 @@ async def check_replay_build_sh(benchmark_name: str) -> str:
     if not replay_build_path.exists():
         return f"Error: replay-build.sh not found for benchmark: {benchmark_name}"
 
-    logger.info("Testing replay-build.sh for benchmark '%s'...", benchmark_name)
+    logger.info(f"Testing replay-build.sh for benchmark '{benchmark_name}'...")
 
     # Prepare benchmark in oss-fuzz/projects/aixcc/
     oss_fuzz_project = prepare_benchmark_for_oss_fuzz(
@@ -198,19 +198,19 @@ async def check_replay_build_sh(benchmark_name: str) -> str:
             log_stdout.write("\n\nreplay-build.sh execution succeeded.\n")
         except subprocess.CalledProcessError as e:
             logger.info(
-                "replay-build.sh failed for benchmark '%s': %s", benchmark_name, str(e)
+                f"replay-build.sh failed for benchmark '{benchmark_name}': {e}"
             )
             log_stdout.write(
                 f"\n\nreplay-build.sh failed with exit code {e.returncode}\n"
             )
         except subprocess.TimeoutExpired:
-            logger.info("replay-build.sh timed out for benchmark '%s'", benchmark_name)
+            logger.info(f"replay-build.sh timed out for benchmark '{benchmark_name}'")
             log_stdout.write("\n\nreplay-build.sh execution timed out.\n")
 
     with target_logs.open("r", encoding="utf-8") as f:
         logs = f.read()
 
-    logger.info("replay-build.sh logs retrieved for benchmark '%s'", benchmark_name)
+    logger.info(f"replay-build.sh logs retrieved for benchmark '{benchmark_name}'")
     # Return full logs - MCP client can truncate if needed for display
     return logs
 
@@ -298,7 +298,7 @@ def start_mcp_server():
     Path(mcp_config.BASE_BENCHMARKS_DIR).mkdir(parents=True, exist_ok=True)
     Path(mcp_config.BASE_TMP_LOGS).mkdir(parents=True, exist_ok=True)
 
-    logger.info("CRSBench MCP server target: %s", benchmark_name)
+    logger.info(f"CRSBench MCP server target: {benchmark_name}")
 
     try:
         logger.info("Starting MCP server.")
