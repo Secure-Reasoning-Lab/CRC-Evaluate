@@ -62,6 +62,7 @@ class PatchVerificationManager:
         input_cpvs_total: int,
         *,
         trial_start_time: Optional[float] = None,
+        work_dir: Optional[Path] = None,
     ):
         """Initialize patch verification manager.
 
@@ -72,6 +73,7 @@ class PatchVerificationManager:
             benchmark_id: Benchmark identifier
             input_cpvs_total: Number of input CPVs to generate patches for
             trial_start_time: Trial start timestamp (defaults to current time)
+            work_dir: crs-compose working directory for EXCHANGE_DIR scanning
 
         Raises:
             ValueError: If trial_dir doesn't exist
@@ -95,6 +97,10 @@ class PatchVerificationManager:
         self._snapshot_count = 0
         self._latest_snapshot: Optional[PatchSnapshot] = None
 
+        # EXCHANGE_DIR scanning for real-time patch discovery during CRS execution
+        self._work_dir = work_dir
+        self._exchange_patch_dir: Optional[Path] = None  # Lazy-resolved
+
         logger.info(
             f"PatchVerificationManager initialized: trial_dir={trial_dir}, "
             f"harness={harness_name}, benchmark={benchmark_id}, "
@@ -113,36 +119,86 @@ class PatchVerificationManager:
         with self._lock:
             return self._patches_total
 
+    def _resolve_exchange_patch_dir(self) -> Optional[Path]:
+        """Resolve the EXCHANGE_DIR patch/ path (lazy, cached after first success).
+
+        EXCHANGE_DIR may not exist until the exchange sidecar creates it
+        during CRS execution.  Returns None when ``work_dir`` was not provided
+        or the directory has not appeared yet.
+        """
+        if self._exchange_patch_dir is not None:
+            return self._exchange_patch_dir
+
+        if self._work_dir is None:
+            return None
+
+        from crsbench.evaluation.adapter.compose_common import find_exchange_dir
+
+        exchange_dir = find_exchange_dir(self._work_dir, self.harness_name)
+        if exchange_dir is None:
+            return None
+
+        patch_dir = exchange_dir / "patch"
+        if not patch_dir.exists():
+            return None
+
+        self._exchange_patch_dir = patch_dir
+        logger.info(f"Resolved EXCHANGE_DIR patch path: {patch_dir}")
+        return self._exchange_patch_dir
+
+    @staticmethod
+    def _scan_patch_directory(directory: Path) -> list[tuple[str, Path]]:
+        """Scan a directory for patch files in {cpv_id}/patch.diff structure.
+
+        Args:
+            directory: Directory to scan for patch subdirectories.
+
+        Returns:
+            List of (cpv_id, patch_file_path) tuples.
+        """
+        if not directory.exists():
+            return []
+
+        results = []
+        for cpv_dir in directory.iterdir():
+            if not cpv_dir.is_dir():
+                continue
+            patch_file = cpv_dir / "patch.diff"
+            if patch_file.exists():
+                results.append((cpv_dir.name, patch_file))
+        return results
+
     def _discover_new_patches(self) -> tuple[list[str], int]:
-        """Discover new patches in the output directory.
+        """Discover new patches in output and EXCHANGE_DIR directories.
+
+        Scans both the primary ``patch_output_dir`` (populated by
+        ``collect_results()`` after CRS execution) and the EXCHANGE_DIR
+        ``patch/`` subdirectory (populated in real-time by the exchange
+        sidecar during CRS execution).
 
         Patches are organized as:
-        output/patches/{cpv_id}/patch.diff
+        {dir}/{cpv_id}/patch.diff
 
         Returns:
             Tuple of (new_cpv_ids, new_patches_count)
         """
-        if not self.patch_output_dir.exists():
-            return [], 0
+        # Collect patches from both directories
+        patch_entries = self._scan_patch_directory(self.patch_output_dir)
+
+        exchange_patch_dir = self._resolve_exchange_patch_dir()
+        if exchange_patch_dir is not None:
+            patch_entries.extend(self._scan_patch_directory(exchange_patch_dir))
 
         new_cpv_ids = []
         new_patches_count = 0
 
-        # Iterate through cpv_id directories
-        for cpv_dir in self.patch_output_dir.iterdir():
-            if not cpv_dir.is_dir():
-                continue
-
-            cpv_id = cpv_dir.name
-            patch_file = cpv_dir / "patch.diff"
-
-            if patch_file.exists():
-                with self._lock:
-                    if cpv_id not in self._discovered_cpv_ids:
-                        self._discovered_cpv_ids.add(cpv_id)
-                        self._patches_total += 1
-                        new_cpv_ids.append(cpv_id)
-                        new_patches_count += 1
+        for cpv_id, _patch_file in patch_entries:
+            with self._lock:
+                if cpv_id not in self._discovered_cpv_ids:
+                    self._discovered_cpv_ids.add(cpv_id)
+                    self._patches_total += 1
+                    new_cpv_ids.append(cpv_id)
+                    new_patches_count += 1
 
         return new_cpv_ids, new_patches_count
 

@@ -878,6 +878,7 @@ class BenchmarkRunner:
                 redis_host=self.redis_host,
                 experiment_name=self.experiment_name,
                 trial_id=trial_id,
+                work_dir=self.adapter.work_dir,
             )
 
             self.logger.info(
@@ -934,6 +935,7 @@ class BenchmarkRunner:
                 benchmark_id=benchmark_id,
                 input_cpvs_total=input_cpvs_total,
                 trial_start_time=trial_start_time,
+                work_dir=self.adapter.work_dir,
             )
 
             self.logger.info(

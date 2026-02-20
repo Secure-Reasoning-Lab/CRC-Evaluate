@@ -83,6 +83,11 @@ class OssCrsAdapter:
         return self._mode
 
     @property
+    def work_dir(self) -> Optional[Path]:
+        """Return the crs-compose working directory, or None if not yet set."""
+        return self._work_dir
+
+    @property
     def built_projects(self) -> set[str]:
         """Track which projects have been built (stateful)."""
         return self._built_projects

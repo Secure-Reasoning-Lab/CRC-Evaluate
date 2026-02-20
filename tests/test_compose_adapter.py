@@ -19,6 +19,7 @@ import yaml
 from crsbench.evaluation.adapter import OssCrsAdapter
 from crsbench.evaluation.adapter.compose_common import (
     docker_compose_down_cleanup,
+    find_exchange_dir,
     find_submit_dir,
     read_crs_source_from_registry,
     run_crs_compose_build_target,
@@ -464,6 +465,54 @@ class TestComposeCommon:
     def test_find_submit_dir_returns_none_when_no_match(self, tmp_path: Path) -> None:
         result = find_submit_dir(tmp_path, "no-crs", "no-harness")
         assert result is None
+
+    def test_find_exchange_dir_oss_crs_convention(self, tmp_path: Path) -> None:
+        """Verify find_exchange_dir matches oss-crs CRS.get_exchange_dir() layout.
+
+        oss-crs creates EXCHANGE_DIR at:
+          crs_compose/{config_hash}/{sanitizer}/runs/{run_id}/EXCHANGE_DIR/{target_key}/{harness}/
+        """
+        exchange = (
+            tmp_path
+            / "crs_compose"
+            / "abc123"
+            / "address"
+            / "runs"
+            / "run-0"
+            / "EXCHANGE_DIR"
+            / "target_1"
+            / "handler_ber"
+        )
+        exchange.mkdir(parents=True)
+        (exchange / "pov").mkdir()
+        (exchange / "pov" / "pov_0.bin").write_bytes(b"\x00")
+
+        result = find_exchange_dir(tmp_path, "handler_ber")
+        assert result is not None
+        assert result == exchange
+
+    def test_find_exchange_dir_returns_none_when_no_match(self, tmp_path: Path) -> None:
+        result = find_exchange_dir(tmp_path, "no-harness")
+        assert result is None
+
+    def test_find_exchange_dir_no_crs_name_needed(self, tmp_path: Path) -> None:
+        """EXCHANGE_DIR is CRS-agnostic; ensure it works without crs_name."""
+        exchange = (
+            tmp_path
+            / "crs_compose"
+            / "hash1"
+            / "address"
+            / "runs"
+            / "run-1"
+            / "EXCHANGE_DIR"
+            / "proj_target"
+            / "fuzz_target"
+        )
+        exchange.mkdir(parents=True)
+
+        result = find_exchange_dir(tmp_path, "fuzz_target")
+        assert result is not None
+        assert "EXCHANGE_DIR" in str(result)
 
 
 # ===========================================================================

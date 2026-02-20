@@ -1037,3 +1037,129 @@ class TestAsyncMode:
         # Should have verified inline
         manager._engine.verify_pov.assert_called_once()
         assert snapshot.povs_new == 1
+
+
+class TestExchangeDirScanning:
+    """Tests for EXCHANGE_DIR POV discovery."""
+
+    def _make_exchange_dir(self, work_dir: Path, harness_name: str) -> Path:
+        """Create a mock EXCHANGE_DIR structure and return the pov/ path."""
+        exchange = (
+            work_dir
+            / "crs_compose"
+            / "hash1"
+            / "address"
+            / "runs"
+            / "run-0"
+            / "EXCHANGE_DIR"
+            / "target_1"
+            / harness_name
+            / "pov"
+        )
+        exchange.mkdir(parents=True)
+        return exchange
+
+    def _make_manager(self, tmp_path: Path, *, work_dir: Path = None):
+        from crsbench.evaluation.verification.pov.manager import (
+            POVVerificationManager,
+        )
+
+        trial_dir = tmp_path / "trial-1"
+        trial_dir.mkdir(exist_ok=True)
+        pov_output_dir = trial_dir / "pov_output"
+        pov_output_dir.mkdir(exist_ok=True)
+
+        config = POVVerificationConfig()
+        return POVVerificationManager(
+            trial_dir=trial_dir,
+            pov_output_dir=pov_output_dir,
+            config=config,
+            harness_name="fuzz_parser",
+            benchmark_id="test-benchmark",
+            expected_cpv_ids=["cpv_0", "cpv_1"],
+            work_dir=work_dir,
+        )
+
+    def test_discover_from_exchange_dir(self, tmp_path: Path) -> None:
+        """POVs in EXCHANGE_DIR/pov/ are discovered alongside pov_output_dir."""
+        work_dir = tmp_path / "workdir"
+        work_dir.mkdir()
+        exchange_pov = self._make_exchange_dir(work_dir, "fuzz_parser")
+
+        # Write POV to EXCHANGE_DIR only (not to pov_output_dir)
+        (exchange_pov / "exchange_pov.blob").write_bytes(b"exchange_pov_data")
+
+        manager = self._make_manager(tmp_path, work_dir=work_dir)
+        new_povs = manager._discover_new_povs()
+
+        assert len(new_povs) == 1
+        assert new_povs[0][0].name == "exchange_pov.blob"
+
+    def test_discover_merges_both_dirs(self, tmp_path: Path) -> None:
+        """POVs from both pov_output_dir and EXCHANGE_DIR are merged."""
+        work_dir = tmp_path / "workdir"
+        work_dir.mkdir()
+        exchange_pov = self._make_exchange_dir(work_dir, "fuzz_parser")
+
+        manager = self._make_manager(tmp_path, work_dir=work_dir)
+
+        # Write POV to pov_output_dir
+        (manager.pov_output_dir / "output_pov.blob").write_bytes(b"output_data")
+        # Write different POV to EXCHANGE_DIR
+        (exchange_pov / "exchange_pov.blob").write_bytes(b"exchange_data")
+
+        new_povs = manager._discover_new_povs()
+        names = {p.name for p, _ in new_povs}
+
+        assert len(new_povs) == 2
+        assert "output_pov.blob" in names
+        assert "exchange_pov.blob" in names
+
+    def test_dedup_same_content_across_dirs(self, tmp_path: Path) -> None:
+        """Same POV content in both dirs is deduplicated within a single call."""
+        work_dir = tmp_path / "workdir"
+        work_dir.mkdir()
+        exchange_pov = self._make_exchange_dir(work_dir, "fuzz_parser")
+
+        manager = self._make_manager(tmp_path, work_dir=work_dir)
+
+        # Write identical content to both directories
+        content = b"identical_pov_content"
+        (manager.pov_output_dir / "pov.blob").write_bytes(content)
+        (exchange_pov / "pov_copy.blob").write_bytes(content)
+
+        new_povs = manager._discover_new_povs()
+
+        # Same hash in both dirs → only one returned (within-call dedup)
+        assert len(new_povs) == 1
+
+    def test_no_work_dir_falls_back_gracefully(self, tmp_path: Path) -> None:
+        """Without work_dir, only pov_output_dir is scanned."""
+        manager = self._make_manager(tmp_path, work_dir=None)
+        (manager.pov_output_dir / "pov.blob").write_bytes(b"data")
+
+        new_povs = manager._discover_new_povs()
+        assert len(new_povs) == 1
+
+    def test_lazy_resolution_exchange_dir_not_yet_created(self, tmp_path: Path) -> None:
+        """Exchange dir not found on first call, found on subsequent call."""
+        work_dir = tmp_path / "workdir"
+        work_dir.mkdir()
+
+        manager = self._make_manager(tmp_path, work_dir=work_dir)
+
+        # First call: EXCHANGE_DIR doesn't exist yet
+        assert manager._resolve_exchange_pov_dir() is None
+
+        # Create EXCHANGE_DIR structure
+        exchange_pov = self._make_exchange_dir(work_dir, "fuzz_parser")
+        (exchange_pov / "pov.blob").write_bytes(b"data")
+
+        # Second call: now found and cached
+        result = manager._resolve_exchange_pov_dir()
+        assert result is not None
+        assert result == exchange_pov
+
+        # Third call: uses cached value
+        result2 = manager._resolve_exchange_pov_dir()
+        assert result2 == result

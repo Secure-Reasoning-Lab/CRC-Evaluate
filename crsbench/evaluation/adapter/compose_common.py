@@ -315,6 +315,44 @@ def docker_compose_down_cleanup(work_dir: Path) -> None:
         logger.warning(f"Failed during Docker cleanup for work_dir {work_dir}")
 
 
+def find_exchange_dir(
+    work_dir: Path,
+    harness_name: str,
+) -> Optional[Path]:
+    """Locate the EXCHANGE_DIR for a harness in the work directory.
+
+    EXCHANGE_DIR is shared across all CRSes (no ``crs_name`` parameter
+    needed).  The exchange sidecar copies from each CRS's SUBMIT_DIR
+    into EXCHANGE_DIR every 2 seconds, deduplicating by filename.
+
+    Matches oss-crs's ``CRS.get_exchange_dir()`` convention::
+
+        <work_dir>/crs_compose/<config_hash>/<sanitizer>/runs/<run_id>/EXCHANGE_DIR/<target_key>/<harness>/
+
+    Args:
+        work_dir: crs-compose working directory.
+        harness_name: Name of the harness.
+
+    Returns:
+        Path to the EXCHANGE_DIR/<harness> directory, or None if not found.
+    """
+    pattern = f"crs_compose/*/*/runs/*/EXCHANGE_DIR/*/{harness_name}"
+    matches = list(work_dir.glob(pattern))
+
+    if not matches:
+        logger.debug(
+            f"No EXCHANGE_DIR found for harness '{harness_name}' in {work_dir}"
+        )
+        return None
+
+    if len(matches) > 1:
+        logger.warning(
+            f"Multiple EXCHANGE_DIRs found for harness '{harness_name}': {matches}. Using first."
+        )
+
+    return matches[0]
+
+
 def find_submit_dir(
     work_dir: Path,
     crs_name: str,

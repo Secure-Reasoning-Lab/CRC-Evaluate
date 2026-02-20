@@ -81,6 +81,7 @@ class POVVerificationManager:
         redis_host: Optional[str] = None,
         experiment_name: Optional[str] = None,
         trial_id: Optional[str] = None,
+        work_dir: Optional[Path] = None,
     ):
         """Initialize POV verification manager.
 
@@ -99,6 +100,7 @@ class POVVerificationManager:
             redis_host: Redis server hostname for async mode (None = inline mode)
             experiment_name: Experiment name for async verify queue naming
             trial_id: Trial identifier for async result correlation
+            work_dir: crs-compose working directory for EXCHANGE_DIR scanning
 
         Raises:
             ValueError: If trial_dir doesn't exist
@@ -151,6 +153,10 @@ class POVVerificationManager:
         self._pending_job_ids: list[str] = []  # Job IDs awaiting results
         self._pov_hash_to_path: dict[str, Path] = {}  # hash → local file path
         self._job_to_pov_id: dict[str, str] = {}  # job_id → pov_id for timeout marking
+
+        # EXCHANGE_DIR scanning for real-time POV discovery during CRS execution
+        self._work_dir = work_dir
+        self._exchange_pov_dir: Optional[Path] = None  # Lazy-resolved
 
         async_mode = "async (Redis)" if redis_host else "inline"
         logger.info(
@@ -323,34 +329,90 @@ class POVVerificationManager:
                 f"Processed {len(completed)} async verdicts, {len(remaining)} pending"
             )
 
+    def _resolve_exchange_pov_dir(self) -> Optional[Path]:
+        """Resolve the EXCHANGE_DIR pov/ path (lazy, cached after first success).
+
+        EXCHANGE_DIR may not exist until the exchange sidecar creates it
+        during CRS execution.  Returns None when ``work_dir`` was not provided
+        or the directory has not appeared yet.
+        """
+        if self._exchange_pov_dir is not None:
+            return self._exchange_pov_dir
+
+        if self._work_dir is None:
+            return None
+
+        from crsbench.evaluation.adapter.compose_common import find_exchange_dir
+
+        exchange_dir = find_exchange_dir(self._work_dir, self.harness_name)
+        if exchange_dir is None:
+            return None
+
+        pov_dir = exchange_dir / "pov"
+        if not pov_dir.exists():
+            return None
+
+        self._exchange_pov_dir = pov_dir
+        logger.info(f"Resolved EXCHANGE_DIR pov path: {pov_dir}")
+        return self._exchange_pov_dir
+
+    @staticmethod
+    def _scan_pov_directory(directory: Path) -> list[Path]:
+        """Scan a directory for POV files.
+
+        Returns all regular files excluding hidden files, directories,
+        and symlinks.
+
+        Args:
+            directory: Directory to scan for POV files.
+
+        Returns:
+            List of POV file paths found.
+        """
+        if not directory.exists():
+            return []
+
+        return [
+            f
+            for f in directory.glob("*")
+            if f.is_file() and not f.name.startswith(".") and not f.is_symlink()
+        ]
+
     def _discover_new_povs(self) -> list[tuple[Path, str]]:
-        """Discover new POV files in the output directory.
+        """Discover new POV files in output and EXCHANGE_DIR directories.
+
+        Scans both the primary ``pov_output_dir`` (populated by
+        ``collect_results()`` after CRS execution) and the EXCHANGE_DIR
+        ``pov/`` subdirectory (populated in real-time by the exchange
+        sidecar during CRS execution).
 
         POV files can have various formats:
         - No extension (hex hash like '47107064ecc2b03b')
         - .blob, .bin, .pov extensions
 
         Excludes hidden files (starting with '.'), directories, and symlinks.
+        Deduplication is handled by the store's hash-based tracking.
 
         Returns:
             List of (path, hash) tuples for new POV files not yet tested
         """
-        if not self.pov_output_dir.exists():
-            return []
+        # Collect POV files from both directories
+        pov_files = self._scan_pov_directory(self.pov_output_dir)
 
-        # Match all files, exclude hidden files, directories, and symlinks
-        pov_files = [
-            f
-            for f in self.pov_output_dir.glob("*")
-            if f.is_file() and not f.name.startswith(".") and not f.is_symlink()
-        ]
+        exchange_pov_dir = self._resolve_exchange_pov_dir()
+        if exchange_pov_dir is not None:
+            pov_files.extend(self._scan_pov_directory(exchange_pov_dir))
 
-        # Filter out already tested POVs and return with hashes
+        # Filter out already tested POVs and return with hashes.
+        # Track seen hashes within this call to avoid returning the same
+        # content twice when it exists in both directories.
         new_povs = []
+        seen_hashes: set[str] = set()
         for pov_path in pov_files:
             pov_hash, is_tested = self.store.check_pov_hash(pov_path)
-            if not is_tested:
+            if not is_tested and pov_hash not in seen_hashes:
                 new_povs.append((pov_path, pov_hash))
+                seen_hashes.add(pov_hash)
         return new_povs
 
     def _verify_pov(self, pov_path: Path) -> Optional[PovVerificationResult]:
