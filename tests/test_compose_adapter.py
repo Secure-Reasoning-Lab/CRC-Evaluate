@@ -410,55 +410,56 @@ class TestComposeCommon:
         # 2 compose-down calls + 1 docker network prune call
         assert mock_run.call_count == 3
 
-    def test_find_submit_dir_returns_path(self, tmp_path: Path) -> None:
-        submit = (
-            tmp_path
-            / "crs_compose"
-            / "abc123"
-            / "crs"
-            / "my-crs"
-            / "target_img"
-            / "SUBMIT_DIR"
-            / "harness1"
-        )
-        submit.mkdir(parents=True)
-
-        result = find_submit_dir(tmp_path, "my-crs", "harness1")
-        assert result is not None
-        assert result == submit
-
     def test_find_submit_dir_oss_crs_convention(self, tmp_path: Path) -> None:
-        """Verify find_submit_dir matches oss-crs's crs-compose directory layout.
+        """Verify find_submit_dir matches oss-crs CRS.get_submit_dir() layout.
 
-        oss-crs (post PR #64) creates SUBMIT_DIR at:
+        oss-crs creates SUBMIT_DIR at:
           crs_compose/{config_hash}/{sanitizer}/runs/{run_id}/crs/{crs_name}/{target_key}/SUBMIT_DIR/{harness}/
 
-        This test ensures our glob pattern handles the multi-level intermediate
-        directories ({sanitizer}/runs/{run_id}/) between the config hash and
-        the crs/ subtree.
+        The glob pattern must explicitly match each level so that a layout
+        change in oss-crs causes a visible failure.
         """
         submit = (
             tmp_path
             / "crs_compose"
-            / "8d20a8aeb804"  # config hash
+            / "8d20a8aeb804"  # config_hash
             / "address"  # sanitizer
             / "runs"
             / "17715598561c"  # run_id
             / "crs"
-            / "my-crs"
+            / "my-crs"  # crs_name
             / "afc-wireshark-full-01_ddaef6f5de3a"  # target_key
             / "SUBMIT_DIR"
             / "handler_ber"  # harness
         )
         submit.mkdir(parents=True)
-        # Place a POV file to make it realistic
-        pov_dir = submit / "pov"
-        pov_dir.mkdir()
-        (pov_dir / "pov_0.bin").write_bytes(b"\x00")
+        (submit / "pov").mkdir()
+        (submit / "pov" / "pov_0.bin").write_bytes(b"\x00")
 
         result = find_submit_dir(tmp_path, "my-crs", "handler_ber")
         assert result is not None
         assert result == submit
+
+    def test_find_submit_dir_rejects_wrong_layout(self, tmp_path: Path) -> None:
+        """Ensure the explicit pattern does NOT match arbitrary nesting.
+
+        If someone accidentally puts crs/ at a wrong depth, the pattern
+        should not match — unlike a loose ``**`` glob.
+        """
+        wrong = (
+            tmp_path
+            / "crs_compose"
+            / "abc123"
+            / "crs"  # wrong: crs/ is directly under hash, no sanitizer/runs
+            / "my-crs"
+            / "target_img"
+            / "SUBMIT_DIR"
+            / "harness1"
+        )
+        wrong.mkdir(parents=True)
+
+        result = find_submit_dir(tmp_path, "my-crs", "harness1")
+        assert result is None
 
     def test_find_submit_dir_returns_none_when_no_match(self, tmp_path: Path) -> None:
         result = find_submit_dir(tmp_path, "no-crs", "no-harness")
@@ -752,12 +753,15 @@ class TestOssCrsAdapterBugFindFull:
         adapter = self._make_adapter(tmp_path)
         adapter.configure({"docker_registry": "ghcr.io/t"})
 
-        # Set up work_dir with SUBMIT_DIR containing POVs
+        # Set up work_dir with SUBMIT_DIR matching oss-crs convention
         work_dir = tmp_path / "work"
         submit = (
             work_dir
             / "crs_compose"
-            / "hash123"
+            / "hash123"  # config_hash
+            / "address"  # sanitizer
+            / "runs"
+            / "run001"  # run_id
             / "crs"
             / "test-crs"
             / "target_img"
@@ -928,12 +932,15 @@ class TestOssCrsAdapterBugFixFull:
         adapter = self._make_adapter(tmp_path)
         adapter.configure({"docker_registry": "ghcr.io/t"})
 
-        # Set up SUBMIT_DIR with patches
+        # Set up SUBMIT_DIR matching oss-crs convention
         work_dir = tmp_path / "work"
         submit = (
             work_dir
             / "crs_compose"
-            / "hash456"
+            / "hash456"  # config_hash
+            / "address"  # sanitizer
+            / "runs"
+            / "run001"  # run_id
             / "crs"
             / "test-crs"
             / "target_img"
@@ -961,7 +968,10 @@ class TestOssCrsAdapterBugFixFull:
         submit = (
             work_dir
             / "crs_compose"
-            / "hash789"
+            / "hash789"  # config_hash
+            / "address"  # sanitizer
+            / "runs"
+            / "run001"  # run_id
             / "crs"
             / "test-crs"
             / "target_img"

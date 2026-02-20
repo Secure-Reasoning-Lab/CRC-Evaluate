@@ -322,15 +322,14 @@ def find_submit_dir(
 ) -> Optional[Path]:
     """Locate the SUBMIT_DIR for a CRS and harness in the work directory.
 
-    The workdir structure varies by crs-compose version::
+    Matches oss-crs's ``CRS.get_submit_dir()`` convention::
 
-        # Older layout (single hash level):
-        <work_dir>/crs_compose/<hash>/crs/<crs_name>/<target_image>/SUBMIT_DIR/<harness>/
+        <work_dir>/crs_compose/<config_hash>/<sanitizer>/runs/<run_id>/crs/<crs_name>/<target_key>/SUBMIT_DIR/<harness>/
 
-        # Newer layout (sanitizer + run levels):
-        <work_dir>/crs_compose/<hash>/<sanitizer>/runs/<run_hash>/crs/<crs_name>/<target_image>/SUBMIT_DIR/<harness>/
-
-    Uses ``**`` glob to match any number of intermediate directories.
+    Each ``*`` maps to a single unknown segment (hash, sanitizer, run-id,
+    target-key).  This is intentionally explicit rather than ``**`` so that
+    a layout change in oss-crs causes a visible failure instead of silently
+    matching the wrong path.
 
     Args:
         work_dir: crs-compose working directory.
@@ -340,7 +339,7 @@ def find_submit_dir(
     Returns:
         Path to the SUBMIT_DIR/<harness> directory, or None if not found.
     """
-    pattern = f"crs_compose/**/crs/{crs_name}/*/SUBMIT_DIR/{harness_name}"
+    pattern = f"crs_compose/*/*/runs/*/crs/{crs_name}/*/SUBMIT_DIR/{harness_name}"
     matches = list(work_dir.glob(pattern))
 
     if not matches:
