@@ -427,6 +427,39 @@ class TestComposeCommon:
         assert result is not None
         assert result == submit
 
+    def test_find_submit_dir_oss_crs_convention(self, tmp_path: Path) -> None:
+        """Verify find_submit_dir matches oss-crs's crs-compose directory layout.
+
+        oss-crs (post PR #64) creates SUBMIT_DIR at:
+          crs_compose/{config_hash}/{sanitizer}/runs/{run_id}/crs/{crs_name}/{target_key}/SUBMIT_DIR/{harness}/
+
+        This test ensures our glob pattern handles the multi-level intermediate
+        directories ({sanitizer}/runs/{run_id}/) between the config hash and
+        the crs/ subtree.
+        """
+        submit = (
+            tmp_path
+            / "crs_compose"
+            / "8d20a8aeb804"  # config hash
+            / "address"  # sanitizer
+            / "runs"
+            / "17715598561c"  # run_id
+            / "crs"
+            / "my-crs"
+            / "afc-wireshark-full-01_ddaef6f5de3a"  # target_key
+            / "SUBMIT_DIR"
+            / "handler_ber"  # harness
+        )
+        submit.mkdir(parents=True)
+        # Place a POV file to make it realistic
+        pov_dir = submit / "pov"
+        pov_dir.mkdir()
+        (pov_dir / "pov_0.bin").write_bytes(b"\x00")
+
+        result = find_submit_dir(tmp_path, "my-crs", "handler_ber")
+        assert result is not None
+        assert result == submit
+
     def test_find_submit_dir_returns_none_when_no_match(self, tmp_path: Path) -> None:
         result = find_submit_dir(tmp_path, "no-crs", "no-harness")
         assert result is None
