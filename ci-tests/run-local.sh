@@ -76,7 +76,7 @@ run_format() {
         # atlanta-json-java-full-01 \
         # afc-libxml2-full-01 \
         # afc-apache-commons-compress-delta-01; do
-        uv run crsbench ci format "$benchmark" || fail "Format validation failed for $benchmark"
+        uv run crsbench benchmark ci format "$benchmark" || fail "Format validation failed for $benchmark"
     done
 
     success "Stage 2a completed!"
@@ -88,7 +88,7 @@ run_sanity() {
 
     for benchmark in sanity-mock-c-delta-01 sanity-mock-java-delta-01; do
         echo -e "\n${YELLOW}--- $benchmark ---${NC}"
-        uv run crsbench ci all "$benchmark" \
+        uv run crsbench benchmark ci all "$benchmark" \
             --force-rebuild || fail "All checks failed for $benchmark"
         success "$benchmark passed"
     done
@@ -103,7 +103,7 @@ run_sanity() {
 #
 #     for benchmark in afc-xz-full-01 atlanta-json-java-full-01; do
 #         echo -e "\n${YELLOW}--- $benchmark ---${NC}"
-#         uv run crsbench ci all "$benchmark" \
+#         uv run crsbench benchmark ci all "$benchmark" \
 #             --force-rebuild || fail "All checks failed for $benchmark"
 #         success "$benchmark passed"
 #     done
@@ -118,7 +118,7 @@ run_sanity() {
 #
 #     for benchmark in afc-libxml2-full-01 afc-apache-commons-compress-delta-01; do
 #         echo -e "\n${YELLOW}--- $benchmark ---${NC}"
-#         uv run crsbench ci all "$benchmark" \
+#         uv run crsbench benchmark ci all "$benchmark" \
 #             --force-rebuild || fail "All checks failed for $benchmark"
 #         success "$benchmark passed"
 #     done

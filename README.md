@@ -47,7 +47,7 @@ crsbench coverage     benchmarks/project --corpus-dir ./corpus/
 ```bash
 crsbench report    --experiment my-exp
 crsbench dashboard --base-dir ./experiments
-crsbench stats     --output stats.csv
+crsbench benchmark stats --output stats.csv
 ```
 
 ### Dataset
@@ -63,7 +63,7 @@ Each benchmark is stored as two tarballs: `benchmark.tar.gz` (project files, bui
 source packages) and `ground-truth.tar.gz` (`.aixcc/` vulnerability metadata and patches).
 Use `--no-ground-truth` for blind CRS evaluation without vulnerability answers.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for developer commands (`crsbench benchmark`, `crsbench ci`).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for developer commands (`crsbench benchmark`).
 
 ## Architecture
 

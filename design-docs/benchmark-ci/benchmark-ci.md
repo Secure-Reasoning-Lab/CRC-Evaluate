@@ -751,7 +751,7 @@ jobs:
 
       - name: Run benchmark CI
         run: |
-          uv run crsbench ci benchmarks/${{ matrix.benchmark }} \
+          uv run crsbench benchmark ci benchmarks/${{ matrix.benchmark }} \
             --sanitizer address \
             --output results-${{ matrix.benchmark }}.csv
 
@@ -794,7 +794,7 @@ crsbench/benchmark_ci/
 ## Example Output
 
 ```
-$ crsbench ci benchmarks/curl --sanitizer address
+$ crsbench benchmark ci benchmarks/curl --sanitizer address
 
 === Build Phase: 5 jobs ===
 [build:curl-asan-deltabase]    PASS (245.3s)

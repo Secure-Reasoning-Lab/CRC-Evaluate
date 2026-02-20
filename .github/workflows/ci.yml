@@ -53,12 +53,12 @@ jobs:
 
       - name: Validate benchmark formats
         run: |
-          uv run crsbench ci format sanity-mock-c-delta-01 --no-color
-          uv run crsbench ci format sanity-mock-java-delta-01 --no-color
-          # uv run crsbench ci format afc-xz-full-01 --no-color
-          # uv run crsbench ci format atlanta-json-java-full-01 --no-color
-          # uv run crsbench ci format afc-libxml2-full-01 --no-color
-          # uv run crsbench ci format afc-apache-commons-compress-delta-01 --no-color
+          uv run crsbench benchmark ci format sanity-mock-c-delta-01 --no-color
+          uv run crsbench benchmark ci format sanity-mock-java-delta-01 --no-color
+          # uv run crsbench benchmark ci format afc-xz-full-01 --no-color
+          # uv run crsbench benchmark ci format atlanta-json-java-full-01 --no-color
+          # uv run crsbench benchmark ci format afc-libxml2-full-01 --no-color
+          # uv run crsbench benchmark ci format afc-apache-commons-compress-delta-01 --no-color
 
   # Stage 2b: Sanity checks on mock projects (fail-fast)
   sanity-mock:
@@ -94,7 +94,7 @@ jobs:
 
       - name: Run all checks on ${{ matrix.project }}
         run: |
-          uv run crsbench ci all ${{ matrix.benchmark }} \
+          uv run crsbench benchmark ci all ${{ matrix.benchmark }} \
             --force-rebuild \
             --no-color
 
@@ -132,7 +132,7 @@ jobs:
   #
   #     - name: Run all checks on ${{ matrix.project }}
   #       run: |
-  #         uv run crsbench ci all ${{ matrix.benchmark }} \
+  #         uv run crsbench benchmark ci all ${{ matrix.benchmark }} \
   #           --force-rebuild \
   #           --no-color
 

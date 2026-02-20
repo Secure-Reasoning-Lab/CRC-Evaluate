@@ -30,13 +30,13 @@ docker info
 ### Run All Checks on a Single Benchmark
 
 ```bash
-crsbench ci all benchmarks/afc-curl-delta-01
+crsbench benchmark ci all benchmarks/afc-curl-delta-01
 ```
 
 ### Run All Checks on All Benchmarks
 
 ```bash
-crsbench ci all --all
+crsbench benchmark ci all --all
 ```
 
 ## CLI Reference
@@ -44,16 +44,16 @@ crsbench ci all --all
 ### Subcommands
 
 ```bash
-crsbench ci format    # Format validation only (no Docker)
-crsbench ci build     # Build variants only (no verification)
-crsbench ci pov       # Build + POV verification
-crsbench ci patch     # Build + patch verification + unit tests
-crsbench ci coverage  # Build + coverage collection
-crsbench ci rts       # Build + RTS unit test checks
-crsbench ci all       # All of the above (coverage with --inc-coverage)
-crsbench ci parse     # Parse results from a previous run
-crsbench ci retry     # Retry failed benchmarks from a previous run
-crsbench ci storage   # Show storage usage per benchmark (no Docker)
+crsbench benchmark ci format    # Format validation only (no Docker)
+crsbench benchmark ci build     # Build variants only (no verification)
+crsbench benchmark ci pov       # Build + POV verification
+crsbench benchmark ci patch     # Build + patch verification + unit tests
+crsbench benchmark ci coverage  # Build + coverage collection
+crsbench benchmark ci rts       # Build + RTS unit test checks
+crsbench benchmark ci all       # All of the above (coverage with --inc-coverage)
+crsbench benchmark ci parse     # Parse results from a previous run
+crsbench benchmark ci retry     # Retry failed benchmarks from a previous run
+crsbench benchmark ci storage   # Show storage usage per benchmark (no Docker)
 ```
 
 ### Benchmark Selection
@@ -62,20 +62,20 @@ All subcommands (except `parse`) accept:
 
 ```bash
 # Single benchmark (positional)
-crsbench ci all benchmarks/afc-curl-delta-01
+crsbench benchmark ci all benchmarks/afc-curl-delta-01
 
 # Multiple benchmarks (space-separated)
-crsbench ci all -b afc-curl-delta-01 afc-curl-delta-02 afc-tika-delta-01
+crsbench benchmark ci all -b afc-curl-delta-01 afc-curl-delta-02 afc-tika-delta-01
 
 # Filter by glob pattern
-crsbench ci all --filter "afc-curl-*"
-crsbench ci all --filter "atlanta-*"
+crsbench benchmark ci all --filter "afc-curl-*"
+crsbench benchmark ci all --filter "atlanta-*"
 
 # All benchmarks
-crsbench ci all --all
+crsbench benchmark ci all --all
 
 # From a suite file
-crsbench ci all -s smoke-test-bug-finding
+crsbench benchmark ci all -s smoke-test-bug-finding
 ```
 
 ### Common Options
@@ -94,27 +94,27 @@ crsbench ci all -s smoke-test-bug-finding
 
 ## Local Execution
 
-By default, `crsbench ci` runs locally in a single process. Jobs are
+By default, `crsbench benchmark ci` runs locally in a single process. Jobs are
 topologically sorted by dependencies and executed **sequentially**.
 
 ```bash
 # Run all checks on all benchmarks (sequential)
-crsbench ci all --all --output-dir ci-results/
+crsbench benchmark ci all --all --output-dir ci-results/
 
 # Format check only (fast, no Docker)
-crsbench ci format --all
+crsbench benchmark ci format --all
 
 # Build only (no verification)
-crsbench ci build --all
+crsbench benchmark ci build --all
 
 # POV verification only
-crsbench ci pov --filter "afc-curl-*"
+crsbench benchmark ci pov --filter "afc-curl-*"
 
 # Patch + unit tests
-crsbench ci patch --filter "afc-zookeeper-*"
+crsbench benchmark ci patch --filter "afc-zookeeper-*"
 
 # Include coverage (expensive)
-crsbench ci all --all --inc-coverage --output-dir ci-results/
+crsbench benchmark ci all --all --inc-coverage --output-dir ci-results/
 ```
 
 **Note**: In local mode, `--build-workers` and `--verify-workers` are accepted
@@ -124,7 +124,7 @@ parallel execution.
 ### Execution Flow (Local)
 
 ```
-crsbench ci all --all
+crsbench benchmark ci all --all
   |
   |-- Phase 1: Format validation (fast, no Docker)
   |     Runs validate_benchmark() on each benchmark
@@ -144,11 +144,11 @@ For parallel execution across multiple CPU cores or machines, use Redis RQ.
 ### Architecture
 
 ```
-                      +-----------------+
-                      |  crsbench ci    |
-                      |  --distributed  |
-                      |  (submitter)    |
-                      +--------+--------+
+                      +-------------------------+
+                      |  crsbench benchmark ci  |
+                      |  --distributed          |
+                      |  (submitter)            |
+                      +------------+------------+
                                |
                     enqueue jobs to Redis
                                |
@@ -243,14 +243,14 @@ crsbench evaluator --ci --redis-host redis.internal \
 
 ```bash
 # Submit all benchmarks to Redis workers
-crsbench ci all --all --distributed --redis-host localhost \
+crsbench benchmark ci all --all --distributed --redis-host localhost \
   --output-dir ci-results/
 
 # Submit filtered subset
-crsbench ci all --filter "afc-*" --distributed --redis-host redis.internal
+crsbench benchmark ci all --filter "afc-*" --distributed --redis-host redis.internal
 
 # With coverage
-crsbench ci all --all --distributed --redis-host localhost \
+crsbench benchmark ci all --all --distributed --redis-host localhost \
   --inc-coverage --output-dir ci-results/
 ```
 
@@ -266,7 +266,7 @@ The submitter will:
 ### Distributed Execution Flow
 
 ```
-crsbench ci all --all --distributed
+crsbench benchmark ci all --all --distributed
   |
   |-- Phase 1: Format validation (local, fast)
   |
@@ -347,13 +347,13 @@ ci-results/
 ### Parsing Previous Results
 
 ```bash
-crsbench ci parse ci-results/
+crsbench benchmark ci parse ci-results/
 ```
 
 ### Retrying Failed Benchmarks
 
 ```bash
-crsbench ci retry ci-results/ --output-dir ci-results-retry/
+crsbench benchmark ci retry ci-results/ --output-dir ci-results-retry/
 ```
 
 ## Source Mode
@@ -364,12 +364,12 @@ bundled `pkgs/` directory. This is the standard mode for reproducible builds.
 To test with live git clones instead:
 
 ```bash
-crsbench ci all --all --source main_repo
+crsbench benchmark ci all --all --source main_repo
 ```
 
 ## Tips
 
-- Start with `crsbench ci format --all` to catch structural issues fast
+- Start with `crsbench benchmark ci format --all` to catch structural issues fast
 - Use `--filter` to test a subset before running all benchmarks
 - Use `--exit-on-error` for fast feedback during development
 - For full parallel execution, use `--distributed` with Redis workers

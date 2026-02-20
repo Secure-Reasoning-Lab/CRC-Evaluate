@@ -1,9 +1,9 @@
 """Simplified CLI for benchmark CI validation.
 
 Usage:
-    crsbench ci --benchmarks bench1 bench2
-    crsbench ci --all
-    crsbench ci --all --include-coverage
+    crsbench benchmark ci --benchmarks bench1 bench2
+    crsbench benchmark ci --all
+    crsbench benchmark ci --all --include-coverage
 
 This CLI uses BenchmarkValidator which delegates to existing engines:
 - VerificationEngine for POV checks
@@ -105,22 +105,22 @@ def add_ci_subparser(subparsers: argparse._SubParsersAction) -> None:
         epilog="""
 Examples:
   # Validate specific benchmarks
-  crsbench ci --benchmarks sanity-mock-c-delta-01 sanity-mock-c-full-01
+  crsbench benchmark ci --benchmarks sanity-mock-c-delta-01 sanity-mock-c-full-01
 
   # Validate all benchmarks
-  crsbench ci --all
+  crsbench benchmark ci --all
 
   # Filter benchmarks by pattern
-  crsbench ci --all --filter "afc-*"
+  crsbench benchmark ci --all --filter "afc-*"
 
   # Include coverage check (slower)
-  crsbench ci --all --include-coverage
+  crsbench benchmark ci --all --include-coverage
 
   # Export results to JSON
-  crsbench ci --all --output results.json
+  crsbench benchmark ci --all --output results.json
 
   # Parse existing results
-  crsbench ci parse --output-dir ./results --format table
+  crsbench benchmark ci parse --output-dir ./results --format table
         """,
     )
 
@@ -1028,16 +1028,16 @@ def add_ci_parse_subparser(subparsers: argparse._SubParsersAction) -> None:
         epilog="""
 Examples:
   # Display results as table (default)
-  crsbench ci parse --output-dir ./results
+  crsbench benchmark ci parse --output-dir ./results
 
   # Export as JSON
-  crsbench ci parse --output-dir ./results --format json
+  crsbench benchmark ci parse --output-dir ./results --format json
 
   # Export as CSV
-  crsbench ci parse --output-dir ./results --format csv
+  crsbench benchmark ci parse --output-dir ./results --format csv
 
   # Show only failed benchmarks
-  crsbench ci parse --output-dir ./results --failed-only
+  crsbench benchmark ci parse --output-dir ./results --failed-only
         """,
     )
 

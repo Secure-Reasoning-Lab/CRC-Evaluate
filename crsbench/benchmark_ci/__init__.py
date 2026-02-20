@@ -12,8 +12,8 @@ This module provides benchmark validation using Redis-based distributed executio
 Jobs are executed via Redis queues processed by evaluator workers.
 
 CLI:
-    crsbench ci --all
-    crsbench ci --benchmarks bench1 bench2
+    crsbench benchmark ci --all
+    crsbench benchmark ci --benchmarks bench1 bench2
 """
 
 from crsbench.benchmark_ci.checks import (

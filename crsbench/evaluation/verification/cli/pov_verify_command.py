@@ -4,7 +4,7 @@ This module provides the `crsbench verify` CLI command for verifying
 CRS-produced POVs against benchmark variants.
 
 Requires explicit POV input (--pov or --pov-dir). For validating
-benchmark ground-truth POVs, use `crsbench ci pov` instead.
+benchmark ground-truth POVs, use `crsbench benchmark ci pov` instead.
 
 Usage:
     crsbench verify <benchmark_path> --pov-dir ./povs/ [options]

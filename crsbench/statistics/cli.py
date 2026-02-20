@@ -86,9 +86,9 @@ def add_stats_subparser(subparsers: argparse._SubParsersAction) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  crsbench stats --summary-only
-  crsbench stats --output benchmarks.csv
-  crsbench stats --benchmarks atlanta-curl-delta-01 afc-libxml2-delta-01
+  crsbench benchmark stats --summary-only
+  crsbench benchmark stats --output benchmarks.csv
+  crsbench benchmark stats --benchmarks atlanta-curl-delta-01 afc-libxml2-delta-01
         """,
     )
 

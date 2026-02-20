@@ -30,7 +30,7 @@ Builds are cached in `oss-fuzz/build/out/{variant_name}/`. By default, if a cach
 | `crsbench patch-verify` | full | ON | `--force-rebuild` | N/A |
 | `crsbench coverage` | full | ON | `--force-rebuild` | N/A |
 | `crsbench run` | full | ON | `--force-rebuild` | N/A |
-| `crsbench ci *` | full | **OFF** | always | N/A |
+| `crsbench benchmark ci*` | full | **OFF** | always | N/A |
 
 All commands support `--inc-build` to use incremental build mode (falls back to full build on failure).
 
@@ -69,10 +69,10 @@ CI always uses `force_rebuild=True` because it validates that the build process 
 CI defaults to full build (same as standalone). To test inc-build mode, use `--inc-build`. To compare both modes, run CI twice:
 ```bash
 # Test with full build (default)
-crsbench ci all --all --output-dir results-full
+crsbench benchmark ci all --all --output-dir results-full
 
 # Test with inc-build
-crsbench ci all --all --inc-build --output-dir results-inc
+crsbench benchmark ci all --all --inc-build --output-dir results-inc
 
 # Compare results externally
 diff results-inc/summary.json results-full/summary.json

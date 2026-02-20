@@ -1,7 +1,7 @@
 """Distributed CI verify/test job execution.
 
 Provides RQ-compatible functions for executing CI verify and test jobs
-remotely via Redis workers. Used by ``crsbench ci all`` to run verify/test
+remotely via Redis workers. Used by ``crsbench benchmark ci all`` to run verify/test
 jobs on evaluator machines where Docker images exist.
 
 Pattern: Same as build_jobs.py — serialize → enqueue → execute on evaluator → poll.

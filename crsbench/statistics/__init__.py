@@ -29,8 +29,8 @@ Usage:
     print_summary(benchmarks)
 
 CLI Usage:
-    crsbench stats --summary-only
-    crsbench stats --output benchmarks.csv
+    crsbench benchmark stats --summary-only
+    crsbench benchmark stats --output benchmarks.csv
 """
 
 from crsbench.statistics.collector import (

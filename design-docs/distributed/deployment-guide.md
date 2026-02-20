@@ -208,11 +208,11 @@ crsbench evaluator --experiment-config config.yaml \
 
 ## Distributed CI Builds
 
-The `crsbench ci` command supports distributing builds to remote evaluators:
+The `crsbench benchmark ci` command supports distributing builds to remote evaluators:
 
 ```bash
 # On Machine A (with Redis running)
-crsbench ci build --all \
+crsbench benchmark ci build --all \
   --distributed \
   --redis-host localhost
 

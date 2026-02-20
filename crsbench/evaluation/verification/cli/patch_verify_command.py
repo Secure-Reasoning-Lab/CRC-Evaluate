@@ -5,7 +5,7 @@ CRS-generated patches against benchmark POVs.
 
 Requires explicit patch input (--patch or --patch-dir) and POV input
 (--pov or --pov-dir). For validating benchmark ground-truth patches,
-use `crsbench ci patch` instead.
+use `crsbench benchmark ci patch` instead.
 
 Usage:
     crsbench patch-verify <benchmark_path> --patch-dir ./patches --pov-dir ./povs [options]
@@ -66,7 +66,7 @@ def add_patch_verify_subparser(subparsers: argparse._SubParsersAction) -> None:
             "Two modes are supported:\n"
             "  1. Single patch: Verify a single patch file with --patch\n"
             "  2. Directory: Verify all patches in a directory with --patch-dir\n\n"
-            "For validating benchmark ground-truth patches, use 'crsbench ci patch' instead."
+            "For validating benchmark ground-truth patches, use 'crsbench benchmark ci patch' instead."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
