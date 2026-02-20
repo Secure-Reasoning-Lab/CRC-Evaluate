@@ -257,6 +257,18 @@ Examples:
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
+    # --- Ordered by experiment lifecycle ---
+
+    # 'download' subcommand - HuggingFace dataset download
+    from crsbench.dataset.cli import add_dataset_subparser
+
+    add_dataset_subparser(subparsers)
+
+    # 'benchmark' subcommand - benchmark management including migrate, stats, ci
+    from crsbench.benchmark.packaging.cli import add_benchmark_subparser
+
+    add_benchmark_subparser(subparsers)
+
     # 'run' subcommand - experiment execution
     run_parser = subparsers.add_parser(
         "run",
@@ -271,6 +283,16 @@ Examples:
     )
     _add_run_arguments(run_parser)
     run_parser.set_defaults(command="run")
+
+    # 'worker' subcommand - distributed worker
+    from crsbench.distributed.cli.worker_command import add_worker_subparser
+
+    add_worker_subparser(subparsers)
+
+    # 'evaluator' subcommand - distributed POV verification
+    from crsbench.distributed.cli.evaluator_command import add_evaluator_subparser
+
+    add_evaluator_subparser(subparsers)
 
     # 'verify' subcommand - POV verification
     from crsbench.evaluation.verification.cli.pov_verify_command import (
@@ -293,26 +315,6 @@ Examples:
 
     add_coverage_subparser(subparsers)
 
-    # 'worker' subcommand - distributed worker
-    from crsbench.distributed.cli.worker_command import add_worker_subparser
-
-    add_worker_subparser(subparsers)
-
-    # 'evaluator' subcommand - distributed POV verification
-    from crsbench.distributed.cli.evaluator_command import add_evaluator_subparser
-
-    add_evaluator_subparser(subparsers)
-
-    # 'migrate' subcommand - migration and generation tools
-    from crsbench.migration.cli.converter_command import add_migrate_subparser
-
-    add_migrate_subparser(subparsers)
-
-    # 'stats' subcommand - benchmark statistics
-    from crsbench.statistics.cli import add_stats_subparser
-
-    add_stats_subparser(subparsers)
-
     # 'report' subcommand - report generation
     from crsbench.reporting.cli import add_report_subparser
 
@@ -323,25 +325,10 @@ Examples:
 
     add_dashboard_subparser(subparsers)
 
-    # 'ci' subcommand - benchmark CI testing
-    from crsbench.benchmark_ci.cli import add_ci_subparser
-
-    add_ci_subparser(subparsers)
-
-    # 'benchmark' subcommand - benchmark management (bundle, validate, prepare-delta)
-    from crsbench.benchmark.packaging.cli import add_benchmark_subparser
-
-    add_benchmark_subparser(subparsers)
-
     # 're-eval' subcommand - re-run verification on existing trials
     from crsbench.evaluation.reeval.cli import add_reeval_subparser
 
     add_reeval_subparser(subparsers)
-
-    # 'download' subcommand - HuggingFace dataset download
-    from crsbench.dataset.cli import add_dataset_subparser
-
-    add_dataset_subparser(subparsers)
 
     args = parser.parse_args()
 
@@ -2040,18 +2027,6 @@ def main() -> None:
 
         sys.exit(run_evaluator(args))
 
-    if args.command == "migrate":
-        # Handle migrate command (conversion and generation tools)
-        from crsbench.migration.cli.converter_command import run_migrate
-
-        sys.exit(run_migrate(args))
-
-    if args.command == "stats":
-        # Handle stats command
-        from crsbench.statistics.cli import run_stats
-
-        sys.exit(run_stats(args))
-
     if args.command == "report":
         # Handle report command
         from crsbench.reporting.cli import run_report
@@ -2063,11 +2038,6 @@ def main() -> None:
         from crsbench.reporting.cli import run_dashboard
 
         sys.exit(run_dashboard(args))
-
-    if args.command == "ci":
-        from crsbench.benchmark_ci.cli import dispatch_ci
-
-        sys.exit(dispatch_ci(args))
 
     if args.command == "benchmark":
         # Handle benchmark command (bundle, validate, prepare-delta)

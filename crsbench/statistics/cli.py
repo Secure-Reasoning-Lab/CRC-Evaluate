@@ -19,6 +19,61 @@ from crsbench.utils.logger import configure_logger, get_logger
 logger = get_logger(__name__)
 
 
+def register_stats_subcommand(parent_subparsers: argparse._SubParsersAction) -> None:
+    """Register 'stats' as a child subparser of an existing command group.
+
+    Used by `crsbench benchmark stats ...` to nest stats under benchmark.
+
+    Args:
+        parent_subparsers: Subparsers action from the parent command (e.g., benchmark)
+    """
+    parser = parent_subparsers.add_parser(
+        "stats",
+        help="Collect and export benchmark statistics to CSV",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  crsbench benchmark stats --summary-only
+  crsbench benchmark stats --output benchmarks.csv
+  crsbench benchmark stats --benchmarks atlanta-curl-delta-01 afc-libxml2-delta-01
+        """,
+    )
+
+    parser.add_argument(
+        "--benchmarks-dir",
+        type=Path,
+        default=None,
+        help="Path to benchmarks directory (default: auto-detect from project root)",
+    )
+    parser.add_argument(
+        "--benchmarks",
+        type=str,
+        nargs="+",
+        help="Specific benchmark names to process",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        default=Path("benchmark_stats.csv"),
+        help="Output CSV file path (default: benchmark_stats.csv)",
+    )
+    parser.add_argument(
+        "--include-no-vulns",
+        action="store_true",
+        help="Include benchmarks with no vulnerabilities in output",
+    )
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Print summary only, don't export CSV",
+    )
+    parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Enable verbose logging"
+    )
+    parser.set_defaults(func=run_stats)
+
+
 def add_stats_subparser(subparsers: argparse._SubParsersAction) -> None:
     """Add the stats subcommand to argparse.
 

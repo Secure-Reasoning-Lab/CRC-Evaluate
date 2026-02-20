@@ -405,6 +405,21 @@ Examples:
     )
     upload_parser.set_defaults(func=handle_upload)
 
+    # crsbench benchmark migrate (nested subparser group)
+    from crsbench.migration.cli.converter_command import register_migrate_subcommands
+
+    register_migrate_subcommands(benchmark_subparsers)
+
+    # crsbench benchmark stats (leaf subparser)
+    from crsbench.statistics.cli import register_stats_subcommand
+
+    register_stats_subcommand(benchmark_subparsers)
+
+    # crsbench benchmark ci (nested subparser group)
+    from crsbench.benchmark_ci.cli import register_ci_subcommands
+
+    register_ci_subcommands(benchmark_subparsers)
+
     benchmark_parser.set_defaults(command="benchmark", func=handle_benchmark_help)
 
 
