@@ -21,14 +21,14 @@ def check_hf_token() -> tuple[bool, str]:
     Returns:
         (is_valid, message) tuple
     """
-    from huggingface_hub import HfApi
+    from huggingface_hub import HfApi, get_token
 
-    api = HfApi()
-    token = api.token
+    token = get_token()
     if not token:
         return False, ("No HuggingFace token found. Login with: huggingface-cli login")
 
     try:
+        api = HfApi()
         user_info = api.whoami()
         return True, f"Authenticated as: {user_info.get('name', 'unknown')}"
     except Exception as e:
