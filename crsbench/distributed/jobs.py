@@ -1337,6 +1337,22 @@ def evaluate_crs_trial(trial_id: str, trial_data: Dict[str, Any]) -> Dict[str, A
         }
 
 
+def check_benchmarks_available(
+    benchmarks: list[str], config: ExperimentConfig
+) -> list[str]:
+    """Check which benchmarks from config are missing on this machine.
+
+    Returns list of missing benchmark names (empty = all present).
+    """
+    missing = []
+    for name in benchmarks:
+        try:
+            _resolve_benchmark_path(name, config)
+        except FileNotFoundError:
+            missing.append(name)
+    return missing
+
+
 def _resolve_benchmark_path(benchmark: str, config: ExperimentConfig) -> Path:
     """
     Resolve benchmark identifier to filesystem path.
@@ -1395,6 +1411,11 @@ def _resolve_benchmark_path(benchmark: str, config: ExperimentConfig) -> Path:
     if benchmarks_root:
         error_msg += f"  - Config root: {Path(benchmarks_root) / benchmark}\n"
     error_msg += f"  - Default root: {default_benchmarks_root / benchmark}"
+    error_msg += (
+        "\n\nTo download missing benchmarks:\n"
+        f"  crsbench download --dataset crsbench "
+        f"--benchmarks {benchmark} --output-dir {default_benchmarks_root}"
+    )
 
     raise FileNotFoundError(error_msg)
 

@@ -151,6 +151,30 @@ def run_worker(args: argparse.Namespace) -> int:
         if worker_config:
             logger.info("Using worker configuration from experiment config")
 
+    # Preflight: check that benchmarks exist on this machine
+    if config and config.benchmarks:
+        from crsbench.distributed.jobs import check_benchmarks_available
+
+        effective_config = config.model_copy()
+        if config.worker and config.worker.benchmarks_root:
+            effective_config.benchmarks_root = config.worker.benchmarks_root
+
+        benchmark_names = config.get_benchmark_list()
+        missing = check_benchmarks_available(benchmark_names, effective_config)
+        if missing:
+            logger.error(
+                f"Missing {len(missing)} of {len(benchmark_names)} benchmarks "
+                f"at {effective_config.benchmarks_root}:\n"
+                + "\n".join(f"  - {name}" for name in missing)
+            )
+            logger.error(
+                "Download them with:\n"
+                f"  crsbench download --dataset crsbench "
+                f"--benchmarks {' '.join(missing)} "
+                f"--output-dir {effective_config.benchmarks_root}"
+            )
+            return 1
+
     # Resolve settings: CLI > config > defaults
     def resolve(cli_val, config_val, cli_default):
         """Resolve value with priority: CLI > config > default."""

@@ -15,6 +15,34 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def check_hf_token() -> tuple[bool, str]:
+    """Check if HuggingFace token is configured and valid.
+
+    Returns:
+        (is_valid, message) tuple
+    """
+    try:
+        from huggingface_hub import HfApi
+    except ImportError:
+        return False, (
+            "huggingface_hub not installed. "
+            "Install with: uv pip install 'crsbench[dataset]'"
+        )
+
+    api = HfApi()
+    token = api.token
+    if not token:
+        return False, ("No HuggingFace token found. Login with: huggingface-cli login")
+
+    try:
+        user_info = api.whoami()
+        return True, f"Authenticated as: {user_info.get('name', 'unknown')}"
+    except Exception as e:
+        return False, (
+            f"HuggingFace token invalid: {e}. Re-login with: huggingface-cli login"
+        )
+
+
 def _download_huggingface(
     config: DatasetConfig,
     output_dir: Path,

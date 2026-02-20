@@ -1038,6 +1038,14 @@ def handle_upload(args: argparse.Namespace) -> int:
     if hasattr(args, "verbose") and args.verbose:
         configure_logger(level="DEBUG")
 
+    from crsbench.dataset.backends import check_hf_token
+
+    is_valid, message = check_hf_token()
+    if not is_valid:
+        logger.error(message)
+        return 1
+    logger.info(message)
+
     from crsbench.dataset.upload import upload_dataset
 
     try:
