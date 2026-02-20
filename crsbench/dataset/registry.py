@@ -18,8 +18,8 @@ class DatasetConfig:
     location: str
     # Benchmark directory prefixes that belong to this dataset
     prefixes: list[str] = field(default_factory=list)
-    # Optional: HF repo type (only for huggingface backend)
-    repo_type: Optional[str] = None
+    # HF repo type (only for huggingface backend)
+    repo_type: str = "dataset"
     # Optional: directory containing dataset card files (README.md, etc.)
     cards_dir: Optional[str] = None
 

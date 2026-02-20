@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 
 from crsbench.dataset.backends import upload
-from crsbench.dataset.bundle import bundle_all_benchmarks
+from crsbench.dataset.bundle import bundle_benchmark
 from crsbench.dataset.registry import DatasetConfig, get_dataset
 from crsbench.utils.logger import get_logger
 
@@ -57,10 +57,13 @@ def upload_dataset(
     with tempfile.TemporaryDirectory(prefix="crsbench-upload-") as tmpdir:
         staging_dir = Path(tmpdir)
         logger.info(f"Bundling {len(matching)} benchmarks...")
-        count = bundle_all_benchmarks(
-            benchmarks_dir, staging_dir, prefixes=config.prefixes
+        for benchmark_dir in matching:
+            output = staging_dir / benchmark_dir.name
+            archives = bundle_benchmark(benchmark_dir, output)
+            logger.info(f"Bundled {benchmark_dir.name}: {len(archives)} archives")
+        logger.info(
+            f"Bundled {len(matching)} benchmarks, uploading to {config.location}..."
         )
-        logger.info(f"Bundled {count} benchmarks, uploading to {config.location}...")
 
         upload(config, staging_dir)
 
@@ -108,5 +111,5 @@ def _upload_card_files(
             path_or_fileobj=str(f),
             path_in_repo=f.name,
             repo_id=config.location,
-            repo_type=config.repo_type or "dataset",
+            repo_type=config.repo_type,
         )

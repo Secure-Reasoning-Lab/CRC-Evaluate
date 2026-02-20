@@ -48,7 +48,7 @@ def _download_huggingface(
 
     result = snapshot_download(
         repo_id=config.location,
-        repo_type=config.repo_type or "dataset",
+        repo_type=config.repo_type,
         local_dir=str(output_dir),
         allow_patterns=allow_patterns,
     )
@@ -68,7 +68,7 @@ def _upload_huggingface(
     api.upload_large_folder(
         folder_path=str(folder_path),
         repo_id=config.location,
-        repo_type=config.repo_type or "dataset",
+        repo_type=config.repo_type,
         allow_patterns=allow_patterns,
     )
 

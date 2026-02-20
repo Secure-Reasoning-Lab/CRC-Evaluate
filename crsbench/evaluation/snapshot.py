@@ -273,7 +273,7 @@ def extract_snapshot(archive_path: Path, extract_dir: Path) -> bool:
         extract_dir.mkdir(parents=True, exist_ok=True)
 
         with tarfile.open(archive_path, "r:gz") as tar:
-            tar.extractall(path=extract_dir)
+            tar.extractall(path=extract_dir, filter="data")
 
         logger.info(f"Extracted snapshot to {extract_dir}")
         return True
