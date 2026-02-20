@@ -748,9 +748,7 @@ def run_crs_trial(
         if job:
             # Only set runtime fields (static fields already set at enqueue)
             job.meta["started_at"] = start_time
-            job.meta["worker_name"] = os.environ.get(
-                "CRSBENCH_WORKER_DISPLAY_NAME", "unknown"
-            )
+            job.meta["worker_name"] = socket.gethostname()
             job.save_meta()
             logger.debug(f"Updated runtime job metadata for job {job.id}")
     except Exception as e:

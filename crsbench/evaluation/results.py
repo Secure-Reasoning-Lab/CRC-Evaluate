@@ -94,8 +94,15 @@ class EvaluationReport:
 
     @property
     def success(self) -> bool:
-        """Return True if all harness runs were successful."""
-        return all(hr.run_successful for hr in self.harness_results)
+        """Return True if evaluation completed (harness results exist).
+
+        Note: ``HarnessResult.run_successful`` reflects the ``crs-compose run``
+        exit code, which is non-zero when Docker containers exit non-zero
+        (e.g. fuzzer killed by timeout).  This is normal — POVs/patches may
+        still be present.  Therefore ``success`` is based on whether the
+        evaluation produced results, not the raw exit code.
+        """
+        return len(self.harness_results) > 0
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert report to dictionary."""

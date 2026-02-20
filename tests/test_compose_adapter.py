@@ -1051,7 +1051,13 @@ class TestCollectResultsWiring:
 
         adapter.collect_results.assert_called_once_with(trial_dir, "fuzz_target")
 
-    def test_collect_results_not_called_on_failed_run(self, tmp_path: Path) -> None:
+    def test_collect_results_called_even_on_failed_run(self, tmp_path: Path) -> None:
+        """collect_results() is always called regardless of exit code.
+
+        crs-compose run returns non-zero when Docker containers exit non-zero
+        (e.g. fuzzer killed by timeout), but POVs/patches may still exist in
+        SUBMIT_DIR and must be collected.
+        """
         adapter = MagicMock()
         adapter.run.return_value = self._make_failure_result()
 
@@ -1067,7 +1073,7 @@ class TestCollectResultsWiring:
             trial_start_time=0.0,
         )
 
-        adapter.collect_results.assert_not_called()
+        adapter.collect_results.assert_called_once_with(trial_dir, "fuzz_target")
 
     def test_collect_results_failure_does_not_fail_trial(self, tmp_path: Path) -> None:
         adapter = MagicMock()

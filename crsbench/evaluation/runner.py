@@ -498,12 +498,13 @@ class BenchmarkRunner:
             self.on_verification_start()
 
         # POV verification: use manager's final sweep + drain (unified path)
+        # Always verify regardless of run exit code — crs-compose run may
+        # return non-zero (e.g. fuzzer killed by timeout) while POVs exist.
         pov_verification_results: list[VerifResult] = []
         if (
             self._crs_type == "bug-finding"
             and pov_verification_manager
             and harness_result
-            and harness_result.run_successful
             and not skip_verification
             and oss_fuzz_path
         ):
@@ -520,11 +521,11 @@ class BenchmarkRunner:
             )
 
         # Patch verification: run separately (bug-fixing CRS only)
+        # Always verify regardless of run exit code (same rationale as POV).
         patch_verification_results: list[PatchVerificationResult] = []
         if (
             self._crs_type == "bug-fixing"
             and harness_result
-            and harness_result.run_successful
             and not skip_verification
             and oss_fuzz_path
         ):
@@ -647,16 +648,18 @@ class BenchmarkRunner:
             )
 
             # Collect adapter results (copies SUBMIT_DIR artifacts to trial_output_dir/output/)
-            if crs_result.success:
-                try:
-                    collect_meta = self.adapter.collect_results(
-                        trial_output_dir, harness.name
-                    )
-                    self.logger.info(f"Adapter collect_results: {collect_meta}")
-                except Exception as collect_err:
-                    self.logger.warning(
-                        "Failed to collect adapter results: %s", collect_err
-                    )
+            # Always collect regardless of exit code — crs-compose run returns
+            # non-zero when Docker containers exit non-zero (e.g. fuzzer killed
+            # by timeout), but POVs/patches may still be present in SUBMIT_DIR.
+            try:
+                collect_meta = self.adapter.collect_results(
+                    trial_output_dir, harness.name
+                )
+                self.logger.info(f"Adapter collect_results: {collect_meta}")
+            except Exception as collect_err:
+                self.logger.warning(
+                    "Failed to collect adapter results: %s", collect_err
+                )
 
         except Exception as e:
             self.logger.error(f"Failed to evaluate harness '{harness.name}': {str(e)}")
