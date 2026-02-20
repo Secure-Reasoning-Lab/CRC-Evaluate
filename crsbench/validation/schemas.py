@@ -1040,6 +1040,14 @@ class ExperimentConfig(BaseModel):
         default=None,
         description="Destination path for copying results (contains experiment-data/ and report-data/)",
     )
+    pov_dedup_strategy: Literal[
+        "patch-based", "stack-based", "status-based", "none"
+    ] = Field(
+        default="patch-based",
+        description="POV deduplication strategy: 'patch-based' (by CPV match set), "
+        "'stack-based' (by crash signature from sanitizer stack trace), "
+        "'status-based' (one per status type), 'none' (keep all).",
+    )
     seed_corpus_enabled: bool = Field(
         default=False,
         description="Enable seed corpus from previous experiment runs. "

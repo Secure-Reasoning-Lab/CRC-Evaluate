@@ -929,6 +929,7 @@ def run_crs_trial(
             verify_workers=config.verify_workers,
             redis_host=_resolve_redis_host(config),
             experiment_name=config.experiment,
+            pov_dedup_strategy=config.pov_dedup_strategy,
         )
 
         # Resolve benchmark path

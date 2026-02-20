@@ -281,8 +281,16 @@ class POVVerificationManager:
                 status = PovVerificationStatus(result.verdict.status)
                 cpv_matched = result.verdict.cpv_matches
 
+                # Parse crash signature from async verdict crash logs
+                sig_hash = self._extract_crash_sig_from_logs(result.verdict.crash_logs)
+
                 # Add to store directly (no POV path — it was enqueued by content)
-                self.store.add_pov_by_id(result.verdict.pov_id, status, cpv_matched)
+                self.store.add_pov_by_id(
+                    result.verdict.pov_id,
+                    status,
+                    cpv_matched,
+                    crash_signature=sig_hash,
+                )
 
                 # Store crash logs for ALL statuses (not just CPV)
                 pov_hash = self.store._extract_hash(result.verdict.pov_id)
@@ -450,6 +458,77 @@ class POVVerificationManager:
             logger.error(f"POV verification failed for {pov_path}: {e}", exc_info=True)
             return None
 
+    @staticmethod
+    def _extract_crash_sig_from_logs(
+        crash_logs: dict[str, str],
+    ) -> Optional[str]:
+        """Extract crash signature hash from a dict of variant crash logs.
+
+        Used for async verdict processing where crash logs come as a
+        plain dict rather than embedded in a PovVerificationResult.
+
+        Args:
+            crash_logs: Dict mapping variant_name -> crash_log text
+
+        Returns:
+            Crash signature hash (16-char hex) or None if not parseable
+        """
+        if not crash_logs:
+            return None
+
+        from crsbench.evaluation.verification.crash_signature import (
+            parse_crash_signature,
+        )
+
+        for crash_log in crash_logs.values():
+            if crash_log:
+                sig = parse_crash_signature(crash_log)
+                if sig:
+                    return sig.signature_hash
+        return None
+
+    @staticmethod
+    def _extract_crash_signature(
+        result: PovVerificationResult,
+    ) -> Optional[str]:
+        """Extract crash signature hash from a verification result's crash logs.
+
+        Parses the first available crash log from the result's crash_info
+        using the crash_signature module.
+
+        Args:
+            result: Verification result with optional crash_info
+
+        Returns:
+            Crash signature hash (16-char hex) or None if not parseable
+        """
+        if not result.crash_info:
+            return None
+
+        from crsbench.evaluation.verification.crash_signature import (
+            parse_crash_signature,
+        )
+
+        # Try stdout logs (from verify_povs_parallel)
+        stdout_logs = result.crash_info.get("stdout")
+        if stdout_logs and isinstance(stdout_logs, dict):
+            for crash_log in stdout_logs.values():
+                if crash_log:
+                    sig = parse_crash_signature(crash_log)
+                    if sig:
+                        return sig.signature_hash
+
+        # Try logs key (from verify_pov single-POV path)
+        logs = result.crash_info.get("logs")
+        if logs and isinstance(logs, dict):
+            for crash_log in logs.values():
+                if crash_log:
+                    sig = parse_crash_signature(crash_log)
+                    if sig:
+                        return sig.signature_hash
+
+        return None
+
     def _update_state(
         self,
         pov_path: Path,
@@ -480,9 +559,18 @@ class POVVerificationManager:
 
             pov_hash = compute_content_hash(pov_path)
 
+        # Parse crash signature from crash logs
+        sig_hash = self._extract_crash_signature(result)
+        if sig_hash:
+            result.crash_signature = sig_hash
+
         # Add to store with the verification status directly (no mapping needed)
         self.store.add_pov(
-            pov_path, result.status, result.cpv_matched, pov_hash=pov_hash
+            pov_path,
+            result.status,
+            result.cpv_matched,
+            pov_hash=pov_hash,
+            crash_signature=sig_hash,
         )
 
         # Store per-variant crash logs for ALL statuses (not just CPV)
@@ -667,6 +755,10 @@ class POVVerificationManager:
         # Get remaining CPVs
         cpvs_remaining = self._get_remaining_cpvs()
 
+        # Count unique crash sites from store
+        crash_summary = self.store.get_unintended_crash_summary()
+        unique_crash_sites = len(crash_summary)
+
         with self._lock:
             return POVVerificationReport(
                 benchmark_id=self.benchmark_id,
@@ -677,6 +769,7 @@ class POVVerificationManager:
                 total_povs_processed=len(self.store.povs),
                 duplicates_skipped=self._duplicates_count,
                 unintended_crashes=self._unintended_crashes_count,
+                unique_unintended_crash_sites=unique_crash_sites,
                 verification_errors=self._errors_count,
                 verification_timeouts=0,  # Not tracked separately
                 early_stopped=self._early_stop_triggered,
@@ -774,6 +867,7 @@ class POVVerificationManager:
                         benchmark=self.benchmark_id,
                         cpv_matched=list(entry.cpv_matched),
                         pov_id=entry.hash,
+                        crash_signature=entry.crash_signature,
                     )
                 )
         return results

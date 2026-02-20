@@ -137,6 +137,7 @@ class POVStore:
         *,
         timestamp: Optional[float] = None,
         pov_hash: Optional[str] = None,
+        crash_signature: Optional[str] = None,
     ) -> tuple[str, bool]:
         """Add a POV with its verification result.
 
@@ -147,6 +148,7 @@ class POVStore:
             verification_duration: Time taken to verify (seconds)
             timestamp: Optional timestamp for first_seen_ts (defaults to now)
             pov_hash: Optional pre-computed hash (avoids recomputation)
+            crash_signature: Optional crash signature hash from stack trace
 
         Returns:
             Tuple of (hash, is_new) where:
@@ -180,6 +182,7 @@ class POVStore:
                         status=existing.status,
                         cpv_matched=existing.cpv_matched,
                         crash_log_path=existing.crash_log_path,
+                        crash_signature=existing.crash_signature,
                         verification_duration=existing.verification_duration,
                     )
                 return pov_hash, False
@@ -192,6 +195,7 @@ class POVStore:
                 file_size=file_size,
                 status=status,
                 cpv_matched=cpv_matched,
+                crash_signature=crash_signature,
                 verification_duration=verification_duration,
             )
 
@@ -294,6 +298,7 @@ class POVStore:
                         status=entry.status,
                         cpv_matched=entry.cpv_matched,
                         crash_log_path=str(rel_path),
+                        crash_signature=entry.crash_signature,
                         verification_duration=entry.verification_duration,
                     )
 
@@ -416,6 +421,8 @@ class POVStore:
         pov_id: str,
         status: PovVerificationStatus,
         cpv_matched: list[str],
+        *,
+        crash_signature: Optional[str] = None,
     ) -> None:
         """Add a POV result by ID (for async verification results).
 
@@ -435,6 +442,7 @@ class POVStore:
             pov_id: POV identifier (``{filename}:{hash}`` or plain hash)
             status: Verification result status
             cpv_matched: List of CPV identifiers matched
+            crash_signature: Optional crash signature hash from stack trace
         """
         pov_hash = self._extract_hash(pov_id)
 
@@ -455,6 +463,7 @@ class POVStore:
                 file_size=file_size,
                 status=status,
                 cpv_matched=cpv_matched,
+                crash_signature=crash_signature,
             )
 
             # Track CPV discovery
@@ -491,6 +500,50 @@ class POVStore:
                 elif entry.status == PovVerificationStatus.ERROR:
                     stats["errors"] += 1
             return stats
+
+    def get_unique_crash_signatures(
+        self, status: Optional[PovVerificationStatus] = None
+    ) -> dict[str, list[str]]:
+        """Get mapping of crash signature hash to POV hashes.
+
+        Groups POVs by their crash_signature field.
+
+        Args:
+            status: If provided, filter to POVs with this status only
+
+        Returns:
+            Dict mapping signature_hash -> list of pov_hashes
+        """
+        with self._lock:
+            groups: dict[str, list[str]] = {}
+            for pov_hash, entry in self.povs.items():
+                if status is not None and entry.status != status:
+                    continue
+                if entry.crash_signature is None:
+                    continue
+                groups.setdefault(entry.crash_signature, []).append(pov_hash)
+            return groups
+
+    def get_unintended_crash_summary(self) -> dict[str, int]:
+        """Get mapping of crash signature to count for UNINTENDED_CRASH POVs.
+
+        Only includes POVs with UNINTENDED_CRASH status that have a
+        crash_signature set. Useful for reporting unique crash sites.
+
+        Returns:
+            Dict mapping crash_signature -> count of POVs with that signature
+        """
+        with self._lock:
+            summary: dict[str, int] = {}
+            for entry in self.povs.values():
+                if entry.status != PovVerificationStatus.UNINTENDED_CRASH:
+                    continue
+                if entry.crash_signature is None:
+                    continue
+                summary[entry.crash_signature] = (
+                    summary.get(entry.crash_signature, 0) + 1
+                )
+            return summary
 
     def save(self, path: Optional[Path] = None) -> None:
         """Persist store state to JSON file.

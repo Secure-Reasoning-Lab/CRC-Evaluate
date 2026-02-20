@@ -15,8 +15,9 @@ from crsbench.evaluation.results import (
     ResultCollector,
 )
 from crsbench.evaluation.snapshot_manager import SnapshotManager
-from crsbench.evaluation.verification import PatchBasedDedup, VerificationEngine
 from crsbench.evaluation.verification import PovVerificationResult as VerifResult
+from crsbench.evaluation.verification import VerificationEngine
+from crsbench.evaluation.verification.dedup import get_dedup_strategy
 from crsbench.evaluation.verification.models import (
     PatchVerificationOutput,
     PatchVerificationResult,
@@ -107,6 +108,7 @@ class BenchmarkRunner:
         verify_workers: Optional[int] = None,
         redis_host: Optional[str] = None,
         experiment_name: Optional[str] = None,
+        pov_dedup_strategy: str = "patch-based",
     ):
         """Initialize benchmark runner.
 
@@ -130,6 +132,7 @@ class BenchmarkRunner:
             verify_workers: Number of parallel workers for POV/patch verification
             redis_host: Redis server hostname for async POV verification
             experiment_name: Experiment name for async verify queue naming
+            pov_dedup_strategy: POV deduplication strategy name
         """
         self.adapter = adapter
         self.snapshot_period = snapshot_period
@@ -150,6 +153,7 @@ class BenchmarkRunner:
         self.verify_workers = verify_workers
         self.redis_host = redis_host
         self.experiment_name = experiment_name
+        self.pov_dedup_strategy = pov_dedup_strategy
         self.logger = get_logger(__name__)
 
         if coverage_early_stop:
@@ -853,7 +857,7 @@ class BenchmarkRunner:
             engine = VerificationEngine(
                 oss_fuzz_path=self.oss_fuzz_path,
                 timeout=self.per_pov_verify_timeout,
-                dedup_strategy=PatchBasedDedup(),
+                dedup_strategy=get_dedup_strategy(self.pov_dedup_strategy),
                 build_workers=self.build_workers,
                 verify_workers=self.verify_workers,
             )

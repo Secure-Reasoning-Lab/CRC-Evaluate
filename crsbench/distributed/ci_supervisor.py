@@ -202,7 +202,14 @@ def run_ci_supervisor(
                 _sweep_deferred_cgroups(deferred_cgroup_cleanup)
 
             # --- Detect build phase completion ---
-            if not build_phase_complete and not build_active and build_queue.count == 0:
+            # Only relevant when there's a separate verify phase (verify_jobs > 0).
+            # Workers pass verify_jobs=0 and the same queue for both, so skip.
+            if (
+                verify_jobs > 0
+                and not build_phase_complete
+                and not build_active
+                and build_queue.count == 0
+            ):
                 build_phase_complete = True
                 idle_since = time.time()
                 logger.info(
