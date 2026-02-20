@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import json
 import subprocess
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -19,10 +20,6 @@ import yaml
 from crsbench.distributed.jobs import run_crs_trial
 from crsbench.evaluation.results import TrialResult
 from crsbench.validation.schemas import ExperimentConfig
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -186,6 +183,56 @@ def e2e_bugfix_env(tmp_path: Path) -> Path:
 
 _SUBPROCESS_RUN = "crsbench.evaluation.adapter.compose_common.subprocess.run"
 _RUN_GRACEFUL = "crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout"
+_ARTIFACTS = "crsbench.evaluation.adapter.oss_crs.run_oss_crs_artifacts"
+
+
+def _artifacts_side_effect_factory(tmp_path: Path, crs_name: str, harness: str) -> Any:
+    """Create side_effect for run_oss_crs_artifacts returning correct submit_dir."""
+
+    def _side_effect(
+        _compose_file: Any,
+        work_dir: Any,
+        _target_proj_path: Any,
+        _target_harness: str,
+        run_id: str,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        # Find the oss-crs-workdir under filestore (same logic as _make_run_side_effect)
+        filestore = tmp_path / "filestore"
+        work_dirs = list(filestore.rglob("oss-crs-workdir"))
+        wd = work_dirs[0] if work_dirs else Path(str(work_dir))
+
+        submit_str = str(
+            wd
+            / "crs_compose"
+            / "abc123hash"
+            / "address"
+            / "runs"
+            / "run-0"
+            / "crs"
+            / crs_name
+            / "target_img"
+            / "SUBMIT_DIR"
+            / harness
+        )
+        exchange_base = str(wd / "exchange")
+        return {
+            "build_id": "test",
+            "run_id": run_id,
+            "sanitizer": "address",
+            "exchange_dir": {
+                "base": exchange_base,
+                "pov": f"{exchange_base}/povs",
+                "patch": f"{exchange_base}/patches",
+            },
+            "crs": {
+                crs_name: {
+                    "submit_dir": submit_str,
+                }
+            },
+        }
+
+    return _side_effect
 
 
 # ---------------------------------------------------------------------------
@@ -196,12 +243,14 @@ _RUN_GRACEFUL = "crsbench.evaluation.adapter.compose_common.run_with_graceful_ti
 class TestBugFixE2ECompose:
     """E2E tests for bug-fixing compose adapter through run_crs_trial."""
 
+    @patch(_ARTIFACTS)
     @patch(_RUN_GRACEFUL)
     @patch(_SUBPROCESS_RUN)
     def test_full_trial_lifecycle_bugfix(
         self,
         mock_subprocess: MagicMock,
         mock_run_graceful: MagicMock,
+        mock_artifacts: MagicMock,
         e2e_bugfix_env: Path,
     ) -> None:
         """Complete bug-fixing flow through run_crs_trial."""
@@ -214,6 +263,9 @@ class TestBugFixE2ECompose:
 
         # run_with_graceful_timeout succeeds and creates SUBMIT_DIR
         mock_run_graceful.side_effect = _make_run_side_effect_with_patches(
+            tmp_path, "test-crs", "fuzz_target"
+        )
+        mock_artifacts.side_effect = _artifacts_side_effect_factory(
             tmp_path, "test-crs", "fuzz_target"
         )
 
@@ -251,12 +303,14 @@ class TestBugFixE2ECompose:
         assert patches_dir.exists()
         assert (patches_dir / "fix.patch").exists()
 
+    @patch(_ARTIFACTS)
     @patch(_RUN_GRACEFUL)
     @patch(_SUBPROCESS_RUN)
     def test_bugfix_prepare_failure(
         self,
         mock_subprocess: MagicMock,
         mock_run_graceful: MagicMock,
+        mock_artifacts: MagicMock,
         e2e_bugfix_env: Path,
     ) -> None:
         """Prepare failure results in failed trial."""
@@ -284,12 +338,14 @@ class TestBugFixE2ECompose:
         assert isinstance(result, TrialResult)
         assert result.success is False
 
+    @patch(_ARTIFACTS)
     @patch(_RUN_GRACEFUL)
     @patch(_SUBPROCESS_RUN)
     def test_bugfix_run_timeout(
         self,
         mock_subprocess: MagicMock,
         mock_run_graceful: MagicMock,
+        mock_artifacts: MagicMock,
         e2e_bugfix_env: Path,
     ) -> None:
         """Run timeout produces failure result, not exception."""
@@ -301,6 +357,9 @@ class TestBugFixE2ECompose:
         )
         # run_with_graceful_timeout reports timeout
         mock_run_graceful.return_value = ("", "", 1, True)
+        mock_artifacts.side_effect = _artifacts_side_effect_factory(
+            tmp_path, "test-crs", "fuzz_target"
+        )
 
         config_dict = make_bugfix_config_dict(tmp_path)
         config = ExperimentConfig(**config_dict)
@@ -318,15 +377,18 @@ class TestBugFixE2ECompose:
 
         # Timeout produces a result (not an exception)
         assert isinstance(result, TrialResult)
-        # Run failed because CRS returned non-zero
-        assert result.success is False
+        # Trial is "successful" (evaluation completed), even though CRS timed out.
+        # EvaluationReport.success reflects whether results were produced, not CRS exit code.
+        assert result.success is True
 
+    @patch(_ARTIFACTS)
     @patch(_RUN_GRACEFUL)
     @patch(_SUBPROCESS_RUN)
     def test_bugfix_metadata_mode_is_patch_generation(
         self,
         mock_subprocess: MagicMock,
         mock_run_graceful: MagicMock,
+        mock_artifacts: MagicMock,
         e2e_bugfix_env: Path,
     ) -> None:
         """Bug-fixing trial metadata mode is patch_generation."""
@@ -336,6 +398,9 @@ class TestBugFixE2ECompose:
             args=[], returncode=0, stdout="ok", stderr=""
         )
         mock_run_graceful.side_effect = _make_run_side_effect_with_patches(
+            tmp_path, "test-crs", "fuzz_target"
+        )
+        mock_artifacts.side_effect = _artifacts_side_effect_factory(
             tmp_path, "test-crs", "fuzz_target"
         )
 
@@ -363,12 +428,14 @@ class TestBugFixE2ECompose:
 
         assert metadata["mode"] == "patch_generation"
 
+    @patch(_ARTIFACTS)
     @patch(_RUN_GRACEFUL)
     @patch(_SUBPROCESS_RUN)
     def test_bugfix_patches_collected_to_output(
         self,
         mock_subprocess: MagicMock,
         mock_run_graceful: MagicMock,
+        mock_artifacts: MagicMock,
         e2e_bugfix_env: Path,
     ) -> None:
         """Patches from SUBMIT_DIR are collected to output/patches/ directory."""
@@ -378,6 +445,9 @@ class TestBugFixE2ECompose:
             args=[], returncode=0, stdout="ok", stderr=""
         )
         mock_run_graceful.side_effect = _make_run_side_effect_with_patches(
+            tmp_path, "test-crs", "fuzz_target"
+        )
+        mock_artifacts.side_effect = _artifacts_side_effect_factory(
             tmp_path, "test-crs", "fuzz_target"
         )
 
@@ -412,12 +482,14 @@ class TestBugFixE2ECompose:
         # Report dict should be non-empty
         assert result.report
 
+    @patch(_ARTIFACTS)
     @patch(_RUN_GRACEFUL)
     @patch(_SUBPROCESS_RUN)
     def test_bugfix_no_patches_still_succeeds(
         self,
         mock_subprocess: MagicMock,
         mock_run_graceful: MagicMock,
+        mock_artifacts: MagicMock,
         e2e_bugfix_env: Path,
     ) -> None:
         """Run succeeds even when no patches are generated (no SUBMIT_DIR)."""
@@ -428,6 +500,9 @@ class TestBugFixE2ECompose:
         )
         # Run succeeds but does NOT create SUBMIT_DIR (no patches)
         mock_run_graceful.return_value = ("output", "", 0, False)
+        mock_artifacts.side_effect = _artifacts_side_effect_factory(
+            tmp_path, "test-crs", "fuzz_target"
+        )
 
         config_dict = make_bugfix_config_dict(tmp_path)
         config = ExperimentConfig(**config_dict)

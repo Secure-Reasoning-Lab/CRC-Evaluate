@@ -62,7 +62,7 @@ class PatchVerificationManager:
         input_cpvs_total: int,
         *,
         trial_start_time: Optional[float] = None,
-        work_dir: Optional[Path] = None,
+        exchange_patch_dir: Optional[Path] = None,
     ):
         """Initialize patch verification manager.
 
@@ -73,7 +73,7 @@ class PatchVerificationManager:
             benchmark_id: Benchmark identifier
             input_cpvs_total: Number of input CPVs to generate patches for
             trial_start_time: Trial start timestamp (defaults to current time)
-            work_dir: oss-crs working directory for EXCHANGE_DIR scanning
+            exchange_patch_dir: Pre-resolved EXCHANGE_DIR patches path for real-time scanning
 
         Raises:
             ValueError: If trial_dir doesn't exist
@@ -98,8 +98,7 @@ class PatchVerificationManager:
         self._latest_snapshot: Optional[PatchSnapshot] = None
 
         # EXCHANGE_DIR scanning for real-time patch discovery during CRS execution
-        self._work_dir = work_dir
-        self._exchange_patch_dir: Optional[Path] = None  # Lazy-resolved
+        self._exchange_patch_dir = exchange_patch_dir
 
         logger.info(
             f"PatchVerificationManager initialized: trial_dir={trial_dir}, "
@@ -118,33 +117,6 @@ class PatchVerificationManager:
         """Get total number of patches discovered."""
         with self._lock:
             return self._patches_total
-
-    def _resolve_exchange_patch_dir(self) -> Optional[Path]:
-        """Resolve the EXCHANGE_DIR patch/ path (lazy, cached after first success).
-
-        EXCHANGE_DIR may not exist until the exchange sidecar creates it
-        during CRS execution.  Returns None when ``work_dir`` was not provided
-        or the directory has not appeared yet.
-        """
-        if self._exchange_patch_dir is not None:
-            return self._exchange_patch_dir
-
-        if self._work_dir is None:
-            return None
-
-        from crsbench.evaluation.adapter.compose_common import find_exchange_dir
-
-        exchange_dir = find_exchange_dir(self._work_dir, self.harness_name)
-        if exchange_dir is None:
-            return None
-
-        patch_dir = exchange_dir / "patches"
-        if not patch_dir.exists():
-            return None
-
-        self._exchange_patch_dir = patch_dir
-        logger.info(f"Resolved EXCHANGE_DIR patch path: {patch_dir}")
-        return self._exchange_patch_dir
 
     @staticmethod
     def _scan_patch_directory(directory: Path) -> list[tuple[str, Path]]:
@@ -185,9 +157,8 @@ class PatchVerificationManager:
         # Collect patches from both directories
         patch_entries = self._scan_patch_directory(self.patch_output_dir)
 
-        exchange_patch_dir = self._resolve_exchange_patch_dir()
-        if exchange_patch_dir is not None:
-            patch_entries.extend(self._scan_patch_directory(exchange_patch_dir))
+        if self._exchange_patch_dir is not None:
+            patch_entries.extend(self._scan_patch_directory(self._exchange_patch_dir))
 
         new_cpv_ids = []
         new_patches_count = 0

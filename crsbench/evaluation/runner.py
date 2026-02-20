@@ -570,6 +570,12 @@ class BenchmarkRunner:
         harness_result = None
 
         try:
+            # Pre-resolve artifact paths so exchange_dir is available
+            # before verification managers are created.
+            self.adapter.resolve_artifacts(
+                benchmark_path, harness.name, trial_output_dir
+            )
+
             # Start managers
             coverage_manager, coverage_thread, stop_event = (
                 self._start_coverage_manager(
@@ -869,6 +875,9 @@ class BenchmarkRunner:
             # Derive trial_id from output dir name for async result correlation
             trial_id = trial_output_dir.name
 
+            # Use pre-resolved exchange POV path from oss-crs artifacts
+            exchange_pov_dir = self.adapter.exchange_pov_dir
+
             manager = POVVerificationManager(
                 trial_dir=trial_output_dir,
                 pov_output_dir=pov_output_dir,
@@ -882,7 +891,7 @@ class BenchmarkRunner:
                 redis_host=self.redis_host,
                 experiment_name=self.experiment_name,
                 trial_id=trial_id,
-                work_dir=self.adapter.work_dir,
+                exchange_pov_dir=exchange_pov_dir,
             )
 
             self.logger.info(
@@ -932,6 +941,9 @@ class BenchmarkRunner:
             cpvs_dir = trial_output_dir / "crs-input" / "cpvs"
             input_cpvs_total = len(list(cpvs_dir.iterdir())) if cpvs_dir.exists() else 0
 
+            # Use pre-resolved exchange patch path from oss-crs artifacts
+            exchange_patch_dir = self.adapter.exchange_patch_dir
+
             manager = PatchVerificationManager(
                 trial_dir=trial_output_dir,
                 patch_output_dir=patch_output_dir,
@@ -939,7 +951,7 @@ class BenchmarkRunner:
                 benchmark_id=benchmark_id,
                 input_cpvs_total=input_cpvs_total,
                 trial_start_time=trial_start_time,
-                work_dir=self.adapter.work_dir,
+                exchange_patch_dir=exchange_patch_dir,
             )
 
             self.logger.info(

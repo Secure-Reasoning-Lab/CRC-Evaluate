@@ -2,14 +2,18 @@
 
 Provides functions for all three oss-crs lifecycle phases
 (prepare, build-target, run), Docker cleanup, CRS source resolution
-from the registry, and artifact directory discovery.
+from the registry, and artifact path resolution via ``oss-crs artifacts``.
 """
 
 from __future__ import annotations
 
+import json
 import os
+import random
+import string
 import subprocess
-from typing import TYPE_CHECKING, Optional
+import time
+from typing import TYPE_CHECKING, Any, Optional
 
 import yaml
 
@@ -179,6 +183,7 @@ def run_oss_crs_run(
     timeout: int,
     oss_crs_cmd: str = "oss-crs",
     sanitizer: Optional[str] = None,
+    run_id: Optional[str] = None,
     grace_period: int = 60,
     stop_event: Optional[threading.Event] = None,
     pov: Optional[Path] = None,
@@ -202,6 +207,7 @@ def run_oss_crs_run(
         timeout: Maximum time in seconds for the run phase.
         oss_crs_cmd: Path to the oss-crs executable.
         sanitizer: Sanitizer to use (e.g., "address", "undefined").
+        run_id: Unique run identifier for deterministic path resolution.
         grace_period: Seconds to wait after SIGTERM before SIGKILL.
         stop_event: Threading event for early termination.
         pov: Path to a single POV file (bug-fixing).
@@ -234,6 +240,8 @@ def run_oss_crs_run(
 
     if sanitizer is not None:
         cmd.extend(["--sanitizer", sanitizer])
+    if run_id is not None:
+        cmd.extend(["--run-id", run_id])
     if pov is not None:
         cmd.extend(["--pov", str(pov)])
     if pov_dir is not None:
@@ -323,80 +331,85 @@ def docker_compose_down_cleanup(work_dir: Path) -> None:
         logger.warning(f"Failed during Docker cleanup for work_dir {work_dir}")
 
 
-def find_exchange_dir(
+def generate_run_id() -> str:
+    """Generate a unique run identifier for oss-crs.
+
+    Uses timestamp plus a random suffix to avoid collisions when
+    multiple runs start within the same second.
+    """
+    suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
+    return f"run-{int(time.time())}-{suffix}"
+
+
+def run_oss_crs_artifacts(
+    compose_file: Path,
     work_dir: Path,
-    harness_name: str,
-) -> Optional[Path]:
-    """Locate the EXCHANGE_DIR for a harness in the work directory.
+    target_proj_path: Path,
+    target_harness: str,
+    run_id: str,
+    *,
+    oss_crs_cmd: str = "oss-crs",
+    sanitizer: str = "address",
+) -> dict[str, Any]:
+    """Resolve artifact paths via ``oss-crs artifacts``.
 
-    EXCHANGE_DIR is shared across all CRSes (no ``crs_name`` parameter
-    needed).  The exchange sidecar copies from each CRS's SUBMIT_DIR
-    into EXCHANGE_DIR every 2 seconds, deduplicating by filename.
-
-    Matches oss-crs's ``CRS.get_exchange_dir()`` convention::
-
-        <work_dir>/crs_compose/<config_hash>/<sanitizer>/runs/<run_id>/EXCHANGE_DIR/<target_key>/<harness>/
+    Calls the oss-crs artifacts command to pre-resolve SUBMIT_DIR,
+    EXCHANGE_DIR, and other artifact paths for a given run.  This
+    replaces brittle glob-based path discovery.
 
     Args:
-        work_dir: oss-crs working directory.
-        harness_name: Name of the harness.
+        compose_file: Path to the crs-compose.yaml file.
+        work_dir: Working directory for oss-crs.
+        target_proj_path: Path to the benchmark project directory.
+        target_harness: Name of the harness.
+        run_id: Unique run identifier (same as passed to ``oss-crs run``).
+        oss_crs_cmd: Path to the oss-crs executable.
+        sanitizer: Sanitizer name (e.g., "address").
 
     Returns:
-        Path to the EXCHANGE_DIR/<harness> directory, or None if not found.
+        Parsed JSON dict from oss-crs artifacts output.
+
+    Raises:
+        RuntimeError: If the command fails or output cannot be parsed.
     """
-    pattern = f"crs_compose/*/*/runs/*/EXCHANGE_DIR/*/{harness_name}"
-    matches = list(work_dir.glob(pattern))
+    cmd = [
+        oss_crs_cmd,
+        "artifacts",
+        "--compose-file",
+        str(compose_file),
+        "--work-dir",
+        str(work_dir),
+        "--target-proj-path",
+        str(target_proj_path),
+        "--target-harness",
+        target_harness,
+        "--run-id",
+        run_id,
+        "--sanitizer",
+        sanitizer,
+    ]
 
-    if not matches:
-        logger.debug(
-            f"No EXCHANGE_DIR found for harness '{harness_name}' in {work_dir}"
+    logger.debug(f"Running oss-crs artifacts: {' '.join(cmd)}")
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except FileNotFoundError as exc:
+        msg = (
+            f"oss-crs executable not found: '{oss_crs_cmd}'. "
+            "Set oss_crs_cmd in crs_compose config to the full path."
         )
-        return None
+        raise RuntimeError(msg) from exc
+    except subprocess.TimeoutExpired as exc:
+        msg = "oss-crs artifacts timed out after 60s"
+        raise RuntimeError(msg) from exc
 
-    if len(matches) > 1:
-        logger.warning(
-            f"Multiple EXCHANGE_DIRs found for harness '{harness_name}': {matches}. Using first."
-        )
+    if result.returncode != 0:
+        detail = result.stderr or result.stdout
+        msg = f"oss-crs artifacts failed (rc={result.returncode}): {detail}"
+        raise RuntimeError(msg)
 
-    return matches[0]
-
-
-def find_submit_dir(
-    work_dir: Path,
-    crs_name: str,
-    harness_name: str,
-) -> Optional[Path]:
-    """Locate the SUBMIT_DIR for a CRS and harness in the work directory.
-
-    Matches oss-crs's ``CRS.get_submit_dir()`` convention::
-
-        <work_dir>/crs_compose/<config_hash>/<sanitizer>/runs/<run_id>/crs/<crs_name>/<target_key>/SUBMIT_DIR/<harness>/
-
-    Each ``*`` maps to a single unknown segment (hash, sanitizer, run-id,
-    target-key).  This is intentionally explicit rather than ``**`` so that
-    a layout change in oss-crs causes a visible failure instead of silently
-    matching the wrong path.
-
-    Args:
-        work_dir: oss-crs working directory.
-        crs_name: Name of the CRS.
-        harness_name: Name of the harness.
-
-    Returns:
-        Path to the SUBMIT_DIR/<harness> directory, or None if not found.
-    """
-    pattern = f"crs_compose/*/*/runs/*/crs/{crs_name}/*/SUBMIT_DIR/{harness_name}"
-    matches = list(work_dir.glob(pattern))
-
-    if not matches:
-        logger.warning(
-            f"No SUBMIT_DIR found for CRS '{crs_name}', harness '{harness_name}' in {work_dir}"
-        )
-        return None
-
-    if len(matches) > 1:
-        logger.warning(
-            f"Multiple SUBMIT_DIRs found for CRS '{crs_name}', harness '{harness_name}': {matches}. Using first."
-        )
-
-    return matches[0]
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        msg = f"Failed to parse oss-crs artifacts JSON: {exc}"
+        raise RuntimeError(msg) from exc

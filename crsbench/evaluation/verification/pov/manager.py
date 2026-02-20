@@ -81,7 +81,7 @@ class POVVerificationManager:
         redis_host: Optional[str] = None,
         experiment_name: Optional[str] = None,
         trial_id: Optional[str] = None,
-        work_dir: Optional[Path] = None,
+        exchange_pov_dir: Optional[Path] = None,
     ):
         """Initialize POV verification manager.
 
@@ -100,7 +100,7 @@ class POVVerificationManager:
             redis_host: Redis server hostname for async mode (None = inline mode)
             experiment_name: Experiment name for async verify queue naming
             trial_id: Trial identifier for async result correlation
-            work_dir: oss-crs working directory for EXCHANGE_DIR scanning
+            exchange_pov_dir: Pre-resolved EXCHANGE_DIR pov path for real-time scanning
 
         Raises:
             ValueError: If trial_dir doesn't exist
@@ -155,8 +155,7 @@ class POVVerificationManager:
         self._job_to_pov_id: dict[str, str] = {}  # job_id → pov_id for timeout marking
 
         # EXCHANGE_DIR scanning for real-time POV discovery during CRS execution
-        self._work_dir = work_dir
-        self._exchange_pov_dir: Optional[Path] = None  # Lazy-resolved
+        self._exchange_pov_dir = exchange_pov_dir
 
         async_mode = "async (Redis)" if redis_host else "inline"
         logger.info(
@@ -337,33 +336,6 @@ class POVVerificationManager:
                 f"Processed {len(completed)} async verdicts, {len(remaining)} pending"
             )
 
-    def _resolve_exchange_pov_dir(self) -> Optional[Path]:
-        """Resolve the EXCHANGE_DIR pov/ path (lazy, cached after first success).
-
-        EXCHANGE_DIR may not exist until the exchange sidecar creates it
-        during CRS execution.  Returns None when ``work_dir`` was not provided
-        or the directory has not appeared yet.
-        """
-        if self._exchange_pov_dir is not None:
-            return self._exchange_pov_dir
-
-        if self._work_dir is None:
-            return None
-
-        from crsbench.evaluation.adapter.compose_common import find_exchange_dir
-
-        exchange_dir = find_exchange_dir(self._work_dir, self.harness_name)
-        if exchange_dir is None:
-            return None
-
-        pov_dir = exchange_dir / "povs"
-        if not pov_dir.exists():
-            return None
-
-        self._exchange_pov_dir = pov_dir
-        logger.info(f"Resolved EXCHANGE_DIR pov path: {pov_dir}")
-        return self._exchange_pov_dir
-
     @staticmethod
     def _scan_pov_directory(directory: Path) -> list[Path]:
         """Scan a directory for POV files.
@@ -407,9 +379,8 @@ class POVVerificationManager:
         # Collect POV files from both directories
         pov_files = self._scan_pov_directory(self.pov_output_dir)
 
-        exchange_pov_dir = self._resolve_exchange_pov_dir()
-        if exchange_pov_dir is not None:
-            pov_files.extend(self._scan_pov_directory(exchange_pov_dir))
+        if self._exchange_pov_dir is not None:
+            pov_files.extend(self._scan_pov_directory(self._exchange_pov_dir))
 
         # Filter out already tested POVs and return with hashes.
         # Track seen hashes within this call to avoid returning the same

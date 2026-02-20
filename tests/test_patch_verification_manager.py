@@ -31,12 +31,12 @@ class TestPatchVerificationManagerInit:
         assert manager.input_cpvs_total == 3
         assert manager.patches_total == 0
 
-    def test_init_with_work_dir(self, tmp_path: Path) -> None:
-        """Test initialization with work_dir."""
+    def test_init_with_exchange_patch_dir(self, tmp_path: Path) -> None:
+        """Test initialization with exchange_patch_dir."""
         trial_dir = tmp_path / "trial-1"
         trial_dir.mkdir()
-        work_dir = tmp_path / "workdir"
-        work_dir.mkdir()
+        exchange_patch_dir = tmp_path / "exchange" / "patches"
+        exchange_patch_dir.mkdir(parents=True)
 
         manager = PatchVerificationManager(
             trial_dir=trial_dir,
@@ -44,10 +44,10 @@ class TestPatchVerificationManagerInit:
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
             input_cpvs_total=2,
-            work_dir=work_dir,
+            exchange_patch_dir=exchange_patch_dir,
         )
 
-        assert manager._work_dir == work_dir
+        assert manager._exchange_patch_dir == exchange_patch_dir
 
 
 class TestDiscoverNewPatches:
@@ -98,35 +98,16 @@ class TestDiscoverNewPatches:
 
 
 class TestExchangeDirScanning:
-    """Tests for EXCHANGE_DIR patch discovery."""
-
-    @staticmethod
-    def _make_exchange_dir(work_dir: Path, harness_name: str) -> Path:
-        """Create a mock EXCHANGE_DIR structure and return the patches/ path."""
-        exchange = (
-            work_dir
-            / "crs_compose"
-            / "hash1"
-            / "address"
-            / "runs"
-            / "run-0"
-            / "EXCHANGE_DIR"
-            / "target_1"
-            / harness_name
-            / "patches"
-        )
-        exchange.mkdir(parents=True)
-        return exchange
+    """Tests for EXCHANGE_DIR patch discovery via pre-resolved exchange_patch_dir."""
 
     def test_discover_from_exchange_dir(self, tmp_path: Path) -> None:
-        """Patches in EXCHANGE_DIR/patch/ are discovered."""
+        """Patches in exchange_patch_dir are discovered."""
         trial_dir = tmp_path / "trial-1"
         trial_dir.mkdir()
-        work_dir = tmp_path / "workdir"
-        work_dir.mkdir()
-        exchange_patch = self._make_exchange_dir(work_dir, "fuzz_parser")
+        exchange_patch = tmp_path / "exchange" / "patches"
+        exchange_patch.mkdir(parents=True)
 
-        # Write patch to EXCHANGE_DIR only
+        # Write patch to exchange dir only
         (exchange_patch / "cpv_0").mkdir()
         (exchange_patch / "cpv_0" / "patch.diff").write_text("exchange diff")
 
@@ -136,7 +117,7 @@ class TestExchangeDirScanning:
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
             input_cpvs_total=2,
-            work_dir=work_dir,
+            exchange_patch_dir=exchange_patch,
         )
 
         new_cpv_ids, count = manager._discover_new_patches()
@@ -144,19 +125,18 @@ class TestExchangeDirScanning:
         assert new_cpv_ids == ["cpv_0"]
 
     def test_discover_merges_both_dirs(self, tmp_path: Path) -> None:
-        """Patches from both patch_output_dir and EXCHANGE_DIR are merged."""
+        """Patches from both patch_output_dir and exchange_patch_dir are merged."""
         trial_dir = tmp_path / "trial-1"
         trial_dir.mkdir()
-        work_dir = tmp_path / "workdir"
-        work_dir.mkdir()
-        exchange_patch = self._make_exchange_dir(work_dir, "fuzz_parser")
+        exchange_patch = tmp_path / "exchange" / "patches"
+        exchange_patch.mkdir(parents=True)
         patch_output_dir = trial_dir / "output" / "patches"
 
         # Write patch to output dir
         (patch_output_dir / "cpv_0").mkdir(parents=True)
         (patch_output_dir / "cpv_0" / "patch.diff").write_text("output diff")
 
-        # Write different patch to EXCHANGE_DIR
+        # Write different patch to exchange dir
         (exchange_patch / "cpv_1").mkdir()
         (exchange_patch / "cpv_1" / "patch.diff").write_text("exchange diff")
 
@@ -166,7 +146,7 @@ class TestExchangeDirScanning:
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
             input_cpvs_total=2,
-            work_dir=work_dir,
+            exchange_patch_dir=exchange_patch,
         )
 
         new_cpv_ids, count = manager._discover_new_patches()
@@ -177,9 +157,8 @@ class TestExchangeDirScanning:
         """Same cpv_id in both dirs is counted only once."""
         trial_dir = tmp_path / "trial-1"
         trial_dir.mkdir()
-        work_dir = tmp_path / "workdir"
-        work_dir.mkdir()
-        exchange_patch = self._make_exchange_dir(work_dir, "fuzz_parser")
+        exchange_patch = tmp_path / "exchange" / "patches"
+        exchange_patch.mkdir(parents=True)
         patch_output_dir = trial_dir / "output" / "patches"
 
         # Same cpv_id in both directories
@@ -194,7 +173,7 @@ class TestExchangeDirScanning:
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
             input_cpvs_total=2,
-            work_dir=work_dir,
+            exchange_patch_dir=exchange_patch,
         )
 
         new_cpv_ids, count = manager._discover_new_patches()
@@ -202,8 +181,8 @@ class TestExchangeDirScanning:
         assert count == 1
         assert new_cpv_ids == ["cpv_0"]
 
-    def test_no_work_dir_falls_back_gracefully(self, tmp_path: Path) -> None:
-        """Without work_dir, only patch_output_dir is scanned."""
+    def test_no_exchange_dir_falls_back_gracefully(self, tmp_path: Path) -> None:
+        """Without exchange_patch_dir, only patch_output_dir is scanned."""
         trial_dir = tmp_path / "trial-1"
         trial_dir.mkdir()
         patch_output_dir = trial_dir / "output" / "patches"
@@ -216,41 +195,7 @@ class TestExchangeDirScanning:
             harness_name="fuzz_parser",
             benchmark_id="test-benchmark",
             input_cpvs_total=2,
-            work_dir=None,
         )
 
         new_cpv_ids, count = manager._discover_new_patches()
         assert count == 1
-
-    def test_lazy_resolution_exchange_dir_not_yet_created(self, tmp_path: Path) -> None:
-        """Exchange dir not found on first call, found on subsequent call."""
-        trial_dir = tmp_path / "trial-1"
-        trial_dir.mkdir()
-        work_dir = tmp_path / "workdir"
-        work_dir.mkdir()
-
-        manager = PatchVerificationManager(
-            trial_dir=trial_dir,
-            patch_output_dir=trial_dir / "output" / "patches",
-            harness_name="fuzz_parser",
-            benchmark_id="test-benchmark",
-            input_cpvs_total=2,
-            work_dir=work_dir,
-        )
-
-        # First call: EXCHANGE_DIR doesn't exist yet
-        assert manager._resolve_exchange_patch_dir() is None
-
-        # Create EXCHANGE_DIR structure
-        exchange_patch = self._make_exchange_dir(work_dir, "fuzz_parser")
-        (exchange_patch / "cpv_0").mkdir()
-        (exchange_patch / "cpv_0" / "patch.diff").write_text("diff")
-
-        # Second call: now found and cached
-        result = manager._resolve_exchange_patch_dir()
-        assert result is not None
-        assert result == exchange_patch
-
-        # Third call: uses cached value
-        result2 = manager._resolve_exchange_patch_dir()
-        assert result2 == result

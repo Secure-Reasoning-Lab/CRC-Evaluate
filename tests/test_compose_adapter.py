@@ -19,9 +19,9 @@ import yaml
 from crsbench.evaluation.adapter import OssCrsAdapter
 from crsbench.evaluation.adapter.compose_common import (
     docker_compose_down_cleanup,
-    find_exchange_dir,
-    find_submit_dir,
+    generate_run_id,
     read_crs_source_from_registry,
+    run_oss_crs_artifacts,
     run_oss_crs_build_target,
     run_oss_crs_prepare,
     run_oss_crs_run,
@@ -409,108 +409,89 @@ class TestComposeCommon:
         # 2 compose-down calls + 1 docker network prune call
         assert mock_run.call_count == 3
 
-    def test_find_submit_dir_oss_crs_convention(self, tmp_path: Path) -> None:
-        """Verify find_submit_dir matches oss-crs CRS.get_submit_dir() layout.
+    def test_generate_run_id_format(self) -> None:
+        """generate_run_id returns 'run-{ts}-{suffix}' with random suffix."""
+        rid = generate_run_id()
+        assert rid.startswith("run-")
+        parts = rid.split("-", maxsplit=2)
+        assert len(parts) == 3
+        assert parts[1].isdigit()
+        assert len(parts[2]) == 4
 
-        oss-crs creates SUBMIT_DIR at:
-          crs_compose/{config_hash}/{sanitizer}/runs/{run_id}/crs/{crs_name}/{target_key}/SUBMIT_DIR/{harness}/
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_run_oss_crs_artifacts_parses_json(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """run_oss_crs_artifacts calls oss-crs artifacts and parses JSON."""
+        import json
 
-        The glob pattern must explicitly match each level so that a layout
-        change in oss-crs causes a visible failure.
-        """
-        submit = (
-            tmp_path
-            / "crs_compose"
-            / "8d20a8aeb804"  # config_hash
-            / "address"  # sanitizer
-            / "runs"
-            / "17715598561c"  # run_id
-            / "crs"
-            / "my-crs"  # crs_name
-            / "afc-wireshark-full-01_ddaef6f5de3a"  # target_key
-            / "SUBMIT_DIR"
-            / "handler_ber"  # harness
+        artifacts = {
+            "build_id": "abc",
+            "run_id": "run-1",
+            "sanitizer": "address",
+            "exchange_dir": {
+                "base": "/work/EXCHANGE_DIR/h",
+                "pov": "/work/EXCHANGE_DIR/h/povs",
+                "patch": "/work/EXCHANGE_DIR/h/patches",
+            },
+            "crs": {
+                "test-crs": {
+                    "submit_dir": "/work/SUBMIT_DIR/h",
+                }
+            },
+        }
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(artifacts), stderr=""
         )
-        submit.mkdir(parents=True)
-        (submit / "povs").mkdir()
-        (submit / "povs" / "pov_0.bin").write_bytes(b"\x00")
 
-        result = find_submit_dir(tmp_path, "my-crs", "handler_ber")
-        assert result is not None
-        assert result == submit
-
-    def test_find_submit_dir_rejects_wrong_layout(self, tmp_path: Path) -> None:
-        """Ensure the explicit pattern does NOT match arbitrary nesting.
-
-        If someone accidentally puts crs/ at a wrong depth, the pattern
-        should not match — unlike a loose ``**`` glob.
-        """
-        wrong = (
-            tmp_path
-            / "crs_compose"
-            / "abc123"
-            / "crs"  # wrong: crs/ is directly under hash, no sanitizer/runs
-            / "my-crs"
-            / "target_img"
-            / "SUBMIT_DIR"
-            / "harness1"
+        result = run_oss_crs_artifacts(
+            tmp_path / "compose.yaml",
+            tmp_path / "work",
+            tmp_path / "bench",
+            "harness1",
+            "run-1",
         )
-        wrong.mkdir(parents=True)
+        assert result == artifacts
+        cmd = mock_run.call_args[0][0]
+        assert cmd[1] == "artifacts"
+        assert "--run-id" in cmd
+        assert "run-1" in cmd
 
-        result = find_submit_dir(tmp_path, "my-crs", "harness1")
-        assert result is None
-
-    def test_find_submit_dir_returns_none_when_no_match(self, tmp_path: Path) -> None:
-        result = find_submit_dir(tmp_path, "no-crs", "no-harness")
-        assert result is None
-
-    def test_find_exchange_dir_oss_crs_convention(self, tmp_path: Path) -> None:
-        """Verify find_exchange_dir matches oss-crs CRS.get_exchange_dir() layout.
-
-        oss-crs creates EXCHANGE_DIR at:
-          crs_compose/{config_hash}/{sanitizer}/runs/{run_id}/EXCHANGE_DIR/{target_key}/{harness}/
-        """
-        exchange = (
-            tmp_path
-            / "crs_compose"
-            / "abc123"
-            / "address"
-            / "runs"
-            / "run-0"
-            / "EXCHANGE_DIR"
-            / "target_1"
-            / "handler_ber"
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_run_oss_crs_artifacts_raises_on_failure(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="error"
         )
-        exchange.mkdir(parents=True)
-        (exchange / "povs").mkdir()
-        (exchange / "povs" / "pov_0.bin").write_bytes(b"\x00")
 
-        result = find_exchange_dir(tmp_path, "handler_ber")
-        assert result is not None
-        assert result == exchange
+        with pytest.raises(RuntimeError, match="artifacts failed"):
+            run_oss_crs_artifacts(
+                tmp_path / "compose.yaml",
+                tmp_path / "work",
+                tmp_path / "bench",
+                "harness1",
+                "run-1",
+            )
 
-    def test_find_exchange_dir_returns_none_when_no_match(self, tmp_path: Path) -> None:
-        result = find_exchange_dir(tmp_path, "no-harness")
-        assert result is None
+    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
+    def test_run_appends_run_id(self, mock_rwgt: MagicMock, tmp_path: Path) -> None:
+        """run_oss_crs_run appends --run-id when provided."""
+        mock_rwgt.return_value = ("out", "err", 0, False)
+        compose_file = tmp_path / "crs-compose.yaml"
 
-    def test_find_exchange_dir_no_crs_name_needed(self, tmp_path: Path) -> None:
-        """EXCHANGE_DIR is CRS-agnostic; ensure it works without crs_name."""
-        exchange = (
-            tmp_path
-            / "crs_compose"
-            / "hash1"
-            / "address"
-            / "runs"
-            / "run-1"
-            / "EXCHANGE_DIR"
-            / "proj_target"
-            / "fuzz_target"
+        run_oss_crs_run(
+            compose_file,
+            tmp_path / "work",
+            tmp_path / "bench",
+            "harness",
+            timeout=3600,
+            run_id="run-42",
         )
-        exchange.mkdir(parents=True)
 
-        result = find_exchange_dir(tmp_path, "fuzz_target")
-        assert result is not None
-        assert "EXCHANGE_DIR" in str(result)
+        cmd = mock_rwgt.call_args[0][0]
+        assert "--run-id" in cmd
+        assert "run-42" in cmd
 
 
 # ===========================================================================
@@ -800,27 +781,16 @@ class TestOssCrsAdapterBugFindFull:
         adapter = self._make_adapter(tmp_path)
         adapter.configure({"docker_registry": "ghcr.io/t"})
 
-        # Set up work_dir with SUBMIT_DIR matching oss-crs convention
-        work_dir = tmp_path / "work"
-        submit = (
-            work_dir
-            / "crs_compose"
-            / "hash123"  # config_hash
-            / "address"  # sanitizer
-            / "runs"
-            / "run001"  # run_id
-            / "crs"
-            / "test-crs"
-            / "target_img"
-            / "SUBMIT_DIR"
-            / "harness1"
-        )
+        # Set up SUBMIT_DIR on filesystem and point artifacts to it
+        submit = tmp_path / "submit" / "harness1"
         pov_dir = submit / "povs"
         pov_dir.mkdir(parents=True)
         (pov_dir / "crash-001").write_bytes(b"\x00" * 16)
         (pov_dir / "crash-002").write_bytes(b"\xff" * 8)
 
-        adapter._work_dir = work_dir
+        adapter._resolved_artifacts = {
+            "crs": {"test-crs": {"submit_dir": str(submit)}},
+        }
         trial = tmp_path / "trial_out"
 
         metadata = adapter.collect_results(trial, "harness1")
@@ -830,17 +800,21 @@ class TestOssCrsAdapterBugFindFull:
         assert (output_dir / "povs" / "crash-001").exists()
         assert (output_dir / "povs" / "crash-002").exists()
 
-    def test_collect_results_handles_missing_submit_dir(self, tmp_path: Path) -> None:
+    def test_collect_results_handles_missing_crs_in_artifacts(
+        self, tmp_path: Path
+    ) -> None:
         adapter = self._make_adapter(tmp_path)
-        adapter._work_dir = tmp_path / "empty-work"
-        adapter._work_dir.mkdir()
+        # Artifacts exist but don't contain our CRS name
+        adapter._resolved_artifacts = {"crs": {"other-crs": {"submit_dir": "/x"}}}
 
         metadata = adapter.collect_results(tmp_path / "trial", "harness1")
         assert metadata["submit_dir"] is None
 
-    def test_collect_results_handles_none_work_dir(self, tmp_path: Path) -> None:
+    def test_collect_results_handles_none_artifacts(self, tmp_path: Path) -> None:
         adapter = self._make_adapter(tmp_path)
-        # work_dir is None (build never called)
+        # Artifacts never resolved (build never called / artifacts failed)
+        adapter._resolved_artifacts = None
+
         metadata = adapter.collect_results(tmp_path / "trial", "harness1")
         assert metadata["submit_dir"] is None
 
@@ -979,26 +953,15 @@ class TestOssCrsAdapterBugFixFull:
         adapter = self._make_adapter(tmp_path)
         adapter.configure({"docker_registry": "ghcr.io/t"})
 
-        # Set up SUBMIT_DIR matching oss-crs convention
-        work_dir = tmp_path / "work"
-        submit = (
-            work_dir
-            / "crs_compose"
-            / "hash456"  # config_hash
-            / "address"  # sanitizer
-            / "runs"
-            / "run001"  # run_id
-            / "crs"
-            / "test-crs"
-            / "target_img"
-            / "SUBMIT_DIR"
-            / "harness1"
-        )
+        # Set up SUBMIT_DIR on filesystem and point artifacts to it
+        submit = tmp_path / "submit" / "harness1"
         patch_dir = submit / "patches"
         patch_dir.mkdir(parents=True)
         (patch_dir / "fix.patch").write_text("--- a/bug.c\n+++ b/bug.c\n")
 
-        adapter._work_dir = work_dir
+        adapter._resolved_artifacts = {
+            "crs": {"test-crs": {"submit_dir": str(submit)}},
+        }
         trial = tmp_path / "trial_out"
 
         metadata = adapter.collect_results(trial, "harness1")
@@ -1011,26 +974,15 @@ class TestOssCrsAdapterBugFixFull:
         adapter = self._make_adapter(tmp_path)
         adapter.configure({"docker_registry": "ghcr.io/t"})
 
-        work_dir = tmp_path / "work"
-        submit = (
-            work_dir
-            / "crs_compose"
-            / "hash789"  # config_hash
-            / "address"  # sanitizer
-            / "runs"
-            / "run001"  # run_id
-            / "crs"
-            / "test-crs"
-            / "target_img"
-            / "SUBMIT_DIR"
-            / "harness1"
-        )
+        submit = tmp_path / "submit" / "harness1"
         patch_dir = submit / "patches"
         patch_dir.mkdir(parents=True)
         (patch_dir / "fix1.patch").write_text("patch1")
         (patch_dir / "fix2.patch").write_text("patch2")
 
-        adapter._work_dir = work_dir
+        adapter._resolved_artifacts = {
+            "crs": {"test-crs": {"submit_dir": str(submit)}},
+        }
         trial = tmp_path / "trial_out"
 
         metadata = adapter.collect_results(trial, "harness1")

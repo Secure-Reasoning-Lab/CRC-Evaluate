@@ -240,15 +240,66 @@ def _setup_noop_resource_ctx(mock_resource_ctx: MagicMock) -> None:
 _PATCH_SUBPROCESS = "crsbench.evaluation.adapter.compose_common.subprocess.run"
 _PATCH_RWGT = "crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout"
 _PATCH_RESOURCE_CTX = "crsbench.evaluation.resource_context.ResourceContext"
+_PATCH_ARTIFACTS = "crsbench.evaluation.adapter.oss_crs.run_oss_crs_artifacts"
 
 _SUBPROCESS_OK = subprocess.CompletedProcess(
     args=[], returncode=0, stdout="ok", stderr=""
 )
 
 
+def _artifacts_side_effect_factory(crs_name: str, harness_name: str) -> Any:
+    """Create a side_effect for run_oss_crs_artifacts that returns correct submit_dir.
+
+    The submit_dir is created by _run_side_effect_factory during the run phase,
+    so artifacts just needs to point to that same path.
+    """
+
+    def _side_effect(
+        _compose_file: Any,
+        work_dir: Any,
+        _target_proj_path: Any,
+        _target_harness: str,
+        run_id: str,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        # Build the submit_dir path matching _create_submit_dir() layout
+        submit_str = str(
+            Path(str(work_dir))
+            / "crs_compose"
+            / "abc123hash"
+            / "address"
+            / "runs"
+            / "run-0"
+            / "crs"
+            / crs_name
+            / "target_img"
+            / "SUBMIT_DIR"
+            / harness_name
+        )
+        exchange_base = str(Path(str(work_dir)) / "exchange")
+        return {
+            "build_id": "test",
+            "run_id": run_id,
+            "sanitizer": "address",
+            "exchange_dir": {
+                "base": exchange_base,
+                "pov": f"{exchange_base}/povs",
+                "patch": f"{exchange_base}/patches",
+            },
+            "crs": {
+                crs_name: {
+                    "submit_dir": submit_str,
+                }
+            },
+        }
+
+    return _side_effect
+
+
 class TestBugFindE2ECompose:
     """E2E tests exercising run_crs_trial -> OssCrsAdapter (bug-finding) -> TrialResult."""
 
+    @patch(_PATCH_ARTIFACTS)
     @patch(_PATCH_RESOURCE_CTX)
     @patch(_PATCH_RWGT)
     @patch(_PATCH_SUBPROCESS)
@@ -257,6 +308,7 @@ class TestBugFindE2ECompose:
         mock_subprocess_run: MagicMock,
         mock_rwgt: MagicMock,
         mock_resource_ctx: MagicMock,
+        mock_artifacts: MagicMock,
         e2e_bugfind_env: Path,
     ) -> None:
         """Complete happy path: prepare/build-target/run -> TrialResult + POVs."""
@@ -266,6 +318,9 @@ class TestBugFindE2ECompose:
         mock_subprocess_run.return_value = _SUBPROCESS_OK
         _setup_noop_resource_ctx(mock_resource_ctx)
         mock_rwgt.side_effect = _run_side_effect_factory("test-crs", "fuzz_target")
+        mock_artifacts.side_effect = _artifacts_side_effect_factory(
+            "test-crs", "fuzz_target"
+        )
 
         result = _run_trial(config_dict)
 
@@ -301,6 +356,7 @@ class TestBugFindE2ECompose:
         pov_names = sorted(f.name for f in pov_files)
         assert pov_names == ["crash-001", "crash-002"]
 
+    @patch(_PATCH_ARTIFACTS)
     @patch(_PATCH_RESOURCE_CTX)
     @patch(_PATCH_RWGT)
     @patch(_PATCH_SUBPROCESS)
@@ -309,6 +365,7 @@ class TestBugFindE2ECompose:
         mock_subprocess_run: MagicMock,
         mock_rwgt: MagicMock,
         mock_resource_ctx: MagicMock,
+        mock_artifacts: MagicMock,
         e2e_bugfind_env: Path,
     ) -> None:
         """prepare rc=1 -> TrialResult with success=False."""
@@ -330,6 +387,7 @@ class TestBugFindE2ECompose:
         # run_with_graceful_timeout should NOT have been called (build failed first)
         mock_rwgt.assert_not_called()
 
+    @patch(_PATCH_ARTIFACTS)
     @patch(_PATCH_RESOURCE_CTX)
     @patch(_PATCH_RWGT)
     @patch(_PATCH_SUBPROCESS)
@@ -338,6 +396,7 @@ class TestBugFindE2ECompose:
         mock_subprocess_run: MagicMock,
         mock_rwgt: MagicMock,
         mock_resource_ctx: MagicMock,
+        mock_artifacts: MagicMock,
         e2e_bugfind_env: Path,
     ) -> None:
         """prepare succeeds, build-target fails -> TrialResult with success=False."""
@@ -360,6 +419,7 @@ class TestBugFindE2ECompose:
         # run_with_graceful_timeout should NOT have been called
         mock_rwgt.assert_not_called()
 
+    @patch(_PATCH_ARTIFACTS)
     @patch(_PATCH_RESOURCE_CTX)
     @patch(_PATCH_RWGT)
     @patch(_PATCH_SUBPROCESS)
@@ -368,6 +428,7 @@ class TestBugFindE2ECompose:
         mock_subprocess_run: MagicMock,
         mock_rwgt: MagicMock,
         mock_resource_ctx: MagicMock,
+        mock_artifacts: MagicMock,
         e2e_bugfind_env: Path,
     ) -> None:
         """Run phase times out -> TrialResult returned (not an exception)."""
@@ -376,6 +437,9 @@ class TestBugFindE2ECompose:
 
         mock_subprocess_run.return_value = _SUBPROCESS_OK
         _setup_noop_resource_ctx(mock_resource_ctx)
+        mock_artifacts.side_effect = _artifacts_side_effect_factory(
+            "test-crs", "fuzz_target"
+        )
 
         # run phase times out (rc=1, timed_out=True)
         mock_rwgt.return_value = ("", "", 1, True)
@@ -386,6 +450,7 @@ class TestBugFindE2ECompose:
         assert isinstance(result, TrialResult)
         assert result is not None
 
+    @patch(_PATCH_ARTIFACTS)
     @patch(_PATCH_RESOURCE_CTX)
     @patch(_PATCH_RWGT)
     @patch(_PATCH_SUBPROCESS)
@@ -394,6 +459,7 @@ class TestBugFindE2ECompose:
         mock_subprocess_run: MagicMock,
         mock_rwgt: MagicMock,
         mock_resource_ctx: MagicMock,
+        mock_artifacts: MagicMock,
         e2e_bugfind_env: Path,
     ) -> None:
         """After a successful trial, verify trial_output_dir structure."""
@@ -403,6 +469,9 @@ class TestBugFindE2ECompose:
         mock_subprocess_run.return_value = _SUBPROCESS_OK
         _setup_noop_resource_ctx(mock_resource_ctx)
         mock_rwgt.side_effect = _run_side_effect_factory("test-crs", "fuzz_target")
+        mock_artifacts.side_effect = _artifacts_side_effect_factory(
+            "test-crs", "fuzz_target"
+        )
 
         _run_trial(config_dict)
 
@@ -435,6 +504,7 @@ class TestBugFindE2ECompose:
 class TestResultFormatInterchangeability:
     """Verify compose adapter results match expected evaluation format."""
 
+    @patch(_PATCH_ARTIFACTS)
     @patch(_PATCH_RESOURCE_CTX)
     @patch(_PATCH_RWGT)
     @patch(_PATCH_SUBPROCESS)
@@ -443,6 +513,7 @@ class TestResultFormatInterchangeability:
         mock_subprocess_run: MagicMock,
         mock_rwgt: MagicMock,
         mock_resource_ctx: MagicMock,
+        mock_artifacts: MagicMock,
         e2e_bugfind_env: Path,
     ) -> None:
         """TrialResult from compose adapter has all required fields."""
@@ -452,6 +523,9 @@ class TestResultFormatInterchangeability:
         mock_subprocess_run.return_value = _SUBPROCESS_OK
         _setup_noop_resource_ctx(mock_resource_ctx)
         mock_rwgt.side_effect = _run_side_effect_factory("test-crs", "fuzz_target")
+        mock_artifacts.side_effect = _artifacts_side_effect_factory(
+            "test-crs", "fuzz_target"
+        )
 
         result = _run_trial(config_dict)
 
@@ -472,6 +546,7 @@ class TestResultFormatInterchangeability:
         assert result.metadata.timestamp_start > 0
         assert result.metadata.timestamp_end >= result.metadata.timestamp_start
 
+    @patch(_PATCH_ARTIFACTS)
     @patch(_PATCH_RESOURCE_CTX)
     @patch(_PATCH_RWGT)
     @patch(_PATCH_SUBPROCESS)
@@ -480,6 +555,7 @@ class TestResultFormatInterchangeability:
         mock_subprocess_run: MagicMock,
         mock_rwgt: MagicMock,
         mock_resource_ctx: MagicMock,
+        mock_artifacts: MagicMock,
         e2e_bugfind_env: Path,
     ) -> None:
         """metadata.json in trial_output_dir has all legacy-required fields."""
@@ -489,6 +565,9 @@ class TestResultFormatInterchangeability:
         mock_subprocess_run.return_value = _SUBPROCESS_OK
         _setup_noop_resource_ctx(mock_resource_ctx)
         mock_rwgt.side_effect = _run_side_effect_factory("test-crs", "fuzz_target")
+        mock_artifacts.side_effect = _artifacts_side_effect_factory(
+            "test-crs", "fuzz_target"
+        )
 
         _run_trial(config_dict)
 

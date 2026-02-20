@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import shutil
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from crsbench.evaluation.adapter.compose_common import (
     docker_compose_down_cleanup,
-    find_submit_dir,
+    generate_run_id,
     read_crs_source_from_registry,
+    run_oss_crs_artifacts,
     run_oss_crs_build_target,
     run_oss_crs_prepare,
     run_oss_crs_run,
@@ -30,7 +32,6 @@ from crsbench.utils.logger import get_logger
 if TYPE_CHECKING:
     import threading
     from collections.abc import Callable
-    from pathlib import Path
 
     from crsbench.validation.schemas import ExperimentConfig, HarnessFile
 
@@ -78,6 +79,10 @@ class OssCrsAdapter:
         self._litellm_url: str = ""
         self._litellm_api_key: str = ""
 
+        # Artifacts resolved via `oss-crs artifacts`
+        self._resolved_artifacts: Optional[dict[str, Any]] = None
+        self._run_id: Optional[str] = None
+
     @property
     def mode(self) -> str:
         """Return the adapter mode (bug-finding or bug-fixing)."""
@@ -92,6 +97,64 @@ class OssCrsAdapter:
     def built_projects(self) -> set[str]:
         """Track which projects have been built (stateful)."""
         return self._built_projects
+
+    def _get_crs_artifact_path(self, key: str) -> Optional[Path]:
+        """Look up a single path from resolved artifacts for the current CRS.
+
+        Returns ``None`` when artifacts haven't been resolved or the key is
+        absent in the CRS entry.
+        """
+        if self._resolved_artifacts is None:
+            return None
+        crs_arts = self._resolved_artifacts.get("crs", {}).get(
+            self._crs_config_name, {}
+        )
+        value = crs_arts.get(key)
+        return Path(value) if value else None
+
+    def _get_exchange_path(self, key: str) -> Optional[Path]:
+        """Look up a path from the top-level ``exchange_dir`` in artifacts.
+
+        Returns ``None`` when artifacts haven't been resolved or the key is
+        absent in the ``exchange_dir`` entry.
+        """
+        if self._resolved_artifacts is None:
+            return None
+        exchange = self._resolved_artifacts.get("exchange_dir")
+        if exchange is None:
+            return None
+        value = exchange.get(key)
+        return Path(value) if value else None
+
+    @property
+    def exchange_base_dir(self) -> Optional[Path]:
+        """Return pre-resolved EXCHANGE_DIR base path, or None."""
+        return self._get_exchange_path("base")
+
+    @property
+    def exchange_pov_dir(self) -> Optional[Path]:
+        """Return pre-resolved EXCHANGE_DIR POV path, or None."""
+        return self._get_exchange_path("pov")
+
+    @property
+    def exchange_seed_dir(self) -> Optional[Path]:
+        """Return pre-resolved EXCHANGE_DIR seed path, or None."""
+        return self._get_exchange_path("seed")
+
+    @property
+    def exchange_bug_candidate_dir(self) -> Optional[Path]:
+        """Return pre-resolved EXCHANGE_DIR bug-candidate path, or None."""
+        return self._get_exchange_path("bug_candidate")
+
+    @property
+    def exchange_patch_dir(self) -> Optional[Path]:
+        """Return pre-resolved EXCHANGE_DIR patch path, or None."""
+        return self._get_exchange_path("patch")
+
+    @property
+    def exchange_diff_dir(self) -> Optional[Path]:
+        """Return pre-resolved EXCHANGE_DIR diff path, or None."""
+        return self._get_exchange_path("diff")
 
     def configure(self, config: dict[str, Any]) -> None:
         """Configure the adapter with experiment parameters.
@@ -113,9 +176,7 @@ class OssCrsAdapter:
         if "oss_crs_infra_memory" in config:
             self._oss_crs_infra_memory = str(config["oss_crs_infra_memory"])
         if "work_dir" in config and config["work_dir"] is not None:
-            from pathlib import Path as _Path
-
-            self._work_dir = _Path(config["work_dir"])
+            self._work_dir = Path(config["work_dir"])
         if "sanitizer" in config:
             self._sanitizer = str(config["sanitizer"])
         if "external_litellm" in config:
@@ -247,6 +308,45 @@ class OssCrsAdapter:
             return candidate
         return None
 
+    def resolve_artifacts(
+        self,
+        benchmark_path: Path,
+        harness_name: str,
+        trial_output_dir: Path,
+    ) -> None:
+        """Pre-resolve artifact paths via ``oss-crs artifacts``.
+
+        Must be called after ``build()`` and before ``run()``.  Generates a
+        ``run_id`` and queries ``oss-crs artifacts`` for deterministic
+        SUBMIT_DIR / EXCHANGE_DIR paths.  The same ``run_id`` is later
+        forwarded to ``oss-crs run`` so on-disk paths match.
+
+        Call this before creating verification managers so that
+        ``exchange_dir`` returns a real path instead of ``None``.
+        """
+        compose_file, work_dir = self._ensure_compose_state()
+        # Reuse staged path created by build() — same deterministic location
+        staged_path = trial_output_dir / "staged" / benchmark_path.name
+
+        self._run_id = generate_run_id()
+        try:
+            self._resolved_artifacts = run_oss_crs_artifacts(
+                compose_file,
+                work_dir,
+                staged_path,
+                harness_name,
+                self._run_id,
+                oss_crs_cmd=self._oss_crs_cmd,
+                sanitizer=self._sanitizer,
+            )
+            logger.info(f"Resolved artifacts for run_id={self._run_id}")
+        except RuntimeError:
+            logger.warning(
+                "oss-crs artifacts failed, falling back to None paths",
+                exc_info=True,
+            )
+            self._resolved_artifacts = None
+
     def run(
         self,
         benchmark_path: Path,
@@ -300,6 +400,7 @@ class OssCrsAdapter:
                 timeout=self._run_timeout,
                 oss_crs_cmd=self._oss_crs_cmd,
                 sanitizer=self._sanitizer,
+                run_id=self._run_id,
                 stop_event=stop_event,
                 pov_dir=pov_dir,
                 diff=diff,
@@ -335,18 +436,15 @@ class OssCrsAdapter:
         output_dir = trial_output_dir / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        if self._work_dir is None:
-            logger.warning("work_dir not set, cannot collect results")
-            return {
-                "type": self._mode,
-                "output_dir": str(output_dir),
-                "harness": harness_name,
-                "submit_dir": None,
-            }
-
-        submit_dir = find_submit_dir(
-            self._work_dir, self._crs_config_name, harness_name
-        )
+        # Resolve SUBMIT_DIR from pre-resolved artifacts
+        submit_dir = self._get_crs_artifact_path("submit_dir")
+        if submit_dir is None:
+            if self._resolved_artifacts is None:
+                logger.warning("No resolved artifacts, cannot locate SUBMIT_DIR")
+            else:
+                logger.warning(
+                    f"CRS '{self._crs_config_name}' not found in artifacts output"
+                )
 
         if self._mode == "bug-finding":
             return self._collect_bugfind_results(submit_dir, output_dir, harness_name)
