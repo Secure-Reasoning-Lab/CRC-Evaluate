@@ -200,6 +200,7 @@ def main(
             use_cgroups=use_cpuset,
             cores=cores,
             skip_cpus=skip_cpus,
+            continuous=False,
         )
 
     # Standard parallel workers
