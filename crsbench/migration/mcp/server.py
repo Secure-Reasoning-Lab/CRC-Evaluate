@@ -197,9 +197,7 @@ async def check_replay_build_sh(benchmark_name: str) -> str:
             )
             log_stdout.write("\n\nreplay-build.sh execution succeeded.\n")
         except subprocess.CalledProcessError as e:
-            logger.info(
-                f"replay-build.sh failed for benchmark '{benchmark_name}': {e}"
-            )
+            logger.info(f"replay-build.sh failed for benchmark '{benchmark_name}': {e}")
             log_stdout.write(
                 f"\n\nreplay-build.sh failed with exit code {e.returncode}\n"
             )

@@ -81,6 +81,7 @@ def run_ci_supervisor(
     minimum_disk_size: str = "10GB",
     disk_check_interval: int = 60,
     continuous: bool = True,
+    idle_timeout: int = 0,
 ) -> int:
     """Dual-queue supervisor for evaluator CI mode.
 
@@ -104,6 +105,8 @@ def run_ci_supervisor(
         skip_cpus: CPUs to exclude (cpuset format).
         minimum_disk_size: Minimum free disk space before pausing.
         disk_check_interval: Seconds between disk space checks.
+        idle_timeout: Seconds to wait idle after build phase completes
+            before exiting. 0 means disabled (wait forever).
 
     Returns:
         Exit code (0 for success).
@@ -155,6 +158,7 @@ def run_ci_supervisor(
     used_worker_nums: set[int] = set()
     max_total = build_jobs + verify_jobs
     build_phase_complete = False
+    idle_since: float = 0.0
 
     # Disk space state
     minimum_disk_bytes = parse_size_to_bytes(minimum_disk_size)
@@ -200,6 +204,7 @@ def run_ci_supervisor(
             # --- Detect build phase completion ---
             if not build_phase_complete and not build_active and build_queue.count == 0:
                 build_phase_complete = True
+                idle_since = time.time()
                 logger.info(
                     "=" * 60
                     + "\n  BUILD PHASE COMPLETE — all build jobs finished"
@@ -208,6 +213,20 @@ def run_ci_supervisor(
                     + "\n"
                     + "=" * 60
                 )
+
+            # --- Idle timeout check (continuous mode only) ---
+            if continuous and build_phase_complete and idle_timeout > 0:
+                if not verify_active and verify_queue.count == 0:
+                    elapsed = time.time() - idle_since
+                    if elapsed >= idle_timeout:
+                        logger.info(
+                            f"Idle timeout reached ({idle_timeout}s) — "
+                            "no verify jobs after build phase. Exiting."
+                        )
+                        break
+                else:
+                    # Reset idle timer when there's work
+                    idle_since = time.time()
 
             # --- Disk space check ---
             current_time = time.time()

@@ -407,7 +407,8 @@ class TestComposeCommon:
 
         docker_compose_down_cleanup(tmp_path)
 
-        assert mock_run.call_count == 2
+        # 2 compose-down calls + 1 docker network prune call
+        assert mock_run.call_count == 3
 
     def test_find_submit_dir_returns_path(self, tmp_path: Path) -> None:
         submit = (
@@ -646,10 +647,12 @@ class TestOssCrsAdapterBugFindFull:
             adapter.run(bench, harness, trial)
 
         # subprocess.run should have been called for docker compose down
-        # (the last call after the build calls)
-        last_call_args = mock_subprocess.call_args_list[-1][0][0]
-        assert "docker" in last_call_args
-        assert "down" in last_call_args
+        # and docker network prune (the last two calls after the build calls)
+        all_calls = [c[0][0] for c in mock_subprocess.call_args_list]
+        down_calls = [c for c in all_calls if "down" in c]
+        assert len(down_calls) >= 1
+        prune_calls = [c for c in all_calls if "prune" in c]
+        assert len(prune_calls) >= 1
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")

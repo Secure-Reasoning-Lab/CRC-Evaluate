@@ -300,6 +300,17 @@ def docker_compose_down_cleanup(work_dir: Path) -> None:
                 OSError,
             ):
                 logger.warning(f"Failed to run docker compose down for {compose_file}")
+
+        # Prune dangling Docker networks left by killed crs-compose processes
+        try:
+            subprocess.run(
+                ["docker", "network", "prune", "-f"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+            logger.debug("Failed to prune Docker networks")
     except Exception:
         logger.warning(f"Failed during Docker cleanup for work_dir {work_dir}")
 
