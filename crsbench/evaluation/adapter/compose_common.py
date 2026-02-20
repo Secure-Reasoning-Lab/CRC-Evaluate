@@ -322,12 +322,15 @@ def find_submit_dir(
 ) -> Optional[Path]:
     """Locate the SUBMIT_DIR for a CRS and harness in the work directory.
 
-    The workdir structure is::
+    The workdir structure varies by crs-compose version::
 
+        # Older layout (single hash level):
         <work_dir>/crs_compose/<hash>/crs/<crs_name>/<target_image>/SUBMIT_DIR/<harness>/
 
-    Since we don't know the hash or target_image, this function scans
-    for matching directories using glob.
+        # Newer layout (sanitizer + run levels):
+        <work_dir>/crs_compose/<hash>/<sanitizer>/runs/<run_hash>/crs/<crs_name>/<target_image>/SUBMIT_DIR/<harness>/
+
+    Uses ``**`` glob to match any number of intermediate directories.
 
     Args:
         work_dir: crs-compose working directory.
@@ -337,7 +340,7 @@ def find_submit_dir(
     Returns:
         Path to the SUBMIT_DIR/<harness> directory, or None if not found.
     """
-    pattern = f"crs_compose/*/crs/{crs_name}/*/SUBMIT_DIR/{harness_name}"
+    pattern = f"crs_compose/**/crs/{crs_name}/*/SUBMIT_DIR/{harness_name}"
     matches = list(work_dir.glob(pattern))
 
     if not matches:
