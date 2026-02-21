@@ -45,3 +45,7 @@ pov_early_stop: true
 
 # LiteLLM mode (null = no LLM needed for given_fuzzer)
 litellm_mode: null
+
+resources:
+  cores_per_trial: 2
+  memory_per_trial: "8G"

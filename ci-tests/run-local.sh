@@ -41,6 +41,24 @@ fail() {
     exit 1
 }
 
+cleanup_path() {
+    local path="$1"
+    [ -z "$path" ] && return 0
+    [ ! -e "$path" ] && return 0
+
+    # Best-effort local cleanup first.
+    rm -rf "$path" 2>/dev/null && return 0
+
+    # Fallback for root-owned artifacts created by Docker during trials.
+    if command -v docker >/dev/null 2>&1; then
+        docker run --rm -v "$path:/cleanup-path" ubuntu:24.04 \
+            bash -lc 'rm -rf /cleanup-path/* /cleanup-path/.[!.]* /cleanup-path/..?*' \
+            >/dev/null 2>&1 || true
+    fi
+
+    rm -rf "$path" 2>/dev/null || true
+}
+
 # Stage 1: Basic checks
 run_checks() {
     run_stage "Stage 1: Basic Checks"
@@ -181,8 +199,10 @@ if '$expected_cpv' not in cpvs:
         fi
     done
 
-    # Cleanup
-    rm -rf "$EXPERIMENT_DIR" "$REPORT_DIR" /tmp/pov-e2e-config.yaml
+    # Cleanup (best-effort; oss-crs may create root-owned files)
+    cleanup_path "$EXPERIMENT_DIR"
+    cleanup_path "$REPORT_DIR"
+    rm -f /tmp/pov-e2e-config.yaml || true
 
     if [ "$FAILED" -ne 0 ]; then
         fail "E2E FAILED: Not all answer POVs were found"

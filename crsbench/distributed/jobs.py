@@ -837,26 +837,26 @@ def run_crs_trial(
         )
 
         # Configure adapter
-        adapter.configure(
-            {
-                "build_timeout": config.build_timeout,
-                "run_timeout": config.run_timeout,
-                "hints_enabled": config.hints_enabled,
-                "hint_sarif_level": config.hint_sarif_level,
-                "hint_corpus_level": config.hint_corpus_level,
-                "project_image_prefix": config.project_image_prefix,
-                "mode": mode,
-                "sanitizer": sanitizer,
-                "allocated_cpus": allocated_cpus,
-                "allocated_memory": allocated_memory,
-                "oss_crs_infra_cpuset": allocated_cpus,
-                "run_id": trial_id,
-                "source_mode": config.source_mode,
-                "skip_litellm": config.skip_litellm,
-                # Spread crs_compose config fields when present
-                **(config.crs_compose.model_dump() if config.crs_compose else {}),
-            }
-        )
+        adapter_config = {
+            "build_timeout": config.build_timeout,
+            "run_timeout": config.run_timeout,
+            "hints_enabled": config.hints_enabled,
+            "hint_sarif_level": config.hint_sarif_level,
+            "hint_corpus_level": config.hint_corpus_level,
+            "project_image_prefix": config.project_image_prefix,
+            "mode": mode,
+            "sanitizer": sanitizer,
+            "allocated_cpus": allocated_cpus,
+            "allocated_memory": allocated_memory,
+            "run_id": trial_id,
+            "source_mode": config.source_mode,
+            "skip_litellm": config.skip_litellm,
+            # Spread crs_compose config fields when present
+            **(config.crs_compose.model_dump() if config.crs_compose else {}),
+        }
+        if allocated_cpus:
+            adapter_config["oss_crs_infra_cpuset"] = allocated_cpus
+        adapter.configure(adapter_config)
 
         # Initialize benchmark runner with adapter and snapshot configuration
         coverage_enabled = config.coverage_enabled

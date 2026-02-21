@@ -38,6 +38,20 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def _normalize_optional_text(value: Any) -> Optional[str]:
+    """Normalize optional config values.
+
+    Returns None for unset/sentinel values ("none", "null", empty),
+    otherwise returns stripped string.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text == "" or text.lower() in {"none", "null"}:
+        return None
+    return text
+
+
 class OssCrsAdapter:
     """Adapter for oss-crs interface supporting both bug-finding and bug-fixing.
 
@@ -168,13 +182,31 @@ class OssCrsAdapter:
         if "run_timeout" in config:
             self._run_timeout = int(config["run_timeout"])
         if "oss_crs_cmd" in config:
-            self._oss_crs_cmd = str(config["oss_crs_cmd"])
+            normalized = _normalize_optional_text(config["oss_crs_cmd"])
+            if normalized is not None:
+                self._oss_crs_cmd = normalized
         if "docker_registry" in config:
-            self._docker_registry = str(config["docker_registry"])
+            normalized = _normalize_optional_text(config["docker_registry"])
+            if normalized is not None:
+                self._docker_registry = normalized
         if "oss_crs_infra_cpuset" in config:
-            self._oss_crs_infra_cpuset = str(config["oss_crs_infra_cpuset"])
+            normalized = _normalize_optional_text(config["oss_crs_infra_cpuset"])
+            if normalized is not None:
+                self._oss_crs_infra_cpuset = normalized
+            else:
+                logger.debug(
+                    "Ignoring empty oss_crs_infra_cpuset; keeping existing value "
+                    f"'{self._oss_crs_infra_cpuset}'"
+                )
         if "oss_crs_infra_memory" in config:
-            self._oss_crs_infra_memory = str(config["oss_crs_infra_memory"])
+            normalized = _normalize_optional_text(config["oss_crs_infra_memory"])
+            if normalized is not None:
+                self._oss_crs_infra_memory = normalized
+            else:
+                logger.debug(
+                    "Ignoring empty oss_crs_infra_memory; keeping existing value "
+                    f"'{self._oss_crs_infra_memory}'"
+                )
         if "work_dir" in config and config["work_dir"] is not None:
             self._work_dir = Path(config["work_dir"])
         if "sanitizer" in config:
