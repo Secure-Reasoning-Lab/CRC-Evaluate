@@ -809,7 +809,7 @@ def validate(data: dict) -> ValidationResult:
 
 ## References
 
-- [RFC Specification](../../benchmark-spec.md): Full benchmark format specification
+- [RFC Specification](../../RFC.md): Full benchmark format specification
 - [Module Documentation](../../modules/validation.md): User-facing documentation
 - [Architecture](../architecture.md): Overall CRSBench architecture
 - [Pydantic Documentation](https://docs.pydantic.dev/): Pydantic v2 docs

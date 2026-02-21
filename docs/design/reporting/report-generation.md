@@ -1688,4 +1688,4 @@ class InsightGenerator:
 - [Snapshot Implementation](../evaluation/snapshots.md): Snapshot design and structure
 - [Architecture](../architecture.md): Overall CRSBench architecture
 - [Evaluation Module](../evaluation/evaluation.md): Evaluation and result collection
-- [Benchmark Specification](../../benchmark-spec.md): Benchmark format
+- [Benchmark Specification](../../RFC.md): Benchmark format

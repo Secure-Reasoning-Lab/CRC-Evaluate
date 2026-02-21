@@ -566,7 +566,7 @@ if validation.metadata["has_delta_mode"]:
 
 ## References
 
-- [RFC Specification](../../benchmark-spec.md): Benchmark format specification
+- [RFC Specification](../../RFC.md): Benchmark format specification
 - [Architecture](../architecture.md): Overall CRSBench architecture
 - [OSS-Fuzz Interface](../../ossfuzz-crs-interface.md): CRS interface specification
 - [Validation Module](../validation/validation.md): Validation module design

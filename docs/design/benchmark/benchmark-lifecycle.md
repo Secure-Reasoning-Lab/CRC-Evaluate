@@ -384,6 +384,6 @@ Planned adapters for:
 
 ## Related Documentation
 
-- [docs/benchmark-spec.md](../../benchmark-spec.md) - RFC for benchmark format
+- [docs/RFC.md](../../RFC.md) - RFC for benchmark format
 - [docs/ossfuzz-crs-interface.md](../../ossfuzz-crs-interface.md) - CRS interface specification
 - [docs/modules/benchmark/generation.md](../../modules/benchmark/generation.md) - Planned generation architecture
