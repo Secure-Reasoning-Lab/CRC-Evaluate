@@ -999,6 +999,13 @@ class ExperimentConfig(BaseModel):
         description="Timeout in seconds for each single POV verification (default: 180 = 3 minutes). "
         "This is the time allowed to run the harness binary with a POV input to check if it crashes.",
     )
+    max_pov_variants_per_cpv: Optional[int] = Field(
+        default=1,
+        ge=1,
+        description="For bug-fixing CRS input staging, maximum POV variants per CPV to provide via --pov-dir. "
+        "Set to 1 for a single POV per CPV (default), N for multiple variants per CPV, "
+        "or null to include all available variants.",
+    )
     build_workers: Optional[int] = Field(
         default=None,
         ge=1,

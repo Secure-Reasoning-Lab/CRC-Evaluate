@@ -2,6 +2,7 @@
 
 import threading
 import time
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -106,6 +107,7 @@ class BenchmarkRunner:
         llm_trial_id: Optional[str] = None,
         build_workers: Optional[int] = None,
         verify_workers: Optional[int] = None,
+        max_pov_variants_per_cpv: Optional[int] = 1,
         redis_host: Optional[str] = None,
         experiment_name: Optional[str] = None,
         pov_dedup_strategy: str = "patch-based",
@@ -130,6 +132,9 @@ class BenchmarkRunner:
             llm_trial_id: Optional trial identifier for LLM usage files
             build_workers: Number of parallel workers for building variants
             verify_workers: Number of parallel workers for POV/patch verification
+            max_pov_variants_per_cpv: Max POV variants per CPV for bug-fixing input
+                staging.
+                1 = single POV per CPV (default), N = multiple, None = all.
             redis_host: Redis server hostname for async POV verification
             experiment_name: Experiment name for async verify queue naming
             pov_dedup_strategy: POV deduplication strategy name
@@ -151,6 +156,7 @@ class BenchmarkRunner:
         self.llm_trial_id = llm_trial_id
         self.build_workers = build_workers
         self.verify_workers = verify_workers
+        self.max_pov_variants_per_cpv = max_pov_variants_per_cpv
         self.redis_host = redis_host
         self.experiment_name = experiment_name
         self.pov_dedup_strategy = pov_dedup_strategy
@@ -327,18 +333,16 @@ class BenchmarkRunner:
                 collector.set_pov_stats(pov_verification_results)
 
         elif self._crs_type == "bug-fixing" and trial_output_dir:
+            # Always set input POV count even when no patch results were produced.
+            # This keeps reporting accurate for "0 patches from N input POVs".
+            povs_dir = trial_output_dir / "crs-input" / "povs"
+            total_input_povs = len(list(povs_dir.iterdir())) if povs_dir.exists() else 0
+            collector.set_patch_stats(total_input_povs, patch_verification_results)
+            self.logger.info(
+                f"Patch verification: {len(patch_verification_results)} patches "
+                f"from {total_input_povs} input POVs"
+            )
             if patch_verification_results:
-                # Get total_input_povs from input directory
-                povs_dir = trial_output_dir / "crs-input" / "povs"
-                total_input_povs = (
-                    len(list(povs_dir.iterdir())) if povs_dir.exists() else 0
-                )
-                # Set all patch stats from verification results (like POV)
-                collector.set_patch_stats(total_input_povs, patch_verification_results)
-                self.logger.info(
-                    f"Patch verification: {len(patch_verification_results)} patches "
-                    f"from {total_input_povs} input POVs"
-                )
                 self._save_patch_verification_results(
                     trial_output_dir, patch_verification_results, total_input_povs
                 )
@@ -576,6 +580,15 @@ class BenchmarkRunner:
                 benchmark_path, harness.name, trial_output_dir
             )
 
+            # For bug-fixing CRS, stage CPV/POV inputs from benchmark .aixcc
+            # into the trial directory before managers are initialized.
+            if self._crs_type == "bug-fixing":
+                self._prepare_bugfix_inputs(
+                    benchmark_path=benchmark_path,
+                    harness_name=harness.name,
+                    trial_output_dir=trial_output_dir,
+                )
+
             # Start managers
             coverage_manager, coverage_thread, stop_event = (
                 self._start_coverage_manager(
@@ -695,6 +708,90 @@ class BenchmarkRunner:
             coverage_manager,
             pov_verification_manager,
             patch_verification_manager,
+        )
+
+    def _prepare_bugfix_inputs(
+        self,
+        benchmark_path: Path,
+        harness_name: str,
+        trial_output_dir: Path,
+    ) -> None:
+        """Prepare bug-fixing input CPVs/POVs in trial-local directories.
+
+        Expected benchmark layout:
+        ``<benchmark>/.aixcc/<harness>/cpv_*/blobs/*.blob``
+
+        Created trial layout:
+        - ``trial/crs-input/cpvs/<cpv_id>/`` (marker dirs for CPV count/tracking)
+        - ``trial/crs-input/povs/<name>`` (input POV blobs)
+        - ``trial/povs/<name>`` (adapter input path for oss-crs run)
+          where ``name`` is ``<cpv_id>`` for first variant and
+          ``<cpv_id>__<pov_id>`` for additional variants.
+        """
+        from crsbench.validation.meta_adapter import MetaYamlAdapter
+
+        adapter = MetaYamlAdapter.from_benchmark_path(benchmark_path)
+        if adapter is None:
+            self.logger.warning(
+                f"Failed to load MetaYamlAdapter for bug-fixing input prep: {benchmark_path}"
+            )
+            return
+
+        harness = adapter.get_harness(harness_name)
+        if harness is None or not harness.vulns:
+            self.logger.warning(
+                f"No vulnerabilities found for harness during bug-fixing input prep: {harness_name}"
+            )
+            return
+
+        cpvs_dir = trial_output_dir / "crs-input" / "cpvs"
+        input_povs_dir = trial_output_dir / "crs-input" / "povs"
+        adapter_povs_dir = trial_output_dir / "povs"
+        cpvs_dir.mkdir(parents=True, exist_ok=True)
+        input_povs_dir.mkdir(parents=True, exist_ok=True)
+        adapter_povs_dir.mkdir(parents=True, exist_ok=True)
+
+        staged_cpvs = 0
+        staged_povs = 0
+        for vuln in harness.vulns:
+            cpv_id = vuln.vuln_keyword
+            if not vuln.povs:
+                continue
+
+            available: list[tuple[str, Path]] = []
+            for pov in vuln.povs:
+                src_blob = adapter.get_pov_path(harness_name, cpv_id, pov.id)
+                if src_blob is None or not src_blob.exists():
+                    self.logger.warning(
+                        f"Missing POV blob for bug-fixing input prep: "
+                        f"harness={harness_name}, cpv={cpv_id}, pov={pov.id}"
+                    )
+                    continue
+                available.append((pov.id, src_blob))
+
+            if not available:
+                continue
+
+            # Track CPV identity for manager counts.
+            (cpvs_dir / cpv_id).mkdir(parents=True, exist_ok=True)
+            staged_cpvs += 1
+
+            selected = (
+                available
+                if self.max_pov_variants_per_cpv is None
+                else available[: self.max_pov_variants_per_cpv]
+            )
+            for i, (pov_id, src_blob) in enumerate(selected):
+                name = cpv_id if i == 0 else f"{cpv_id}__{pov_id}"
+                shutil.copy2(src_blob, input_povs_dir / name)
+                shutil.copy2(src_blob, adapter_povs_dir / name)
+                staged_povs += 1
+
+        self.logger.info(
+            "Prepared bug-fixing trial inputs: "
+            f"harness={harness_name}, cpvs={staged_cpvs}, pov_files={staged_povs}, "
+            "max_pov_variants_per_cpv="
+            f"{self.max_pov_variants_per_cpv if self.max_pov_variants_per_cpv is not None else 'all'}"
         )
 
     def _start_coverage_manager(

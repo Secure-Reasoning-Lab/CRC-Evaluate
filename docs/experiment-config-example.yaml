@@ -39,6 +39,10 @@ run_timeout: 7200
 # Default: 7200 (2 hours)
 verify_timeout: 7200
 
+# For bug-fixing CRS input staging: max POV variants per CPV passed via --pov-dir.
+# 1 = single POV per CPV (default), N = multiple variants per CPV, null = all variants.
+# max_pov_variants_per_cpv: 1
+
 # ===== CRS and Benchmark Selection =====
 
 # List of CRS (Cyber Reasoning Systems) to evaluate.

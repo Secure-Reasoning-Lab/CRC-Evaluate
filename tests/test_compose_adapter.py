@@ -1137,6 +1137,152 @@ class TestCollectResultsWiring:
 
 
 # ===========================================================================
+# Bug-fixing Input Staging (POV variant selection)
+# ===========================================================================
+
+
+class TestBugFixInputStaging:
+    """Tests for BenchmarkRunner._prepare_bugfix_inputs variant selection."""
+
+    @staticmethod
+    def _make_benchmark_with_variants(tmp_path: Path) -> Path:
+        benchmark = tmp_path / "benchmarks" / "test-project"
+        aixcc = benchmark / ".aixcc"
+        harness_dir = aixcc / "fuzz_target"
+        (harness_dir / "cpv_0" / "blobs").mkdir(parents=True)
+        (harness_dir / "cpv_1" / "blobs").mkdir(parents=True)
+
+        # CPV 0 has three POV variants.
+        (harness_dir / "cpv_0" / "blobs" / "pov_0.blob").write_bytes(b"a")
+        (harness_dir / "cpv_0" / "blobs" / "pov_1.blob").write_bytes(b"b")
+        (harness_dir / "cpv_0" / "blobs" / "pov_2.blob").write_bytes(b"c")
+        # CPV 1 has one POV variant.
+        (harness_dir / "cpv_1" / "blobs" / "pov_0.blob").write_bytes(b"d")
+
+        (benchmark / "project.yaml").write_text(
+            yaml.dump(
+                {
+                    "main_repo": "https://github.com/test/project.git",
+                    "repo_name": "project",
+                    "language": "c",
+                }
+            )
+        )
+        (aixcc / "meta.yaml").write_text(
+            yaml.dump(
+                {
+                    "harness_files": [
+                        {
+                            "name": "fuzz_target",
+                            "path": "/src/project/fuzz_target.c",
+                            "vulns": [
+                                {
+                                    "vuln_keyword": "cpv_0",
+                                    "povs": [
+                                        {"id": "pov_0", "sanitizer": "address"},
+                                        {"id": "pov_1", "sanitizer": "address"},
+                                        {"id": "pov_2", "sanitizer": "address"},
+                                    ],
+                                },
+                                {
+                                    "vuln_keyword": "cpv_1",
+                                    "povs": [
+                                        {"id": "pov_0", "sanitizer": "address"},
+                                    ],
+                                },
+                            ],
+                        }
+                    ],
+                    "full_mode": {
+                        "base_commit": "abc123def456789012345678901234567890abcd",
+                    },
+                }
+            )
+        )
+        return benchmark
+
+    @staticmethod
+    def _make_runner(max_variants: int | None) -> BenchmarkRunner:
+        adapter = MagicMock()
+        adapter.mode = "bug-fixing"
+        return BenchmarkRunner(
+            adapter=adapter,
+            snapshot_period=0,
+            max_pov_variants_per_cpv=max_variants,
+        )
+
+    def test_prepare_bugfix_inputs_single_variant_per_cpv(
+        self, tmp_path: Path
+    ) -> None:
+        benchmark = self._make_benchmark_with_variants(tmp_path)
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+        runner = self._make_runner(1)
+
+        runner._prepare_bugfix_inputs(benchmark, "fuzz_target", trial_dir)
+
+        staged = {p.name for p in (trial_dir / "povs").iterdir()}
+        assert staged == {"cpv_0", "cpv_1"}
+        assert (trial_dir / "crs-input" / "cpvs" / "cpv_0").exists()
+        assert (trial_dir / "crs-input" / "cpvs" / "cpv_1").exists()
+
+    def test_prepare_bugfix_inputs_multiple_variants_per_cpv(
+        self, tmp_path: Path
+    ) -> None:
+        benchmark = self._make_benchmark_with_variants(tmp_path)
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+        runner = self._make_runner(2)
+
+        runner._prepare_bugfix_inputs(benchmark, "fuzz_target", trial_dir)
+
+        staged = {p.name for p in (trial_dir / "povs").iterdir()}
+        # cpv_0 has 2 staged variants, cpv_1 has only 1 available.
+        assert staged == {"cpv_0", "cpv_0__pov_1", "cpv_1"}
+        assert "cpv_0__pov_2" not in staged
+
+    def test_prepare_bugfix_inputs_all_variants_when_unbounded(
+        self, tmp_path: Path
+    ) -> None:
+        benchmark = self._make_benchmark_with_variants(tmp_path)
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+        runner = self._make_runner(None)
+
+        runner._prepare_bugfix_inputs(benchmark, "fuzz_target", trial_dir)
+
+        staged = {p.name for p in (trial_dir / "povs").iterdir()}
+        assert staged == {"cpv_0", "cpv_0__pov_1", "cpv_0__pov_2", "cpv_1"}
+
+
+class TestBugFixPatchStatsCollection:
+    """Tests for bug-fixing patch stats collection/reporting."""
+
+    def test_sets_total_input_povs_even_when_no_patch_results(
+        self, tmp_path: Path
+    ) -> None:
+        adapter = MagicMock()
+        adapter.mode = "bug-fixing"
+        runner = BenchmarkRunner(adapter=adapter, snapshot_period=0)
+        collector = MagicMock()
+
+        trial_dir = tmp_path / "trial"
+        povs_dir = trial_dir / "crs-input" / "povs"
+        povs_dir.mkdir(parents=True)
+        (povs_dir / "cpv_0").write_bytes(b"a")
+        (povs_dir / "cpv_1").write_bytes(b"b")
+
+        runner._collect_crs_results(
+            collector=collector,
+            trial_output_dir=trial_dir,
+            pov_verification_results=[],
+            patch_verification_results=[],
+        )
+
+        collector.set_patch_stats.assert_called_once_with(2, [])
+
+
+# ===========================================================================
 # Benchmark Staging (Ground Truth Leakage Prevention)
 # ===========================================================================
 

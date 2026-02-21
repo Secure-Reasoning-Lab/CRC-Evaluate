@@ -942,6 +942,7 @@ def run_crs_trial(
             llm_trial_id=trial_id,
             build_workers=config.build_workers,
             verify_workers=config.verify_workers,
+            max_pov_variants_per_cpv=config.max_pov_variants_per_cpv,
             redis_host=_resolve_redis_host(config),
             experiment_name=config.experiment,
             pov_dedup_strategy=config.pov_dedup_strategy,
