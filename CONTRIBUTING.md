@@ -66,6 +66,9 @@ For commit messages, use Conventional Commits where possible:
 - Design/implementation docs: `docs/design/`
 - Module docs: `docs/modules/`
 - Keep docs updated in the same PR when behavior changes.
+- Use canonical ownership and placement rules in `docs/documentation-taxonomy.md`.
+- For substantial doc changes, request review across multiple lanes (onboarding,
+  runtime/ops, architecture, and module maintenance at minimum).
 
 ## Repository Scope
 

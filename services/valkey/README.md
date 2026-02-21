@@ -151,7 +151,7 @@ python -m crsbench.distributed.worker
 
 ## Management
 
-### Using Helper Script (Recommended)
+### Management via Helper Script (Recommended)
 
 ```bash
 # Clean specific experiment

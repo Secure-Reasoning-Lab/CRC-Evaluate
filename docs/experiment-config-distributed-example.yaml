@@ -173,7 +173,7 @@ worker:
   # oss_fuzz_path: /opt/oss-fuzz
 
   # Override CRS registry directory.
-  # registry_dir: /opt/crses/registry
+  # registry_dir: /opt/oss-crs/registry
 
   # Override CRS configs directory.
   # crs_configs_dir: /opt/crses/configs
@@ -215,7 +215,7 @@ worker:
 oss_fuzz_path: ./oss-fuzz  # default: ./oss-fuzz
 
 # Path to CRS registry directory.
-# registry_dir: ./crses/registry  # default: ./crses/registry
+# registry_dir: ./oss-crs/registry  # default: ./oss-crs/registry
 
 # Path to CRS configs directory.
 # crs_configs_dir: ./crses/configs  # default: ./crses/configs

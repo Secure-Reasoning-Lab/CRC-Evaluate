@@ -28,7 +28,7 @@ A distributed CRSBench deployment consists of three process types sharing a sing
 
 All machines need:
 
-- CRSBench installed (`uv pip install -e .`)
+- CRSBench dependencies installed (`uv sync`)
 - Docker running
 - OSS-Fuzz repository cloned (same path or use `--oss-fuzz-path` override)
 - Benchmarks available (same path or use `--benchmarks-root` override)

@@ -395,7 +395,7 @@ SnapshotManager (creates snapshots every N seconds)
 
 ## Threading Model
 
-### Overview
+### Threading Pattern
 
 Adopt FuzzBench's simple and reliable threading pattern:
 
@@ -1291,53 +1291,6 @@ pytest tests/test_snapshot_manager.py -k integration -v
 - OS scheduling delays
 - I/O wait time
 - Disk speed (especially for large logs)
-
-## Comparison with FuzzBench
-
-### What We Adopt
-
-✅ **Threading model:**
-- Main thread + worker thread pattern
-- Daemon thread for background work
-- Simple and reliable
-
-✅ **Timing mechanism:**
-- Sleep-based polling
-- Fixed interval snapshots
-- Predictable behavior
-
-✅ **Incremental capture:**
-- Only capture new data since last snapshot
-- Track what has been captured
-- Reduces overhead
-
-### What We Adapt
-
-🔄 **Storage:**
-- FuzzBench: Google Cloud Storage (GCS)
-- CRSBench: Local filesystem
-
-🔄 **Data format:**
-- FuzzBench: Tar.gz archives of corpus
-- CRSBench: JSON + diff files
-
-🔄 **Measurement:**
-- FuzzBench: Separate measurer process with multiprocessing
-- CRSBench: No separate measurement (no verification)
-
-### What We Skip
-
-❌ **Database storage:**
-- FuzzBench: PostgreSQL with Snapshot table
-- CRSBench: Filesystem only (simpler)
-
-❌ **Async verification:**
-- FuzzBench: Coverage analysis in parallel
-- CRSBench: No verification during snapshots
-
-❌ **Cloud infrastructure:**
-- FuzzBench: GCE instances + GCS + dispatcher
-- CRSBench: Local execution
 
 ## Implementation Status and Notes
 

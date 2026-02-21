@@ -53,7 +53,7 @@ CRSBench uses a distributed model backed by a Redis-compatible queue (Valkey):
 ## Prerequisites
 
 1. **Docker** installed and running
-2. **CRSBench** installed (`uv pip install -e .`)
+2. **CRSBench** dependencies installed (`uv sync`)
 3. **Valkey** (Redis-compatible server):
 
 ```bash

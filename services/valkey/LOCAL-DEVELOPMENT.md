@@ -246,7 +246,7 @@ services:
       - "6379"
 ```
 
-### Step 2: Restart Valkey
+### Step 2: Restart Valkey in Secure Mode
 
 ```bash
 python scripts/valkey-helper.py restart

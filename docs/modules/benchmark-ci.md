@@ -23,8 +23,8 @@ verify/test jobs (POV, patch, RTS, unit tests) from Redis queues.
 ### Prerequisites
 
 ```bash
-# Install crsbench in editable mode
-uv pip install -e .
+# Install dependencies
+uv sync
 
 # Docker must be running (for build/verify stages)
 docker info

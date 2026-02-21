@@ -1,4 +1,4 @@
-# Resource Configuration for atlantis-claude-code CRS Deployment
+# Resource Configuration for crs-claude-code CRS Deployment
 
 # Worker definitions
 workers:
@@ -8,6 +8,6 @@ workers:
 
 # CRS-specific configurations
 crs:
-  atlantis-claude-code:
+  crs-claude-code:
     workers:
       - local

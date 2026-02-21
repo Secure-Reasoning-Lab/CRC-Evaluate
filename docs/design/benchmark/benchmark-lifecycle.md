@@ -85,7 +85,7 @@ crsbench benchmark generate --interactive
 
 **Purpose**: Bundle benchmark source into distributable tarballs.
 
-### Components
+### Packaging Components
 
 #### `workdir_parser.py`
 
@@ -237,7 +237,7 @@ This enables:
 
 **Purpose**: Load benchmarks for CRS evaluation.
 
-### Components
+### Runtime Components
 
 #### `models.py`
 

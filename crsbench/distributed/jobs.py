@@ -202,7 +202,10 @@ def _cleanup_llm_tracking(
 
 
 def get_crs_type(crs_name: str, registry_dir: Path) -> str:
-    """Read CRS type from pkg.yaml in registry.
+    """Read CRS type from registry entry.
+
+    Expected registry layout:
+    ``<registry_dir>/<crs_name>.yaml`` (oss-crs format)
 
     Args:
         crs_name: Name of the CRS
@@ -212,27 +215,39 @@ def get_crs_type(crs_name: str, registry_dir: Path) -> str:
         CRS type: 'bug-finding' or 'bug-fixing'
 
     Raises:
-        FileNotFoundError: If pkg.yaml not found
+        FileNotFoundError: If registry entry not found
         ValueError: If type field is missing or invalid
     """
-    pkg_yaml_path = registry_dir / crs_name / "pkg.yaml"
+    oss_crs_yaml = registry_dir / f"{crs_name}.yaml"
+    if not oss_crs_yaml.exists():
+        raise FileNotFoundError(
+            f"CRS registry entry not found for '{crs_name}' in {registry_dir}. "
+            f"Expected: {oss_crs_yaml}"
+        )
 
-    if not pkg_yaml_path.exists():
-        raise FileNotFoundError(f"CRS package file not found: {pkg_yaml_path}")
-
-    with pkg_yaml_path.open("r") as f:
+    with oss_crs_yaml.open("r") as f:
         pkg_data = yaml.safe_load(f)
 
     crs_type = pkg_data.get("type")
     if not crs_type:
-        raise ValueError(f"CRS type not specified in {pkg_yaml_path}")
+        raise ValueError(f"CRS type not specified in {oss_crs_yaml}")
+
+    # oss-crs registry uses list form: type: [bug-finding]
+    if isinstance(crs_type, list):
+        if len(crs_type) != 1:
+            raise ValueError(
+                f"Invalid CRS type list in {oss_crs_yaml}: {crs_type}. "
+                "Expected exactly one CRS type."
+            )
+        crs_type = crs_type[0]
 
     if crs_type not in ["bug-finding", "bug-fixing"]:
         raise ValueError(
-            f"Invalid CRS type '{crs_type}' in {pkg_yaml_path}. Must be 'bug-finding' or 'bug-fixing'"
+            f"Invalid CRS type '{crs_type}' in {oss_crs_yaml}. "
+            "Must be 'bug-finding' or 'bug-fixing'"
         )
 
-    return crs_type
+    return str(crs_type)
 
 
 def build_crs_environment(

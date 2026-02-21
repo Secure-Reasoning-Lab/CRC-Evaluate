@@ -22,7 +22,7 @@ CRSBench Orchestrator
 Trial-Specific Configuration
     ├── --build-dir (unique per trial)
     ├── --oss-fuzz-dir (shared submodule)
-    ├── --registry-dir (oss-crs-registry or crses/)
+    ├── --registry-dir (oss-crs/registry or crses/)
     ├── --project-path (from benchmarks/)
     └── source-path (pre-cloned by CRSBench)
     ↓
@@ -120,8 +120,8 @@ oss-crs build --oss-fuzz-dir /path/to/CRSBench/oss-fuzz \
 
 **Testing/Development Mode**:
 ```python
-# Use oss-crs-registry submodule for development
-registry_dir = CRSBENCH_ROOT / "oss-crs-registry"
+# Use oss-crs/registry submodule for development
+registry_dir = CRSBENCH_ROOT / "oss-crs/registry"
 ```
 
 **Production Mode**:
@@ -132,8 +132,8 @@ registry_dir = CRSBENCH_ROOT / "crses"
 
 **Usage**:
 ```bash
-# Development/testing with oss-crs-registry
-oss-crs build --registry-dir /path/to/CRSBench/oss-crs-registry \
+# Development/testing with oss-crs/registry
+oss-crs build --registry-dir /path/to/CRSBench/oss-crs/registry \
               --build-dir /experiments/exp-1/trial-0/build \
               example_configs/atlantis-c-libafl json-c
 
@@ -145,7 +145,7 @@ oss-crs build --registry-dir /path/to/CRSBench/crses \
 
 **Registry Structure**:
 ```
-oss-crs-registry/           # Development/testing
+oss-crs/registry/           # Development/testing
 └── crs/
     ├── atlantis-c-libafl/
     │   └── pkg.yaml
@@ -166,7 +166,7 @@ crses/                      # Production evaluation
 
 **Benefits**:
 - Separate development and production CRS configurations
-- Reference implementations in oss-crs-registry
+- Reference implementations in oss-crs/registry
 - Production-ready CRS in crses/
 - Both follow same structure
 
@@ -182,7 +182,7 @@ def get_registry_dir(config):
     if config.get("crs_registry_mode") == "production":
         return CRSBENCH_ROOT / "crses"
     else:
-        return CRSBENCH_ROOT / "oss-crs-registry"
+        return CRSBENCH_ROOT / "oss-crs/registry"
 ```
 
 ### 4. Project Path (`--project-path`)
@@ -444,7 +444,7 @@ oss-crs run \
 crs_registry_mode: testing
 ```
 
-**Registry Location**: `oss-crs-registry/` (git submodule)
+**Registry Location**: `oss-crs/registry/` (git submodule)
 
 **CRS Available**:
 - Reference implementations (crs-libfuzzer, mock-crs)
@@ -483,7 +483,7 @@ adapter = create_adapter(
     config=config,
     crs_config_name=crs,
     oss_fuzz_path=oss_fuzz_path,
-    registry_dir=registry_dir,      # resolves to crses/ or oss-crs-registry/
+    registry_dir=registry_dir,      # resolves to crses/ or oss-crs/registry/
     benchmarks_root=benchmarks_root,
     crs_configs_dir=crs_configs_dir,
     mode=crs_type,                   # "bug-finding" or "bug-fixing"
@@ -597,7 +597,7 @@ def resolve_crs_config(crs_name, registry_dir):
     crs_dir = registry_dir / "crs" / crs_name
     if not crs_dir.exists():
         # Try alternative registry
-        alt_registry = CRSBENCH_ROOT / "oss-crs-registry" if registry_dir.name == "crses" else CRSBENCH_ROOT / "crses"
+        alt_registry = CRSBENCH_ROOT / "oss-crs/registry" if registry_dir.name == "crses" else CRSBENCH_ROOT / "crses"
         alt_dir = alt_registry / "crs" / crs_name
 
         if alt_dir.exists():

@@ -61,8 +61,8 @@ User runs: crsbench run --experiment-config config.yaml
 ### Installation
 
 ```bash
-# Install in editable mode
-uv pip install -e .
+# Install dependencies
+uv sync
 
 # Creates executable: .venv/bin/crsbench
 ```

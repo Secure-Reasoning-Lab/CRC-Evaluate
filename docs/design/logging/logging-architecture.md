@@ -91,80 +91,15 @@ YYYY-MM-DD HH:mm:ss | LEVEL    | [module/path]                   | message
 
 ## Usage Patterns
 
-### Standard Usage
+Usage examples and operational guidance are maintained in:
+- `docs/logger-usage-guide.md`
 
-```python
-from crsbench.utils.logger import get_logger
-
-logger = get_logger(__name__)
-
-logger.debug("Detailed debugging info")
-logger.info("General information")
-logger.success("Operation succeeded")
-logger.warning("Warning message")
-logger.error("Error occurred")
-logger.critical("Critical failure")
-```
-
-### Module-Level Quick Logging
-
-```python
-from crsbench.utils import info, warning, error
-
-info("Quick info message")
-warning("Quick warning")
-error("Quick error")
-```
-
-### Configuration
-
-```python
-from crsbench.utils.logger import configure_logger
-
-# Change log level
-configure_logger(level="DEBUG")
-
-# Disable colors
-configure_logger(colorize=False)
-
-# Change output sink
-import sys
-configure_logger(sink=sys.stderr, level="WARNING")
-```
-
-### Environment Variable
-
-```bash
-# Set log level globally
-export LOG_LEVEL=DEBUG
-crsbench run --experiment-config config.yaml ...
-```
+This architecture document focuses on internals and design rationale.
 
 ## Migration from Standard Logging
 
-### Before (Standard Logging)
-
-```python
-import logging
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-logger.info("Message")
-```
-
-### After (Loguru via CRSBench)
-
-```python
-from crsbench.utils.logger import get_logger
-
-logger = get_logger(__name__)
-
-logger.info("Message")
-```
+Prefer replacing `logging.getLogger(...)` usage with `get_logger(__name__)` from
+`crsbench.utils.logger`. See `docs/logger-usage-guide.md` for complete migration examples.
 
 ## Benefits
 

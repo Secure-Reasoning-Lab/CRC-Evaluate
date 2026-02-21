@@ -14,7 +14,7 @@ max_total_time: 9600  # 2 hours total
 
 # CRS Selection
 crses:
-  - atlantis-claude-code
+  - crs-claude-code
 
 mode: all
 adapter: oss-crs

@@ -1,39 +1,39 @@
 # CRSBench Documentation Index
 
-This directory is the central home for project documentation.
+This directory is the canonical entry point for CRSBench documentation.
 
 ## Start Here
 
-- [Benchmark Specification (RFC)](./RFC.md)
 - [Environment Setup](./environment-setup.md)
 - [Experiment Workflow](./experiment-workflow.md)
+- [Benchmark Specification (RFC)](./RFC.md)
 
-## Developer Guides
+## Documentation Governance
 
-- [Benchmark Developer Guide](./benchmark-developer-guide.md)
+- [Documentation Taxonomy and Canonical Map](./documentation-taxonomy.md)
+- [Documentation Inventory and Audit](./documentation-inventory.md)
+- [Documentation Maintenance Guide](./documentation-maintenance.md)
+
+## Contributor Guides
+
 - [Framework Developer Guide](./framework-developer-guide.md)
+- [Benchmark Developer Guide](./benchmark-developer-guide.md)
 - [Testing Setup](./testing-setup.md)
 - [Coding Standards](./coding-standards.md)
 - [Manual Validation Guideline](./manual-validation-guideline.md)
 
-## Runtime And Results
+## Runtime and Operations
 
 - [OSS-CRS Interface](./ossfuzz-crs-interface.md)
+- [Logger Usage Guide](./logger-usage-guide.md)
 - [Seed Corpus](./seed-corpus.md)
 - [Snapshot Examples](./snapshot-examples.md)
-- [Logger Usage Guide](./logger-usage-guide.md)
 - [Experiment Config Example](./experiment-config-example.yaml)
 - [Distributed Config Example](./experiment-config-distributed-example.yaml)
 
-## Data And Contamination
+## Architecture and Design
 
-- [Benchmark Data Protection and AI Contamination](./design/benchmark-protection-and-contamination.md)
-
-## Architecture And Design
-
-Design docs live under [`docs/design/`](./design/) and are indexed at
-[`docs/design/README.md`](./design/README.md).
-
+- [Design Index](./design/README.md)
 - [Architecture Overview](./design/architecture.md)
 - [Distributed Execution](./design/distributed/)
 - [Evaluation](./design/evaluation/)
@@ -43,27 +43,22 @@ Design docs live under [`docs/design/`](./design/) and are indexed at
 - [Benchmark CI](./design/benchmark-ci/)
 - [Migration](./design/migration/)
 
-## Module Docs
+## Module Reference
 
-Module docs are centralized under [`docs/modules/`](./modules/) and indexed at
-[`docs/modules/README.md`](./modules/README.md).
+- [Module Index](./modules/README.md)
 
-## Adjacent READMEs
+## Adjacent Component Readmes
 
-- [services/valkey/README.md](../services/valkey/README.md)
-- [services/litellm/README.md](../services/litellm/README.md)
 - [scripts/README.md](../scripts/README.md)
 - [benchmark-suites/README.md](../benchmark-suites/README.md)
+- [crses/README.md](../crses/README.md)
+- [experiment-configs/README.md](../experiment-configs/README.md)
+- [integration_tests/README.md](../integration_tests/README.md)
+- [integration_tests_distributed/README.md](../integration_tests_distributed/README.md)
 - [snapshot-examples/README.md](../snapshot-examples/README.md)
+- [dashboard/README.md](../dashboard/README.md)
 
-## Notes
+## Integrated Upstream Projects
 
-- External/upstream submodules (`oss-fuzz/`, `oss-crs/`) keep their own
-  documentation layout.
-- Documentation maintenance policy:
-  - Keep one canonical page per topic; other pages should link instead of duplicating.
-  - Prefer `docs/RFC.md` for benchmark format requirements.
-- Key OSS-CRS references:
-  - [oss-crs/README.md](../oss-crs/README.md)
-  - [oss-crs/docs/README.md](../oss-crs/docs/README.md)
-  - [oss-crs/docs/design/parallel.md](../oss-crs/docs/design/parallel.md)
+- [oss-crs/README.md](../oss-crs/README.md)
+- [oss-fuzz/README.md](../oss-fuzz/README.md)

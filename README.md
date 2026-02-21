@@ -94,7 +94,7 @@ CRSBench/
 │   ├── statistics/          #   Benchmark statistics
 │   └── utils/               #   Shared utilities (logger, YAML, etc.)
 ├── crses/                   # CRS configurations for evaluation
-├── oss-crs-registry/        # CRS registry (submodule)
+├── oss-crs/                 # CRS runtime and registry (submodule)
 ├── oss-fuzz/                # OSS-Fuzz (submodule)
 ├── docs/                    # Documentation hub (user + design docs)
 └── docs/design/             # Internal architecture docs
@@ -102,24 +102,21 @@ CRSBench/
 
 ## Documentation
 
-- Canonical docs index: [docs/README.md](docs/README.md)
-- Canonical benchmark format spec: [docs/RFC.md](docs/RFC.md)
-
-- Start here:
-  - [Documentation Index](docs/README.md)
-  - [Benchmark RFC](docs/RFC.md)
-- Development guides:
-  - [Benchmark Developer Guide](docs/benchmark-developer-guide.md)
-  - [Framework Developer Guide](docs/framework-developer-guide.md)
-  - [Testing Setup](docs/testing-setup.md)
-- Runtime and operations:
-  - [Experiment Workflow](docs/experiment-workflow.md)
+- Entry point: [docs/README.md](docs/README.md)
+- Benchmark format contract: [docs/RFC.md](docs/RFC.md)
+- Documentation governance:
+  - [Taxonomy and Canonical Map](docs/documentation-taxonomy.md)
+  - [Inventory and Audit](docs/documentation-inventory.md)
+  - [Maintenance Guide](docs/documentation-maintenance.md)
+- Setup and runtime:
   - [Environment Setup](docs/environment-setup.md)
-  - [OSS-CRS Interface](docs/ossfuzz-crs-interface.md)
-- Architecture and internals:
-  - [Module Docs](docs/modules/README.md)
+  - [Experiment Workflow](docs/experiment-workflow.md)
+- Contributor tracks:
+  - [Framework Developer Guide](docs/framework-developer-guide.md)
+  - [Benchmark Developer Guide](docs/benchmark-developer-guide.md)
+- Architecture and modules:
   - [Design Docs](docs/design/README.md)
-  - [Logger Guide](docs/logger-usage-guide.md)
+  - [Module Docs](docs/modules/README.md)
 
 ## Contributing
 

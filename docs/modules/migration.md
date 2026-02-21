@@ -20,7 +20,7 @@ Generates vulnerability YAML files with mock data.
 #### **file_migrator.py**
 Handles file operations with dry-run support.
 
-### Quick Start
+### Atlanta-to-RFC Quick Start
 
 ```bash
 # Dry run to validate
@@ -36,7 +36,7 @@ Handles file operations with dry-run support.
   --projects curl-delta-04
 ```
 
-### Features
+### Atlanta-to-RFC Features
 
 - ✅ Complete directory structure transformation
 - ✅ Config.yaml to meta.yaml conversion
@@ -46,7 +46,7 @@ Handles file operations with dry-run support.
 - ✅ Comprehensive logging
 - ✅ CSV migration reports
 
-### Design Documentation
+### Atlanta-to-RFC Design Documentation
 
 See [migration design document](../design/migration/migration-atlanta-to-rfc.md) for implementation details.
 
@@ -56,14 +56,14 @@ See [migration design document](../design/migration/migration-atlanta-to-rfc.md)
 
 Automated tool to generate `test.sh` functional test scripts for benchmarks using Claude Agent SDK.
 
-### Overview
+### Test.sh Generator Overview
 
 Security patch validation requires functional testing beyond vulnerability triggering. The test.sh generator automatically creates test scripts by:
 1. Analyzing project repositories to find unit tests
 2. Identifying build systems and test frameworks
 3. Generating appropriate test.sh scripts for Docker environments
 
-### Quick Start
+### Test.sh Generator Quick Start
 
 #### Option 1: Using .env file (Recommended)
 
@@ -106,7 +106,7 @@ python -m crsbench.migration.cli.test_sh_command \
   --verbose
 ```
 
-### Features
+### Test.sh Generator Features
 
 - ✅ **Auto-clone repositories**: Automatically clones project repos from benchmark config
 - ✅ Automatic unit test discovery using Claude Agent SDK
@@ -155,7 +155,7 @@ if result["success"]:
     print(f"📄 Analysis: {result['analysis_md_path']}")
 ```
 
-### Design Documentation
+### Test.sh Generator Design Documentation
 
 See [test.sh generator design document](../design/migration/test-sh-generator.md) for architecture details.
 
@@ -165,7 +165,7 @@ See [test.sh generator design document](../design/migration/test-sh-generator.md
 
 An optional iterative approach to test.sh generation using Model Context Protocol (MCP) with Claude Agent SDK.
 
-### Overview
+### MCP-Enhanced Overview
 
 The MCP-enhanced generator adds Docker testing capabilities to the standard test.sh generator:
 1. Build Docker images and analyze build logs
@@ -173,7 +173,7 @@ The MCP-enhanced generator adds Docker testing capabilities to the standard test
 3. Iteratively refine based on test failures
 4. Automatic retry until test.sh works
 
-### Quick Start
+### MCP-Enhanced Quick Start
 
 ```python
 from crsbench.migration.test_sh import generate_test_sh_for_benchmark
@@ -196,7 +196,7 @@ result = generate_test_sh_for_benchmark(
 )
 ```
 
-### Features
+### MCP-Enhanced Features
 
 - ✅ **Integrated approach**: MCP tools work alongside Claude Agent SDK
 - ✅ **Docker integration**: Builds images and tests scripts in containers
@@ -241,14 +241,14 @@ See [test.sh generator design doc](../design/migration/test-sh-generator.md) for
 
 Automatically generates vuln.yaml files for CPVs by analyzing crash logs, POV files, and source code.
 
-### Features
+### vuln.yaml Generator Features
 - Analyzes crash logs (pov_*.log) to extract vulnerability information
 - Identifies CWE classifications based on vulnerability type
 - Locates vulnerable code in source files
 - Generates accurate vuln.yaml with proper metadata
 - **Auto-detects temporary MOCK files** and regenerates them automatically
 
-### Usage
+### vuln.yaml Generator Usage
 
 ```bash
 # Generate vuln.yaml for ALL CPVs in a benchmark
@@ -291,7 +291,7 @@ description: 'MOCK: ... (TBD) ...'
 - Claude Agent SDK
 - Project source code (auto-cloned if not present)
 
-### Design Documentation
+### vuln.yaml Generator Design Documentation
 
 See [vuln.yaml generator design document](../design/migration/vuln-yaml-generator.md) for architecture details.
 
@@ -301,7 +301,7 @@ See [vuln.yaml generator design document](../design/migration/vuln-yaml-generato
 
 Core utility for automatic cloning and checkout of project repositories needed during migration and test generation workflows.
 
-### Overview
+### Repository Manager Overview
 
 The repository manager (`repo_manager.py`) provides:
 - **Automatic repository cloning** from benchmark configuration
@@ -318,7 +318,7 @@ The repository manager (`repo_manager.py`) provides:
 - ✅ **Smart reuse** - detects existing git repositories
 - ✅ **Graceful error handling** with detailed logging
 
-### Usage
+### Repository Manager Usage
 
 #### Basic Usage
 ```python
@@ -372,7 +372,7 @@ The repository manager is used by:
 - **vuln.yaml generator** - Needs source code for vulnerability analysis
 - **Migration scripts** - Can pre-clone repositories for batch operations
 
-### Design Documentation
+### Repository Manager Design Documentation
 
 See [repository manager design document](../design/migration/repo-manager.md) for full implementation details including:
 - Architecture and component relationships
