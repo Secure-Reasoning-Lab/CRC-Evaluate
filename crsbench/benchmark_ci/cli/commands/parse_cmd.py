@@ -18,10 +18,12 @@ from typing import Optional
 from rich.console import Console
 from rich.table import Table
 
+from crsbench.benchmark_ci.cli.discovery import get_benchmarks_root
 from crsbench.benchmark_ci.cli.output import (
     _add_all_columns,
     _add_all_rows,
     print_results_table,
+    save_output_dir,
     write_summary_csv,
 )
 from crsbench.benchmark_ci.models import (
@@ -32,6 +34,7 @@ from crsbench.benchmark_ci.models import (
     ValidationSummary,
 )
 from crsbench.benchmark_ci.storage import format_storage_size
+from crsbench.benchmark_ci.validator import _load_project_capabilities
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -547,22 +550,199 @@ def _reparse_patch_var_results(
     )
 
 
+def _derive_combined_pov(
+    pov_build: Optional[CheckResult], pov_pov: Optional[CheckResult]
+) -> Optional[CheckResult]:
+    """Derive combined pov_check from split results.
+
+    PASS if both pov_build and pov_pov pass; FAIL if either fails.
+    Returns None if neither split result exists.
+    """
+    if pov_build is None and pov_pov is None:
+        return None
+
+    build_time = pov_build.build_time if pov_build else 0.0
+    verify_time = pov_pov.verify_time if pov_pov else 0.0
+    total_time = (pov_build.time_seconds if pov_build else 0.0) + (
+        pov_pov.time_seconds if pov_pov else 0.0
+    )
+
+    # Fail if either component fails
+    if (pov_build and pov_build.status == CheckStatus.FAIL) or (
+        pov_pov and pov_pov.status == CheckStatus.FAIL
+    ):
+        errors = []
+        if pov_build and pov_build.error:
+            errors.append(pov_build.error)
+        if pov_pov and pov_pov.error:
+            errors.append(pov_pov.error)
+        return CheckResult(
+            status=CheckStatus.FAIL,
+            time_seconds=total_time,
+            build_time=build_time,
+            verify_time=verify_time,
+            error="; ".join(errors),
+        )
+
+    return CheckResult(
+        status=CheckStatus.PASS,
+        time_seconds=total_time,
+        build_time=build_time,
+        verify_time=verify_time,
+    )
+
+
+def _derive_combined_patch(
+    patch_build: Optional[CheckResult],
+    patch_pov: Optional[CheckResult],
+    patch_unittest: Optional[CheckResult],
+) -> Optional[CheckResult]:
+    """Derive combined patch_check from split results.
+
+    PASS if all of patch_build, patch_pov, patch_unittest pass; FAIL if any fails.
+    Returns None if no split results exist.
+    """
+    parts = [patch_build, patch_pov, patch_unittest]
+    present = [p for p in parts if p is not None]
+    if not present:
+        return None
+
+    build_time = patch_build.build_time if patch_build else 0.0
+    verify_time = sum(
+        p.verify_time for p in [patch_pov, patch_unittest] if p is not None
+    )
+    total_time = sum(p.time_seconds for p in present)
+
+    if any(p.status == CheckStatus.FAIL for p in present):
+        errors = [p.error for p in present if p.error]
+        return CheckResult(
+            status=CheckStatus.FAIL,
+            time_seconds=total_time,
+            build_time=build_time,
+            verify_time=verify_time,
+            error="; ".join(errors),
+        )
+
+    return CheckResult(
+        status=CheckStatus.PASS,
+        time_seconds=total_time,
+        build_time=build_time,
+        verify_time=verify_time,
+    )
+
+
+def _reconstruct_from_logs(output_dir: Path) -> Optional[ValidationSummary]:
+    """Reconstruct a ValidationSummary from per-benchmark job logs.
+
+    Used as fallback when summary.json is missing (e.g., crash during display).
+    Scans output_dir for subdirectories that contain build/ or verify/ dirs
+    and re-parses their logs using existing reparse functions.
+
+    Args:
+        output_dir: CI output directory containing benchmark subdirs
+
+    Returns:
+        Reconstructed ValidationSummary, or None if no logs found
+    """
+    # Find benchmark subdirs that have build/ or verify/ dirs
+    benchmark_dirs = sorted(
+        d
+        for d in output_dir.iterdir()
+        if d.is_dir() and ((d / "build").is_dir() or (d / "verify").is_dir())
+    )
+
+    if not benchmark_dirs:
+        logger.error(f"No benchmark logs found in {output_dir}")
+        return None
+
+    logger.info(
+        f"Reconstructing results from {len(benchmark_dirs)} benchmark logs "
+        f"(summary.json not found)"
+    )
+
+    # Resolve benchmarks root for benchmark_path
+    try:
+        benchmarks_root = get_benchmarks_root()
+    except RuntimeError:
+        benchmarks_root = None
+
+    summary = ValidationSummary(check_mode=CheckMode.ALL)
+    for bdir in benchmark_dirs:
+        benchmark_name = bdir.name
+
+        # Resolve benchmark path
+        if benchmarks_root and (benchmarks_root / benchmark_name).is_dir():
+            benchmark_path = benchmarks_root / benchmark_name
+        else:
+            benchmark_path = Path(f"benchmarks/{benchmark_name}")
+
+        # Load project capabilities (inc_build, rts_mode) from project.yaml
+        supports_inc_build = True
+        rts_mode = None
+        if benchmark_path.is_dir():
+            supports_inc_build, rts_mode = _load_project_capabilities(benchmark_path)
+
+        # Re-parse split POV results
+        pov_build, pov_pov = _reparse_split_pov_results(output_dir, benchmark_name)
+        pov_var = _reparse_pov_var_results(output_dir, benchmark_name)
+
+        # Re-parse split patch results
+        patch_build, patch_pov, patch_unittest = _reparse_split_patch_results(
+            output_dir, benchmark_name
+        )
+        patch_var = _reparse_patch_var_results(output_dir, benchmark_name)
+
+        # Derive combined pov_check and patch_check from split results
+        pov_check = _derive_combined_pov(pov_build, pov_pov)
+        patch_check = _derive_combined_patch(patch_build, patch_pov, patch_unittest)
+
+        result = BenchmarkValidationResult(
+            benchmark=benchmark_name,
+            benchmark_path=benchmark_path,
+            # format_check left as None (not available from logs)
+            pov_check=pov_check,
+            pov_build_check=pov_build,
+            pov_pov_check=pov_pov,
+            pov_var_check=pov_var,
+            patch_check=patch_check,
+            patch_build_check=patch_build,
+            patch_pov_check=patch_pov,
+            patch_var_check=patch_var,
+            patch_unittest_check=patch_unittest,
+            # coverage_check left as None (not available from logs)
+            supports_inc_build=supports_inc_build,
+            rts_mode=rts_mode,
+        )
+        summary.add_result(result)
+
+    logger.info(
+        f"Reconstructed {summary.total} results: "
+        f"{summary.passed} passed, {summary.failed} failed, {summary.errors} errors"
+    )
+    return summary
+
+
 def _load_summary_from_output_dir(
     output_dir: Path, *, reparse_logs: bool = True
 ) -> Optional[ValidationSummary]:
     """Load ValidationSummary from an output directory.
 
+    Falls back to reconstructing from per-benchmark job logs if
+    summary.json is missing (e.g., after a crash during display).
+
     Args:
-        output_dir: Directory containing summary.json
+        output_dir: Directory containing summary.json or benchmark log dirs
         reparse_logs: If True, re-parse job logs to populate split patch fields
 
     Returns:
-        ValidationSummary if found, None otherwise
+        ValidationSummary if found or reconstructed, None otherwise
     """
     summary_path = output_dir / "summary.json"
     if not summary_path.exists():
-        logger.error(f"summary.json not found in {output_dir}")
-        return None
+        logger.warning(
+            f"summary.json not found in {output_dir}, attempting reconstruction from logs"
+        )
+        return _reconstruct_from_logs(output_dir)
 
     with summary_path.open() as f:
         data = json.load(f)
@@ -741,7 +921,7 @@ Examples:
         "-d",
         type=Path,
         required=True,
-        help="Directory containing CI results (summary.json)",
+        help="Directory containing CI results (summary.json or benchmark log dirs)",
     )
     parser.add_argument(
         "--format",
@@ -783,12 +963,19 @@ def run_parse(args: argparse.Namespace) -> int:
         logger.error(f"Output directory not found: {output_dir}")
         return 1
 
+    reconstructed = not (output_dir / "summary.json").exists()
     summary = _load_summary_from_output_dir(output_dir, reparse_logs=True)
     if summary is None:
         return 1
 
     # Use check_mode from saved summary
     check_mode = summary.check_mode
+
+    # If reconstructed from logs, persist standard files so subsequent runs
+    # find summary.json and summary.csv (the normal code path)
+    if reconstructed:
+        save_output_dir(summary, output_dir, check_mode=check_mode)
+        logger.info(f"Wrote reconstructed summary.json and summary.csv to {output_dir}")
 
     # Write reparsed files unless disabled
     if not getattr(args, "no_rewrite", False):
