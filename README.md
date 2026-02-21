@@ -102,6 +102,9 @@ CRSBench/
 
 ## Documentation
 
+- Canonical docs index: [docs/README.md](docs/README.md)
+- Canonical benchmark format spec: [docs/RFC.md](docs/RFC.md)
+
 - Start here:
   - [Documentation Index](docs/README.md)
   - [Benchmark RFC](docs/RFC.md)
