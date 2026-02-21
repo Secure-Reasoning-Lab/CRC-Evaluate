@@ -59,6 +59,36 @@ def test_manifest_roundtrip_remote_and_local(tmp_path: Path) -> None:
     assert loaded_local[entry.benchmark].to_dict() == entry.to_dict()
 
 
+def test_manifest_from_dict_coercion() -> None:
+    entry = BenchmarkManifestEntry.from_dict(
+        {
+            "benchmark": None,
+            "benchmark_source_sha256": "abc",
+            "ground_truth_source_sha256": "def",
+            "benchmark_archive_size": "123",
+            "ground_truth_archive_size": "not-a-number",
+            "has_ground_truth": "true",
+        }
+    )
+
+    assert entry.benchmark == ""
+    assert entry.benchmark_source_sha256 == "abc"
+    assert entry.ground_truth_source_sha256 == "def"
+    assert entry.benchmark_archive_size == 123
+    assert entry.ground_truth_archive_size == 0
+    assert entry.has_ground_truth is True
+
+    entry_false = BenchmarkManifestEntry.from_dict(
+        {
+            "benchmark": "x",
+            "benchmark_source_sha256": "a",
+            "ground_truth_source_sha256": "b",
+            "has_ground_truth": "false",
+        }
+    )
+    assert entry_false.has_ground_truth is False
+
+
 def test_plan_upload_skips_unchanged(tmp_path: Path) -> None:
     unchanged_dir = tmp_path / "afc-curl-delta-01"
     changed_dir = tmp_path / "afc-libxml2-delta-01"

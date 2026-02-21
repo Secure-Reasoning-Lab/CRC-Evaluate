@@ -39,18 +39,24 @@ class BenchmarkManifestEntry:
     def from_dict(cls, data: dict[str, object]) -> "BenchmarkManifestEntry":
         """Build entry from dict, tolerating missing optional fields."""
         return cls(
-            benchmark=str(data.get("benchmark", "")),
-            benchmark_source_sha256=str(data.get("benchmark_source_sha256", "")),
-            ground_truth_source_sha256=str(data.get("ground_truth_source_sha256", "")),
-            benchmark_archive_sha256=str(data.get("benchmark_archive_sha256", "")),
-            ground_truth_archive_sha256=str(data.get("ground_truth_archive_sha256", "")),
+            benchmark=_to_str(data.get("benchmark", "")),
+            benchmark_source_sha256=_to_str(data.get("benchmark_source_sha256", "")),
+            ground_truth_source_sha256=_to_str(
+                data.get("ground_truth_source_sha256", "")
+            ),
+            benchmark_archive_sha256=_to_str(
+                data.get("benchmark_archive_sha256", "")
+            ),
+            ground_truth_archive_sha256=_to_str(
+                data.get("ground_truth_archive_sha256", "")
+            ),
             benchmark_archive_size=_to_int(data.get("benchmark_archive_size", 0)),
             ground_truth_archive_size=_to_int(
                 data.get("ground_truth_archive_size", 0)
             ),
-            source_commit=str(data.get("source_commit", "")),
-            updated_at=str(data.get("updated_at", "")),
-            has_ground_truth=bool(data.get("has_ground_truth", False)),
+            source_commit=_to_str(data.get("source_commit", "")),
+            updated_at=_to_str(data.get("updated_at", "")),
+            has_ground_truth=_to_bool(data.get("has_ground_truth", False)),
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -159,3 +165,25 @@ def _to_int(value: object) -> int:
         except ValueError:
             return 0
     return 0
+
+
+def _to_str(value: object) -> str:
+    """Convert manifest field to string with None-safe behavior."""
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _to_bool(value: object) -> bool:
+    """Best-effort conversion of manifest fields to bool."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off", ""}:
+            return False
+    return False
