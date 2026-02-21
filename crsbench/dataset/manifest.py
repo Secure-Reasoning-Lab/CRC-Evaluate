@@ -44,8 +44,10 @@ class BenchmarkManifestEntry:
             ground_truth_source_sha256=str(data.get("ground_truth_source_sha256", "")),
             benchmark_archive_sha256=str(data.get("benchmark_archive_sha256", "")),
             ground_truth_archive_sha256=str(data.get("ground_truth_archive_sha256", "")),
-            benchmark_archive_size=int(data.get("benchmark_archive_size", 0)),
-            ground_truth_archive_size=int(data.get("ground_truth_archive_size", 0)),
+            benchmark_archive_size=_to_int(data.get("benchmark_archive_size", 0)),
+            ground_truth_archive_size=_to_int(
+                data.get("ground_truth_archive_size", 0)
+            ),
             source_commit=str(data.get("source_commit", "")),
             updated_at=str(data.get("updated_at", "")),
             has_ground_truth=bool(data.get("has_ground_truth", False)),
@@ -145,3 +147,15 @@ def _update_hash(digest: _Digest, rel: Path, path: Path) -> None:
     with path.open("rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             digest.update(chunk)
+
+
+def _to_int(value: object) -> int:
+    """Best-effort conversion of manifest fields to int."""
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
