@@ -310,7 +310,7 @@ def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
 
     logger.info(
         f"Verifying POV {pov.pov_id} for trial {payload.trial_id} "
-        f"benchmark {payload.benchmark}"
+        f"benchmark {payload.benchmark} harness {payload.harness}"
     )
 
     # Check that we have builds for this benchmark; try lazy load if missing
@@ -402,11 +402,14 @@ def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
         )
 
         logger.info(
-            f"  POV {pov.pov_id}: {result.status.value} (CPVs: {result.cpv_matched})"
+            f"  POV {pov.pov_id} harness {payload.harness}: "
+            f"{result.status.value} (CPVs: {result.cpv_matched})"
         )
 
     except Exception as e:
-        logger.error(f"  POV {pov.pov_id}: verification failed: {e}")
+        logger.error(
+            f"  POV {pov.pov_id} harness {payload.harness}: verification failed: {e}"
+        )
         verdict = PovVerdict(
             pov_id=pov.pov_id,
             triggered_bug=False,

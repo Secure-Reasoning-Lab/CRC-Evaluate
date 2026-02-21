@@ -108,6 +108,11 @@ def load_execution_json(trial_dir: Path) -> dict | None:
         return json.load(f)
 
 
+def _read_text_file(path: Path) -> str:
+    """Read full text file with replacement for invalid bytes."""
+    return path.read_text(errors="replace")
+
+
 def _is_timeout(execution: dict | None, trial_dir: Path) -> bool:
     """Check whether a trial was terminated due to timeout.
 
@@ -126,7 +131,7 @@ def _is_timeout(execution: dict | None, trial_dir: Path) -> bool:
     # of the actual timed_out flag from run_with_graceful_timeout).
     worker_log_path = trial_dir / "worker.log"
     if worker_log_path.exists():
-        worker_log = worker_log_path.read_text(errors="replace")[-5000:]
+        worker_log = _read_text_file(worker_log_path)
         if "Timeout reached after" in worker_log:
             return True
 
@@ -169,14 +174,14 @@ def detect_failure_reason(trial_dir: Path, pov_store: dict | None) -> str:
         # Check worker.log for build timeout
         worker_log_path = trial_dir / "worker.log"
         if worker_log_path.exists():
-            worker_log = worker_log_path.read_text(errors="replace")[-3000:]
+            worker_log = _read_text_file(worker_log_path)
             if "Build timeout" in worker_log:
                 return "build_timeout"
 
         # Try to get error info from stderr
         stderr_path = trial_dir / "crs_stderr.log"
         if stderr_path.exists():
-            stderr = stderr_path.read_text(errors="replace")[-2000:]
+            stderr = _read_text_file(stderr_path)
             if any(kw in stderr.lower() for kw in ["build fail", "compilation error", "make error", "cmake error"]):
                 return "build_failure"
         return "runtime_error"
