@@ -38,9 +38,9 @@ LiteLLM acts as an OpenAI-compatible proxy for CRSBench, providing:
 │  │ Container │    │ LiteLLM      │    │  LiteLLM      │  Provider │
 │  └───────────┘    │ (Proxy)      │    │  (Gateway)    │           │
 │       │           └──────────────┘    └───────────────┘          │
-│  uses LITELLM_       │  forwards          │  uses provider        │
-│  MASTER_KEY          │  with              │  API keys             │
-│                      │  LITELLM_          │                        │
+│  uses CRSBENCH_      │  forwards          │  uses provider        │
+│  LLM_MASTER_KEY      │  with              │  API keys             │
+│                      │  CRSBENCH_LLM_     │                        │
 │                      │  API_KEY           │                        │
 │                      ▼                     ▼                        │
 │                   ┌──────────┐          ┌──────────┐              │
@@ -51,8 +51,8 @@ LiteLLM acts as an OpenAI-compatible proxy for CRSBench, providing:
 └────────────────────────────────────────────────────────────────────┘
 
 Key Configuration:
-- CRS containers: Use LITELLM_MASTER_KEY to authenticate with trial LiteLLM
-- Trial LiteLLM: Uses LITELLM_API_KEY to authenticate with central LiteLLM
+- CRS containers: Use CRSBENCH_LLM_MASTER_KEY to authenticate with trial LiteLLM
+- Trial LiteLLM: Uses CRSBENCH_LLM_API_KEY to authenticate with central LiteLLM
 - Central LiteLLM: Connects to providers with provider API keys
 
 Benefits:
@@ -85,9 +85,9 @@ API keys loaded from `.env` file (env vars take precedence over config):
 
 | Variable | Purpose | Required |
 |----------|----------|----------|
-| `LITELLM_MASTER_KEY` | Authentication key passed to CRS containers | Yes |
-| `LITELLM_API_KEY` | API key for authenticating with upstream LiteLLM (proxy mode only) | Proxy mode only |
-| `UPSTREAM_LITELLM_BASE_URL` | URL of central/upstream LiteLLM instance (proxy mode only) | Proxy mode only |
+| `CRSBENCH_LLM_MASTER_KEY` | Authentication key passed to CRS containers | Yes |
+| `CRSBENCH_LLM_API_KEY` | API key for authenticating with upstream LiteLLM (proxy mode only) | Proxy mode only |
+| `CRSBENCH_LLM_UPSTREAM_BASE_URL` | URL of central/upstream LiteLLM instance (proxy mode only) | Proxy mode only |
 | `OPENAI_API_KEY` | OpenAI API access | No (direct mode only) |
 | `ANTHROPIC_API_KEY` | Anthropic API access | No (direct mode only) |
 | `GOOGLE_API_KEY` | Google AI API access | No (direct mode only) |
@@ -188,7 +188,7 @@ services:
     image: ghcr.io/berriai/litellm:main-stable
     container_name: litellm-{{ trial_id }}
     environment:
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+      - CRSBENCH_LLM_MASTER_KEY=${CRSBENCH_LLM_MASTER_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}

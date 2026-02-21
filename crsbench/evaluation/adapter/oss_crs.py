@@ -7,10 +7,16 @@ from SUBMIT_DIR after execution.
 
 from __future__ import annotations
 
+import fcntl
+import os
+import re
 import shutil
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
+
+import yaml
 
 from crsbench.evaluation.adapter.compose_common import (
     docker_compose_down_cleanup,
@@ -24,9 +30,11 @@ from crsbench.evaluation.adapter.compose_common import (
 from crsbench.evaluation.adapter.config_gen import (
     CrsComposeCrsEntry,
     CrsComposeInfra,
+    CrsComposeLlmConfig,
     CrsComposeYaml,
 )
 from crsbench.evaluation.results import CRSExecutionResult
+from crsbench.utils.crs_helper import get_all_crs_registry_names
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -92,10 +100,48 @@ class OssCrsAdapter:
         self._external_litellm: bool = False
         self._litellm_url: str = ""
         self._litellm_api_key: str = ""
+        self._litellm_config_path: str = ""
+        self._additional_env_overrides: dict[str, str] = {}
 
         # Artifacts resolved via `oss-crs artifacts`
         self._resolved_artifacts: Optional[dict[str, Any]] = None
         self._run_id: Optional[str] = None
+
+    @staticmethod
+    def _lock_token(value: str) -> str:
+        """Convert arbitrary text to a filesystem-safe lock token."""
+        token = re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip("-")
+        return token or "unknown"
+
+    def _build_lock_file_path(self, project_name: str) -> Path:
+        """Return host-local lock file path for build-target serialization.
+
+        This is a temporary workaround for docker image tag races when multiple
+        trials build the same CRS/project/sanitizer concurrently on one host.
+        """
+        lock_dir = Path(
+            os.environ.get("CRSBENCH_OSS_CRS_BUILD_LOCK_DIR", "/tmp")
+        ).expanduser()
+        crs = self._lock_token(self._crs_config_name)
+        project = self._lock_token(project_name)
+        sanitizer = self._lock_token(self._sanitizer)
+        return lock_dir / f"crsbench-oss-crs-build-{crs}-{project}-{sanitizer}.lock"
+
+    @contextmanager
+    def _acquire_build_lock(self, project_name: str):
+        """Acquire an exclusive host-local lock for this build key."""
+        lock_path = self._build_lock_file_path(project_name)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("w") as lock_file:
+            logger.info(
+                f"Acquiring build lock for {self._crs_config_name}/{project_name} "
+                f"({self._sanitizer}): {lock_path}"
+            )
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     @property
     def mode(self) -> str:
@@ -217,6 +263,61 @@ class OssCrsAdapter:
             self._litellm_url = str(config["litellm_url"])
         if "litellm_api_key" in config:
             self._litellm_api_key = str(config["litellm_api_key"])
+        if "litellm_config_path" in config:
+            normalized = _normalize_optional_text(config["litellm_config_path"])
+            if normalized is not None:
+                self._litellm_config_path = normalized
+        if "additional_env" in config and config["additional_env"] is not None:
+            self._additional_env_overrides = {
+                str(k): str(v) for k, v in dict(config["additional_env"]).items()
+            }
+
+    def _collect_required_llm_aliases(self) -> tuple[list[str], list[str]]:
+        """Collect required LLM aliases from registry metadata.
+
+        For ensemble CRS configs, unions requirements from all registry members
+        listed in ``crses/configs/<config>/config-resource.yaml``.
+        """
+        registry_names = get_all_crs_registry_names(
+            self._crs_config_name, self._crs_configs_dir
+        )
+        required: set[str] = set()
+
+        for registry_name in registry_names:
+            registry_yaml = self._registry_dir / f"{registry_name}.yaml"
+            if not registry_yaml.exists():
+                raise FileNotFoundError(
+                    f"CRS registry entry not found for required_llms lookup: {registry_yaml}"
+                )
+            with registry_yaml.open("r") as f:
+                data = yaml.safe_load(f) or {}
+            raw_required = data.get("required_llms")
+            if raw_required is None:
+                continue
+            if not isinstance(raw_required, list) or not all(
+                isinstance(x, str) for x in raw_required
+            ):
+                raise ValueError(
+                    f"Invalid required_llms in {registry_yaml}; expected list[str]"
+                )
+            required.update(x.strip() for x in raw_required if x and x.strip())
+
+        return sorted(required), registry_names
+
+    @staticmethod
+    def _load_litellm_aliases(litellm_config_path: Path) -> set[str]:
+        """Load LiteLLM model aliases from config file."""
+        with litellm_config_path.open("r") as f:
+            cfg = yaml.safe_load(f) or {}
+        model_list = cfg.get("model_list", [])
+        aliases: set[str] = set()
+        if isinstance(model_list, list):
+            for model in model_list:
+                if isinstance(model, dict):
+                    alias = model.get("model_name")
+                    if isinstance(alias, str) and alias.strip():
+                        aliases.add(alias.strip())
+        return aliases
 
     @staticmethod
     def _ignore_dotfiles(_directory: str, contents: list[str]) -> list[str]:
@@ -250,6 +351,59 @@ class OssCrsAdapter:
         source = read_crs_source_from_registry(
             self._registry_dir, self._crs_config_name
         )
+        required_llms, required_sources = self._collect_required_llm_aliases()
+        litellm_config_path = (
+            Path(self._litellm_config_path)
+            if self._litellm_config_path
+            else self._crs_configs_dir / self._crs_config_name / "config-litellm.yaml"
+        )
+        llm_config: Optional[CrsComposeLlmConfig] = None
+        if litellm_config_path.exists():
+            llm_config = CrsComposeLlmConfig(litellm_config=str(litellm_config_path))
+            logger.info(
+                f"Using LiteLLM config for '{self._crs_config_name}': {litellm_config_path}"
+            )
+        elif self._litellm_config_path:
+            raise RuntimeError(
+                f"Configured litellm_config_path does not exist: {litellm_config_path}"
+            )
+        else:
+            logger.info(
+                f"No LiteLLM config found for '{self._crs_config_name}' at default path: {litellm_config_path}"
+            )
+
+        # Preflight contract validation: required_llms from CRS metadata must
+        # be present in selected LiteLLM config.
+        if required_llms:
+            if llm_config is None:
+                raise RuntimeError(
+                    "Missing LiteLLM config for CRS required_llms validation. "
+                    f"Required aliases: {', '.join(sorted(required_llms))}. "
+                    f"Registry sources: {', '.join(required_sources)}"
+                )
+            available = self._load_litellm_aliases(litellm_config_path)
+            missing = sorted(alias for alias in required_llms if alias not in available)
+            if missing:
+                raise RuntimeError(
+                    "LiteLLM config missing required aliases for CRS: "
+                    f"{', '.join(missing)}. "
+                    f"Config: {litellm_config_path}. "
+                    f"Registry sources: {', '.join(required_sources)}"
+                )
+            logger.info(
+                f"Validated required_llms for '{self._crs_config_name}' "
+                f"(aliases={len(required_llms)}, sources={','.join(required_sources)})"
+            )
+
+        additional_env: dict[str, str] = dict(self._additional_env_overrides)
+        if self._external_litellm:
+            if not self._litellm_url or not self._litellm_api_key:
+                raise RuntimeError(
+                    "external_litellm is enabled but litellm_url or "
+                    "litellm_api_key is missing"
+                )
+            additional_env["OSS_CRS_LLM_API_URL"] = self._litellm_url
+            additional_env["OSS_CRS_LLM_API_KEY"] = self._litellm_api_key
 
         compose_yaml = CrsComposeYaml(
             docker_registry=self._docker_registry,
@@ -262,8 +416,10 @@ class OssCrsAdapter:
                     source=source,
                     cpuset=self._oss_crs_infra_cpuset,
                     memory=self._oss_crs_infra_memory,
+                    additional_env=additional_env or None,
                 ),
             },
+            llm_config=llm_config,
         )
 
         compose_path = trial_output_dir / "crs-compose.yaml"
@@ -300,38 +456,44 @@ class OssCrsAdapter:
         # Stage benchmark to exclude ground truth dotfiles
         staged_path = self._stage_benchmark(benchmark_path, trial_output_dir)
 
-        # Phase 1: prepare (build CRS Docker images)
-        logger.info(f"oss-crs prepare for {project_name}")
-        stdout, stderr, rc = run_oss_crs_prepare(
-            compose_file,
-            work_dir,
-            oss_crs_cmd=self._oss_crs_cmd,
-            timeout=self._build_timeout,
-        )
-        if rc != 0:
-            # oss-crs outputs errors via rich console to stdout
-            detail = stderr or stdout
-            msg = f"oss-crs prepare failed (rc={rc}): {detail}"
-            raise RuntimeError(msg)
+        with self._acquire_build_lock(project_name):
+            # Re-check after lock in case another actor finished first.
+            if project_name in self._built_projects:
+                logger.debug(f"Project {project_name} already built, skipping")
+                return
 
-        # Phase 2: build-target (compile the target project)
-        logger.info(f"oss-crs build-target for {project_name}")
-        stdout, stderr, rc = run_oss_crs_build_target(
-            compose_file,
-            work_dir,
-            staged_path,
-            oss_crs_cmd=self._oss_crs_cmd,
-            timeout=self._build_timeout,
-            sanitizer=self._sanitizer,
-        )
-        if rc != 0:
-            # oss-crs outputs errors via rich console to stdout
-            detail = stderr or stdout
-            msg = f"oss-crs build-target failed (rc={rc}): {detail}"
-            raise RuntimeError(msg)
+            # Phase 1: prepare (build CRS Docker images)
+            logger.info(f"oss-crs prepare for {project_name}")
+            stdout, stderr, rc = run_oss_crs_prepare(
+                compose_file,
+                work_dir,
+                oss_crs_cmd=self._oss_crs_cmd,
+                timeout=self._build_timeout,
+            )
+            if rc != 0:
+                # oss-crs outputs errors via rich console to stdout
+                detail = stderr or stdout
+                msg = f"oss-crs prepare failed (rc={rc}): {detail}"
+                raise RuntimeError(msg)
 
-        self._built_projects.add(project_name)
-        logger.info(f"Build complete for {project_name}")
+            # Phase 2: build-target (compile the target project)
+            logger.info(f"oss-crs build-target for {project_name}")
+            stdout, stderr, rc = run_oss_crs_build_target(
+                compose_file,
+                work_dir,
+                staged_path,
+                oss_crs_cmd=self._oss_crs_cmd,
+                timeout=self._build_timeout,
+                sanitizer=self._sanitizer,
+            )
+            if rc != 0:
+                # oss-crs outputs errors via rich console to stdout
+                detail = stderr or stdout
+                msg = f"oss-crs build-target failed (rc={rc}): {detail}"
+                raise RuntimeError(msg)
+
+            self._built_projects.add(project_name)
+            logger.info(f"Build complete for {project_name}")
 
     def _find_pov_dir(self, trial_output_dir: Path) -> Optional[Path]:
         """Locate POV directory in trial output."""

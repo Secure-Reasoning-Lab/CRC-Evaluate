@@ -955,8 +955,7 @@ A single entry point for running experiments:
 
 ```sh
 $ crsbench run \
-  --experiment-config <CONFIG_FILE: e.g. experiment-config.yaml> \
-  --experiment-name <EXPERIMENT_NAME>
+  --experiment-config <CONFIG_FILE: e.g. experiment-config.yaml>
 ```
 
 Benchmarks, CRSes, and other experiment settings are specified in the experiment

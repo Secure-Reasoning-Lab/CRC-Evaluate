@@ -33,7 +33,7 @@ experiment_filestore: /tmp/crsbench/crsbench-integration-test-patch-vincent/expe
 report_filestore: /tmp/crsbench/crsbench-integration-test-patch-vincent/report-data
 
 # LiteLLM Configuration - passthrough mode (default)
-# Requires UPSTREAM_LITELLM_BASE_URL and LITELLM_API_KEY environment variables
+# Requires CRSBENCH_LLM_UPSTREAM_BASE_URL and CRSBENCH_LLM_API_KEY environment variables
 litellm_mode: passthrough
 
 # CRS Paths - optional configuration (defaults: crses/registry, crses/configs)

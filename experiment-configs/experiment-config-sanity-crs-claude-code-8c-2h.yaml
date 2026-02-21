@@ -11,6 +11,11 @@ trials: 1
 mode: delta
 adapter: oss-crs
 
+crs_compose:
+  docker_registry: us-central1-docker.pkg.dev/aixcc-scoring-prod/oss-fuzz
+  # Override per experiment to switch CRS model routing/profile.
+  litellm_config_path: /home/dongkwan/multilang-test/combined-litellm-config.yaml
+
 # Timeout Configuration
 # 4h build + 2h run + 4h verify + 1h buffer = 11h total
 max_total_time: 39600  # 11 hours total
@@ -50,4 +55,4 @@ resources:
 # With 8 cores/trial: floor(128 / 8) = 16 parallel trial jobs.
 worker:
   jobs: 16
-  cleanup_after_trial: true
+  cleanup_after_trial: false

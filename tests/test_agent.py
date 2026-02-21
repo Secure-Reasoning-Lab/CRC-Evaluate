@@ -23,8 +23,8 @@ from crsbench.utils.repo_manager import find_or_clone_project
 def litellm_config():
     """Get LiteLLM configuration from environment."""
     return {
-        "base_url": os.getenv("LITELLM_BASE_URL", "http://localhost:4000"),
-        "api_key": os.getenv("LITELLM_API_KEY", "test-key"),
+        "base_url": os.getenv("CRSBENCH_LLM_BASE_URL", "http://localhost:4000"),
+        "api_key": os.getenv("CRSBENCH_LLM_API_KEY", "test-key"),
     }
 
 
@@ -142,8 +142,8 @@ class TestShTestGenerator:
     def test_agent_initialization_from_env(self):
         """Test agent initialization from environment variables."""
         # Set env vars
-        os.environ["LITELLM_BASE_URL"] = "http://test:4000"
-        os.environ["LITELLM_API_KEY"] = "test-key-123"
+        os.environ["CRSBENCH_LLM_BASE_URL"] = "http://test:4000"
+        os.environ["CRSBENCH_LLM_API_KEY"] = "test-key-123"
 
         agent = ShTestGenerator()
 
@@ -153,21 +153,19 @@ class TestShTestGenerator:
     def test_agent_missing_base_url(self):
         """Test agent raises error when base URL is missing."""
         # Clear env vars
-        if "LITELLM_BASE_URL" in os.environ:
-            del os.environ["LITELLM_BASE_URL"]
-        if "LITELLM_API_BASE" in os.environ:
-            del os.environ["LITELLM_API_BASE"]
+        if "CRSBENCH_LLM_BASE_URL" in os.environ:
+            del os.environ["CRSBENCH_LLM_BASE_URL"]
 
-        with pytest.raises(ValueError, match="LITELLM_BASE_URL or LITELLM_API_BASE"):
+        with pytest.raises(ValueError, match="CRSBENCH_LLM_BASE_URL"):
             ShTestGenerator(litellm_api_key="test-key")
 
     def test_agent_missing_api_key(self):
         """Test agent raises error when API key is missing."""
         # Clear env var
-        if "LITELLM_API_KEY" in os.environ:
-            del os.environ["LITELLM_API_KEY"]
+        if "CRSBENCH_LLM_API_KEY" in os.environ:
+            del os.environ["CRSBENCH_LLM_API_KEY"]
 
-        with pytest.raises(ValueError, match="LITELLM_API_KEY"):
+        with pytest.raises(ValueError, match="CRSBENCH_LLM_API_KEY"):
             ShTestGenerator(litellm_base_url="http://test:4000")
 
     def test_agent_has_required_methods(self, litellm_config):
@@ -196,7 +194,7 @@ class TestShTestGenerator:
 
 @pytest.mark.integration
 @pytest.mark.skipif(
-    not os.getenv("LITELLM_BASE_URL") or not os.getenv("LITELLM_API_KEY"),
+    not os.getenv("CRSBENCH_LLM_BASE_URL") or not os.getenv("CRSBENCH_LLM_API_KEY"),
     reason="LiteLLM environment variables not set",
 )
 class TestAgentIntegration:
@@ -363,7 +361,7 @@ class TestGenerateTestShForBenchmark:
 @pytest.mark.integration
 @pytest.mark.mcp
 @pytest.mark.skipif(
-    not os.getenv("LITELLM_BASE_URL") or not os.getenv("LITELLM_API_KEY"),
+    not os.getenv("CRSBENCH_LLM_BASE_URL") or not os.getenv("CRSBENCH_LLM_API_KEY"),
     reason="LiteLLM environment variables not set",
 )
 @pytest.mark.skipif(

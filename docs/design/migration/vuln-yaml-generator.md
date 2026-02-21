@@ -138,8 +138,8 @@ python crsbench/migration/generate_vuln_yaml.py
 ```
 
 ## Environment Requirements
-- `LITELLM_BASE_URL`: LiteLLM proxy endpoint
-- `LITELLM_API_KEY`: API key for LiteLLM
+- `CRSBENCH_LLM_BASE_URL`: LiteLLM proxy endpoint
+- `CRSBENCH_LLM_API_KEY`: API key for LiteLLM
 - `PROJECT_REPOS_DIR`: Optional directory for cloned repos
 
 ## Generated Artifacts

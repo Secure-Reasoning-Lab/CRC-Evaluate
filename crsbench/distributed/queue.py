@@ -63,7 +63,7 @@ def create_redis_connection(
 ) -> "redis.Redis":
     """Create a Redis connection with auto-detection of password requirement.
 
-    Reads REDIS_PASSWORD from environment. If set but the server doesn't
+    Reads CRSBENCH_REDIS_PASSWORD from environment. If set but the server doesn't
     require auth (stale .env), retries without password. If not set but
     the server requires auth, raises a clear error.
 
@@ -79,7 +79,7 @@ def create_redis_connection(
 
     Raises:
         redis.AuthenticationError: If server requires a password but
-            REDIS_PASSWORD is not set
+            CRSBENCH_REDIS_PASSWORD is not set
         redis.ConnectionError: If server is unreachable
     """
     global _auth_required  # noqa: PLW0603
@@ -90,7 +90,7 @@ def create_redis_connection(
             "Install with: pip install redis rq"
         )
 
-    password = os.environ.get("REDIS_PASSWORD") or None
+    password = os.environ.get("CRSBENCH_REDIS_PASSWORD") or None
 
     # Fast path: use cached auth decision
     if _auth_required is True and password:
@@ -121,9 +121,9 @@ def create_redis_connection(
             _auth_required = True
             return conn
         except redis.AuthenticationError:
-            # Server doesn't need auth — stale REDIS_PASSWORD in env
+            # Server doesn't need auth — stale CRSBENCH_REDIS_PASSWORD in env
             logger.info(
-                "REDIS_PASSWORD is set but server requires no auth, "
+                "CRSBENCH_REDIS_PASSWORD is set but server requires no auth, "
                 "connecting without password"
             )
             conn = redis.Redis(
@@ -145,7 +145,7 @@ def create_redis_connection(
         return conn
     except redis.AuthenticationError:
         raise redis.AuthenticationError(
-            "Redis server requires authentication. Set REDIS_PASSWORD environment variable."
+            "Redis server requires authentication. Set CRSBENCH_REDIS_PASSWORD environment variable."
         ) from None
 
 

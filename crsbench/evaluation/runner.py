@@ -1,8 +1,8 @@
 """Main benchmark runner for CRS evaluation."""
 
+import shutil
 import threading
 import time
-import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -1197,7 +1197,9 @@ class BenchmarkRunner:
             # Patches are in trial_output_dir/output/patches/
             patch_dir = trial_output_dir / "output" / "patches"
             if not patch_dir.exists():
-                self.logger.warning(f"No patches directory found: {patch_dir}")
+                self.logger.info(
+                    f"No patches directory found (CRS produced no patches): {patch_dir}"
+                )
                 return []
 
             # POVs were prepared in trial_output_dir/crs-input/povs/
@@ -1288,7 +1290,9 @@ class BenchmarkRunner:
             # Discover patches in trial_output_dir/output/patches/
             patch_dir = trial_output_dir / "output" / "patches"
             if not patch_dir.exists():
-                self.logger.warning(f"No patches directory found: {patch_dir}")
+                self.logger.info(
+                    f"No patches directory found (CRS produced no patches): {patch_dir}"
+                )
                 return []
 
             patches: list[tuple[str, str, Path]] = []

@@ -31,7 +31,7 @@ def validate_redis_config(redis_host: str, redis_password: Optional[str] = None)
     if is_public and not redis_password:
         raise ValueError(
             "Redis password required for public binding. "
-            "Set REDIS_PASSWORD environment variable."
+            "Set CRSBENCH_REDIS_PASSWORD environment variable."
         )
 ```
 

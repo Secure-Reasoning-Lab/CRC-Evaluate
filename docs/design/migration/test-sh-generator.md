@@ -20,7 +20,7 @@ Automated tool to generate `test.sh` functional test scripts for benchmarks that
 6. **CLI Orchestrator**: Coordinates the workflow
 
 ### Agent Communication
-All agents use Claude Agent SDK with LiteLLM proxy (LITELLM_BASE_URL, LITELLM_API_KEY from environment)
+All agents use Claude Agent SDK with LiteLLM proxy (CRSBENCH_LLM_BASE_URL, CRSBENCH_LLM_API_KEY from environment)
 
 ### Data Flow
 ```
@@ -141,8 +141,8 @@ make test
 ```
 
 ## Environment Requirements
-- `LITELLM_BASE_URL`: LiteLLM proxy endpoint
-- `LITELLM_API_KEY`: API key for LiteLLM
+- `CRSBENCH_LLM_BASE_URL`: LiteLLM proxy endpoint
+- `CRSBENCH_LLM_API_KEY`: API key for LiteLLM
 - `PROJECT_REPO_DIR`: Optional, directory containing cloned project repos
 
 ## Future Enhancements (TODO)

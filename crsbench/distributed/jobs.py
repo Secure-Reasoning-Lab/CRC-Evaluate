@@ -19,11 +19,14 @@ from crsbench.evaluation.cleanup import cleanup_trial_directory, copy_trial_resu
 from crsbench.evaluation.litellm_tracker import (
     LiteLLMTracker,
     LiteLLMTrackerError,
-    is_tracking_available,
 )
 from crsbench.evaluation.results import TrialMetadata, TrialResult
 from crsbench.evaluation.runner import BenchmarkFormatError, BenchmarkRunner
 from crsbench.utils.crs_helper import get_crs_registry_name
+from crsbench.utils.litellm_env import (
+    required_env_errors_for_mode,
+    resolve_litellm_runtime_env,
+)
 from crsbench.utils.logger import (
     add_file_handler,
     create_trial_filter,
@@ -113,16 +116,21 @@ def _setup_llm_tracking(
     if not config.llm_tracking_enabled:
         return None, None
 
-    if not is_tracking_available():
+    runtime_env = resolve_litellm_runtime_env(config.litellm_mode or "passthrough")
+    contract_errors = required_env_errors_for_mode(runtime_env, tracking_enabled=True)
+    if contract_errors:
+        joined = "; ".join(contract_errors)
         logger.warning(
-            "LLM tracking enabled but required env vars not set. "
-            "Need (LITELLM_BASE_URL or UPSTREAM_LITELLM_BASE_URL) and "
-            "(LITELLM_MASTER_KEY or LITELLM_API_KEY). Skipping tracking."
+            "LLM tracking enabled but canonical runtime inputs are missing. "
+            f"{joined}. Skipping tracking."
         )
         return None, None
 
     try:
-        tracker = LiteLLMTracker()
+        tracker = LiteLLMTracker(
+            base_url=runtime_env.tracking_base_url,
+            master_key=runtime_env.master_key,
+        )
 
         # Extract cost budget from config if present
         max_budget = None
@@ -869,6 +877,11 @@ def run_crs_trial(
             # Spread crs_compose config fields when present
             **(config.crs_compose.model_dump() if config.crs_compose else {}),
         }
+        if config.crs_overrides and crs in config.crs_overrides:
+            override_dict = config.crs_overrides[crs].model_dump(exclude_none=True)
+            if override_dict:
+                adapter_config.update(override_dict)
+                logger.info(f"Applied CRS overrides for '{crs}'")
         if allocated_cpus:
             adapter_config["oss_crs_infra_cpuset"] = allocated_cpus
         adapter.configure(adapter_config)
@@ -889,6 +902,7 @@ def run_crs_trial(
         on_build_start, on_run_start, on_verification_start = _create_phase_callbacks()
 
         # Set up LLM tracking if enabled (must be before BenchmarkRunner creation)
+        os.environ["CRSBENCH_LLM_MODE"] = config.litellm_mode or "passthrough"
         llm_tracker, llm_api_key = _setup_llm_tracking(
             config=config,
             crs=crs,
@@ -908,20 +922,32 @@ def run_crs_trial(
 
         # When LLM tracking is enabled, enable external_litellm so
         # CRS containers route traffic through CRSBench's upstream LiteLLM proxy
-        if llm_api_key:
-            litellm_base_url = os.environ.get("LITELLM_BASE_URL") or os.environ.get(
-                "UPSTREAM_LITELLM_BASE_URL", ""
+        runtime_env = resolve_litellm_runtime_env(config.litellm_mode or "passthrough")
+        runtime_errors = required_env_errors_for_mode(
+            runtime_env, tracking_enabled=config.llm_tracking_enabled
+        )
+        if runtime_errors:
+            raise RuntimeError(
+                "Invalid LiteLLM runtime configuration: " + "; ".join(runtime_errors)
             )
-            if litellm_base_url:
+
+        # Passthrough mode: external LiteLLM endpoint is the direct runtime path.
+        # Prefer per-trial virtual key when tracking is enabled.
+        if (config.litellm_mode or "passthrough") == "passthrough":
+            litellm_runtime_key = (
+                llm_api_key or runtime_env.api_key or runtime_env.master_key
+            )
+            litellm_runtime_url = runtime_env.direct_base_url
+            if litellm_runtime_url and litellm_runtime_key:
                 adapter.configure(
                     {
                         "external_litellm": True,
-                        "litellm_url": litellm_base_url,
-                        "litellm_api_key": llm_api_key,
+                        "litellm_url": litellm_runtime_url,
+                        "litellm_api_key": litellm_runtime_key,
                     }
                 )
                 logger.info(
-                    "Configured compose adapter with external LiteLLM for tracking"
+                    "Configured compose adapter for passthrough LiteLLM runtime"
                 )
 
         runner = BenchmarkRunner(

@@ -137,7 +137,7 @@ def _get_env_file_path() -> Path:
 
 
 def _load_env_password() -> str | None:
-    """Parse .env file for REDIS_PASSWORD value."""
+    """Parse .env file for CRSBENCH_REDIS_PASSWORD value."""
     env_file = _get_env_file_path()
     if not env_file.exists():
         return None
@@ -146,13 +146,13 @@ def _load_env_password() -> str | None:
         if line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        if key.strip() == "REDIS_PASSWORD" and value.strip():
+        if key.strip() == "CRSBENCH_REDIS_PASSWORD" and value.strip():
             return value.strip()
     return None
 
 
 def _save_env_password(password: str) -> None:
-    """Update or append REDIS_PASSWORD in .env, chmod 600."""
+    """Update or append CRSBENCH_REDIS_PASSWORD in .env, chmod 600."""
     env_file = _get_env_file_path()
     lines: list[str] = []
     found = False
@@ -160,16 +160,16 @@ def _save_env_password(password: str) -> None:
     if env_file.exists():
         for line in env_file.read_text().splitlines():
             stripped = line.strip()
-            if stripped.startswith("REDIS_PASSWORD=") or (
-                not stripped.startswith("#") and "REDIS_PASSWORD=" in stripped
+            if stripped.startswith("CRSBENCH_REDIS_PASSWORD=") or (
+                not stripped.startswith("#") and "CRSBENCH_REDIS_PASSWORD=" in stripped
             ):
-                lines.append(f"REDIS_PASSWORD={password}")
+                lines.append(f"CRSBENCH_REDIS_PASSWORD={password}")
                 found = True
             else:
                 lines.append(line)
 
     if not found:
-        lines.append(f"REDIS_PASSWORD={password}")
+        lines.append(f"CRSBENCH_REDIS_PASSWORD={password}")
 
     env_file.write_text("\n".join(lines) + "\n")
     env_file.chmod(0o600)
@@ -191,7 +191,7 @@ def _get_active_password() -> str | None:
     """Return password only if the running server actually requires it."""
     if not _server_requires_password():
         return None
-    env_val = os.environ.get("REDIS_PASSWORD")
+    env_val = os.environ.get("CRSBENCH_REDIS_PASSWORD")
     if env_val:
         return env_val
     return _load_env_password()

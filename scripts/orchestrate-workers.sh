@@ -19,7 +19,7 @@
 #   all         Push + setup + start (full deployment)
 #
 # Environment:
-#   REDIS_PASSWORD  Override Redis password (default: read from .env)
+#   CRSBENCH_REDIS_PASSWORD  Override Redis password (default: read from .env)
 #
 # Examples:
 #   scripts/orchestrate-workers.sh redis-setup            # One-time Redis setup
@@ -62,8 +62,8 @@ log() { echo "[orchestrate] $*"; }
 err() { echo "[orchestrate] ERROR: $*" >&2; }
 
 load_env() {
-    # Source .env if it exists and REDIS_PASSWORD not already set
-    if [[ -z "${REDIS_PASSWORD:-}" ]] && [[ -f "$ENV_FILE" ]]; then
+    # Source .env if it exists and CRSBENCH_REDIS_PASSWORD not already set
+    if [[ -z "${CRSBENCH_REDIS_PASSWORD:-}" ]] && [[ -f "$ENV_FILE" ]]; then
         # shellcheck disable=SC1090
         source "$ENV_FILE"
     fi
@@ -71,8 +71,8 @@ load_env() {
 
 get_redis_password() {
     load_env
-    if [[ -n "${REDIS_PASSWORD:-}" ]]; then
-        echo "$REDIS_PASSWORD"
+    if [[ -n "${CRSBENCH_REDIS_PASSWORD:-}" ]]; then
+        echo "$CRSBENCH_REDIS_PASSWORD"
         return
     fi
     err "Redis password not found. Run: scripts/orchestrate-workers.sh redis-setup"
@@ -130,7 +130,7 @@ cmd_redis_setup() {
 
     # Reuse existing password from .env, or generate a new one
     load_env
-    local password="${REDIS_PASSWORD:-}"
+    local password="${CRSBENCH_REDIS_PASSWORD:-}"
     if [[ -z "$password" ]]; then
         password=$(openssl rand -base64 24)
         log "  Generated new Redis password"
@@ -165,7 +165,7 @@ cmd_redis_setup() {
     done
 
     # Save to .env
-    echo "REDIS_PASSWORD=$password" > "$ENV_FILE"
+    echo "CRSBENCH_REDIS_PASSWORD=$password" > "$ENV_FILE"
     chmod 600 "$ENV_FILE"
 
     log "  Container:  $container_name (redis:latest)"
@@ -208,11 +208,11 @@ cmd_setup() {
         if [[ -f "$ENV_FILE" ]]; then
             scp -q $SSH_OPTS "$ENV_FILE" "$host:$INSTALL_DIR/.env"
         fi
-        # Pass REDIS_PASSWORD if available so setup can test connectivity
+        # Pass CRSBENCH_REDIS_PASSWORD if available so setup can test connectivity
         load_env
         local redis_env=""
-        if [[ -n "${REDIS_PASSWORD:-}" ]]; then
-            redis_env="REDIS_PASSWORD=$REDIS_PASSWORD"
+        if [[ -n "${CRSBENCH_REDIS_PASSWORD:-}" ]]; then
+            redis_env="CRSBENCH_REDIS_PASSWORD=$CRSBENCH_REDIS_PASSWORD"
         fi
         ssh $SSH_OPTS "$host" "$redis_env bash /tmp/setup-remote-worker.sh $machine" \
             > "$logfile" 2>&1 &
@@ -284,9 +284,9 @@ cmd_start() {
         # Kill existing tmux session if present
         ssh_cmd "$host" "tmux kill-session -t $TMUX_SESSION 2>/dev/null || true"
 
-        # Start worker in tmux with REDIS_PASSWORD and PATH for uv
+        # Start worker in tmux with CRSBENCH_REDIS_PASSWORD and PATH for uv
         ssh_cmd "$host" "tmux new-session -d -s $TMUX_SESSION \
-            'export PATH=\$HOME/.local/bin:\$PATH && export REDIS_PASSWORD=\"$redis_pass\" && cd $INSTALL_DIR && uv run crsbench worker --experiment-config $config 2>&1 | tee worker.log'"
+            'export PATH=\$HOME/.local/bin:\$PATH && export CRSBENCH_REDIS_PASSWORD=\"$redis_pass\" && cd $INSTALL_DIR && uv run crsbench worker --experiment-config $config 2>&1 | tee worker.log'"
 
         log "  $machine: worker started (tmux session: $TMUX_SESSION)"
     done

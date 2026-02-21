@@ -190,8 +190,6 @@ crsbench evaluator \
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `--experiment-config` | Path to experiment config YAML | Required |
-| `--experiment-name` | Override experiment name (queue name) | From config |
-| `--redis-host` | Redis server hostname | `localhost` |
 | `--build-jobs` | Max concurrent build jobs | `1` |
 | `--build-cores-per-job` | CPUs per build job | `1` |
 | `--verify-jobs` | Max concurrent verify jobs | `build-jobs × build-cores-per-job` |
@@ -220,8 +218,6 @@ Job count is configured in the experiment config YAML under `worker.jobs`.
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `--experiment-config` | Path to experiment config YAML | Required |
-| `--experiment-name` | Override experiment name | From config |
-| `--redis-host` | Redis server hostname | `localhost` |
 | `--cores` | CPU cores (count or range, e.g., `0-111`) | All available |
 | `--skip-cpus` | CPUs to exclude | None |
 | `--continuous` | Keep running after queue empties | `false` |
@@ -250,15 +246,15 @@ crsbench worker --experiment-config config.yaml --cores 0-111
 
 **Machine B..N** (Remote Workers):
 ```bash
-# Copy .env from Machine A (contains REDIS_PASSWORD)
+# Copy .env from Machine A (contains CRSBENCH_REDIS_PASSWORD)
 scp user@machine-a:/path/to/CRSBench/.env /path/to/CRSBench/.env
 
 # Setup: bundle packages and prepare environment
 scripts/orchestrate-workers.sh setup
 
-# Start worker (redis_host points to Machine A)
+# Start worker (set CRSBENCH_REDIS_HOST in .env for Machine A)
 crsbench worker --experiment-config config.yaml \
-    --redis-host <machine-a-host> --continuous
+    --continuous
 ```
 
 After all trials complete, collect experiment data back to the orchestrator:
@@ -284,8 +280,8 @@ crsbench run --experiment-config config.yaml
 # Tunnel to Machine A's Valkey
 ssh -N -L 6379:localhost:6379 user@machine-a &
 
-# Start worker (redis_host=localhost via tunnel)
-crsbench worker --experiment-config config.yaml --redis-host localhost --continuous
+# Start worker (set CRSBENCH_REDIS_HOST=localhost via tunnel)
+crsbench worker --experiment-config config.yaml --continuous
 ```
 
 For persistent tunnels during long experiments:
@@ -362,15 +358,23 @@ python scripts/valkey-helper.py stats
 
 Always clean queues before re-running an experiment with the same name or after an interrupted run.
 
+## CI Smoke Secrets
+
+For GitHub smoke workflows (`ci.yml` and `smoke-crs-regression.yml`) using bug-fixing CRS in passthrough mode, configure these repository secrets:
+
+- `CRSBENCH_LLM_UPSTREAM_BASE_URL`
+- `CRSBENCH_LLM_MASTER_KEY`
+- `CRSBENCH_LLM_API_KEY` (optional fallback when not using per-trial keys)
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Workers not picking up jobs | Queue name mismatch | Verify `--experiment-name` matches between orchestrator and workers |
+| Workers not picking up jobs | Queue name mismatch | Verify `experiment` in config is identical on orchestrator and workers |
 | "Redis not available" | Valkey not running or wrong host | `python scripts/valkey-helper.py status`; check `redis_host` in config |
 | Workers exit immediately | Queue is empty (burst mode) | Use `--continuous` flag to keep workers running |
 | Stale jobs from previous run | Queue not cleaned | `python scripts/valkey-helper.py clean <experiment>` |
-| `UPSTREAM_LITELLM_BASE_URL not set` | LiteLLM not needed but `litellm_mode` still active | Set `skip_litellm: true` in experiment config |
+| `CRSBENCH_LLM_UPSTREAM_BASE_URL not set` | LiteLLM not needed but `litellm_mode` still active | Set `skip_litellm: true` in experiment config |
 
 ## CLI Reference
 

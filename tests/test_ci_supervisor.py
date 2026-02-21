@@ -305,8 +305,6 @@ class TestEvaluatorCommandCiFlags:
                 "evaluator",
                 "--experiment-config",
                 "test.yaml",
-                "--experiment-name",
-                "exp1",
                 "--build-jobs",
                 "16",
             ]
@@ -330,8 +328,6 @@ class TestEvaluatorCommandCiFlags:
                 "evaluator",
                 "--experiment-config",
                 "test.yaml",
-                "--experiment-name",
-                "exp1",
             ]
         )
         assert args.build_cores_per_job == 1
@@ -355,8 +351,6 @@ class TestEvaluatorCommandCiFlags:
                     "evaluator",
                     "--experiment-config",
                     "test.yaml",
-                    "--experiment-name",
-                    "exp1",
                     "--build-workers",
                     "4",
                 ]
@@ -381,8 +375,6 @@ class TestEvaluatorCommandCiFlags:
                     "evaluator",
                     "--experiment-config",
                     "test.yaml",
-                    "--experiment-name",
-                    "exp1",
                     "--verify-workers",
                     "8",
                 ]

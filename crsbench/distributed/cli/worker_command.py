@@ -23,17 +23,14 @@ def add_worker_subparser(subparsers) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Run worker with default settings (localhost Redis, 'default' experiment)
+  # Run worker with default settings ('default' experiment)
   %(prog)s
 
   # Run worker for specific experiment
-  %(prog)s --experiment-name my-experiment --redis-host redis.example.com
+  %(prog)s --experiment-config my-experiment-config.yaml
 
   # Run worker in continuous mode with DEBUG logging
-  %(prog)s --continuous --log-level DEBUG
-
-  # Run worker with custom timeout
-  %(prog)s --timeout 7200 --experiment-name long-running-exp
+  %(prog)s --continuous --verbose
         """,
     )
 
@@ -46,36 +43,9 @@ Examples:
     )
 
     worker_parser.add_argument(
-        "--redis-host",
-        type=str,
-        default="localhost",
-        metavar="HOST",
-        help="Redis server hostname or IP address (default: localhost)",
-    )
-
-    worker_parser.add_argument(
-        "--experiment-name",
-        type=str,
-        default="default",
-        metavar="NAME",
-        help="Experiment identifier for queue naming (default: default)",
-    )
-
-    worker_parser.add_argument(
-        "--timeout",
-        type=int,
-        default=3600,
-        metavar="SECONDS",
-        help="Job execution timeout in seconds (default: 3600)",
-    )
-
-    worker_parser.add_argument(
-        "--log-level",
-        type=str,
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        metavar="LEVEL",
-        help="Logging level (default: INFO)",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging (DEBUG level)",
     )
 
     worker_parser.add_argument(
@@ -132,14 +102,16 @@ def run_worker(args: argparse.Namespace) -> int:
     from crsbench.distributed.worker import run_worker_continuous
     from crsbench.utils.logger import configure_logger, get_logger
 
+    log_level = "DEBUG" if args.verbose else "INFO"
     # Configure logging
-    configure_logger(level=args.log_level, sink=sys.stdout)
+    configure_logger(level=log_level, sink=sys.stdout)
+    # Propagate log level to worker subprocesses.
+    os.environ["CRSBENCH_LOG_LEVEL"] = log_level
     logger = get_logger(__name__)
 
     # Load experiment config if provided
     config = None
     worker_config = None
-    experiment_name_from_config = None
     if args.experiment_config:
         from crsbench.run_experiment import load_experiment_config
 
@@ -147,7 +119,6 @@ def run_worker(args: argparse.Namespace) -> int:
         logger.info(f"Loading experiment config from: {config_path}")
         config = load_experiment_config(config_path)
         worker_config = config.worker
-        experiment_name_from_config = config.experiment
         if worker_config:
             logger.info("Using worker configuration from experiment config")
 
@@ -184,25 +155,24 @@ def run_worker(args: argparse.Namespace) -> int:
             return config_val
         return cli_val  # Use CLI default
 
-    redis_host = resolve(
-        args.redis_host,
+    redis_host = (
         (worker_config.redis_host if worker_config else None)
-        or (config.redis_host if config else None),
-        "localhost",
+        or (config.redis_host if config else None)
+        or os.environ.get("CRSBENCH_REDIS_HOST", "localhost")
     )
     num_workers = worker_config.jobs if worker_config else 1
     continuous = args.continuous or (
         worker_config.continuous if worker_config else False
     )
-    experiment_name = resolve(
-        args.experiment_name, experiment_name_from_config, "default"
-    )
+    experiment_name = config.experiment if config else "default"
 
     # Trial queue name
     queue_name = f"crsbench_{experiment_name}"
 
-    # Export experiment name for worker logging (internal operational env var)
-    os.environ["CRSBENCH_EXPERIMENT_NAME"] = experiment_name
+    # Resolve worker name: CLI > config > hostname
+    worker_name = args.worker_name
+    if worker_name is None and worker_config and worker_config.worker_name:
+        worker_name = worker_config.worker_name
 
     # Validate --no-cpuset with multiple workers
     if getattr(args, "no_cpuset", False) and num_workers > 1:
@@ -229,7 +199,7 @@ def run_worker(args: argparse.Namespace) -> int:
             run_worker_continuous(
                 redis_host=redis_host,
                 experiment_name=experiment_name,
-                worker_name=args.worker_name,
+                worker_name=worker_name,
                 num_workers=num_workers,
                 queue_name=queue_name,
                 use_cpuset=use_cpuset,
@@ -237,17 +207,19 @@ def run_worker(args: argparse.Namespace) -> int:
                 disk_check_interval=disk_check_interval,
                 cores=cores,
                 skip_cpus=skip_cpus,
+                log_level=log_level,
             )
             return 0
         return worker_main(
             redis_host=redis_host,
             experiment_name=experiment_name,
-            worker_name=args.worker_name,
+            worker_name=worker_name,
             num_workers=num_workers,
             queue_name=queue_name,
             use_cpuset=use_cpuset,
             cores=cores,
             skip_cpus=skip_cpus,
+            log_level=log_level,
         )
 
     except KeyboardInterrupt:

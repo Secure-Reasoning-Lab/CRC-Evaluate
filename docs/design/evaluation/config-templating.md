@@ -7,7 +7,7 @@ This document describes the design for runtime CRS configuration generation usin
 ## Problem Statement
 
 Currently, CRS configurations in `crses/configs/<crs-name>/` are static:
-- `.env` - Secrets (POSTGRES_PASSWORD, LITELLM_MASTER_KEY)
+- `.env` - Secrets (POSTGRES_PASSWORD, CRSBENCH_LLM_MASTER_KEY)
 - `config-resource.yaml` - Workers, CPU, memory, LLM budgets
 - `config-litellm.yaml` - LLM model endpoints
 
@@ -70,7 +70,7 @@ crs_overrides:
   # Global defaults (apply to ALL CRS unless overridden)
   default:
     env:
-      LITELLM_MASTER_KEY: sk-experiment-key-123
+      CRSBENCH_LLM_MASTER_KEY: sk-experiment-key-123
       POSTGRES_PASSWORD: experiment-password
     resources:
       workers:
@@ -913,7 +913,7 @@ crses: [mock-crs]
 crs_overrides:
   default:
     env:
-      LITELLM_MASTER_KEY: sk-test-key
+      CRSBENCH_LLM_MASTER_KEY: sk-test-key
     resources:
       workers:
         local:

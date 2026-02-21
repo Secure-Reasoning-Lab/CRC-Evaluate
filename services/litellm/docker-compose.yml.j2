@@ -16,7 +16,7 @@ services:
     container_name: litellm-{{ trial_id }}
     environment:
       # LiteLLM master key for authentication
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+      - CRSBENCH_LLM_MASTER_KEY=${CRSBENCH_LLM_MASTER_KEY}
 
       # OpenAI
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -48,9 +48,9 @@ services:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
 
       # Proxy Mode (optional) - Forward to upstream LiteLLM
-      # Uses UPSTREAM_LITELLM_BASE_URL for the upstream URL
-      # Uses LITELLM_API_KEY (above) for upstream authentication
-      - UPSTREAM_LITELLM_BASE_URL=${UPSTREAM_LITELLM_BASE_URL:-}
+      # Uses CRSBENCH_LLM_UPSTREAM_BASE_URL for the upstream URL
+      # Uses CRSBENCH_LLM_API_KEY (above) for upstream authentication
+      - CRSBENCH_LLM_UPSTREAM_BASE_URL=${CRSBENCH_LLM_UPSTREAM_BASE_URL:-}
 
       # Logging configuration
       - JSON_LOGS=true

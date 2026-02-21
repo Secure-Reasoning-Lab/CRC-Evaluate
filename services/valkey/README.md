@@ -27,7 +27,7 @@ python scripts/valkey-helper.py status
 python scripts/valkey-helper.py --bind-host start
 
 # Now you can run workers on host
-export REDIS_HOST=localhost
+export CRSBENCH_REDIS_HOST=localhost
 python -m crsbench.distributed.worker
 ```
 
@@ -142,7 +142,7 @@ redis_host: valkey     # For docker-compose network
 ### Environment Variables for Workers
 
 ```bash
-export REDIS_HOST=localhost
+export CRSBENCH_REDIS_HOST=localhost
 export EXPERIMENT_NAME=my-experiment
 
 # Start worker

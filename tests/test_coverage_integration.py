@@ -182,7 +182,7 @@ class TestCoverageManagerIntegration:
             extract_dir.mkdir()
 
             with tarfile.open(archive_path, "r:gz") as tar:
-                tar.extractall(extract_dir)
+                tar.extractall(extract_dir, filter="data")
 
             # Verify coverage.json exists and has correct content
             coverage_json = extract_dir / "coverage.json"

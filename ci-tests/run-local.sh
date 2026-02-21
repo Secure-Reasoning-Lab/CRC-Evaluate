@@ -4,11 +4,14 @@
 # CI runs: checks → format → sanity-mock → e2e
 #
 # Usage:
-#   ./ci-tests/run-local.sh              # Run full CI pipeline (checks + format + mock + e2e)
+#   ./ci-tests/run-local.sh              # Run full CI pipeline (checks + format + mock + smoke)
 #   ./ci-tests/run-local.sh checks       # Stage 1: typecheck, lint, format, unit tests
 #   ./ci-tests/run-local.sh format       # Stage 2a: format validation (sanity benchmarks)
 #   ./ci-tests/run-local.sh sanity       # Stage 2b: all checks (mock-c + mock-java)
 #   ./ci-tests/run-local.sh e2e          # Stage 3: bug finding E2E
+#   ./ci-tests/run-local.sh smoke        # Stage 4: parallel smoke (bugfinding + bugfixing)
+#   ./ci-tests/run-local.sh smoke-bugfinding
+#   ./ci-tests/run-local.sh smoke-bugfixing
 #
 # TODO: re-enable after adding HuggingFace download to CI
 #   ./ci-tests/run-local.sh all          # Run all stages including integration
@@ -211,6 +214,50 @@ if '$expected_cpv' not in cpvs:
     success "E2E PASSED: All answer POVs found!"
 }
 
+# Stage 4: smoke checks for default regression CRSs
+run_smoke_bugfinding() {
+    run_stage "Stage 4a: Smoke Bugfinding (atlantis-multilang-given_fuzzer)"
+    uv run python ci-tests/smoke_runner.py \
+        --suite bugfinding \
+        --worker-cores 16 \
+        --keep-workspace || fail "Smoke bugfinding failed"
+    success "Smoke bugfinding passed"
+}
+
+run_smoke_bugfixing() {
+    run_stage "Stage 4b: Smoke Bugfixing (crs-claude-code)"
+    uv run python ci-tests/smoke_runner.py \
+        --suite bugfixing \
+        --worker-cores 16 \
+        --keep-workspace || fail "Smoke bugfixing failed"
+    success "Smoke bugfixing passed"
+}
+
+run_smoke_parallel() {
+    run_stage "Stage 4: Parallel Smoke (bugfinding + bugfixing)"
+
+    # Run in parallel with disjoint cpusets by default.
+    # Override with env vars if your machine has a different layout.
+    local bugfinding_cpuset=${SMOKE_CPUSET_BUGFINDING:-0-23}
+    local bugfixing_cpuset=${SMOKE_CPUSET_BUGFIXING:-24-47}
+
+    uv run python ci-tests/smoke_runner.py \
+        --suite bugfinding \
+        --worker-cpuset "$bugfinding_cpuset" \
+        --keep-workspace &
+    pid1=$!
+
+    uv run python ci-tests/smoke_runner.py \
+        --suite bugfixing \
+        --worker-cpuset "$bugfixing_cpuset" \
+        --keep-workspace &
+    pid2=$!
+
+    wait "$pid1" || fail "Parallel smoke bugfinding failed"
+    wait "$pid2" || fail "Parallel smoke bugfixing failed"
+    success "Parallel smoke passed"
+}
+
 # Main
 main() {
     local stage=${1:-default}
@@ -238,14 +285,23 @@ main() {
         e2e)
             run_e2e
             ;;
+        smoke)
+            run_smoke_parallel
+            ;;
+        smoke-bugfinding)
+            run_smoke_bugfinding
+            ;;
+        smoke-bugfixing)
+            run_smoke_bugfixing
+            ;;
         default)
-            # Default: matches CI pipeline (checks → format → mock → e2e)
+            # Default: matches CI pipeline (checks → format → mock → smoke)
             run_checks
             run_format
             run_sanity
             # TODO: re-enable after adding HuggingFace download
             # run_sanity_real
-            run_e2e
+            run_smoke_parallel
             ;;
         all)
             run_checks
@@ -254,16 +310,19 @@ main() {
             # TODO: re-enable after adding HuggingFace download
             # run_sanity_real
             # run_integration
-            run_e2e
+            run_smoke_parallel
             ;;
         *)
-            echo "Usage: $0 [checks|format|sanity|e2e]"
+            echo "Usage: $0 [checks|format|sanity|e2e|smoke|smoke-bugfinding|smoke-bugfixing]"
             echo ""
-            echo "  (default)    Run checks + format + sanity-mock + e2e (matches CI)"
+            echo "  (default)    Run checks + format + sanity-mock + smoke (matches CI)"
             echo "  checks       Stage 1: typecheck, lint, format, unit tests"
             echo "  format       Stage 2a: format validation (sanity benchmarks)"
             echo "  sanity       Stage 2b: all checks (mock-c + mock-java)"
-            echo "  e2e          Stage 3: bug finding E2E"
+            echo "  e2e          Optional: bug finding E2E (longer/deeper)"
+            echo "  smoke        Stage 4: parallel smoke checks (bugfinding + bugfixing)"
+            echo "  smoke-bugfinding  Smoke check for atlantis-multilang-given_fuzzer"
+            echo "  smoke-bugfixing   Smoke check for crs-claude-code"
             exit 1
             ;;
     esac

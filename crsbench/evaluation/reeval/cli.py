@@ -611,7 +611,9 @@ def _reeval_patch_generation(
 
     patch_dir = trial_dir / "output" / "patches"
     if not patch_dir.exists():
-        logger.warning(f"No patches directory found: {patch_dir}")
+        logger.info(
+            f"No patches directory found (CRS produced no patches): {patch_dir}"
+        )
         return 0
 
     pov_dir = trial_dir / "crs-input" / "povs"

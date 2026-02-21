@@ -105,24 +105,24 @@ def main(
     use_cpuset: bool = False,
     cores: Optional[str] = None,
     skip_cpus: Optional[str] = None,
+    log_level: str = "INFO",
 ) -> int:
     """
     Worker entry point - connects to Redis and processes trial jobs.
 
     Args:
-        redis_host: Redis server hostname (overrides REDIS_HOST env var)
-        experiment_name: Experiment identifier (overrides EXPERIMENT_NAME env var)
+        redis_host: Redis server hostname (overrides CRSBENCH_REDIS_HOST env var)
+        experiment_name: Experiment identifier for queue naming
         worker_name: Worker name for identification
         num_workers: Number of parallel worker processes
         queue_name: Redis queue name
         use_cpuset: Enable CPU affinity
         cores: CPU cores for worker pool
         skip_cpus: CPUs to exclude from allocation
+        log_level: Worker logging level (default: INFO)
 
     Environment Variables (used when CLI args not provided):
-        REDIS_HOST: Redis server hostname (default: localhost)
-        EXPERIMENT_NAME: Experiment identifier for queue naming (default: default)
-        LOG_LEVEL: Logging level (default: INFO)
+        CRSBENCH_REDIS_HOST: Redis server hostname (default: localhost)
 
     Returns:
         Exit code (0 for success, non-zero for errors)
@@ -135,7 +135,6 @@ def main(
         4: Another worker already running
     """
     # Configure logging (if not already configured by caller)
-    log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
     configure_logger(level=log_level, sink=sys.stdout)
 
     # Check if Redis/RQ available
@@ -144,12 +143,10 @@ def main(
         logger.error("Install with: pip install redis rq")
         sys.exit(1)
 
-    # Get configuration: CLI args override environment variables
-    redis_host = redis_host or os.environ.get("REDIS_HOST", "localhost")
-    experiment_name = experiment_name or os.environ.get("EXPERIMENT_NAME", "default")
-    worker_name = (
-        worker_name or os.environ.get("CRSBENCH_WORKER_NAME") or socket.gethostname()
-    )
+    # Resolve runtime configuration.
+    redis_host = redis_host or os.environ.get("CRSBENCH_REDIS_HOST", "localhost")
+    experiment_name = experiment_name or "default"
+    worker_name = worker_name or socket.gethostname()
 
     from crsbench.distributed.queue import validate_queue_name_component
 
@@ -210,6 +207,7 @@ def main(
         num_workers,
         queue_name=queue_name,
         continuous=False,
+        log_level=log_level,
     )
 
 
@@ -221,6 +219,7 @@ def _spawn_workers(
     queue_name: Optional[str] = None,
     *,
     continuous: bool = False,
+    log_level: str = "INFO",
 ) -> int:
     """Spawn multiple worker processes.
 
@@ -248,7 +247,11 @@ def _spawn_workers(
             p = multiprocessing.Process(
                 target=_run_single_worker,
                 args=(redis_host, experiment_name, name),
-                kwargs={"continuous": continuous, "queue_name": queue_name},
+                kwargs={
+                    "continuous": continuous,
+                    "queue_name": queue_name,
+                    "log_level": log_level,
+                },
                 name=f"worker-{i}",
             )
             p.start()
@@ -290,6 +293,7 @@ def _run_single_worker(
     *,
     continuous: bool = False,
     queue_name: Optional[str] = None,
+    log_level: str = "INFO",
 ):
     """Run a single worker process (for multiprocessing).
 
@@ -301,7 +305,7 @@ def _run_single_worker(
         queue_name: Redis queue name (default: crsbench_{experiment_name})
     """
     # Note: This runs in a subprocess, so we need to reconfigure logging
-    configure_logger(level=os.environ.get("LOG_LEVEL", "INFO").upper(), sink=sys.stdout)
+    configure_logger(level=log_level, sink=sys.stdout)
 
     if continuous:
         # Run continuous worker (without spawning more workers)
@@ -311,6 +315,7 @@ def _run_single_worker(
             worker_name=worker_name,
             num_workers=1,
             queue_name=queue_name,
+            log_level=log_level,
         )
     else:
         # Run burst mode worker
@@ -387,6 +392,7 @@ def run_worker_continuous(
     disk_check_interval: int = 60,
     cores: Optional[str] = None,
     skip_cpus: Optional[str] = None,
+    log_level: str = "INFO",
 ):
     """
     Run worker in continuous mode (polling indefinitely).
@@ -413,9 +419,7 @@ def run_worker_continuous(
     if not REDIS_AVAILABLE:
         raise RuntimeError("Redis and RQ packages are required")
 
-    worker_name = (
-        worker_name or os.environ.get("CRSBENCH_WORKER_NAME") or socket.gethostname()
-    )
+    worker_name = worker_name or socket.gethostname()
 
     from crsbench.distributed.queue import validate_queue_name_component
 
@@ -460,6 +464,7 @@ def run_worker_continuous(
             num_workers,
             queue_name=queue_name,
             continuous=True,
+            log_level=log_level,
         )
 
     if exit_code != 0:

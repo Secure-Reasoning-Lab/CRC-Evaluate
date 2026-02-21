@@ -45,7 +45,7 @@ Utility Functions Usage:
     log_file_info("/path/to/file.txt", "Report saved")
 
 Configuration:
-    - Log level can be set via LOG_LEVEL environment variable (default: INFO)
+    - Default log level is INFO unless overridden by CLI/code via configure_logger()
     - Colors are automatically disabled for non-TTY output (e.g., file redirection)
     - Format includes timestamp, level, module name, and message
 """
@@ -62,8 +62,8 @@ from loguru import logger as _loguru_logger
 # Remove default handler to prevent duplicate logs
 _loguru_logger.remove()
 
-# Determine log level from environment variable or default to INFO
-_log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+# Default logger level
+_log_level = "INFO"
 
 
 def _format_module_path(record):

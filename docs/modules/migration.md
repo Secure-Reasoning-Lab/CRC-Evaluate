@@ -70,8 +70,8 @@ Security patch validation requires functional testing beyond vulnerability trigg
 ```bash
 # Create .env file in project root
 cat > .env << 'EOF'
-LITELLM_BASE_URL=http://localhost:4000
-LITELLM_API_KEY=your-api-key-here
+CRSBENCH_LLM_BASE_URL=http://localhost:4000
+CRSBENCH_LLM_API_KEY=your-api-key-here
 PROJECT_REPOS_DIR=/home/acorn421/work/team-atlanta/afc-repos
 EOF
 
@@ -81,8 +81,8 @@ EOF
 #### Option 2: Set environment variables manually
 
 ```bash
-export LITELLM_BASE_URL="http://localhost:4000"
-export LITELLM_API_KEY="your-api-key"
+export CRSBENCH_LLM_BASE_URL="http://localhost:4000"
+export CRSBENCH_LLM_API_KEY="your-api-key"
 export PROJECT_REPOS_DIR="/home/acorn421/work/team-atlanta/afc-repos"
 ```
 
@@ -127,8 +127,8 @@ Basic structure validation without requiring Claude Agent SDK.
 #### Full Test (Requires LiteLLM)
 ```bash
 # Set up environment first
-export LITELLM_BASE_URL="http://localhost:4000"
-export LITELLM_API_KEY="your-api-key"
+export CRSBENCH_LLM_BASE_URL="http://localhost:4000"
+export CRSBENCH_LLM_API_KEY="your-api-key"
 
 # Run full test suite
 python crsbench/migration/test_agent_simple.py
@@ -287,7 +287,7 @@ description: 'MOCK: ... (TBD) ...'
 3. **vuln_agent_log.txt** - Agent execution log (per CPV)
 
 ### Requirements
-- LITELLM_BASE_URL and LITELLM_API_KEY environment variables
+- CRSBENCH_LLM_BASE_URL and CRSBENCH_LLM_API_KEY environment variables
 - Claude Agent SDK
 - Project source code (auto-cloned if not present)
 

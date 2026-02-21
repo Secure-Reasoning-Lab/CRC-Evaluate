@@ -84,7 +84,6 @@ experiment_filestore: /tmp/crsbench/experiment-data
 report_filestore: /tmp/crsbench/report-data
 crses:
   - atlantis-c
-  - ensemble-c
 benchmarks:
   - curl-delta-02
   - libxml2-delta-03
@@ -96,7 +95,7 @@ benchmarks:
         assert config.trials == 3
         assert config.max_total_time == 20000
         assert config.difficulty_level == 2
-        assert config.crses == ["atlantis-c", "ensemble-c"]
+        assert config.crses == ["atlantis-c"]
         assert config.benchmarks == ["curl-delta-02", "libxml2-delta-03"]
         assert config.benchmark_suite is None
 
@@ -188,7 +187,7 @@ class TestTrialMatrixGeneration:
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["crs1", "crs2"],
+            crses=["crs1"],
             benchmarks=["bench1", "bench2"],
             only_cpv_harnesses=False,
         )
@@ -239,7 +238,7 @@ class TestTrialMatrixGeneration:
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
             report_filestore="/tmp/rep",
-            crses=["crs1", "crs2"],
+            crses=["crs1"],
             benchmarks=["bench1", "bench2"],
             only_cpv_harnesses=False,
         )
@@ -364,7 +363,7 @@ class TestTrialMatrixGeneration:
                 difficulty_level=1,
                 experiment_filestore="/tmp/exp",
                 report_filestore="/tmp/rep",
-                crses=crses,
+                crses=["crs1"],
                 benchmarks=["dummy"],  # Not used, but required for config
                 only_cpv_harnesses=False,
             )
@@ -602,11 +601,11 @@ class TestOnlyCpvHarnesses:
 # ============================================================================
 
 
-class TestCLIOverrides:
-    """Test CLI argument override behavior (only --experiment-name remains)."""
+class TestExperimentNameSource:
+    """Test experiment name source of truth behavior."""
 
-    def test_cli_override_experiment_name(self, tmp_path):
-        """Test CLI override of experiment name."""
+    def test_experiment_name_from_config(self, tmp_path):
+        """Experiment name is taken from config."""
         config_path = tmp_path / "config.yaml"
         config_path.write_text("""
 experiment: original-name
@@ -622,18 +621,7 @@ benchmarks: [bench1]
 """)
 
         config = load_experiment_config(config_path)
-
-        # Simulate CLI override
-        cli_experiment_name = "overridden-name"
-
-        # Resolution logic (what orchestrator does)
-        resolved_name = (
-            cli_experiment_name if cli_experiment_name else config.experiment
-        )
-
-        # Verify CLI value takes precedence
-        assert resolved_name == "overridden-name"
-        assert config.experiment == "original-name"  # Original unchanged
+        assert config.experiment == "original-name"
 
 
 # ============================================================================
@@ -658,7 +646,6 @@ experiment_filestore: /tmp/crsbench/exp
 report_filestore: /tmp/crsbench/rep
 crses:
   - crs1
-  - crs2
 benchmarks:
   - bench1
   - bench2
@@ -691,7 +678,7 @@ benchmarks:
             stored_config = yaml.safe_load(f)
 
         assert stored_config["experiment"] == "test-experiment"
-        assert stored_config["crses"] == ["crs1", "crs2"]
+        assert stored_config["crses"] == ["crs1"]
         assert stored_config["benchmarks"] == ["bench1", "bench2"]
 
     def test_stored_config_has_trial_specific_fields(self, tmp_path):
@@ -823,9 +810,9 @@ benchmarks:
 class TestIntegrationWithSampleConfigs:
     """Test integration with actual sample configs from experiment-configs/."""
 
-    def test_e2e_with_sample_config_multi_crs(self, tmp_path):
-        """Test end-to-end workflow with experiment-config-multi-crs.yaml."""
-        config_path = Path("experiment-configs/experiment-config-multi-crs.yaml")
+    def test_e2e_with_sample_config_single_crs(self, tmp_path):
+        """Test end-to-end workflow with a sample single-CRS config."""
+        config_path = Path("experiment-configs/experiment-config-sanity.yaml")
 
         if not config_path.exists():
             pytest.skip("Sample config not found, skipping integration test")
@@ -837,20 +824,23 @@ class TestIntegrationWithSampleConfigs:
         config = config.model_copy(update={"only_cpv_harnesses": False})
 
         # Verify config loaded correctly
-        assert config.experiment == "multi-crs-baseline-eval"
-        assert config.trials == 3
-        assert len(config.crses) == 3  # atlantis-c, atlantis-multilang, ensemble-c
-        assert len(config.benchmarks) == 6
+        assert config.experiment == "sanity-test"
+        assert config.trials == 1
+        assert len(config.crses) == 1
 
         # Mock BenchmarkHarness objects - in reality these would come from meta.yaml
         # For this test, create one harness per benchmark
+        benchmark_names = config.benchmarks or [
+            "sanity-mock-c-delta-01",
+            "sanity-mock-java-delta-01",
+        ]
         benchmark_harnesses = [
             BenchmarkHarness(
                 name=b,
                 path=Path(f"/tmp/{b}"),
                 harness=HarnessFile(name=f"{b}_harness", path=f"/src/{b}_harness.c"),
             )
-            for b in config.benchmarks
+            for b in benchmark_names
         ]
 
         # Generate trial matrix
@@ -862,8 +852,8 @@ class TestIntegrationWithSampleConfigs:
             crs_configs_dir=Path("/tmp/crs-configs"),
         )
 
-        # Expected: 3 CRSes × 6 benchmark_harnesses × 3 trials = 54 total
-        assert len(trials) == 54
+        # Expected: 1 CRS × 2 benchmark_harnesses × 1 trial = 2 total
+        assert len(trials) == 2
 
         # Mock trial execution - store config in trial dirs
         for i, trial in enumerate(trials[:3]):  # Test first 3 trials
@@ -875,7 +865,7 @@ class TestIntegrationWithSampleConfigs:
                 "experiment": config.experiment,
                 "trials": config.trials,
                 "crses": config.crses,
-                "benchmarks": config.benchmarks,
+                "benchmarks": benchmark_names,
                 "trial_crs": trial.crs,
                 "trial_benchmark": trial.benchmark_harness.name,
                 "trial_harness": trial.benchmark_harness.harness.name,
@@ -892,11 +882,11 @@ class TestIntegrationWithSampleConfigs:
             assert stored["trial_crs"] == trial.crs
             assert stored["trial_benchmark"] == trial.benchmark_harness.name
             assert stored["trial_harness"] == trial.benchmark_harness.harness.name
-            assert stored["experiment"] == "multi-crs-baseline-eval"
+            assert stored["experiment"] == "sanity-test"
 
-    def test_e2e_with_experiment_name_override(self, tmp_path):
-        """Test end-to-end workflow with --experiment-name override."""
-        config_path = Path("experiment-configs/experiment-config-multi-crs.yaml")
+    def test_e2e_with_config_experiment_name(self, tmp_path):
+        """Test end-to-end workflow with config-defined experiment name."""
+        config_path = Path("experiment-configs/experiment-config-sanity.yaml")
 
         if not config_path.exists():
             pytest.skip("Sample config not found, skipping integration test")
@@ -906,12 +896,12 @@ class TestIntegrationWithSampleConfigs:
         # Override only_cpv_harnesses to False for this test
         config = config.model_copy(update={"only_cpv_harnesses": False})
 
-        # Only --experiment-name can override config values now
-        cli_experiment_name = "custom-experiment-name"
-
         # CRSes and benchmarks come from config only
         crses = config.crses
-        benchmarks = config.benchmarks
+        benchmarks = config.benchmarks or [
+            "sanity-mock-c-delta-01",
+            "sanity-mock-java-delta-01",
+        ]
 
         # Mock BenchmarkHarness objects
         benchmark_harnesses = [
@@ -932,15 +922,15 @@ class TestIntegrationWithSampleConfigs:
             crs_configs_dir=Path("/tmp/crs-configs"),
         )
 
-        # Expected: 3 CRSes × 6 benchmark_harnesses × 3 trials = 54 total
-        assert len(trials) == 54
+        # Expected: 1 CRS × 2 benchmark_harnesses × 1 trial = 2 total
+        assert len(trials) == 2
 
         # Store config in trial directory
         trial_dir = tmp_path / "trial_0"
         trial_dir.mkdir(parents=True, exist_ok=True)
 
         stored_config = {
-            "experiment": cli_experiment_name,
+            "experiment": config.experiment,
             "trials": config.trials,
             "crses": crses,
             "benchmarks": benchmarks,
@@ -956,11 +946,11 @@ class TestIntegrationWithSampleConfigs:
         with open(trial_dir / "config.yaml") as f:
             stored = yaml.safe_load(f)
 
-        # Experiment name comes from CLI override
-        assert stored["experiment"] == "custom-experiment-name"
+        # Experiment name comes from config
+        assert stored["experiment"] == "sanity-test"
         # CRSes and benchmarks come from config (single source of truth)
         assert stored["crses"] == config.crses
-        assert stored["benchmarks"] == config.benchmarks
+        assert stored["benchmarks"] == benchmarks
 
     def test_benchmark_suite_expansion(self):
         """Test benchmark suite correctly expands to benchmark list."""
