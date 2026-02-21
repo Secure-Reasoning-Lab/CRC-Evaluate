@@ -71,7 +71,7 @@ class TestRunCoverage:
 
     def test_passes_coverage_output_dir(self, mock_oss_fuzz: Path, tmp_path: Path):
         """Verify --coverage-output-dir is passed to helper.py."""
-        corpus = tmp_path / "corpus"
+        corpus = tmp_path / "seeds"
         corpus.mkdir()
         (corpus / "input").write_bytes(b"test")
         output = tmp_path / "out"

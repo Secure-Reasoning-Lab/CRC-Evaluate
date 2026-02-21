@@ -41,11 +41,7 @@ crsbench benchmark upload --dataset crsbench --dry-run
 
 ## Dependency
 
-`huggingface_hub` is an optional dependency. Install with:
-
-```bash
-pip install 'crsbench[dataset]'
-```
+`huggingface_hub` is a core dependency, installed automatically with `crsbench`.
 
 ## Design Doc
 

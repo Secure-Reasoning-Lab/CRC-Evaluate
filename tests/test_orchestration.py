@@ -26,6 +26,7 @@ from crsbench.run_experiment import (
 )
 from crsbench.validation.schemas import (
     POV,
+    AdapterType,
     BenchmarkHarness,
     ExperimentConfig,
     HarnessFile,
@@ -76,6 +77,7 @@ class TestConfigLoading:
 experiment: test-experiment
 trials: 3
 mode: delta
+adapter: oss-crs
 max_total_time: 20000
 difficulty_level: 2
 experiment_filestore: /tmp/crsbench/experiment-data
@@ -105,6 +107,7 @@ benchmarks:
 experiment: suite-experiment
 trials: 2
 mode: full
+adapter: oss-crs
 max_total_time: 20000
 difficulty_level: 1
 experiment_filestore: /tmp/crsbench/experiment-data
@@ -129,6 +132,7 @@ benchmark_suite: crsbench-afc-c
 experiment: redis-experiment
 trials: 2
 mode: delta
+adapter: oss-crs
 max_total_time: 20000
 difficulty_level: 1
 experiment_filestore: /tmp/crsbench/experiment-data
@@ -149,6 +153,7 @@ redis_host: localhost
 experiment: minimal-experiment
 trials: 1
 mode: delta
+adapter: oss-crs
 max_total_time: 20000
 difficulty_level: 0
 experiment_filestore: /tmp/crsbench/exp
@@ -178,6 +183,7 @@ class TestTrialMatrixGeneration:
             experiment="test",
             trials=2,
             mode="delta",
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -228,6 +234,7 @@ class TestTrialMatrixGeneration:
             experiment="test",
             trials=2,
             mode="delta",
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -288,6 +295,7 @@ class TestTrialMatrixGeneration:
             experiment="test",
             trials=1,
             mode="delta",
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -351,6 +359,7 @@ class TestTrialMatrixGeneration:
                 experiment="test",
                 trials=trials_count,
                 mode="delta",
+                adapter=AdapterType.OSS_CRS,
                 max_total_time=20000,
                 difficulty_level=1,
                 experiment_filestore="/tmp/exp",
@@ -385,6 +394,7 @@ class TestOnlyCpvHarnesses:
             experiment="test",
             trials=1,
             mode="delta",
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -461,6 +471,7 @@ class TestOnlyCpvHarnesses:
             experiment="test",
             trials=1,
             mode="delta",
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -516,6 +527,7 @@ class TestOnlyCpvHarnesses:
             experiment="test",
             trials=1,
             mode="delta",
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -600,6 +612,7 @@ class TestCLIOverrides:
 experiment: original-name
 trials: 1
 mode: delta
+adapter: oss-crs
 max_total_time: 20000
 difficulty_level: 1
 experiment_filestore: /tmp/crsbench/exp
@@ -638,6 +651,7 @@ class TestConfigStorage:
 experiment: test-experiment
 trials: 1
 mode: delta
+adapter: oss-crs
 max_total_time: 20000
 difficulty_level: 1
 experiment_filestore: /tmp/crsbench/exp
@@ -686,6 +700,7 @@ benchmarks:
             experiment="test-experiment",
             trials=2,
             mode="delta",
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=2,
             experiment_filestore="/tmp/exp",
@@ -987,6 +1002,7 @@ class UnitTestModeSelection:
             experiment="test",
             trials=1,
             mode="delta",
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -1016,6 +1032,7 @@ class UnitTestModeSelection:
             experiment="test",
             trials=2,
             mode="delta",
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -1045,6 +1062,7 @@ class UnitTestModeSelection:
             experiment="test",
             trials=2,
             mode="delta",
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -1075,6 +1093,7 @@ class UnitTestModeSelection:
             experiment="test",
             trials=1,
             mode="delta",
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -1104,6 +1123,7 @@ class UnitTestModeSelection:
             experiment="test",
             trials=1,
             mode="delta",
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -1181,6 +1201,7 @@ class TestSanitizerFiltering:
             experiment="test",
             trials=1,
             mode="delta",
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -1239,6 +1260,7 @@ class TestSanitizerFiltering:
             experiment="test",
             trials=2,
             mode="delta",
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -1301,6 +1323,7 @@ class TestSanitizerFiltering:
             experiment="test",
             trials=1,
             mode="delta",
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",

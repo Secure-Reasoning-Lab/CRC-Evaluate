@@ -41,7 +41,7 @@ class SeedCorpusPreparer:
         """
         self.benchmark_path = benchmark_path
         self.harness_name = harness_name
-        self.corpus_dir = benchmark_path / ".aixcc" / harness_name / "corpus"
+        self.corpus_dir = benchmark_path / ".aixcc" / harness_name / "seeds"
 
     def has_seed_corpus(self) -> bool:
         """Check if seed corpus is available for this harness.

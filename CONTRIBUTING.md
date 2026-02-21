@@ -79,11 +79,11 @@ crsbench benchmark upload        --dataset crsbench --dry-run
 ### Local (single machine)
 
 ```bash
-crsbench ci format --all          # Validate format (no Docker)
-crsbench ci build  --all          # Build variant images
-crsbench ci pov    --all          # Verify ground-truth POVs
-crsbench ci patch  --all          # Verify ground-truth patches
-crsbench ci all    --all          # Run all checks
+crsbench benchmark ci format --all          # Validate format (no Docker)
+crsbench benchmark ci build  --all          # Build variant images
+crsbench benchmark ci pov    --all          # Verify ground-truth POVs
+crsbench benchmark ci patch  --all          # Verify ground-truth patches
+crsbench benchmark ci all    --all          # Run all checks
 ```
 
 ### Distributed (with Redis/Valkey)
@@ -103,13 +103,13 @@ This starts a Valkey instance and saves the connection password to `.env`.
 
 ```bash
 # Submit all benchmarks (enqueues build + verify jobs to Redis)
-crsbench ci all --all --distributed --output-dir ci-results
+crsbench benchmark ci all --all --distributed --output-dir ci-results
 
 # Enable incremental build (full build is default)
-crsbench ci all --all --distributed --output-dir ci-results --inc-build
+crsbench benchmark ci all --all --distributed --output-dir ci-results --inc-build
 
 # Also skip force-rebuild (reuse existing Docker images)
-crsbench ci all --all --distributed --output-dir ci-results \
+crsbench benchmark ci all --all --distributed --output-dir ci-results \
   --inc-build --no-force-rebuild
 ```
 

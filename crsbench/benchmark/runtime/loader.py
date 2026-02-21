@@ -239,7 +239,7 @@ def prepare_source_from_bundle(
     logger.info(f"Extracting {tarball_path.name} to {dest_dir}")
     try:
         with tarfile.open(tarball_path, "r:gz") as tar:
-            tar.extractall(dest_dir)
+            tar.extractall(dest_dir, filter="data")
     except Exception as e:
         logger.error(f"Failed to extract tarball: {e}")
         return None

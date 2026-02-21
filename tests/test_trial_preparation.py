@@ -366,7 +366,7 @@ class TestMetadataGeneration:
         hints_dir = temp_experiment_dir / "hints"
         hints_dir.mkdir()
         (hints_dir / "sarif").mkdir()
-        (hints_dir / "corpus").mkdir()
+        (hints_dir / "seeds").mkdir()
 
         povs_dir = temp_experiment_dir / "povs"
         povs_dir.mkdir()

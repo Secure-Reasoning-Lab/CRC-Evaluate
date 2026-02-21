@@ -30,3 +30,7 @@ snapshot_period: 60
 coverage_enabled: false
 pov_early_stop: true
 litellm_mode: null
+
+resources:
+  cores_per_trial: 2
+  memory_per_trial: "8G"

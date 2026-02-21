@@ -23,6 +23,7 @@ experiment: sanity-test
 trials: 1
 
 mode: delta
+adapter: oss-crs
 
 # Short timeout — sanity benchmarks are fast
 max_total_time: 1200  # 20 minutes

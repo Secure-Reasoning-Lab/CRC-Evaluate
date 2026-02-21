@@ -16,6 +16,48 @@ from crsbench.benchmark_ci.cli.commands import (
 )
 
 
+def register_ci_subcommands(parent_subparsers: argparse._SubParsersAction) -> None:
+    """Register 'ci' as a child subparser of an existing command group.
+
+    Used by `crsbench benchmark ci ...` to nest ci under benchmark.
+
+    Args:
+        parent_subparsers: Subparsers action from the parent command (e.g., benchmark)
+    """
+    ci_parser = parent_subparsers.add_parser(
+        "ci",
+        help="Validate benchmarks (format, POV, patch, coverage, rts)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Subcommands:
+  format      Run format validation only (fast, no Docker)
+  build       Build POV variants only (no verification)
+  pov         Run POV verification
+  patch       Run patch verification
+  coverage    Run coverage validation
+  rts         Run regression test selection checks
+  all         Run all validation checks
+  parse       Parse and display results from output directory
+  retry       Retry failed benchmarks from a previous CI run
+  storage     Show storage usage per benchmark
+        """,
+    )
+    ci_parser.set_defaults(func=dispatch_ci)
+
+    ci_subparsers = ci_parser.add_subparsers(dest="ci_subcommand")
+
+    format_cmd.register(ci_subparsers)
+    build_cmd.register(ci_subparsers)
+    pov_cmd.register(ci_subparsers)
+    patch_cmd.register(ci_subparsers)
+    coverage_cmd.register(ci_subparsers)
+    rts_cmd.register(ci_subparsers)
+    all_cmd.register(ci_subparsers)
+    parse_cmd.register(ci_subparsers)
+    retry_cmd.register(ci_subparsers)
+    storage_cmd.register(ci_subparsers)
+
+
 def add_ci_subparser(subparsers: argparse._SubParsersAction) -> None:
     """Add 'ci' subcommand with sub-subcommands to the CLI."""
     ci_parser = subparsers.add_parser(
@@ -59,9 +101,11 @@ def dispatch_ci(args: argparse.Namespace) -> int:
         from crsbench.utils.logger import get_logger
 
         logger = get_logger(__name__)
-        logger.error("No subcommand specified. Run 'crsbench ci --help' for usage.")
+        logger.error(
+            "No subcommand specified. Run 'crsbench benchmark ci --help' for usage."
+        )
         return 1
     return args.ci_func(args)
 
 
-__all__ = ["add_ci_subparser", "dispatch_ci"]
+__all__ = ["add_ci_subparser", "dispatch_ci", "register_ci_subcommands"]

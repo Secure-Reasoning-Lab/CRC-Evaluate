@@ -81,6 +81,7 @@ class POVVerificationManager:
         redis_host: Optional[str] = None,
         experiment_name: Optional[str] = None,
         trial_id: Optional[str] = None,
+        exchange_pov_dir: Optional[Path] = None,
     ):
         """Initialize POV verification manager.
 
@@ -99,6 +100,7 @@ class POVVerificationManager:
             redis_host: Redis server hostname for async mode (None = inline mode)
             experiment_name: Experiment name for async verify queue naming
             trial_id: Trial identifier for async result correlation
+            exchange_pov_dir: Pre-resolved EXCHANGE_DIR pov path for real-time scanning
 
         Raises:
             ValueError: If trial_dir doesn't exist
@@ -151,6 +153,9 @@ class POVVerificationManager:
         self._pending_job_ids: list[str] = []  # Job IDs awaiting results
         self._pov_hash_to_path: dict[str, Path] = {}  # hash → local file path
         self._job_to_pov_id: dict[str, str] = {}  # job_id → pov_id for timeout marking
+
+        # EXCHANGE_DIR scanning for real-time POV discovery during CRS execution
+        self._exchange_pov_dir = exchange_pov_dir
 
         async_mode = "async (Redis)" if redis_host else "inline"
         logger.info(
@@ -275,8 +280,16 @@ class POVVerificationManager:
                 status = PovVerificationStatus(result.verdict.status)
                 cpv_matched = result.verdict.cpv_matches
 
+                # Parse crash signature from async verdict crash logs
+                sig_hash = self._extract_crash_sig_from_logs(result.verdict.crash_logs)
+
                 # Add to store directly (no POV path — it was enqueued by content)
-                self.store.add_pov_by_id(result.verdict.pov_id, status, cpv_matched)
+                self.store.add_pov_by_id(
+                    result.verdict.pov_id,
+                    status,
+                    cpv_matched,
+                    crash_signature=sig_hash,
+                )
 
                 # Store crash logs for ALL statuses (not just CPV)
                 pov_hash = self.store._extract_hash(result.verdict.pov_id)
@@ -323,34 +336,62 @@ class POVVerificationManager:
                 f"Processed {len(completed)} async verdicts, {len(remaining)} pending"
             )
 
+    @staticmethod
+    def _scan_pov_directory(directory: Path) -> list[Path]:
+        """Scan a directory for POV files.
+
+        Returns all regular files excluding hidden files, directories,
+        and symlinks.
+
+        Args:
+            directory: Directory to scan for POV files.
+
+        Returns:
+            List of POV file paths found.
+        """
+        if not directory.exists():
+            return []
+
+        return [
+            f
+            for f in directory.glob("*")
+            if f.is_file() and not f.name.startswith(".") and not f.is_symlink()
+        ]
+
     def _discover_new_povs(self) -> list[tuple[Path, str]]:
-        """Discover new POV files in the output directory.
+        """Discover new POV files in output and EXCHANGE_DIR directories.
+
+        Scans both the primary ``pov_output_dir`` (populated by
+        ``collect_results()`` after CRS execution) and the EXCHANGE_DIR
+        ``pov/`` subdirectory (populated in real-time by the exchange
+        sidecar during CRS execution).
 
         POV files can have various formats:
         - No extension (hex hash like '47107064ecc2b03b')
         - .blob, .bin, .pov extensions
 
         Excludes hidden files (starting with '.'), directories, and symlinks.
+        Deduplication is handled by the store's hash-based tracking.
 
         Returns:
             List of (path, hash) tuples for new POV files not yet tested
         """
-        if not self.pov_output_dir.exists():
-            return []
+        # Collect POV files from both directories
+        pov_files = self._scan_pov_directory(self.pov_output_dir)
 
-        # Match all files, exclude hidden files, directories, and symlinks
-        pov_files = [
-            f
-            for f in self.pov_output_dir.glob("*")
-            if f.is_file() and not f.name.startswith(".") and not f.is_symlink()
-        ]
+        if self._exchange_pov_dir is not None:
+            pov_files.extend(self._scan_pov_directory(self._exchange_pov_dir))
 
-        # Filter out already tested POVs and return with hashes
+        # Filter out already tested POVs and return with hashes.
+        # Track seen hashes within this call to avoid returning the same
+        # content twice when it exists in both directories.
         new_povs = []
+        seen_hashes: set[str] = set()
         for pov_path in pov_files:
             pov_hash, is_tested = self.store.check_pov_hash(pov_path)
-            if not is_tested:
+            if not is_tested and pov_hash not in seen_hashes:
                 new_povs.append((pov_path, pov_hash))
+                seen_hashes.add(pov_hash)
         return new_povs
 
     def _verify_pov(self, pov_path: Path) -> Optional[PovVerificationResult]:
@@ -388,6 +429,81 @@ class POVVerificationManager:
             logger.error(f"POV verification failed for {pov_path}: {e}", exc_info=True)
             return None
 
+    @staticmethod
+    def _extract_crash_sig_from_logs(
+        crash_logs: dict[str, str],
+    ) -> Optional[str]:
+        """Extract crash signature hash from a dict of variant crash logs.
+
+        Used for async verdict processing where crash logs come as a
+        plain dict rather than embedded in a PovVerificationResult.
+
+        Args:
+            crash_logs: Dict mapping variant_name -> crash_log text
+
+        Returns:
+            Crash signature hash (16-char hex) or None if not parseable
+        """
+        if not crash_logs:
+            return None
+
+        from crsbench.evaluation.verification.crash_signature import (
+            parse_crash_signature,
+        )
+
+        # Iterate in key order for deterministic signature extraction.
+        for variant_name in sorted(crash_logs):
+            crash_log = crash_logs[variant_name]
+            if crash_log:
+                sig = parse_crash_signature(crash_log)
+                if sig:
+                    return sig.signature_hash
+        return None
+
+    @staticmethod
+    def _extract_crash_signature(
+        result: PovVerificationResult,
+    ) -> Optional[str]:
+        """Extract crash signature hash from a verification result's crash logs.
+
+        Parses the first available crash log from the result's crash_info
+        using the crash_signature module.
+
+        Args:
+            result: Verification result with optional crash_info
+
+        Returns:
+            Crash signature hash (16-char hex) or None if not parseable
+        """
+        if not result.crash_info:
+            return None
+
+        from crsbench.evaluation.verification.crash_signature import (
+            parse_crash_signature,
+        )
+
+        # Try stdout logs (from verify_povs_parallel)
+        stdout_logs = result.crash_info.get("stdout")
+        if stdout_logs and isinstance(stdout_logs, dict):
+            for variant_name in sorted(stdout_logs):
+                crash_log = stdout_logs[variant_name]
+                if crash_log:
+                    sig = parse_crash_signature(crash_log)
+                    if sig:
+                        return sig.signature_hash
+
+        # Try logs key (from verify_pov single-POV path)
+        logs = result.crash_info.get("logs")
+        if logs and isinstance(logs, dict):
+            for variant_name in sorted(logs):
+                crash_log = logs[variant_name]
+                if crash_log:
+                    sig = parse_crash_signature(crash_log)
+                    if sig:
+                        return sig.signature_hash
+
+        return None
+
     def _update_state(
         self,
         pov_path: Path,
@@ -418,9 +534,18 @@ class POVVerificationManager:
 
             pov_hash = compute_content_hash(pov_path)
 
+        # Parse crash signature from crash logs
+        sig_hash = self._extract_crash_signature(result)
+        if sig_hash:
+            result.crash_signature = sig_hash
+
         # Add to store with the verification status directly (no mapping needed)
         self.store.add_pov(
-            pov_path, result.status, result.cpv_matched, pov_hash=pov_hash
+            pov_path,
+            result.status,
+            result.cpv_matched,
+            pov_hash=pov_hash,
+            crash_signature=sig_hash,
         )
 
         # Store per-variant crash logs for ALL statuses (not just CPV)
@@ -605,6 +730,10 @@ class POVVerificationManager:
         # Get remaining CPVs
         cpvs_remaining = self._get_remaining_cpvs()
 
+        # Count unique crash sites from store
+        crash_summary = self.store.get_unintended_crash_summary()
+        unique_crash_sites = len(crash_summary)
+
         with self._lock:
             return POVVerificationReport(
                 benchmark_id=self.benchmark_id,
@@ -615,6 +744,7 @@ class POVVerificationManager:
                 total_povs_processed=len(self.store.povs),
                 duplicates_skipped=self._duplicates_count,
                 unintended_crashes=self._unintended_crashes_count,
+                unique_unintended_crash_sites=unique_crash_sites,
                 verification_errors=self._errors_count,
                 verification_timeouts=0,  # Not tracked separately
                 early_stopped=self._early_stop_triggered,
@@ -712,6 +842,7 @@ class POVVerificationManager:
                         benchmark=self.benchmark_id,
                         cpv_matched=list(entry.cpv_matched),
                         pov_id=entry.hash,
+                        crash_signature=entry.crash_signature,
                     )
                 )
         return results

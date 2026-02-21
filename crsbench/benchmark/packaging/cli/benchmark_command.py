@@ -9,6 +9,7 @@ Provides:
 - crsbench benchmark list-canaries - List registered canary UUIDs
 - crsbench benchmark pull-image <dir> - Pull inc-build Docker images
 - crsbench benchmark check-image <dir> - Check local vs remote image digests
+- crsbench benchmark dedup-povs <path> - Deduplicate POVs by crash signature
 """
 
 import argparse
@@ -18,6 +19,14 @@ from pathlib import Path
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _positive_int(value: str) -> int:
+    """argparse type: strictly positive integer."""
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(f"must be > 0 (got {value})")
+    return parsed
 
 
 def add_benchmark_subparser(subparsers: argparse._SubParsersAction) -> None:
@@ -405,6 +414,88 @@ Examples:
     )
     upload_parser.set_defaults(func=handle_upload)
 
+    # crsbench benchmark dedup-povs
+    dedup_povs_parser = benchmark_subparsers.add_parser(
+        "dedup-povs",
+        help="Deduplicate POVs by crash signature",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Scans .aixcc/{harness}/{cpv}/blobs/ and logs/ directories, parses crash
+signatures from log files, and identifies duplicate POV variants.
+
+pov_0 is always kept as ground truth. POVs with unparseable logs are
+conservatively kept to avoid false positives.
+
+Default mode is dry-run (report only). Use --no-dry-run to delete files.
+
+Examples:
+  # Dry-run: see what would be removed
+  %(prog)s benchmarks/afc-libexif-delta-03
+
+  # Actually delete duplicates
+  %(prog)s benchmarks/afc-libexif-delta-03 --no-dry-run
+
+  # Filter to specific harness and CPV
+  %(prog)s benchmarks/afc-libexif-delta-03 --harness exif_from_data_fuzzer --cpv cpv_0
+
+  # Use fewer stack frames for coarser grouping
+  %(prog)s benchmarks/afc-libexif-delta-03 --top-n 3
+
+  # Write JSON report
+  %(prog)s benchmarks/afc-libexif-delta-03 --output report.json
+        """,
+    )
+    dedup_povs_parser.add_argument(
+        "benchmark_path",
+        type=str,
+        help="Path to benchmark directory",
+    )
+    dedup_povs_parser.add_argument(
+        "--harness",
+        type=str,
+        default=None,
+        help="Filter to a specific harness name",
+    )
+    dedup_povs_parser.add_argument(
+        "--cpv",
+        type=str,
+        default=None,
+        help="Filter to a specific CPV (e.g., cpv_0)",
+    )
+    dedup_povs_parser.add_argument(
+        "--top-n",
+        type=_positive_int,
+        default=5,
+        help="Stack frame depth for crash signature (default: 5)",
+    )
+    dedup_povs_parser.add_argument(
+        "--no-dry-run",
+        action="store_true",
+        help="Actually delete duplicate files (default: dry-run / report only)",
+    )
+    dedup_povs_parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Write JSON report to file",
+    )
+    dedup_povs_parser.set_defaults(func=handle_dedup_povs)
+
+    # crsbench benchmark migrate (nested subparser group)
+    from crsbench.migration.cli.converter_command import register_migrate_subcommands
+
+    register_migrate_subcommands(benchmark_subparsers)
+
+    # crsbench benchmark stats (leaf subparser)
+    from crsbench.statistics.cli import register_stats_subcommand
+
+    register_stats_subcommand(benchmark_subparsers)
+
+    # crsbench benchmark ci (nested subparser group)
+    from crsbench.benchmark_ci.cli import register_ci_subcommands
+
+    register_ci_subcommands(benchmark_subparsers)
+
     benchmark_parser.set_defaults(command="benchmark", func=handle_benchmark_help)
 
 
@@ -605,6 +696,54 @@ def handle_prepare_delta(args: argparse.Namespace) -> int:
         return 1
 
 
+def handle_dedup_povs(args: argparse.Namespace) -> int:
+    """Handle 'crsbench benchmark dedup-povs' command."""
+    from crsbench.benchmark.packaging.dedup_povs import dedup_benchmark_povs
+
+    benchmark_path = Path(args.benchmark_path)
+
+    if not benchmark_path.is_dir():
+        logger.error(f"Benchmark not found: {benchmark_path}")
+        return 1
+
+    dry_run = not args.no_dry_run
+    mode = "DRY RUN" if dry_run else "LIVE"
+    logger.info(f"Deduplicating POVs in {benchmark_path.name} [{mode}]")
+
+    try:
+        summary = dedup_benchmark_povs(
+            benchmark_path,
+            harness_filter=args.harness,
+            cpv_filter=args.cpv,
+            top_n=args.top_n,
+            dry_run=dry_run,
+        )
+    except ValueError as e:
+        logger.error(str(e))
+        return 1
+
+    # Print summary
+    logger.info("\n" + "=" * 50)
+    logger.info("DEDUP SUMMARY")
+    logger.info("=" * 50)
+    logger.info(f"Benchmark: {summary.benchmark}")
+    logger.info(f"Total POVs: {summary.total_povs}")
+    logger.info(f"Kept: {summary.total_kept}")
+
+    action = "Would remove" if dry_run else "Removed"
+    logger.info(f"{action}: {summary.total_removed}")
+
+    if dry_run and summary.total_removed > 0:
+        logger.info("\nRun with --no-dry-run to actually delete files.")
+
+    # Write JSON report if requested
+    if args.output:
+        args.output.write_text(summary.to_json())
+        logger.info(f"\nReport written to: {args.output}")
+
+    return 0
+
+
 def handle_inject_canary(args: argparse.Namespace) -> int:
     """Handle 'crsbench benchmark inject-canary' command.
 
@@ -642,7 +781,7 @@ def handle_inject_canary(args: argparse.Namespace) -> int:
             force=args.force,
         )
 
-        if not result.benchmarks and result.skipped_count == 0:
+        if result.matched_count == 0:
             logger.warning(f"No benchmarks found matching filter: {args.filter}")
             return 0
 
@@ -652,6 +791,7 @@ def handle_inject_canary(args: argparse.Namespace) -> int:
         logger.info("=" * 50)
         logger.info(f"Filter: {args.filter}")
         logger.info(f"UUID: {result.canary_uuid}")
+        logger.info(f"Benchmarks matched: {result.matched_count}")
         logger.info(f"Files injected: {result.injected_count}")
         logger.info(f"Benchmarks skipped (existing): {result.skipped_count}")
         logger.info(f"Benchmarks processed: {len(result.benchmarks)}")
@@ -1037,6 +1177,14 @@ def handle_upload(args: argparse.Namespace) -> int:
 
     if hasattr(args, "verbose") and args.verbose:
         configure_logger(level="DEBUG")
+
+    from crsbench.dataset.backends import check_hf_token
+
+    is_valid, message = check_hf_token()
+    if not is_valid:
+        logger.error(message)
+        return 1
+    logger.info(message)
 
     from crsbench.dataset.upload import upload_dataset
 

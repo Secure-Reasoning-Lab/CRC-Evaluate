@@ -17,6 +17,7 @@ crses:
   - atlantis-claude-code
 
 mode: all
+adapter: oss-crs
 
 # Explicit list of wireshark benchmarks
 benchmarks:

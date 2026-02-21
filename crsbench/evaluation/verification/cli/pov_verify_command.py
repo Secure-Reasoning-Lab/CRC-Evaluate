@@ -4,7 +4,7 @@ This module provides the `crsbench verify` CLI command for verifying
 CRS-produced POVs against benchmark variants.
 
 Requires explicit POV input (--pov or --pov-dir). For validating
-benchmark ground-truth POVs, use `crsbench ci pov` instead.
+benchmark ground-truth POVs, use `crsbench benchmark ci pov` instead.
 
 Usage:
     crsbench verify <benchmark_path> --pov-dir ./povs/ [options]
@@ -33,11 +33,9 @@ from typing import Optional
 import yaml
 
 from crsbench.evaluation.verification import (
-    NoOpDedup,
-    PatchBasedDedup,
     PovVerificationResult,
-    StatusBasedDedup,
     VerificationEngine,
+    get_dedup_strategy,
 )
 from crsbench.utils.logger import get_logger
 
@@ -125,8 +123,14 @@ Examples:
         "--dedup-strategy",
         type=str,
         default="patch-based",
-        choices=["patch-based", "status-based", "none"],
+        choices=["patch-based", "status-based", "stack-based", "none"],
         help="Deduplication strategy (default: patch-based). Use 'none' to disable.",
+    )
+    parser.add_argument(
+        "--top-n",
+        type=int,
+        default=5,
+        help="Stack frame depth for stack-based dedup signature (default: 5)",
     )
     parser.add_argument(
         "--timeout",
@@ -206,13 +210,7 @@ def run_verify(args: argparse.Namespace) -> int:
         return 1
 
     # Create verification engine
-    # Convert string strategy to class instance
-    if args.dedup_strategy == "none":
-        dedup_strategy = NoOpDedup()
-    elif args.dedup_strategy == "status-based":
-        dedup_strategy = StatusBasedDedup()
-    else:  # "patch-based" (default)
-        dedup_strategy = PatchBasedDedup()
+    dedup_strategy = get_dedup_strategy(args.dedup_strategy, top_n=args.top_n)
 
     engine = VerificationEngine(
         oss_fuzz_path=oss_fuzz_path,

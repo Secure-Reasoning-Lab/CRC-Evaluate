@@ -12,7 +12,7 @@
 The current codebase has three separate execution paths for builds and three for verification:
 
 **Build paths:**
-1. `DAGExecutor` + `BuildSingleVariantJob` (CI via `crsbench ci build` / `crsbench ci all`)
+1. `DAGExecutor` + `BuildSingleVariantJob` (CI via `crsbench benchmark ci build` / `crsbench benchmark ci all`)
 2. `ThreadPoolExecutor` in `evaluator.py:_build_all_variants()` (evaluator startup)
 3. `VerificationEngine.get_or_build_results()` called inline by `BuildVariantsJob` (CI legacy path) and `POVVerificationManager._verify_pov()` (CRS run)
 
@@ -55,7 +55,7 @@ Build and verify share the same evaluator worker pool. The evaluator dequeues fr
 
 ## 3. Two-Phase Execution for CI
 
-### 3.1 `crsbench ci all`
+### 3.1 `crsbench benchmark ci all`
 
 CI execution uses two sequential phases with all jobs within each phase running in parallel:
 
@@ -72,7 +72,7 @@ Phase 2 (Verify/Test — all parallel):
 
 Phase 2 jobs only start after all Phase 1 builds complete. This is enforced by the orchestrator (poll loop), not by job-level dependencies. DAGExecutor's topological sort is replaced by this simpler two-phase barrier.
 
-### 3.2 `crsbench ci build`
+### 3.2 `crsbench benchmark ci build`
 
 Same as Phase 1 above. `VariantPlanner` creates `BuildSingleVariantJob` instances, enqueues them, and waits for completion.
 
@@ -265,12 +265,12 @@ If no evaluator is running, verify jobs accumulate in Redis. The worker continue
 
 ## 9. Changes Per Component
 
-### 9.1 `crsbench ci build`
+### 9.1 `crsbench benchmark ci build`
 
 **Before:** Creates `BuildSingleVariantJob` list, executes via `DAGExecutor`.
 **After:** Creates `BuildSingleVariantJob` list via `VariantPlanner`, enqueues to Redis build queue, polls for completion.
 
-### 9.2 `crsbench ci all`
+### 9.2 `crsbench benchmark ci all`
 
 **Before:** Creates full DAG (build + verify + patch-build + patch-test jobs), executes via `DAGExecutor` with topological ordering and `type_limits`.
 **After:** Phase 1: `VariantPlanner.plan_all_builds()` → enqueue → wait. Phase 2: plan verify/test jobs from build results → enqueue → wait.

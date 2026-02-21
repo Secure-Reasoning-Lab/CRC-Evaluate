@@ -10,6 +10,3 @@ for fuzzer in $(find $SRC/fuzz -name 'fuzz*.c'); do
 done
 
 cp -r $SRC/mock-c $OUT/src
-if [ "${CRS_TEST:-False}" == "True" ]; then
-    cp -r $SRC/.aixcc $OUT/.aixcc
-fi

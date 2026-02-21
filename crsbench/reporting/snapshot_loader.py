@@ -194,7 +194,7 @@ class SnapshotLoader:
                         patch_names.append(item.name)
 
         # Count corpus files
-        corpus_dir = extract_dir / "corpus"
+        corpus_dir = extract_dir / "seeds"
         corpus_count = 0
         if corpus_dir.exists():
             corpus_count = len([f for f in corpus_dir.iterdir() if f.is_file()])

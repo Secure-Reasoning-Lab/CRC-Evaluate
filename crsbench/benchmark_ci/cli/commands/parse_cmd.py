@@ -721,19 +721,19 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         epilog="""
 Examples:
   # Display results as table (default)
-  crsbench ci parse --output-dir ./results
+  crsbench benchmark ci parse --output-dir ./results
 
   # Export as JSON
-  crsbench ci parse --output-dir ./results --format json
+  crsbench benchmark ci parse --output-dir ./results --format json
 
   # Export as CSV
-  crsbench ci parse --output-dir ./results --format csv
+  crsbench benchmark ci parse --output-dir ./results --format csv
 
   # Show only failed benchmarks
-  crsbench ci parse --output-dir ./results --failed-only
+  crsbench benchmark ci parse --output-dir ./results --failed-only
 
   # Skip writing reparsed files
-  crsbench ci parse --output-dir ./results --no-rewrite
+  crsbench benchmark ci parse --output-dir ./results --no-rewrite
         """,
     )
     parser.add_argument(

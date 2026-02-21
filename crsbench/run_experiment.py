@@ -6,14 +6,18 @@ standardized experiment configurations, CRS integration, and benchmark suite
 management.
 
 Usage:
-    # Run experiments
-    crsbench run --experiment-config experiment-config.yaml
+    # Download benchmarks and run experiments
+    crsbench download --all
+    crsbench run --experiment-config config.yaml
 
-    # Verify POVs
-    crsbench verify benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
+    # Verify POVs / patches / coverage
+    crsbench verify benchmarks/afc-curl-delta-01 --pov-dir ./povs/
+    crsbench patch-verify benchmarks/afc-curl-delta-01 --patch-dir ./patches --pov-dir ./povs
+    crsbench coverage benchmarks/afc-curl-delta-01 --corpus-dir ./corpus/
 
-    # Collect coverage
-    crsbench coverage benchmarks/sanity-mock-c-delta-01 --corpus-dir ./corpus/
+    # Benchmark management (validate, bundle, CI, stats)
+    crsbench benchmark validate ./benchmarks/afc-curl-delta-01
+    crsbench benchmark ci all --all
 """
 
 import argparse
@@ -38,7 +42,7 @@ from crsbench.distributed.jobs import (
     get_crs_type,
 )
 from crsbench.evaluation.cleanup import cleanup_trial_directory
-from crsbench.evaluation.results import CRSType, TrialResult
+from crsbench.evaluation.results import TrialResult
 from crsbench.utils import log_progress, log_section, log_summary
 from crsbench.utils.benchmark_utils import (
     filter_benchmarks_by_mode,
@@ -247,15 +251,44 @@ def parse_arguments() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Download benchmarks from HuggingFace
+  %(prog)s download --all
+
   # Run CRS experiments
   %(prog)s run --experiment-config config.yaml
 
+  # Start distributed worker / evaluator
+  %(prog)s worker --experiment-config config.yaml
+  %(prog)s evaluator --experiment-config config.yaml
+
   # Verify POVs against benchmark variants
-  %(prog)s verify benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
+  %(prog)s verify benchmarks/afc-curl-delta-01 --pov-dir ./povs/
+
+  # Verify CRS-generated patches
+  %(prog)s patch-verify benchmarks/afc-curl-delta-01 --patch-dir ./patches --pov-dir ./povs
+
+  # Collect code coverage
+  %(prog)s coverage benchmarks/afc-curl-delta-01 --corpus-dir ./corpus/
+
+  # Generate reports and start dashboard
+  %(prog)s report --experiment my-experiment
+  %(prog)s dashboard --base-dir ./experiments
+
+  # Benchmark management (validate, bundle, CI, stats, migrate)
+  %(prog)s benchmark validate ./benchmarks/afc-curl-delta-01
+  %(prog)s benchmark ci all --all
+  %(prog)s benchmark stats --summary-only
         """,
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # --- Ordered by experiment lifecycle ---
+
+    # 'download' subcommand - HuggingFace dataset download
+    from crsbench.dataset.cli import add_dataset_subparser
+
+    add_dataset_subparser(subparsers)
 
     # 'run' subcommand - experiment execution
     run_parser = subparsers.add_parser(
@@ -271,6 +304,16 @@ Examples:
     )
     _add_run_arguments(run_parser)
     run_parser.set_defaults(command="run")
+
+    # 'worker' subcommand - distributed worker
+    from crsbench.distributed.cli.worker_command import add_worker_subparser
+
+    add_worker_subparser(subparsers)
+
+    # 'evaluator' subcommand - distributed POV verification
+    from crsbench.distributed.cli.evaluator_command import add_evaluator_subparser
+
+    add_evaluator_subparser(subparsers)
 
     # 'verify' subcommand - POV verification
     from crsbench.evaluation.verification.cli.pov_verify_command import (
@@ -293,26 +336,6 @@ Examples:
 
     add_coverage_subparser(subparsers)
 
-    # 'worker' subcommand - distributed worker
-    from crsbench.distributed.cli.worker_command import add_worker_subparser
-
-    add_worker_subparser(subparsers)
-
-    # 'evaluator' subcommand - distributed POV verification
-    from crsbench.distributed.cli.evaluator_command import add_evaluator_subparser
-
-    add_evaluator_subparser(subparsers)
-
-    # 'migrate' subcommand - migration and generation tools
-    from crsbench.migration.cli.converter_command import add_migrate_subparser
-
-    add_migrate_subparser(subparsers)
-
-    # 'stats' subcommand - benchmark statistics
-    from crsbench.statistics.cli import add_stats_subparser
-
-    add_stats_subparser(subparsers)
-
     # 'report' subcommand - report generation
     from crsbench.reporting.cli import add_report_subparser
 
@@ -323,25 +346,15 @@ Examples:
 
     add_dashboard_subparser(subparsers)
 
-    # 'ci' subcommand - benchmark CI testing
-    from crsbench.benchmark_ci.cli import add_ci_subparser
-
-    add_ci_subparser(subparsers)
-
-    # 'benchmark' subcommand - benchmark management (bundle, validate, prepare-delta)
-    from crsbench.benchmark.packaging.cli import add_benchmark_subparser
-
-    add_benchmark_subparser(subparsers)
-
     # 're-eval' subcommand - re-run verification on existing trials
     from crsbench.evaluation.reeval.cli import add_reeval_subparser
 
     add_reeval_subparser(subparsers)
 
-    # 'download' subcommand - HuggingFace dataset download
-    from crsbench.dataset.cli import add_dataset_subparser
+    # 'benchmark' subcommand - benchmark management including migrate, stats, ci
+    from crsbench.benchmark.packaging.cli import add_benchmark_subparser
 
-    add_dataset_subparser(subparsers)
+    add_benchmark_subparser(subparsers)
 
     args = parser.parse_args()
 
@@ -616,7 +629,7 @@ def generate_trial_matrix(
         # Detect CRS type
         registry_name = get_crs_registry_name(crs, crs_configs_dir)
         crs_type = get_crs_type(registry_name, registry_dir)
-        is_bug_fixing = crs_type == CRSType.BUG_FIXING.value
+        is_bug_fixing = crs_type == "bug-fixing"
 
         for benchmark_harness in benchmark_harnesses:
             # Skip harnesses without CPVs:
@@ -1010,7 +1023,7 @@ def run_experiment_local(
 
         # Log result and raise exception on failure
         if result.success:
-            if result.crs_type == CRSType.BUG_FIXING:
+            if result.crs_type == "bug-fixing":
                 logger.info(
                     f"  ✓ Success: {result.patches_generated} patches generated, "
                     f"{result.patches_valid} valid"
@@ -1244,7 +1257,7 @@ def _monitor_jobs_basic(
                         benchmark=kwargs.get("benchmark", "unknown"),
                         harness=kwargs.get("harness_name", "unknown"),
                         trial_num=kwargs.get("trial_num", 0),
-                        crs_type=CRSType.BUG_FINDING,
+                        crs_type="bug-finding",
                         mode=kwargs.get("mode"),
                         sanitizer=kwargs.get("sanitizer"),
                         success=False,
@@ -1291,7 +1304,7 @@ def _monitor_jobs_basic(
                     benchmark=kwargs.get("benchmark", "unknown"),
                     harness=kwargs.get("harness_name", "unknown"),
                     trial_num=kwargs.get("trial_num", 0),
-                    crs_type=CRSType.BUG_FINDING,
+                    crs_type="bug-finding",
                     mode=kwargs.get("mode"),
                     sanitizer=kwargs.get("sanitizer"),
                     success=False,
@@ -1429,7 +1442,7 @@ def _monitor_jobs_rich(
                             benchmark=kwargs.get("benchmark", "unknown"),
                             harness=kwargs.get("harness_name", "unknown"),
                             trial_num=kwargs.get("trial_num", 0),
-                            crs_type=CRSType.BUG_FINDING,
+                            crs_type="bug-finding",
                             mode=kwargs.get("mode"),
                             sanitizer=kwargs.get("sanitizer"),
                             success=False,
@@ -1473,7 +1486,7 @@ def _monitor_jobs_rich(
                     benchmark=kwargs.get("benchmark", "unknown"),
                     harness=kwargs.get("harness_name", "unknown"),
                     trial_num=kwargs.get("trial_num", 0),
-                    crs_type=CRSType.BUG_FINDING,
+                    crs_type="bug-finding",
                     mode=kwargs.get("mode"),
                     sanitizer=kwargs.get("sanitizer"),
                     success=False,
@@ -2040,18 +2053,6 @@ def main() -> None:
 
         sys.exit(run_evaluator(args))
 
-    if args.command == "migrate":
-        # Handle migrate command (conversion and generation tools)
-        from crsbench.migration.cli.converter_command import run_migrate
-
-        sys.exit(run_migrate(args))
-
-    if args.command == "stats":
-        # Handle stats command
-        from crsbench.statistics.cli import run_stats
-
-        sys.exit(run_stats(args))
-
     if args.command == "report":
         # Handle report command
         from crsbench.reporting.cli import run_report
@@ -2063,11 +2064,6 @@ def main() -> None:
         from crsbench.reporting.cli import run_dashboard
 
         sys.exit(run_dashboard(args))
-
-    if args.command == "ci":
-        from crsbench.benchmark_ci.cli import dispatch_ci
-
-        sys.exit(dispatch_ci(args))
 
     if args.command == "benchmark":
         # Handle benchmark command (bundle, validate, prepare-delta)

@@ -1192,6 +1192,7 @@ class TestSetupLlmTrackingBudget:
             "experiment": "test-exp",
             "trials": 1,
             "mode": "delta",
+            "adapter": "oss-crs",
             "max_total_time": 36000,  # Must be > build + run + verify timeouts
             "build_timeout": 3600,
             "run_timeout": 7200,

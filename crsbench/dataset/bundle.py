@@ -90,7 +90,7 @@ def unbundle_benchmark(bundle_dir: Path, output_dir: Path) -> None:
             continue
 
         with tarfile.open(archive_path, "r:gz") as tar:
-            tar.extractall(path=str(output_dir))
+            tar.extractall(path=str(output_dir), filter="data")
 
         logger.debug(f"Extracted {archive_name} -> {output_dir}")
 

@@ -48,8 +48,8 @@ The CRS implementation receives the host path and decides how to use it:
 ```
 crsbench/evaluation/
 ├── path_resolver.py      # Core path resolution logic
-├── crs_executor.py       # Uses path resolver
-└── oss_patch_executor.py # Uses path resolver
+└── adapter/
+    └── oss_crs.py        # OssCrsAdapter uses path resolver
 ```
 
 ### Integration Points
@@ -65,7 +65,7 @@ PathResolver
     ↓ outputs
 (host_path, container_path) tuple
     ↓ used by
-CRSExecutor
+OssCrsAdapter
     ↓ generates
 Docker volume mount arguments
 ```
@@ -336,77 +336,27 @@ except Exception as e:
 
 ## Integration with CRS Executors
 
-### Bug Finding CRS Example
+### OssCrsAdapter Usage Example
+
+`OssCrsAdapter` uses the path resolver internally when building crs-compose commands for both bug-finding and bug-fixing modes:
 
 ```python
 from crsbench.evaluation.path_resolver import get_harness_source_path
+from crsbench.evaluation.adapter import OssCrsAdapter
 
-class CRSBugFindingExecutor(CRSExecutor):
-    def run_crs(self, benchmark_path: Path, harness: HarnessFile, ...) -> CRSResult:
-        """Run CRS with optional harness source path."""
-        # Build base command
-        cmd = [
-            "oss-crs", "run",
-            self.crs_config_name,
-            project_name,
-            harness.name,
-            "--output", str(trial_output_dir)
-        ]
+# Bug finding mode
+adapter = OssCrsAdapter(mode="bug-finding", crs_config_name="ensemble-c", ...)
 
-        # Add optional harness source path
-        harness_source = get_harness_source_path(
-            harness, benchmark_path, self.repos_dir
-        )
-        if harness_source:
-            cmd.extend(["--harness-source", str(harness_source)])
-            logger.info(f"Harness source: {harness_source}")
-        else:
-            logger.warning("Running without harness source code")
+# Bug fixing (patch generation) mode
+adapter = OssCrsAdapter(mode="bug-fixing", crs_config_name="multi-retrieval", ...)
 
-        # Add hints if available
-        if hints_dir:
-            cmd.extend(["--hints", str(hints_dir)])
-
-        # Execute
-        result = subprocess.run(cmd, ...)
-        return self._parse_result(result)
-```
-
-### Patch Generation CRS Example
-
-```python
-from crsbench.evaluation.path_resolver import get_harness_source_path
-
-class CRSPatchExecutor(CRSExecutor):
-    def run_crs(self, benchmark_path: Path, harness: HarnessFile, ...) -> CRSResult:
-        """Run patch CRS with optional harness source path."""
-        # Build base command
-        cmd = [
-            "oss-bugfix-crs", "run",
-            self.crs_config_name,
-            project_name,
-            "--harness", harness.name,
-            "--povs", str(povs_dir),
-            "--output", str(trial_output_dir),
-            "--litellm-base", litellm_base_url,
-            "--litellm-key", litellm_key
-        ]
-
-        # Add optional harness source path
-        harness_source = get_harness_source_path(
-            harness, benchmark_path, self.repos_dir
-        )
-        if harness_source:
-            cmd.extend(["--harness-source", str(harness_source)])
-            logger.info(f"Harness source: {harness_source}")
-
-        # Add hints if available
-        if hints_dir:
-            cmd.extend(["--hints", str(hints_dir)])
-
-        # Execute
-        result = subprocess.run(cmd, ...)
-        return self._parse_result(result)
+# Both modes resolve harness source paths via:
+harness_source = get_harness_source_path(
+    harness, benchmark_path, repos_dir
+)
+if harness_source:
+    # Passed to crs-compose run via --harness-source flag
+    cmd.extend(["--harness-source", str(harness_source)])
 ```
 
 ## Testing Strategy

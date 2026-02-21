@@ -748,64 +748,31 @@ class TrialPreparationResult:
     error: Optional[str] = None
 ```
 
-## Integration: CRS Executor
+## Integration: OssCrsAdapter
 
-### CRSBugFindingExecutor Updates
+### Adapter Updates
 
-**File**: `crsbench/evaluation/crs_bug_finding_executor.py`
+**File**: `crsbench/evaluation/adapter/oss_crs.py`
 
-Update `run_crs()` to accept and use generated config:
-
-```python
-def run_crs(
-    self,
-    benchmark_path: Path,
-    harness: HarnessFile,
-    trial_output_dir: Path,
-    crs_config_dir: Path  # NEW: from TrialPreparationResult
-) -> CRSResult:
-    """Run CRS on a specific harness.
-
-    Args:
-        benchmark_path: Path to benchmark directory
-        harness: Harness configuration
-        trial_output_dir: Trial directory
-        crs_config_dir: Path to generated CRS config (NEW)
-    """
-
-    # ... existing setup ...
-
-    # Build command - use generated config
-    cmd = self._construct_build_command(
-        project_name=project_name,
-        trial_build_dir=trial_build_dir,
-        crs_config_dir=crs_config_dir  # Pass generated config
-    )
-
-    # ... existing execution logic ...
-```
-
-Update command construction:
+The `OssCrsAdapter` accepts generated config via the `configure()` method, which
+passes crs-compose fields through to the 3-phase lifecycle (prepare → build-target → run).
 
 ```python
-def _construct_build_command(
-    self,
-    project_name: str,
-    trial_build_dir: Path,
-    crs_config_dir: Path  # NEW
-) -> List[str]:
-    """Construct oss-bugfind-crs build command."""
-    cmd = [
-        "oss-crs", "build",
-        "--build-dir", str(trial_build_dir),
-        "--oss-fuzz-dir", str(self.oss_fuzz_path),
-        "--registry-dir", str(self.registry_dir),
-        "--project-path", str(benchmark_path),
-        str(crs_config_dir),  # Generated config (not template)
-        project_name,
-        str(source_path)
-    ]
-    return cmd
+adapter = create_adapter(
+    config=config,
+    crs_config_name=crs,
+    oss_fuzz_path=oss_fuzz_path,
+    registry_dir=registry_dir,
+    benchmarks_root=benchmarks_root,
+    crs_configs_dir=crs_configs_dir,
+    mode=crs_type,  # "bug-finding" or "bug-fixing"
+)
+
+adapter.configure({
+    "build_timeout": config.build_timeout,
+    "run_timeout": config.run_timeout,
+    # ... crs_compose fields spread from config ...
+})
 ```
 
 ## Trial Directory Structure

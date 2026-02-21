@@ -9,10 +9,10 @@ import json
 from pathlib import Path
 
 from crsbench.distributed.jobs import _build_trial_output_path, _check_existing_trial
-from crsbench.evaluation.results import CRSType, TrialResult
 from crsbench.evaluation.results import TrialMetadata as ResultsTrialMetadata
+from crsbench.evaluation.results import TrialResult
 from crsbench.run_experiment import _write_orchestrator_marker
-from crsbench.validation.schemas import ExperimentConfig, TrialMode
+from crsbench.validation.schemas import AdapterType, ExperimentConfig, TrialMode
 from crsbench.validation.schemas import TrialMetadata as SchemasTrialMetadata
 
 # ---------------------------------------------------------------------------
@@ -26,6 +26,7 @@ def _make_experiment_config(tmp_path: Path, **overrides) -> ExperimentConfig:
         "experiment": "test-exp",
         "trials": 1,
         "mode": "delta",
+        "adapter": AdapterType.OSS_CRS,
         "max_total_time": 86400,
         "difficulty_level": 0,
         "experiment_filestore": str(tmp_path / "experiment-data"),
@@ -55,7 +56,7 @@ def _make_trial_result(
         benchmark=benchmark,
         harness=harness,
         trial_num=trial_num,
-        crs_type=CRSType.BUG_FINDING,
+        crs_type="bug-finding",
         mode=mode,
         sanitizer=sanitizer,
         success=success,

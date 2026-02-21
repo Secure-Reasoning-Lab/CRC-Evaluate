@@ -1,8 +1,8 @@
 """CLI commands for bidirectional benchmark format conversion.
 
 Usage:
-  crsbench migrate atlanta-to-rfc --source-dir ... --target-dir ...
-  crsbench migrate rfc-to-atlanta --source-dir ... --target-dir ...
+  crsbench benchmark migrate atlanta-to-rfc --source-dir ... --target-dir ...
+  crsbench benchmark migrate rfc-to-atlanta --source-dir ... --target-dir ...
 """
 
 import argparse
@@ -255,6 +255,100 @@ def run_rfc_to_atlanta(args: argparse.Namespace) -> int:
 # =============================================================================
 
 
+def register_migrate_subcommands(parent_subparsers) -> None:
+    """Register 'migrate' as a child subparser of an existing command group.
+
+    Used by `crsbench benchmark migrate ...` to nest migrate under benchmark.
+
+    Args:
+        parent_subparsers: Subparsers action from the parent command (e.g., benchmark)
+    """
+    migrate_parser = parent_subparsers.add_parser(
+        "migrate",
+        help="Migration and generation tools for CRSBench benchmarks",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Subcommands:
+  atlanta-to-rfc      Convert Atlanta OSS-Fuzz format to CRSBench RFC format
+  rfc-to-atlanta      Convert CRSBench RFC format to Atlanta OSS-Fuzz format
+  generate-test-sh    Generate test.sh for benchmarks using Claude Agent SDK
+  generate-vuln-yaml  Generate vuln.yaml for CPVs using Claude Agent SDK
+
+Examples:
+  crsbench benchmark migrate atlanta-to-rfc --source-dir /path/to/oss-fuzz/projects --target-dir /path/to/benchmarks
+  crsbench benchmark migrate rfc-to-atlanta --source-dir /path/to/benchmarks --target-dir /path/to/oss-fuzz/projects
+        """,
+    )
+
+    migrate_subparsers = migrate_parser.add_subparsers(
+        dest="migrate_subcommand",
+        help="Migration/generation subcommand",
+    )
+
+    # atlanta-to-rfc subcommand
+    atlanta_to_rfc_parser = migrate_subparsers.add_parser(
+        "atlanta-to-rfc",
+        help="Convert Atlanta OSS-Fuzz benchmarks to CRSBench RFC format",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  crsbench benchmark migrate atlanta-to-rfc --source-dir /path/to/oss-fuzz/projects --target-dir /path/to/benchmarks
+  crsbench benchmark migrate atlanta-to-rfc --source-dir /path/to/oss-fuzz/projects --target-dir /path/to/benchmarks --dry-run
+        """,
+    )
+    _add_atlanta_to_rfc_args(atlanta_to_rfc_parser)
+
+    # rfc-to-atlanta subcommand
+    rfc_to_atlanta_parser = migrate_subparsers.add_parser(
+        "rfc-to-atlanta",
+        help="Convert CRSBench RFC format benchmarks to Atlanta OSS-Fuzz format",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  crsbench benchmark migrate rfc-to-atlanta --source-dir /path/to/benchmarks --target-dir /path/to/oss-fuzz/projects
+  crsbench benchmark migrate rfc-to-atlanta --source-dir /path/to/benchmarks --target-dir /path/to/oss-fuzz/projects --dry-run
+        """,
+    )
+    _add_rfc_to_atlanta_args(rfc_to_atlanta_parser)
+
+    # generate-test-sh subcommand
+    from crsbench.migration.cli.test_sh_command import (
+        _add_arguments as _add_test_sh_args,
+    )
+
+    generate_test_sh_parser = migrate_subparsers.add_parser(
+        "generate-test-sh",
+        help="Generate test.sh for CRSBench benchmarks using Claude Agent SDK",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  crsbench benchmark migrate generate-test-sh --benchmark apache-commons-compress-delta-01
+  crsbench benchmark migrate generate-test-sh --benchmarks bench1 bench2 --parallel 2
+  crsbench benchmark migrate generate-test-sh --all-missing
+        """,
+    )
+    _add_test_sh_args(generate_test_sh_parser)
+
+    # generate-vuln-yaml subcommand
+    from crsbench.migration.cli.vuln_yaml_command import (
+        _add_arguments as _add_vuln_yaml_args,
+    )
+
+    generate_vuln_yaml_parser = migrate_subparsers.add_parser(
+        "generate-vuln-yaml",
+        help="Generate vuln.yaml for CRSBench CPVs using Claude Agent SDK",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  crsbench benchmark migrate generate-vuln-yaml
+  crsbench benchmark migrate generate-vuln-yaml --benchmark atlanta-curl-delta-01
+        """,
+    )
+    _add_vuln_yaml_args(generate_vuln_yaml_parser)
+
+    migrate_parser.set_defaults(func=run_migrate)
+
+
 def add_migrate_subparser(subparsers) -> None:
     """Add 'migrate' subcommand with nested subcommands to the CLI."""
     migrate_parser = subparsers.add_parser(
@@ -270,16 +364,16 @@ Subcommands:
 
 Examples:
   # Convert Atlanta to RFC
-  crsbench migrate atlanta-to-rfc --source-dir /path/to/oss-fuzz/projects --target-dir /path/to/benchmarks
+  crsbench benchmark migrate atlanta-to-rfc --source-dir /path/to/oss-fuzz/projects --target-dir /path/to/benchmarks
 
   # Convert RFC to Atlanta
-  crsbench migrate rfc-to-atlanta --source-dir /path/to/benchmarks --target-dir /path/to/oss-fuzz/projects
+  crsbench benchmark migrate rfc-to-atlanta --source-dir /path/to/benchmarks --target-dir /path/to/oss-fuzz/projects
 
   # Generate test.sh
-  crsbench migrate generate-test-sh --benchmark curl-delta-01
+  crsbench benchmark migrate generate-test-sh --benchmark curl-delta-01
 
   # Generate vuln.yaml
-  crsbench migrate generate-vuln-yaml --benchmark curl-delta-01
+  crsbench benchmark migrate generate-vuln-yaml --benchmark curl-delta-01
         """,
     )
 
@@ -296,9 +390,9 @@ Examples:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  crsbench migrate atlanta-to-rfc --source-dir /path/to/oss-fuzz/projects --target-dir /path/to/benchmarks
-  crsbench migrate atlanta-to-rfc --source-dir /path/to/oss-fuzz/projects --target-dir /path/to/benchmarks --dry-run
-  crsbench migrate atlanta-to-rfc --source-dir /path/to/oss-fuzz/projects --target-dir /path/to/benchmarks --projects curl-delta-04
+  crsbench benchmark migrate atlanta-to-rfc --source-dir /path/to/oss-fuzz/projects --target-dir /path/to/benchmarks
+  crsbench benchmark migrate atlanta-to-rfc --source-dir /path/to/oss-fuzz/projects --target-dir /path/to/benchmarks --dry-run
+  crsbench benchmark migrate atlanta-to-rfc --source-dir /path/to/oss-fuzz/projects --target-dir /path/to/benchmarks --projects curl-delta-04
         """,
     )
     _add_atlanta_to_rfc_args(atlanta_to_rfc_parser)
@@ -310,9 +404,9 @@ Examples:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  crsbench migrate rfc-to-atlanta --source-dir /path/to/benchmarks --target-dir /path/to/oss-fuzz/projects
-  crsbench migrate rfc-to-atlanta --source-dir /path/to/benchmarks --target-dir /path/to/oss-fuzz/projects --dry-run
-  crsbench migrate rfc-to-atlanta --source-dir /path/to/benchmarks --target-dir /path/to/oss-fuzz/projects --projects curl-delta-04
+  crsbench benchmark migrate rfc-to-atlanta --source-dir /path/to/benchmarks --target-dir /path/to/oss-fuzz/projects
+  crsbench benchmark migrate rfc-to-atlanta --source-dir /path/to/benchmarks --target-dir /path/to/oss-fuzz/projects --dry-run
+  crsbench benchmark migrate rfc-to-atlanta --source-dir /path/to/benchmarks --target-dir /path/to/oss-fuzz/projects --projects curl-delta-04
         """,
     )
     _add_rfc_to_atlanta_args(rfc_to_atlanta_parser)
@@ -328,9 +422,9 @@ Examples:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  crsbench migrate generate-test-sh --benchmark apache-commons-compress-delta-01
-  crsbench migrate generate-test-sh --benchmarks bench1 bench2 --parallel 2
-  crsbench migrate generate-test-sh --all-missing
+  crsbench benchmark migrate generate-test-sh --benchmark apache-commons-compress-delta-01
+  crsbench benchmark migrate generate-test-sh --benchmarks bench1 bench2 --parallel 2
+  crsbench benchmark migrate generate-test-sh --all-missing
         """,
     )
     _add_test_sh_args(generate_test_sh_parser)
@@ -346,9 +440,9 @@ Examples:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  crsbench migrate generate-vuln-yaml
-  crsbench migrate generate-vuln-yaml --benchmark atlanta-curl-delta-01
-  crsbench migrate generate-vuln-yaml --benchmark atlanta-curl-delta-01 --harness curl_fuzzer_http --cpv cpv_0
+  crsbench benchmark migrate generate-vuln-yaml
+  crsbench benchmark migrate generate-vuln-yaml --benchmark atlanta-curl-delta-01
+  crsbench benchmark migrate generate-vuln-yaml --benchmark atlanta-curl-delta-01 --harness curl_fuzzer_http --cpv cpv_0
         """,
     )
     _add_vuln_yaml_args(generate_vuln_yaml_parser)
@@ -363,7 +457,7 @@ def run_migrate(args: argparse.Namespace) -> int:
         logger.info(
             "Available: atlanta-to-rfc, rfc-to-atlanta, generate-test-sh, generate-vuln-yaml"
         )
-        logger.info("Run 'crsbench migrate --help' for usage information.")
+        logger.info("Run 'crsbench benchmark migrate --help' for usage information.")
         return 1
 
     if args.migrate_subcommand == "atlanta-to-rfc":

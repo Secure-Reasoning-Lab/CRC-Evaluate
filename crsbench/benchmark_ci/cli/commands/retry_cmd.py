@@ -70,13 +70,13 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         epilog="""
 Examples:
   # Retry failed benchmarks from a previous run
-  crsbench ci retry --csv ./ci-output/summary.csv --output-dir ./ci-retry
+  crsbench benchmark ci retry --csv ./ci-output/summary.csv --output-dir ./ci-retry
 
   # Retry using bundled source
-  crsbench ci retry --csv ./ci-output/summary.csv --source pkgs
+  crsbench benchmark ci retry --csv ./ci-output/summary.csv --source pkgs
 
   # Retry with different output directory
-  crsbench ci retry --csv ./previous-run/summary.csv --output-dir ./retry-output
+  crsbench benchmark ci retry --csv ./previous-run/summary.csv --output-dir ./retry-output
         """,
     )
     parser.add_argument(

@@ -48,6 +48,9 @@ class InjectionResult(BaseModel):
     skipped_count: int = Field(
         default=0, description="Files skipped (already have canary)"
     )
+    matched_count: int = Field(
+        default=0, description="Benchmarks matched by filter pattern"
+    )
     benchmarks: list[str] = Field(
         default_factory=list,
         description="List of benchmark names processed",

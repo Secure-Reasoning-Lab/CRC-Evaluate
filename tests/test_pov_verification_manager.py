@@ -1037,3 +1037,86 @@ class TestAsyncMode:
         # Should have verified inline
         manager._engine.verify_pov.assert_called_once()
         assert snapshot.povs_new == 1
+
+
+class TestExchangeDirScanning:
+    """Tests for EXCHANGE_DIR POV discovery via pre-resolved exchange_pov_dir."""
+
+    def _make_manager(self, tmp_path: Path, *, exchange_pov_dir: Path = None):
+        from crsbench.evaluation.verification.pov.manager import (
+            POVVerificationManager,
+        )
+
+        trial_dir = tmp_path / "trial-1"
+        trial_dir.mkdir(exist_ok=True)
+        pov_output_dir = trial_dir / "pov_output"
+        pov_output_dir.mkdir(exist_ok=True)
+
+        config = POVVerificationConfig()
+        return POVVerificationManager(
+            trial_dir=trial_dir,
+            pov_output_dir=pov_output_dir,
+            config=config,
+            harness_name="fuzz_parser",
+            benchmark_id="test-benchmark",
+            expected_cpv_ids=["cpv_0", "cpv_1"],
+            exchange_pov_dir=exchange_pov_dir,
+        )
+
+    def test_discover_from_exchange_dir(self, tmp_path: Path) -> None:
+        """POVs in exchange_pov_dir are discovered alongside pov_output_dir."""
+        exchange_pov = tmp_path / "exchange" / "povs"
+        exchange_pov.mkdir(parents=True)
+
+        # Write POV to exchange dir only (not to pov_output_dir)
+        (exchange_pov / "exchange_pov.blob").write_bytes(b"exchange_pov_data")
+
+        manager = self._make_manager(tmp_path, exchange_pov_dir=exchange_pov)
+        new_povs = manager._discover_new_povs()
+
+        assert len(new_povs) == 1
+        assert new_povs[0][0].name == "exchange_pov.blob"
+
+    def test_discover_merges_both_dirs(self, tmp_path: Path) -> None:
+        """POVs from both pov_output_dir and exchange_pov_dir are merged."""
+        exchange_pov = tmp_path / "exchange" / "povs"
+        exchange_pov.mkdir(parents=True)
+
+        manager = self._make_manager(tmp_path, exchange_pov_dir=exchange_pov)
+
+        # Write POV to pov_output_dir
+        (manager.pov_output_dir / "output_pov.blob").write_bytes(b"output_data")
+        # Write different POV to exchange dir
+        (exchange_pov / "exchange_pov.blob").write_bytes(b"exchange_data")
+
+        new_povs = manager._discover_new_povs()
+        names = {p.name for p, _ in new_povs}
+
+        assert len(new_povs) == 2
+        assert "output_pov.blob" in names
+        assert "exchange_pov.blob" in names
+
+    def test_dedup_same_content_across_dirs(self, tmp_path: Path) -> None:
+        """Same POV content in both dirs is deduplicated within a single call."""
+        exchange_pov = tmp_path / "exchange" / "povs"
+        exchange_pov.mkdir(parents=True)
+
+        manager = self._make_manager(tmp_path, exchange_pov_dir=exchange_pov)
+
+        # Write identical content to both directories
+        content = b"identical_pov_content"
+        (manager.pov_output_dir / "pov.blob").write_bytes(content)
+        (exchange_pov / "pov_copy.blob").write_bytes(content)
+
+        new_povs = manager._discover_new_povs()
+
+        # Same hash in both dirs → only one returned (within-call dedup)
+        assert len(new_povs) == 1
+
+    def test_no_exchange_dir_falls_back_gracefully(self, tmp_path: Path) -> None:
+        """Without exchange_pov_dir, only pov_output_dir is scanned."""
+        manager = self._make_manager(tmp_path, exchange_pov_dir=None)
+        (manager.pov_output_dir / "pov.blob").write_bytes(b"data")
+
+        new_povs = manager._discover_new_povs()
+        assert len(new_povs) == 1

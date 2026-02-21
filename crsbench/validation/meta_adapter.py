@@ -534,8 +534,8 @@ class MetaYamlAdapter:
         candidates: list[Path] = []
 
         if harness_name:
-            candidates.append(aixcc_dir / harness_name / "corpus")
-        candidates.append(aixcc_dir / "corpus")
+            candidates.append(aixcc_dir / harness_name / "seeds")
+        candidates.append(aixcc_dir / "seeds")
 
         for candidate in candidates:
             if candidate.exists() and any(candidate.iterdir()):

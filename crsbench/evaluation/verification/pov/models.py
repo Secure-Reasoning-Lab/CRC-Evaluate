@@ -34,6 +34,10 @@ class POVEntry(BaseModel):
     crash_log_path: Optional[str] = Field(
         default=None, description="Relative path to crash log file"
     )
+    crash_signature: Optional[str] = Field(
+        default=None,
+        description="Crash signature hash from sanitizer stack trace (16-char hex)",
+    )
     verification_duration: float = Field(
         default=0.0, description="Time taken to verify (seconds)"
     )
@@ -84,6 +88,10 @@ class POVVerificationReport(BaseModel):
         default=0, description="Duplicate POVs not re-verified"
     )
     unintended_crashes: int = Field(default=0, description="Unintended crashes found")
+    unique_unintended_crash_sites: int = Field(
+        default=0,
+        description="Number of unique crash sites among unintended crashes",
+    )
     verification_errors: int = Field(default=0, description="Verification failures")
     verification_timeouts: int = Field(default=0, description="Verification timeouts")
     early_stopped: bool = Field(

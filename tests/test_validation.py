@@ -12,6 +12,7 @@ from crsbench.validation import (
 from crsbench.validation.errors import ValidationCodes
 from crsbench.validation.schemas import (
     POV,
+    AdapterType,
     BenchmarkEntry,
     BenchmarkSuiteConfig,
     EvaluationMode,
@@ -607,6 +608,7 @@ class TestExperimentConfigSchema:
             experiment="test",
             trials=3,
             mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
             max_total_time=86400,
             difficulty_level=2,
             experiment_filestore="/tmp/experiment-data",
@@ -625,6 +627,7 @@ class TestExperimentConfigSchema:
                 experiment="test",
                 trials=0,  # Invalid: must be >= 1
                 mode=EvaluationMode.DELTA,
+                adapter=AdapterType.OSS_CRS,
                 max_total_time=86400,
                 difficulty_level=1,
                 experiment_filestore="/tmp/exp",
@@ -641,6 +644,7 @@ class TestExperimentConfigSchema:
                 experiment="test",
                 trials=1,
                 mode=EvaluationMode.DELTA,
+                adapter=AdapterType.OSS_CRS,
                 max_total_time=0,  # Invalid: must be >= 1
                 difficulty_level=1,
                 experiment_filestore="/tmp/exp",
@@ -657,6 +661,7 @@ class TestExperimentConfigSchema:
                 experiment="test",
                 trials=1,
                 mode=EvaluationMode.DELTA,
+                adapter=AdapterType.OSS_CRS,
                 max_total_time=86400,
                 difficulty_level=5,  # Invalid: must be 0-4
                 experiment_filestore="/tmp/exp",
@@ -673,6 +678,7 @@ class TestExperimentConfigSchema:
                 experiment="test",
                 trials=1,
                 mode=EvaluationMode.DELTA,
+                adapter=AdapterType.OSS_CRS,
                 max_total_time=86400,
                 difficulty_level=1,
                 experiment_filestore="",  # Empty
@@ -687,6 +693,7 @@ class TestExperimentConfigSchema:
             experiment="test",
             trials=1,
             mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
             max_total_time=86400,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -703,6 +710,7 @@ class TestExperimentConfigSchema:
             experiment="test",
             trials=1,
             mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
             max_total_time=86400,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -718,6 +726,7 @@ class TestExperimentConfigSchema:
             experiment="test",
             trials=1,
             mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
             max_total_time=86400,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -738,6 +747,7 @@ class TestExperimentConfigSchema:
                 experiment="test",
                 trials=1,
                 mode=EvaluationMode.DELTA,
+                adapter=AdapterType.OSS_CRS,
                 max_total_time=86400,
                 difficulty_level=1,
                 experiment_filestore="/tmp/exp",
@@ -755,6 +765,7 @@ class TestExperimentConfigSchema:
             experiment="test",
             trials=1,
             mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
             max_total_time=86400,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -771,6 +782,7 @@ class TestExperimentConfigSchema:
             experiment="test",
             trials=3,
             mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
             max_total_time=86400,
             difficulty_level=2,
             experiment_filestore="/tmp/exp",
@@ -799,6 +811,7 @@ class TestExperimentConfigSchema:
             experiment="test",
             trials=1,
             mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -814,6 +827,7 @@ class TestExperimentConfigSchema:
             experiment="test",
             trials=1,
             mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -830,6 +844,7 @@ class TestExperimentConfigSchema:
             experiment="test",
             trials=1,
             mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -846,6 +861,7 @@ class TestExperimentConfigSchema:
             experiment="test",
             trials=1,
             mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -864,6 +880,7 @@ class TestExperimentConfigSchema:
             experiment="test",
             trials=1,
             mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
             max_total_time=20000,  # Greater than 3600 + 7200 + 7200 = 18000
             difficulty_level=1,
             experiment_filestore="/tmp/exp",
@@ -881,6 +898,7 @@ class TestExperimentConfigSchema:
                 experiment="test",
                 trials=1,
                 mode=EvaluationMode.DELTA,
+                adapter=AdapterType.OSS_CRS,
                 max_total_time=18000,  # Equal to 3600 + 7200 + 7200
                 difficulty_level=1,
                 experiment_filestore="/tmp/exp",
@@ -903,6 +921,7 @@ class TestExperimentConfigValidation:
 experiment: test
 trials: 1
 mode: delta
+adapter: oss-crs
 max_total_time: 86400
 difficulty_level: 1
 experiment_filestore: /tmp/crsbench/experiment-data
@@ -926,6 +945,7 @@ benchmarks:
 experiment: test
 trials: 1
 mode: delta
+adapter: oss-crs
 max_total_time: 86400
 # Missing difficulty_level
 experiment_filestore: /tmp/crsbench/experiment-data
@@ -947,6 +967,7 @@ benchmarks:
 experiment: test
 trials: -1
 mode: delta
+adapter: oss-crs
 max_total_time: 86400
 difficulty_level: 1
 experiment_filestore: /tmp/crsbench/exp
@@ -967,6 +988,7 @@ benchmarks:
 experiment: test
 trials: 1
 mode: delta
+adapter: oss-crs
 max_total_time: 86400
 difficulty_level: 10
 experiment_filestore: /tmp/crsbench/exp
@@ -1002,6 +1024,7 @@ benchmarks:
 experiment: test
 trials: 1
 mode: delta
+adapter: oss-crs
 max_total_time: 86400
 difficulty_level: 1
 experiment_filestore: /tmp/crsbench/experiment-data
@@ -1026,6 +1049,7 @@ redis_host: queue-server
 experiment: test
 trials: 1
 mode: delta
+adapter: oss-crs
 max_total_time: 86400
 difficulty_level: 1
 experiment_filestore: /tmp/crsbench/experiment-data
@@ -1047,6 +1071,7 @@ benchmarks_root: {tmpdir}
 experiment: test
 trials: 1
 mode: delta
+adapter: oss-crs
 max_total_time: 86400
 difficulty_level: 1
 experiment_filestore: /tmp/crsbench/experiment-data
@@ -1468,6 +1493,7 @@ harness_files:
 experiment: test
 trials: 1
 mode: delta
+adapter: oss-crs
 max_total_time: 86400
 difficulty_level: 1
 experiment_filestore: /tmp/crsbench/exp

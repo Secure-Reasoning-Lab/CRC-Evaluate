@@ -347,7 +347,7 @@ The evaluator builds ALL variant images at startup before listening on the verif
 
 ### 8.2 Shared Build Infrastructure
 
-The evaluator uses the same build pipeline as `crsbench ci build`:
+The evaluator uses the same build pipeline as `crsbench benchmark ci build`:
 - `OSSFuzzBuilder` for build plan creation and execution
 - `OSSFuzzInfrastructure.reproduce()` for POV verification
 - Build results cached identically to `VerificationEngine._get_or_build_results()`

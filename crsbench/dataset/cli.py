@@ -104,6 +104,14 @@ def run_download(args: argparse.Namespace) -> int:
     if hasattr(args, "verbose") and args.verbose:
         configure_logger(level="DEBUG")
 
+    from crsbench.dataset.backends import check_hf_token
+
+    is_valid, message = check_hf_token()
+    if not is_valid:
+        logger.error(message)
+        return 1
+    logger.info(message)
+
     if args.benchmarks and not args.dataset:
         logger.error("--benchmarks can only be used with --dataset")
         return 1

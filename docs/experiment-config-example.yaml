@@ -16,6 +16,10 @@ trials: 1
 # - all: Run all available modes for each benchmark (multiplies trials)
 mode: delta
 
+# CRS adapter type. Only supported value: "oss-crs".
+# Mode (bug-finding vs bug-fixing) is auto-detected from the CRS registry's pkg.yaml.
+adapter: oss-crs
+
 # The maximum time in seconds for the entire trial.
 # IMPORTANT: Must be greater than build_timeout + run_timeout + verify_timeout
 # Default: 86400 (24 hours)

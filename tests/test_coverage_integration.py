@@ -19,7 +19,7 @@ class TestCoverageManagerIntegration:
         with tempfile.TemporaryDirectory() as tmp_dir:
             trial_dir = Path(tmp_dir) / "trial"
             trial_dir.mkdir()
-            corpus_dir = trial_dir / "output" / "corpus"
+            corpus_dir = trial_dir / "output" / "seeds"
             corpus_dir.mkdir(parents=True)
 
             # Create mock strategy
@@ -59,7 +59,7 @@ class TestCoverageManagerIntegration:
         with tempfile.TemporaryDirectory() as tmp_dir:
             trial_dir = Path(tmp_dir) / "trial"
             trial_dir.mkdir()
-            corpus_dir = trial_dir / "output" / "corpus"
+            corpus_dir = trial_dir / "output" / "seeds"
             corpus_dir.mkdir(parents=True)
 
             mock_strategy = MagicMock()
@@ -96,7 +96,7 @@ class TestCoverageManagerIntegration:
         with tempfile.TemporaryDirectory() as tmp_dir:
             trial_dir = Path(tmp_dir) / "trial"
             trial_dir.mkdir()
-            corpus_dir = trial_dir / "output" / "corpus"
+            corpus_dir = trial_dir / "output" / "seeds"
             corpus_dir.mkdir(parents=True)
 
             mock_strategy = MagicMock()
@@ -144,7 +144,7 @@ class TestCoverageManagerIntegration:
         with tempfile.TemporaryDirectory() as tmp_dir:
             trial_dir = Path(tmp_dir) / "trial"
             trial_dir.mkdir()
-            corpus_dir = trial_dir / "output" / "corpus"
+            corpus_dir = trial_dir / "output" / "seeds"
             corpus_dir.mkdir(parents=True)
 
             mock_strategy = MagicMock()

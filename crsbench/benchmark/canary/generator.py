@@ -22,6 +22,9 @@ logger = get_logger(__name__)
 
 # Default registry filename (resolved relative to cwd at runtime)
 DEFAULT_REGISTRY_FILENAME = "canary-registry.json"
+_CANARY_UUID_RE = re.compile(
+    r"(?i)(canary GUID )([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+)
 
 
 def _get_default_registry_path() -> Path:
@@ -94,6 +97,8 @@ def generate_canary_block(canary_uuid: UUID) -> str:
 def inject_canary_into_file(
     file_path: Path,
     canary_uuid: UUID,
+    *,
+    force: bool = False,
 ) -> bool:
     """Inject canary comment block into a file.
 
@@ -104,7 +109,7 @@ def inject_canary_into_file(
         canary_uuid: UUID to inject
 
     Returns:
-        True if canary was injected, False if already present or file not found
+        True if canary content was added/updated, False if unchanged or file missing
     """
     if not file_path.exists():
         logger.warning(f"File not found: {file_path}")
@@ -113,9 +118,21 @@ def inject_canary_into_file(
     content = file_path.read_text(encoding="utf-8")
 
     # Check if canary already exists
-    if "canary GUID" in content:
-        logger.debug(f"Canary already present in {file_path}")
-        return False
+    if _CANARY_UUID_RE.search(content):
+        if not force:
+            logger.debug(f"Canary already present in {file_path}")
+            return False
+
+        # Force mode: update existing canary GUIDs in-place.
+        updated = _CANARY_UUID_RE.sub(
+            lambda m: f"{m.group(1)}{canary_uuid}",
+            content,
+        )
+        if updated == content:
+            return False
+        file_path.write_text(updated, encoding="utf-8")
+        logger.debug(f"Updated canary UUID in {file_path}")
+        return True
 
     # Prepend canary block
     canary_block = generate_canary_block(canary_uuid)
@@ -129,6 +146,8 @@ def inject_canary_into_file(
 def inject_canary_into_benchmark(
     benchmark_path: Path,
     canary_uuid: UUID,
+    *,
+    force: bool = False,
 ) -> int:
     """Inject canary into all relevant files in a benchmark.
 
@@ -156,27 +175,33 @@ def inject_canary_into_benchmark(
 
     # Inject into meta.yaml
     meta_yaml = aixcc_dir / "meta.yaml"
-    if meta_yaml.exists() and inject_canary_into_file(meta_yaml, canary_uuid):
+    if meta_yaml.exists() and inject_canary_into_file(
+        meta_yaml, canary_uuid, force=force
+    ):
         injected += 1
 
     # Inject into all vuln.yaml files
     for vuln_yaml in aixcc_dir.rglob("vuln.yaml"):
-        if inject_canary_into_file(vuln_yaml, canary_uuid):
+        if inject_canary_into_file(vuln_yaml, canary_uuid, force=force):
             injected += 1
 
     # Inject into ref.diff (ground truth patch)
     ref_diff = aixcc_dir / "ref.diff"
-    if ref_diff.exists() and inject_canary_into_file(ref_diff, canary_uuid):
+    if ref_diff.exists() and inject_canary_into_file(
+        ref_diff, canary_uuid, force=force
+    ):
         injected += 1
 
     # Inject into all .patch files
     for patch_file in aixcc_dir.rglob("*.patch"):
-        if inject_canary_into_file(patch_file, canary_uuid):
+        if inject_canary_into_file(patch_file, canary_uuid, force=force):
             injected += 1
 
     # Inject into all .diff files (excluding ref.diff already handled)
     for diff_file in aixcc_dir.rglob("*.diff"):
-        if diff_file != ref_diff and inject_canary_into_file(diff_file, canary_uuid):
+        if diff_file != ref_diff and inject_canary_into_file(
+            diff_file, canary_uuid, force=force
+        ):
             injected += 1
 
     return injected
@@ -226,6 +251,7 @@ def inject_canaries_by_prefix(
             continue
         if not fnmatch.fnmatch(benchmark_path.name, prefix_filter):
             continue
+        result.matched_count += 1
 
         # Check if already has canary (unless force)
         meta_yaml = benchmark_path / ".aixcc" / "meta.yaml"
@@ -236,9 +262,12 @@ def inject_canaries_by_prefix(
                 continue
 
         # Inject canary
-        injected = inject_canary_into_benchmark(benchmark_path, canary_uuid)
+        injected = inject_canary_into_benchmark(
+            benchmark_path, canary_uuid, force=force
+        )
         if injected > 0:
             result.injected_count += injected
+        if injected > 0 or force:
             result.benchmarks.append(benchmark_path.name)
 
     # Save registry

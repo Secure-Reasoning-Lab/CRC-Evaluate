@@ -147,6 +147,14 @@ Examples:
     )
 
     evaluator_parser.add_argument(
+        "--idle-timeout",
+        type=int,
+        default=0,
+        metavar="SECONDS",
+        help="Exit after N seconds idle post-build-phase with empty verify queue (0=disabled/infinite, default: 0)",
+    )
+
+    evaluator_parser.add_argument(
         "--worker-name",
         type=str,
         default=None,
@@ -200,6 +208,7 @@ def run_evaluator(args: argparse.Namespace) -> int:
             or (build_jobs * build_cores_per_job) // verify_cores_per_job
         )
         worker_name = getattr(args, "worker_name", None) or "ci-evaluator"
+        idle_timeout = getattr(args, "idle_timeout", 0)
 
         try:
             return run_evaluator_ci_mode(
@@ -212,6 +221,7 @@ def run_evaluator(args: argparse.Namespace) -> int:
                 use_cpuset=use_cpuset,
                 cores=cores,
                 skip_cpus=skip_cpus,
+                idle_timeout=idle_timeout,
             )
         except KeyboardInterrupt:
             logger.info("Evaluator interrupted by user")
@@ -264,6 +274,7 @@ def run_evaluator(args: argparse.Namespace) -> int:
         getattr(args, "verify_jobs", None)
         or (build_jobs * build_cores_per_job) // verify_cores_per_job
     )
+    idle_timeout = getattr(args, "idle_timeout", 0)
 
     try:
         return run_evaluator_main(
@@ -277,6 +288,7 @@ def run_evaluator(args: argparse.Namespace) -> int:
             build_cores_per_job=build_cores_per_job,
             verify_cores_per_job=verify_cores_per_job,
             verify_jobs=verify_jobs,
+            idle_timeout=idle_timeout,
         )
     except KeyboardInterrupt:
         logger.info("Evaluator interrupted by user")

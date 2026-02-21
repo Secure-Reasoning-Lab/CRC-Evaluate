@@ -116,6 +116,7 @@ def run_evaluator_main(
     build_cores_per_job: Optional[int] = None,
     verify_cores_per_job: Optional[int] = None,
     verify_jobs: Optional[int] = None,
+    idle_timeout: int = 0,
 ) -> int:
     """Main entry point for the evaluator process.
 
@@ -201,6 +202,7 @@ def run_evaluator_main(
         use_cgroups=use_cpuset,
         cores=cores,
         skip_cpus=skip_cpus,
+        idle_timeout=idle_timeout,
     )
 
 
@@ -366,6 +368,7 @@ def run_evaluator_ci_mode(
     use_cpuset: bool = False,
     cores: Optional[str] = None,
     skip_cpus: Optional[str] = None,
+    idle_timeout: int = 0,
 ) -> int:
     """Run evaluator in CI mode (no experiment config required).
 
@@ -417,4 +420,5 @@ def run_evaluator_ci_mode(
         use_cgroups=use_cpuset,
         cores=cores,
         skip_cpus=skip_cpus,
+        idle_timeout=idle_timeout,
     )

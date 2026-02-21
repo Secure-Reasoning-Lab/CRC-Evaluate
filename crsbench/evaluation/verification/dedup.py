@@ -1,16 +1,15 @@
 """Deduplication strategies for POV verification results.
 
 This module provides an extensible framework for deduplicating POVs
-based on different criteria. Initial implementation uses patch-based
-deduplication (POVs triggering the same CPV set are duplicates).
-
-Future extensions can add:
-- Stack-based deduplication (comparing crash stack traces)
-- Hybrid deduplication (combining multiple strategies)
-- Content-based deduplication (comparing POV content)
+based on different criteria:
+- PatchBasedDedup: POVs triggering the same CPV set are duplicates
+- StackBasedDedup: Groups UNINTENDED_CRASH POVs by crash signature hash
+- StatusBasedDedup: Keeps one result per status type
+- NoOpDedup: No deduplication (debug/testing)
 """
 
 from abc import ABC, abstractmethod
+from typing import Optional
 
 from crsbench.evaluation.verification.models import (
     PatchVerificationResult,
@@ -154,6 +153,109 @@ class StatusBasedDedup(DeduplicationStrategy):
         return unique_results
 
 
+class StackBasedDedup(DeduplicationStrategy):
+    """Deduplicate UNINTENDED_CRASH POVs by crash signature hash.
+
+    Uses sanitizer stack trace parsing to compute a deterministic crash
+    signature for each unintended crash. POVs with the same crash site
+    (same signature hash) are considered duplicates.
+
+    For CPV results, falls back to PatchBasedDedup behavior (dedup by
+    cpv_matched set). Other statuses are kept as-is.
+    """
+
+    def __init__(self, *, top_n: int = 5) -> None:
+        if top_n <= 0:
+            raise ValueError(f"top_n must be > 0, got {top_n}")
+        self._top_n = top_n
+
+    @property
+    def name(self) -> str:
+        return "stack-based"
+
+    def _extract_crash_log(self, result: PovVerificationResult) -> Optional[str]:
+        """Extract the first available crash log from a verification result.
+
+        Looks in crash_info for stdout logs (per-variant crash output).
+
+        Args:
+            result: Verification result to extract crash log from
+
+        Returns:
+            First crash log string, or None if not available
+        """
+        if not result.crash_info:
+            return None
+
+        # Try stdout logs (standard crash_info structure from engine)
+        stdout_logs = result.crash_info.get("stdout")
+        if stdout_logs and isinstance(stdout_logs, dict):
+            for variant_name in sorted(stdout_logs):
+                crash_log = stdout_logs[variant_name]
+                if crash_log:
+                    return crash_log
+
+        # Try logs key (from verify_pov single-POV path)
+        logs = result.crash_info.get("logs")
+        if logs and isinstance(logs, dict):
+            for variant_name in sorted(logs):
+                crash_log = logs[variant_name]
+                if crash_log:
+                    return crash_log
+
+        return None
+
+    def deduplicate(
+        self, results: list[PovVerificationResult]
+    ) -> list[PovVerificationResult]:
+        """Deduplicate results using crash signature for unintended crashes.
+
+        - CPV results: deduplicated by cpv_matched set (same as PatchBasedDedup)
+        - UNINTENDED_CRASH results: deduplicated by crash signature hash
+        - Other statuses: kept as-is
+
+        Args:
+            results: List of verification results
+
+        Returns:
+            Deduplicated list
+        """
+        from crsbench.evaluation.verification.crash_signature import (
+            parse_crash_signature,
+        )
+
+        unique_results: list[PovVerificationResult] = []
+        seen_cpv_sets: set[tuple[str, ...]] = set()
+        seen_crash_signatures: set[str] = set()
+
+        for result in results:
+            if result.status == PovVerificationStatus.CPV:
+                cpv_key = tuple(sorted(result.cpv_matched))
+                if cpv_key in seen_cpv_sets:
+                    continue
+                seen_cpv_sets.add(cpv_key)
+
+            elif result.status == PovVerificationStatus.UNINTENDED_CRASH:
+                # Use pre-computed signature if available, else parse from logs
+                sig_hash = result.crash_signature
+                if not sig_hash:
+                    crash_log = self._extract_crash_log(result)
+                    if crash_log:
+                        signature = parse_crash_signature(crash_log, top_n=self._top_n)
+                        if signature:
+                            sig_hash = signature.signature_hash
+
+                if sig_hash:
+                    if sig_hash in seen_crash_signatures:
+                        continue
+                    seen_crash_signatures.add(sig_hash)
+                # If no signature found, keep the result
+
+            unique_results.append(result)
+
+        return unique_results
+
+
 # =============================================================================
 # Patch Verification Deduplication Strategies
 # =============================================================================
@@ -248,11 +350,12 @@ class NoOpPatchDedup(PatchDeduplicationStrategy):
         return list(results)
 
 
-def get_dedup_strategy(name: str) -> DeduplicationStrategy:
+def get_dedup_strategy(name: str, *, top_n: int = 5) -> DeduplicationStrategy:
     """Get a deduplication strategy by name.
 
     Args:
-        name: Strategy name ("patch-based", "none", "status-based")
+        name: Strategy name ("patch-based", "none", "status-based", "stack-based")
+        top_n: Stack frame depth for stack-based dedup (default: 5)
 
     Returns:
         DeduplicationStrategy instance
@@ -264,11 +367,15 @@ def get_dedup_strategy(name: str) -> DeduplicationStrategy:
         "patch-based": PatchBasedDedup,
         "none": NoOpDedup,
         "status-based": StatusBasedDedup,
+        "stack-based": StackBasedDedup,
     }
 
     if name not in strategies:
         available = ", ".join(strategies.keys())
         raise ValueError(f"Unknown dedup strategy: {name}. Available: {available}")
+
+    if name == "stack-based":
+        return StackBasedDedup(top_n=top_n)
 
     return strategies[name]()
 

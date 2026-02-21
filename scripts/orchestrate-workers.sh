@@ -40,7 +40,7 @@ BRANCH="feat/distributed"
 SETUP_SCRIPT="$SCRIPT_DIR/setup-remote-worker.sh"
 INSTALL_DIR="/home/dongkwan/CRSBench"
 TMUX_SESSION="crsbench-worker"
-REMOTE_EXPERIMENT_DIR="/home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc-rest7"
+REMOTE_EXPERIMENT_DIR="/home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-given-fuzzer-afc-1t"
 ENV_FILE="$REPO_DIR/.env"
 
 # Default worker machines

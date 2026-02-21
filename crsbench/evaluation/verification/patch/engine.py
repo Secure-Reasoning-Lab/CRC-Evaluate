@@ -984,7 +984,14 @@ class PatchVerificationEngine:
 
         if passed:
             return True, ""
-        return False, stderr or "Unit tests failed"
+        # helper.py run_test sends most container output to stdout.
+        # Preserve both streams so CI reports include actionable failure details.
+        details_parts = []
+        if stderr and stderr.strip():
+            details_parts.append(stderr.strip())
+        if stdout and stdout.strip():
+            details_parts.append(stdout.strip())
+        return False, "\n\n".join(details_parts) or "Unit tests failed"
 
     def _discover_pov_variants(
         self,

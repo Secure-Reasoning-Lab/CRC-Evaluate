@@ -102,7 +102,7 @@ class TestCorpusCollector:
 
     def test_collect_corpus_files_skips_hidden(self, tmp_path: Path):
         """Test that hidden files are skipped."""
-        corpus_dir = tmp_path / "corpus"
+        corpus_dir = tmp_path / "seeds"
         corpus_dir.mkdir()
 
         # Create regular files
@@ -126,7 +126,7 @@ class TestCorpusCollector:
 
     def test_collect_corpus_files_skips_directories(self, tmp_path: Path):
         """Test that directories are skipped."""
-        corpus_dir = tmp_path / "corpus"
+        corpus_dir = tmp_path / "seeds"
         corpus_dir.mkdir()
 
         # Create regular file
@@ -271,7 +271,7 @@ class TestCorpusCollector:
     def test_find_corpus_dir_direct(self, tmp_path: Path):
         """Test finding corpus in output/corpus/."""
         trial_dir = tmp_path / "trial-1"
-        corpus_dir = trial_dir / "output" / "corpus"
+        corpus_dir = trial_dir / "output" / "seeds"
         corpus_dir.mkdir(parents=True)
         (corpus_dir / "file1").write_bytes(b"test")
 
@@ -283,7 +283,7 @@ class TestCorpusCollector:
     def test_find_corpus_dir_crs_build(self, tmp_path: Path):
         """Test finding corpus in crs-build/run/ structure."""
         trial_dir = tmp_path / "trial-1"
-        corpus_dir = trial_dir / "crs-build" / "run" / "some" / "path" / "corpus"
+        corpus_dir = trial_dir / "crs-build" / "run" / "some" / "path" / "seeds"
         corpus_dir.mkdir(parents=True)
         (corpus_dir / "file1").write_bytes(b"test")
 
@@ -336,7 +336,7 @@ class TestCorpusCollectorIntegration:
         experiment_dir = tmp_path / "experiment"
         trial_dir = experiment_dir / "trial-1"
         povs_dir = trial_dir / "povs"
-        corpus_dir = trial_dir / "output" / "corpus"
+        corpus_dir = trial_dir / "output" / "seeds"
         corpus_dir.mkdir(parents=True)
         povs_dir.mkdir(parents=True)
 
@@ -378,7 +378,7 @@ class TestCorpusCollectorIntegration:
         assert result.benchmark_name == "test-bench"
         assert result.harness_name == "test-harness"
         assert result.total_files == 2
-        assert result.output_dir == benchmark_dir / ".aixcc" / "test-harness" / "corpus"
+        assert result.output_dir == benchmark_dir / ".aixcc" / "test-harness" / "seeds"
         assert result.output_dir.exists()
         assert (result.output_dir / "manifest.json").exists()
 
@@ -388,7 +388,7 @@ class TestCorpusCollectorIntegration:
         experiment_dir = tmp_path / "experiment"
         trial_dir = experiment_dir / "trial-1"
         povs_dir = trial_dir / "povs"
-        corpus_dir = trial_dir / "output" / "corpus"
+        corpus_dir = trial_dir / "output" / "seeds"
         corpus_dir.mkdir(parents=True)
         povs_dir.mkdir(parents=True)
 
@@ -403,7 +403,7 @@ class TestCorpusCollectorIntegration:
         # Set up benchmark with existing corpus
         benchmarks_dir = tmp_path / "benchmarks"
         benchmark_dir = benchmarks_dir / "test-bench"
-        existing_corpus = benchmark_dir / ".aixcc" / "test-harness" / "corpus"
+        existing_corpus = benchmark_dir / ".aixcc" / "test-harness" / "seeds"
         existing_corpus.mkdir(parents=True)
         (existing_corpus / "old_file").write_bytes(b"old")
 
@@ -423,7 +423,7 @@ class TestCorpusCollectorIntegration:
         experiment_dir = tmp_path / "experiment"
         trial_dir = experiment_dir / "trial-1"
         povs_dir = trial_dir / "povs"
-        corpus_dir = trial_dir / "output" / "corpus"
+        corpus_dir = trial_dir / "output" / "seeds"
         corpus_dir.mkdir(parents=True)
         povs_dir.mkdir(parents=True)
 
@@ -457,7 +457,7 @@ class TestSeedCorpusPreparer:
 
     def _create_corpus(self, benchmark_path: Path, harness_name: str) -> Path:
         """Helper to create a test corpus with manifest."""
-        corpus_dir = benchmark_path / ".aixcc" / harness_name / "corpus"
+        corpus_dir = benchmark_path / ".aixcc" / harness_name / "seeds"
         corpus_dir.mkdir(parents=True)
 
         # Create test files
@@ -498,7 +498,7 @@ class TestSeedCorpusPreparer:
     def test_has_seed_corpus_false_no_manifest(self, tmp_path: Path):
         """Test has_seed_corpus returns False when manifest missing."""
         benchmark_path = tmp_path / "benchmark"
-        corpus_dir = benchmark_path / ".aixcc" / "test-harness" / "corpus"
+        corpus_dir = benchmark_path / ".aixcc" / "test-harness" / "seeds"
         corpus_dir.mkdir(parents=True)
         (corpus_dir / "hash1").write_bytes(b"test")
 

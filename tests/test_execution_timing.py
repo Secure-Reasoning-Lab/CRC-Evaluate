@@ -1,7 +1,6 @@
 """Tests for build/run timing split in CRS execution."""
 
-from crsbench.evaluation.crs_executor import CRSExecutionResult
-from crsbench.evaluation.results import HarnessResult, TrialMetadata
+from crsbench.evaluation.results import CRSExecutionResult, HarnessResult, TrialMetadata
 
 
 class TestCRSExecutionResultTiming:

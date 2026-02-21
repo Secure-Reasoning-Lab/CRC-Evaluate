@@ -68,6 +68,7 @@ class PovVerificationResult:
     pov_id: Optional[str] = None
     details: Optional[str] = None
     crash_info: Optional[dict[str, Any]] = None
+    crash_signature: Optional[str] = None
     fallback_used: bool = False
 
     def to_dict(self, *, include_logs: bool = True) -> dict[str, Any]:
@@ -86,6 +87,8 @@ class PovVerificationResult:
             result["pov_id"] = self.pov_id
         if self.details:
             result["details"] = self.details
+        if self.crash_signature:
+            result["crash_signature"] = self.crash_signature
         if self.crash_info:
             if include_logs:
                 result["crash_info"] = self.crash_info

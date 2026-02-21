@@ -203,6 +203,17 @@ class RtsMode(str, Enum):
     BINARYRTS = "binaryrts"
 
 
+class AdapterType(str, Enum):
+    """CRS adapter type.
+
+    Single value representing the unified oss-crs adapter.
+    The mode (bug-finding vs bug-fixing) is specified separately on
+    the adapter instance.
+    """
+
+    OSS_CRS = "oss-crs"
+
+
 @dataclass
 class BenchmarkEntry:
     """Represents a benchmark with optional harness specification.
@@ -804,6 +815,31 @@ class WorkerConfig(BaseModel):
     )
 
 
+class CrsComposeConfig(BaseModel):
+    """Configuration for oss-crs adapter."""
+
+    docker_registry: str = Field(
+        ...,
+        description="Docker registry for CRS images (e.g., ghcr.io/team-atlanta/test)",
+    )
+    oss_crs_infra_cpuset: str = Field(
+        default="0-3",
+        description="CPU set for oss-crs infrastructure services",
+    )
+    oss_crs_infra_memory: str = Field(
+        default="8G",
+        description="Memory limit for oss-crs infrastructure services",
+    )
+    oss_crs_cmd: str = Field(
+        default="oss-crs",
+        description="Path to oss-crs executable (default: assumes on PATH)",
+    )
+    work_dir: Optional[Path] = Field(
+        default=None,
+        description="Base work directory for oss-crs (default: trial_output_dir/oss-crs-workdir)",
+    )
+
+
 class ExperimentConfig(BaseModel):
     """Experiment configuration schema."""
 
@@ -814,6 +850,10 @@ class ExperimentConfig(BaseModel):
     mode: EvaluationMode = Field(
         ...,
         description="Evaluation mode: 'delta', 'full', 'all' (run all available), or 'auto' (single mode, delta preferred)",
+    )
+    adapter: AdapterType = Field(
+        default=AdapterType.OSS_CRS,
+        description="CRS adapter type (only oss-crs supported)",
     )
     max_total_time: int = Field(
         ..., ge=1, description="Maximum time in seconds per trial (must be >= 1)"
@@ -980,6 +1020,10 @@ class ExperimentConfig(BaseModel):
     worker: Optional[WorkerConfig] = Field(
         default=None, description="Distributed worker configuration"
     )
+    crs_compose: Optional[CrsComposeConfig] = Field(
+        default=None,
+        description="Configuration for oss-crs adapter (used at runtime by OssCrsAdapter)",
+    )
     keep_only_results: bool = Field(
         default=False,
         description="Delete bulky artifacts after experiment, keeping only essential files for reporting",
@@ -995,6 +1039,14 @@ class ExperimentConfig(BaseModel):
     results_filestore: Optional[Path] = Field(
         default=None,
         description="Destination path for copying results (contains experiment-data/ and report-data/)",
+    )
+    pov_dedup_strategy: Literal[
+        "patch-based", "stack-based", "status-based", "none"
+    ] = Field(
+        default="patch-based",
+        description="POV deduplication strategy: 'patch-based' (by CPV match set), "
+        "'stack-based' (by crash signature from sanitizer stack trace), "
+        "'status-based' (one per status type), 'none' (keep all).",
     )
     seed_corpus_enabled: bool = Field(
         default=False,

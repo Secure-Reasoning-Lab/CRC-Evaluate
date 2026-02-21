@@ -151,11 +151,7 @@ def create_post_trial_jobs(
                 patch_test_count += 1
 
     logger.info(
-        "Created %d post-trial jobs: %d coverage, %d patch builds, %d patch tests",
-        len(jobs),
-        coverage_count,
-        patch_build_count,
-        patch_test_count,
+        f"Created {len(jobs)} post-trial jobs: {coverage_count} coverage, {patch_build_count} patch builds, {patch_test_count} patch tests"
     )
 
     return jobs
@@ -186,7 +182,7 @@ def execute_post_trial_analysis(
         enqueue_and_poll_ci_jobs,
     )
 
-    logger.info("Executing %d post-trial jobs via Redis (%s)", len(jobs), redis_host)
+    logger.info(f"Executing {len(jobs)} post-trial jobs via Redis ({redis_host})")
 
     raw_results = enqueue_and_poll_ci_jobs(jobs, redis_host, queue_name=queue_name)
     results = ci_results_to_executor_results(raw_results)
@@ -195,9 +191,7 @@ def execute_post_trial_analysis(
     failed_count = len(results) - success_count
 
     logger.info(
-        "Post-trial analysis complete: %d succeeded, %d failed",
-        success_count,
-        failed_count,
+        f"Post-trial analysis complete: {success_count} succeeded, {failed_count} failed"
     )
 
     return results

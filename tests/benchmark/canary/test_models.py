@@ -75,6 +75,7 @@ class TestInjectionResult:
         assert result.canary_uuid == test_uuid
         assert result.injected_count == 0
         assert result.skipped_count == 0
+        assert result.matched_count == 0
         assert result.benchmarks == []
 
     def test_canary_string_property(self):

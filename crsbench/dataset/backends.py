@@ -15,6 +15,28 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def check_hf_token() -> tuple[bool, str]:
+    """Check if HuggingFace token is configured and valid.
+
+    Returns:
+        (is_valid, message) tuple
+    """
+    from huggingface_hub import HfApi, get_token
+
+    token = get_token()
+    if not token:
+        return False, ("No HuggingFace token found. Login with: huggingface-cli login")
+
+    try:
+        api = HfApi()
+        user_info = api.whoami()
+        return True, f"Authenticated as: {user_info.get('name', 'unknown')}"
+    except Exception as e:
+        return False, (
+            f"HuggingFace token invalid: {e}. Re-login with: huggingface-cli login"
+        )
+
+
 def _download_huggingface(
     config: DatasetConfig,
     output_dir: Path,
@@ -22,17 +44,11 @@ def _download_huggingface(
     allow_patterns: Optional[list[str]] = None,
 ) -> Path:
     """Download from HuggingFace using snapshot_download."""
-    try:
-        from huggingface_hub import snapshot_download
-    except ImportError:
-        raise ImportError(
-            "huggingface_hub is required for HuggingFace downloads. "
-            "Install it with: pip install 'crsbench[dataset]'"
-        ) from None
+    from huggingface_hub import snapshot_download
 
     result = snapshot_download(
         repo_id=config.location,
-        repo_type=config.repo_type or "dataset",
+        repo_type=config.repo_type,
         local_dir=str(output_dir),
         allow_patterns=allow_patterns,
     )
@@ -46,19 +62,13 @@ def _upload_huggingface(
     allow_patterns: Optional[list[str]] = None,
 ) -> None:
     """Upload to HuggingFace using upload_large_folder for reliability."""
-    try:
-        from huggingface_hub import HfApi
-    except ImportError:
-        raise ImportError(
-            "huggingface_hub is required for HuggingFace uploads. "
-            "Install it with: pip install 'crsbench[dataset]'"
-        ) from None
+    from huggingface_hub import HfApi
 
     api = HfApi()
     api.upload_large_folder(
         folder_path=str(folder_path),
         repo_id=config.location,
-        repo_type=config.repo_type or "dataset",
+        repo_type=config.repo_type,
         allow_patterns=allow_patterns,
     )
 

@@ -66,17 +66,18 @@ def _rmtree_with_docker(path: Path) -> bool:
 # Directories to EXCLUDE from copying (blacklist)
 # These contain large build artifacts that aren't needed for results
 EXCLUDE_PATTERNS: list[str] = [
-    "crs-build",
-    ".oss-bugfind",
+    "oss-crs-workdir",
+    "staged",
 ]
 
 
 def _resolve_symlinks_pointing_to_excluded(trial_dir: Path) -> None:
     """Resolve symlinks that point to excluded directories.
 
-    Some items (e.g., output/) may be symlinks to locations in crs-build/.
-    Before cleanup, we need to convert these to real files/directories,
-    otherwise deleting crs-build/ would break the symlinks.
+    Some items (e.g., output/) may be symlinks to locations inside
+    excluded dirs (oss-crs-workdir/, staged/).  Before cleanup,
+    we convert these to real files/directories so deleting the
+    excluded dirs does not break the symlinks.
 
     Args:
         trial_dir: Path to trial output directory

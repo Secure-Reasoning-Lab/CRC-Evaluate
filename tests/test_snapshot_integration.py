@@ -3,12 +3,38 @@
 import threading
 import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
-from crsbench.evaluation.crs_executor import StubCRSExecutor
+from crsbench.evaluation.results import CRSExecutionResult
 from crsbench.evaluation.runner import BenchmarkRunner
 from crsbench.evaluation.snapshot import list_snapshots, load_snapshot_metadata
 from crsbench.validation.schemas import BenchmarkHarness, HarnessFile
+
+
+def _make_stub_adapter() -> MagicMock:
+    """Create a mock adapter that acts as a no-op for testing.
+
+    Simulates OssCrsAdapter with mode='bug-finding' but skips real
+    subprocess calls. build() is a no-op, run() returns success.
+    """
+    adapter = MagicMock()
+    adapter.mode = "bug-finding"
+    adapter.built_projects = set()
+    adapter.build.return_value = None
+    adapter.run.return_value = CRSExecutionResult(
+        harness_name="test_harness",
+        execution_time=0.1,
+        success=True,
+        output="stub output",
+    )
+    adapter.collect_results.return_value = {
+        "type": "bug-finding",
+        "output_dir": "/tmp/stub",
+        "harness": "test_harness",
+        "submit_dir": None,
+    }
+    return adapter
 
 
 class TestSnapshotIntegration:
@@ -44,8 +70,8 @@ full_mode:
 
     def test_snapshot_disabled_by_default(self, sample_benchmark, tmp_path):
         """Test that snapshots are disabled when snapshot_period not provided."""
-        executor = StubCRSExecutor()
-        runner = BenchmarkRunner(executor)
+        adapter = _make_stub_adapter()
+        runner = BenchmarkRunner(adapter)
 
         trial_dir = tmp_path / "trial"
         trial_dir.mkdir()
@@ -68,9 +94,9 @@ full_mode:
 
     def test_snapshot_enabled_with_period(self, sample_benchmark, tmp_path):
         """Test that snapshots are created when enabled."""
-        executor = StubCRSExecutor()
+        adapter = _make_stub_adapter()
         # Enable snapshots with very short period for testing
-        runner = BenchmarkRunner(executor, snapshot_period=1)
+        runner = BenchmarkRunner(adapter, snapshot_period=1)
 
         trial_dir = tmp_path / "trial"
         trial_dir.mkdir()
@@ -92,15 +118,15 @@ full_mode:
 
         # Should complete successfully (exception raised if validation fails)
         # At least one snapshot should be created
-        # (StubCRSExecutor is fast, but snapshot thread should capture at least 1)
+        # (mock adapter is fast, but snapshot thread should capture at least 1)
         snapshots = list_snapshots(trial_dir)
         # May be 0 if CRS completes before first snapshot interval
         assert len(snapshots) >= 0
 
     def test_snapshot_period_zero_disables(self, sample_benchmark, tmp_path):
         """Test that snapshot_period=0 disables snapshots."""
-        executor = StubCRSExecutor()
-        runner = BenchmarkRunner(executor, snapshot_period=0)
+        adapter = _make_stub_adapter()
+        runner = BenchmarkRunner(adapter, snapshot_period=0)
 
         trial_dir = tmp_path / "trial"
         trial_dir.mkdir()
@@ -122,8 +148,8 @@ full_mode:
 
     def test_snapshot_without_trial_dir_fails(self, sample_benchmark):
         """Test that enabling snapshots without trial_dir raises error."""
-        executor = StubCRSExecutor()
-        runner = BenchmarkRunner(executor, snapshot_period=60)
+        adapter = _make_stub_adapter()
+        runner = BenchmarkRunner(adapter, snapshot_period=60)
 
         # Create BenchmarkHarness
         harness = HarnessFile(name="test_harness", path="/src/test/harness.c")
@@ -141,8 +167,8 @@ full_mode:
 
     def test_snapshot_with_nonexistent_trial_dir_fails(self, sample_benchmark):
         """Test that non-existent trial_dir raises error."""
-        executor = StubCRSExecutor()
-        runner = BenchmarkRunner(executor, snapshot_period=60)
+        adapter = _make_stub_adapter()
+        runner = BenchmarkRunner(adapter, snapshot_period=60)
 
         nonexistent_dir = Path("/nonexistent/trial/dir")
 

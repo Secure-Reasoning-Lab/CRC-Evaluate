@@ -817,7 +817,7 @@ class VerificationEngine:
                 logger.warning(
                     f"{adapter.benchmark_name} uses multiple sanitizers: "
                     f"{sanitizers}. POV verification will use {sanitizer}. "
-                    "Use 'crsbench ci' for full multi-sanitizer support."
+                    "Use 'crsbench benchmark ci' for full multi-sanitizer support."
                 )
 
         # Create build plan

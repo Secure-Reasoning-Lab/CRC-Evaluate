@@ -14,7 +14,9 @@ The evaluation module orchestrates the execution of CRS (Cyber Reasoning System)
 crsbench/evaluation/
 ├── __init__.py              # Public API exports
 ├── runner.py                # BenchmarkRunner orchestration
-├── crs_executor.py          # CRS executor interface and stub
+├── adapter/                 # CRS adapter interface
+│   ├── __init__.py          # Public API (create_adapter, OssCrsAdapter)
+│   └── oss_crs.py           # OssCrsAdapter and create_adapter()
 ├── results.py               # Result data structures
 └── errors.py                # Evaluation-specific errors
 ```
@@ -43,8 +45,8 @@ Orchestrates the evaluation process across all harnesses in a benchmark.
 **Key Methods**:
 ```python
 class BenchmarkRunner:
-    def __init__(self, crs_executor: CRSExecutor):
-        """Initialize with CRS implementation."""
+    def __init__(self, adapter: OssCrsAdapter):
+        """Initialize with CRS adapter."""
 
     def run_benchmark(
         self,
@@ -69,59 +71,53 @@ class BenchmarkRunner:
 7. Generate evaluation report
 ```
 
-### CRSExecutor Interface (crs_executor.py)
+### OssCrsAdapter (adapter/oss_crs.py)
 
-Abstract base class defining the standard interface for CRS implementations.
+Unified adapter for CRS execution supporting both bug-finding and bug-fixing modes via a `mode` parameter.
 
 **Interface Definition**:
 ```python
-class CRSExecutor(ABC):
-    @abstractmethod
-    def configure_crs(self, config: Dict[str, Any]) -> None:
+class OssCrsAdapter:
+    def __init__(self, mode: str, crs_config_name: str, ...):
+        """Initialize adapter with mode ('bug-finding' or 'bug-fixing')."""
+
+    def configure(self, config: Dict[str, Any]) -> None:
         """Configure CRS with parameters."""
 
-    @abstractmethod
-    def run_crs(
-        self,
-        benchmark_path: Path,
-        harness: HarnessFile,
-        base_commit: str,
-        ref_commit: Optional[str] = None
-    ) -> CRSResult:
-        """Execute CRS on specific harness."""
+    def prepare(self, benchmark_path: Path, harness: HarnessFile, ...) -> None:
+        """Run crs-compose prepare phase."""
 
-    @abstractmethod
-    def process_pov_results(
-        self,
-        crs_result: CRSResult,
-        harness: HarnessFile
-    ) -> List[POVResult]:
-        """Determine POV detection status from CRS output."""
+    def build_target(self, ...) -> None:
+        """Run crs-compose build-target phase."""
+
+    def run(self, ...) -> CRSExecutionResult:
+        """Run crs-compose run phase and collect results."""
+```
+
+**Factory Function**:
+```python
+def create_adapter(config: ExperimentConfig, crs_config_name: str, ...) -> OssCrsAdapter:
+    """Create an OssCrsAdapter from experiment configuration."""
 ```
 
 **Design Decisions**:
 
-- **Separate configuration from execution**: Allows reconfiguration without reinstantiation
+- **Single class with mode parameter**: OssCrsAdapter handles both bug-finding and bug-fixing via `mode`
+- **Three-phase lifecycle**: crs-compose prepare/build-target/run phases
 - **Harness-level execution**: Each harness is evaluated independently
-- **Post-processing POV results**: CRS executor determines which POVs were detected
-- **Support for both delta and full modes**: `ref_commit` parameter enables delta mode
+- **Support for both modes**: `mode` parameter selects bug-finding or bug-fixing behavior
 
-### StubCRSExecutor (crs_executor.py)
+### Testing with Mock Adapters
 
-Testing implementation that simulates CRS behavior for development and testing.
+For testing, use `unittest.mock.MagicMock` configured to return `CRSExecutionResult`:
 
-**Features**:
-- Configurable simulation delay (execution time)
-- Configurable success rate (POV detection probability)
-- Realistic output generation
-- Random failure simulation
-
-**Configuration Parameters**:
 ```python
-{
-    "simulation_delay": 0.1,  # Seconds per harness
-    "success_rate": 0.8       # POV detection rate (0.0-1.0)
-}
+from unittest.mock import MagicMock
+from crsbench.evaluation.results import CRSExecutionResult
+
+mock_adapter = MagicMock()
+mock_adapter.mode = "bug-finding"
+mock_adapter.run.return_value = CRSExecutionResult(...)
 ```
 
 **Use Cases**:
@@ -245,54 +241,49 @@ full_mode:
 The evaluation module is designed to integrate with the OSS-Fuzz CRS interface for actual CRS implementations.
 
 **See [CRS Executors Design](./crs-executors.md) for complete implementation details** covering:
-- `CRSBugFindingExecutor` for vulnerability discovery
-- `CRSPatchExecutor` for patch generation
-- Docker integration and container management
+- `OssCrsAdapter` with `mode` parameter for bug-finding and bug-fixing
+- Docker integration and container management via crs-compose
 - POV detection logic and crash analysis
 - Configuration management
 - Build caching strategy
-- Command migration to future formats
 
-### Executor Overview
+### Adapter Overview
 
-Concrete CRS executors wrap the OSS-Fuzz/OSS-Patch command-line interfaces:
+`OssCrsAdapter` wraps the crs-compose interface for both bug-finding and bug-fixing:
 
 ```python
-# Bug Finding Executor
-class CRSBugFindingExecutor(CRSExecutor):
-    """Wraps OSS-Fuzz bug finding interface."""
-    # Build: oss-crs build <config-dir> <project>
-    # Run: oss-crs run <config-dir> <project> <harness> [--output <dir>] [--hints <dir>]
+# Bug Finding
+adapter = OssCrsAdapter(mode="bug-finding", crs_config_name="ensemble-c", ...)
+# Runs: crs-compose prepare/build-target/run for bug finding
 
-# Patch Generation Executor
-class CRSPatchExecutor(CRSExecutor):
-    """Wraps OSS-Patch interface."""
-    # Build: oss-bugfix-crs build <config> <project> --oss-fuzz $OSS_FUZZ_HOME \
-    #        --project-path <benchmark-dir> --source-path <repo-manager-source>
-    # Run: oss-bugfix-crs run <config> <project> --harness <name> \
-    #      [--pov <file> | --povs <dir>] [--hints <dir>] [--output <dir>] --litellm-*
+# Bug Fixing (Patch Generation)
+adapter = OssCrsAdapter(mode="bug-fixing", crs_config_name="multi-retrieval", ...)
+# Runs: crs-compose prepare/build-target/run for patch generation
 ```
 
 ### Usage Example
 
 ```python
-from crsbench.evaluation import BenchmarkRunner, CRSBugFindingExecutor
+from crsbench.evaluation.adapter import create_adapter, OssCrsAdapter
 
-# Create executor
-executor = CRSBugFindingExecutor(
+# Create adapter via factory function
+adapter = create_adapter(
+    config=experiment_config,
     crs_config_name="ensemble-c",
-    oss_fuzz_path=Path("/path/to/oss-fuzz")
+    oss_fuzz_path=Path("/path/to/oss-fuzz"),
+    registry_dir=Path("/path/to/registry"),
+    benchmarks_root=Path("/path/to/benchmarks"),
 )
 
 # Run evaluation
-runner = BenchmarkRunner(executor)
+runner = BenchmarkRunner(adapter=adapter)
 result = runner.run_benchmark(
     benchmark_path=Path("benchmarks/json-c"),
     mode="auto"
 )
 ```
 
-See [CRS Executors Design](./crs-executors.md) and [OSS-Fuzz CRS Interface](../docs/ossfuzz-crs-interface.md) for complete details.
+See [CRS Executors Design](./crs-executors.md) and [OSS-Fuzz CRS Interface](../../docs/ossfuzz-crs-interface.md) for complete details.
 
 ## Error Handling
 
@@ -347,16 +338,16 @@ def test_runner_invalid_mode():
     """Test error handling for invalid mode."""
 ```
 
-#### 2. CRSExecutor Interface Tests
+#### 2. OssCrsAdapter Tests
 ```python
-def test_stub_executor_configuration():
-    """Test CRS configuration."""
+def test_adapter_configuration():
+    """Test CRS adapter configuration."""
 
-def test_stub_executor_execution():
-    """Test harness execution."""
+def test_adapter_execution():
+    """Test harness execution via adapter."""
 
-def test_stub_executor_pov_processing():
-    """Test POV result processing."""
+def test_adapter_mode_selection():
+    """Test bug-finding vs bug-fixing mode."""
 ```
 
 #### 3. Result Collection Tests
@@ -430,9 +421,11 @@ def run_benchmark(self, benchmark_path: Path, ...):
 ### Orchestrator (run_experiment.py)
 ```python
 from crsbench.evaluation import BenchmarkRunner
+from crsbench.evaluation.adapter import create_adapter
 
 # Orchestrator creates runners for each CRS
-runner = BenchmarkRunner(crs_executor)
+adapter = create_adapter(config, crs_name, oss_fuzz_path, registry_dir, benchmarks_root)
+runner = BenchmarkRunner(adapter=adapter)
 result = runner.run_benchmark(benchmark_path, mode="auto", crs_config=config)
 ```
 
@@ -440,23 +433,24 @@ result = runner.run_benchmark(benchmark_path, mode="auto", crs_config=config)
 ```python
 # Jobs can be distributed across workers
 def run_trial(trial_config):
-    runner = BenchmarkRunner(create_crs_executor(trial_config.crs))
+    adapter = create_adapter(trial_config.config, trial_config.crs, ...)
+    runner = BenchmarkRunner(adapter=adapter)
     return runner.run_benchmark(trial_config.benchmark, ...)
 ```
 
 ## Design Decisions
 
-### Why Abstract CRSExecutor?
+### Why OssCrsAdapter with Mode Parameter?
 
-**Problem**: Need to support multiple CRS implementations with different interfaces.
+**Problem**: Need to support both bug-finding and bug-fixing CRS workflows with a consistent interface.
 
-**Solution**: Define abstract interface that all CRS implementations must follow.
+**Solution**: Single `OssCrsAdapter` class with a `mode` parameter ("bug-finding" or "bug-fixing") and a `create_adapter()` factory function.
 
 **Benefits**:
-- Standardized evaluation process
-- Easy to add new CRS implementations
-- Testing with stub implementation
-- Clear contract for CRS developers
+- Standardized evaluation process for both modes
+- Single adapter class reduces code duplication
+- Factory function encapsulates creation logic
+- Mock-friendly for testing (use `MagicMock` with `CRSExecutionResult`)
 
 ### Why Separate POV Processing?
 
@@ -520,7 +514,7 @@ def run_trial(trial_config):
 
 **Wrong**:
 ```python
-runner = BenchmarkRunner(crs)
+runner = BenchmarkRunner(adapter)
 result = runner.run_benchmark(path)  # May fail with cryptic error
 ```
 
@@ -530,7 +524,7 @@ validation_result = validate_benchmark(path)
 if not validation_result.is_valid:
     raise EvaluationError(f"Invalid benchmark: {validation_result.summary()}")
 
-runner = BenchmarkRunner(crs)
+runner = BenchmarkRunner(adapter)
 result = runner.run_benchmark(path)
 ```
 

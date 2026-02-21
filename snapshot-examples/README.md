@@ -98,7 +98,7 @@ snapshot-NNNN/
 ├── patches/              # New patches only (incremental, organized by POV ID)
 │   └── pov_N/
 │       └── patch.diff
-└── corpus/               # New/modified corpus (incremental)
+└── seeds/                # New/modified seeds (incremental)
     └── input-NNN
 ```
 
