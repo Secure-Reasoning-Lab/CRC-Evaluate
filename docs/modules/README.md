@@ -1,6 +1,8 @@
 # Module Documentation
 
 Module-specific documentation moved from `crsbench/*/README.md` into this folder.
+These pages are intentionally concise and should link to detailed design docs
+under `docs/design/` instead of duplicating implementation detail.
 
 ## Available Modules
 
@@ -13,3 +15,8 @@ Module-specific documentation moved from `crsbench/*/README.md` into this folder
 - [Reporting](./reporting.md)
 - [Statistics](./statistics.md)
 - [Validation](./validation.md)
+
+## Maintenance Rule
+
+- Keep module pages task-oriented and short.
+- Put deep architecture/mechanism details in `docs/design/`.
