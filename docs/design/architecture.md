@@ -29,7 +29,7 @@ CRSBench/
 ├── oss-fuzz/                   # OSS-Fuzz submodule (bug finding infrastructure)
 ├── oss-patch/                  # OSS-Patch submodule (patch generation infrastructure)
 ├── docs/                       # RFC specifications and user docs
-│   ├── benchmark-spec.md       # RFC for benchmark format
+│   ├── RFC.md                  # RFC for benchmark format
 │   └── meta-example.yaml       # Example configuration
 ├── docs/design/                # Implementation documentation (this file)
 ├── test_benchmark/             # Test benchmark for development
@@ -412,7 +412,7 @@ Defines CRS-specific runtime parameters and settings.
 
 When contributing to CRSBench:
 
-1. **Read RFC first**: [docs/benchmark-spec.md](../benchmark-spec.md)
+1. **Read RFC first**: [docs/RFC.md](../RFC.md)
 2. **Check design docs**: This file and module-specific docs
 3. **Use absolute imports**: No relative imports in Python
 4. **Type everything**: Use type hints and Pydantic models
@@ -423,7 +423,7 @@ When contributing to CRSBench:
 
 ## Related Documentation
 
-- [RFC Specification](../benchmark-spec.md): Benchmark format specification
+- [RFC Specification](../RFC.md): Benchmark format specification
 - [Orchestration Module](./orchestration.md): Experiment orchestration and CLI design
 - [Validation Module](./validation/validation.md): Detailed validation documentation
 - [Evaluation Module](./evaluation/evaluation.md): Evaluation module design
