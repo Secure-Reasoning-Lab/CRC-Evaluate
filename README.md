@@ -102,22 +102,21 @@ CRSBench/
 
 ## Documentation
 
-| Topic | Link |
-|-------|------|
-| Documentation Index | [docs/README.md](docs/README.md) |
-| Benchmark Developer Guide | [docs/benchmark-developer-guide.md](docs/benchmark-developer-guide.md) |
-| Framework Developer Guide | [docs/framework-developer-guide.md](docs/framework-developer-guide.md) |
-| Benchmark RFC Specification | [docs/benchmark-spec.md](docs/benchmark-spec.md) |
-| Experiment Workflow | [docs/experiment-workflow.md](docs/experiment-workflow.md) |
-| Environment Setup | [docs/environment-setup.md](docs/environment-setup.md) |
-| Module Documentation | [docs/modules/README.md](docs/modules/README.md) |
-| CRS Interface | [docs/ossfuzz-crs-interface.md](docs/ossfuzz-crs-interface.md) |
-| Distributed Execution | [docs/design/distributed/](docs/design/distributed/) |
-| Dataset Module | [docs/design/dataset/dataset.md](docs/design/dataset/dataset.md) |
-| Architecture Overview | [docs/design/architecture.md](docs/design/architecture.md) |
-| Logging | [docs/logger-usage-guide.md](docs/logger-usage-guide.md) |
-
-CRSBench module docs live under [docs/modules/](docs/modules/).
+- Start here:
+  - [Documentation Index](docs/README.md)
+  - [Benchmark RFC](docs/RFC.md)
+- Development guides:
+  - [Benchmark Developer Guide](docs/benchmark-developer-guide.md)
+  - [Framework Developer Guide](docs/framework-developer-guide.md)
+  - [Testing Setup](docs/testing-setup.md)
+- Runtime and operations:
+  - [Experiment Workflow](docs/experiment-workflow.md)
+  - [Environment Setup](docs/environment-setup.md)
+  - [OSS-CRS Interface](docs/ossfuzz-crs-interface.md)
+- Architecture and internals:
+  - [Module Docs](docs/modules/README.md)
+  - [Design Docs](docs/design/README.md)
+  - [Logger Guide](docs/logger-usage-guide.md)
 
 ## Contributing
 
