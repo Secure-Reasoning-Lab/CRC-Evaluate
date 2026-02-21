@@ -781,7 +781,7 @@ def handle_inject_canary(args: argparse.Namespace) -> int:
             force=args.force,
         )
 
-        if not result.benchmarks and result.skipped_count == 0:
+        if result.matched_count == 0:
             logger.warning(f"No benchmarks found matching filter: {args.filter}")
             return 0
 
@@ -791,6 +791,7 @@ def handle_inject_canary(args: argparse.Namespace) -> int:
         logger.info("=" * 50)
         logger.info(f"Filter: {args.filter}")
         logger.info(f"UUID: {result.canary_uuid}")
+        logger.info(f"Benchmarks matched: {result.matched_count}")
         logger.info(f"Files injected: {result.injected_count}")
         logger.info(f"Benchmarks skipped (existing): {result.skipped_count}")
         logger.info(f"Benchmarks processed: {len(result.benchmarks)}")
