@@ -39,15 +39,16 @@ CRSBench module docs are centralized under [`docs/modules/`](./modules/) and ind
 
 Other project areas keep local READMEs:
 
-- `services/*/README.md`
-- `scripts/README.md`
-- `benchmark-suites/README.md`
-- `snapshot-examples/README.md`
+- [services/valkey/README.md](../services/valkey/README.md)
+- [services/litellm/README.md](../services/litellm/README.md)
+- [scripts/README.md](../scripts/README.md)
+- [benchmark-suites/README.md](../benchmark-suites/README.md)
+- [snapshot-examples/README.md](../snapshot-examples/README.md)
 
 ## Notes
 
 - External/upstream submodules (`oss-fuzz/`, `oss-crs/`) keep their own documentation layout.
 - Key OSS-CRS references:
-  - `oss-crs/README.md`
-  - `oss-crs/docs/README.md`
-  - `oss-crs/docs/design/parallel.md`
+  - [oss-crs/README.md](../oss-crs/README.md)
+  - [oss-crs/docs/README.md](../oss-crs/docs/README.md)
+  - [oss-crs/docs/design/parallel.md](../oss-crs/docs/design/parallel.md)

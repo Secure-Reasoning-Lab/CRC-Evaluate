@@ -5,7 +5,7 @@ Use these standards for CRSBench framework code.
 ## Scope
 
 - Applies to `crsbench/`, `scripts/`, and related framework code paths.
-- Benchmark-specific policy and lifecycle guidance is in `docs/benchmark-developer-guide.md`.
+- Benchmark-specific policy and lifecycle guidance is in [docs/benchmark-developer-guide.md](./benchmark-developer-guide.md).
 
 ## Python Style
 

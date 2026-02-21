@@ -223,7 +223,7 @@ crsbench evaluator --ci --redis-host localhost \
   --continuous
 ```
 
-The submitter enqueues jobs to Redis build/verify queues. Evaluators running `crsbench evaluator --ci` dequeue and execute them. See `docs/modules/benchmark-ci.md` for full worker options.
+The submitter enqueues jobs to Redis build/verify queues. Evaluators running `crsbench evaluator --ci` dequeue and execute them. See [docs/modules/benchmark-ci.md](../../modules/benchmark-ci.md) for full worker options.
 
 ## Post-Experiment Evaluation
 

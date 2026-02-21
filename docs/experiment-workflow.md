@@ -396,6 +396,6 @@ Always clean queues before re-running an experiment with the same name or after 
 
 ## Upstream OSS-CRS References
 
-- `oss-crs/README.md` — lifecycle and command overview
-- `oss-crs/docs/design/parallel.md` — build/run IDs and artifact path model
-- `oss-crs/docs/config/crs-compose.md` — compose configuration fields
+- [oss-crs/README.md](../oss-crs/README.md) — lifecycle and command overview
+- [oss-crs/docs/design/parallel.md](../oss-crs/docs/design/parallel.md) — build/run IDs and artifact path model
+- [oss-crs/docs/config/crs-compose.md](../oss-crs/docs/config/crs-compose.md) — compose configuration fields

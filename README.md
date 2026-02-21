@@ -117,7 +117,7 @@ CRSBench/
 | Architecture Overview | [docs/design/architecture.md](docs/design/architecture.md) |
 | Logging | [docs/logger-usage-guide.md](docs/logger-usage-guide.md) |
 
-CRSBench module docs live under `docs/modules/`.
+CRSBench module docs live under [docs/modules/](docs/modules/).
 
 ## Contributing
 

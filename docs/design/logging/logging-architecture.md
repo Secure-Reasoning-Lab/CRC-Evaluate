@@ -229,6 +229,5 @@ uv run pytest tests/test_logger.py -v
 
 - Implementation: `crsbench/utils/logger.py`
 - Tests: `tests/test_logger.py`
-- Usage Guide: `docs/logger-usage-guide.md`
-- Migration Summary: `docs/logging-migration-summary.md`
+- Usage Guide: [docs/logger-usage-guide.md](../../logger-usage-guide.md)
 - Loguru Documentation: https://loguru.readthedocs.io/

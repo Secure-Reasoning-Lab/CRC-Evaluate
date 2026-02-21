@@ -69,11 +69,11 @@ Discovered POVs are deduplicated before verification based on `pov_dedup_strateg
 
 ## Upstream OSS-CRS References
 
-- `oss-crs/README.md` — quick start and lifecycle overview
-- `oss-crs/docs/design/parallel.md` — `--run-id`, `artifacts`, and deterministic path semantics
-- `oss-crs/docs/config/crs-compose.md` — compose config reference
-- `oss-crs/docs/config/crs.md` — CRS config (`oss-crs/crs.yaml`) reference
-- `oss-crs/docs/design/libCRS.md` — submit/fetch artifact channels and shared dirs
+- [oss-crs/README.md](../oss-crs/README.md) — quick start and lifecycle overview
+- [oss-crs/docs/design/parallel.md](../oss-crs/docs/design/parallel.md) — `--run-id`, `artifacts`, and deterministic path semantics
+- [oss-crs/docs/config/crs-compose.md](../oss-crs/docs/config/crs-compose.md) — compose config reference
+- [oss-crs/docs/config/crs.md](../oss-crs/docs/config/crs.md) — CRS config (`oss-crs/crs.yaml`) reference
+- [oss-crs/docs/design/libCRS.md](../oss-crs/docs/design/libCRS.md) — submit/fetch artifact channels and shared dirs
 
 ## Related CRSBench Docs
 

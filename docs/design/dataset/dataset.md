@@ -3,7 +3,7 @@
 **Status**: Implemented
 **Created**: 2026-02-14
 **Related Issues**: #5 (protect ground truth), #61 (HuggingFace distribution)
-**Related Design Doc**: `docs/design/benchmark-protection-and-contamination.md`
+**Related Design Doc**: [docs/design/benchmark-protection-and-contamination.md](../benchmark-protection-and-contamination.md)
 
 ## 1. Problem
 

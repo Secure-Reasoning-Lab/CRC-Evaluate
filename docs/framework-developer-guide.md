@@ -38,11 +38,11 @@ Recommended order: tests -> typecheck -> lint/format.
 
 ## Development References
 
-- Coding standards: `docs/coding-standards.md`
-- Distributed runtime: `docs/experiment-workflow.md`
-- CRS runtime interface: `docs/ossfuzz-crs-interface.md`
-- Design docs: `docs/design/README.md`
-- Module docs: `docs/modules/README.md`
+- Coding standards: [docs/coding-standards.md](./coding-standards.md)
+- Distributed runtime: [docs/experiment-workflow.md](./experiment-workflow.md)
+- CRS runtime interface: [docs/ossfuzz-crs-interface.md](./ossfuzz-crs-interface.md)
+- Design docs: [docs/design/README.md](./design/README.md)
+- Module docs: [docs/modules/README.md](./modules/README.md)
 
 ## Pull Request Expectations
 

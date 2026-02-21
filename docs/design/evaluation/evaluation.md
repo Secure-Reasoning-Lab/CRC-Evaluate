@@ -29,6 +29,11 @@ crsbench/evaluation/
 4. **Resource Monitoring**: Track execution time and resource usage
 5. **Extensible**: Easy to add new CRS implementations
 
+### Snapshot Support
+
+Evaluation supports periodic trial snapshots for progress tracking and partial-result inspection.
+See [docs/design/evaluation/snapshots.md](./snapshots.md) for snapshot format, capture lifecycle, and usage.
+
 ## Core Components
 
 ### BenchmarkRunner (runner.py)

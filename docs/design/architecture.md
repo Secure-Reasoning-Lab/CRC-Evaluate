@@ -69,6 +69,9 @@ See [docs/design/validation/validation.md](./validation/validation.md) for detai
 - OssCrsAdapter for CRS execution (bug-finding and bug-fixing modes)
 - create_adapter() factory function for adapter creation
 - Result aggregation and reporting
+- Periodic snapshot capture during trial execution for monitoring/debugging
+
+See [docs/design/evaluation/snapshots.md](./evaluation/snapshots.md) for snapshot design and data format.
 
 ### 3. migration/
 **Purpose**: Migrate Team-Atlanta format benchmarks to RFC format.
@@ -409,7 +412,7 @@ Defines CRS-specific runtime parameters and settings.
 
 When contributing to CRSBench:
 
-1. **Read RFC first**: `docs/benchmark-spec.md`
+1. **Read RFC first**: [docs/benchmark-spec.md](../benchmark-spec.md)
 2. **Check design docs**: This file and module-specific docs
 3. **Use absolute imports**: No relative imports in Python
 4. **Type everything**: Use type hints and Pydantic models

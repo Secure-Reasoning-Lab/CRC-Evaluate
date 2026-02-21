@@ -4,10 +4,10 @@ Thank you for your interest in contributing to CRSBench.
 
 For contribution tracks and development workflows, start with:
 
-- Framework development: `docs/framework-developer-guide.md`
-- Benchmark development: `docs/benchmark-developer-guide.md`
-- Experiment/runtime usage: `docs/experiment-workflow.md`
-- Documentation index: `docs/README.md`
+- Framework development: [docs/framework-developer-guide.md](docs/framework-developer-guide.md)
+- Benchmark development: [docs/benchmark-developer-guide.md](docs/benchmark-developer-guide.md)
+- Experiment/runtime usage: [docs/experiment-workflow.md](docs/experiment-workflow.md)
+- Documentation index: [docs/README.md](docs/README.md)
 
 ## Governance
 

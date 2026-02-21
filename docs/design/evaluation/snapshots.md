@@ -1601,8 +1601,6 @@ def capture_snapshot(self):
 ### Phase 3: Documentation
 
 - [ ] **Update design docs**
-  - [ ] Update `docs/design/evaluation/evaluation.md` to mention snapshots
-  - [ ] Update `docs/design/architecture.md` if needed
 
 - [ ] **Update user docs**
   - [ ] Document snapshot_period in experiment config docs

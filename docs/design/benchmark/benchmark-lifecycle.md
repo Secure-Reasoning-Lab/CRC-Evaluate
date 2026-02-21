@@ -55,7 +55,7 @@ crsbench/benchmark/
 
 **Purpose**: Create new benchmarks from external vulnerability sources.
 
-**Status**: Not yet implemented. See `docs/modules/benchmark/generation.md` for planned architecture.
+**Status**: Not yet implemented. See [docs/modules/benchmark/generation.md](../../modules/benchmark/generation.md) for planned architecture.
 
 ### Planned Adapters
 
@@ -384,6 +384,6 @@ Planned adapters for:
 
 ## Related Documentation
 
-- `docs/benchmark-spec.md` - RFC for benchmark format
-- `docs/ossfuzz-crs-interface.md` - CRS interface specification
-- `docs/modules/benchmark/generation.md` - Planned generation architecture
+- [docs/benchmark-spec.md](../../benchmark-spec.md) - RFC for benchmark format
+- [docs/ossfuzz-crs-interface.md](../../ossfuzz-crs-interface.md) - CRS interface specification
+- [docs/modules/benchmark/generation.md](../../modules/benchmark/generation.md) - Planned generation architecture
