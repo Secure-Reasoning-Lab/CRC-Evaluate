@@ -275,5 +275,5 @@ services:
 ## See Also
 
 - [Experiment Workflow](../../docs/experiment-workflow.md)
-- [Distributed Job Queue Design](../../design-docs/distributed/distributed-job-queue.md)
+- [Distributed Job Queue Design](../../docs/design/distributed/distributed-job-queue.md)
 - [Valkey Documentation](https://valkey.io/)

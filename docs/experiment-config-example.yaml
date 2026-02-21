@@ -137,6 +137,16 @@ llm_tracking_enabled: true
 # Default: 900 (15 minutes)
 snapshot_period: 900
 
+# ===== Verification & Deduplication =====
+
+# How discovered POVs are deduplicated before verification/reporting.
+# Options:
+#   - patch-based: Group by matched CPV set (default)
+#   - stack-based: Group by crash stack signature
+#   - status-based: Keep one per verification status type
+#   - none: Keep all discovered POVs
+pov_dedup_strategy: patch-based
+
 # ===== Resource Management =====
 
 # OPTIONAL: Resource allocation configuration for trials
@@ -196,7 +206,7 @@ snapshot_period: 900
 #   redis_host: "redis.example.com"
 #
 #   # Whether workers should run continuously or exit after completing one job
-#   # Default: true
+#   # Default: false
 #   # Set to false for one-shot execution (useful for testing or batch processing)
 #   continuous: true
 #

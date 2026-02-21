@@ -149,7 +149,7 @@ worker:
   redis_host: localhost  # default: "localhost"
 
   # Run continuously or exit when queue is empty.
-  continuous: true  # default: true
+  continuous: true  # default: false
 
   # Minimum free disk space required to accept new jobs.
   # Possible values: "200GB" | "100MB" | "1TB" | etc.
@@ -257,6 +257,10 @@ coverage_early_stop: false  # default: false
 
 # Terminate trial early when all CPVs for harness are found.
 pov_early_stop: false  # default: false
+
+# POV deduplication strategy before verification/reporting.
+# Possible values: "patch-based" | "stack-based" | "status-based" | "none"
+pov_dedup_strategy: patch-based  # default: patch-based
 
 # Number of parallel workers for building variants. (>= 1)
 # build_workers: 4  # default: 4

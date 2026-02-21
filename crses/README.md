@@ -412,7 +412,7 @@ crs:
 
 ## See Also
 
-- [oss-crs Package Documentation](../oss-crs/CLAUDE.md)
+- [oss-crs Package Documentation](../oss-crs/docs/README.md)
 - [CRS Interface Specification](../docs/ossfuzz-crs-interface.md)
-- [Resource Configuration Guide](../oss-crs/example_configs/ensemble-c/RESOURCE_CONFIG_README.md)
+- [Resource Configuration Guide](../oss-crs/docs/config/crs.md)
 - [CRSBench Documentation](../docs/benchmark-spec.md)

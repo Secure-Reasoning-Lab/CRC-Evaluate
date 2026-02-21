@@ -99,7 +99,6 @@ extend-exclude = [
     "snapshot-examples/",
     "scripts/",
     "integration_tests/",
-    "claude_reference_projects/",
 ]
 
 [tool.ruff.lint]

@@ -462,6 +462,6 @@ if __name__ == "__main__":
 
 ## See Also
 
-- [Design Documentation](../design-docs/evaluation/snapshots.md) - Technical details
+- [Design Documentation](./design/evaluation/snapshots.md) - Technical details
 - [Sample Snapshots](../snapshot-examples/) - Example snapshots for testing
 - [API Reference](../crsbench/evaluation/snapshot.py) - Python API documentation
