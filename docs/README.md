@@ -2,27 +2,37 @@
 
 This directory is the central home for project documentation.
 
-## User Docs
+## Start Here
+
+- [Benchmark Specification (RFC)](./RFC.md)
+- [Environment Setup](./environment-setup.md)
+- [Experiment Workflow](./experiment-workflow.md)
+
+## Developer Guides
 
 - [Benchmark Developer Guide](./benchmark-developer-guide.md)
 - [Framework Developer Guide](./framework-developer-guide.md)
+- [Testing Setup](./testing-setup.md)
 - [Coding Standards](./coding-standards.md)
-- [Benchmark Data Protection and AI Contamination](./design/benchmark-protection-and-contamination.md)
-- [Environment Setup](./environment-setup.md)
-- [Experiment Workflow](./experiment-workflow.md)
-- [Experiment Config Example](./experiment-config-example.yaml)
-- [Distributed Config Example](./experiment-config-distributed-example.yaml)
-- [Benchmark Specification](./benchmark-spec.md)
+- [Manual Validation Guideline](./manual-validation-guideline.md)
+
+## Runtime And Results
+
 - [OSS-CRS Interface](./ossfuzz-crs-interface.md)
 - [Seed Corpus](./seed-corpus.md)
 - [Snapshot Examples](./snapshot-examples.md)
-- [Testing Setup](./testing-setup.md)
-- [Manual Validation Guideline](./manual-validation-guideline.md)
 - [Logger Usage Guide](./logger-usage-guide.md)
+- [Experiment Config Example](./experiment-config-example.yaml)
+- [Distributed Config Example](./experiment-config-distributed-example.yaml)
 
-## Design Docs
+## Data And Contamination
 
-Internal architecture and implementation design docs now live under [`docs/design/`](./design/) and are indexed at [`docs/design/README.md`](./design/README.md):
+- [Benchmark Data Protection and AI Contamination](./design/benchmark-protection-and-contamination.md)
+
+## Architecture And Design
+
+Design docs live under [`docs/design/`](./design/) and are indexed at
+[`docs/design/README.md`](./design/README.md).
 
 - [Architecture Overview](./design/architecture.md)
 - [Distributed Execution](./design/distributed/)
@@ -35,9 +45,10 @@ Internal architecture and implementation design docs now live under [`docs/desig
 
 ## Module Docs
 
-CRSBench module docs are centralized under [`docs/modules/`](./modules/) and indexed at [`docs/modules/README.md`](./modules/README.md).
+Module docs are centralized under [`docs/modules/`](./modules/) and indexed at
+[`docs/modules/README.md`](./modules/README.md).
 
-Other project areas keep local READMEs:
+## Adjacent READMEs
 
 - [services/valkey/README.md](../services/valkey/README.md)
 - [services/litellm/README.md](../services/litellm/README.md)
@@ -47,7 +58,8 @@ Other project areas keep local READMEs:
 
 ## Notes
 
-- External/upstream submodules (`oss-fuzz/`, `oss-crs/`) keep their own documentation layout.
+- External/upstream submodules (`oss-fuzz/`, `oss-crs/`) keep their own
+  documentation layout.
 - Key OSS-CRS references:
   - [oss-crs/README.md](../oss-crs/README.md)
   - [oss-crs/docs/README.md](../oss-crs/docs/README.md)
