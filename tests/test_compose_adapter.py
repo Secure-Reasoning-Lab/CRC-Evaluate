@@ -197,10 +197,8 @@ class TestReadCrsSourceFromRegistry:
     """Tests for read_crs_source_from_registry utility."""
 
     def test_reads_source_url_and_ref(self, tmp_path: Path) -> None:
-        crs_dir = tmp_path / "my-crs"
-        crs_dir.mkdir()
-        pkg_yaml = crs_dir / "pkg.yaml"
-        pkg_yaml.write_text(
+        crs_yaml = tmp_path / "my-crs.yaml"
+        crs_yaml.write_text(
             yaml.dump(
                 {
                     "source": {
@@ -217,13 +215,11 @@ class TestReadCrsSourceFromRegistry:
         assert result.ref == "v1.0.0"
 
     def test_raises_file_not_found_when_pkg_yaml_missing(self, tmp_path: Path) -> None:
-        with pytest.raises(FileNotFoundError, match="pkg.yaml"):
+        with pytest.raises(FileNotFoundError, match="Expected"):
             read_crs_source_from_registry(tmp_path, "nonexistent-crs")
 
     def test_raises_value_error_when_source_key_missing(self, tmp_path: Path) -> None:
-        crs_dir = tmp_path / "bad-crs"
-        crs_dir.mkdir()
-        (crs_dir / "pkg.yaml").write_text(yaml.dump({"name": "bad-crs"}))
+        (tmp_path / "bad-crs.yaml").write_text(yaml.dump({"name": "bad-crs"}))
 
         with pytest.raises(ValueError, match="source"):
             read_crs_source_from_registry(tmp_path, "bad-crs")
@@ -503,11 +499,10 @@ class TestOssCrsAdapterBugFindFull:
     """Comprehensive tests for OssCrsAdapter (bug-finding) lifecycle."""
 
     def _make_adapter(self, tmp_path: Path) -> OssCrsAdapter:
-        """Create adapter with registry dir containing a valid pkg.yaml."""
+        """Create adapter with registry dir containing a valid oss-crs YAML."""
         registry = tmp_path / "registry"
-        crs_dir = registry / "test-crs"
-        crs_dir.mkdir(parents=True)
-        (crs_dir / "pkg.yaml").write_text(
+        registry.mkdir(parents=True)
+        (registry / "test-crs.yaml").write_text(
             yaml.dump(
                 {
                     "source": {
@@ -828,11 +823,10 @@ class TestOssCrsAdapterBugFixFull:
     """Comprehensive tests for OssCrsAdapter (bug-fixing) lifecycle."""
 
     def _make_adapter(self, tmp_path: Path) -> OssCrsAdapter:
-        """Create adapter with registry dir containing a valid pkg.yaml."""
+        """Create adapter with registry dir containing a valid oss-crs YAML."""
         registry = tmp_path / "registry"
-        crs_dir = registry / "test-crs"
-        crs_dir.mkdir(parents=True)
-        (crs_dir / "pkg.yaml").write_text(
+        registry.mkdir(parents=True)
+        (registry / "test-crs.yaml").write_text(
             yaml.dump(
                 {
                     "source": {
@@ -1152,9 +1146,8 @@ class TestStageBenchmark:
 
     def _make_adapter(self, tmp_path: Path) -> OssCrsAdapter:
         registry = tmp_path / "registry"
-        crs_dir = registry / "test-crs"
-        crs_dir.mkdir(parents=True)
-        (crs_dir / "pkg.yaml").write_text(
+        registry.mkdir(parents=True)
+        (registry / "test-crs.yaml").write_text(
             yaml.dump(
                 {
                     "source": {

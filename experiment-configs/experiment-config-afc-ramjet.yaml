@@ -89,6 +89,6 @@ worker:
   # Execute on local NVMe for fast Docker I/O
   experiment_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc-rest7
   report_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/report-data-afc-rest7
-  # Clean up build artifacts (crs-build/, .oss-bugfind/) after each trial
+  # Clean up build artifacts (crs-build/, .oss-crs-workdir/) after each trial
   # Results (POVs, logs, metadata) stay on local disk for rsync collection
   cleanup_after_trial: true

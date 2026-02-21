@@ -915,8 +915,8 @@ class ExperimentConfig(BaseModel):
         description="Snapshot interval in seconds (0 to disable, default 900 = 15 minutes)",
     )
     registry_dir: Path = Field(
-        default=Path("crses/registry"),
-        description="Path to CRS registry directory (default: crses/registry)",
+        default=Path("oss-crs/registry"),
+        description="Path to CRS registry directory (default: oss-crs/registry)",
     )
     crs_configs_dir: Path = Field(
         default=Path("crses/configs"),

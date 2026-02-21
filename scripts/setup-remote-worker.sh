@@ -127,12 +127,17 @@ echo "  Benchmarks bundled"
 # ----- Step 7: Prepare CRS Docker images -----
 echo ""
 echo "[7/9] Preparing CRS (atlantis-multilang-given_fuzzer)..."
-# Remove stale .oss-bugfind cache to force fresh image builds
+# Remove stale OSS-CRS work/cache dirs to force fresh image builds
+if [ -d "$INSTALL_DIR/.oss-crs-workdir" ]; then
+    echo "  Removing stale .oss-crs-workdir cache..."
+    rm -rf "$INSTALL_DIR/.oss-crs-workdir"
+fi
+# Legacy cache path cleanup for older setups
 if [ -d "$INSTALL_DIR/.oss-bugfind" ]; then
-    echo "  Removing stale .oss-bugfind cache..."
+    echo "  Removing legacy .oss-bugfind cache..."
     rm -rf "$INSTALL_DIR/.oss-bugfind"
 fi
-uv run oss-bugfind-crs prepare atlantis-multilang-given_fuzzer
+uv run oss-crs prepare atlantis-multilang-given_fuzzer
 echo "  CRS prepared"
 
 # ----- Step 8: Verify config file exists -----

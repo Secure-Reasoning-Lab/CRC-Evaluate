@@ -25,16 +25,14 @@ def check_hf_token() -> tuple[bool, str]:
 
     token = get_token()
     if not token:
-        return False, ("No HuggingFace token found. Login with: huggingface-cli login")
+        return False, ("No HuggingFace token found. Login with: hf auth login")
 
     try:
         api = HfApi()
         user_info = api.whoami()
         return True, f"Authenticated as: {user_info.get('name', 'unknown')}"
     except Exception as e:
-        return False, (
-            f"HuggingFace token invalid: {e}. Re-login with: huggingface-cli login"
-        )
+        return False, (f"HuggingFace token invalid: {e}. Re-login with: hf auth login")
 
 
 def _download_huggingface(

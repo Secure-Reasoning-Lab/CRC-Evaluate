@@ -15,8 +15,7 @@ uv sync
 #   1. Create a token at https://huggingface.co/settings/tokens
 #   2. Accept the Data Use Agreement at https://huggingface.co/datasets/sslab-gatech/crsbench-dataset
 #   3. Log in:
-uv sync --extra dataset
-huggingface-cli login
+uv run hf auth login
 crsbench download --all                     # all 134 benchmarks (~12GB)
 crsbench download --all --no-ground-truth   # skip .aixcc/ ground truth
 crsbench download --benchmark-suite sanity  # small test suite
@@ -28,8 +27,18 @@ crsbench worker    --experiment-config experiment-configs/experiment-config-sani
 crsbench evaluator --experiment-config experiment-configs/experiment-config-sanity.yaml
 ```
 
+If your virtual environment is not activated, prefix CLI commands with `uv run`
+(for example, `uv run crsbench download --all`).
+
 CRS experiments use a distributed job queue (Redis/RQ). The orchestrator (`run`) enqueues jobs,
-workers (`worker`) execute them. Add `evaluator` for real-time POV verification.
+workers (`worker`) execute them. Add `evaluator` for real-time POV and patch verification.
+
+### Execution Notes (oss-crs Workflow)
+
+- CRS lifecycle now uses `oss-crs prepare`, `oss-crs build-target`, `oss-crs artifacts`, and `oss-crs run`
+- Trial artifact discovery is resolved via `oss-crs artifacts` (no glob-based submit-dir discovery)
+- Real-time POV/patch collection is tied to resolved `EXCHANGE_DIR` paths
+- Additional POV dedup strategy `stack-based` is available via `pov_dedup_strategy` in experiment config
 
 See [Experiment Workflow](docs/experiment-workflow.md) for multi-machine setup, core pinning, and
 production deployment. See [Environment Setup](docs/environment-setup.md) for `.env` configuration.
@@ -85,26 +94,29 @@ CRSBench/
 │   ├── statistics/          #   Benchmark statistics
 │   └── utils/               #   Shared utilities (logger, YAML, etc.)
 ├── crses/                   # CRS configurations for evaluation
-├── oss-crs-registry/        # CRS registry (submodule)
+├── oss-crs/                 # CRS runtime and registry (submodule)
 ├── oss-fuzz/                # OSS-Fuzz (submodule)
-├── docs/                    # User-facing documentation
-└── design-docs/             # Internal architecture docs
+├── docs/                    # Documentation hub (user + design docs)
+└── docs/design/             # Internal architecture docs
 ```
 
 ## Documentation
 
-| Topic | Link |
-|-------|------|
-| Benchmark RFC Specification | [docs/benchmark-spec.md](docs/benchmark-spec.md) |
-| Experiment Workflow | [docs/experiment-workflow.md](docs/experiment-workflow.md) |
-| Environment Setup | [docs/environment-setup.md](docs/environment-setup.md) |
-| CRS Interface | [docs/ossfuzz-crs-interface.md](docs/ossfuzz-crs-interface.md) |
-| Distributed Execution | [design-docs/distributed/](design-docs/distributed/) |
-| Dataset Module | [design-docs/dataset/dataset.md](design-docs/dataset/dataset.md) |
-| Architecture Overview | [design-docs/architecture.md](design-docs/architecture.md) |
-| Logging | [docs/logger-usage-guide.md](docs/logger-usage-guide.md) |
-
-Each module has its own README under `crsbench/<module>/README.md`.
+- Entry point: [docs/README.md](docs/README.md)
+- Benchmark format contract: [docs/RFC.md](docs/RFC.md)
+- Documentation governance:
+  - [Taxonomy and Canonical Map](docs/documentation-taxonomy.md)
+  - [Inventory and Audit](docs/documentation-inventory.md)
+  - [Maintenance Guide](docs/documentation-maintenance.md)
+- Setup and runtime:
+  - [Environment Setup](docs/environment-setup.md)
+  - [Experiment Workflow](docs/experiment-workflow.md)
+- Contributor tracks:
+  - [Framework Developer Guide](docs/framework-developer-guide.md)
+  - [Benchmark Developer Guide](docs/benchmark-developer-guide.md)
+- Architecture and modules:
+  - [Design Docs](docs/design/README.md)
+  - [Module Docs](docs/modules/README.md)
 
 ## Contributing
 
@@ -114,29 +126,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and coding standard
 
 CRSBench is licensed under [MIT](LICENSE). Bundled upstream source code retains
 its original license — see [LICENSE-THIRD-PARTY.md](LICENSE-THIRD-PARTY.md).
-
-## Citation
-
-If you use CRSBench, please cite it. See [CITATION.cff](CITATION.cff) for
-machine-readable metadata, or use:
-
-```bibtex
-@software{crsbench2026,
-  title     = {CRSBench: A Benchmark for Cyber Reasoning Systems},
-  author    = {Kim, Youngjoon and Fu, Yu-Fu and Kim, Dongkwan and
-               Kim, Jiho and Chin, Andrew and Park, Younggi and
-               Zhang, Cen and Lee, Junekyu and Fleischer, Fabian and
-               Jeong, Dae R. and Xu, Qingxiao and Sheng, Ze and
-               Silliman, Jonathan and Mcdaniel, Mikel and
-               Casavant, Jefferson and Goldthwaite, Isaac and
-               Vidovich, Nicholas and Lehman, Matthew and
-               Kim, Taesoo},
-  year      = {2026},
-  url       = {https://github.com/sslab-gatech/CRSBench},
-  license   = {MIT},
-  note      = {Youngjoon Kim, Yu-Fu Fu, and Dongkwan Kim contributed equally},
-}
-```
 
 ## Related Projects
 

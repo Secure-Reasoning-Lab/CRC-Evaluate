@@ -1,0 +1,13 @@
+# Resource Configuration for crs-claude-code CRS Deployment
+
+# Worker definitions
+workers:
+  local:
+    cpuset: "0-15"
+    memory: "64G"
+
+# CRS-specific configurations
+crs:
+  crs-claude-code:
+    workers:
+      - local

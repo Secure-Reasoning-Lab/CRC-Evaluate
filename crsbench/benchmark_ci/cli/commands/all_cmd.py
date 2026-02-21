@@ -689,14 +689,15 @@ def run_all(args: argparse.Namespace) -> int:
 
     summary.finished_at = datetime.now()
 
+    # Save first (data safety — display may crash on markup issues)
+    if output_dir:
+        save_output_dir(summary, Path(output_dir), check_mode=CheckMode.ALL)
+
     print_results_table(
         summary,
         check_mode=CheckMode.ALL,
         no_color=getattr(args, "no_color", False),
     )
-
-    if output_dir:
-        save_output_dir(summary, Path(output_dir), check_mode=CheckMode.ALL)
 
     output_path = getattr(args, "output", None)
     if output_path:

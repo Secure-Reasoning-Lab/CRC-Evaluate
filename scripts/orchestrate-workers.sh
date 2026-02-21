@@ -378,7 +378,7 @@ cmd_collect() {
         # Trial paths are unique per benchmark/harness/trial so no conflicts.
         rsync -az --progress \
             --exclude='crs-build/' \
-            --exclude='.oss-bugfind/' \
+            --exclude='.oss-crs-workdir/' \
             -e "ssh $SSH_OPTS" \
             "$host:$REMOTE_EXPERIMENT_DIR/" \
             "$REMOTE_EXPERIMENT_DIR/"

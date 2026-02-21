@@ -12,7 +12,7 @@ Snapshots are periodic captures of CRS trial progress, including:
 - CRS logs (full)
 - Configuration and metadata
 
-See `design-docs/evaluation/snapshots.md` for the complete snapshot design specification.
+See `docs/design/evaluation/snapshots.md` for the complete snapshot design specification.
 
 ## Contents
 

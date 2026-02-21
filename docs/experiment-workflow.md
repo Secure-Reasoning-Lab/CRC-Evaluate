@@ -42,18 +42,18 @@ CRSBench uses a distributed model backed by a Redis-compatible queue (Valkey):
 - **Workers** (`crsbench worker`): execute CRS trials, discover POVs
 
 **Optional processes:**
-- **Evaluator** (`crsbench evaluator`): build variant images and verify discovered POVs
+- **Evaluator** (`crsbench evaluator`): build variant images and verify discovered POVs/patches
 - **Remote workers**: scale out to additional machines
 
 **Queue names (same Redis instance):**
 - `crsbench_{experiment}` — CRS trial jobs (workers consume)
 - `crsbench_{experiment}_build` — variant build jobs (evaluators consume)
-- `crsbench_{experiment}_verify` — POV verification jobs (evaluators consume)
+- `crsbench_{experiment}_verify` — POV/patch verification jobs (evaluators consume)
 
 ## Prerequisites
 
 1. **Docker** installed and running
-2. **CRSBench** installed (`uv pip install -e .`)
+2. **CRSBench** dependencies installed (`uv sync`)
 3. **Valkey** (Redis-compatible server):
 
 ```bash
@@ -136,6 +136,7 @@ max_total_time: 28800
 build_timeout: 300
 run_timeout: 300
 verify_timeout: 300
+pov_dedup_strategy: patch-based
 experiment_filestore: /data/experiments
 report_filestore: /data/reports
 
@@ -388,7 +389,13 @@ Always clean queues before re-running an experiment with the same name or after 
 ## See Also
 
 - [Experiment Config Example](experiment-config-distributed-example.yaml) — full configuration reference
-- [Design: Distributed Job Queue](../design-docs/distributed/distributed-job-queue.md) — job queue architecture
-- [Design: Distributed Evaluation](../design-docs/distributed/distributed-evaluation.md) — evaluator architecture
+- [Design: Distributed Job Queue](./design/distributed/distributed-job-queue.md) — job queue architecture
+- [Design: Distributed Evaluation](./design/distributed/distributed-evaluation.md) — evaluator architecture
 - [Environment Setup](environment-setup.md) — environment variables and .env configuration
 - [Snapshot System](snapshot-examples.md) — progress monitoring during trials
+
+## Upstream OSS-CRS References
+
+- [oss-crs/README.md](../oss-crs/README.md) — lifecycle and command overview
+- [oss-crs/docs/design/parallel.md](../oss-crs/docs/design/parallel.md) — build/run IDs and artifact path model
+- [oss-crs/docs/config/crs-compose.md](../oss-crs/docs/config/crs-compose.md) — compose configuration fields

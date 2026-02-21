@@ -10,7 +10,7 @@
 # CLI Override Examples:
 #   --experiment-name jvm-focused-eval
 #   --benchmark-suite crsbench-afc-jvm
-#   --crses atlantis-multilang,custom-jvm-crs
+#   --crses atlantis-multilang-given_fuzzer,crs-libfuzzer
 
 # Experiment identifier for tracking and reporting
 experiment: afc-c-suite-evaluation
@@ -45,8 +45,8 @@ report_filestore: /tmp/crsbench/crsbench/report-data
 
 # List of CRS implementations to evaluate
 crses:
-  - atlantis-c           # C/C++ focused CRS
-  - ensemble-c           # Ensemble-based CRS for C
+  - crs-libfuzzer                # libFuzzer-centric CRS
+  - atlantis-multilang-given_fuzzer  # multi-language bug-finding CRS
 
 # Benchmark suite to evaluate
 # Suite name corresponds to file in benchmark-suites/{suite-name}.yaml

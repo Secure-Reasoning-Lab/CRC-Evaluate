@@ -1,145 +1,76 @@
 # Contributing to CRSBench
 
-## Setup
+Thank you for your interest in contributing to CRSBench.
 
-```bash
-git clone https://github.com/sslab-gatech/CRSBench.git && cd CRSBench
-uv sync --extra dev
-pre-commit install
-```
+For contribution tracks and development workflows, start with:
 
-## Code Quality
+- Framework development: [docs/framework-developer-guide.md](docs/framework-developer-guide.md)
+- Benchmark development: [docs/benchmark-developer-guide.md](docs/benchmark-developer-guide.md)
+- Experiment/runtime usage: [docs/experiment-workflow.md](docs/experiment-workflow.md)
+- Documentation index: [docs/README.md](docs/README.md)
 
-```bash
-# Run tests first
-uv run pytest tests/ -v
-uv run pytest tests/test_<module>.py -v   # single module
+## Governance
 
-# Then checks
-just check       # typecheck + lint + format (all at once)
-just typecheck   # type checking only
-just lint        # linting only
-just lint-fix    # auto-fix lint issues
-just format      # auto-format code
-```
+### Technical Steering Committee (TSC)
 
-**Workflow**: tests → typecheck → lint/format.
+The Technical Steering Committee (TSC) is responsible for technical oversight of CRSBench.
+TSC voting members are the project's Maintainers. Decisions are made by consensus when possible; when a vote is needed, each voting member has one vote and a majority of those present (with quorum) is required.
 
-## Coding Standards
+### Roles
 
-See [CLAUDE.md](CLAUDE.md) for the full coding standards, including:
+**Contributors** are anyone in the technical community who contributes code, documentation, benchmarks, or other technical artifacts.
 
-- Import style (absolute imports only)
-- Logging (`from crsbench.utils.logger import get_logger`, never `import logging`)
-- Naming conventions, function design, nesting limits
-- Type annotations (avoid `Any`, use type aliases)
-- Testing conventions (`uv run pytest`, tests in `tests/`)
+**Maintainers** are Contributors who can approve and merge changes to project repositories. A Contributor may become a Maintainer by majority approval of the TSC. Maintainers serve as TSC voting members.
 
-## Documentation
+### Initial Maintainers (alphabetic order)
 
-- Create a design doc in `design-docs/<module>/` before implementing new features
-- Update module README at `crsbench/<module>/README.md`
-- User-facing docs go in `docs/`
+| Name             | Organization                                | GitHub     |
+|------------------|---------------------------------------------|------------|
+| Andrew Chin      | Georgia Institute of Technology             | `@azchin`  |
+| Cen Zhang        | Georgia Institute of Technology             | `@occia`   |
+| Dongkwan Kim     | Georgia Institute of Technology             | `@0xdkay`  |
+| Fabian Fleischer | Georgia Institute of Technology             | `@fab1ano` |
+| Jiho Kim         | Georgia Institute of Technology             | `@jhkimx2` |
+| Taesoo Kim       | Georgia Institute of Technology & Microsoft | `@tsgates` |
+| Younggi Park     | Independent Researcher                      | `@grill66` |
+| Youngjoon Kim    | Georgia Institute of Technology             | `@acorn421` |
+| Yu-Fu Fu         | Georgia Institute of Technology             | `@fuyu0425` |
 
-## Project Layout
+## Reporting Issues
 
-Each major feature lives in its own module under `crsbench/`:
+Use the GitHub issue tracker for bugs and tasks. Include:
 
-| Module | Purpose |
-|--------|---------|
-| `builder/` | OSS-Fuzz variant building |
-| `evaluation/` | CRS execution & verification |
-| `benchmark_ci/` | Benchmark CI pipeline |
-| `distributed/` | Multi-machine execution (Redis/RQ) |
-| `benchmark/` | Packaging, canary, seed tools |
-| `dataset/` | HuggingFace upload/download |
-| `validation/` | Format validation & schemas |
-| `migration/` | Format migration tools |
-| `hint_generation/` | Progressive hint generation |
-| `reporting/` | Reports & dashboard |
-| `statistics/` | Benchmark statistics |
-| `utils/` | Shared utilities (logger, YAML, etc.) |
+- Observed and expected behavior
+- Reproduction steps (exact commands/configs)
+- Environment details (OS, Docker, Redis/Valkey, relevant paths)
 
-Only `run_experiment.py` (CLI entry point) lives at the `crsbench/` root.
+## Contributing Code
 
-## Benchmark Management
+If you have a fix or feature:
 
-```bash
-crsbench benchmark validate      benchmarks/project
-crsbench benchmark bundle        benchmarks/project
-crsbench benchmark bundle-all    benchmarks/ --workers 8
-crsbench benchmark prepare-delta benchmarks/project
-crsbench benchmark inject-canary benchmarks/ --filter "atlanta-*"
-crsbench benchmark upload        --dataset crsbench       # HuggingFace upload
-crsbench benchmark upload        --dataset crsbench --dry-run
-```
+1. Branch from `main`
+2. Implement and test locally
+3. Rebase on latest `main` before opening PR
+4. Open a PR and request review
 
-## Benchmark CI
+For commit messages, use Conventional Commits where possible:
+- `fix:`
+- `feat:`
+- `chore:`
+- `docs:`
+- `refactor:`
 
-### Local (single machine)
+## Documentation Policy
 
-```bash
-crsbench benchmark ci format --all          # Validate format (no Docker)
-crsbench benchmark ci build  --all          # Build variant images
-crsbench benchmark ci pov    --all          # Verify ground-truth POVs
-crsbench benchmark ci patch  --all          # Verify ground-truth patches
-crsbench benchmark ci all    --all          # Run all checks
-```
+- User-facing docs: `docs/`
+- Design/implementation docs: `docs/design/`
+- Module docs: `docs/modules/`
+- Keep docs updated in the same PR when behavior changes.
+- Use canonical ownership and placement rules in `docs/documentation-taxonomy.md`.
+- For substantial doc changes, request review across multiple lanes (onboarding,
+  runtime/ops, architecture, and module maintenance at minimum).
 
-### Distributed (with Redis/Valkey)
+## Repository Scope
 
-Distributed CI splits work into build and verify jobs processed by evaluator
-workers. This lets you parallelize across many cores or multiple machines.
-
-**Start Valkey/Redis first:**
-
-```bash
-python scripts/valkey-helper.py --password start
-```
-
-This starts a Valkey instance and saves the connection password to `.env`.
-
-**Terminal 1 — Submit jobs:**
-
-```bash
-# Submit all benchmarks (enqueues build + verify jobs to Redis)
-crsbench benchmark ci all --all --distributed --output-dir ci-results
-
-# Enable incremental build (full build is default)
-crsbench benchmark ci all --all --distributed --output-dir ci-results --inc-build
-
-# Also skip force-rebuild (reuse existing Docker images)
-crsbench benchmark ci all --all --distributed --output-dir ci-results \
-  --inc-build --no-force-rebuild
-```
-
-**Terminal 2 — Start evaluator to process jobs:**
-
-```bash
-crsbench evaluator --ci \
-  --build-jobs 16 --build-cores-per-job 8 \
-  --verify-jobs 16 --verify-cores-per-job 8
-```
-
-The submitter enqueues jobs to Redis queues. The evaluator dequeues and
-executes them in parallel. Build jobs run first, then verify/patch/test jobs.
-
-**Core allocation:** The evaluator distributes available CPU cores across
-build and verify jobs. For example, on a 128-core machine:
-
-```bash
-# 16 build jobs × 8 cores = 128 cores for builds
-# After builds finish, 16 verify jobs × 8 cores = 128 cores for verification
-crsbench evaluator --ci \
-  --build-jobs 16 --build-cores-per-job 8 \
-  --verify-jobs 16 --verify-cores-per-job 8
-
-# Pin to specific cores (e.g., cores 0-63 only)
-crsbench evaluator --ci \
-  --build-jobs 8 --build-cores-per-job 8 \
-  --verify-jobs 16 --verify-cores-per-job 4 \
-  --cores 0-63
-```
-
-See `crsbench/benchmark_ci/README.md` for the full option reference and
-execution flow.
+This repository includes CRSBench and related in-tree components (including `oss-crs/`).
+Contribution policy is defined by this repository.

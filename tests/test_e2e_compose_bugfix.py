@@ -142,11 +142,10 @@ def e2e_bugfix_env(tmp_path: Path) -> Path:
         )
     )
 
-    # 2. CRS registry with pkg.yaml (bug-fixing type)
+    # 2. CRS registry with oss-crs YAML entry (bug-fixing type)
     registry = tmp_path / "registry"
-    crs_dir = registry / "test-crs"
-    crs_dir.mkdir(parents=True)
-    (crs_dir / "pkg.yaml").write_text(
+    registry.mkdir(parents=True)
+    (registry / "test-crs.yaml").write_text(
         yaml.dump(
             {
                 "type": "bug-fixing",

@@ -128,7 +128,7 @@ At runtime, when `seed_corpus_enabled: true`:
 1. `SeedCorpusPreparer` reads `manifest.json` from `.aixcc/{harness}/corpus/`
 2. Filters files by `relative_time <= seed_corpus_max_time` (if configured)
 3. Copies selected files to `trial_dir/seed_corpus/`
-4. Passes directory to CRS via `oss-bugfind-crs run --corpus <path>`
+4. Passes directory to CRS via `oss-crs run --seed-dir <path>`
 
 The CRS then uses these files as initial fuzzing seeds, potentially finding bugs faster.
 

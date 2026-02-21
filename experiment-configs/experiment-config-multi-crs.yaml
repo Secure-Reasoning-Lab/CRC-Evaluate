@@ -8,7 +8,7 @@
 #
 # CLI Override Examples:
 #   --experiment-name my-custom-experiment
-#   --crses atlantis-c,custom-crs
+#   --crses crs-libfuzzer,atlantis-multilang-given_fuzzer
 #   --benchmarks curl-delta-02,libxml2-delta-03
 
 # Experiment identifier for tracking and reporting
@@ -46,9 +46,9 @@ report_filestore: /tmp/crsbench/crsbench/report-data
 # List of CRS implementations to evaluate
 # Each CRS must have configuration in crses/{crs-name}/
 crses:
-  - atlantis-c           # C/C++ focused CRS
-  - atlantis-multilang   # Multi-language CRS
-  - ensemble-c           # Ensemble-based CRS for C
+  - crs-libfuzzer                 # libFuzzer-centric CRS
+  - atlantis-multilang-given_fuzzer   # multi-language CRS (given_fuzzer)
+  - atlantis-multilang-wo-concolic    # multi-language CRS (no concolic)
 
 # Explicit list of benchmarks to evaluate
 # Mix of delta mode (focused on diffs) and full mode (entire codebase)

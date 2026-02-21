@@ -32,34 +32,36 @@ def read_crs_source_from_registry(
     registry_dir: Path,
     crs_name: str,
 ) -> CrsComposeSource:
-    """Read CRS source URL and ref from registry pkg.yaml.
+    """Read CRS source URL and ref from registry entry.
 
-    Follows the same pattern as ``get_crs_type()`` in
-    ``crsbench/distributed/jobs.py``.
+    Expected registry layout:
+    ``<registry_dir>/<crs_name>.yaml`` (oss-crs format)
 
     Args:
         registry_dir: Path to CRS registry directory.
         crs_name: Name of the CRS to look up.
 
     Returns:
-        CrsComposeSource with url and ref populated from pkg.yaml.
+        CrsComposeSource with url and ref populated from registry entry.
 
     Raises:
-        FileNotFoundError: If pkg.yaml does not exist.
-        ValueError: If the ``source`` key is missing from pkg.yaml.
+        FileNotFoundError: If registry entry does not exist.
+        ValueError: If the ``source`` key is missing from registry entry.
     """
-    pkg_yaml_path = registry_dir / crs_name / "pkg.yaml"
-
-    if not pkg_yaml_path.exists():
-        msg = f"CRS package file not found: {pkg_yaml_path}"
+    oss_crs_yaml = registry_dir / f"{crs_name}.yaml"
+    if not oss_crs_yaml.exists():
+        msg = (
+            f"CRS registry entry not found for '{crs_name}' in {registry_dir}. "
+            f"Expected: {oss_crs_yaml}"
+        )
         raise FileNotFoundError(msg)
 
-    with pkg_yaml_path.open("r") as f:
+    with oss_crs_yaml.open("r") as f:
         pkg_data = yaml.safe_load(f)
 
     source = pkg_data.get("source")
     if not source:
-        msg = f"'source' key not found in {pkg_yaml_path}"
+        msg = f"'source' key not found in {oss_crs_yaml}"
         raise ValueError(msg)
 
     return CrsComposeSource(

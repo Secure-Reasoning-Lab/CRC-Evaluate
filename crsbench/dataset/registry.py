@@ -20,8 +20,6 @@ class DatasetConfig:
     prefixes: list[str] = field(default_factory=list)
     # HF repo type (only for huggingface backend)
     repo_type: str = "dataset"
-    # Optional: directory containing dataset card files (README.md, etc.)
-    cards_dir: Optional[str] = None
 
 
 # Central registry: dataset short name -> config
@@ -31,7 +29,6 @@ DATASET_REGISTRY: dict[str, DatasetConfig] = {
         location="sslab-gatech/crsbench-dataset",
         prefixes=["atlanta-", "sanity-", "afc-", "asc-"],
         repo_type="dataset",
-        cards_dir="dataset-cards",
     ),
 }
 

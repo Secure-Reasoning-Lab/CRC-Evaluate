@@ -149,7 +149,7 @@ worker:
   redis_host: localhost  # default: "localhost"
 
   # Run continuously or exit when queue is empty.
-  continuous: true  # default: true
+  continuous: true  # default: false
 
   # Minimum free disk space required to accept new jobs.
   # Possible values: "200GB" | "100MB" | "1TB" | etc.
@@ -173,7 +173,7 @@ worker:
   # oss_fuzz_path: /opt/oss-fuzz
 
   # Override CRS registry directory.
-  # registry_dir: /opt/crses/registry
+  # registry_dir: /opt/oss-crs/registry
 
   # Override CRS configs directory.
   # crs_configs_dir: /opt/crses/configs
@@ -215,7 +215,7 @@ worker:
 oss_fuzz_path: ./oss-fuzz  # default: ./oss-fuzz
 
 # Path to CRS registry directory.
-# registry_dir: ./crses/registry  # default: ./crses/registry
+# registry_dir: ./oss-crs/registry  # default: ./oss-crs/registry
 
 # Path to CRS configs directory.
 # crs_configs_dir: ./crses/configs  # default: ./crses/configs
@@ -257,6 +257,10 @@ coverage_early_stop: false  # default: false
 
 # Terminate trial early when all CPVs for harness are found.
 pov_early_stop: false  # default: false
+
+# POV deduplication strategy before verification/reporting.
+# Possible values: "patch-based" | "stack-based" | "status-based" | "none"
+pov_dedup_strategy: patch-based  # default: patch-based
 
 # Number of parallel workers for building variants. (>= 1)
 # build_workers: 4  # default: 4
