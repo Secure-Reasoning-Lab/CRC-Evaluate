@@ -52,13 +52,8 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         ],
         help="Build POV variants only (no verification, no patch builds)",
     )
-    # Override defaults specific to build command:
-    # - force_rebuild=False: build relies on Docker cache by default
-    # - no_inc_build=True: build uses full-build by default (inc disabled)
-    parser.set_defaults(
-        force_rebuild=False,
-        no_inc_build=True,
-    )
+    # Override: build relies on Docker cache by default
+    parser.set_defaults(force_rebuild=False)
     parser.set_defaults(ci_func=run_build)
 
 
@@ -139,7 +134,7 @@ def run_build(args: argparse.Namespace) -> int:
     )
 
     source_mode = getattr(args, "source", "pkgs")
-    use_inc_build = not getattr(args, "no_inc_build", True)
+    use_inc_build = getattr(args, "inc_build", False)
     force_rebuild = getattr(args, "force_rebuild", False)
     distributed = getattr(args, "distributed", False)
     redis_host = getattr(args, "redis_host", "localhost")

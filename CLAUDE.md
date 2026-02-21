@@ -581,30 +581,41 @@ After installation, run it using:
 # Or as a Python module
 python -m crsbench.run_experiment --help
 
-# Example with arguments
-.venv/bin/crsbench \
+# Example: benchmarks, crses, etc. are configured in the experiment config YAML
+.venv/bin/crsbench run \
   --experiment-config config.yaml \
-  --benchmarks bench1,bench2 \
-  --experiment-name test-exp \
-  --crses atlantis-c,atlantis-multilang
+  --experiment-name test-exp
 ```
 
 ### Testing argument parsing
 ```bash
-# Create test config
-echo "trials: 1" > /tmp/test-config.yaml
+# Create test config (benchmarks, crses, mode, etc. go in the YAML)
+cat > /tmp/test-config.yaml <<EOF
+experiment: test
+trials: 1
+crses:
+  - crs1
+  - crs2
+benchmarks:
+  - bench1
+  - bench2
+EOF
 
 # Test with sample arguments
-python crsbench/run_experiment.py \
+python crsbench/run_experiment.py run \
   --experiment-config /tmp/test-config.yaml \
-  --benchmarks bench1,bench2 \
-  --experiment-name test \
-  --crses crs1,crs2
+  --experiment-name test
 ```
 
 ## Worker Override Pattern (Distributed Execution)
 
-When adding new configuration fields that need worker-level overrides in distributed mode:
+In distributed mode, the orchestrator serializes the full `ExperimentConfig`
+into each Redis job. Workers on different machines deserialize it, but paths
+may not match the worker's filesystem. The `worker:` section in the experiment
+YAML provides machine-specific overrides that are applied automatically via
+`_apply_worker_overrides()` in `crsbench/distributed/jobs.py`.
+
+When adding new configuration fields that need worker-level overrides:
 
 1. **Add field to `WorkerConfig` schema** (in `crsbench/validation/schemas.py`):
    ```python
@@ -615,26 +626,19 @@ When adding new configuration fields that need worker-level overrides in distrib
        )
    ```
 
-2. **Add to override_fields list** (in `crsbench/distributed/cli/worker_command.py`):
+2. **Add field to the appropriate list in `_apply_worker_overrides()`** (in `crsbench/distributed/jobs.py`):
    ```python
-   override_fields = [
-       # ... existing fields ...
-       "new_field",  # Add new field here
-   ]
+   # For Path fields:
+   path_fields = [..., "new_field"]
+   # For int fields:
+   int_fields = [..., "new_field"]
+   # For bool fields:
+   bool_fields = [..., "new_field"]
    ```
 
-3. **Apply override in job execution** (in `crsbench/distributed/jobs.py`, in `run_crs_trial()`):
-   ```python
-   new_field_override = get_worker_override("new_field")
-   if new_field_override:
-       config.new_field = Path(new_field_override).resolve()  # or appropriate type conversion
-       logger.info(f"Worker override applied: new_field = {config.new_field}")
-   ```
-
-**Pattern locations to remember:**
+**Pattern locations:**
 - Schema: `crsbench/validation/schemas.py` (WorkerConfig class)
-- Override list: `crsbench/distributed/cli/worker_command.py` (override_fields)
-- Application: `crsbench/distributed/jobs.py` (run_crs_trial function)
+- Application: `crsbench/distributed/jobs.py` (`_apply_worker_overrides` function)
 
 ## Other instructions
 - read TODO.md in the new session.

@@ -8,7 +8,6 @@ for fine-grained parallelism across evaluator workers.
 """
 
 import base64
-import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,14 +17,25 @@ from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Module-level benchmarks root (set by evaluator at startup, inherited by forked jobs)
+_benchmarks_root: Path = Path("benchmarks")
+
+
+def set_benchmarks_root(path: Path) -> None:
+    """Set the benchmarks root directory for evaluator jobs.
+
+    Called by the evaluator at startup. Inherited by forked job processes.
+
+    Args:
+        path: Path to the benchmarks root directory
+    """
+    global _benchmarks_root  # noqa: PLW0603
+    _benchmarks_root = path
+
 
 def get_evaluator_benchmarks_root() -> Path:
-    """Return the benchmarks root directory for the evaluator.
-
-    Reads from ``CRSBENCH_EVALUATOR_BENCHMARKS_ROOT`` env var,
-    defaulting to ``benchmarks`` (relative to cwd).
-    """
-    return Path(os.environ.get("CRSBENCH_EVALUATOR_BENCHMARKS_ROOT", "benchmarks"))
+    """Return the benchmarks root directory for the evaluator."""
+    return _benchmarks_root
 
 
 def resolve_benchmark_path(benchmarks_root: Path, benchmark_name: str) -> Path:

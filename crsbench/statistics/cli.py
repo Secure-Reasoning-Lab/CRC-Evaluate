@@ -33,7 +33,7 @@ def add_stats_subparser(subparsers: argparse._SubParsersAction) -> None:
 Examples:
   crsbench stats --summary-only
   crsbench stats --output benchmarks.csv
-  crsbench stats --benchmarks atlanta-curl-delta-01,afc-libxml2-delta-01
+  crsbench stats --benchmarks atlanta-curl-delta-01 afc-libxml2-delta-01
         """,
     )
 
@@ -47,7 +47,8 @@ Examples:
     parser.add_argument(
         "--benchmarks",
         type=str,
-        help="Comma-separated list of specific benchmark names to process",
+        nargs="+",
+        help="Specific benchmark names to process",
     )
 
     parser.add_argument(
@@ -91,9 +92,7 @@ def run_stats(args: argparse.Namespace) -> int:
     configure_logger(level=level)
 
     # Parse specific benchmarks
-    specific_benchmarks = None
-    if args.benchmarks:
-        specific_benchmarks = [b.strip() for b in args.benchmarks.split(",")]
+    specific_benchmarks = args.benchmarks
 
     # Get benchmarks directory (auto-detect if not specified)
     benchmarks_dir = args.benchmarks_dir or get_default_benchmarks_dir()
@@ -138,7 +137,7 @@ Examples:
 
   # Export specific benchmarks
   python -m crsbench.statistics.cli \\
-    --benchmarks atlanta-curl-delta-01,afc-libxml2-delta-01 \\
+    --benchmarks atlanta-curl-delta-01 afc-libxml2-delta-01 \\
     --output selected.csv
 
   # Summary only (no CSV export)
@@ -156,7 +155,8 @@ Examples:
     parser.add_argument(
         "--benchmarks",
         type=str,
-        help="Comma-separated list of specific benchmark names to process",
+        nargs="+",
+        help="Specific benchmark names to process",
     )
 
     parser.add_argument(

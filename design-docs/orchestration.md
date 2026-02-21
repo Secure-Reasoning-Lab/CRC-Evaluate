@@ -16,27 +16,25 @@ The orchestration module provides:
 ### Command Flow
 
 ```
-User runs: crsbench --experiment-config config.yaml
+User runs: crsbench run --experiment-config config.yaml
 
     ↓
 1. Parse CLI Arguments
     ├── --experiment-config (required)
     ├── --experiment-name (optional override)
-    ├── --crses (optional override)
-    ├── --benchmarks (optional override)
-    ├── --benchmark-suite (optional override)
-    └── --local-only (optional flag)
+    ├── --local-only (optional flag)
+    ├── --distributed (optional flag)
+    └── --dry-run, --verbose
     ↓
 2. Load & Validate Config
     └── Load experiment-config.yaml
     └── Validate with ExperimentConfig schema
     └── Exit if invalid
     ↓
-3. Resolve Parameters (CLI overrides config)
+3. Resolve Parameters (all from config)
     ├── experiment_name: CLI --experiment-name > config.experiment
-    ├── crses: CLI --crses > config.crses
-    └── benchmarks: CLI --benchmarks > CLI --benchmark-suite >
-                    config.benchmarks > config.benchmark_suite
+    ├── crses: config.crses
+    └── benchmarks: config.benchmarks or config.benchmark_suite
     ↓
 4. Generate Trial Matrix
     └── trials = crses × benchmarks × config.trials
@@ -72,86 +70,67 @@ uv pip install -e .
 ### Command Signature
 
 ```bash
-crsbench \
+crsbench run \
   --experiment-config CONFIG_FILE \
   [--experiment-name EXPERIMENT_NAME] \
-  [--crses CRS_LIST] \
-  [--benchmarks BENCHMARK_LIST] \
-  [--benchmark-suite SUITE_NAME] \
-  [--local-only]
+  [--local-only] \
+  [--distributed] \
+  [--dry-run] \
+  [--verbose]
 ```
 
-**Key Design Decision**: All arguments except `--experiment-config` are optional, allowing the config file to be the source of truth with CLI providing overrides.
+**Key Design Decision**: The experiment config YAML is the source of truth for benchmarks, CRSes, mode, paths, and other experiment settings. The CLI provides only execution-control flags.
 
 ### Arguments
 
 | Argument | Required | Type | Description |
 |----------|----------|------|-------------|
-| `--experiment-config` | ✅ Yes | Path | Path to experiment YAML config |
-| `--experiment-name` | ❌ No | String | Override experiment identifier |
-| `--crses` | ❌ No | CSV List | Override CRS list |
-| `--benchmarks` | ❌ No | CSV List | Override benchmark list |
-| `--benchmark-suite` | ❌ No | String | Override with suite name |
-| `--local-only` | ❌ No | Flag | Force local execution |
+| `--experiment-config` | Yes | Path | Path to experiment YAML config |
+| `--experiment-name` | No | String | Override experiment identifier |
+| `--local-only` | No | Flag | Force local execution |
+| `--distributed` | No | Flag | Force distributed execution |
+| `--dry-run` | No | Flag | Show what would run without executing |
+| `--verbose` / `-v` | No | Flag | Enable verbose output |
 
-**Mutual Exclusivity**: Cannot specify both `--benchmarks` and `--benchmark-suite`
+Benchmarks, CRSes, benchmark suites, mode, paths, hint settings, and all other experiment parameters are specified in the experiment config YAML.
 
 ### Usage Examples
 
-**Minimal usage (all from config):**
+**Minimal usage (benchmarks, crses, etc. configured in YAML):**
 ```bash
-crsbench --experiment-config my-experiment.yaml
+crsbench run --experiment-config my-experiment.yaml
 ```
 
 **Override experiment name:**
 ```bash
-crsbench --experiment-config config.yaml \
-         --experiment-name test-run-v2
-```
-
-**Override CRS list:**
-```bash
-crsbench --experiment-config config.yaml \
-         --crses custom-crs1,custom-crs2
-```
-
-**Override benchmarks with direct list:**
-```bash
-crsbench --experiment-config config.yaml \
-         --benchmarks bench1,bench2,bench3
-```
-
-**Override benchmarks with suite:**
-```bash
-crsbench --experiment-config config.yaml \
-         --benchmark-suite crsbench-afc-jvm
+crsbench run --experiment-config config.yaml \
+             --experiment-name test-run-v2
 ```
 
 **Force local execution:**
 ```bash
-crsbench --experiment-config config.yaml \
-         --local-only
+crsbench run --experiment-config config.yaml \
+             --local-only
+```
+
+**Dry run (show what would execute):**
+```bash
+crsbench run --experiment-config config.yaml \
+             --dry-run
 ```
 
 ## Configuration Resolution
 
-### Override Priority
+### Resolution Priority
 
-The orchestration layer implements a clear priority system:
+The orchestration layer reads experiment parameters from the config YAML. Only `experiment_name` can be overridden from the CLI.
 
 **For `experiment_name`:**
 1. CLI `--experiment-name` (highest priority)
 2. Config `experiment` field
 
-**For `crses`:**
-1. CLI `--crses` (highest priority)
-2. Config `crses` field
-
-**For `benchmarks`:**
-1. CLI `--benchmarks` (highest priority)
-2. CLI `--benchmark-suite`
-3. Config `benchmarks` field
-4. Config `benchmark_suite` field
+**For `crses`, `benchmarks`, `benchmark_suite`, and all other settings:**
+- Config YAML only (no CLI override)
 
 ### Resolution Logic
 
@@ -163,43 +142,17 @@ def main():
     # Load config
     config = load_experiment_config(args.experiment_config)
 
-    # Resolve experiment name
+    # Resolve experiment name (only CLI override)
     experiment_name = args.experiment_name if args.experiment_name else config.experiment
 
-    # Resolve CRSes
-    if args.crses:
-        crses = parse_list_argument(args.crses)  # CLI override
-    else:
-        crses = config.crses  # From config
+    # CRSes from config
+    crses = config.crses
 
-    # Resolve benchmarks
-    if args.benchmarks and args.benchmark_suite:
-        # Error: mutually exclusive
-        sys.exit(1)
-    elif args.benchmarks:
-        benchmarks = parse_list_argument(args.benchmarks)  # CLI --benchmarks
-    elif args.benchmark_suite:
-        benchmarks = load_suite(args.benchmark_suite)  # CLI --benchmark-suite
-    else:
-        benchmarks = config.get_benchmark_list()  # From config
+    # Benchmarks from config (benchmarks list or benchmark_suite)
+    benchmarks = config.get_benchmark_list()
 ```
 
-**Design Decision**: CLI arguments always override config values, never merge. This provides predictable behavior and avoids confusion.
-
-### Logging Override Information
-
-When an override is used, the orchestrator logs it clearly:
-
-```
-Experiment name: test-run-v2
-  (overridden from CLI, config has: original-experiment)
-CRSes (2): custom-crs1, custom-crs2
-  (overridden from CLI, config has: atlantis-c, atlantis-multilang)
-Benchmarks (3): bench1, bench2, bench3
-  (overridden from CLI --benchmarks)
-```
-
-This transparency helps users understand exactly what configuration is being used.
+**Design Decision**: Benchmarks, CRSes, and other experiment parameters are config-only. This keeps the CLI simple and makes experiment configs self-contained and reproducible.
 
 ## Trial Matrix Generation
 
@@ -463,16 +416,15 @@ if not result.is_valid:
     sys.exit(1)
 ```
 
-**Mutual exclusivity violation:**
+**Mutual exclusivity in config:**
 ```python
-if args.benchmarks and args.benchmark_suite:
-    logger.error("Cannot specify both --benchmarks and --benchmark-suite")
-    sys.exit(1)
+# Validated by ExperimentConfig schema
+# Cannot specify both benchmarks and benchmark_suite in YAML
 ```
 
 **Missing benchmark suite:**
 ```python
-suite_path = Path("benchmark-suites") / f"{args.benchmark_suite}.yaml"
+suite_path = Path("benchmark-suites") / f"{config.benchmark_suite}.yaml"
 if not suite_path.exists():
     logger.error(f"Benchmark suite file not found: {suite_path}")
     sys.exit(1)
@@ -545,34 +497,19 @@ result = run_crs_trial(
 
 ## Design Decisions
 
-### Why Optional CLI Arguments?
+### Why Config-Only for Experiment Parameters?
 
-**Problem**: Original design required `--experiment-name` and `--crses` on CLI, duplicating config.
+**Problem**: Having 23+ CLI flags duplicated settings from the config YAML, creating confusion about which source of truth was active.
 
-**Solution**: Make all CLI args optional, use config as source of truth.
+**Solution**: Remove CLI overrides for experiment parameters (benchmarks, CRSes, mode, paths, hints, etc.). The config YAML is the single source of truth. Only execution-control flags remain on the CLI.
 
 **Benefits**:
-- Cleaner command line for standard runs
-- Config file contains complete experiment definition
-- CLI provides convenient overrides for testing
+- Simple, predictable CLI with only 9 flags
+- Config file is self-contained and reproducible
+- No ambiguity about which values are active
 - Consistent with infrastructure-as-code practices
 
-**Trade-off**: Slightly more complex resolution logic, but much better UX.
-
-### Why Priority-Based Resolution?
-
-**Problem**: Need clear rules for when CLI overrides config.
-
-**Solution**: Simple priority system: CLI always wins.
-
-**Benefits**:
-- Predictable behavior
-- No ambiguity
-- Easy to understand and explain
-- No merging complexity
-
-**Alternative Considered**: Merge CLI and config values
-**Rejected Because**: Unpredictable results, hard to reason about
+**Trade-off**: Cannot do quick ad-hoc overrides from CLI, but this was rarely needed and caused confusion.
 
 ### Why Automatic Mode Selection?
 
@@ -652,10 +589,6 @@ result = run_crs_trial(
 
 Test individual functions:
 ```python
-def test_parse_list_argument():
-    assert parse_list_argument("a,b,c") == ["a", "b", "c"]
-    assert parse_list_argument(" a , b , c ") == ["a", "b", "c"]
-
 def test_generate_trial_matrix():
     config = Mock(trials=2)
     trials = generate_trial_matrix(["b1", "b2"], ["c1"], config)
@@ -701,29 +634,35 @@ def test_run_experiment_local_mode(tmp_path):
 
 **Wrong**:
 ```bash
-crsbench --experiment-name test
+crsbench run --experiment-name test
 ```
 
 **Right**:
 ```bash
-crsbench --experiment-config config.yaml
+crsbench run --experiment-config config.yaml
 ```
 
-### 2. Specifying Both Benchmark Methods
+### 2. Trying to Override Benchmarks/CRSes from CLI
 
-**Wrong**:
+**Wrong** (these flags no longer exist on `crsbench run`):
 ```bash
-crsbench --experiment-config config.yaml \
-         --benchmarks bench1,bench2 \
-         --benchmark-suite crsbench-afc-c  # Error!
+crsbench run --experiment-config config.yaml \
+             --benchmarks bench1 bench2 \
+             --crses crs1,crs2
 ```
 
-**Right**:
+**Right** (specify in config YAML):
+```yaml
+# config.yaml
+benchmarks:
+  - bench1
+  - bench2
+crses:
+  - crs1
+  - crs2
+```
 ```bash
-# Choose one
-crsbench --experiment-config config.yaml --benchmarks bench1,bench2
-# OR
-crsbench --experiment-config config.yaml --benchmark-suite crsbench-afc-c
+crsbench run --experiment-config config.yaml
 ```
 
 ### 3. Assuming Distributed Mode

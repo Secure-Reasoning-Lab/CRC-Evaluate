@@ -54,7 +54,7 @@ fi
 
 sleep 3
 
-.venv/bin/crsbench run --experiment-config "$CONFIG_FILE" --queue-mode fresh
+.venv/bin/crsbench run --experiment-config "$CONFIG_FILE" --distributed
 
 echo "Experiment complete."
 

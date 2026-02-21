@@ -38,12 +38,12 @@ class TestAddReevalSubparser:
         add_reeval_subparser(subparsers)
 
         args = parser.parse_args(["re-eval", "-c", "/tmp/config.yaml"])
-        assert args.oss_fuzz is None
+        assert args.oss_fuzz_path is None
         assert args.source == "pkgs"
         assert args.build_workers is None
         assert args.verify_workers is None
         assert args.force_rebuild is False
-        assert args.no_inc_build is False
+        assert args.inc_build is False
         assert args.output is None
         assert args.verbose is False
 
@@ -58,7 +58,7 @@ class TestAddReevalSubparser:
                 "re-eval",
                 "-c",
                 "/tmp/config.yaml",
-                "--oss-fuzz",
+                "--oss-fuzz-path",
                 "/opt/oss-fuzz",
                 "--source",
                 "pkgs",
@@ -67,18 +67,18 @@ class TestAddReevalSubparser:
                 "--verify-workers",
                 "8",
                 "--force-rebuild",
-                "--no-inc-build",
+                "--inc-build",
                 "--output",
                 "/tmp/out",
                 "-v",
             ]
         )
-        assert args.oss_fuzz == Path("/opt/oss-fuzz")
+        assert args.oss_fuzz_path == Path("/opt/oss-fuzz")
         assert args.source == "pkgs"
         assert args.build_workers == 4
         assert args.verify_workers == 8
         assert args.force_rebuild is True
-        assert args.no_inc_build is True
+        assert args.inc_build is True
         assert args.output == Path("/tmp/out")
         assert args.verbose is True
 
@@ -219,12 +219,12 @@ class TestRunReeval:
         """Create a Namespace matching CLI args."""
         return argparse.Namespace(
             experiment_config=config_path,
-            oss_fuzz=oss_fuzz,
+            oss_fuzz_path=oss_fuzz,
             source="main_repo",
             build_workers=None,
             verify_workers=None,
             force_rebuild=False,
-            no_inc_build=False,
+            inc_build=False,
             per_pov_verify_timeout=None,
             output=output,
             verbose=False,

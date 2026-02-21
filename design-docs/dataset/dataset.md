@@ -122,7 +122,7 @@ No changes needed to CLI, download.py, or upload.py.
 ### 2.5 Benchmark Suite Integration
 
 Download supports the same benchmark suite YAML files used by
-`crsbench run --benchmark-suite`:
+`crsbench run` (configured via `benchmark_suite` in the experiment config YAML):
 
 ```bash
 crsbench download --benchmark-suite afc-all

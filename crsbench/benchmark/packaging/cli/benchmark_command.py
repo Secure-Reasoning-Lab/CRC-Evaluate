@@ -367,6 +367,7 @@ Available datasets: {dataset_names}
 
 Examples:
   %(prog)s --dataset crsbench
+  %(prog)s --dataset crsbench --benchmarks afc-curl-delta-01 afc-curl-delta-02
   %(prog)s --dataset crsbench --dry-run
   %(prog)s --dataset crsbench --benchmarks-dir ./benchmarks
         """,
@@ -385,14 +386,22 @@ Examples:
         help="Path to benchmarks directory (default: benchmarks/)",
     )
     upload_parser.add_argument(
+        "--benchmarks",
+        nargs="+",
+        type=str,
+        default=None,
+        help="Specific benchmark names to upload (e.g., afc-curl-delta-01)",
+    )
+    upload_parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Only list what would be uploaded, don't actually upload",
     )
     upload_parser.add_argument(
-        "--debug",
+        "--verbose",
+        "-v",
         action="store_true",
-        help="Enable debug logging",
+        help="Enable verbose/debug logging",
     )
     upload_parser.set_defaults(func=handle_upload)
 
@@ -401,7 +410,10 @@ Examples:
 
 def handle_benchmark_help(_args: argparse.Namespace) -> int:
     """Handle benchmark command without subcommand."""
-    logger.error("Please specify a subcommand: validate, bundle, or prepare-delta")
+    logger.error(
+        "Please specify a subcommand. "
+        "Run 'crsbench benchmark --help' for available subcommands."
+    )
     return 1
 
 
@@ -1023,17 +1035,22 @@ def handle_upload(args: argparse.Namespace) -> int:
     """Handle 'crsbench benchmark upload' command."""
     from crsbench.utils.logger import configure_logger
 
-    if hasattr(args, "debug") and args.debug:
+    if hasattr(args, "verbose") and args.verbose:
         configure_logger(level="DEBUG")
 
     from crsbench.dataset.upload import upload_dataset
 
-    upload_dataset(
-        args.dataset,
-        args.benchmarks_dir,
-        dry_run=args.dry_run,
-    )
-    return 0
+    try:
+        upload_dataset(
+            args.dataset,
+            args.benchmarks_dir,
+            benchmarks=args.benchmarks,
+            dry_run=args.dry_run,
+        )
+        return 0
+    except Exception as e:
+        logger.error(f"Upload failed: {e}")
+        return 1
 
 
 def run_benchmark_command(args: argparse.Namespace) -> int:

@@ -121,7 +121,7 @@ scp .env user@worker:/path/to/CRSBench/.env
 python scripts/valkey-helper.py start
 
 # Test
-crsbench --experiment-config config.yaml --experiment-name quick-test ...
+crsbench run --experiment-config config.yaml --experiment-name quick-test ...
 
 # Cleanup
 python scripts/valkey-helper.py clean quick-test

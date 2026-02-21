@@ -177,49 +177,7 @@ def run_worker(args: argparse.Namespace) -> int:
     # Trial queue name
     queue_name = f"crsbench_{experiment_name}"
 
-    # Set worker override environment variables
-    if worker_config:
-        override_fields = [
-            "oss_fuzz_path",
-            "registry_dir",
-            "crs_configs_dir",
-            "build_workers",
-            "verify_workers",
-            "benchmarks_root",
-            "benchmark_suites_root",
-            "experiment_filestore",
-            "report_filestore",
-            "keep_only_results",
-            "cleanup_after_trial",
-            "copy_results_after_trial",
-            "results_filestore",
-            "minimum_disk_size",
-            "disk_check_interval",
-            "skip_cpus",
-            "shared_cpus",
-            "cores",
-        ]
-        for field in override_fields:
-            value = getattr(worker_config, field, None)
-            if value is not None:
-                env_var = f"CRSBENCH_WORKER_{field.upper()}"
-                os.environ[env_var] = str(value)
-                logger.info(f"Worker override: {field} = {value}")
-
-    # Export experiment_filestore from main config if worker didn't override it
-    if (
-        args.experiment_config
-        and config is not None
-        and "CRSBENCH_WORKER_EXPERIMENT_FILESTORE" not in os.environ
-    ):
-        experiment_filestore = config.experiment_filestore
-        if experiment_filestore:
-            os.environ["CRSBENCH_WORKER_EXPERIMENT_FILESTORE"] = str(
-                experiment_filestore
-            )
-            logger.info(f"Experiment filestore: {experiment_filestore}")
-
-    # Export experiment name for worker logging
+    # Export experiment name for worker logging (internal operational env var)
     os.environ["CRSBENCH_EXPERIMENT_NAME"] = experiment_name
 
     # Validate --no-cpuset with multiple workers

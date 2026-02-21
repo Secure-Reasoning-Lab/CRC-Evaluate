@@ -145,11 +145,10 @@ done
 ### Run Experiment from Host
 
 ```bash
-crsbench \
+# benchmarks, crses, and other settings are configured in config.yaml
+crsbench run \
   --experiment-config config.yaml \
-  --experiment-name my-experiment \
-  --benchmarks bench1,bench2 \
-  --crses crs1,crs2
+  --experiment-name my-experiment
 ```
 
 The experiment will automatically connect to Valkey at `localhost:6379`.

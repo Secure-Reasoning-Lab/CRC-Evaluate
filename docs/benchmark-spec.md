@@ -905,18 +905,14 @@ The benchmark provides a comprehensive framework for running CRS evaluations wit
 A single entry point for running experiments:
 
 ```sh
-$ crsbench \
+$ crsbench run \
   --experiment-config <CONFIG_FILE: e.g. experiment-config.yaml> \
-  --benchmarks <BENCHMARK: list of benchmarks or group of benchmark> \
-  --experiment-name <EXPERIMENT_NAME> \
-  --crses <CRS_LIST: list of crses. e.g atlantis-c, atlantis-multilang>
+  --experiment-name <EXPERIMENT_NAME>
 ```
 
-The user can specify:
-- Experiment configuration file
-- Target benchmarks or benchmark suites
-- Experiment name for tracking and reporting
-- List of CRS implementations to evaluate
+Benchmarks, CRSes, and other experiment settings are specified in the experiment
+configuration YAML file. The CLI provides a small set of flags for execution
+control (e.g., `--dry-run`, `--local-only`, `--distributed`).
 
 ### Experiment Configuration File
 
@@ -971,7 +967,7 @@ crses/[crs-name]/
 A benchmark suite is a collection of benchmarks grouped for experimental convenience:
 
 - Used to evaluate CRS for specific languages, input formats, and more
-- Users can select the suite through the --benchmarks option of run_experiment.py
+- Users can select the suite through the `benchmark_suite` field in the experiment config YAML
 
 ```yaml
 # Name of the benchmark suite.

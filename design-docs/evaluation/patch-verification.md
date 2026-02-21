@@ -176,7 +176,7 @@ Inc-Build Image (pre-built)
 
 **Fallback behavior:**
 - If inc-build image not available, falls back to standard OSS-Fuzz build
-- Use `--no-inc-build` to force standard build (useful for debugging)
+- Use `--inc-build` to enable incremental build (full build is default)
 
 ## Build Caching
 
@@ -221,10 +221,10 @@ crsbench patch-verify benchmarks/project \
 ### Advanced Options
 
 ```bash
-# Force rebuild, disable inc-build
+# Force rebuild, enable inc-build
 crsbench patch-verify benchmarks/project \
     --force-rebuild \
-    --no-inc-build
+    --inc-build
 
 # Parallel workers
 crsbench patch-verify benchmarks/project \
@@ -257,7 +257,7 @@ crsbench patch-verify benchmarks/project \
 | `--no-parallel` | Disable parallel patch verification | No |
 | `--no-variants` | Disable POV variant verification | No |
 | `--force-rebuild` | Force rebuild even if cached | No |
-| `--no-inc-build` | Disable incremental builds | No |
+| `--inc-build` | Enable incremental builds (full build is default) | No |
 | `--output` | Output file path | No |
 | `--format` | Output format (`json`, `yaml`, `text`) | No (default: `text`) |
 

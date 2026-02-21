@@ -6,6 +6,7 @@ This ensures consistent argument definitions across all subcommands.
 """
 
 import argparse
+from pathlib import Path
 
 
 def create_benchmark_selection_parent() -> argparse.ArgumentParser:
@@ -13,7 +14,7 @@ def create_benchmark_selection_parent() -> argparse.ArgumentParser:
 
     Provides:
         benchmark: Positional arg for benchmark path (e.g., "benchmarks/project_name")
-        --benchmarks / -b: Comma-separated list of benchmark names
+        --benchmarks / -b: List of benchmark names (space-separated)
         --benchmark-suite / -s: Load benchmarks from a suite file
         --all: Run against all benchmarks
         --filter / -f: Glob pattern to filter benchmarks
@@ -29,7 +30,8 @@ def create_benchmark_selection_parent() -> argparse.ArgumentParser:
         "--benchmarks",
         "-b",
         type=str,
-        help="Comma-separated list of benchmark names (e.g., 'bench1,bench2,bench3')",
+        nargs="+",
+        help="Benchmark names (e.g., bench1 bench2 bench3)",
     )
     parser.add_argument(
         "--benchmark-suite",
@@ -87,9 +89,9 @@ def create_build_options_parent() -> argparse.ArgumentParser:
         help="Exit immediately on first benchmark failure",
     )
     parser.add_argument(
-        "--no-inc-build",
+        "--inc-build",
         action="store_true",
-        help="Force full build instead of incremental build (default uses inc-build)",
+        help="Use incremental build instead of full build",
     )
     parser.add_argument(
         "--force-rebuild",
@@ -108,13 +110,11 @@ def create_build_options_parent() -> argparse.ArgumentParser:
         "--controller-cores",
         type=int,
         default=None,
-        help="CPU cores reserved for controller (monitoring). "
-        "Priority: CLI > CRSBENCH_CONTROLLER_CORES env > config (default: 2)",
+        help="CPU cores reserved for controller (monitoring, default: 2).",
     )
     parser.add_argument(
         "--distributed",
         action="store_true",
-        default=False,
         help="Use Redis workers for execution (default: local sequential)",
     )
     parser.add_argument(
@@ -138,12 +138,12 @@ def create_output_options_parent() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output",
         "-o",
-        type=str,
+        type=Path,
         help="Path to save results JSON",
     )
     parser.add_argument(
         "--output-dir",
-        type=str,
+        type=Path,
         help="Directory for detailed logs",
     )
     parser.add_argument(

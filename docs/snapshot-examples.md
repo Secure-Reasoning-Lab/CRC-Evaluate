@@ -31,7 +31,7 @@ benchmark_suite: crsbench-afc-c
 
 Run experiment:
 ```bash
-crsbench --experiment-config experiment-config.yaml
+crsbench run --experiment-config experiment-config.yaml
 ```
 
 Snapshots will be saved in:

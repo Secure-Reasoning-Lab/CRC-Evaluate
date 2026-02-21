@@ -2173,8 +2173,8 @@ class TestPatchVerifyCLI:
         )
         assert args.force_rebuild is True
 
-    def test_no_inc_build_flag(self, cli_module, temp_dir: Path):
-        """Test --no-inc-build flag."""
+    def test_inc_build_flag(self, cli_module, temp_dir: Path):
+        """Test --inc-build flag."""
         args = cli_module.parse_args(
             [
                 "patch-verify",
@@ -2183,10 +2183,10 @@ class TestPatchVerifyCLI:
                 str(temp_dir / "patches"),
                 "--pov-dir",
                 str(temp_dir / "povs"),
-                "--no-inc-build",
+                "--inc-build",
             ]
         )
-        assert args.no_inc_build is True
+        assert args.inc_build is True
 
     def test_single_patch_with_pov(self, cli_module, temp_dir: Path):
         """Test single patch mode with --pov."""
@@ -2430,7 +2430,7 @@ class TestPatchVerifyCLIValidation:
             pov=temp_dir / "pov.blob",
             pov_dir=None,
             harness="fuzz_test",
-            oss_fuzz=temp_dir / "oss-fuzz",
+            oss_fuzz_path=temp_dir / "oss-fuzz",
             test_mode="full",
             sanitizer="address",
             timeout=120,
@@ -2440,7 +2440,7 @@ class TestPatchVerifyCLIValidation:
             verify_workers=None,
             no_variants=False,
             force_rebuild=False,
-            no_inc_build=False,
+            inc_build=False,
             source="main_repo",
             output=None,
             format="text",
@@ -2464,7 +2464,7 @@ class TestPatchVerifyCLIValidation:
             pov=temp_dir / "nonexistent.blob",
             pov_dir=None,
             harness="fuzz_test",
-            oss_fuzz=temp_dir / "oss-fuzz",
+            oss_fuzz_path=temp_dir / "oss-fuzz",
             test_mode="full",
             sanitizer="address",
             timeout=120,
@@ -2474,7 +2474,7 @@ class TestPatchVerifyCLIValidation:
             verify_workers=None,
             no_variants=False,
             force_rebuild=False,
-            no_inc_build=False,
+            inc_build=False,
             source="main_repo",
             output=None,
             format="text",

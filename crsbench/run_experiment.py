@@ -7,16 +7,13 @@ management.
 
 Usage:
     # Run experiments
-    crsbench run --experiment-config experiment-config.yaml --benchmarks benchmark1
+    crsbench run --experiment-config experiment-config.yaml
 
     # Verify POVs
     crsbench verify benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
 
     # Collect coverage
     crsbench coverage benchmarks/sanity-mock-c-delta-01 --corpus-dir ./corpus/
-
-    # Legacy (backward compatible - runs 'run' subcommand)
-    crsbench --experiment-config experiment-config.yaml --benchmarks benchmark1
 """
 
 import argparse
@@ -42,7 +39,7 @@ from crsbench.distributed.jobs import (
 )
 from crsbench.evaluation.cleanup import cleanup_trial_directory
 from crsbench.evaluation.results import CRSType, TrialResult
-from crsbench.utils import log_progress, log_section, log_summary, set_gitcache
+from crsbench.utils import log_progress, log_section, log_summary
 from crsbench.utils.benchmark_utils import (
     filter_benchmarks_by_mode,
     get_available_modes_for_benchmark,
@@ -190,6 +187,9 @@ class Trial(BaseModel):
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     """Add arguments for the 'run' subcommand.
 
+    All benchmark, CRS, and path configuration belongs in the experiment
+    config YAML.  CLI flags are limited to runtime control only.
+
     Args:
         parser: ArgumentParser to add arguments to
     """
@@ -210,37 +210,16 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--crses",
-        type=str,
-        required=False,
-        metavar="CRS_LIST",
-        help="Comma-separated list of CRS implementations (overrides config file if specified)",
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Enable verbose/debug logging",
     )
 
     parser.add_argument(
-        "--benchmarks",
-        type=str,
-        required=False,
-        metavar="BENCHMARK_LIST",
-        help="Comma-separated list of benchmarks (overrides config file if specified)",
-    )
-
-    parser.add_argument(
-        "--benchmark-suite",
-        type=str,
-        required=False,
-        metavar="SUITE_NAME",
-        help="Benchmark suite name (overrides config file if specified, mutually exclusive with --benchmarks)",
-    )
-
-    parser.add_argument(
-        "--mode",
-        type=str,
-        choices=["delta", "full", "all"],
-        required=False,
-        metavar="MODE",
-        help="Evaluation mode: 'delta' (diff-based), 'full' (complete codebase), or 'all' (run all available modes). "
-        "Overrides config file if specified.",
+        "--dry-run",
+        action="store_true",
+        help="Print trials that would be enqueued without executing them",
     )
 
     parser.add_argument(
@@ -255,232 +234,13 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         help="Force distributed execution mode with Redis (raises error if Redis unavailable)",
     )
 
-    parser.add_argument(
-        "--queue-mode",
-        type=str,
-        choices=["fresh", "continue"],
-        required=False,
-        metavar="MODE",
-        help="Queue mode for distributed execution: 'fresh' purges existing jobs and starts from scratch, "
-        "'continue' resumes from existing state (skips existing trials, retries failed). "
-        "If not specified and stale jobs exist, you will be prompted interactively.",
-    )
-
-    parser.add_argument(
-        "--oss-fuzz-path",
-        type=str,
-        required=False,
-        metavar="OSS_FUZZ_PATH",
-        help="Path to oss-fuzz directory (highest precedence, overrides config file)",
-    )
-
-    parser.add_argument(
-        "--source",
-        type=str,
-        choices=["main_repo", "pkgs"],
-        required=False,
-        metavar="SOURCE_MODE",
-        help="Source mode: 'pkgs' (bundled tarballs, default) or 'main_repo' (git clone). "
-        "Overrides config file if specified.",
-    )
-
-    parser.add_argument(
-        "--registry-dir",
-        type=str,
-        required=False,
-        metavar="REGISTRY_DIR",
-        help="Path to CRS registry directory (highest precedence, overrides config file)",
-    )
-
-    parser.add_argument(
-        "--crs-configs-dir",
-        type=str,
-        required=False,
-        metavar="CRS_CONFIGS_DIR",
-        help="Path to CRS configs directory (highest precedence, overrides config file)",
-    )
-
-    parser.add_argument(
-        "--benchmarks-root",
-        type=str,
-        required=False,
-        metavar="BENCHMARKS_ROOT",
-        help="Path to benchmarks root directory (highest precedence, overrides config file)",
-    )
-
-    parser.add_argument(
-        "--benchmark-suites-root",
-        type=str,
-        required=False,
-        metavar="BENCHMARK_SUITES_ROOT",
-        help="Path to benchmark suites root directory (highest precedence, overrides config file)",
-    )
-
-    parser.add_argument(
-        "--hints-enabled",
-        action="store_true",
-        help="Enable hints for CRS evaluation (overrides config file)",
-    )
-
-    parser.add_argument(
-        "--hint-sarif-level",
-        type=int,
-        choices=[1, 2, 3, 4, 5],
-        required=False,
-        metavar="LEVEL",
-        help="SARIF hint level 1-5 (1=vague, 5=detailed, overrides config file)",
-    )
-
-    parser.add_argument(
-        "--hint-corpus-level",
-        type=int,
-        choices=[1, 2, 3, 4, 5],
-        required=False,
-        metavar="LEVEL",
-        help="Corpus hint level 1-5 (1=minimal, 5=comprehensive, overrides config file) [PLACEHOLDER]",
-    )
-
-    parser.add_argument(
-        "--litellm-mode",
-        type=str,
-        choices=["passthrough", "proxy"],
-        required=False,
-        metavar="MODE",
-        help="LiteLLM mode: 'passthrough' uses external LiteLLM (UPSTREAM_LITELLM_BASE_URL, LITELLM_API_KEY), "
-        "'proxy' uses self-hosted proxy (LITELLM_BASE_URL, LITELLM_MASTER_KEY). "
-        "If not set, CRS deploys its own LiteLLM instance. (overrides config file)",
-    )
-
-    parser.add_argument(
-        "--skip-litellm",
-        action="store_true",
-        default=None,
-        help="Skip LiteLLM/Postgres deployment inside oss-crs containers. "
-        "Use when CRS does not need LLM access. (overrides config file)",
-    )
-
-    parser.add_argument(
-        "--project-image-prefix",
-        type=str,
-        required=False,
-        metavar="PREFIX",
-        help="Docker image prefix for custom project images (default: aixcc-afc). "
-        "Used when building project images locally. (overrides config file)",
-    )
-
-    parser.add_argument(
-        "--gitcache",
-        action="store_true",
-        help="Use gitcache for git clone operations (caches git clones for faster CI/CD)",
-    )
-
-    parser.add_argument(
-        "--build-workers",
-        type=int,
-        required=False,
-        metavar="N",
-        help="Number of parallel workers for building variants (default: 4). "
-        "Priority: CLI > CRSBENCH_BUILD_WORKERS env > config file.",
-    )
-
-    parser.add_argument(
-        "--verify-workers",
-        type=int,
-        required=False,
-        metavar="N",
-        help="Number of parallel workers for POV/patch verification (default: 4). "
-        "Priority: CLI > CRSBENCH_VERIFY_WORKERS env > config file.",
-    )
-
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug logging (logs all commands executed with their working directories)",
-    )
-
-    parser.add_argument(
-        "--only-cpv-harnesses",
-        action="store_true",
-        help="Skip harnesses without CPVs for bug-finding CRS (default: True, this flag is for explicit override). "
-        "Bug-fixing CRS always skips harnesses without CPVs regardless of this flag.",
-    )
-
-    parser.add_argument(
-        "--keep-only-results",
-        action="store_true",
-        help="Delete bulky artifacts after experiment completes, keeping only essential files for reporting",
-    )
-
-    parser.add_argument(
-        "--cleanup-after-trial",
-        action="store_true",
-        help="Delete bulky artifacts after each trial completes",
-    )
-
-    parser.add_argument(
-        "--copy-results-after-trial",
-        action="store_true",
-        help="Copy essential files to results_filestore after each trial completes",
-    )
-
-    parser.add_argument(
-        "--copy-results-to-filestore",
-        action="store_true",
-        help="Enable copying essential files to results_filestore location",
-    )
-
-    parser.add_argument(
-        "--results-filestore",
-        type=str,
-        required=False,
-        metavar="PATH",
-        help="Destination path for copying results (contains experiment-data/ and report-data/)",
-    )
-
-    parser.add_argument(
-        "--split",
-        "-s",
-        type=str,
-        required=False,
-        metavar="A/N",
-        help="Split jobs into N slices and run slice A (1-indexed). "
-        "Format: 'A/N' (e.g., '1/2' for first half, '2/2' for second half)",
-    )
-
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print trials that would be enqueued without executing them",
-    )
-
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments with subcommand support.
 
-    Supports both subcommands and legacy flat arguments for backward compatibility:
-    - crsbench run --experiment-config ...  (new style)
-    - crsbench verify <benchmark> ...         (POV verification)
-    - crsbench --experiment-config ...       (legacy, equivalent to 'run')
-
     Returns:
         Parsed arguments with experiment configuration.
     """
-    # Check for legacy invocation (no subcommand, starts with --)
-    # or verify/coverage/worker/stats subcommand
-    if len(sys.argv) > 1 and sys.argv[1] not in [
-        "run",
-        "verify",
-        "coverage",
-        "worker",
-        "stats",
-        "benchmark",
-        "-h",
-        "--help",
-    ]:
-        # Legacy mode: insert 'run' as default subcommand
-        if sys.argv[1].startswith("-"):
-            sys.argv.insert(1, "run")
-
     parser = argparse.ArgumentParser(
         prog="crsbench",
         description="CRSBench - Cyber Reasoning System Evaluation Framework",
@@ -488,13 +248,10 @@ def parse_arguments() -> argparse.Namespace:
         epilog="""
 Examples:
   # Run CRS experiments
-  %(prog)s run --experiment-config config.yaml --benchmarks bench1 --crses crs1
+  %(prog)s run --experiment-config config.yaml
 
   # Verify POVs against benchmark variants
   %(prog)s verify benchmarks/sanity-mock-c-delta-01 --pov-dir ./povs/
-
-  # Legacy style (equivalent to 'run')
-  %(prog)s --experiment-config config.yaml --benchmarks bench1 --crses crs1
         """,
     )
 
@@ -507,8 +264,9 @@ Examples:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s --experiment-config config.yaml --benchmarks bench1 --crses crs1
-  %(prog)s --experiment-config config.yaml --benchmark-suite crsbench-c
+  %(prog)s --experiment-config config.yaml
+  %(prog)s --experiment-config config.yaml --dry-run
+  %(prog)s --experiment-config config.yaml --distributed
         """,
     )
     _add_run_arguments(run_parser)
@@ -671,108 +429,6 @@ def validate_filestore_permissions(config: ExperimentConfig) -> None:
     logger.info("Filestore permissions verified")
 
 
-def parse_list_argument(arg_value: str) -> List[str]:
-    """Parse comma-separated list argument.
-
-    Args:
-        arg_value: Comma-separated string value
-
-    Returns:
-        List of stripped strings
-    """
-    return [item.strip() for item in arg_value.split(",") if item.strip()]
-
-
-def parse_split_argument(split_arg: str) -> tuple[int, int]:
-    """Parse split argument in A/N format.
-
-    Args:
-        split_arg: Split argument in format "A/N" (e.g., "1/2")
-
-    Returns:
-        Tuple of (slice_index, total_slices) - both 1-indexed
-
-    Raises:
-        ValueError: If split format is invalid
-    """
-    parts = split_arg.split("/")
-    if len(parts) != 2:
-        raise ValueError(f"Invalid split format: {split_arg}. Expected A/N (e.g., 1/2)")
-    try:
-        slice_index = int(parts[0])
-        total_slices = int(parts[1])
-    except ValueError as e:
-        raise ValueError(
-            f"Invalid split format: {split_arg}. A and N must be integers"
-        ) from e
-    if total_slices < 1:
-        raise ValueError(f"Total slices must be >= 1, got {total_slices}")
-    if slice_index < 1 or slice_index > total_slices:
-        raise ValueError(
-            f"Slice index must be between 1 and {total_slices}, got {slice_index}"
-        )
-    return slice_index, total_slices
-
-
-def _calculate_split_start(n: int, slice_index: int, total_slices: int) -> int:
-    """Calculate the starting index for a split slice.
-
-    Args:
-        n: Total number of trials
-        slice_index: 1-indexed slice to return (1 <= slice_index <= total_slices)
-        total_slices: Total number of slices to split into
-
-    Returns:
-        Starting index (0-indexed) for the specified slice
-    """
-    if total_slices == 1:
-        return 0
-
-    base_size = n // total_slices
-    remainder = n % total_slices
-
-    # First 'remainder' slices get (base_size + 1), rest get base_size
-    if slice_index <= remainder:
-        return (slice_index - 1) * (base_size + 1)
-    return remainder * (base_size + 1) + (slice_index - 1 - remainder) * base_size
-
-
-def apply_split_to_trials(
-    trials: List[Trial], slice_index: int, total_slices: int
-) -> List[Trial]:
-    """Split trials into contiguous slices and return the specified slice.
-
-    Uses contiguous ranges for better space locality.
-    Guarantees: union of all slices == original trials (no jobs lost).
-
-    Args:
-        trials: List of Trial objects to split
-        slice_index: 1-indexed slice to return (1 <= slice_index <= total_slices)
-        total_slices: Total number of slices to split into
-
-    Returns:
-        List of trials for the specified slice
-    """
-    if total_slices == 1:
-        return trials
-
-    n = len(trials)
-    # Calculate slice boundaries for even distribution
-    # Slice k gets indices [start_k, end_k) where sizes differ by at most 1
-    base_size = n // total_slices
-    remainder = n % total_slices
-
-    # First 'remainder' slices get (base_size + 1), rest get base_size
-    if slice_index <= remainder:
-        start = (slice_index - 1) * (base_size + 1)
-        end = start + base_size + 1
-    else:
-        start = remainder * (base_size + 1) + (slice_index - 1 - remainder) * base_size
-        end = start + base_size
-
-    return trials[start:end]
-
-
 def load_experiment_config(config_path: Path) -> ExperimentConfig:
     """Load and validate experiment configuration from YAML file.
 
@@ -845,8 +501,6 @@ def resolve_benchmark_harnesses(
             if not meta_yaml_path.exists():
                 raise FileNotFoundError(f"meta.yaml not found: {meta_yaml_path}")
 
-            import yaml
-
             with meta_yaml_path.open() as f:
                 meta_data = yaml.safe_load(f)
 
@@ -888,8 +542,6 @@ def resolve_benchmark_harnesses(
                 )
 
             # Load meta.yaml to get harnesses
-            import yaml
-
             meta_yaml_path = benchmark_path / ".aixcc" / "meta.yaml"
             if not meta_yaml_path.exists():
                 raise FileNotFoundError(f"meta.yaml not found: {meta_yaml_path}")
@@ -1060,8 +712,6 @@ def dump_trial_matrix(
         trials: List of Trial objects
         config: Experiment configuration
     """
-    import json
-
     output_dir = config.experiment_filestore.resolve() / config.experiment
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "trial_matrix.json"
@@ -1297,124 +947,10 @@ def should_use_distributed_mode(
     return True
 
 
-def enhance_config_with_cli_args(
-    config: ExperimentConfig, args: argparse.Namespace
-) -> ExperimentConfig:
-    """Enhance config with CLI arguments (highest precedence).
-
-    CLI arguments override config file values.
-
-    Args:
-        config: Experiment configuration
-        args: Parsed CLI arguments
-
-    Returns:
-        Enhanced experiment configuration
-    """
-    # Collect overrides
-    overrides = {}
-
-    # Override with CLI arguments (highest precedence)
-    if args.oss_fuzz_path:
-        overrides["oss_fuzz_path"] = args.oss_fuzz_path
-        logger.info(f"Using oss-fuzz path from CLI: {args.oss_fuzz_path}")
-
-    if args.registry_dir:
-        overrides["registry_dir"] = args.registry_dir
-        logger.info(f"Using registry directory from CLI: {args.registry_dir}")
-
-    if args.crs_configs_dir:
-        overrides["crs_configs_dir"] = args.crs_configs_dir
-        logger.info(f"Using CRS configs directory from CLI: {args.crs_configs_dir}")
-
-    if args.benchmarks_root:
-        overrides["benchmarks_root"] = args.benchmarks_root
-        logger.info(f"Using benchmarks root from CLI: {args.benchmarks_root}")
-
-    if args.benchmark_suites_root:
-        overrides["benchmark_suites_root"] = args.benchmark_suites_root
-        logger.info(
-            f"Using benchmark suites root from CLI: {args.benchmark_suites_root}"
-        )
-
-    # Mode override
-    if hasattr(args, "mode") and args.mode is not None:
-        overrides["mode"] = args.mode
-        logger.info(f"Using evaluation mode from CLI: {args.mode}")
-
-    # Source mode override
-    if hasattr(args, "source") and args.source is not None:
-        overrides["source_mode"] = args.source
-        logger.info(f"Using source mode from CLI: {args.source}")
-
-    # Hint configuration overrides
-    if args.hints_enabled:
-        overrides["hints_enabled"] = True
-        logger.info("Hints enabled via CLI")
-
-    if args.hint_sarif_level is not None:
-        overrides["hint_sarif_level"] = args.hint_sarif_level
-        logger.info(f"Using SARIF hint level from CLI: {args.hint_sarif_level}")
-
-    if args.hint_corpus_level is not None:
-        overrides["hint_corpus_level"] = args.hint_corpus_level
-        logger.info(f"Using corpus hint level from CLI: {args.hint_corpus_level}")
-
-    # LiteLLM mode override
-    if args.litellm_mode is not None:
-        overrides["litellm_mode"] = args.litellm_mode
-        logger.info(f"Using LiteLLM mode from CLI: {args.litellm_mode}")
-
-    # Skip LiteLLM override
-    if args.skip_litellm is not None:
-        overrides["skip_litellm"] = args.skip_litellm
-        logger.info("Skip LiteLLM enabled via CLI")
-
-    # Project image prefix override
-    if args.project_image_prefix is not None:
-        overrides["project_image_prefix"] = args.project_image_prefix
-        logger.info(f"Using project image prefix from CLI: {args.project_image_prefix}")
-
-    # Build workers override
-    if hasattr(args, "build_workers") and args.build_workers is not None:
-        overrides["build_workers"] = args.build_workers
-        logger.info(f"Using build_workers from CLI: {args.build_workers}")
-
-    # Verify workers override
-    if hasattr(args, "verify_workers") and args.verify_workers is not None:
-        overrides["verify_workers"] = args.verify_workers
-        logger.info(f"Using verify_workers from CLI: {args.verify_workers}")
-
-    # only_cpv_harnesses override
-    if hasattr(args, "only_cpv_harnesses") and args.only_cpv_harnesses:
-        overrides["only_cpv_harnesses"] = True
-        logger.info("Using only_cpv_harnesses=True from CLI")
-
-    # Cleanup configuration overrides
-    if hasattr(args, "keep_only_results") and args.keep_only_results:
-        overrides["keep_only_results"] = True
-        logger.info("Using keep_only_results=True from CLI")
-
-    if hasattr(args, "cleanup_after_trial") and args.cleanup_after_trial:
-        overrides["cleanup_after_trial"] = True
-        logger.info("Using cleanup_after_trial=True from CLI")
-
-    if hasattr(args, "copy_results_after_trial") and args.copy_results_after_trial:
-        overrides["copy_results_after_trial"] = True
-        logger.info("Using copy_results_after_trial=True from CLI")
-
-    if hasattr(args, "results_filestore") and args.results_filestore is not None:
-        overrides["results_filestore"] = args.results_filestore
-        logger.info(f"Using results_filestore from CLI: {args.results_filestore}")
-
-    return config.model_copy(update=overrides)
-
-
 def run_experiment_local(
     experiment_name: str,
     config,
     trials: List[Trial],
-    args: argparse.Namespace,
 ) -> None:
     """Run experiment locally without Redis queue.
 
@@ -1424,7 +960,6 @@ def run_experiment_local(
         experiment_name: Experiment identifier
         config: Experiment configuration
         trials: List of Trial objects to execute
-        args: CLI arguments for config overrides
     """
     log_section("Running CRSBench in Local Mode (No Redis)", width=60)
 
@@ -1454,9 +989,6 @@ def run_experiment_local(
         # Import and execute job directly
         from crsbench.distributed.jobs import run_crs_trial
 
-        # Enhance config with CLI arguments (highest precedence)
-        enhanced_config = enhance_config_with_cli_args(config, args)
-
         # Build trial_id with random suffix
         # Must be lowercase for Docker Compose project name compatibility
         raw_trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{bh.harness.name}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
@@ -1469,7 +1001,7 @@ def run_experiment_local(
             harness_path=bh.harness.path,
             trial_num=trial.trial_num,
             trial_id=trial_id,
-            config_dict=enhanced_config.model_dump(),
+            config_dict=config.model_dump(),
             mode=trial.mode,
             sanitizer=trial.sanitizer,
         )
@@ -2091,7 +1623,6 @@ def run_experiment_distributed(
     experiment_name: str,
     config: ExperimentConfig,
     trials: List[Trial],
-    args: argparse.Namespace,
 ) -> None:
     """Run experiment using Redis queue-based distributed execution.
 
@@ -2099,7 +1630,6 @@ def run_experiment_distributed(
         experiment_name: Experiment identifier
         config: Experiment configuration
         trials: List of Trial objects to execute
-        args: CLI arguments for config overrides
     """
     from crsbench.distributed.queue import initialize_queue
 
@@ -2120,7 +1650,7 @@ def run_experiment_distributed(
         raise RuntimeError(f"Failed to initialize Redis queue at {config.redis_host}")
 
     # Resolve CRS paths with defaults
-    crs_configs_dir = Path(config.crs_configs_dir or "crses/configs").resolve()
+    crs_configs_dir = config.crs_configs_dir.resolve()
 
     # Check for existing jobs in queue (queue sanity check)
     from crsbench.distributed.queue import (
@@ -2133,8 +1663,8 @@ def run_experiment_distributed(
     existing = get_existing_trials(queue)
     has_existing = any(existing.values())
 
-    # Get queue mode from CLI args or prompt if stale jobs exist
-    queue_mode = args.queue_mode if hasattr(args, "queue_mode") else None
+    # Queue mode: prompt if stale jobs exist, default to fresh
+    queue_mode = None
 
     if has_existing and queue_mode is None:
         # Stale jobs exist and no mode specified - prompt user
@@ -2220,15 +1750,12 @@ def run_experiment_distributed(
     # Enqueue jobs
     logger.info("\nEnqueuing jobs...")
 
-    # Enhance config with CLI arguments (highest precedence)
-    enhanced_config = enhance_config_with_cli_args(config, args)
-
     # Extract unique CRS names from trials
     crses = sorted({t.crs for t in trials})
 
     # Get CPU counts for each CRS
     # Priority: experiment config > CRS resource config > default (4)
-    # Note: crs_configs_dir already resolved at line 1490
+    # Note: crs_configs_dir already resolved above
     crs_cpu_counts = {}
     if config.resources and config.resources.cores_per_trial:
         # Use experiment-level resource config (highest priority)
@@ -2291,7 +1818,7 @@ def run_experiment_distributed(
             harness_path=bh.harness.path,
             trial_num=trial.trial_num,
             trial_id=trial_id,
-            config_dict=enhanced_config.model_dump(),
+            config_dict=config.model_dump(),
             mode=trial.mode,
             sanitizer=trial.sanitizer,
             results_timestamp=results_timestamp,
@@ -2562,14 +2089,10 @@ def main() -> None:
 
     # Below is for 'run' command (experiment execution)
 
-    # Set debug logging if requested
-    if hasattr(args, "debug") and args.debug:
+    # Set verbose logging if requested
+    if hasattr(args, "verbose") and args.verbose:
         configure_logger(level="DEBUG")
-        logger.debug("Debug logging enabled")
-
-    # Set gitcache mode
-    if hasattr(args, "gitcache"):
-        set_gitcache(args.gitcache)
+        logger.debug("Verbose logging enabled")
 
     # Validate arguments
     validate_arguments(args)
@@ -2598,76 +2121,22 @@ def main() -> None:
         logger.info(f"  (overridden from CLI, config had: {original_experiment})")
     logger.info(f"Configuration file: {args.experiment_config}")
 
-    # Resolve CRSes (CLI overrides config)
-    if args.crses:
-        crses = parse_list_argument(args.crses)
-        logger.info(f"CRSes ({len(crses)}): {', '.join(crses)}")
-        logger.info(f"  (overridden from CLI, config has: {', '.join(config.crses)})")
-    else:
-        crses = config.crses
-        logger.info(f"CRSes ({len(crses)}): {', '.join(crses)}")
+    # Resolve CRSes from config
+    crses = config.crses
+    logger.info(f"CRSes ({len(crses)}): {', '.join(crses)}")
 
-    # Resolve benchmarks (CLI has highest priority):
-    # --benchmarks > --benchmark-suite > config.benchmarks > config.benchmark_suite
+    # Resolve benchmarks from config
     try:
-        if args.benchmarks and args.benchmark_suite:
-            logger.error("Cannot specify both --benchmarks and --benchmark-suite")
-            sys.exit(1)
-
-        if args.benchmarks:
-            # CLI --benchmarks has highest priority
-            from crsbench.validation.schemas import BenchmarkEntry
-
-            benchmark_names = parse_list_argument(args.benchmarks)
-            # Convert to BenchmarkEntry objects (no harness specified = all harnesses)
-            benchmark_entries = [
-                BenchmarkEntry(name=name, harnesses=None) for name in benchmark_names
-            ]
-            logger.info(
-                f"Benchmarks ({len(benchmark_names)}): {', '.join(benchmark_names)}"
-            )
-            logger.info("  (overridden from CLI --benchmarks)")
-        elif args.benchmark_suite:
-            # CLI --benchmark-suite has second priority
-            import yaml
-
-            from crsbench.validation.schemas import BenchmarkSuiteConfig
-
-            # Use configured benchmark suites root or default
-            benchmark_suites_root = Path(
-                config.benchmark_suites_root or "benchmark-suites"
-            )
-            suite_path = benchmark_suites_root / f"{args.benchmark_suite}.yaml"
-            if not suite_path.exists():
-                logger.error(f"Benchmark suite file not found: {suite_path}")
-                sys.exit(1)
-
-            with suite_path.open() as f:
-                suite_data = yaml.safe_load(f)
-            suite_config = BenchmarkSuiteConfig(**suite_data)
-            benchmark_entries = suite_config.get_benchmark_entries()
-            benchmark_names = suite_config.get_benchmark_names()
-            logger.info(f"Benchmark suite: {args.benchmark_suite}")
-            logger.info(
-                f"Benchmarks ({len(benchmark_names)}): {', '.join(benchmark_names)}"
-            )
-            logger.info("  (overridden from CLI --benchmark-suite)")
-        else:
-            # Use config (benchmarks or benchmark_suite)
-            benchmark_entries = config.get_benchmark_entries()
-            benchmark_names = config.get_benchmark_list()
-            if config.benchmark_suite:
-                logger.info(f"Benchmark suite: {config.benchmark_suite}")
-                logger.info(
-                    f"Benchmarks ({len(benchmark_names)}): {', '.join(benchmark_names)}"
-                )
-            else:
-                logger.info(
-                    f"Benchmarks ({len(benchmark_names)}): {', '.join(benchmark_names)}"
-                )
+        benchmark_entries = config.get_benchmark_entries()
+        benchmark_names = config.get_benchmark_list()
+        if config.benchmark_suite:
+            logger.info(f"Benchmark suite: {config.benchmark_suite}")
+        logger.info(
+            f"Benchmarks ({len(benchmark_names)}): {', '.join(benchmark_names)}"
+        )
 
         # Filter benchmarks by mode early (before resolving harnesses)
-        benchmarks_root = Path(config.benchmarks_root or "benchmarks")
+        benchmarks_root = config.benchmarks_root
         mode_str = config.mode.value  # Get string value from enum
         if mode_str != "all":
             original_count = len(benchmark_names)
@@ -2700,23 +2169,11 @@ def main() -> None:
         sys.exit(1)
 
     # Calculate total jobs using trial matrix (accounts for mode and CPV filtering)
-    registry_dir = Path(config.registry_dir or "crses/registry")
-    crs_configs_dir = Path(config.crs_configs_dir or "crses/configs")
+    registry_dir = config.registry_dir
+    crs_configs_dir = config.crs_configs_dir
     trial_matrix = generate_trial_matrix(
         benchmark_harnesses, crses, config, registry_dir, crs_configs_dir
     )
-
-    # Apply split if specified
-    start_index = 0
-    if hasattr(args, "split") and args.split:
-        slice_index, total_slices = parse_split_argument(args.split)
-        original_count = len(trial_matrix)
-        # Calculate start_index BEFORE applying split
-        start_index = _calculate_split_start(original_count, slice_index, total_slices)
-        trial_matrix = apply_split_to_trials(trial_matrix, slice_index, total_slices)
-        logger.info(
-            f"Split {slice_index}/{total_slices}: {len(trial_matrix)} of {original_count} jobs"
-        )
 
     total_jobs = len(trial_matrix)
     logger.info(f"Total jobs to execute: {total_jobs}")
@@ -2732,14 +2189,14 @@ def main() -> None:
 
     # Handle dry-run mode: display trials and exit without executing
     if hasattr(args, "dry_run") and args.dry_run:
-        display_trial_matrix(trial_matrix, start_index)
+        display_trial_matrix(trial_matrix)
         return
 
     # Run experiment in appropriate mode
     if use_distributed:
-        run_experiment_distributed(experiment_name, config, trial_matrix, args)
+        run_experiment_distributed(experiment_name, config, trial_matrix)
     else:
-        run_experiment_local(experiment_name, config, trial_matrix, args)
+        run_experiment_local(experiment_name, config, trial_matrix)
 
 
 if __name__ == "__main__":

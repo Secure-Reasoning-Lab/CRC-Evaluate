@@ -390,20 +390,19 @@ class TestLazyBuildCache:
             cpv_matched=["cpv_0"],
         )
 
+        mock_benchmark_path = MagicMock()
+        mock_benchmark_path.exists.return_value = True
+
         with (
             patch(
                 "crsbench.distributed.evaluator_jobs._verification_engine",
                 mock_engine,
             ),
             patch(
-                "crsbench.distributed.evaluator_jobs.Path",
-            ) as mock_path_cls,
+                "crsbench.distributed.evaluator_jobs.resolve_benchmark_path",
+                return_value=mock_benchmark_path,
+            ),
         ):
-            mock_path = MagicMock()
-            mock_path.exists.return_value = True
-            mock_path.__truediv__ = lambda _self, _other: mock_path
-            mock_path_cls.return_value = mock_path
-
             result_dict = verify_single_pov(self._make_payload())
 
         result = SinglePovResult.from_dict(result_dict)
@@ -417,20 +416,19 @@ class TestLazyBuildCache:
         mock_engine = MagicMock()
         mock_engine.load_adapter.return_value = None  # Adapter not found
 
+        mock_benchmark_path = MagicMock()
+        mock_benchmark_path.exists.return_value = True
+
         with (
             patch(
                 "crsbench.distributed.evaluator_jobs._verification_engine",
                 mock_engine,
             ),
             patch(
-                "crsbench.distributed.evaluator_jobs.Path",
-            ) as mock_path_cls,
+                "crsbench.distributed.evaluator_jobs.resolve_benchmark_path",
+                return_value=mock_benchmark_path,
+            ),
         ):
-            mock_path = MagicMock()
-            mock_path.exists.return_value = True
-            mock_path.__truediv__ = lambda _self, _other: mock_path
-            mock_path_cls.return_value = mock_path
-
             result_dict = verify_single_pov(self._make_payload())
 
         result = SinglePovResult.from_dict(result_dict)

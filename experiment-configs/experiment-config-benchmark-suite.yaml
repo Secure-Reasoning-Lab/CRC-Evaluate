@@ -55,7 +55,7 @@ crses:
 benchmark_suite: crsbench-afc-c
 
 # Note: Cannot specify both 'benchmarks' and 'benchmark_suite'
-# Use CLI override to switch: --benchmarks bench1,bench2
+# Use CLI override to switch: --benchmarks bench1 bench2
 # Or switch suite: --benchmark-suite crsbench-afc-jvm
 
 # Optional: Redis configuration for distributed execution

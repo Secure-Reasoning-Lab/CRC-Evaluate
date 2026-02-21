@@ -703,7 +703,16 @@ class ResourceConfig(BaseModel):
 
 
 class WorkerConfig(BaseModel):
-    """Distributed worker configuration."""
+    """Distributed worker configuration.
+
+    In distributed mode, the orchestrator serializes the full ExperimentConfig
+    into each Redis job. Workers deserialize it, but paths may not match the
+    worker's filesystem. Fields below (oss_fuzz_path, benchmarks_root, etc.)
+    let workers override the orchestrator's paths.
+
+    Note: All workers sharing the same config get the same overrides.
+    For heterogeneous clusters, use shared storage with consistent mount points.
+    """
 
     jobs: int = Field(default=4, ge=1, description="Number of parallel jobs per worker")
     redis_host: Optional[str] = Field(
@@ -842,9 +851,9 @@ class ExperimentConfig(BaseModel):
         default=None,
         description="Redis server hostname or IP (optional, omit or set to 'none' for local mode)",
     )
-    benchmarks_root: Optional[Path] = Field(
-        default=None,
-        description="Root directory containing benchmark projects (defaults to ./benchmarks)",
+    benchmarks_root: Path = Field(
+        default=Path("benchmarks"),
+        description="Root directory containing benchmark projects (default: benchmarks)",
     )
     benchmarks: Optional[List[Union[str, Dict[str, List[str]]]]] = Field(
         default=None,
@@ -856,22 +865,22 @@ class ExperimentConfig(BaseModel):
         default=None,
         description="Benchmark suite name to load (mutually exclusive with benchmarks)",
     )
-    benchmark_suites_root: Optional[Path] = Field(
-        default=None,
-        description="Root directory containing benchmark suite YAML files (defaults to ./benchmark-suites)",
+    benchmark_suites_root: Path = Field(
+        default=Path("benchmark-suites"),
+        description="Root directory containing benchmark suite YAML files (default: benchmark-suites)",
     )
     snapshot_period: Optional[int] = Field(
         default=900,
         ge=0,
         description="Snapshot interval in seconds (0 to disable, default 900 = 15 minutes)",
     )
-    registry_dir: Optional[Path] = Field(
-        default=None,
-        description="Path to CRS registry directory (defaults to ./crses/registry)",
+    registry_dir: Path = Field(
+        default=Path("crses/registry"),
+        description="Path to CRS registry directory (default: crses/registry)",
     )
-    crs_configs_dir: Optional[Path] = Field(
-        default=None,
-        description="Path to CRS configs directory (defaults to ./crses/configs)",
+    crs_configs_dir: Path = Field(
+        default=Path("crses/configs"),
+        description="Path to CRS configs directory (default: crses/configs)",
     )
     hints_enabled: bool = Field(
         default=False, description="Enable hints for CRS evaluation"
@@ -953,14 +962,12 @@ class ExperimentConfig(BaseModel):
     build_workers: Optional[int] = Field(
         default=None,
         ge=1,
-        description="Number of parallel workers for building variants (default: 4). "
-        "CLI --build-workers takes precedence, then CRSBENCH_BUILD_WORKERS env var, then this config value.",
+        description="Number of parallel workers for building variants (default: 4).",
     )
     verify_workers: Optional[int] = Field(
         default=None,
         ge=1,
-        description="Number of parallel workers for POV/patch verification (default: 4). "
-        "CLI --verify-workers takes precedence, then CRSBENCH_VERIFY_WORKERS env var, then this config value.",
+        description="Number of parallel workers for POV/patch verification (default: 4).",
     )
     only_cpv_harnesses: bool = Field(
         default=True,
@@ -1058,27 +1065,13 @@ class ExperimentConfig(BaseModel):
     @classmethod
     def validate_benchmarks_root(cls, v):
         """Validate benchmarks root directory."""
-        if v:
-            # Pydantic already converts str to Path
-            if not v.exists():
-                raise ValueError(f"Benchmarks root directory does not exist: {v}")
-            if not v.is_dir():
-                raise ValueError(f"Benchmarks root must be a directory: {v}")
-            return v.absolute()
-        return None  # Use default ./benchmarks if not specified
+        return v
 
     @field_validator("benchmark_suites_root")
     @classmethod
     def validate_benchmark_suites_root(cls, v):
         """Validate benchmark suites root directory."""
-        if v:
-            # Pydantic already converts str to Path
-            if not v.exists():
-                raise ValueError(f"Benchmark suites root directory does not exist: {v}")
-            if not v.is_dir():
-                raise ValueError(f"Benchmark suites root must be a directory: {v}")
-            return v.absolute()
-        return None  # Use default ./benchmark-suites if not specified
+        return v
 
     @field_validator("benchmarks")
     @classmethod
@@ -1241,6 +1234,34 @@ class ExperimentConfig(BaseModel):
         if self.skip_litellm:
             self.litellm_mode = None
             self.llm_tracking_enabled = False
+        return self
+
+    @model_validator(mode="after")
+    def resolve_path_fields(self):
+        """Resolve relative Path fields to absolute paths.
+
+        Config YAML often specifies relative paths (e.g., ``benchmarks_root: benchmarks``).
+        These must be resolved to absolute paths so that downstream code (CRS executors,
+        build commands) can use them regardless of CWD changes.
+        """
+        path_fields = [
+            "experiment_filestore",
+            "report_filestore",
+            "benchmarks_root",
+            "benchmark_suites_root",
+            "registry_dir",
+            "crs_configs_dir",
+            "oss_fuzz_path",
+        ]
+        for field_name in path_fields:
+            value = getattr(self, field_name, None)
+            if isinstance(value, Path) and not value.is_absolute():
+                setattr(self, field_name, value.resolve())
+
+        # Optional path field
+        if self.results_filestore and not self.results_filestore.is_absolute():
+            self.results_filestore = self.results_filestore.resolve()
+
         return self
 
     def get_benchmark_list(self) -> List[str]:

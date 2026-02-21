@@ -137,7 +137,7 @@ configure_logger(sink=sys.stderr, level="WARNING")
 ```bash
 # Set log level globally
 export LOG_LEVEL=DEBUG
-crsbench --experiment-config config.yaml ...
+crsbench run --experiment-config config.yaml ...
 ```
 
 ## Migration from Standard Logging

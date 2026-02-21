@@ -136,7 +136,7 @@ Examples:
 
     # OSS-Fuzz path
     parser.add_argument(
-        "--oss-fuzz",
+        "--oss-fuzz-path",
         type=Path,
         default=None,
         help="Path to oss-fuzz directory (default: ./oss-fuzz)",
@@ -197,16 +197,14 @@ Examples:
         "--build-workers",
         type=int,
         default=None,
-        help="Number of parallel workers for patch builds (default: 4). "
-        "Priority: CLI > CRSBENCH_BUILD_WORKERS env.",
+        help="Number of parallel workers for patch builds (default: 4).",
     )
 
     parser.add_argument(
         "--verify-workers",
         type=int,
         default=None,
-        help="Number of parallel workers for patch verification (default: 4). "
-        "Priority: CLI > CRSBENCH_VERIFY_WORKERS env.",
+        help="Number of parallel workers for patch verification (default: 4).",
     )
 
     parser.add_argument(
@@ -223,9 +221,9 @@ Examples:
     )
 
     parser.add_argument(
-        "--no-inc-build",
+        "--inc-build",
         action="store_true",
-        help="Disable incremental builds, use full OSS-Fuzz build instead",
+        help="Use incremental build instead of full build",
     )
 
     # Output options
@@ -295,7 +293,7 @@ def run_patch_verify(args: argparse.Namespace) -> int:
         return 1
 
     # Determine oss-fuzz path
-    oss_fuzz_path = args.oss_fuzz or Path("./oss-fuzz")
+    oss_fuzz_path = args.oss_fuzz_path or Path("./oss-fuzz")
     if not oss_fuzz_path.exists():
         logger.error(f"OSS-Fuzz directory not found: {oss_fuzz_path}")
         return 1
@@ -312,7 +310,7 @@ def run_patch_verify(args: argparse.Namespace) -> int:
         verify_workers=args.verify_workers,
         verify_variants=not args.no_variants,
         force_rebuild=args.force_rebuild,
-        use_inc_build=not args.no_inc_build,
+        use_inc_build=args.inc_build,
         source_mode=args.source,
     )
 

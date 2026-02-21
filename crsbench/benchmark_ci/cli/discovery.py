@@ -167,7 +167,7 @@ def _resolve_single_benchmark(benchmark_arg: str, benchmarks_root: Path) -> Path
 def resolve_benchmark_paths(
     benchmark_arg: Optional[str] = None,
     *,
-    benchmarks_list: Optional[str] = None,
+    benchmarks_list: Optional[list[str]] = None,
     benchmark_suite: Optional[str] = None,
     all_benchmarks: bool = False,
     filter_pattern: Optional[str] = None,
@@ -176,13 +176,13 @@ def resolve_benchmark_paths(
 
     Handles multiple input formats:
     - Positional arg: single benchmark name or path
-    - --benchmarks: comma-separated list of benchmark names
+    - --benchmarks: list of benchmark names
     - --benchmark-suite: load benchmarks from a suite file
     - --all: discover all benchmarks with optional filter
 
     Args:
         benchmark_arg: Positional benchmark argument (name or path)
-        benchmarks_list: Comma-separated list of benchmark names (--benchmarks)
+        benchmarks_list: List of benchmark names (--benchmarks)
         benchmark_suite: Name or path to a benchmark suite file (--benchmark-suite)
         all_benchmarks: Whether --all was specified
         filter_pattern: Optional glob filter for --all mode
@@ -207,7 +207,7 @@ def resolve_benchmark_paths(
         return [_resolve_single_benchmark(name, benchmarks_root) for name in names]
 
     if benchmarks_list:
-        names = [name.strip() for name in benchmarks_list.split(",") if name.strip()]
+        names = [name.strip() for name in benchmarks_list if name.strip()]
         if not names:
             logger.error("Empty --benchmarks list provided")
             raise SystemExit(1)

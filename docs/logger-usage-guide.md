@@ -55,11 +55,11 @@ Set log level globally:
 ```bash
 # Show all messages including DEBUG
 export LOG_LEVEL=DEBUG
-crsbench --experiment-config config.yaml ...
+crsbench run --experiment-config config.yaml ...
 
 # Show only warnings and errors
 export LOG_LEVEL=WARNING
-crsbench --experiment-config config.yaml ...
+crsbench run --experiment-config config.yaml ...
 ```
 
 ### Programmatic Configuration
@@ -227,10 +227,10 @@ configure_logger(level="DEBUG")  # See all messages
 Colors only work in TTY:
 ```bash
 # ✓ Colors enabled
-crsbench --experiment-config config.yaml
+crsbench run --experiment-config config.yaml
 
 # ✗ Colors disabled (redirected)
-crsbench --experiment-config config.yaml > output.log
+crsbench run --experiment-config config.yaml > output.log
 ```
 
 Force colors:

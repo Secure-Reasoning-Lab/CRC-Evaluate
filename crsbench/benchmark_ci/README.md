@@ -64,8 +64,8 @@ All subcommands (except `parse`) accept:
 # Single benchmark (positional)
 crsbench ci all benchmarks/afc-curl-delta-01
 
-# Multiple benchmarks (comma-separated)
-crsbench ci all -b afc-curl-delta-01,afc-curl-delta-02,afc-tika-delta-01
+# Multiple benchmarks (space-separated)
+crsbench ci all -b afc-curl-delta-01 afc-curl-delta-02 afc-tika-delta-01
 
 # Filter by glob pattern
 crsbench ci all --filter "afc-curl-*"
@@ -82,7 +82,7 @@ crsbench ci all -s smoke-test-bug-finding
 
 ```bash
 --source {pkgs,main_repo}   # Source mode (default: pkgs = bundled tarballs)
---no-inc-build               # Force full build (default uses inc-build)
+--inc-build                  # Enable incremental build (default is full build)
 --force-rebuild              # Rebuild even if cached (default ON for CI)
 --exit-on-error              # Stop on first failure
 --output-dir DIR             # Save per-job logs and artifacts
@@ -290,9 +290,6 @@ crsbench ci all --all --distributed
 | Variable | Description |
 |----------|-------------|
 | `REDIS_PASSWORD` | Redis password (if auth enabled; auto-loaded from `.env` when using valkey-helper) |
-| `CRSBENCH_BUILD_WORKERS` | Default build workers (overridden by CLI) |
-| `CRSBENCH_VERIFY_WORKERS` | Default verify workers (overridden by CLI) |
-| `CRSBENCH_CONTROLLER_CORES` | CPU cores for controller monitoring |
 
 ## DAG Job Types
 

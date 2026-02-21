@@ -15,22 +15,29 @@ def upload_dataset(
     dataset: str,
     benchmarks_dir: Path,
     *,
+    benchmarks: list[str] | None = None,
     dry_run: bool = False,
 ) -> None:
     """Bundle and upload benchmark directories to the configured backend.
 
-    Each benchmark is split into 3 tarballs (benchmark.tar.gz, pkgs.tar.gz,
+    Each benchmark is split into 2 tarballs (benchmark.tar.gz,
     ground-truth.tar.gz) before upload to minimize HuggingFace API calls.
 
     Args:
         dataset: Dataset short name (e.g., "crsbench")
         benchmarks_dir: Path to the benchmarks/ directory
+        benchmarks: Specific benchmark names to upload (None = all matching)
         dry_run: If True, only list what would be uploaded
     """
     config = get_dataset(dataset)
 
     # List matching directories for logging
     matching = _find_matching_benchmarks(benchmarks_dir, config.prefixes)
+
+    # Filter to specific benchmarks if requested
+    if benchmarks:
+        names = set(benchmarks)
+        matching = [d for d in matching if d.name in names]
 
     logger.info(f"Dataset: {dataset} -> {config.location} ({config.backend})")
     logger.info(f"Matching benchmarks: {len(matching)}")
