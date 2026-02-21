@@ -1,0 +1,55 @@
+name: Smoke CRS Regression
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "oss-crs/**"
+      - "crsbench/evaluation/**"
+      - "crsbench/distributed/**"
+      - "crsbench/validation/**"
+      - "crses/**"
+      - "ci-tests/**"
+      - ".github/workflows/smoke-crs-regression.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: smoke-crs-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke-parallel:
+    name: Smoke (Bugfinding + Bugfixing, Parallel)
+    runs-on: [self-hosted, linux, crs]
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          token: ${{ secrets.PAT_TOKEN }}
+          persist-credentials: false
+
+      - name: Configure Team-Atlanta access
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.TEAM_ATLANTA_PAT }}@github.com/Team-Atlanta/".insteadOf "git@github.com:Team-Atlanta/"
+
+      - uses: ./.github/actions/setup
+        with:
+          require-docker: true
+
+      - name: Run parallel smoke suites
+        env:
+          # Override from repository/workflow vars when needed.
+          # Defaults in run-local.sh: 0-23 (bugfinding), 24-47 (bugfixing)
+          SMOKE_CPUSET_BUGFINDING: ${{ vars.SMOKE_CPUSET_BUGFINDING }}
+          SMOKE_CPUSET_BUGFIXING: ${{ vars.SMOKE_CPUSET_BUGFIXING }}
+          # Required for bugfixing CRS (crs-claude-code) in passthrough mode
+          CRSBENCH_LLM_UPSTREAM_BASE_URL: ${{ secrets.CRSBENCH_LLM_UPSTREAM_BASE_URL }}
+          # Tracking/control-plane endpoint; defaults to upstream when unset.
+          CRSBENCH_LLM_BASE_URL: ${{ secrets.CRSBENCH_LLM_BASE_URL || secrets.CRSBENCH_LLM_UPSTREAM_BASE_URL }}
+          CRSBENCH_LLM_MASTER_KEY: ${{ secrets.CRSBENCH_LLM_MASTER_KEY }}
+          # Optional fallback when not creating per-trial keys
+          CRSBENCH_LLM_API_KEY: ${{ secrets.CRSBENCH_LLM_API_KEY }}
+        run: |
+          ./ci-tests/run-local.sh smoke

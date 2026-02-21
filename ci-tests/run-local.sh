@@ -240,21 +240,54 @@ run_smoke_parallel() {
     # Override with env vars if your machine has a different layout.
     local bugfinding_cpuset=${SMOKE_CPUSET_BUGFINDING:-0-23}
     local bugfixing_cpuset=${SMOKE_CPUSET_BUGFIXING:-24-47}
+    local smoke_run_root
+    smoke_run_root=$(mktemp -d /tmp/crsbench-smoke-parallel-XXXXXX)
 
     uv run python ci-tests/smoke_runner.py \
         --suite bugfinding \
         --worker-cpuset "$bugfinding_cpuset" \
+        --result-root "$smoke_run_root" \
         --keep-workspace &
     pid1=$!
 
     uv run python ci-tests/smoke_runner.py \
         --suite bugfixing \
         --worker-cpuset "$bugfixing_cpuset" \
+        --result-root "$smoke_run_root" \
         --keep-workspace &
     pid2=$!
 
     wait "$pid1" || fail "Parallel smoke bugfinding failed"
     wait "$pid2" || fail "Parallel smoke bugfixing failed"
+
+    echo -e "\n${YELLOW}--- Parallel Smoke Summary ---${NC}"
+    local summaries
+    summaries=$(find "$smoke_run_root" -name summary.json -type f | sort || true)
+    if [ -z "$summaries" ]; then
+        fail "Parallel smoke completed but no summary.json files found under $smoke_run_root"
+    fi
+
+    while IFS= read -r summary; do
+        [ -z "$summary" ] && continue
+        python3 - "$summary" <<'PY'
+import json, sys
+from pathlib import Path
+
+summary_path = Path(sys.argv[1])
+data = json.loads(summary_path.read_text())
+suite = data.get("suite", "unknown")
+status = data.get("status", "unknown")
+workspace = data.get("workspace", "unknown")
+successes = data.get("successes", 0)
+total_trials = data.get("total_trials", 0)
+patch_files = data.get("patch_files", 0)
+pov_files = data.get("pov_files", 0)
+print(f"[{suite}] status={status} successes={successes}/{total_trials} patch_files={patch_files} pov_files={pov_files}")
+print(f"[{suite}] workspace={workspace}")
+PY
+    done <<< "$summaries"
+
+    echo "[smoke] summary root: $smoke_run_root"
     success "Parallel smoke passed"
 }
 
