@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 from rich.console import Console
+from rich.markup import escape as rich_escape
 from rich.table import Table
 
 from crsbench.benchmark_ci.models import (
@@ -116,7 +117,7 @@ def _add_detail_rows(
             continue
         if check.error:
             table.add_row(
-                f"  [dim]fmt/{name}: {check.error}[/dim]",
+                f"  [dim]fmt/{name}: {rich_escape(check.error)}[/dim]",
                 *[""] * num_columns,
             )
 
@@ -134,7 +135,7 @@ def _add_detail_rows(
         failures = check.details.get("failures", [])
         for failure in failures:
             table.add_row(
-                f"  [dim]{failure}[/dim]",
+                f"  [dim]{rich_escape(failure)}[/dim]",
                 *[""] * num_columns,
             )
 
@@ -180,7 +181,7 @@ def _add_format_detail_rows(
             continue
         if check.error:
             table.add_row(
-                f"  [dim]{name}: {check.error}[/dim]",
+                f"  [dim]{name}: {rich_escape(check.error)}[/dim]",
                 *[""] * num_columns,
             )
 
@@ -219,7 +220,7 @@ def _add_build_rows(table: Table, summary: ValidationSummary) -> None:
         ):
             if r.pov_build_check.error:
                 table.add_row(
-                    f"  [dim]{r.pov_build_check.error}[/dim]",
+                    f"  [dim]{rich_escape(r.pov_build_check.error)}[/dim]",
                     *[""] * 3,
                 )
 
@@ -554,7 +555,7 @@ def write_summary_csv(
             cols = [_plain_status(r.format_checks.get(n)) for n in check_names]
             f.write(
                 f"{r.benchmark},{','.join(cols)},"
-                f"{r.total_status.value},{fmt_time:.1f},{r.storage_bytes}\n"
+                f"{r.total_status.value.upper()},{fmt_time:.1f},{r.storage_bytes}\n"
             )
     elif check_mode == CheckMode.BUILD:
         f.write("benchmark,build,build_time_s,total,storage_bytes\n")
@@ -564,7 +565,7 @@ def write_summary_csv(
                 f"{r.benchmark},"
                 f"{_plain_status(r.pov_build_check)},"
                 f"{build_t:.1f},"
-                f"{r.total_status.value},{r.storage_bytes}\n"
+                f"{r.total_status.value.upper()},{r.storage_bytes}\n"
             )
     elif check_mode == CheckMode.DEFAULT:
         f.write(
@@ -580,7 +581,7 @@ def write_summary_csv(
                 f"{_plain_status(r.pov_check)},"
                 f"{_plain_status(r.patch_check)},"
                 f"{_plain_status(r.coverage_check)},"
-                f"{r.total_status.value},{r.total_time:.1f},"
+                f"{r.total_status.value.upper()},{r.total_time:.1f},"
                 f"{build_t:.1f},{verify_t:.1f},{r.storage_bytes}\n"
             )
     elif check_mode == CheckMode.INC:
@@ -598,7 +599,7 @@ def write_summary_csv(
                 f"{_plain_status(r.pov_inc_check)},"
                 f"{_plain_status(r.patch_inc_check)},"
                 f"{_plain_status(r.coverage_inc_check)},"
-                f"{r.total_status.value},{r.total_time:.1f},"
+                f"{r.total_status.value.upper()},{r.total_time:.1f},"
                 f"{build_t:.1f},{verify_t:.1f},{r.storage_bytes}\n"
             )
     elif check_mode == CheckMode.RTS:
@@ -614,7 +615,7 @@ def write_summary_csv(
                 f"{r.benchmark},{rts},"
                 f"{_plain_status(r.format_check)},"
                 f"{_plain_status(r.patch_rts_check)},"
-                f"{r.total_status.value},{r.total_time:.1f},"
+                f"{r.total_status.value.upper()},{r.total_time:.1f},"
                 f"{build_t:.1f},{verify_t:.1f},{r.storage_bytes}\n"
             )
     else:
@@ -622,7 +623,7 @@ def write_summary_csv(
         f.write(
             "benchmark,inc,rts,fmt,"
             "pov_build,pov_build_s,pov_pov,pov_pov_s,pov_var,pov_var_s,"
-            "patch,patch_build,patch_pov,patch_var,patch_unittest,"
+            "patch_build,patch_pov,patch_var,patch_unittest,"
             "patch_build_s,patch_pov_s,patch_var_s,patch_unittest_s,"
             "patch_rts,patch_rts_s,"
             "cov,cov_verify_s,"
@@ -640,7 +641,6 @@ def write_summary_csv(
                 f"{_check_verify_time(r.pov_pov_check):.1f},"
                 f"{_plain_var_status(r.pov_var_check)},"
                 f"{_check_verify_time(r.pov_var_check):.1f},"
-                f"{_plain_status(r.patch_check)},"
                 f"{_plain_status(r.patch_build_check)},"
                 f"{_plain_status(r.patch_pov_check)},"
                 f"{_plain_var_status(r.patch_var_check)},"
@@ -653,7 +653,7 @@ def write_summary_csv(
                 f"{_check_verify_time(r.patch_rts_check):.1f},"
                 f"{_plain_status(r.coverage_check)},"
                 f"{_check_verify_time(r.coverage_check):.1f},"
-                f"{r.total_status.value},{r.total_time:.1f},{r.storage_bytes}\n"
+                f"{r.total_status.value.upper()},{r.total_time:.1f},{r.storage_bytes}\n"
             )
 
 
