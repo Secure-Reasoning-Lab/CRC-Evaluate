@@ -1,6 +1,8 @@
 # RFC for Standard Benchmark Specification for Cyber Reasoning Systems (CRS) v0.1
 
 Status: Draft
+Canonical Path: `docs/RFC.md`
+Last Updated: 2026-02-21
 
 This specification defines a standardized benchmark format for
 evaluating Cyber Reasoning Systems (CRS) developed during the AIxCC competition.
