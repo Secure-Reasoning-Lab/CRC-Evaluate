@@ -60,6 +60,9 @@ Module docs are centralized under [`docs/modules/`](./modules/) and indexed at
 
 - External/upstream submodules (`oss-fuzz/`, `oss-crs/`) keep their own
   documentation layout.
+- Documentation maintenance policy:
+  - Keep one canonical page per topic; other pages should link instead of duplicating.
+  - Prefer `docs/RFC.md` for benchmark format requirements.
 - Key OSS-CRS references:
   - [oss-crs/README.md](../oss-crs/README.md)
   - [oss-crs/docs/README.md](../oss-crs/docs/README.md)
