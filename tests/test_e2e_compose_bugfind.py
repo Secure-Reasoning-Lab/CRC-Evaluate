@@ -148,11 +148,10 @@ def e2e_bugfind_env(tmp_path: Path) -> Path:
         )
     )
 
-    # 2. CRS registry with pkg.yaml
+    # 2. CRS registry with oss-crs YAML entry
     registry = tmp_path / "registry"
-    crs_dir = registry / "test-crs"
-    crs_dir.mkdir(parents=True)
-    (crs_dir / "pkg.yaml").write_text(
+    registry.mkdir(parents=True)
+    (registry / "test-crs.yaml").write_text(
         yaml.dump(
             {
                 "type": "bug-finding",
