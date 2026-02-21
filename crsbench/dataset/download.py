@@ -274,10 +274,16 @@ def _is_local_entry_up_to_date(
     if no_ground_truth:
         return True
 
-    if local_entry.ground_truth_source_sha256 != remote_entry.ground_truth_source_sha256:
+    if (
+        local_entry.ground_truth_source_sha256
+        != remote_entry.ground_truth_source_sha256
+    ):
         return False
 
-    if remote_entry.ground_truth_source_sha256 and not (benchmark_dir / ".aixcc").is_dir():
+    if (
+        remote_entry.ground_truth_source_sha256
+        and not (benchmark_dir / ".aixcc").is_dir()
+    ):
         return False
 
     return True
@@ -285,7 +291,9 @@ def _is_local_entry_up_to_date(
 
 def _load_remote_manifest(config: DatasetConfig) -> dict[str, BenchmarkManifestEntry]:
     """Load remote dataset manifest index if present."""
-    with tempfile.TemporaryDirectory(prefix="crsbench-download-remote-manifest-") as tmpdir:
+    with tempfile.TemporaryDirectory(
+        prefix="crsbench-download-remote-manifest-"
+    ) as tmpdir:
         tmp_path = Path(tmpdir)
         for index_path in (REMOTE_INDEX_PATH, REMOTE_INDEX_ALIAS_PATH):
             try:

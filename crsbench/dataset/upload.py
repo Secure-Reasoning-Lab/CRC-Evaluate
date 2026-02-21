@@ -167,7 +167,9 @@ def _upload_card_files(
 
 def _load_remote_manifest(config: DatasetConfig) -> dict[str, BenchmarkManifestEntry]:
     """Load existing remote manifest index from dataset storage backend."""
-    with tempfile.TemporaryDirectory(prefix="crsbench-upload-remote-manifest-") as tmpdir:
+    with tempfile.TemporaryDirectory(
+        prefix="crsbench-upload-remote-manifest-"
+    ) as tmpdir:
         tmp_path = Path(tmpdir)
         for index_path in (REMOTE_INDEX_PATH, REMOTE_INDEX_ALIAS_PATH):
             try:
@@ -214,7 +216,9 @@ def _plan_upload(
         ):
             changed.append(benchmark_dir)
             continue
-        if not _remote_archives_exist(benchmark_dir.name, has_ground_truth, remote_files):
+        if not _remote_archives_exist(
+            benchmark_dir.name, has_ground_truth, remote_files
+        ):
             changed.append(benchmark_dir)
             continue
 

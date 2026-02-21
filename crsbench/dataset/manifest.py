@@ -44,16 +44,12 @@ class BenchmarkManifestEntry:
             ground_truth_source_sha256=_to_str(
                 data.get("ground_truth_source_sha256", "")
             ),
-            benchmark_archive_sha256=_to_str(
-                data.get("benchmark_archive_sha256", "")
-            ),
+            benchmark_archive_sha256=_to_str(data.get("benchmark_archive_sha256", "")),
             ground_truth_archive_sha256=_to_str(
                 data.get("ground_truth_archive_sha256", "")
             ),
             benchmark_archive_size=_to_int(data.get("benchmark_archive_size", 0)),
-            ground_truth_archive_size=_to_int(
-                data.get("ground_truth_archive_size", 0)
-            ),
+            ground_truth_archive_size=_to_int(data.get("ground_truth_archive_size", 0)),
             source_commit=_to_str(data.get("source_commit", "")),
             updated_at=_to_str(data.get("updated_at", "")),
             has_ground_truth=_to_bool(data.get("has_ground_truth", False)),

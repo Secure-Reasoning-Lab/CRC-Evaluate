@@ -32,9 +32,7 @@ def check_hf_token() -> tuple[bool, str]:
         user_info = api.whoami()
         return True, f"Authenticated as: {user_info.get('name', 'unknown')}"
     except Exception as e:
-        return False, (
-            f"HuggingFace token invalid: {e}. Re-login with: hf auth login"
-        )
+        return False, (f"HuggingFace token invalid: {e}. Re-login with: hf auth login")
 
 
 def _download_huggingface(
