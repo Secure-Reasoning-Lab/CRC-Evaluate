@@ -21,6 +21,14 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _positive_int(value: str) -> int:
+    """argparse type: strictly positive integer."""
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(f"must be > 0 (got {value})")
+    return parsed
+
+
 def add_benchmark_subparser(subparsers: argparse._SubParsersAction) -> None:
     """Add 'benchmark' subcommand with its subcommands.
 
@@ -456,7 +464,7 @@ Examples:
     )
     dedup_povs_parser.add_argument(
         "--top-n",
-        type=int,
+        type=_positive_int,
         default=5,
         help="Stack frame depth for crash signature (default: 5)",
     )

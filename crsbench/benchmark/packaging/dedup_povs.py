@@ -151,6 +151,9 @@ def dedup_cpv_povs(
     Returns:
         DedupResult with kept/removed/unparseable POV numbers
     """
+    if top_n <= 0:
+        raise ValueError(f"top_n must be > 0, got {top_n}")
+
     entries = scan_povs(cpv_dir)
     result = DedupResult(
         harness=harness,
@@ -225,6 +228,9 @@ def dedup_benchmark_povs(
     Returns:
         DedupSummary with per-CPV results
     """
+    if top_n <= 0:
+        raise ValueError(f"top_n must be > 0, got {top_n}")
+
     aixcc_dir = benchmark_path / ".aixcc"
     if not aixcc_dir.is_dir():
         raise ValueError(f"No .aixcc directory found at {benchmark_path}")

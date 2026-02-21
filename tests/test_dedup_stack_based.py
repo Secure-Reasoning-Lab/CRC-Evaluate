@@ -244,6 +244,13 @@ class TestStackBasedDedupTopN:
         dedup = StackBasedDedup()
         assert dedup._top_n == 5
 
+    def test_invalid_top_n_raises(self) -> None:
+        """top_n must be strictly positive."""
+        import pytest
+
+        with pytest.raises(ValueError, match="top_n must be > 0"):
+            StackBasedDedup(top_n=0)
+
     def test_top_n_affects_signature(self) -> None:
         """Test that different top_n values produce different signatures."""
         # Build a crash log with many frames

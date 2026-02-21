@@ -165,6 +165,8 @@ class StackBasedDedup(DeduplicationStrategy):
     """
 
     def __init__(self, *, top_n: int = 5) -> None:
+        if top_n <= 0:
+            raise ValueError(f"top_n must be > 0, got {top_n}")
         self._top_n = top_n
 
     @property
@@ -188,14 +190,16 @@ class StackBasedDedup(DeduplicationStrategy):
         # Try stdout logs (standard crash_info structure from engine)
         stdout_logs = result.crash_info.get("stdout")
         if stdout_logs and isinstance(stdout_logs, dict):
-            for crash_log in stdout_logs.values():
+            for variant_name in sorted(stdout_logs):
+                crash_log = stdout_logs[variant_name]
                 if crash_log:
                     return crash_log
 
         # Try logs key (from verify_pov single-POV path)
         logs = result.crash_info.get("logs")
         if logs and isinstance(logs, dict):
-            for crash_log in logs.values():
+            for variant_name in sorted(logs):
+                crash_log = logs[variant_name]
                 if crash_log:
                     return crash_log
 

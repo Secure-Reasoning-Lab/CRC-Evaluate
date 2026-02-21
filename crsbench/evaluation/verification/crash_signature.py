@@ -52,8 +52,8 @@ _SANITIZER_INTERNAL_PREFIXES = (
     "__lsan",
 )
 
-# ASAN ERROR line: ==PID==ERROR: AddressSanitizer: CRASH_TYPE on/at ...
-_ASAN_ERROR = re.compile(r"==\d+==ERROR:\s+(\w+Sanitizer):\s+(\S+)")
+# ASAN ERROR line: ==PID==ERROR: AddressSanitizer: CRASH_TYPE ...
+_ASAN_ERROR = re.compile(r"==\d+==ERROR:\s+(\w+Sanitizer):\s+(.+)$")
 
 # Java exception: == Java Exception: class_name
 _JAVA_EXCEPTION = re.compile(r"==\s*Java Exception:\s*(\S+)")
@@ -89,6 +89,41 @@ class CrashSignature:
     raw_summary: str = ""
 
 
+_LEADING_NOISE_FUNCTIONS = {
+    "raise",
+    "abort",
+    "__fortify_fail",
+    "__chk_fail",
+    "<unknown>",
+}
+
+_LEADING_NOISE_FILE_SUBSTRINGS = (
+    "/compiler-rt/lib/asan/",
+    "/sanitizer_common/",
+    "/lib/x86_64-linux-gnu/libc.so",
+    "/lib64/libc.so",
+    "/usr/include/x86_64-linux-gnu/bits/string_fortified.h",
+)
+
+_ALLOCATOR_NOISE_FUNCTIONS = {
+    "free",
+    "malloc",
+    "calloc",
+    "realloc",
+    "operator delete",
+    "operator new",
+}
+
+_JAVA_LEADING_NOISE_PREFIXES = (
+    "com.code_intelligence.jazzer.sanitizers.",
+    "com.code_intelligence.jazzer.runtime.",
+)
+
+_JAVA_LEADING_NOISE_FUNCTIONS = {
+    "jaz.Zer.reportFinding",
+}
+
+
 def compute_signature_hash(crash_type: str, frames: list[StackFrame]) -> str:
     """Compute deterministic hash from crash type and stack frames.
 
@@ -111,6 +146,47 @@ def _is_sanitizer_internal(function_name: str) -> bool:
     return any(
         function_name.startswith(prefix) for prefix in _SANITIZER_INTERNAL_PREFIXES
     )
+
+
+def _is_leading_noise_frame(frame: StackFrame) -> bool:
+    """Return True if this frame is likely runtime noise, not crash root cause."""
+    func_lower = frame.function.lower()
+    file_lower = frame.file.lower()
+
+    if frame.function in _LEADING_NOISE_FUNCTIONS:
+        return True
+    if frame.function in _ALLOCATOR_NOISE_FUNCTIONS and (
+        "/compiler-rt/lib/asan/" in file_lower or "libc.so" in file_lower
+    ):
+        return True
+    if func_lower.startswith("atomic_compare_exchange_strong<"):
+        return True
+    if func_lower.startswith("atomicallysetquarantineflagifallocated"):
+        return True
+    return any(substr in file_lower for substr in _LEADING_NOISE_FILE_SUBSTRINGS)
+
+
+def _trim_leading_noise_frames(frames: list[StackFrame]) -> list[StackFrame]:
+    """Drop leading runtime/sanitizer noise frames from the parsed stack."""
+    idx = 0
+    while idx < len(frames) and _is_leading_noise_frame(frames[idx]):
+        idx += 1
+    return frames[idx:]
+
+
+def _is_java_leading_noise_frame(frame: StackFrame) -> bool:
+    """Return True for leading Java fuzzing/sanitizer wrapper frames."""
+    return frame.function in _JAVA_LEADING_NOISE_FUNCTIONS or frame.function.startswith(
+        _JAVA_LEADING_NOISE_PREFIXES
+    )
+
+
+def _trim_java_leading_noise_frames(frames: list[StackFrame]) -> list[StackFrame]:
+    """Drop leading Java sanitizer/runtime wrapper frames."""
+    idx = 0
+    while idx < len(frames) and _is_java_leading_noise_frame(frames[idx]):
+        idx += 1
+    return frames[idx:]
 
 
 def _parse_asan_frames(
@@ -149,8 +225,6 @@ def _parse_asan_frames(
                     line=int(match.group(4)),
                 )
             )
-            if len(frames) >= top_n:
-                break
             continue
 
         # Try no-source frame
@@ -167,8 +241,6 @@ def _parse_asan_frames(
                     line=0,
                 )
             )
-            if len(frames) >= top_n:
-                break
             continue
 
         # Try address-only frame
@@ -182,10 +254,10 @@ def _parse_asan_frames(
                     line=0,
                 )
             )
-            if len(frames) >= top_n:
-                break
-
-    return frames
+    trimmed_frames = _trim_leading_noise_frames(frames)
+    # Keep original frames if every parsed frame was trimmed as noise.
+    candidate_frames = trimmed_frames if trimmed_frames else frames
+    return candidate_frames[:top_n]
 
 
 def _parse_java_frames(
@@ -214,10 +286,9 @@ def _parse_java_frames(
                     line=int(match.group(3)),
                 )
             )
-            if len(frames) >= top_n:
-                break
-
-    return frames
+    trimmed_frames = _trim_java_leading_noise_frames(frames)
+    candidate_frames = trimmed_frames if trimmed_frames else frames
+    return candidate_frames[:top_n]
 
 
 def _extract_summary_line(lines: list[str]) -> str:
@@ -245,6 +316,9 @@ def parse_crash_signature(
     Returns:
         CrashSignature if parseable, None if no recognizable crash pattern found
     """
+    if top_n <= 0:
+        raise ValueError("top_n must be > 0")
+
     if not crash_log:
         return None
 
@@ -255,7 +329,7 @@ def parse_crash_signature(
     for i, line in enumerate(lines):
         match = _ASAN_ERROR.search(line)
         if match:
-            crash_type = match.group(2)
+            crash_type = _normalize_asan_crash_type(match.group(2))
             # Parse frames starting after the ERROR line
             frames = _parse_asan_frames(lines, i + 1, top_n=top_n)
             if not frames:
@@ -322,3 +396,22 @@ def parse_crash_signature(
 
     # No recognizable pattern
     return None
+
+
+def _normalize_asan_crash_type(raw_crash_type: str) -> str:
+    """Normalize ASAN crash type from error line text."""
+    raw = raw_crash_type.strip()
+    if not raw:
+        return "unknown"
+
+    # Keep meaningful multi-word categories (e.g., "attempting free") and
+    # strip trailing address/read/write details that vary per crash instance.
+    match = re.match(
+        r"(.+?)(?:\s+on\s+address|\s+on\s+unknown|\s+on\s+pc|\s+at\s+0x|\s+READ of size|\s+WRITE of size|$)",
+        raw,
+    )
+    if match:
+        normalized = match.group(1).strip()
+        if normalized:
+            return normalized
+    return raw

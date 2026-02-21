@@ -3,6 +3,7 @@
 Tests for crsbench/evaluation/verification/crash_signature.py.
 """
 
+import pytest
 from crsbench.evaluation.verification.crash_signature import (
     StackFrame,
     compute_signature_hash,
@@ -292,3 +293,48 @@ class TestTopNParameter:
         # Different frames means different hash (if more frames exist)
         if len(sig2.frames) > 1:
             assert sig1.signature_hash != sig2.signature_hash
+
+    def test_invalid_top_n_raises(self) -> None:
+        """top_n must be strictly positive."""
+        with pytest.raises(ValueError, match="top_n must be > 0"):
+            parse_crash_signature(ASAN_HEAP_BUFFER_OVERFLOW, top_n=0)
+
+
+def test_asan_multi_word_crash_type_normalized() -> None:
+    log = """\
+==1==ERROR: AddressSanitizer: attempting free on address 0x603000000040 in thread T0
+    #0 0xaaa in free /src/llvm-project/compiler-rt/lib/asan/asan_malloc_linux.cpp:52
+    #1 0xbbb in vuln_free /src/project/a.c:10:3
+"""
+    sig = parse_crash_signature(log, top_n=5)
+    assert sig is not None
+    assert sig.crash_type == "attempting free"
+
+
+def test_asan_leading_noise_frames_trimmed() -> None:
+    log = """\
+==1==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x1
+    #0 0xaaa in raise (/lib/x86_64-linux-gnu/libc.so.6+0x123)
+    #1 0xbbb in abort (/lib/x86_64-linux-gnu/libc.so.6+0x456)
+    #2 0xccc in target_func /src/project/target.c:42:7
+    #3 0xddd in main /src/project/main.c:7:1
+"""
+    sig = parse_crash_signature(log, top_n=1)
+    assert sig is not None
+    assert len(sig.frames) == 1
+    assert sig.frames[0].function == "target_func"
+
+
+def test_java_jazzer_leading_frames_trimmed() -> None:
+    log = """\
+== Java Exception: com.code_intelligence.jazzer.api.FuzzerSecurityIssueCritical
+    at com.code_intelligence.jazzer.sanitizers.FilePathTraversal.check(FilePathTraversal.java:100)
+    at jaz.Zer.reportFinding(Zer.java:42)
+    at com.example.MyParser.parse(MyParser.java:17)
+    at com.example.App.main(App.java:9)
+"""
+    sig = parse_crash_signature(log, top_n=2)
+    assert sig is not None
+    assert len(sig.frames) == 2
+    assert sig.frames[0].function == "com.example.MyParser.parse"
+    assert sig.frames[1].function == "com.example.App.main"

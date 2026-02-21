@@ -231,6 +231,16 @@ class TestDryRun:
         assert (cpv_dir / "blobs" / "pov_2.blob").exists()
 
 
+class TestTopNValidation:
+    """Tests for top_n argument validation."""
+
+    def test_invalid_top_n_raises(self, tmp_path: Path) -> None:
+        cpv_dir = _make_cpv_dir(tmp_path, "h1", "cpv_0", {0: CRASH_LOG_A})
+
+        with pytest.raises(ValueError, match="top_n must be > 0"):
+            dedup_cpv_povs(cpv_dir, "h1", "cpv_0", top_n=0)
+
+
 class TestBenchmarkDedup:
     """Tests for dedup_benchmark_povs (full benchmark scan)."""
 

@@ -451,7 +451,9 @@ class POVVerificationManager:
             parse_crash_signature,
         )
 
-        for crash_log in crash_logs.values():
+        # Iterate in key order for deterministic signature extraction.
+        for variant_name in sorted(crash_logs):
+            crash_log = crash_logs[variant_name]
             if crash_log:
                 sig = parse_crash_signature(crash_log)
                 if sig:
@@ -483,7 +485,8 @@ class POVVerificationManager:
         # Try stdout logs (from verify_povs_parallel)
         stdout_logs = result.crash_info.get("stdout")
         if stdout_logs and isinstance(stdout_logs, dict):
-            for crash_log in stdout_logs.values():
+            for variant_name in sorted(stdout_logs):
+                crash_log = stdout_logs[variant_name]
                 if crash_log:
                     sig = parse_crash_signature(crash_log)
                     if sig:
@@ -492,7 +495,8 @@ class POVVerificationManager:
         # Try logs key (from verify_pov single-POV path)
         logs = result.crash_info.get("logs")
         if logs and isinstance(logs, dict):
-            for crash_log in logs.values():
+            for variant_name in sorted(logs):
+                crash_log = logs[variant_name]
                 if crash_log:
                     sig = parse_crash_signature(crash_log)
                     if sig:
