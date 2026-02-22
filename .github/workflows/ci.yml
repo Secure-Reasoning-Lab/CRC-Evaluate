@@ -137,8 +137,8 @@ jobs:
   #           --no-color
 
   # Stage 3: Parallel smoke checks with result validation
-  smoke-regression:
-    name: Smoke Regression
+  smoke-parallel:
+    name: Smoke (Bugfinding + Bugfixing, Parallel)
     # needs: [sanity-mock, sanity-real]
     needs: [sanity-mock]
     runs-on: [self-hosted, linux, crs]
