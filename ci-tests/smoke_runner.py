@@ -92,6 +92,10 @@ def build_experiment_config(
 
     timeouts = suite["timeouts"]
 
+    redis_host = os.environ.get("CRSBENCH_REDIS_HOST") or suite.get(
+        "redis_host", defaults.get("redis_host", "localhost")
+    )
+
     config: dict[str, Any] = {
         "experiment": experiment_name,
         "trials": int(suite.get("trials", defaults.get("trials", 1))),
@@ -107,7 +111,7 @@ def build_experiment_config(
         "experiment_filestore": str(experiment_filestore),
         "report_filestore": str(report_filestore),
         "crses": [suite["crs"]],
-        "redis_host": suite.get("redis_host", defaults.get("redis_host", "localhost")),
+        "redis_host": redis_host,
         "resources": suite["resources"],
         "worker": {
             "jobs": int(suite.get("worker_jobs", defaults.get("worker_jobs", 3))),

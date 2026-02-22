@@ -199,6 +199,9 @@ python scripts/valkey-helper.py clean-all
 
 For manual Redis setup: `docker run -d --name redis -p 6379:6379 redis:7`
 
+When configuring CRSBench, set `CRSBENCH_REDIS_HOST` as `host` or `host:port`
+(for example `localhost:6379` or `redis.internal:6380`).
+
 #### 2. Start Worker(s)
 
 Each worker runs a dual-queue supervisor that processes build jobs (priority)
@@ -217,12 +220,12 @@ crsbench evaluator --ci \
 
 # Multiple machines (each connects to same Redis)
 # Machine A (64 cores):
-CRSBENCH_REDIS_HOST=redis.internal crsbench evaluator --ci \
+CRSBENCH_REDIS_HOST=redis.internal:6379 crsbench evaluator --ci \
   --build-jobs 8 --build-cores-per-job 4 --verify-jobs 32 \
   --cores 64 --continuous
 
 # Machine B (32 cores):
-CRSBENCH_REDIS_HOST=redis.internal crsbench evaluator --ci \
+CRSBENCH_REDIS_HOST=redis.internal:6379 crsbench evaluator --ci \
   --build-jobs 4 --build-cores-per-job 4 --verify-jobs 16 \
   --cores 32 --continuous
 ```

@@ -117,12 +117,12 @@ benchmarks:
 # =============================================================================
 
 # Redis server hostname for distributed mode.
-# Possible values: null | "none" | "localhost" | "redis" | "<ip>" | "<hostname>"
+# Possible values: null | "none" | "localhost" | "localhost:6380" | "redis" | "<ip>" | "<hostname>" | "<hostname>:<port>"
 # - null or "none": local mode (sequential, no Redis)
-# - "localhost": Redis on same machine
+# - "localhost" or "localhost:6379": Redis on same machine
 # - "redis": Docker Compose service name
-# - "<ip>/<hostname>": remote Redis server
-redis_host: localhost
+# - "<ip>/<hostname>[:port]": remote Redis server
+redis_host: localhost:6379
 
 # Snapshot interval in seconds. (0 to disable, 60-86400 when enabled)
 snapshot_period: 900  # 15 minutes, default: 900
@@ -163,8 +163,8 @@ worker:
   # Number of parallel jobs per worker process. (>= 1)
   jobs: 4  # default: 4
 
-  # Redis server hostname for workers.
-  redis_host: localhost  # default: "localhost"
+  # Redis server for workers (host or host:port).
+  redis_host: localhost:6379  # default: top-level redis_host
 
   # Run continuously or exit when queue is empty.
   continuous: true  # default: false

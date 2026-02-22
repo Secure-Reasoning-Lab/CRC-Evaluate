@@ -56,6 +56,25 @@ def validate_queue_name_component(name: str) -> str:
 _auth_required: Optional[bool] = None
 
 
+def _resolve_redis_endpoint(redis_host: str) -> tuple[str, int]:
+    """Resolve Redis host/port from host string and environment.
+
+    Supported formats:
+    - ``redis_host="host"`` (defaults to port 6379)
+    - ``redis_host="host:port"``
+    """
+    host = redis_host.strip()
+    port = 6379
+
+    if ":" in host:
+        candidate_host, candidate_port = host.rsplit(":", 1)
+        if candidate_port.isdigit():
+            host = candidate_host
+            port = int(candidate_port)
+
+    return host, port
+
+
 def create_redis_connection(
     redis_host: str,
     *,
@@ -90,12 +109,14 @@ def create_redis_connection(
             "Install with: pip install redis rq"
         )
 
+    resolved_host, resolved_port = _resolve_redis_endpoint(redis_host)
     password = os.environ.get("CRSBENCH_REDIS_PASSWORD") or None
 
     # Fast path: use cached auth decision
     if _auth_required is True and password:
         conn = redis.Redis(
-            host=redis_host,
+            host=resolved_host,
+            port=resolved_port,
             password=password,
             socket_connect_timeout=socket_connect_timeout,
         )
@@ -103,7 +124,8 @@ def create_redis_connection(
         return conn
     if _auth_required is False:
         conn = redis.Redis(
-            host=redis_host,
+            host=resolved_host,
+            port=resolved_port,
             socket_connect_timeout=socket_connect_timeout,
         )
         conn.ping()
@@ -113,7 +135,8 @@ def create_redis_connection(
     if password:
         try:
             conn = redis.Redis(
-                host=redis_host,
+                host=resolved_host,
+                port=resolved_port,
                 password=password,
                 socket_connect_timeout=socket_connect_timeout,
             )
@@ -127,7 +150,8 @@ def create_redis_connection(
                 "connecting without password"
             )
             conn = redis.Redis(
-                host=redis_host,
+                host=resolved_host,
+                port=resolved_port,
                 socket_connect_timeout=socket_connect_timeout,
             )
             conn.ping()
@@ -137,7 +161,8 @@ def create_redis_connection(
     # No password in env — connect without
     try:
         conn = redis.Redis(
-            host=redis_host,
+            host=resolved_host,
+            port=resolved_port,
             socket_connect_timeout=socket_connect_timeout,
         )
         conn.ping()

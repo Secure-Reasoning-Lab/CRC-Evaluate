@@ -224,10 +224,10 @@ pov_dedup_strategy: patch-based
 #   # Higher values increase worker throughput but require more resources
 #   jobs: 8
 #
-#   # Redis server hostname or IP address for distributed job coordination
+#   # Redis server for distributed job coordination (host or host:port)
 #   # Default: "localhost"
 #   # All workers must connect to the same Redis instance
-#   redis_host: "redis.example.com"
+#   redis_host: "redis.example.com:6379"
 #
 #   # Whether workers should run continuously or exit after completing one job
 #   # Default: false

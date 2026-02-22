@@ -105,7 +105,7 @@ experiment_filestore: /data/experiments
 oss_fuzz_path: /opt/oss-fuzz
 benchmarks_root: /home/user/CRSBench/benchmarks
 max_total_time: 3600
-redis_host: localhost
+redis_host: localhost:6379
 benchmarks:
   - sanity-mock-c-delta-01
   - afc-curl-delta-01

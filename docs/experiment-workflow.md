@@ -58,10 +58,10 @@ CRSBench uses a distributed model backed by a Redis-compatible queue (Valkey):
 
 ```bash
 # Local development (host access, no auth)
-python scripts/valkey-helper.py start --bind-host
+python scripts/valkey-helper.py start
 
 # Remote workers (password auth, binds 0.0.0.0)
-python scripts/valkey-helper.py start --password
+python scripts/valkey-helper.py --password start
 ```
 
 4. **Experiment config** — YAML file defining CRSes, benchmarks, timeouts, and resources.
@@ -70,7 +70,7 @@ python scripts/valkey-helper.py start --password
 
 ```bash
 # 1. Start Valkey
-python scripts/valkey-helper.py start --bind-host
+python scripts/valkey-helper.py start
 
 # 2. Run orchestrator (enqueues jobs and monitors)
 crsbench run --experiment-config config.yaml
@@ -93,7 +93,7 @@ A realistic example on a 128-core machine running 7 trial jobs with an evaluator
 
 ```bash
 # 1. Start Valkey with password auth (for remote workers)
-python scripts/valkey-helper.py start --password
+python scripts/valkey-helper.py --password start
 
 # 2. Start evaluator (cores 112-127, 16 cores)
 #    --build-jobs 4: up to 4 parallel variant builds
@@ -140,7 +140,7 @@ pov_dedup_strategy: patch-based
 experiment_filestore: /data/experiments
 report_filestore: /data/reports
 
-redis_host: localhost
+redis_host: localhost:6379  # or localhost:6380
 
 crses:
   - atlantis-c
@@ -231,7 +231,7 @@ Job count is configured in the experiment config YAML under `worker.jobs`.
 **Machine A** (Valkey + Orchestrator + Evaluator):
 ```bash
 # Start Valkey with password auth
-python scripts/valkey-helper.py start --password
+python scripts/valkey-helper.py --password start
 
 # Start evaluator
 crsbench evaluator --experiment-config config.yaml \
@@ -271,7 +271,7 @@ scripts/orchestrate-workers.sh collect
 
 **Machine A** (Valkey + Orchestrator):
 ```bash
-python scripts/valkey-helper.py start --bind-host
+python scripts/valkey-helper.py start
 crsbench run --experiment-config config.yaml
 ```
 
@@ -280,7 +280,7 @@ crsbench run --experiment-config config.yaml
 # Tunnel to Machine A's Valkey
 ssh -N -L 6379:localhost:6379 user@machine-a &
 
-# Start worker (set CRSBENCH_REDIS_HOST=localhost via tunnel)
+# Start worker (set CRSBENCH_REDIS_HOST=localhost:6379 via tunnel)
 crsbench worker --experiment-config config.yaml --continuous
 ```
 
