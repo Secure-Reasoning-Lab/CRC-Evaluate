@@ -158,6 +158,11 @@ jobs:
         with:
           require-docker: true
 
+      - name: Start Valkey for distributed smoke
+        run: |
+          uv run python scripts/valkey-helper.py start --bind-host
+          uv run python scripts/valkey-helper.py status
+
       - name: Run validated smoke suites (parallel)
         env:
           # 8 cores/trial x 3 harnesses = 24 cores per suite

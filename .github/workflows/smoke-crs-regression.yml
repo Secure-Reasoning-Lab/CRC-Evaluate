@@ -38,6 +38,11 @@ jobs:
         with:
           require-docker: true
 
+      - name: Start Valkey for distributed smoke
+        run: |
+          uv run python scripts/valkey-helper.py start --bind-host
+          uv run python scripts/valkey-helper.py status
+
       - name: Run parallel smoke suites
         env:
           # Override from repository/workflow vars when needed.
