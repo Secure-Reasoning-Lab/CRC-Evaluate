@@ -30,6 +30,21 @@ crsbench evaluator --experiment-config experiment-configs/experiment-config-sani
 If your virtual environment is not activated, prefix CLI commands with `uv run`
 (for example, `uv run crsbench download --all`).
 
+### Shell Completion
+
+Enable tab-completion for all `crsbench` subcommands and options:
+
+```bash
+# Bash
+activate-global-python-argcomplete --user   # then restart shell or source ~/.bashrc
+
+# Zsh — add to ~/.zshrc
+eval "$(register-python-argcomplete crsbench)"
+```
+
+See the [argcomplete docs](https://github.com/kislyuk/argcomplete#installation) for
+fish and other shell setup instructions.
+
 CRS experiments use a distributed job queue (Redis/RQ). The orchestrator (`run`) enqueues jobs,
 workers (`worker`) execute them. Add `evaluator` for real-time POV and patch verification.
 

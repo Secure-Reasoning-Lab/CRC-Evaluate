@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# PYTHON_ARGCOMPLETE_OK
 """Experiment runner for CRSBench evaluation framework.
 
 This script provides a single entry point for running CRS evaluations with
@@ -32,6 +33,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List
 
+import argcomplete
 import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -348,6 +350,7 @@ Examples:
 
     add_benchmark_subparser(subparsers)
 
+    argcomplete.autocomplete(parser)
     args = parser.parse_args()
 
     # Default to 'run' if no command specified (shouldn't happen due to legacy handling)
