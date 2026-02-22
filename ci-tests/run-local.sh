@@ -296,8 +296,13 @@ run_smoke_bugfinding() {
     run_stage "Stage 4a: Smoke Bugfinding (atlantis-multilang-given_fuzzer)"
     start_temp_valkey
     trap cleanup_temp_valkey EXIT
+    local cpuset_flag=()
+    if [ "${SMOKE_NO_CPUSET:-1}" = "1" ]; then
+        cpuset_flag=(--no-cpuset)
+    fi
     uv run python ci-tests/smoke_runner.py \
         --suite bugfinding \
+        "${cpuset_flag[@]}" \
         --worker-cores 16 \
         --keep-workspace || fail "Smoke bugfinding failed"
     trap - EXIT
@@ -309,8 +314,13 @@ run_smoke_bugfixing() {
     run_stage "Stage 4b: Smoke Bugfixing (crs-claude-code)"
     start_temp_valkey
     trap cleanup_temp_valkey EXIT
+    local cpuset_flag=()
+    if [ "${SMOKE_NO_CPUSET:-1}" = "1" ]; then
+        cpuset_flag=(--no-cpuset)
+    fi
     uv run python ci-tests/smoke_runner.py \
         --suite bugfixing \
+        "${cpuset_flag[@]}" \
         --worker-cores 16 \
         --keep-workspace || fail "Smoke bugfixing failed"
     trap - EXIT
@@ -327,11 +337,16 @@ run_smoke_parallel() {
     local bugfixing_cpuset=${SMOKE_CPUSET_BUGFIXING:-24-47}
     local smoke_run_root
     smoke_run_root=$(mktemp -d /tmp/crsbench-smoke-parallel-XXXXXX)
+    local cpuset_flag=()
+    if [ "${SMOKE_NO_CPUSET:-1}" = "1" ]; then
+        cpuset_flag=(--no-cpuset)
+    fi
     start_temp_valkey
     trap cleanup_temp_valkey EXIT
 
     uv run python ci-tests/smoke_runner.py \
         --suite bugfinding \
+        "${cpuset_flag[@]}" \
         --worker-cpuset "$bugfinding_cpuset" \
         --result-root "$smoke_run_root" \
         --keep-workspace &
@@ -339,6 +354,7 @@ run_smoke_parallel() {
 
     uv run python ci-tests/smoke_runner.py \
         --suite bugfixing \
+        "${cpuset_flag[@]}" \
         --worker-cpuset "$bugfixing_cpuset" \
         --result-root "$smoke_run_root" \
         --keep-workspace &

@@ -318,6 +318,8 @@ def run_suite(args: argparse.Namespace) -> int:
         str(config_path),
         "--continuous",
     ]
+    if args.no_cpuset:
+        worker_cmd.append("--no-cpuset")
     if args.worker_cpuset:
         worker_cmd += ["--cores", args.worker_cpuset]
     else:
@@ -468,6 +470,11 @@ def parse_args() -> argparse.Namespace:
         "--worker-cpuset",
         default="",
         help="Optional cpuset for worker cores (e.g. 0-15). Overrides --worker-cores.",
+    )
+    parser.add_argument(
+        "--no-cpuset",
+        action="store_true",
+        help="Run worker without cpuset/cgroup pinning (portable across Docker cgroup drivers).",
     )
     parser.add_argument(
         "--result-root",

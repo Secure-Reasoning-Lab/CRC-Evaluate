@@ -65,7 +65,7 @@ Examples:
     worker_parser.add_argument(
         "--no-cpuset",
         action="store_true",
-        help="Disable CPU affinity (not supported with multiple workers)",
+        help="Disable CPU affinity and cgroup pinning",
     )
 
     worker_parser.add_argument(
@@ -173,10 +173,6 @@ def run_worker(args: argparse.Namespace) -> int:
     worker_name = args.worker_name
     if worker_name is None and worker_config and worker_config.worker_name:
         worker_name = worker_config.worker_name
-
-    # Validate --no-cpuset with multiple workers
-    if getattr(args, "no_cpuset", False) and num_workers > 1:
-        raise ValueError("--no-cpuset is not supported with multiple workers")
 
     # cpuset is enabled by default, disabled with --no-cpuset
     use_cpuset = not getattr(args, "no_cpuset", False)
