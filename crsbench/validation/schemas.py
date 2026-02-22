@@ -689,6 +689,8 @@ class ValidationMetadata(BaseModel):
 class LitellmResourceConfig(BaseModel):
     """LiteLLM resource configuration."""
 
+    model_config = ConfigDict(extra="forbid")
+
     max_concurrent_requests: int = Field(
         default=10, ge=1, description="Maximum concurrent requests to LiteLLM"
     )
@@ -706,6 +708,8 @@ class LitellmResourceConfig(BaseModel):
 
 class ResourceConfig(BaseModel):
     """Resource allocation configuration for trials."""
+
+    model_config = ConfigDict(extra="forbid")
 
     cores_per_trial: int = Field(
         default=4, ge=1, description="Number of CPU cores allocated per trial"
@@ -729,6 +733,8 @@ class WorkerConfig(BaseModel):
     Note: All workers sharing the same config get the same overrides.
     For heterogeneous clusters, use shared storage with consistent mount points.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     jobs: int = Field(default=4, ge=1, description="Number of parallel jobs per worker")
     redis_host: Optional[str] = Field(
@@ -828,6 +834,8 @@ class WorkerConfig(BaseModel):
 class CrsComposeConfig(BaseModel):
     """Configuration for oss-crs adapter."""
 
+    model_config = ConfigDict(extra="forbid")
+
     docker_registry: str = Field(
         ...,
         description="Docker registry for CRS images (e.g., ghcr.io/team-atlanta/test)",
@@ -857,6 +865,8 @@ class CrsComposeConfig(BaseModel):
 class CrsOverrideConfig(BaseModel):
     """Per-CRS runtime override configuration."""
 
+    model_config = ConfigDict(extra="forbid")
+
     litellm_config_path: Optional[Path] = Field(
         default=None,
         description="Per-CRS override path to LiteLLM config file",
@@ -870,6 +880,16 @@ class CrsOverrideConfig(BaseModel):
 class ExperimentConfig(BaseModel):
     """Experiment configuration schema."""
 
+    model_config = ConfigDict(extra="forbid")
+
+    description: Optional[str] = Field(
+        default=None,
+        description="Human-readable description of this experiment run",
+    )
+    git_hash: Optional[str] = Field(
+        default=None,
+        description="Git commit hash for reproducibility tracking",
+    )
     experiment: str = Field(
         ..., description="Unique identifier for this experiment run"
     )
@@ -1521,7 +1541,7 @@ class ExperimentConfig(BaseModel):
 class BenchmarkSuiteConfig(BaseModel):
     """Benchmark suite configuration schema."""
 
-    model_config = {"populate_by_name": True}  # Pydantic V2 syntax
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     Name: str = Field(..., description="Unique identifier for the benchmark suite")
     Description: str = Field(

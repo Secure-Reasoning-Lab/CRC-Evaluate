@@ -4,11 +4,13 @@ This module provides pure functions with minimal side effects for validating
 benchmark configurations. Safe for use as tool calls by LLM agents.
 """
 
+import difflib
 import os
 from pathlib import Path
 from typing import Any, Dict, Union
 
 import yaml
+from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 
 from crsbench.validation.errors import (
@@ -25,6 +27,38 @@ from crsbench.validation.schemas import (
     FullMode,
     HarnessFile,
 )
+
+
+def _suggest_typo_fields(
+    data: Dict[str, Any],
+    model_class: type[BaseModel],
+) -> list[str]:
+    """Check for unknown keys and return 'did you mean?' suggestions.
+
+    Args:
+        data: Raw YAML dict to validate.
+        model_class: The Pydantic model class to compare against.
+
+    Returns:
+        List of human-readable suggestion strings for unknown keys.
+    """
+    known_fields = set(model_class.model_fields.keys())
+    # Also include field aliases
+    for field_info in model_class.model_fields.values():
+        if field_info.alias:
+            known_fields.add(field_info.alias)
+
+    suggestions = []
+    for key in data:
+        if key not in known_fields:
+            matches = difflib.get_close_matches(key, known_fields, n=1, cutoff=0.6)
+            if matches:
+                suggestions.append(
+                    f"Unknown field '{key}'. Did you mean '{matches[0]}'?"
+                )
+            else:
+                suggestions.append(f"Unknown field '{key}'.")
+    return suggestions
 
 
 def validate_benchmark(path: Union[str, Path]) -> ValidationResult:
@@ -479,6 +513,14 @@ def _validate_experiment_schema(
                 field=field_path,
                 context={"validation_error": error},
             )
+        # Add did-you-mean suggestions for unknown top-level fields
+        suggestions = _suggest_typo_fields(data, ExperimentConfig)
+        for suggestion in suggestions:
+            result.add_error(
+                ValidationCodes.SCHEMA_VALIDATION_ERROR,
+                suggestion,
+                field="unknown_field",
+            )
         # Return a minimal config to avoid crashes
         return ExperimentConfig(
             experiment="dummy",
@@ -666,6 +708,14 @@ def _validate_benchmark_suite_schema(
                 f"Schema validation error in '{field_path}': {error['msg']}",
                 field=field_path,
                 context={"validation_error": error},
+            )
+        # Add did-you-mean suggestions for unknown fields
+        suggestions = _suggest_typo_fields(data, BenchmarkSuiteConfig)
+        for suggestion in suggestions:
+            result.add_error(
+                ValidationCodes.SCHEMA_VALIDATION_ERROR,
+                suggestion,
+                field="unknown_field",
             )
         # Return a minimal config to avoid crashes
         return BenchmarkSuiteConfig.model_validate(
