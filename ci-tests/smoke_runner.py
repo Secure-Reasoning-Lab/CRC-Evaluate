@@ -172,6 +172,16 @@ def terminate_worker(proc: subprocess.Popen[str]) -> None:
             proc.kill()
 
 
+def _tail_text(path: Path, lines: int = 80) -> str:
+    if not path.exists():
+        return "(log file missing)"
+    text = path.read_text(errors="replace")
+    data = text.splitlines()
+    if len(data) <= lines:
+        return text
+    return "\n".join(data[-lines:])
+
+
 def _count_files(path: Path) -> int:
     if not path.exists():
         return 0
@@ -308,17 +318,60 @@ def run_suite(args: argparse.Namespace) -> int:
     else:
         worker_cmd += ["--cores", str(args.worker_cores)]
 
+    orchestrator_cmd = [
+        "uv",
+        "run",
+        "crsbench",
+        "run",
+        "--experiment-config",
+        str(config_path),
+    ]
+    orchestrator_log = workspace / "orchestrator.log"
+    with orchestrator_log.open("w") as of:
+        orchestrator = subprocess.Popen(
+            orchestrator_cmd, stdout=of, stderr=subprocess.STDOUT, text=True
+        )
+
     worker_log = workspace / "worker-supervisor.log"
     with worker_log.open("w") as wf:
         worker = subprocess.Popen(
             worker_cmd, stdout=wf, stderr=subprocess.STDOUT, text=True
         )
 
+    orchestrator_rc: int | None = None
     try:
-        wait_for_worker_start(worker)
-        run(["uv", "run", "crsbench", "run", "--experiment-config", str(config_path)])
+        try:
+            wait_for_worker_start(worker)
+        except RuntimeError:
+            # In CI/cpuset mode, worker can occasionally exit during startup.
+            # Retry once while orchestrator is already running.
+            if orchestrator.poll() is None:
+                with worker_log.open("a") as wf:
+                    worker = subprocess.Popen(
+                        worker_cmd, stdout=wf, stderr=subprocess.STDOUT, text=True
+                    )
+                wait_for_worker_start(worker, timeout_s=8.0)
+            else:
+                raise
+        orchestrator_rc = orchestrator.wait()
     finally:
         terminate_worker(worker)
+        if orchestrator.poll() is None:
+            orchestrator.terminate()
+            try:
+                orchestrator.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                orchestrator.kill()
+
+    if orchestrator_rc != 0:
+        raise RuntimeError(
+            "Orchestrator exited with non-zero status "
+            f"({orchestrator_rc}).\n"
+            "=== orchestrator.log (tail) ===\n"
+            f"{_tail_text(orchestrator_log)}\n"
+            "=== worker-supervisor.log (tail) ===\n"
+            f"{_tail_text(worker_log)}"
+        )
 
     exp_dir = exp_filestore / config["experiment"]
     successes, failures, patch_files, pov_files, trial_dirs = summarize_trial_status(
