@@ -62,6 +62,8 @@ class JSONReportGenerator:
                 "benchmark": trial_metrics.benchmark,
                 "harness": trial_metrics.harness,
                 "mode": trial_metrics.mode,
+                "run_mode": trial_metrics.run_mode,
+                "sanitizer": trial_metrics.sanitizer,
             },
             "summary": {
                 "total_povs_discovered": trial_metrics.total_povs_discovered,
@@ -84,15 +86,29 @@ class JSONReportGenerator:
             },
             "llm_usage": {
                 "total_tokens": trial_metrics.total_llm_tokens,
+                "total_input_tokens": trial_metrics.total_llm_input_tokens,
+                "total_output_tokens": trial_metrics.total_llm_output_tokens,
                 "total_cost": trial_metrics.total_llm_cost,
                 "by_model": trial_metrics.llm_usage_by_model,
+            },
+            "early_stop_analysis": {
+                "total_cpvs": getattr(trial_metrics, "total_cpvs", 0),
+                "cpvs_found": getattr(trial_metrics, "cpvs_found_count", 0),
+                "all_cpvs_found": getattr(trial_metrics, "all_cpvs_found", False),
+                "early_stop_time": getattr(trial_metrics, "early_stop_time", ""),
+                "early_stop_cost": getattr(trial_metrics, "early_stop_cost", ""),
+                "time_saved": getattr(trial_metrics, "time_saved", ""),
+                "cost_saved": getattr(trial_metrics, "cost_saved", ""),
             },
             "time_series": [
                 {
                     "elapsed_time": p.elapsed_time,
+                    "running_elapsed_time": p.running_elapsed_time,
                     "cumulative_povs": p.cumulative_povs,
                     "cumulative_patches": p.cumulative_patches,
                     "llm_tokens": p.llm_tokens,
+                    "llm_input_tokens": p.llm_input_tokens,
+                    "llm_output_tokens": p.llm_output_tokens,
                     "llm_cost": p.llm_cost,
                 }
                 for p in trial_metrics.time_series
@@ -104,10 +120,19 @@ class JSONReportGenerator:
         trial_reports_dir = self.output_dir / "trial-reports"
         trial_reports_dir.mkdir(exist_ok=True)
 
-        output_path = trial_reports_dir / f"trial-{trial_metrics.trial_num}.json"
+        # Create unique filename from trial path
+        # e.g., "exp/afc-curl/curl_fuzzer/delta/trial-1" -> "afc-curl-curl_fuzzer-delta-trial-1"
+        trial_path = Path(trial_metrics.trial_dir)
+        # Skip experiment dir (first part) and join the rest
+        trial_id = (
+            "-".join(trial_path.parts[1:])
+            if len(trial_path.parts) > 1
+            else trial_path.name
+        )
+        output_path = trial_reports_dir / f"{trial_id}.json"
         output_path.write_text(json.dumps(report, indent=2))
 
-        logger.info(f"Generated JSON trial report: {output_path}")
+        logger.debug(f"Generated JSON trial report: {output_path}")
         return output_path
 
     def generate_experiment_report(
@@ -143,6 +168,9 @@ class JSONReportGenerator:
                 "avg_povs_per_trial": experiment_metrics.avg_povs_per_trial,
                 "avg_patches_per_trial": experiment_metrics.avg_patches_per_trial,
                 "avg_cost_per_trial": experiment_metrics.avg_cost_per_trial,
+                "early_stop_count": sum(
+                    1 for m in experiment_metrics.trial_metrics if m.all_cpvs_found
+                ),
             },
             "by_crs": by_crs,
             "by_benchmark": by_benchmark,
@@ -164,6 +192,24 @@ class JSONReportGenerator:
                 }
                 for m in experiment_metrics.trial_metrics
             ],
+            "early_stop_trials": [
+                {
+                    "trial_dir": m.trial_dir,
+                    "benchmark": m.benchmark,
+                    "crs": m.crs,
+                    "harness": m.harness,
+                    "sanitizer": m.sanitizer,
+                    "mode": m.mode,
+                    "early_stop_time": m.early_stop_time,
+                    "early_stop_cost": m.early_stop_cost,
+                    "time_saved": m.time_saved,
+                    "cost_saved": m.cost_saved,
+                    "total_cpvs": m.total_cpvs,
+                    "cpvs_found_count": m.cpvs_found_count,
+                }
+                for m in experiment_metrics.trial_metrics
+                if m.all_cpvs_found
+            ],
         }
 
         if trial_report_paths:
@@ -174,7 +220,7 @@ class JSONReportGenerator:
         output_path = self.output_dir / f"experiment-{exp_name}.json"
         output_path.write_text(json.dumps(report, indent=2))
 
-        logger.info(f"Generated JSON experiment report: {output_path}")
+        logger.debug(f"Generated JSON experiment report: {output_path}")
         return output_path
 
     def _build_timeline(self, snapshots: list[SnapshotData]) -> dict[str, Any]:

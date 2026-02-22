@@ -92,6 +92,8 @@ TRIAL_REPORT_TEMPLATE = """<!DOCTYPE html>
         <span><strong>CRS:</strong> {crs}</span>
         <span><strong>Harness:</strong> {harness}</span>
         <span class="badge {mode_badge_class}">{mode_display}</span>
+        <span><strong>Run Mode:</strong> {run_mode}</span>
+        <span><strong>Sanitizer:</strong> {sanitizer}</span>
         <span class="ml-auto">Generated: {generated_at}</span>
       </div>
     </div>
@@ -522,6 +524,8 @@ class HTMLReportGenerator:
             harness=trial_metrics.harness,
             mode_display=trial_metrics.mode.value.replace("_", " ").title(),
             mode_badge_class=mode_badge_class,
+            run_mode=trial_metrics.run_mode or "N/A",
+            sanitizer=trial_metrics.sanitizer or "N/A",
             generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             shadcn_styles=SHADCN_STYLES,
             stat_cards=stat_cards,
@@ -532,10 +536,20 @@ class HTMLReportGenerator:
 
         trial_reports_dir = self.output_dir / "trial-reports"
         trial_reports_dir.mkdir(exist_ok=True)
-        output_path = trial_reports_dir / f"trial-{trial_metrics.trial_num}.html"
+
+        # Create unique filename from trial path
+        # e.g., "exp/afc-curl/curl_fuzzer/delta/trial-1" -> "afc-curl-curl_fuzzer-delta-trial-1"
+        trial_path = Path(trial_metrics.trial_dir)
+        # Skip experiment dir (first part) and join the rest
+        trial_id = (
+            "-".join(trial_path.parts[1:])
+            if len(trial_path.parts) > 1
+            else trial_path.name
+        )
+        output_path = trial_reports_dir / f"{trial_id}.html"
         output_path.write_text(html)
 
-        logger.info(f"Generated HTML trial report: {output_path}")
+        logger.debug(f"Generated HTML trial report: {output_path}")
         return output_path
 
     def generate_experiment_report(self, experiment_metrics: ExperimentMetrics) -> Path:
@@ -585,7 +599,7 @@ class HTMLReportGenerator:
         output_path = self.output_dir / f"experiment-{experiment_name}.html"
         output_path.write_text(html)
 
-        logger.info(f"Generated HTML experiment report: {output_path}")
+        logger.debug(f"Generated HTML experiment report: {output_path}")
         return output_path
 
     def _build_stat_cards(self, stats: list[tuple[str, Any]]) -> str:

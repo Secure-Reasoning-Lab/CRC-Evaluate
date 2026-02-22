@@ -96,6 +96,11 @@ class SnapshotData(BaseModel):
     # LLM usage (parsed from llm-usage.json)
     llm_usage: LLMUsage = Field(default_factory=LLMUsage)
 
+    # POV verification data (from pov_verification.json)
+    cpvs_found: list[str] = Field(default_factory=list)
+    cpvs_remaining: list[str] = Field(default_factory=list)
+    early_stop_triggered: bool = False
+
     # Flags indicating what was captured
     has_config: bool = False
     has_execution_metadata: bool = False
@@ -147,9 +152,12 @@ class TimeSeriesPoint(BaseModel):
     """Single point in time series data."""
 
     elapsed_time: float
+    running_elapsed_time: float = 0.0
     cumulative_povs: int = 0
     cumulative_patches: int = 0
     llm_tokens: int = 0
+    llm_input_tokens: int = 0
+    llm_output_tokens: int = 0
     llm_cost: float = 0.0
 
 
@@ -166,6 +174,10 @@ class TrialMetrics(BaseModel):
     harness: str
     mode: TrialMode
 
+    # Run configuration (extracted from trial path)
+    run_mode: str | None = None  # "full" or "delta"
+    sanitizer: str | None = None  # "address", "undefined", etc.
+
     # POV metrics
     total_povs_discovered: int = 0
     unique_pov_names: list[str] = Field(default_factory=list)
@@ -177,6 +189,8 @@ class TrialMetrics(BaseModel):
     # Cost metrics
     total_llm_cost: float = 0.0
     total_llm_tokens: int = 0
+    total_llm_input_tokens: int = 0
+    total_llm_output_tokens: int = 0
     llm_usage_by_model: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     # Time metrics
@@ -188,6 +202,15 @@ class TrialMetrics(BaseModel):
 
     # Snapshot info
     snapshot_count: int = 0
+
+    # Early stop analysis
+    total_cpvs: int = 0
+    cpvs_found_count: int = 0
+    all_cpvs_found: bool = False
+    early_stop_time: float | None = None
+    early_stop_cost: float | None = None
+    time_saved: float | None = None
+    cost_saved: float | None = None
 
     @property
     def unique_povs(self) -> int:

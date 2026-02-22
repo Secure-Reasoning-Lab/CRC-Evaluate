@@ -1,6 +1,7 @@
 """Metrics aggregation for the reporting module."""
 
 from collections import defaultdict
+from pathlib import Path
 
 from crsbench.reporting.models import (
     BenchmarkMetrics,
@@ -30,20 +31,59 @@ class MetricsAggregator:
         trial_metrics = aggregator.aggregate_trial(trial_info, snapshots)
     """
 
+    @staticmethod
+    def _extract_run_config(trial_dir: str | Path) -> tuple[str | None, str | None]:
+        """Extract run_mode and sanitizer from trial directory path.
+
+        Path pattern: <experiment>/<config>/<harness>/<run_mode>/<sanitizer>/trial-N
+
+        Args:
+            trial_dir: Trial directory path
+
+        Returns:
+            Tuple of (run_mode, sanitizer) or (None, None) if not found
+        """
+        path = Path(trial_dir)
+        parts = path.parts
+
+        # Need at least: mode/sanitizer/trial-N
+        if len(parts) < 3:
+            return None, None
+
+        try:
+            # run_mode is third from end (e.g., "full" or "delta")
+            run_mode = parts[-3]
+            # sanitizer is second from end (e.g., "address")
+            sanitizer = parts[-2]
+
+            # Validate run_mode is expected value
+            if run_mode not in ("full", "delta"):
+                return None, None
+
+            return run_mode, sanitizer
+        except (IndexError, ValueError):
+            return None, None
+
     def aggregate_trial(
         self,
         trial_info: TrialInfo,
         snapshots: list[SnapshotData],
+        *,
+        total_cpvs: int = 0,
     ) -> TrialMetrics:
         """Aggregate metrics for a single trial.
 
         Args:
             trial_info: Trial information
             snapshots: List of snapshot data from the trial
+            total_cpvs: Total CPVs for this harness from ground truth (default: 0)
 
         Returns:
             Aggregated trial metrics
         """
+        # Extract run configuration from trial path
+        run_mode, sanitizer = self._extract_run_config(trial_info.trial_dir)
+
         if not snapshots:
             return TrialMetrics(
                 trial_dir=str(trial_info.trial_dir),
@@ -52,6 +92,8 @@ class MetricsAggregator:
                 benchmark=trial_info.benchmark,
                 harness=trial_info.harness,
                 mode=trial_info.mode,
+                run_mode=run_mode,
+                sanitizer=sanitizer,
             )
 
         # Sort snapshots by cycle
@@ -60,14 +102,14 @@ class MetricsAggregator:
         # Collect all unique POV and patch names across snapshots
         all_pov_names: set[str] = set()
         all_patch_names: set[str] = set()
-        total_povs = 0
-        total_patches = 0
 
         for snap in sorted_snapshots:
             all_pov_names.update(snap.pov_names)
             all_patch_names.update(snap.patch_names)
-            total_povs += snap.pov_count
-            total_patches += snap.patch_count
+
+        # Count unique POVs and patches
+        total_povs = len(all_pov_names)
+        total_patches = len(all_patch_names)
 
         # Get final snapshot for cumulative LLM usage
         final_snapshot = sorted_snapshots[-1]
@@ -89,6 +131,44 @@ class MetricsAggregator:
         # Compute time-series data
         time_series = self._compute_time_series(sorted_snapshots)
 
+        # Early stop analysis
+        early_stop_time: float | None = None
+        early_stop_cost: float | None = None
+        cpvs_found_count = 0
+        all_cpvs_found = False
+
+        if total_cpvs > 0:
+            # Find first snapshot where all CPVs were discovered
+            # Only triggers if pov_verification.json exists (cpvs_found non-empty)
+            for snap in sorted_snapshots:
+                # NOTE: we assume we did have at least one ground truth cpv!!
+                if snap.cpvs_found and not snap.cpvs_remaining:
+                    # All CPVs found - cpvs_remaining is empty
+                    early_stop_time = snap.running_elapsed_time or snap.elapsed_time
+                    early_stop_cost = snap.llm_usage.total_cost_usd
+                    cpvs_found_count = len(snap.cpvs_found)
+                    all_cpvs_found = True
+                    logger.debug(
+                        f"Early stop detected: {trial_info.trial_dir} - "
+                        f"all {total_cpvs} CPVs found at "
+                        f"run_elapsed_time={early_stop_time:.1f}s, cost=${early_stop_cost:.4f}"
+                    )
+                    break
+
+            # If not all found, use last snapshot's CPV count (if pov_verification.json exists)
+            if not all_cpvs_found and sorted_snapshots:
+                last_snap = sorted_snapshots[-1]
+                if last_snap.cpvs_found:
+                    cpvs_found_count = len(last_snap.cpvs_found)
+
+        # Calculate savings
+        time_saved: float | None = None
+        cost_saved: float | None = None
+        if early_stop_time is not None:
+            time_saved = total_time - early_stop_time
+        if early_stop_cost is not None:
+            cost_saved = llm_usage.total_cost_usd - early_stop_cost
+
         return TrialMetrics(
             trial_dir=str(trial_info.trial_dir),
             trial_num=trial_info.trial_num,
@@ -96,6 +176,8 @@ class MetricsAggregator:
             benchmark=trial_info.benchmark,
             harness=trial_info.harness,
             mode=trial_info.mode,
+            run_mode=run_mode,
+            sanitizer=sanitizer,
             total_povs_discovered=total_povs,
             unique_pov_names=sorted(all_pov_names),
             total_patches_generated=total_patches,
@@ -103,11 +185,20 @@ class MetricsAggregator:
             total_llm_cost=llm_usage.total_cost_usd,
             total_llm_tokens=llm_usage.total_input_tokens
             + llm_usage.total_output_tokens,
+            total_llm_input_tokens=llm_usage.total_input_tokens,
+            total_llm_output_tokens=llm_usage.total_output_tokens,
             llm_usage_by_model=llm_usage_by_model,
             total_time=total_time,
             time_to_first_pov=time_to_first_pov,
             time_series=time_series,
             snapshot_count=len(sorted_snapshots),
+            total_cpvs=total_cpvs,
+            cpvs_found_count=cpvs_found_count,
+            all_cpvs_found=all_cpvs_found,
+            early_stop_time=early_stop_time,
+            early_stop_cost=early_stop_cost,
+            time_saved=time_saved,
+            cost_saved=cost_saved,
         )
 
     def aggregate_experiment(
@@ -175,12 +266,49 @@ class MetricsAggregator:
     ) -> list[TimeSeriesPoint]:
         """Compute time-series data from snapshots.
 
+        For snapshots with running_elapsed_time = 0 or None (build phase),
+        only keep the one with the largest elapsed_time (last snapshot before
+        CRS started running). Keep all snapshots with running_elapsed_time > 0.
+
         Args:
             snapshots: Sorted list of snapshots
 
         Returns:
             List of time series points
         """
+        if not snapshots:
+            return []
+
+        # Separate snapshots into two groups:
+        # 1. Snapshots with running_elapsed_time = 0 or None (build phase)
+        # 2. Snapshots with running_elapsed_time > 0 (CRS running phase)
+        build_snapshots = [
+            s
+            for s in snapshots
+            if s.running_elapsed_time is None or s.running_elapsed_time == 0
+        ]
+        running_snapshots = [
+            s
+            for s in snapshots
+            if s.running_elapsed_time is not None and s.running_elapsed_time > 0
+        ]
+
+        # Among build snapshots, only keep the one with largest elapsed_time
+        # (the last snapshot before CRS started running)
+        filtered_snapshots = []
+        if build_snapshots:
+            last_build_snapshot = max(build_snapshots, key=lambda s: s.elapsed_time)
+            filtered_snapshots.append(last_build_snapshot)
+        filtered_snapshots.extend(running_snapshots)
+
+        # Sort by elapsed_time to ensure correct order
+        filtered_snapshots.sort(key=lambda s: s.elapsed_time)
+
+        # Create a set of filtered snapshot cycles for quick lookup
+        filtered_cycles = {s.cycle for s in filtered_snapshots}
+
+        # Compute cumulative counts from ALL snapshots (not just filtered ones)
+        # But only create TimeSeriesPoint entries for filtered snapshots
         time_series: list[TimeSeriesPoint] = []
         cumulative_povs = 0
         cumulative_patches = 0
@@ -189,17 +317,24 @@ class MetricsAggregator:
             cumulative_povs += snapshot.pov_count
             cumulative_patches += snapshot.patch_count
 
-            point = TimeSeriesPoint(
-                elapsed_time=snapshot.elapsed_time,
-                cumulative_povs=cumulative_povs,
-                cumulative_patches=cumulative_patches,
-                llm_tokens=(
-                    snapshot.llm_usage.total_input_tokens
-                    + snapshot.llm_usage.total_output_tokens
-                ),
-                llm_cost=snapshot.llm_usage.total_cost_usd,
-            )
-            time_series.append(point)
+            # Only create time series point for filtered snapshots
+            if snapshot.cycle in filtered_cycles:
+                running_time = snapshot.running_elapsed_time or 0.0
+
+                point = TimeSeriesPoint(
+                    elapsed_time=snapshot.elapsed_time,
+                    running_elapsed_time=running_time,
+                    cumulative_povs=cumulative_povs,
+                    cumulative_patches=cumulative_patches,
+                    llm_tokens=(
+                        snapshot.llm_usage.total_input_tokens
+                        + snapshot.llm_usage.total_output_tokens
+                    ),
+                    llm_input_tokens=snapshot.llm_usage.total_input_tokens,
+                    llm_output_tokens=snapshot.llm_usage.total_output_tokens,
+                    llm_cost=snapshot.llm_usage.total_cost_usd,
+                )
+                time_series.append(point)
 
         return time_series
 

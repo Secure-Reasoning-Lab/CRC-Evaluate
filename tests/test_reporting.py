@@ -59,6 +59,7 @@ def sample_snapshot_data(temp_dir, sample_llm_usage) -> SnapshotData:
         cycle=1,
         timestamp=1234567890.0,
         elapsed_time=900.0,
+        running_elapsed_time=800.0,
         snapshot_period=900,
         pov_count=2,
         patch_count=1,
@@ -104,6 +105,8 @@ def sample_trial_metrics() -> TrialMetrics:
         unique_patch_names=["patch_001", "patch_002", "patch_003", "patch_004"],
         total_llm_cost=12.50,
         total_llm_tokens=50000,
+        total_llm_input_tokens=37000,
+        total_llm_output_tokens=13000,
         llm_usage_by_model={
             "claude-sonnet-4": {
                 "input_tokens": 30000,
@@ -116,31 +119,23 @@ def sample_trial_metrics() -> TrialMetrics:
         time_to_first_pov=900.0,
         time_series=[
             TimeSeriesPoint(
-                elapsed_time=900.0,
-                cumulative_povs=1,
-                cumulative_patches=2,
-                llm_tokens=10000,
-                llm_cost=2.50,
-            ),
-            TimeSeriesPoint(
-                elapsed_time=1800.0,
-                cumulative_povs=2,
-                cumulative_patches=4,
-                llm_tokens=25000,
-                llm_cost=6.25,
-            ),
-            TimeSeriesPoint(
                 elapsed_time=2700.0,
+                running_elapsed_time=0.0,
                 cumulative_povs=4,
                 cumulative_patches=6,
                 llm_tokens=40000,
+                llm_input_tokens=30000,
+                llm_output_tokens=10000,
                 llm_cost=10.00,
             ),
             TimeSeriesPoint(
                 elapsed_time=3600.0,
+                running_elapsed_time=3200.0,
                 cumulative_povs=5,
                 cumulative_patches=8,
                 llm_tokens=50000,
+                llm_input_tokens=37000,
+                llm_output_tokens=13000,
                 llm_cost=12.50,
             ),
         ],
@@ -339,6 +334,7 @@ class TestMetricsAggregator:
                 cycle=1,
                 timestamp=1000.0,
                 elapsed_time=900.0,
+                running_elapsed_time=800.0,
                 snapshot_period=900,
                 pov_count=1,
                 patch_count=0,
@@ -355,6 +351,7 @@ class TestMetricsAggregator:
                 cycle=2,
                 timestamp=2000.0,
                 elapsed_time=1800.0,
+                running_elapsed_time=1600.0,
                 snapshot_period=900,
                 pov_count=2,
                 patch_count=1,
@@ -538,6 +535,7 @@ class TestJSONReportGenerator:
                 cycle=1,
                 timestamp=1000.0,
                 elapsed_time=900.0,
+                running_elapsed_time=800.0,
                 snapshot_period=900,
                 pov_count=1,
                 patch_count=0,
@@ -602,6 +600,7 @@ class TestHTMLReportGenerator:
                 cycle=1,
                 timestamp=1000.0,
                 elapsed_time=900.0,
+                running_elapsed_time=800.0,
                 snapshot_period=900,
                 pov_count=1,
                 patch_count=0,
@@ -714,3 +713,123 @@ class TestDiscoverTrials:
         missing_trials = [t for t in trials if t.status == "missing_metadata"]
         assert len(valid_trials) == 1
         assert len(missing_trials) == 1
+
+
+class TestReportGeneratorCPVFiltering:
+    """Tests for ReportGenerator CPV filtering by sanitizer."""
+
+    def test_get_cpv_info_filters_by_sanitizer(self, temp_dir):
+        """Test that _get_cpv_info filters CPVs by sanitizer."""
+        from crsbench.reporting.orchestrator import ReportGenerator
+        from crsbench.validation.schemas import (
+            POV,
+            BenchmarkConfig,
+            HarnessFile,
+            Vulnerability,
+        )
+
+        # Create a benchmark directory with meta.yaml
+        benchmark_dir = temp_dir / "benchmarks" / "test-benchmark"
+        benchmark_dir.mkdir(parents=True)
+
+        # Create meta.yaml with CPVs having different sanitizers
+        from crsbench.validation.schemas import FullMode
+
+        config = BenchmarkConfig(
+            harness_files=[
+                HarnessFile(
+                    name="test_harness",
+                    path="/src/test_harness.c",
+                    vulns=[
+                        Vulnerability(
+                            vuln_keyword="cpv_0",
+                            povs=[
+                                POV(id="pov_0", sanitizer="address"),
+                            ],
+                        ),
+                        Vulnerability(
+                            vuln_keyword="cpv_1",
+                            povs=[
+                                POV(id="pov_1", sanitizer="undefined"),
+                            ],
+                        ),
+                        Vulnerability(
+                            vuln_keyword="cpv_2",
+                            povs=[
+                                POV(id="pov_2_asan", sanitizer="address"),
+                                POV(id="pov_2_ubsan", sanitizer="undefined"),
+                            ],
+                        ),
+                    ],
+                )
+            ],
+            full_mode=FullMode(base_commit="abc123def456"),
+        )
+
+        # Write meta.yaml
+        meta_yaml_path = benchmark_dir / ".aixcc" / "meta.yaml"
+        config.to_yaml(meta_yaml_path)
+
+        # Create trial directory with sanitizer in path
+        # Pattern: <experiment>/<config>/<harness>/<run_mode>/<sanitizer>/trial-N
+        trial_dir_address = (
+            temp_dir
+            / "test-exp"
+            / "ensemble-c"
+            / "test_harness"
+            / "full"
+            / "address"
+            / "trial-1"
+        )
+        trial_dir_address.mkdir(parents=True)
+
+        trial_dir_undefined = (
+            temp_dir
+            / "test-exp"
+            / "ensemble-c"
+            / "test_harness"
+            / "full"
+            / "undefined"
+            / "trial-2"
+        )
+        trial_dir_undefined.mkdir(parents=True)
+
+        # Create ReportGenerator
+        generator = ReportGenerator(
+            output_dir=temp_dir / "reports",
+            benchmarks_root=temp_dir / "benchmarks",
+        )
+
+        # Test address sanitizer trial
+        trial_info_address = TrialInfo(
+            trial_dir=trial_dir_address,
+            trial_num=1,
+            crs="ensemble-c",
+            benchmark="test-benchmark",
+            harness="test_harness",
+            mode="bug_finding",
+            status="valid",
+        )
+
+        total_cpvs, cpv_ids = generator._get_cpv_info(trial_info_address)
+
+        # Should only get CPVs with address sanitizer POVs (cpv_0, cpv_2)
+        assert total_cpvs == 2
+        assert set(cpv_ids) == {"cpv_0", "cpv_2"}
+
+        # Test undefined sanitizer trial
+        trial_info_undefined = TrialInfo(
+            trial_dir=trial_dir_undefined,
+            trial_num=2,
+            crs="ensemble-c",
+            benchmark="test-benchmark",
+            harness="test_harness",
+            mode="bug_finding",
+            status="valid",
+        )
+
+        total_cpvs, cpv_ids = generator._get_cpv_info(trial_info_undefined)
+
+        # Should only get CPVs with undefined sanitizer POVs (cpv_1, cpv_2)
+        assert total_cpvs == 2
+        assert set(cpv_ids) == {"cpv_1", "cpv_2"}
