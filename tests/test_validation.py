@@ -1178,6 +1178,77 @@ redis_host: none
         # 'none' should be converted to None
         assert result.metadata.get("redis_host") is None
 
+    def test_validate_experiment_typo_field_suggests_correction(self):
+        """Typo'd field name should suggest the correct field."""
+        yaml_content = """
+experiment: test
+trials: 1
+mode: delta
+adapter: oss-crs
+max_total_time: 86400
+difficulty_level: 1
+experiment_filestore: /tmp/crsbench/experiment-data
+report_filestore: /tmp/crsbench/report-data
+crses:
+  - test-crs
+benchmark:
+  - test-bench
+"""
+        result = validate_experiment_config_from_string(yaml_content)
+
+        assert result.is_valid is False
+        error_messages = " ".join(e.message for e in result.errors)
+        assert "benchmark" in error_messages.lower()
+        assert "did you mean" in error_messages.lower()
+        assert "benchmarks" in error_messages.lower()
+
+    def test_validate_experiment_unknown_field_no_suggestion(self):
+        """Completely unknown field should error without suggestion."""
+        yaml_content = """
+experiment: test
+trials: 1
+mode: delta
+adapter: oss-crs
+max_total_time: 86400
+difficulty_level: 1
+experiment_filestore: /tmp/crsbench/experiment-data
+report_filestore: /tmp/crsbench/report-data
+crses:
+  - test-crs
+benchmarks:
+  - test-bench
+zzz_totally_unknown_field: true
+"""
+        result = validate_experiment_config_from_string(yaml_content)
+
+        assert result.is_valid is False
+        error_messages = " ".join(e.message for e in result.errors)
+        assert "zzz_totally_unknown_field" in error_messages
+
+    def test_validate_experiment_typo_nested_worker_field(self):
+        """Typo'd field in nested worker config should be caught."""
+        yaml_content = """
+experiment: test
+trials: 1
+mode: delta
+adapter: oss-crs
+max_total_time: 86400
+difficulty_level: 1
+experiment_filestore: /tmp/crsbench/experiment-data
+report_filestore: /tmp/crsbench/report-data
+crses:
+  - test-crs
+benchmarks:
+  - test-bench
+worker:
+  job: 4
+"""
+        result = validate_experiment_config_from_string(yaml_content)
+
+        assert result.is_valid is False
+        error_messages = " ".join(e.message for e in result.errors)
+        assert "job" in error_messages.lower()
+
 
 # ============================================================================
 # Benchmark Suite Config Tests
@@ -1523,6 +1594,23 @@ benchmark_list:
 
         assert result.is_valid is False
         assert any(e.code == ValidationCodes.YAML_SYNTAX_ERROR for e in result.errors)
+
+    def test_validate_benchmark_suite_typo_field(self):
+        """Typo'd field in benchmark suite config should be caught."""
+        yaml_content = """
+Name: test-suite
+Description: A test suite
+Release date: 01.01.2025
+benchmark_lis:
+  - bench-01
+"""
+        result = validate_benchmark_suite_from_string(yaml_content)
+
+        assert result.is_valid is False
+        error_messages = " ".join(e.message for e in result.errors)
+        assert "benchmark_lis" in error_messages
+        assert "did you mean" in error_messages.lower()
+        assert "benchmark_list" in error_messages.lower()
 
 
 # ============================================================================
