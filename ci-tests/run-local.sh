@@ -44,6 +44,81 @@ fail() {
     exit 1
 }
 
+SMOKE_VALKEY_CONTAINER=""
+SMOKE_VALKEY_VOLUME=""
+SMOKE_REDIS_PORT=""
+SMOKE_ORIG_REDIS_HOST=""
+SMOKE_HAD_ORIG_REDIS_HOST=0
+
+start_temp_valkey() {
+    local attempt port name volume
+    if [ "${SMOKE_HAD_ORIG_REDIS_HOST}" -eq 0 ] && [ -n "${CRSBENCH_REDIS_HOST:-}" ]; then
+        SMOKE_ORIG_REDIS_HOST="${CRSBENCH_REDIS_HOST}"
+        SMOKE_HAD_ORIG_REDIS_HOST=1
+    fi
+
+    for attempt in $(seq 1 20); do
+        port=$(python3 - <<'PY'
+import random
+print(random.randint(20000, 50000))
+PY
+)
+        name="crsbench-smoke-valkey-${port}-$$"
+        volume="crsbench_smoke_valkey_${port}_$$"
+
+        if docker run -d \
+            --name "$name" \
+            -p "127.0.0.1:${port}:6379" \
+            -v "${volume}:/data" \
+            valkey/valkey:8.0-alpine \
+            valkey-server --appendonly yes >/dev/null 2>&1; then
+            SMOKE_VALKEY_CONTAINER="$name"
+            SMOKE_VALKEY_VOLUME="$volume"
+            SMOKE_REDIS_PORT="$port"
+            local ready=0
+            for _ in $(seq 1 20); do
+                if docker exec "$SMOKE_VALKEY_CONTAINER" valkey-cli ping >/dev/null 2>&1; then
+                    ready=1
+                    break
+                fi
+                sleep 0.2
+            done
+            if [ "$ready" -ne 1 ]; then
+                docker rm -f "$SMOKE_VALKEY_CONTAINER" >/dev/null 2>&1 || true
+                docker volume rm "$SMOKE_VALKEY_VOLUME" >/dev/null 2>&1 || true
+                SMOKE_VALKEY_CONTAINER=""
+                SMOKE_VALKEY_VOLUME=""
+                SMOKE_REDIS_PORT=""
+                continue
+            fi
+            export CRSBENCH_REDIS_HOST="localhost:${SMOKE_REDIS_PORT}"
+            echo "[smoke] started temporary Valkey: container=${SMOKE_VALKEY_CONTAINER} host=${CRSBENCH_REDIS_HOST}"
+            return 0
+        fi
+    done
+
+    fail "Failed to start temporary Valkey on a random port after 20 attempts"
+}
+
+cleanup_temp_valkey() {
+    if [ -n "$SMOKE_VALKEY_CONTAINER" ]; then
+        docker rm -f "$SMOKE_VALKEY_CONTAINER" >/dev/null 2>&1 || true
+    fi
+    if [ -n "$SMOKE_VALKEY_VOLUME" ]; then
+        docker volume rm "$SMOKE_VALKEY_VOLUME" >/dev/null 2>&1 || true
+    fi
+    if [ "${SMOKE_HAD_ORIG_REDIS_HOST}" -eq 1 ]; then
+        export CRSBENCH_REDIS_HOST="${SMOKE_ORIG_REDIS_HOST}"
+    else
+        unset CRSBENCH_REDIS_HOST
+    fi
+    SMOKE_VALKEY_CONTAINER=""
+    SMOKE_VALKEY_VOLUME=""
+    SMOKE_REDIS_PORT=""
+    SMOKE_ORIG_REDIS_HOST=""
+    SMOKE_HAD_ORIG_REDIS_HOST=0
+}
+
 cleanup_path() {
     local path="$1"
     [ -z "$path" ] && return 0
@@ -215,21 +290,31 @@ if '$expected_cpv' not in cpvs:
 }
 
 # Stage 4: smoke checks for default regression CRSs
+# Smoke stages run against an isolated temporary Valkey instance on a random port.
+# The container/volume are cleaned up automatically after each smoke run.
 run_smoke_bugfinding() {
     run_stage "Stage 4a: Smoke Bugfinding (atlantis-multilang-given_fuzzer)"
+    start_temp_valkey
+    trap cleanup_temp_valkey EXIT
     uv run python ci-tests/smoke_runner.py \
         --suite bugfinding \
         --worker-cores 16 \
         --keep-workspace || fail "Smoke bugfinding failed"
+    trap - EXIT
+    cleanup_temp_valkey
     success "Smoke bugfinding passed"
 }
 
 run_smoke_bugfixing() {
     run_stage "Stage 4b: Smoke Bugfixing (crs-claude-code)"
+    start_temp_valkey
+    trap cleanup_temp_valkey EXIT
     uv run python ci-tests/smoke_runner.py \
         --suite bugfixing \
         --worker-cores 16 \
         --keep-workspace || fail "Smoke bugfixing failed"
+    trap - EXIT
+    cleanup_temp_valkey
     success "Smoke bugfixing passed"
 }
 
@@ -242,6 +327,8 @@ run_smoke_parallel() {
     local bugfixing_cpuset=${SMOKE_CPUSET_BUGFIXING:-24-47}
     local smoke_run_root
     smoke_run_root=$(mktemp -d /tmp/crsbench-smoke-parallel-XXXXXX)
+    start_temp_valkey
+    trap cleanup_temp_valkey EXIT
 
     uv run python ci-tests/smoke_runner.py \
         --suite bugfinding \
@@ -288,6 +375,8 @@ PY
     done <<< "$summaries"
 
     echo "[smoke] summary root: $smoke_run_root"
+    trap - EXIT
+    cleanup_temp_valkey
     success "Parallel smoke passed"
 }
 

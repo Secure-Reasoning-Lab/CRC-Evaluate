@@ -38,13 +38,9 @@ jobs:
         with:
           require-docker: true
 
-      - name: Start Valkey for distributed smoke
-        run: |
-          uv run python scripts/valkey-helper.py start --bind-host
-          uv run python scripts/valkey-helper.py status
-
       - name: Run parallel smoke suites
         env:
+          # run-local.sh manages an isolated temporary Valkey on a random port.
           # Override from repository/workflow vars when needed.
           # Defaults in run-local.sh: 0-23 (bugfinding), 24-47 (bugfixing)
           SMOKE_CPUSET_BUGFINDING: ${{ vars.SMOKE_CPUSET_BUGFINDING }}
