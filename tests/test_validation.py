@@ -976,8 +976,8 @@ class TestExperimentConfigSchema:
 
         assert "Missing required LiteLLM runtime inputs" in str(exc_info.value)
 
-    def test_skip_litellm_disables_contract_validation(self, monkeypatch):
-        """skip_litellm should bypass mode runtime contract checks."""
+    def test_skip_litellm_disables_runtime_interface_validation(self, monkeypatch):
+        """skip_litellm should bypass mode runtime interface checks."""
         monkeypatch.delenv("CRSBENCH_LLM_BASE_URL", raising=False)
         monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_BASE_URL", raising=False)
         monkeypatch.delenv("CRSBENCH_LLM_API_KEY", raising=False)

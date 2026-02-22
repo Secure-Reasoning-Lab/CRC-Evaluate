@@ -372,7 +372,7 @@ class OssCrsAdapter:
                 f"No LiteLLM config found for '{self._crs_config_name}' at default path: {litellm_config_path}"
             )
 
-        # Preflight contract validation: required_llms from CRS metadata must
+        # Preflight runtime interface validation: required_llms from CRS metadata must
         # be present in selected LiteLLM config.
         if required_llms:
             if llm_config is None:
