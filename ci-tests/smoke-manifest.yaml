@@ -1,5 +1,5 @@
 defaults:
-  redis_host: localhost
+  redis_host: localhost:6379
   adapter: oss-crs
   mode: delta
   benchmark_suite: sanity
