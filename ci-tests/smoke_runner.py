@@ -347,7 +347,7 @@ def run_suite(args: argparse.Namespace) -> int:
     try:
         try:
             wait_for_worker_start(worker)
-        except RuntimeError:
+        except RuntimeError as first_start_err:
             # In CI/cpuset mode, worker can occasionally exit during startup.
             # Retry once while orchestrator is already running.
             if orchestrator.poll() is None:
@@ -355,9 +355,27 @@ def run_suite(args: argparse.Namespace) -> int:
                     worker = subprocess.Popen(
                         worker_cmd, stdout=wf, stderr=subprocess.STDOUT, text=True
                     )
-                wait_for_worker_start(worker, timeout_s=8.0)
+                try:
+                    wait_for_worker_start(worker, timeout_s=8.0)
+                except RuntimeError as second_start_err:
+                    raise RuntimeError(
+                        "Worker failed to stay alive during startup after retry.\n"
+                        f"First error: {first_start_err}\n"
+                        f"Second error: {second_start_err}\n"
+                        "=== worker-supervisor.log (tail) ===\n"
+                        f"{_tail_text(worker_log)}\n"
+                        "=== orchestrator.log (tail) ===\n"
+                        f"{_tail_text(orchestrator_log)}"
+                    ) from second_start_err
             else:
-                raise
+                raise RuntimeError(
+                    "Worker exited during startup and orchestrator was already down.\n"
+                    f"Error: {first_start_err}\n"
+                    "=== worker-supervisor.log (tail) ===\n"
+                    f"{_tail_text(worker_log)}\n"
+                    "=== orchestrator.log (tail) ===\n"
+                    f"{_tail_text(orchestrator_log)}"
+                ) from first_start_err
         orchestrator_rc = orchestrator.wait()
     finally:
         terminate_worker(worker)
