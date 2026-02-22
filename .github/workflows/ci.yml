@@ -136,13 +136,13 @@ jobs:
   #           --force-rebuild \
   #           --no-color
 
-  # Stage 3: E2E Bug Finding with CRS
-  e2e-bugfinding:
-    name: E2E Bug Finding
+  # Stage 3: Parallel smoke checks with result validation
+  smoke-parallel:
+    name: Smoke (Bugfinding + Bugfixing, Parallel)
     # needs: [sanity-mock, sanity-real]
     needs: [sanity-mock]
     runs-on: [self-hosted, linux, crs]
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
         with:
@@ -158,77 +158,18 @@ jobs:
         with:
           require-docker: true
 
-      - name: Run E2E experiment
-        id: e2e-run
+      - name: Run validated smoke suites (parallel)
+        env:
+          # run-local.sh manages an isolated temporary Valkey on a random port.
+          # 8 cores/trial x 3 harnesses = 24 cores per suite
+          SMOKE_CPUSET_BUGFINDING: 0-23
+          SMOKE_CPUSET_BUGFIXING: 24-47
+          # Required for bugfixing CRS (crs-claude-code) in passthrough mode
+          CRSBENCH_LLM_UPSTREAM_BASE_URL: ${{ secrets.CRSBENCH_LLM_UPSTREAM_BASE_URL }}
+          # Tracking/control-plane endpoint; defaults to upstream when unset.
+          CRSBENCH_LLM_BASE_URL: ${{ secrets.CRSBENCH_LLM_BASE_URL || secrets.CRSBENCH_LLM_UPSTREAM_BASE_URL }}
+          CRSBENCH_LLM_MASTER_KEY: ${{ secrets.CRSBENCH_LLM_MASTER_KEY }}
+          # Optional fallback when not creating per-trial keys
+          CRSBENCH_LLM_API_KEY: ${{ secrets.CRSBENCH_LLM_API_KEY }}
         run: |
-          EXPERIMENT_DIR=$(mktemp -d)
-          REPORT_DIR=$(mktemp -d)
-          echo "experiment_dir=$EXPERIMENT_DIR" >> "$GITHUB_OUTPUT"
-          echo "report_dir=$REPORT_DIR" >> "$GITHUB_OUTPUT"
-
-          # Generate config with random temp directories
-          sed \
-            -e "s|PLACEHOLDER_EXPERIMENT|$EXPERIMENT_DIR|" \
-            -e "s|PLACEHOLDER_REPORT|$REPORT_DIR|" \
-            ci-tests/pov-e2e-test.yaml > /tmp/pov-e2e-config.yaml
-
-          uv run crsbench run \
-            --experiment-config /tmp/pov-e2e-config.yaml
-
-      - name: Verify all answer POVs found
-        run: |
-          RESULT_DIR="${{ steps.e2e-run.outputs.experiment_dir }}"
-          FAILED=0
-
-          # Expected CPVs per benchmark/harness
-          # mock-c: cpv_0 in fuzz_process_input_header, cpv_1 in fuzz_parse_buffer_section
-          # mock-java: cpv_0 in OssFuzz1
-          declare -A EXPECTED
-          EXPECTED["sanity-mock-c-delta-01/fuzz_process_input_header"]="cpv_0"
-          EXPECTED["sanity-mock-c-delta-01/fuzz_parse_buffer_section"]="cpv_1"
-          EXPECTED["sanity-mock-java-delta-01/OssFuzz1"]="cpv_0"
-
-          for key in "${!EXPECTED[@]}"; do
-            bench=$(echo "$key" | cut -d'/' -f1)
-            harness=$(echo "$key" | cut -d'/' -f2)
-            expected_cpv="${EXPECTED[$key]}"
-
-            POV_STORE=$(find "$RESULT_DIR" -path "*/$bench/$harness/*/trial-*/povs/pov_store.json" | head -1)
-
-            if [ -z "$POV_STORE" ]; then
-              echo "FAIL: No pov_store.json for $bench/$harness"
-              FAILED=1
-              continue
-            fi
-
-            # Check if expected CPV is in cpv_matched of any POV
-            if python3 -c "
-          import json, sys
-          with open('$POV_STORE') as f:
-              data = json.load(f)
-          cpvs = set()
-          for pov in data.get('povs', {}).values():
-              for cpv in pov.get('cpv_matched', []):
-                  cpvs.add(cpv)
-          if '$expected_cpv' not in cpvs:
-              sys.exit(1)
-          "; then
-              echo "PASS: $bench/$harness found $expected_cpv"
-            else
-              echo "FAIL: $bench/$harness missing $expected_cpv"
-              FAILED=1
-            fi
-          done
-
-          if [ "$FAILED" -ne 0 ]; then
-            echo "E2E FAILED: Not all answer POVs were found"
-            exit 1
-          fi
-          echo "E2E PASSED: All answer POVs found for mock-c and mock-java"
-
-      - name: Cleanup
-        if: always()
-        run: |
-          rm -rf "${{ steps.e2e-run.outputs.experiment_dir }}" || true
-          rm -rf "${{ steps.e2e-run.outputs.report_dir }}" || true
-          rm -f /tmp/pov-e2e-config.yaml || true
+          ./ci-tests/run-local.sh smoke

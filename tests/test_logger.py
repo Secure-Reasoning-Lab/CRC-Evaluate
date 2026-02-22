@@ -1,6 +1,5 @@
 """Tests for the centralized loguru-based logger."""
 
-import os
 import tempfile
 from io import StringIO
 from pathlib import Path
@@ -143,27 +142,6 @@ def test_logger_adapter_compatibility():
     assert "Info from adapter" in output_str
     assert "Warning from adapter" in output_str
     assert "Error from adapter" in output_str
-
-
-def test_logger_respects_env_var():
-    """Test that logger respects LOG_LEVEL environment variable."""
-    # Save original env var
-    original_level = os.environ.get("LOG_LEVEL")
-
-    try:
-        # Set LOG_LEVEL to DEBUG
-        os.environ["LOG_LEVEL"] = "DEBUG"
-
-        # Re-import to pick up env var (in real usage, this would be set before import)
-        # For this test, we just verify the mechanism exists
-        assert os.environ.get("LOG_LEVEL") == "DEBUG"
-
-    finally:
-        # Restore original env var
-        if original_level is not None:
-            os.environ["LOG_LEVEL"] = original_level
-        elif "LOG_LEVEL" in os.environ:
-            del os.environ["LOG_LEVEL"]
 
 
 def test_colorize_option():

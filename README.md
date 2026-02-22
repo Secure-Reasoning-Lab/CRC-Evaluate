@@ -110,6 +110,7 @@ CRSBench/
   - [Maintenance Guide](docs/documentation-maintenance.md)
 - Setup and runtime:
   - [Environment Setup](docs/environment-setup.md)
+  - [Environment Variables](docs/environment-variables.md)
   - [Experiment Workflow](docs/experiment-workflow.md)
 - Contributor tracks:
   - [Framework Developer Guide](docs/framework-developer-guide.md)

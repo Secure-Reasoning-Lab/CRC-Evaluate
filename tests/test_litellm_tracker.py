@@ -26,9 +26,10 @@ class TestLiteLLMTracker:
         with patch.dict(
             os.environ,
             {
-                "LITELLM_BASE_URL": "http://litellm:4000",
-                "LITELLM_MASTER_KEY": "sk-master-key-123",
+                "CRSBENCH_LLM_BASE_URL": "http://litellm:4000",
+                "CRSBENCH_LLM_MASTER_KEY": "sk-master-key-123",
             },
+            clear=True,
         ):
             return LiteLLMTracker()
 
@@ -37,9 +38,10 @@ class TestLiteLLMTracker:
         with patch.dict(
             os.environ,
             {
-                "LITELLM_BASE_URL": "http://litellm:4000",
-                "LITELLM_MASTER_KEY": "sk-master-key-123",
+                "CRSBENCH_LLM_BASE_URL": "http://litellm:4000",
+                "CRSBENCH_LLM_MASTER_KEY": "sk-master-key-123",
             },
+            clear=True,
         ):
             tracker = LiteLLMTracker()
             assert tracker.base_url == "http://litellm:4000"
@@ -55,21 +57,23 @@ class TestLiteLLMTracker:
         assert tracker.master_key == "sk-custom-key"
 
     def test_init_missing_base_url(self):
-        """Test error when LITELLM_BASE_URL is not set."""
-        with patch.dict(os.environ, {"LITELLM_MASTER_KEY": "sk-key"}, clear=True):
-            # Clear LITELLM_BASE_URL
-            os.environ.pop("LITELLM_BASE_URL", None)
-            with pytest.raises(LiteLLMTrackerError, match="LITELLM_BASE_URL not set"):
+        """Test error when no runtime base URL is set."""
+        with patch.dict(os.environ, {"CRSBENCH_LLM_MASTER_KEY": "sk-key"}, clear=True):
+            with pytest.raises(
+                LiteLLMTrackerError,
+                match="CRSBENCH_LLM_BASE_URL/CRSBENCH_LLM_UPSTREAM_BASE_URL not set",
+            ):
                 LiteLLMTracker()
 
     def test_init_missing_master_key(self):
-        """Test error when LITELLM_MASTER_KEY is not set."""
+        """Test error when master key is not set."""
         with patch.dict(
-            os.environ, {"LITELLM_BASE_URL": "http://litellm:4000"}, clear=True
+            os.environ, {"CRSBENCH_LLM_BASE_URL": "http://litellm:4000"}, clear=True
         ):
-            # Clear LITELLM_MASTER_KEY
-            os.environ.pop("LITELLM_MASTER_KEY", None)
-            with pytest.raises(LiteLLMTrackerError, match="LITELLM_MASTER_KEY not set"):
+            with pytest.raises(
+                LiteLLMTrackerError,
+                match="CRSBENCH_LLM_MASTER_KEY not set",
+            ):
                 LiteLLMTracker()
 
     def test_base_url_trailing_slash_removed(self):
@@ -1146,19 +1150,20 @@ class TestIsTrackingAvailable:
         with patch.dict(
             os.environ,
             {
-                "LITELLM_BASE_URL": "http://litellm:4000",
-                "LITELLM_MASTER_KEY": "sk-key",
+                "CRSBENCH_LLM_BASE_URL": "http://litellm:4000",
+                "CRSBENCH_LLM_MASTER_KEY": "sk-key",
             },
+            clear=True,
         ):
             assert is_tracking_available() is True
 
     def test_available_with_upstream_base_url(self):
-        """Test returns True when UPSTREAM_LITELLM_BASE_URL is used."""
+        """Test returns True when CRSBENCH_LLM_UPSTREAM_BASE_URL is used."""
         with patch.dict(
             os.environ,
             {
-                "UPSTREAM_LITELLM_BASE_URL": "http://upstream:4000",
-                "LITELLM_MASTER_KEY": "sk-key",
+                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "http://upstream:4000",
+                "CRSBENCH_LLM_MASTER_KEY": "sk-key",
             },
             clear=True,
         ):
@@ -1166,13 +1171,13 @@ class TestIsTrackingAvailable:
 
     def test_unavailable_when_base_url_missing(self):
         """Test returns False when base URL is missing."""
-        with patch.dict(os.environ, {"LITELLM_MASTER_KEY": "sk-key"}, clear=True):
+        with patch.dict(os.environ, {"CRSBENCH_LLM_MASTER_KEY": "sk-key"}, clear=True):
             assert is_tracking_available() is False
 
     def test_unavailable_when_master_key_missing(self):
         """Test returns False when master key is missing."""
         with patch.dict(
-            os.environ, {"LITELLM_BASE_URL": "http://litellm:4000"}, clear=True
+            os.environ, {"CRSBENCH_LLM_BASE_URL": "http://litellm:4000"}, clear=True
         ):
             assert is_tracking_available() is False
 
@@ -1184,6 +1189,21 @@ class TestIsTrackingAvailable:
 
 class TestSetupLlmTrackingBudget:
     """Tests for _setup_llm_tracking budget propagation."""
+
+    @pytest.fixture(autouse=True)
+    def litellm_env(self):
+        """Provide LiteLLM env vars expected by tracking setup."""
+        with patch.dict(
+            os.environ,
+            {
+                "CRSBENCH_LLM_BASE_URL": "http://litellm:4000",
+                "CRSBENCH_LLM_UPSTREAM_BASE_URL": "http://litellm:4000",
+                "CRSBENCH_LLM_MASTER_KEY": "sk-master-key-123",
+                "CRSBENCH_LLM_API_KEY": "sk-api-key-123",
+            },
+            clear=False,
+        ):
+            yield
 
     @pytest.fixture
     def base_config_dict(self, tmp_path):
@@ -1205,10 +1225,7 @@ class TestSetupLlmTrackingBudget:
         }
 
     @patch("crsbench.distributed.jobs.LiteLLMTracker")
-    @patch("crsbench.distributed.jobs.is_tracking_available")
-    def test_budget_passed_to_generate_key(
-        self, mock_is_available, mock_tracker_class, base_config_dict
-    ):
+    def test_budget_passed_to_generate_key(self, mock_tracker_class, base_config_dict):
         """Test that cost_budget from config is passed to generate_key()."""
         from crsbench.distributed.jobs import _setup_llm_tracking
         from crsbench.validation.schemas import (
@@ -1217,7 +1234,6 @@ class TestSetupLlmTrackingBudget:
             ResourceConfig,
         )
 
-        mock_is_available.return_value = True
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
         mock_tracker.get_or_create_team.return_value = "team-123"
@@ -1252,15 +1268,13 @@ class TestSetupLlmTrackingBudget:
         )
 
     @patch("crsbench.distributed.jobs.LiteLLMTracker")
-    @patch("crsbench.distributed.jobs.is_tracking_available")
     def test_no_budget_when_resources_not_configured(
-        self, mock_is_available, mock_tracker_class, base_config_dict
+        self, mock_tracker_class, base_config_dict
     ):
         """Test that max_budget is None when resources.litellm not configured."""
         from crsbench.distributed.jobs import _setup_llm_tracking
         from crsbench.validation.schemas import ExperimentConfig
 
-        mock_is_available.return_value = True
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
         mock_tracker.get_or_create_team.return_value = "team-123"
@@ -1291,15 +1305,13 @@ class TestSetupLlmTrackingBudget:
         )
 
     @patch("crsbench.distributed.jobs.LiteLLMTracker")
-    @patch("crsbench.distributed.jobs.is_tracking_available")
     def test_no_budget_when_litellm_not_configured(
-        self, mock_is_available, mock_tracker_class, base_config_dict
+        self, mock_tracker_class, base_config_dict
     ):
         """Test that max_budget is None when litellm not in resources."""
         from crsbench.distributed.jobs import _setup_llm_tracking
         from crsbench.validation.schemas import ExperimentConfig, ResourceConfig
 
-        mock_is_available.return_value = True
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
         mock_tracker.get_or_create_team.return_value = "team-123"
@@ -1336,10 +1348,7 @@ class TestSetupLlmTrackingBudget:
         )
 
     @patch("crsbench.distributed.jobs.LiteLLMTracker")
-    @patch("crsbench.distributed.jobs.is_tracking_available")
-    def test_team_from_config(
-        self, mock_is_available, mock_tracker_class, base_config_dict
-    ):
+    def test_team_from_config(self, mock_tracker_class, base_config_dict):
         """Test that team config is accepted but team association is disabled."""
         from crsbench.distributed.jobs import _setup_llm_tracking
         from crsbench.validation.schemas import (
@@ -1348,7 +1357,6 @@ class TestSetupLlmTrackingBudget:
             ResourceConfig,
         )
 
-        mock_is_available.return_value = True
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
         mock_tracker_class.return_value = mock_tracker
@@ -1385,15 +1393,13 @@ class TestSetupLlmTrackingBudget:
         )
 
     @patch("crsbench.distributed.jobs.LiteLLMTracker")
-    @patch("crsbench.distributed.jobs.is_tracking_available")
     def test_team_defaults_to_experiment_name(
-        self, mock_is_available, mock_tracker_class, base_config_dict
+        self, mock_tracker_class, base_config_dict
     ):
         """Test that keys are generated without team association."""
         from crsbench.distributed.jobs import _setup_llm_tracking
         from crsbench.validation.schemas import ExperimentConfig
 
-        mock_is_available.return_value = True
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
         mock_tracker_class.return_value = mock_tracker
@@ -1425,9 +1431,8 @@ class TestSetupLlmTrackingBudget:
         )
 
     @patch("crsbench.distributed.jobs.LiteLLMTracker")
-    @patch("crsbench.distributed.jobs.is_tracking_available")
     def test_team_config_ignored_key_generated_independently(
-        self, mock_is_available, mock_tracker_class, base_config_dict
+        self, mock_tracker_class, base_config_dict
     ):
         """Test that team/team_max_budget config is ignored; key is independent."""
         from crsbench.distributed.jobs import _setup_llm_tracking
@@ -1437,7 +1442,6 @@ class TestSetupLlmTrackingBudget:
             ResourceConfig,
         )
 
-        mock_is_available.return_value = True
         mock_tracker = MagicMock()
         mock_tracker.generate_key.return_value = "sk-test-key"
         mock_tracker_class.return_value = mock_tracker

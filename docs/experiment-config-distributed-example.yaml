@@ -67,9 +67,27 @@ copy_results_after_trial: false
 # results_filestore: /opt/crsbench-finished/my-experiment
 
 # List of CRS implementations to evaluate.
+# This profile is single-CRS: exactly one CRS entry is allowed.
+# Use separate experiments for different CRS setups.
 crses:
   - atlantis-c
-  - atlantis-multilang
+
+# Optional compose/runtime overrides for oss-crs adapter.
+# crs_compose:
+#   docker_registry: us-central1-docker.pkg.dev/aixcc-scoring-prod/oss-fuzz
+#   # Global LiteLLM config override for this experiment
+#   litellm_config_path: /path/to/combined-litellm-config.yaml
+#
+# Optional per-CRS overrides keyed by CRS name in `crses`.
+# Highest precedence for litellm_config_path is:
+#   crs_overrides.<crs>.litellm_config_path >
+#   crs_compose.litellm_config_path >
+#   crses/configs/<crs>/config-litellm.yaml
+# crs_overrides:
+#   atlantis-c:
+#     litellm_config_path: /path/to/atlantis-c-litellm.yaml
+#     additional_env:
+#       ANTHROPIC_MODEL: claude-sonnet-4-5-20250929
 
 # =============================================================================
 # Benchmark Specification (choose ONE of the following)
@@ -99,12 +117,12 @@ benchmarks:
 # =============================================================================
 
 # Redis server hostname for distributed mode.
-# Possible values: null | "none" | "localhost" | "redis" | "<ip>" | "<hostname>"
+# Possible values: null | "none" | "localhost" | "localhost:6380" | "redis" | "<ip>" | "<hostname>" | "<hostname>:<port>"
 # - null or "none": local mode (sequential, no Redis)
-# - "localhost": Redis on same machine
+# - "localhost" or "localhost:6379": Redis on same machine
 # - "redis": Docker Compose service name
-# - "<ip>/<hostname>": remote Redis server
-redis_host: localhost
+# - "<ip>/<hostname>[:port]": remote Redis server
+redis_host: localhost:6379
 
 # Snapshot interval in seconds. (0 to disable, 60-86400 when enabled)
 snapshot_period: 900  # 15 minutes, default: 900
@@ -145,8 +163,8 @@ worker:
   # Number of parallel jobs per worker process. (>= 1)
   jobs: 4  # default: 4
 
-  # Redis server hostname for workers.
-  redis_host: localhost  # default: "localhost"
+  # Redis server for workers (host or host:port).
+  redis_host: localhost:6379  # default: top-level redis_host
 
   # Run continuously or exit when queue is empty.
   continuous: true  # default: false
@@ -231,13 +249,16 @@ hints_enabled: false  # default: false
 
 # LiteLLM mode.
 # Possible values: "passthrough" | "proxy"
-# passthrough: pass the upstream LITELLM to the CRS
-# proxy: CRSBench setup a LiteLLM proxy
-# - passthrough: uses UPSTREAM_LITELLM_BASE_URL, LITELLM_API_KEY
-# - proxy: uses LITELLM_BASE_URL, LITELLM_MASTER_KEY
+# passthrough: external LiteLLM-first runtime
+# - uses CRSBENCH_LLM_UPSTREAM_BASE_URL (preferred passthrough target) or CRSBENCH_LLM_BASE_URL
+# - requires CRSBENCH_LLM_API_KEY or CRSBENCH_LLM_MASTER_KEY
+# proxy: trial-local LiteLLM hop
+# - uses CRSBENCH_LLM_BASE_URL (immediate target)
+# - requires CRSBENCH_LLM_MASTER_KEY
 litellm_mode: passthrough  # default: passthrough
 
 # Enable LLM usage tracking via LiteLLM Virtual Keys.
+# Requires CRSBENCH_LLM_* env vars for the selected mode.
 llm_tracking_enabled: true  # default: true
 
 # Docker image prefix for custom project images.

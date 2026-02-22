@@ -10,7 +10,7 @@ Create a `.env` file in the project root:
 
 ```bash
 # Required
-LITELLM_MASTER_KEY=your-master-key-here
+CRSBENCH_LLM_MASTER_KEY=your-master-key-here
 
 # Provider API Keys (at least one required)
 OPENAI_API_KEY=sk-...
@@ -102,11 +102,11 @@ LiteLLM can forward requests to another LiteLLM instance (upstream proxy). This 
 1. Set environment variables:
 ```bash
 # Master key passed to CRS containers (for trial LiteLLM authentication)
-LITELLM_MASTER_KEY=sk-trial-master-key
+CRSBENCH_LLM_MASTER_KEY=sk-trial-master-key
 
 # Proxy configuration
-UPSTREAM_LITELLM_BASE_URL=http://central-litellm:4000
-LITELLM_API_KEY=sk-central-master-key  # Central LiteLLM's master key
+CRSBENCH_LLM_UPSTREAM_BASE_URL=http://central-litellm:4000
+CRSBENCH_LLM_API_KEY=sk-central-master-key  # Central LiteLLM's master key
 ```
 
 2. Use the proxy mode config:
@@ -118,14 +118,14 @@ python scripts/litellm-helper.py start --config services/litellm/proxy-mode.yaml
 ```
 CRS Container → Trial LiteLLM (Proxy) → Central LiteLLM → LLM Providers
    (uses          (forwards with           (connects to
-LITELLM_MASTER_KEY) LITELLM_API_KEY)        providers)
+CRSBENCH_LLM_MASTER_KEY) CRSBENCH_LLM_API_KEY)        providers)
                     ↓ logs                  ↓ logs
               trial-logs/              central-logs/
 ```
 
 **Key Configuration:**
-- **CRS containers**: Use `LITELLM_MASTER_KEY` to authenticate with trial LiteLLM
-- **Trial LiteLLM**: Uses `LITELLM_API_KEY` to authenticate with central LiteLLM
+- **CRS containers**: Use `CRSBENCH_LLM_MASTER_KEY` to authenticate with trial LiteLLM
+- **Trial LiteLLM**: Uses `CRSBENCH_LLM_API_KEY` to authenticate with central LiteLLM
 - **Central LiteLLM**: Connects to providers with provider API keys
 
 **Benefits:**
@@ -165,14 +165,14 @@ model_list:
   - model_name: gpt-4o
     litellm_params:
       model: litellm_proxy/gpt-4o
-      api_base: os.environ/UPSTREAM_LITELLM_BASE_URL
-      api_key: os.environ/LITELLM_API_KEY
+      api_base: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
+      api_key: os.environ/CRSBENCH_LLM_API_KEY
 
   - model_name: claude-sonnet-4
     litellm_params:
       model: litellm_proxy/claude-sonnet-4
-      api_base: os.environ/UPSTREAM_LITELLM_BASE_URL
-      api_key: os.environ/LITELLM_API_KEY
+      api_base: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
+      api_key: os.environ/CRSBENCH_LLM_API_KEY
 ```
 
 ## Logging
@@ -266,7 +266,7 @@ python scripts/sync-upstream-models.py --list-only \
 
 **Sync models with confirmation:**
 ```bash
-# Uses .env file settings (UPSTREAM_LITELLM_BASE_URL and LITELLM_API_KEY)
+# Uses .env file settings (CRSBENCH_LLM_UPSTREAM_BASE_URL and CRSBENCH_LLM_API_KEY)
 python scripts/sync-upstream-models.py
 
 # Skip confirmation prompt
@@ -343,13 +343,13 @@ curl http://localhost:4000/health
 **List models:**
 ```bash
 curl -X GET http://localhost:4000/models \
-  -H "Authorization: Bearer $LITELLM_MASTER_KEY"
+  -H "Authorization: Bearer $CRSBENCH_LLM_MASTER_KEY"
 ```
 
 **Mock completion (no API call):**
 ```bash
 curl -X POST http://localhost:4000/chat/completions \
-  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H "Authorization: Bearer $CRSBENCH_LLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gpt-4o-mini",
@@ -361,7 +361,7 @@ curl -X POST http://localhost:4000/chat/completions \
 **Real completion (makes API call):**
 ```bash
 curl -X POST http://localhost:4000/chat/completions \
-  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H "Authorization: Bearer $CRSBENCH_LLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gpt-4o-mini",
@@ -410,7 +410,7 @@ docker logs litellm
 Verify the API key for that provider is set and valid:
 ```bash
 curl -X GET http://localhost:4000/models \
-  -H "Authorization: Bearer $LITELLM_MASTER_KEY"
+  -H "Authorization: Bearer $CRSBENCH_LLM_MASTER_KEY"
 ```
 
 ### Port Already in Use

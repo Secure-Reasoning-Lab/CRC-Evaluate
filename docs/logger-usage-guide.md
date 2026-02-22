@@ -48,18 +48,16 @@ logger.critical("System out of memory")
 
 ## Configuration
 
-### Environment Variable
+### CLI Verbose Mode
 
-Set log level globally:
+Set DEBUG logs explicitly per command:
 
 ```bash
 # Show all messages including DEBUG
-export LOG_LEVEL=DEBUG
-crsbench run --experiment-config config.yaml ...
+crsbench worker --experiment-config config.yaml --verbose
 
-# Show only warnings and errors
-export LOG_LEVEL=WARNING
-crsbench run --experiment-config config.yaml ...
+# Evaluator verbose mode
+crsbench evaluator --experiment-config config.yaml --verbose
 ```
 
 ### Programmatic Configuration

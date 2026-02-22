@@ -10,6 +10,7 @@ The evaluator supports two modes:
 """
 
 import argparse
+import os
 import sys
 
 
@@ -52,22 +53,6 @@ Examples:
     )
 
     evaluator_parser.add_argument(
-        "--experiment-name",
-        type=str,
-        default=None,
-        metavar="NAME",
-        help="Override experiment name for queue naming (default: from config)",
-    )
-
-    evaluator_parser.add_argument(
-        "--redis-host",
-        type=str,
-        default="localhost",
-        metavar="HOST",
-        help="Redis server hostname or IP address (default: localhost)",
-    )
-
-    evaluator_parser.add_argument(
         "--benchmarks-root",
         type=str,
         default=None,
@@ -76,20 +61,9 @@ Examples:
     )
 
     evaluator_parser.add_argument(
-        "--oss-fuzz-path",
-        type=str,
-        default=None,
-        metavar="PATH",
-        help="Override oss-fuzz directory path",
-    )
-
-    evaluator_parser.add_argument(
-        "--log-level",
-        type=str,
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        metavar="LEVEL",
-        help="Logging level (default: INFO)",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging (DEBUG level)",
     )
 
     evaluator_parser.add_argument(
@@ -180,8 +154,11 @@ def run_evaluator(args: argparse.Namespace) -> int:
     """
     from crsbench.utils.logger import configure_logger, get_logger
 
+    log_level = "DEBUG" if args.verbose else "INFO"
     # Configure logging
-    configure_logger(level=args.log_level, sink=sys.stdout)
+    configure_logger(level=log_level, sink=sys.stdout)
+    # Propagate log level to evaluator subprocesses.
+    os.environ["CRSBENCH_LOG_LEVEL"] = log_level
     logger = get_logger(__name__)
 
     ci_mode = getattr(args, "ci", False)
@@ -212,7 +189,7 @@ def run_evaluator(args: argparse.Namespace) -> int:
 
         try:
             return run_evaluator_ci_mode(
-                redis_host=args.redis_host,
+                redis_host=os.environ.get("CRSBENCH_REDIS_HOST", "localhost"),
                 worker_name=worker_name,
                 build_jobs=build_jobs,
                 build_cores_per_job=build_cores_per_job,
@@ -240,21 +217,15 @@ def run_evaluator(args: argparse.Namespace) -> int:
     logger.info(f"Loading experiment config from: {config_path}")
     config = load_experiment_config(config_path)
 
-    # Resolve experiment name: CLI > config
-    experiment_name = args.experiment_name or config.experiment
+    # Resolve experiment name from config
+    experiment_name = config.experiment
     logger.info(f"Experiment name: {experiment_name}")
 
-    # Resolve redis_host: CLI > config > default
-    redis_host = args.redis_host
-    if redis_host == "localhost" and config.redis_host:
-        redis_host = config.redis_host
+    # Resolve redis_host: config > default
+    redis_host = config.redis_host or "localhost"
     logger.info(f"Redis host: {redis_host}")
 
     # Apply CLI overrides directly to config
-    if args.oss_fuzz_path:
-        config.oss_fuzz_path = Path(args.oss_fuzz_path)
-        logger.info(f"Evaluator override: oss_fuzz_path = {args.oss_fuzz_path}")
-
     if args.benchmarks_root:
         config.benchmarks_root = Path(args.benchmarks_root)
         logger.info(f"Evaluator override: benchmarks_root = {args.benchmarks_root}")

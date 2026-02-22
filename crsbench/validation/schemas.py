@@ -14,6 +14,11 @@ from typing import Any, Dict, List, Literal, Optional, Union
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from crsbench.utils.litellm_env import (
+    required_env_errors_for_mode,
+    resolve_litellm_runtime_env,
+)
+
 # =============================================================================
 # Shared Schemas (used across evaluation and reporting modules)
 # =============================================================================
@@ -735,6 +740,11 @@ class WorkerConfig(BaseModel):
         default=False,
         description="Whether workers should run continuously or exit after one job",
     )
+    worker_name: Optional[str] = Field(
+        default=None,
+        description="Optional base worker name for identification. "
+        "Defaults to hostname when not set.",
+    )
     experiment_filestore: Optional[Path] = Field(
         default=None,
         description="Override experiment data storage path for workers on different machines",
@@ -838,6 +848,23 @@ class CrsComposeConfig(BaseModel):
         default=None,
         description="Base work directory for oss-crs (default: trial_output_dir/oss-crs-workdir)",
     )
+    litellm_config_path: Optional[Path] = Field(
+        default=None,
+        description="Override path to LiteLLM config file for oss-crs llm_config.litellm_config",
+    )
+
+
+class CrsOverrideConfig(BaseModel):
+    """Per-CRS runtime override configuration."""
+
+    litellm_config_path: Optional[Path] = Field(
+        default=None,
+        description="Per-CRS override path to LiteLLM config file",
+    )
+    additional_env: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Additional environment variables injected into CRS runtime container",
+    )
 
 
 class ExperimentConfig(BaseModel):
@@ -939,8 +966,9 @@ class ExperimentConfig(BaseModel):
     )
     litellm_mode: Optional[Literal["passthrough", "proxy"]] = Field(
         default="passthrough",
-        description="LiteLLM mode: 'passthrough' uses external LiteLLM (UPSTREAM_LITELLM_BASE_URL, LITELLM_API_KEY), "
-        "'proxy' uses self-hosted proxy (LITELLM_BASE_URL, LITELLM_MASTER_KEY), "
+        description="LiteLLM mode: 'passthrough' uses external LiteLLM "
+        "(CRSBENCH_LLM_UPSTREAM_BASE_URL/CRSBENCH_LLM_BASE_URL + CRSBENCH_LLM_API_KEY or CRSBENCH_LLM_MASTER_KEY), "
+        "'proxy' uses self-hosted proxy (CRSBENCH_LLM_BASE_URL + CRSBENCH_LLM_MASTER_KEY), "
         "null skips LiteLLM entirely (for CRS that don't need LLM). "
         "Default is 'passthrough'.",
     )
@@ -953,7 +981,7 @@ class ExperimentConfig(BaseModel):
     llm_tracking_enabled: bool = Field(
         default=True,
         description="Enable LLM usage tracking via LiteLLM Virtual Keys. "
-        "Automatically enabled when LITELLM_BASE_URL and LITELLM_MASTER_KEY env vars are set. "
+        "Requires canonical runtime envs (CRSBENCH_LLM_*). "
         "Set to false to explicitly disable. "
         "Generates llm-usage.json with per-trial cost and token metrics.",
     )
@@ -999,6 +1027,13 @@ class ExperimentConfig(BaseModel):
         description="Timeout in seconds for each single POV verification (default: 180 = 3 minutes). "
         "This is the time allowed to run the harness binary with a POV input to check if it crashes.",
     )
+    max_pov_variants_per_cpv: Optional[int] = Field(
+        default=1,
+        ge=1,
+        description="For bug-fixing CRS input staging, maximum POV variants per CPV to provide via --pov-dir. "
+        "Set to 1 for a single POV per CPV (default), N for multiple variants per CPV, "
+        "or null to include all available variants.",
+    )
     build_workers: Optional[int] = Field(
         default=None,
         ge=1,
@@ -1023,6 +1058,10 @@ class ExperimentConfig(BaseModel):
     crs_compose: Optional[CrsComposeConfig] = Field(
         default=None,
         description="Configuration for oss-crs adapter (used at runtime by OssCrsAdapter)",
+    )
+    crs_overrides: Optional[Dict[str, CrsOverrideConfig]] = Field(
+        default=None,
+        description="Per-CRS runtime overrides keyed by CRS config name",
     )
     keep_only_results: bool = Field(
         default=False,
@@ -1250,6 +1289,29 @@ class ExperimentConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def check_single_crs_execution_profile(self):
+        """Enforce single CRS setup profile per experiment."""
+        if len(self.crses) != 1:
+            raise ValueError(
+                f"Experiment must define exactly 1 CRS in 'crses' for a single setup profile; got {len(self.crses)}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_crs_override_keys(self):
+        """Validate that crs_overrides keys match configured CRS names."""
+        if not self.crs_overrides:
+            return self
+
+        valid = set(self.crses)
+        unknown = sorted(k for k in self.crs_overrides.keys() if k not in valid)
+        if unknown:
+            raise ValueError(
+                f"Unknown CRS override key(s): {', '.join(unknown)}. Valid CRS names: {', '.join(sorted(valid))}"
+            )
+        return self
+
+    @model_validator(mode="after")
     def check_hints_configuration(self):
         """Validate hint configuration consistency."""
         if self.hints_enabled:
@@ -1289,6 +1351,28 @@ class ExperimentConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def check_litellm_runtime_contract(self):
+        """Fail fast when mode-required LiteLLM runtime env inputs are missing."""
+        if self.skip_litellm or self.litellm_mode is None:
+            return self
+        if (
+            "litellm_mode" not in self.model_fields_set
+            and "llm_tracking_enabled" not in self.model_fields_set
+        ):
+            return self
+
+        runtime_env = resolve_litellm_runtime_env(self.litellm_mode)
+        errors = required_env_errors_for_mode(
+            runtime_env, tracking_enabled=self.llm_tracking_enabled
+        )
+        if errors:
+            joined = "; ".join(errors)
+            raise ValueError(
+                f"Missing required LiteLLM runtime inputs for litellm_mode='{self.litellm_mode}': {joined}"
+            )
+        return self
+
+    @model_validator(mode="after")
     def resolve_path_fields(self):
         """Resolve relative Path fields to absolute paths.
 
@@ -1313,6 +1397,27 @@ class ExperimentConfig(BaseModel):
         # Optional path field
         if self.results_filestore and not self.results_filestore.is_absolute():
             self.results_filestore = self.results_filestore.resolve()
+
+        # Compose-level optional path field
+        if (
+            self.crs_compose
+            and self.crs_compose.litellm_config_path
+            and not self.crs_compose.litellm_config_path.is_absolute()
+        ):
+            self.crs_compose.litellm_config_path = (
+                self.crs_compose.litellm_config_path.resolve()
+            )
+
+        # Per-CRS override optional path fields
+        if self.crs_overrides:
+            for override in self.crs_overrides.values():
+                if (
+                    override.litellm_config_path
+                    and not override.litellm_config_path.is_absolute()
+                ):
+                    override.litellm_config_path = (
+                        override.litellm_config_path.resolve()
+                    )
 
         return self
 

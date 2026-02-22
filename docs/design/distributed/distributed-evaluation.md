@@ -107,14 +107,6 @@ def add_evaluator_subparser(subparsers) -> None:
         help="Path to experiment configuration YAML file",
     )
     evaluator_parser.add_argument(
-        "--experiment-name", type=str, required=True,
-        help="Experiment identifier for queue naming",
-    )
-    evaluator_parser.add_argument(
-        "--redis-host", type=str, default="localhost",
-        help="Redis server hostname (default: localhost)",
-    )
-    evaluator_parser.add_argument(
         "--build-jobs", type=int, default=1,
         help="Max concurrent build jobs (default: 1)",
     )
@@ -125,10 +117,6 @@ def add_evaluator_subparser(subparsers) -> None:
     evaluator_parser.add_argument(
         "--benchmarks-root", type=str, default=None,
         help="Override benchmarks root directory",
-    )
-    evaluator_parser.add_argument(
-        "--oss-fuzz-path", type=str, default=None,
-        help="Override oss-fuzz directory path",
     )
 
     evaluator_parser.set_defaults(command="evaluator")
@@ -399,14 +387,14 @@ Worker config flag `skip_verification: true` skips inline verification entirely 
 
 ## 11. Configuration
 
-### 11.1 Evaluator Config Overrides
+### 11.1 Evaluator Config
 
-The evaluator reads paths from the experiment config YAML, with CLI flag overrides:
+The evaluator reads paths from the experiment config YAML:
 
-| Field | CLI Flag | Purpose |
-|-------|----------|---------|
-| `oss_fuzz_path` | `--oss-fuzz-path` | Path to oss-fuzz checkout |
-| `benchmarks_root` | `--benchmarks-root` | Path to benchmarks directory |
+| Field | Purpose |
+|-------|---------|
+| `oss_fuzz_path` | Path to oss-fuzz checkout |
+| `benchmarks_root` | Path to benchmarks directory |
 
 ### 11.2 Experiment Config
 

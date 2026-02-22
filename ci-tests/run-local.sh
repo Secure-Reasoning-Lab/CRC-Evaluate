@@ -4,11 +4,14 @@
 # CI runs: checks → format → sanity-mock → e2e
 #
 # Usage:
-#   ./ci-tests/run-local.sh              # Run full CI pipeline (checks + format + mock + e2e)
+#   ./ci-tests/run-local.sh              # Run full CI pipeline (checks + format + mock + smoke)
 #   ./ci-tests/run-local.sh checks       # Stage 1: typecheck, lint, format, unit tests
 #   ./ci-tests/run-local.sh format       # Stage 2a: format validation (sanity benchmarks)
 #   ./ci-tests/run-local.sh sanity       # Stage 2b: all checks (mock-c + mock-java)
 #   ./ci-tests/run-local.sh e2e          # Stage 3: bug finding E2E
+#   ./ci-tests/run-local.sh smoke        # Stage 4: parallel smoke (bugfinding + bugfixing)
+#   ./ci-tests/run-local.sh smoke-bugfinding
+#   ./ci-tests/run-local.sh smoke-bugfixing
 #
 # TODO: re-enable after adding HuggingFace download to CI
 #   ./ci-tests/run-local.sh all          # Run all stages including integration
@@ -39,6 +42,81 @@ success() {
 fail() {
     echo -e "${RED}$1${NC}"
     exit 1
+}
+
+SMOKE_VALKEY_CONTAINER=""
+SMOKE_VALKEY_VOLUME=""
+SMOKE_REDIS_PORT=""
+SMOKE_ORIG_REDIS_HOST=""
+SMOKE_HAD_ORIG_REDIS_HOST=0
+
+start_temp_valkey() {
+    local attempt port name volume
+    if [ "${SMOKE_HAD_ORIG_REDIS_HOST}" -eq 0 ] && [ -n "${CRSBENCH_REDIS_HOST:-}" ]; then
+        SMOKE_ORIG_REDIS_HOST="${CRSBENCH_REDIS_HOST}"
+        SMOKE_HAD_ORIG_REDIS_HOST=1
+    fi
+
+    for attempt in $(seq 1 20); do
+        port=$(python3 - <<'PY'
+import random
+print(random.randint(20000, 50000))
+PY
+)
+        name="crsbench-smoke-valkey-${port}-$$"
+        volume="crsbench_smoke_valkey_${port}_$$"
+
+        if docker run -d \
+            --name "$name" \
+            -p "127.0.0.1:${port}:6379" \
+            -v "${volume}:/data" \
+            valkey/valkey:8.0-alpine \
+            valkey-server --appendonly yes >/dev/null 2>&1; then
+            SMOKE_VALKEY_CONTAINER="$name"
+            SMOKE_VALKEY_VOLUME="$volume"
+            SMOKE_REDIS_PORT="$port"
+            local ready=0
+            for _ in $(seq 1 20); do
+                if docker exec "$SMOKE_VALKEY_CONTAINER" valkey-cli ping >/dev/null 2>&1; then
+                    ready=1
+                    break
+                fi
+                sleep 0.2
+            done
+            if [ "$ready" -ne 1 ]; then
+                docker rm -f "$SMOKE_VALKEY_CONTAINER" >/dev/null 2>&1 || true
+                docker volume rm "$SMOKE_VALKEY_VOLUME" >/dev/null 2>&1 || true
+                SMOKE_VALKEY_CONTAINER=""
+                SMOKE_VALKEY_VOLUME=""
+                SMOKE_REDIS_PORT=""
+                continue
+            fi
+            export CRSBENCH_REDIS_HOST="localhost:${SMOKE_REDIS_PORT}"
+            echo "[smoke] started temporary Valkey: container=${SMOKE_VALKEY_CONTAINER} host=${CRSBENCH_REDIS_HOST}"
+            return 0
+        fi
+    done
+
+    fail "Failed to start temporary Valkey on a random port after 20 attempts"
+}
+
+cleanup_temp_valkey() {
+    if [ -n "$SMOKE_VALKEY_CONTAINER" ]; then
+        docker rm -f "$SMOKE_VALKEY_CONTAINER" >/dev/null 2>&1 || true
+    fi
+    if [ -n "$SMOKE_VALKEY_VOLUME" ]; then
+        docker volume rm "$SMOKE_VALKEY_VOLUME" >/dev/null 2>&1 || true
+    fi
+    if [ "${SMOKE_HAD_ORIG_REDIS_HOST}" -eq 1 ]; then
+        export CRSBENCH_REDIS_HOST="${SMOKE_ORIG_REDIS_HOST}"
+    else
+        unset CRSBENCH_REDIS_HOST
+    fi
+    SMOKE_VALKEY_CONTAINER=""
+    SMOKE_VALKEY_VOLUME=""
+    SMOKE_REDIS_PORT=""
+    SMOKE_ORIG_REDIS_HOST=""
+    SMOKE_HAD_ORIG_REDIS_HOST=0
 }
 
 cleanup_path() {
@@ -211,6 +289,113 @@ if '$expected_cpv' not in cpvs:
     success "E2E PASSED: All answer POVs found!"
 }
 
+# Stage 4: smoke checks for default regression CRSs
+# Smoke stages run against an isolated temporary Valkey instance on a random port.
+# The container/volume are cleaned up automatically after each smoke run.
+run_smoke_bugfinding() {
+    run_stage "Stage 4a: Smoke Bugfinding (atlantis-multilang-given_fuzzer)"
+    start_temp_valkey
+    trap cleanup_temp_valkey EXIT
+    local cpuset_flag=()
+    if [ "${SMOKE_NO_CPUSET:-1}" = "1" ]; then
+        cpuset_flag=(--no-cpuset)
+    fi
+    uv run python ci-tests/smoke_runner.py \
+        --suite bugfinding \
+        "${cpuset_flag[@]}" \
+        --worker-cores 16 \
+        --keep-workspace || fail "Smoke bugfinding failed"
+    trap - EXIT
+    cleanup_temp_valkey
+    success "Smoke bugfinding passed"
+}
+
+run_smoke_bugfixing() {
+    run_stage "Stage 4b: Smoke Bugfixing (crs-claude-code)"
+    start_temp_valkey
+    trap cleanup_temp_valkey EXIT
+    local cpuset_flag=()
+    if [ "${SMOKE_NO_CPUSET:-1}" = "1" ]; then
+        cpuset_flag=(--no-cpuset)
+    fi
+    uv run python ci-tests/smoke_runner.py \
+        --suite bugfixing \
+        "${cpuset_flag[@]}" \
+        --worker-cores 16 \
+        --keep-workspace || fail "Smoke bugfixing failed"
+    trap - EXIT
+    cleanup_temp_valkey
+    success "Smoke bugfixing passed"
+}
+
+run_smoke_parallel() {
+    run_stage "Stage 4: Parallel Smoke (bugfinding + bugfixing)"
+
+    # Run in parallel with disjoint cpusets by default.
+    # Override with env vars if your machine has a different layout.
+    local bugfinding_cpuset=${SMOKE_CPUSET_BUGFINDING:-0-23}
+    local bugfixing_cpuset=${SMOKE_CPUSET_BUGFIXING:-24-47}
+    local smoke_run_root
+    smoke_run_root=$(mktemp -d /tmp/crsbench-smoke-parallel-XXXXXX)
+    local cpuset_flag=()
+    if [ "${SMOKE_NO_CPUSET:-1}" = "1" ]; then
+        cpuset_flag=(--no-cpuset)
+    fi
+    start_temp_valkey
+    trap cleanup_temp_valkey EXIT
+
+    uv run python ci-tests/smoke_runner.py \
+        --suite bugfinding \
+        "${cpuset_flag[@]}" \
+        --worker-cpuset "$bugfinding_cpuset" \
+        --result-root "$smoke_run_root" \
+        --keep-workspace &
+    pid1=$!
+
+    uv run python ci-tests/smoke_runner.py \
+        --suite bugfixing \
+        "${cpuset_flag[@]}" \
+        --worker-cpuset "$bugfixing_cpuset" \
+        --result-root "$smoke_run_root" \
+        --keep-workspace &
+    pid2=$!
+
+    wait "$pid1" || fail "Parallel smoke bugfinding failed"
+    wait "$pid2" || fail "Parallel smoke bugfixing failed"
+
+    echo -e "\n${YELLOW}--- Parallel Smoke Summary ---${NC}"
+    local summaries
+    summaries=$(find "$smoke_run_root" -name summary.json -type f | sort || true)
+    if [ -z "$summaries" ]; then
+        fail "Parallel smoke completed but no summary.json files found under $smoke_run_root"
+    fi
+
+    while IFS= read -r summary; do
+        [ -z "$summary" ] && continue
+        python3 - "$summary" <<'PY'
+import json, sys
+from pathlib import Path
+
+summary_path = Path(sys.argv[1])
+data = json.loads(summary_path.read_text())
+suite = data.get("suite", "unknown")
+status = data.get("status", "unknown")
+workspace = data.get("workspace", "unknown")
+successes = data.get("successes", 0)
+total_trials = data.get("total_trials", 0)
+patch_files = data.get("patch_files", 0)
+pov_files = data.get("pov_files", 0)
+print(f"[{suite}] status={status} successes={successes}/{total_trials} patch_files={patch_files} pov_files={pov_files}")
+print(f"[{suite}] workspace={workspace}")
+PY
+    done <<< "$summaries"
+
+    echo "[smoke] summary root: $smoke_run_root"
+    trap - EXIT
+    cleanup_temp_valkey
+    success "Parallel smoke passed"
+}
+
 # Main
 main() {
     local stage=${1:-default}
@@ -238,14 +423,23 @@ main() {
         e2e)
             run_e2e
             ;;
+        smoke)
+            run_smoke_parallel
+            ;;
+        smoke-bugfinding)
+            run_smoke_bugfinding
+            ;;
+        smoke-bugfixing)
+            run_smoke_bugfixing
+            ;;
         default)
-            # Default: matches CI pipeline (checks → format → mock → e2e)
+            # Default: matches CI pipeline (checks → format → mock → smoke)
             run_checks
             run_format
             run_sanity
             # TODO: re-enable after adding HuggingFace download
             # run_sanity_real
-            run_e2e
+            run_smoke_parallel
             ;;
         all)
             run_checks
@@ -254,16 +448,19 @@ main() {
             # TODO: re-enable after adding HuggingFace download
             # run_sanity_real
             # run_integration
-            run_e2e
+            run_smoke_parallel
             ;;
         *)
-            echo "Usage: $0 [checks|format|sanity|e2e]"
+            echo "Usage: $0 [checks|format|sanity|e2e|smoke|smoke-bugfinding|smoke-bugfixing]"
             echo ""
-            echo "  (default)    Run checks + format + sanity-mock + e2e (matches CI)"
+            echo "  (default)    Run checks + format + sanity-mock + smoke (matches CI)"
             echo "  checks       Stage 1: typecheck, lint, format, unit tests"
             echo "  format       Stage 2a: format validation (sanity benchmarks)"
             echo "  sanity       Stage 2b: all checks (mock-c + mock-java)"
-            echo "  e2e          Stage 3: bug finding E2E"
+            echo "  e2e          Optional: bug finding E2E (longer/deeper)"
+            echo "  smoke        Stage 4: parallel smoke checks (bugfinding + bugfixing)"
+            echo "  smoke-bugfinding  Smoke check for atlantis-multilang-given_fuzzer"
+            echo "  smoke-bugfixing   Smoke check for crs-claude-code"
             exit 1
             ;;
     esac

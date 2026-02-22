@@ -7,8 +7,8 @@
 # - Distributed execution mode (Redis required)
 #
 # Required environment variables:
-#   UPSTREAM_LITELLM_BASE_URL  LiteLLM server URL (e.g., https://litellm.example.com/v1)
-#   LITELLM_API_KEY            LiteLLM API key
+#   CRSBENCH_LLM_UPSTREAM_BASE_URL  LiteLLM server URL (e.g., https://litellm.example.com/v1)
+#   CRSBENCH_LLM_API_KEY            LiteLLM API key
 #
 # Usage:
 #   ./run_bugfixing_smoke_test.sh [OPTIONS]
@@ -197,21 +197,21 @@ fi
 
 # Check required environment variables for LiteLLM passthrough mode
 echo -e "${YELLOW}Checking LiteLLM environment variables...${NC}"
-if [ -z "$UPSTREAM_LITELLM_BASE_URL" ]; then
-    echo -e "${RED}Error: UPSTREAM_LITELLM_BASE_URL is not set${NC}"
+if [ -z "$CRSBENCH_LLM_UPSTREAM_BASE_URL" ]; then
+    echo -e "${RED}Error: CRSBENCH_LLM_UPSTREAM_BASE_URL is not set${NC}"
     echo "Bug-fixing CRS requires LiteLLM. Please set in .env or export:"
-    echo "  UPSTREAM_LITELLM_BASE_URL=https://your-litellm-server/v1"
-    echo "  LITELLM_API_KEY=your-api-key"
+    echo "  CRSBENCH_LLM_UPSTREAM_BASE_URL=https://your-litellm-server/v1"
+    echo "  CRSBENCH_LLM_API_KEY=your-api-key"
     exit 1
 fi
-if [ -z "$LITELLM_API_KEY" ]; then
-    echo -e "${RED}Error: LITELLM_API_KEY is not set${NC}"
+if [ -z "$CRSBENCH_LLM_API_KEY" ]; then
+    echo -e "${RED}Error: CRSBENCH_LLM_API_KEY is not set${NC}"
     echo "Bug-fixing CRS requires LiteLLM. Please set in .env or export:"
-    echo "  LITELLM_API_KEY=your-api-key"
+    echo "  CRSBENCH_LLM_API_KEY=your-api-key"
     exit 1
 fi
 echo -e "${GREEN}✓ LiteLLM environment variables are set${NC}"
-echo "  UPSTREAM_LITELLM_BASE_URL: $UPSTREAM_LITELLM_BASE_URL"
+echo "  CRSBENCH_LLM_UPSTREAM_BASE_URL: $CRSBENCH_LLM_UPSTREAM_BASE_URL"
 echo ""
 
 # Create config directory

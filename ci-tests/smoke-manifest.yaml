@@ -1,0 +1,53 @@
+defaults:
+  redis_host: localhost:6379
+  adapter: oss-crs
+  mode: delta
+  benchmark_suite: sanity
+  trials: 1
+  difficulty_level: 1
+  worker_jobs: 3
+  cleanup_after_trial: false
+
+suites:
+  bugfinding:
+    description: "Smoke-check bug-finding CRS on sanity mock-c/mock-java"
+    crs: atlantis-multilang-given_fuzzer
+    experiment_prefix: smoke-bugfinding-atlantis-given-fuzzer
+    timeouts:
+      max_total_time: 3000
+      build_timeout: 1800
+      run_timeout: 300
+      verify_timeout: 120
+      per_pov_verify_timeout: 30
+    pov_early_stop: true
+    skip_verification: true
+    skip_litellm: true
+    resources:
+      cores_per_trial: 8
+      litellm:
+        max_concurrent_requests: 5
+        cost_budget: 0
+    # Smoke gate: each harness should emit at least one POV artifact.
+    min_pov_files_per_trial: 1
+
+  bugfixing:
+    description: "Smoke-check bug-fixing CRS on sanity mock-c/mock-java"
+    crs: crs-claude-code
+    experiment_prefix: smoke-bugfixing-crs-claude-code
+    timeouts:
+      max_total_time: 4200
+      build_timeout: 1800
+      run_timeout: 900
+      verify_timeout: 1200
+      per_pov_verify_timeout: 600
+    max_pov_variants_per_cpv: 1
+    skip_verification: true
+    litellm_mode: passthrough
+    llm_tracking_enabled: false
+    resources:
+      cores_per_trial: 8
+      litellm:
+        max_concurrent_requests: 5
+        cost_budget: 10
+    # Smoke gate: suite should emit at least one patch artifact overall.
+    min_patch_files_total: 1

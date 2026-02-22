@@ -30,7 +30,7 @@ All machines need:
 
 - CRSBench dependencies installed (`uv sync`)
 - Docker running
-- OSS-Fuzz repository cloned (same path or use `--oss-fuzz-path` override)
+- OSS-Fuzz repository cloned (same path as experiment config expectation)
 - Benchmarks available (same path or use `--benchmarks-root` override)
 - Python packages: `redis`, `rq` (`pip install redis rq`)
 
@@ -74,7 +74,7 @@ If Redis requires authentication:
 
 ```bash
 # Set on all machines (orchestrator, workers, evaluators)
-export REDIS_PASSWORD=your-redis-password
+export CRSBENCH_REDIS_PASSWORD=your-redis-password
 ```
 
 ### Verify tunnel works
@@ -105,7 +105,7 @@ experiment_filestore: /data/experiments
 oss_fuzz_path: /opt/oss-fuzz
 benchmarks_root: /home/user/CRSBench/benchmarks
 max_total_time: 3600
-redis_host: localhost
+redis_host: localhost:6379
 benchmarks:
   - sanity-mock-c-delta-01
   - afc-curl-delta-01
@@ -125,8 +125,7 @@ ssh -N -L 6379:localhost:6379 user@machine-a &
 # Run evaluator
 crsbench evaluator \
   --experiment-config experiment-config.yaml \
-  --experiment-name my-distributed-exp \
-  --redis-host localhost
+
 ```
 
 The evaluator:
@@ -143,8 +142,7 @@ ssh -N -L 6379:localhost:6379 user@machine-a &
 # Run worker (paths come from experiment config YAML worker: section)
 crsbench worker \
   --experiment-config experiment-config.yaml \
-  --experiment-name my-distributed-exp \
-  --redis-host localhost
+
 ```
 
 ### Step 5: Start orchestrator (Machine A)
@@ -196,13 +194,12 @@ worker:
   experiment_filestore: /data/experiments
 ```
 
-### Evaluator CLI overrides
+### Evaluator path config
 
-Evaluators accept CLI flags to override config paths directly:
+Evaluators read paths from experiment config directly:
 
 ```bash
 crsbench evaluator --experiment-config config.yaml \
-  --oss-fuzz-path /opt/oss-fuzz \
   --benchmarks-root /data/benchmarks
 ```
 
@@ -217,7 +214,7 @@ crsbench benchmark ci build --all \
   --redis-host localhost
 
 # On Machine B (with SSH tunnel)
-crsbench evaluator --ci --redis-host localhost \
+crsbench evaluator --ci \
   --build-jobs 8 --build-cores-per-job 4 \
   --verify-cores-per-job 2 \
   --continuous
@@ -233,7 +230,7 @@ If no evaluator was running during the experiment, verification jobs accumulate 
 # After experiment completes, start evaluator to drain verify queue
 crsbench evaluator \
   --experiment-config experiment-config.yaml \
-  --experiment-name my-distributed-exp
+
 ```
 
 The evaluator builds variants, then processes all queued verification jobs.

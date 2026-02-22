@@ -131,7 +131,7 @@ class TestSnapshotCapture:
         extract_dir.mkdir()
 
         with tarfile.open(archive_path, "r:gz") as tar:
-            tar.extractall(extract_dir)
+            tar.extractall(extract_dir, filter="data")
 
         # Check required files
         assert (extract_dir / "metadata.json").exists()
@@ -173,7 +173,7 @@ class TestSnapshotCapture:
         extract_dir.mkdir()
 
         with tarfile.open(archive_path, "r:gz") as tar:
-            tar.extractall(extract_dir)
+            tar.extractall(extract_dir, filter="data")
 
         # Should have all 3 POVs
         pov_files = sorted([p.name for p in (extract_dir / "povs").iterdir()])
@@ -205,7 +205,7 @@ class TestSnapshotCapture:
         extract_dir.mkdir()
 
         with tarfile.open(archive_path, "r:gz") as tar:
-            tar.extractall(extract_dir)
+            tar.extractall(extract_dir, filter="data")
 
         # Should have both patches
         assert (extract_dir / "patches" / "pov_1" / "patch.diff").exists()

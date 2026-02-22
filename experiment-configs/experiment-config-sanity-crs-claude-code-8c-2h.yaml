@@ -1,0 +1,58 @@
+# Experiment Configuration - Sanity Test (crs-claude-code, 8 cores, 2h run)
+#
+# Based on experiment-config-sanity.yaml with resource/timeout profile:
+# - cores_per_trial: 8
+# - run_timeout: 7200 (2 hours)
+
+experiment: sanity-test-crs-claude-code-8c-2h
+
+trials: 1
+
+mode: delta
+adapter: oss-crs
+
+crs_compose:
+  docker_registry: us-central1-docker.pkg.dev/aixcc-scoring-prod/oss-fuzz
+  # Override per experiment to switch CRS model routing/profile.
+  litellm_config_path: /home/dongkwan/multilang-test/combined-litellm-config.yaml
+
+# Timeout Configuration
+# 4h build + 2h run + 4h verify + 1h buffer = 11h total
+max_total_time: 39600  # 11 hours total
+build_timeout: 14400   # 4 hours
+run_timeout: 7200     # 2 hours
+verify_timeout: 14400  # 4 hours
+per_pov_verify_timeout: 7200  # 2 hours per individual POV/patch verification
+# Bug-fixing input staging: max POV variants per CPV passed via --pov-dir
+# 1 = single POV per CPV, N = multiple variants per CPV, null = all variants
+max_pov_variants_per_cpv: 1
+
+difficulty_level: 1
+
+experiment_filestore: /home/dongkwan/crsbench_eval_patch/experiment-data
+report_filestore: /home/dongkwan/crsbench_eval_patch/report-data
+
+crses:
+  - crs-claude-code
+
+# Uses sanity suite: sanity-mock-c-delta-01, sanity-mock-java-delta-01
+benchmark_suite: sanity
+
+# Distributed execution
+redis_host: localhost
+
+# crs-claude-code typically uses LiteLLM passthrough/proxy mode (do not skip LiteLLM)
+litellm_mode: passthrough
+
+resources:
+  cores_per_trial: 8
+  litellm:
+    max_concurrent_requests: 5
+    cost_budget: 10
+
+# Worker configuration (for distributed mode)
+# Use all 128 cores for trial execution (no evaluator reservation).
+# With 8 cores/trial: floor(128 / 8) = 16 parallel trial jobs.
+worker:
+  jobs: 16
+  cleanup_after_trial: false

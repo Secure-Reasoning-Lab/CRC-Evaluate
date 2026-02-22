@@ -21,7 +21,6 @@ User runs: crsbench run --experiment-config config.yaml
     ↓
 1. Parse CLI Arguments
     ├── --experiment-config (required)
-    ├── --experiment-name (optional override)
     ├── --local-only (optional flag)
     ├── --distributed (optional flag)
     └── --dry-run, --verbose
@@ -32,7 +31,7 @@ User runs: crsbench run --experiment-config config.yaml
     └── Exit if invalid
     ↓
 3. Resolve Parameters (all from config)
-    ├── experiment_name: CLI --experiment-name > config.experiment
+    ├── experiment_name: config.experiment
     ├── crses: config.crses
     └── benchmarks: config.benchmarks or config.benchmark_suite
     ↓
@@ -72,7 +71,6 @@ uv sync
 ```bash
 crsbench run \
   --experiment-config CONFIG_FILE \
-  [--experiment-name EXPERIMENT_NAME] \
   [--local-only] \
   [--distributed] \
   [--dry-run] \
@@ -86,7 +84,6 @@ crsbench run \
 | Argument | Required | Type | Description |
 |----------|----------|------|-------------|
 | `--experiment-config` | Yes | Path | Path to experiment YAML config |
-| `--experiment-name` | No | String | Override experiment identifier |
 | `--local-only` | No | Flag | Force local execution |
 | `--distributed` | No | Flag | Force distributed execution |
 | `--dry-run` | No | Flag | Show what would run without executing |
@@ -104,7 +101,7 @@ crsbench run --experiment-config my-experiment.yaml
 **Override experiment name:**
 ```bash
 crsbench run --experiment-config config.yaml \
-             --experiment-name test-run-v2
+
 ```
 
 **Force local execution:**
@@ -123,14 +120,9 @@ crsbench run --experiment-config config.yaml \
 
 ### Resolution Priority
 
-The orchestration layer reads experiment parameters from the config YAML. Only `experiment_name` can be overridden from the CLI.
-
-**For `experiment_name`:**
-1. CLI `--experiment-name` (highest priority)
-2. Config `experiment` field
-
-**For `crses`, `benchmarks`, `benchmark_suite`, and all other settings:**
-- Config YAML only (no CLI override)
+The orchestration layer reads experiment parameters from the config YAML.
+`experiment_name`, `crses`, `benchmarks`, `benchmark_suite`, and all other
+experiment settings come from config.
 
 ### Resolution Logic
 
@@ -142,8 +134,8 @@ def main():
     # Load config
     config = load_experiment_config(args.experiment_config)
 
-    # Resolve experiment name (only CLI override)
-    experiment_name = args.experiment_name if args.experiment_name else config.experiment
+    # Resolve experiment name from config
+    experiment_name = config.experiment
 
     # CRSes from config
     crses = config.crses
@@ -634,7 +626,7 @@ def test_run_experiment_local_mode(tmp_path):
 
 **Wrong**:
 ```bash
-crsbench run --experiment-name test
+crsbench run
 ```
 
 **Right**:

@@ -8,6 +8,7 @@ operations for testing and development workflows.
 Usage:
     # Service management
     python scripts/valkey-helper.py start                # localhost:6379
+    python scripts/valkey-helper.py --port 6380 start    # localhost:6380
     python scripts/valkey-helper.py --password start     # 0.0.0.0:6379 with auth (remote workers)
     python scripts/valkey-helper.py stop
     python scripts/valkey-helper.py restart
@@ -54,12 +55,12 @@ from pathlib import Path
 
 # ANSI color codes for terminal output
 class Colors:
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    RED = '\033[91m'
-    BLUE = '\033[94m'
-    RESET = '\033[0m'
-    BOLD = '\033[1m'
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    BLUE = "\033[94m"
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
 
 
 def print_success(msg: str) -> None:
@@ -82,7 +83,9 @@ def print_warning(msg: str) -> None:
     print(f"{Colors.YELLOW}⚠{Colors.RESET} {msg}")
 
 
-def run_command(cmd: list[str], capture_output: bool = False, check: bool = True) -> subprocess.CompletedProcess:
+def run_command(
+    cmd: list[str], capture_output: bool = False, check: bool = True
+) -> subprocess.CompletedProcess:
     """
     Run a shell command with error handling.
 
@@ -96,10 +99,7 @@ def run_command(cmd: list[str], capture_output: bool = False, check: bool = True
     """
     try:
         result = subprocess.run(
-            cmd,
-            capture_output=capture_output,
-            text=True,
-            check=check
+            cmd, capture_output=capture_output, text=True, check=check
         )
         return result
     except subprocess.CalledProcessError as e:
@@ -137,7 +137,7 @@ def _get_env_file_path() -> Path:
 
 
 def _load_env_password() -> str | None:
-    """Parse .env file for REDIS_PASSWORD value."""
+    """Parse .env file for CRSBENCH_REDIS_PASSWORD value."""
     env_file = _get_env_file_path()
     if not env_file.exists():
         return None
@@ -146,13 +146,13 @@ def _load_env_password() -> str | None:
         if line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        if key.strip() == "REDIS_PASSWORD" and value.strip():
+        if key.strip() == "CRSBENCH_REDIS_PASSWORD" and value.strip():
             return value.strip()
     return None
 
 
 def _save_env_password(password: str) -> None:
-    """Update or append REDIS_PASSWORD in .env, chmod 600."""
+    """Update or append CRSBENCH_REDIS_PASSWORD in .env, chmod 600."""
     env_file = _get_env_file_path()
     lines: list[str] = []
     found = False
@@ -160,16 +160,16 @@ def _save_env_password(password: str) -> None:
     if env_file.exists():
         for line in env_file.read_text().splitlines():
             stripped = line.strip()
-            if stripped.startswith("REDIS_PASSWORD=") or (
-                not stripped.startswith("#") and "REDIS_PASSWORD=" in stripped
+            if stripped.startswith("CRSBENCH_REDIS_PASSWORD=") or (
+                not stripped.startswith("#") and "CRSBENCH_REDIS_PASSWORD=" in stripped
             ):
-                lines.append(f"REDIS_PASSWORD={password}")
+                lines.append(f"CRSBENCH_REDIS_PASSWORD={password}")
                 found = True
             else:
                 lines.append(line)
 
     if not found:
-        lines.append(f"REDIS_PASSWORD={password}")
+        lines.append(f"CRSBENCH_REDIS_PASSWORD={password}")
 
     env_file.write_text("\n".join(lines) + "\n")
     env_file.chmod(0o600)
@@ -179,8 +179,10 @@ def _server_requires_password() -> bool:
     """Check if the running Valkey container was started with --requirepass."""
     try:
         result = subprocess.run(
-            ["docker", "inspect", "crsbench-valkey", "--format", "{{join .Args \" \"}}"],
-            capture_output=True, text=True, check=True,
+            ["docker", "inspect", "crsbench-valkey", "--format", '{{join .Args " "}}'],
+            capture_output=True,
+            text=True,
+            check=True,
         )
         return "--requirepass" in result.stdout
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -191,7 +193,7 @@ def _get_active_password() -> str | None:
     """Return password only if the running server actually requires it."""
     if not _server_requires_password():
         return None
-    env_val = os.environ.get("REDIS_PASSWORD")
+    env_val = os.environ.get("CRSBENCH_REDIS_PASSWORD")
     if env_val:
         return env_val
     return _load_env_password()
@@ -222,10 +224,17 @@ def is_valkey_running() -> bool:
     """Check if Valkey container is running."""
     try:
         result = subprocess.run(
-            ["docker", "ps", "--filter", "name=crsbench-valkey", "--format", "{{.Names}}"],
+            [
+                "docker",
+                "ps",
+                "--filter",
+                "name=crsbench-valkey",
+                "--format",
+                "{{.Names}}",
+            ],
             capture_output=True,
             text=True,
-            check=True
+            check=True,
         )
         return "crsbench-valkey" in result.stdout
     except subprocess.CalledProcessError:
@@ -234,41 +243,59 @@ def is_valkey_running() -> bool:
 
 def cmd_start(args: argparse.Namespace) -> None:
     """Start Valkey service."""
-    compose_file = get_compose_file_path()
-
     if is_valkey_running():
         print_warning("Valkey is already running")
         return
 
     password = None
+    host_port = int(args.port)
 
     if args.password:
         # --password mode: bind 0.0.0.0, require auth
         password = _load_env_password() or secrets.token_urlsafe(24)
-        bind_addr = "0.0.0.0:6379:6379"
+        bind_addr = f"0.0.0.0:{host_port}:6379"
 
-        print_info("Starting Valkey service with password auth (0.0.0.0:6379)...")
-        print_warning("Port 6379 will be accessible from ALL interfaces")
+        print_info(
+            f"Starting Valkey service with password auth (0.0.0.0:{host_port})..."
+        )
+        print_warning(f"Port {host_port} will be accessible from ALL interfaces")
 
         # Stop any existing container first
-        run_command(["docker", "stop", "crsbench-valkey"], check=False, capture_output=True)
-        run_command(["docker", "rm", "crsbench-valkey"], check=False, capture_output=True)
+        run_command(
+            ["docker", "stop", "crsbench-valkey"], check=False, capture_output=True
+        )
+        run_command(
+            ["docker", "rm", "crsbench-valkey"], check=False, capture_output=True
+        )
 
-        run_command([
-            "docker", "run", "-d",
-            "--name", "crsbench-valkey",
-            "-p", bind_addr,
-            "-v", "valkey_valkey-data:/data",
-            "--restart", "unless-stopped",
-            "valkey/valkey:8.0-alpine",
-            "valkey-server", "--appendonly", "yes", "--requirepass", password,
-        ])
+        run_command(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                "crsbench-valkey",
+                "-p",
+                bind_addr,
+                "-v",
+                "valkey_valkey-data:/data",
+                "--restart",
+                "unless-stopped",
+                "valkey/valkey:8.0-alpine",
+                "valkey-server",
+                "--appendonly",
+                "yes",
+                "--requirepass",
+                password,
+            ]
+        )
 
         _save_env_password(password)
 
     else:
-        # Default: bind to localhost (127.0.0.1:6379)
-        print_info("Starting Valkey service (localhost:6379)...")
+        # Default: bind to localhost (127.0.0.1:<port>)
+        bind_addr = f"127.0.0.1:{host_port}:6379"
+        print_info(f"Starting Valkey service (localhost:{host_port})...")
 
         # Create external volume if it doesn't exist (idempotent)
         run_command(
@@ -278,13 +305,36 @@ def cmd_start(args: argparse.Namespace) -> None:
         )
 
         # Clean up any stopped containers to avoid name conflicts
-        run_command(["docker", "stop", "crsbench-valkey"], check=False, capture_output=True)
-        run_command(["docker", "rm", "crsbench-valkey"], check=False, capture_output=True)
+        run_command(
+            ["docker", "stop", "crsbench-valkey"], check=False, capture_output=True
+        )
+        run_command(
+            ["docker", "rm", "crsbench-valkey"], check=False, capture_output=True
+        )
 
-        run_command(docker_compose_cmd(compose_file, "up", "-d"))
+        run_command(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                "crsbench-valkey",
+                "-p",
+                bind_addr,
+                "-v",
+                "valkey_valkey-data:/data",
+                "--restart",
+                "unless-stopped",
+                "valkey/valkey:8.0-alpine",
+                "valkey-server",
+                "--appendonly",
+                "yes",
+            ]
+        )
 
     # Wait a moment and check status
     import time
+
     time.sleep(2)
 
     if is_valkey_running():
@@ -292,17 +342,21 @@ def cmd_start(args: argparse.Namespace) -> None:
 
         if args.password:
             print_success("Password auth: ENABLED")
-            print_success("Host access enabled at 0.0.0.0:6379")
+            print_success(f"Host access enabled at 0.0.0.0:{host_port}")
             print_info(f"Password saved to {_get_env_file_path()}")
-            print_info("Copy .env to worker machines: scp .env user@worker:/path/to/CRSBench/.env")
+            print_info(
+                "Copy .env to worker machines: scp .env user@worker:/path/to/CRSBench/.env"
+            )
         else:
-            print_success("Host access enabled at localhost:6379")
+            print_success(f"Host access enabled at localhost:{host_port}")
 
         # Test connection
         try:
             result = _run_valkey_cli(
-                "crsbench-valkey", "ping",
-                password=password, capture_output=True,
+                "crsbench-valkey",
+                "ping",
+                password=password,
+                capture_output=True,
             )
             if "PONG" in result.stdout:
                 print_success("Connection test successful (PONG)")
@@ -326,15 +380,21 @@ def cmd_stop(args: argparse.Namespace) -> None:
     try:
         subprocess.run(
             docker_compose_cmd(compose_file, "down"),
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
     except FileNotFoundError:
         pass  # docker-compose not installed, fall through to docker stop
 
     # If that didn't work, try stopping container directly
     if is_valkey_running():
-        run_command(["docker", "stop", "crsbench-valkey"], check=False, capture_output=True)
-        run_command(["docker", "rm", "crsbench-valkey"], check=False, capture_output=True)
+        run_command(
+            ["docker", "stop", "crsbench-valkey"], check=False, capture_output=True
+        )
+        run_command(
+            ["docker", "rm", "crsbench-valkey"], check=False, capture_output=True
+        )
 
     print_success("Valkey service stopped")
 
@@ -384,8 +444,10 @@ def cmd_status(args: argparse.Namespace) -> None:
     # Test connection
     try:
         result = _run_valkey_cli(
-            "crsbench-valkey", "ping",
-            password=password, capture_output=True,
+            "crsbench-valkey",
+            "ping",
+            password=password,
+            capture_output=True,
         )
         if "PONG" in result.stdout:
             print_success("Connection test: PONG")
@@ -398,12 +460,15 @@ def cmd_status(args: argparse.Namespace) -> None:
     # Get info
     try:
         result = _run_valkey_cli(
-            "crsbench-valkey", "info", "server",
-            password=password, capture_output=True,
+            "crsbench-valkey",
+            "info",
+            "server",
+            password=password,
+            capture_output=True,
         )
-        for line in result.stdout.split('\n'):
-            if line.startswith('redis_version:') or line.startswith('valkey_version:'):
-                version = line.split(':')[1].strip()
+        for line in result.stdout.split("\n"):
+            if line.startswith("redis_version:") or line.startswith("valkey_version:"):
+                version = line.split(":")[1].strip()
                 print_info(f"Version: {version}")
                 break
     except Exception:
@@ -420,7 +485,9 @@ def cmd_logs(args: argparse.Namespace) -> None:
 
     print_info("Streaming Valkey logs (Ctrl+C to exit)...")
     try:
-        run_command(docker_compose_cmd(compose_file, "logs", "-f", "valkey"), check=False)
+        run_command(
+            docker_compose_cmd(compose_file, "logs", "-f", "valkey"), check=False
+        )
     except KeyboardInterrupt:
         print("\n")
         print_info("Stopped streaming logs")
@@ -440,8 +507,11 @@ def cmd_clean(args: argparse.Namespace) -> None:
 
     # Check if queue exists
     result = _run_valkey_cli(
-        "crsbench-valkey", "EXISTS", queue_name,
-        password=password, capture_output=True,
+        "crsbench-valkey",
+        "EXISTS",
+        queue_name,
+        password=password,
+        capture_output=True,
     )
 
     if result.stdout.strip() == "0":
@@ -453,11 +523,14 @@ def cmd_clean(args: argparse.Namespace) -> None:
 
     # Get all matching keys
     result = _run_valkey_cli(
-        "crsbench-valkey", "KEYS", f"rq:*crsbench_{experiment}*",
-        password=password, capture_output=True,
+        "crsbench-valkey",
+        "KEYS",
+        f"rq:*crsbench_{experiment}*",
+        password=password,
+        capture_output=True,
     )
 
-    keys = [k for k in result.stdout.strip().split('\n') if k]
+    keys = [k for k in result.stdout.strip().split("\n") if k]
 
     if not keys:
         print_warning("No keys found to delete")
@@ -468,8 +541,11 @@ def cmd_clean(args: argparse.Namespace) -> None:
     # Delete each key
     for key in keys:
         _run_valkey_cli(
-            "crsbench-valkey", "DEL", key,
-            password=password, capture_output=True,
+            "crsbench-valkey",
+            "DEL",
+            key,
+            password=password,
+            capture_output=True,
         )
 
     print_success(f"Cleaned experiment queue: {experiment}")
@@ -487,15 +563,19 @@ def cmd_clean_all(args: argparse.Namespace) -> None:
     print_warning("This includes all CRSBench queues and any other data.")
 
     if not args.force:
-        response = input(f"{Colors.YELLOW}Are you sure? Type 'yes' to confirm:{Colors.RESET} ")
+        response = input(
+            f"{Colors.YELLOW}Are you sure? Type 'yes' to confirm:{Colors.RESET} "
+        )
         if response.lower() != "yes":
             print_info("Cancelled")
             return
 
     print_info("Flushing entire database...")
     _run_valkey_cli(
-        "crsbench-valkey", "FLUSHDB",
-        password=password, capture_output=True,
+        "crsbench-valkey",
+        "FLUSHDB",
+        password=password,
+        capture_output=True,
     )
     print_success("Database flushed")
 
@@ -512,11 +592,14 @@ def cmd_list_queues(args: argparse.Namespace) -> None:
 
     # Get all queue keys
     result = _run_valkey_cli(
-        "crsbench-valkey", "KEYS", "rq:queue:crsbench_*",
-        password=password, capture_output=True,
+        "crsbench-valkey",
+        "KEYS",
+        "rq:queue:crsbench_*",
+        password=password,
+        capture_output=True,
     )
 
-    queues = [q for q in result.stdout.strip().split('\n') if q]
+    queues = [q for q in result.stdout.strip().split("\n") if q]
 
     if not queues:
         print_info("No queues found")
@@ -525,8 +608,11 @@ def cmd_list_queues(args: argparse.Namespace) -> None:
     for queue in queues:
         # Get queue length
         result = _run_valkey_cli(
-            "crsbench-valkey", "LLEN", queue,
-            password=password, capture_output=True,
+            "crsbench-valkey",
+            "LLEN",
+            queue,
+            password=password,
+            capture_output=True,
         )
         length = result.stdout.strip()
 
@@ -551,8 +637,11 @@ def cmd_queue_info(args: argparse.Namespace) -> None:
 
     # Check if exists
     result = _run_valkey_cli(
-        "crsbench-valkey", "EXISTS", queue_name,
-        password=password, capture_output=True,
+        "crsbench-valkey",
+        "EXISTS",
+        queue_name,
+        password=password,
+        capture_output=True,
     )
 
     if result.stdout.strip() == "0":
@@ -561,33 +650,45 @@ def cmd_queue_info(args: argparse.Namespace) -> None:
 
     # Get queue length
     result = _run_valkey_cli(
-        "crsbench-valkey", "LLEN", queue_name,
-        password=password, capture_output=True,
+        "crsbench-valkey",
+        "LLEN",
+        queue_name,
+        password=password,
+        capture_output=True,
     )
     length = int(result.stdout.strip())
     print(f"Queued jobs: {length}")
 
     # Get all related keys
     result = _run_valkey_cli(
-        "crsbench-valkey", "KEYS", f"rq:*crsbench_{experiment}*",
-        password=password, capture_output=True,
+        "crsbench-valkey",
+        "KEYS",
+        f"rq:*crsbench_{experiment}*",
+        password=password,
+        capture_output=True,
     )
 
-    keys = [k for k in result.stdout.strip().split('\n') if k]
+    keys = [k for k in result.stdout.strip().split("\n") if k]
     print(f"Total keys: {len(keys)}")
 
     # Categorize keys
     for key in keys:
         if "finished" in key:
             result = _run_valkey_cli(
-                "crsbench-valkey", "SCARD", key,
-                password=password, capture_output=True,
+                "crsbench-valkey",
+                "SCARD",
+                key,
+                password=password,
+                capture_output=True,
             )
             print(f"Finished jobs: {result.stdout.strip()}")
         elif "failed" in key:
             result = _run_valkey_cli(
-                "crsbench-valkey", "SCARD", key,
-                password=password, capture_output=True,
+                "crsbench-valkey",
+                "SCARD",
+                key,
+                password=password,
+                capture_output=True,
             )
             print(f"Failed jobs: {result.stdout.strip()}")
 
@@ -604,30 +705,38 @@ def cmd_stats(args: argparse.Namespace) -> None:
 
     # Database size
     result = _run_valkey_cli(
-        "crsbench-valkey", "DBSIZE",
-        password=password, capture_output=True,
+        "crsbench-valkey",
+        "DBSIZE",
+        password=password,
+        capture_output=True,
     )
     dbsize = result.stdout.strip()
     print(f"Total keys: {dbsize}")
 
     # Memory usage
     result = _run_valkey_cli(
-        "crsbench-valkey", "info", "memory",
-        password=password, capture_output=True,
+        "crsbench-valkey",
+        "info",
+        "memory",
+        password=password,
+        capture_output=True,
     )
 
-    for line in result.stdout.split('\n'):
-        if line.startswith('used_memory_human:'):
-            memory = line.split(':')[1].strip()
+    for line in result.stdout.split("\n"):
+        if line.startswith("used_memory_human:"):
+            memory = line.split(":")[1].strip()
             print(f"Memory usage: {memory}")
             break
 
     # Count CRSBench queues
     result = _run_valkey_cli(
-        "crsbench-valkey", "KEYS", "rq:queue:crsbench_*",
-        password=password, capture_output=True,
+        "crsbench-valkey",
+        "KEYS",
+        "rq:queue:crsbench_*",
+        password=password,
+        capture_output=True,
     )
-    queues = [q for q in result.stdout.strip().split('\n') if q]
+    queues = [q for q in result.stdout.strip().split("\n") if q]
     print(f"CRSBench queues: {len(queues)}")
 
 
@@ -639,57 +748,77 @@ def main():
         epilog="""
 Examples:
   %(prog)s start              Start Valkey (localhost:6379)
+  %(prog)s --port 6380 start  Start Valkey on localhost:6380
   %(prog)s --password start   Start with password auth (0.0.0.0:6379)
   %(prog)s status             Check if running
   %(prog)s clean my-exp       Clean specific experiment
   %(prog)s clean-all          Flush entire database
   %(prog)s list-queues        Show all queues
-        """
+        """,
     )
 
     # Add global flags
-    parser.add_argument('--password', action='store_true',
-                        help='Enable password auth (auto-generates, binds 0.0.0.0, saves to .env)')
+    parser.add_argument(
+        "--password",
+        action="store_true",
+        help="Enable password auth (auto-generates, binds 0.0.0.0, saves to .env)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=6379,
+        help="Host port to bind Valkey to (default: 6379)",
+    )
 
-    subparsers = parser.add_subparsers(dest='command', required=True, help='Command to run')
+    subparsers = parser.add_subparsers(
+        dest="command", required=True, help="Command to run"
+    )
 
     # Service management commands
-    subparsers.add_parser('start', help='Start Valkey service')
-    subparsers.add_parser('stop', help='Stop Valkey service')
-    subparsers.add_parser('restart', help='Restart Valkey service')
+    subparsers.add_parser("start", help="Start Valkey service")
+    subparsers.add_parser("stop", help="Stop Valkey service")
+    subparsers.add_parser("restart", help="Restart Valkey service")
 
-    subparsers.add_parser('status', help='Check service status')
-    subparsers.add_parser('logs', help='View service logs')
+    subparsers.add_parser("status", help="Check service status")
+    subparsers.add_parser("logs", help="View service logs")
 
     # Queue management commands
-    clean_parser = subparsers.add_parser('clean', help='Clean specific experiment queue')
-    clean_parser.add_argument('experiment', help='Experiment name')
+    clean_parser = subparsers.add_parser(
+        "clean", help="Clean specific experiment queue"
+    )
+    clean_parser.add_argument("experiment", help="Experiment name")
 
-    clean_all_parser = subparsers.add_parser('clean-all', help='Flush entire database (WARNING: destructive)')
-    clean_all_parser.add_argument('--force', action='store_true', help='Skip confirmation prompt')
+    clean_all_parser = subparsers.add_parser(
+        "clean-all", help="Flush entire database (WARNING: destructive)"
+    )
+    clean_all_parser.add_argument(
+        "--force", action="store_true", help="Skip confirmation prompt"
+    )
 
-    subparsers.add_parser('list-queues', help='List all CRSBench queues')
+    subparsers.add_parser("list-queues", help="List all CRSBench queues")
 
-    queue_info_parser = subparsers.add_parser('queue-info', help='Show detailed queue info')
-    queue_info_parser.add_argument('experiment', help='Experiment name')
+    queue_info_parser = subparsers.add_parser(
+        "queue-info", help="Show detailed queue info"
+    )
+    queue_info_parser.add_argument("experiment", help="Experiment name")
 
     # Monitoring commands
-    subparsers.add_parser('stats', help='Show database statistics')
+    subparsers.add_parser("stats", help="Show database statistics")
 
     args = parser.parse_args()
 
     # Route to command handlers
     commands = {
-        'start': cmd_start,
-        'stop': cmd_stop,
-        'restart': cmd_restart,
-        'status': cmd_status,
-        'logs': cmd_logs,
-        'clean': cmd_clean,
-        'clean-all': cmd_clean_all,
-        'list-queues': cmd_list_queues,
-        'queue-info': cmd_queue_info,
-        'stats': cmd_stats,
+        "start": cmd_start,
+        "stop": cmd_stop,
+        "restart": cmd_restart,
+        "status": cmd_status,
+        "logs": cmd_logs,
+        "clean": cmd_clean,
+        "clean-all": cmd_clean_all,
+        "list-queues": cmd_list_queues,
+        "queue-info": cmd_queue_info,
+        "stats": cmd_stats,
     }
 
     handler = commands.get(args.command)

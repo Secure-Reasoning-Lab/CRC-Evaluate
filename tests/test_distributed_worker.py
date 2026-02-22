@@ -175,3 +175,31 @@ class TestWorkerLock:
                         # Both locks should exist simultaneously
                         assert lock_0.exists()
                         assert lock_1.exists()
+
+
+class TestWorkerContinuousMode:
+    """Regression tests for continuous worker process behavior."""
+
+    def test_run_single_worker_continuous_uses_single_loop_runner(self):
+        """Continuous child worker should not recursively spawn more workers."""
+        from crsbench.distributed.worker import _run_single_worker
+
+        with (
+            patch(
+                "crsbench.distributed.worker._run_worker_continuous"
+            ) as mock_single_loop,
+            patch("crsbench.distributed.worker.run_worker_continuous") as mock_spawn,
+        ):
+            _run_single_worker(
+                redis_host="localhost",
+                experiment_name="exp",
+                worker_name="worker-0",
+                continuous=True,
+                queue_name="crsbench_exp",
+                log_level="INFO",
+            )
+
+            mock_single_loop.assert_called_once_with(
+                "localhost", "exp", "worker-0", "crsbench_exp"
+            )
+            mock_spawn.assert_not_called()

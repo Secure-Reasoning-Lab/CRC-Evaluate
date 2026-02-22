@@ -239,7 +239,9 @@ def _run_single_job(
     from rq.results import Result
 
     # Reconfigure logging in subprocess
-    configure_logger(level=os.environ.get("LOG_LEVEL", "INFO").upper(), sink=sys.stdout)
+    configure_logger(
+        level=os.environ.get("CRSBENCH_LOG_LEVEL", "INFO").upper(), sink=sys.stdout
+    )
 
     try:
         from crsbench.distributed.queue import create_redis_connection

@@ -45,6 +45,7 @@ def make_bugfix_config_dict(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
         "crs_configs_dir": str(tmp_path / "crs-configs"),
         "snapshot_period": 0,
         "skip_verification": True,
+        "skip_litellm": True,
         "build_timeout": 60,
         "run_timeout": 10,
         "crs_compose": {

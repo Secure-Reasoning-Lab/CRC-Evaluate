@@ -199,6 +199,9 @@ python scripts/valkey-helper.py clean-all
 
 For manual Redis setup: `docker run -d --name redis -p 6379:6379 redis:7`
 
+When configuring CRSBench, set `CRSBENCH_REDIS_HOST` as `host` or `host:port`
+(for example `localhost:6379` or `redis.internal:6380`).
+
 #### 2. Start Worker(s)
 
 Each worker runs a dual-queue supervisor that processes build jobs (priority)
@@ -206,23 +209,23 @@ and verify/test jobs concurrently.
 
 ```bash
 # Single machine, 10 build slots + 20 verify slots
-crsbench evaluator --ci --redis-host localhost \
+crsbench evaluator --ci \
   --build-jobs 10 --build-cores-per-job 2 --verify-jobs 20 \
   --continuous
 
 # With CPU affinity (pin to specific cores)
-crsbench evaluator --ci --redis-host localhost \
+crsbench evaluator --ci \
   --build-jobs 8 --build-cores-per-job 4 --verify-jobs 16 \
   --cores 0-63 --skip-cpus 0-3 --continuous
 
 # Multiple machines (each connects to same Redis)
 # Machine A (64 cores):
-crsbench evaluator --ci --redis-host redis.internal \
+CRSBENCH_REDIS_HOST=redis.internal:6379 crsbench evaluator --ci \
   --build-jobs 8 --build-cores-per-job 4 --verify-jobs 32 \
   --cores 64 --continuous
 
 # Machine B (32 cores):
-crsbench evaluator --ci --redis-host redis.internal \
+CRSBENCH_REDIS_HOST=redis.internal:6379 crsbench evaluator --ci \
   --build-jobs 4 --build-cores-per-job 4 --verify-jobs 16 \
   --cores 32 --continuous
 ```
@@ -232,7 +235,6 @@ crsbench evaluator --ci --redis-host redis.internal \
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--ci` | Use CI queue mode (build + verify) | Required |
-| `--redis-host HOST` | Redis server hostname | localhost |
 | `--build-jobs N` | Max concurrent build jobs | 1 |
 | `--build-cores-per-job M` | CPUs per build job | 1 |
 | `--verify-jobs K` | Max concurrent verify/test jobs | build-jobs * build-cores / verify-cores |
@@ -292,7 +294,7 @@ crsbench benchmark ci all --all --distributed
 
 | Variable | Description |
 |----------|-------------|
-| `REDIS_PASSWORD` | Redis password (if auth enabled; auto-loaded from `.env` when using valkey-helper) |
+| `CRSBENCH_REDIS_PASSWORD` | Redis password (if auth enabled; auto-loaded from `.env` when using valkey-helper) |
 
 ## DAG Job Types
 

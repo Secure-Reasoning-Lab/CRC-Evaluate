@@ -22,7 +22,7 @@ MACHINE_NAME="${1:?Usage: $0 <machine-name> (cerebros|ramjet)}"
 REPO_URL="git@github.com:sslab-gatech/CRSBench.git"
 BRANCH="feat/distributed"
 INSTALL_DIR="$HOME/CRSBench"
-REDIS_HOST="cyclonus.gtisc.gatech.edu"
+CRSBENCH_REDIS_HOST="cyclonus.gtisc.gatech.edu"
 
 echo "============================================="
 echo " CRSBench Remote Worker Setup: $MACHINE_NAME"
@@ -159,15 +159,15 @@ echo "[9/9] Testing Redis connectivity..."
 
 if uv run python -c "
 import redis, os
-r = redis.Redis(host='$REDIS_HOST', password=os.environ.get('REDIS_PASSWORD'), socket_connect_timeout=5)
+r = redis.Redis(host='$CRSBENCH_REDIS_HOST', password=os.environ.get('CRSBENCH_REDIS_PASSWORD'), socket_connect_timeout=5)
 r.ping()
-print('  Redis connection OK: $REDIS_HOST')
+print('  Redis connection OK: $CRSBENCH_REDIS_HOST')
 " 2>/dev/null; then
     :
 else
-    echo "WARNING: Cannot reach Redis at $REDIS_HOST"
+    echo "WARNING: Cannot reach Redis at $CRSBENCH_REDIS_HOST"
     echo "  Make sure Redis is running on cyclonus and is network-accessible."
-    echo "  Check: redis-cli -h $REDIS_HOST ping"
+    echo "  Check: redis-cli -h $CRSBENCH_REDIS_HOST ping"
 fi
 
 # ----- Done -----

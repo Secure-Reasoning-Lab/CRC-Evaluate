@@ -177,7 +177,7 @@ def test_real_completion(base_url, api_key, model="gemini-2.5-flash-lite"):
 
             # Check for common errors
             if response.status_code == 401:
-                print("  Hint: Check LITELLM_MASTER_KEY is correct")
+                print("  Hint: Check CRSBENCH_LLM_MASTER_KEY is correct")
             elif response.status_code == 404:
                 print(f"  Hint: Model '{model}' not found. Check default-models.yaml")
             elif response.status_code == 500:
@@ -263,7 +263,7 @@ def main():
     )
     parser.add_argument(
         "--api-key", default=None,
-        help="LiteLLM API key (default: from LITELLM_MASTER_KEY env)"
+        help="LiteLLM API key (default: from CRSBENCH_LLM_MASTER_KEY env)"
     )
     parser.add_argument(
         "--mock-only", action="store_true",
@@ -280,7 +280,7 @@ def main():
     api_key = args.api_key
     if not api_key:
         import os
-        api_key = os.getenv("LITELLM_MASTER_KEY", "sk-test")
+        api_key = os.getenv("CRSBENCH_LLM_MASTER_KEY", "sk-test")
 
     base_url = f"http://{args.host}:{args.port}"
 

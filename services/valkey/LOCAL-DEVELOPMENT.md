@@ -115,7 +115,7 @@ Once you've enabled host access, you can run workers directly on your host:
 
 ```bash
 # Set environment variables
-export REDIS_HOST=localhost
+export CRSBENCH_REDIS_HOST=localhost
 export EXPERIMENT_NAME=my-experiment
 
 # Start worker
@@ -126,18 +126,18 @@ python -m crsbench.distributed.worker
 
 ```bash
 # Terminal 1
-export REDIS_HOST=localhost
+export CRSBENCH_REDIS_HOST=localhost
 export EXPERIMENT_NAME=my-experiment
 python -m crsbench.distributed.worker
 
 # Terminal 2
-export REDIS_HOST=localhost
+export CRSBENCH_REDIS_HOST=localhost
 export EXPERIMENT_NAME=my-experiment
 python -m crsbench.distributed.worker
 
 # Or run in background
 for i in {1..4}; do
-  REDIS_HOST=localhost EXPERIMENT_NAME=my-experiment \
+  CRSBENCH_REDIS_HOST=localhost EXPERIMENT_NAME=my-experiment \
     python -m crsbench.distributed.worker &
 done
 ```
@@ -179,7 +179,7 @@ ports:
 **With password:** Required for remote workers. Use `--password` flag:
 ```bash
 python scripts/valkey-helper.py --password start
-# Auto-generates password, binds 0.0.0.0, saves REDIS_PASSWORD to .env
+# Auto-generates password, binds 0.0.0.0, saves CRSBENCH_REDIS_PASSWORD to .env
 ```
 
 ### Adding Authentication
@@ -198,12 +198,12 @@ Or manually:
 
 ```bash
 # Set password in .env
-echo "REDIS_PASSWORD=your_secure_password" >> .env
+echo "CRSBENCH_REDIS_PASSWORD=your_secure_password" >> .env
 
 # Connect with authentication
 redis-cli -h localhost -p 6379 -a your_secure_password ping
 
-# Workers read REDIS_PASSWORD from .env automatically
+# Workers read CRSBENCH_REDIS_PASSWORD from .env automatically
 python -m crsbench.distributed.worker
 ```
 
@@ -278,7 +278,7 @@ services:
     depends_on:
       - valkey
     environment:
-      - REDIS_HOST=crsbench-valkey
+      - CRSBENCH_REDIS_HOST=crsbench-valkey
       - EXPERIMENT_NAME=${EXPERIMENT_NAME:-default}
     command: python -m crsbench.distributed.worker
     deploy:
@@ -302,7 +302,7 @@ EXPERIMENT_NAME=my-exp docker-compose -f docker-compose.worker.yml up
 # Run worker container on same network
 docker run --rm \
   --network valkey_default \
-  -e REDIS_HOST=crsbench-valkey \
+  -e CRSBENCH_REDIS_HOST=crsbench-valkey \
   -e EXPERIMENT_NAME=my-exp \
   crsbench:latest \
   python -m crsbench.distributed.worker
@@ -332,8 +332,8 @@ This way, workers access Valkey via Docker network without exposing ports to hos
 
 **Solution:**
 ```bash
-# Check REDIS_HOST environment variable
-echo $REDIS_HOST  # Should be 'localhost' for host workers
+# Check CRSBENCH_REDIS_HOST environment variable
+echo $CRSBENCH_REDIS_HOST  # Should be 'localhost' for host workers
 
 # Check Valkey is running
 python scripts/valkey-helper.py status
@@ -375,7 +375,7 @@ python scripts/valkey-helper.py restart
 
 1. Uncomment `ports: - "127.0.0.1:6379:6379"` in `services/valkey/docker-compose.yml`
 2. Restart Valkey: `python scripts/valkey-helper.py restart`
-3. Set `REDIS_HOST=localhost` when running workers
+3. Set `CRSBENCH_REDIS_HOST=localhost` when running workers
 4. Run your experiments and workers from host
 
 **Security checklist:**

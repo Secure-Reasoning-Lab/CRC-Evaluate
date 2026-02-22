@@ -168,8 +168,8 @@ logger = logging.getLogger(__name__)
 
 def main():
     """Worker entry point - connects to Redis and processes jobs."""
-    redis_host = os.environ.get('REDIS_HOST', 'localhost')
-    experiment_name = os.environ.get('EXPERIMENT_NAME', 'default')
+    redis_host = os.environ.get('CRSBENCH_REDIS_HOST', 'localhost')
+    experiment_name = 'default'  # Normally provided by config/CLI
 
     logger.info(f"Connecting to Redis at {redis_host}")
     redis_connection = redis.Redis(host=redis_host)
@@ -198,8 +198,7 @@ if __name__ == '__main__':
 ```
 
 **Environment Variables**:
-- `REDIS_HOST`: Redis server hostname (default: localhost)
-- `EXPERIMENT_NAME`: Experiment identifier for queue naming
+- `CRSBENCH_REDIS_HOST`: Redis server hostname (default: localhost)
 
 ### 3.3 Jobs Module (jobs.py)
 
@@ -636,15 +635,14 @@ services:
       queue-server:
         condition: service_healthy
     environment:
-      - REDIS_HOST=queue-server
-      - EXPERIMENT_NAME=${EXPERIMENT_NAME:-default}
+      - CRSBENCH_REDIS_HOST=queue-server
     volumes:
       - experiment-data:/tmp/experiment-data
       - report-data:/tmp/report-data
     command: >
       crsbench run
       --experiment-config /config/experiment-config.yaml
-      --experiment-name ${EXPERIMENT_NAME}
+
 
   worker:
     build:
@@ -654,8 +652,7 @@ services:
       - run-experiment
       - queue-server
     environment:
-      - REDIS_HOST=queue-server
-      - EXPERIMENT_NAME=${EXPERIMENT_NAME:-default}
+      - CRSBENCH_REDIS_HOST=queue-server
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - experiment-data:/tmp/experiment-data
@@ -702,12 +699,11 @@ CMD ["python", "-m", "crsbench.distributed.worker"]
 
 set -e
 
-REDIS_HOST=${REDIS_HOST:-localhost}
-EXPERIMENT_NAME=${EXPERIMENT_NAME:-default}
+CRSBENCH_REDIS_HOST=${CRSBENCH_REDIS_HOST:-localhost}
 
 echo "Starting CRSBench worker"
-echo "Redis host: $REDIS_HOST"
-echo "Experiment: $EXPERIMENT_NAME"
+echo "Redis host: $CRSBENCH_REDIS_HOST"
+echo "Experiment: configured via config/CLI"
 
 # Start RQ worker
 python -m crsbench.distributed.worker
@@ -1181,7 +1177,7 @@ crsbench run --experiment-config config.yaml
 # Multiple jobs - automatically uses distributed mode (if Redis available)
 # (config.yaml has 3 benchmarks, 2 CRSes)
 crsbench run --experiment-config config.yaml \
-             --experiment-name multi-test
+
 
 # Output:
 # [INFO] Multiple jobs detected (6 jobs total), using distributed mode
@@ -1190,7 +1186,7 @@ crsbench run --experiment-config config.yaml \
 # Force local mode even with multiple jobs
 crsbench run --local-only \
              --experiment-config config.yaml \
-             --experiment-name local-multi
+
 
 # Output:
 # [INFO] Local mode explicitly requested via --local-only flag
@@ -1247,8 +1243,7 @@ def should_use_distributed_mode(args, config) -> bool:
 
 | Variable | Description | Default | Used By |
 |----------|-------------|---------|---------|
-| REDIS_HOST | Redis server hostname | localhost | Orchestrator, Worker |
-| EXPERIMENT_NAME | Experiment identifier | default | Orchestrator, Worker |
+| CRSBENCH_REDIS_HOST | Redis server hostname | localhost | Orchestrator, Worker |
 | PYTHONPATH | Python module path | /app | Worker |
 
 ### 15.2 Queue Naming Convention

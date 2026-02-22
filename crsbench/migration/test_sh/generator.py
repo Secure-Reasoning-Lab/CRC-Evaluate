@@ -35,7 +35,8 @@ class ShTestGenerator:
     """
     Agent-based test.sh generator using Claude Agent SDK.
 
-    Uses LiteLLM proxy for Claude API access via LITELLM_BASE_URL and LITELLM_API_KEY.
+    Uses LiteLLM proxy for Claude API access via CRSBENCH_LLM_BASE_URL
+    and CRSBENCH_LLM_API_KEY.
     """
 
     def __init__(
@@ -48,26 +49,22 @@ class ShTestGenerator:
         Initialize the test.sh generator agent.
 
         Args:
-            litellm_base_url: LiteLLM proxy URL (defaults to LITELLM_BASE_URL or
-                LITELLM_API_BASE env var)
-            litellm_api_key: LiteLLM API key (defaults to LITELLM_API_KEY env var)
+            litellm_base_url: LiteLLM proxy URL
+                (defaults to CRSBENCH_LLM_BASE_URL env var)
+            litellm_api_key: LiteLLM API key
+                (defaults to CRSBENCH_LLM_API_KEY env var)
             model: Model to use via LiteLLM
         """
-        self.litellm_base_url = (
-            litellm_base_url
-            or os.getenv("LITELLM_BASE_URL")
-            or os.getenv("LITELLM_API_BASE")
-        )
-        self.litellm_api_key = litellm_api_key or os.getenv("LITELLM_API_KEY")
+        self.litellm_base_url = litellm_base_url or os.getenv("CRSBENCH_LLM_BASE_URL")
+        self.litellm_api_key = litellm_api_key or os.getenv("CRSBENCH_LLM_API_KEY")
 
         if not self.litellm_base_url:
             raise ValueError(
-                "LITELLM_BASE_URL or LITELLM_API_BASE must be set in environment "
-                "or passed as parameter"
+                "CRSBENCH_LLM_BASE_URL must be set in environment or passed as parameter"
             )
         if not self.litellm_api_key:
             raise ValueError(
-                "LITELLM_API_KEY must be set in environment or passed as parameter"
+                "CRSBENCH_LLM_API_KEY must be set in environment or passed as parameter"
             )
 
         self.model = model

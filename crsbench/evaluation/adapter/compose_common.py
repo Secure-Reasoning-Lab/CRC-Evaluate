@@ -8,7 +8,6 @@ from the registry, and artifact path resolution via ``oss-crs artifacts``.
 from __future__ import annotations
 
 import json
-import os
 import random
 import string
 import subprocess
@@ -216,9 +215,7 @@ def run_oss_crs_run(
         pov_dir: Path to a directory of POVs (bug-fixing).
         diff: Path to a reference diff file (bug-fixing).
         seed_dir: Path to seed corpus directory.
-        external_litellm: When True, pass ``--external-litellm`` flag and
-            inject ``LITELLM_URL`` / ``LITELLM_KEY`` env vars so the CRS
-            routes LLM traffic through CRSBench's upstream proxy.
+        external_litellm: When True, configure runtime for external LiteLLM.
         litellm_url: Upstream LiteLLM proxy URL.
         litellm_api_key: Per-trial LiteLLM API key.
 
@@ -253,20 +250,14 @@ def run_oss_crs_run(
     if seed_dir is not None:
         cmd.extend(["--seed-dir", str(seed_dir)])
 
-    # Build subprocess environment for external LiteLLM proxy routing
+    # New oss-crs LiteLLM integration is compose-driven.
+    # Keep logging context for traceability; do not pass CLI flags.
     run_env: Optional[dict[str, str]] = None
-    if external_litellm:
-        cmd.append("--external-litellm")
-        if litellm_url and litellm_api_key:
-            run_env = {
-                **os.environ,
-                "LITELLM_URL": litellm_url,
-                "LITELLM_KEY": litellm_api_key,
-            }
-            key_suffix = litellm_api_key[-4:] if len(litellm_api_key) > 4 else "****"
-            logger.debug(
-                f"External LiteLLM enabled: URL={litellm_url}, key=...{key_suffix}"
-            )
+    if external_litellm and litellm_url and litellm_api_key:
+        key_suffix = litellm_api_key[-4:] if len(litellm_api_key) > 4 else "****"
+        logger.debug(
+            f"External LiteLLM configured: URL={litellm_url}, key=...{key_suffix}"
+        )
 
     logger.debug(f"Running oss-crs run: {' '.join(cmd)}")
 

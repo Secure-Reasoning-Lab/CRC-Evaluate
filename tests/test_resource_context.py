@@ -271,7 +271,7 @@ class TestComposeLLMIntegration:
     def test_run_oss_crs_run_passes_env_when_external_litellm(
         self, mock_run: MagicMock
     ) -> None:
-        """When external_litellm=True, env dict should contain LITELLM_URL/KEY."""
+        """New interface: no run env injection, compose handles LiteLLM routing."""
         mock_run.return_value = ("stdout", "stderr", 0, False)
 
         from crsbench.evaluation.adapter.compose_common import run_oss_crs_run
@@ -290,13 +290,7 @@ class TestComposeLLMIntegration:
         mock_run.assert_called_once()
         call_kwargs = mock_run.call_args
         env = call_kwargs.kwargs.get("env") or call_kwargs[1].get("env")
-        assert env is not None
-        assert env["LITELLM_URL"] == "http://litellm:4000"
-        assert env["LITELLM_KEY"] == "sk-test-key"
-
-        # Verify --external-litellm flag was added to cmd
-        cmd = call_kwargs.args[0] if call_kwargs.args else call_kwargs[1].get("cmd")
-        assert "--external-litellm" in cmd
+        assert env is None
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
     def test_run_oss_crs_run_no_env_when_external_litellm_false(
@@ -321,13 +315,9 @@ class TestComposeLLMIntegration:
         env = call_kwargs.kwargs.get("env") or call_kwargs[1].get("env")
         assert env is None
 
-        # Verify --external-litellm flag was NOT added
-        cmd = call_kwargs.args[0] if call_kwargs.args else call_kwargs[1].get("cmd")
-        assert "--external-litellm" not in cmd
-
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
     def test_run_oss_crs_run_no_env_when_url_missing(self, mock_run: MagicMock) -> None:
-        """When external_litellm=True but url/key are missing, env should be None."""
+        """When external_litellm=True but url/key missing, run still has no env."""
         mock_run.return_value = ("stdout", "stderr", 0, False)
 
         from crsbench.evaluation.adapter.compose_common import run_oss_crs_run
@@ -347,7 +337,3 @@ class TestComposeLLMIntegration:
         call_kwargs = mock_run.call_args
         env = call_kwargs.kwargs.get("env") or call_kwargs[1].get("env")
         assert env is None
-
-        # --external-litellm flag still added (the CRS may handle it)
-        cmd = call_kwargs.args[0] if call_kwargs.args else call_kwargs[1].get("cmd")
-        assert "--external-litellm" in cmd

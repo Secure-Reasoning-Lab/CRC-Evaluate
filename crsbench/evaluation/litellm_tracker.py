@@ -19,6 +19,7 @@ from typing import Optional
 
 import requests
 
+from crsbench.utils.litellm_env import resolve_litellm_runtime_env
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -140,8 +141,9 @@ class LiteLLMTracker:
     3. Delete the key after trial completion
 
     Environment Variables:
-        LITELLM_BASE_URL: LiteLLM proxy URL (e.g., http://litellm:4000)
-        LITELLM_MASTER_KEY: Master key for key management APIs
+        CRSBENCH_LLM_BASE_URL / CRSBENCH_LLM_UPSTREAM_BASE_URL:
+            LiteLLM URL(s) used for runtime and/or forwarding.
+        CRSBENCH_LLM_MASTER_KEY: Master key for key management APIs
     """
 
     def __init__(
@@ -154,31 +156,30 @@ class LiteLLMTracker:
         """Initialize LiteLLM tracker.
 
         Args:
-            base_url: LiteLLM proxy URL. Defaults to LITELLM_BASE_URL or
-                UPSTREAM_LITELLM_BASE_URL env var.
-            master_key: Master key for API. Defaults to LITELLM_MASTER_KEY env var.
+            base_url: LiteLLM proxy URL. Defaults to resolved CRSBench runtime
+                URL for current mode.
+            master_key: Master key for API. Defaults to resolved CRSBench
+                runtime key.
             timeout: Request timeout in seconds.
 
         Raises:
             LiteLLMTrackerError: If required environment variables are not set.
         """
-        # Try LITELLM_BASE_URL first, then fall back to UPSTREAM_LITELLM_BASE_URL
-        self.base_url = (
-            base_url
-            or os.environ.get("LITELLM_BASE_URL")
-            or os.environ.get("UPSTREAM_LITELLM_BASE_URL")
+        runtime_env = resolve_litellm_runtime_env(
+            os.environ.get("CRSBENCH_LLM_MODE", "passthrough")
         )
-        self.master_key = master_key or os.environ.get("LITELLM_MASTER_KEY")
+        self.base_url = base_url or runtime_env.tracking_base_url
+        self.master_key = master_key or runtime_env.master_key
         self.timeout = timeout
 
         if not self.base_url:
             raise LiteLLMTrackerError(
-                "LITELLM_BASE_URL or UPSTREAM_LITELLM_BASE_URL not set. "
+                "CRSBENCH_LLM_BASE_URL/CRSBENCH_LLM_UPSTREAM_BASE_URL not set. "
                 "Required for LLM tracking."
             )
         if not self.master_key:
             raise LiteLLMTrackerError(
-                "LITELLM_MASTER_KEY not set. Required for LLM tracking."
+                "CRSBENCH_LLM_MASTER_KEY not set. Required for LLM tracking."
             )
 
         # Remove trailing slash from base URL
@@ -934,10 +935,9 @@ def is_tracking_available() -> bool:
     """Check if LLM tracking is available (env vars set).
 
     Returns:
-        True if (LITELLM_BASE_URL or UPSTREAM_LITELLM_BASE_URL) and LITELLM_MASTER_KEY are set
+        True if resolved tracking URL and master key are set.
     """
-    base_url = os.environ.get("LITELLM_BASE_URL") or os.environ.get(
-        "UPSTREAM_LITELLM_BASE_URL"
+    runtime_env = resolve_litellm_runtime_env(
+        os.environ.get("CRSBENCH_LLM_MODE", "passthrough")
     )
-    master_key = os.environ.get("LITELLM_MASTER_KEY")
-    return bool(base_url and master_key)
+    return bool(runtime_env.tracking_base_url and runtime_env.master_key)

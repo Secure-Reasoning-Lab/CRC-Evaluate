@@ -206,14 +206,6 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--experiment-name",
-        type=str,
-        required=False,
-        metavar="EXPERIMENT_NAME",
-        help="Name for this experiment (overrides config file if specified)",
-    )
-
-    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -2011,7 +2003,7 @@ def _generate_html_json_reports(experiment_name: str, config) -> None:
 
 def main() -> None:
     """Main entry point for the experiment runner."""
-    # Load .env file (REDIS_PASSWORD, etc.) if present.
+    # Load .env file (CRSBENCH_REDIS_PASSWORD, etc.) if present.
     # override=True ensures .env is the source of truth over stale shell exports.
     from dotenv import load_dotenv
 
@@ -2100,21 +2092,12 @@ def main() -> None:
     # Validate filestore directory permissions early
     validate_filestore_permissions(config)
 
-    # Resolve experiment name (CLI overrides config)
-    experiment_name = (
-        args.experiment_name if args.experiment_name else config.experiment
-    )
-    original_experiment = config.experiment
-    # Propagate CLI override into config so serialized config_dict
-    # (sent to workers) uses the correct experiment name everywhere
-    if experiment_name != config.experiment:
-        config.experiment = experiment_name
+    # Resolve experiment name from config (single source of truth)
+    experiment_name = config.experiment
     logger.info("=" * 60)
     logger.info("CRSBench Experiment Runner")
     logger.info("=" * 60)
     logger.info(f"Experiment name: {experiment_name}")
-    if args.experiment_name:
-        logger.info(f"  (overridden from CLI, config had: {original_experiment})")
     logger.info(f"Configuration file: {args.experiment_config}")
 
     # Resolve CRSes from config

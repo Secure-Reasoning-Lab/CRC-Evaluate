@@ -911,6 +911,96 @@ class TestExperimentConfigSchema:
         assert "max_total_time" in error_msg
         assert "build_timeout + run_timeout + verify_timeout" in error_msg
 
+    def test_single_crs_policy_rejects_multiple_crses(self):
+        """Experiment config must define exactly one CRS setup profile."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            ExperimentConfig(
+                experiment="test",
+                trials=1,
+                mode=EvaluationMode.DELTA,
+                adapter=AdapterType.OSS_CRS,
+                max_total_time=20000,
+                difficulty_level=1,
+                experiment_filestore="/tmp/exp",
+                report_filestore="/tmp/rep",
+                crses=["crs-a", "crs-b"],
+                benchmarks=["test-bench"],
+            )
+        assert "exactly 1 CRS" in str(exc_info.value)
+
+    def test_crs_overrides_reject_unknown_key(self):
+        """Unknown override keys must fail validation."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            ExperimentConfig(
+                experiment="test",
+                trials=1,
+                mode=EvaluationMode.DELTA,
+                adapter=AdapterType.OSS_CRS,
+                max_total_time=20000,
+                difficulty_level=1,
+                experiment_filestore="/tmp/exp",
+                report_filestore="/tmp/rep",
+                crses=["test-crs"],
+                benchmarks=["test-bench"],
+                crs_overrides={
+                    "other-crs": {
+                        "additional_env": {
+                            "ANTHROPIC_MODEL": "claude-sonnet-4-5-20250929"
+                        }
+                    }
+                },
+            )
+        assert "Unknown CRS override key" in str(exc_info.value)
+
+    def test_litellm_mode_explicit_missing_runtime_env_fails(self, monkeypatch):
+        """Explicit litellm mode should fail fast on missing canonical env vars."""
+        monkeypatch.delenv("CRSBENCH_LLM_BASE_URL", raising=False)
+        monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_BASE_URL", raising=False)
+        monkeypatch.delenv("CRSBENCH_LLM_API_KEY", raising=False)
+        monkeypatch.delenv("CRSBENCH_LLM_MASTER_KEY", raising=False)
+
+        with pytest.raises(PydanticValidationError) as exc_info:
+            ExperimentConfig(
+                experiment="test",
+                trials=1,
+                mode=EvaluationMode.DELTA,
+                adapter=AdapterType.OSS_CRS,
+                max_total_time=20000,
+                difficulty_level=1,
+                experiment_filestore="/tmp/exp",
+                report_filestore="/tmp/rep",
+                crses=["test-crs"],
+                benchmarks=["test-bench"],
+                litellm_mode="passthrough",
+            )
+
+        assert "Missing required LiteLLM runtime inputs" in str(exc_info.value)
+
+    def test_skip_litellm_disables_runtime_interface_validation(self, monkeypatch):
+        """skip_litellm should bypass mode runtime interface checks."""
+        monkeypatch.delenv("CRSBENCH_LLM_BASE_URL", raising=False)
+        monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_BASE_URL", raising=False)
+        monkeypatch.delenv("CRSBENCH_LLM_API_KEY", raising=False)
+        monkeypatch.delenv("CRSBENCH_LLM_MASTER_KEY", raising=False)
+
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
+            max_total_time=20000,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["test-crs"],
+            benchmarks=["test-bench"],
+            litellm_mode="passthrough",
+            skip_litellm=True,
+        )
+
+        assert config.litellm_mode is None
+        assert config.llm_tracking_enabled is False
+
 
 class TestExperimentConfigValidation:
     """Test experiment config validation with YAML."""
@@ -1443,8 +1533,12 @@ benchmark_list:
 class TestIntegrationAllConfigs:
     """Integration tests with all configuration types."""
 
-    def test_validate_experiment_example_yaml(self):
+    def test_validate_experiment_example_yaml(self, monkeypatch):
         """Test validation of docs/experiment-config-example.yaml."""
+        monkeypatch.setenv("CRSBENCH_LLM_BASE_URL", "http://litellm:4000")
+        monkeypatch.setenv("CRSBENCH_LLM_UPSTREAM_BASE_URL", "http://litellm:4000")
+        monkeypatch.setenv("CRSBENCH_LLM_MASTER_KEY", "sk-test")
+        monkeypatch.setenv("CRSBENCH_LLM_API_KEY", "sk-test")
         # Use Path to construct path relative to test file
         test_dir = Path(__file__).parent
         exp_path = test_dir / "assets" / "experiment-config-example.yaml"

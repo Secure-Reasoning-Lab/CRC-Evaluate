@@ -5,6 +5,7 @@ This directory is the canonical entry point for CRSBench documentation.
 ## Start Here
 
 - [Environment Setup](./environment-setup.md)
+- [Environment Variables](./environment-variables.md)
 - [Experiment Workflow](./experiment-workflow.md)
 - [Benchmark Specification (RFC)](./RFC.md)
 

@@ -9,7 +9,7 @@ CRSBench uses a centralized logging system based on [loguru](https://loguru.read
 1. **Single Source of Truth**: All logging goes through `crsbench/utils/logger.py`
 2. **Module Hierarchy Display**: Logs show clear module paths (e.g., `[distributed/worker]`, `[evaluation/runner]`)
 3. **Automatic Color Management**: Colors enabled for TTY, disabled for file redirection
-4. **Environment-Based Configuration**: Log level controlled via `LOG_LEVEL` environment variable
+4. **CLI/Code Configuration**: Log level defaults to INFO and is overridden via CLI flags (for example `--verbose`) or `configure_logger(...)`
 5. **Backwards Compatibility**: Provides adapter for standard `logging` module patterns
 
 ## Architecture
@@ -59,7 +59,7 @@ CRSBench uses a centralized logging system based on [loguru](https://loguru.read
 - Colored output with level-specific color schemes
 - Module path formatting: `crsbench.distributed.worker` → `[distributed/worker]`
 - Support for all log levels: TRACE, DEBUG, INFO, SUCCESS, WARNING, ERROR, CRITICAL
-- Environment variable configuration (`LOG_LEVEL`)
+- CLI/programmatic configuration (`--verbose`, `configure_logger(...)`)
 
 ### Log Format
 
@@ -108,7 +108,7 @@ Prefer replacing `logging.getLogger(...)` usage with `get_logger(__name__)` from
 3. **Automatic Color Management**: Works correctly in all environments
 4. **Simpler API**: No need for `basicConfig()` or manual setup
 5. **Better Defaults**: Sensible formatting out of the box
-6. **Environment Control**: Easy runtime configuration via `LOG_LEVEL`
+6. **Runtime Control**: Easy runtime configuration via CLI flags and `configure_logger(...)`
 
 ## Module Coverage
 
