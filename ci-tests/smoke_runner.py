@@ -301,6 +301,7 @@ def run_suite(args: argparse.Namespace) -> int:
         "worker",
         "--experiment-config",
         str(config_path),
+        "--continuous",
     ]
     if args.worker_cpuset:
         worker_cmd += ["--cores", args.worker_cpuset]

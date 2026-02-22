@@ -43,7 +43,7 @@ suites:
     max_pov_variants_per_cpv: 1
     skip_verification: true
     litellm_mode: passthrough
-    llm_tracking_enabled: true
+    llm_tracking_enabled: false
     resources:
       cores_per_trial: 8
       litellm:
