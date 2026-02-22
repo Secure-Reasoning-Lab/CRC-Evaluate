@@ -901,54 +901,57 @@ def run_crs_trial(
         # Create phase callbacks for job metadata tracking
         on_build_start, on_run_start, on_verification_start = _create_phase_callbacks()
 
-        # Set up LLM tracking if enabled (must be before BenchmarkRunner creation)
-        os.environ["CRSBENCH_LLM_MODE"] = config.litellm_mode or "passthrough"
-        llm_tracker, llm_api_key = _setup_llm_tracking(
-            config=config,
-            crs=crs,
-            benchmark=benchmark,
-            harness_name=harness_name,
-            trial_num=trial_num,
-            mode=mode,
-            sanitizer=sanitizer,
-        )
-
-        # If tracking is enabled, pass the trial-specific API key to executor
-        if llm_api_key:
-            set_key = getattr(adapter, "set_llm_api_key", None)
-            if set_key is not None:
-                set_key(llm_api_key)
-                logger.info("Configured adapter with trial-specific LLM API key")
-
-        # When LLM tracking is enabled, enable external_litellm so
-        # CRS containers route traffic through CRSBench's upstream LiteLLM proxy
-        runtime_env = resolve_litellm_runtime_env(config.litellm_mode or "passthrough")
-        runtime_errors = required_env_errors_for_mode(
-            runtime_env, tracking_enabled=config.llm_tracking_enabled
-        )
-        if runtime_errors:
-            raise RuntimeError(
-                "Invalid LiteLLM runtime configuration: " + "; ".join(runtime_errors)
+        # Set up LLM tracking/runtime only when LiteLLM is enabled for this trial.
+        llm_tracker = None
+        llm_api_key = None
+        if not config.skip_litellm:
+            os.environ["CRSBENCH_LLM_MODE"] = config.litellm_mode or "passthrough"
+            llm_tracker, llm_api_key = _setup_llm_tracking(
+                config=config,
+                crs=crs,
+                benchmark=benchmark,
+                harness_name=harness_name,
+                trial_num=trial_num,
+                mode=mode,
+                sanitizer=sanitizer,
             )
 
-        # Passthrough mode: external LiteLLM endpoint is the direct runtime path.
-        # Prefer per-trial virtual key when tracking is enabled.
-        if (config.litellm_mode or "passthrough") == "passthrough":
-            litellm_runtime_key = (
-                llm_api_key or runtime_env.api_key or runtime_env.master_key
+            # If tracking is enabled, pass the trial-specific API key to executor
+            if llm_api_key:
+                set_key = getattr(adapter, "set_llm_api_key", None)
+                if set_key is not None:
+                    set_key(llm_api_key)
+                    logger.info("Configured adapter with trial-specific LLM API key")
+
+            runtime_env = resolve_litellm_runtime_env(config.litellm_mode or "passthrough")
+            runtime_errors = required_env_errors_for_mode(
+                runtime_env, tracking_enabled=config.llm_tracking_enabled
             )
-            litellm_runtime_url = runtime_env.direct_base_url
-            if litellm_runtime_url and litellm_runtime_key:
-                adapter.configure(
-                    {
-                        "external_litellm": True,
-                        "litellm_url": litellm_runtime_url,
-                        "litellm_api_key": litellm_runtime_key,
-                    }
+            if runtime_errors:
+                raise RuntimeError(
+                    "Invalid LiteLLM runtime configuration: " + "; ".join(runtime_errors)
                 )
-                logger.info(
-                    "Configured compose adapter for passthrough LiteLLM runtime"
+
+            # Passthrough mode: external LiteLLM endpoint is the direct runtime path.
+            # Prefer per-trial virtual key when tracking is enabled.
+            if (config.litellm_mode or "passthrough") == "passthrough":
+                litellm_runtime_key = (
+                    llm_api_key or runtime_env.api_key or runtime_env.master_key
                 )
+                litellm_runtime_url = runtime_env.direct_base_url
+                if litellm_runtime_url and litellm_runtime_key:
+                    adapter.configure(
+                        {
+                            "external_litellm": True,
+                            "litellm_url": litellm_runtime_url,
+                            "litellm_api_key": litellm_runtime_key,
+                        }
+                    )
+                    logger.info(
+                        "Configured compose adapter for passthrough LiteLLM runtime"
+                    )
+        else:
+            logger.debug("skip_litellm=true; skipping LiteLLM runtime and tracking setup")
 
         runner = BenchmarkRunner(
             adapter=adapter,
