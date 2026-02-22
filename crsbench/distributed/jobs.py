@@ -923,13 +923,16 @@ def run_crs_trial(
                     set_key(llm_api_key)
                     logger.info("Configured adapter with trial-specific LLM API key")
 
-            runtime_env = resolve_litellm_runtime_env(config.litellm_mode or "passthrough")
+            runtime_env = resolve_litellm_runtime_env(
+                config.litellm_mode or "passthrough"
+            )
             runtime_errors = required_env_errors_for_mode(
                 runtime_env, tracking_enabled=config.llm_tracking_enabled
             )
             if runtime_errors:
                 raise RuntimeError(
-                    "Invalid LiteLLM runtime configuration: " + "; ".join(runtime_errors)
+                    "Invalid LiteLLM runtime configuration: "
+                    + "; ".join(runtime_errors)
                 )
 
             # Passthrough mode: external LiteLLM endpoint is the direct runtime path.
@@ -951,7 +954,9 @@ def run_crs_trial(
                         "Configured compose adapter for passthrough LiteLLM runtime"
                     )
         else:
-            logger.debug("skip_litellm=true; skipping LiteLLM runtime and tracking setup")
+            logger.debug(
+                "skip_litellm=true; skipping LiteLLM runtime and tracking setup"
+            )
 
         runner = BenchmarkRunner(
             adapter=adapter,
