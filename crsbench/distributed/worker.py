@@ -308,15 +308,8 @@ def _run_single_worker(
     configure_logger(level=log_level, sink=sys.stdout)
 
     if continuous:
-        # Run continuous worker (without spawning more workers)
-        run_worker_continuous(
-            redis_host,
-            experiment_name,
-            worker_name=worker_name,
-            num_workers=1,
-            queue_name=queue_name,
-            log_level=log_level,
-        )
+        # Run a single continuous worker loop in this subprocess.
+        _run_worker_continuous(redis_host, experiment_name, worker_name, queue_name)
     else:
         # Run burst mode worker
         _run_worker(redis_host, experiment_name, worker_name, queue_name)
@@ -378,6 +371,34 @@ def _run_worker(
     logger.info("=" * 60)
     logger.info("Queue empty, worker shutting down")
     logger.info("=" * 60)
+
+
+def _run_worker_continuous(
+    redis_host: str,
+    experiment_name: str,
+    worker_name: str,
+    queue_name: Optional[str] = None,
+) -> None:
+    """Internal helper to run one RQ worker in continuous polling mode."""
+    import rq
+
+    logger.info(f"Connecting to Redis at {redis_host}...")
+    from crsbench.distributed.queue import create_redis_connection
+
+    redis_connection = create_redis_connection(redis_host)
+    logger.info("Connected to Redis successfully")
+
+    queue_name = queue_name or f"crsbench_{experiment_name}"
+    queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
+
+    os.environ["CRSBENCH_WORKER_DISPLAY_NAME"] = worker_name
+    worker = rq.Worker([queue], connection=redis_connection)  # type: ignore[attr-defined]
+
+    logger.info(
+        f"Continuous worker '{worker_name}' started, listening on queue: {queue_name}"
+    )
+    logger.info("Polling for jobs...")
+    worker.work(burst=False)
 
 
 def run_worker_continuous(
