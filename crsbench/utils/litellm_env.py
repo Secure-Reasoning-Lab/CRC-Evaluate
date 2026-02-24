@@ -105,6 +105,8 @@ def required_env_errors_for_mode(
                 "Tracking requires CRSBENCH_LLM_BASE_URL semantics to resolve"
             )
         if runtime_env.master_key is None:
-            errors.append("Tracking requires CRSBENCH_LLM_MASTER_KEY")
+            errors.append(
+                "Tracking requires CRSBENCH_LLM_UPSTREAM_MASTER_KEY or CRSBENCH_LLM_MASTER_KEY"
+            )
 
     return errors
