@@ -125,6 +125,7 @@ class TrialMetadata(BaseModel):
     # Build configuration
     build_mode: Optional[str] = None  # "delta" or "full" (evaluation mode)
     sanitizer: Optional[str] = None
+    target_cpv_id: Optional[str] = None
 
     # Experiment-level fields
     experiment_name: Optional[str] = None
@@ -858,7 +859,7 @@ class CrsComposeConfig(BaseModel):
     )
     litellm_config_path: Optional[Path] = Field(
         default=None,
-        description="Override path to LiteLLM config file for oss-crs llm_config.litellm_config",
+        description="Deprecated LiteLLM config path override. Ignored for litellm_mode='external'.",
     )
 
 
@@ -869,7 +870,7 @@ class CrsOverrideConfig(BaseModel):
 
     litellm_config_path: Optional[Path] = Field(
         default=None,
-        description="Per-CRS override path to LiteLLM config file",
+        description="Deprecated per-CRS LiteLLM config path override. Ignored for litellm_mode='external'.",
     )
     additional_env: Optional[Dict[str, str]] = Field(
         default=None,
@@ -984,13 +985,13 @@ class ExperimentConfig(BaseModel):
         le=5,
         description="Pre-fuzz corpus level (1=minimal, 5=comprehensive). None disables corpus. [PLACEHOLDER - not yet implemented]",
     )
-    litellm_mode: Optional[Literal["passthrough", "proxy"]] = Field(
-        default="passthrough",
-        description="LiteLLM mode: 'passthrough' uses external LiteLLM "
-        "(CRSBENCH_LLM_UPSTREAM_BASE_URL/CRSBENCH_LLM_BASE_URL + CRSBENCH_LLM_API_KEY or CRSBENCH_LLM_MASTER_KEY), "
-        "'proxy' uses self-hosted proxy (CRSBENCH_LLM_BASE_URL + CRSBENCH_LLM_MASTER_KEY), "
+    litellm_mode: Optional[Literal["external", "self_hosted"]] = Field(
+        default="external",
+        description="LiteLLM mode: 'external' uses an external LiteLLM endpoint "
+        "(CRSBENCH_LLM_UPSTREAM_BASE_URL/CRSBENCH_LLM_BASE_URL + CRSBENCH_LLM_UPSTREAM_API_KEY or CRSBENCH_LLM_MASTER_KEY), "
+        "'self_hosted' is reserved and not implemented yet, "
         "null skips LiteLLM entirely (for CRS that don't need LLM). "
-        "Default is 'passthrough'.",
+        "Default is 'external'.",
     )
     skip_litellm: bool = Field(
         default=False,
@@ -1285,9 +1286,9 @@ class ExperimentConfig(BaseModel):
     @classmethod
     def validate_litellm_mode(cls, v):
         """Validate LiteLLM mode."""
-        if v is not None and v not in ("passthrough", "proxy"):
+        if v is not None and v not in ("external", "self_hosted"):
             raise ValueError(
-                f"Invalid litellm_mode: {v}. Must be 'passthrough' or 'proxy'"
+                f"Invalid litellm_mode: {v}. Must be 'external' or 'self_hosted'"
             )
         return v
 
@@ -1375,6 +1376,13 @@ class ExperimentConfig(BaseModel):
         """Fail fast when mode-required LiteLLM runtime env inputs are missing."""
         if self.skip_litellm or self.litellm_mode is None:
             return self
+
+        if self.litellm_mode == "self_hosted":
+            raise ValueError(
+                "litellm_mode='self_hosted' is not implemented yet. "
+                "Use litellm_mode='external'."
+            )
+
         if (
             "litellm_mode" not in self.model_fields_set
             and "llm_tracking_enabled" not in self.model_fields_set

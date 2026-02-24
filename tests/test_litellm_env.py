@@ -6,35 +6,36 @@ from crsbench.utils.litellm_env import (
 )
 
 
-def test_passthrough_prefers_canonical_upstream_base() -> None:
+def test_external_prefers_canonical_upstream_base() -> None:
     runtime_env = resolve_litellm_runtime_env(
-        "passthrough",
+        "external",
         {
             "CRSBENCH_LLM_UPSTREAM_BASE_URL": "http://central:4000",
             "CRSBENCH_LLM_BASE_URL": "http://local:4000",
-            "CRSBENCH_LLM_API_KEY": "sk-api",
+            "CRSBENCH_LLM_UPSTREAM_API_KEY": "sk-api",
         },
     )
     assert runtime_env.direct_base_url == "http://central:4000"
     assert required_env_errors_for_mode(runtime_env, tracking_enabled=False) == []
 
 
-def test_proxy_requires_base_and_master() -> None:
+def test_self_hosted_reports_not_implemented() -> None:
     runtime_env = resolve_litellm_runtime_env(
-        "proxy",
+        "self_hosted",
         {
-            "CRSBENCH_LLM_UPSTREAM_BASE_URL": "http://central:4000",
-            "CRSBENCH_LLM_API_KEY": "sk-api",
+            "CRSBENCH_LLM_BASE_URL": "http://127.0.0.1:4000",
         },
     )
     errors = required_env_errors_for_mode(runtime_env, tracking_enabled=False)
-    assert "CRSBENCH_LLM_BASE_URL must be set" in errors
-    assert "CRSBENCH_LLM_MASTER_KEY must be set" in errors
+    assert (
+        "litellm_mode='self_hosted' is not implemented yet; use litellm_mode='external'"
+        in errors
+    )
 
 
 def test_legacy_fallback_vars_do_not_resolve() -> None:
     runtime_env = resolve_litellm_runtime_env(
-        "passthrough",
+        "external",
         {
             "OLD_CRSBENCH_LLM_BASE_URL": "http://legacy-upstream:4000",
             "OLD_CRSBENCH_LLM_API_KEY": "legacy-key",

@@ -54,17 +54,10 @@ crses:
 # Optional compose/runtime overrides for oss-crs adapter.
 # crs_compose:
 #   docker_registry: us-central1-docker.pkg.dev/aixcc-scoring-prod/oss-fuzz
-#   # Global LiteLLM config override for this experiment
-#   litellm_config_path: /path/to/combined-litellm-config.yaml
 #
-# Optional per-CRS overrides keyed by CRS name in `crses`.
-# Highest precedence for litellm_config_path is:
-#   crs_overrides.<crs>.litellm_config_path >
-#   crs_compose.litellm_config_path >
-#   crses/configs/<crs>/config-litellm.yaml
+# Optional per-CRS runtime env overrides keyed by CRS name in `crses`.
 # crs_overrides:
 #   atlantis-c:
-#     litellm_config_path: /path/to/atlantis-c-litellm.yaml
 #     additional_env:
 #       ANTHROPIC_MODEL: claude-sonnet-4-5-20250929
 
@@ -138,14 +131,13 @@ seed_corpus_enabled: false
 
 # ===== LiteLLM Configuration =====
 
-# LiteLLM mode: 'passthrough' or 'proxy'
-# - passthrough: Uses external LiteLLM service
+# LiteLLM mode: 'external' or 'self_hosted'
+# - external: Uses external LiteLLM service
 #   (CRSBENCH_LLM_UPSTREAM_BASE_URL or CRSBENCH_LLM_BASE_URL, plus
-#    CRSBENCH_LLM_API_KEY or CRSBENCH_LLM_MASTER_KEY)
-# - proxy: Uses self-hosted LiteLLM proxy
-#   (CRSBENCH_LLM_BASE_URL and CRSBENCH_LLM_MASTER_KEY)
-# Default: passthrough
-litellm_mode: passthrough
+#    CRSBENCH_LLM_UPSTREAM_API_KEY or CRSBENCH_LLM_MASTER_KEY)
+# - self_hosted: Reserved, not implemented yet
+# Default: external
+litellm_mode: external
 
 # Enable LLM usage tracking via LiteLLM Virtual Keys
 # When enabled, generates llm-usage.json with per-trial cost and token metrics.

@@ -80,6 +80,8 @@ skip_litellm: true
 # Distributed mode configuration — point to cyclonus where Redis runs
 redis_host: cyclonus.gtisc.gatech.edu
 
+# Persistent build cache
+
 # Worker Configuration (for distributed mode)
 # 8 trial jobs × 16 cores = 128 cores; evaluator runs on cyclonus, not here
 worker:

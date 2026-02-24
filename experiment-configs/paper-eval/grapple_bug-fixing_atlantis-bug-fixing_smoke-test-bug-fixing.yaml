@@ -34,8 +34,8 @@ snapshot_period: 300  # 5 minutes
 experiment_filestore: /tmp/crsbench/grapple-bug-fixing-smoke-testing/experiment-data
 report_filestore: /tmp/crsbench/grapple-bug-fixing-smoke-testing/report-data
 
-# LiteLLM Configuration - passthrough mode (default)
-litellm_mode: passthrough
+# LiteLLM Configuration
+litellm_mode: external
 
 # Build Configuration
 build_timeout: 600

@@ -50,7 +50,12 @@ hints_enabled: false
 source_mode: pkgs
 
 # LiteLLM Configuration
-litellm_mode: passthrough
+litellm_mode: external
+
+llm_tracking_enabled: true
+
+crs_overrides:
+  crs-claude-code:
 
 # Redis Configuration
 redis_host: localhost

@@ -13,8 +13,6 @@ adapter: oss-crs
 
 crs_compose:
   docker_registry: us-central1-docker.pkg.dev/aixcc-scoring-prod/oss-fuzz
-  # Override per experiment to switch CRS model routing/profile.
-  litellm_config_path: /home/dongkwan/multilang-test/combined-litellm-config.yaml
 
 # Timeout Configuration
 # 4h build + 2h run + 4h verify + 1h buffer = 11h total
@@ -41,8 +39,13 @@ benchmark_suite: sanity
 # Distributed execution
 redis_host: localhost
 
-# crs-claude-code typically uses LiteLLM passthrough/proxy mode (do not skip LiteLLM)
-litellm_mode: passthrough
+# crs-claude-code typically uses LiteLLM external/self_hosted mode (do not skip LiteLLM)
+litellm_mode: external
+
+llm_tracking_enabled: true
+
+crs_overrides:
+  crs-claude-code:
 
 resources:
   cores_per_trial: 8

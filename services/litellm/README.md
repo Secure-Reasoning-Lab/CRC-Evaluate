@@ -106,7 +106,7 @@ CRSBENCH_LLM_MASTER_KEY=sk-trial-master-key
 
 # Proxy configuration
 CRSBENCH_LLM_UPSTREAM_BASE_URL=http://central-litellm:4000
-CRSBENCH_LLM_API_KEY=sk-central-master-key  # Central LiteLLM's master key
+CRSBENCH_LLM_UPSTREAM_API_KEY=sk-central-master-key  # Central LiteLLM's master key
 ```
 
 2. Use the proxy mode config:
@@ -118,14 +118,14 @@ python scripts/litellm-helper.py start --config services/litellm/proxy-mode.yaml
 ```
 CRS Container → Trial LiteLLM (Proxy) → Central LiteLLM → LLM Providers
    (uses          (forwards with           (connects to
-CRSBENCH_LLM_MASTER_KEY) CRSBENCH_LLM_API_KEY)        providers)
+CRSBENCH_LLM_MASTER_KEY) CRSBENCH_LLM_UPSTREAM_API_KEY)        providers)
                     ↓ logs                  ↓ logs
               trial-logs/              central-logs/
 ```
 
 **Key Configuration:**
 - **CRS containers**: Use `CRSBENCH_LLM_MASTER_KEY` to authenticate with trial LiteLLM
-- **Trial LiteLLM**: Uses `CRSBENCH_LLM_API_KEY` to authenticate with central LiteLLM
+- **Trial LiteLLM**: Uses `CRSBENCH_LLM_UPSTREAM_API_KEY` to authenticate with central LiteLLM
 - **Central LiteLLM**: Connects to providers with provider API keys
 
 **Benefits:**
@@ -166,13 +166,13 @@ model_list:
     litellm_params:
       model: litellm_proxy/gpt-4o
       api_base: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
-      api_key: os.environ/CRSBENCH_LLM_API_KEY
+      api_key: os.environ/CRSBENCH_LLM_UPSTREAM_API_KEY
 
   - model_name: claude-sonnet-4
     litellm_params:
       model: litellm_proxy/claude-sonnet-4
       api_base: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
-      api_key: os.environ/CRSBENCH_LLM_API_KEY
+      api_key: os.environ/CRSBENCH_LLM_UPSTREAM_API_KEY
 ```
 
 ## Logging
@@ -266,7 +266,7 @@ python scripts/sync-upstream-models.py --list-only \
 
 **Sync models with confirmation:**
 ```bash
-# Uses .env file settings (CRSBENCH_LLM_UPSTREAM_BASE_URL and CRSBENCH_LLM_API_KEY)
+# Uses .env file settings (CRSBENCH_LLM_UPSTREAM_BASE_URL and CRSBENCH_LLM_UPSTREAM_API_KEY)
 python scripts/sync-upstream-models.py
 
 # Skip confirmation prompt

@@ -5,14 +5,14 @@
 #
 # Environment Variables Required:
 #   CRSBENCH_LLM_UPSTREAM_BASE_URL - URL of upstream LiteLLM (e.g., http://central-litellm:4000)
-#   CRSBENCH_LLM_API_KEY          - API key for upstream LiteLLM (reuses existing env var)
+#   CRSBENCH_LLM_UPSTREAM_API_KEY          - API key for upstream LiteLLM (reuses existing env var)
 #
 # Usage:
 #   docker run -d \
 #     -p 4000:4000 \
 #     -v $(pwd)/proxy-mode.yaml:/app/config.yaml:ro \
 #     -e CRSBENCH_LLM_UPSTREAM_BASE_URL=http://central-litellm:4000 \
-#     -e CRSBENCH_LLM_API_KEY=sk-your-key \
+#     -e CRSBENCH_LLM_UPSTREAM_API_KEY=sk-your-key \
 #     ghcr.io/berriai/litellm:main-stable \
 #     --config /app/config.yaml
 
@@ -24,7 +24,7 @@ model_list:
       # Use OpenAI format to forward requests
       model: openai/*
       api_base: os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL
-      api_key: os.environ/CRSBENCH_LLM_API_KEY
+      api_key: os.environ/CRSBENCH_LLM_UPSTREAM_API_KEY
 
 # LiteLLM Settings
 litellm_settings:

@@ -1199,7 +1199,7 @@ class TestSetupLlmTrackingBudget:
                 "CRSBENCH_LLM_BASE_URL": "http://litellm:4000",
                 "CRSBENCH_LLM_UPSTREAM_BASE_URL": "http://litellm:4000",
                 "CRSBENCH_LLM_MASTER_KEY": "sk-master-key-123",
-                "CRSBENCH_LLM_API_KEY": "sk-api-key-123",
+                "CRSBENCH_LLM_UPSTREAM_API_KEY": "sk-api-key-123",
             },
             clear=False,
         ):

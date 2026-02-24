@@ -166,7 +166,7 @@ class LiteLLMTracker:
             LiteLLMTrackerError: If required environment variables are not set.
         """
         runtime_env = resolve_litellm_runtime_env(
-            os.environ.get("CRSBENCH_LLM_MODE", "passthrough")
+            os.environ.get("CRSBENCH_LLM_MODE", "external")
         )
         self.base_url = base_url or runtime_env.tracking_base_url
         self.master_key = master_key or runtime_env.master_key
@@ -938,6 +938,6 @@ def is_tracking_available() -> bool:
         True if resolved tracking URL and master key are set.
     """
     runtime_env = resolve_litellm_runtime_env(
-        os.environ.get("CRSBENCH_LLM_MODE", "passthrough")
+        os.environ.get("CRSBENCH_LLM_MODE", "external")
     )
     return bool(runtime_env.tracking_base_url and runtime_env.master_key)
