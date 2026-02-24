@@ -116,7 +116,7 @@ def _setup_llm_tracking(
     if not config.llm_tracking_enabled:
         return None, None
 
-    runtime_env = resolve_litellm_runtime_env(config.litellm_mode or "passthrough")
+    runtime_env = resolve_litellm_runtime_env(config.litellm_mode or "external")
     contract_errors = required_env_errors_for_mode(runtime_env, tracking_enabled=True)
     if contract_errors:
         joined = "; ".join(contract_errors)
@@ -379,6 +379,7 @@ def _build_trial_output_path(
     mode: str,
     sanitizer: str,
     trial_num: int,
+    target_cpv_id: str | None = None,
 ) -> Path:
     """Construct trial output directory path.
 
@@ -395,16 +396,11 @@ def _build_trial_output_path(
     Returns:
         Path to trial output directory
     """
-    return (
-        filestore
-        / experiment_name
-        / crs
-        / benchmark
-        / harness
-        / mode
-        / sanitizer
-        / f"trial-{trial_num}"
-    )
+    parts = [filestore, experiment_name, crs, benchmark, harness]
+    if target_cpv_id:
+        parts.append(target_cpv_id)
+    parts.extend([mode, sanitizer, f"trial-{trial_num}"])
+    return Path(*parts)
 
 
 def _reconstruct_trial_result_from_success(
@@ -413,6 +409,7 @@ def _reconstruct_trial_result_from_success(
     benchmark: str,
     harness: str,
     trial_num: int,
+    target_cpv_id: str | None = None,
 ) -> TrialResult:
     """Reconstruct TrialResult from a successful trial's metadata.json.
 
@@ -434,6 +431,7 @@ def _reconstruct_trial_result_from_success(
     povs_found = 0
     total_povs = 0
     patches_generated = 0
+    patches_verified = 0
     patches_valid = 0
     build_time = None
     run_time = None
@@ -453,6 +451,7 @@ def _reconstruct_trial_result_from_success(
             povs_found = metadata.get("povs_found", 0)
             total_povs = metadata.get("total_povs", 0)
             patches_generated = metadata.get("patches_generated", 0)
+            patches_verified = metadata.get("patches_verified", 0)
             patches_valid = metadata.get("patches_valid", 0)
             build_time = metadata.get("build_time")
             run_time = metadata.get("run_time")
@@ -478,11 +477,13 @@ def _reconstruct_trial_result_from_success(
         crs_type=crs_type,
         mode=None,
         sanitizer=None,
+        target_cpv_id=target_cpv_id,
         success=True,
         execution_time=execution_time,
         povs_found=povs_found,
         total_povs=total_povs,
         patches_generated=patches_generated,
+        patches_verified=patches_verified,
         patches_valid=patches_valid,
         report={},
         metadata=TrialMetadata(
@@ -490,6 +491,7 @@ def _reconstruct_trial_result_from_success(
             timestamp_end=0.0,
             build_time=build_time,
             run_time=run_time,
+            target_cpv_id=target_cpv_id,
         ),
     )
 
@@ -500,6 +502,7 @@ def _create_failed_trial_result(
     benchmark: str,
     harness: str,
     trial_num: int,
+    target_cpv_id: str | None = None,
 ) -> TrialResult:
     """Create TrialResult for a previously failed trial.
 
@@ -545,6 +548,7 @@ def _create_failed_trial_result(
         crs_type=crs_type,
         mode=None,
         sanitizer=None,
+        target_cpv_id=target_cpv_id,
         success=False,
         execution_time=0.0,
         error="Trial previously failed (marked for retry)",
@@ -553,6 +557,7 @@ def _create_failed_trial_result(
         metadata=TrialMetadata(
             timestamp_start=0.0,
             timestamp_end=0.0,
+            target_cpv_id=target_cpv_id,
         ),
     )
 
@@ -565,6 +570,7 @@ def _check_existing_trial(
     mode: str,
     sanitizer: str,
     trial_num: int,
+    target_cpv_id: str | None = None,
 ) -> Optional[TrialResult]:
     """Check for existing trial markers and return TrialResult if found.
 
@@ -601,6 +607,7 @@ def _check_existing_trial(
             mode=mode,
             sanitizer=sanitizer,
             trial_num=trial_num,
+            target_cpv_id=target_cpv_id,
         )
 
         if not trial_dir.exists():
@@ -615,6 +622,7 @@ def _check_existing_trial(
                 benchmark=benchmark,
                 harness=harness,
                 trial_num=trial_num,
+                target_cpv_id=target_cpv_id,
             )
 
         # Check for fail marker
@@ -626,6 +634,7 @@ def _check_existing_trial(
                 benchmark=benchmark,
                 harness=harness,
                 trial_num=trial_num,
+                target_cpv_id=target_cpv_id,
             )
 
     # No existing trial markers found
@@ -700,6 +709,7 @@ def run_crs_trial(
     mode: str,
     sanitizer: str = "address",
     results_timestamp: Optional[str] = None,
+    target_cpv_id: str | None = None,
 ) -> TrialResult:
     """
     Execute a single CRS trial.
@@ -721,6 +731,7 @@ def run_crs_trial(
         config_dict: Experiment configuration as dict (deserialized by RQ)
         mode: Evaluation mode ('delta', 'full', or 'all')
         sanitizer: Sanitizer type ('address', 'memory', or 'undefined')
+        target_cpv_id: Target CPV ID for per-CPV bug-fixing trials
 
     Returns:
         TrialResult: Trial results including POVs found, success rate, and metadata
@@ -752,6 +763,7 @@ def run_crs_trial(
         mode=mode,
         sanitizer=sanitizer,
         trial_num=trial_num,
+        target_cpv_id=target_cpv_id,
     )
     if existing_result is not None:
         return existing_result
@@ -905,7 +917,7 @@ def run_crs_trial(
         llm_tracker = None
         llm_api_key = None
         if not config.skip_litellm:
-            os.environ["CRSBENCH_LLM_MODE"] = config.litellm_mode or "passthrough"
+            os.environ["CRSBENCH_LLM_MODE"] = config.litellm_mode or "external"
             llm_tracker, llm_api_key = _setup_llm_tracking(
                 config=config,
                 crs=crs,
@@ -923,9 +935,7 @@ def run_crs_trial(
                     set_key(llm_api_key)
                     logger.info("Configured adapter with trial-specific LLM API key")
 
-            runtime_env = resolve_litellm_runtime_env(
-                config.litellm_mode or "passthrough"
-            )
+            runtime_env = resolve_litellm_runtime_env(config.litellm_mode or "external")
             runtime_errors = required_env_errors_for_mode(
                 runtime_env, tracking_enabled=config.llm_tracking_enabled
             )
@@ -935,24 +945,23 @@ def run_crs_trial(
                     + "; ".join(runtime_errors)
                 )
 
-            # Passthrough mode: external LiteLLM endpoint is the direct runtime path.
+            # Pass resolved runtime URL/key to oss-crs for all LiteLLM modes.
             # Prefer per-trial virtual key when tracking is enabled.
-            if (config.litellm_mode or "passthrough") == "passthrough":
-                litellm_runtime_key = (
-                    llm_api_key or runtime_env.api_key or runtime_env.master_key
+            litellm_runtime_key = (
+                llm_api_key or runtime_env.api_key or runtime_env.master_key
+            )
+            litellm_runtime_url = runtime_env.direct_base_url
+            if litellm_runtime_url and litellm_runtime_key:
+                adapter.configure(
+                    {
+                        "litellm_runtime_url": litellm_runtime_url,
+                        "litellm_runtime_api_key": litellm_runtime_key,
+                    }
                 )
-                litellm_runtime_url = runtime_env.direct_base_url
-                if litellm_runtime_url and litellm_runtime_key:
-                    adapter.configure(
-                        {
-                            "external_litellm": True,
-                            "litellm_url": litellm_runtime_url,
-                            "litellm_api_key": litellm_runtime_key,
-                        }
-                    )
-                    logger.info(
-                        "Configured compose adapter for passthrough LiteLLM runtime"
-                    )
+                logger.info(
+                    "Configured compose adapter for LiteLLM runtime "
+                    f"(mode={config.litellm_mode or 'external'})"
+                )
         else:
             logger.debug(
                 "skip_litellm=true; skipping LiteLLM runtime and tracking setup"
@@ -1011,6 +1020,7 @@ def run_crs_trial(
             mode=mode,
             sanitizer=sanitizer,
             trial_num=trial_num,
+            target_cpv_id=target_cpv_id,
         )
         trial_output_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Trial output directory: {trial_output_dir}")
@@ -1046,6 +1056,7 @@ def run_crs_trial(
             worker_trial_dir=str(trial_output_dir),
             build_mode=mode,
             sanitizer=sanitizer,
+            target_cpv_id=target_cpv_id,
             experiment_name=config.experiment,
             litellm_budget=(
                 config.resources.litellm.cost_budget
@@ -1093,6 +1104,7 @@ def run_crs_trial(
                     trial_output_dir=trial_output_dir,
                     oss_fuzz_path=oss_fuzz_path,
                     skip_verification=config.skip_verification,
+                    target_cpv_id=target_cpv_id,
                 )
             finally:
                 # Clean up per-trial logging
@@ -1139,6 +1151,7 @@ def run_crs_trial(
             memory_per_trial=config.resources.memory_per_trial
             if config.resources
             else None,
+            target_cpv_id=target_cpv_id,
             worker_machine=socket.gethostname(),
             worker_trial_dir=str(trial_output_dir),
         )
@@ -1152,11 +1165,13 @@ def run_crs_trial(
             crs_type=crs_type,
             mode=mode,
             sanitizer=sanitizer,
+            target_cpv_id=target_cpv_id,
             success=result.success,
             execution_time=execution_time,
             povs_found=result.povs_found,
             total_povs=result.total_povs,
             patches_generated=result.report.patches_generated,
+            patches_verified=result.report.patches_verified,
             patches_valid=result.report.patches_valid,
             report=result.report.to_dict(),
             metadata=metadata,
@@ -1231,6 +1246,7 @@ def run_crs_trial(
             crs_type=crs_type,
             mode=mode,
             sanitizer=sanitizer,
+            target_cpv_id=target_cpv_id,
             success=False,
             execution_time=execution_time,
             error=f"Benchmark not found: {e!s}",
@@ -1239,6 +1255,7 @@ def run_crs_trial(
             metadata=TrialMetadata(
                 timestamp_start=start_time,
                 timestamp_end=time.time(),
+                target_cpv_id=target_cpv_id,
             ),
         )
 
@@ -1276,6 +1293,7 @@ def run_crs_trial(
             crs_type=crs_type,
             mode=mode,
             sanitizer=sanitizer,
+            target_cpv_id=target_cpv_id,
             success=False,
             execution_time=execution_time,
             error=f"Invalid benchmark format: {e!s}",
@@ -1284,6 +1302,7 @@ def run_crs_trial(
             metadata=TrialMetadata(
                 timestamp_start=start_time,
                 timestamp_end=time.time(),
+                target_cpv_id=target_cpv_id,
             ),
         )
 
@@ -1323,6 +1342,7 @@ def run_crs_trial(
             crs_type=crs_type,
             mode=mode,
             sanitizer=sanitizer,
+            target_cpv_id=target_cpv_id,
             success=False,
             execution_time=execution_time,
             error=str(e),
@@ -1331,6 +1351,7 @@ def run_crs_trial(
             metadata=TrialMetadata(
                 timestamp_start=start_time,
                 timestamp_end=time.time(),
+                target_cpv_id=target_cpv_id,
             ),
         )
 

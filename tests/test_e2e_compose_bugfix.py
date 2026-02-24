@@ -56,35 +56,22 @@ def make_bugfix_config_dict(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
     return base
 
 
-def _create_patch_submit_dir(work_dir: Path, crs_name: str, harness: str) -> Path:
-    """Create a SUBMIT_DIR with mock patch files.
+def _create_patch_exchange_dir(work_dir: Path) -> Path:
+    """Create EXCHANGE_DIR with mock patch files.
 
-    Returns the path to the created SUBMIT_DIR/<harness> directory.
+    Returns the path to the created EXCHANGE_DIR/patches directory.
     """
-    submit = (
-        work_dir
-        / "crs_compose"
-        / "abc123hash"
-        / "address"
-        / "runs"
-        / "run-0"
-        / "crs"
-        / crs_name
-        / "target_img"
-        / "SUBMIT_DIR"
-        / harness
-    )
-    patch_dir = submit / "patches"
+    patch_dir = work_dir / "exchange" / "patches"
     patch_dir.mkdir(parents=True)
     (patch_dir / "fix.patch").write_text("--- a/bug.c\n+++ b/bug.c\n@@ -1 +1 @@\n")
-    return submit
+    return patch_dir
 
 
-def _make_run_side_effect_with_patches(tmp_path: Path, crs_name: str, harness: str):
-    """Return a side_effect callable that creates SUBMIT_DIR patches during run.
+def _make_run_side_effect_with_patches(tmp_path: Path, _crs_name: str, _harness: str):
+    """Return a side_effect callable that creates EXCHANGE_DIR patches during run.
 
     The side_effect finds the oss-crs-workdir under the filestore and creates
-    the SUBMIT_DIR/patch/ directory with a mock patch file.
+    the EXCHANGE_DIR/patches directory with a mock patch file.
     """
 
     def side_effect(*_args: Any, **_kwargs: Any) -> tuple[str, str, int, bool]:
@@ -93,7 +80,7 @@ def _make_run_side_effect_with_patches(tmp_path: Path, crs_name: str, harness: s
         work_dirs = list(filestore.rglob("oss-crs-workdir"))
         if work_dirs:
             work_dir = work_dirs[0]
-            _create_patch_submit_dir(work_dir, crs_name, harness)
+            _create_patch_exchange_dir(work_dir)
         return ("output", "", 0, False)
 
     return side_effect

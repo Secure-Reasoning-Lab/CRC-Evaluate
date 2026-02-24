@@ -1305,6 +1305,69 @@ class TestSanitizerFiltering:
         assert sanitizers.count("address") == 2
         assert sanitizers.count("undefined") == 2
 
+    def test_bugfix_trial_generation_is_per_cpv(self):
+        """Bug-fixing trials are generated once per CPV (per sanitizer)."""
+        from crsbench.validation.schemas import POV, Sanitizer, Vulnerability
+
+        config = ExperimentConfig(
+            experiment="test",
+            trials=2,
+            mode="delta",
+            adapter=AdapterType.OSS_CRS,
+            max_total_time=20000,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["crs1"],
+            benchmarks=["bench1"],
+            sanitizers=[Sanitizer.ADDRESS],
+            only_cpv_harnesses=False,
+        )
+
+        harness_file = HarnessFile(
+            name="harness1",
+            path="/src/harness1.c",
+            vulns=[
+                Vulnerability(
+                    vuln_keyword="cpv_0",
+                    povs=[POV(id="pov_0", sanitizer="address")],
+                ),
+                Vulnerability(
+                    vuln_keyword="cpv_1",
+                    povs=[POV(id="pov_0", sanitizer="address")],
+                ),
+            ],
+        )
+
+        benchmark_harness = BenchmarkHarness(
+            name="bench1",
+            path=Path("/tmp/bench1"),
+            harness=harness_file,
+        )
+
+        from unittest.mock import MagicMock
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_harness.return_value = harness_file
+
+        with (
+            patch(
+                "crsbench.run_experiment.MetaYamlAdapter.from_meta_yaml",
+                return_value=mock_adapter,
+            ),
+            patch("crsbench.run_experiment.get_crs_type", return_value="bug-fixing"),
+        ):
+            trials = generate_trial_matrix(
+                [benchmark_harness],
+                ["crs1"],
+                config,
+                registry_dir=Path("/tmp/registry"),
+                crs_configs_dir=Path("/tmp/crs-configs"),
+            )
+
+        assert len(trials) == 4  # 2 CPVs x 2 trial_num
+        assert {t.target_cpv_id for t in trials} == {"cpv_0", "cpv_1"}
+
     def test_trial_generation_no_filtering_when_only_cpv_harnesses_false(self):
         """Test that sanitizer filtering is skipped when only_cpv_harnesses=False for bug-finding CRS."""
         from crsbench.validation.schemas import Sanitizer

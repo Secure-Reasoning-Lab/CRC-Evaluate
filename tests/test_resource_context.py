@@ -3,7 +3,7 @@
 Covers:
 - ResourceContext env var management and cgroup lifecycle (mock-based)
 - Graceful degradation when cgroup v2 is unavailable
-- Compose adapter external_litellm configuration
+- Compose adapter external LiteLLM configuration
 - run_oss_crs_run env var passthrough to subprocess
 """
 
@@ -237,40 +237,34 @@ class TestResourceContext:
 
 
 class TestComposeLLMIntegration:
-    """Tests for compose adapter external_litellm configuration and wiring."""
+    """Tests for compose adapter external LiteLLM configuration and wiring."""
 
     def test_oss_crs_adapter_bugfind_accepts_external_litellm_config(self) -> None:
-        """Configure with external_litellm should set internal state (bug-finding)."""
+        """Configure with external LiteLLM should set internal state (bug-finding)."""
         adapter = OssCrsAdapter(**FACTORY_ARGS, mode="bug-finding")
         adapter.configure(
             {
-                "external_litellm": True,
-                "litellm_url": "http://litellm:4000",
-                "litellm_api_key": "sk-test-key-123",
+                "litellm_runtime_url": "http://litellm:4000",
+                "litellm_runtime_api_key": "sk-test-key-123",
             }
         )
-        assert adapter._external_litellm is True
-        assert adapter._litellm_url == "http://litellm:4000"
-        assert adapter._litellm_api_key == "sk-test-key-123"
+        assert adapter._litellm_runtime_url == "http://litellm:4000"
+        assert adapter._litellm_runtime_api_key == "sk-test-key-123"
 
     def test_oss_crs_adapter_bugfix_accepts_external_litellm_config(self) -> None:
-        """Configure with external_litellm should set internal state (bug-fixing)."""
+        """Configure with external LiteLLM should set internal state (bug-fixing)."""
         adapter = OssCrsAdapter(**FACTORY_ARGS, mode="bug-fixing")
         adapter.configure(
             {
-                "external_litellm": True,
-                "litellm_url": "http://litellm:4000",
-                "litellm_api_key": "sk-bugfix-key",
+                "litellm_runtime_url": "http://litellm:4000",
+                "litellm_runtime_api_key": "sk-bugfix-key",
             }
         )
-        assert adapter._external_litellm is True
-        assert adapter._litellm_url == "http://litellm:4000"
-        assert adapter._litellm_api_key == "sk-bugfix-key"
+        assert adapter._litellm_runtime_url == "http://litellm:4000"
+        assert adapter._litellm_runtime_api_key == "sk-bugfix-key"
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
-    def test_run_oss_crs_run_passes_env_when_external_litellm(
-        self, mock_run: MagicMock
-    ) -> None:
+    def test_run_oss_crs_run_no_env_passthrough(self, mock_run: MagicMock) -> None:
         """New interface: no run env injection, compose handles LiteLLM routing."""
         mock_run.return_value = ("stdout", "stderr", 0, False)
 
@@ -282,9 +276,6 @@ class TestComposeLLMIntegration:
             target_proj_path=Path("/tmp/proj"),
             target_harness="fuzz_test",
             timeout=3600,
-            external_litellm=True,
-            litellm_url="http://litellm:4000",
-            litellm_api_key="sk-test-key",
         )
 
         mock_run.assert_called_once()
@@ -293,10 +284,8 @@ class TestComposeLLMIntegration:
         assert env is None
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
-    def test_run_oss_crs_run_no_env_when_external_litellm_false(
-        self, mock_run: MagicMock
-    ) -> None:
-        """When external_litellm=False, env should be None."""
+    def test_run_oss_crs_run_no_env_default(self, mock_run: MagicMock) -> None:
+        """Default mode should keep env passthrough disabled."""
         mock_run.return_value = ("stdout", "stderr", 0, False)
 
         from crsbench.evaluation.adapter.compose_common import run_oss_crs_run
@@ -307,30 +296,6 @@ class TestComposeLLMIntegration:
             target_proj_path=Path("/tmp/proj"),
             target_harness="fuzz_test",
             timeout=3600,
-            external_litellm=False,
-        )
-
-        mock_run.assert_called_once()
-        call_kwargs = mock_run.call_args
-        env = call_kwargs.kwargs.get("env") or call_kwargs[1].get("env")
-        assert env is None
-
-    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
-    def test_run_oss_crs_run_no_env_when_url_missing(self, mock_run: MagicMock) -> None:
-        """When external_litellm=True but url/key missing, run still has no env."""
-        mock_run.return_value = ("stdout", "stderr", 0, False)
-
-        from crsbench.evaluation.adapter.compose_common import run_oss_crs_run
-
-        run_oss_crs_run(
-            compose_file=Path("/tmp/compose.yaml"),
-            work_dir=Path("/tmp/work"),
-            target_proj_path=Path("/tmp/proj"),
-            target_harness="fuzz_test",
-            timeout=3600,
-            external_litellm=True,
-            litellm_url=None,
-            litellm_api_key=None,
         )
 
         mock_run.assert_called_once()

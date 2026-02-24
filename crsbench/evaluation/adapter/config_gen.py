@@ -46,9 +46,39 @@ class CrsComposeInfra(BaseModel):
 
 
 class CrsComposeLlmConfig(BaseModel):
-    """LLM configuration for crs-compose."""
+    """Legacy LLM config path (internal mode)."""
 
     litellm_config: str
+
+
+class CrsComposeLiteLLMInternalConfig(BaseModel):
+    """oss-crs internal LiteLLM mode configuration."""
+
+    config_path: str
+
+
+class CrsComposeLiteLLMExternalConfig(BaseModel):
+    """oss-crs external LiteLLM mode configuration."""
+
+    url: Optional[str] = None
+    url_env: Optional[str] = None
+    key: Optional[str] = None
+    key_env: Optional[str] = None
+
+
+class CrsComposeLiteLLMConfig(BaseModel):
+    """Top-level oss-crs LiteLLM mode selection."""
+
+    mode: str
+    model_check: bool = True
+    internal: Optional[CrsComposeLiteLLMInternalConfig] = None
+    external: Optional[CrsComposeLiteLLMExternalConfig] = None
+
+
+class CrsComposeLLMConfig(BaseModel):
+    """LLM configuration block for crs-compose."""
+
+    litellm: CrsComposeLiteLLMConfig
 
 
 class CrsComposeYaml(BaseModel):
@@ -62,7 +92,7 @@ class CrsComposeYaml(BaseModel):
     docker_registry: str
     oss_crs_infra: CrsComposeInfra
     crs_entries: dict[str, CrsComposeCrsEntry]
-    llm_config: Optional[CrsComposeLlmConfig] = None
+    llm_config: Optional[CrsComposeLLMConfig] = None
 
     def to_yaml(self, path: Path) -> None:
         """Write to YAML file in crs-compose format.

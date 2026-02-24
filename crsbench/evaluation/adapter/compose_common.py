@@ -122,7 +122,6 @@ def run_oss_crs_build_target(
     *,
     oss_crs_cmd: str = "oss-crs",
     timeout: int = 3600,
-    target_repo_path: Optional[Path] = None,
     sanitizer: Optional[str] = None,
 ) -> tuple[str, str, int]:
     """Run ``oss-crs build-target`` to compile the target.
@@ -133,7 +132,6 @@ def run_oss_crs_build_target(
         target_proj_path: Path to the benchmark project directory.
         oss_crs_cmd: Path to the oss-crs executable.
         timeout: Maximum time in seconds.
-        target_repo_path: Path to pre-prepared source repository.
         sanitizer: Sanitizer to use (e.g., "address", "undefined").
 
     Returns:
@@ -149,12 +147,10 @@ def run_oss_crs_build_target(
         str(compose_file),
         "--work-dir",
         str(work_dir),
-        "--target-proj-path",
+        "--target-path",
         str(target_proj_path),
     ]
 
-    if target_repo_path is not None:
-        cmd.extend(["--target-repo-path", str(target_repo_path)])
     if sanitizer is not None:
         cmd.extend(["--sanitizer", sanitizer])
 
@@ -191,9 +187,6 @@ def run_oss_crs_run(
     pov_dir: Optional[Path] = None,
     diff: Optional[Path] = None,
     seed_dir: Optional[Path] = None,
-    external_litellm: bool = False,
-    litellm_url: Optional[str] = None,
-    litellm_api_key: Optional[str] = None,
 ) -> tuple[str, str, int, bool]:
     """Run ``oss-crs run`` with timeout and graceful shutdown.
 
@@ -215,10 +208,6 @@ def run_oss_crs_run(
         pov_dir: Path to a directory of POVs (bug-fixing).
         diff: Path to a reference diff file (bug-fixing).
         seed_dir: Path to seed corpus directory.
-        external_litellm: When True, configure runtime for external LiteLLM.
-        litellm_url: Upstream LiteLLM proxy URL.
-        litellm_api_key: Per-trial LiteLLM API key.
-
     Returns:
         Tuple of (stdout, stderr, returncode, timed_out).
     """
@@ -229,7 +218,7 @@ def run_oss_crs_run(
         str(compose_file),
         "--work-dir",
         str(work_dir),
-        "--target-proj-path",
+        "--target-path",
         str(target_proj_path),
         "--target-harness",
         target_harness,
@@ -250,15 +239,6 @@ def run_oss_crs_run(
     if seed_dir is not None:
         cmd.extend(["--seed-dir", str(seed_dir)])
 
-    # New oss-crs LiteLLM integration is compose-driven.
-    # Keep logging context for traceability; do not pass CLI flags.
-    run_env: Optional[dict[str, str]] = None
-    if external_litellm and litellm_url and litellm_api_key:
-        key_suffix = litellm_api_key[-4:] if len(litellm_api_key) > 4 else "****"
-        logger.debug(
-            f"External LiteLLM configured: URL={litellm_url}, key=...{key_suffix}"
-        )
-
     logger.debug(f"Running oss-crs run: {' '.join(cmd)}")
 
     return run_with_graceful_timeout(
@@ -266,7 +246,7 @@ def run_oss_crs_run(
         timeout=timeout,
         grace_period=grace_period,
         stop_event=stop_event,
-        env=run_env,
+        env=None,
     )
 
 
@@ -372,7 +352,7 @@ def run_oss_crs_artifacts(
         str(compose_file),
         "--work-dir",
         str(work_dir),
-        "--target-proj-path",
+        "--target-path",
         str(target_proj_path),
         "--target-harness",
         target_harness,

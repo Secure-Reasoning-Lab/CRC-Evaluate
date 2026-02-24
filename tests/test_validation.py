@@ -956,7 +956,7 @@ class TestExperimentConfigSchema:
         """Explicit litellm mode should fail fast on missing canonical env vars."""
         monkeypatch.delenv("CRSBENCH_LLM_BASE_URL", raising=False)
         monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_BASE_URL", raising=False)
-        monkeypatch.delenv("CRSBENCH_LLM_API_KEY", raising=False)
+        monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_API_KEY", raising=False)
         monkeypatch.delenv("CRSBENCH_LLM_MASTER_KEY", raising=False)
 
         with pytest.raises(PydanticValidationError) as exc_info:
@@ -971,7 +971,7 @@ class TestExperimentConfigSchema:
                 report_filestore="/tmp/rep",
                 crses=["test-crs"],
                 benchmarks=["test-bench"],
-                litellm_mode="passthrough",
+                litellm_mode="external",
             )
 
         assert "Missing required LiteLLM runtime inputs" in str(exc_info.value)
@@ -980,7 +980,7 @@ class TestExperimentConfigSchema:
         """skip_litellm should bypass mode runtime interface checks."""
         monkeypatch.delenv("CRSBENCH_LLM_BASE_URL", raising=False)
         monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_BASE_URL", raising=False)
-        monkeypatch.delenv("CRSBENCH_LLM_API_KEY", raising=False)
+        monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_API_KEY", raising=False)
         monkeypatch.delenv("CRSBENCH_LLM_MASTER_KEY", raising=False)
 
         config = ExperimentConfig(
@@ -994,12 +994,31 @@ class TestExperimentConfigSchema:
             report_filestore="/tmp/rep",
             crses=["test-crs"],
             benchmarks=["test-bench"],
-            litellm_mode="passthrough",
+            litellm_mode="external",
             skip_litellm=True,
         )
 
         assert config.litellm_mode is None
         assert config.llm_tracking_enabled is False
+
+    def test_self_hosted_mode_not_implemented(self):
+        """self_hosted mode should fail fast as unsupported."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            ExperimentConfig(
+                experiment="test",
+                trials=1,
+                mode=EvaluationMode.DELTA,
+                adapter=AdapterType.OSS_CRS,
+                max_total_time=20000,
+                difficulty_level=1,
+                experiment_filestore="/tmp/exp",
+                report_filestore="/tmp/rep",
+                crses=["test-crs"],
+                benchmarks=["test-bench"],
+                litellm_mode="self_hosted",
+            )
+
+        assert "not implemented yet" in str(exc_info.value)
 
 
 class TestExperimentConfigValidation:
@@ -1626,7 +1645,7 @@ class TestIntegrationAllConfigs:
         monkeypatch.setenv("CRSBENCH_LLM_BASE_URL", "http://litellm:4000")
         monkeypatch.setenv("CRSBENCH_LLM_UPSTREAM_BASE_URL", "http://litellm:4000")
         monkeypatch.setenv("CRSBENCH_LLM_MASTER_KEY", "sk-test")
-        monkeypatch.setenv("CRSBENCH_LLM_API_KEY", "sk-test")
+        monkeypatch.setenv("CRSBENCH_LLM_UPSTREAM_API_KEY", "sk-test")
         # Use Path to construct path relative to test file
         test_dir = Path(__file__).parent
         exp_path = test_dir / "assets" / "experiment-config-example.yaml"

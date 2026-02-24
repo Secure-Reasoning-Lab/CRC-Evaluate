@@ -30,7 +30,9 @@ from crsbench.evaluation.adapter.compose_common import (
 from crsbench.evaluation.adapter.config_gen import (
     CrsComposeCrsEntry,
     CrsComposeInfra,
-    CrsComposeLlmConfig,
+    CrsComposeLiteLLMConfig,
+    CrsComposeLiteLLMExternalConfig,
+    CrsComposeLLMConfig,
     CrsComposeYaml,
 )
 from crsbench.evaluation.results import CRSExecutionResult
@@ -76,7 +78,7 @@ class OssCrsAdapter:
         benchmarks_root: Path,
         crs_configs_dir: Path,
         *,
-        litellm_mode: str = "passthrough",
+        litellm_mode: str = "external",
         mode: str = "bug-finding",
     ) -> None:
         self._crs_config_name = crs_config_name
@@ -97,9 +99,9 @@ class OssCrsAdapter:
         self._build_timeout: int = 3600
         self._run_timeout: int = 7200
         self._sanitizer: str = "address"
-        self._external_litellm: bool = False
-        self._litellm_url: str = ""
-        self._litellm_api_key: str = ""
+        self._skip_litellm: bool = False
+        self._litellm_runtime_url: str = ""
+        self._litellm_runtime_api_key: str = ""
         self._litellm_config_path: str = ""
         self._additional_env_overrides: dict[str, str] = {}
 
@@ -172,6 +174,33 @@ class OssCrsAdapter:
         value = crs_arts.get(key)
         return Path(value) if value else None
 
+    def _get_all_crs_artifact_paths(self, key: str) -> dict[str, Path]:
+        """Collect existing per-CRS artifact paths for ``key``.
+
+        Iterates over all CRS entries returned by ``oss-crs artifacts`` and keeps
+        only existing paths. This supports ensemble layouts where artifacts may
+        be produced by multiple CRS containers.
+        """
+        if self._resolved_artifacts is None:
+            return {}
+
+        result: dict[str, Path] = {}
+        crs_entries = self._resolved_artifacts.get("crs", {})
+        if not isinstance(crs_entries, dict):
+            return {}
+
+        for crs_name, crs_info in crs_entries.items():
+            if not isinstance(crs_info, dict):
+                continue
+            value = crs_info.get(key)
+            if not value:
+                continue
+            path = Path(str(value))
+            if path.exists():
+                result[str(crs_name)] = path
+
+        return result
+
     def _get_exchange_path(self, key: str) -> Optional[Path]:
         """Look up a path from the top-level ``exchange_dir`` in artifacts.
 
@@ -184,6 +213,16 @@ class OssCrsAdapter:
         if exchange is None:
             return None
         value = exchange.get(key)
+        return Path(value) if value else None
+
+    def _get_run_logs_path(self, key: str) -> Optional[Path]:
+        """Look up a path from the top-level ``run_logs`` in artifacts."""
+        if self._resolved_artifacts is None:
+            return None
+        run_logs = self._resolved_artifacts.get("run_logs")
+        if run_logs is None:
+            return None
+        value = run_logs.get(key)
         return Path(value) if value else None
 
     @property
@@ -215,6 +254,73 @@ class OssCrsAdapter:
     def exchange_diff_dir(self) -> Optional[Path]:
         """Return pre-resolved EXCHANGE_DIR diff path, or None."""
         return self._get_exchange_path("diff")
+
+    @property
+    def run_logs_base_dir(self) -> Optional[Path]:
+        """Return top-level run logs base path, or None."""
+        return self._get_run_logs_path("base")
+
+    @property
+    def compose_stdout_log(self) -> Optional[Path]:
+        """Return compose stdout log path, or None."""
+        return self._get_run_logs_path("compose_stdout_log")
+
+    @property
+    def compose_stderr_log(self) -> Optional[Path]:
+        """Return compose stderr log path, or None."""
+        return self._get_run_logs_path("compose_stderr_log")
+
+    @property
+    def service_logs_dir(self) -> Optional[Path]:
+        """Return compose per-service logs directory, or None."""
+        return self._get_run_logs_path("service_logs")
+
+    def _collect_run_logs(
+        self,
+        output_dir: Path,
+    ) -> dict[str, Any]:
+        """Collect compose and per-CRS run logs from resolved artifacts."""
+        logs_out = output_dir / "logs"
+        logs_out.mkdir(parents=True, exist_ok=True)
+
+        compose_stdout = self.compose_stdout_log
+        compose_stderr = self.compose_stderr_log
+        service_logs = self.service_logs_dir
+        crs_run_logs_by_crs = self._get_all_crs_artifact_paths("run_logs")
+
+        if compose_stdout and compose_stdout.exists():
+            dst = logs_out / "docker-compose.stdout.log"
+            shutil.copy2(compose_stdout, dst)
+            logger.info(f"Copied compose stdout log from {compose_stdout}")
+
+        if compose_stderr and compose_stderr.exists():
+            dst = logs_out / "docker-compose.stderr.log"
+            shutil.copy2(compose_stderr, dst)
+            logger.info(f"Copied compose stderr log from {compose_stderr}")
+
+        if service_logs and service_logs.exists():
+            shutil.copytree(service_logs, logs_out / "services", dirs_exist_ok=True)
+            logger.info(f"Copied service logs from {service_logs}")
+
+        if crs_run_logs_by_crs:
+            for crs_name, crs_log_dir in sorted(crs_run_logs_by_crs.items()):
+                if not crs_log_dir.exists():
+                    continue
+                dst = logs_out / "crs" / crs_name
+                shutil.copytree(crs_log_dir, dst, dirs_exist_ok=True)
+                logger.info(f"Copied CRS run logs from {crs_log_dir}")
+
+        return {
+            "run_logs_base_dir": str(self.run_logs_base_dir)
+            if self.run_logs_base_dir
+            else None,
+            "compose_stdout_log": str(compose_stdout) if compose_stdout else None,
+            "compose_stderr_log": str(compose_stderr) if compose_stderr else None,
+            "service_logs_dir": str(service_logs) if service_logs else None,
+            "crs_run_logs_by_crs": {
+                k: str(v) for k, v in sorted(crs_run_logs_by_crs.items())
+            },
+        }
 
     def configure(self, config: dict[str, Any]) -> None:
         """Configure the adapter with experiment parameters.
@@ -257,12 +363,12 @@ class OssCrsAdapter:
             self._work_dir = Path(config["work_dir"])
         if "sanitizer" in config:
             self._sanitizer = str(config["sanitizer"])
-        if "external_litellm" in config:
-            self._external_litellm = bool(config["external_litellm"])
-        if "litellm_url" in config:
-            self._litellm_url = str(config["litellm_url"])
-        if "litellm_api_key" in config:
-            self._litellm_api_key = str(config["litellm_api_key"])
+        if "skip_litellm" in config:
+            self._skip_litellm = bool(config["skip_litellm"])
+        if "litellm_runtime_url" in config:
+            self._litellm_runtime_url = str(config["litellm_runtime_url"])
+        if "litellm_runtime_api_key" in config:
+            self._litellm_runtime_api_key = str(config["litellm_runtime_api_key"])
         if "litellm_config_path" in config:
             normalized = _normalize_optional_text(config["litellm_config_path"])
             if normalized is not None:
@@ -352,58 +458,54 @@ class OssCrsAdapter:
             self._registry_dir, self._crs_config_name
         )
         required_llms, required_sources = self._collect_required_llm_aliases()
+        llm_config: Optional[CrsComposeLLMConfig] = None
         litellm_config_path = (
-            Path(self._litellm_config_path)
-            if self._litellm_config_path
-            else self._crs_configs_dir / self._crs_config_name / "config-litellm.yaml"
+            Path(self._litellm_config_path) if self._litellm_config_path else None
         )
-        llm_config: Optional[CrsComposeLlmConfig] = None
-        if litellm_config_path.exists():
-            llm_config = CrsComposeLlmConfig(litellm_config=str(litellm_config_path))
+        if self._skip_litellm:
             logger.info(
-                f"Using LiteLLM config for '{self._crs_config_name}': {litellm_config_path}"
-            )
-        elif self._litellm_config_path:
-            raise RuntimeError(
-                f"Configured litellm_config_path does not exist: {litellm_config_path}"
+                f"skip_litellm=true; disabling LiteLLM for '{self._crs_config_name}'"
             )
         else:
+            if self._litellm_mode != "external":
+                raise RuntimeError(
+                    f"Unsupported litellm_mode='{self._litellm_mode}'. "
+                    "CRSBench currently supports only litellm_mode='external'."
+                )
+            if litellm_config_path is not None:
+                logger.info(
+                    "litellm_config_path is ignored in external mode: "
+                    f"{litellm_config_path}"
+                )
+
+            llm_config = CrsComposeLLMConfig(
+                litellm=CrsComposeLiteLLMConfig(
+                    mode="external",
+                    model_check=True,
+                    external=CrsComposeLiteLLMExternalConfig(
+                        url=self._litellm_runtime_url,
+                        key=self._litellm_runtime_api_key,
+                    ),
+                )
+            )
+            if not self._litellm_runtime_url or not self._litellm_runtime_api_key:
+                raise RuntimeError(
+                    "LiteLLM external mode requires explicit runtime URL/API key from "
+                    "CRSBench (litellm_runtime_url, litellm_runtime_api_key)."
+                )
             logger.info(
-                f"No LiteLLM config found for '{self._crs_config_name}' at default path: {litellm_config_path}"
+                f"Configured oss-crs LiteLLM external mode for '{self._crs_config_name}'"
             )
 
-        # Preflight runtime interface validation: required_llms from CRS metadata must
-        # be present in selected LiteLLM config.
-        if required_llms:
-            if llm_config is None:
-                raise RuntimeError(
-                    "Missing LiteLLM config for CRS required_llms validation. "
-                    f"Required aliases: {', '.join(sorted(required_llms))}. "
-                    f"Registry sources: {', '.join(required_sources)}"
-                )
-            available = self._load_litellm_aliases(litellm_config_path)
-            missing = sorted(alias for alias in required_llms if alias not in available)
-            if missing:
-                raise RuntimeError(
-                    "LiteLLM config missing required aliases for CRS: "
-                    f"{', '.join(missing)}. "
-                    f"Config: {litellm_config_path}. "
-                    f"Registry sources: {', '.join(required_sources)}"
-                )
+        # Keep CRS-level required_llms information visible in logs.
+        if required_llms and not self._skip_litellm:
             logger.info(
-                f"Validated required_llms for '{self._crs_config_name}' "
-                f"(aliases={len(required_llms)}, sources={','.join(required_sources)})"
+                "Required LLM aliases from CRS metadata "
+                f"(validated by oss-crs in external mode): {', '.join(required_llms)} "
+                f"[sources: {', '.join(required_sources)}]"
             )
 
         additional_env: dict[str, str] = dict(self._additional_env_overrides)
-        if self._external_litellm:
-            if not self._litellm_url or not self._litellm_api_key:
-                raise RuntimeError(
-                    "external_litellm is enabled but litellm_url or "
-                    "litellm_api_key is missing"
-                )
-            additional_env["OSS_CRS_LLM_API_URL"] = self._litellm_url
-            additional_env["OSS_CRS_LLM_API_KEY"] = self._litellm_api_key
 
         compose_yaml = CrsComposeYaml(
             docker_registry=self._docker_registry,
@@ -534,10 +636,12 @@ class OssCrsAdapter:
                 sanitizer=self._sanitizer,
             )
             logger.info(f"Resolved artifacts for run_id={self._run_id}")
-        except RuntimeError:
-            logger.warning(
-                "oss-crs artifacts failed, falling back to None paths",
-                exc_info=True,
+        except RuntimeError as err:
+            logger.info(
+                "oss-crs artifacts pre-run unavailable for run_id=%s; "
+                "continuing and will refresh post-run: %s",
+                self._run_id,
+                err,
             )
             self._resolved_artifacts = None
 
@@ -599,9 +703,6 @@ class OssCrsAdapter:
                 pov_dir=pov_dir,
                 diff=diff,
                 seed_dir=seed_dir,
-                external_litellm=self._external_litellm,
-                litellm_url=self._litellm_url,
-                litellm_api_key=self._litellm_api_key,
             )
         finally:
             docker_compose_down_cleanup(work_dir)
@@ -630,64 +731,127 @@ class OssCrsAdapter:
         output_dir = trial_output_dir / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Resolve SUBMIT_DIR from pre-resolved artifacts
-        submit_dir = self._get_crs_artifact_path("submit_dir")
-        if submit_dir is None:
-            if self._resolved_artifacts is None:
-                logger.warning("No resolved artifacts, cannot locate SUBMIT_DIR")
-            else:
-                logger.warning(
-                    f"CRS '{self._crs_config_name}' not found in artifacts output"
-                )
+        # Refresh artifacts after run. Pre-run resolution can fail or return
+        # incomplete paths before oss-crs materializes run outputs.
+        self._refresh_artifacts_post_run(trial_output_dir, harness_name)
+
+        # EXCHANGE_DIR is the source-of-truth for inter-container artifact transport.
+        shared_dirs_by_crs = self._get_all_crs_artifact_paths("shared")
+        exchange_pov_dir = self.exchange_pov_dir
+        exchange_seed_dir = self.exchange_seed_dir
+        exchange_patch_dir = self.exchange_patch_dir
+
+        if (
+            exchange_pov_dir is None
+            and exchange_seed_dir is None
+            and exchange_patch_dir is None
+        ):
+            logger.warning("No exchange_dir artifact paths available")
 
         if self._mode == "bug-finding":
-            return self._collect_bugfind_results(submit_dir, output_dir, harness_name)
-        return self._collect_bugfix_results(submit_dir, output_dir, harness_name)
+            result = self._collect_bugfind_results(
+                exchange_pov_dir=exchange_pov_dir,
+                exchange_seed_dir=exchange_seed_dir,
+                output_dir=output_dir,
+                harness_name=harness_name,
+            )
+        else:
+            result = self._collect_bugfix_results(
+                exchange_patch_dir=exchange_patch_dir,
+                exchange_pov_dir=exchange_pov_dir,
+                output_dir=output_dir,
+                harness_name=harness_name,
+            )
+
+        result.update(self._collect_run_logs(output_dir))
+        result["shared_dirs_by_crs"] = {
+            k: str(v) for k, v in sorted(shared_dirs_by_crs.items())
+        }
+        return result
 
     def _collect_bugfind_results(
         self,
-        submit_dir: Optional[Path],
+        exchange_pov_dir: Optional[Path],
+        exchange_seed_dir: Optional[Path],
         output_dir: Path,
         harness_name: str,
     ) -> dict[str, Any]:
         """Collect bug-finding artifacts (POVs and seeds)."""
-        if submit_dir is not None:
-            pov_src = submit_dir / "povs"
-            if pov_src.exists():
-                shutil.copytree(pov_src, output_dir / "povs", dirs_exist_ok=True)
-                logger.info(f"Copied POVs from {pov_src}")
+        if exchange_pov_dir and exchange_pov_dir.exists():
+            shutil.copytree(exchange_pov_dir, output_dir / "povs", dirs_exist_ok=True)
+            logger.info(f"Copied POVs from {exchange_pov_dir}")
 
-            seed_src = submit_dir / "seeds"
-            if seed_src.exists():
-                shutil.copytree(seed_src, output_dir / "seeds", dirs_exist_ok=True)
-                logger.info(f"Copied seeds from {seed_src}")
+        if exchange_seed_dir and exchange_seed_dir.exists():
+            shutil.copytree(exchange_seed_dir, output_dir / "seeds", dirs_exist_ok=True)
+            logger.info(f"Copied seeds from {exchange_seed_dir}")
 
         return {
             "type": "bug-finding",
             "output_dir": str(output_dir),
             "harness": harness_name,
-            "submit_dir": str(submit_dir) if submit_dir else None,
+            "exchange_pov_dir": str(exchange_pov_dir) if exchange_pov_dir else None,
+            "exchange_seed_dir": str(exchange_seed_dir) if exchange_seed_dir else None,
         }
+
+    def _refresh_artifacts_post_run(
+        self,
+        trial_output_dir: Path,
+        harness_name: str,
+    ) -> None:
+        """Refresh artifacts after run to capture finalized exchange/log paths."""
+        if self._run_id is None or self._compose_file is None or self._work_dir is None:
+            return
+
+        staged_root = trial_output_dir / "staged"
+        if not staged_root.exists():
+            logger.warning(
+                "Cannot refresh artifacts post-run: staged directory missing at "
+                f"{staged_root}"
+            )
+            return
+
+        staged_projects = [p for p in staged_root.iterdir() if p.is_dir()]
+        if len(staged_projects) != 1:
+            logger.warning(
+                "Cannot refresh artifacts post-run: expected exactly one staged "
+                f"project under {staged_root}, found {len(staged_projects)}"
+            )
+            return
+
+        try:
+            self._resolved_artifacts = run_oss_crs_artifacts(
+                self._compose_file,
+                self._work_dir,
+                staged_projects[0],
+                harness_name,
+                self._run_id,
+                oss_crs_cmd=self._oss_crs_cmd,
+                sanitizer=self._sanitizer,
+            )
+            logger.info(f"Refreshed artifacts after run for run_id={self._run_id}")
+        except RuntimeError:
+            logger.warning(
+                "Failed to refresh artifacts post-run",
+                exc_info=True,
+            )
 
     def _collect_bugfix_results(
         self,
-        submit_dir: Optional[Path],
+        exchange_patch_dir: Optional[Path],
+        exchange_pov_dir: Optional[Path],
         output_dir: Path,
         harness_name: str,
     ) -> dict[str, Any]:
         """Collect bug-fixing artifacts (patches and POVs)."""
-        if submit_dir is not None:
-            # Copy patches (primary artifact for bug-fixing)
-            patch_src = submit_dir / "patches"
-            if patch_src.exists():
-                shutil.copytree(patch_src, output_dir / "patches", dirs_exist_ok=True)
-                logger.info(f"Copied patches from {patch_src}")
+        if exchange_patch_dir and exchange_patch_dir.exists():
+            shutil.copytree(
+                exchange_patch_dir, output_dir / "patches", dirs_exist_ok=True
+            )
+            logger.info(f"Copied patches from {exchange_patch_dir}")
 
-            # Also copy POVs if present (CRS may find new vulnerabilities)
-            pov_src = submit_dir / "povs"
-            if pov_src.exists():
-                shutil.copytree(pov_src, output_dir / "povs", dirs_exist_ok=True)
-                logger.info(f"Copied POVs from {pov_src}")
+        if exchange_pov_dir and exchange_pov_dir.exists():
+            shutil.copytree(exchange_pov_dir, output_dir / "povs", dirs_exist_ok=True)
+            logger.info(f"Copied POVs from {exchange_pov_dir}")
 
         # List collected patches
         patch_output = output_dir / "patches"
@@ -700,7 +864,10 @@ class OssCrsAdapter:
             "output_dir": str(output_dir),
             "harness": harness_name,
             "patches": patches,
-            "submit_dir": str(submit_dir) if submit_dir else None,
+            "exchange_patch_dir": str(exchange_patch_dir)
+            if exchange_patch_dir
+            else None,
+            "exchange_pov_dir": str(exchange_pov_dir) if exchange_pov_dir else None,
         }
 
 
@@ -725,6 +892,6 @@ def create_adapter(
         registry_dir=registry_dir,
         benchmarks_root=benchmarks_root,
         crs_configs_dir=crs_configs_dir,
-        litellm_mode=config.litellm_mode or "passthrough",
+        litellm_mode=config.litellm_mode or "external",
         mode=mode,
     )

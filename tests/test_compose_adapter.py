@@ -29,12 +29,14 @@ from crsbench.evaluation.adapter.compose_common import (
 from crsbench.evaluation.adapter.config_gen import (
     CrsComposeCrsEntry,
     CrsComposeInfra,
-    CrsComposeLlmConfig,
+    CrsComposeLiteLLMConfig,
+    CrsComposeLiteLLMExternalConfig,
+    CrsComposeLLMConfig,
     CrsComposeSource,
     CrsComposeYaml,
 )
 from crsbench.evaluation.results import CRSExecutionResult
-from crsbench.evaluation.runner import BenchmarkRunner
+from crsbench.evaluation.runner import BenchmarkRunner, EvaluationError
 from crsbench.validation.schemas import HarnessFile
 
 # ---------------------------------------------------------------------------
@@ -159,13 +161,26 @@ class TestCrsComposeYaml:
             docker_registry="ghcr.io/test",
             oss_crs_infra=CrsComposeInfra(cpuset="0-3", memory="8G"),
             crs_entries={},
-            llm_config=CrsComposeLlmConfig(litellm_config="/etc/litellm.yaml"),
+            llm_config=CrsComposeLLMConfig(
+                litellm=CrsComposeLiteLLMConfig(
+                    mode="external",
+                    model_check=True,
+                    external=CrsComposeLiteLLMExternalConfig(
+                        url="https://litellm.example",
+                        key="sk-test-key",
+                    ),
+                )
+            ),
         )
         compose.to_yaml(yaml_path)
 
         data = yaml.safe_load(yaml_path.read_text())
         assert "llm_config" in data
-        assert data["llm_config"]["litellm_config"] == "/etc/litellm.yaml"
+        assert data["llm_config"]["litellm"]["mode"] == "external"
+        assert (
+            data["llm_config"]["litellm"]["external"]["url"]
+            == "https://litellm.example"
+        )
 
     def test_crs_entry_names_preserved(self, tmp_path: Path) -> None:
         yaml_path = tmp_path / "crs-compose.yaml"
@@ -276,7 +291,7 @@ class TestComposeCommon:
             str(compose_file),
             "--work-dir",
             str(work_dir),
-            "--target-proj-path",
+            "--target-path",
             str(target),
         ]
 
@@ -299,7 +314,7 @@ class TestComposeCommon:
             str(compose_file),
             "--work-dir",
             str(work_dir),
-            "--target-proj-path",
+            "--target-path",
             str(target),
             "--target-harness",
             "test_harness",
@@ -522,7 +537,7 @@ class TestOssCrsAdapterBugFindFull:
                 }
             )
         )
-        return OssCrsAdapter(
+        adapter = OssCrsAdapter(
             crs_config_name="test-crs",
             oss_fuzz_path=tmp_path / "oss-fuzz",
             registry_dir=registry,
@@ -530,6 +545,13 @@ class TestOssCrsAdapterBugFindFull:
             crs_configs_dir=tmp_path / "configs",
             mode="bug-finding",
         )
+        adapter.configure(
+            {
+                "litellm_runtime_url": "https://litellm.example",
+                "litellm_runtime_api_key": "sk-test-key",
+            }
+        )
+        return adapter
 
     def test_configure_stores_fields(self, tmp_path: Path) -> None:
         adapter = self._make_adapter(tmp_path)
@@ -659,17 +681,15 @@ class TestOssCrsAdapterBugFindFull:
         assert data["test-crs"]["source"]["url"] == "https://github.com/team/crs.git"
 
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
-    def test_generate_compose_yaml_injects_external_litellm_env(
+    def test_generate_compose_yaml_does_not_inject_external_litellm_env(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """Compose generation should inject OSS_CRS_LLM_* when configured."""
+        """Compose generation should not inject LiteLLM runtime env into CRS env."""
         adapter = self._make_adapter(tmp_path)
         adapter.configure(
             {
-                "docker_registry": "ghcr.io/t",
-                "external_litellm": True,
-                "litellm_url": "https://litellm.example",
-                "litellm_api_key": "sk-test-key",
+                "litellm_runtime_url": "https://litellm.example",
+                "litellm_runtime_api_key": "sk-test-key",
             }
         )
         trial = tmp_path / "trial"
@@ -677,146 +697,40 @@ class TestOssCrsAdapterBugFindFull:
         compose_path = adapter._generate_compose_yaml(trial)
 
         data = yaml.safe_load(compose_path.read_text())
-        env = data["test-crs"]["additional_env"]
-        assert env["OSS_CRS_LLM_API_URL"] == "https://litellm.example"
-        assert env["OSS_CRS_LLM_API_KEY"] == "sk-test-key"
+        env = data["test-crs"].get("additional_env", {})
+        assert "CRSBENCH_LLM_UPSTREAM_BASE_URL" not in env
+        assert "CRSBENCH_LLM_API_KEY" not in env
 
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
-    def test_generate_compose_yaml_includes_llm_config_when_present(
+    def test_generate_compose_yaml_includes_external_litellm_config_when_present(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """Compose generation should include llm_config from crs config dir."""
+        """Compose generation should include llm_config.litellm external mode."""
         adapter = self._make_adapter(tmp_path)
-        adapter.configure({"docker_registry": "ghcr.io/t"})
-        litellm_cfg = tmp_path / "configs" / "test-crs" / "config-litellm.yaml"
-        litellm_cfg.parent.mkdir(parents=True, exist_ok=True)
-        litellm_cfg.write_text(
-            yaml.dump(
-                {
-                    "model_list": [
-                        {
-                            "model_name": "claude-sonnet-4-5-20250929",
-                            "litellm_params": {
-                                "model": "anthropic/claude-sonnet-4-5-20250929",
-                                "api_key": "os.environ/CRSBENCH_LLM_API_KEY",
-                            },
-                        }
-                    ]
-                }
-            )
+        adapter.configure(
+            {
+                "docker_registry": "ghcr.io/t",
+                "litellm_runtime_url": "https://litellm.example",
+                "litellm_runtime_api_key": "sk-test-key",
+            }
         )
 
         compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
         data = yaml.safe_load(compose_path.read_text())
-        assert data["llm_config"]["litellm_config"] == str(litellm_cfg)
+        assert data["llm_config"]["litellm"]["mode"] == "external"
+        assert (
+            data["llm_config"]["litellm"]["external"]["url"]
+            == "https://litellm.example"
+        )
+        assert data["llm_config"]["litellm"]["external"]["key"] == "sk-test-key"
 
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
-    def test_generate_compose_yaml_uses_litellm_config_path_override(
+    def test_generate_compose_yaml_skips_required_llm_validation_when_skip_litellm(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """Explicit litellm_config_path should override default per-CRS path."""
+        """skip_litellm should bypass llm_config loading and required_llms checks."""
         adapter = self._make_adapter(tmp_path)
-        override_cfg = tmp_path / "custom" / "combined-litellm-config.yaml"
-        override_cfg.parent.mkdir(parents=True, exist_ok=True)
-        override_cfg.write_text("model_list: []\n")
-        adapter.configure(
-            {
-                "docker_registry": "ghcr.io/t",
-                "litellm_config_path": str(override_cfg),
-            }
-        )
-        # Default path exists but must be ignored due to override.
-        default_cfg = tmp_path / "configs" / "test-crs" / "config-litellm.yaml"
-        default_cfg.parent.mkdir(parents=True, exist_ok=True)
-        default_cfg.write_text("model_list: []\n")
-
-        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
-        data = yaml.safe_load(compose_path.read_text())
-        assert data["llm_config"]["litellm_config"] == str(override_cfg)
-
-    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
-    def test_generate_compose_yaml_raises_when_litellm_override_missing(
-        self, mock_run: MagicMock, tmp_path: Path
-    ) -> None:
-        adapter = self._make_adapter(tmp_path)
-        adapter.configure(
-            {
-                "docker_registry": "ghcr.io/t",
-                "litellm_config_path": str(tmp_path / "does-not-exist.yaml"),
-            }
-        )
-        with pytest.raises(RuntimeError, match="litellm_config_path does not exist"):
-            adapter._generate_compose_yaml(tmp_path / "trial")
-
-    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
-    def test_generate_compose_yaml_merges_additional_env_with_external_litellm(
-        self, mock_run: MagicMock, tmp_path: Path
-    ) -> None:
-        adapter = self._make_adapter(tmp_path)
-        litellm_cfg = tmp_path / "custom" / "litellm.yaml"
-        litellm_cfg.parent.mkdir(parents=True, exist_ok=True)
-        litellm_cfg.write_text(
-            yaml.dump(
-                {
-                    "model_list": [
-                        {
-                            "model_name": "claude-sonnet-4-5-20250929",
-                            "litellm_params": {
-                                "model": "anthropic/claude-sonnet-4-5-20250929",
-                                "api_key": "os.environ/CRSBENCH_LLM_API_KEY",
-                            },
-                        }
-                    ]
-                }
-            )
-        )
-        # Add required_llms to registry so preflight runs.
-        registry_yaml = tmp_path / "registry" / "test-crs.yaml"
-        data = yaml.safe_load(registry_yaml.read_text())
-        data["required_llms"] = ["claude-sonnet-4-5-20250929"]
-        registry_yaml.write_text(yaml.dump(data))
-
-        adapter.configure(
-            {
-                "docker_registry": "ghcr.io/t",
-                "litellm_config_path": str(litellm_cfg),
-                "additional_env": {
-                    "ANTHROPIC_MODEL": "claude-sonnet-4-5-20250929",
-                },
-                "external_litellm": True,
-                "litellm_url": "https://litellm.example",
-                "litellm_api_key": "sk-test-key",
-            }
-        )
-        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
-        compose_data = yaml.safe_load(compose_path.read_text())
-        env = compose_data["test-crs"]["additional_env"]
-        assert env["ANTHROPIC_MODEL"] == "claude-sonnet-4-5-20250929"
-        assert env["OSS_CRS_LLM_API_URL"] == "https://litellm.example"
-        assert env["OSS_CRS_LLM_API_KEY"] == "sk-test-key"
-
-    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
-    def test_generate_compose_yaml_raises_when_required_llm_missing(
-        self, mock_run: MagicMock, tmp_path: Path
-    ) -> None:
-        adapter = self._make_adapter(tmp_path)
-        litellm_cfg = tmp_path / "custom" / "litellm.yaml"
-        litellm_cfg.parent.mkdir(parents=True, exist_ok=True)
-        litellm_cfg.write_text(
-            yaml.dump(
-                {
-                    "model_list": [
-                        {
-                            "model_name": "some-other-model",
-                            "litellm_params": {
-                                "model": "openai/gpt-4o-mini",
-                                "api_key": "os.environ/OPENAI_API_KEY",
-                            },
-                        }
-                    ]
-                }
-            )
-        )
+        # Add required_llms metadata; without skip_litellm this would require llm_config.
         registry_yaml = tmp_path / "registry" / "test-crs.yaml"
         data = yaml.safe_load(registry_yaml.read_text())
         data["required_llms"] = ["claude-opus-4-6"]
@@ -825,10 +739,72 @@ class TestOssCrsAdapterBugFindFull:
         adapter.configure(
             {
                 "docker_registry": "ghcr.io/t",
-                "litellm_config_path": str(litellm_cfg),
+                "skip_litellm": True,
             }
         )
-        with pytest.raises(RuntimeError, match="missing required aliases"):
+        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+        compose_data = yaml.safe_load(compose_path.read_text())
+        assert "llm_config" not in compose_data
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_generate_compose_yaml_merges_additional_env_with_external_litellm(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+
+        adapter.configure(
+            {
+                "docker_registry": "ghcr.io/t",
+                "additional_env": {
+                    "ANTHROPIC_MODEL": "claude-sonnet-4-5-20250929",
+                },
+                "litellm_runtime_url": "https://litellm.example",
+                "litellm_runtime_api_key": "sk-test-key",
+            }
+        )
+        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+        compose_data = yaml.safe_load(compose_path.read_text())
+        env = compose_data["test-crs"]["additional_env"]
+        assert env["ANTHROPIC_MODEL"] == "claude-sonnet-4-5-20250929"
+        assert "CRSBENCH_LLM_UPSTREAM_BASE_URL" not in env
+        assert "CRSBENCH_LLM_API_KEY" not in env
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_generate_compose_yaml_no_longer_raises_when_required_llm_missing_locally(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """required_llms are validated by oss-crs external model check, not local YAML."""
+        adapter = self._make_adapter(tmp_path)
+        registry_yaml = tmp_path / "registry" / "test-crs.yaml"
+        data = yaml.safe_load(registry_yaml.read_text())
+        data["required_llms"] = ["claude-opus-4-6"]
+        registry_yaml.write_text(yaml.dump(data))
+
+        adapter.configure(
+            {
+                "docker_registry": "ghcr.io/t",
+                "litellm_runtime_url": "https://litellm.example",
+                "litellm_runtime_api_key": "sk-test-key",
+            }
+        )
+        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+        compose_data = yaml.safe_load(compose_path.read_text())
+        assert compose_data["llm_config"]["litellm"]["mode"] == "external"
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_generate_compose_yaml_raises_when_external_runtime_not_injected(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """External mode must receive explicit runtime URL/key from CRSBench."""
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure(
+            {
+                "litellm_runtime_url": "",
+                "litellm_runtime_api_key": "",
+            }
+        )
+
+        with pytest.raises(RuntimeError, match="requires explicit runtime URL/API key"):
             adapter._generate_compose_yaml(tmp_path / "trial")
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
@@ -973,15 +949,14 @@ class TestOssCrsAdapterBugFindFull:
         adapter = self._make_adapter(tmp_path)
         adapter.configure({"docker_registry": "ghcr.io/t"})
 
-        # Set up SUBMIT_DIR on filesystem and point artifacts to it
-        submit = tmp_path / "submit" / "harness1"
-        pov_dir = submit / "povs"
+        # Set up EXCHANGE_DIR POV path
+        pov_dir = tmp_path / "exchange" / "pov"
         pov_dir.mkdir(parents=True)
         (pov_dir / "crash-001").write_bytes(b"\x00" * 16)
         (pov_dir / "crash-002").write_bytes(b"\xff" * 8)
 
         adapter._resolved_artifacts = {
-            "crs": {"test-crs": {"submit_dir": str(submit)}},
+            "exchange_dir": {"pov": str(pov_dir)},
         }
         trial = tmp_path / "trial_out"
 
@@ -1000,7 +975,8 @@ class TestOssCrsAdapterBugFindFull:
         adapter._resolved_artifacts = {"crs": {"other-crs": {"submit_dir": "/x"}}}
 
         metadata = adapter.collect_results(tmp_path / "trial", "harness1")
-        assert metadata["submit_dir"] is None
+        assert metadata["exchange_pov_dir"] is None
+        assert metadata["shared_dirs_by_crs"] == {}
 
     def test_collect_results_handles_none_artifacts(self, tmp_path: Path) -> None:
         adapter = self._make_adapter(tmp_path)
@@ -1008,7 +984,122 @@ class TestOssCrsAdapterBugFindFull:
         adapter._resolved_artifacts = None
 
         metadata = adapter.collect_results(tmp_path / "trial", "harness1")
-        assert metadata["submit_dir"] is None
+        assert metadata["exchange_pov_dir"] is None
+        assert metadata["shared_dirs_by_crs"] == {}
+
+    @patch("crsbench.evaluation.adapter.oss_crs.run_oss_crs_artifacts")
+    def test_collect_results_refreshes_artifacts_post_run(
+        self,
+        mock_artifacts: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        adapter._compose_file = tmp_path / "trial" / "crs-compose.yaml"
+        adapter._work_dir = tmp_path / "trial" / "oss-crs-workdir"
+        adapter._run_id = "run-1234"
+        adapter._resolved_artifacts = None
+
+        trial = tmp_path / "trial"
+        staged = trial / "staged" / "proj1"
+        staged.mkdir(parents=True)
+        exchange_pov = tmp_path / "exchange" / "pov"
+        exchange_pov.mkdir(parents=True)
+        (exchange_pov / "crash-001").write_bytes(b"\x00")
+        compose_stdout = tmp_path / "run-logs" / "compose.stdout.log"
+        compose_stdout.parent.mkdir(parents=True)
+        compose_stdout.write_text("compose-out")
+
+        mock_artifacts.return_value = {
+            "exchange_dir": {"pov": str(exchange_pov)},
+            "run_logs": {"compose_stdout_log": str(compose_stdout)},
+        }
+
+        metadata = adapter.collect_results(trial, "harness1")
+
+        mock_artifacts.assert_called_once_with(
+            adapter._compose_file,
+            adapter._work_dir,
+            staged,
+            "harness1",
+            "run-1234",
+            oss_crs_cmd=adapter._oss_crs_cmd,
+            sanitizer=adapter._sanitizer,
+        )
+        output_dir = Path(metadata["output_dir"])
+        assert (output_dir / "povs" / "crash-001").exists()
+        assert (output_dir / "logs" / "docker-compose.stdout.log").read_text() == (
+            "compose-out"
+        )
+
+    def test_collect_results_copies_top_level_run_logs(self, tmp_path: Path) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+
+        run_logs_base = tmp_path / "run-logs"
+        services = run_logs_base / "services"
+        services.mkdir(parents=True)
+        compose_stdout = run_logs_base / "docker-compose.stdout.log"
+        compose_stderr = run_logs_base / "docker-compose.stderr.log"
+        (services / "exchange.log").write_text("exchange-ok")
+        compose_stdout.write_text("compose-out")
+        compose_stderr.write_text("compose-err")
+
+        adapter._resolved_artifacts = {
+            "run_logs": {
+                "base": str(run_logs_base),
+                "compose_stdout_log": str(compose_stdout),
+                "compose_stderr_log": str(compose_stderr),
+                "service_logs": str(services),
+            }
+        }
+        trial = tmp_path / "trial_out"
+
+        metadata = adapter.collect_results(trial, "harness1")
+        logs_dir = Path(metadata["output_dir"]) / "logs"
+        assert (logs_dir / "docker-compose.stdout.log").read_text() == "compose-out"
+        assert (logs_dir / "docker-compose.stderr.log").read_text() == "compose-err"
+        assert (logs_dir / "services" / "exchange.log").read_text() == "exchange-ok"
+        assert metadata["run_logs_base_dir"] == str(run_logs_base)
+
+    def test_collect_results_copies_crs_run_logs(self, tmp_path: Path) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+
+        crs_a = tmp_path / "run-logs" / "crs" / "test-crs"
+        crs_b = tmp_path / "run-logs" / "crs" / "other-crs"
+        crs_a.mkdir(parents=True)
+        crs_b.mkdir(parents=True)
+        (crs_a / "stdout.log").write_text("a")
+        (crs_b / "stdout.log").write_text("b")
+        nested = crs_a / "claude-logs" / "projects" / "-work-src-libexif"
+        nested.mkdir(parents=True)
+        (nested / "session.jsonl").write_text('{"event":"ok"}')
+
+        adapter._resolved_artifacts = {
+            "crs": {
+                "test-crs": {"run_logs": str(crs_a)},
+                "other-crs": {"run_logs": str(crs_b)},
+            }
+        }
+        trial = tmp_path / "trial_out"
+
+        metadata = adapter.collect_results(trial, "harness1")
+        logs_dir = Path(metadata["output_dir"]) / "logs" / "crs"
+        assert (logs_dir / "test-crs" / "stdout.log").read_text() == "a"
+        assert (logs_dir / "other-crs" / "stdout.log").read_text() == "b"
+        assert (
+            logs_dir
+            / "test-crs"
+            / "claude-logs"
+            / "projects"
+            / "-work-src-libexif"
+            / "session.jsonl"
+        ).read_text() == '{"event":"ok"}'
+        assert metadata["crs_run_logs_by_crs"] == {
+            "other-crs": str(crs_b),
+            "test-crs": str(crs_a),
+        }
 
 
 # ===========================================================================
@@ -1043,7 +1134,7 @@ class TestOssCrsAdapterBugFixFull:
                 }
             )
         )
-        return OssCrsAdapter(
+        adapter = OssCrsAdapter(
             crs_config_name="test-crs",
             oss_fuzz_path=tmp_path / "oss-fuzz",
             registry_dir=registry,
@@ -1051,6 +1142,13 @@ class TestOssCrsAdapterBugFixFull:
             crs_configs_dir=tmp_path / "configs",
             mode="bug-fixing",
         )
+        adapter.configure(
+            {
+                "litellm_runtime_url": "https://litellm.example",
+                "litellm_runtime_api_key": "sk-test-key",
+            }
+        )
+        return adapter
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
@@ -1154,14 +1252,12 @@ class TestOssCrsAdapterBugFixFull:
         adapter = self._make_adapter(tmp_path)
         adapter.configure({"docker_registry": "ghcr.io/t"})
 
-        # Set up SUBMIT_DIR on filesystem and point artifacts to it
-        submit = tmp_path / "submit" / "harness1"
-        patch_dir = submit / "patches"
+        patch_dir = tmp_path / "exchange" / "patch"
         patch_dir.mkdir(parents=True)
         (patch_dir / "fix.patch").write_text("--- a/bug.c\n+++ b/bug.c\n")
 
         adapter._resolved_artifacts = {
-            "crs": {"test-crs": {"submit_dir": str(submit)}},
+            "exchange_dir": {"patch": str(patch_dir)},
         }
         trial = tmp_path / "trial_out"
 
@@ -1175,14 +1271,13 @@ class TestOssCrsAdapterBugFixFull:
         adapter = self._make_adapter(tmp_path)
         adapter.configure({"docker_registry": "ghcr.io/t"})
 
-        submit = tmp_path / "submit" / "harness1"
-        patch_dir = submit / "patches"
+        patch_dir = tmp_path / "exchange" / "patch"
         patch_dir.mkdir(parents=True)
         (patch_dir / "fix1.patch").write_text("patch1")
         (patch_dir / "fix2.patch").write_text("patch2")
 
         adapter._resolved_artifacts = {
-            "crs": {"test-crs": {"submit_dir": str(submit)}},
+            "exchange_dir": {"patch": str(patch_dir)},
         }
         trial = tmp_path / "trial_out"
 
@@ -1459,6 +1554,32 @@ class TestBugFixInputStaging:
         staged = {p.name for p in (trial_dir / "povs").iterdir()}
         assert staged == {"cpv_0", "cpv_0__pov_1", "cpv_0__pov_2", "cpv_1"}
 
+    def test_prepare_bugfix_inputs_target_cpv_only(self, tmp_path: Path) -> None:
+        benchmark = self._make_benchmark_with_variants(tmp_path)
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+        runner = self._make_runner(None)
+
+        runner._prepare_bugfix_inputs(
+            benchmark, "fuzz_target", trial_dir, target_cpv_id="cpv_1"
+        )
+
+        staged = {p.name for p in (trial_dir / "povs").iterdir()}
+        assert staged == {"cpv_1"}
+        assert (trial_dir / "crs-input" / "cpvs" / "cpv_1").exists()
+        assert not (trial_dir / "crs-input" / "cpvs" / "cpv_0").exists()
+
+    def test_prepare_bugfix_inputs_target_cpv_missing(self, tmp_path: Path) -> None:
+        benchmark = self._make_benchmark_with_variants(tmp_path)
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+        runner = self._make_runner(None)
+
+        with pytest.raises(EvaluationError, match="Target CPV not found"):
+            runner._prepare_bugfix_inputs(
+                benchmark, "fuzz_target", trial_dir, target_cpv_id="cpv_missing"
+            )
+
 
 class TestBugFixPatchStatsCollection:
     """Tests for bug-fixing patch stats collection/reporting."""
@@ -1484,7 +1605,34 @@ class TestBugFixPatchStatsCollection:
             patch_verification_results=[],
         )
 
-        collector.set_patch_stats.assert_called_once_with(2, [])
+        collector.set_patch_stats.assert_called_once_with(2, 0, [])
+
+    def test_counts_produced_patches_when_verification_skipped(
+        self, tmp_path: Path
+    ) -> None:
+        adapter = MagicMock()
+        adapter.mode = "bug-fixing"
+        runner = BenchmarkRunner(adapter=adapter, snapshot_period=0)
+        collector = MagicMock()
+
+        trial_dir = tmp_path / "trial"
+        povs_dir = trial_dir / "crs-input" / "povs"
+        patch_dir = trial_dir / "output" / "patches"
+        povs_dir.mkdir(parents=True)
+        patch_dir.mkdir(parents=True)
+        (povs_dir / "cpv_0").write_bytes(b"a")
+        (patch_dir / "patch_0.diff").write_text("diff --git a b")
+        (patch_dir / "patch_1.diff").write_text("diff --git a b")
+
+        runner._collect_crs_results(
+            collector=collector,
+            trial_output_dir=trial_dir,
+            pov_verification_results=[],
+            patch_verification_results=[],
+            target_cpv_id="cpv_0",
+        )
+
+        collector.set_patch_stats.assert_called_once_with(1, 2, [])
 
 
 # ===========================================================================
@@ -1518,7 +1666,7 @@ class TestStageBenchmark:
                 }
             )
         )
-        return OssCrsAdapter(
+        adapter = OssCrsAdapter(
             crs_config_name="test-crs",
             oss_fuzz_path=tmp_path / "oss-fuzz",
             registry_dir=registry,
@@ -1526,6 +1674,13 @@ class TestStageBenchmark:
             crs_configs_dir=tmp_path / "configs",
             mode="bug-finding",
         )
+        adapter.configure(
+            {
+                "litellm_runtime_url": "https://litellm.example",
+                "litellm_runtime_api_key": "sk-test-key",
+            }
+        )
+        return adapter
 
     def _make_benchmark(self, tmp_path: Path) -> Path:
         bench = tmp_path / "bench-proj"
@@ -1633,7 +1788,7 @@ class TestStageBenchmark:
 
         # build-target is the second subprocess.run call
         build_target_cmd = mock_run.call_args_list[1][0][0]
-        target_path_idx = build_target_cmd.index("--target-proj-path") + 1
+        target_path_idx = build_target_cmd.index("--target-path") + 1
         target_path = build_target_cmd[target_path_idx]
         assert "/staged/" in target_path
         assert target_path != str(bench)
@@ -1664,7 +1819,7 @@ class TestStageBenchmark:
         adapter.run(bench, harness, trial)
 
         run_cmd = mock_rwgt.call_args[0][0]
-        target_path_idx = run_cmd.index("--target-proj-path") + 1
+        target_path_idx = run_cmd.index("--target-path") + 1
         target_path = run_cmd[target_path_idx]
         assert "/staged/" in target_path
         assert target_path != str(bench)

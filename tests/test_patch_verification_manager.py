@@ -96,6 +96,30 @@ class TestDiscoverNewPatches:
         assert count == 2
         assert set(new_cpv_ids) == {"cpv_0", "cpv_1"}
 
+    def test_discover_flat_patches_uses_target_cpv(self, tmp_path: Path) -> None:
+        """Flat patch files are counted and mapped to target CPV."""
+        trial_dir = tmp_path / "trial-1"
+        trial_dir.mkdir()
+        patch_output_dir = trial_dir / "output" / "patches"
+        patch_output_dir.mkdir(parents=True)
+        (patch_output_dir / "patch-a.diff").write_text("a")
+        (patch_output_dir / "patch-b.diff").write_text("b")
+
+        manager = PatchVerificationManager(
+            trial_dir=trial_dir,
+            patch_output_dir=patch_output_dir,
+            harness_name="fuzz_parser",
+            benchmark_id="test-benchmark",
+            input_cpvs_total=1,
+            target_cpv_id="cpv_7",
+        )
+
+        new_cpv_ids, count = manager._discover_new_patches()
+        assert count == 2
+        assert new_cpv_ids == ["cpv_7"]
+        assert manager.patches_total == 2
+        assert manager.cpvs_with_patches == ["cpv_7"]
+
 
 class TestExchangeDirScanning:
     """Tests for EXCHANGE_DIR patch discovery via pre-resolved exchange_patch_dir."""
@@ -180,6 +204,33 @@ class TestExchangeDirScanning:
         # cpv_0 appears in both, but should only be counted once
         assert count == 1
         assert new_cpv_ids == ["cpv_0"]
+
+    def test_dedup_same_flat_patch_across_dirs(self, tmp_path: Path) -> None:
+        """Same flat patch filename across dirs is counted once."""
+        trial_dir = tmp_path / "trial-1"
+        trial_dir.mkdir()
+        exchange_patch = tmp_path / "exchange" / "patches"
+        exchange_patch.mkdir(parents=True)
+        patch_output_dir = trial_dir / "output" / "patches"
+        patch_output_dir.mkdir(parents=True)
+
+        (patch_output_dir / "patch_0.diff").write_text("x")
+        (exchange_patch / "patch_0.diff").write_text("x")
+
+        manager = PatchVerificationManager(
+            trial_dir=trial_dir,
+            patch_output_dir=patch_output_dir,
+            harness_name="fuzz_parser",
+            benchmark_id="test-benchmark",
+            input_cpvs_total=1,
+            exchange_patch_dir=exchange_patch,
+            target_cpv_id="cpv_0",
+        )
+
+        new_cpv_ids, count = manager._discover_new_patches()
+        assert count == 1
+        assert new_cpv_ids == ["cpv_0"]
+        assert manager.patches_total == 1
 
     def test_no_exchange_dir_falls_back_gracefully(self, tmp_path: Path) -> None:
         """Without exchange_patch_dir, only patch_output_dir is scanned."""

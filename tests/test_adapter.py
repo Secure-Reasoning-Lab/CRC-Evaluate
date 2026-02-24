@@ -108,14 +108,12 @@ class TestOssCrsAdapter:
         adapter = OssCrsAdapter(**FACTORY_ARGS, mode="bug-fixing")
         adapter.configure(
             {
-                "external_litellm": True,
-                "litellm_url": "http://litellm:4000",
-                "litellm_api_key": "sk-test-key",
+                "litellm_runtime_url": "http://litellm:4000",
+                "litellm_runtime_api_key": "sk-test-key",
             }
         )
-        assert adapter._external_litellm is True
-        assert adapter._litellm_url == "http://litellm:4000"
-        assert adapter._litellm_api_key == "sk-test-key"
+        assert adapter._litellm_runtime_url == "http://litellm:4000"
+        assert adapter._litellm_runtime_api_key == "sk-test-key"
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +126,7 @@ class TestCreateAdapter:
 
     def test_returns_oss_crs_adapter(self) -> None:
         config = MagicMock()
-        config.litellm_mode = "passthrough"
+        config.litellm_mode = "external"
         adapter = create_adapter(
             config=config,
             crs_config_name="test-crs",
@@ -142,7 +140,7 @@ class TestCreateAdapter:
 
     def test_mode_passed_through(self) -> None:
         config = MagicMock()
-        config.litellm_mode = "passthrough"
+        config.litellm_mode = "external"
         adapter = create_adapter(
             config=config,
             crs_config_name="test-crs",
