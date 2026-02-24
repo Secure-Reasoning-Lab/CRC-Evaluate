@@ -1,0 +1,11 @@
+# Resource Configuration for crs-codex CRS Deployment
+
+workers:
+  local:
+    cpuset: "0-15"
+    memory: "64G"
+
+crs:
+  crs-codex:
+    workers:
+      - local
