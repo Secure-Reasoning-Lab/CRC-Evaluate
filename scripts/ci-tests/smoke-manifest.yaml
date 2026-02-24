@@ -29,6 +29,8 @@ suites:
         cost_budget: 0
     # Smoke gate: each harness should emit at least one POV artifact.
     min_pov_files_per_trial: 1
+    # Ensure oss-crs compose is generated without llm_config when skip_litellm=true.
+    assert_no_oss_crs_litellm: true
 
   bugfixing:
     description: "Smoke-check bug-fixing CRS on sanity mock-c/mock-java"
@@ -42,8 +44,8 @@ suites:
       per_pov_verify_timeout: 600
     max_pov_variants_per_cpv: 1
     skip_verification: true
-    litellm_mode: passthrough
-    llm_tracking_enabled: false
+    litellm_mode: external
+    llm_tracking_enabled: true
     resources:
       cores_per_trial: 8
       litellm:
@@ -51,3 +53,6 @@ suites:
         cost_budget: 10
     # Smoke gate: suite should emit at least one patch artifact overall.
     min_patch_files_total: 1
+    # Smoke gate: tracking must capture non-zero request/cost usage.
+    min_llm_total_requests: 1
+    min_llm_total_cost_usd: 0.000001

@@ -172,4 +172,4 @@ jobs:
           # Optional fallback when not creating per-trial keys
           CRSBENCH_LLM_API_KEY: ${{ secrets.CRSBENCH_LLM_API_KEY }}
         run: |
-          ./ci-tests/run-local.sh smoke
+          ./scripts/ci-tests/run-local.sh smoke
