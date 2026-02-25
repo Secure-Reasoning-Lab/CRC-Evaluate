@@ -22,11 +22,13 @@ from crsbench.run_experiment import (
     Trial,
     generate_trial_matrix,
     load_experiment_config,
+    resolve_benchmark_harnesses,
     should_use_distributed_mode,
 )
 from crsbench.validation.schemas import (
     POV,
     AdapterType,
+    BenchmarkEntry,
     BenchmarkHarness,
     ExperimentConfig,
     HarnessFile,
@@ -1409,3 +1411,100 @@ class TestSanitizerFiltering:
         assert len(trials) == 2
         sanitizers = {t.sanitizer for t in trials}
         assert sanitizers == {"address", "undefined"}
+
+    def test_bugfix_trial_generation_respects_target_cpvs(self):
+        """Bug-fixing trial generation should honor BenchmarkHarness target_cpvs."""
+        from crsbench.validation.schemas import POV, Sanitizer, Vulnerability
+
+        config = ExperimentConfig(
+            experiment="test",
+            trials=2,
+            mode="delta",
+            adapter=AdapterType.OSS_CRS,
+            max_total_time=20000,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["crs1"],
+            benchmarks=["bench1"],
+            sanitizers=[Sanitizer.ADDRESS],
+            only_cpv_harnesses=False,
+        )
+
+        harness_file = HarnessFile(
+            name="harness1",
+            path="/src/harness1.c",
+            vulns=[
+                Vulnerability(
+                    vuln_keyword="cpv_0",
+                    povs=[POV(id="pov_0", sanitizer="address")],
+                ),
+                Vulnerability(
+                    vuln_keyword="cpv_1",
+                    povs=[POV(id="pov_0", sanitizer="address")],
+                ),
+            ],
+        )
+
+        benchmark_harness = BenchmarkHarness(
+            name="bench1",
+            path=Path("/tmp/bench1"),
+            harness=harness_file,
+            target_cpvs=["cpv_1"],
+        )
+
+        from unittest.mock import MagicMock
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_harness.return_value = harness_file
+
+        with (
+            patch(
+                "crsbench.run_experiment.MetaYamlAdapter.from_meta_yaml",
+                return_value=mock_adapter,
+            ),
+            patch("crsbench.run_experiment.get_crs_type", return_value="bug-fixing"),
+        ):
+            trials = generate_trial_matrix(
+                [benchmark_harness],
+                ["crs1"],
+                config,
+                registry_dir=Path("/tmp/registry"),
+                crs_configs_dir=Path("/tmp/crs-configs"),
+            )
+
+        assert len(trials) == 2
+        assert {t.target_cpv_id for t in trials} == {"cpv_1"}
+
+
+class TestBenchmarkResolver:
+    """Tests for benchmark->harness resolution behavior."""
+
+    def test_resolve_benchmark_harnesses_with_harness_cpv_filters(self, tmp_path):
+        """Resolver should attach per-harness CPV filters to BenchmarkHarness entries."""
+        bench_path = tmp_path / "bench1" / ".aixcc"
+        bench_path.mkdir(parents=True)
+        meta_yaml = bench_path / "meta.yaml"
+        meta_yaml.write_text(
+            """
+harness_files:
+  - name: harness1
+    path: /src/harness1.c
+  - name: harness2
+    path: /src/harness2.c
+"""
+        )
+
+        entries = [
+            BenchmarkEntry(
+                name="bench1",
+                harnesses=["harness1", "harness2"],
+                harness_cpvs={"harness1": ["cpv_0"], "harness2": ["cpv_1", "cpv_2"]},
+            )
+        ]
+        resolved = resolve_benchmark_harnesses(entries, tmp_path)
+
+        assert len(resolved) == 2
+        by_name = {r.harness.name: r for r in resolved}
+        assert by_name["harness1"].target_cpvs == ["cpv_0"]
+        assert by_name["harness2"].target_cpvs == ["cpv_1", "cpv_2"]

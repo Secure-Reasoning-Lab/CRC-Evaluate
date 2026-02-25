@@ -146,6 +146,16 @@ crses:
   - atlantis-c
 benchmarks:
   - libjpeg-turbo
+  # Optional selectors:
+  # - benchmark-only
+  # - benchmark -> harness list
+  # - benchmark -> harness -> cpv list
+  # - afc-libxml2-delta-01:
+  #     - xml
+  # - afc-libxml2-delta-02:
+  #     xml:
+  #       - cpv_0
+  #       - cpv_1
 
 # No LLM needed for pure fuzzers
 skip_litellm: true

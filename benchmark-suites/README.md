@@ -55,4 +55,15 @@ benchmark_list:
   - benchmark-name-3:
       - harness-a
       - harness-b
+  - benchmark-name-4:
+      harness-c:
+        - cpv_0
+        - cpv_1
+      harness-d:
+        - cpv_2
 ```
+
+Selector forms:
+- `benchmark-name`: include all harnesses
+- `benchmark-name: [harness-a, harness-b]`: include specific harnesses
+- `benchmark-name: {harness-a: [cpv_0, cpv_1]}`: include specific CPVs per harness

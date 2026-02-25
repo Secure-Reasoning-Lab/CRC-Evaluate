@@ -519,6 +519,7 @@ def resolve_benchmark_harnesses(
             }
 
             # Validate each specified harness exists and create BenchmarkHarness
+            harness_cpvs = entry.harness_cpvs or {}
             for harness_name in entry.harnesses:
                 if harness_name not in harness_files_dict:
                     raise ValueError(
@@ -531,7 +532,10 @@ def resolve_benchmark_harnesses(
                 )
                 harness_pairs.append(
                     BenchmarkHarness(
-                        name=entry.name, path=benchmark_path, harness=harness_obj
+                        name=entry.name,
+                        path=benchmark_path,
+                        harness=harness_obj,
+                        target_cpvs=harness_cpvs.get(harness_name),
                     )
                 )
         else:
@@ -572,7 +576,9 @@ def resolve_benchmark_harnesses(
                     harness_obj = HarnessFile(name=harness_name, path=harness_path)
                     harness_pairs.append(
                         BenchmarkHarness(
-                            name=entry.name, path=benchmark_path, harness=harness_obj
+                            name=entry.name,
+                            path=benchmark_path,
+                            harness=harness_obj,
                         )
                     )
 
@@ -597,6 +603,27 @@ def _harness_has_cpv_with_sanitizer(harness: HarnessFile, sanitizer: str) -> boo
     return any(
         pov.sanitizer == sanitizer for vuln in harness.vulns for pov in vuln.povs
     )
+
+
+def _filter_matched_cpvs(
+    harness: HarnessFile, sanitizer: str, allowed_cpvs: set[str] | None = None
+) -> list[str]:
+    """Collect unique CPV IDs matching sanitizer and optional CPV allow-list."""
+    matched_cpvs: list[str] = []
+    seen_cpvs: set[str] = set()
+
+    for vuln in harness.vulns or []:
+        if not any(pov.sanitizer == sanitizer for pov in vuln.povs):
+            continue
+        cpv_id = vuln.vuln_keyword
+        if allowed_cpvs is not None and cpv_id not in allowed_cpvs:
+            continue
+        if cpv_id in seen_cpvs:
+            continue
+        seen_cpvs.add(cpv_id)
+        matched_cpvs.append(cpv_id)
+
+    return matched_cpvs
 
 
 def generate_trial_matrix(
@@ -651,6 +678,8 @@ def generate_trial_matrix(
                         f"no CPVs ({skip_reason})"
                     )
                     continue
+            target_cpvs = benchmark_harness.target_cpvs
+            target_cpv_set = set(target_cpvs) if target_cpvs else None
             # Determine which modes to run for this benchmark
             if config_mode == "all":
                 available_modes = get_available_modes_for_benchmark(
@@ -683,8 +712,8 @@ def generate_trial_matrix(
                 for sanitizer in config.sanitizers:
                     # Skip sanitizers that don't match any CPV in this harness
                     if should_check_cpvs and harness:
-                        if not _harness_has_cpv_with_sanitizer(
-                            harness, sanitizer.value
+                        if not _filter_matched_cpvs(
+                            harness, sanitizer.value, target_cpv_set
                         ):
                             logger.debug(
                                 f"Skipping {benchmark_harness.name}/{benchmark_harness.harness.name}: "
@@ -692,18 +721,9 @@ def generate_trial_matrix(
                             )
                             continue
                     if is_bug_fixing and harness:
-                        matched_cpvs: list[str] = []
-                        seen_cpvs: set[str] = set()
-                        for vuln in harness.vulns or []:
-                            if not any(
-                                pov.sanitizer == sanitizer.value for pov in vuln.povs
-                            ):
-                                continue
-                            cpv_id = vuln.vuln_keyword
-                            if cpv_id in seen_cpvs:
-                                continue
-                            seen_cpvs.add(cpv_id)
-                            matched_cpvs.append(cpv_id)
+                        matched_cpvs = _filter_matched_cpvs(
+                            harness, sanitizer.value, target_cpv_set
+                        )
 
                         if not matched_cpvs:
                             logger.debug(

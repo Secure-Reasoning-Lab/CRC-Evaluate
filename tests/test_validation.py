@@ -620,6 +620,48 @@ class TestExperimentConfigSchema:
         assert config.max_total_time == 86400
         assert config.difficulty_level == 2
 
+    def test_experiment_config_benchmarks_nested_harness_cpvs(self):
+        """ExperimentConfig accepts benchmark->harness->cpv nested format."""
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
+            max_total_time=86400,
+            difficulty_level=1,
+            experiment_filestore="/tmp/experiment-data",
+            report_filestore="/tmp/report-data",
+            crses=["test-crs"],
+            benchmarks=[
+                {"bench1": {"harness1": ["cpv_0", "cpv_1"], "harness2": ["cpv_0"]}}
+            ],
+        )
+        entries = config.get_benchmark_entries()
+        assert len(entries) == 1
+        assert entries[0].name == "bench1"
+        assert entries[0].harnesses == ["harness1", "harness2"]
+        assert entries[0].harness_cpvs == {
+            "harness1": ["cpv_0", "cpv_1"],
+            "harness2": ["cpv_0"],
+        }
+
+    def test_experiment_config_benchmarks_nested_empty_cpv_rejected(self):
+        """ExperimentConfig rejects empty CPV list in nested benchmark selector."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            ExperimentConfig(
+                experiment="test",
+                trials=1,
+                mode=EvaluationMode.DELTA,
+                adapter=AdapterType.OSS_CRS,
+                max_total_time=86400,
+                difficulty_level=1,
+                experiment_filestore="/tmp/experiment-data",
+                report_filestore="/tmp/report-data",
+                crses=["test-crs"],
+                benchmarks=[{"bench1": {"harness1": []}}],
+            )
+        assert "cpv list" in str(exc_info.value).lower()
+
     def test_experiment_config_invalid_trials(self):
         """Test experiment config with invalid trials."""
         with pytest.raises(PydanticValidationError) as exc_info:
@@ -1384,6 +1426,20 @@ class TestBenchmarkListFormat:
         assert "bench1" in config.benchmark_list[0]
         assert config.benchmark_list[0]["bench1"] == ["harness1", "harness2"]
 
+    def test_nested_harness_cpv_format(self):
+        """Test nested dict format (harness -> cpv list)."""
+        config = BenchmarkSuiteConfig(
+            Name="test-suite",
+            Description="Test suite",
+            benchmark_list=[
+                {"bench1": {"harness1": ["cpv_0", "cpv_1"], "harness2": ["cpv_0"]}}
+            ],
+            release_date="01.01.2025",
+        )
+        assert isinstance(config.benchmark_list[0], dict)
+        assert config.benchmark_list[0]["bench1"]["harness1"] == ["cpv_0", "cpv_1"]
+        assert config.benchmark_list[0]["bench1"]["harness2"] == ["cpv_0"]
+
     def test_mixed_format(self):
         """Test mixed format (both simple and extended)."""
         config = BenchmarkSuiteConfig(
@@ -1445,6 +1501,26 @@ class TestBenchmarkListFormat:
         assert isinstance(entries[0], BenchmarkEntry)
         assert entries[0].name == "bench1"
         assert entries[0].harnesses == ["harness1", "harness2"]
+        assert entries[0].harness_cpvs is None
+
+    def test_get_benchmark_entries_nested_harness_cpvs(self):
+        """Test get_benchmark_entries() with nested harness->cpv format."""
+        config = BenchmarkSuiteConfig(
+            Name="test-suite",
+            Description="Test suite",
+            benchmark_list=[
+                {"bench1": {"harness1": ["cpv_0", "cpv_1"], "harness2": ["cpv_0"]}}
+            ],
+            release_date="01.01.2025",
+        )
+        entries = config.get_benchmark_entries()
+        assert len(entries) == 1
+        assert entries[0].name == "bench1"
+        assert entries[0].harnesses == ["harness1", "harness2"]
+        assert entries[0].harness_cpvs == {
+            "harness1": ["cpv_0", "cpv_1"],
+            "harness2": ["cpv_0"],
+        }
 
     def test_get_benchmark_entries_mixed(self):
         """Test get_benchmark_entries() with mixed format."""
@@ -1491,6 +1567,17 @@ class TestBenchmarkListFormat:
                 release_date="01.01.2025",
             )
         assert "empty" in str(exc_info.value).lower()
+
+    def test_empty_cpv_list_rejected(self):
+        """Test that empty CPV list is rejected."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            BenchmarkSuiteConfig(
+                Name="test-suite",
+                Description="Test suite",
+                benchmark_list=[{"bench1": {"harness1": []}}],
+                release_date="01.01.2025",
+            )
+        assert "cpv list" in str(exc_info.value).lower()
 
     def test_multiple_keys_in_dict_rejected(self):
         """Test that dict with multiple keys is rejected."""
