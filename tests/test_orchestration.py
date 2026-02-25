@@ -1508,3 +1508,171 @@ harness_files:
         by_name = {r.harness.name: r for r in resolved}
         assert by_name["harness1"].target_cpvs == ["cpv_0"]
         assert by_name["harness2"].target_cpvs == ["cpv_1", "cpv_2"]
+
+    def test_end_to_end_cpv_selector_targets_only_selected_cpvs(self, tmp_path):
+        """Nested benchmark selectors should produce trials only for selected CPVs."""
+        from crsbench.validation.schemas import POV, Sanitizer, Vulnerability
+
+        bench_name = "bench1"
+        bench_aixcc = tmp_path / bench_name / ".aixcc"
+        bench_aixcc.mkdir(parents=True)
+        (bench_aixcc / "meta.yaml").write_text(
+            """
+harness_files:
+  - name: harness1
+    path: /src/harness1.c
+"""
+        )
+
+        config = ExperimentConfig(
+            experiment="test",
+            trials=2,
+            mode="delta",
+            adapter=AdapterType.OSS_CRS,
+            max_total_time=20000,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["crs1"],
+            benchmarks=[{bench_name: {"harness1": ["cpv_1"]}}],
+            sanitizers=[Sanitizer.ADDRESS],
+            only_cpv_harnesses=False,
+        )
+
+        benchmark_harnesses = resolve_benchmark_harnesses(
+            config.get_benchmark_entries(), tmp_path
+        )
+        assert len(benchmark_harnesses) == 1
+        assert benchmark_harnesses[0].target_cpvs == ["cpv_1"]
+
+        harness_with_two_cpvs = HarnessFile(
+            name="harness1",
+            path="/src/harness1.c",
+            vulns=[
+                Vulnerability(
+                    vuln_keyword="cpv_0",
+                    povs=[POV(id="pov_0", sanitizer="address")],
+                ),
+                Vulnerability(
+                    vuln_keyword="cpv_1",
+                    povs=[POV(id="pov_0", sanitizer="address")],
+                ),
+            ],
+        )
+
+        from unittest.mock import MagicMock
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_harness.return_value = harness_with_two_cpvs
+
+        with (
+            patch(
+                "crsbench.run_experiment.MetaYamlAdapter.from_meta_yaml",
+                return_value=mock_adapter,
+            ),
+            patch("crsbench.run_experiment.get_crs_type", return_value="bug-fixing"),
+        ):
+            trials = generate_trial_matrix(
+                benchmark_harnesses,
+                ["crs1"],
+                config,
+                registry_dir=Path("/tmp/registry"),
+                crs_configs_dir=Path("/tmp/crs-configs"),
+            )
+
+        assert len(trials) == 2  # only cpv_1, across trial_num=1..2
+        assert {t.target_cpv_id for t in trials} == {"cpv_1"}
+
+    def test_resolve_benchmark_harnesses_rejects_unknown_harness_in_selector(
+        self, tmp_path
+    ):
+        """Resolver should fail fast when selector references a missing harness."""
+        bench_name = "bench1"
+        bench_aixcc = tmp_path / bench_name / ".aixcc"
+        bench_aixcc.mkdir(parents=True)
+        (bench_aixcc / "meta.yaml").write_text(
+            """
+harness_files:
+  - name: harness1
+    path: /src/harness1.c
+"""
+        )
+
+        entries = [
+            BenchmarkEntry(
+                name=bench_name,
+                harnesses=["missing-harness"],
+                harness_cpvs={"missing-harness": ["cpv_0"]},
+            )
+        ]
+
+        with pytest.raises(ValueError, match="not found in benchmark"):
+            resolve_benchmark_harnesses(entries, tmp_path)
+
+    def test_bugfix_cpv_selector_absent_in_harness_produces_zero_trials(self, tmp_path):
+        """If selected CPV is not present in harness metadata, no trials should be generated."""
+        from crsbench.validation.schemas import POV, Sanitizer, Vulnerability
+
+        bench_name = "bench1"
+        bench_aixcc = tmp_path / bench_name / ".aixcc"
+        bench_aixcc.mkdir(parents=True)
+        (bench_aixcc / "meta.yaml").write_text(
+            """
+harness_files:
+  - name: harness1
+    path: /src/harness1.c
+"""
+        )
+
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode="delta",
+            adapter=AdapterType.OSS_CRS,
+            max_total_time=20000,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["crs1"],
+            benchmarks=[{bench_name: {"harness1": ["cpv_missing"]}}],
+            sanitizers=[Sanitizer.ADDRESS],
+            only_cpv_harnesses=False,
+        )
+
+        benchmark_harnesses = resolve_benchmark_harnesses(
+            config.get_benchmark_entries(), tmp_path
+        )
+        assert len(benchmark_harnesses) == 1
+
+        harness_metadata = HarnessFile(
+            name="harness1",
+            path="/src/harness1.c",
+            vulns=[
+                Vulnerability(
+                    vuln_keyword="cpv_0",
+                    povs=[POV(id="pov_0", sanitizer="address")],
+                ),
+            ],
+        )
+
+        from unittest.mock import MagicMock
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_harness.return_value = harness_metadata
+
+        with (
+            patch(
+                "crsbench.run_experiment.MetaYamlAdapter.from_meta_yaml",
+                return_value=mock_adapter,
+            ),
+            patch("crsbench.run_experiment.get_crs_type", return_value="bug-fixing"),
+        ):
+            trials = generate_trial_matrix(
+                benchmark_harnesses,
+                ["crs1"],
+                config,
+                registry_dir=Path("/tmp/registry"),
+                crs_configs_dir=Path("/tmp/crs-configs"),
+            )
+
+        assert trials == []

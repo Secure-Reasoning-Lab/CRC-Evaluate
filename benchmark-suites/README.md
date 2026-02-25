@@ -67,6 +67,7 @@ Selector forms:
 - `benchmark-name`: include all harnesses
 - `benchmark-name: [harness-a, harness-b]`: include specific harnesses
 - `benchmark-name: {harness-a: [cpv_0, cpv_1]}`: include specific CPVs per harness
+- A benchmark ID can appear only once in `benchmark_list`.
 
 Variant-focused suite notes:
 - `afc-final-variants.yaml` uses the CPV-scoped form (`benchmark -> harness -> cpv list`).
