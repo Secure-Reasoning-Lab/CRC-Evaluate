@@ -11,7 +11,7 @@ The AFC benchmarks are organized by competition round:
 | `afc-r2.yaml` | Round 2 benchmarks | 13 |
 | `afc-r3.yaml` | Round 3 benchmarks | 14 |
 | `afc-final.yaml` | Final round benchmarks | 36 |
-| `afc-final-variants.yaml` | Final round benchmarks (only harnesses with POV variants) | 17 |
+| `afc-final-variants.yaml` | Final round benchmarks (only CPVs with POV variants, scoped by harness) | 17 |
 | `afc-all.yaml` | All unique AFC benchmarks | 61 |
 
 **Note:** Round suites may have overlapping projects (e.g., some R3 projects also appear in Final).
@@ -67,3 +67,7 @@ Selector forms:
 - `benchmark-name`: include all harnesses
 - `benchmark-name: [harness-a, harness-b]`: include specific harnesses
 - `benchmark-name: {harness-a: [cpv_0, cpv_1]}`: include specific CPVs per harness
+
+Variant-focused suite notes:
+- `afc-final-variants.yaml` uses the CPV-scoped form (`benchmark -> harness -> cpv list`).
+- Inline comments like `# variants: N` indicate the number of POV blobs under `.aixcc/{harness}/{cpv}/blobs`.
