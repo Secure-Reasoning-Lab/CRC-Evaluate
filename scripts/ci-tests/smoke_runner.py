@@ -232,8 +232,27 @@ def _compose_has_llm_config(compose_path: Path) -> bool:
 
 def summarize_trial_status(exp_dir: Path) -> tuple[int, int, int, int, list[Path]]:
     trial_dirs = sorted(p for p in exp_dir.rglob("trial-*") if p.is_dir())
-    successes = sum((t / ".success").exists() for t in trial_dirs)
-    failures = sum((t / ".failed").exists() for t in trial_dirs)
+    successes = 0
+    failures = 0
+    for trial_dir in trial_dirs:
+        if (trial_dir / ".success").exists():
+            successes += 1
+            continue
+        # Current marker name is .fail; keep .failed as legacy fallback.
+        if (trial_dir / ".fail").exists() or (trial_dir / ".failed").exists():
+            failures += 1
+            continue
+        # Fallback to orchestrator metadata if marker writes were interrupted.
+        metadata_path = trial_dir / "metadata.json"
+        if metadata_path.exists():
+            try:
+                metadata = json.loads(metadata_path.read_text())
+                if metadata.get("success") is True:
+                    successes += 1
+                elif metadata.get("success") is False:
+                    failures += 1
+            except Exception:
+                pass
     patch_files = sum(_count_files(t / "output" / "patches") for t in trial_dirs)
     pov_files = sum(_count_files(t / "output" / "povs") for t in trial_dirs)
     return successes, failures, patch_files, pov_files, trial_dirs
