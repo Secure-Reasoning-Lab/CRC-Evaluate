@@ -10,8 +10,9 @@ The AFC benchmarks are organized by competition round:
 |-------|-------------|-------|
 | `afc-r2.yaml` | Round 2 benchmarks | 13 |
 | `afc-r3.yaml` | Round 3 benchmarks | 14 |
-| `afc-final.yaml` | Final round benchmarks | 35 |
-| `afc-all.yaml` | All unique AFC benchmarks | 60 |
+| `afc-final.yaml` | Final round benchmarks | 36 |
+| `afc-final-variants.yaml` | Final round benchmarks (only harnesses with POV variants) | 17 |
+| `afc-all.yaml` | All unique AFC benchmarks | 61 |
 
 **Note:** Round suites may have overlapping projects (e.g., some R3 projects also appear in Final).
 
@@ -51,4 +52,7 @@ Release date: MM.DD.YYYY
 benchmark_list:
   - benchmark-name-1
   - benchmark-name-2
+  - benchmark-name-3:
+      - harness-a
+      - harness-b
 ```

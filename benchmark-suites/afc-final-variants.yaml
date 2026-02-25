@@ -1,0 +1,42 @@
+Name: afc-final-variants
+Description: AFC Final benchmarks filtered to harnesses where at least one CPV has multiple POV blobs (pov_1+).
+Release date: 02.25.2026
+benchmark_list:
+  - afc-apache-commons-compress-delta-01:
+      - CompressTarFuzzer
+  - afc-apache-commons-compress-delta-04:
+      - ExpanderFuzzer
+  - afc-apache-commons-compress-delta-05:
+      - CompressorGzipFuzzer
+  - afc-apache-poi-delta-01:
+      - POIXSSFFuzzer
+  - afc-curl-delta-04:
+      - curl_fuzzer_http
+  - afc-curl-delta-05:
+      - curl_fuzzer_dict
+  - afc-dav1d-full-01:
+      - dav1d_fuzzer_mt@NO_OOM
+  - afc-freerdp-delta-02:
+      - TestFuzzCryptoCertificateDataSetPEM
+  - afc-libexif-delta-03:
+      - exif_from_data_fuzzer
+  - afc-libxml2-delta-03:
+      - html
+  - afc-mongoose-delta-02:
+      - fuzz
+  - afc-mongoose-full-01:
+      - fuzz
+  - afc-systemd-full-01:
+      - fuzz-link-parser
+      - fuzz-udev-rule-parse-value
+      - fuzz-systemctl-parse-argv
+      - fuzz-catalog
+  - afc-wireshark-delta-01:
+      - handler_ber
+  - afc-wireshark-delta-04:
+      - handler_json
+  - afc-wireshark-full-01:
+      - handler_telnet
+      - handler_aim
+  - afc-xz-full-01:
+      - fuzz_encode_stream
