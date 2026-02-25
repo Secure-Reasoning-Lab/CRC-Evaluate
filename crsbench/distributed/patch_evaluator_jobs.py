@@ -365,6 +365,68 @@ def execute_patch_build(payload_dict: dict[str, Any]) -> dict[str, Any]:
             temp_patch_path.unlink()
 
 
+def _resolve_patch_variant_name(
+    payload: PatchJobPayload, benchmark_path: Path
+) -> Optional[str]:
+    """Resolve patched variant name for post-verify Docker image cleanup."""
+    try:
+        from crsbench.builder.types import BuildConfig, VariantType
+        from crsbench.evaluation.verification.pov import VerificationEngine
+        from crsbench.utils.run_helper import get_oss_fuzz_root
+
+        oss_fuzz_path = Path(get_oss_fuzz_root())
+        engine = VerificationEngine(oss_fuzz_path, source_mode=payload.source_mode)
+        adapter = engine.load_adapter(benchmark_path)
+        if not adapter:
+            return None
+
+        sanitizer = adapter.get_cpv_sanitizer(payload.harness, payload.cpv_id)
+        config = BuildConfig(
+            benchmark_name=payload.benchmark,
+            benchmark_path=benchmark_path,
+            variant_type=VariantType.PATCHED,
+            mode=adapter.get_mode(),
+            sanitizer=sanitizer,
+            language=adapter.lang,
+            commit=adapter.get_ref_commit() or adapter.get_base_commit(),
+            main_repo=adapter.main_repo,
+            patch_id=payload.patch.patch_id,
+            pov_id=payload.cpv_id,
+        )
+        return config.variant_name
+    except Exception as e:
+        logger.debug(
+            "Failed to resolve patched variant name for cleanup "
+            f"({payload.benchmark}/{payload.harness}/{payload.cpv_id}): {e}"
+        )
+        return None
+
+
+def _cleanup_patch_variant_artifacts(variant_name: Optional[str]) -> None:
+    """Remove patched variant artifacts after patch verification.
+
+    Cleans both the patch variant and its unittest variant:
+    - Docker images
+    - build/out + build/work artifacts
+    - isolated source dirs and project symlinks
+    """
+    if not variant_name:
+        return
+    try:
+        from crsbench.builder.infrastructure import OSSFuzzInfrastructure
+        from crsbench.utils.run_helper import get_oss_fuzz_root
+
+        infra = OSSFuzzInfrastructure(Path(get_oss_fuzz_root()))
+        for name in (variant_name, f"{variant_name}-unittest"):
+            infra.cleanup_docker_images(name)
+            infra.cleanup_variant(name)
+        logger.info(f"Removed patch verification artifacts for variant={variant_name}")
+    except Exception as e:
+        logger.warning(
+            f"Failed to remove patch verification artifacts for variant={variant_name}: {e}"
+        )
+
+
 def execute_patch_verify(payload_dict: dict[str, Any]) -> dict[str, Any]:
     """Execute a patch verify job (POV test + unit test). RQ job function.
 
@@ -391,42 +453,43 @@ def execute_patch_verify(payload_dict: dict[str, Any]) -> dict[str, Any]:
     benchmarks_root = get_evaluator_benchmarks_root()
     benchmark_path = resolve_benchmark_path(benchmarks_root, payload.benchmark)
 
-    # Discover POV path from benchmark directory
-    pov_path = (
-        benchmark_path
-        / ".aixcc"
-        / payload.harness
-        / payload.cpv_id
-        / "blobs"
-        / "pov_0.blob"
-    )
-    if not pov_path.exists():
-        error_msg = f"POV file not found at {pov_path}"
-        logger.error(error_msg)
-        return PatchVerifyResult(
-            trial_id=payload.trial_id,
-            benchmark=payload.benchmark,
-            harness=payload.harness,
-            cpv_id=payload.cpv_id,
-            patch_id=patch.patch_id,
-            status="error",
-            details=error_msg,
-            error=error_msg,
-            completed_at=time.time(),
-        ).to_dict()
-
-    # Build the patch build job ID (format matches BuildPatchVariantJob.job_id)
-    build_patch_job_id = (
-        f"build-patch/{payload.benchmark}/{payload.cpv_id}/{patch.patch_id}"
-    )
-
-    pov_test_passed: Optional[bool] = None
-    unit_test_passed: Optional[bool] = None
-    status = "error"
-    details = ""
-    error: Optional[str] = None
-
+    cleanup_variant_name = _resolve_patch_variant_name(payload, benchmark_path)
     try:
+        # Discover POV path from benchmark directory
+        pov_path = (
+            benchmark_path
+            / ".aixcc"
+            / payload.harness
+            / payload.cpv_id
+            / "blobs"
+            / "pov_0.blob"
+        )
+        if not pov_path.exists():
+            error_msg = f"POV file not found at {pov_path}"
+            logger.error(error_msg)
+            return PatchVerifyResult(
+                trial_id=payload.trial_id,
+                benchmark=payload.benchmark,
+                harness=payload.harness,
+                cpv_id=payload.cpv_id,
+                patch_id=patch.patch_id,
+                status="error",
+                details=error_msg,
+                error=error_msg,
+                completed_at=time.time(),
+            ).to_dict()
+
+        # Build the patch build job ID (format matches BuildPatchVariantJob.job_id)
+        build_patch_job_id = (
+            f"build-patch/{payload.benchmark}/{payload.cpv_id}/{patch.patch_id}"
+        )
+
+        pov_test_passed: Optional[bool] = None
+        unit_test_passed: Optional[bool] = None
+        status = "error"
+        details = ""
+        error: Optional[str] = None
+
         # Run POV test
         from crsbench.benchmark_ci.jobs.flat import PatchPovTestJob
 
@@ -471,22 +534,37 @@ def execute_patch_verify(payload_dict: dict[str, Any]) -> dict[str, Any]:
             status = "test_failed"
             details = unit_result.get("error", "Unit tests failed with patch")
 
+        return PatchVerifyResult(
+            trial_id=payload.trial_id,
+            benchmark=payload.benchmark,
+            harness=payload.harness,
+            cpv_id=payload.cpv_id,
+            patch_id=patch.patch_id,
+            pov_test_passed=pov_test_passed,
+            unit_test_passed=unit_test_passed,
+            status=status,
+            details=details,
+            error=error,
+            completed_at=time.time(),
+        ).to_dict()
+
     except Exception as e:
         logger.error(f"Patch verify failed for {patch.patch_id}: {e}")
         error = str(e)
         status = "error"
         details = str(e)
-
-    return PatchVerifyResult(
-        trial_id=payload.trial_id,
-        benchmark=payload.benchmark,
-        harness=payload.harness,
-        cpv_id=payload.cpv_id,
-        patch_id=patch.patch_id,
-        pov_test_passed=pov_test_passed,
-        unit_test_passed=unit_test_passed,
-        status=status,
-        details=details,
-        error=error,
-        completed_at=time.time(),
-    ).to_dict()
+        return PatchVerifyResult(
+            trial_id=payload.trial_id,
+            benchmark=payload.benchmark,
+            harness=payload.harness,
+            cpv_id=payload.cpv_id,
+            patch_id=patch.patch_id,
+            pov_test_passed=None,
+            unit_test_passed=None,
+            status=status,
+            details=details,
+            error=error,
+            completed_at=time.time(),
+        ).to_dict()
+    finally:
+        _cleanup_patch_variant_artifacts(cleanup_variant_name)

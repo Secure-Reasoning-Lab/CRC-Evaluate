@@ -13,6 +13,8 @@ from crsbench.distributed.patch_evaluator_jobs import (
     PatchBuildResult,
     PatchJobPayload,
     PatchVerifyResult,
+    _cleanup_patch_variant_artifacts,
+    execute_patch_verify,
 )
 
 
@@ -319,3 +321,78 @@ class TestPollPatchVerdicts:
         assert completed[0]["status"] == "error"
         assert "RuntimeError: build crashed" in completed[0]["error"]
         assert remaining == []
+
+
+class TestPatchVerifyCleanup:
+    """Tests for patched image cleanup in execute_patch_verify."""
+
+    @patch("crsbench.builder.infrastructure.OSSFuzzInfrastructure")
+    @patch("crsbench.utils.run_helper.get_oss_fuzz_root", return_value="/tmp/oss-fuzz")
+    def test_cleanup_removes_patch_and_unittest_variants(
+        self, mock_root: MagicMock, mock_infra_cls: MagicMock
+    ) -> None:
+        """Cleanup helper removes both patch and patch-unittest artifacts."""
+        assert mock_root is not None
+        mock_infra = MagicMock()
+        mock_infra_cls.return_value = mock_infra
+
+        _cleanup_patch_variant_artifacts("bench-asan-delta-patched-cpv_0-patch_0")
+
+        # main patch variant
+        mock_infra.cleanup_docker_images.assert_any_call(
+            "bench-asan-delta-patched-cpv_0-patch_0"
+        )
+        mock_infra.cleanup_variant.assert_any_call(
+            "bench-asan-delta-patched-cpv_0-patch_0"
+        )
+        # unittest variant
+        mock_infra.cleanup_docker_images.assert_any_call(
+            "bench-asan-delta-patched-cpv_0-patch_0-unittest"
+        )
+        mock_infra.cleanup_variant.assert_any_call(
+            "bench-asan-delta-patched-cpv_0-patch_0-unittest"
+        )
+
+    @patch("crsbench.distributed.patch_evaluator_jobs._cleanup_patch_variant_artifacts")
+    @patch(
+        "crsbench.distributed.patch_evaluator_jobs._resolve_patch_variant_name",
+        return_value="mock-bench-asan-delta-patched-cpv_0-patch_0",
+    )
+    @patch(
+        "crsbench.distributed.patch_evaluator_jobs.resolve_benchmark_path",
+        return_value=Path("/tmp/nonexistent-benchmark"),
+    )
+    @patch(
+        "crsbench.distributed.patch_evaluator_jobs.get_evaluator_benchmarks_root",
+        return_value=Path("/tmp"),
+    )
+    def test_cleanup_runs_on_early_return_when_pov_missing(
+        self,
+        mock_root: MagicMock,
+        mock_resolve: MagicMock,
+        mock_variant: MagicMock,
+        mock_cleanup: MagicMock,
+    ) -> None:
+        """Cleanup runs even when verify exits early due to missing POV file."""
+        assert mock_root is not None
+        assert mock_resolve is not None
+        assert mock_variant is not None
+        payload = PatchJobPayload(
+            experiment_name="exp",
+            trial_id="trial-1",
+            benchmark="mock-bench",
+            harness="h0",
+            cpv_id="cpv_0",
+            patch=EmbeddedPatch(
+                patch_id="patch_0",
+                pov_id="cpv_0",
+                patch_content_b64="ZHVtbXk=",  # "dummy"
+            ),
+        )
+
+        result = execute_patch_verify(payload.to_dict())
+        assert result["status"] == "error"
+        assert "POV file not found" in result["details"]
+        mock_cleanup.assert_called_once_with(
+            "mock-bench-asan-delta-patched-cpv_0-patch_0"
+        )
