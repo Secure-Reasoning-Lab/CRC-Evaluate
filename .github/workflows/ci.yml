@@ -158,6 +158,15 @@ jobs:
         with:
           require-docker: true
 
+      - name: Validate LiteLLM health and auth
+        env:
+          CRSBENCH_LLM_UPSTREAM_BASE_URL: ${{ secrets.CRSBENCH_LLM_UPSTREAM_BASE_URL }}
+          CRSBENCH_LLM_BASE_URL: ${{ secrets.CRSBENCH_LLM_BASE_URL || secrets.CRSBENCH_LLM_UPSTREAM_BASE_URL }}
+          CRSBENCH_LLM_UPSTREAM_MASTER_KEY: ${{ secrets.CRSBENCH_LLM_UPSTREAM_MASTER_KEY }}
+          CRSBENCH_LLM_UPSTREAM_API_KEY: ${{ secrets.CRSBENCH_LLM_UPSTREAM_API_KEY }}
+        run: |
+          uv run python scripts/ci-tests/litellm_preflight.py --mode external
+
       - name: Run validated smoke suites (parallel)
         env:
           # run-local.sh manages an isolated temporary Valkey on a random port.

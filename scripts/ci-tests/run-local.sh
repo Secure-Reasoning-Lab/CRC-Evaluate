@@ -318,6 +318,7 @@ if '$expected_cpv' not in cpvs:
 # The container/volume are cleaned up automatically after each smoke run.
 run_smoke_bugfinding() {
     run_stage "Stage 4a: Smoke Bugfinding (atlantis-multilang-given_fuzzer)"
+    run_litellm_preflight
     start_temp_valkey
     trap cleanup_temp_valkey EXIT
     local cpuset_flag=()
@@ -334,8 +335,15 @@ run_smoke_bugfinding() {
     success "Smoke bugfinding passed"
 }
 
+run_litellm_preflight() {
+    echo "Running LiteLLM preflight (health + runtime auth)..."
+    uv run python scripts/ci-tests/litellm_preflight.py --mode external || fail "LiteLLM preflight failed"
+    success "LiteLLM preflight passed"
+}
+
 run_smoke_bugfixing() {
     run_stage "Stage 4b: Smoke Bugfixing (crs-claude-code)"
+    run_litellm_preflight
     start_temp_valkey
     trap cleanup_temp_valkey EXIT
     local cpuset_flag=()
@@ -354,6 +362,7 @@ run_smoke_bugfixing() {
 
 run_smoke_parallel() {
     run_stage "Stage 4: Parallel Smoke (bugfinding + bugfixing)"
+    run_litellm_preflight
 
     # Run in parallel with disjoint cpusets by default.
     # Override with env vars if your machine has a different layout.
