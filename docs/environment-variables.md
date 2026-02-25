@@ -10,8 +10,6 @@ This page is the canonical index for CRSBench environment variables.
 | `CRSBENCH_REDIS_PASSWORD` | Password for Redis/Valkey auth (if enabled). |
 | `CRSBENCH_LLM_BASE_URL` | Immediate LiteLLM endpoint called directly. |
 | `CRSBENCH_LLM_UPSTREAM_BASE_URL` | Upstream/forwarding LiteLLM endpoint. |
-| `CRSBENCH_LLM_MASTER_KEY` | LiteLLM key-management/tracking credential. |
-| `CRSBENCH_LLM_UPSTREAM_API_KEY` | Runtime LiteLLM API key (fixed-key mode). |
 | `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` | Upstream LiteLLM key-management/tracking credential (`external` mode preferred). |
 | `CRSBENCH_LLM_UPSTREAM_API_KEY` | Upstream LiteLLM runtime API key (`external` mode preferred). |
 

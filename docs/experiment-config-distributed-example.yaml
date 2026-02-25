@@ -244,7 +244,7 @@ hints_enabled: false  # default: false
 # Possible values: "external" | "self_hosted"
 # external: use external LiteLLM endpoint directly
 # - uses CRSBENCH_LLM_UPSTREAM_BASE_URL (preferred) or CRSBENCH_LLM_BASE_URL
-# - requires CRSBENCH_LLM_UPSTREAM_API_KEY or CRSBENCH_LLM_MASTER_KEY
+# - requires CRSBENCH_LLM_UPSTREAM_API_KEY or CRSBENCH_LLM_UPSTREAM_MASTER_KEY
 # self_hosted: reserved, not implemented yet
 litellm_mode: external  # default: external
 

@@ -999,7 +999,7 @@ class TestExperimentConfigSchema:
         monkeypatch.delenv("CRSBENCH_LLM_BASE_URL", raising=False)
         monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_BASE_URL", raising=False)
         monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_API_KEY", raising=False)
-        monkeypatch.delenv("CRSBENCH_LLM_MASTER_KEY", raising=False)
+        monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_MASTER_KEY", raising=False)
 
         with pytest.raises(PydanticValidationError) as exc_info:
             ExperimentConfig(
@@ -1023,7 +1023,7 @@ class TestExperimentConfigSchema:
         monkeypatch.delenv("CRSBENCH_LLM_BASE_URL", raising=False)
         monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_BASE_URL", raising=False)
         monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_API_KEY", raising=False)
-        monkeypatch.delenv("CRSBENCH_LLM_MASTER_KEY", raising=False)
+        monkeypatch.delenv("CRSBENCH_LLM_UPSTREAM_MASTER_KEY", raising=False)
 
         config = ExperimentConfig(
             experiment="test",
@@ -1731,7 +1731,7 @@ class TestIntegrationAllConfigs:
         """Test validation of docs/experiment-config-example.yaml."""
         monkeypatch.setenv("CRSBENCH_LLM_BASE_URL", "http://litellm:4000")
         monkeypatch.setenv("CRSBENCH_LLM_UPSTREAM_BASE_URL", "http://litellm:4000")
-        monkeypatch.setenv("CRSBENCH_LLM_MASTER_KEY", "sk-test")
+        monkeypatch.setenv("CRSBENCH_LLM_UPSTREAM_MASTER_KEY", "sk-test")
         monkeypatch.setenv("CRSBENCH_LLM_UPSTREAM_API_KEY", "sk-test")
         # Use Path to construct path relative to test file
         test_dir = Path(__file__).parent

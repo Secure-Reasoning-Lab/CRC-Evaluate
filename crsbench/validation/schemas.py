@@ -1104,7 +1104,7 @@ class ExperimentConfig(BaseModel):
     litellm_mode: Optional[Literal["external", "self_hosted"]] = Field(
         default="external",
         description="LiteLLM mode: 'external' uses an external LiteLLM endpoint "
-        "(CRSBENCH_LLM_UPSTREAM_BASE_URL/CRSBENCH_LLM_BASE_URL + CRSBENCH_LLM_UPSTREAM_API_KEY or CRSBENCH_LLM_MASTER_KEY), "
+        "(CRSBENCH_LLM_UPSTREAM_BASE_URL/CRSBENCH_LLM_BASE_URL + CRSBENCH_LLM_UPSTREAM_API_KEY or CRSBENCH_LLM_UPSTREAM_MASTER_KEY), "
         "'self_hosted' is reserved and not implemented yet, "
         "null skips LiteLLM entirely (for CRS that don't need LLM). "
         "Default is 'external'.",

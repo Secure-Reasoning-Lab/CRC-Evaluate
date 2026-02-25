@@ -143,7 +143,7 @@ class LiteLLMTracker:
     Environment Variables:
         CRSBENCH_LLM_BASE_URL / CRSBENCH_LLM_UPSTREAM_BASE_URL:
             LiteLLM URL(s) used for runtime and/or forwarding.
-        CRSBENCH_LLM_MASTER_KEY: Master key for key management APIs
+        CRSBENCH_LLM_UPSTREAM_MASTER_KEY: Master key for key management APIs
     """
 
     def __init__(
@@ -179,7 +179,7 @@ class LiteLLMTracker:
             )
         if not self.master_key:
             raise LiteLLMTrackerError(
-                "CRSBENCH_LLM_MASTER_KEY not set. Required for LLM tracking."
+                "CRSBENCH_LLM_UPSTREAM_MASTER_KEY not set. Required for LLM tracking."
             )
 
         # Remove trailing slash from base URL

@@ -134,7 +134,7 @@ seed_corpus_enabled: false
 # LiteLLM mode: 'external' or 'self_hosted'
 # - external: Uses external LiteLLM service
 #   (CRSBENCH_LLM_UPSTREAM_BASE_URL or CRSBENCH_LLM_BASE_URL, plus
-#    CRSBENCH_LLM_UPSTREAM_API_KEY or CRSBENCH_LLM_MASTER_KEY)
+#    CRSBENCH_LLM_UPSTREAM_API_KEY or CRSBENCH_LLM_UPSTREAM_MASTER_KEY)
 # - self_hosted: Reserved, not implemented yet
 # Default: external
 litellm_mode: external
