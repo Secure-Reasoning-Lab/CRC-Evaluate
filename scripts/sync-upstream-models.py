@@ -78,7 +78,7 @@ def generate_proxy_config(upstream_url: str, models: list[dict]) -> dict:
             "litellm_params": {
                 "model": f"litellm_proxy/{model_name}",  # Prefix with litellm_proxy/
                 "api_base": "os.environ/CRSBENCH_LLM_UPSTREAM_BASE_URL",
-                "api_key": "os.environ/CRSBENCH_LLM_API_KEY"
+                "api_key": "os.environ/CRSBENCH_LLM_UPSTREAM_API_KEY"
             }
         })
 
@@ -170,7 +170,7 @@ def write_config(config_path: Path, config: dict) -> None:
         f.write("#\n")
         f.write("# Environment Variables Required:\n")
         f.write("#   CRSBENCH_LLM_UPSTREAM_BASE_URL - URL of upstream LiteLLM\n")
-        f.write("#   CRSBENCH_LLM_API_KEY          - API key for upstream LiteLLM\n")
+        f.write("#   CRSBENCH_LLM_UPSTREAM_API_KEY          - API key for upstream LiteLLM\n")
         f.write("#\n\n")
 
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
@@ -185,7 +185,7 @@ def main():
         epilog="""
 Examples:
   # Use environment variables from .env file
-  # (set CRSBENCH_LLM_UPSTREAM_BASE_URL and CRSBENCH_LLM_API_KEY in .env)
+  # (set CRSBENCH_LLM_UPSTREAM_BASE_URL and CRSBENCH_LLM_UPSTREAM_API_KEY in .env)
   python scripts/sync-upstream-models.py
 
   # Specify via command line (overrides .env)
@@ -211,7 +211,7 @@ Examples:
     )
     parser.add_argument(
         '--api-key',
-        help='API key for upstream LiteLLM (default: CRSBENCH_LLM_API_KEY env var)'
+        help='API key for upstream LiteLLM (default: CRSBENCH_LLM_UPSTREAM_API_KEY env var)'
     )
     parser.add_argument(
         '--output',
@@ -241,10 +241,10 @@ Examples:
         sys.exit(1)
 
     # Get API key
-    api_key = args.api_key or os.getenv('CRSBENCH_LLM_API_KEY')
+    api_key = args.api_key or os.getenv('CRSBENCH_LLM_UPSTREAM_API_KEY')
     if not api_key:
         print("Error: API key not provided", file=sys.stderr)
-        print("Set CRSBENCH_LLM_API_KEY env var or use --api-key", file=sys.stderr)
+        print("Set CRSBENCH_LLM_UPSTREAM_API_KEY env var or use --api-key", file=sys.stderr)
         sys.exit(1)
 
     try:

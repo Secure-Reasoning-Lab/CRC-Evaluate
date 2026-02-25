@@ -60,46 +60,31 @@ def make_bugfind_config_dict(tmp_path: Path, **overrides: Any) -> dict[str, Any]
     return base
 
 
-def _create_submit_dir(
+def _create_exchange_pov_dir(
     work_dir: Path,
-    crs_name: str,
-    harness_name: str,
     pov_filenames: list[str] | None = None,
 ) -> Path:
-    """Create a SUBMIT_DIR structure with optional mock POV files.
+    """Create an EXCHANGE_DIR POV structure with optional mock POV files.
 
-    Returns the harness-level SUBMIT_DIR path.
+    Returns the exchange POV directory path.
     """
-    submit = (
-        work_dir
-        / "crs_compose"
-        / "abc123hash"
-        / "address"
-        / "runs"
-        / "run-0"
-        / "crs"
-        / crs_name
-        / "target_img"
-        / "SUBMIT_DIR"
-        / harness_name
-    )
-    pov_dir = submit / "povs"
+    pov_dir = work_dir / "exchange" / "povs"
     pov_dir.mkdir(parents=True)
 
     for name in pov_filenames or ["crash-001", "crash-002"]:
         (pov_dir / name).write_bytes(b"\xde\xad" * 4)
 
-    return submit
+    return pov_dir
 
 
-def _run_side_effect_factory(crs_name: str, harness_name: str) -> Any:
-    """Create a side_effect that populates SUBMIT_DIR when run is called."""
+def _run_side_effect_factory(_crs_name: str, _harness_name: str) -> Any:
+    """Create a side_effect that populates EXCHANGE_DIR when run is called."""
 
     def _side_effect(*args: Any, **_kwargs: Any) -> tuple[str, str, int, bool]:
         cmd = args[0]
         work_dir_idx = cmd.index("--work-dir") + 1
         work_dir = Path(cmd[work_dir_idx])
-        _create_submit_dir(work_dir, crs_name, harness_name)
+        _create_exchange_pov_dir(work_dir)
         return ("output", "", 0, False)
 
     return _side_effect

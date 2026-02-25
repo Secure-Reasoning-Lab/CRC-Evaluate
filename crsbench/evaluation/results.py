@@ -66,6 +66,7 @@ class EvaluationReport:
     patches_generated: int = 0  # Number of patches generated
 
     # Patch verification results
+    patches_verified: int = 0  # Number of produced patches that were verified
     patches_valid: int = 0  # VALID - patch fixes vulnerability and passes tests
     patches_build_failed: int = 0  # BUILD_FAILED - patch failed to build
     patches_pov_triggers: int = 0  # POV_STILL_TRIGGERS - vulnerability not fixed
@@ -151,6 +152,7 @@ class ResultCollector:
         self.total_input_povs = 0
         self.patches_generated = 0
         # Patch verification statistics
+        self.patches_verified = 0
         self.patches_valid = 0
         self.patches_build_failed = 0
         self.patches_pov_triggers = 0
@@ -206,16 +208,17 @@ class ResultCollector:
         )
 
     def set_patch_stats(
-        self, total_input_povs: int, results: List["PatchVerificationResult"]
+        self,
+        total_input_povs: int,
+        patches_generated: int,
+        verification_results: List["PatchVerificationResult"],
     ) -> None:
         """Set patch statistics from verification results.
 
-        Similar to set_pov_stats(), this derives all patch statistics from
-        verification results.
-
         Args:
             total_input_povs: Number of POVs provided to the patch CRS
-            results: List of PatchVerificationResult objects
+            patches_generated: Number of patches produced by CRS artifacts
+            verification_results: List of PatchVerificationResult objects
 
         Note:
             Maps PatchVerificationStatus to statistics:
@@ -228,23 +231,30 @@ class ResultCollector:
         from crsbench.evaluation.verification.models import PatchVerificationStatus
 
         self.total_input_povs = total_input_povs
-        self.patches_generated = len(results)
+        self.patches_generated = patches_generated
+        self.patches_verified = len(verification_results)
 
         self.patches_valid = sum(
-            1 for r in results if r.status == PatchVerificationStatus.VALID
+            1 for r in verification_results if r.status == PatchVerificationStatus.VALID
         )
         self.patches_build_failed = sum(
-            1 for r in results if r.status == PatchVerificationStatus.BUILD_FAILED
+            1
+            for r in verification_results
+            if r.status == PatchVerificationStatus.BUILD_FAILED
         )
         self.patches_pov_triggers = sum(
-            1 for r in results if r.status == PatchVerificationStatus.POV_STILL_TRIGGERS
+            1
+            for r in verification_results
+            if r.status == PatchVerificationStatus.POV_STILL_TRIGGERS
         )
         self.patches_test_failed = sum(
-            1 for r in results if r.status == PatchVerificationStatus.TEST_FAILED
+            1
+            for r in verification_results
+            if r.status == PatchVerificationStatus.TEST_FAILED
         )
         self.patches_error = sum(
             1
-            for r in results
+            for r in verification_results
             if r.status
             in (PatchVerificationStatus.ERROR, PatchVerificationStatus.PENDING)
         )
@@ -267,6 +277,7 @@ class ResultCollector:
             povs_error=self.povs_error,
             total_input_povs=self.total_input_povs,
             patches_generated=self.patches_generated,
+            patches_verified=self.patches_verified,
             patches_valid=self.patches_valid,
             patches_build_failed=self.patches_build_failed,
             patches_pov_triggers=self.patches_pov_triggers,
@@ -300,6 +311,7 @@ class TrialMetadata(BaseModel):
     # Worker identification (for distributed execution)
     worker_machine: Optional[str] = None
     worker_trial_dir: Optional[str] = None
+    target_cpv_id: Optional[str] = None
 
 
 class TrialResult(BaseModel):
@@ -321,6 +333,7 @@ class TrialResult(BaseModel):
     # Evaluation configuration
     mode: Optional[str] = None  # "delta" or "full"
     sanitizer: Optional[str] = None  # "address", "memory", "undefined"
+    target_cpv_id: Optional[str] = None
 
     # Execution status
     success: bool
@@ -334,6 +347,7 @@ class TrialResult(BaseModel):
 
     # Bug-fixing CRS metrics
     patches_generated: int = 0
+    patches_verified: int = 0
     patches_valid: int = 0
 
     # Full report (as dict for flexibility)
@@ -352,9 +366,9 @@ class TrialResult(BaseModel):
     @property
     def patch_valid_rate(self) -> float:
         """Patch validation rate (for bug-fixing CRS)."""
-        if self.patches_generated == 0:
+        if self.patches_verified == 0:
             return 0.0
-        return self.patches_valid / self.patches_generated
+        return self.patches_valid / self.patches_verified
 
     def log_summary(self) -> str:
         """Generate a summary log message based on CRS type."""
@@ -364,7 +378,8 @@ class TrialResult(BaseModel):
         )
         if self.crs_type == "bug-fixing":
             return (
-                f"{base}{self.patches_generated} patches generated, "
+                f"{base}{self.patches_generated} patches produced, "
+                f"{self.patches_verified} verified, "
                 f"{self.patches_valid} valid in {self.execution_time:.1f}s"
             )
         return (
@@ -410,6 +425,7 @@ class TrialResult(BaseModel):
             povs_found=result.povs_found,
             total_povs=result.total_povs,
             patches_generated=result.report.patches_generated,
+            patches_verified=result.report.patches_verified,
             patches_valid=result.report.patches_valid,
             report=result.report.to_dict(),
             metadata=metadata,

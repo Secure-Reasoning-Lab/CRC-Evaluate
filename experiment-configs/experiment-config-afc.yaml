@@ -70,6 +70,8 @@ skip_litellm: true
 # Distributed mode configuration
 redis_host: localhost
 
+# Persistent build cache
+
 # Worker Configuration (for distributed mode)
 # 7 trial jobs × 16 cores = 112 cores; 16 cores reserved for evaluator
 worker:
@@ -77,4 +79,3 @@ worker:
   build_workers: 16
   verify_workers: 16
   cleanup_after_trial: true
-

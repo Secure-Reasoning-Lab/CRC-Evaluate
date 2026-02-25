@@ -58,7 +58,7 @@ class CRSRunJob(Job):
     run_timeout: int = 7200
     snapshot_interval: int = 300
     build_job_id: str = ""
-    litellm_mode: Optional[str] = "passthrough"
+    litellm_mode: Optional[str] = "external"
     crs_type: str = "bug-finding"  # "bug-finding" or "bug-fixing"
     early_stop_enabled: bool = True
     executor_config: dict[str, Any] = field(default_factory=dict)
@@ -146,7 +146,7 @@ class CRSRunJob(Job):
                 registry_dir=self.registry_dir,
                 benchmarks_root=self.benchmarks_root,
                 crs_configs_dir=self.crs_configs_dir,
-                litellm_mode=self.litellm_mode or "passthrough",
+                litellm_mode=self.litellm_mode or "external",
                 mode=self.crs_type,
             )
 

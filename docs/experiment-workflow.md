@@ -146,6 +146,16 @@ crses:
   - atlantis-c
 benchmarks:
   - libjpeg-turbo
+  # Optional selectors:
+  # - benchmark-only
+  # - benchmark -> harness list
+  # - benchmark -> harness -> cpv list
+  # - afc-libxml2-delta-01:
+  #     - xml
+  # - afc-libxml2-delta-02:
+  #     xml:
+  #       - cpv_0
+  #       - cpv_1
 
 # No LLM needed for pure fuzzers
 skip_litellm: true
@@ -360,12 +370,12 @@ Always clean queues before re-running an experiment with the same name or after 
 
 ## CI Smoke Secrets
 
-For GitHub smoke workflows (`ci.yml` and `smoke-crs-regression.yml`) using bug-fixing CRS in passthrough mode, configure these repository secrets:
+For GitHub smoke workflows (`ci.yml` and `smoke-crs-regression.yml`) using bug-fixing CRS in external mode, configure these repository secrets:
 
 - `CRSBENCH_LLM_UPSTREAM_BASE_URL`
-- `CRSBENCH_LLM_API_KEY` (or `CRSBENCH_LLM_MASTER_KEY`)
+- `CRSBENCH_LLM_UPSTREAM_API_KEY` (or `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`)
 
-Smoke bug-fixing runs use `llm_tracking_enabled: false`, so `CRSBENCH_LLM_MASTER_KEY` is optional for smoke.
+Smoke bug-fixing runs use `llm_tracking_enabled: false`, so `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` is optional for smoke.
 
 ## Troubleshooting
 

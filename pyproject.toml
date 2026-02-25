@@ -99,7 +99,6 @@ extend-exclude = [
     "oss-crs-registry/",
     "snapshot-examples/",
     "scripts/",
-    "integration_tests/",
 ]
 
 [tool.ruff.lint]

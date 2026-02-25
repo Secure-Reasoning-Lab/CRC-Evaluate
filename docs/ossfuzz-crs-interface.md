@@ -21,10 +21,13 @@ CRSBench invokes `oss-crs` with these core arguments:
 
 - `--compose-file <trial>/crs-compose.yaml`
 - `--work-dir <trial>/oss-crs-workdir`
-- `--target-proj-path <trial>/staged/<benchmark>`
+- `--target-path <trial>/staged/<benchmark>` (`--target-proj-path` compatibility alias)
 - `--target-harness <harness-name>` (run phase)
 - `--sanitizer <address|memory|undefined>`
 - `--run-id <id>` (artifacts + run)
+
+Note: CRSBench currently does not pass `--target-source-path`; staged benchmark
+input under `--target-path` is the single source input path in this integration.
 
 ### Why `oss-crs artifacts` matters
 

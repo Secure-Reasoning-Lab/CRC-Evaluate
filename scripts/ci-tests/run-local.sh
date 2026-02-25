@@ -4,24 +4,24 @@
 # CI runs: checks → format → sanity-mock → e2e
 #
 # Usage:
-#   ./ci-tests/run-local.sh              # Run full CI pipeline (checks + format + mock + smoke)
-#   ./ci-tests/run-local.sh checks       # Stage 1: typecheck, lint, format, unit tests
-#   ./ci-tests/run-local.sh format       # Stage 2a: format validation (sanity benchmarks)
-#   ./ci-tests/run-local.sh sanity       # Stage 2b: all checks (mock-c + mock-java)
-#   ./ci-tests/run-local.sh e2e          # Stage 3: bug finding E2E
-#   ./ci-tests/run-local.sh smoke        # Stage 4: parallel smoke (bugfinding + bugfixing)
-#   ./ci-tests/run-local.sh smoke-bugfinding
-#   ./ci-tests/run-local.sh smoke-bugfixing
+#   ./scripts/ci-tests/run-local.sh              # Run full CI pipeline (checks + format + mock + smoke)
+#   ./scripts/ci-tests/run-local.sh checks       # Stage 1: typecheck, lint, format, unit tests
+#   ./scripts/ci-tests/run-local.sh format       # Stage 2a: format validation (sanity benchmarks)
+#   ./scripts/ci-tests/run-local.sh sanity       # Stage 2b: all checks (mock-c + mock-java)
+#   ./scripts/ci-tests/run-local.sh e2e          # Stage 3: bug finding E2E
+#   ./scripts/ci-tests/run-local.sh smoke        # Stage 4: parallel smoke (bugfinding + bugfixing)
+#   ./scripts/ci-tests/run-local.sh smoke-bugfinding
+#   ./scripts/ci-tests/run-local.sh smoke-bugfixing
 #
 # TODO: re-enable after adding HuggingFace download to CI
-#   ./ci-tests/run-local.sh all          # Run all stages including integration
-#   ./ci-tests/run-local.sh sanity-real  # Stage 2c: all checks (afc-xz + json-java)
-#   ./ci-tests/run-local.sh integration  # Local only: real projects (libxml2, commons-compress)
+#   ./scripts/ci-tests/run-local.sh all          # Run all stages including integration
+#   ./scripts/ci-tests/run-local.sh sanity-real  # Stage 2c: all checks (afc-xz + json-java)
+#   ./scripts/ci-tests/run-local.sh integration  # Local only: real projects (libxml2, commons-compress)
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+ROOT_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 
 cd "$ROOT_DIR"
 
@@ -50,8 +50,32 @@ SMOKE_REDIS_PORT=""
 SMOKE_ORIG_REDIS_HOST=""
 SMOKE_HAD_ORIG_REDIS_HOST=0
 
+cleanup_stale_temp_valkey() {
+    local stale_containers stale_volumes
+    if ! command -v docker >/dev/null 2>&1; then
+        return 0
+    fi
+
+    stale_containers=$(docker ps -a --filter "name=crsbench-smoke-valkey-" --format '{{.Names}}' 2>/dev/null || true)
+    if [ -n "$stale_containers" ]; then
+        while IFS= read -r container; do
+            [ -z "$container" ] && continue
+            docker rm -f "$container" >/dev/null 2>&1 || true
+        done <<< "$stale_containers"
+    fi
+
+    stale_volumes=$(docker volume ls --filter "name=crsbench_smoke_valkey_" --format '{{.Name}}' 2>/dev/null || true)
+    if [ -n "$stale_volumes" ]; then
+        while IFS= read -r volume; do
+            [ -z "$volume" ] && continue
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+        done <<< "$stale_volumes"
+    fi
+}
+
 start_temp_valkey() {
     local attempt port name volume
+    cleanup_stale_temp_valkey
     if [ "${SMOKE_HAD_ORIG_REDIS_HOST}" -eq 0 ] && [ -n "${CRSBENCH_REDIS_HOST:-}" ]; then
         SMOKE_ORIG_REDIS_HOST="${CRSBENCH_REDIS_HOST}"
         SMOKE_HAD_ORIG_REDIS_HOST=1
@@ -233,7 +257,7 @@ run_e2e() {
     sed \
         -e "s|PLACEHOLDER_EXPERIMENT|$EXPERIMENT_DIR|" \
         -e "s|PLACEHOLDER_REPORT|$REPORT_DIR|" \
-        ci-tests/pov-e2e-test.yaml > /tmp/pov-e2e-config.yaml
+        scripts/ci-tests/local-e2e-bugfinding.yaml > /tmp/pov-e2e-config.yaml
 
     echo "Running E2E experiment (max 30 minutes, early stop enabled)..."
     uv run crsbench run --experiment-config /tmp/pov-e2e-config.yaml || fail "E2E experiment failed"
@@ -294,13 +318,14 @@ if '$expected_cpv' not in cpvs:
 # The container/volume are cleaned up automatically after each smoke run.
 run_smoke_bugfinding() {
     run_stage "Stage 4a: Smoke Bugfinding (atlantis-multilang-given_fuzzer)"
+    run_litellm_preflight
     start_temp_valkey
     trap cleanup_temp_valkey EXIT
     local cpuset_flag=()
     if [ "${SMOKE_NO_CPUSET:-1}" = "1" ]; then
         cpuset_flag=(--no-cpuset)
     fi
-    uv run python ci-tests/smoke_runner.py \
+    uv run python scripts/ci-tests/smoke_runner.py \
         --suite bugfinding \
         "${cpuset_flag[@]}" \
         --worker-cores 16 \
@@ -310,15 +335,22 @@ run_smoke_bugfinding() {
     success "Smoke bugfinding passed"
 }
 
+run_litellm_preflight() {
+    echo "Running LiteLLM preflight (health + runtime auth)..."
+    uv run python scripts/ci-tests/litellm_preflight.py --mode external || fail "LiteLLM preflight failed"
+    success "LiteLLM preflight passed"
+}
+
 run_smoke_bugfixing() {
     run_stage "Stage 4b: Smoke Bugfixing (crs-claude-code)"
+    run_litellm_preflight
     start_temp_valkey
     trap cleanup_temp_valkey EXIT
     local cpuset_flag=()
     if [ "${SMOKE_NO_CPUSET:-1}" = "1" ]; then
         cpuset_flag=(--no-cpuset)
     fi
-    uv run python ci-tests/smoke_runner.py \
+    uv run python scripts/ci-tests/smoke_runner.py \
         --suite bugfixing \
         "${cpuset_flag[@]}" \
         --worker-cores 16 \
@@ -330,6 +362,7 @@ run_smoke_bugfixing() {
 
 run_smoke_parallel() {
     run_stage "Stage 4: Parallel Smoke (bugfinding + bugfixing)"
+    run_litellm_preflight
 
     # Run in parallel with disjoint cpusets by default.
     # Override with env vars if your machine has a different layout.
@@ -344,7 +377,7 @@ run_smoke_parallel() {
     start_temp_valkey
     trap cleanup_temp_valkey EXIT
 
-    uv run python ci-tests/smoke_runner.py \
+    uv run python scripts/ci-tests/smoke_runner.py \
         --suite bugfinding \
         "${cpuset_flag[@]}" \
         --worker-cpuset "$bugfinding_cpuset" \
@@ -352,7 +385,7 @@ run_smoke_parallel() {
         --keep-workspace &
     pid1=$!
 
-    uv run python ci-tests/smoke_runner.py \
+    uv run python scripts/ci-tests/smoke_runner.py \
         --suite bugfixing \
         "${cpuset_flag[@]}" \
         --worker-cpuset "$bugfixing_cpuset" \

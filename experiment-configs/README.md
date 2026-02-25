@@ -8,4 +8,4 @@ Store experiment configurations as:
 Notes:
 
 - Keep machine-local paths out of shared templates when possible.
-- Use `integration_tests/test-experiment-config*.yaml` for test-only configs.
+- Use `scripts/ci-tests/smoke-manifest.yaml` and `scripts/ci-tests/run-local.sh smoke` for smoke/integration-style test scenarios.

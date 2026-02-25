@@ -143,7 +143,7 @@ class LiteLLMTracker:
     Environment Variables:
         CRSBENCH_LLM_BASE_URL / CRSBENCH_LLM_UPSTREAM_BASE_URL:
             LiteLLM URL(s) used for runtime and/or forwarding.
-        CRSBENCH_LLM_MASTER_KEY: Master key for key management APIs
+        CRSBENCH_LLM_UPSTREAM_MASTER_KEY: Master key for key management APIs
     """
 
     def __init__(
@@ -166,7 +166,7 @@ class LiteLLMTracker:
             LiteLLMTrackerError: If required environment variables are not set.
         """
         runtime_env = resolve_litellm_runtime_env(
-            os.environ.get("CRSBENCH_LLM_MODE", "passthrough")
+            os.environ.get("CRSBENCH_LLM_MODE", "external")
         )
         self.base_url = base_url or runtime_env.tracking_base_url
         self.master_key = master_key or runtime_env.master_key
@@ -179,7 +179,7 @@ class LiteLLMTracker:
             )
         if not self.master_key:
             raise LiteLLMTrackerError(
-                "CRSBENCH_LLM_MASTER_KEY not set. Required for LLM tracking."
+                "CRSBENCH_LLM_UPSTREAM_MASTER_KEY not set. Required for LLM tracking."
             )
 
         # Remove trailing slash from base URL
@@ -938,6 +938,6 @@ def is_tracking_available() -> bool:
         True if resolved tracking URL and master key are set.
     """
     runtime_env = resolve_litellm_runtime_env(
-        os.environ.get("CRSBENCH_LLM_MODE", "passthrough")
+        os.environ.get("CRSBENCH_LLM_MODE", "external")
     )
     return bool(runtime_env.tracking_base_url and runtime_env.master_key)

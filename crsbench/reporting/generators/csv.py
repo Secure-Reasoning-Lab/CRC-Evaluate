@@ -1,6 +1,8 @@
 """CSV report generator for CRSBench experiment results."""
 
 import csv
+import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -165,6 +167,173 @@ class CSVReportGenerator:
             logger.debug(f"Generated combined report CSV: {combined_csv}")
 
         return output_files
+
+    def generate_patch_analysis_report(self, experiment_dir: Path) -> Path:
+        """Generate patch analysis CSV from per-trial artifacts.
+
+        Columns:
+            crs, benchmark, harness, cpv, mode, sanitizer, status,
+            patch_generated_count, verified_valid_count, verified_total_count,
+            no_crash_all_verified, unittest_all_verified,
+            verification_build_failed, verification_pov_still_triggers,
+            verification_test_failed, verification_error,
+            elapsed_seconds, llm_cost_usd, llm_requests, trial_dir
+        """
+        out_path = self.output_dir / "patch_analysis.csv"
+        rows: list[dict[str, Any]] = []
+
+        for trial_dir in sorted(experiment_dir.rglob("trial-*")):
+            if not trial_dir.is_dir():
+                continue
+
+            metadata_path = trial_dir / "metadata.json"
+            if not metadata_path.exists():
+                continue
+
+            try:
+                metadata = json.loads(metadata_path.read_text())
+            except Exception:
+                continue
+
+            status = self._resolve_trial_status(trial_dir)
+            cpv_id = metadata.get("target_cpv_id")
+            run_mode = metadata.get("build_mode")
+            sanitizer = metadata.get("sanitizer")
+
+            patch_verif_path = trial_dir / "patch_verification_results.json"
+            patch_data: dict[str, Any] = {}
+            if patch_verif_path.exists():
+                try:
+                    patch_data = json.loads(patch_verif_path.read_text())
+                except Exception:
+                    patch_data = {}
+
+            summary = (
+                patch_data.get("summary", {}) if isinstance(patch_data, dict) else {}
+            )
+            results = (
+                patch_data.get("results", []) if isinstance(patch_data, dict) else []
+            )
+            if not isinstance(results, list):
+                results = []
+
+            patch_generated = int(summary.get("patches_generated", 0) or 0)
+            if patch_generated == 0:
+                patch_generated = len(
+                    list((trial_dir / "output" / "patches").glob("*.diff"))
+                )
+
+            verified_valid = int(summary.get("valid", 0) or 0)
+            verified_total = len(results)
+            no_crash_all_verified = bool(
+                verified_total > 0
+                and all(r.get("pov_test_passed") is True for r in results)
+            )
+            unittest_all_verified = bool(
+                verified_total > 0
+                and all(r.get("unit_tests_passed") is True for r in results)
+            )
+
+            llm_cost, llm_requests = self._load_llm_usage(trial_dir)
+            elapsed_seconds = self._extract_elapsed_seconds(trial_dir / "worker.log")
+
+            rows.append(
+                {
+                    "crs": metadata.get("crs", ""),
+                    "benchmark": metadata.get("benchmark", ""),
+                    "harness": metadata.get("harness", ""),
+                    "cpv": cpv_id or "",
+                    "mode": run_mode or "",
+                    "sanitizer": sanitizer or "",
+                    "status": status,
+                    "patch_generated_count": patch_generated,
+                    "verified_valid_count": verified_valid,
+                    "verified_total_count": verified_total,
+                    "no_crash_all_verified": no_crash_all_verified,
+                    "unittest_all_verified": unittest_all_verified,
+                    "verification_build_failed": int(
+                        summary.get("build_failed", 0) or 0
+                    ),
+                    "verification_pov_still_triggers": int(
+                        summary.get("pov_still_triggers", 0) or 0
+                    ),
+                    "verification_test_failed": int(summary.get("test_failed", 0) or 0),
+                    "verification_error": int(summary.get("error", 0) or 0),
+                    "elapsed_seconds": elapsed_seconds,
+                    "llm_cost_usd": llm_cost,
+                    "llm_requests": llm_requests,
+                    "trial_dir": str(trial_dir),
+                }
+            )
+
+        fieldnames = [
+            "crs",
+            "benchmark",
+            "harness",
+            "cpv",
+            "mode",
+            "sanitizer",
+            "status",
+            "patch_generated_count",
+            "verified_valid_count",
+            "verified_total_count",
+            "no_crash_all_verified",
+            "unittest_all_verified",
+            "verification_build_failed",
+            "verification_pov_still_triggers",
+            "verification_test_failed",
+            "verification_error",
+            "elapsed_seconds",
+            "llm_cost_usd",
+            "llm_requests",
+            "trial_dir",
+        ]
+        self._write_csv_rows(out_path, rows, fieldnames)
+        logger.debug(f"Generated patch analysis CSV: {out_path}")
+        return out_path
+
+    @staticmethod
+    def _resolve_trial_status(trial_dir: Path) -> str:
+        if (trial_dir / ".success").exists():
+            return "finished"
+        if (trial_dir / ".fail").exists():
+            return "failed"
+        if (trial_dir / ".started").exists():
+            return "started"
+        return "running"
+
+    @staticmethod
+    def _load_llm_usage(trial_dir: Path) -> tuple[float, int]:
+        llm_path = trial_dir / "llm-usage.json"
+        if not llm_path.exists():
+            return 0.0, 0
+        try:
+            data = json.loads(llm_path.read_text())
+            return (
+                float(data.get("total_cost_usd", 0.0) or 0.0),
+                int(data.get("request_count", 0) or 0),
+            )
+        except Exception:
+            return 0.0, 0
+
+    @staticmethod
+    def _extract_elapsed_seconds(worker_log_path: Path) -> float | None:
+        if not worker_log_path.exists():
+            return None
+        try:
+            text = worker_log_path.read_text(errors="ignore")
+        except Exception:
+            return None
+
+        matches = re.findall(
+            r"\[Trial\s+\d+\]\s+Completed.* in ([0-9]+(?:\.[0-9]+)?)s", text
+        )
+        if not matches:
+            return None
+        try:
+            return float(matches[-1])
+        except ValueError:
+            return None
 
     def _format_trial_row(self, trial_metrics: dict[str, Any]) -> dict[str, Any]:
         """Format trial metrics into CSV row.

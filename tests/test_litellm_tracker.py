@@ -27,7 +27,7 @@ class TestLiteLLMTracker:
             os.environ,
             {
                 "CRSBENCH_LLM_BASE_URL": "http://litellm:4000",
-                "CRSBENCH_LLM_MASTER_KEY": "sk-master-key-123",
+                "CRSBENCH_LLM_UPSTREAM_MASTER_KEY": "sk-master-key-123",
             },
             clear=True,
         ):
@@ -39,7 +39,7 @@ class TestLiteLLMTracker:
             os.environ,
             {
                 "CRSBENCH_LLM_BASE_URL": "http://litellm:4000",
-                "CRSBENCH_LLM_MASTER_KEY": "sk-master-key-123",
+                "CRSBENCH_LLM_UPSTREAM_MASTER_KEY": "sk-master-key-123",
             },
             clear=True,
         ):
@@ -58,7 +58,9 @@ class TestLiteLLMTracker:
 
     def test_init_missing_base_url(self):
         """Test error when no runtime base URL is set."""
-        with patch.dict(os.environ, {"CRSBENCH_LLM_MASTER_KEY": "sk-key"}, clear=True):
+        with patch.dict(
+            os.environ, {"CRSBENCH_LLM_UPSTREAM_MASTER_KEY": "sk-key"}, clear=True
+        ):
             with pytest.raises(
                 LiteLLMTrackerError,
                 match="CRSBENCH_LLM_BASE_URL/CRSBENCH_LLM_UPSTREAM_BASE_URL not set",
@@ -72,7 +74,7 @@ class TestLiteLLMTracker:
         ):
             with pytest.raises(
                 LiteLLMTrackerError,
-                match="CRSBENCH_LLM_MASTER_KEY not set",
+                match="CRSBENCH_LLM_UPSTREAM_MASTER_KEY not set",
             ):
                 LiteLLMTracker()
 
@@ -1151,7 +1153,7 @@ class TestIsTrackingAvailable:
             os.environ,
             {
                 "CRSBENCH_LLM_BASE_URL": "http://litellm:4000",
-                "CRSBENCH_LLM_MASTER_KEY": "sk-key",
+                "CRSBENCH_LLM_UPSTREAM_MASTER_KEY": "sk-key",
             },
             clear=True,
         ):
@@ -1163,7 +1165,7 @@ class TestIsTrackingAvailable:
             os.environ,
             {
                 "CRSBENCH_LLM_UPSTREAM_BASE_URL": "http://upstream:4000",
-                "CRSBENCH_LLM_MASTER_KEY": "sk-key",
+                "CRSBENCH_LLM_UPSTREAM_MASTER_KEY": "sk-key",
             },
             clear=True,
         ):
@@ -1171,7 +1173,9 @@ class TestIsTrackingAvailable:
 
     def test_unavailable_when_base_url_missing(self):
         """Test returns False when base URL is missing."""
-        with patch.dict(os.environ, {"CRSBENCH_LLM_MASTER_KEY": "sk-key"}, clear=True):
+        with patch.dict(
+            os.environ, {"CRSBENCH_LLM_UPSTREAM_MASTER_KEY": "sk-key"}, clear=True
+        ):
             assert is_tracking_available() is False
 
     def test_unavailable_when_master_key_missing(self):
@@ -1198,8 +1202,8 @@ class TestSetupLlmTrackingBudget:
             {
                 "CRSBENCH_LLM_BASE_URL": "http://litellm:4000",
                 "CRSBENCH_LLM_UPSTREAM_BASE_URL": "http://litellm:4000",
-                "CRSBENCH_LLM_MASTER_KEY": "sk-master-key-123",
-                "CRSBENCH_LLM_API_KEY": "sk-api-key-123",
+                "CRSBENCH_LLM_UPSTREAM_MASTER_KEY": "sk-master-key-123",
+                "CRSBENCH_LLM_UPSTREAM_API_KEY": "sk-api-key-123",
             },
             clear=False,
         ):

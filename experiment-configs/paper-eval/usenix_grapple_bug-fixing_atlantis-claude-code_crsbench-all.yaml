@@ -40,7 +40,7 @@ hints_enabled: false
 source_mode: pkgs
 
 # LiteLLM Configuration
-litellm_mode: passthrough
+litellm_mode: external
 
 # Redis Configuration
 redis_host: localhost

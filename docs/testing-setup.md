@@ -21,7 +21,7 @@ uv sync --extra dev
 
 ```bash
 # Typecheck + lint + format-check
-ci-tests/run-local.sh checks
+scripts/ci-tests/run-local.sh checks
 
 # Unit tests
 uv run pytest tests/ -v
@@ -37,5 +37,4 @@ For Redis/Valkey setup and multi-process runs (`run`, `worker`, `evaluator`):
 
 ## Integration Test Scripts
 
-- [integration_tests/README.md](../integration_tests/README.md)
-- [integration_tests_distributed/README.md](../integration_tests_distributed/README.md)
+- Smoke/local CI runner: `scripts/ci-tests/run-local.sh`

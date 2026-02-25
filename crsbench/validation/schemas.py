@@ -125,6 +125,7 @@ class TrialMetadata(BaseModel):
     # Build configuration
     build_mode: Optional[str] = None  # "delta" or "full" (evaluation mode)
     sanitizer: Optional[str] = None
+    target_cpv_id: Optional[str] = None
 
     # Experiment-level fields
     experiment_name: Optional[str] = None
@@ -227,10 +228,13 @@ class BenchmarkEntry:
         name: Benchmark identifier (e.g., afc-curl-delta-01)
         harnesses: Optional list of specific harnesses to run.
                    If None, all harnesses for this benchmark will be used.
+        harness_cpvs: Optional mapping of harness -> allowed CPV IDs.
+                      If provided, only these CPVs are considered for that harness.
     """
 
     name: str
     harnesses: Optional[List[str]] = None
+    harness_cpvs: Optional[Dict[str, List[str]]] = None
 
 
 @dataclass
@@ -244,11 +248,122 @@ class BenchmarkHarness:
         name: Benchmark name (e.g., "afc-curl-delta-01")
         path: Path to benchmark directory
         harness: Parsed harness with name and path
+        target_cpvs: Optional subset of CPV IDs to target for this harness
     """
 
     name: str
     path: Path
     harness: "HarnessFile"  # Forward reference - HarnessFile defined later in this file
+    target_cpvs: Optional[List[str]] = None
+
+
+def _normalize_harness_list(
+    benchmark_name: str, harnesses: Any, field_name: str
+) -> List[str]:
+    if not isinstance(harnesses, list) or not harnesses:
+        raise ValueError(
+            f"Harness list for '{benchmark_name}' in '{field_name}' must be a non-empty list"
+        )
+
+    normalized = [str(h).strip() for h in harnesses]
+    if any(not h for h in normalized):
+        raise ValueError(
+            f"Harness list for '{benchmark_name}' in '{field_name}' contains empty harness names"
+        )
+    return normalized
+
+
+def _normalize_harness_cpv_map(
+    benchmark_name: str, harness_cpvs: Any, field_name: str
+) -> Dict[str, List[str]]:
+    if not isinstance(harness_cpvs, dict) or not harness_cpvs:
+        raise ValueError(
+            f"Harness/CPV map for '{benchmark_name}' in '{field_name}' must be a non-empty map"
+        )
+
+    normalized: Dict[str, List[str]] = {}
+    for harness_name, cpvs in harness_cpvs.items():
+        harness = str(harness_name).strip()
+        if not harness:
+            raise ValueError(
+                f"Harness/CPV map for '{benchmark_name}' in '{field_name}' contains an empty harness name"
+            )
+        if not isinstance(cpvs, list) or not cpvs:
+            raise ValueError(
+                f"CPV list for '{benchmark_name}/{harness}' in '{field_name}' must be a non-empty list"
+            )
+        normalized_cpvs = [str(cpv).strip() for cpv in cpvs]
+        if any(not cpv for cpv in normalized_cpvs):
+            raise ValueError(
+                f"CPV list for '{benchmark_name}/{harness}' in '{field_name}' contains empty CPV IDs"
+            )
+        normalized[harness] = normalized_cpvs
+    return normalized
+
+
+def _normalize_benchmark_selector_list(
+    values: Any, field_name: str
+) -> Optional[List[Union[str, Dict[str, Union[List[str], Dict[str, List[str]]]]]]]:
+    if values is None:
+        return None
+    if not isinstance(values, list):
+        raise ValueError(f"{field_name} must be a list")
+
+    cleaned_list: List[
+        Union[str, Dict[str, Union[List[str], Dict[str, List[str]]]]]
+    ] = []
+    benchmark_names: List[str] = []
+
+    for item in values:
+        if isinstance(item, str):
+            name = item.strip()
+            if not name:
+                raise ValueError(f"{field_name} list contains empty benchmark ID")
+            benchmark_names.append(name)
+            cleaned_list.append(name)
+            continue
+
+        if isinstance(item, dict):
+            if len(item) != 1:
+                raise ValueError(
+                    f"Each dict entry in '{field_name}' must have exactly one benchmark name as key"
+                )
+            raw_name = list(item.keys())[0]
+            name = str(raw_name).strip()
+            selector = item[raw_name]
+            if not name:
+                raise ValueError(f"Benchmark name in '{field_name}' cannot be empty")
+
+            benchmark_names.append(name)
+
+            if isinstance(selector, list):
+                cleaned_list.append(
+                    {name: _normalize_harness_list(name, selector, field_name)}
+                )
+                continue
+
+            if isinstance(selector, dict):
+                cleaned_list.append(
+                    {name: _normalize_harness_cpv_map(name, selector, field_name)}
+                )
+                continue
+
+            raise ValueError(
+                f"Invalid benchmark selector for '{name}' in '{field_name}'. "
+                "Expected list[harness] or map[harness -> list[cpv]]"
+            )
+
+        raise ValueError(
+            f"Invalid {field_name} entry type: {type(item).__name__}. Expected str or dict"
+        )
+
+    if len(benchmark_names) != len(set(benchmark_names)):
+        duplicates = [
+            name for name in benchmark_names if benchmark_names.count(name) > 1
+        ]
+        raise ValueError(f"Duplicate benchmark IDs found: {', '.join(set(duplicates))}")
+
+    return cleaned_list if cleaned_list else None
 
 
 class POV(BaseModel):
@@ -858,7 +973,7 @@ class CrsComposeConfig(BaseModel):
     )
     litellm_config_path: Optional[Path] = Field(
         default=None,
-        description="Override path to LiteLLM config file for oss-crs llm_config.litellm_config",
+        description="Deprecated LiteLLM config path override. Ignored for litellm_mode='external'.",
     )
 
 
@@ -869,7 +984,7 @@ class CrsOverrideConfig(BaseModel):
 
     litellm_config_path: Optional[Path] = Field(
         default=None,
-        description="Per-CRS override path to LiteLLM config file",
+        description="Deprecated per-CRS LiteLLM config path override. Ignored for litellm_mode='external'.",
     )
     additional_env: Optional[Dict[str, str]] = Field(
         default=None,
@@ -942,7 +1057,9 @@ class ExperimentConfig(BaseModel):
         default=Path("benchmarks"),
         description="Root directory containing benchmark projects (default: benchmarks)",
     )
-    benchmarks: Optional[List[Union[str, Dict[str, List[str]]]]] = Field(
+    benchmarks: Optional[
+        List[Union[str, Dict[str, Union[List[str], Dict[str, List[str]]]]]]
+    ] = Field(
         default=None,
         description="List of benchmarks to evaluate (mutually exclusive with benchmark_suite). "
         "Each entry can be either a string (benchmark name, runs all harnesses) "
@@ -984,13 +1101,13 @@ class ExperimentConfig(BaseModel):
         le=5,
         description="Pre-fuzz corpus level (1=minimal, 5=comprehensive). None disables corpus. [PLACEHOLDER - not yet implemented]",
     )
-    litellm_mode: Optional[Literal["passthrough", "proxy"]] = Field(
-        default="passthrough",
-        description="LiteLLM mode: 'passthrough' uses external LiteLLM "
-        "(CRSBENCH_LLM_UPSTREAM_BASE_URL/CRSBENCH_LLM_BASE_URL + CRSBENCH_LLM_API_KEY or CRSBENCH_LLM_MASTER_KEY), "
-        "'proxy' uses self-hosted proxy (CRSBENCH_LLM_BASE_URL + CRSBENCH_LLM_MASTER_KEY), "
+    litellm_mode: Optional[Literal["external", "self_hosted"]] = Field(
+        default="external",
+        description="LiteLLM mode: 'external' uses an external LiteLLM endpoint "
+        "(CRSBENCH_LLM_UPSTREAM_BASE_URL/CRSBENCH_LLM_BASE_URL + CRSBENCH_LLM_UPSTREAM_API_KEY or CRSBENCH_LLM_UPSTREAM_MASTER_KEY), "
+        "'self_hosted' is reserved and not implemented yet, "
         "null skips LiteLLM entirely (for CRS that don't need LLM). "
-        "Default is 'passthrough'.",
+        "Default is 'external'.",
     )
     skip_litellm: bool = Field(
         default=False,
@@ -1187,63 +1304,8 @@ class ExperimentConfig(BaseModel):
     @field_validator("benchmarks")
     @classmethod
     def validate_benchmarks(cls, v):
-        """Validate benchmarks list (supports both string and dict formats)."""
-        if v is None:
-            return None
-
-        if not isinstance(v, list):
-            raise ValueError("benchmarks must be a list")
-
-        cleaned_list = []
-        benchmark_names = []
-
-        for item in v:
-            if isinstance(item, str):
-                # Simple string format
-                name = item.strip()
-                if not name:
-                    raise ValueError("benchmarks list contains empty benchmark ID")
-                benchmark_names.append(name)
-                cleaned_list.append(name)
-            elif isinstance(item, dict):
-                # Dict format: {benchmark_name: [harness_list]}
-                if len(item) != 1:
-                    raise ValueError(
-                        "Each dict entry must have exactly one benchmark name as key"
-                    )
-                name = list(item.keys())[0].strip()
-                harnesses = item[name]
-
-                if not name:
-                    raise ValueError("Benchmark name cannot be empty")
-                if not isinstance(harnesses, list) or not harnesses:
-                    raise ValueError(
-                        f"Harness list for '{name}' must be a non-empty list"
-                    )
-                if any(not h or not str(h).strip() for h in harnesses):
-                    raise ValueError(
-                        f"Harness list for '{name}' contains empty harness names"
-                    )
-
-                benchmark_names.append(name)
-                # Store normalized format
-                cleaned_list.append({name: [str(h).strip() for h in harnesses]})
-            else:
-                raise ValueError(
-                    f"Invalid benchmarks entry type: {type(item).__name__}. "
-                    "Expected str or dict"
-                )
-
-        # Check for duplicate benchmark names
-        if len(benchmark_names) != len(set(benchmark_names)):
-            duplicates = [
-                name for name in benchmark_names if benchmark_names.count(name) > 1
-            ]
-            raise ValueError(
-                f"Duplicate benchmark IDs found: {', '.join(set(duplicates))}"
-            )
-
-        return cleaned_list if cleaned_list else None
+        """Validate benchmarks list (string, harness list, or harness->cpv map)."""
+        return _normalize_benchmark_selector_list(v, "benchmarks")
 
     @field_validator("benchmark_suite")
     @classmethod
@@ -1285,9 +1347,9 @@ class ExperimentConfig(BaseModel):
     @classmethod
     def validate_litellm_mode(cls, v):
         """Validate LiteLLM mode."""
-        if v is not None and v not in ("passthrough", "proxy"):
+        if v is not None and v not in ("external", "self_hosted"):
             raise ValueError(
-                f"Invalid litellm_mode: {v}. Must be 'passthrough' or 'proxy'"
+                f"Invalid litellm_mode: {v}. Must be 'external' or 'self_hosted'"
             )
         return v
 
@@ -1375,6 +1437,13 @@ class ExperimentConfig(BaseModel):
         """Fail fast when mode-required LiteLLM runtime env inputs are missing."""
         if self.skip_litellm or self.litellm_mode is None:
             return self
+
+        if self.litellm_mode == "self_hosted":
+            raise ValueError(
+                "litellm_mode='self_hosted' is not implemented yet. "
+                "Use litellm_mode='external'."
+            )
+
         if (
             "litellm_mode" not in self.model_fields_set
             and "llm_tracking_enabled" not in self.model_fields_set
@@ -1505,8 +1574,17 @@ class ExperimentConfig(BaseModel):
                     entries.append(BenchmarkEntry(name=item, harnesses=None))
                 elif isinstance(item, dict):
                     name = list(item.keys())[0]
-                    harnesses = item[name]
-                    entries.append(BenchmarkEntry(name=name, harnesses=harnesses))
+                    selector = item[name]
+                    if isinstance(selector, list):
+                        entries.append(BenchmarkEntry(name=name, harnesses=selector))
+                    else:
+                        entries.append(
+                            BenchmarkEntry(
+                                name=name,
+                                harnesses=list(selector.keys()),
+                                harness_cpvs=selector,
+                            )
+                        )
             return entries
 
         if self.benchmark_suite is not None:
@@ -1547,7 +1625,9 @@ class BenchmarkSuiteConfig(BaseModel):
     Description: str = Field(
         ..., description="Description of the benchmark suite purpose and scope"
     )
-    benchmark_list: List[Union[str, Dict[str, List[str]]]] = Field(
+    benchmark_list: List[
+        Union[str, Dict[str, Union[List[str], Dict[str, List[str]]]]]
+    ] = Field(
         ...,
         description="List of benchmarks. Each entry can be either a string (benchmark name) "
         "or a dict mapping benchmark name to list of harnesses",
@@ -1592,57 +1672,7 @@ class BenchmarkSuiteConfig(BaseModel):
     def validate_benchmark_list(cls, v):
         if not v:
             raise ValueError("benchmark_list must contain at least one benchmark ID")
-
-        benchmark_names = []
-        cleaned_list = []
-
-        for item in v:
-            if isinstance(item, str):
-                # Simple string format
-                name = item.strip()
-                if not name:
-                    raise ValueError("benchmark_list contains empty benchmark ID")
-                benchmark_names.append(name)
-                cleaned_list.append(name)
-            elif isinstance(item, dict):
-                # Dict format: {benchmark_name: [harness_list]}
-                if len(item) != 1:
-                    raise ValueError(
-                        "Each dict entry must have exactly one benchmark name as key"
-                    )
-                name = list(item.keys())[0].strip()
-                harnesses = item[name]
-
-                if not name:
-                    raise ValueError("Benchmark name cannot be empty")
-                if not isinstance(harnesses, list) or not harnesses:
-                    raise ValueError(
-                        f"Harness list for '{name}' must be a non-empty list"
-                    )
-                if any(not h or not str(h).strip() for h in harnesses):
-                    raise ValueError(
-                        f"Harness list for '{name}' contains empty harness names"
-                    )
-
-                benchmark_names.append(name)
-                # Store normalized format
-                cleaned_list.append({name: [str(h).strip() for h in harnesses]})
-            else:
-                raise ValueError(
-                    f"Invalid benchmark_list entry type: {type(item).__name__}. "
-                    "Expected str or dict"
-                )
-
-        # Check for duplicate benchmark names
-        if len(benchmark_names) != len(set(benchmark_names)):
-            duplicates = [
-                name for name in benchmark_names if benchmark_names.count(name) > 1
-            ]
-            raise ValueError(
-                f"Duplicate benchmark IDs found: {', '.join(set(duplicates))}"
-            )
-
-        return cleaned_list
+        return _normalize_benchmark_selector_list(v, "benchmark_list")
 
     def get_benchmark_names(self) -> List[str]:
         """Get list of benchmark names only (backward compatible).
@@ -1670,8 +1700,17 @@ class BenchmarkSuiteConfig(BaseModel):
                 entries.append(BenchmarkEntry(name=item, harnesses=None))
             elif isinstance(item, dict):
                 name = list(item.keys())[0]
-                harnesses = item[name]
-                entries.append(BenchmarkEntry(name=name, harnesses=harnesses))
+                selector = item[name]
+                if isinstance(selector, list):
+                    entries.append(BenchmarkEntry(name=name, harnesses=selector))
+                else:
+                    entries.append(
+                        BenchmarkEntry(
+                            name=name,
+                            harnesses=list(selector.keys()),
+                            harness_cpvs=selector,
+                        )
+                    )
         return entries
 
 

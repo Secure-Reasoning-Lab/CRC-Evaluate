@@ -20,6 +20,7 @@ from crsbench.evaluation.verification import PovVerificationResult as VerifResul
 from crsbench.evaluation.verification import VerificationEngine
 from crsbench.evaluation.verification.dedup import get_dedup_strategy
 from crsbench.evaluation.verification.models import (
+    PatchInfo,
     PatchVerificationOutput,
     PatchVerificationResult,
     PatchVerificationStatus,
@@ -50,6 +51,10 @@ class BenchmarkFormatError(Exception):
     def __init__(self, message: str, validation_result: ValidationResult):
         self.validation_result = validation_result
         super().__init__(message)
+
+
+class PatchDiscoveryError(Exception):
+    """Raised when trial patch layout is invalid for verification."""
 
 
 class EvaluationResult:
@@ -199,6 +204,7 @@ class BenchmarkRunner:
         oss_fuzz_path: Optional[Path] = None,
         *,
         skip_verification: bool = False,
+        target_cpv_id: str | None = None,
     ) -> EvaluationResult:
         """Run a complete benchmark evaluation for a specific harness."""
         benchmark_path = benchmark_harness.path
@@ -233,6 +239,7 @@ class BenchmarkRunner:
                     trial_start_time=trial_start_time,
                     oss_fuzz_path=oss_fuzz_path,
                     skip_verification=skip_verification,
+                    target_cpv_id=target_cpv_id,
                 )
             )
             collector.add_harness_result(harness_result)
@@ -243,6 +250,7 @@ class BenchmarkRunner:
                 trial_output_dir=trial_output_dir,
                 pov_verification_results=pov_verification_results,
                 patch_verification_results=patch_verification_results,
+                target_cpv_id=target_cpv_id,
             )
 
             # Finalize
@@ -322,6 +330,8 @@ class BenchmarkRunner:
         trial_output_dir: Optional[Path],
         pov_verification_results: list[VerifResult],
         patch_verification_results: list[PatchVerificationResult],
+        *,
+        target_cpv_id: str | None = None,
     ) -> None:
         """Collect results based on CRS type.
 
@@ -337,10 +347,21 @@ class BenchmarkRunner:
             # This keeps reporting accurate for "0 patches from N input POVs".
             povs_dir = trial_output_dir / "crs-input" / "povs"
             total_input_povs = len(list(povs_dir.iterdir())) if povs_dir.exists() else 0
-            collector.set_patch_stats(total_input_povs, patch_verification_results)
+            patch_dir = trial_output_dir / "output" / "patches"
+            produced_patches = len(
+                self._discover_trial_patches_for_verification(
+                    patch_dir=patch_dir, target_cpv_id=target_cpv_id
+                )
+            )
+            collector.set_patch_stats(
+                total_input_povs,
+                produced_patches,
+                patch_verification_results,
+            )
             self.logger.info(
-                f"Patch verification: {len(patch_verification_results)} patches "
-                f"from {total_input_povs} input POVs"
+                f"Patch reporting: produced={produced_patches}, "
+                f"verified={len(patch_verification_results)} from "
+                f"{total_input_povs} input POVs"
             )
             if patch_verification_results:
                 self._save_patch_verification_results(
@@ -351,7 +372,7 @@ class BenchmarkRunner:
         """Log evaluation summary based on CRS type."""
         if self._crs_type == "bug-fixing":
             verification_info = ""
-            if report.patches_valid > 0 or report.patches_build_failed > 0:
+            if report.patches_verified > 0:
                 verification_info = (
                     f", {report.patches_valid} valid patches "
                     f"({report.patches_build_failed} build failed, "
@@ -359,7 +380,8 @@ class BenchmarkRunner:
                     f"{report.patches_test_failed} test failed)"
                 )
             self.logger.info(
-                f"Evaluation completed: {report.patches_generated} patches generated "
+                f"Evaluation completed: {report.patches_generated} patches produced, "
+                f"{report.patches_verified} verified "
                 f"from {report.total_input_povs} input POVs{verification_info}"
             )
         else:
@@ -450,6 +472,7 @@ class BenchmarkRunner:
         oss_fuzz_path: Optional[Path],
         *,
         skip_verification: bool,
+        target_cpv_id: str | None = None,
     ) -> tuple[HarnessResult, list[VerifResult], list[PatchVerificationResult]]:
         """Run evaluation for a single harness with snapshot management and verification."""
         self.logger.info(f"Evaluating harness: {harness.name}")
@@ -465,6 +488,7 @@ class BenchmarkRunner:
             benchmark_path=benchmark_path,
             trial_output_dir=trial_output_dir,
             trial_start_time=trial_start_time,
+            target_cpv_id=target_cpv_id,
         )
 
         # Log POV verification manager final report if available (bug-finding CRS)
@@ -542,6 +566,7 @@ class BenchmarkRunner:
                 trial_output_dir=trial_output_dir,
                 oss_fuzz_path=oss_fuzz_path,
                 harness_name=harness.name,
+                target_cpv_id=target_cpv_id,
             )
 
         return harness_result, pov_verification_results, patch_verification_results
@@ -552,6 +577,7 @@ class BenchmarkRunner:
         benchmark_path: Path,
         trial_output_dir: Path,
         trial_start_time: float,
+        target_cpv_id: str | None = None,
     ) -> tuple[
         HarnessResult,
         Any,
@@ -587,6 +613,7 @@ class BenchmarkRunner:
                     benchmark_path=benchmark_path,
                     harness_name=harness.name,
                     trial_output_dir=trial_output_dir,
+                    target_cpv_id=target_cpv_id,
                 )
 
             # Start managers
@@ -615,6 +642,7 @@ class BenchmarkRunner:
                 trial_start_time=trial_start_time,
                 harness_name=harness.name,
                 benchmark_id=benchmark_path.name,
+                target_cpv_id=target_cpv_id,
             )
 
             # Combine stop events: either coverage saturation OR all CPVs found can stop CRS
@@ -715,6 +743,7 @@ class BenchmarkRunner:
         benchmark_path: Path,
         harness_name: str,
         trial_output_dir: Path,
+        target_cpv_id: str | None = None,
     ) -> None:
         """Prepare bug-fixing input CPVs/POVs in trial-local directories.
 
@@ -753,8 +782,16 @@ class BenchmarkRunner:
 
         staged_cpvs = 0
         staged_povs = 0
+        seen_cpvs: set[str] = set()
         for vuln in harness.vulns:
             cpv_id = vuln.vuln_keyword
+            if cpv_id in seen_cpvs:
+                continue
+            seen_cpvs.add(cpv_id)
+
+            if target_cpv_id is not None and cpv_id != target_cpv_id:
+                continue
+
             if not vuln.povs:
                 continue
 
@@ -786,6 +823,11 @@ class BenchmarkRunner:
                 shutil.copy2(src_blob, input_povs_dir / name)
                 shutil.copy2(src_blob, adapter_povs_dir / name)
                 staged_povs += 1
+
+        if target_cpv_id is not None and staged_cpvs == 0:
+            raise EvaluationError(
+                f"Target CPV not found for harness '{harness_name}': {target_cpv_id}"
+            )
 
         self.logger.info(
             "Prepared bug-fixing trial inputs: "
@@ -1010,6 +1052,7 @@ class BenchmarkRunner:
         trial_start_time: float,
         harness_name: str,
         benchmark_id: str,
+        target_cpv_id: str | None = None,
     ) -> Optional[PatchVerificationManager]:
         """Start patch verification manager for bug-fixing CRS.
 
@@ -1049,6 +1092,7 @@ class BenchmarkRunner:
                 input_cpvs_total=input_cpvs_total,
                 trial_start_time=trial_start_time,
                 exchange_patch_dir=exchange_patch_dir,
+                target_cpv_id=target_cpv_id,
             )
 
             self.logger.info(
@@ -1137,6 +1181,7 @@ class BenchmarkRunner:
         trial_output_dir: Path,
         oss_fuzz_path: Path,
         harness_name: str,
+        target_cpv_id: str | None = None,
     ) -> list[PatchVerificationResult]:
         """Verify CRS-generated patches for a specific harness.
 
@@ -1158,6 +1203,7 @@ class BenchmarkRunner:
                 benchmark_path=benchmark_path,
                 trial_output_dir=trial_output_dir,
                 harness_name=harness_name,
+                target_cpv_id=target_cpv_id,
             )
 
         # Local fallback: use PatchVerificationEngine directly
@@ -1166,6 +1212,7 @@ class BenchmarkRunner:
             trial_output_dir=trial_output_dir,
             oss_fuzz_path=oss_fuzz_path,
             harness_name=harness_name,
+            target_cpv_id=target_cpv_id,
         )
 
     def _verify_patches_local(
@@ -1174,6 +1221,7 @@ class BenchmarkRunner:
         trial_output_dir: Path,
         oss_fuzz_path: Path,
         harness_name: str,
+        target_cpv_id: str | None = None,
     ) -> list[PatchVerificationResult]:
         """Verify patches locally using PatchVerificationEngine.
 
@@ -1194,12 +1242,13 @@ class BenchmarkRunner:
                 f"Starting local patch verification for harness: {harness_name}"
             )
 
-            # Patches are in trial_output_dir/output/patches/
             patch_dir = trial_output_dir / "output" / "patches"
-            if not patch_dir.exists():
-                self.logger.info(
-                    f"No patches directory found (CRS produced no patches): {patch_dir}"
-                )
+            patches = self._discover_trial_patches_for_verification(
+                patch_dir=patch_dir,
+                target_cpv_id=target_cpv_id,
+            )
+            if not patches:
+                self.logger.info("No patches found for local verification")
                 return []
 
             # POVs were prepared in trial_output_dir/crs-input/povs/
@@ -1223,13 +1272,35 @@ class BenchmarkRunner:
                 verify_workers=self.verify_workers,
             )
 
-            # Run verification
-            results = engine.verify_patches(
-                benchmark_path=benchmark_path,
-                patch_dir=patch_dir,
-                harness=harness_name,
-                pov_dir=pov_dir,
-            )
+            results: list[PatchVerificationResult] = []
+            for cpv_id, patch_id, patch_path in patches:
+                pov_path = self._find_trial_pov_for_cpv(pov_dir, cpv_id)
+                if pov_path is None:
+                    results.append(
+                        PatchVerificationResult(
+                            status=PatchVerificationStatus.ERROR,
+                            patch_id=patch_id,
+                            pov_id=cpv_id,
+                            benchmark=str(benchmark_path.name),
+                            patch_path=patch_path,
+                            details=f"POV not found for {cpv_id}",
+                        )
+                    )
+                    continue
+
+                patch = PatchInfo(
+                    patch_id=patch_id,
+                    pov_id=cpv_id,
+                    patch_path=patch_path,
+                )
+                results.append(
+                    engine.verify_patch(
+                        benchmark_path=benchmark_path,
+                        patch=patch,
+                        harness=harness_name,
+                        pov_path=pov_path,
+                    )
+                )
 
             # Log summary
             valid_count = sum(1 for r in results if r.is_valid)
@@ -1242,6 +1313,8 @@ class BenchmarkRunner:
 
             return results
 
+        except PatchDiscoveryError:
+            raise
         except Exception as e:
             self.logger.error(
                 f"Patch verification failed for harness '{harness_name}': {e}",
@@ -1254,6 +1327,7 @@ class BenchmarkRunner:
         benchmark_path: Path,
         trial_output_dir: Path,
         harness_name: str,
+        target_cpv_id: str | None = None,
     ) -> list[PatchVerificationResult]:
         """Verify patches via distributed evaluator queues.
 
@@ -1287,24 +1361,11 @@ class BenchmarkRunner:
                 f"Starting distributed patch verification for harness: {harness_name}"
             )
 
-            # Discover patches in trial_output_dir/output/patches/
             patch_dir = trial_output_dir / "output" / "patches"
-            if not patch_dir.exists():
-                self.logger.info(
-                    f"No patches directory found (CRS produced no patches): {patch_dir}"
-                )
-                return []
-
-            patches: list[tuple[str, str, Path]] = []
-            if patch_dir.is_dir():
-                for idx, subdir in enumerate(sorted(patch_dir.iterdir())):
-                    if not subdir.is_dir():
-                        continue
-                    patch_file = subdir / "patch.diff"
-                    if patch_file.exists():
-                        cpv_id = subdir.name
-                        patch_id = f"patch_{idx}"
-                        patches.append((cpv_id, patch_id, patch_file))
+            patches = self._discover_trial_patches_for_verification(
+                patch_dir=patch_dir,
+                target_cpv_id=target_cpv_id,
+            )
 
             if not patches:
                 self.logger.info("No patches found for distributed verification")
@@ -1323,6 +1384,7 @@ class BenchmarkRunner:
                     trial_output_dir=trial_output_dir,
                     oss_fuzz_path=self.oss_fuzz_path or Path(),
                     harness_name=harness_name,
+                    target_cpv_id=target_cpv_id,
                 )
 
             # Derive trial_id from output dir name
@@ -1346,6 +1408,7 @@ class BenchmarkRunner:
                     trial_output_dir=trial_output_dir,
                     oss_fuzz_path=self.oss_fuzz_path or Path(),
                     harness_name=harness_name,
+                    target_cpv_id=target_cpv_id,
                 )
 
             # Drain results (blocking poll)
@@ -1441,6 +1504,8 @@ class BenchmarkRunner:
 
             return results
 
+        except PatchDiscoveryError:
+            raise
         except Exception as e:
             self.logger.error(
                 f"Distributed patch verification failed for harness "
@@ -1448,6 +1513,85 @@ class BenchmarkRunner:
                 exc_info=True,
             )
             return []
+
+    def _discover_trial_patches_for_verification(
+        self,
+        patch_dir: Path,
+        target_cpv_id: str | None,
+    ) -> list[tuple[str, str, Path]]:
+        """Discover trial patches for verification.
+
+        Supports two layouts:
+        ``output/patches/<cpv_id>/*.diff`` (structured) and
+        ``output/patches/*.diff`` (flat).
+        """
+        if not patch_dir.exists():
+            self.logger.info(
+                f"No patches directory found (CRS produced no patches): {patch_dir}"
+            )
+            return []
+
+        structured_patches: list[tuple[str, str, Path]] = []
+        structured_dirs = sorted(
+            entry for entry in patch_dir.iterdir() if entry.is_dir()
+        )
+        for cpv_dir in structured_dirs:
+            cpv_id = cpv_dir.name
+            cpv_patches = sorted(
+                entry
+                for entry in cpv_dir.iterdir()
+                if entry.is_file() and entry.suffix == ".diff"
+            )
+            for i, patch_path in enumerate(cpv_patches):
+                structured_patches.append((cpv_id, f"patch_{i}", patch_path))
+
+        flat_patches = sorted(
+            entry
+            for entry in patch_dir.iterdir()
+            if entry.is_file() and entry.suffix == ".diff"
+        )
+        flat_discovered: list[tuple[str, str, Path]] = []
+        if flat_patches:
+            if self._crs_type == "bug-fixing" and not target_cpv_id:
+                raise PatchDiscoveryError(
+                    "Flat patch output requires target_cpv_id for bug-fixing trials."
+                )
+            cpv_id = target_cpv_id or "unknown"
+            flat_discovered = [
+                (cpv_id, f"patch_{i}", patch_path)
+                for i, patch_path in enumerate(flat_patches)
+            ]
+
+        discovered = structured_patches + flat_discovered
+        if not discovered:
+            return []
+        self.logger.info(
+            "Discovered patches for verification: "
+            f"structured={len(structured_patches)}, flat={len(flat_discovered)}, "
+            f"total={len(discovered)}, "
+            f"target_cpv_id={target_cpv_id or '-'}"
+        )
+        return discovered
+
+    @staticmethod
+    def _find_trial_pov_for_cpv(pov_dir: Path, cpv_id: str) -> Optional[Path]:
+        """Find staged trial POV path for the given CPV."""
+        direct = pov_dir / cpv_id
+        if direct.exists() and direct.is_file():
+            return direct
+
+        for ext in [".blob", ".pov", ".bin"]:
+            candidate = pov_dir / f"{cpv_id}{ext}"
+            if candidate.exists() and candidate.is_file():
+                return candidate
+
+        cpv_subdir = pov_dir / cpv_id
+        if cpv_subdir.is_dir():
+            for child in sorted(cpv_subdir.iterdir()):
+                if child.is_file():
+                    return child
+
+        return None
 
     def _create_coverage_manager(
         self,

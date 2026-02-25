@@ -23,8 +23,8 @@ from crsbench.utils.litellm_env import (
 )
 from dotenv import load_dotenv
 
-ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MANIFEST = ROOT / "ci-tests" / "smoke-manifest.yaml"
+ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_MANIFEST = ROOT / "scripts" / "ci-tests" / "smoke-manifest.yaml"
 
 # Keep local smoke behavior consistent with CRSBench CLI entrypoints.
 load_dotenv()
@@ -151,6 +151,8 @@ def build_experiment_config(
 
     if "crs_compose" in suite:
         config["crs_compose"] = suite["crs_compose"]
+    if "crs_overrides" in suite:
+        config["crs_overrides"] = suite["crs_overrides"]
 
     return config
 
@@ -193,10 +195,64 @@ def _count_files(path: Path) -> int:
     return sum(1 for p in path.iterdir() if p.is_file())
 
 
+def _sum_llm_usage(exp_dir: Path) -> tuple[float, int, int]:
+    """Aggregate LLM usage from per-trial llm-usage.json files.
+
+    Returns:
+        (total_cost_usd, total_requests, usage_file_count)
+    """
+    total_cost = 0.0
+    total_requests = 0
+    usage_files = 0
+    for usage_path in exp_dir.rglob("llm-usage.json"):
+        try:
+            data = json.loads(usage_path.read_text())
+        except Exception:
+            continue
+        usage_files += 1
+        total_cost += float(data.get("total_cost_usd", 0.0) or 0.0)
+        # New schema: request_count / total_api_calls. Keep legacy fallback.
+        if "request_count" in data:
+            total_requests += int(data.get("request_count", 0) or 0)
+        elif "total_api_calls" in data:
+            total_requests += int(data.get("total_api_calls", 0) or 0)
+        else:
+            total_requests += int(data.get("num_requests", 0) or 0)
+    return total_cost, total_requests, usage_files
+
+
+def _compose_has_llm_config(compose_path: Path) -> bool:
+    """Return True when compose YAML includes llm_config section."""
+    try:
+        data = yaml.safe_load(compose_path.read_text()) or {}
+    except Exception:
+        return False
+    return isinstance(data, dict) and "llm_config" in data
+
+
 def summarize_trial_status(exp_dir: Path) -> tuple[int, int, int, int, list[Path]]:
     trial_dirs = sorted(p for p in exp_dir.rglob("trial-*") if p.is_dir())
-    successes = sum((t / ".success").exists() for t in trial_dirs)
-    failures = sum((t / ".failed").exists() for t in trial_dirs)
+    successes = 0
+    failures = 0
+    for trial_dir in trial_dirs:
+        if (trial_dir / ".success").exists():
+            successes += 1
+            continue
+        # Current marker name is .fail; keep .failed as legacy fallback.
+        if (trial_dir / ".fail").exists() or (trial_dir / ".failed").exists():
+            failures += 1
+            continue
+        # Fallback to orchestrator metadata if marker writes were interrupted.
+        metadata_path = trial_dir / "metadata.json"
+        if metadata_path.exists():
+            try:
+                metadata = json.loads(metadata_path.read_text())
+                if metadata.get("success") is True:
+                    successes += 1
+                elif metadata.get("success") is False:
+                    failures += 1
+            except Exception:
+                pass
     patch_files = sum(_count_files(t / "output" / "patches") for t in trial_dirs)
     pov_files = sum(_count_files(t / "output" / "povs") for t in trial_dirs)
     return successes, failures, patch_files, pov_files, trial_dirs
@@ -402,6 +458,7 @@ def run_suite(args: argparse.Namespace) -> int:
     successes, failures, patch_files, pov_files, trial_dirs = summarize_trial_status(
         exp_dir
     )
+    llm_total_cost, llm_total_requests, llm_usage_files = _sum_llm_usage(exp_dir)
 
     errors: list[str] = []
     if failures > 0:
@@ -434,6 +491,24 @@ def run_suite(args: argparse.Namespace) -> int:
         if not ok:
             errors.extend(cpv_errors)
 
+    if suite.get("assert_no_oss_crs_litellm"):
+        for trial_dir in trial_dirs:
+            compose_path = trial_dir / "crs-compose.yaml"
+            if compose_path.exists() and _compose_has_llm_config(compose_path):
+                errors.append(
+                    f"{compose_path}: expected no llm_config when skip_litellm=true"
+                )
+
+    min_llm_requests = suite.get("min_llm_total_requests")
+    if min_llm_requests is not None and llm_total_requests < int(min_llm_requests):
+        errors.append(
+            f"llm_total_requests={llm_total_requests} < {int(min_llm_requests)}"
+        )
+
+    min_llm_cost = suite.get("min_llm_total_cost_usd")
+    if min_llm_cost is not None and llm_total_cost < float(min_llm_cost):
+        errors.append(f"llm_total_cost_usd={llm_total_cost:.6f} < {float(min_llm_cost)}")
+
     summary = {
         "suite": args.suite,
         "experiment": config["experiment"],
@@ -443,6 +518,9 @@ def run_suite(args: argparse.Namespace) -> int:
         "total_trials": len(trial_dirs),
         "patch_files": patch_files,
         "pov_files": pov_files,
+        "llm_total_cost_usd": llm_total_cost,
+        "llm_total_requests": llm_total_requests,
+        "llm_usage_files": llm_usage_files,
         "errors": errors,
         "status": "pass" if not errors else "fail",
     }

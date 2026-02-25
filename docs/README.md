@@ -54,8 +54,7 @@ This directory is the canonical entry point for CRSBench documentation.
 - [benchmark-suites/README.md](../benchmark-suites/README.md)
 - [crses/README.md](../crses/README.md)
 - [experiment-configs/README.md](../experiment-configs/README.md)
-- [integration_tests/README.md](../integration_tests/README.md)
-- [integration_tests_distributed/README.md](../integration_tests_distributed/README.md)
+- Smoke and local CI scripts: `scripts/ci-tests/run-local.sh`
 - [snapshot-examples/README.md](../snapshot-examples/README.md)
 - [dashboard/README.md](../dashboard/README.md)
 

@@ -373,14 +373,21 @@ def get_trial_key(job: "rq.job.Job") -> str:
         job: RQ job instance
 
     Returns:
-        str: Unique trial key in format "crs:benchmark:harness:mode:trial_num"
+        str: Unique trial key in format
+            "crs:benchmark:harness:mode:sanitizer:trial_num:target_cpv_id"
 
     Example:
         >>> key = get_trial_key(job)
         >>> print(key)  # "atlantis-c:libxml2:fuzz_test:delta:1"
     """
     meta = job.meta
-    return f"{meta['crs']}:{meta['benchmark']}:{meta['harness']}:{meta['mode']}:{meta['trial_num']}"
+    return (
+        f"{meta['crs']}:{meta['benchmark']}:{meta['harness']}:"
+        f"{meta.get('mode', '-')}:"
+        f"{meta.get('sanitizer', '-')}:"
+        f"{meta.get('trial_num', '-')}:"
+        f"{meta.get('target_cpv_id') or '-'}"
+    )
 
 
 def get_existing_trials(queue: "rq.Queue") -> dict[str, dict[str, "rq.job.Job"]]:

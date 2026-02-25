@@ -9,7 +9,9 @@ Threading Model:
 
 Integration:
 - Works with SnapshotManager for synchronized patch tracking snapshots
-- Tracks patches in output/patches/{cpv_id}/patch.diff structure
+- Tracks patches in both supported layouts:
+  - output/patches/{cpv_id}/patch.diff
+  - output/patches/*.diff (flat; mapped to trial target CPV by runner)
 
 Note: Follows POVVerificationManager pattern. Unlike POVVerificationManager,
 this manager only tracks patch discovery - full verification (build, POV test,
@@ -63,6 +65,7 @@ class PatchVerificationManager:
         *,
         trial_start_time: Optional[float] = None,
         exchange_patch_dir: Optional[Path] = None,
+        target_cpv_id: Optional[str] = None,
     ):
         """Initialize patch verification manager.
 
@@ -74,6 +77,7 @@ class PatchVerificationManager:
             input_cpvs_total: Number of input CPVs to generate patches for
             trial_start_time: Trial start timestamp (defaults to current time)
             exchange_patch_dir: Pre-resolved EXCHANGE_DIR patches path for real-time scanning
+            target_cpv_id: Target CPV ID for flat patch layouts (per-CPV trials)
 
         Raises:
             ValueError: If trial_dir doesn't exist
@@ -87,12 +91,14 @@ class PatchVerificationManager:
         self.benchmark_id = benchmark_id
         self.input_cpvs_total = input_cpvs_total
         self.trial_start_time = trial_start_time or time.time()
+        self._target_cpv_id = target_cpv_id
 
         # Thread-safe access to state
         self._lock = threading.Lock()
 
         # Tracking state
         self._discovered_cpv_ids: set[str] = set()  # CPV IDs with patches
+        self._discovered_patch_keys: set[str] = set()  # Logical patch keys
         self._patches_total = 0
         self._snapshot_count = 0
         self._latest_snapshot: Optional[PatchSnapshot] = None
@@ -119,25 +125,48 @@ class PatchVerificationManager:
             return self._patches_total
 
     @staticmethod
-    def _scan_patch_directory(directory: Path) -> list[tuple[str, Path]]:
-        """Scan a directory for patch files in {cpv_id}/patch.diff structure.
+    def _scan_patch_directory(
+        directory: Path,
+        target_cpv_id: Optional[str],
+    ) -> list[tuple[str, str, Path]]:
+        """Scan a directory for patch files.
+
+        Supports:
+        - Structured layout: {cpv_id}/patch.diff
+        - Flat layout: *.diff (mapped to target_cpv_id when available)
 
         Args:
             directory: Directory to scan for patch subdirectories.
+            target_cpv_id: Target CPV for flat patch files.
 
         Returns:
-            List of (cpv_id, patch_file_path) tuples.
+            List of (cpv_id, logical_patch_key, patch_file_path) tuples.
         """
         if not directory.exists():
             return []
 
-        results = []
+        results: list[tuple[str, str, Path]] = []
+
+        # Flat layout: output/patches/*.diff
+        flat_files = sorted(
+            entry
+            for entry in directory.iterdir()
+            if entry.is_file() and entry.suffix == ".diff"
+        )
+        if flat_files:
+            flat_cpv_id = target_cpv_id or "unknown"
+            for patch_file in flat_files:
+                # Use filename as logical key so exchange/output duplicates dedupe.
+                results.append((flat_cpv_id, patch_file.name, patch_file))
+
+        # Structured layout: output/patches/{cpv_id}/patch.diff
         for cpv_dir in directory.iterdir():
             if not cpv_dir.is_dir():
                 continue
             patch_file = cpv_dir / "patch.diff"
             if patch_file.exists():
-                results.append((cpv_dir.name, patch_file))
+                # Logical key by relative path to dedupe exchange/output duplicates.
+                results.append((cpv_dir.name, f"{cpv_dir.name}/patch.diff", patch_file))
         return results
 
     def _discover_new_patches(self) -> tuple[list[str], int]:
@@ -148,28 +177,42 @@ class PatchVerificationManager:
         ``patch/`` subdirectory (populated in real-time by the exchange
         sidecar during CRS execution).
 
-        Patches are organized as:
-        {dir}/{cpv_id}/patch.diff
+        Patches may be organized as:
+        - {dir}/{cpv_id}/patch.diff
+        - {dir}/*.diff
 
         Returns:
             Tuple of (new_cpv_ids, new_patches_count)
         """
         # Collect patches from both directories
-        patch_entries = self._scan_patch_directory(self.patch_output_dir)
+        patch_entries = self._scan_patch_directory(
+            self.patch_output_dir, self._target_cpv_id
+        )
 
         if self._exchange_patch_dir is not None:
-            patch_entries.extend(self._scan_patch_directory(self._exchange_patch_dir))
+            patch_entries.extend(
+                self._scan_patch_directory(
+                    self._exchange_patch_dir, self._target_cpv_id
+                )
+            )
 
         new_cpv_ids = []
         new_patches_count = 0
 
-        for cpv_id, _patch_file in patch_entries:
+        for cpv_id, patch_key, _patch_file in patch_entries:
             with self._lock:
+                if patch_key in self._discovered_patch_keys:
+                    continue
+
+                self._discovered_patch_keys.add(patch_key)
                 if cpv_id not in self._discovered_cpv_ids:
                     self._discovered_cpv_ids.add(cpv_id)
-                    self._patches_total += 1
                     new_cpv_ids.append(cpv_id)
-                    new_patches_count += 1
+
+                    self._patches_total += 1
+                else:
+                    self._patches_total += 1
+                new_patches_count += 1
 
         return new_cpv_ids, new_patches_count
 

@@ -188,6 +188,7 @@ class Trial(BaseModel):
     trial_num: int
     mode: str
     sanitizer: str
+    target_cpv_id: str | None = None
 
 
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
@@ -518,6 +519,7 @@ def resolve_benchmark_harnesses(
             }
 
             # Validate each specified harness exists and create BenchmarkHarness
+            harness_cpvs = entry.harness_cpvs or {}
             for harness_name in entry.harnesses:
                 if harness_name not in harness_files_dict:
                     raise ValueError(
@@ -530,7 +532,10 @@ def resolve_benchmark_harnesses(
                 )
                 harness_pairs.append(
                     BenchmarkHarness(
-                        name=entry.name, path=benchmark_path, harness=harness_obj
+                        name=entry.name,
+                        path=benchmark_path,
+                        harness=harness_obj,
+                        target_cpvs=harness_cpvs.get(harness_name),
                     )
                 )
         else:
@@ -571,7 +576,9 @@ def resolve_benchmark_harnesses(
                     harness_obj = HarnessFile(name=harness_name, path=harness_path)
                     harness_pairs.append(
                         BenchmarkHarness(
-                            name=entry.name, path=benchmark_path, harness=harness_obj
+                            name=entry.name,
+                            path=benchmark_path,
+                            harness=harness_obj,
                         )
                     )
 
@@ -596,6 +603,27 @@ def _harness_has_cpv_with_sanitizer(harness: HarnessFile, sanitizer: str) -> boo
     return any(
         pov.sanitizer == sanitizer for vuln in harness.vulns for pov in vuln.povs
     )
+
+
+def _filter_matched_cpvs(
+    harness: HarnessFile, sanitizer: str, allowed_cpvs: set[str] | None = None
+) -> list[str]:
+    """Collect unique CPV IDs matching sanitizer and optional CPV allow-list."""
+    matched_cpvs: list[str] = []
+    seen_cpvs: set[str] = set()
+
+    for vuln in harness.vulns or []:
+        if not any(pov.sanitizer == sanitizer for pov in vuln.povs):
+            continue
+        cpv_id = vuln.vuln_keyword
+        if allowed_cpvs is not None and cpv_id not in allowed_cpvs:
+            continue
+        if cpv_id in seen_cpvs:
+            continue
+        seen_cpvs.add(cpv_id)
+        matched_cpvs.append(cpv_id)
+
+    return matched_cpvs
 
 
 def generate_trial_matrix(
@@ -650,6 +678,8 @@ def generate_trial_matrix(
                         f"no CPVs ({skip_reason})"
                     )
                     continue
+            target_cpvs = benchmark_harness.target_cpvs
+            target_cpv_set = set(target_cpvs) if target_cpvs else None
             # Determine which modes to run for this benchmark
             if config_mode == "all":
                 available_modes = get_available_modes_for_benchmark(
@@ -682,24 +712,49 @@ def generate_trial_matrix(
                 for sanitizer in config.sanitizers:
                     # Skip sanitizers that don't match any CPV in this harness
                     if should_check_cpvs and harness:
-                        if not _harness_has_cpv_with_sanitizer(
-                            harness, sanitizer.value
+                        if not _filter_matched_cpvs(
+                            harness, sanitizer.value, target_cpv_set
                         ):
                             logger.debug(
                                 f"Skipping {benchmark_harness.name}/{benchmark_harness.harness.name}: "
                                 f"no CPVs with sanitizer {sanitizer.value}"
                             )
                             continue
-                    for trial_num in range(1, config.trials + 1):
-                        trials.append(
-                            Trial(
-                                crs=crs,
-                                benchmark_harness=benchmark_harness,
-                                trial_num=trial_num,
-                                mode=mode,
-                                sanitizer=sanitizer.value,
-                            )
+                    if is_bug_fixing and harness:
+                        matched_cpvs = _filter_matched_cpvs(
+                            harness, sanitizer.value, target_cpv_set
                         )
+
+                        if not matched_cpvs:
+                            logger.debug(
+                                f"Skipping {benchmark_harness.name}/{benchmark_harness.harness.name}: "
+                                f"no CPVs with sanitizer {sanitizer.value}"
+                            )
+                            continue
+
+                        for cpv_id in matched_cpvs:
+                            for trial_num in range(1, config.trials + 1):
+                                trials.append(
+                                    Trial(
+                                        crs=crs,
+                                        benchmark_harness=benchmark_harness,
+                                        trial_num=trial_num,
+                                        mode=mode,
+                                        sanitizer=sanitizer.value,
+                                        target_cpv_id=cpv_id,
+                                    )
+                                )
+                    else:
+                        for trial_num in range(1, config.trials + 1):
+                            trials.append(
+                                Trial(
+                                    crs=crs,
+                                    benchmark_harness=benchmark_harness,
+                                    trial_num=trial_num,
+                                    mode=mode,
+                                    sanitizer=sanitizer.value,
+                                )
+                            )
 
     logger.info(
         f"Generated {len(trials)} trials: {len(crses)} CRSes × "
@@ -737,6 +792,8 @@ def dump_trial_matrix(
                 "harness_path": bh.harness.path,
                 "trial_num": trial.trial_num,
                 "mode": trial.mode,
+                "sanitizer": trial.sanitizer,
+                "target_cpv_id": trial.target_cpv_id,
             }
         )
 
@@ -765,6 +822,7 @@ def _display_trial_matrix_rich(trials: List[Trial], start_index: int) -> None:
     table.add_column("CRS", style="green")
     table.add_column("Benchmark", style="yellow")
     table.add_column("Harness", style="yellow")
+    table.add_column("CPV", style="magenta")
     table.add_column("Mode", style="blue")
     table.add_column("Sanitizer", style="magenta")
     table.add_column("Trial", justify="right")
@@ -778,6 +836,7 @@ def _display_trial_matrix_rich(trials: List[Trial], start_index: int) -> None:
             trial.crs,
             bh.name,
             bh.harness.name,
+            trial.target_cpv_id or "-",
             trial.mode,
             trial.sanitizer,
             str(trial.trial_num),
@@ -789,23 +848,27 @@ def _display_trial_matrix_rich(trials: List[Trial], start_index: int) -> None:
 
 def _display_trial_matrix_basic(trials: List[Trial], start_index: int) -> None:
     """Display trial matrix using basic text output."""
-    sys.stdout.write("\nTrials to be enqueued:\n")
-    sys.stdout.write("-" * 127 + "\n")
-    sys.stdout.write(
-        f"{'Order':<6} {'CRS':<35} {'Benchmark':<25} {'Harness':<20} "
-        f"{'Mode':<8} {'Sanitizer':<10} {'Trial':<5}\n"
+    header = (
+        f"{'Order':<6} {'CRS':<35} {'Benchmark':<25} {'Harness':<20} {'CPV':<10} "
+        f"{'Mode':<8} {'Sanitizer':<10} {'Trial':<5}"
     )
-    sys.stdout.write("-" * 127 + "\n")
+    separator = "-" * len(header)
+
+    sys.stdout.write("\nTrials to be enqueued:\n")
+    sys.stdout.write(separator + "\n")
+    sys.stdout.write(header + "\n")
+    sys.stdout.write(separator + "\n")
 
     for i, trial in enumerate(trials):
         order = start_index + i + 1
         bh = trial.benchmark_harness
         sys.stdout.write(
             f"{order:<6} {trial.crs:<35} {bh.name:<25} {bh.harness.name:<20} "
+            f"{(trial.target_cpv_id or '-'): <10}"
             f"{trial.mode:<8} {trial.sanitizer:<10} {trial.trial_num:<5}\n"
         )
 
-    sys.stdout.write("-" * 127 + "\n")
+    sys.stdout.write(separator + "\n")
     sys.stdout.write(f"Total trials: {len(trials)}\n\n")
 
 
@@ -1012,6 +1075,7 @@ def run_experiment_local(
             config_dict=config.model_dump(),
             mode=trial.mode,
             sanitizer=trial.sanitizer,
+            target_cpv_id=trial.target_cpv_id,
         )
 
         results.append(result)
@@ -1020,8 +1084,8 @@ def run_experiment_local(
         if result.success:
             if result.crs_type == "bug-fixing":
                 logger.info(
-                    f"  ✓ Success: {result.patches_generated} patches generated, "
-                    f"{result.patches_valid} valid"
+                    f"  ✓ Success: {result.patches_generated} patches produced, "
+                    f"{result.patches_verified} verified, {result.patches_valid} valid"
                 )
             else:
                 logger.info(
@@ -1073,6 +1137,7 @@ def _write_orchestrator_marker(
         mode=trial_result.mode,
         sanitizer=trial_result.sanitizer,
         trial_num=trial_result.trial_num,
+        target_cpv_id=trial_result.target_cpv_id,
     )
     trial_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1093,6 +1158,7 @@ def _write_orchestrator_marker(
             "trial_num": trial_result.trial_num,
             "mode": trial_result.mode,
             "sanitizer": trial_result.sanitizer,
+            "target_cpv_id": trial_result.target_cpv_id,
             "success": trial_result.success,
             "execution_time": trial_result.execution_time,
             "timestamp_start": trial_result.metadata.timestamp_start,
@@ -1104,6 +1170,7 @@ def _write_orchestrator_marker(
             "povs_found": trial_result.povs_found,
             "total_povs": trial_result.total_povs,
             "patches_generated": trial_result.patches_generated,
+            "patches_verified": trial_result.patches_verified,
             "patches_valid": trial_result.patches_valid,
             "error": trial_result.error,
             "error_type": trial_result.error_type,
@@ -1200,6 +1267,7 @@ def _monitor_jobs_basic(
                 crs = job.meta.get("crs", "?")
                 benchmark = job.meta.get("benchmark", "?")
                 harness = job.meta.get("harness", "?")
+                target_cpv_id = job.meta.get("target_cpv_id", "-")
                 mode = job.meta.get("mode", "?")
                 trial_num = job.meta.get("trial_num", "?")
                 phase = job.meta.get("phase", "queued")
@@ -1210,7 +1278,7 @@ def _monitor_jobs_basic(
                     mins, secs = divmod(elapsed_sec, 60)
                     elapsed = f"{mins}m{secs}s"
                 running_jobs.append(
-                    f"  [{worker_name}] [{crs}] {benchmark}/{harness} mode={mode} trial={trial_num} phase={phase} ({elapsed})"
+                    f"  [{worker_name}] [{crs}] {benchmark}/{harness} cpv={target_cpv_id} mode={mode} trial={trial_num} phase={phase} ({elapsed})"
                 )
 
         if running_jobs:
@@ -1364,6 +1432,7 @@ def _monitor_jobs_rich(
         running_table.add_column("CRS", style="cyan")
         running_table.add_column("Benchmark", style="yellow")
         running_table.add_column("Harness", style="yellow")
+        running_table.add_column("CPV", style="magenta")
         running_table.add_column("Mode", style="blue")
         running_table.add_column("Trial", justify="right")
         running_table.add_column("Phase", style="magenta")
@@ -1380,6 +1449,7 @@ def _monitor_jobs_rich(
                 crs = job.meta.get("crs", "?")
                 benchmark = job.meta.get("benchmark", "?")
                 harness = job.meta.get("harness", "?")
+                target_cpv_id = job.meta.get("target_cpv_id", "-")
                 mode = job.meta.get("mode", "?")
                 trial_num = str(job.meta.get("trial_num", "?"))
                 phase = job.meta.get("phase", "queued")
@@ -1394,6 +1464,7 @@ def _monitor_jobs_rich(
                     crs,
                     benchmark,
                     harness,
+                    target_cpv_id,
                     mode,
                     trial_num,
                     phase,
@@ -1440,6 +1511,7 @@ def _monitor_jobs_rich(
                             crs_type="bug-finding",
                             mode=kwargs.get("mode"),
                             sanitizer=kwargs.get("sanitizer"),
+                            target_cpv_id=kwargs.get("target_cpv_id"),
                             success=False,
                             execution_time=0.0,
                             error=f"Job failed: {job.exc_info}",
@@ -1484,6 +1556,7 @@ def _monitor_jobs_rich(
                     crs_type="bug-finding",
                     mode=kwargs.get("mode"),
                     sanitizer=kwargs.get("sanitizer"),
+                    target_cpv_id=kwargs.get("target_cpv_id"),
                     success=False,
                     execution_time=0.0,
                     error=f"Job failed: {job.exc_info}",
@@ -1717,7 +1790,10 @@ def run_experiment_distributed(
         trials = [
             t
             for t in trials
-            if f"{t.crs}:{t.benchmark_harness.name}:{t.benchmark_harness.harness.name}:{t.mode}:{t.trial_num}"
+            if (
+                f"{t.crs}:{t.benchmark_harness.name}:{t.benchmark_harness.harness.name}:"
+                f"{t.mode}:{t.sanitizer}:{t.trial_num}:{t.target_cpv_id or '-'}"
+            )
             not in existing_keys
         ]
         skipped_count = original_count - len(trials)
@@ -1740,6 +1816,7 @@ def run_experiment_distributed(
             t.mode,
             t.sanitizer,
             t.trial_num,
+            t.target_cpv_id,
         )
         is None
     ]
@@ -1829,6 +1906,7 @@ def run_experiment_distributed(
             config_dict=config.model_dump(),
             mode=trial.mode,
             sanitizer=trial.sanitizer,
+            target_cpv_id=trial.target_cpv_id,
             results_timestamp=results_timestamp,
             job_timeout=config.max_total_time,
             result_ttl=-1,  # Persist results forever
@@ -1839,6 +1917,7 @@ def run_experiment_distributed(
                 "mode": trial.mode,
                 "sanitizer": trial.sanitizer,
                 "trial_num": trial.trial_num,
+                "target_cpv_id": trial.target_cpv_id,
                 "cpu_count": cpu_count,  # CPU count from resource config
                 "memory_limit": memory_limit,  # Memory limit from resource config
             },
