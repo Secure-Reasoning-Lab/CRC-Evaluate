@@ -376,6 +376,10 @@ class ReportGenerator:
             csv_paths = self.csv_generator.generate_experiment_report(
                 experiment_metrics.model_dump()
             )
+            patch_csv = self.csv_generator.generate_patch_analysis_report(
+                experiment_dir
+            )
+            csv_paths.append(patch_csv)
             result["csv"] = csv_paths
 
         logger.info(
