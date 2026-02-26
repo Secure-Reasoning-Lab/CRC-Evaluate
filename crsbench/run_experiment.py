@@ -45,6 +45,7 @@ from crsbench.distributed.jobs import (
 )
 from crsbench.evaluation.cleanup import cleanup_trial_directory
 from crsbench.evaluation.results import TrialResult
+from crsbench.evaluation.trial_paths import experiment_dir as resolve_experiment_dir
 from crsbench.utils import log_progress, log_section, log_summary
 from crsbench.utils.benchmark_utils import (
     filter_benchmarks_by_mode,
@@ -775,7 +776,9 @@ def dump_trial_matrix(
         trials: List of Trial objects
         config: Experiment configuration
     """
-    output_dir = config.experiment_filestore.resolve() / config.experiment
+    output_dir = resolve_experiment_dir(
+        config.experiment_filestore.resolve(), config.experiment
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "trial_matrix.json"
 
@@ -1191,6 +1194,7 @@ def monitor_jobs(
     config: ExperimentConfig,
     *,
     disk_skipped: int = 0,
+    registry=None,
 ) -> List[TrialResult]:
     """Monitor job progress and display status.
 
@@ -1200,6 +1204,7 @@ def monitor_jobs(
         experiment_name: Experiment identifier
         config: Experiment configuration (for writing orchestrator markers)
         disk_skipped: Number of trials skipped due to existing .success markers
+        registry: Optional RegistryClient for lock renewal
 
     Returns:
         List of TrialResult objects
@@ -1212,10 +1217,20 @@ def monitor_jobs(
 
     if rich_available:
         return _monitor_jobs_rich(
-            queue, job_list, experiment_name, config, disk_skipped=disk_skipped
+            queue,
+            job_list,
+            experiment_name,
+            config,
+            disk_skipped=disk_skipped,
+            registry=registry,
         )
     return _monitor_jobs_basic(
-        queue, job_list, experiment_name, config, disk_skipped=disk_skipped
+        queue,
+        job_list,
+        experiment_name,
+        config,
+        disk_skipped=disk_skipped,
+        registry=registry,
     )
 
 
@@ -1226,11 +1241,13 @@ def _monitor_jobs_basic(
     config: ExperimentConfig,
     *,
     disk_skipped: int = 0,
+    registry=None,
 ) -> List[TrialResult]:
     """Basic job monitoring without Rich UI."""
     from crsbench.distributed.queue import get_queue_stats
     from crsbench.evaluation.results import TrialMetadata
 
+    last_renew = time.monotonic()
     logger.info(f"\nMonitoring {len(job_list)} jobs for experiment: {experiment_name}")
 
     # Track jobs that have already had markers written
@@ -1349,6 +1366,11 @@ def _monitor_jobs_basic(
         if completed + failed >= len(job_list):
             break
 
+        if registry and time.monotonic() - last_renew >= 60:
+            if not registry.renew(experiment_name):
+                logger.warning("Experiment lock lost — another run may have taken over")
+            last_renew = time.monotonic()
+
         time.sleep(3)
 
     # Collect results
@@ -1393,6 +1415,7 @@ def _monitor_jobs_rich(
     config: ExperimentConfig,
     *,
     disk_skipped: int = 0,
+    registry=None,
 ) -> List[TrialResult]:
     """Monitor jobs with Rich UI."""
     from rich.console import Console, Group
@@ -1473,6 +1496,7 @@ def _monitor_jobs_rich(
 
         return Group(table, running_table)
 
+    last_renew = time.monotonic()
     with Live(generate_status_table(), refresh_per_second=1, console=console) as live:
         while True:
             # Check if all jobs completed and write markers incrementally
@@ -1533,6 +1557,13 @@ def _monitor_jobs_rich(
 
             if completed + failed >= len(job_list):
                 break
+
+            if registry and time.monotonic() - last_renew >= 60:
+                if not registry.renew(experiment_name):
+                    logger.warning(
+                        "Experiment lock lost — another run may have taken over"
+                    )
+                last_renew = time.monotonic()
 
             live.update(generate_status_table())
             time.sleep(1)
@@ -1712,7 +1743,10 @@ def run_experiment_distributed(
         config: Experiment configuration
         trials: List of Trial objects to execute
     """
-    from crsbench.distributed.queue import initialize_queue
+    from crsbench.distributed.runtime_session import (
+        DistributedRuntimeSession,
+        LockContentionError,
+    )
 
     log_section("Running CRSBench in Distributed Mode (Redis)", width=60)
 
@@ -1725,10 +1759,12 @@ def run_experiment_distributed(
     # Mark this process as orchestrator for logging
     os.environ["CRSBENCH_ORCHESTRATOR"] = "1"
 
-    # Initialize queue
-    queue = initialize_queue(config.redis_host, experiment_name)
-    if queue is None:
+    session = DistributedRuntimeSession.for_run(
+        redis_host=config.redis_host, experiment_name=experiment_name
+    )
+    if session is None or session.trial_queue is None:
         raise RuntimeError(f"Failed to initialize Redis queue at {config.redis_host}")
+    queue = session.trial_queue
 
     # Resolve CRS paths with defaults
     crs_configs_dir = config.crs_configs_dir.resolve()
@@ -1876,6 +1912,10 @@ def run_experiment_distributed(
             else:
                 logger.debug(f"CRS {crs} has no memory limit configured")
 
+    cpu_tag = None
+    if config.resources:
+        cpu_tag = config.resources.cpu_tag
+
     # Generate 6-char random alphanumeric suffix (shared by all trials)
     trial_suffix = "_" + "".join(
         secrets.choice(string.ascii_lowercase + string.digits) for _ in range(6)
@@ -1884,61 +1924,88 @@ def run_experiment_distributed(
     # Generate timestamp once for all jobs in this experiment batch
     results_timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    jobs = []
-    for trial in trials:
-        bh = trial.benchmark_harness
-        cpu_count = crs_cpu_counts.get(trial.crs, 4)
-        memory_limit = crs_memory_limits.get(trial.crs)
+    # Acquire a distributed lock so only one orchestrator runs per
+    # experiment name at a time.  If the lock is already held, reject
+    # the second invocation immediately.
+    from crsbench.distributed.registry import RuntimeRegistration
 
-        # Build trial_id at enqueue time with random suffix
-        # Must be lowercase for Docker Compose project name compatibility
-        raw_trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{bh.harness.name}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
-        trial_id = sanitize_trial_id(raw_trial_id)
+    # Register experiment in the Redis registry so configless workers
+    # and evaluators can discover queues and resource requirements.
+    # Wrapped in try/finally to guarantee cleanup on crash or
+    # KeyboardInterrupt.
+    registration = RuntimeRegistration.from_experiment_config(config)
+    try:
+        try:
+            session.register_or_raise(registration)
+        except LockContentionError:
+            logger.error(
+                f"Experiment '{experiment_name}' is already running. "
+                "Use a different experiment name or wait for the current run to finish."
+            )
+            return
+        jobs = []
+        for trial in trials:
+            bh = trial.benchmark_harness
+            cpu_count = crs_cpu_counts.get(trial.crs, 4)
+            memory_limit = crs_memory_limits.get(trial.crs)
 
-        job = queue.enqueue(
-            "crsbench.distributed.jobs.run_crs_trial",
-            crs=trial.crs,
-            benchmark=bh.name,
-            harness_name=bh.harness.name,
-            harness_path=bh.harness.path,
-            trial_num=trial.trial_num,
-            trial_id=trial_id,
-            config_dict=config.model_dump(),
-            mode=trial.mode,
-            sanitizer=trial.sanitizer,
-            target_cpv_id=trial.target_cpv_id,
-            results_timestamp=results_timestamp,
-            job_timeout=config.max_total_time,
-            result_ttl=-1,  # Persist results forever
-            meta={
-                "crs": trial.crs,
-                "benchmark": bh.name,
-                "harness": bh.harness.name,
-                "mode": trial.mode,
-                "sanitizer": trial.sanitizer,
-                "trial_num": trial.trial_num,
-                "target_cpv_id": trial.target_cpv_id,
-                "cpu_count": cpu_count,  # CPU count from resource config
-                "memory_limit": memory_limit,  # Memory limit from resource config
-            },
+            # Build trial_id at enqueue time with random suffix
+            # Must be lowercase for Docker Compose project name compatibility
+            raw_trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{bh.harness.name}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
+            trial_id = sanitize_trial_id(raw_trial_id)
+
+            job = queue.enqueue(
+                "crsbench.distributed.jobs.run_crs_trial",
+                crs=trial.crs,
+                benchmark=bh.name,
+                harness_name=bh.harness.name,
+                harness_path=bh.harness.path,
+                trial_num=trial.trial_num,
+                trial_id=trial_id,
+                config_dict=config.model_dump(),
+                mode=trial.mode,
+                sanitizer=trial.sanitizer,
+                target_cpv_id=trial.target_cpv_id,
+                results_timestamp=results_timestamp,
+                job_timeout=config.max_total_time,
+                result_ttl=-1,  # Persist results forever
+                meta={
+                    "crs": trial.crs,
+                    "benchmark": bh.name,
+                    "harness": bh.harness.name,
+                    "mode": trial.mode,
+                    "sanitizer": trial.sanitizer,
+                    "trial_num": trial.trial_num,
+                    "target_cpv_id": trial.target_cpv_id,
+                    "cpu_count": cpu_count,  # CPU count from resource config
+                    "memory_limit": memory_limit,  # Memory limit from resource config
+                    "cpu_tag": cpu_tag,
+                },
+            )
+            jobs.append(job)
+            logger.debug(
+                f"Enqueued job {job.id} for {trial.crs} on {bh.name}/{bh.harness.name} (trial {trial.trial_num})"
+            )
+
+        logger.info(f"✓ Enqueued {len(jobs)} jobs successfully")
+
+        # Monitor progress
+        logger.info("\nMonitoring job progress...")
+        results = monitor_jobs(
+            queue,
+            jobs,
+            experiment_name,
+            config,
+            disk_skipped=disk_skipped,
+            registry=session.registry,
         )
-        jobs.append(job)
-        logger.debug(
-            f"Enqueued job {job.id} for {trial.crs} on {bh.name}/{bh.harness.name} (trial {trial.trial_num})"
-        )
 
-    logger.info(f"✓ Enqueued {len(jobs)} jobs successfully")
+        # Generate final report
+        log_section("Experiment Complete - Generating Report", width=60)
 
-    # Monitor progress
-    logger.info("\nMonitoring job progress...")
-    results = monitor_jobs(
-        queue, jobs, experiment_name, config, disk_skipped=disk_skipped
-    )
-
-    # Generate final report
-    log_section("Experiment Complete - Generating Report", width=60)
-
-    generate_final_report(results, experiment_name, config)
+        generate_final_report(results, experiment_name, config)
+    finally:
+        session.cleanup()
 
     # Post-experiment operations
     # Cleanup bulky artifacts
@@ -1955,7 +2022,9 @@ def _cleanup_experiment_artifacts(experiment_name: str, config) -> None:
     """
     from crsbench.reporting.snapshot_loader import discover_trials
 
-    experiment_dir = Path(config.experiment_filestore) / experiment_name
+    experiment_dir = resolve_experiment_dir(
+        config.experiment_filestore, experiment_name
+    )
 
     if not experiment_dir.exists():
         logger.warning(f"Experiment directory not found for cleanup: {experiment_dir}")
@@ -2048,7 +2117,9 @@ def _generate_html_json_reports(experiment_name: str, config) -> None:
     """
     from crsbench.reporting import ReportGenerator
 
-    experiment_dir = Path(config.experiment_filestore) / experiment_name
+    experiment_dir = resolve_experiment_dir(
+        config.experiment_filestore, experiment_name
+    )
     report_dir = Path(config.report_filestore) / experiment_name
     benchmarks_root = Path(config.benchmarks_root or "benchmarks")
 

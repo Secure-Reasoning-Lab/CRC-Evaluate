@@ -8,6 +8,7 @@ All verification uses per-POV granularity (verify_single_pov) for
 fine-grained parallelism and individual retry.
 """
 
+import os
 import time
 from typing import Any, Optional
 
@@ -40,10 +41,9 @@ def initialize_verify_queue(
         logger.debug("Redis/RQ packages not installed, verify queue unavailable")
         return None
 
-    from crsbench.distributed.queue import validate_queue_name_component
+    from crsbench.distributed.queue import resolve_queue_names
 
-    validate_queue_name_component(experiment_name)
-    queue_name = f"crsbench_{experiment_name}_verify"
+    _trial_queue, _build_queue, queue_name = resolve_queue_names(experiment_name)
     try:
         from crsbench.distributed.queue import create_redis_connection
 
@@ -65,6 +65,7 @@ def enqueue_single_pov(
     pov_id: str,
     pov_data: bytes,
     job_timeout: int = 3600,
+    cpu_tag: Optional[str] = None,
 ) -> Optional[str]:
     """Enqueue a single POV for async verification.
 
@@ -107,11 +108,15 @@ def enqueue_single_pov(
     )
 
     try:
+        effective_cpu_tag = cpu_tag or os.environ.get("CRSBENCH_JOB_CPU_TAG")
+        job_meta = {"cpu_tag": effective_cpu_tag} if effective_cpu_tag else {}
+
         job = verify_queue.enqueue(
             "crsbench.distributed.evaluator_jobs.verify_single_pov",
             payload.to_dict(),
             job_timeout=job_timeout,
             result_ttl=-1,
+            meta=job_meta,
         )
         logger.debug(
             f"Enqueued single POV verify job {job.id[:8]} "

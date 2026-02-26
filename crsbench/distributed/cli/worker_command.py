@@ -3,12 +3,24 @@
 This module provides the 'crsbench worker' subcommand for running
 distributed workers that process trial jobs from the Redis queue.
 
+Two modes:
+  - Default (no config): discover experiments from Redis registry
+  - --experiment-config: focus on a specific experiment
+
 For CI build/verify jobs, use 'crsbench evaluator --ci' instead.
 """
 
 import argparse
 import os
 import sys
+
+
+def _positive_int(value: str) -> int:
+    """Parse positive integer CLI values."""
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError(f"Expected integer >= 1, got {value}")
+    return parsed
 
 
 def add_worker_subparser(subparsers) -> None:
@@ -23,14 +35,14 @@ def add_worker_subparser(subparsers) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Run worker with default settings ('default' experiment)
-  %(prog)s
+  # Discover experiments from Redis registry (default)
+  %(prog)s --continuous
 
-  # Run worker for specific experiment
-  %(prog)s --experiment-config my-experiment-config.yaml
+  # Focus on a specific experiment
+  %(prog)s --experiment-config my-experiment.yaml --continuous
 
-  # Run worker in continuous mode with DEBUG logging
-  %(prog)s --continuous --verbose
+  # With CPU affinity
+  %(prog)s --continuous --cores 16-47
         """,
     )
 
@@ -39,13 +51,29 @@ Examples:
         type=str,
         default=None,
         metavar="CONFIG_FILE",
-        help="Path to experiment configuration YAML file (optional, provides defaults from 'worker' section)",
+        help="Focus on a specific experiment (default: discover all from registry)",
     )
 
     worker_parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging (DEBUG level)",
+    )
+
+    worker_parser.add_argument(
+        "--jobs",
+        type=_positive_int,
+        default=None,
+        metavar="N",
+        help="Max concurrent worker jobs (CLI override)",
+    )
+
+    worker_parser.add_argument(
+        "--cores-per-job",
+        type=_positive_int,
+        default=None,
+        metavar="M",
+        help="CPUs per worker job when cpuset supervisor is used (CLI override)",
     )
 
     worker_parser.add_argument(
@@ -84,11 +112,24 @@ Examples:
         help="CPUs to exclude from allocation (cpuset format, e.g., '0-3,8-11')",
     )
 
+    worker_parser.add_argument(
+        "--cpu-tag",
+        type=str,
+        default=None,
+        metavar="TAG",
+        help="Optional CPU capability tag. Worker only executes jobs with matching cpu_tag (or untagged jobs).",
+    )
+
     worker_parser.set_defaults(command="worker")
 
 
 def run_worker(args: argparse.Namespace) -> int:
     """Execute the worker command.
+
+    Without ``--experiment-config``, discovers experiments from the Redis
+    registry and listens on all discovered trial queues.
+
+    With ``--experiment-config``, focuses on the specified experiment.
 
     Args:
         args: Parsed command line arguments
@@ -96,34 +137,61 @@ def run_worker(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success, non-zero for failure)
     """
+    from crsbench.distributed.common import normalize_cpu_tag
+    from crsbench.utils.logger import configure_logger, get_logger
+
+    log_level = "DEBUG" if args.verbose else "INFO"
+    configure_logger(level=log_level, sink=sys.stdout)
+    os.environ["CRSBENCH_LOG_LEVEL"] = log_level
+    logger = get_logger(__name__)
+
+    use_cpuset = not getattr(args, "no_cpuset", False)
+    cores = getattr(args, "cores", None)
+    skip_cpus = getattr(args, "skip_cpus", None)
+    cpu_tag = getattr(args, "cpu_tag", None)
+    jobs_override = getattr(args, "jobs", None)
+    cores_per_job_override = getattr(args, "cores_per_job", None)
+
+    # --- Configless mode: discover experiments from registry ---
+    if not args.experiment_config:
+        from crsbench.distributed.worker import run_worker_configless
+
+        redis_host = os.environ.get("CRSBENCH_REDIS_HOST", "localhost")
+
+        try:
+            return run_worker_configless(
+                redis_host=redis_host,
+                worker_name=args.worker_name,
+                use_cpuset=use_cpuset,
+                cores=cores,
+                skip_cpus=skip_cpus,
+                cpu_tag=cpu_tag,
+                continuous=args.continuous,
+                jobs_override=jobs_override,
+                cores_per_job_override=cores_per_job_override,
+                log_level=log_level,
+            )
+        except KeyboardInterrupt:
+            logger.info("Worker interrupted by user")
+            return 0
+        except Exception as e:
+            logger.error(f"Worker failed: {e}")
+            return 1
+
+    # --- Config mode: focus on a specific experiment ---
     from pathlib import Path
 
     from crsbench.distributed.worker import main as worker_main
     from crsbench.distributed.worker import run_worker_continuous
-    from crsbench.utils.logger import configure_logger, get_logger
+    from crsbench.run_experiment import load_experiment_config
 
-    log_level = "DEBUG" if args.verbose else "INFO"
-    # Configure logging
-    configure_logger(level=log_level, sink=sys.stdout)
-    # Propagate log level to worker subprocesses.
-    os.environ["CRSBENCH_LOG_LEVEL"] = log_level
-    logger = get_logger(__name__)
-
-    # Load experiment config if provided
-    config = None
-    worker_config = None
-    if args.experiment_config:
-        from crsbench.run_experiment import load_experiment_config
-
-        config_path = Path(args.experiment_config)
-        logger.info(f"Loading experiment config from: {config_path}")
-        config = load_experiment_config(config_path)
-        worker_config = config.worker
-        if worker_config:
-            logger.info("Using worker configuration from experiment config")
+    config_path = Path(args.experiment_config)
+    logger.info(f"Loading experiment config from: {config_path}")
+    config = load_experiment_config(config_path)
+    worker_config = config.worker
 
     # Preflight: check that benchmarks exist on this machine
-    if config and config.benchmarks:
+    if config.benchmarks:
         from crsbench.distributed.jobs import check_benchmarks_available
 
         effective_config = config.model_copy()
@@ -147,48 +215,57 @@ def run_worker(args: argparse.Namespace) -> int:
             return 1
 
     # Resolve settings: CLI > config > defaults
-    def resolve(cli_val, config_val, cli_default):
-        """Resolve value with priority: CLI > config > default."""
-        if cli_val != cli_default:  # CLI was explicitly set
-            return cli_val
-        if config_val is not None:
-            return config_val
-        return cli_val  # Use CLI default
-
     redis_host = (
         (worker_config.redis_host if worker_config else None)
         or (config.redis_host if config else None)
         or os.environ.get("CRSBENCH_REDIS_HOST", "localhost")
     )
-    num_workers = worker_config.jobs if worker_config else 1
+    num_workers = (
+        jobs_override
+        if jobs_override is not None
+        else (worker_config.jobs if worker_config else 1)
+    )
+    default_cores_per_job = config.resources.cores_per_trial if config.resources else 4
+    cores_per_job = (
+        cores_per_job_override
+        if cores_per_job_override is not None
+        else (
+            worker_config.cores_per_job
+            if worker_config and worker_config.cores_per_job is not None
+            else default_cores_per_job
+        )
+    )
     continuous = args.continuous or (
         worker_config.continuous if worker_config else False
     )
-    experiment_name = config.experiment if config else "default"
+    experiment_name = config.experiment
+    from crsbench.distributed.queue import resolve_queue_names
 
-    # Trial queue name
-    queue_name = f"crsbench_{experiment_name}"
+    queue_name, _build_queue_name, _verify_queue_name = resolve_queue_names(
+        experiment_name
+    )
 
-    # Resolve worker name: CLI > config > hostname
     worker_name = args.worker_name
     if worker_name is None and worker_config and worker_config.worker_name:
         worker_name = worker_config.worker_name
 
-    # cpuset is enabled by default, disabled with --no-cpuset
-    use_cpuset = not getattr(args, "no_cpuset", False)
-
-    # Get disk space config from worker_config
     minimum_disk_size = worker_config.minimum_disk_size if worker_config else "10GB"
     disk_check_interval = worker_config.disk_check_interval if worker_config else 60
 
-    # Resolve cores and skip_cpus: CLI > worker config > None
-    cores = getattr(args, "cores", None)
     if cores is None and worker_config:
         cores = worker_config.cores
-
-    skip_cpus = getattr(args, "skip_cpus", None)
     if skip_cpus is None and worker_config:
         skip_cpus = worker_config.skip_cpus
+    if cpu_tag is None:
+        worker_cpu_tag = normalize_cpu_tag(
+            worker_config.cpu_tag if worker_config else None
+        )
+        resources_cpu_tag = normalize_cpu_tag(
+            config.resources.cpu_tag if config.resources else None
+        )
+        cpu_tag = worker_cpu_tag or resources_cpu_tag
+    else:
+        cpu_tag = normalize_cpu_tag(cpu_tag)
 
     try:
         if continuous:
@@ -203,6 +280,8 @@ def run_worker(args: argparse.Namespace) -> int:
                 disk_check_interval=disk_check_interval,
                 cores=cores,
                 skip_cpus=skip_cpus,
+                cpu_tag=cpu_tag,
+                cores_per_job=cores_per_job,
                 log_level=log_level,
             )
             return 0
@@ -215,18 +294,13 @@ def run_worker(args: argparse.Namespace) -> int:
             use_cpuset=use_cpuset,
             cores=cores,
             skip_cpus=skip_cpus,
+            cpu_tag=cpu_tag,
+            cores_per_job=cores_per_job,
             log_level=log_level,
         )
-
     except KeyboardInterrupt:
-        from crsbench.utils.logger import get_logger
-
-        logger = get_logger(__name__)
         logger.info("Worker interrupted by user")
         return 0
     except Exception as e:
-        from crsbench.utils.logger import get_logger
-
-        logger = get_logger(__name__)
         logger.error(f"Worker failed: {e}")
         return 1

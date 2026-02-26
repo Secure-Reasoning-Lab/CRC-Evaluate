@@ -14,6 +14,8 @@ from crsbench.distributed.patch_evaluator_jobs import (
     PatchJobPayload,
     PatchVerifyResult,
     _cleanup_patch_variant_artifacts,
+    _collect_patch_verify_logs,
+    _resolve_patch_job_output_dir,
     execute_patch_verify,
 )
 
@@ -85,6 +87,8 @@ class TestPatchJobPayload:
             patch=embedded,
             sanitizer="address",
             source_mode="pkgs",
+            verify_variants=True,
+            test_mode="RTS",
             use_inc_build=True,
             enqueued_at=1700000000.0,
         )
@@ -101,8 +105,29 @@ class TestPatchJobPayload:
         assert restored.patch.pov_id == "cpv_1"
         assert restored.sanitizer == "address"
         assert restored.source_mode == "pkgs"
+        assert restored.verify_variants is True
+        assert restored.test_mode == "RTS"
         assert restored.use_inc_build is True
         assert restored.enqueued_at == 1700000000.0
+
+    def test_patch_job_payload_use_inc_build_defaults_false(self) -> None:
+        """Missing use_inc_build in payload should default to False."""
+        payload = {
+            "experiment_name": "exp",
+            "trial_id": "trial-1",
+            "benchmark": "bench",
+            "harness": "h0",
+            "cpv_id": "cpv_0",
+            "patch": {
+                "patch_id": "patch_0",
+                "pov_id": "cpv_0",
+                "patch_content_b64": "ZHVtbXk=",
+            },
+        }
+
+        restored = PatchJobPayload.from_dict(payload)
+        assert restored.test_mode == "FULL"
+        assert restored.use_inc_build is False
 
 
 class TestPatchBuildResult:
@@ -150,6 +175,7 @@ class TestPatchVerifyResult:
             pov_test_passed=True,
             unit_test_passed=True,
             status="valid",
+            security_verdict="PASS",
             details="Patch passes both POV and unit tests",
             error=None,
             completed_at=1700000200.0,
@@ -166,6 +192,7 @@ class TestPatchVerifyResult:
         assert restored.pov_test_passed is True
         assert restored.unit_test_passed is True
         assert restored.status == "valid"
+        assert restored.security_verdict == "PASS"
         assert restored.details == "Patch passes both POV and unit tests"
         assert restored.error is None
         assert restored.completed_at == 1700000200.0
@@ -217,6 +244,7 @@ class TestEnqueuePatchJobs:
             "mock-bench",
             "harness_0",
             patches,
+            verify_variants=True,
         )
 
         # Verify build queue called with execute_patch_build
@@ -226,6 +254,9 @@ class TestEnqueuePatchJobs:
             build_call_args[0][0]
             == "crsbench.distributed.patch_evaluator_jobs.execute_patch_build"
         )
+        build_payload = build_call_args[0][1]
+        assert build_payload["use_inc_build"] is False
+        assert build_payload["test_mode"] == "FULL"
 
         # Verify verify queue called with execute_patch_verify and depends_on
         assert verify_queue.enqueue.call_count == 1
@@ -235,6 +266,10 @@ class TestEnqueuePatchJobs:
             == "crsbench.distributed.patch_evaluator_jobs.execute_patch_verify"
         )
         assert verify_call_args[1]["depends_on"] == [mock_build_job]
+        verify_payload = verify_call_args[0][1]
+        assert verify_payload["verify_variants"] is True
+        assert verify_payload["test_mode"] == "FULL"
+        assert verify_payload["use_inc_build"] is False
 
         # Returns list with one verify job ID
         assert job_ids == ["verify-job-001"]
@@ -301,6 +336,90 @@ class TestPollPatchVerdicts:
     @patch("crsbench.distributed.patch_queue.REDIS_AVAILABLE", new=True)
     @patch("crsbench.distributed.patch_queue.rq")
     @patch("crsbench.distributed.queue.create_redis_connection")
+    def test_poll_patch_verdicts_finished_without_result(
+        self, mock_create_conn: MagicMock, mock_rq: MagicMock
+    ) -> None:
+        """Finished job with missing result should be terminal error."""
+        from crsbench.distributed.patch_queue import poll_patch_verdicts
+
+        mock_conn = MagicMock()
+        mock_create_conn.return_value = mock_conn
+
+        mock_job = MagicMock()
+        mock_job.get_status.return_value = "finished"
+        mock_job.result = None
+        mock_job.args = (
+            {
+                "trial_id": "trial-2",
+                "benchmark": "bench",
+                "harness": "h0",
+                "cpv_id": "cpv_0",
+                "patch": {"patch_id": "patch_2"},
+            },
+        )
+        mock_rq.job.Job.fetch.return_value = mock_job
+
+        completed, remaining = poll_patch_verdicts("localhost", ["job-002"])
+
+        assert len(completed) == 1
+        assert completed[0]["status"] == "error"
+        assert completed[0]["trial_id"] == "trial-2"
+        assert completed[0]["patch_id"] == "patch_2"
+        assert "without a result payload" in completed[0]["error"]
+        assert remaining == []
+
+    @patch("crsbench.distributed.patch_queue.REDIS_AVAILABLE", new=True)
+    @patch("crsbench.distributed.patch_queue.rq")
+    @patch("crsbench.distributed.queue.create_redis_connection")
+    def test_poll_patch_verdicts_finished_with_invalid_result_payload(
+        self, mock_create_conn: MagicMock, mock_rq: MagicMock
+    ) -> None:
+        """Finished job with non-dict result should become terminal error."""
+        from crsbench.distributed.patch_queue import poll_patch_verdicts
+
+        mock_conn = MagicMock()
+        mock_create_conn.return_value = mock_conn
+
+        mock_job = MagicMock()
+        mock_job.get_status.return_value = "finished"
+        mock_job.result = "not-a-dict"
+        mock_job.args = ({"trial_id": "trial-2", "patch": {"patch_id": "patch_2"}},)
+        mock_rq.job.Job.fetch.return_value = mock_job
+
+        completed, remaining = poll_patch_verdicts("localhost", ["job-002"])
+
+        assert len(completed) == 1
+        assert completed[0]["status"] == "error"
+        assert "invalid result payload type" in completed[0]["error"]
+        assert remaining == []
+
+    @patch("crsbench.distributed.patch_queue.REDIS_AVAILABLE", new=True)
+    @patch("crsbench.distributed.patch_queue.rq")
+    @patch("crsbench.distributed.queue.create_redis_connection")
+    def test_poll_patch_verdicts_cancelled_treated_as_terminal_error(
+        self, mock_create_conn: MagicMock, mock_rq: MagicMock
+    ) -> None:
+        """Cancelled jobs should not remain pending forever."""
+        from crsbench.distributed.patch_queue import poll_patch_verdicts
+
+        mock_conn = MagicMock()
+        mock_create_conn.return_value = mock_conn
+
+        mock_job = MagicMock()
+        mock_job.get_status.return_value = "cancelled"
+        mock_job.args = ({"trial_id": "trial-2", "patch": {"patch_id": "patch_2"}},)
+        mock_rq.job.Job.fetch.return_value = mock_job
+
+        completed, remaining = poll_patch_verdicts("localhost", ["job-002"])
+
+        assert len(completed) == 1
+        assert completed[0]["status"] == "error"
+        assert "non-success job status: cancelled" in completed[0]["error"]
+        assert remaining == []
+
+    @patch("crsbench.distributed.patch_queue.REDIS_AVAILABLE", new=True)
+    @patch("crsbench.distributed.patch_queue.rq")
+    @patch("crsbench.distributed.queue.create_redis_connection")
     def test_poll_patch_verdicts_failed(
         self, mock_create_conn: MagicMock, mock_rq: MagicMock
     ) -> None:
@@ -313,13 +432,106 @@ class TestPollPatchVerdicts:
         mock_job = MagicMock()
         mock_job.get_status.return_value = "failed"
         mock_job.exc_info = "RuntimeError: build crashed"
+        mock_job.args = (
+            {
+                "trial_id": "trial-3",
+                "benchmark": "bench",
+                "harness": "h0",
+                "cpv_id": "cpv_0",
+                "patch": {"patch_id": "patch_0"},
+            },
+        )
         mock_rq.job.Job.fetch.return_value = mock_job
 
         completed, remaining = poll_patch_verdicts("localhost", ["job-003"])
 
         assert len(completed) == 1
+        assert completed[0]["trial_id"] == "trial-3"
+        assert completed[0]["benchmark"] == "bench"
+        assert completed[0]["patch_id"] == "patch_0"
         assert completed[0]["status"] == "error"
         assert "RuntimeError: build crashed" in completed[0]["error"]
+        assert remaining == []
+
+    @patch("crsbench.distributed.patch_queue.REDIS_AVAILABLE", new=True)
+    @patch("crsbench.distributed.patch_queue.rq")
+    @patch("crsbench.distributed.queue.create_redis_connection")
+    def test_poll_patch_verdicts_failed_with_malformed_patch_payload(
+        self, mock_create_conn: MagicMock, mock_rq: MagicMock
+    ) -> None:
+        """Malformed payload should still return completed error, not remaining."""
+        from crsbench.distributed.patch_queue import poll_patch_verdicts
+
+        mock_conn = MagicMock()
+        mock_create_conn.return_value = mock_conn
+
+        mock_job = MagicMock()
+        mock_job.get_status.return_value = "failed"
+        mock_job.exc_info = "RuntimeError: verify crashed"
+        mock_job.args = ({"trial_id": "trial-4", "patch": None},)
+        mock_rq.job.Job.fetch.return_value = mock_job
+
+        completed, remaining = poll_patch_verdicts("localhost", ["job-004"])
+
+        assert len(completed) == 1
+        assert completed[0]["trial_id"] == "trial-4"
+        assert completed[0]["patch_id"] == ""
+        assert remaining == []
+
+    @patch("crsbench.distributed.patch_queue.REDIS_AVAILABLE", new=True)
+    @patch("crsbench.distributed.patch_queue.rq")
+    @patch("crsbench.distributed.queue.create_redis_connection")
+    def test_poll_patch_verdicts_failed_with_none_args(
+        self, mock_create_conn: MagicMock, mock_rq: MagicMock
+    ) -> None:
+        """None args should still yield a completed error verdict."""
+        from crsbench.distributed.patch_queue import poll_patch_verdicts
+
+        mock_conn = MagicMock()
+        mock_create_conn.return_value = mock_conn
+
+        mock_job = MagicMock()
+        mock_job.get_status.return_value = "failed"
+        mock_job.exc_info = "RuntimeError: verify crashed"
+        mock_job.args = None
+        mock_rq.job.Job.fetch.return_value = mock_job
+
+        completed, remaining = poll_patch_verdicts("localhost", ["job-005"])
+
+        assert len(completed) == 1
+        assert completed[0]["status"] == "error"
+        assert remaining == []
+
+    @patch("crsbench.distributed.patch_queue.REDIS_AVAILABLE", new=True)
+    @patch("crsbench.distributed.patch_queue.rq")
+    @patch("crsbench.distributed.queue.create_redis_connection")
+    def test_poll_patch_verdicts_failed_with_kwargs_payload(
+        self, mock_create_conn: MagicMock, mock_rq: MagicMock
+    ) -> None:
+        """Failed jobs should recover routing fields from kwargs payload."""
+        from crsbench.distributed.patch_queue import poll_patch_verdicts
+
+        mock_conn = MagicMock()
+        mock_create_conn.return_value = mock_conn
+
+        mock_job = MagicMock()
+        mock_job.get_status.return_value = "failed"
+        mock_job.exc_info = "RuntimeError: verify crashed"
+        mock_job.args = ()
+        mock_job.kwargs = {
+            "trial_id": "trial-6",
+            "benchmark": "bench",
+            "harness": "h0",
+            "cpv_id": "cpv_0",
+            "patch": {"patch_id": "patch_6"},
+        }
+        mock_rq.job.Job.fetch.return_value = mock_job
+
+        completed, remaining = poll_patch_verdicts("localhost", ["job-006"])
+
+        assert len(completed) == 1
+        assert completed[0]["trial_id"] == "trial-6"
+        assert completed[0]["patch_id"] == "patch_6"
         assert remaining == []
 
 
@@ -392,7 +604,226 @@ class TestPatchVerifyCleanup:
 
         result = execute_patch_verify(payload.to_dict())
         assert result["status"] == "error"
-        assert "POV file not found" in result["details"]
+        assert "No POV files found" in result["details"]
         mock_cleanup.assert_called_once_with(
             "mock-bench-asan-delta-patched-cpv_0-patch_0"
         )
+
+    @patch("crsbench.distributed.ci_jobs.execute_ci_job")
+    @patch(
+        "crsbench.distributed.patch_evaluator_jobs.resolve_benchmark_path",
+    )
+    @patch(
+        "crsbench.distributed.patch_evaluator_jobs.get_evaluator_benchmarks_root",
+    )
+    def test_verify_uses_embedded_patch_path_override(
+        self,
+        mock_root: MagicMock,
+        mock_resolve: MagicMock,
+        mock_execute_ci: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Distributed verify should pass embedded patch path override to CI job."""
+        mock_root.return_value = tmp_path
+        bench = tmp_path / "mock-bench"
+        (bench / ".aixcc" / "h0" / "cpv_0" / "blobs").mkdir(parents=True, exist_ok=True)
+        (bench / ".aixcc" / "h0" / "cpv_0" / "blobs" / "pov_0.blob").write_bytes(b"x")
+        mock_resolve.return_value = bench
+        mock_execute_ci.return_value = {
+            "success": False,
+            "error": "verification failed",
+            "details": {},
+        }
+
+        payload = PatchJobPayload(
+            experiment_name="exp",
+            trial_id="trial-2",
+            benchmark="mock-bench",
+            harness="h0",
+            cpv_id="cpv_0",
+            patch=EmbeddedPatch(
+                patch_id="patch_1",
+                pov_id="cpv_0",
+                patch_content_b64="ZHVtbXk=",  # dummy
+            ),
+            verify_variants=True,
+        )
+
+        result = execute_patch_verify(payload.to_dict())
+        assert result["status"] == "error"
+        called_params = mock_execute_ci.call_args[0][0]
+        patch_override = called_params.get("patch_path_override")
+        assert isinstance(patch_override, str)
+        assert patch_override.endswith("/patches/patch_1.diff")
+
+
+class TestPatchJobOutputDir:
+    """Tests for distributed patch job output dir resolution."""
+
+    def test_resolve_patch_job_output_dir_is_deterministic(self) -> None:
+        """Path should be stable and namespaced by experiment/trial/patch identity."""
+        payload = PatchJobPayload(
+            experiment_name="exp/main",
+            trial_id="trial:1",
+            benchmark="mock-bench",
+            harness="harness_0",
+            cpv_id="cpv_0",
+            patch=EmbeddedPatch(
+                patch_id="patch#0",
+                pov_id="cpv_0",
+                patch_content_b64="ZHVtbXk=",  # "dummy"
+            ),
+        )
+
+        path = _resolve_patch_job_output_dir(payload)
+        path_str = str(path)
+
+        assert "distributed-patch-jobs" in path_str
+        assert "exp_main" in path_str
+        assert "trial_1" in path_str
+        assert "mock-bench" in path_str
+        assert "harness_0" in path_str
+        assert "cpv_0" in path_str
+        assert "patch_0" in path_str
+
+
+class TestPatchLogCollection:
+    """Tests for distributed patch log collection safeguards."""
+
+    def test_collect_patch_verify_logs_truncates_large_logs(
+        self, tmp_path: Path
+    ) -> None:
+        """Collected logs should be bounded and marked truncated when oversized."""
+        payload = PatchJobPayload(
+            experiment_name="exp",
+            trial_id="trial-1",
+            benchmark="mock-bench",
+            harness="harness_0",
+            cpv_id="cpv_0",
+            patch=EmbeddedPatch(
+                patch_id="patch_0",
+                pov_id="cpv_0",
+                patch_content_b64="ZHVtbXk=",
+            ),
+        )
+        out_dir = _resolve_patch_job_output_dir(payload)
+        logs_dir = out_dir / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        (logs_dir / "huge.stdout").write_bytes(b"a" * (300 * 1024))
+
+        logs = _collect_patch_verify_logs(payload)
+        assert "huge.stdout" in logs
+        assert "[truncated additional bytes]" in logs["huge.stdout"]
+
+    def test_collect_patch_verify_logs_skips_unreadable(self, tmp_path: Path) -> None:
+        """Unreadable log files should not crash collection."""
+        payload = PatchJobPayload(
+            experiment_name="exp",
+            trial_id="trial-2",
+            benchmark="mock-bench",
+            harness="harness_0",
+            cpv_id="cpv_0",
+            patch=EmbeddedPatch(
+                patch_id="patch_1",
+                pov_id="cpv_0",
+                patch_content_b64="ZHVtbXk=",
+            ),
+        )
+        out_dir = _resolve_patch_job_output_dir(payload)
+        logs_dir = out_dir / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        path = logs_dir / "ok.stdout"
+        path.write_text("ok")
+
+        with patch.object(Path, "open", side_effect=OSError("boom")):
+            logs = _collect_patch_verify_logs(payload)
+
+        assert logs == {}
+
+    def test_collect_patch_verify_logs_count_only_eligible_logs(
+        self, tmp_path: Path
+    ) -> None:
+        """Non-log files should not consume file-count budget."""
+        payload = PatchJobPayload(
+            experiment_name="exp",
+            trial_id="trial-3",
+            benchmark="mock-bench",
+            harness="harness_0",
+            cpv_id="cpv_0",
+            patch=EmbeddedPatch(
+                patch_id="patch_2",
+                pov_id="cpv_0",
+                patch_content_b64="ZHVtbXk=",
+            ),
+        )
+        out_dir = _resolve_patch_job_output_dir(payload)
+        logs_dir = out_dir / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        # Irrelevant entries
+        for i in range(100):
+            (logs_dir / f"junk-{i}.txt").write_text("x")
+
+        # Eligible entries should still be collected
+        (logs_dir / "a.stdout").write_text("ok")
+        (logs_dir / "b.stderr").write_text("err")
+
+        logs = _collect_patch_verify_logs(payload)
+        assert logs["a.stdout"] == "ok"
+        assert logs["b.stderr"] == "err"
+
+    @patch("crsbench.distributed.patch_evaluator_jobs._MAX_LOG_FILE_COUNT", new=1)
+    def test_collect_patch_verify_logs_order_is_deterministic(
+        self, tmp_path: Path
+    ) -> None:
+        """When capped, lexicographically first eligible log is selected."""
+        payload = PatchJobPayload(
+            experiment_name="exp",
+            trial_id="trial-4",
+            benchmark="mock-bench",
+            harness="harness_0",
+            cpv_id="cpv_0",
+            patch=EmbeddedPatch(
+                patch_id="patch_3",
+                pov_id="cpv_0",
+                patch_content_b64="ZHVtbXk=",
+            ),
+        )
+        out_dir = _resolve_patch_job_output_dir(payload)
+        logs_dir = out_dir / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        (logs_dir / "z.stderr").write_text("last")
+        (logs_dir / "a.stdout").write_text("first")
+
+        logs = _collect_patch_verify_logs(payload)
+        assert list(logs.keys()) == ["a.stdout"]
+
+    @patch("crsbench.distributed.patch_evaluator_jobs._MAX_LOG_FILE_COUNT", new=2)
+    def test_collect_patch_verify_logs_large_set_respects_cap_and_order(
+        self, tmp_path: Path
+    ) -> None:
+        """Large eligible sets should still select deterministic lowest names."""
+        payload = PatchJobPayload(
+            experiment_name="exp",
+            trial_id="trial-5",
+            benchmark="mock-bench",
+            harness="harness_0",
+            cpv_id="cpv_0",
+            patch=EmbeddedPatch(
+                patch_id="patch_4",
+                pov_id="cpv_0",
+                patch_content_b64="ZHVtbXk=",
+            ),
+        )
+        out_dir = _resolve_patch_job_output_dir(payload)
+        logs_dir = out_dir / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        for i in range(200):
+            (logs_dir / f"log-{i:04d}.stdout").write_text(str(i))
+        (logs_dir / "aaa.stderr").write_text("a")
+        (logs_dir / "aab.stdout").write_text("b")
+
+        logs = _collect_patch_verify_logs(payload)
+        assert list(logs.keys()) == ["aaa.stderr", "aab.stdout"]

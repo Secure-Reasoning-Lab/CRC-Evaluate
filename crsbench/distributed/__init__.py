@@ -16,7 +16,11 @@ Usage:
     queue = initialize_queue('localhost', 'experiment-name')
     job = queue.enqueue(run_crs_trial, crs='test-crs', benchmark='test-bench', ...)
 
-    # Worker execution
+    # Worker execution (configless — discovers from registry)
+    from crsbench.distributed.worker import run_worker_configless
+    run_worker_configless()
+
+    # Worker execution (config — specific experiment)
     from crsbench.distributed.worker import main as worker_main
     worker_main()
 """

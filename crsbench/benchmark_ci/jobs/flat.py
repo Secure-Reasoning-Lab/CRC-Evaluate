@@ -651,6 +651,7 @@ class BuildPatchVariantJob(Job):
                 force_rebuild=self.force_rebuild,
                 source_mode=self.source_mode,
                 build_only=True,  # Only build, skip verification
+                log_dir=context.output_dir,
             )
 
             # Create PatchInfo for the engine
@@ -758,6 +759,7 @@ class PatchVariantTestJob(Job):
     harness: str
     pov_paths: list[Path] = field(default_factory=list)
     test_mode: str = "FULL"
+    patch_path_override: Optional[Path] = None
     build_patch_job_id: str = ""
     source_mode: str = "pkgs"
 
@@ -861,6 +863,7 @@ class PatchVariantTestJob(Job):
                 source_mode=self.source_mode,
                 build_only=False,  # Run full verification
                 verify_variants=True,  # Test all POV variants
+                log_dir=context.output_dir,
             )
 
             # Get first POV path for the engine (it will discover all variants)
@@ -869,13 +872,19 @@ class PatchVariantTestJob(Job):
                 raise ValueError(f"No POV paths provided for {self.cpv_id}")
 
             # Find patch path from benchmark structure
-            patch_dir = (
-                self.benchmark_path / ".aixcc" / self.harness / self.cpv_id / "patches"
-            )
-            patch_path = patch_dir / f"{self.patch_id}.diff"
-            if not patch_path.exists():
-                # Try alternative naming
-                patch_path = patch_dir / "patch.diff"
+            patch_path = self.patch_path_override
+            if patch_path is None:
+                patch_dir = (
+                    self.benchmark_path
+                    / ".aixcc"
+                    / self.harness
+                    / self.cpv_id
+                    / "patches"
+                )
+                patch_path = patch_dir / f"{self.patch_id}.diff"
+                if not patch_path.exists():
+                    # Try alternative naming
+                    patch_path = patch_dir / "patch.diff"
 
             if not patch_path.exists():
                 raise ValueError(f"Patch file not found: {patch_path}")
@@ -994,6 +1003,7 @@ class PatchPovTestJob(Job):
     patch_id: str
     harness: str
     pov_path: Optional[Path] = None  # Single pov_0 path
+    patch_path_override: Optional[Path] = None
     build_patch_job_id: str = ""
     source_mode: str = "pkgs"
 
@@ -1061,15 +1071,22 @@ class PatchPovTestJob(Job):
                 build_only=False,
                 verify_variants=False,  # Only test pov_0
                 skip_unittest=True,
+                log_dir=context.output_dir,
             )
 
             # Find patch path from benchmark structure
-            patch_dir = (
-                self.benchmark_path / ".aixcc" / self.harness / self.cpv_id / "patches"
-            )
-            patch_path = patch_dir / f"{self.patch_id}.diff"
-            if not patch_path.exists():
-                patch_path = patch_dir / "patch.diff"
+            patch_path = self.patch_path_override
+            if patch_path is None:
+                patch_dir = (
+                    self.benchmark_path
+                    / ".aixcc"
+                    / self.harness
+                    / self.cpv_id
+                    / "patches"
+                )
+                patch_path = patch_dir / f"{self.patch_id}.diff"
+                if not patch_path.exists():
+                    patch_path = patch_dir / "patch.diff"
 
             if not patch_path.exists():
                 raise ValueError(f"Patch file not found: {patch_path}")
@@ -1149,6 +1166,7 @@ class PatchVarTestJob(Job):
     patch_id: str
     harness: str
     pov_paths: list[Path] = field(default_factory=list)  # pov_1+ paths
+    patch_path_override: Optional[Path] = None
     build_patch_job_id: str = ""
     source_mode: str = "pkgs"
 
@@ -1205,12 +1223,18 @@ class PatchVarTestJob(Job):
             oss_fuzz_path = Path(get_oss_fuzz_root())
 
             # Find patch path from benchmark structure
-            patch_dir = (
-                self.benchmark_path / ".aixcc" / self.harness / self.cpv_id / "patches"
-            )
-            patch_path = patch_dir / f"{self.patch_id}.diff"
-            if not patch_path.exists():
-                patch_path = patch_dir / "patch.diff"
+            patch_path = self.patch_path_override
+            if patch_path is None:
+                patch_dir = (
+                    self.benchmark_path
+                    / ".aixcc"
+                    / self.harness
+                    / self.cpv_id
+                    / "patches"
+                )
+                patch_path = patch_dir / f"{self.patch_id}.diff"
+                if not patch_path.exists():
+                    patch_path = patch_dir / "patch.diff"
 
             if not patch_path.exists():
                 raise ValueError(f"Patch file not found: {patch_path}")
@@ -1237,6 +1261,7 @@ class PatchVarTestJob(Job):
                     build_only=False,
                     verify_variants=False,  # Test one at a time
                     skip_unittest=True,
+                    log_dir=context.output_dir,
                 )
 
                 result = engine.verify_patch(
@@ -1309,6 +1334,7 @@ class PatchUnitTestJob(Job):
     patch_id: str
     harness: str
     test_mode: str = "FULL"  # FULL or RTS
+    patch_path_override: Optional[Path] = None
     build_patch_job_id: str = ""  # Dependency on build job
     source_mode: str = "pkgs"
 
@@ -1366,15 +1392,22 @@ class PatchUnitTestJob(Job):
                 build_only=False,
                 verify_variants=False,  # Not needed for unit tests
                 skip_pov=True,  # Skip POV, only run unit tests
+                log_dir=context.output_dir,
             )
 
             # Find patch path from benchmark structure
-            patch_dir = (
-                self.benchmark_path / ".aixcc" / self.harness / self.cpv_id / "patches"
-            )
-            patch_path = patch_dir / f"{self.patch_id}.diff"
-            if not patch_path.exists():
-                patch_path = patch_dir / "patch.diff"
+            patch_path = self.patch_path_override
+            if patch_path is None:
+                patch_dir = (
+                    self.benchmark_path
+                    / ".aixcc"
+                    / self.harness
+                    / self.cpv_id
+                    / "patches"
+                )
+                patch_path = patch_dir / f"{self.patch_id}.diff"
+                if not patch_path.exists():
+                    patch_path = patch_dir / "patch.diff"
 
             if not patch_path.exists():
                 raise ValueError(f"Patch file not found: {patch_path}")

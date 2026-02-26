@@ -34,6 +34,7 @@ _SUPPORTED_JOB_TYPES = frozenset(
         "VerifyCpvVarJob",
         "PatchPovTestJob",
         "PatchVarTestJob",
+        "PatchVariantTestJob",
         "PatchUnitTestJob",
         "FlatCollectCoverageJob",
         "BuildPatchVariantJob",
@@ -120,6 +121,9 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 "patch_id": job.patch_id,
                 "harness": job.harness,
                 "pov_path": str(job.pov_path) if job.pov_path else None,
+                "patch_path_override": str(job.patch_path_override)
+                if job.patch_path_override
+                else None,
                 "build_patch_job_id": job.build_patch_job_id,
                 "source_mode": job.source_mode,
             }
@@ -133,6 +137,26 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 "patch_id": job.patch_id,
                 "harness": job.harness,
                 "pov_paths": [str(p) for p in job.pov_paths],
+                "patch_path_override": str(job.patch_path_override)
+                if job.patch_path_override
+                else None,
+                "build_patch_job_id": job.build_patch_job_id,
+                "source_mode": job.source_mode,
+            }
+        )
+    elif cls_name == "PatchVariantTestJob":
+        params.update(
+            {
+                "benchmark_path": str(job.benchmark_path),
+                "benchmark_name": job.benchmark_name,
+                "cpv_id": job.cpv_id,
+                "patch_id": job.patch_id,
+                "harness": job.harness,
+                "test_mode": job.test_mode,
+                "pov_paths": [str(p) for p in job.pov_paths],
+                "patch_path_override": str(job.patch_path_override)
+                if job.patch_path_override
+                else None,
                 "build_patch_job_id": job.build_patch_job_id,
                 "source_mode": job.source_mode,
             }
@@ -146,6 +170,9 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 "patch_id": job.patch_id,
                 "harness": job.harness,
                 "test_mode": job.test_mode,
+                "patch_path_override": str(job.patch_path_override)
+                if job.patch_path_override
+                else None,
                 "build_patch_job_id": job.build_patch_job_id,
                 "source_mode": job.source_mode,
             }
@@ -196,6 +223,7 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
         FlatCollectCoverageJob,
         PatchPovTestJob,
         PatchUnitTestJob,
+        PatchVariantTestJob,
         PatchVarTestJob,
         VerifyCpvPovJob,
         VerifyCpvVarJob,
@@ -217,7 +245,7 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             patch_id=params.get("patch_id"),
             pov_id=params.get("pov_id"),
             patches=[Path(p) for p in params.get("patches", [])],
-            use_inc_build=params.get("use_inc_build", True),
+            use_inc_build=params.get("use_inc_build", False),
             force_rebuild=params.get("force_rebuild", False),
             skip_if_cached=params.get("skip_if_cached", False),
             source_mode=params.get("source_mode", "pkgs"),
@@ -257,6 +285,9 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             patch_id=params["patch_id"],
             harness=params["harness"],
             pov_path=Path(params["pov_path"]) if params.get("pov_path") else None,
+            patch_path_override=Path(params["patch_path_override"])
+            if params.get("patch_path_override")
+            else None,
             build_patch_job_id=params.get("build_patch_job_id", ""),
             source_mode=params.get("source_mode", "pkgs"),
         )
@@ -268,6 +299,24 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             patch_id=params["patch_id"],
             harness=params["harness"],
             pov_paths=[Path(p) for p in params.get("pov_paths", [])],
+            patch_path_override=Path(params["patch_path_override"])
+            if params.get("patch_path_override")
+            else None,
+            build_patch_job_id=params.get("build_patch_job_id", ""),
+            source_mode=params.get("source_mode", "pkgs"),
+        )
+    if cls_name == "PatchVariantTestJob":
+        return PatchVariantTestJob(
+            benchmark_path=Path(params["benchmark_path"]),
+            benchmark_name=params["benchmark_name"],
+            cpv_id=params["cpv_id"],
+            patch_id=params["patch_id"],
+            harness=params["harness"],
+            test_mode=params.get("test_mode", "FULL"),
+            pov_paths=[Path(p) for p in params.get("pov_paths", [])],
+            patch_path_override=Path(params["patch_path_override"])
+            if params.get("patch_path_override")
+            else None,
             build_patch_job_id=params.get("build_patch_job_id", ""),
             source_mode=params.get("source_mode", "pkgs"),
         )
@@ -279,6 +328,9 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             patch_id=params["patch_id"],
             harness=params["harness"],
             test_mode=params.get("test_mode", "FULL"),
+            patch_path_override=Path(params["patch_path_override"])
+            if params.get("patch_path_override")
+            else None,
             build_patch_job_id=params.get("build_patch_job_id", ""),
             source_mode=params.get("source_mode", "pkgs"),
         )
@@ -300,7 +352,7 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             patch_path=Path(params["patch_path"]),
             harness=params.get("harness", ""),
             sanitizer=params.get("sanitizer", "address"),
-            use_inc_build=params.get("use_inc_build", True),
+            use_inc_build=params.get("use_inc_build", False),
             force_rebuild=params.get("force_rebuild", False),
             build_job_id=params.get("build_job_id", ""),
             source_mode=params.get("source_mode", "pkgs"),
@@ -720,6 +772,17 @@ def ci_results_to_executor_results(
     from crsbench.benchmark_ci.jobs.base import JobResult
     from crsbench.executor.types import ExecutorResult, JobStatus
 
+    def _parse_timestamp(value: Any) -> datetime:
+        if not value:
+            return datetime.now()
+        if not isinstance(value, str):
+            return datetime.now()
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            logger.warning(f"Invalid CI job timestamp: {value!r}; using current time")
+            return datetime.now()
+
     results: dict[str, ExecutorResult] = {}
     for job_id, r in raw_results.items():
         if r.get("success"):
@@ -727,12 +790,8 @@ def ci_results_to_executor_results(
                 job_id=r["job_id"],
                 job_type=r.get("job_type", "verify"),
                 success=r["success"],
-                started_at=datetime.fromisoformat(r["started_at"])
-                if r.get("started_at")
-                else datetime.now(),
-                finished_at=datetime.fromisoformat(r["finished_at"])
-                if r.get("finished_at")
-                else datetime.now(),
+                started_at=_parse_timestamp(r.get("started_at")),
+                finished_at=_parse_timestamp(r.get("finished_at")),
                 elapsed_seconds=r.get("elapsed_seconds", 0.0),
                 error=r.get("error"),
                 details=r.get("details", {}),
@@ -748,12 +807,8 @@ def ci_results_to_executor_results(
                 job_id=r.get("job_id", job_id),
                 job_type=r.get("job_type", "verify"),
                 success=False,
-                started_at=datetime.fromisoformat(r["started_at"])
-                if r.get("started_at")
-                else datetime.now(),
-                finished_at=datetime.fromisoformat(r["finished_at"])
-                if r.get("finished_at")
-                else datetime.now(),
+                started_at=_parse_timestamp(r.get("started_at")),
+                finished_at=_parse_timestamp(r.get("finished_at")),
                 elapsed_seconds=r.get("elapsed_seconds", 0.0),
                 error=r.get("error", "Unknown error"),
                 details=r.get("details", {}),

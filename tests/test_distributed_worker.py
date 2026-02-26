@@ -1,11 +1,12 @@
 """Tests for distributed worker lock functionality."""
 
+import argparse
 import multiprocessing
 import os
 import tempfile
 import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from crsbench.distributed.worker import worker_lock
@@ -203,3 +204,506 @@ class TestWorkerContinuousMode:
                 "localhost", "exp", "worker-0", "crsbench_exp"
             )
             mock_spawn.assert_not_called()
+
+
+class TestConfiglessWorker:
+    """Tests for configless worker mode (registry discovery)."""
+
+    def test_run_worker_configless_exists(self):
+        """run_worker_configless function exists and is callable."""
+        from crsbench.distributed.worker import run_worker_configless
+
+        assert callable(run_worker_configless)
+
+    def test_configless_discovers_from_registry(self):
+        """Configless worker discovers queues from registry."""
+        from crsbench.distributed.registry import RuntimeRegistration
+        from crsbench.distributed.worker import run_worker_configless
+
+        reg = RuntimeRegistration(
+            experiment="exp-42",
+            trial_queue="crsbench_exp-42",
+            build_queue="crsbench_exp-42_build",
+            verify_queue="crsbench_exp-42_verify",
+        )
+
+        mock_conn = MagicMock()
+
+        with (
+            patch(
+                "crsbench.distributed.worker.discover_registered_experiments",
+                return_value=(mock_conn, {"exp-42": reg}),
+            ),
+            patch(
+                "crsbench.distributed.ci_supervisor.run_multi_queue_supervisor",
+                return_value=0,
+            ) as mock_supervisor,
+        ):
+            result = run_worker_configless(
+                redis_host="localhost",
+                use_cpuset=False,
+                continuous=False,
+            )
+
+        assert result == 0
+        mock_supervisor.assert_called_once()
+
+    def test_configless_polls_when_no_experiments(self):
+        """Configless worker polls when registry is initially empty."""
+        from crsbench.distributed.worker import run_worker_configless
+
+        with (
+            patch(
+                "crsbench.distributed.worker.discover_registered_experiments",
+                side_effect=RuntimeError("No experiments found after 12 attempts"),
+            ),
+            patch("rq.Queue") as mock_rq_queue,
+            patch("rq.Worker") as mock_rq_worker,
+        ):
+            mock_rq_queue.return_value = MagicMock()
+            mock_rq_worker.return_value = MagicMock()
+
+            result = run_worker_configless(
+                redis_host="localhost",
+                use_cpuset=False,
+                continuous=False,
+            )
+
+        assert result == 1
+
+    def test_worker_cli_config_mode(self):
+        """Worker CLI uses main() when --experiment-config is given."""
+        import argparse
+
+        from crsbench.distributed.cli.worker_command import run_worker
+
+        args = argparse.Namespace(
+            experiment_config="test.yaml",
+            verbose=False,
+            continuous=False,
+            worker_name=None,
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag=None,
+            jobs=None,
+            cores_per_job=None,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.worker.main",
+                return_value=0,
+            ) as mock_main,
+            patch(
+                "crsbench.run_experiment.load_experiment_config",
+            ) as mock_load,
+        ):
+            mock_config = MagicMock()
+            mock_config.worker = None
+            mock_config.benchmarks = None
+            mock_config.experiment = "default"
+            mock_config.redis_host = "localhost"
+            mock_config.resources = MagicMock()
+            mock_config.resources.cpu_tag = "x86-avx2"
+            mock_load.return_value = mock_config
+
+            with patch.dict(
+                "os.environ", {"CRSBENCH_QUEUE_MODEL": "flat"}, clear=False
+            ):
+                result = run_worker(args)
+
+        assert result == 0
+        mock_main.assert_called_once()
+        assert mock_main.call_args.kwargs["queue_name"] == "crsbench_trial"
+        assert mock_main.call_args.kwargs["cpu_tag"] == "x86-avx2"
+
+    def test_worker_cli_config_mode_whitespace_worker_cpu_tag_falls_back_to_resources(
+        self,
+    ):
+        """Whitespace worker.cpu_tag should fall back to resources.cpu_tag."""
+        import argparse
+
+        from crsbench.distributed.cli.worker_command import run_worker
+
+        args = argparse.Namespace(
+            experiment_config="test.yaml",
+            verbose=False,
+            continuous=False,
+            worker_name=None,
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag=None,
+            jobs=None,
+            cores_per_job=None,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.worker.main",
+                return_value=0,
+            ) as mock_main,
+            patch(
+                "crsbench.run_experiment.load_experiment_config",
+            ) as mock_load,
+        ):
+            mock_worker = MagicMock()
+            mock_worker.cpu_tag = "   "
+            mock_worker.worker_name = None
+            mock_worker.jobs = 1
+            mock_worker.cores_per_job = None
+            mock_worker.continuous = False
+            mock_worker.minimum_disk_size = "10GB"
+            mock_worker.disk_check_interval = 60
+            mock_worker.cores = None
+            mock_worker.skip_cpus = None
+            mock_worker.redis_host = None
+
+            mock_config = MagicMock()
+            mock_config.worker = mock_worker
+            mock_config.benchmarks = None
+            mock_config.experiment = "default"
+            mock_config.redis_host = "localhost"
+            mock_config.resources = MagicMock()
+            mock_config.resources.cpu_tag = "x86-avx2"
+            mock_load.return_value = mock_config
+
+            result = run_worker(args)
+
+        assert result == 0
+        assert mock_main.call_args.kwargs["cpu_tag"] == "x86-avx2"
+
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
+    def test_configless_worker_cpu_tag_whitespace_falls_back_to_resources_cpu_tag(
+        self,
+    ):
+        """Whitespace worker_cpu_tag should defer to registration cpu_tag."""
+        from crsbench.distributed.registry import RuntimeRegistration
+        from crsbench.distributed.worker import run_worker_configless
+
+        reg = RuntimeRegistration(
+            experiment="exp-a",
+            trial_queue="crsbench_exp-a",
+            build_queue="crsbench_exp-a_build",
+            verify_queue="crsbench_exp-a_verify",
+            worker_cpu_tag="   ",
+            cpu_tag="x86-avx2",
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.worker.discover_registered_experiments",
+                return_value=(MagicMock(), {"exp-a": reg}),
+            ),
+            patch(
+                "crsbench.distributed.ci_supervisor.run_multi_queue_supervisor",
+                return_value=0,
+            ) as mock_supervisor,
+        ):
+            result = run_worker_configless(redis_host="localhost")
+
+        assert result == 0
+        assert mock_supervisor.call_args.kwargs["cpu_tag"] == "x86-avx2"
+
+    def test_configless_cpuset_uses_cli_then_metadata_profile(self):
+        """Configless cpuset worker resolves jobs/cores_per_job from CLI>metadata."""
+        from crsbench.distributed.registry import RuntimeRegistration
+        from crsbench.distributed.worker import run_worker_configless
+
+        reg = RuntimeRegistration(
+            experiment="exp-42",
+            trial_queue="crsbench_exp-42",
+            build_queue="crsbench_exp-42_build",
+            verify_queue="crsbench_exp-42_verify",
+            worker_jobs=6,
+            worker_cores_per_job=8,
+            cores_per_trial=8,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.worker.discover_registered_experiments",
+                return_value=(MagicMock(), {"exp-42": reg}),
+            ),
+            patch(
+                "crsbench.distributed.ci_supervisor.run_multi_queue_supervisor",
+                return_value=0,
+            ) as mock_supervisor,
+        ):
+            result = run_worker_configless(
+                redis_host="localhost",
+                use_cpuset=True,
+                continuous=True,
+                jobs_override=None,
+                cores_per_job_override=None,
+            )
+
+        assert result == 0
+        kwargs = mock_supervisor.call_args.kwargs
+        assert kwargs["build_jobs"] == 6
+        assert kwargs["build_cores_per_job"] == 8
+
+        with (
+            patch(
+                "crsbench.distributed.worker.discover_registered_experiments",
+                return_value=(MagicMock(), {"exp-42": reg}),
+            ),
+            patch(
+                "crsbench.distributed.ci_supervisor.run_multi_queue_supervisor",
+                return_value=0,
+            ) as mock_supervisor,
+        ):
+            result = run_worker_configless(
+                redis_host="localhost",
+                use_cpuset=True,
+                continuous=True,
+                jobs_override=2,
+                cores_per_job_override=4,
+            )
+
+        assert result == 0
+        kwargs = mock_supervisor.call_args.kwargs
+        assert kwargs["build_jobs"] == 2
+        assert kwargs["build_cores_per_job"] == 4
+
+    def test_configless_cpuset_uses_default_profile_without_metadata(self):
+        """Configless cpuset worker defaults to jobs=1 and cores_per_job=4."""
+        from crsbench.distributed.registry import RuntimeRegistration
+        from crsbench.distributed.worker import run_worker_configless
+
+        reg = RuntimeRegistration(
+            experiment="exp-42",
+            trial_queue="crsbench_exp-42",
+            build_queue="crsbench_exp-42_build",
+            verify_queue="crsbench_exp-42_verify",
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.worker.discover_registered_experiments",
+                return_value=(MagicMock(), {"exp-42": reg}),
+            ),
+            patch(
+                "crsbench.distributed.ci_supervisor.run_multi_queue_supervisor",
+                return_value=0,
+            ) as mock_supervisor,
+        ):
+            result = run_worker_configless(
+                redis_host="localhost",
+                use_cpuset=True,
+                continuous=True,
+            )
+
+        assert result == 0
+        kwargs = mock_supervisor.call_args.kwargs
+        assert kwargs["build_jobs"] == 1
+        assert kwargs["build_cores_per_job"] == 4
+
+    def test_configless_cpuset_uses_first_metadata_for_worker_cpu_pinning(self):
+        """Configless worker uses first metadata cores/skip with warning on conflicts."""
+        from crsbench.distributed.registry import RuntimeRegistration
+        from crsbench.distributed.worker import run_worker_configless
+
+        reg1 = RuntimeRegistration(
+            experiment="exp-a",
+            trial_queue="crsbench_exp-a",
+            build_queue="crsbench_exp-a_build",
+            verify_queue="crsbench_exp-a_verify",
+            worker_cores="8-15",
+            worker_skip_cpus="9",
+        )
+        reg2 = RuntimeRegistration(
+            experiment="exp-b",
+            trial_queue="crsbench_exp-b",
+            build_queue="crsbench_exp-b_build",
+            verify_queue="crsbench_exp-b_verify",
+            worker_cores="16-23",
+            worker_skip_cpus="17",
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.worker.discover_registered_experiments",
+                return_value=(MagicMock(), {"exp-b": reg2, "exp-a": reg1}),
+            ),
+            patch(
+                "crsbench.distributed.ci_supervisor.run_multi_queue_supervisor",
+                return_value=0,
+            ) as mock_supervisor,
+            patch("crsbench.distributed.common.logger.warning") as mock_warning,
+        ):
+            result = run_worker_configless(
+                redis_host="localhost",
+                use_cpuset=True,
+                continuous=True,
+            )
+
+        assert result == 0
+        kwargs = mock_supervisor.call_args.kwargs
+        assert kwargs["cores"] == "8-15"
+        assert kwargs["skip_cpus"] == "9"
+        assert mock_warning.called
+
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
+    def test_configless_rejects_conflicting_cpu_tag_metadata(self):
+        """Configless worker fails when cpu_tag metadata conflicts across experiments."""
+        from crsbench.distributed.registry import RuntimeRegistration
+        from crsbench.distributed.worker import run_worker_configless
+
+        reg1 = RuntimeRegistration(
+            experiment="exp-a",
+            trial_queue="crsbench_exp-a",
+            build_queue="crsbench_exp-a_build",
+            verify_queue="crsbench_exp-a_verify",
+            worker_cpu_tag="cpu-a",
+        )
+        reg2 = RuntimeRegistration(
+            experiment="exp-b",
+            trial_queue="crsbench_exp-b",
+            build_queue="crsbench_exp-b_build",
+            verify_queue="crsbench_exp-b_verify",
+            worker_cpu_tag="cpu-b",
+        )
+
+        with patch(
+            "crsbench.distributed.worker.discover_registered_experiments",
+            return_value=(MagicMock(), {"exp-a": reg1, "exp-b": reg2}),
+        ):
+            result = run_worker_configless(redis_host="localhost")
+
+        assert result == 1
+
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
+    def test_configless_normalizes_cpu_tag_metadata_before_conflict_check(self):
+        """Whitespace-only cpu_tag differences are treated as equivalent."""
+        from crsbench.distributed.registry import RuntimeRegistration
+        from crsbench.distributed.worker import run_worker_configless
+
+        reg1 = RuntimeRegistration(
+            experiment="exp-a",
+            trial_queue="crsbench_exp-a",
+            build_queue="crsbench_exp-a_build",
+            verify_queue="crsbench_exp-a_verify",
+            worker_cpu_tag="x86-avx2",
+        )
+        reg2 = RuntimeRegistration(
+            experiment="exp-b",
+            trial_queue="crsbench_exp-b",
+            build_queue="crsbench_exp-b_build",
+            verify_queue="crsbench_exp-b_verify",
+            worker_cpu_tag="  x86-avx2  ",
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.worker.discover_registered_experiments",
+                return_value=(MagicMock(), {"exp-a": reg1, "exp-b": reg2}),
+            ),
+            patch(
+                "crsbench.distributed.ci_supervisor.run_multi_queue_supervisor",
+                return_value=0,
+            ) as mock_supervisor,
+        ):
+            result = run_worker_configless(redis_host="localhost")
+
+        assert result == 0
+        assert mock_supervisor.call_args.kwargs["cpu_tag"] == "x86-avx2"
+
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
+    def test_configless_rejects_invalid_worker_jobs_metadata(self):
+        """Configless worker fails fast on invalid worker.jobs metadata."""
+        from crsbench.distributed.registry import RuntimeRegistration
+        from crsbench.distributed.worker import run_worker_configless
+
+        reg = RuntimeRegistration(
+            experiment="exp-42",
+            trial_queue="crsbench_exp-42",
+            build_queue="crsbench_exp-42_build",
+            verify_queue="crsbench_exp-42_verify",
+            worker_jobs=0,
+        )
+
+        with patch(
+            "crsbench.distributed.worker.discover_registered_experiments",
+            return_value=(MagicMock(), {"exp-42": reg}),
+        ):
+            result = run_worker_configless(redis_host="localhost")
+
+        assert result == 1
+
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
+    def test_configless_rejects_invalid_worker_cores_per_job_metadata(self):
+        """Configless worker fails fast on invalid worker.cores_per_job metadata."""
+        from crsbench.distributed.registry import RuntimeRegistration
+        from crsbench.distributed.worker import run_worker_configless
+
+        reg = RuntimeRegistration(
+            experiment="exp-42",
+            trial_queue="crsbench_exp-42",
+            build_queue="crsbench_exp-42_build",
+            verify_queue="crsbench_exp-42_verify",
+            worker_cores_per_job=0,
+        )
+
+        with patch(
+            "crsbench.distributed.worker.discover_registered_experiments",
+            return_value=(MagicMock(), {"exp-42": reg}),
+        ):
+            result = run_worker_configless(redis_host="localhost")
+
+        assert result == 1
+
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
+    def test_configless_rejects_invalid_jobs_override(self):
+        """Configless worker rejects non-positive CLI override values."""
+        from crsbench.distributed.registry import RuntimeRegistration
+        from crsbench.distributed.worker import run_worker_configless
+
+        reg = RuntimeRegistration(
+            experiment="exp-42",
+            trial_queue="crsbench_exp-42",
+            build_queue="crsbench_exp-42_build",
+            verify_queue="crsbench_exp-42_verify",
+        )
+
+        with patch(
+            "crsbench.distributed.worker.discover_registered_experiments",
+            return_value=(MagicMock(), {"exp-42": reg}),
+        ):
+            result = run_worker_configless(redis_host="localhost", jobs_override=0)
+
+        assert result == 1
+
+
+class TestMetadataValidationHelpers:
+    """Unit tests for configless metadata validation helpers."""
+
+    def test_collect_validated_int_metadata_rejects_boolean(self):
+        """Boolean metadata values should not pass integer validation."""
+        from types import SimpleNamespace
+
+        from crsbench.distributed.common import collect_validated_int_metadata
+
+        reg = SimpleNamespace(experiment="exp-42", worker_jobs=True)
+        with pytest.raises(RuntimeError):
+            collect_validated_int_metadata(
+                registrations=[reg],
+                attr_name="worker_jobs",
+                field_name="worker.jobs",
+                minimum=1,
+            )
+
+
+class TestWorkerCliValidation:
+    """Tests for worker CLI argument validation."""
+
+    def test_jobs_rejects_zero(self):
+        """--jobs must be >= 1."""
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers(dest="command")
+        from crsbench.distributed.cli.worker_command import add_worker_subparser
+
+        add_worker_subparser(subparsers)
+        with pytest.raises(SystemExit):
+            parser.parse_args(["worker", "--jobs", "0"])

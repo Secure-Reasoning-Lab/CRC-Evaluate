@@ -36,6 +36,7 @@ class TestSerializeCiJob:
             pov_path=Path(
                 "/benchmarks/test-bench/.aixcc/fuzz_target/cpv_0/blobs/pov_0.blob"
             ),
+            patch_path_override=Path("/tmp/embedded.diff"),
             build_patch_job_id="build-patch:test-bench:cpv_0:patch_0",
             source_mode="pkgs",
         )
@@ -67,6 +68,7 @@ class TestSerializeCiJob:
         assert params["_job_class"] == "PatchPovTestJob"
         assert params["patch_id"] == "patch_0"
         assert params["build_patch_job_id"] == "build-patch:test-bench:cpv_0:patch_0"
+        assert params["patch_path_override"] == "/tmp/embedded.diff"
 
     def test_serialize_unsupported_type_raises(self) -> None:
         """Unsupported job type raises ValueError."""
@@ -103,6 +105,7 @@ class TestSerializeCiJob:
         assert type(restored).__name__ == "PatchPovTestJob"
         assert restored.patch_id == "patch_0"
         assert restored.build_patch_job_id == original.build_patch_job_id
+        assert restored.patch_path_override == Path("/tmp/embedded.diff")
 
 
 class TestSerializeAllJobTypes:
@@ -142,6 +145,28 @@ class TestSerializeAllJobTypes:
         restored = _reconstruct_job(params)
         assert type(restored).__name__ == "PatchVarTestJob"
         assert restored.patch_id == "p0"
+
+    def test_patch_variant_test_roundtrip(self) -> None:
+        from crsbench.benchmark_ci.jobs.flat import PatchVariantTestJob
+        from crsbench.distributed.ci_jobs import _reconstruct_job, serialize_ci_job
+
+        job = PatchVariantTestJob(
+            benchmark_path=Path("/b"),
+            benchmark_name="bench",
+            cpv_id="cpv_0",
+            patch_id="p0",
+            harness="h",
+            test_mode="RTS",
+            pov_paths=[Path("/pov1"), Path("/pov2")],
+            patch_path_override=Path("/tmp/embedded-variant.diff"),
+            build_patch_job_id="bp1",
+        )
+        params = serialize_ci_job(job)
+        restored = _reconstruct_job(params)
+        assert type(restored).__name__ == "PatchVariantTestJob"
+        assert len(restored.pov_paths) == 2
+        assert restored.test_mode == "RTS"
+        assert restored.patch_path_override == Path("/tmp/embedded-variant.diff")
 
     def test_patch_unit_test_roundtrip(self) -> None:
         from crsbench.benchmark_ci.jobs.flat import PatchUnitTestJob
@@ -197,7 +222,7 @@ class TestSerializeAllJobTypes:
         assert restored.sanitizer == "undefined"
 
     def test_build_patch_variant_default_sanitizer(self) -> None:
-        """BuildPatchVariantJob defaults sanitizer to 'address' on deserialize."""
+        """BuildPatchVariantJob defaults sanitizer and use_inc_build on deserialize."""
         from crsbench.distributed.ci_jobs import _reconstruct_job
 
         params = {
@@ -211,6 +236,7 @@ class TestSerializeAllJobTypes:
         }
         restored = _reconstruct_job(params)
         assert restored.sanitizer == "address"
+        assert restored.use_inc_build is False
 
     def test_build_single_variant_roundtrip(self) -> None:
         """BuildSingleVariantJob serializes and reconstructs correctly."""
@@ -257,6 +283,40 @@ class TestSerializeAllJobTypes:
         assert restored.patches == [Path("/patches/p1.diff")]
         assert restored.sanitizer == "address"
         assert restored.repo_name == "test-repo"
+
+    def test_build_single_variant_default_use_inc_build_false(self) -> None:
+        """BuildSingleVariantJob defaults use_inc_build to False on deserialize."""
+        from crsbench.distributed.ci_jobs import _reconstruct_job
+
+        params = {
+            "_job_class": "BuildSingleVariantJob",
+            "benchmark_path": "/benchmarks/test-bench",
+            "benchmark_name": "test-bench",
+            "variant_type": "deltaref",
+            "commit": "abc123",
+            "main_repo": "https://github.com/test/repo",
+            "mode": "delta",
+        }
+        restored = _reconstruct_job(params)
+        assert restored.use_inc_build is False
+
+    def test_patch_variant_test_default_test_mode_full(self) -> None:
+        """PatchVariantTestJob defaults test_mode to FULL for legacy payloads."""
+        from crsbench.distributed.ci_jobs import _reconstruct_job
+
+        params = {
+            "_job_class": "PatchVariantTestJob",
+            "benchmark_path": "/b",
+            "benchmark_name": "bench",
+            "cpv_id": "cpv_0",
+            "patch_id": "p0",
+            "harness": "h",
+            "pov_paths": ["/pov1"],
+            "build_patch_job_id": "bp1",
+            "source_mode": "pkgs",
+        }
+        restored = _reconstruct_job(params)
+        assert restored.test_mode == "FULL"
 
 
 class TestCiResultsToExecutorResults:
@@ -337,6 +397,25 @@ class TestCiResultsToExecutorResults:
         from crsbench.distributed.ci_jobs import ci_results_to_executor_results
 
         assert ci_results_to_executor_results({}) == {}
+
+    def test_invalid_timestamp_falls_back_to_now(self) -> None:
+        """Malformed timestamps should not crash conversion."""
+        from crsbench.distributed.ci_jobs import ci_results_to_executor_results
+
+        raw = {
+            "verify-cpv:bench:cpv_0": {
+                "job_id": "verify-cpv:bench:cpv_0",
+                "job_type": "verify",
+                "success": True,
+                "started_at": "not-an-iso-time",
+                "finished_at": "still-not-iso",
+                "elapsed_seconds": 1.0,
+            }
+        }
+        results = ci_results_to_executor_results(raw)
+        r = results["verify-cpv:bench:cpv_0"]
+        assert r.status.value == "success"
+        assert r.job_result is not None
 
 
 class TestReconstructUnknown:

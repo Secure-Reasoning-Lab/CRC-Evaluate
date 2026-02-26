@@ -12,9 +12,12 @@ verification via evaluator_jobs.py / verify_queue.py.
 
 import base64
 import os
+import re
+import shutil
 import tempfile
 import time
-from dataclasses import dataclass
+from bisect import insort
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
@@ -25,6 +28,40 @@ from crsbench.distributed.evaluator_jobs import (
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_MAX_LOG_FILE_BYTES = 256 * 1024
+_MAX_LOG_TOTAL_BYTES = 1024 * 1024
+_MAX_LOG_FILE_COUNT = 64
+
+
+def _truncate_text_to_utf8_bytes(text: str, max_bytes: int) -> str:
+    """Truncate text to fit max UTF-8 bytes without breaking characters."""
+    if max_bytes <= 0:
+        return ""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def _sanitize_path_token(value: str) -> str:
+    """Sanitize arbitrary strings for filesystem-safe path segments."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._")
+    return safe or "unknown"
+
+
+def _resolve_patch_job_output_dir(payload: "PatchJobPayload") -> Path:
+    """Resolve deterministic per-job output directory for distributed patch jobs."""
+    root = Path(tempfile.gettempdir()) / "crsbench-distributed-patch-jobs"
+    return (
+        root
+        / _sanitize_path_token(payload.experiment_name)
+        / _sanitize_path_token(payload.trial_id)
+        / _sanitize_path_token(payload.benchmark)
+        / _sanitize_path_token(payload.harness)
+        / _sanitize_path_token(payload.cpv_id)
+        / _sanitize_path_token(payload.patch.patch_id)
+    )
 
 
 # =============================================================================
@@ -112,6 +149,7 @@ class PatchJobPayload:
         patch: Embedded patch with content
         sanitizer: Sanitizer to use for build
         source_mode: Source mode for builds
+        verify_variants: Whether to verify against all POV variants per CPV
         use_inc_build: Whether to use incremental build
         enqueued_at: Timestamp when job was enqueued
     """
@@ -124,7 +162,9 @@ class PatchJobPayload:
     patch: EmbeddedPatch
     sanitizer: str = "address"
     source_mode: str = "pkgs"
-    use_inc_build: bool = True
+    verify_variants: bool = False
+    test_mode: str = "FULL"
+    use_inc_build: bool = False
     enqueued_at: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
@@ -137,6 +177,8 @@ class PatchJobPayload:
             "patch": self.patch.to_dict(),
             "sanitizer": self.sanitizer,
             "source_mode": self.source_mode,
+            "verify_variants": self.verify_variants,
+            "test_mode": self.test_mode,
             "use_inc_build": self.use_inc_build,
             "enqueued_at": self.enqueued_at,
         }
@@ -152,7 +194,9 @@ class PatchJobPayload:
             patch=EmbeddedPatch.from_dict(d["patch"]),
             sanitizer=d.get("sanitizer", "address"),
             source_mode=d.get("source_mode", "pkgs"),
-            use_inc_build=d.get("use_inc_build", True),
+            verify_variants=d.get("verify_variants", False),
+            test_mode=d.get("test_mode", "FULL"),
+            use_inc_build=d.get("use_inc_build", False),
             enqueued_at=d.get("enqueued_at", 0.0),
         )
 
@@ -224,6 +268,7 @@ class PatchVerifyResult:
         pov_test_passed: Whether POV test passed (None if not run)
         unit_test_passed: Whether unit test passed (None if not run)
         status: Verification status string
+        security_verdict: PASS/FAIL security verdict
         details: Additional details about the verification
         error: Error message if verification failed
         completed_at: Timestamp when verification completed
@@ -237,9 +282,11 @@ class PatchVerifyResult:
     pov_test_passed: Optional[bool] = None
     unit_test_passed: Optional[bool] = None
     status: str = ""
+    security_verdict: str = "FAIL"
     details: str = ""
     error: Optional[str] = None
     completed_at: float = 0.0
+    logs: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -251,9 +298,11 @@ class PatchVerifyResult:
             "pov_test_passed": self.pov_test_passed,
             "unit_test_passed": self.unit_test_passed,
             "status": self.status,
+            "security_verdict": self.security_verdict,
             "details": self.details,
             "error": self.error,
             "completed_at": self.completed_at,
+            "logs": self.logs,
         }
 
     @classmethod
@@ -267,10 +316,67 @@ class PatchVerifyResult:
             pov_test_passed=d.get("pov_test_passed"),
             unit_test_passed=d.get("unit_test_passed"),
             status=d.get("status", ""),
+            security_verdict=d.get("security_verdict", "FAIL"),
             details=d.get("details", ""),
             error=d.get("error"),
             completed_at=d.get("completed_at", 0.0),
+            logs=d.get("logs", {}),
         )
+
+
+def _collect_patch_verify_logs(payload: "PatchJobPayload") -> dict[str, str]:
+    """Collect bounded patch verify stream logs from worker-local output dir."""
+    output_dir = _resolve_patch_job_output_dir(payload)
+    logs_dir = output_dir / "logs"
+    if not logs_dir.exists():
+        return {}
+
+    collected: dict[str, str] = {}
+    remaining = _MAX_LOG_TOTAL_BYTES
+    selected_logs: list[tuple[str, Path]] = []
+    for path in logs_dir.iterdir():
+        if not path.is_file() or path.suffix not in {".stdout", ".stderr"}:
+            continue
+        insort(selected_logs, (path.name, path))
+        if len(selected_logs) > _MAX_LOG_FILE_COUNT:
+            selected_logs.pop()
+
+    for _, path in selected_logs:
+        if remaining <= 0:
+            break
+        # Reserve room for filename overhead in serialized payload.
+        name_overhead = len(path.name.encode("utf-8")) + 4
+        if remaining <= name_overhead:
+            break
+        budget = min(_MAX_LOG_FILE_BYTES, remaining - name_overhead)
+        try:
+            with path.open("rb") as f:
+                content = f.read(budget + 1)
+        except Exception as e:
+            logger.warning(f"Failed reading patch log {path}: {e}")
+            continue
+
+        truncated = len(content) > budget
+        chunk = content[:budget] if truncated else content
+        text = chunk.decode("utf-8", errors="replace")
+        if truncated:
+            text += "\n[truncated additional bytes]"
+        text = _truncate_text_to_utf8_bytes(text, remaining - name_overhead)
+        if not text:
+            break
+        collected[path.name] = text
+        remaining -= len(text.encode("utf-8")) + name_overhead
+    return collected
+
+
+def _cleanup_patch_job_output_dir(payload: "PatchJobPayload") -> None:
+    """Remove temporary worker-local patch job artifacts."""
+    output_dir = _resolve_patch_job_output_dir(payload)
+    if output_dir.exists():
+        try:
+            shutil.rmtree(output_dir)
+        except Exception as e:
+            logger.warning(f"Failed to cleanup patch job output dir {output_dir}: {e}")
 
 
 # =============================================================================
@@ -329,6 +435,7 @@ def execute_patch_build(payload_dict: dict[str, Any]) -> dict[str, Any]:
 
         # Serialize and execute via ci_jobs
         params = ci_jobs.serialize_ci_job(build_job)
+        params["output_dir"] = str(_resolve_patch_job_output_dir(payload))
         result_dict = ci_jobs.execute_ci_job(params)
 
         success = result_dict.get("success", False)
@@ -455,17 +562,27 @@ def execute_patch_verify(payload_dict: dict[str, Any]) -> dict[str, Any]:
 
     cleanup_variant_name = _resolve_patch_variant_name(payload, benchmark_path)
     try:
-        # Discover POV path from benchmark directory
-        pov_path = (
-            benchmark_path
-            / ".aixcc"
-            / payload.harness
-            / payload.cpv_id
-            / "blobs"
-            / "pov_0.blob"
+        output_dir = _resolve_patch_job_output_dir(payload)
+        patch_file = output_dir / "patches" / f"{patch.patch_id}.diff"
+        patch_file.parent.mkdir(parents=True, exist_ok=True)
+        patch.write_to(patch_file)
+
+        # Discover POV paths from benchmark directory
+        blobs_dir = (
+            benchmark_path / ".aixcc" / payload.harness / payload.cpv_id / "blobs"
         )
-        if not pov_path.exists():
-            error_msg = f"POV file not found at {pov_path}"
+        pov_paths = list(blobs_dir.glob("pov_*.blob")) if blobs_dir.exists() else []
+
+        def _extract_pov_num(path: Path) -> int:
+            try:
+                return int(path.stem.split("_")[1])
+            except (IndexError, ValueError):
+                return 999
+
+        pov_paths.sort(key=_extract_pov_num)
+
+        if not pov_paths:
+            error_msg = f"No POV files found under {blobs_dir}"
             logger.error(error_msg)
             return PatchVerifyResult(
                 trial_id=payload.trial_id,
@@ -474,9 +591,11 @@ def execute_patch_verify(payload_dict: dict[str, Any]) -> dict[str, Any]:
                 cpv_id=payload.cpv_id,
                 patch_id=patch.patch_id,
                 status="error",
+                security_verdict="FAIL",
                 details=error_msg,
                 error=error_msg,
                 completed_at=time.time(),
+                logs=_collect_patch_verify_logs(payload),
             ).to_dict()
 
         # Build the patch build job ID (format matches BuildPatchVariantJob.job_id)
@@ -487,52 +606,105 @@ def execute_patch_verify(payload_dict: dict[str, Any]) -> dict[str, Any]:
         pov_test_passed: Optional[bool] = None
         unit_test_passed: Optional[bool] = None
         status = "error"
+        security_verdict = "FAIL"
         details = ""
         error: Optional[str] = None
 
-        # Run POV test
-        from crsbench.benchmark_ci.jobs.flat import PatchPovTestJob
+        if payload.verify_variants:
+            # Variant mode: PatchVariantTestJob runs full patch verification
+            # (all pov_* variants + unit tests) in one job.
+            from crsbench.benchmark_ci.jobs.flat import PatchVariantTestJob
 
-        pov_test_job = PatchPovTestJob(
-            benchmark_path=benchmark_path,
-            benchmark_name=payload.benchmark,
-            cpv_id=payload.cpv_id,
-            patch_id=patch.patch_id,
-            harness=payload.harness,
-            pov_path=pov_path,
-            build_patch_job_id=build_patch_job_id,
-            source_mode=payload.source_mode,
-        )
-        pov_params = ci_jobs.serialize_ci_job(pov_test_job)
-        pov_result = ci_jobs.execute_ci_job(pov_params)
-        pov_test_passed = pov_result.get("success", False)
+            variant_test_job = PatchVariantTestJob(
+                benchmark_path=benchmark_path,
+                benchmark_name=payload.benchmark,
+                cpv_id=payload.cpv_id,
+                patch_id=patch.patch_id,
+                harness=payload.harness,
+                pov_paths=pov_paths,
+                test_mode=payload.test_mode,
+                patch_path_override=patch_file,
+                build_patch_job_id=build_patch_job_id,
+                source_mode=payload.source_mode,
+            )
+            variant_params = ci_jobs.serialize_ci_job(variant_test_job)
+            variant_params["output_dir"] = str(output_dir)
+            variant_result = ci_jobs.execute_ci_job(variant_params)
+            details_dict = variant_result.get("details", {}) or {}
+            pov_test_passed = details_dict.get("pov_test_passed")
+            unit_test_passed = details_dict.get("unit_tests_passed")
 
-        # Run unit test
-        from crsbench.benchmark_ci.jobs.flat import PatchUnitTestJob
-
-        unit_test_job = PatchUnitTestJob(
-            benchmark_path=benchmark_path,
-            benchmark_name=payload.benchmark,
-            cpv_id=payload.cpv_id,
-            patch_id=patch.patch_id,
-            harness=payload.harness,
-            build_patch_job_id=build_patch_job_id,
-            source_mode=payload.source_mode,
-        )
-        unit_params = ci_jobs.serialize_ci_job(unit_test_job)
-        unit_result = ci_jobs.execute_ci_job(unit_params)
-        unit_test_passed = unit_result.get("success", False)
-
-        # Determine overall status
-        if pov_test_passed and unit_test_passed:
-            status = "valid"
-            details = "Patch passes both POV and unit tests"
-        elif not pov_test_passed:
-            status = "pov_still_triggers"
-            details = pov_result.get("error", "POV still crashes with patch")
+            if variant_result.get("success", False):
+                status = "valid"
+                security_verdict = "PASS"
+                details = "Patch passes all POV variants and unit tests"
+            elif pov_test_passed is False:
+                status = "pov_still_triggers"
+                security_verdict = "FAIL"
+                details = variant_result.get(
+                    "error", "One or more POV variants still crash"
+                )
+            elif unit_test_passed is False:
+                status = "test_failed"
+                security_verdict = "FAIL"
+                details = variant_result.get("error", "Unit tests failed with patch")
+            else:
+                status = "error"
+                security_verdict = "FAIL"
+                details = variant_result.get(
+                    "error", "Patch variant verification failed"
+                )
         else:
-            status = "test_failed"
-            details = unit_result.get("error", "Unit tests failed with patch")
+            # Legacy mode: verify against single pov_0 only, then run unit tests.
+            from crsbench.benchmark_ci.jobs.flat import PatchPovTestJob
+
+            pov_test_job = PatchPovTestJob(
+                benchmark_path=benchmark_path,
+                benchmark_name=payload.benchmark,
+                cpv_id=payload.cpv_id,
+                patch_id=patch.patch_id,
+                harness=payload.harness,
+                pov_path=pov_paths[0],
+                patch_path_override=patch_file,
+                build_patch_job_id=build_patch_job_id,
+                source_mode=payload.source_mode,
+            )
+            pov_params = ci_jobs.serialize_ci_job(pov_test_job)
+            pov_params["output_dir"] = str(output_dir)
+            pov_result = ci_jobs.execute_ci_job(pov_params)
+            pov_test_passed = pov_result.get("success", False)
+
+            from crsbench.benchmark_ci.jobs.flat import PatchUnitTestJob
+
+            unit_test_job = PatchUnitTestJob(
+                benchmark_path=benchmark_path,
+                benchmark_name=payload.benchmark,
+                cpv_id=payload.cpv_id,
+                patch_id=patch.patch_id,
+                harness=payload.harness,
+                test_mode=payload.test_mode,
+                patch_path_override=patch_file,
+                build_patch_job_id=build_patch_job_id,
+                source_mode=payload.source_mode,
+            )
+            unit_params = ci_jobs.serialize_ci_job(unit_test_job)
+            unit_params["output_dir"] = str(output_dir)
+            unit_result = ci_jobs.execute_ci_job(unit_params)
+            unit_test_passed = unit_result.get("success", False)
+
+            # Determine overall status
+            if pov_test_passed and unit_test_passed:
+                status = "valid"
+                security_verdict = "PASS"
+                details = "Patch passes both POV and unit tests"
+            elif not pov_test_passed:
+                status = "pov_still_triggers"
+                security_verdict = "FAIL"
+                details = pov_result.get("error", "POV still crashes with patch")
+            else:
+                status = "test_failed"
+                security_verdict = "FAIL"
+                details = unit_result.get("error", "Unit tests failed with patch")
 
         return PatchVerifyResult(
             trial_id=payload.trial_id,
@@ -543,9 +715,11 @@ def execute_patch_verify(payload_dict: dict[str, Any]) -> dict[str, Any]:
             pov_test_passed=pov_test_passed,
             unit_test_passed=unit_test_passed,
             status=status,
+            security_verdict=security_verdict,
             details=details,
             error=error,
             completed_at=time.time(),
+            logs=_collect_patch_verify_logs(payload),
         ).to_dict()
 
     except Exception as e:
@@ -562,9 +736,12 @@ def execute_patch_verify(payload_dict: dict[str, Any]) -> dict[str, Any]:
             pov_test_passed=None,
             unit_test_passed=None,
             status=status,
+            security_verdict="FAIL",
             details=details,
             error=error,
             completed_at=time.time(),
+            logs=_collect_patch_verify_logs(payload),
         ).to_dict()
     finally:
         _cleanup_patch_variant_artifacts(cleanup_variant_name)
+        _cleanup_patch_job_output_dir(payload)

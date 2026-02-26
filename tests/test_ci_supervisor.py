@@ -77,7 +77,10 @@ class TestCiSupervisorQueues:
 
     def test_build_queue_priority(self) -> None:
         """Build queue is listed first for dequeue priority."""
-        from crsbench.distributed.ci_supervisor import run_ci_supervisor
+        from crsbench.distributed.ci_supervisor import (
+            DEQUEUE_POLL_TIMEOUT_SECONDS,
+            run_ci_supervisor,
+        )
 
         mock_build_queue = _make_mock_queue("crsbench_ci_build", count=1)
         mock_verify_queue = _make_mock_queue("crsbench_ci_verify", count=1)
@@ -88,9 +91,11 @@ class TestCiSupervisorQueues:
             return mock_verify_queue
 
         dequeue_calls = []
+        dequeue_timeouts = []
 
         def track_dequeue_any(queues, **_kwargs):
             dequeue_calls.append([q.name for q in queues])
+            dequeue_timeouts.append(_kwargs.get("timeout"))
             raise KeyboardInterrupt
 
         with (
@@ -113,6 +118,7 @@ class TestCiSupervisorQueues:
         assert len(dequeue_calls) > 0
         assert dequeue_calls[0][0] == "crsbench_ci_build"
         assert dequeue_calls[0][1] == "crsbench_ci_verify"
+        assert dequeue_timeouts[0] == DEQUEUE_POLL_TIMEOUT_SECONDS
 
     def test_respects_per_queue_capacity(self) -> None:
         """Only queues with remaining capacity are included in dequeue."""
@@ -169,6 +175,60 @@ class TestCiSupervisorQueues:
         assert "crsbench_ci_build" in dequeue_calls[0]
         assert "crsbench_ci_build" not in dequeue_calls[1]
         assert "crsbench_ci_verify" in dequeue_calls[1]
+
+    def test_cpu_tag_mismatch_applies_short_backoff(self) -> None:
+        """Mismatch path should back off briefly to avoid hot-loop churn."""
+        from crsbench.distributed.ci_supervisor import run_ci_supervisor
+
+        mock_build_queue = _make_mock_queue("crsbench_ci_build", count=1)
+        mock_verify_queue = _make_mock_queue("crsbench_ci_verify", count=0)
+
+        def queue_factory(name, **_kwargs):
+            if "build" in name:
+                return mock_build_queue
+            return mock_verify_queue
+
+        mock_job = MagicMock()
+        mock_job.id = "test-job-12345678"
+        mock_job.meta = {"cpu_tag": "arm-neon"}
+        mock_job.get_status.return_value = "queued"
+
+        dequeue_count = [0]
+
+        def dequeue_any(_queues, **_kwargs):
+            dequeue_count[0] += 1
+            if dequeue_count[0] == 1:
+                return (mock_job, mock_build_queue)
+            raise KeyboardInterrupt
+
+        sleep_calls: list[float] = []
+
+        def record_sleep(seconds: float):
+            sleep_calls.append(seconds)
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor.time.sleep",
+                side_effect=record_sleep,
+            ),
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            mock_rq.Queue.dequeue_any = dequeue_any
+            run_ci_supervisor(
+                redis_host="localhost",
+                build_queue_name="crsbench_ci_build",
+                verify_queue_name="crsbench_ci_verify",
+                worker_name="test-worker",
+                build_jobs=1,
+                build_cores_per_job=1,
+                verify_jobs=0,
+                job_runner=lambda _h, _n, _j: None,
+                cpu_tag="x86-avx2",
+            )
+
+        assert 0.05 in sleep_calls
 
 
 class TestWorkerTrialAdapter:
@@ -312,7 +372,7 @@ class TestEvaluatorCommandCiFlags:
         assert args.build_jobs == 16
 
     def test_build_cores_per_job_default(self) -> None:
-        """--build-cores-per-job defaults to 1 on evaluator."""
+        """--build-cores-per-job is unset by parser and resolved later."""
         import argparse
 
         from crsbench.distributed.cli.evaluator_command import (
@@ -330,7 +390,7 @@ class TestEvaluatorCommandCiFlags:
                 "test.yaml",
             ]
         )
-        assert args.build_cores_per_job == 1
+        assert args.build_cores_per_job is None
 
     def test_old_build_workers_removed(self) -> None:
         """--build-workers flag no longer exists."""
@@ -516,6 +576,288 @@ class TestSupervisorExitCondition:
         result, iterations = self._run_supervisor()
         assert iterations == 5  # Ran until KeyboardInterrupt
 
+    def test_idle_timeout_does_not_exit_when_build_work_reappears(self) -> None:
+        """Idle timeout should not trigger while build queue has work."""
+        from crsbench.distributed.ci_supervisor import run_ci_supervisor
+
+        build_q = _make_mock_queue("crsbench_ci_build", count=0)
+        verify_q = _make_mock_queue("crsbench_ci_verify", count=0)
+
+        def queue_factory(name, **_kwargs):
+            return build_q if "build" in name else verify_q
+
+        iterations = [0]
+
+        def bump_and_interrupt(_seconds):
+            iterations[0] += 1
+            # Simulate new build work after initial backlog drain.
+            build_q.count = 1
+            if iterations[0] >= 6:
+                raise KeyboardInterrupt
+
+        time_counter = [0]
+
+        def fake_time():
+            time_counter[0] += 1
+            return float(time_counter[0])
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor.time.sleep",
+                side_effect=bump_and_interrupt,
+            ),
+            patch(
+                "crsbench.distributed.ci_supervisor.time.time", side_effect=fake_time
+            ),
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            mock_rq.Queue.dequeue_any = lambda _queues, **_kwargs: None
+            result = run_ci_supervisor(
+                redis_host="localhost",
+                build_queue_name="crsbench_ci_build",
+                verify_queue_name="crsbench_ci_verify",
+                worker_name="test-worker",
+                build_jobs=1,
+                build_cores_per_job=1,
+                verify_jobs=1,
+                job_runner=lambda _h, _n, _j: None,
+                continuous=True,
+                idle_timeout=5,
+            )
+
+        assert result == 0
+        assert iterations[0] == 6
+
+
+class TestMultiQueueSupervisor:
+    """Tests for run_multi_queue_supervisor with multiple queue lists."""
+
+    def test_function_exists(self) -> None:
+        """run_multi_queue_supervisor exists and is importable."""
+        from crsbench.distributed.ci_supervisor import run_multi_queue_supervisor
+
+        assert callable(run_multi_queue_supervisor)
+
+    def test_creates_multiple_queues(self) -> None:
+        """Multi-queue supervisor creates queue objects for all names."""
+        from crsbench.distributed.ci_supervisor import run_multi_queue_supervisor
+
+        queues_created = []
+
+        def track_queue_creation(name, **_kwargs):
+            queues_created.append(name)
+            return _make_mock_queue(name)
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor.time.sleep",
+                side_effect=KeyboardInterrupt,
+            ),
+        ):
+            mock_rq.Queue.side_effect = track_queue_creation
+            result = run_multi_queue_supervisor(
+                redis_host="localhost",
+                build_queue_names=["crsbench_exp1_build", "crsbench_exp2_build"],
+                verify_queue_names=["crsbench_exp1_verify", "crsbench_exp2_verify"],
+                worker_name="test-worker",
+                build_jobs=2,
+                build_cores_per_job=1,
+                verify_jobs=4,
+                job_runner=lambda _h, _n, _j: None,
+            )
+
+        assert "crsbench_exp1_build" in queues_created
+        assert "crsbench_exp2_build" in queues_created
+        assert "crsbench_exp1_verify" in queues_created
+        assert "crsbench_exp2_verify" in queues_created
+        assert result == 0
+
+    def test_build_priority_across_experiments(self) -> None:
+        """Build queues from all experiments are prioritized over verify queues."""
+        from crsbench.distributed.ci_supervisor import (
+            DEQUEUE_POLL_TIMEOUT_SECONDS,
+            run_multi_queue_supervisor,
+        )
+
+        build_q1 = _make_mock_queue("crsbench_exp1_build", count=1)
+        build_q2 = _make_mock_queue("crsbench_exp2_build", count=1)
+        verify_q1 = _make_mock_queue("crsbench_exp1_verify", count=1)
+        verify_q2 = _make_mock_queue("crsbench_exp2_verify", count=1)
+
+        queue_map = {
+            "crsbench_exp1_build": build_q1,
+            "crsbench_exp2_build": build_q2,
+            "crsbench_exp1_verify": verify_q1,
+            "crsbench_exp2_verify": verify_q2,
+        }
+
+        def queue_factory(name, **_kwargs):
+            return queue_map[name]
+
+        dequeue_calls = []
+        dequeue_timeouts = []
+
+        def track_dequeue_any(queues, **_kwargs):
+            dequeue_calls.append([q.name for q in queues])
+            dequeue_timeouts.append(_kwargs.get("timeout"))
+            raise KeyboardInterrupt
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            mock_rq.Queue.dequeue_any = track_dequeue_any
+            run_multi_queue_supervisor(
+                redis_host="localhost",
+                build_queue_names=["crsbench_exp1_build", "crsbench_exp2_build"],
+                verify_queue_names=["crsbench_exp1_verify", "crsbench_exp2_verify"],
+                worker_name="test-worker",
+                build_jobs=2,
+                build_cores_per_job=1,
+                verify_jobs=4,
+                job_runner=lambda _h, _n, _j: None,
+            )
+
+        assert len(dequeue_calls) > 0
+        # Build queues should appear before verify queues
+        first_call = dequeue_calls[0]
+        build_positions = [i for i, name in enumerate(first_call) if "build" in name]
+        verify_positions = [i for i, name in enumerate(first_call) if "verify" in name]
+        if build_positions and verify_positions:
+            assert max(build_positions) < min(verify_positions)
+        assert dequeue_timeouts[0] == DEQUEUE_POLL_TIMEOUT_SECONDS
+
+    def test_non_continuous_exits_when_all_empty(self) -> None:
+        """Non-continuous mode exits when all queues across experiments are empty."""
+        from crsbench.distributed.ci_supervisor import run_multi_queue_supervisor
+
+        build_q = _make_mock_queue("crsbench_exp1_build")
+        verify_q = _make_mock_queue("crsbench_exp1_verify")
+
+        def queue_factory(name, **_kwargs):
+            if "build" in name:
+                return build_q
+            return verify_q
+
+        iterations = [0]
+
+        def count_and_break(_seconds):
+            iterations[0] += 1
+            if iterations[0] >= 5:
+                raise KeyboardInterrupt
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor.time.sleep",
+                side_effect=count_and_break,
+            ),
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            result = run_multi_queue_supervisor(
+                redis_host="localhost",
+                build_queue_names=["crsbench_exp1_build"],
+                verify_queue_names=["crsbench_exp1_verify"],
+                worker_name="test-worker",
+                build_jobs=1,
+                build_cores_per_job=1,
+                verify_jobs=1,
+                job_runner=lambda _h, _n, _j: None,
+                continuous=False,
+            )
+
+        # Should exit immediately (0 iterations) since all queues are empty
+        assert result == 0
+        assert iterations[0] == 0
+
+    def test_accepts_empty_verify_list(self) -> None:
+        """Multi-queue supervisor works with empty verify queue list (worker mode)."""
+        from crsbench.distributed.ci_supervisor import run_multi_queue_supervisor
+
+        def queue_factory(name, **_kwargs):
+            return _make_mock_queue(name)
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor.time.sleep",
+                side_effect=KeyboardInterrupt,
+            ),
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            result = run_multi_queue_supervisor(
+                redis_host="localhost",
+                build_queue_names=["crsbench_exp_trial"],
+                verify_queue_names=[],
+                worker_name="test-worker",
+                build_jobs=1,
+                build_cores_per_job=1,
+                verify_jobs=0,
+                job_runner=lambda _h, _n, _j: None,
+            )
+
+        assert result == 0
+
+    def test_idle_timeout_does_not_exit_when_build_work_reappears(self) -> None:
+        """Multi-queue idle timeout should not trigger with pending build work."""
+        from crsbench.distributed.ci_supervisor import run_multi_queue_supervisor
+
+        build_q = _make_mock_queue("crsbench_exp_build", count=0)
+        verify_q = _make_mock_queue("crsbench_exp_verify", count=0)
+
+        def queue_factory(name, **_kwargs):
+            return build_q if "build" in name else verify_q
+
+        iterations = [0]
+
+        def bump_and_interrupt(_seconds):
+            iterations[0] += 1
+            build_q.count = 1
+            if iterations[0] >= 6:
+                raise KeyboardInterrupt
+
+        time_counter = [0]
+
+        def fake_time():
+            time_counter[0] += 1
+            return float(time_counter[0])
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor.time.sleep",
+                side_effect=bump_and_interrupt,
+            ),
+            patch(
+                "crsbench.distributed.ci_supervisor.time.time", side_effect=fake_time
+            ),
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            mock_rq.Queue.dequeue_any = lambda _queues, **_kwargs: None
+            result = run_multi_queue_supervisor(
+                redis_host="localhost",
+                build_queue_names=["crsbench_exp_build"],
+                verify_queue_names=["crsbench_exp_verify"],
+                worker_name="test-worker",
+                build_jobs=1,
+                build_cores_per_job=1,
+                verify_jobs=1,
+                job_runner=lambda _h, _n, _j: None,
+                continuous=True,
+                idle_timeout=5,
+            )
+
+        assert result == 0
+        assert iterations[0] == 6
+
 
 class TestHelperFunctions:
     """Test internal helper functions."""
@@ -544,3 +886,30 @@ class TestHelperFunctions:
         result = check_disk_space(Path("/tmp"))
         assert isinstance(result, int)
         assert result > 0
+
+    def test_matches_cpu_tag_strict_for_untagged_workers(self) -> None:
+        """Untagged workers should not execute tagged jobs."""
+        from crsbench.distributed.ci_supervisor import _matches_cpu_tag
+
+        tagged_job = MagicMock()
+        tagged_job.meta = {"cpu_tag": "x86-avx2"}
+        untagged_job = MagicMock()
+        untagged_job.meta = {}
+
+        assert _matches_cpu_tag(untagged_job, None) is True
+        assert _matches_cpu_tag(tagged_job, None) is False
+
+    def test_matches_cpu_tag_for_tagged_workers(self) -> None:
+        """Tagged workers execute untagged + matching tagged jobs only."""
+        from crsbench.distributed.ci_supervisor import _matches_cpu_tag
+
+        untagged_job = MagicMock()
+        untagged_job.meta = {}
+        matching_job = MagicMock()
+        matching_job.meta = {"cpu_tag": "x86-avx2"}
+        mismatching_job = MagicMock()
+        mismatching_job.meta = {"cpu_tag": "arm-neon"}
+
+        assert _matches_cpu_tag(untagged_job, "x86-avx2") is True
+        assert _matches_cpu_tag(matching_job, "x86-avx2") is True
+        assert _matches_cpu_tag(mismatching_job, "x86-avx2") is False

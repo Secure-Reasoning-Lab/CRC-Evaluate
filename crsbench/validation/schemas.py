@@ -829,8 +829,13 @@ class ResourceConfig(BaseModel):
     cores_per_trial: int = Field(
         default=4, ge=1, description="Number of CPU cores allocated per trial"
     )
-    memory_per_trial: str = Field(
-        default="8G", description="Memory allocation per trial (e.g., '8G', '16G')"
+    memory_per_trial: Optional[str] = Field(
+        default=None,
+        description="Memory allocation per trial (e.g., '8G', '16G'). None means unlimited.",
+    )
+    cpu_tag: Optional[str] = Field(
+        default=None,
+        description="Optional CPU capability tag required by trial/build/verify jobs in this experiment.",
     )
     litellm: Optional[LitellmResourceConfig] = Field(
         default=None, description="LiteLLM resource configuration"
@@ -852,6 +857,12 @@ class WorkerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     jobs: int = Field(default=4, ge=1, description="Number of parallel jobs per worker")
+    cores_per_job: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="CPUs per worker job when using cpuset/cgroup supervisor. "
+        "Falls back to resources.cores_per_trial when not set.",
+    )
     redis_host: Optional[str] = Field(
         default=None,
         description="Redis server hostname or IP for workers. "
@@ -944,6 +955,10 @@ class WorkerConfig(BaseModel):
         description="Restrict CPU pool to these cores only (cpuset format, e.g., '16-47'). "
         "If not set, all system cores are used. Accepts cpuset format.",
     )
+    cpu_tag: Optional[str] = Field(
+        default=None,
+        description="Worker CPU capability tag for matching jobs that require resources.cpu_tag.",
+    )
 
 
 class CrsComposeConfig(BaseModel):
@@ -989,6 +1004,50 @@ class CrsOverrideConfig(BaseModel):
     additional_env: Optional[Dict[str, str]] = Field(
         default=None,
         description="Additional environment variables injected into CRS runtime container",
+    )
+
+
+class EvaluatorConfig(BaseModel):
+    """Distributed evaluator runtime override configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    build_jobs: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Max concurrent build jobs for distributed evaluator",
+    )
+    build_cores_per_job: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="CPUs per evaluator build job",
+    )
+    verify_jobs: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Max concurrent verify jobs for distributed evaluator",
+    )
+    verify_cores_per_job: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="CPUs per evaluator verify job",
+    )
+    cores: Optional[str] = Field(
+        default=None,
+        description="Restrict evaluator CPU pool to these cores only (cpuset format)",
+    )
+    skip_cpus: Optional[str] = Field(
+        default=None,
+        description="CPUs to exclude from evaluator pool (cpuset format)",
+    )
+    idle_timeout: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Evaluator idle timeout in seconds after build phase (0 disables timeout)",
+    )
+    cpu_tag: Optional[str] = Field(
+        default=None,
+        description="Evaluator CPU capability tag for matching jobs that require resources.cpu_tag.",
     )
 
 
@@ -1122,6 +1181,13 @@ class ExperimentConfig(BaseModel):
         "Set to false to explicitly disable. "
         "Generates llm-usage.json with per-trial cost and token metrics.",
     )
+    llm_accounting_settle_seconds: int = Field(
+        default=60,
+        ge=0,
+        description="Minimum wait after CRS run end before final LLM usage/log "
+        "capture. Helps LiteLLM key/info and spend/log aggregates converge. "
+        "Set to 0 to disable.",
+    )
     project_image_prefix: str = Field(
         default="aixcc-afc",
         description="Docker image prefix for custom project images (default: aixcc-afc)",
@@ -1171,6 +1237,12 @@ class ExperimentConfig(BaseModel):
         "Set to 1 for a single POV per CPV (default), N for multiple variants per CPV, "
         "or null to include all available variants.",
     )
+    patch_verify_variants: bool = Field(
+        default=False,
+        description="For bug-fixing patch verification, whether to verify patches against all benchmark POV variants "
+        "for each CPV (default: False). When False, verifies against a single POV (pov_0-like behavior), "
+        "equivalent to passing --no-variants in patch-verify.",
+    )
     build_workers: Optional[int] = Field(
         default=None,
         ge=1,
@@ -1191,6 +1263,9 @@ class ExperimentConfig(BaseModel):
     )
     worker: Optional[WorkerConfig] = Field(
         default=None, description="Distributed worker configuration"
+    )
+    evaluator: Optional[EvaluatorConfig] = Field(
+        default=None, description="Distributed evaluator configuration"
     )
     crs_compose: Optional[CrsComposeConfig] = Field(
         default=None,

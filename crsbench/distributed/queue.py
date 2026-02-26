@@ -26,6 +26,14 @@ logger = get_logger(__name__)
 # Regex for valid queue name components (alphanumeric, underscores, hyphens)
 _VALID_QUEUE_COMPONENT = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
 
+QUEUE_MODEL_ENV = "CRSBENCH_QUEUE_MODEL"
+QUEUE_MODEL_FLAT = "flat"
+QUEUE_MODEL_PER_EXPERIMENT = "per-experiment"
+
+FLAT_TRIAL_QUEUE = "crsbench_trial"
+FLAT_BUILD_QUEUE = "crsbench_build"
+FLAT_VERIFY_QUEUE = "crsbench_verify"
+
 
 def validate_queue_name_component(name: str) -> str:
     """Validate that a name is safe for use in Redis queue names.
@@ -49,6 +57,35 @@ def validate_queue_name_component(name: str) -> str:
             "Must start with alphanumeric and contain only [a-zA-Z0-9_-]."
         )
     return name
+
+
+def get_queue_model() -> str:
+    """Return queue model for distributed runtime.
+
+    Supported values:
+    - ``flat`` (default): global trial/build/verify queues shared by all experiments
+    - ``per-experiment``: legacy per-experiment queue names
+    """
+    model = os.environ.get(QUEUE_MODEL_ENV, QUEUE_MODEL_FLAT).strip().lower()
+    if model not in {QUEUE_MODEL_FLAT, QUEUE_MODEL_PER_EXPERIMENT}:
+        logger.warning(
+            f"Invalid {QUEUE_MODEL_ENV}={model!r}; falling back to {QUEUE_MODEL_FLAT!r}"
+        )
+        return QUEUE_MODEL_FLAT
+    return model
+
+
+def resolve_queue_names(experiment_name: str) -> tuple[str, str, str]:
+    """Resolve trial/build/verify queue names for the configured queue model."""
+    if get_queue_model() == QUEUE_MODEL_FLAT:
+        return FLAT_TRIAL_QUEUE, FLAT_BUILD_QUEUE, FLAT_VERIFY_QUEUE
+
+    validate_queue_name_component(experiment_name)
+    return (
+        f"crsbench_{experiment_name}",
+        f"crsbench_{experiment_name}_build",
+        f"crsbench_{experiment_name}_verify",
+    )
 
 
 # Cache for auth detection: avoids extra connection attempt per call.
@@ -231,8 +268,10 @@ def initialize_queue(redis_host: str, experiment_name: str) -> Optional["rq.Queu
             "Install with: pip install redis rq"
         )
 
-    validate_queue_name_component(experiment_name)
-    queue_name = f"crsbench_{experiment_name}"
+    trial_queue_name, _build_queue_name, _verify_queue_name = resolve_queue_names(
+        experiment_name
+    )
+    queue_name = trial_queue_name
     logger.info(f"Initializing queue: {queue_name}")
 
     try:

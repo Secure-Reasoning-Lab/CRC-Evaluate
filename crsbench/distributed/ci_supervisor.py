@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, NamedTuple, Optional, Union
 
+from crsbench.distributed.common import normalize_cpu_tag
 from crsbench.distributed.queue import REDIS_AVAILABLE
 from crsbench.utils.logger import get_logger
 
@@ -25,9 +26,11 @@ if TYPE_CHECKING:
     from redis import Redis
 
 logger = get_logger(__name__)
+DEQUEUE_POLL_TIMEOUT_SECONDS = 1
 
 # job_runner(redis_host, child_name, job_id) -> None
 type JobRunner = Callable[[str, str, str], None]
+type QueueRefresher = Callable[["Redis"], tuple[list[str], list[str]]]
 
 
 class WorkerEntry(NamedTuple):
@@ -82,6 +85,7 @@ def run_ci_supervisor(
     disk_check_interval: int = 60,
     continuous: bool = True,
     idle_timeout: int = 0,
+    cpu_tag: Optional[str] = None,
 ) -> int:
     """Dual-queue supervisor for evaluator CI mode.
 
@@ -107,6 +111,8 @@ def run_ci_supervisor(
         disk_check_interval: Seconds between disk space checks.
         idle_timeout: Seconds to wait idle after build phase completes
             before exiting. 0 means disabled (wait forever).
+        cpu_tag: Optional worker capability tag. Jobs with mismatched
+            ``job.meta['cpu_tag']`` are re-queued.
 
     Returns:
         Exit code (0 for success).
@@ -122,6 +128,8 @@ def run_ci_supervisor(
     logger.info(
         f"Verify concurrency: {verify_jobs} jobs x {verify_cores_per_job} CPUs each"
     )
+    if cpu_tag:
+        logger.info(f"CPU tag filter enabled: {cpu_tag}")
 
     # CPU pool setup
     cpu_pool: Optional[CPUPool] = None
@@ -164,6 +172,7 @@ def run_ci_supervisor(
     minimum_disk_bytes = parse_size_to_bytes(minimum_disk_size)
     disk_space_ok = True
     last_disk_check = 0.0
+    queue_cooldown_until: dict[str, float] = {}
 
     try:
         from crsbench.distributed.queue import create_redis_connection
@@ -214,8 +223,8 @@ def run_ci_supervisor(
                 idle_since = time.time()
                 logger.info(
                     "=" * 60
-                    + "\n  BUILD PHASE COMPLETE — all build jobs finished"
-                    + "\n  Switching to verify-only mode"
+                    + "\n  BUILD BACKLOG DRAINED — build queue currently empty"
+                    + "\n  Continuing to serve both build and verify queues"
                     + f"\n  Verify queue: {verify_queue.count} pending"
                     + "\n"
                     + "=" * 60
@@ -223,12 +232,14 @@ def run_ci_supervisor(
 
             # --- Idle timeout check (continuous mode only) ---
             if continuous and build_phase_complete and idle_timeout > 0:
-                if not verify_active and verify_queue.count == 0:
+                build_idle = not build_active and build_queue.count == 0
+                verify_idle = not verify_active and verify_queue.count == 0
+                if build_idle and verify_idle:
                     elapsed = time.time() - idle_since
                     if elapsed >= idle_timeout:
                         logger.info(
                             f"Idle timeout reached ({idle_timeout}s) — "
-                            "no verify jobs after build phase. Exiting."
+                            "no build or verify activity after backlog drain. Exiting."
                         )
                         break
                 else:
@@ -281,10 +292,19 @@ def run_ci_supervisor(
                             break
 
             # --- Determine which queues have capacity ---
+            now = time.time()
             queues_with_capacity: list[rq.Queue] = []
-            if len(build_active) < build_jobs and build_queue.count > 0:
+            if (
+                len(build_active) < build_jobs
+                and build_queue.count > 0
+                and queue_cooldown_until.get(build_queue.name, 0.0) <= now
+            ):
                 queues_with_capacity.append(build_queue)
-            if len(verify_active) < verify_jobs and verify_queue.count > 0:
+            if (
+                len(verify_active) < verify_jobs
+                and verify_queue.count > 0
+                and queue_cooldown_until.get(verify_queue.name, 0.0) <= now
+            ):
                 queues_with_capacity.append(verify_queue)
 
             if not queues_with_capacity:
@@ -294,7 +314,7 @@ def run_ci_supervisor(
             # Dequeue with build priority (build queue first in list)
             result = rq.Queue.dequeue_any(
                 queues_with_capacity,
-                timeout=None,
+                timeout=DEQUEUE_POLL_TIMEOUT_SECONDS,
                 connection=redis_conn,
             )
 
@@ -308,6 +328,16 @@ def run_ci_supervisor(
             job_status = job.get_status()
             if job_status in ("finished", "failed"):
                 logger.debug(f"Skipping stale job {job.id[:30]} (status={job_status})")
+                continue
+            if not _matches_cpu_tag(job, cpu_tag):
+                queue_obj.enqueue_job(job)
+                if len(queues_with_capacity) > 1:
+                    queue_cooldown_until[queue_obj.name] = time.time() + 0.1
+                logger.debug(
+                    f"Re-queued job {job.id[:8]} due to cpu_tag mismatch: "
+                    f"job={job.meta.get('cpu_tag')!r}, worker={cpu_tag!r}"
+                )
+                time.sleep(0.05)
                 continue
 
             is_build = queue_obj.name == build_queue_name
@@ -422,6 +452,441 @@ def run_ci_supervisor(
 # ---------------------------------------------------------------------------
 
 
+def run_multi_queue_supervisor(
+    redis_host: str,
+    build_queue_names: list[str],
+    verify_queue_names: list[str],
+    worker_name: str,
+    build_jobs: int,
+    build_cores_per_job: int,
+    verify_jobs: int,
+    job_runner: JobRunner,
+    *,
+    verify_cores_per_job: int = 1,
+    use_cpuset: bool = False,
+    use_cgroups: bool = False,
+    cores: Optional[str] = None,
+    skip_cpus: Optional[str] = None,
+    minimum_disk_size: str = "10GB",
+    disk_check_interval: int = 60,
+    continuous: bool = True,
+    idle_timeout: int = 0,
+    queue_refresher: Optional[QueueRefresher] = None,
+    queue_refresh_interval: int = 5,
+    cpu_tag: Optional[str] = None,
+) -> int:
+    """Multi-queue supervisor for configless workers and evaluators.
+
+    Similar to ``run_ci_supervisor`` but accepts *lists* of queue names,
+    enabling a single supervisor to serve multiple experiments concurrently.
+
+    Build queues are checked with priority over verify queues.
+    Build phase is considered complete when ALL build queues are empty.
+
+    Args:
+        redis_host: Redis server hostname.
+        build_queue_names: List of Redis build queue names.
+        verify_queue_names: List of Redis verify queue names.
+        worker_name: Base worker name for child processes.
+        build_jobs: Max concurrent build jobs.
+        build_cores_per_job: CPUs per build job.
+        verify_jobs: Max concurrent verify jobs.
+        job_runner: Callable to execute a single job in a child process.
+        verify_cores_per_job: CPUs per verify job.
+        use_cpuset: Enable CPU affinity.
+        use_cgroups: Create per-job cgroups.
+        cores: CPU cores for pool.
+        skip_cpus: CPUs to exclude.
+        minimum_disk_size: Minimum free disk space before pausing.
+        disk_check_interval: Seconds between disk space checks.
+        continuous: Keep running when queues are empty.
+        idle_timeout: Exit after N seconds idle post-build-phase.
+        queue_refresher: Optional callback to refresh queue names at runtime.
+        queue_refresh_interval: Seconds between refresh attempts.
+        cpu_tag: Optional worker capability tag. Jobs with mismatched
+            ``job.meta['cpu_tag']`` are re-queued.
+
+    Returns:
+        Exit code (0 for success).
+    """
+    from crsbench.utils.cpu_pool import CPUPool, format_cpuset
+    from crsbench.utils.size_parser import parse_size_to_bytes
+
+    os.environ["CRSBENCH_SUPERVISOR"] = "1"
+    logger.info("Starting multi-queue supervisor...")
+    logger.info(f"Build queues: {build_queue_names}")
+    logger.info(f"Verify queues: {verify_queue_names}")
+    logger.info(
+        f"Build concurrency: {build_jobs} jobs x {build_cores_per_job} CPUs each"
+    )
+    logger.info(
+        f"Verify concurrency: {verify_jobs} jobs x {verify_cores_per_job} CPUs each"
+    )
+    if cpu_tag:
+        logger.info(f"CPU tag filter enabled: {cpu_tag}")
+    if queue_refresher is not None:
+        logger.info(
+            f"Runtime queue refresh enabled (interval={queue_refresh_interval}s)"
+        )
+
+    # CPU pool setup
+    cpu_pool: Optional[CPUPool] = None
+    if use_cpuset:
+        cores_arg: Union[str, int, None] = None
+        if cores is not None:
+            try:
+                cores_arg = int(cores)
+            except ValueError:
+                cores_arg = cores
+        cpu_pool = CPUPool(cores=cores_arg, skip_cpus=skip_cpus)
+
+    # Cgroup initialization
+    cgroup_base: Optional[Path] = None
+    if use_cgroups:
+        from crsbench.utils.cgroup import (
+            cleanup_stale_cgroups,
+            run_preflight_checks,
+            setup_cgroup_hierarchy,
+        )
+
+        cgroup_base = run_preflight_checks()
+        setup_cgroup_hierarchy(cgroup_base)
+        cleaned = cleanup_stale_cgroups(cgroup_base)
+        if cleaned > 0:
+            logger.info(f"Cleaned up {cleaned} stale cgroup(s)")
+
+    # Build a set for fast membership check
+    build_queue_name_set = set(build_queue_names)
+
+    # Tracking state
+    build_active: dict[int, WorkerEntry] = {}
+    verify_active: dict[int, WorkerEntry] = {}
+    deferred_cgroup_cleanup: list[Path] = []
+
+    used_worker_nums: set[int] = set()
+    max_total = build_jobs + verify_jobs
+    build_phase_complete = False
+    idle_since: float = 0.0
+
+    # Disk space state
+    minimum_disk_bytes = parse_size_to_bytes(minimum_disk_size)
+    disk_space_ok = True
+    last_disk_check = 0.0
+    last_queue_refresh = 0.0
+    queue_cooldown_until: dict[str, float] = {}
+
+    try:
+        from crsbench.distributed.queue import create_redis_connection
+
+        redis_conn = create_redis_connection(redis_host)
+
+        # Create queue objects
+        build_queues = [
+            rq.Queue(name, connection=redis_conn) for name in build_queue_names
+        ]
+        verify_queues = [
+            rq.Queue(name, connection=redis_conn) for name in verify_queue_names
+        ]
+
+        logger.info(
+            f"Multi-queue supervisor connected: "
+            f"{len(build_queues)} build + {len(verify_queues)} verify queues"
+        )
+        if cpu_pool:
+            logger.info(f"CPU pool: {cpu_pool.total_cpus} CPUs")
+
+        while True:
+            # --- Cleanup finished workers ---
+            _reap_finished(
+                build_active,
+                cpu_pool,
+                used_worker_nums,
+                deferred_cgroup_cleanup,
+                redis_conn=redis_conn,
+            )
+            _reap_finished(
+                verify_active,
+                cpu_pool,
+                used_worker_nums,
+                deferred_cgroup_cleanup,
+                redis_conn=redis_conn,
+            )
+
+            # --- Sweep deferred cgroup removals ---
+            if deferred_cgroup_cleanup:
+                _sweep_deferred_cgroups(deferred_cgroup_cleanup)
+
+            # --- Refresh queue set from registry (configless mode) ---
+            if (
+                queue_refresher
+                and time.time() - last_queue_refresh >= queue_refresh_interval
+            ):
+                last_queue_refresh = time.time()
+                try:
+                    refreshed_build, refreshed_verify = queue_refresher(redis_conn)
+                    refreshed_build = sorted(set(refreshed_build))
+                    refreshed_verify = sorted(set(refreshed_verify))
+                    if (
+                        refreshed_build != build_queue_names
+                        or refreshed_verify != verify_queue_names
+                    ):
+                        old_build = build_queue_names
+                        old_verify = verify_queue_names
+                        build_queue_names = refreshed_build
+                        verify_queue_names = refreshed_verify
+                        build_queue_name_set = set(build_queue_names)
+                        build_queues = [
+                            rq.Queue(name, connection=redis_conn)
+                            for name in build_queue_names
+                        ]
+                        verify_queues = [
+                            rq.Queue(name, connection=redis_conn)
+                            for name in verify_queue_names
+                        ]
+                        # New build queues may appear after backlog was drained.
+                        build_phase_complete = False
+                        idle_since = time.time()
+                        logger.info(
+                            "Queue set updated from registry: "
+                            f"build {old_build} -> {build_queue_names}, "
+                            f"verify {old_verify} -> {verify_queue_names}"
+                        )
+                except Exception as exc:
+                    logger.warning(f"Queue refresh failed: {exc}")
+
+            # --- Detect build phase completion ---
+            if (
+                verify_jobs > 0
+                and not build_phase_complete
+                and not build_active
+                and all(bq.count == 0 for bq in build_queues)
+            ):
+                build_phase_complete = True
+                idle_since = time.time()
+                total_verify = sum(vq.count for vq in verify_queues)
+                logger.info(
+                    "=" * 60
+                    + "\n  BUILD BACKLOG DRAINED — build queues currently empty"
+                    + "\n  Continuing to serve both build and verify queues"
+                    + f"\n  Verify queues: {total_verify} pending"
+                    + "\n"
+                    + "=" * 60
+                )
+
+            # --- Idle timeout check ---
+            if continuous and build_phase_complete and idle_timeout > 0:
+                all_build_empty = all(bq.count == 0 for bq in build_queues)
+                all_verify_empty = all(vq.count == 0 for vq in verify_queues)
+                if (
+                    not build_active
+                    and all_build_empty
+                    and not verify_active
+                    and all_verify_empty
+                ):
+                    elapsed = time.time() - idle_since
+                    if elapsed >= idle_timeout:
+                        logger.info(
+                            f"Idle timeout reached ({idle_timeout}s) — "
+                            "no build or verify activity after backlog drain. Exiting."
+                        )
+                        break
+                else:
+                    idle_since = time.time()
+
+            # --- Disk space check ---
+            current_time = time.time()
+            if current_time - last_disk_check >= disk_check_interval:
+                filestore_path = Path(
+                    os.environ.get("CRSBENCH_WORKER_EXPERIMENT_FILESTORE")
+                    or str(Path.cwd())
+                )
+                available_bytes = check_disk_space(filestore_path)
+                last_disk_check = current_time
+
+                if available_bytes < minimum_disk_bytes:
+                    if disk_space_ok:
+                        logger.warning(
+                            f"Disk space low: {available_bytes / (1024**3):.2f}GB "
+                            f"(min {minimum_disk_bytes / (1024**3):.2f}GB). Pausing."
+                        )
+                        disk_space_ok = False
+                elif not disk_space_ok:
+                    logger.info(
+                        f"Disk space recovered: "
+                        f"{available_bytes / (1024**3):.2f}GB. Resuming."
+                    )
+                    disk_space_ok = True
+
+            if not disk_space_ok:
+                time.sleep(0.5)
+                continue
+
+            # --- Exit when all work is done (non-continuous mode only) ---
+            if not continuous:
+                no_active_workers = not build_active and not verify_active
+                if no_active_workers:
+                    all_queued_empty = all(
+                        bq.count == 0 for bq in build_queues
+                    ) and all(vq.count == 0 for vq in verify_queues)
+                    if all_queued_empty:
+                        all_deferred_empty = all(
+                            bq.deferred_job_registry.count == 0 for bq in build_queues
+                        ) and all(
+                            vq.deferred_job_registry.count == 0 for vq in verify_queues
+                        )
+                        if all_deferred_empty:
+                            logger.info(
+                                "All queues empty and no active workers — exiting"
+                            )
+                            break
+
+            # --- Determine which queues have capacity ---
+            now = time.time()
+            queues_with_capacity: list[rq.Queue] = []
+            # Build queues first (priority)
+            if len(build_active) < build_jobs:
+                for bq in build_queues:
+                    if bq.count > 0 and queue_cooldown_until.get(bq.name, 0.0) <= now:
+                        queues_with_capacity.append(bq)
+            # Then verify queues
+            if len(verify_active) < verify_jobs:
+                for vq in verify_queues:
+                    if vq.count > 0 and queue_cooldown_until.get(vq.name, 0.0) <= now:
+                        queues_with_capacity.append(vq)
+
+            if not queues_with_capacity:
+                time.sleep(0.5)
+                continue
+
+            # Dequeue with build priority
+            result = rq.Queue.dequeue_any(
+                queues_with_capacity,
+                timeout=DEQUEUE_POLL_TIMEOUT_SECONDS,
+                connection=redis_conn,
+            )
+
+            if not result:
+                time.sleep(0.5)
+                continue
+
+            job, queue_obj = result
+
+            # Skip stale jobs
+            job_status = job.get_status()
+            if job_status in ("finished", "failed"):
+                logger.debug(f"Skipping stale job {job.id[:30]} (status={job_status})")
+                continue
+            if not _matches_cpu_tag(job, cpu_tag):
+                queue_obj.enqueue_job(job)
+                if len(queues_with_capacity) > 1:
+                    queue_cooldown_until[queue_obj.name] = time.time() + 0.1
+                logger.debug(
+                    f"Re-queued job {job.id[:8]} due to cpu_tag mismatch: "
+                    f"job={job.meta.get('cpu_tag')!r}, worker={cpu_tag!r}"
+                )
+                time.sleep(0.05)
+                continue
+
+            is_build = queue_obj.name in build_queue_name_set
+            queue_label = "build" if is_build else "verify"
+            cpu_count = build_cores_per_job if is_build else verify_cores_per_job
+
+            # Allocate CPUs
+            cpus = cpu_pool.allocate(cpu_count) if cpu_pool else None
+
+            if cpu_pool is not None and cpus is None:
+                queue_obj.enqueue_job(job, at_front=True)
+                logger.debug(
+                    f"Job {job.id[:8]} needs {cpu_count} CPUs, "
+                    f"only {cpu_pool.available_count()} available. Re-enqueued."
+                )
+                time.sleep(0.5)
+                continue
+
+            # Set up metadata
+            cpuset_str = ""
+            if cpus:
+                cpuset_str = format_cpuset(cpus)
+                job.meta["allocated_cpus"] = cpuset_str
+                job.save_meta()
+
+            # Worker numbering
+            worker_num = _next_worker_num(used_worker_nums, max_total)
+            used_worker_nums.add(worker_num)
+            child_name = f"{worker_name}-{worker_num}"
+
+            try:
+                cgroup_path: Optional[Path] = None
+                if cgroup_base is not None and cpuset_str:
+                    from crsbench.utils.cgroup import (
+                        cgroup_path_for_docker,
+                        create_cgroup,
+                    )
+
+                    cgroup_name = f"{queue_label}-{worker_num}"
+                    cgroup_path = create_cgroup(
+                        cgroup_base, cgroup_name, cpuset=cpuset_str
+                    )
+                    cgroup_parent = cgroup_path_for_docker(cgroup_path)
+                    job.meta["cgroup_parent"] = cgroup_parent
+                    job.save_meta()
+                    logger.info(f"Created cgroup {cgroup_name} cpuset={cpuset_str}")
+
+                if cgroup_path is not None:
+                    os.environ["OSS_FUZZ_CGROUP_PARENT"] = cgroup_path_for_docker(
+                        cgroup_path
+                    )
+                if cpuset_str:
+                    os.environ["OSS_FUZZ_CPUSET_CPUS"] = cpuset_str
+
+                # Spawn child process
+                p = multiprocessing.Process(
+                    target=job_runner,
+                    args=(redis_host, child_name, job.id),
+                    name=f"mq-{queue_label}-{worker_num}",
+                )
+                p.start()
+
+                if cgroup_path is not None:
+                    os.environ.pop("OSS_FUZZ_CGROUP_PARENT", None)
+                os.environ.pop("OSS_FUZZ_CPUSET_CPUS", None)
+
+                if p.pid is not None:
+                    entry = WorkerEntry(p, cpus or [], job.id, worker_num, cgroup_path)
+                    if is_build:
+                        build_active[p.pid] = entry
+                    else:
+                        verify_active[p.pid] = entry
+
+                logger.info(
+                    f"Started {queue_label} job {job.id[:8]} (PID: {p.pid})"
+                    + (f" with {len(cpus)} CPUs: {cpuset_str}" if cpus else "")
+                )
+            except OSError as spawn_err:
+                logger.warning(
+                    f"Failed to spawn worker {worker_num}: {spawn_err}. "
+                    "Re-enqueuing job."
+                )
+                os.environ.pop("OSS_FUZZ_CGROUP_PARENT", None)
+                os.environ.pop("OSS_FUZZ_CPUSET_CPUS", None)
+                if cpu_pool and cpus:
+                    cpu_pool.release(cpus)
+                queue_obj.enqueue_job(job, at_front=True)
+                time.sleep(0.5)
+                continue
+
+    except KeyboardInterrupt:
+        logger.info("\nMulti-queue supervisor interrupted, terminating workers...")
+        _terminate_all(build_active, cpu_pool)
+        _terminate_all(verify_active, cpu_pool)
+        return 0
+    except Exception as e:
+        logger.error(f"Multi-queue supervisor error: {e}", exc_info=True)
+        return 3
+
+    return 0
+
+
 def _enqueue_dependents_for_job(redis_conn: Redis, job_id: str) -> None:
     """Enqueue dependent jobs after a job finishes.
 
@@ -437,6 +902,22 @@ def _enqueue_dependents_for_job(redis_conn: Redis, job_id: str) -> None:
         queue.enqueue_dependents(job)
     except Exception:
         logger.debug(f"Failed to enqueue dependents for {job_id}", exc_info=True)
+
+
+def _matches_cpu_tag(job: "rq.job.Job", worker_cpu_tag: Optional[str]) -> bool:
+    """Return whether a job is runnable on this worker by CPU tag."""
+    normalized_worker_tag = normalize_cpu_tag(worker_cpu_tag)
+    raw_job_tag = job.meta.get("cpu_tag")
+    normalized_job_tag = normalize_cpu_tag(str(raw_job_tag) if raw_job_tag else None)
+
+    # Untagged workers only run untagged jobs.
+    if not normalized_worker_tag:
+        return normalized_job_tag is None
+
+    # Tagged workers can run untagged jobs plus matching tagged jobs.
+    if normalized_job_tag is None:
+        return True
+    return normalized_job_tag == normalized_worker_tag
 
 
 def _try_remove_cgroup(cgroup_path: Path) -> bool:
