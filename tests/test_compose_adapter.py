@@ -417,8 +417,8 @@ class TestComposeCommon:
 
         docker_compose_down_cleanup(tmp_path)
 
-        # 2 compose-down calls + 1 docker network prune call
-        assert mock_run.call_count == 3
+        # One compose-down call per compose file (no global network prune)
+        assert mock_run.call_count == 2
 
     def test_generate_run_id_format(self) -> None:
         """generate_run_id returns 'run-{ts}-{suffix}' with random suffix."""
@@ -876,13 +876,12 @@ class TestOssCrsAdapterBugFindFull:
         with pytest.raises(OSError, match="process error"):
             adapter.run(bench, harness, trial)
 
-        # subprocess.run should have been called for docker compose down
-        # and docker network prune (the last two calls after the build calls)
+        # subprocess.run should have been called for docker compose down.
         all_calls = [c[0][0] for c in mock_subprocess.call_args_list]
         down_calls = [c for c in all_calls if "down" in c]
         assert len(down_calls) >= 1
         prune_calls = [c for c in all_calls if "prune" in c]
-        assert len(prune_calls) >= 1
+        assert len(prune_calls) == 0
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
@@ -1437,6 +1436,31 @@ class TestCollectResultsWiring:
         assert harness_result.run_successful is True
         adapter.collect_results.assert_called_once()
 
+    def test_cleanup_issue_does_not_flip_run_successful(self, tmp_path: Path) -> None:
+        adapter = MagicMock()
+        adapter.run.return_value = self._make_success_result()
+        adapter.collect_results.return_value = {"type": "bug-finding"}
+
+        runner = self._make_runner_with_adapter(adapter)
+        trial_dir = tmp_path / "trial"
+        trial_dir.mkdir()
+        harness = self._make_harness()
+
+        with patch.object(
+            runner, "_stop_managers", return_value="snapshot cleanup warning"
+        ):
+            result = runner._execute_crs_with_managers(
+                harness=harness,
+                benchmark_path=tmp_path,
+                trial_output_dir=trial_dir,
+                trial_start_time=0.0,
+            )
+
+        harness_result = result[0]
+        assert harness_result.run_successful is True
+        assert harness_result.run_output is not None
+        assert "[cleanup] snapshot cleanup warning" in harness_result.run_output
+
 
 # ===========================================================================
 # Bug-fixing Input Staging (POV variant selection)
@@ -1606,6 +1630,30 @@ class TestBugFixPatchStatsCollection:
         )
 
         collector.set_patch_stats.assert_called_once_with(2, 0, [])
+
+    def test_total_input_povs_ignores_hidden_and_directories(
+        self, tmp_path: Path
+    ) -> None:
+        adapter = MagicMock()
+        adapter.mode = "bug-fixing"
+        runner = BenchmarkRunner(adapter=adapter, snapshot_period=0)
+        collector = MagicMock()
+
+        trial_dir = tmp_path / "trial"
+        povs_dir = trial_dir / "crs-input" / "povs"
+        povs_dir.mkdir(parents=True)
+        (povs_dir / "cpv_0").write_bytes(b"a")
+        (povs_dir / ".hidden").write_bytes(b"hidden")
+        (povs_dir / "nested").mkdir()
+
+        runner._collect_crs_results(
+            collector=collector,
+            trial_output_dir=trial_dir,
+            pov_verification_results=[],
+            patch_verification_results=[],
+        )
+
+        collector.set_patch_stats.assert_called_once_with(1, 0, [])
 
     def test_counts_produced_patches_when_verification_skipped(
         self, tmp_path: Path

@@ -8,6 +8,9 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from crsbench.evaluation.trial_paths import (
+    TrialDir,
+)
 from crsbench.reporting.errors import SnapshotLoadError
 from crsbench.reporting.models import (
     LLMUsageFile,
@@ -17,6 +20,7 @@ from crsbench.reporting.models import (
     TrialMetadataFile,
 )
 from crsbench.utils.logger import get_logger
+from crsbench.validation.schemas import TrialMode
 
 logger = get_logger(__name__)
 
@@ -322,6 +326,13 @@ def _load_trial_info(trial_dir: Path, trial_num: int) -> TrialInfo:
 
     # Load metadata.json (required)
     metadata_path = trial_dir / "metadata.json"
+    has_success_marker = (trial_dir / ".success").exists()
+    has_fail_marker = (trial_dir / ".fail").exists()
+    execution_status = (
+        "success"
+        if has_success_marker
+        else ("failed" if has_fail_marker else "incomplete")
+    )
 
     if not metadata_path.exists():
         return TrialInfo(
@@ -329,6 +340,9 @@ def _load_trial_info(trial_dir: Path, trial_num: int) -> TrialInfo:
             trial_num=trial_num,
             status="missing_metadata",
             error="metadata.json not found",
+            has_success_marker=has_success_marker,
+            has_fail_marker=has_fail_marker,
+            execution_status=execution_status,
             snapshot_count=snapshot_count,
             complete_snapshot_count=complete_count,
         )
@@ -336,6 +350,9 @@ def _load_trial_info(trial_dir: Path, trial_num: int) -> TrialInfo:
     try:
         metadata_dict = json.loads(metadata_path.read_text())
         metadata = TrialMetadataFile.model_validate(metadata_dict)
+        reeval_ready, reeval_reason = _evaluate_reeval_readiness(
+            trial_dir, metadata.mode
+        )
 
         return TrialInfo(
             trial_dir=trial_dir,
@@ -346,6 +363,11 @@ def _load_trial_info(trial_dir: Path, trial_num: int) -> TrialInfo:
             mode=metadata.mode,
             status="valid",
             metadata=metadata,
+            has_success_marker=has_success_marker,
+            has_fail_marker=has_fail_marker,
+            execution_status=execution_status,
+            reeval_ready=reeval_ready,
+            reeval_reason=reeval_reason,
             snapshot_count=snapshot_count,
             complete_snapshot_count=complete_count,
         )
@@ -356,6 +378,9 @@ def _load_trial_info(trial_dir: Path, trial_num: int) -> TrialInfo:
             trial_num=trial_num,
             status="invalid_metadata",
             error=f"Invalid JSON in metadata.json: {e}",
+            has_success_marker=has_success_marker,
+            has_fail_marker=has_fail_marker,
+            execution_status=execution_status,
             snapshot_count=snapshot_count,
             complete_snapshot_count=complete_count,
         )
@@ -366,6 +391,49 @@ def _load_trial_info(trial_dir: Path, trial_num: int) -> TrialInfo:
             trial_num=trial_num,
             status="invalid_metadata",
             error=f"Invalid metadata format: {e}",
+            has_success_marker=has_success_marker,
+            has_fail_marker=has_fail_marker,
+            execution_status=execution_status,
             snapshot_count=snapshot_count,
             complete_snapshot_count=complete_count,
         )
+
+
+def _evaluate_reeval_readiness(trial_dir: Path, mode: TrialMode) -> tuple[bool, str]:
+    """Return whether trial has required outputs for re-eval.
+
+    Readiness checks are mode-specific and intentionally shared from trial
+    discovery so downstream tools (re-eval/reporting) can use a single
+    classification result.
+    """
+    output_dir = trial_dir / "output"
+    if not output_dir.exists():
+        return False, "missing output directory"
+
+    if mode == TrialMode.bug_finding:
+        pov_dir = TrialDir(trial_dir).output_povs
+        if not pov_dir.exists():
+            return False, "missing output/povs directory"
+
+        has_pov_file = any(
+            p.is_file() and not p.name.startswith(".") for p in pov_dir.iterdir()
+        )
+        if not has_pov_file:
+            return False, "no POV files in output/povs"
+        return True, "ready"
+
+    if mode == TrialMode.patch_generation:
+        patch_dir = TrialDir(trial_dir).output_patches
+        if not patch_dir.exists():
+            return False, "missing output/patches directory"
+
+        has_patch = any(
+            p.is_file() and not p.name.startswith(".")
+            for p in patch_dir.rglob("*.diff")
+        )
+        if not has_patch:
+            return False, "no patch diff files in output/patches"
+        return True, "ready"
+
+    # Unknown mode: treat as not re-evaluable by default.
+    return False, f"unsupported trial mode: {mode.value}"

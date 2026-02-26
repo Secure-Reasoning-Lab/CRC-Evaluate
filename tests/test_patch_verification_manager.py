@@ -5,6 +5,7 @@ Tests for crsbench/evaluation/verification/patch/manager.py.
 
 from pathlib import Path
 
+import pytest
 from crsbench.evaluation.verification.patch.manager import PatchVerificationManager
 
 
@@ -96,6 +97,30 @@ class TestDiscoverNewPatches:
         assert count == 2
         assert set(new_cpv_ids) == {"cpv_0", "cpv_1"}
 
+    def test_discover_structured_multiple_diff_files(self, tmp_path: Path) -> None:
+        """Structured patch dirs count all *.diff files, not just patch.diff."""
+        trial_dir = tmp_path / "trial-1"
+        trial_dir.mkdir()
+        patch_output_dir = trial_dir / "output" / "patches"
+        (patch_output_dir / "cpv_0").mkdir(parents=True)
+        (patch_output_dir / "cpv_1").mkdir(parents=True)
+        (patch_output_dir / "cpv_0" / "patch_0.diff").write_text("diff-0")
+        (patch_output_dir / "cpv_0" / "patch_1.diff").write_text("diff-1")
+        (patch_output_dir / "cpv_1" / "patch.diff").write_text("diff-2")
+
+        manager = PatchVerificationManager(
+            trial_dir=trial_dir,
+            patch_output_dir=patch_output_dir,
+            harness_name="fuzz_parser",
+            benchmark_id="test-benchmark",
+            input_cpvs_total=2,
+        )
+
+        new_cpv_ids, count = manager._discover_new_patches()
+        assert count == 3
+        assert set(new_cpv_ids) == {"cpv_0", "cpv_1"}
+        assert manager.patches_total == 3
+
     def test_discover_flat_patches_uses_target_cpv(self, tmp_path: Path) -> None:
         """Flat patch files are counted and mapped to target CPV."""
         trial_dir = tmp_path / "trial-1"
@@ -119,6 +144,26 @@ class TestDiscoverNewPatches:
         assert new_cpv_ids == ["cpv_7"]
         assert manager.patches_total == 2
         assert manager.cpvs_with_patches == ["cpv_7"]
+
+    def test_discover_flat_patches_requires_target_cpv(self, tmp_path: Path) -> None:
+        """Flat patch files require target CPV ID for bug-fixing trials."""
+        trial_dir = tmp_path / "trial-1"
+        trial_dir.mkdir()
+        patch_output_dir = trial_dir / "output" / "patches"
+        patch_output_dir.mkdir(parents=True)
+        (patch_output_dir / "patch-a.diff").write_text("a")
+
+        manager = PatchVerificationManager(
+            trial_dir=trial_dir,
+            patch_output_dir=patch_output_dir,
+            harness_name="fuzz_parser",
+            benchmark_id="test-benchmark",
+            input_cpvs_total=1,
+            target_cpv_id=None,
+        )
+
+        with pytest.raises(ValueError, match="target_cpv_id"):
+            manager._discover_new_patches()
 
 
 class TestExchangeDirScanning:

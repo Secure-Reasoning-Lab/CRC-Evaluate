@@ -1,5 +1,7 @@
 """Main benchmark runner for CRS evaluation."""
 
+import hashlib
+import re
 import shutil
 import threading
 import time
@@ -7,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from crsbench.evaluation.adapter import OssCrsAdapter
+from crsbench.evaluation.trial_paths import count_visible_files
 
 if TYPE_CHECKING:
     from crsbench.evaluation.litellm_tracker import LiteLLMTracker
@@ -110,9 +113,11 @@ class BenchmarkRunner:
         llm_tracker: Optional["LiteLLMTracker"] = None,
         llm_api_key: Optional[str] = None,
         llm_trial_id: Optional[str] = None,
+        llm_accounting_settle_seconds: int = 60,
         build_workers: Optional[int] = None,
         verify_workers: Optional[int] = None,
         max_pov_variants_per_cpv: Optional[int] = 1,
+        patch_verify_variants: bool = False,
         redis_host: Optional[str] = None,
         experiment_name: Optional[str] = None,
         pov_dedup_strategy: str = "patch-based",
@@ -135,11 +140,17 @@ class BenchmarkRunner:
             llm_tracker: Optional LiteLLMTracker for querying LLM usage during snapshots
             llm_api_key: Optional trial-specific API key for LLM tracking
             llm_trial_id: Optional trial identifier for LLM usage files
+            llm_accounting_settle_seconds: Minimum time to wait after CRS run end
+                before final LLM usage/log capture. Remaining wait is computed after
+                manager shutdown work; set to 0 to disable.
             build_workers: Number of parallel workers for building variants
             verify_workers: Number of parallel workers for POV/patch verification
             max_pov_variants_per_cpv: Max POV variants per CPV for bug-fixing input
                 staging.
                 1 = single POV per CPV (default), N = multiple, None = all.
+            patch_verify_variants: For bug-fixing patch verification, verify
+                patches against all benchmark POV variants per CPV. When False
+                (default), verify against a single POV (pov_0-like behavior).
             redis_host: Redis server hostname for async POV verification
             experiment_name: Experiment name for async verify queue naming
             pov_dedup_strategy: POV deduplication strategy name
@@ -159,9 +170,16 @@ class BenchmarkRunner:
         self.llm_tracker = llm_tracker
         self.llm_api_key = llm_api_key
         self.llm_trial_id = llm_trial_id
+        if llm_accounting_settle_seconds < 0:
+            raise ValueError(
+                "llm_accounting_settle_seconds must be >= 0, "
+                f"got {llm_accounting_settle_seconds}"
+            )
+        self.llm_accounting_settle_seconds = llm_accounting_settle_seconds
         self.build_workers = build_workers
         self.verify_workers = verify_workers
         self.max_pov_variants_per_cpv = max_pov_variants_per_cpv
+        self.patch_verify_variants = patch_verify_variants
         self.redis_host = redis_host
         self.experiment_name = experiment_name
         self.pov_dedup_strategy = pov_dedup_strategy
@@ -346,7 +364,7 @@ class BenchmarkRunner:
             # Always set input POV count even when no patch results were produced.
             # This keeps reporting accurate for "0 patches from N input POVs".
             povs_dir = trial_output_dir / "crs-input" / "povs"
-            total_input_povs = len(list(povs_dir.iterdir())) if povs_dir.exists() else 0
+            total_input_povs = count_visible_files(povs_dir)
             patch_dir = trial_output_dir / "output" / "patches"
             produced_patches = len(
                 self._discover_trial_patches_for_verification(
@@ -598,6 +616,10 @@ class BenchmarkRunner:
         patch_verification_manager = None
         stop_event: Optional[threading.Event] = None
         harness_result = None
+        cleanup_issue: Optional[str] = None
+        crs_run_started = False
+        crs_run_returned = False
+        crs_run_end_monotonic: Optional[float] = None
 
         try:
             # Pre-resolve artifact paths so exchange_dir is available
@@ -667,6 +689,8 @@ class BenchmarkRunner:
 
             # Create callback for run start
             def on_run_start() -> None:
+                nonlocal crs_run_started
+                crs_run_started = True
                 run_start = time.time()
                 if snapshot_manager:
                     snapshot_manager.set_crs_run_start_time(run_start)
@@ -679,14 +703,20 @@ class BenchmarkRunner:
                     self.on_run_start()
 
             # Run CRS
-            crs_result = self.adapter.run(
-                benchmark_path=benchmark_path,
-                harness=harness,
-                trial_output_dir=trial_output_dir,
-                on_build_start=self.on_build_start,
-                on_run_start=on_run_start,
-                stop_event=combined_stop_event,
-            )
+            try:
+                crs_result = self.adapter.run(
+                    benchmark_path=benchmark_path,
+                    harness=harness,
+                    trial_output_dir=trial_output_dir,
+                    on_build_start=self.on_build_start,
+                    on_run_start=on_run_start,
+                    stop_event=combined_stop_event,
+                )
+                crs_run_returned = True
+            finally:
+                if crs_run_started and crs_run_returned:
+                    # Use monotonic clock for duration/remaining-wait math.
+                    crs_run_end_monotonic = time.monotonic()
 
             harness_result = HarnessResult(
                 name=harness.name,
@@ -723,13 +753,30 @@ class BenchmarkRunner:
             )
 
         finally:
-            self._stop_managers(
+            cleanup_issue = self._stop_managers(
                 snapshot_manager=snapshot_manager,
                 snapshot_thread=snapshot_thread,
                 coverage_manager=coverage_manager,
                 coverage_thread=coverage_thread,
                 harness_name=harness.name,
+                crs_run_end_monotonic=crs_run_end_monotonic,
             )
+
+        if cleanup_issue:
+            if harness_result is None:
+                harness_result = HarnessResult(
+                    name=harness.name,
+                    path=harness.path,
+                    execution_time=0.0,
+                    run_successful=False,
+                    run_output=f"Cleanup error: {cleanup_issue}",
+                )
+            else:
+                current_output = harness_result.run_output or ""
+                separator = "\n" if current_output else ""
+                harness_result.run_output = (
+                    f"{current_output}{separator}[cleanup] {cleanup_issue}"
+                )
 
         return (
             harness_result,
@@ -1149,31 +1196,124 @@ class BenchmarkRunner:
         coverage_manager: Any,
         coverage_thread: Optional[threading.Thread],
         harness_name: str,
-    ) -> None:
+        crs_run_end_monotonic: Optional[float] = None,
+    ) -> Optional[str]:
         """Stop snapshot and coverage managers."""
+        cleanup_errors: list[str] = []
+        snapshot_thread_stopped = False
+        snapshot_stop_failed = False
         if snapshot_manager:
+            self.logger.info("Requesting snapshot manager stop...")
+            try:
+                snapshot_manager.stop()
+            except Exception as e:
+                snapshot_stop_failed = True
+                msg = f"Snapshot manager cleanup failed: {e}"
+                self.logger.warning(msg)
+                cleanup_errors.append(msg)
+
+            try:
+                if snapshot_thread is None:
+                    snapshot_thread_stopped = True
+                elif snapshot_thread.is_alive():
+                    snapshot_thread.join(timeout=15.0)
+                    if snapshot_thread.is_alive():
+                        self.logger.warning(
+                            "Snapshot thread did not stop within timeout; waiting up to 60s more"
+                        )
+                        snapshot_thread.join(timeout=60.0)
+                        if snapshot_thread.is_alive():
+                            msg = (
+                                "Snapshot thread did not stop after shutdown wait; "
+                                "continuing cleanup with race risk"
+                            )
+                            self.logger.error(msg)
+                            cleanup_errors.append(msg)
+                        else:
+                            snapshot_thread_stopped = True
+                    else:
+                        snapshot_thread_stopped = True
+                else:
+                    snapshot_thread_stopped = True
+
+                if snapshot_thread_stopped:
+                    if snapshot_stop_failed:
+                        self.logger.warning(
+                            "Snapshot stop() failed but thread is stopped; "
+                            "continuing with best-effort final snapshot capture"
+                        )
+            except Exception as e:
+                snapshot_thread_stopped = False
+                msg = f"Snapshot manager shutdown sequencing failed: {e}"
+                self.logger.warning(msg)
+                cleanup_errors.append(msg)
+
+        if coverage_manager:
+            self.logger.info("Stopping coverage manager...")
+            try:
+                coverage_manager.stop()
+                if coverage_thread and coverage_thread.is_alive():
+                    coverage_thread.join(timeout=5.0)
+                    if coverage_thread.is_alive():
+                        msg = "Coverage thread did not stop within timeout"
+                        self.logger.warning(msg)
+                        cleanup_errors.append(msg)
+            except Exception as e:
+                msg = f"Coverage manager cleanup failed: {e}"
+                self.logger.warning(msg)
+                cleanup_errors.append(msg)
+
+        if snapshot_manager and snapshot_thread_stopped:
+            try:
+                self._wait_for_llm_accounting_settle(
+                    crs_run_end_monotonic=crs_run_end_monotonic
+                )
+            except Exception as e:
+                msg = f"LLM accounting settle wait failed: {e}"
+                self.logger.warning(msg)
+                cleanup_errors.append(msg)
             self.logger.info(
                 f"Capturing final snapshot for harness '{harness_name}'..."
             )
             try:
                 snapshot_manager.capture_snapshot()
+                snapshot_manager.refresh_final_symlink()
             except Exception as e:
-                self.logger.warning(f"Failed to capture final snapshot: {e}")
+                msg = f"Failed to capture final snapshot: {e}"
+                self.logger.warning(msg)
+                cleanup_errors.append(msg)
 
-            self.logger.info("Stopping snapshot manager...")
-            snapshot_manager.stop()
-            if snapshot_thread and snapshot_thread.is_alive():
-                snapshot_thread.join(timeout=5.0)
-                if snapshot_thread.is_alive():
-                    self.logger.warning("Snapshot thread did not stop within timeout")
+        if cleanup_errors:
+            summary = "; ".join(cleanup_errors)
+            self.logger.error(
+                "Manager cleanup completed with issues for harness '%s': %s",
+                harness_name,
+                summary,
+            )
+            return summary
+        return None
 
-        if coverage_manager:
-            self.logger.info("Stopping coverage manager...")
-            coverage_manager.stop()
-            if coverage_thread and coverage_thread.is_alive():
-                coverage_thread.join(timeout=5.0)
-                if coverage_thread.is_alive():
-                    self.logger.warning("Coverage thread did not stop within timeout")
+    def _wait_for_llm_accounting_settle(
+        self, *, crs_run_end_monotonic: Optional[float]
+    ) -> None:
+        """Wait remaining settle time so final LiteLLM accounting can converge."""
+        if (
+            self.llm_accounting_settle_seconds <= 0
+            or crs_run_end_monotonic is None
+            or not (self.llm_tracker and self.llm_api_key and self.llm_trial_id)
+        ):
+            return
+
+        elapsed_since_run_end = max(0.0, time.monotonic() - crs_run_end_monotonic)
+        remaining = self.llm_accounting_settle_seconds - elapsed_since_run_end
+        if remaining <= 0:
+            return
+
+        self.logger.info(
+            "Waiting %.1fs for LiteLLM accounting to settle before final snapshot",
+            remaining,
+        )
+        time.sleep(remaining)
 
     def _verify_patches(
         self,
@@ -1257,19 +1397,20 @@ class BenchmarkRunner:
                 self.logger.warning(f"No POVs directory found: {pov_dir}")
                 return []
 
-            # Create verification engine with trial-specific work directory
-            work_dir = trial_output_dir / "patch-verify"
-            work_dir.mkdir(parents=True, exist_ok=True)
+            # Patch verification logs are written under trial/patches/logs/
+            patch_artifacts_dir = trial_output_dir / "patches"
+            patch_artifacts_dir.mkdir(parents=True, exist_ok=True)
 
             engine = PatchVerificationEngine(
                 oss_fuzz_path=oss_fuzz_path,
                 timeout=self.per_pov_verify_timeout,
                 build_timeout=1200,
                 test_timeout=1800,
-                work_dir=work_dir,
+                log_dir=patch_artifacts_dir,
                 force_rebuild=True,  # Always rebuild for fresh verification
                 build_workers=self.build_workers,
                 verify_workers=self.verify_workers,
+                verify_variants=self.patch_verify_variants,
             )
 
             results: list[PatchVerificationResult] = []
@@ -1399,6 +1540,7 @@ class BenchmarkRunner:
                 benchmark_path.name,
                 harness_name,
                 patches,
+                verify_variants=self.patch_verify_variants,
             )
 
             if not job_ids:
@@ -1542,8 +1684,14 @@ class BenchmarkRunner:
                 for entry in cpv_dir.iterdir()
                 if entry.is_file() and entry.suffix == ".diff"
             )
-            for i, patch_path in enumerate(cpv_patches):
-                structured_patches.append((cpv_id, f"patch_{i}", patch_path))
+            for patch_path in cpv_patches:
+                patch_id = self._build_trial_patch_id(
+                    layout="structured",
+                    cpv_id=cpv_id,
+                    patch_path=patch_path,
+                    patch_dir=patch_dir,
+                )
+                structured_patches.append((cpv_id, patch_id, patch_path))
 
         flat_patches = sorted(
             entry
@@ -1557,21 +1705,53 @@ class BenchmarkRunner:
                     "Flat patch output requires target_cpv_id for bug-fixing trials."
                 )
             cpv_id = target_cpv_id or "unknown"
-            flat_discovered = [
-                (cpv_id, f"patch_{i}", patch_path)
-                for i, patch_path in enumerate(flat_patches)
-            ]
+            for patch_path in flat_patches:
+                patch_id = self._build_trial_patch_id(
+                    layout="flat",
+                    cpv_id=cpv_id,
+                    patch_path=patch_path,
+                    patch_dir=patch_dir,
+                )
+                flat_discovered.append((cpv_id, patch_id, patch_path))
 
         discovered = structured_patches + flat_discovered
-        if not discovered:
+        deduped: list[tuple[str, str, Path]] = []
+        seen_keys: set[tuple[str, str]] = set()
+        for cpv_id, patch_id, patch_path in discovered:
+            key = (cpv_id, patch_id)
+            if key in seen_keys:
+                self.logger.warning(
+                    "Skipping duplicate discovered patch identity: "
+                    f"cpv_id={cpv_id}, patch_id={patch_id}, path={patch_path}"
+                )
+                continue
+            seen_keys.add(key)
+            deduped.append((cpv_id, patch_id, patch_path))
+        if not deduped:
             return []
         self.logger.info(
             "Discovered patches for verification: "
             f"structured={len(structured_patches)}, flat={len(flat_discovered)}, "
-            f"total={len(discovered)}, "
+            f"total={len(deduped)}, "
             f"target_cpv_id={target_cpv_id or '-'}"
         )
-        return discovered
+        return deduped
+
+    @staticmethod
+    def _build_trial_patch_id(
+        *,
+        layout: str,
+        cpv_id: str,
+        patch_path: Path,
+        patch_dir: Path,
+    ) -> str:
+        """Build a stable, collision-resistant patch ID within a trial."""
+        rel_path = patch_path.relative_to(patch_dir).as_posix()
+        name_part = re.sub(r"[^a-zA-Z0-9_-]+", "_", patch_path.stem).strip("_")
+        if not name_part:
+            name_part = "patch"
+        digest = hashlib.sha1(f"{layout}:{cpv_id}:{rel_path}".encode()).hexdigest()[:10]
+        return f"{layout}_{name_part}_{digest}"
 
     @staticmethod
     def _find_trial_pov_for_cpv(pov_dir: Path, cpv_id: str) -> Optional[Path]:

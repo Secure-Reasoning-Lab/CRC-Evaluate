@@ -46,9 +46,17 @@ CRSBench uses a distributed model backed by a Redis-compatible queue (Valkey):
 - **Remote workers**: scale out to additional machines
 
 **Queue names (same Redis instance):**
-- `crsbench_{experiment}` — CRS trial jobs (workers consume)
-- `crsbench_{experiment}_build` — variant build jobs (evaluators consume)
-- `crsbench_{experiment}_verify` — POV/patch verification jobs (evaluators consume)
+- Default queue model (`CRSBENCH_QUEUE_MODEL=flat`):
+  - `crsbench_trial` — CRS trial jobs (workers consume)
+  - `crsbench_build` — variant build jobs (evaluators consume)
+  - `crsbench_verify` — POV/patch verification jobs (evaluators consume)
+- Optional legacy model (`CRSBENCH_QUEUE_MODEL=per-experiment`):
+  - `crsbench_{experiment}`
+  - `crsbench_{experiment}_build`
+  - `crsbench_{experiment}_verify`
+
+For canonical queue-model behavior and configless details, see
+[`docs/design/distributed/configless-runtime.md`](design/distributed/configless-runtime.md).
 
 ## Prerequisites
 
@@ -319,6 +327,9 @@ crsbench re-eval -c config.yaml --output /tmp/reeval-results
 ```
 
 Re-eval preserves `metadata.json` and relative POV discovery times, but re-runs verification and collects crash logs.
+For patch-generation trials, `patch_verify_variants` in the experiment config
+controls whether patch verification checks all `pov_*` variants (`true`) or
+single-POV mode (`false`, default).
 
 | Flag | Description |
 |------|-------------|

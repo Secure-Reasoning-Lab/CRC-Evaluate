@@ -1,5 +1,7 @@
 """Tests for CSV report generator."""
 
+import csv
+import json
 import tempfile
 from pathlib import Path
 
@@ -341,3 +343,216 @@ def test_combined_report_structure(temp_output_dir, sample_experiment_metrics):
     assert content.count("crs") >= 2
     assert content.count("benchmark") >= 2
     assert content.count("time_series") >= 2
+
+
+def test_generate_patch_analysis_report_includes_sidecar_api_calls(temp_output_dir):
+    """Patch analysis includes sidecar POST API call counts."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "experiment-data" / "exp-1"
+        trial_dir = (
+            experiment_dir
+            / "crs-codex"
+            / "afc-shadowsocks-full-01"
+            / "json_fuzz"
+            / "cpv_0"
+            / "full"
+            / "address"
+            / "trial-1"
+        )
+        trial_dir.mkdir(parents=True, exist_ok=True)
+
+        (trial_dir / ".success").write_text("")
+        (trial_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "crs": "crs-codex",
+                    "benchmark": "afc-shadowsocks-full-01",
+                    "harness": "json_fuzz",
+                    "target_cpv_id": "cpv_0",
+                    "build_mode": "full",
+                    "sanitizer": "address",
+                }
+            )
+        )
+
+        services_dir = trial_dir / "output" / "logs" / "services"
+        services_dir.mkdir(parents=True, exist_ok=True)
+        (services_dir / "crs-codex_inc-builder-asan.stdout.log").write_text(
+            "\n".join(
+                [
+                    'INFO: 127.0.0.1:11111 - "GET /health HTTP/1.1" 200 OK',
+                    'INFO: 127.0.0.1:11111 - "POST /build HTTP/1.1" 200 OK',
+                    'INFO: 127.0.0.1:11111 - "POST /run-pov HTTP/1.1" 200 OK',
+                    'INFO: 127.0.0.1:11111 - "POST /run-test HTTP/1.1" 200 OK',
+                ]
+            )
+        )
+
+        out_path = generator.generate_patch_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert "builder_sidecar_api_calls" in rows[0]
+    assert rows[0]["builder_sidecar_api_calls"] == "3"
+
+
+def test_patch_analysis_sidecar_api_calls_fallback_to_crs_logs(temp_output_dir):
+    """Patch analysis falls back to output/logs/crs when services logs are absent."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "experiment-data" / "exp-1"
+        trial_dir = (
+            experiment_dir
+            / "crs-codex"
+            / "afc-shadowsocks-full-01"
+            / "json_fuzz"
+            / "cpv_1"
+            / "full"
+            / "address"
+            / "trial-1"
+        )
+        trial_dir.mkdir(parents=True, exist_ok=True)
+
+        (trial_dir / ".success").write_text("")
+        (trial_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "crs": "crs-codex",
+                    "benchmark": "afc-shadowsocks-full-01",
+                    "harness": "json_fuzz",
+                    "target_cpv_id": "cpv_1",
+                    "build_mode": "full",
+                    "sanitizer": "address",
+                }
+            )
+        )
+
+        crs_logs_dir = trial_dir / "output" / "logs" / "crs" / "crs-codex"
+        crs_logs_dir.mkdir(parents=True, exist_ok=True)
+        (crs_logs_dir / "crs-codex_inc-builder-asan.stdout.log").write_text(
+            "\n".join(
+                [
+                    'INFO: 127.0.0.1:11111 - "GET /status/abc HTTP/1.1" 200 OK',
+                    'INFO: 127.0.0.1:11111 - "POST /build HTTP/1.1" 200 OK',
+                ]
+            )
+        )
+
+        out_path = generator.generate_patch_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["builder_sidecar_api_calls"] == "1"
+
+
+def test_patch_analysis_uses_max_generated_count(temp_output_dir):
+    """Patch generated count should not undercount when summary is stale."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "experiment-data" / "exp-1"
+        trial_dir = (
+            experiment_dir
+            / "crs-codex"
+            / "afc-xz-full-01"
+            / "fuzz_encode_stream"
+            / "cpv_0"
+            / "full"
+            / "address"
+            / "trial-1"
+        )
+        trial_dir.mkdir(parents=True, exist_ok=True)
+
+        (trial_dir / ".success").write_text("")
+        (trial_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "crs": "crs-codex",
+                    "benchmark": "afc-xz-full-01",
+                    "harness": "fuzz_encode_stream",
+                    "target_cpv_id": "cpv_0",
+                    "build_mode": "full",
+                    "sanitizer": "address",
+                }
+            )
+        )
+        (trial_dir / "patch_verification_results.json").write_text(
+            json.dumps(
+                {
+                    "summary": {"patches_generated": 1, "valid": 1},
+                    "results": [
+                        {
+                            "patch_id": "patch_0",
+                            "pov_id": "cpv_0",
+                            "pov_test_passed": True,
+                            "unit_tests_passed": True,
+                        }
+                    ],
+                }
+            )
+        )
+
+        output_patches = trial_dir / "output" / "patches" / "cpv_0"
+        output_patches.mkdir(parents=True, exist_ok=True)
+        (output_patches / "patch_0.diff").write_text("diff 0")
+        (output_patches / "patch_1.diff").write_text("diff 1")
+
+        out_path = generator.generate_patch_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["patch_generated_count"] == "2"
+    assert rows[0]["verified_total_count"] == "1"
+
+
+def test_patch_analysis_ignores_hidden_patch_diff_files(temp_output_dir):
+    """Hidden patch diff files should not inflate generated patch count."""
+    generator = CSVReportGenerator(temp_output_dir)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        experiment_dir = Path(tmpdir) / "experiment-data" / "exp-1"
+        trial_dir = (
+            experiment_dir
+            / "crs-codex"
+            / "afc-xz-full-01"
+            / "fuzz_encode_stream"
+            / "cpv_0"
+            / "full"
+            / "address"
+            / "trial-1"
+        )
+        trial_dir.mkdir(parents=True, exist_ok=True)
+
+        (trial_dir / ".success").write_text("")
+        (trial_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "crs": "crs-codex",
+                    "benchmark": "afc-xz-full-01",
+                    "harness": "fuzz_encode_stream",
+                    "target_cpv_id": "cpv_0",
+                    "build_mode": "full",
+                    "sanitizer": "address",
+                }
+            )
+        )
+
+        output_patches = trial_dir / "output" / "patches" / "cpv_0"
+        output_patches.mkdir(parents=True, exist_ok=True)
+        (output_patches / "patch_0.diff").write_text("diff 0")
+        hidden_dir = trial_dir / "output" / "patches" / ".tmp"
+        hidden_dir.mkdir(parents=True, exist_ok=True)
+        (hidden_dir / "patch_hidden.diff").write_text("diff hidden")
+
+        out_path = generator.generate_patch_analysis_report(experiment_dir)
+        with out_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["patch_generated_count"] == "1"

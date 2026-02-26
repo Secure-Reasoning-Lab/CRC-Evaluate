@@ -3,9 +3,11 @@
 import csv
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from crsbench.evaluation.trial_paths import TrialDir
 from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -177,6 +179,7 @@ class CSVReportGenerator:
             no_crash_all_verified, unittest_all_verified,
             verification_build_failed, verification_pov_still_triggers,
             verification_test_failed, verification_error,
+            build_time, run_time, verify_time,
             elapsed_seconds, llm_cost_usd, llm_requests, trial_dir
         """
         out_path = self.output_dir / "patch_analysis.csv"
@@ -185,8 +188,9 @@ class CSVReportGenerator:
         for trial_dir in sorted(experiment_dir.rglob("trial-*")):
             if not trial_dir.is_dir():
                 continue
+            paths = TrialDir(trial_dir)
 
-            metadata_path = trial_dir / "metadata.json"
+            metadata_path = paths.metadata_path
             if not metadata_path.exists():
                 continue
 
@@ -200,7 +204,7 @@ class CSVReportGenerator:
             run_mode = metadata.get("build_mode")
             sanitizer = metadata.get("sanitizer")
 
-            patch_verif_path = trial_dir / "patch_verification_results.json"
+            patch_verif_path = paths.patch_verification_results_path
             patch_data: dict[str, Any] = {}
             if patch_verif_path.exists():
                 try:
@@ -217,11 +221,12 @@ class CSVReportGenerator:
             if not isinstance(results, list):
                 results = []
 
-            patch_generated = int(summary.get("patches_generated", 0) or 0)
-            if patch_generated == 0:
-                patch_generated = len(
-                    list((trial_dir / "output" / "patches").glob("*.diff"))
-                )
+            discovered_patch_files = paths.count_visible_patch_diffs()
+            patch_generated = max(
+                int(summary.get("patches_generated", 0) or 0),
+                len(results),
+                discovered_patch_files,
+            )
 
             verified_valid = int(summary.get("valid", 0) or 0)
             verified_total = len(results)
@@ -235,7 +240,21 @@ class CSVReportGenerator:
             )
 
             llm_cost, llm_requests = self._load_llm_usage(trial_dir)
-            elapsed_seconds = self._extract_elapsed_seconds(trial_dir / "worker.log")
+            elapsed_seconds = self._extract_elapsed_seconds(paths.worker_log_path)
+            builder_sidecar_api_calls = self._count_builder_sidecar_api_calls(trial_dir)
+            (
+                parsed_build_time,
+                parsed_run_time,
+                parsed_verify_time,
+            ) = self._extract_phase_times(paths.worker_log_path)
+
+            build_time = metadata.get("build_time")
+            run_time = metadata.get("run_time")
+            verify_time = parsed_verify_time
+            if build_time is None:
+                build_time = parsed_build_time
+            if run_time is None:
+                run_time = parsed_run_time
 
             rows.append(
                 {
@@ -259,6 +278,10 @@ class CSVReportGenerator:
                     ),
                     "verification_test_failed": int(summary.get("test_failed", 0) or 0),
                     "verification_error": int(summary.get("error", 0) or 0),
+                    "builder_sidecar_api_calls": builder_sidecar_api_calls,
+                    "build_time": build_time,
+                    "run_time": run_time,
+                    "verify_time": verify_time,
                     "elapsed_seconds": elapsed_seconds,
                     "llm_cost_usd": llm_cost,
                     "llm_requests": llm_requests,
@@ -283,6 +306,10 @@ class CSVReportGenerator:
             "verification_pov_still_triggers",
             "verification_test_failed",
             "verification_error",
+            "builder_sidecar_api_calls",
+            "build_time",
+            "run_time",
+            "verify_time",
             "elapsed_seconds",
             "llm_cost_usd",
             "llm_requests",
@@ -334,6 +361,99 @@ class CSVReportGenerator:
             return float(matches[-1])
         except ValueError:
             return None
+
+    @staticmethod
+    def _extract_phase_times(
+        worker_log_path: Path,
+    ) -> tuple[float | None, float | None, float | None]:
+        """Extract build/run/verify durations from worker log timestamps.
+
+        Returns:
+            Tuple: (build_time, run_time, verify_time) in seconds.
+        """
+        if not worker_log_path.exists():
+            return None, None, None
+
+        try:
+            lines = worker_log_path.read_text(errors="ignore").splitlines()
+        except Exception:
+            return None, None, None
+
+        def parse_ts(line: str) -> datetime | None:
+            # Log format begins with "YYYY-MM-DD HH:MM:SS | ..."
+            if len(line) < 19:
+                return None
+            try:
+                return datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                return None
+
+        build_start: datetime | None = None
+        build_end: datetime | None = None
+        verify_start: datetime | None = None
+        end_time: datetime | None = None
+
+        for line in lines:
+            ts = parse_ts(line)
+            if ts is None:
+                continue
+            if build_start is None and "phase -> building" in line:
+                build_start = ts
+            if build_end is None and "Build complete for " in line:
+                build_end = ts
+            if verify_start is None and "phase -> verifying" in line:
+                verify_start = ts
+            if (
+                "Evaluation completed:" in line
+                or "Benchmark evaluation failed:" in line
+            ):
+                end_time = ts
+
+        build_time = (
+            (build_end - build_start).total_seconds()
+            if build_start is not None and build_end is not None
+            else None
+        )
+        run_time = (
+            (verify_start - build_end).total_seconds()
+            if build_end is not None and verify_start is not None
+            else None
+        )
+        verify_time = (
+            (end_time - verify_start).total_seconds()
+            if verify_start is not None and end_time is not None
+            else None
+        )
+        return build_time, run_time, verify_time
+
+    @staticmethod
+    def _count_builder_sidecar_api_calls(trial_dir: Path) -> int:
+        """Count sidecar builder API calls from inc-builder stdout logs.
+
+        Counts only HTTP POST access-log lines (build/run-pov/run-test calls), and
+        ignores health/status polling GET requests.
+        """
+        services_dir = trial_dir / "output" / "logs" / "services"
+        log_paths = sorted(services_dir.glob("*inc-builder-*.stdout.log"))
+
+        # Backward-compatible fallback for older layouts without services logs.
+        if not log_paths:
+            log_paths = sorted(
+                (trial_dir / "output" / "logs" / "crs").glob(
+                    "**/*inc-builder-*.stdout.log"
+                )
+            )
+
+        api_calls = 0
+        for log_path in log_paths:
+            try:
+                for line in log_path.read_text(errors="ignore").splitlines():
+                    if '"POST /' in line and "HTTP/" in line:
+                        api_calls += 1
+            except Exception:
+                continue
+
+        return api_calls
 
     def _format_trial_row(self, trial_metrics: dict[str, Any]) -> dict[str, Any]:
         """Format trial metrics into CSV row.

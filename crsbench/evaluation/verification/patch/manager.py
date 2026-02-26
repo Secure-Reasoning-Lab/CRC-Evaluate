@@ -132,7 +132,7 @@ class PatchVerificationManager:
         """Scan a directory for patch files.
 
         Supports:
-        - Structured layout: {cpv_id}/patch.diff
+        - Structured layout: {cpv_id}/*.diff
         - Flat layout: *.diff (mapped to target_cpv_id when available)
 
         Args:
@@ -154,19 +154,29 @@ class PatchVerificationManager:
             if entry.is_file() and entry.suffix == ".diff"
         )
         if flat_files:
+            if target_cpv_id is None:
+                raise ValueError(
+                    "Flat patch output requires target_cpv_id for bug-fixing trials."
+                )
             flat_cpv_id = target_cpv_id or "unknown"
             for patch_file in flat_files:
                 # Use filename as logical key so exchange/output duplicates dedupe.
                 results.append((flat_cpv_id, patch_file.name, patch_file))
 
-        # Structured layout: output/patches/{cpv_id}/patch.diff
+        # Structured layout: output/patches/{cpv_id}/*.diff
         for cpv_dir in directory.iterdir():
             if not cpv_dir.is_dir():
                 continue
-            patch_file = cpv_dir / "patch.diff"
-            if patch_file.exists():
+            cpv_patches = sorted(
+                entry
+                for entry in cpv_dir.iterdir()
+                if entry.is_file() and entry.suffix == ".diff"
+            )
+            for patch_file in cpv_patches:
                 # Logical key by relative path to dedupe exchange/output duplicates.
-                results.append((cpv_dir.name, f"{cpv_dir.name}/patch.diff", patch_file))
+                results.append(
+                    (cpv_dir.name, f"{cpv_dir.name}/{patch_file.name}", patch_file)
+                )
         return results
 
     def _discover_new_patches(self) -> tuple[list[str], int]:

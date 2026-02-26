@@ -1351,7 +1351,9 @@ trial_output_dir/                          # Created by Orchestrator
 │   └── ...
 ├── config.yaml                            # Experiment config (copied once, static)
 ├── execution.json                         # Execution metadata (written by BenchmarkRunner, static)
-├── llm-usage.json                         # LLM metrics (updated by CRS, snapshotted fully)
+├── llm-usage.json                         # LLM metrics (snapshotted fully)
+├── llm-logs.json                          # Raw LiteLLM request/spend logs (not snapshotted)
+├── llm-summary.json                       # Concise LiteLLM failure summary (not snapshotted)
 ├── crs-output.log                         # CRS stdout/stderr (growing, snapshotted fully)
 ├── snapshot-0001.tar.gz                   # Snapshot archives
 ├── snapshot-0001.complete                 # Completion markers
@@ -1363,6 +1365,7 @@ trial_output_dir/                          # Created by Orchestrator
 **Key Points**:
 - **Snapshots capture `output/` directory contents** (POVs, patches, seeds, crs-data)
 - **Snapshots also capture logs** (`llm-usage.json`, `crs-output.log`)
+- **`llm-logs.json` and `llm-summary.json` are maintained in trial dir for debugging/dashboard and are not included in snapshot archives**
 - **Snapshots also capture static config** (`config.yaml`, `execution.json`)
 - **Snapshots do NOT capture inputs** (`hints/`, `povs/` for patch-gen)
 - **CRS creates `output/` and subdirectories** as needed

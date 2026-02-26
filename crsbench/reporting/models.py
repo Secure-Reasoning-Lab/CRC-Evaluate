@@ -135,6 +135,13 @@ class TrialInfo(BaseModel):
     status: str = "valid"  # "valid", "missing_metadata", "invalid_metadata"
     error: str | None = None
 
+    # Execution readiness markers (shared by reporting/re-eval flows)
+    has_success_marker: bool = False
+    has_fail_marker: bool = False
+    execution_status: str = "incomplete"  # "success", "failed", "incomplete"
+    reeval_ready: bool = False
+    reeval_reason: str | None = None
+
     # Full metadata (if loaded)
     metadata: TrialMetadata | None = None
 

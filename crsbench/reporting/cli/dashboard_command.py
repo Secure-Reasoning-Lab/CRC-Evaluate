@@ -47,7 +47,7 @@ Examples:
 Directory structure expected:
   <base-dir>/
     <experiment-name>/
-      experiment-data/   # Trial execution data (crs-logs/, llm-logs.json, etc.)
+      experiment-data/   # Trial execution data (crs-logs/, llm-logs.json, llm-summary.json, etc.)
       report-data/       # Generated reports (experiment-*.json, trial-reports/)
         """,
     )
