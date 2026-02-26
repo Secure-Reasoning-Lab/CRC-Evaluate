@@ -273,15 +273,21 @@ def run_evaluator(args: argparse.Namespace) -> int:
         experiment_name = config.experiment
         logger.info(f"Experiment name: {experiment_name}")
 
-        redis_host = normalize_redis_host(
-            config.redis_host or os.environ.get("CRSBENCH_REDIS_HOST") or "localhost"
-        )
-        if redis_host is None:
-            logger.error(
-                "Distributed evaluator requires a Redis host; "
-                "set redis_host or CRSBENCH_REDIS_HOST"
-            )
-            return 1
+        normalized_config_redis_host = normalize_redis_host(config.redis_host)
+        if normalized_config_redis_host is not None:
+            redis_host = normalized_config_redis_host
+        else:
+            env_redis_host = os.environ.get("CRSBENCH_REDIS_HOST")
+            if env_redis_host is not None:
+                redis_host = normalize_redis_host(env_redis_host)
+                if redis_host is None:
+                    logger.error(
+                        "Distributed evaluator requires a Redis host; "
+                        "set redis_host or CRSBENCH_REDIS_HOST"
+                    )
+                    return 1
+            else:
+                redis_host = "localhost"
         logger.info(f"Redis host: {redis_host}")
 
         if args.benchmarks_root:

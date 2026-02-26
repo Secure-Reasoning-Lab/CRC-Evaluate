@@ -93,6 +93,15 @@ class TestRunEvaluatorMain:
         assert kwargs["build_cores_per_job"] == 4
         assert kwargs["verify_cores_per_job"] == 4
 
+    @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
+    def test_rejects_invalid_redis_host(self) -> None:
+        """run_evaluator_main should reject invalid redis host values."""
+        from crsbench.distributed.evaluator import run_evaluator_main
+
+        config = MagicMock()
+        result = run_evaluator_main(config, "exp-test", redis_host=" none ")
+        assert result == 1
+
 
 class TestEvaluatorSupervisorQueues:
     """Test evaluator delegates to ci_supervisor for dual-queue setup.
@@ -760,6 +769,92 @@ class TestConfiglessEvaluator:
             mock_config = MagicMock()
             mock_config.experiment = "exp-1"
             mock_config.redis_host = None
+            mock_config.evaluator = None
+            mock_config.resources = None
+            mock_load.return_value = mock_config
+
+            result = run_evaluator(args)
+
+        assert result == 0
+        assert mock_main.call_args.kwargs["redis_host"] == "redis-env"
+
+    def test_evaluator_cli_config_mode_rejects_empty_env_redis_host(self) -> None:
+        """Config-mode evaluator should reject explicitly empty env redis host."""
+        import argparse
+
+        from crsbench.distributed.cli.evaluator_command import run_evaluator
+
+        args = argparse.Namespace(
+            experiment_config="test.yaml",
+            ci=False,
+            verbose=False,
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag=None,
+            build_jobs=None,
+            build_cores_per_job=None,
+            verify_cores_per_job=None,
+            verify_jobs=None,
+            worker_name=None,
+            idle_timeout=None,
+            benchmarks_root=None,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator.run_evaluator_main", return_value=0
+            ) as mock_main,
+            patch("crsbench.run_experiment.load_experiment_config") as mock_load,
+            patch.dict("os.environ", {"CRSBENCH_REDIS_HOST": ""}, clear=False),
+        ):
+            mock_config = MagicMock()
+            mock_config.experiment = "exp-1"
+            mock_config.redis_host = None
+            mock_config.evaluator = None
+            mock_config.resources = None
+            mock_load.return_value = mock_config
+
+            result = run_evaluator(args)
+
+        assert result == 1
+        mock_main.assert_not_called()
+
+    def test_evaluator_cli_config_mode_blank_config_redis_uses_env_fallback(
+        self,
+    ) -> None:
+        """Blank config redis_host should defer to env redis host."""
+        import argparse
+
+        from crsbench.distributed.cli.evaluator_command import run_evaluator
+
+        args = argparse.Namespace(
+            experiment_config="test.yaml",
+            ci=False,
+            verbose=False,
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag=None,
+            build_jobs=None,
+            build_cores_per_job=None,
+            verify_cores_per_job=None,
+            verify_jobs=None,
+            worker_name=None,
+            idle_timeout=None,
+            benchmarks_root=None,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator.run_evaluator_main", return_value=0
+            ) as mock_main,
+            patch("crsbench.run_experiment.load_experiment_config") as mock_load,
+            patch.dict("os.environ", {"CRSBENCH_REDIS_HOST": "redis-env"}, clear=False),
+        ):
+            mock_config = MagicMock()
+            mock_config.experiment = "exp-1"
+            mock_config.redis_host = "   "
             mock_config.evaluator = None
             mock_config.resources = None
             mock_load.return_value = mock_config

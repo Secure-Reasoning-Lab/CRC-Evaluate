@@ -205,6 +205,23 @@ class TestWorkerContinuousMode:
             )
             mock_spawn.assert_not_called()
 
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
+    def test_worker_main_rejects_invalid_cli_redis_host(self):
+        """Worker main should fail when explicit redis_host normalizes to None."""
+        from crsbench.distributed.worker import main
+
+        result = main(redis_host="none")
+        assert result == 1
+
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
+    def test_worker_main_rejects_invalid_env_redis_host(self):
+        """Worker main should fail when CRSBENCH_REDIS_HOST is invalid."""
+        from crsbench.distributed.worker import main
+
+        with patch.dict("os.environ", {"CRSBENCH_REDIS_HOST": "   "}, clear=False):
+            result = main(redis_host=None)
+        assert result == 1
+
 
 class TestConfiglessWorker:
     """Tests for configless worker mode (registry discovery)."""

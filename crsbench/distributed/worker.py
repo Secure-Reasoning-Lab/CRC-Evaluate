@@ -154,11 +154,27 @@ def main(
         sys.exit(1)
 
     # Resolve runtime configuration.
-    redis_host = normalize_redis_host(redis_host)
-    if redis_host is None:
-        redis_host = normalize_redis_host(os.environ.get("CRSBENCH_REDIS_HOST"))
-    if redis_host is None:
-        redis_host = "localhost"
+    normalized_cli_redis_host = normalize_redis_host(redis_host)
+    if redis_host is not None and normalized_cli_redis_host is None:
+        logger.error(
+            "Invalid redis host override for worker. "
+            "Set redis_host to a non-empty hostname."
+        )
+        return 1
+    if normalized_cli_redis_host is not None:
+        redis_host = normalized_cli_redis_host
+    else:
+        env_redis_host = os.environ.get("CRSBENCH_REDIS_HOST")
+        if env_redis_host is not None:
+            redis_host = normalize_redis_host(env_redis_host)
+            if redis_host is None:
+                logger.error(
+                    "Invalid CRSBENCH_REDIS_HOST for worker. "
+                    "Set it to a non-empty hostname."
+                )
+                return 1
+        else:
+            redis_host = "localhost"
     experiment_name = experiment_name or "default"
     worker_name = worker_name or socket.gethostname()
 

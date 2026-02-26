@@ -153,6 +153,14 @@ def run_evaluator_main(
         logger.error("Install with: pip install redis rq")
         return 1
 
+    normalized_redis_host = normalize_redis_host(redis_host)
+    if normalized_redis_host is None:
+        logger.error(
+            "Invalid redis host for evaluator. Set redis_host to a non-empty hostname."
+        )
+        return 1
+    redis_host = normalized_redis_host
+
     from crsbench.distributed.queue import resolve_queue_names
 
     _trial_queue, build_queue_name, verify_queue_name = resolve_queue_names(
