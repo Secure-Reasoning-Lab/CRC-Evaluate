@@ -25,6 +25,7 @@ from crsbench.distributed.common import (
     collect_validated_int_metadata,
     discover_registered_experiments,
     normalize_cpu_tag,
+    normalize_redis_host,
     resolve_cli_or_first_metadata,
     validate_optional_int_override,
 )
@@ -153,7 +154,11 @@ def main(
         sys.exit(1)
 
     # Resolve runtime configuration.
-    redis_host = redis_host or os.environ.get("CRSBENCH_REDIS_HOST", "localhost")
+    redis_host = normalize_redis_host(redis_host)
+    if redis_host is None:
+        redis_host = normalize_redis_host(os.environ.get("CRSBENCH_REDIS_HOST"))
+    if redis_host is None:
+        redis_host = "localhost"
     experiment_name = experiment_name or "default"
     worker_name = worker_name or socket.gethostname()
 
@@ -572,6 +577,15 @@ def run_worker_configless(
     if not REDIS_AVAILABLE:
         logger.error("Redis and RQ packages are required for worker execution")
         return 1
+
+    normalized_redis_host = normalize_redis_host(redis_host)
+    if normalized_redis_host is None:
+        logger.error(
+            "Configless worker requires a Redis host. "
+            "Set CRSBENCH_REDIS_HOST to a non-empty hostname."
+        )
+        return 1
+    redis_host = normalized_redis_host
 
     worker_name = worker_name or socket.gethostname()
 

@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+DEFAULT_BENCHMARKS_ROOT = Path("benchmarks")
+
 
 @dataclass(frozen=True)
 class TrialDir:
@@ -155,6 +157,27 @@ def experiment_dir(experiment_filestore: str | Path, experiment_name: str) -> Pa
 def experiment_dir_from_config_dict(config: Mapping[str, Any]) -> Path:
     """Resolve experiment directory from config-like mapping."""
     return ExperimentDir.from_config_dict(config).path
+
+
+def resolve_benchmarks_root(benchmarks_root: Optional[str | Path]) -> Path:
+    """Resolve benchmarks root with a stable default."""
+    if benchmarks_root is None:
+        return DEFAULT_BENCHMARKS_ROOT
+    if isinstance(benchmarks_root, str):
+        if not benchmarks_root.strip():
+            return DEFAULT_BENCHMARKS_ROOT
+        return Path(benchmarks_root)
+    root = Path(benchmarks_root)
+    if not str(root).strip():
+        return DEFAULT_BENCHMARKS_ROOT
+    return root
+
+
+def resolve_benchmark_path(
+    benchmark_name: str, benchmarks_root: Optional[str | Path]
+) -> Path:
+    """Return canonical path to a benchmark under the resolved root."""
+    return resolve_benchmarks_root(benchmarks_root) / benchmark_name
 
 
 def trial_relative_to_experiment(trial_dir: Path, exp_dir: Path) -> Path:

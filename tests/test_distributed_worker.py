@@ -215,6 +215,12 @@ class TestConfiglessWorker:
 
         assert callable(run_worker_configless)
 
+    def test_run_worker_configless_rejects_none_redis_host(self):
+        from crsbench.distributed.worker import run_worker_configless
+
+        result = run_worker_configless(redis_host="none")
+        assert result == 1
+
     def test_configless_discovers_from_registry(self):
         """Configless worker discovers queues from registry."""
         from crsbench.distributed.registry import RuntimeRegistration
@@ -373,6 +379,81 @@ class TestConfiglessWorker:
 
         assert result == 0
         assert mock_main.call_args.kwargs["cpu_tag"] == "x86-avx2"
+
+    def test_worker_cli_config_mode_rejects_none_redis_host(self):
+        """Config-mode worker should fail fast when redis host normalizes to None."""
+        from crsbench.distributed.cli.worker_command import run_worker
+
+        args = argparse.Namespace(
+            experiment_config="test.yaml",
+            verbose=False,
+            continuous=False,
+            worker_name=None,
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag=None,
+            jobs=None,
+            cores_per_job=None,
+        )
+
+        with (
+            patch("crsbench.distributed.worker.main", return_value=0) as mock_main,
+            patch("crsbench.run_experiment.load_experiment_config") as mock_load,
+            patch.dict("os.environ", {"CRSBENCH_REDIS_HOST": "none"}, clear=False),
+        ):
+            mock_worker = MagicMock()
+            mock_worker.cpu_tag = None
+            mock_worker.worker_name = None
+            mock_worker.jobs = 1
+            mock_worker.cores_per_job = None
+            mock_worker.continuous = False
+            mock_worker.minimum_disk_size = "10GB"
+            mock_worker.disk_check_interval = 60
+            mock_worker.cores = None
+            mock_worker.skip_cpus = None
+            mock_worker.redis_host = " none "
+
+            mock_config = MagicMock()
+            mock_config.worker = mock_worker
+            mock_config.benchmarks = None
+            mock_config.experiment = "default"
+            mock_config.redis_host = None
+            mock_config.resources = None
+            mock_load.return_value = mock_config
+
+            result = run_worker(args)
+
+        assert result == 1
+        mock_main.assert_not_called()
+
+    def test_worker_cli_configless_rejects_empty_env_redis_host(self):
+        """Configless worker should fail fast when env redis host is unset/none."""
+        from crsbench.distributed.cli.worker_command import run_worker
+
+        args = argparse.Namespace(
+            experiment_config=None,
+            verbose=False,
+            continuous=False,
+            worker_name=None,
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag=None,
+            jobs=None,
+            cores_per_job=None,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.worker.run_worker_configless", return_value=0
+            ) as mock_configless,
+            patch.dict("os.environ", {"CRSBENCH_REDIS_HOST": "   "}, clear=False),
+        ):
+            result = run_worker(args)
+
+        assert result == 1
+        mock_configless.assert_not_called()
 
     @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
     def test_configless_worker_cpu_tag_whitespace_falls_back_to_resources_cpu_tag(

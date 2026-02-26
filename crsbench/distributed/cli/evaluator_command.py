@@ -176,7 +176,7 @@ def run_evaluator(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success, non-zero for failure)
     """
-    from crsbench.distributed.common import normalize_cpu_tag
+    from crsbench.distributed.common import normalize_cpu_tag, normalize_redis_host
     from crsbench.utils.logger import configure_logger, get_logger
 
     log_level = "DEBUG" if args.verbose else "INFO"
@@ -206,9 +206,18 @@ def run_evaluator(args: argparse.Namespace) -> int:
 
             worker_name = args.worker_name or "configless-evaluator"
             benchmarks_root = args.benchmarks_root
+            redis_host = normalize_redis_host(
+                os.environ.get("CRSBENCH_REDIS_HOST", "localhost")
+            )
+            if redis_host is None:
+                logger.error(
+                    "Distributed evaluator requires a Redis host; "
+                    "set CRSBENCH_REDIS_HOST to a non-empty hostname"
+                )
+                return 1
 
             return run_evaluator_configless(
-                redis_host=os.environ.get("CRSBENCH_REDIS_HOST", "localhost"),
+                redis_host=redis_host,
                 worker_name=worker_name,
                 build_jobs=build_jobs,
                 build_cores_per_job=build_cores_per_job,
@@ -227,9 +236,18 @@ def run_evaluator(args: argparse.Namespace) -> int:
             from crsbench.distributed.evaluator import run_evaluator_ci_mode
 
             worker_name = args.worker_name or "ci-evaluator"
+            redis_host = normalize_redis_host(
+                os.environ.get("CRSBENCH_REDIS_HOST", "localhost")
+            )
+            if redis_host is None:
+                logger.error(
+                    "CI evaluator requires a Redis host; "
+                    "set CRSBENCH_REDIS_HOST to a non-empty hostname"
+                )
+                return 1
 
             return run_evaluator_ci_mode(
-                redis_host=os.environ.get("CRSBENCH_REDIS_HOST", "localhost"),
+                redis_host=redis_host,
                 worker_name=worker_name,
                 build_jobs=build_jobs,
                 build_cores_per_job=build_cores_per_job,
@@ -255,7 +273,15 @@ def run_evaluator(args: argparse.Namespace) -> int:
         experiment_name = config.experiment
         logger.info(f"Experiment name: {experiment_name}")
 
-        redis_host = config.redis_host or "localhost"
+        redis_host = normalize_redis_host(
+            config.redis_host or os.environ.get("CRSBENCH_REDIS_HOST") or "localhost"
+        )
+        if redis_host is None:
+            logger.error(
+                "Distributed evaluator requires a Redis host; "
+                "set redis_host or CRSBENCH_REDIS_HOST"
+            )
+            return 1
         logger.info(f"Redis host: {redis_host}")
 
         if args.benchmarks_root:

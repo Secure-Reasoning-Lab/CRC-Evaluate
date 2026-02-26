@@ -727,6 +727,48 @@ class TestConfiglessEvaluator:
         assert result == 0
         assert mock_main.call_args.kwargs["cpu_tag"] == "x86-avx2"
 
+    def test_evaluator_cli_config_mode_uses_env_redis_host_fallback(self) -> None:
+        """Config-mode evaluator should honor CRSBENCH_REDIS_HOST fallback."""
+        import argparse
+
+        from crsbench.distributed.cli.evaluator_command import run_evaluator
+
+        args = argparse.Namespace(
+            experiment_config="test.yaml",
+            ci=False,
+            verbose=False,
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag=None,
+            build_jobs=None,
+            build_cores_per_job=None,
+            verify_cores_per_job=None,
+            verify_jobs=None,
+            worker_name=None,
+            idle_timeout=None,
+            benchmarks_root=None,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator.run_evaluator_main", return_value=0
+            ) as mock_main,
+            patch("crsbench.run_experiment.load_experiment_config") as mock_load,
+            patch.dict("os.environ", {"CRSBENCH_REDIS_HOST": "redis-env"}, clear=False),
+        ):
+            mock_config = MagicMock()
+            mock_config.experiment = "exp-1"
+            mock_config.redis_host = None
+            mock_config.evaluator = None
+            mock_config.resources = None
+            mock_load.return_value = mock_config
+
+            result = run_evaluator(args)
+
+        assert result == 0
+        assert mock_main.call_args.kwargs["redis_host"] == "redis-env"
+
     def test_evaluator_cli_config_mode_whitespace_evaluator_cpu_tag_falls_back_to_resources(
         self,
     ) -> None:
@@ -820,6 +862,75 @@ class TestConfiglessEvaluator:
         assert result == 0
         assert mock_supervisor.call_args.kwargs["cpu_tag"] == "x86-avx2"
 
+    def test_evaluator_cli_configless_rejects_none_env_redis_host(self) -> None:
+        """Configless evaluator should fail fast on empty/none redis host."""
+        import argparse
+
+        from crsbench.distributed.cli.evaluator_command import run_evaluator
+
+        args = argparse.Namespace(
+            experiment_config=None,
+            ci=False,
+            verbose=False,
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag=None,
+            build_jobs=1,
+            build_cores_per_job=None,
+            verify_cores_per_job=None,
+            verify_jobs=None,
+            worker_name=None,
+            idle_timeout=0,
+            benchmarks_root=None,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator.run_evaluator_configless",
+                return_value=0,
+            ) as mock_configless,
+            patch.dict("os.environ", {"CRSBENCH_REDIS_HOST": "none"}, clear=False),
+        ):
+            result = run_evaluator(args)
+
+        assert result == 1
+        mock_configless.assert_not_called()
+
+    def test_evaluator_cli_ci_mode_rejects_none_env_redis_host(self) -> None:
+        """CI evaluator should fail fast on empty/none redis host."""
+        import argparse
+
+        from crsbench.distributed.cli.evaluator_command import run_evaluator
+
+        args = argparse.Namespace(
+            experiment_config=None,
+            ci=True,
+            verbose=False,
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag=None,
+            build_jobs=1,
+            build_cores_per_job=None,
+            verify_cores_per_job=None,
+            verify_jobs=None,
+            worker_name=None,
+            idle_timeout=0,
+            benchmarks_root=None,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator.run_evaluator_ci_mode", return_value=0
+            ) as mock_ci,
+            patch.dict("os.environ", {"CRSBENCH_REDIS_HOST": "   "}, clear=False),
+        ):
+            result = run_evaluator(args)
+
+        assert result == 1
+        mock_ci.assert_not_called()
+
 
 class TestRunSingleJob:
     """Test _run_single_job() generic job execution."""
@@ -855,6 +966,18 @@ class TestRunEvaluatorCiMode:
         kwargs = mock_supervisor.call_args.kwargs
         assert kwargs["build_cores_per_job"] == 4
         assert kwargs["verify_cores_per_job"] == 4
+
+    def test_run_evaluator_configless_rejects_none_redis_host(self) -> None:
+        from crsbench.distributed.evaluator import run_evaluator_configless
+
+        result = run_evaluator_configless(redis_host="none")
+        assert result == 1
+
+    def test_run_evaluator_ci_mode_rejects_none_redis_host(self) -> None:
+        from crsbench.distributed.evaluator import run_evaluator_ci_mode
+
+        result = run_evaluator_ci_mode(redis_host="   ")
+        assert result == 1
 
 
 class TestEvaluatorCliValidation:

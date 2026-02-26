@@ -16,6 +16,7 @@ from crsbench.distributed.common import (
     collect_validated_int_metadata,
     discover_registered_experiments,
     normalize_cpu_tag,
+    normalize_redis_host,
     resolve_cli_or_first_metadata,
     validate_optional_int_override,
 )
@@ -521,6 +522,14 @@ def run_evaluator_configless(
     if not REDIS_AVAILABLE:
         logger.error("Redis and RQ packages are required for evaluator execution")
         return 1
+    normalized_redis_host = normalize_redis_host(redis_host)
+    if normalized_redis_host is None:
+        logger.error(
+            "Configless evaluator requires a Redis host. "
+            "Set CRSBENCH_REDIS_HOST to a non-empty hostname."
+        )
+        return 1
+    redis_host = normalized_redis_host
 
     logger.info("=" * 60)
     logger.info("CRSBench Evaluator — Configless Mode")
@@ -860,6 +869,14 @@ def run_evaluator_ci_mode(
         logger.error("Redis and RQ packages are required for evaluator execution")
         logger.error("Install with: pip install redis rq")
         return 1
+    normalized_redis_host = normalize_redis_host(redis_host)
+    if normalized_redis_host is None:
+        logger.error(
+            "CI evaluator requires a Redis host. "
+            "Set CRSBENCH_REDIS_HOST to a non-empty hostname."
+        )
+        return 1
+    redis_host = normalized_redis_host
 
     resolved_build_jobs = build_jobs if build_jobs is not None else 1
     resolved_build_cores_per_job = (

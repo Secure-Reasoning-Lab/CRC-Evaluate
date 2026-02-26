@@ -137,7 +137,7 @@ def run_worker(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success, non-zero for failure)
     """
-    from crsbench.distributed.common import normalize_cpu_tag
+    from crsbench.distributed.common import normalize_cpu_tag, normalize_redis_host
     from crsbench.utils.logger import configure_logger, get_logger
 
     log_level = "DEBUG" if args.verbose else "INFO"
@@ -156,7 +156,15 @@ def run_worker(args: argparse.Namespace) -> int:
     if not args.experiment_config:
         from crsbench.distributed.worker import run_worker_configless
 
-        redis_host = os.environ.get("CRSBENCH_REDIS_HOST", "localhost")
+        redis_host = normalize_redis_host(
+            os.environ.get("CRSBENCH_REDIS_HOST", "localhost")
+        )
+        if redis_host is None:
+            logger.error(
+                "Distributed worker requires a Redis host; "
+                "set CRSBENCH_REDIS_HOST to a non-empty hostname"
+            )
+            return 1
 
         try:
             return run_worker_configless(
@@ -220,6 +228,13 @@ def run_worker(args: argparse.Namespace) -> int:
         or (config.redis_host if config else None)
         or os.environ.get("CRSBENCH_REDIS_HOST", "localhost")
     )
+    redis_host = normalize_redis_host(redis_host)
+    if redis_host is None:
+        logger.error(
+            "Distributed worker requires a Redis host; "
+            "set worker.redis_host, redis_host, or CRSBENCH_REDIS_HOST"
+        )
+        return 1
     num_workers = (
         jobs_override
         if jobs_override is not None

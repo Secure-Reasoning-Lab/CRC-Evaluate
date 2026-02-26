@@ -45,7 +45,12 @@ from crsbench.distributed.jobs import (
 )
 from crsbench.evaluation.cleanup import cleanup_trial_directory
 from crsbench.evaluation.results import TrialResult
-from crsbench.evaluation.trial_paths import experiment_dir as resolve_experiment_dir
+from crsbench.evaluation.trial_paths import (
+    experiment_dir as resolve_experiment_dir,
+)
+from crsbench.evaluation.trial_paths import (
+    resolve_benchmarks_root,
+)
 from crsbench.utils import log_progress, log_section, log_summary
 from crsbench.utils.benchmark_utils import (
     filter_benchmarks_by_mode,
@@ -53,6 +58,7 @@ from crsbench.utils.benchmark_utils import (
 )
 from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.logger import configure_logger, get_logger
+from crsbench.validation.ground_truth_paths import GroundTruthPaths
 from crsbench.validation.meta_adapter import MetaYamlAdapter
 from crsbench.validation.schemas import (
     BenchmarkHarness,
@@ -507,7 +513,7 @@ def resolve_benchmark_harnesses(
                     f"Benchmark directory not found: {benchmark_path}"
                 )
 
-            meta_yaml_path = benchmark_path / ".aixcc" / "meta.yaml"
+            meta_yaml_path = GroundTruthPaths(benchmark_path).meta_yaml
             if not meta_yaml_path.exists():
                 raise FileNotFoundError(f"meta.yaml not found: {meta_yaml_path}")
 
@@ -556,7 +562,7 @@ def resolve_benchmark_harnesses(
                 )
 
             # Load meta.yaml to get harnesses
-            meta_yaml_path = benchmark_path / ".aixcc" / "meta.yaml"
+            meta_yaml_path = GroundTruthPaths(benchmark_path).meta_yaml
             if not meta_yaml_path.exists():
                 raise FileNotFoundError(f"meta.yaml not found: {meta_yaml_path}")
 
@@ -662,7 +668,7 @@ def generate_trial_matrix(
             should_check_cpvs = is_bug_fixing or config.only_cpv_harnesses
             harness = None
             if should_check_cpvs:
-                meta_path = Path(benchmark_harness.path) / ".aixcc" / "meta.yaml"
+                meta_path = GroundTruthPaths(Path(benchmark_harness.path)).meta_yaml
                 adapter = MetaYamlAdapter.from_meta_yaml(
                     meta_path,
                     benchmark_name=benchmark_harness.name,
@@ -2125,7 +2131,7 @@ def _generate_html_json_reports(experiment_name: str, config) -> None:
         config.experiment_filestore, experiment_name
     )
     report_dir = Path(config.report_filestore) / experiment_name
-    benchmarks_root = Path(config.benchmarks_root or "benchmarks")
+    benchmarks_root = resolve_benchmarks_root(config.benchmarks_root)
 
     # Check if experiment directory exists
     if not experiment_dir.exists():
@@ -2275,7 +2281,7 @@ def main() -> None:
         )
 
         # Filter benchmarks by mode early (before resolving harnesses)
-        benchmarks_root = config.benchmarks_root
+        benchmarks_root = resolve_benchmarks_root(config.benchmarks_root)
         mode_str = config.mode.value  # Get string value from enum
         if mode_str != "all":
             original_count = len(benchmark_names)

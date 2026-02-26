@@ -26,6 +26,7 @@ from crsbench.distributed.evaluator_jobs import (
     resolve_benchmark_path,
 )
 from crsbench.utils.logger import get_logger
+from crsbench.validation.ground_truth_paths import GroundTruthPaths
 
 logger = get_logger(__name__)
 
@@ -568,8 +569,8 @@ def execute_patch_verify(payload_dict: dict[str, Any]) -> dict[str, Any]:
         patch.write_to(patch_file)
 
         # Discover POV paths from benchmark directory
-        blobs_dir = (
-            benchmark_path / ".aixcc" / payload.harness / payload.cpv_id / "blobs"
+        blobs_dir = GroundTruthPaths(benchmark_path).cpv_blobs_dir(
+            payload.harness, payload.cpv_id
         )
         pov_paths = list(blobs_dir.glob("pov_*.blob")) if blobs_dir.exists() else []
 

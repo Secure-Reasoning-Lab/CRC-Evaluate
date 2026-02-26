@@ -2,7 +2,13 @@
 
 from pathlib import Path
 
-from crsbench.evaluation.trial_paths import ExperimentDir, TrialDir
+from crsbench.evaluation.trial_paths import (
+    DEFAULT_BENCHMARKS_ROOT,
+    ExperimentDir,
+    TrialDir,
+    resolve_benchmark_path,
+    resolve_benchmarks_root,
+)
 
 
 def test_trial_dir_paths_and_visible_counts(tmp_path: Path) -> None:
@@ -36,3 +42,21 @@ def test_experiment_dir_mirror_trial_path(tmp_path: Path) -> None:
 
     assert exp.trial_relative_path(trial_dir) == Path("crs/bench/trial-1")
     assert mirrored == tmp_path / "out" / "crs" / "bench" / "trial-1"
+
+
+def test_resolve_benchmarks_root_defaults_and_custom() -> None:
+    assert resolve_benchmarks_root(None) == DEFAULT_BENCHMARKS_ROOT
+    assert resolve_benchmarks_root("") == DEFAULT_BENCHMARKS_ROOT
+    assert resolve_benchmarks_root("   ") == DEFAULT_BENCHMARKS_ROOT
+    assert resolve_benchmarks_root(Path("   ")) == DEFAULT_BENCHMARKS_ROOT
+    assert resolve_benchmarks_root(Path("/bench-root")) == Path("/bench-root")
+    assert resolve_benchmarks_root("  bench-root  ") == Path("  bench-root  ")
+
+
+def test_resolve_benchmark_path_uses_resolved_root() -> None:
+    assert resolve_benchmark_path("afc-curl-delta-01", None) == Path(
+        "benchmarks/afc-curl-delta-01"
+    )
+    assert resolve_benchmark_path("afc-curl-delta-01", Path("/custom")) == Path(
+        "/custom/afc-curl-delta-01"
+    )

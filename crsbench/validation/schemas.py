@@ -18,6 +18,7 @@ from crsbench.utils.litellm_env import (
     required_env_errors_for_mode,
     resolve_litellm_runtime_env,
 )
+from crsbench.validation.ground_truth_paths import validate_ground_truth_segment
 
 # =============================================================================
 # Shared Schemas (used across evaluation and reporting modules)
@@ -218,6 +219,16 @@ class AdapterType(str, Enum):
     """
 
     OSS_CRS = "oss-crs"
+
+
+def _normalize_optional_path_override(value: Any) -> Any:
+    """Normalize optional path override inputs before Path coercion."""
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
+    return value
 
 
 @dataclass
@@ -485,9 +496,7 @@ class HarnessFile(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, v):
-        if not v or not v.strip():
-            raise ValueError("Harness name cannot be empty")
-        return v.strip()
+        return validate_ground_truth_segment(v, label="harness name")
 
     @field_validator("path")
     @classmethod
@@ -960,6 +969,33 @@ class WorkerConfig(BaseModel):
         description="Worker CPU capability tag for matching jobs that require resources.cpu_tag.",
     )
 
+    @field_validator("redis_host")
+    @classmethod
+    def validate_redis_host(cls, v):
+        """Normalize optional worker redis host."""
+        if v is None:
+            return None
+        normalized = v.strip()
+        if not normalized or normalized.lower() == "none":
+            return None
+        return normalized
+
+    @field_validator(
+        "experiment_filestore",
+        "report_filestore",
+        "oss_fuzz_path",
+        "registry_dir",
+        "crs_configs_dir",
+        "benchmarks_root",
+        "benchmark_suites_root",
+        "results_filestore",
+        mode="before",
+    )
+    @classmethod
+    def normalize_optional_paths(cls, v):
+        """Treat blank string worker path overrides as unset (None)."""
+        return _normalize_optional_path_override(v)
+
 
 class CrsComposeConfig(BaseModel):
     """Configuration for oss-crs adapter."""
@@ -1364,16 +1400,20 @@ class ExperimentConfig(BaseModel):
             return v.strip()
         return None  # Treat empty or "none" as None (local mode)
 
-    @field_validator("benchmarks_root")
+    @field_validator("benchmarks_root", mode="before")
     @classmethod
     def validate_benchmarks_root(cls, v):
-        """Validate benchmarks root directory."""
+        """Normalize benchmarks root directory."""
+        if isinstance(v, str) and not v.strip():
+            return Path("benchmarks")
         return v
 
-    @field_validator("benchmark_suites_root")
+    @field_validator("benchmark_suites_root", mode="before")
     @classmethod
     def validate_benchmark_suites_root(cls, v):
-        """Validate benchmark suites root directory."""
+        """Normalize benchmark suites root directory."""
+        if isinstance(v, str) and not v.strip():
+            return Path("benchmark-suites")
         return v
 
     @field_validator("benchmarks")

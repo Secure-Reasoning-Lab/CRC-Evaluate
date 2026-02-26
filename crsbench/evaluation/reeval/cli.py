@@ -26,6 +26,7 @@ from crsbench.distributed.common import normalize_redis_host
 from crsbench.evaluation.trial_paths import (
     ExperimentDir,
     TrialDir,
+    resolve_benchmark_path,
 )
 from crsbench.evaluation.verification.models import (
     PatchVerificationOutput,
@@ -177,8 +178,7 @@ def _resolve_benchmark_path(
     Returns:
         Path to benchmark directory
     """
-    root = benchmarks_root or Path("benchmarks")
-    return root / benchmark_name
+    return resolve_benchmark_path(benchmark_name, benchmarks_root)
 
 
 def _resolve_output_dir(
