@@ -23,6 +23,21 @@ def normalize_cpu_tag(value: Optional[str]) -> Optional[str]:
     return normalized or None
 
 
+def normalize_redis_host(value: object) -> Optional[str]:
+    """Normalize redis_host values to a usable host or None for local mode."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        host = value.strip()
+        if not host or host.lower() == "none":
+            return None
+        return host
+    if not value:
+        return None
+    host = str(value).strip()
+    return host or None
+
+
 def discover_registered_experiments(
     redis_host: str,
     *,

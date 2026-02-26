@@ -514,7 +514,8 @@ def execute_ci_job(params: dict[str, Any]) -> dict[str, Any]:
             )
 
     if hasattr(job, "build_patch_job_id") and job.build_patch_job_id:
-        _load_patch_build_context(context, job, source_mode)
+        if job.build_patch_job_id not in context.shared:
+            _load_patch_build_context(context, job, source_mode)
 
     result = job.execute(context)
     return result.to_dict()

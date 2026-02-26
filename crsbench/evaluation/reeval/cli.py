@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Optional
 
 import yaml
 
+from crsbench.distributed.common import normalize_redis_host
 from crsbench.evaluation.trial_paths import (
     ExperimentDir,
     TrialDir,
@@ -162,21 +163,6 @@ def _resolve_experiment_dir(config: dict) -> Path:
         Path to experiment directory
     """
     return ExperimentDir.from_config_dict(config).path
-
-
-def _normalize_redis_host(value: object) -> Optional[str]:
-    """Normalize redis_host config value.
-
-    Returns None for unset/empty/"none" values to keep local-mode semantics.
-    """
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        return None if not value else str(value)
-    host = str(value).strip()
-    if not host or host.lower() == "none":
-        return None
-    return host
 
 
 def _resolve_benchmark_path(
@@ -998,7 +984,7 @@ def run_reeval(args: argparse.Namespace) -> int:
     logger.info(f"Patch verify variants: {patch_verify_variants}")
 
     # Async mode: initialize Redis queues when redis_host is configured
-    redis_host = _normalize_redis_host(config.get("redis_host"))
+    redis_host = normalize_redis_host(config.get("redis_host"))
     experiment_name = config.get("experiment", "default")
     verify_queue = None
     patch_build_queue = None

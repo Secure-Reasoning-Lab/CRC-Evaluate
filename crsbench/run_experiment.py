@@ -964,7 +964,10 @@ def should_use_distributed_mode(
     Raises:
         RuntimeError: If --distributed is set but Redis is unavailable
     """
+    from crsbench.distributed.common import normalize_redis_host
     from crsbench.distributed.queue import check_redis_available
+
+    redis_host = normalize_redis_host(getattr(config, "redis_host", None))
 
     # Check for conflicting flags
     distributed = getattr(args, "distributed", False)
@@ -976,20 +979,20 @@ def should_use_distributed_mode(
         logger.info("Distributed mode explicitly requested via --distributed flag")
 
         # Validate Redis host is configured
-        if not config.redis_host or config.redis_host == "none":
+        if not redis_host:
             raise RuntimeError(
                 "Cannot use distributed mode: No Redis host configured. "
                 "Please set 'redis_host' in experiment config or remove --distributed flag."
             )
 
         # Validate Redis is available
-        if not check_redis_available(config.redis_host):
+        if not check_redis_available(redis_host):
             raise RuntimeError(
-                f"Cannot use distributed mode: Redis not available at {config.redis_host}. "
+                f"Cannot use distributed mode: Redis not available at {redis_host}. "
                 "Please ensure Redis server is running or remove --distributed flag."
             )
 
-        logger.info(f"Forcing distributed mode with Redis at {config.redis_host}")
+        logger.info(f"Forcing distributed mode with Redis at {redis_host}")
         return True
 
     # User explicitly disabled distributed mode
@@ -1003,14 +1006,14 @@ def should_use_distributed_mode(
         return False
 
     # No Redis host configured
-    if not config.redis_host or config.redis_host == "none":
+    if not redis_host:
         logger.info("No Redis host configured, using local mode")
         return False
 
     # Check if Redis is available
-    if not check_redis_available(config.redis_host):
+    if not check_redis_available(redis_host):
         logger.warning(
-            f"Redis not available at {config.redis_host}, falling back to local mode"
+            f"Redis not available at {redis_host}, falling back to local mode"
         )
         return False
 
@@ -1743,6 +1746,7 @@ def run_experiment_distributed(
         config: Experiment configuration
         trials: List of Trial objects to execute
     """
+    from crsbench.distributed.common import normalize_redis_host
     from crsbench.distributed.runtime_session import (
         DistributedRuntimeSession,
         LockContentionError,
@@ -1750,20 +1754,20 @@ def run_experiment_distributed(
 
     log_section("Running CRSBench in Distributed Mode (Redis)", width=60)
 
-    # Validate redis_host is provided
-    if not config.redis_host:
+    redis_host = normalize_redis_host(config.redis_host)
+    if not redis_host:
         raise ValueError("redis_host is required for distributed mode")
 
-    logger.info(f"Redis host: {config.redis_host}")
+    logger.info(f"Redis host: {redis_host}")
 
     # Mark this process as orchestrator for logging
     os.environ["CRSBENCH_ORCHESTRATOR"] = "1"
 
     session = DistributedRuntimeSession.for_run(
-        redis_host=config.redis_host, experiment_name=experiment_name
+        redis_host=redis_host, experiment_name=experiment_name
     )
     if session is None or session.trial_queue is None:
-        raise RuntimeError(f"Failed to initialize Redis queue at {config.redis_host}")
+        raise RuntimeError(f"Failed to initialize Redis queue at {redis_host}")
     queue = session.trial_queue
 
     # Resolve CRS paths with defaults

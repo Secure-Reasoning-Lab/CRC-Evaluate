@@ -418,6 +418,70 @@ class TestCiResultsToExecutorResults:
         assert r.job_result is not None
 
 
+class TestExecuteCiJobContextPreload:
+    """Test execute_ci_job context preloading behavior."""
+
+    def test_skips_patch_context_when_already_loaded_from_build_ids(self) -> None:
+        """Avoid duplicate patch context loads for the same build job id."""
+        from crsbench.distributed.ci_jobs import execute_ci_job
+
+        fake_result = MagicMock()
+        fake_result.to_dict.return_value = {"success": True}
+
+        fake_job = MagicMock()
+        fake_job.build_job_ids = ["build-patch/bench/cpv_0/patch_0"]
+        fake_job.build_patch_job_id = "build-patch/bench/cpv_0/patch_0"
+        fake_job.benchmark_path = Path("/benchmarks/bench")
+        fake_job.execute.return_value = fake_result
+
+        def preload_shared(context, *_args, **_kwargs):
+            context.shared["build-patch/bench/cpv_0/patch_0"] = {"variant_name": "v"}
+
+        with (
+            patch(
+                "crsbench.distributed.ci_jobs._reconstruct_job", return_value=fake_job
+            ),
+            patch(
+                "crsbench.distributed.ci_jobs._load_build_context_from_disk",
+                side_effect=preload_shared,
+            ),
+            patch(
+                "crsbench.distributed.ci_jobs._load_patch_build_context"
+            ) as mock_patch_load,
+        ):
+            result = execute_ci_job({"_job_class": "PatchPovTestJob"})
+
+        assert result == {"success": True}
+        mock_patch_load.assert_not_called()
+        fake_job.execute.assert_called_once()
+
+    def test_loads_patch_context_when_missing_from_shared(self) -> None:
+        """Patch context should still load when not preloaded by build ids."""
+        from crsbench.distributed.ci_jobs import execute_ci_job
+
+        fake_result = MagicMock()
+        fake_result.to_dict.return_value = {"success": True}
+
+        fake_job = MagicMock()
+        fake_job.build_job_ids = []
+        fake_job.build_patch_job_id = "build-patch/bench/cpv_0/patch_0"
+        fake_job.execute.return_value = fake_result
+
+        with (
+            patch(
+                "crsbench.distributed.ci_jobs._reconstruct_job", return_value=fake_job
+            ),
+            patch(
+                "crsbench.distributed.ci_jobs._load_patch_build_context"
+            ) as mock_patch_load,
+        ):
+            result = execute_ci_job({"_job_class": "PatchPovTestJob"})
+
+        assert result == {"success": True}
+        mock_patch_load.assert_called_once()
+        fake_job.execute.assert_called_once()
+
+
 class TestReconstructUnknown:
     """Test _reconstruct_job with unknown class."""
 
