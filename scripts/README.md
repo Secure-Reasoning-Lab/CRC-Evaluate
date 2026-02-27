@@ -5,7 +5,7 @@ relevant to CRSBench workflows.
 
 ## Core Scripts
 
-- `valkey-helper.py` - manage Valkey for distributed runs
+- `valkey-helper.py` - manage Valkey for distributed runs (`clean <experiment>` is experiment-scoped and queue-model-aware)
 - `litellm-helper.py` - manage LiteLLM service
 - `test_litellm.py` - sanity checks for LiteLLM integration
 - `cpv_report.py` - CPV report generation from experiment data

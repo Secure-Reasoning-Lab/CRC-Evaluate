@@ -109,7 +109,9 @@ def enqueue_single_pov(
 
     try:
         effective_cpu_tag = cpu_tag or os.environ.get("CRSBENCH_JOB_CPU_TAG")
-        job_meta = {"cpu_tag": effective_cpu_tag} if effective_cpu_tag else {}
+        job_meta = {"experiment_name": experiment_name}
+        if effective_cpu_tag:
+            job_meta["cpu_tag"] = effective_cpu_tag
 
         job = verify_queue.enqueue(
             "crsbench.distributed.evaluator_jobs.verify_single_pov",

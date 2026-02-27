@@ -79,7 +79,9 @@ def _enqueue_pre_builds(
     )
     build_queue = rq.Queue(build_queue_name, connection=redis_conn)
     cpu_tag = config.resources.cpu_tag if config.resources else None
-    job_meta = {"cpu_tag": cpu_tag} if cpu_tag else {}
+    job_meta = {"experiment_name": experiment_name}
+    if cpu_tag:
+        job_meta["cpu_tag"] = cpu_tag
 
     enqueued = 0
     for name in benchmark_names:
@@ -453,7 +455,9 @@ def _enqueue_pre_builds_from_registration(
 
     redis_conn = create_redis_connection(redis_host)
     build_queue = rq.Queue(registration.build_queue, connection=redis_conn)
-    job_meta = {"cpu_tag": registration.cpu_tag} if registration.cpu_tag else {}
+    job_meta = {"experiment_name": registration.experiment}
+    if registration.cpu_tag:
+        job_meta["cpu_tag"] = registration.cpu_tag
 
     enqueued = 0
     for name in benchmark_names:

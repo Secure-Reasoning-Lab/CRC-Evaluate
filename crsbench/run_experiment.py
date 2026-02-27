@@ -26,6 +26,7 @@ import importlib.util
 import json
 import os
 import secrets
+import shutil
 import string
 import sys
 import time
@@ -239,6 +240,17 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Force distributed execution mode with Redis (raises error if Redis unavailable)",
     )
+    parser.add_argument(
+        "--queue-mode",
+        choices=["fresh", "continue", "quit"],
+        default=None,
+        help="Existing-queue behavior for distributed mode (default: prompt in TTY, continue in non-TTY)",
+    )
+    parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="With --queue-mode continue, requeue failed trials after cleaning trial dirs",
+    )
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -316,6 +328,11 @@ Examples:
     from crsbench.distributed.cli.evaluator_command import add_evaluator_subparser
 
     add_evaluator_subparser(subparsers)
+
+    # 'queue' subcommand - distributed queue cleanup/ops
+    from crsbench.distributed.cli.queue_command import add_queue_subparser
+
+    add_queue_subparser(subparsers)
 
     # 'verify' subcommand - POV verification
     from crsbench.evaluation.verification.cli.pov_verify_command import (
@@ -1642,7 +1659,7 @@ def prompt_queue_mode(existing: dict[str, dict]) -> str:
     print("=" * 60)  # noqa: T201
     print("\nHow do you want to proceed?")  # noqa: T201
     print("  [f] Fresh - purge all existing jobs and start from scratch")  # noqa: T201
-    print("  [c] Continue - skip existing, retry failed")  # noqa: T201
+    print("  [c] Continue - skip existing, recover orphaned started jobs")  # noqa: T201
     print("  [q] Quit - abort without changes")  # noqa: T201
     print()  # noqa: T201
 
@@ -1656,6 +1673,40 @@ def prompt_queue_mode(existing: dict[str, dict]) -> str:
         if choice == "q":
             return "quit"
         print("Invalid choice. Please enter 'f', 'c', or 'q'.")  # noqa: T201
+
+
+def _prepare_trial_dir_for_retry(config: ExperimentConfig, job) -> bool:
+    """Archive a failed trial directory and reset it for a clean retry."""
+    kwargs = job.kwargs or {}
+    trial_dir = _build_trial_output_path(
+        filestore=config.experiment_filestore.resolve(),
+        experiment_name=config.experiment,
+        crs=kwargs.get("crs", ""),
+        benchmark=kwargs.get("benchmark", ""),
+        harness=kwargs.get("harness_name", ""),
+        mode=kwargs.get("mode", ""),
+        sanitizer=kwargs.get("sanitizer", "address"),
+        trial_num=kwargs.get("trial_num", 0),
+        target_cpv_id=kwargs.get("target_cpv_id"),
+    )
+    if not trial_dir.exists():
+        return True
+
+    retries_dir = trial_dir / "retries"
+    retries_dir.mkdir(parents=True, exist_ok=True)
+    attempt_name = datetime.now().strftime("attempt-%Y%m%d-%H%M%S")
+    archive_dir = retries_dir / attempt_name
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        for item in list(trial_dir.iterdir()):
+            if item.name == "retries":
+                continue
+            shutil.move(str(item), str(archive_dir / item.name))
+    except Exception as e:
+        logger.warning(f"Failed to prepare retry directory for {trial_dir}: {e}")
+        return False
+    return True
 
 
 def get_crs_cpu_count(crs_name: str, crs_configs_dir: Path) -> int:
@@ -1744,6 +1795,9 @@ def run_experiment_distributed(
     experiment_name: str,
     config: ExperimentConfig,
     trials: List[Trial],
+    *,
+    queue_mode: str | None = None,
+    retry_failed: bool = False,
 ) -> None:
     """Run experiment using Redis queue-based distributed execution.
 
@@ -1781,51 +1835,73 @@ def run_experiment_distributed(
 
     # Check for existing jobs in queue (queue sanity check)
     from crsbench.distributed.queue import (
-        clear_queue,
+        clear_experiment_jobs,
         get_existing_trials,
         handle_orphaned_jobs,
-        requeue_failed_jobs,
     )
 
-    existing = get_existing_trials(queue)
+    existing = get_existing_trials(queue, experiment_name=experiment_name)
     has_existing = any(existing.values())
 
-    # Queue mode: prompt if stale jobs exist, default to fresh
-    queue_mode = None
+    normalized_queue_mode = queue_mode.lower() if queue_mode else None
 
-    if has_existing and queue_mode is None:
-        # Stale jobs exist and no mode specified - prompt user
-        queue_mode = prompt_queue_mode(existing)
-        if queue_mode == "quit":
-            logger.info("Aborted by user")
-            return
+    if has_existing and normalized_queue_mode is None:
+        if sys.stdin.isatty():
+            normalized_queue_mode = prompt_queue_mode(existing)
+            if normalized_queue_mode == "quit":
+                logger.info("Aborted by user")
+                return
+        else:
+            normalized_queue_mode = "continue"
+            logger.info(
+                "Non-interactive mode detected with existing queue jobs; "
+                "using scoped queue mode: continue"
+            )
+
+    if has_existing and normalized_queue_mode == "quit":
+        logger.info("Aborted by queue-mode=quit")
+        return
 
     # Default to fresh if no existing jobs and no mode specified
-    if queue_mode is None:
-        queue_mode = "fresh"
+    if normalized_queue_mode is None:
+        normalized_queue_mode = "fresh"
 
     # TODO: too later to purge queue; as the old jobs are already taken by workers
     # Handle queue based on mode
-    if queue_mode == "fresh":
+    if normalized_queue_mode == "fresh":
         if has_existing:
             total_existing = sum(len(v) for v in existing.values())
-            logger.warning(f"Purging {total_existing} existing jobs from queue")
-            clear_queue(queue)
-    elif queue_mode == "continue":
+            logger.warning(
+                f"Purging {total_existing} existing jobs from queue for experiment={experiment_name}"
+            )
+            clear_experiment_jobs(queue, experiment_name)
+    elif normalized_queue_mode == "continue":
         # Handle orphaned started jobs (move to failed + retry)
         if existing["started"]:
             orphaned_count = handle_orphaned_jobs(queue, existing["started"])
             if orphaned_count > 0:
                 logger.info(f"Handled {orphaned_count} orphaned jobs")
 
-        # Requeue failed jobs (at end of queue - FIFO)
-        if existing["failed"]:
-            failed_count = requeue_failed_jobs(queue, list(existing["failed"].values()))
-            if failed_count > 0:
-                logger.info(f"Requeued {failed_count} failed jobs")
+        # Optional failed retries require explicit opt-in and clean trial dirs.
+        if retry_failed and existing["failed"]:
+            retried = 0
+            for failed_job in existing["failed"].values():
+                if not _prepare_trial_dir_for_retry(config, failed_job):
+                    continue
+                failed_job.meta["force_retry"] = True
+                failed_job.save_meta()
+                try:
+                    queue.enqueue_job(failed_job)
+                    retried += 1
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to requeue failed job {failed_job.id[:8]}: {e}"
+                    )
+            if retried > 0:
+                logger.info(f"Requeued {retried} failed jobs with clean retry dirs")
 
     # Filter trials if in continue mode
-    if queue_mode == "continue" and has_existing:
+    if normalized_queue_mode == "continue" and has_existing:
         # Build set of existing trial keys
         existing_keys = set()
         for status_dict in existing.values():
@@ -1990,6 +2066,7 @@ def run_experiment_distributed(
                     "cpu_count": cpu_count,  # CPU count from resource config
                     "memory_limit": memory_limit,  # Memory limit from resource config
                     "cpu_tag": cpu_tag,
+                    "experiment_name": experiment_name,
                 },
             )
             jobs.append(job)
@@ -2211,6 +2288,11 @@ def main() -> None:
 
         sys.exit(run_evaluator(args))
 
+    if args.command == "queue":
+        from crsbench.distributed.cli.queue_command import run_queue
+
+        sys.exit(run_queue(args))
+
     if args.command == "report":
         # Handle report command
         from crsbench.reporting.cli import run_report
@@ -2339,7 +2421,13 @@ def main() -> None:
 
     # Run experiment in appropriate mode
     if use_distributed:
-        run_experiment_distributed(experiment_name, config, trial_matrix)
+        run_experiment_distributed(
+            experiment_name,
+            config,
+            trial_matrix,
+            queue_mode=getattr(args, "queue_mode", None),
+            retry_failed=bool(getattr(args, "retry_failed", False)),
+        )
     else:
         run_experiment_local(experiment_name, config, trial_matrix)
 

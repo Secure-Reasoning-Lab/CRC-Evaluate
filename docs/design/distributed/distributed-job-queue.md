@@ -1261,6 +1261,16 @@ Queue naming follows the runtime queue model:
 
 See `docs/design/distributed/configless-runtime.md` for canonical behavior.
 
+### 15.2.1 Existing-Job Handling Semantics
+
+- In non-interactive contexts (for example CI), orchestrator defaults to
+  scoped `continue` behavior when existing jobs are detected.
+- Scoped means filtering by experiment identity from job metadata/payload;
+  jobs from other experiments in flat queues are ignored.
+- Default `continue` behavior does **not** auto-retry failed jobs.
+  Failed retry is explicit (`--retry-failed`) and should reset the matching
+  trial directory before re-enqueue.
+
 ### 15.3 File Locations
 
 ```

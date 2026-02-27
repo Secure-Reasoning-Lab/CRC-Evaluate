@@ -68,6 +68,7 @@ def _rmtree_with_docker(path: Path) -> bool:
 EXCLUDE_PATTERNS: list[str] = [
     "oss-crs-workdir",
     "staged",
+    "retries",
 ]
 
 

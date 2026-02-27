@@ -499,55 +499,25 @@ def cmd_clean(args: argparse.Namespace) -> None:
         print_error("Valkey is not running")
         sys.exit(1)
 
-    password = _get_active_password()
     experiment = args.experiment
-    queue_name = f"rq:queue:crsbench_{experiment}"
+    print_info(f"Cleaning experiment queue state: {experiment}")
 
-    print_info(f"Cleaning experiment queue: {experiment}")
+    from crsbench.distributed.queue import create_redis_connection
+    from crsbench.distributed.queue_cleanup import clean_experiment_queues
 
-    # Check if queue exists
-    result = _run_valkey_cli(
-        "crsbench-valkey",
-        "EXISTS",
-        queue_name,
-        password=password,
-        capture_output=True,
+    redis_host = os.environ.get("CRSBENCH_REDIS_HOST", f"localhost:{args.port}")
+    conn = create_redis_connection(redis_host)
+    result = clean_experiment_queues(
+        conn,
+        experiment_name=experiment,
+        scopes=("trial", "build", "verify"),
+        include_registry=True,
+        include_lock=True,
+        dry_run=False,
     )
-
-    if result.stdout.strip() == "0":
-        print_warning(f"Queue does not exist: {queue_name}")
-        return
-
-    # Delete all keys related to this experiment
-    print_info(f"Deleting keys matching: rq:*crsbench_{experiment}*")
-
-    # Get all matching keys
-    result = _run_valkey_cli(
-        "crsbench-valkey",
-        "KEYS",
-        f"rq:*crsbench_{experiment}*",
-        password=password,
-        capture_output=True,
-    )
-
-    keys = [k for k in result.stdout.strip().split("\n") if k]
-
-    if not keys:
-        print_warning("No keys found to delete")
-        return
-
-    print_info(f"Found {len(keys)} keys to delete")
-
-    # Delete each key
-    for key in keys:
-        _run_valkey_cli(
-            "crsbench-valkey",
-            "DEL",
-            key,
-            password=password,
-            capture_output=True,
-        )
-
+    print_info(f"Queues: {', '.join(result.queue_names)}")
+    print_info(f"Matched jobs: {result.matched_jobs}")
+    print_info(f"Removed jobs: {result.removed_jobs}")
     print_success(f"Cleaned experiment queue: {experiment}")
 
 
