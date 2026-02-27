@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock
 
+from crsbench.distributed.queue import get_trial_key
 from crsbench.distributed.queue_cleanup import clean_experiment_queues
 
 
@@ -96,3 +97,10 @@ def test_clean_experiment_queues_applies_registry_and_lock(monkeypatch) -> None:
     assert result.removed_lock
     registry.deregister.assert_called_once_with("exp-test")
     redis_conn.delete.assert_called_once_with("crsbench:lock:exp-test")
+
+
+def test_get_trial_key_falls_back_for_non_trial_jobs() -> None:
+    job = MagicMock()
+    job.id = "job-123"
+    job.meta = {"experiment_name": "exp-x"}
+    assert get_trial_key(job) == "job:exp-x:job-123"

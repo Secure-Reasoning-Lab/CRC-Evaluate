@@ -442,14 +442,20 @@ def get_trial_key(job: "rq.job.Job") -> str:
         >>> key = get_trial_key(job)
         >>> print(key)  # "atlantis-c:libxml2:fuzz_test:delta:1"
     """
-    meta = job.meta
-    return (
-        f"{meta['crs']}:{meta['benchmark']}:{meta['harness']}:"
-        f"{meta.get('mode', '-')}:"
-        f"{meta.get('sanitizer', '-')}:"
-        f"{meta.get('trial_num', '-')}:"
-        f"{meta.get('target_cpv_id') or '-'}"
-    )
+    meta = job.meta or {}
+    crs = meta.get("crs")
+    benchmark = meta.get("benchmark")
+    harness = meta.get("harness")
+    if isinstance(crs, str) and isinstance(benchmark, str) and isinstance(harness, str):
+        return (
+            f"{crs}:{benchmark}:{harness}:"
+            f"{meta.get('mode', '-')}:"
+            f"{meta.get('sanitizer', '-')}:"
+            f"{meta.get('trial_num', '-')}:"
+            f"{meta.get('target_cpv_id') or '-'}"
+        )
+    experiment = get_job_experiment_name(job) or "-"
+    return f"job:{experiment}:{job.id or 'unknown'}"
 
 
 def get_existing_trials(
@@ -482,6 +488,8 @@ def get_existing_trials(
     result = {
         "queued": {},
         "started": {},
+        "deferred": {},
+        "scheduled": {},
         "finished": {},
         "failed": {},
     }
@@ -509,6 +517,25 @@ def get_existing_trials(
                     result["finished"][get_trial_key(job)] = job
             except Exception as e:
                 logger.warning(f"Failed to fetch finished job {job_id}: {e}")
+
+        # Get deferred jobs
+        for job_id in queue.deferred_job_registry.get_job_ids():
+            try:
+                job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
+                if job and is_job_for_experiment(job, experiment_name):
+                    result["deferred"][get_trial_key(job)] = job
+            except Exception as e:
+                logger.warning(f"Failed to fetch deferred job {job_id}: {e}")
+
+        # Get scheduled jobs
+        if hasattr(queue, "scheduled_job_registry"):
+            for job_id in queue.scheduled_job_registry.get_job_ids():
+                try:
+                    job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
+                    if job and is_job_for_experiment(job, experiment_name):
+                        result["scheduled"][get_trial_key(job)] = job
+                except Exception as e:
+                    logger.warning(f"Failed to fetch scheduled job {job_id}: {e}")
 
         # Get failed jobs
         for job_id in queue.failed_job_registry.get_job_ids():

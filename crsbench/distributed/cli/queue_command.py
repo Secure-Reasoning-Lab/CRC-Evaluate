@@ -79,6 +79,12 @@ def run_queue(args: argparse.Namespace) -> int:
     scopes = [s.strip() for s in args.queues.split(",") if s.strip()]
     if not scopes:
         scopes = ["trial", "build", "verify"]
+    include_registry = not args.no_registry
+    include_lock = not args.no_lock
+    if set(scopes) != {"trial", "build", "verify"}:
+        # Partial scope cleanup should not drop experiment coordination state.
+        include_registry = False
+        include_lock = False
 
     if not args.yes and not args.dry_run:
         print("This will remove experiment-scoped jobs from Redis state.")  # noqa: T201
@@ -93,8 +99,8 @@ def run_queue(args: argparse.Namespace) -> int:
             redis_conn,
             experiment_name=args.experiment,
             scopes=scopes,
-            include_registry=not args.no_registry,
-            include_lock=not args.no_lock,
+            include_registry=include_registry,
+            include_lock=include_lock,
             dry_run=args.dry_run,
         )
     except Exception as e:

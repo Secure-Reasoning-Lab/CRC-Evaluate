@@ -1675,20 +1675,8 @@ def prompt_queue_mode(existing: dict[str, dict]) -> str:
         print("Invalid choice. Please enter 'f', 'c', or 'q'.")  # noqa: T201
 
 
-def _prepare_trial_dir_for_retry(config: ExperimentConfig, job) -> bool:
-    """Archive a failed trial directory and reset it for a clean retry."""
-    kwargs = job.kwargs or {}
-    trial_dir = _build_trial_output_path(
-        filestore=config.experiment_filestore.resolve(),
-        experiment_name=config.experiment,
-        crs=kwargs.get("crs", ""),
-        benchmark=kwargs.get("benchmark", ""),
-        harness=kwargs.get("harness_name", ""),
-        mode=kwargs.get("mode", ""),
-        sanitizer=kwargs.get("sanitizer", "address"),
-        trial_num=kwargs.get("trial_num", 0),
-        target_cpv_id=kwargs.get("target_cpv_id"),
-    )
+def _archive_trial_dir_for_retry(trial_dir: Path) -> bool:
+    """Archive a trial directory into retries/ and reset it for a clean retry."""
     if not trial_dir.exists():
         return True
 
@@ -1706,6 +1694,32 @@ def _prepare_trial_dir_for_retry(config: ExperimentConfig, job) -> bool:
     except Exception as e:
         logger.warning(f"Failed to prepare retry directory for {trial_dir}: {e}")
         return False
+    return True
+
+
+def _prepare_trial_dir_for_retry(config: ExperimentConfig, job) -> bool:
+    """Archive failed trial directories (experiment/results filestores) for retry."""
+    kwargs = job.kwargs or {}
+    filestores = [config.experiment_filestore.resolve()]
+    if config.results_filestore:
+        results_root = config.results_filestore.resolve()
+        if results_root not in filestores:
+            filestores.append(results_root)
+
+    for filestore in filestores:
+        trial_dir = _build_trial_output_path(
+            filestore=filestore,
+            experiment_name=config.experiment,
+            crs=kwargs.get("crs", ""),
+            benchmark=kwargs.get("benchmark", ""),
+            harness=kwargs.get("harness_name", ""),
+            mode=kwargs.get("mode", ""),
+            sanitizer=kwargs.get("sanitizer", "address"),
+            trial_num=kwargs.get("trial_num", 0),
+            target_cpv_id=kwargs.get("target_cpv_id"),
+        )
+        if not _archive_trial_dir_for_retry(trial_dir):
+            return False
     return True
 
 

@@ -52,6 +52,11 @@ import sys
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# Load .env so helper subcommands can use CRSBENCH_REDIS_PASSWORD consistently.
+load_dotenv()
+
 
 # ANSI color codes for terminal output
 class Colors:

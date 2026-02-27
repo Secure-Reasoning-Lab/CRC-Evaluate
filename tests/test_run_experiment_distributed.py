@@ -4,7 +4,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from crsbench.run_experiment import run_experiment_distributed
+from crsbench.distributed.jobs import _build_trial_output_path
+from crsbench.run_experiment import (
+    _prepare_trial_dir_for_retry,
+    run_experiment_distributed,
+)
 
 
 def test_register_failure_cleans_registry_lease(tmp_path: Path) -> None:
@@ -139,3 +143,53 @@ def test_continue_mode_does_not_retry_failed_by_default(tmp_path: Path) -> None:
 
     queue.enqueue_job.assert_not_called()
     failed_job.save_meta.assert_not_called()
+
+
+def test_prepare_trial_dir_for_retry_cleans_results_filestore(tmp_path: Path) -> None:
+    config = MagicMock()
+    config.experiment = "exp-test"
+    config.experiment_filestore = tmp_path / "exp-store"
+    config.results_filestore = tmp_path / "results-store"
+
+    job = MagicMock()
+    job.kwargs = {
+        "crs": "crs-a",
+        "benchmark": "bench-a",
+        "harness_name": "fuzz_a",
+        "mode": "delta",
+        "sanitizer": "address",
+        "trial_num": 1,
+        "target_cpv_id": "cpv_0",
+    }
+
+    for filestore in [config.experiment_filestore, config.results_filestore]:
+        trial_dir = _build_trial_output_path(
+            filestore=filestore,
+            experiment_name=config.experiment,
+            crs="crs-a",
+            benchmark="bench-a",
+            harness="fuzz_a",
+            mode="delta",
+            sanitizer="address",
+            trial_num=1,
+            target_cpv_id="cpv_0",
+        )
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        (trial_dir / ".fail").touch()
+
+    assert _prepare_trial_dir_for_retry(config, job)
+
+    for filestore in [config.experiment_filestore, config.results_filestore]:
+        trial_dir = _build_trial_output_path(
+            filestore=filestore,
+            experiment_name=config.experiment,
+            crs="crs-a",
+            benchmark="bench-a",
+            harness="fuzz_a",
+            mode="delta",
+            sanitizer="address",
+            trial_num=1,
+            target_cpv_id="cpv_0",
+        )
+        assert (trial_dir / "retries").exists()
+        assert not (trial_dir / ".fail").exists()
