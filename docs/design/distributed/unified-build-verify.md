@@ -47,11 +47,12 @@ Redis is the single execution backend. There is no fallback to local `ThreadPool
 
 | Queue | Name | Purpose |
 |-------|------|---------|
-| Build | `crsbench_{experiment}_build` | Variant image builds |
-| Verify | `crsbench_{experiment}_verify` | POV verification |
-| Trial | `crsbench_{experiment}` | CRS trial execution (existing) |
+| Build | `crsbench_build` (flat default) / `crsbench_{experiment}_build` (legacy) | Variant image builds |
+| Verify | `crsbench_verify` (flat default) / `crsbench_{experiment}_verify` (legacy) | POV verification |
+| Trial | `crsbench_trial` (flat default) / `crsbench_{experiment}` (legacy) | CRS trial execution |
 
 Build and verify share the same evaluator worker pool. The evaluator dequeues from both build and verify queues, prioritizing build jobs (since verify jobs depend on completed builds).
+Queue names are resolved by runtime queue model (`CRSBENCH_QUEUE_MODEL`), not hardcoded by consumers.
 
 ## 3. Two-Phase Execution for CI
 
@@ -80,8 +81,9 @@ Same as Phase 1 above. `VariantPlanner` creates `BuildSingleVariantJob` instance
 
 ```python
 def run_ci_all(benchmarks, redis_conn, experiment_name):
-    build_queue = rq.Queue(f"crsbench_{experiment_name}_build", connection=redis_conn)
-    verify_queue = rq.Queue(f"crsbench_{experiment_name}_verify", connection=redis_conn)
+    trial_q, build_q, verify_q = resolve_queue_names(experiment_name)
+    build_queue = rq.Queue(build_q, connection=redis_conn)
+    verify_queue = rq.Queue(verify_q, connection=redis_conn)
 
     # Phase 1: Enqueue all builds
     planner = VariantPlanner(benchmarks)
@@ -283,7 +285,7 @@ If no evaluator is running, verify jobs accumulate in Redis. The worker continue
 ### 9.4 `crsbench evaluator`
 
 **Before:** Builds all variants at startup via `ThreadPoolExecutor`, then listens only on verify queue.
-**After:** Listens on both build queue and verify queue. No startup build phase — builds arrive as jobs like everything else. The evaluator is a generic job worker for build and verify queues.
+**After:** Listens on both build queue and verify queue. In configless mode, builds arrive lazily as jobs; in config-pinned mode, startup pre-build enqueue may be used. The evaluator is a generic job worker for build and verify queues.
 
 ### 9.5 `crsbench worker` (CRS trial execution)
 

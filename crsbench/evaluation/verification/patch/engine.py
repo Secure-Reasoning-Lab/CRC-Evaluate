@@ -13,6 +13,7 @@ git apply (preserves .o for unchanged files).
 
 from __future__ import annotations
 
+import re
 import shutil
 import tempfile
 import time
@@ -91,6 +92,7 @@ class PatchVerificationEngine:
         verify_workers: Optional[int] = None,
         verify_variants: bool = True,
         work_dir: Optional[Path] = None,
+        log_dir: Optional[Path] = None,
         force_rebuild: bool = False,
         use_inc_build: bool = True,
         source_mode: str = "pkgs",
@@ -118,6 +120,8 @@ class PatchVerificationEngine:
             work_dir: Working directory for isolated builds. If provided, builds
                 are isolated to this directory with symlinks to oss-fuzz/build/out/
                 for helper.py compatibility. Use this for experiment-specific builds.
+            log_dir: Directory for patch verification stdout/stderr log artifacts.
+                Defaults to work_dir when set, otherwise current directory.
             force_rebuild: If True, clean and rebuild even if build exists.
             use_inc_build: If True, use incremental builds when available (faster).
                 If False, always use full OSS-Fuzz build.
@@ -132,6 +136,7 @@ class PatchVerificationEngine:
         """
         self.oss_fuzz_path = Path(oss_fuzz_path)
         self.work_dir = Path(work_dir) if work_dir else None
+        self.log_dir = Path(log_dir) if log_dir else None
         self.infra = OSSFuzzInfrastructure(oss_fuzz_path, work_dir=work_dir)
         self.test_mode = test_mode
         self.sanitizer = sanitizer
@@ -498,10 +503,18 @@ class PatchVerificationEngine:
             variants_matched = 0
 
             for pov_path in pov_variants:
-                pov_name, passed = self._verify_single_pov(
+                pov_name, passed, pov_stdout, pov_stderr = self._verify_single_pov(
                     variant_name, harness, pov_path
                 )
                 variant_id = pov_path.stem
+                self._write_verify_streams(
+                    patch_id=result.patch_id,
+                    cpv_id=cpv_id,
+                    stage="pov",
+                    run_id=variant_id,
+                    stdout=pov_stdout,
+                    stderr=pov_stderr,
+                )
                 variant_results[variant_id] = passed
                 if passed:
                     variants_matched += 1
@@ -557,7 +570,17 @@ class PatchVerificationEngine:
                 result.pov_test_time = time.time() - pov_start_time
                 return result
 
-            pov_passed = self._run_pov_test(variant_name, harness, pov_path)
+            _, pov_passed, pov_stdout, pov_stderr = self._verify_single_pov(
+                variant_name, harness, pov_path
+            )
+            self._write_verify_streams(
+                patch_id=result.patch_id,
+                cpv_id=result.pov_id,
+                stage="pov",
+                run_id=pov_path.stem,
+                stdout=pov_stdout,
+                stderr=pov_stderr,
+            )
             result.pov_test_passed = pov_passed
             result.pov_test_time = time.time() - pov_start_time
 
@@ -604,11 +627,21 @@ class PatchVerificationEngine:
                 )
                 result.unit_tests_passed = None
             else:
-                test_passed, test_details = self._run_unit_tests(
-                    variant_name,
-                    repo_path,
-                    benchmark_path,
-                    use_inc_image=True,
+                test_passed, test_details, test_stdout, test_stderr = (
+                    self._run_unit_tests(
+                        variant_name,
+                        repo_path,
+                        benchmark_path,
+                        use_inc_image=True,
+                    )
+                )
+                self._write_verify_streams(
+                    patch_id=result.patch_id,
+                    cpv_id=result.pov_id,
+                    stage="unittest",
+                    run_id=self.test_mode.value,
+                    stdout=test_stdout,
+                    stderr=test_stderr,
                 )
                 result.unit_tests_passed = test_passed
                 result.unit_test_time = time.time() - unit_test_start_time
@@ -621,11 +654,19 @@ class PatchVerificationEngine:
                     return result
         else:
             # Standard build: use variant's Docker image (already built)
-            test_passed, test_details = self._run_unit_tests(
+            test_passed, test_details, test_stdout, test_stderr = self._run_unit_tests(
                 variant_name,
                 repo_path,
                 benchmark_path,
                 use_inc_image=False,
+            )
+            self._write_verify_streams(
+                patch_id=result.patch_id,
+                cpv_id=result.pov_id,
+                stage="unittest",
+                run_id=self.test_mode.value,
+                stdout=test_stdout,
+                stderr=test_stderr,
             )
             result.unit_tests_passed = test_passed
             result.unit_test_time = time.time() - unit_test_start_time
@@ -664,7 +705,9 @@ class PatchVerificationEngine:
         """Verify multiple patches.
 
         Discovers patches from patch_dir and verifies each one.
-        Structure expected: patch_dir/<pov_id>/patch.diff
+        Supported structures:
+        - Structured: patch_dir/<pov_id>/patch.diff
+        - Flat: patch_dir/<patch_id>.diff (mapped to trial CPV when inferable)
 
         Args:
             benchmark_path: Path to benchmark directory
@@ -675,8 +718,9 @@ class PatchVerificationEngine:
         Returns:
             List of PatchVerificationResult
         """
+        target_pov_id = self._infer_single_pov_id(pov_dir)
         # Discover patches
-        patches = self._discover_patches(patch_dir)
+        patches = self._discover_patches(patch_dir, target_pov_id=target_pov_id)
         if not patches:
             logger.warning(f"No patches found in {patch_dir}")
             return []
@@ -827,7 +871,7 @@ class PatchVerificationEngine:
         Returns:
             True if POV does NOT crash (patch is valid)
         """
-        _, passed = self._verify_single_pov(variant_name, harness, pov_path)
+        _, passed, _, _ = self._verify_single_pov(variant_name, harness, pov_path)
         return passed
 
     def _verify_single_pov(
@@ -835,7 +879,7 @@ class PatchVerificationEngine:
         variant_name: str,
         harness: str,
         pov_path: Path,
-    ) -> tuple[str, bool]:
+    ) -> tuple[str, bool, str, str]:
         """Verify a single POV against patched code.
 
         Core POV verification logic used by both single POV test and variant tests.
@@ -846,13 +890,14 @@ class PatchVerificationEngine:
             pov_path: Path to POV blob file
 
         Returns:
-            Tuple of (pov_name, passed) where passed=True if POV does NOT crash
+            Tuple of (pov_name, passed, stdout, stderr) where passed=True if POV
+            does NOT crash
         """
         pov_name = pov_path.name
 
         if not pov_path.exists():
             logger.error(f"POV file not found: {pov_path}")
-            return pov_name, False
+            return pov_name, False, "", ""
 
         pov_data = pov_path.read_bytes()
         logger.debug(f"Running POV: {pov_name} against {variant_name}/{harness}")
@@ -871,7 +916,41 @@ class PatchVerificationEngine:
         else:
             logger.debug(f"  ✓ {pov_name}: passed")
 
-        return pov_name, passed
+        return pov_name, passed, output.stdout or "", output.stderr or ""
+
+    @staticmethod
+    def _sanitize_log_token(token: str) -> str:
+        """Sanitize token for log file names."""
+        safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", token).strip("_")
+        return safe or "unknown"
+
+    def _get_verify_log_dir(self) -> Path:
+        """Return base log directory for patch verification stream files."""
+        base_dir = self.log_dir or self.work_dir or Path.cwd()
+        log_dir = base_dir / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        return log_dir
+
+    def _write_verify_streams(
+        self,
+        *,
+        patch_id: str,
+        cpv_id: str,
+        stage: str,
+        run_id: str,
+        stdout: str,
+        stderr: str,
+    ) -> None:
+        """Write stream-separated logs for a single verification run."""
+        log_dir = self._get_verify_log_dir()
+        file_base = (
+            f"patch-{self._sanitize_log_token(patch_id)}"
+            f"__cpv-{self._sanitize_log_token(cpv_id)}"
+            f"__{self._sanitize_log_token(stage)}"
+            f"__{self._sanitize_log_token(run_id)}"
+        )
+        (log_dir / f"{file_base}.stdout").write_text(stdout or "")
+        (log_dir / f"{file_base}.stderr").write_text(stderr or "")
 
     def _run_unit_tests(
         self,
@@ -880,7 +959,7 @@ class PatchVerificationEngine:
         benchmark_path: Path,
         *,
         use_inc_image: bool = False,
-    ) -> tuple[bool | None, str]:
+    ) -> tuple[bool | None, str, str, str]:
         """Run unit tests on patched code.
 
         Uses a separate test variant (variant_name-unittest or variant_name-rts)
@@ -898,7 +977,7 @@ class PatchVerificationEngine:
         # Check if tests are available (test.sh exists in variant project directory)
         if not self.infra.is_tests_available(variant_name):
             logger.warning(f"No test.sh in {variant_name}, skipping unit tests")
-            return True, ""
+            return True, "", "", ""
 
         # RTS tests require /rts_config_jvm.py which is only in inc-build images.
         # Skip RTS tests when inc-build is not available to avoid false failures.
@@ -910,7 +989,7 @@ class PatchVerificationEngine:
                 f"RTS tests require inc-build image, but inc-build not available. "
                 f"Skipping RTS tests for {variant_name}"
             )
-            return None, "RTS skipped: inc-build not available"
+            return None, "RTS skipped: inc-build not available", "", ""
 
         # Use separate variant for test output to avoid overwriting ASAN binary
         # test.sh rebuilds with fuzz-shim which produces non-ASAN binaries
@@ -983,7 +1062,7 @@ class PatchVerificationEngine:
         )
 
         if passed:
-            return True, ""
+            return True, "", stdout or "", stderr or ""
         # helper.py run_test sends most container output to stdout.
         # Preserve both streams so CI reports include actionable failure details.
         details_parts = []
@@ -991,7 +1070,12 @@ class PatchVerificationEngine:
             details_parts.append(stderr.strip())
         if stdout and stdout.strip():
             details_parts.append(stdout.strip())
-        return False, "\n\n".join(details_parts) or "Unit tests failed"
+        return (
+            False,
+            "\n\n".join(details_parts) or "Unit tests failed",
+            stdout or "",
+            stderr or "",
+        )
 
     def _discover_pov_variants(
         self,
@@ -1095,7 +1179,9 @@ class PatchVerificationEngine:
         failed_povs: list[str] = []
 
         for pov_path in pov_paths:
-            pov_name, passed = self._verify_single_pov(variant_name, harness, pov_path)
+            pov_name, passed, _, _ = self._verify_single_pov(
+                variant_name, harness, pov_path
+            )
             if not passed:
                 failed_povs.append(pov_name)
 
@@ -1107,13 +1193,18 @@ class PatchVerificationEngine:
 
         return all_passed, failed_povs
 
-    def _discover_patches(self, patch_dir: Path) -> list[PatchInfo]:
+    def _discover_patches(
+        self, patch_dir: Path, target_pov_id: Optional[str] = None
+    ) -> list[PatchInfo]:
         """Discover patches in directory.
 
-        Expected structure: patch_dir/<pov_id>/patch.diff
+        Supported structures:
+        - patch_dir/<pov_id>/patch.diff
+        - patch_dir/*.diff (flat; target_pov_id required for CPV mapping)
 
         Args:
             patch_dir: Directory containing patches
+            target_pov_id: CPV/POV ID that flat patches should target
 
         Returns:
             List of PatchInfo
@@ -1137,7 +1228,47 @@ class PatchVerificationEngine:
                     )
                 )
 
+        # Flat layout from CRS output collector:
+        # output/patches/<patch_id>.diff
+        flat_patches = sorted(
+            p
+            for p in patch_dir.glob("*.diff")
+            if p.is_file() and not p.name.startswith(".")
+        )
+        if flat_patches:
+            if not target_pov_id:
+                logger.warning(
+                    f"Found {len(flat_patches)} flat patch files in {patch_dir} "
+                    "but no target CPV/POV could be inferred; skipping flat patches"
+                )
+            else:
+                for patch_file in flat_patches:
+                    patches.append(
+                        PatchInfo(
+                            patch_id=patch_file.stem,
+                            pov_id=target_pov_id,
+                            patch_path=patch_file,
+                        )
+                    )
+
         return patches
+
+    def _infer_single_pov_id(self, pov_dir: Path) -> Optional[str]:
+        """Infer a single target POV/CPV identifier from pov_dir.
+
+        In patch-generation trials, crs-input/povs usually contains a single
+        CPV input (e.g., ``cpv_0``). This lets flat patch files map back to the
+        correct target during verification.
+        """
+        if not pov_dir.exists():
+            return None
+
+        candidates = sorted(
+            p.name
+            for p in pov_dir.iterdir()
+            if not p.name.startswith(".") and (p.is_file() or p.is_dir())
+        )
+        return candidates[0] if len(candidates) == 1 else None
 
     def _discover_patches_from_benchmark(
         self, benchmark_path: Path, harness_filter: Optional[str] = None

@@ -26,6 +26,37 @@ logger = get_logger(__name__)
 # Regex for valid queue name components (alphanumeric, underscores, hyphens)
 _VALID_QUEUE_COMPONENT = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
 
+QUEUE_MODEL_ENV = "CRSBENCH_QUEUE_MODEL"
+QUEUE_MODEL_FLAT = "flat"
+QUEUE_MODEL_PER_EXPERIMENT = "per-experiment"
+
+FLAT_TRIAL_QUEUE = "crsbench_trial"
+FLAT_BUILD_QUEUE = "crsbench_build"
+FLAT_VERIFY_QUEUE = "crsbench_verify"
+
+
+def get_job_experiment_name(job: "rq.job.Job") -> str | None:
+    """Extract experiment name from an RQ job (supports old/new payload layouts)."""
+    meta = job.meta or {}
+    experiment = meta.get("experiment_name") or meta.get("experiment")
+    if isinstance(experiment, str) and experiment.strip():
+        return experiment.strip()
+
+    kwargs = job.kwargs or {}
+    config_dict = kwargs.get("config_dict")
+    if isinstance(config_dict, dict):
+        cfg_experiment = config_dict.get("experiment")
+        if isinstance(cfg_experiment, str) and cfg_experiment.strip():
+            return cfg_experiment.strip()
+    return None
+
+
+def is_job_for_experiment(job: "rq.job.Job", experiment_name: str | None) -> bool:
+    """Return True when job belongs to *experiment_name* (or when no filter given)."""
+    if experiment_name is None:
+        return True
+    return get_job_experiment_name(job) == experiment_name
+
 
 def validate_queue_name_component(name: str) -> str:
     """Validate that a name is safe for use in Redis queue names.
@@ -49,6 +80,35 @@ def validate_queue_name_component(name: str) -> str:
             "Must start with alphanumeric and contain only [a-zA-Z0-9_-]."
         )
     return name
+
+
+def get_queue_model() -> str:
+    """Return queue model for distributed runtime.
+
+    Supported values:
+    - ``flat`` (default): global trial/build/verify queues shared by all experiments
+    - ``per-experiment``: legacy per-experiment queue names
+    """
+    model = os.environ.get(QUEUE_MODEL_ENV, QUEUE_MODEL_FLAT).strip().lower()
+    if model not in {QUEUE_MODEL_FLAT, QUEUE_MODEL_PER_EXPERIMENT}:
+        logger.warning(
+            f"Invalid {QUEUE_MODEL_ENV}={model!r}; falling back to {QUEUE_MODEL_FLAT!r}"
+        )
+        return QUEUE_MODEL_FLAT
+    return model
+
+
+def resolve_queue_names(experiment_name: str) -> tuple[str, str, str]:
+    """Resolve trial/build/verify queue names for the configured queue model."""
+    if get_queue_model() == QUEUE_MODEL_FLAT:
+        return FLAT_TRIAL_QUEUE, FLAT_BUILD_QUEUE, FLAT_VERIFY_QUEUE
+
+    validate_queue_name_component(experiment_name)
+    return (
+        f"crsbench_{experiment_name}",
+        f"crsbench_{experiment_name}_build",
+        f"crsbench_{experiment_name}_verify",
+    )
 
 
 # Cache for auth detection: avoids extra connection attempt per call.
@@ -231,8 +291,10 @@ def initialize_queue(redis_host: str, experiment_name: str) -> Optional["rq.Queu
             "Install with: pip install redis rq"
         )
 
-    validate_queue_name_component(experiment_name)
-    queue_name = f"crsbench_{experiment_name}"
+    trial_queue_name, _build_queue_name, _verify_queue_name = resolve_queue_names(
+        experiment_name
+    )
+    queue_name = trial_queue_name
     logger.info(f"Initializing queue: {queue_name}")
 
     try:
@@ -380,22 +442,31 @@ def get_trial_key(job: "rq.job.Job") -> str:
         >>> key = get_trial_key(job)
         >>> print(key)  # "atlantis-c:libxml2:fuzz_test:delta:1"
     """
-    meta = job.meta
-    return (
-        f"{meta['crs']}:{meta['benchmark']}:{meta['harness']}:"
-        f"{meta.get('mode', '-')}:"
-        f"{meta.get('sanitizer', '-')}:"
-        f"{meta.get('trial_num', '-')}:"
-        f"{meta.get('target_cpv_id') or '-'}"
-    )
+    meta = job.meta or {}
+    crs = meta.get("crs")
+    benchmark = meta.get("benchmark")
+    harness = meta.get("harness")
+    if isinstance(crs, str) and isinstance(benchmark, str) and isinstance(harness, str):
+        return (
+            f"{crs}:{benchmark}:{harness}:"
+            f"{meta.get('mode', '-')}:"
+            f"{meta.get('sanitizer', '-')}:"
+            f"{meta.get('trial_num', '-')}:"
+            f"{meta.get('target_cpv_id') or '-'}"
+        )
+    experiment = get_job_experiment_name(job) or "-"
+    return f"job:{experiment}:{job.id or 'unknown'}"
 
 
-def get_existing_trials(queue: "rq.Queue") -> dict[str, dict[str, "rq.job.Job"]]:
+def get_existing_trials(
+    queue: "rq.Queue", experiment_name: str | None = None
+) -> dict[str, dict[str, "rq.job.Job"]]:
     """
     Get all existing jobs grouped by status with trial keys.
 
     Args:
         queue: RQ queue instance
+        experiment_name: Optional experiment filter (required for flat queue safety)
 
     Returns:
         dict: Jobs grouped by status:
@@ -417,6 +488,8 @@ def get_existing_trials(queue: "rq.Queue") -> dict[str, dict[str, "rq.job.Job"]]
     result = {
         "queued": {},
         "started": {},
+        "deferred": {},
+        "scheduled": {},
         "finished": {},
         "failed": {},
     }
@@ -424,14 +497,14 @@ def get_existing_trials(queue: "rq.Queue") -> dict[str, dict[str, "rq.job.Job"]]
     try:
         # Get queued jobs
         for job in get_all_jobs(queue):
-            if job.is_queued:
+            if job.is_queued and is_job_for_experiment(job, experiment_name):
                 result["queued"][get_trial_key(job)] = job
 
         # Get started jobs
         for job_id in queue.started_job_registry.get_job_ids():
             try:
                 job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
-                if job:
+                if job and is_job_for_experiment(job, experiment_name):
                     result["started"][get_trial_key(job)] = job
             except Exception as e:
                 logger.warning(f"Failed to fetch started job {job_id}: {e}")
@@ -440,16 +513,35 @@ def get_existing_trials(queue: "rq.Queue") -> dict[str, dict[str, "rq.job.Job"]]
         for job_id in queue.finished_job_registry.get_job_ids():
             try:
                 job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
-                if job:
+                if job and is_job_for_experiment(job, experiment_name):
                     result["finished"][get_trial_key(job)] = job
             except Exception as e:
                 logger.warning(f"Failed to fetch finished job {job_id}: {e}")
+
+        # Get deferred jobs
+        for job_id in queue.deferred_job_registry.get_job_ids():
+            try:
+                job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
+                if job and is_job_for_experiment(job, experiment_name):
+                    result["deferred"][get_trial_key(job)] = job
+            except Exception as e:
+                logger.warning(f"Failed to fetch deferred job {job_id}: {e}")
+
+        # Get scheduled jobs
+        if hasattr(queue, "scheduled_job_registry"):
+            for job_id in queue.scheduled_job_registry.get_job_ids():
+                try:
+                    job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
+                    if job and is_job_for_experiment(job, experiment_name):
+                        result["scheduled"][get_trial_key(job)] = job
+                except Exception as e:
+                    logger.warning(f"Failed to fetch scheduled job {job_id}: {e}")
 
         # Get failed jobs
         for job_id in queue.failed_job_registry.get_job_ids():
             try:
                 job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
-                if job:
+                if job and is_job_for_experiment(job, experiment_name):
                     result["failed"][get_trial_key(job)] = job
             except Exception as e:
                 logger.warning(f"Failed to fetch failed job {job_id}: {e}")
@@ -459,6 +551,68 @@ def get_existing_trials(queue: "rq.Queue") -> dict[str, dict[str, "rq.job.Job"]]
     except Exception as e:
         logger.error(f"Failed to get existing trials: {e}")
         return result
+
+
+def remove_job_by_id(queue: "rq.Queue", job_id: str) -> bool:
+    """Remove a job reference from queue registries and delete payload."""
+    if not REDIS_AVAILABLE:
+        raise RuntimeError("Redis and RQ packages are required")
+
+    removed = False
+    registries = [
+        queue.started_job_registry,
+        queue.finished_job_registry,
+        queue.failed_job_registry,
+        queue.deferred_job_registry,
+    ]
+    if hasattr(queue, "scheduled_job_registry"):
+        registries.append(queue.scheduled_job_registry)
+
+    for registry in registries:
+        try:
+            registry.remove(job_id, delete_job=False)
+            removed = True
+        except Exception:
+            pass
+
+    try:
+        queue.remove(job_id)
+        removed = True
+    except Exception:
+        pass
+
+    try:
+        job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
+        job.delete()
+        removed = True
+    except Exception:
+        pass
+
+    return removed
+
+
+def clear_experiment_jobs(queue: "rq.Queue", experiment_name: str) -> int:
+    """Remove all jobs for one experiment from a queue (all registries/states)."""
+    if not REDIS_AVAILABLE:
+        raise RuntimeError("Redis and RQ packages are required")
+
+    existing = get_existing_trials(queue, experiment_name=experiment_name)
+    job_ids: set[str] = set()
+    for jobs_by_key in existing.values():
+        for job in jobs_by_key.values():
+            if job.id:
+                job_ids.add(job.id)
+
+    removed = 0
+    for job_id in sorted(job_ids):
+        if remove_job_by_id(queue, job_id):
+            removed += 1
+
+    if removed > 0:
+        logger.info(
+            f"Cleared {removed} jobs from queue {queue.name} for experiment={experiment_name}"
+        )
+    return removed
 
 
 def requeue_failed_jobs(queue: "rq.Queue", failed_jobs: list["rq.job.Job"]) -> int:

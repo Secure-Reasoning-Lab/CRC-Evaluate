@@ -1712,6 +1712,37 @@ class TestEngineDiscoveryFunctions:
         assert patch_info.patch_id == "patch_0"
         assert patch_info.pov_id == "cpv_0"  # pov_id = CPV this patch targets
 
+    def test_discover_patches_flat_layout_with_target_pov(
+        self, tmp_path: Path, mock_oss_fuzz: Path
+    ):
+        """Flat patch files should map to inferred target POV/CPV."""
+        patch_dir = tmp_path / "patches"
+        patch_dir.mkdir(parents=True)
+        (patch_dir / "abc123.diff").write_text("diff content")
+
+        from crsbench.evaluation.verification.patch import PatchVerificationEngine
+
+        engine = PatchVerificationEngine(mock_oss_fuzz)
+        patches = engine._discover_patches(patch_dir, target_pov_id="cpv_3")
+
+        assert len(patches) == 1
+        assert patches[0].patch_id == "abc123"
+        assert patches[0].pov_id == "cpv_3"
+
+    def test_infer_single_pov_id(self, tmp_path: Path, mock_oss_fuzz: Path):
+        """Infer CPV/POV ID only when pov_dir has exactly one entry."""
+        from crsbench.evaluation.verification.patch import PatchVerificationEngine
+
+        engine = PatchVerificationEngine(mock_oss_fuzz)
+        pov_dir = tmp_path / "povs"
+        pov_dir.mkdir(parents=True)
+        (pov_dir / "cpv_1").write_bytes(b"pov")
+
+        assert engine._infer_single_pov_id(pov_dir) == "cpv_1"
+
+        (pov_dir / "cpv_2").write_bytes(b"pov2")
+        assert engine._infer_single_pov_id(pov_dir) is None
+
 
 # =============================================================================
 # Project Directory Creation Tests
@@ -2030,7 +2061,7 @@ class TestRtsSkipReturnValue:
         engine.infra.is_tests_available.return_value = True
 
         # Call _run_unit_tests with use_inc_image=False (RTS without inc-build)
-        passed, details = engine._run_unit_tests(
+        passed, details, _stdout, _stderr = engine._run_unit_tests(
             variant_name="test-proj",
             src_path=tmp_path / "src",
             benchmark_path=tmp_path / "bench",
@@ -2073,7 +2104,7 @@ class TestRtsSkipReturnValue:
         engine.infra.run_tests.return_value = (True, "tests passed", "")
 
         # Call _run_unit_tests with use_inc_image=True (RTS with inc-build)
-        passed, details = engine._run_unit_tests(
+        passed, details, _stdout, _stderr = engine._run_unit_tests(
             variant_name="test-proj",
             src_path=tmp_path / "src",
             benchmark_path=tmp_path / "bench",
@@ -2082,6 +2113,41 @@ class TestRtsSkipReturnValue:
 
         # Should proceed normally and return True (tests passed)
         assert passed is True, "RTS should run and pass with inc-build available"
+
+
+class TestPatchVerificationLogs:
+    """Tests for patch verification stdout/stderr log outputs."""
+
+    def test_write_verify_streams_creates_stdout_stderr_files(self, tmp_path: Path):
+        """Stream logs are written as flat files under logs/."""
+        from crsbench.evaluation.verification.patch.engine import (
+            PatchVerificationEngine,
+        )
+
+        oss_fuzz = tmp_path / "oss-fuzz"
+        infra_dir = oss_fuzz / "infra"
+        infra_dir.mkdir(parents=True)
+        (infra_dir / "helper.py").write_text("# mock")
+
+        work_dir = tmp_path / "trial" / "patches"
+        engine = PatchVerificationEngine(oss_fuzz, work_dir=work_dir)
+        engine._write_verify_streams(
+            patch_id="patch_0",
+            cpv_id="cpv_0",
+            stage="pov",
+            run_id="pov_0",
+            stdout="pov stdout",
+            stderr="pov stderr",
+        )
+
+        base = work_dir / "logs"
+        stdout_files = list(base.glob("*.stdout"))
+        stderr_files = list(base.glob("*.stderr"))
+
+        assert len(stdout_files) == 1
+        assert len(stderr_files) == 1
+        assert stdout_files[0].read_text() == "pov stdout"
+        assert stderr_files[0].read_text() == "pov stderr"
 
 
 # =============================================================================

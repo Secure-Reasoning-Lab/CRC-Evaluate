@@ -26,6 +26,7 @@ import importlib.util
 import json
 import os
 import secrets
+import shutil
 import string
 import sys
 import time
@@ -45,6 +46,12 @@ from crsbench.distributed.jobs import (
 )
 from crsbench.evaluation.cleanup import cleanup_trial_directory
 from crsbench.evaluation.results import TrialResult
+from crsbench.evaluation.trial_paths import (
+    experiment_dir as resolve_experiment_dir,
+)
+from crsbench.evaluation.trial_paths import (
+    resolve_benchmarks_root,
+)
 from crsbench.utils import log_progress, log_section, log_summary
 from crsbench.utils.benchmark_utils import (
     filter_benchmarks_by_mode,
@@ -52,6 +59,7 @@ from crsbench.utils.benchmark_utils import (
 )
 from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.logger import configure_logger, get_logger
+from crsbench.validation.ground_truth_paths import GroundTruthPaths
 from crsbench.validation.meta_adapter import MetaYamlAdapter
 from crsbench.validation.schemas import (
     BenchmarkHarness,
@@ -232,6 +240,17 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Force distributed execution mode with Redis (raises error if Redis unavailable)",
     )
+    parser.add_argument(
+        "--queue-mode",
+        choices=["fresh", "continue", "quit"],
+        default=None,
+        help="Existing-queue behavior for distributed mode (default: prompt in TTY, continue in non-TTY)",
+    )
+    parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="With --queue-mode continue, requeue failed trials after cleaning trial dirs",
+    )
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -309,6 +328,11 @@ Examples:
     from crsbench.distributed.cli.evaluator_command import add_evaluator_subparser
 
     add_evaluator_subparser(subparsers)
+
+    # 'queue' subcommand - distributed queue cleanup/ops
+    from crsbench.distributed.cli.queue_command import add_queue_subparser
+
+    add_queue_subparser(subparsers)
 
     # 'verify' subcommand - POV verification
     from crsbench.evaluation.verification.cli.pov_verify_command import (
@@ -506,7 +530,7 @@ def resolve_benchmark_harnesses(
                     f"Benchmark directory not found: {benchmark_path}"
                 )
 
-            meta_yaml_path = benchmark_path / ".aixcc" / "meta.yaml"
+            meta_yaml_path = GroundTruthPaths(benchmark_path).meta_yaml
             if not meta_yaml_path.exists():
                 raise FileNotFoundError(f"meta.yaml not found: {meta_yaml_path}")
 
@@ -555,7 +579,7 @@ def resolve_benchmark_harnesses(
                 )
 
             # Load meta.yaml to get harnesses
-            meta_yaml_path = benchmark_path / ".aixcc" / "meta.yaml"
+            meta_yaml_path = GroundTruthPaths(benchmark_path).meta_yaml
             if not meta_yaml_path.exists():
                 raise FileNotFoundError(f"meta.yaml not found: {meta_yaml_path}")
 
@@ -661,7 +685,7 @@ def generate_trial_matrix(
             should_check_cpvs = is_bug_fixing or config.only_cpv_harnesses
             harness = None
             if should_check_cpvs:
-                meta_path = Path(benchmark_harness.path) / ".aixcc" / "meta.yaml"
+                meta_path = GroundTruthPaths(Path(benchmark_harness.path)).meta_yaml
                 adapter = MetaYamlAdapter.from_meta_yaml(
                     meta_path,
                     benchmark_name=benchmark_harness.name,
@@ -775,7 +799,9 @@ def dump_trial_matrix(
         trials: List of Trial objects
         config: Experiment configuration
     """
-    output_dir = config.experiment_filestore.resolve() / config.experiment
+    output_dir = resolve_experiment_dir(
+        config.experiment_filestore.resolve(), config.experiment
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "trial_matrix.json"
 
@@ -961,7 +987,10 @@ def should_use_distributed_mode(
     Raises:
         RuntimeError: If --distributed is set but Redis is unavailable
     """
+    from crsbench.distributed.common import normalize_redis_host
     from crsbench.distributed.queue import check_redis_available
+
+    redis_host = normalize_redis_host(getattr(config, "redis_host", None))
 
     # Check for conflicting flags
     distributed = getattr(args, "distributed", False)
@@ -973,20 +1002,20 @@ def should_use_distributed_mode(
         logger.info("Distributed mode explicitly requested via --distributed flag")
 
         # Validate Redis host is configured
-        if not config.redis_host or config.redis_host == "none":
+        if not redis_host:
             raise RuntimeError(
                 "Cannot use distributed mode: No Redis host configured. "
                 "Please set 'redis_host' in experiment config or remove --distributed flag."
             )
 
         # Validate Redis is available
-        if not check_redis_available(config.redis_host):
+        if not check_redis_available(redis_host):
             raise RuntimeError(
-                f"Cannot use distributed mode: Redis not available at {config.redis_host}. "
+                f"Cannot use distributed mode: Redis not available at {redis_host}. "
                 "Please ensure Redis server is running or remove --distributed flag."
             )
 
-        logger.info(f"Forcing distributed mode with Redis at {config.redis_host}")
+        logger.info(f"Forcing distributed mode with Redis at {redis_host}")
         return True
 
     # User explicitly disabled distributed mode
@@ -1000,14 +1029,14 @@ def should_use_distributed_mode(
         return False
 
     # No Redis host configured
-    if not config.redis_host or config.redis_host == "none":
+    if not redis_host:
         logger.info("No Redis host configured, using local mode")
         return False
 
     # Check if Redis is available
-    if not check_redis_available(config.redis_host):
+    if not check_redis_available(redis_host):
         logger.warning(
-            f"Redis not available at {config.redis_host}, falling back to local mode"
+            f"Redis not available at {redis_host}, falling back to local mode"
         )
         return False
 
@@ -1191,6 +1220,7 @@ def monitor_jobs(
     config: ExperimentConfig,
     *,
     disk_skipped: int = 0,
+    registry=None,
 ) -> List[TrialResult]:
     """Monitor job progress and display status.
 
@@ -1200,6 +1230,7 @@ def monitor_jobs(
         experiment_name: Experiment identifier
         config: Experiment configuration (for writing orchestrator markers)
         disk_skipped: Number of trials skipped due to existing .success markers
+        registry: Optional RegistryClient for lock renewal
 
     Returns:
         List of TrialResult objects
@@ -1212,10 +1243,20 @@ def monitor_jobs(
 
     if rich_available:
         return _monitor_jobs_rich(
-            queue, job_list, experiment_name, config, disk_skipped=disk_skipped
+            queue,
+            job_list,
+            experiment_name,
+            config,
+            disk_skipped=disk_skipped,
+            registry=registry,
         )
     return _monitor_jobs_basic(
-        queue, job_list, experiment_name, config, disk_skipped=disk_skipped
+        queue,
+        job_list,
+        experiment_name,
+        config,
+        disk_skipped=disk_skipped,
+        registry=registry,
     )
 
 
@@ -1226,11 +1267,13 @@ def _monitor_jobs_basic(
     config: ExperimentConfig,
     *,
     disk_skipped: int = 0,
+    registry=None,
 ) -> List[TrialResult]:
     """Basic job monitoring without Rich UI."""
     from crsbench.distributed.queue import get_queue_stats
     from crsbench.evaluation.results import TrialMetadata
 
+    last_renew = time.monotonic()
     logger.info(f"\nMonitoring {len(job_list)} jobs for experiment: {experiment_name}")
 
     # Track jobs that have already had markers written
@@ -1349,6 +1392,11 @@ def _monitor_jobs_basic(
         if completed + failed >= len(job_list):
             break
 
+        if registry and time.monotonic() - last_renew >= 60:
+            if not registry.renew(experiment_name):
+                logger.warning("Experiment lock lost — another run may have taken over")
+            last_renew = time.monotonic()
+
         time.sleep(3)
 
     # Collect results
@@ -1393,6 +1441,7 @@ def _monitor_jobs_rich(
     config: ExperimentConfig,
     *,
     disk_skipped: int = 0,
+    registry=None,
 ) -> List[TrialResult]:
     """Monitor jobs with Rich UI."""
     from rich.console import Console, Group
@@ -1473,6 +1522,7 @@ def _monitor_jobs_rich(
 
         return Group(table, running_table)
 
+    last_renew = time.monotonic()
     with Live(generate_status_table(), refresh_per_second=1, console=console) as live:
         while True:
             # Check if all jobs completed and write markers incrementally
@@ -1533,6 +1583,13 @@ def _monitor_jobs_rich(
 
             if completed + failed >= len(job_list):
                 break
+
+            if registry and time.monotonic() - last_renew >= 60:
+                if not registry.renew(experiment_name):
+                    logger.warning(
+                        "Experiment lock lost — another run may have taken over"
+                    )
+                last_renew = time.monotonic()
 
             live.update(generate_status_table())
             time.sleep(1)
@@ -1602,7 +1659,7 @@ def prompt_queue_mode(existing: dict[str, dict]) -> str:
     print("=" * 60)  # noqa: T201
     print("\nHow do you want to proceed?")  # noqa: T201
     print("  [f] Fresh - purge all existing jobs and start from scratch")  # noqa: T201
-    print("  [c] Continue - skip existing, retry failed")  # noqa: T201
+    print("  [c] Continue - skip existing, recover orphaned started jobs")  # noqa: T201
     print("  [q] Quit - abort without changes")  # noqa: T201
     print()  # noqa: T201
 
@@ -1616,6 +1673,54 @@ def prompt_queue_mode(existing: dict[str, dict]) -> str:
         if choice == "q":
             return "quit"
         print("Invalid choice. Please enter 'f', 'c', or 'q'.")  # noqa: T201
+
+
+def _archive_trial_dir_for_retry(trial_dir: Path) -> bool:
+    """Archive a trial directory into retries/ and reset it for a clean retry."""
+    if not trial_dir.exists():
+        return True
+
+    retries_dir = trial_dir / "retries"
+    retries_dir.mkdir(parents=True, exist_ok=True)
+    attempt_name = datetime.now().strftime("attempt-%Y%m%d-%H%M%S")
+    archive_dir = retries_dir / attempt_name
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        for item in list(trial_dir.iterdir()):
+            if item.name == "retries":
+                continue
+            shutil.move(str(item), str(archive_dir / item.name))
+    except Exception as e:
+        logger.warning(f"Failed to prepare retry directory for {trial_dir}: {e}")
+        return False
+    return True
+
+
+def _prepare_trial_dir_for_retry(config: ExperimentConfig, job) -> bool:
+    """Archive failed trial directories (experiment/results filestores) for retry."""
+    kwargs = job.kwargs or {}
+    filestores = [config.experiment_filestore.resolve()]
+    if config.results_filestore:
+        results_root = config.results_filestore.resolve()
+        if results_root not in filestores:
+            filestores.append(results_root)
+
+    for filestore in filestores:
+        trial_dir = _build_trial_output_path(
+            filestore=filestore,
+            experiment_name=config.experiment,
+            crs=kwargs.get("crs", ""),
+            benchmark=kwargs.get("benchmark", ""),
+            harness=kwargs.get("harness_name", ""),
+            mode=kwargs.get("mode", ""),
+            sanitizer=kwargs.get("sanitizer", "address"),
+            trial_num=kwargs.get("trial_num", 0),
+            target_cpv_id=kwargs.get("target_cpv_id"),
+        )
+        if not _archive_trial_dir_for_retry(trial_dir):
+            return False
+    return True
 
 
 def get_crs_cpu_count(crs_name: str, crs_configs_dir: Path) -> int:
@@ -1704,6 +1809,9 @@ def run_experiment_distributed(
     experiment_name: str,
     config: ExperimentConfig,
     trials: List[Trial],
+    *,
+    queue_mode: str | None = None,
+    retry_failed: bool = False,
 ) -> None:
     """Run experiment using Redis queue-based distributed execution.
 
@@ -1712,74 +1820,102 @@ def run_experiment_distributed(
         config: Experiment configuration
         trials: List of Trial objects to execute
     """
-    from crsbench.distributed.queue import initialize_queue
+    from crsbench.distributed.common import normalize_redis_host
+    from crsbench.distributed.runtime_session import (
+        DistributedRuntimeSession,
+        LockContentionError,
+    )
 
     log_section("Running CRSBench in Distributed Mode (Redis)", width=60)
 
-    # Validate redis_host is provided
-    if not config.redis_host:
+    redis_host = normalize_redis_host(config.redis_host)
+    if not redis_host:
         raise ValueError("redis_host is required for distributed mode")
 
-    logger.info(f"Redis host: {config.redis_host}")
+    logger.info(f"Redis host: {redis_host}")
 
     # Mark this process as orchestrator for logging
     os.environ["CRSBENCH_ORCHESTRATOR"] = "1"
 
-    # Initialize queue
-    queue = initialize_queue(config.redis_host, experiment_name)
-    if queue is None:
-        raise RuntimeError(f"Failed to initialize Redis queue at {config.redis_host}")
+    session = DistributedRuntimeSession.for_run(
+        redis_host=redis_host, experiment_name=experiment_name
+    )
+    if session is None or session.trial_queue is None:
+        raise RuntimeError(f"Failed to initialize Redis queue at {redis_host}")
+    queue = session.trial_queue
 
     # Resolve CRS paths with defaults
     crs_configs_dir = config.crs_configs_dir.resolve()
 
     # Check for existing jobs in queue (queue sanity check)
     from crsbench.distributed.queue import (
-        clear_queue,
+        clear_experiment_jobs,
         get_existing_trials,
         handle_orphaned_jobs,
-        requeue_failed_jobs,
     )
 
-    existing = get_existing_trials(queue)
+    existing = get_existing_trials(queue, experiment_name=experiment_name)
     has_existing = any(existing.values())
 
-    # Queue mode: prompt if stale jobs exist, default to fresh
-    queue_mode = None
+    normalized_queue_mode = queue_mode.lower() if queue_mode else None
 
-    if has_existing and queue_mode is None:
-        # Stale jobs exist and no mode specified - prompt user
-        queue_mode = prompt_queue_mode(existing)
-        if queue_mode == "quit":
-            logger.info("Aborted by user")
-            return
+    if has_existing and normalized_queue_mode is None:
+        if sys.stdin.isatty():
+            normalized_queue_mode = prompt_queue_mode(existing)
+            if normalized_queue_mode == "quit":
+                logger.info("Aborted by user")
+                return
+        else:
+            normalized_queue_mode = "continue"
+            logger.info(
+                "Non-interactive mode detected with existing queue jobs; "
+                "using scoped queue mode: continue"
+            )
+
+    if has_existing and normalized_queue_mode == "quit":
+        logger.info("Aborted by queue-mode=quit")
+        return
 
     # Default to fresh if no existing jobs and no mode specified
-    if queue_mode is None:
-        queue_mode = "fresh"
+    if normalized_queue_mode is None:
+        normalized_queue_mode = "fresh"
 
     # TODO: too later to purge queue; as the old jobs are already taken by workers
     # Handle queue based on mode
-    if queue_mode == "fresh":
+    if normalized_queue_mode == "fresh":
         if has_existing:
             total_existing = sum(len(v) for v in existing.values())
-            logger.warning(f"Purging {total_existing} existing jobs from queue")
-            clear_queue(queue)
-    elif queue_mode == "continue":
+            logger.warning(
+                f"Purging {total_existing} existing jobs from queue for experiment={experiment_name}"
+            )
+            clear_experiment_jobs(queue, experiment_name)
+    elif normalized_queue_mode == "continue":
         # Handle orphaned started jobs (move to failed + retry)
         if existing["started"]:
             orphaned_count = handle_orphaned_jobs(queue, existing["started"])
             if orphaned_count > 0:
                 logger.info(f"Handled {orphaned_count} orphaned jobs")
 
-        # Requeue failed jobs (at end of queue - FIFO)
-        if existing["failed"]:
-            failed_count = requeue_failed_jobs(queue, list(existing["failed"].values()))
-            if failed_count > 0:
-                logger.info(f"Requeued {failed_count} failed jobs")
+        # Optional failed retries require explicit opt-in and clean trial dirs.
+        if retry_failed and existing["failed"]:
+            retried = 0
+            for failed_job in existing["failed"].values():
+                if not _prepare_trial_dir_for_retry(config, failed_job):
+                    continue
+                failed_job.meta["force_retry"] = True
+                failed_job.save_meta()
+                try:
+                    queue.enqueue_job(failed_job)
+                    retried += 1
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to requeue failed job {failed_job.id[:8]}: {e}"
+                    )
+            if retried > 0:
+                logger.info(f"Requeued {retried} failed jobs with clean retry dirs")
 
     # Filter trials if in continue mode
-    if queue_mode == "continue" and has_existing:
+    if normalized_queue_mode == "continue" and has_existing:
         # Build set of existing trial keys
         existing_keys = set()
         for status_dict in existing.values():
@@ -1876,6 +2012,10 @@ def run_experiment_distributed(
             else:
                 logger.debug(f"CRS {crs} has no memory limit configured")
 
+    cpu_tag = None
+    if config.resources:
+        cpu_tag = config.resources.cpu_tag
+
     # Generate 6-char random alphanumeric suffix (shared by all trials)
     trial_suffix = "_" + "".join(
         secrets.choice(string.ascii_lowercase + string.digits) for _ in range(6)
@@ -1884,61 +2024,89 @@ def run_experiment_distributed(
     # Generate timestamp once for all jobs in this experiment batch
     results_timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    jobs = []
-    for trial in trials:
-        bh = trial.benchmark_harness
-        cpu_count = crs_cpu_counts.get(trial.crs, 4)
-        memory_limit = crs_memory_limits.get(trial.crs)
+    # Acquire a distributed lock so only one orchestrator runs per
+    # experiment name at a time.  If the lock is already held, reject
+    # the second invocation immediately.
+    from crsbench.distributed.registry import RuntimeRegistration
 
-        # Build trial_id at enqueue time with random suffix
-        # Must be lowercase for Docker Compose project name compatibility
-        raw_trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{bh.harness.name}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
-        trial_id = sanitize_trial_id(raw_trial_id)
+    # Register experiment in the Redis registry so configless workers
+    # and evaluators can discover queues and resource requirements.
+    # Wrapped in try/finally to guarantee cleanup on crash or
+    # KeyboardInterrupt.
+    registration = RuntimeRegistration.from_experiment_config(config)
+    try:
+        try:
+            session.register_or_raise(registration)
+        except LockContentionError:
+            logger.error(
+                f"Experiment '{experiment_name}' is already running. "
+                "Use a different experiment name or wait for the current run to finish."
+            )
+            return
+        jobs = []
+        for trial in trials:
+            bh = trial.benchmark_harness
+            cpu_count = crs_cpu_counts.get(trial.crs, 4)
+            memory_limit = crs_memory_limits.get(trial.crs)
 
-        job = queue.enqueue(
-            "crsbench.distributed.jobs.run_crs_trial",
-            crs=trial.crs,
-            benchmark=bh.name,
-            harness_name=bh.harness.name,
-            harness_path=bh.harness.path,
-            trial_num=trial.trial_num,
-            trial_id=trial_id,
-            config_dict=config.model_dump(),
-            mode=trial.mode,
-            sanitizer=trial.sanitizer,
-            target_cpv_id=trial.target_cpv_id,
-            results_timestamp=results_timestamp,
-            job_timeout=config.max_total_time,
-            result_ttl=-1,  # Persist results forever
-            meta={
-                "crs": trial.crs,
-                "benchmark": bh.name,
-                "harness": bh.harness.name,
-                "mode": trial.mode,
-                "sanitizer": trial.sanitizer,
-                "trial_num": trial.trial_num,
-                "target_cpv_id": trial.target_cpv_id,
-                "cpu_count": cpu_count,  # CPU count from resource config
-                "memory_limit": memory_limit,  # Memory limit from resource config
-            },
+            # Build trial_id at enqueue time with random suffix
+            # Must be lowercase for Docker Compose project name compatibility
+            raw_trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{bh.harness.name}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
+            trial_id = sanitize_trial_id(raw_trial_id)
+
+            job = queue.enqueue(
+                "crsbench.distributed.jobs.run_crs_trial",
+                crs=trial.crs,
+                benchmark=bh.name,
+                harness_name=bh.harness.name,
+                harness_path=bh.harness.path,
+                trial_num=trial.trial_num,
+                trial_id=trial_id,
+                config_dict=config.model_dump(),
+                mode=trial.mode,
+                sanitizer=trial.sanitizer,
+                target_cpv_id=trial.target_cpv_id,
+                results_timestamp=results_timestamp,
+                job_timeout=config.max_total_time,
+                result_ttl=-1,  # Persist results forever
+                meta={
+                    "crs": trial.crs,
+                    "benchmark": bh.name,
+                    "harness": bh.harness.name,
+                    "mode": trial.mode,
+                    "sanitizer": trial.sanitizer,
+                    "trial_num": trial.trial_num,
+                    "target_cpv_id": trial.target_cpv_id,
+                    "cpu_count": cpu_count,  # CPU count from resource config
+                    "memory_limit": memory_limit,  # Memory limit from resource config
+                    "cpu_tag": cpu_tag,
+                    "experiment_name": experiment_name,
+                },
+            )
+            jobs.append(job)
+            logger.debug(
+                f"Enqueued job {job.id} for {trial.crs} on {bh.name}/{bh.harness.name} (trial {trial.trial_num})"
+            )
+
+        logger.info(f"✓ Enqueued {len(jobs)} jobs successfully")
+
+        # Monitor progress
+        logger.info("\nMonitoring job progress...")
+        results = monitor_jobs(
+            queue,
+            jobs,
+            experiment_name,
+            config,
+            disk_skipped=disk_skipped,
+            registry=session.registry,
         )
-        jobs.append(job)
-        logger.debug(
-            f"Enqueued job {job.id} for {trial.crs} on {bh.name}/{bh.harness.name} (trial {trial.trial_num})"
-        )
 
-    logger.info(f"✓ Enqueued {len(jobs)} jobs successfully")
+        # Generate final report
+        log_section("Experiment Complete - Generating Report", width=60)
 
-    # Monitor progress
-    logger.info("\nMonitoring job progress...")
-    results = monitor_jobs(
-        queue, jobs, experiment_name, config, disk_skipped=disk_skipped
-    )
-
-    # Generate final report
-    log_section("Experiment Complete - Generating Report", width=60)
-
-    generate_final_report(results, experiment_name, config)
+        generate_final_report(results, experiment_name, config)
+    finally:
+        session.cleanup()
 
     # Post-experiment operations
     # Cleanup bulky artifacts
@@ -1955,7 +2123,9 @@ def _cleanup_experiment_artifacts(experiment_name: str, config) -> None:
     """
     from crsbench.reporting.snapshot_loader import discover_trials
 
-    experiment_dir = Path(config.experiment_filestore) / experiment_name
+    experiment_dir = resolve_experiment_dir(
+        config.experiment_filestore, experiment_name
+    )
 
     if not experiment_dir.exists():
         logger.warning(f"Experiment directory not found for cleanup: {experiment_dir}")
@@ -2048,9 +2218,11 @@ def _generate_html_json_reports(experiment_name: str, config) -> None:
     """
     from crsbench.reporting import ReportGenerator
 
-    experiment_dir = Path(config.experiment_filestore) / experiment_name
+    experiment_dir = resolve_experiment_dir(
+        config.experiment_filestore, experiment_name
+    )
     report_dir = Path(config.report_filestore) / experiment_name
-    benchmarks_root = Path(config.benchmarks_root or "benchmarks")
+    benchmarks_root = resolve_benchmarks_root(config.benchmarks_root)
 
     # Check if experiment directory exists
     if not experiment_dir.exists():
@@ -2130,6 +2302,11 @@ def main() -> None:
 
         sys.exit(run_evaluator(args))
 
+    if args.command == "queue":
+        from crsbench.distributed.cli.queue_command import run_queue
+
+        sys.exit(run_queue(args))
+
     if args.command == "report":
         # Handle report command
         from crsbench.reporting.cli import run_report
@@ -2200,7 +2377,7 @@ def main() -> None:
         )
 
         # Filter benchmarks by mode early (before resolving harnesses)
-        benchmarks_root = config.benchmarks_root
+        benchmarks_root = resolve_benchmarks_root(config.benchmarks_root)
         mode_str = config.mode.value  # Get string value from enum
         if mode_str != "all":
             original_count = len(benchmark_names)
@@ -2258,7 +2435,13 @@ def main() -> None:
 
     # Run experiment in appropriate mode
     if use_distributed:
-        run_experiment_distributed(experiment_name, config, trial_matrix)
+        run_experiment_distributed(
+            experiment_name,
+            config,
+            trial_matrix,
+            queue_mode=getattr(args, "queue_mode", None),
+            retry_failed=bool(getattr(args, "retry_failed", False)),
+        )
     else:
         run_experiment_local(experiment_name, config, trial_matrix)
 

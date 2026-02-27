@@ -22,6 +22,12 @@ from crsbench.evaluation.litellm_tracker import (
 )
 from crsbench.evaluation.results import TrialMetadata, TrialResult
 from crsbench.evaluation.runner import BenchmarkFormatError, BenchmarkRunner
+from crsbench.evaluation.trial_paths import (
+    experiment_dir as resolve_experiment_dir,
+)
+from crsbench.evaluation.trial_paths import (
+    trial_relative_to_experiment,
+)
 from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.litellm_env import (
     required_env_errors_for_mode,
@@ -201,6 +207,16 @@ def _cleanup_llm_tracking(
         )
     except LiteLLMTrackerError as e:
         logger.error(f"Failed to write LLM logs file: {e}")
+
+    try:
+        # Write concise LLM summary (failure categories, per-model totals)
+        tracker.write_llm_summary_file(
+            api_key=api_key,
+            trial_id=trial_id,
+            output_path=trial_output_dir / "llm-summary.json",
+        )
+    except LiteLLMTrackerError as e:
+        logger.error(f"Failed to write LLM summary file: {e}")
 
     try:
         # Delete the key
@@ -773,6 +789,9 @@ def run_crs_trial(
     )
     start_time = time.time()
     crs_type = "bug-finding"  # Default, updated after detection
+    runtime_worker_name = (
+        os.environ.get("CRSBENCH_WORKER_DISPLAY_NAME") or socket.gethostname()
+    )
 
     # Update runtime job metadata for monitoring (RQ 2.x)
     # Note: Static fields (crs, benchmark, harness, mode, trial_num) are set at enqueue time
@@ -783,7 +802,7 @@ def run_crs_trial(
         if job:
             # Only set runtime fields (static fields already set at enqueue)
             job.meta["started_at"] = start_time
-            job.meta["worker_name"] = socket.gethostname()
+            job.meta["worker_name"] = runtime_worker_name
             job.save_meta()
             logger.debug(f"Updated runtime job metadata for job {job.id}")
     except Exception as e:
@@ -825,7 +844,8 @@ def run_crs_trial(
             )
         if allocated_memory is None and config.resources:
             allocated_memory = config.resources.memory_per_trial
-            logger.info(f"Using memory_per_trial from config: {allocated_memory}")
+            if allocated_memory:
+                logger.info(f"Using memory_per_trial from config: {allocated_memory}")
 
         # Determine whether to create a local cgroup for this trial.
         # If ci_supervisor already created a cgroup (distributed mode),
@@ -983,9 +1003,11 @@ def run_crs_trial(
             llm_tracker=llm_tracker,
             llm_api_key=llm_api_key,
             llm_trial_id=trial_id,
+            llm_accounting_settle_seconds=config.llm_accounting_settle_seconds,
             build_workers=config.build_workers,
             verify_workers=config.verify_workers,
             max_pov_variants_per_cpv=config.max_pov_variants_per_cpv,
+            patch_verify_variants=config.patch_verify_variants,
             redis_host=_resolve_redis_host(config),
             experiment_name=config.experiment,
             pov_dedup_strategy=config.pov_dedup_strategy,
@@ -1052,7 +1074,7 @@ def run_crs_trial(
                 hints_enabled=config.hints_enabled,
                 hints_corpus_level=config.hint_corpus_level,
             ),
-            worker_machine=socket.gethostname(),
+            worker_machine=runtime_worker_name,
             worker_trial_dir=str(trial_output_dir),
             build_mode=mode,
             sanitizer=sanitizer,
@@ -1152,7 +1174,7 @@ def run_crs_trial(
             if config.resources
             else None,
             target_cpv_id=target_cpv_id,
-            worker_machine=socket.gethostname(),
+            worker_machine=runtime_worker_name,
             worker_trial_dir=str(trial_output_dir),
         )
 
@@ -1193,8 +1215,10 @@ def run_crs_trial(
 
         # Per-trial copy if enabled (before cleanup)
         if config.copy_results_after_trial and config.results_filestore:
-            experiment_dir = config.experiment_filestore.resolve() / config.experiment
-            rel_path = trial_output_dir.relative_to(experiment_dir)
+            experiment_dir = resolve_experiment_dir(
+                config.experiment_filestore.resolve(), config.experiment
+            )
+            rel_path = trial_relative_to_experiment(trial_output_dir, experiment_dir)
             folder_name = _generate_results_folder_name(
                 config.experiment, results_timestamp
             )
@@ -1221,10 +1245,12 @@ def run_crs_trial(
             (trial_output_dir / ".fail").touch()
             # Per-trial copy if enabled (before cleanup, even for failed trials)
             if config.copy_results_after_trial and config.results_filestore:
-                experiment_dir = (
-                    config.experiment_filestore.resolve() / config.experiment
+                experiment_dir = resolve_experiment_dir(
+                    config.experiment_filestore.resolve(), config.experiment
                 )
-                rel_path = trial_output_dir.relative_to(experiment_dir)
+                rel_path = trial_relative_to_experiment(
+                    trial_output_dir, experiment_dir
+                )
                 folder_name = _generate_results_folder_name(
                     config.experiment, results_timestamp
                 )
@@ -1268,10 +1294,12 @@ def run_crs_trial(
             (trial_output_dir / ".fail").touch()
             # Per-trial copy if enabled (before cleanup, even for failed trials)
             if config.copy_results_after_trial and config.results_filestore:
-                experiment_dir = (
-                    config.experiment_filestore.resolve() / config.experiment
+                experiment_dir = resolve_experiment_dir(
+                    config.experiment_filestore.resolve(), config.experiment
                 )
-                rel_path = trial_output_dir.relative_to(experiment_dir)
+                rel_path = trial_relative_to_experiment(
+                    trial_output_dir, experiment_dir
+                )
                 folder_name = _generate_results_folder_name(
                     config.experiment, results_timestamp
                 )
@@ -1317,10 +1345,12 @@ def run_crs_trial(
             (trial_output_dir / ".fail").touch()
             # Per-trial copy if enabled (before cleanup, even for failed trials)
             if config.copy_results_after_trial and config.results_filestore:
-                experiment_dir = (
-                    config.experiment_filestore.resolve() / config.experiment
+                experiment_dir = resolve_experiment_dir(
+                    config.experiment_filestore.resolve(), config.experiment
                 )
-                rel_path = trial_output_dir.relative_to(experiment_dir)
+                rel_path = trial_relative_to_experiment(
+                    trial_output_dir, experiment_dir
+                )
                 folder_name = _generate_results_folder_name(
                     config.experiment, results_timestamp
                 )

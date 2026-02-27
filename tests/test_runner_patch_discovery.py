@@ -24,10 +24,10 @@ def test_discover_trial_patches_flat_with_target(tmp_path: Path) -> None:
         patch_dir, target_cpv_id="cpv_7"
     )
 
-    assert [(cpv, patch_id) for cpv, patch_id, _ in discovered] == [
-        ("cpv_7", "patch_0"),
-        ("cpv_7", "patch_1"),
-    ]
+    assert [cpv for cpv, _, _ in discovered] == ["cpv_7", "cpv_7"]
+    assert discovered[0][1].startswith("flat_a_")
+    assert discovered[1][1].startswith("flat_b_")
+    assert discovered[0][1] != discovered[1][1]
     assert [p.name for _, _, p in discovered] == ["a.diff", "b.diff"]
 
 
@@ -58,12 +58,32 @@ def test_discover_trial_patches_structured_layout(tmp_path: Path) -> None:
         patch_dir, target_cpv_id="cpv_unused"
     )
 
-    assert [(cpv, patch_id) for cpv, patch_id, _ in discovered] == [
-        ("cpv_0", "patch_0"),
-        ("cpv_0", "patch_1"),
-        ("cpv_1", "patch_0"),
-    ]
+    assert [cpv for cpv, _, _ in discovered] == ["cpv_0", "cpv_0", "cpv_1"]
+    patch_ids = [patch_id for _, patch_id, _ in discovered]
+    assert patch_ids[0].startswith("structured_a_")
+    assert patch_ids[1].startswith("structured_b_")
+    assert patch_ids[2].startswith("structured_c_")
+    assert len(set(patch_ids)) == 3
     assert [p.name for _, _, p in discovered] == ["a.diff", "b.diff", "c.diff"]
+
+
+def test_discover_trial_patches_mixed_layout_avoids_identity_collisions(
+    tmp_path: Path,
+) -> None:
+    patch_dir = tmp_path / "output" / "patches"
+    cpv0 = patch_dir / "cpv_0"
+    cpv0.mkdir(parents=True)
+    (cpv0 / "patch_0.diff").write_text("structured")
+    (patch_dir / "patch_0.diff").write_text("flat")
+
+    runner = _make_runner("bug-fixing")
+    discovered = runner._discover_trial_patches_for_verification(
+        patch_dir, target_cpv_id="cpv_0"
+    )
+
+    identities = [(cpv, patch_id) for cpv, patch_id, _ in discovered]
+    assert len(identities) == 2
+    assert len(set(identities)) == 2
 
 
 def test_find_trial_pov_for_cpv_prefers_direct_file(tmp_path: Path) -> None:

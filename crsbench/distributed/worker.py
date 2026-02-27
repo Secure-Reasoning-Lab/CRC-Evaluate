@@ -21,6 +21,14 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
+from crsbench.distributed.common import (
+    collect_validated_int_metadata,
+    discover_registered_experiments,
+    normalize_cpu_tag,
+    normalize_redis_host,
+    resolve_cli_or_first_metadata,
+    validate_optional_int_override,
+)
 from crsbench.distributed.queue import REDIS_AVAILABLE
 from crsbench.utils.logger import configure_logger, get_logger
 
@@ -92,7 +100,7 @@ def _trial_job_runner(
     """Adapter for ci_supervisor: delegates to evaluator's _run_single_job."""
     from crsbench.distributed.evaluator import _run_single_job
 
-    _run_single_job(redis_host, job_id, child_name=child_name)
+    _run_single_job(redis_host, job_id, child_name=child_name, execution_role="worker")
 
 
 def main(
@@ -105,6 +113,8 @@ def main(
     use_cpuset: bool = False,
     cores: Optional[str] = None,
     skip_cpus: Optional[str] = None,
+    cpu_tag: Optional[str] = None,
+    cores_per_job: int = DEFAULT_TRIAL_CORES_PER_JOB,
     log_level: str = "INFO",
 ) -> int:
     """
@@ -144,16 +154,42 @@ def main(
         sys.exit(1)
 
     # Resolve runtime configuration.
-    redis_host = redis_host or os.environ.get("CRSBENCH_REDIS_HOST", "localhost")
+    normalized_cli_redis_host = normalize_redis_host(redis_host)
+    if redis_host is not None and normalized_cli_redis_host is None:
+        logger.error(
+            "Invalid redis host override for worker. "
+            "Set redis_host to a non-empty hostname."
+        )
+        return 1
+    if normalized_cli_redis_host is not None:
+        redis_host = normalized_cli_redis_host
+    else:
+        env_redis_host = os.environ.get("CRSBENCH_REDIS_HOST")
+        if env_redis_host is not None:
+            redis_host = normalize_redis_host(env_redis_host)
+            if redis_host is None:
+                logger.error(
+                    "Invalid CRSBENCH_REDIS_HOST for worker. "
+                    "Set it to a non-empty hostname."
+                )
+                return 1
+        else:
+            redis_host = "localhost"
     experiment_name = experiment_name or "default"
     worker_name = worker_name or socket.gethostname()
 
-    from crsbench.distributed.queue import validate_queue_name_component
+    from crsbench.distributed.queue import (
+        resolve_queue_names,
+        validate_queue_name_component,
+    )
 
     validate_queue_name_component(experiment_name)
 
     # Resolve queue name
-    queue_name = queue_name or f"crsbench_{experiment_name}"
+    default_trial_queue, _build_queue, _verify_queue = resolve_queue_names(
+        experiment_name
+    )
+    queue_name = queue_name or default_trial_queue
 
     logger.info("=" * 60)
     logger.info("CRSBench Distributed Worker")
@@ -190,13 +226,14 @@ def main(
             verify_queue_name=queue_name,
             worker_name=worker_name,
             build_jobs=num_workers,
-            build_cores_per_job=DEFAULT_TRIAL_CORES_PER_JOB,
+            build_cores_per_job=cores_per_job,
             verify_jobs=0,
             job_runner=_trial_job_runner,
             use_cpuset=True,
             use_cgroups=use_cpuset,
             cores=cores,
             skip_cpus=skip_cpus,
+            cpu_tag=cpu_tag,
         )
 
     # Standard parallel workers
@@ -234,7 +271,12 @@ def _spawn_workers(
     Returns:
         Exit code (0 for success)
     """
-    queue_name = queue_name or f"crsbench_{experiment_name}"
+    from crsbench.distributed.queue import resolve_queue_names
+
+    default_trial_queue, _build_queue, _verify_queue = resolve_queue_names(
+        experiment_name
+    )
+    queue_name = queue_name or default_trial_queue
     logger.info(f"Spawning {num_workers} worker processes...")
 
     processes = []
@@ -339,7 +381,12 @@ def _run_worker(
     logger.info("Connected to Redis successfully")
 
     # Set up RQ queue and worker (RQ 2.x requires explicit connection)
-    queue_name = queue_name or f"crsbench_{experiment_name}"
+    from crsbench.distributed.queue import resolve_queue_names
+
+    default_trial_queue, _build_queue, _verify_queue = resolve_queue_names(
+        experiment_name
+    )
+    queue_name = queue_name or default_trial_queue
     queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
 
     # Store friendly worker name in environment for job metadata
@@ -388,7 +435,12 @@ def _run_worker_continuous(
     redis_connection = create_redis_connection(redis_host)
     logger.info("Connected to Redis successfully")
 
-    queue_name = queue_name or f"crsbench_{experiment_name}"
+    from crsbench.distributed.queue import resolve_queue_names
+
+    default_trial_queue, _build_queue, _verify_queue = resolve_queue_names(
+        experiment_name
+    )
+    queue_name = queue_name or default_trial_queue
     queue = rq.Queue(queue_name, connection=redis_connection)  # type: ignore[attr-defined]
 
     os.environ["CRSBENCH_WORKER_DISPLAY_NAME"] = worker_name
@@ -413,6 +465,8 @@ def run_worker_continuous(
     disk_check_interval: int = 60,
     cores: Optional[str] = None,
     skip_cpus: Optional[str] = None,
+    cpu_tag: Optional[str] = None,
+    cores_per_job: int = DEFAULT_TRIAL_CORES_PER_JOB,
     log_level: str = "INFO",
 ):
     """
@@ -442,12 +496,18 @@ def run_worker_continuous(
 
     worker_name = worker_name or socket.gethostname()
 
-    from crsbench.distributed.queue import validate_queue_name_component
+    from crsbench.distributed.queue import (
+        resolve_queue_names,
+        validate_queue_name_component,
+    )
 
     validate_queue_name_component(experiment_name)
 
     # Resolve queue name
-    queue_name = queue_name or f"crsbench_{experiment_name}"
+    default_trial_queue, _build_queue, _verify_queue = resolve_queue_names(
+        experiment_name
+    )
+    queue_name = queue_name or default_trial_queue
 
     # Always use supervisor mode for consistent behavior
     if use_cpuset:
@@ -463,7 +523,7 @@ def run_worker_continuous(
             verify_queue_name=queue_name,
             worker_name=worker_name,
             build_jobs=num_workers,
-            build_cores_per_job=DEFAULT_TRIAL_CORES_PER_JOB,
+            build_cores_per_job=cores_per_job,
             verify_jobs=0,
             job_runner=_trial_job_runner,
             use_cpuset=True,
@@ -472,6 +532,7 @@ def run_worker_continuous(
             disk_check_interval=disk_check_interval,
             cores=cores,
             skip_cpus=skip_cpus,
+            cpu_tag=cpu_tag,
         )
     else:
         logger.info(
@@ -490,6 +551,213 @@ def run_worker_continuous(
 
     if exit_code != 0:
         raise RuntimeError(f"Worker processes failed with exit code {exit_code}")
+
+
+def run_worker_configless(
+    redis_host: str = "localhost",
+    worker_name: Optional[str] = None,
+    *,
+    use_cpuset: bool = False,
+    cores: Optional[str] = None,
+    skip_cpus: Optional[str] = None,
+    cpu_tag: Optional[str] = None,
+    continuous: bool = True,
+    jobs_override: Optional[int] = None,
+    cores_per_job_override: Optional[int] = None,
+    minimum_disk_size: str = "10GB",
+    disk_check_interval: int = 60,
+    log_level: str = "INFO",
+) -> int:
+    """Run worker in configless mode — discover experiments from Redis registry.
+
+    Instead of requiring ``--experiment-config``, this function connects to
+    Redis, reads the experiment registry, and listens on all discovered trial
+    queues.
+
+    Args:
+        redis_host: Redis server hostname.
+        worker_name: Worker name for identification (default: hostname).
+        use_cpuset: Enable CPU affinity.
+        cores: CPU cores for worker pool.
+        skip_cpus: CPUs to exclude from allocation.
+        continuous: Run in continuous mode (poll for new experiments).
+        minimum_disk_size: Minimum free disk space before pausing.
+        disk_check_interval: Seconds between disk space checks.
+        log_level: Worker logging level.
+
+    Returns:
+        Exit code (0 for success, non-zero for errors).
+    """
+    configure_logger(level=log_level, sink=sys.stdout)
+
+    if not REDIS_AVAILABLE:
+        logger.error("Redis and RQ packages are required for worker execution")
+        return 1
+
+    normalized_redis_host = normalize_redis_host(redis_host)
+    if normalized_redis_host is None:
+        logger.error(
+            "Configless worker requires a Redis host. "
+            "Set CRSBENCH_REDIS_HOST to a non-empty hostname."
+        )
+        return 1
+    redis_host = normalized_redis_host
+
+    worker_name = worker_name or socket.gethostname()
+
+    logger.info("=" * 60)
+    logger.info("CRSBench Distributed Worker (configless)")
+    logger.info("=" * 60)
+    logger.info(f"Worker name: {worker_name}")
+    logger.info(f"Redis host: {redis_host}")
+    logger.info("Discovering experiments from registry...")
+    logger.info("=" * 60)
+
+    max_poll_attempts = None if continuous else 12
+    try:
+        _redis_conn, experiments = discover_registered_experiments(
+            redis_host,
+            max_poll_attempts=max_poll_attempts,
+        )
+    except RuntimeError as exc:
+        logger.error(f"{exc} — exiting")
+        return 1
+
+    # Use stable experiment ordering so metadata precedence is deterministic.
+    ordered_regs = [experiments[name] for name in sorted(experiments)]
+
+    # Collect all trial queue names
+    queue_names = sorted({reg.trial_queue for reg in ordered_regs})
+    try:
+        jobs_override = validate_optional_int_override(
+            value=jobs_override,
+            field_name="worker.jobs",
+            minimum=1,
+        )
+        cores_per_job_override = validate_optional_int_override(
+            value=cores_per_job_override,
+            field_name="worker.cores_per_job",
+            minimum=1,
+        )
+    except ValueError as exc:
+        logger.error(str(exc))
+        return 1
+
+    try:
+        metadata_jobs = collect_validated_int_metadata(
+            registrations=ordered_regs,
+            attr_name="worker_jobs",
+            field_name="worker.jobs",
+            minimum=1,
+        )
+        metadata_cores_per_job = collect_validated_int_metadata(
+            registrations=ordered_regs,
+            attr_name="worker_cores_per_job",
+            field_name="worker.cores_per_job",
+            minimum=1,
+        )
+        if not metadata_cores_per_job:
+            metadata_cores_per_job = collect_validated_int_metadata(
+                registrations=ordered_regs,
+                attr_name="cores_per_trial",
+                field_name="resources.cores_per_trial",
+                minimum=1,
+            )
+    except RuntimeError as exc:
+        logger.error(str(exc))
+        return 1
+    metadata_worker_cores = [
+        reg.worker_cores for reg in ordered_regs if reg.worker_cores is not None
+    ]
+    metadata_worker_skip = [
+        reg.worker_skip_cpus for reg in ordered_regs if reg.worker_skip_cpus is not None
+    ]
+    metadata_worker_cpu_tags: list[str] = []
+    for reg in ordered_regs:
+        candidate_tag = normalize_cpu_tag(reg.worker_cpu_tag) or normalize_cpu_tag(
+            reg.cpu_tag
+        )
+        if candidate_tag is not None:
+            metadata_worker_cpu_tags.append(candidate_tag)
+    resolved_jobs = (
+        jobs_override
+        if jobs_override is not None
+        else (max(metadata_jobs) if metadata_jobs else 1)
+    )
+    resolved_cores_per_job = (
+        cores_per_job_override
+        if cores_per_job_override is not None
+        else (
+            max(metadata_cores_per_job)
+            if metadata_cores_per_job
+            else DEFAULT_TRIAL_CORES_PER_JOB
+        )
+    )
+    resolved_cores = resolve_cli_or_first_metadata(
+        cli_value=cores,
+        metadata_values=metadata_worker_cores,
+        field_name="worker.cores",
+    )
+    resolved_skip_cpus = resolve_cli_or_first_metadata(
+        cli_value=skip_cpus,
+        metadata_values=metadata_worker_skip,
+        field_name="worker.skip_cpus",
+    )
+    resolved_cpu_tag: Optional[str]
+    if cpu_tag is not None:
+        resolved_cpu_tag = normalize_cpu_tag(cpu_tag)
+    else:
+        distinct_cpu_tags = sorted(set(metadata_worker_cpu_tags))
+        if len(distinct_cpu_tags) > 1:
+            logger.error(
+                "Conflicting worker.cpu_tag/resources.cpu_tag metadata across "
+                "experiments. Set --cpu-tag explicitly to run this worker."
+            )
+            return 1
+        resolved_cpu_tag = distinct_cpu_tags[0] if distinct_cpu_tags else None
+    logger.info(f"Discovered {len(experiments)} experiment(s), queues: {queue_names}")
+    logger.info(
+        f"Worker resource profile (CLI > metadata > default): jobs={resolved_jobs}, "
+        f"cores_per_job={resolved_cores_per_job}, "
+        f"cores={resolved_cores}, skip_cpus={resolved_skip_cpus}, "
+        f"cpu_tag={resolved_cpu_tag}"
+    )
+
+    def _refresh_trial_queues(redis_conn):
+        from crsbench.distributed.registry import RegistryClient
+
+        registry = RegistryClient(redis_conn)
+        refreshed = registry.list_experiments()
+        if not refreshed:
+            return [], []
+        refreshed_trial_queues = sorted(
+            {refreshed[name].trial_queue for name in sorted(refreshed)}
+        )
+        return refreshed_trial_queues, []
+
+    # Use multi-queue supervisor for both cpuset and non-cpuset modes so
+    # configless workers can dynamically adopt queues for new experiments.
+    from crsbench.distributed.ci_supervisor import run_multi_queue_supervisor
+
+    return run_multi_queue_supervisor(
+        redis_host=redis_host,
+        build_queue_names=queue_names,
+        verify_queue_names=[],
+        worker_name=worker_name,
+        build_jobs=resolved_jobs,
+        build_cores_per_job=resolved_cores_per_job,
+        verify_jobs=0,
+        job_runner=_trial_job_runner,
+        use_cpuset=use_cpuset,
+        use_cgroups=use_cpuset,
+        cores=resolved_cores,
+        skip_cpus=resolved_skip_cpus,
+        minimum_disk_size=minimum_disk_size,
+        disk_check_interval=disk_check_interval,
+        continuous=continuous,
+        queue_refresher=_refresh_trial_queues,
+        cpu_tag=resolved_cpu_tag,
+    )
 
 
 if __name__ == "__main__":

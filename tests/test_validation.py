@@ -21,6 +21,7 @@ from crsbench.validation.schemas import (
     ProjectConfig,
     RtsMode,
     Vulnerability,
+    WorkerConfig,
 )
 from pydantic import ValidationError as PydanticValidationError
 
@@ -176,6 +177,15 @@ class TestHarnessFileModel:
         """Test harness without vulnerabilities (distractor harness)."""
         harness = HarnessFile(name="distractor", path="/src/project/test/distractor.c")
         assert harness.vulns == []
+
+    @pytest.mark.parametrize(
+        "invalid_name",
+        ["", "   ", "../escape", "nested/name", "/abs/harness"],
+    )
+    def test_harness_rejects_invalid_name_segments(self, invalid_name: str):
+        """Harness name must be a safe layout segment."""
+        with pytest.raises(PydanticValidationError):
+            HarnessFile(name=invalid_name, path="/src/project/test/harness.c")
 
 
 # ============================================================================
@@ -817,6 +827,50 @@ class TestExperimentConfigSchema:
             benchmarks_root="/custom/benchmarks",
         )
         assert config.benchmarks_root == Path("/custom/benchmarks")
+
+    def test_experiment_config_blank_benchmarks_root_uses_default(self):
+        """Blank benchmarks_root should normalize to default benchmarks path."""
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
+            max_total_time=86400,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["test-crs"],
+            benchmarks=["test-bench"],
+            benchmarks_root="   ",
+            benchmark_suites_root="",
+        )
+        assert config.benchmarks_root == Path("benchmarks").resolve()
+        assert config.benchmark_suites_root == Path("benchmark-suites").resolve()
+
+    def test_worker_config_blank_optional_paths_become_none(self):
+        """Blank worker path overrides should be treated as unset."""
+        worker = WorkerConfig(
+            experiment_filestore="  ",
+            report_filestore="",
+            benchmarks_root=" ",
+            benchmark_suites_root="\t",
+            registry_dir="\n",
+            crs_configs_dir="",
+            oss_fuzz_path=" ",
+            results_filestore="",
+        )
+        assert worker.experiment_filestore is None
+        assert worker.report_filestore is None
+        assert worker.benchmarks_root is None
+        assert worker.benchmark_suites_root is None
+        assert worker.registry_dir is None
+        assert worker.crs_configs_dir is None
+        assert worker.oss_fuzz_path is None
+        assert worker.results_filestore is None
+
+    def test_worker_config_redis_host_none_string_becomes_none(self):
+        worker = WorkerConfig(redis_host=" none ")
+        assert worker.redis_host is None
 
     def test_experiment_config_model_dump(self):
         """Test experiment config model_dump() method (Pydantic V2)."""

@@ -4,6 +4,7 @@ import argparse
 import traceback
 from pathlib import Path
 
+from crsbench.evaluation.trial_paths import experiment_dir as resolve_experiment_dir
 from crsbench.reporting.errors import ReportError
 from crsbench.reporting.orchestrator import ReportGenerator
 from crsbench.utils.logger import configure_logger, get_logger
@@ -203,7 +204,7 @@ def _generate_experiment_report(
     else:
         experiment_name = args.experiment
         experiment_filestore = Path(args.experiment_filestore)
-        experiment_dir = experiment_filestore / experiment_name
+        experiment_dir = resolve_experiment_dir(experiment_filestore, experiment_name)
 
     output_dir = args.output / experiment_name
     benchmarks_root = Path(args.benchmarks_root)

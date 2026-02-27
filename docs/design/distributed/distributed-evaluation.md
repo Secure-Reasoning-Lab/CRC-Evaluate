@@ -9,6 +9,27 @@
 
 ## 1. Overview
 
+### 1.3 Current Implementation Notes (2026-02)
+
+The evaluator has three runtime modes in the current implementation:
+
+- Configless (default): no `--experiment-config`, no `--ci`
+- Config-pinned: `--experiment-config <yaml>`
+- CI standalone: `--ci`
+
+In configless mode, evaluator behavior is:
+
+1. Poll Redis registry until at least one experiment is registered.
+2. Discover build/verify queues from registry entries.
+3. Start multi-queue supervisor and process build + verify queues.
+
+Important constraints for configless multi-experiment operation:
+
+- All discovered experiments must have the same `benchmarks_root`.
+- All discovered experiments must have the same `oss_fuzz_path`.
+- Registry is snapshotted at startup; evaluator does not dynamically subscribe to newly added experiments after startup.
+- Verifier timeout is shared as the max `per_pov_verify_timeout` across discovered experiments.
+
 ### 1.1 Goals
 
 - Decouple POV verification (variant building + reproduce) from CRS trial execution
@@ -92,6 +113,7 @@ Same as existing infrastructure:
 **Command:** `crsbench evaluator`
 
 Follows the `add_evaluator_subparser()` pattern from `worker_command.py`.
+`--experiment-config` is optional (configless discovery is the default when omitted).
 
 **File:** `crsbench/distributed/cli/evaluator_command.py`
 
@@ -103,8 +125,8 @@ def add_evaluator_subparser(subparsers) -> None:
     )
 
     evaluator_parser.add_argument(
-        "--experiment-config", type=str, required=True,
-        help="Path to experiment configuration YAML file",
+        "--experiment-config", type=str, required=False, default=None,
+        help="Focus on a specific experiment (default: discover all from registry)",
     )
     evaluator_parser.add_argument(
         "--build-jobs", type=int, default=1,
@@ -130,13 +152,20 @@ add_evaluator_subparser(subparsers)
 
 ### 3.2 Startup Sequence
 
-1. Load experiment config from `--experiment-config`
-2. Parse benchmark list from config (scoped to experiment)
-3. Build ALL variant Docker images for listed benchmarks using `OSSFuzzBuilder`
-4. Cache build results in `VerificationEngine._built_results` keyed by benchmark name
-5. Connect to Redis, start listening on `crsbench_{exp}_verify` queue
+Config-pinned mode (`--experiment-config`):
 
-Building at startup ensures variants are ready before any verify job arrives.
+1. Load experiment config from `--experiment-config`
+2. Resolve queues for that experiment
+3. Enqueue pre-build jobs for experiment benchmarks
+4. Start dual-queue supervisor (`build` + `verify`)
+
+Configless mode (default):
+
+1. Poll registry until experiments are available
+2. Resolve queue lists from registry (`*_build`, `*_verify`)
+3. Start multi-queue supervisor over discovered queues
+
+Build activity happens lazily as workers enqueue build jobs; configless startup does not trigger an eager pre-build phase.
 
 ### 3.3 Supervisor Pattern
 
@@ -147,8 +176,9 @@ The evaluator supervisor mirrors `worker.py _run_supervisor()`:
 ```python
 def _run_evaluator_supervisor(redis_host, experiment_name, max_jobs, ...):
     cpu_pool = CPUPool() if use_cpuset else None
+    trial_q, build_q, verify_q = resolve_queue_names(experiment_name)
     verify_queue = rq.Queue(
-        f"crsbench_{experiment_name}_verify",
+        verify_q,
         connection=redis_conn,
     )
 
@@ -224,10 +254,11 @@ Jobs are batched per-trial: all POVs discovered in one snapshot cycle are bundle
 
 | Queue | Name | Consumers | Purpose |
 |-------|------|-----------|---------|
-| Trial queue | `crsbench_{experiment_name}` | Workers | CRS trial execution |
-| Verify queue | `crsbench_{experiment_name}_verify` | Evaluators | POV verification |
+| Trial queue | `crsbench_trial` (flat default) / `crsbench_{experiment_name}` (legacy) | Workers | CRS trial execution |
+| Verify queue | `crsbench_verify` (flat default) / `crsbench_{experiment_name}_verify` (legacy) | Evaluators | POV verification |
 
 Both queues use the same Redis/Valkey instance. Multiple evaluators can share the same verify queue (RQ handles distribution).
+Queue names are resolved via runtime queue model (`CRSBENCH_QUEUE_MODEL`), not hardcoded by consumers.
 
 ### 5.2 Job Configuration
 
@@ -326,12 +357,14 @@ run_crs_trial() -> discovers POVs in trial_output_dir/output/povs
 
 ### 8.1 Evaluator Build Strategy
 
-The evaluator builds ALL variant images at startup before listening on the verify queue:
+Current behavior in configless mode uses queue-driven lazy builds:
 
-1. Load experiment config to determine benchmark list
-2. For each benchmark, use `OSSFuzzBuilder.create_build_plan()` + `execute_plan()`
-3. Cache build results in `VerificationEngine._built_results` keyed by benchmark name
-4. Only after all builds complete does the evaluator start consuming from the queue
+1. Discover build/verify queues from registry.
+2. Start supervisor immediately over build + verify queues.
+3. Consume build jobs lazily from build queues as workers enqueue them.
+4. Build jobs execute with queue priority before verify jobs when both are pending.
+
+Config-pinned mode (`--experiment-config`) may still enqueue startup pre-builds for its single target experiment.
 
 ### 8.2 Shared Build Infrastructure
 
@@ -342,7 +375,7 @@ The evaluator uses the same build pipeline as `crsbench benchmark ci build`:
 
 ### 8.3 Unknown Benchmark Handling
 
-If a verify job arrives for a benchmark not in the experiment config (and therefore not pre-built), the evaluator logs an error and fails the job. The worker sees the failure when polling.
+If a verify job arrives before required builds are available, it remains queued until its corresponding build jobs complete; build queues are prioritized over verify queues.
 
 ## 9. CPU / cgroup Allocation
 
@@ -389,7 +422,7 @@ Worker config flag `skip_verification: true` skips inline verification entirely 
 
 ### 11.1 Evaluator Config
 
-The evaluator reads paths from the experiment config YAML:
+Config-pinned mode (`--experiment-config`) reads paths from that YAML:
 
 | Field | Purpose |
 |-------|---------|
@@ -398,10 +431,16 @@ The evaluator reads paths from the experiment config YAML:
 
 ### 11.2 Experiment Config
 
-No new fields needed in `ExperimentConfig`. The evaluator reads the same config as workers to determine:
-- Which benchmarks to build variants for
-- `max_total_time` for job timeout
-- Build settings (sanitizers, incremental build, etc.)
+Configless mode reads runtime registration from Redis (published by orchestrator) to determine:
+
+- Queue names (`trial`, `build`, `verify`)
+- Benchmark list and mode metadata
+- `oss_fuzz_path` and `benchmarks_root`
+- Per-experiment verify timeout metadata
+
+`ExperimentConfig` now supports an optional `evaluator:` block. In configless mode,
+the orchestrator publishes `evaluator.*` runtime hints into the registry, and the
+evaluator resolves resources with precedence `CLI > registry metadata > defaults`.
 
 ### 11.3 Evaluator-Specific CLI Args
 
@@ -419,12 +458,11 @@ No new fields needed in `ExperimentConfig`. The evaluator reads the same config 
 
 ## 13. Future Enhancements
 
-- **Lazy variant building:** Build on first verify job for a benchmark instead of all at startup
 - **Evaluator health endpoint:** HTTP endpoint for monitoring evaluator status and build cache
 - **Result streaming:** Push results to orchestrator via Redis pub/sub instead of worker polling
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: 2026-02-01
+**Document Version**: 1.1
+**Last Updated**: 2026-02-26
 **Next Review**: After Phase 20 implementation

@@ -290,16 +290,9 @@ def docker_compose_down_cleanup(work_dir: Path) -> None:
             ):
                 logger.warning(f"Failed to run docker compose down for {compose_file}")
 
-        # Prune dangling Docker networks left by killed oss-crs processes
-        try:
-            subprocess.run(
-                ["docker", "network", "prune", "-f"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
-            logger.debug("Failed to prune Docker networks")
+        # Intentionally avoid daemon-wide ``docker network prune`` here.
+        # Global pruning can race with other concurrent trials that are
+        # creating/using compose networks on the same Docker host.
     except Exception:
         logger.warning(f"Failed during Docker cleanup for work_dir {work_dir}")
 

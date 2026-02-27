@@ -240,6 +240,44 @@ class TestSnapshotCapture:
         assert len(snapshots) == 3
         assert all(s.is_complete for s in snapshots)
 
+    def test_refresh_final_symlink_after_manual_capture(self, tmp_path):
+        """Manual capture path should refresh snapshot-final symlink."""
+        trial_dir = self.setup_trial_dir(tmp_path)
+        manager = SnapshotManager(trial_dir, snapshot_period=60)
+
+        manager.capture_snapshot()
+        manager.refresh_final_symlink()
+
+        final_link = trial_dir / "snapshot-final.tar.gz"
+        assert final_link.is_symlink()
+        assert final_link.readlink().name == "snapshot-0001.tar.gz"
+
+    def test_refresh_final_symlink_waits_for_capture_lock(self, tmp_path):
+        """refresh_final_symlink should serialize with in-flight capture."""
+        trial_dir = self.setup_trial_dir(tmp_path)
+        manager = SnapshotManager(trial_dir, snapshot_period=60)
+        manager.capture_snapshot()
+
+        done = threading.Event()
+
+        manager._capture_lock.acquire()
+        try:
+            t = threading.Thread(
+                target=lambda: (
+                    manager.refresh_final_symlink(),
+                    done.set(),
+                ),
+                daemon=True,
+            )
+            t.start()
+            time.sleep(0.05)
+            assert not done.is_set()
+        finally:
+            manager._capture_lock.release()
+
+        t.join(timeout=1.0)
+        assert done.is_set()
+
 
 class TestSnapshotThread:
     """Test snapshot thread lifecycle."""

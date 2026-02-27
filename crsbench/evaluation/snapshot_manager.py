@@ -99,6 +99,7 @@ class SnapshotManager:
         self.cycle = 0
         self.running = False
         self.shutdown_event = threading.Event()
+        self._capture_lock = threading.Lock()
 
         logger.info(
             f"SnapshotManager initialized: period={snapshot_period}s, trial_dir={trial_dir}"
@@ -144,7 +145,7 @@ class SnapshotManager:
 
         finally:
             self.running = False
-            self._create_final_symlink()
+            self.refresh_final_symlink()
             logger.info(f"Snapshot thread stopped (captured {self.cycle} snapshots)")
 
     def stop(self):
@@ -183,121 +184,128 @@ class SnapshotManager:
 
         Errors are logged but not raised (allows continuing to next snapshot).
         """
-        self.cycle += 1
-        snapshot_timestamp = time.time()
-        elapsed_time = snapshot_timestamp - self.trial_start_time
-        running_elapsed_time = (
-            snapshot_timestamp - self.crs_run_start_time
-            if self.crs_run_start_time
-            else None
-        )
-
-        # Log running time if CRS has started, otherwise log total elapsed time
-        if running_elapsed_time is not None:
-            logger.info(
-                f"Capturing snapshot {self.cycle} (running: {running_elapsed_time:.1f}s)"
-            )
-        else:
-            logger.info(
-                f"Capturing snapshot {self.cycle} (elapsed: {elapsed_time:.1f}s)"
+        with self._capture_lock:
+            self.cycle += 1
+            snapshot_timestamp = time.time()
+            elapsed_time = snapshot_timestamp - self.trial_start_time
+            running_elapsed_time = (
+                snapshot_timestamp - self.crs_run_start_time
+                if self.crs_run_start_time
+                else None
             )
 
-        # Create temp directory for snapshot contents
-        temp_dir = self.trial_dir / f".snapshot-{self.cycle:04d}"
-        temp_dir.mkdir(exist_ok=True)
+            # Log running time if CRS has started, otherwise log total elapsed time
+            if running_elapsed_time is not None:
+                logger.info(
+                    f"Capturing snapshot {self.cycle} (running: {running_elapsed_time:.1f}s)"
+                )
+            else:
+                logger.info(
+                    f"Capturing snapshot {self.cycle} (elapsed: {elapsed_time:.1f}s)"
+                )
 
-        # Track captured content flags for return value
-        has_config = False
-        has_execution_metadata = False
-        has_llm_usage = False
-        has_crs_log = False
-        has_povs = False
-        has_patches = False
-        has_corpus = False
-        has_crs_data = False
+            # Create temp directory for snapshot contents
+            temp_dir = self.trial_dir / f".snapshot-{self.cycle:04d}"
+            temp_dir.mkdir(exist_ok=True)
 
-        try:
-            # Capture all snapshot data (tracking what was captured)
-            self._capture_metadata(temp_dir, elapsed_time, running_elapsed_time)
+            # Track captured content flags for return value
+            has_config = False
+            has_execution_metadata = False
+            has_llm_usage = False
+            has_crs_log = False
+            has_povs = False
+            has_patches = False
+            has_corpus = False
+            has_crs_data = False
 
-            has_config = self._capture_config(temp_dir)
-            has_execution_metadata = self._capture_execution_metadata(temp_dir)
-            has_llm_usage = self._capture_llm_usage(temp_dir)
-            has_crs_log = self._capture_crs_log(temp_dir)
+            try:
+                # Capture all snapshot data (tracking what was captured)
+                self._capture_metadata(temp_dir, elapsed_time, running_elapsed_time)
 
-            has_povs = self._capture_povs(temp_dir)
-            has_patches = self._capture_patches(temp_dir)
-            has_corpus = self._capture_corpus(temp_dir)
-            has_crs_data = self._capture_crs_data(temp_dir)
+                has_config = self._capture_config(temp_dir)
+                has_execution_metadata = self._capture_execution_metadata(temp_dir)
+                has_llm_usage = self._capture_llm_usage(temp_dir)
+                has_crs_log = self._capture_crs_log(temp_dir)
 
-            # Capture coverage snapshot if coverage manager is available
-            coverage_snapshot = None
-            if self.coverage_manager:
-                try:
-                    coverage_snapshot = self.coverage_manager.on_snapshot(self.cycle)
-                    self._capture_coverage(temp_dir, coverage_snapshot)
-                except Exception as e:
-                    logger.warning(f"Failed to capture coverage snapshot: {e}")
+                has_povs = self._capture_povs(temp_dir)
+                has_patches = self._capture_patches(temp_dir)
+                has_corpus = self._capture_corpus(temp_dir)
+                has_crs_data = self._capture_crs_data(temp_dir)
 
-            # Capture POV verification snapshot if POV verification manager is available
-            if self.pov_verification_manager:
-                try:
-                    pov_snapshot = self.pov_verification_manager.on_snapshot(self.cycle)
-                    self._capture_pov_verification(temp_dir, pov_snapshot)
-                except Exception as e:
-                    logger.warning(f"Failed to capture POV verification snapshot: {e}")
+                # Capture coverage snapshot if coverage manager is available
+                coverage_snapshot = None
+                if self.coverage_manager:
+                    try:
+                        coverage_snapshot = self.coverage_manager.on_snapshot(
+                            self.cycle
+                        )
+                        self._capture_coverage(temp_dir, coverage_snapshot)
+                    except Exception as e:
+                        logger.warning(f"Failed to capture coverage snapshot: {e}")
 
-            # Capture patch verification snapshot if patch verification manager is available
-            if self.patch_verification_manager:
-                try:
-                    patch_snapshot = self.patch_verification_manager.on_snapshot(
-                        self.cycle
-                    )
-                    self._capture_patch_verification(temp_dir, patch_snapshot)
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to capture patch verification snapshot: {e}"
-                    )
+                # Capture POV verification snapshot if POV verification manager is available
+                if self.pov_verification_manager:
+                    try:
+                        pov_snapshot = self.pov_verification_manager.on_snapshot(
+                            self.cycle
+                        )
+                        self._capture_pov_verification(temp_dir, pov_snapshot)
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to capture POV verification snapshot: {e}"
+                        )
 
-            # Compress to tar.gz
-            archive_path = self.trial_dir / f"snapshot-{self.cycle:04d}.tar.gz"
-            self._create_tar_gz(temp_dir, archive_path)
+                # Capture patch verification snapshot if patch verification manager is available
+                if self.patch_verification_manager:
+                    try:
+                        patch_snapshot = self.patch_verification_manager.on_snapshot(
+                            self.cycle
+                        )
+                        self._capture_patch_verification(temp_dir, patch_snapshot)
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to capture patch verification snapshot: {e}"
+                        )
 
-            # Update snapshot-latest symlink
-            self._update_latest_symlink(archive_path)
+                # Compress to tar.gz
+                archive_path = self.trial_dir / f"snapshot-{self.cycle:04d}.tar.gz"
+                self._create_tar_gz(temp_dir, archive_path)
 
-            # Mark complete
-            marker_path = self.trial_dir / f"snapshot-{self.cycle:04d}.complete"
-            marker_path.touch()
+                # Update snapshot-latest symlink
+                self._update_latest_symlink(archive_path)
 
-            # Update LLM logs file in trial directory (not in snapshot)
-            self._update_llm_logs()
+                # Mark complete
+                marker_path = self.trial_dir / f"snapshot-{self.cycle:04d}.complete"
+                marker_path.touch()
 
-            logger.info(f"Snapshot {self.cycle} completed: {archive_path.name}")
+                # Update LLM logs file in trial directory (not in snapshot)
+                self._update_llm_logs()
 
-            # Create and return Snapshot object
-            return Snapshot(
-                cycle=self.cycle,
-                timestamp=snapshot_timestamp,
-                elapsed_time=elapsed_time,
-                snapshot_period=self.snapshot_period,
-                running_elapsed_time=running_elapsed_time,
-                archive_path=archive_path,
-                is_complete=True,
-                has_config=has_config,
-                has_execution_metadata=has_execution_metadata,
-                has_llm_usage=has_llm_usage,
-                has_crs_log=has_crs_log,
-                has_povs=has_povs,
-                has_patches=has_patches,
-                has_corpus=has_corpus,
-                has_crs_data=has_crs_data,
-            )
+                logger.info(f"Snapshot {self.cycle} completed: {archive_path.name}")
 
-        finally:
-            # Always cleanup temp directory
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
+                # Create and return Snapshot object
+                return Snapshot(
+                    cycle=self.cycle,
+                    timestamp=snapshot_timestamp,
+                    elapsed_time=elapsed_time,
+                    snapshot_period=self.snapshot_period,
+                    running_elapsed_time=running_elapsed_time,
+                    archive_path=archive_path,
+                    is_complete=True,
+                    has_config=has_config,
+                    has_execution_metadata=has_execution_metadata,
+                    has_llm_usage=has_llm_usage,
+                    has_crs_log=has_crs_log,
+                    has_povs=has_povs,
+                    has_patches=has_patches,
+                    has_corpus=has_corpus,
+                    has_crs_data=has_crs_data,
+                )
+
+            finally:
+                # Always cleanup temp directory
+                if temp_dir.exists():
+                    shutil.rmtree(temp_dir, ignore_errors=True)
 
     def _sleep_until_next_snapshot(self) -> bool:
         """Sleep until next snapshot period.
@@ -417,6 +425,11 @@ class SnapshotManager:
                 api_key=self.llm_api_key,
                 trial_id=self.llm_trial_id,
                 output_path=output_path,
+            )
+            self.llm_tracker.write_llm_summary_file(
+                api_key=self.llm_api_key,
+                trial_id=self.llm_trial_id,
+                output_path=self.trial_dir / "llm-summary.json",
             )
             logger.debug("Updated LLM logs file")
         except Exception as e:
@@ -579,6 +592,11 @@ class SnapshotManager:
         # Create symlink to final snapshot
         final_link.symlink_to(final_archive_name)
         logger.info(f"Created snapshot-final.tar.gz -> {final_archive_name}")
+
+    def refresh_final_symlink(self) -> None:
+        """Refresh snapshot-final.tar.gz to the latest captured cycle."""
+        with self._capture_lock:
+            self._create_final_symlink()
 
     def _capture_coverage(self, temp_dir: Path, coverage_snapshot) -> bool:
         """Capture coverage snapshot data.

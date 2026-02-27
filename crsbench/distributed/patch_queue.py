@@ -8,6 +8,7 @@ unit test) go to the VERIFY queue (1 CPU) with RQ dependency on the build.
 Follows the same pattern as verify_queue.py for POV verification.
 """
 
+import os
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -23,6 +24,40 @@ if TYPE_CHECKING:
     import redis
 
 logger = get_logger(__name__)
+
+
+def _error_result_from_rq_job(job: Any, *, default_error: str) -> dict[str, Any]:
+    """Build a terminal error verdict from an RQ patch verify job."""
+    raw_args = getattr(job, "args", None)
+    raw_kwargs = getattr(job, "kwargs", None)
+    payload: dict[str, Any] = {}
+    if isinstance(raw_args, dict):
+        payload = raw_args
+    elif (
+        isinstance(raw_args, (list, tuple))
+        and raw_args
+        and isinstance(raw_args[0], dict)
+    ):
+        payload = raw_args[0]
+    elif isinstance(raw_kwargs, dict):
+        payload = raw_kwargs
+    patch_payload = payload.get("patch")
+    patch_id = (
+        patch_payload.get("patch_id", "") if isinstance(patch_payload, dict) else ""
+    )
+    return {
+        "trial_id": payload.get("trial_id", ""),
+        "benchmark": payload.get("benchmark", ""),
+        "harness": payload.get("harness", ""),
+        "cpv_id": payload.get("cpv_id", ""),
+        "patch_id": patch_id,
+        "pov_test_passed": None,
+        "unit_test_passed": None,
+        "status": "error",
+        "details": "",
+        "error": default_error[:500],
+        "completed_at": time.time(),
+    }
 
 
 def initialize_patch_queues(
@@ -46,11 +81,11 @@ def initialize_patch_queues(
         logger.debug("Redis/RQ packages not installed, patch queues unavailable")
         return None, None
 
-    from crsbench.distributed.queue import validate_queue_name_component
+    from crsbench.distributed.queue import resolve_queue_names
 
-    validate_queue_name_component(experiment_name)
-    build_queue_name = f"crsbench_{experiment_name}_build"
-    verify_queue_name = f"crsbench_{experiment_name}_verify"
+    _trial_queue, build_queue_name, verify_queue_name = resolve_queue_names(
+        experiment_name
+    )
 
     try:
         from crsbench.distributed.queue import create_redis_connection
@@ -82,8 +117,11 @@ def enqueue_patch_jobs(
     sanitizer: str = "address",
     source_mode: str = "pkgs",
     *,
-    use_inc_build: bool = True,
+    verify_variants: bool = False,
+    test_mode: str = "FULL",
+    use_inc_build: bool = False,
     job_timeout: int = 3600,
+    cpu_tag: Optional[str] = None,
 ) -> list[str]:
     """Enqueue patch build and verify jobs to evaluator queues.
 
@@ -101,6 +139,8 @@ def enqueue_patch_jobs(
         patches: List of (cpv_id, patch_id, patch_path) tuples
         sanitizer: Sanitizer to use for builds
         source_mode: Source mode for builds
+        verify_variants: Whether to verify against all POV variants per CPV
+        test_mode: Patch unit-test mode (FULL or RTS)
         use_inc_build: Whether to use incremental build
         job_timeout: Job execution timeout in seconds
 
@@ -126,6 +166,8 @@ def enqueue_patch_jobs(
                 patch=embedded_patch,
                 sanitizer=sanitizer,
                 source_mode=source_mode,
+                verify_variants=verify_variants,
+                test_mode=test_mode,
                 use_inc_build=use_inc_build,
                 enqueued_at=time.time(),
             )
@@ -133,11 +175,17 @@ def enqueue_patch_jobs(
             payload_dict = payload.to_dict()
 
             # Enqueue build job to build queue (multi-CPU)
+            effective_cpu_tag = cpu_tag or os.environ.get("CRSBENCH_JOB_CPU_TAG")
+            job_meta = {"experiment_name": experiment_name}
+            if effective_cpu_tag:
+                job_meta["cpu_tag"] = effective_cpu_tag
+
             build_rq_job = build_queue.enqueue(
                 "crsbench.distributed.patch_evaluator_jobs.execute_patch_build",
                 payload_dict,
                 job_timeout=job_timeout,
                 result_ttl=-1,
+                meta=job_meta,
             )
             logger.debug(
                 f"Enqueued patch build job {build_rq_job.id[:8]} "
@@ -151,6 +199,7 @@ def enqueue_patch_jobs(
                 job_timeout=job_timeout,
                 result_ttl=-1,
                 depends_on=[build_rq_job],
+                meta=job_meta,
             )
             logger.debug(
                 f"Enqueued patch verify job {verify_rq_job.id[:8]} "
@@ -207,24 +256,41 @@ def poll_patch_verdicts(
             try:
                 job = rq.job.Job.fetch(job_id, connection=redis_conn)
                 status = job.get_status()
-                if status == "finished" and job.result is not None:
-                    completed.append(job.result)
+                if status == "finished":
+                    if isinstance(job.result, dict):
+                        completed.append(job.result)
+                    elif job.result is not None:
+                        completed.append(
+                            _error_result_from_rq_job(
+                                job,
+                                default_error=(
+                                    "Patch verification finished with invalid "
+                                    f"result payload type: {type(job.result).__name__}"
+                                ),
+                            )
+                        )
+                    else:
+                        completed.append(
+                            _error_result_from_rq_job(
+                                job,
+                                default_error="Patch verification finished without a result payload",
+                            )
+                        )
                 elif status == "failed":
-                    exc_info = job.exc_info or "Unknown error"
                     completed.append(
-                        {
-                            "trial_id": "",
-                            "benchmark": "",
-                            "harness": "",
-                            "cpv_id": "",
-                            "patch_id": "",
-                            "pov_test_passed": None,
-                            "unit_test_passed": None,
-                            "status": "error",
-                            "details": "",
-                            "error": str(exc_info)[:500],
-                            "completed_at": time.time(),
-                        }
+                        _error_result_from_rq_job(
+                            job, default_error=str(job.exc_info or "Unknown error")
+                        )
+                    )
+                elif status in {"stopped", "canceled", "cancelled"}:
+                    completed.append(
+                        _error_result_from_rq_job(
+                            job,
+                            default_error=(
+                                "Patch verification terminated with non-success "
+                                f"job status: {status}"
+                            ),
+                        )
                     )
                 else:
                     remaining.append(job_id)

@@ -112,7 +112,8 @@ def main() -> None:
 
 def run_experiment_with_queue(args, config) -> None:
     """Run experiment using job queue."""
-    queue = rq.Queue(f'crsbench_{args.experiment_name}')
+    trial_q, _build_q, _verify_q = resolve_queue_names(args.experiment_name)
+    queue = rq.Queue(trial_q)
 
     # Generate trial matrix
     trials = generate_trial_matrix(args, config)
@@ -175,7 +176,7 @@ def main():
     redis_connection = redis.Redis(host=redis_host)
 
     with rq.Connection(redis_connection):
-        queue_name = f'crsbench_{experiment_name}'
+        queue_name, _build_q, _verify_q = resolve_queue_names(experiment_name)
         queue = rq.Queue(queue_name)
         worker = rq.Worker([queue])
 
@@ -392,7 +393,7 @@ def initialize_queue(redis_host: str, experiment_name: str) -> rq.Queue:
     Returns:
         Initialized RQ queue
     """
-    queue_name = f'crsbench_{experiment_name}'
+    queue_name, _build_q, _verify_q = resolve_queue_names(experiment_name)
     redis_connection = redis.Redis(host=redis_host)
     queue = rq.Queue(queue_name, connection=redis_connection)
     return queue
@@ -1248,12 +1249,27 @@ def should_use_distributed_mode(args, config) -> bool:
 
 ### 15.2 Queue Naming Convention
 
-Format: `crsbench_{experiment_name}`
+Queue naming follows the runtime queue model:
+- Flat default (`CRSBENCH_QUEUE_MODEL=flat`):
+  - `crsbench_trial`
+  - `crsbench_build`
+  - `crsbench_verify`
+- Legacy per-experiment (`CRSBENCH_QUEUE_MODEL=per-experiment`):
+  - `crsbench_{experiment_name}`
+  - `crsbench_{experiment_name}_build`
+  - `crsbench_{experiment_name}_verify`
 
-Examples:
-- `crsbench_test-exp`
-- `crsbench_atlantis-eval-001`
-- `crsbench_full-benchmark-suite`
+See `docs/design/distributed/configless-runtime.md` for canonical behavior.
+
+### 15.2.1 Existing-Job Handling Semantics
+
+- In non-interactive contexts (for example CI), orchestrator defaults to
+  scoped `continue` behavior when existing jobs are detected.
+- Scoped means filtering by experiment identity from job metadata/payload;
+  jobs from other experiments in flat queues are ignored.
+- Default `continue` behavior does **not** auto-retry failed jobs.
+  Failed retry is explicit (`--retry-failed`) and should reset the matching
+  trial directory before re-enqueue.
 
 ### 15.3 File Locations
 

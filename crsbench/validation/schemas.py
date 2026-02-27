@@ -18,6 +18,7 @@ from crsbench.utils.litellm_env import (
     required_env_errors_for_mode,
     resolve_litellm_runtime_env,
 )
+from crsbench.validation.ground_truth_paths import validate_ground_truth_segment
 
 # =============================================================================
 # Shared Schemas (used across evaluation and reporting modules)
@@ -218,6 +219,16 @@ class AdapterType(str, Enum):
     """
 
     OSS_CRS = "oss-crs"
+
+
+def _normalize_optional_path_override(value: Any) -> Any:
+    """Normalize optional path override inputs before Path coercion."""
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
+    return value
 
 
 @dataclass
@@ -485,9 +496,7 @@ class HarnessFile(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, v):
-        if not v or not v.strip():
-            raise ValueError("Harness name cannot be empty")
-        return v.strip()
+        return validate_ground_truth_segment(v, label="harness name")
 
     @field_validator("path")
     @classmethod
@@ -829,8 +838,13 @@ class ResourceConfig(BaseModel):
     cores_per_trial: int = Field(
         default=4, ge=1, description="Number of CPU cores allocated per trial"
     )
-    memory_per_trial: str = Field(
-        default="8G", description="Memory allocation per trial (e.g., '8G', '16G')"
+    memory_per_trial: Optional[str] = Field(
+        default=None,
+        description="Memory allocation per trial (e.g., '8G', '16G'). None means unlimited.",
+    )
+    cpu_tag: Optional[str] = Field(
+        default=None,
+        description="Optional CPU capability tag required by trial/build/verify jobs in this experiment.",
     )
     litellm: Optional[LitellmResourceConfig] = Field(
         default=None, description="LiteLLM resource configuration"
@@ -852,6 +866,12 @@ class WorkerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     jobs: int = Field(default=4, ge=1, description="Number of parallel jobs per worker")
+    cores_per_job: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="CPUs per worker job when using cpuset/cgroup supervisor. "
+        "Falls back to resources.cores_per_trial when not set.",
+    )
     redis_host: Optional[str] = Field(
         default=None,
         description="Redis server hostname or IP for workers. "
@@ -944,6 +964,37 @@ class WorkerConfig(BaseModel):
         description="Restrict CPU pool to these cores only (cpuset format, e.g., '16-47'). "
         "If not set, all system cores are used. Accepts cpuset format.",
     )
+    cpu_tag: Optional[str] = Field(
+        default=None,
+        description="Worker CPU capability tag for matching jobs that require resources.cpu_tag.",
+    )
+
+    @field_validator("redis_host")
+    @classmethod
+    def validate_redis_host(cls, v):
+        """Normalize optional worker redis host."""
+        if v is None:
+            return None
+        normalized = v.strip()
+        if not normalized or normalized.lower() == "none":
+            return None
+        return normalized
+
+    @field_validator(
+        "experiment_filestore",
+        "report_filestore",
+        "oss_fuzz_path",
+        "registry_dir",
+        "crs_configs_dir",
+        "benchmarks_root",
+        "benchmark_suites_root",
+        "results_filestore",
+        mode="before",
+    )
+    @classmethod
+    def normalize_optional_paths(cls, v):
+        """Treat blank string worker path overrides as unset (None)."""
+        return _normalize_optional_path_override(v)
 
 
 class CrsComposeConfig(BaseModel):
@@ -989,6 +1040,50 @@ class CrsOverrideConfig(BaseModel):
     additional_env: Optional[Dict[str, str]] = Field(
         default=None,
         description="Additional environment variables injected into CRS runtime container",
+    )
+
+
+class EvaluatorConfig(BaseModel):
+    """Distributed evaluator runtime override configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    build_jobs: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Max concurrent build jobs for distributed evaluator",
+    )
+    build_cores_per_job: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="CPUs per evaluator build job",
+    )
+    verify_jobs: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Max concurrent verify jobs for distributed evaluator",
+    )
+    verify_cores_per_job: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="CPUs per evaluator verify job",
+    )
+    cores: Optional[str] = Field(
+        default=None,
+        description="Restrict evaluator CPU pool to these cores only (cpuset format)",
+    )
+    skip_cpus: Optional[str] = Field(
+        default=None,
+        description="CPUs to exclude from evaluator pool (cpuset format)",
+    )
+    idle_timeout: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Evaluator idle timeout in seconds after build phase (0 disables timeout)",
+    )
+    cpu_tag: Optional[str] = Field(
+        default=None,
+        description="Evaluator CPU capability tag for matching jobs that require resources.cpu_tag.",
     )
 
 
@@ -1122,6 +1217,13 @@ class ExperimentConfig(BaseModel):
         "Set to false to explicitly disable. "
         "Generates llm-usage.json with per-trial cost and token metrics.",
     )
+    llm_accounting_settle_seconds: int = Field(
+        default=60,
+        ge=0,
+        description="Minimum wait after CRS run end before final LLM usage/log "
+        "capture. Helps LiteLLM key/info and spend/log aggregates converge. "
+        "Set to 0 to disable.",
+    )
     project_image_prefix: str = Field(
         default="aixcc-afc",
         description="Docker image prefix for custom project images (default: aixcc-afc)",
@@ -1171,6 +1273,12 @@ class ExperimentConfig(BaseModel):
         "Set to 1 for a single POV per CPV (default), N for multiple variants per CPV, "
         "or null to include all available variants.",
     )
+    patch_verify_variants: bool = Field(
+        default=False,
+        description="For bug-fixing patch verification, whether to verify patches against all benchmark POV variants "
+        "for each CPV (default: False). When False, verifies against a single POV (pov_0-like behavior), "
+        "equivalent to passing --no-variants in patch-verify.",
+    )
     build_workers: Optional[int] = Field(
         default=None,
         ge=1,
@@ -1191,6 +1299,9 @@ class ExperimentConfig(BaseModel):
     )
     worker: Optional[WorkerConfig] = Field(
         default=None, description="Distributed worker configuration"
+    )
+    evaluator: Optional[EvaluatorConfig] = Field(
+        default=None, description="Distributed evaluator configuration"
     )
     crs_compose: Optional[CrsComposeConfig] = Field(
         default=None,
@@ -1289,16 +1400,20 @@ class ExperimentConfig(BaseModel):
             return v.strip()
         return None  # Treat empty or "none" as None (local mode)
 
-    @field_validator("benchmarks_root")
+    @field_validator("benchmarks_root", mode="before")
     @classmethod
     def validate_benchmarks_root(cls, v):
-        """Validate benchmarks root directory."""
+        """Normalize benchmarks root directory."""
+        if isinstance(v, str) and not v.strip():
+            return Path("benchmarks")
         return v
 
-    @field_validator("benchmark_suites_root")
+    @field_validator("benchmark_suites_root", mode="before")
     @classmethod
     def validate_benchmark_suites_root(cls, v):
-        """Validate benchmark suites root directory."""
+        """Normalize benchmark suites root directory."""
+        if isinstance(v, str) and not v.strip():
+            return Path("benchmark-suites")
         return v
 
     @field_validator("benchmarks")

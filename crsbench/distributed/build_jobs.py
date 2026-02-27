@@ -44,7 +44,7 @@ def execute_ci_build(params: dict[str, Any]) -> dict[str, Any]:
         patch_id=params.get("patch_id"),
         pov_id=params.get("pov_id"),
         patches=[Path(p) for p in params.get("patches", [])],
-        use_inc_build=params.get("use_inc_build", True),
+        use_inc_build=params.get("use_inc_build", False),
         force_rebuild=params.get("force_rebuild", False),
         skip_if_cached=params.get("skip_if_cached", False),
         source_mode=params.get("source_mode", "pkgs"),

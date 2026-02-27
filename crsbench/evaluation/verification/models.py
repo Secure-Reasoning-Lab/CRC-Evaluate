@@ -382,7 +382,7 @@ class PatchVerificationSummary(BaseModel):
         return cls(
             total_input_povs=total_input_povs,
             patches_generated=len(results),
-            patch_ids=[r.pov_id for r in results],
+            patch_ids=[r.patch_id for r in results],
             valid=sum(1 for r in results if r.status == PatchVerificationStatus.VALID),
             build_failed=sum(
                 1 for r in results if r.status == PatchVerificationStatus.BUILD_FAILED

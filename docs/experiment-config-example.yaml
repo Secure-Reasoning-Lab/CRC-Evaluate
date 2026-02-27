@@ -43,6 +43,10 @@ verify_timeout: 7200
 # 1 = single POV per CPV (default), N = multiple variants per CPV, null = all variants.
 # max_pov_variants_per_cpv: 1
 
+# For bug-fixing patch verification: verify against all benchmark POV variants per CPV.
+# false = single-POV patch verification (pov_0-like), true = variant-aware verification.
+# patch_verify_variants: false
+
 # ===== CRS and Benchmark Selection =====
 
 # List of CRS (Cyber Reasoning Systems) to evaluate.

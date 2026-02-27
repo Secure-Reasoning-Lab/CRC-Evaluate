@@ -128,8 +128,8 @@ resources:
   cores_per_trial: 8  # default: 4
 
   # Memory limit per trial in Docker format.
-  # Possible values: "4G" | "8G" | "16G" | "32G" | "64G"
-  memory_per_trial: "16G"  # default: "8G"
+  # Possible values: null (unlimited) | "4G" | "8G" | "16G" | "32G" | "64G"
+  memory_per_trial: "16G"  # default: null (unlimited)
 
   # LiteLLM configuration for LLM-based CRS.
   litellm:
@@ -217,6 +217,31 @@ worker:
 
   # Override results destination path (contains experiment-data/ and report-data/).
   # results_filestore: /mnt/nfs/finished-experiments
+
+# =============================================================================
+# Evaluator Configuration (optional)
+# =============================================================================
+evaluator:
+  # Max concurrent build jobs for distributed evaluator.
+  # build_jobs: 4
+
+  # CPUs per evaluator build job.
+  # build_cores_per_job: 8
+
+  # Max concurrent verify jobs for distributed evaluator.
+  # verify_jobs: 4
+
+  # CPUs per evaluator verify job.
+  # verify_cores_per_job: 8
+
+  # Restrict evaluator CPU pool (cpuset format).
+  # cores: 96-127
+
+  # Exclude specific CPUs from evaluator pool.
+  # skip_cpus: 0-3
+
+  # Exit after idle seconds once queues are drained (0 disables timeout).
+  # idle_timeout: 0
 
 # =============================================================================
 # Optional Features

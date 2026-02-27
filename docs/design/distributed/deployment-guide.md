@@ -268,6 +268,8 @@ Error: Benchmark not found: /home/orchestrator/benchmarks/...
 
 ### Evaluator not processing jobs
 
-- Verify the experiment name matches: `crsbench_{experiment_name}_verify`
+- Verify evaluator queue model matches runtime (`CRSBENCH_QUEUE_MODEL`):
+  - Flat default: `crsbench_verify`
+  - Legacy: `crsbench_{experiment_name}_verify`
 - Check that the evaluator's variant build succeeded (check logs)
 - Verify Redis connectivity from the evaluator machine

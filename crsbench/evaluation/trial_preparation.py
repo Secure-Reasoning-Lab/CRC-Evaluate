@@ -21,6 +21,7 @@ import yaml
 
 from crsbench.utils import run_git
 from crsbench.utils.logger import get_logger
+from crsbench.validation.ground_truth_paths import GroundTruthPaths
 
 logger = get_logger(__name__)
 
@@ -289,7 +290,8 @@ class TrialDirectoryPreparer:
             return None
 
         # Load meta.yaml to discover all harnesses and CPVs
-        meta_yaml_path = benchmark_dir / ".aixcc" / "meta.yaml"
+        gt = GroundTruthPaths(benchmark_dir)
+        meta_yaml_path = gt.meta_yaml
         if not meta_yaml_path.exists():
             logger.warning(f"No meta.yaml found for {benchmark}")
             return None
@@ -370,8 +372,8 @@ class TrialDirectoryPreparer:
                     continue
 
                 # Construct path to CPV hints
-                cpv_hints_dir = (
-                    benchmark_dir / ".aixcc" / harness_name / cpv_keyword / "hints"
+                cpv_hints_dir = GroundTruthPaths(benchmark_dir).cpv_hints_dir(
+                    harness_name, cpv_keyword
                 )
                 sarif_file = cpv_hints_dir / f"level_{sarif_level}.sarif"
 
@@ -412,7 +414,7 @@ class TrialDirectoryPreparer:
             └── cpv_1      # First POV blob from cpv_1
         """
         benchmark_dir = self.benchmarks_root / benchmark
-        source_harness_dir = benchmark_dir / ".aixcc" / harness
+        source_harness_dir = GroundTruthPaths(benchmark_dir).harness_dir(harness)
 
         if not source_harness_dir.exists():
             logger.warning(f"No harness directory for {benchmark}/{harness}")

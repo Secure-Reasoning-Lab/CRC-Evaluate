@@ -146,6 +146,8 @@ class LiteLLMTracker:
         CRSBENCH_LLM_UPSTREAM_MASTER_KEY: Master key for key management APIs
     """
 
+    SPEND_MISMATCH_EPSILON_USD = 1e-6
+
     def __init__(
         self,
         base_url: Optional[str] = None,
@@ -649,21 +651,34 @@ class LiteLLMTracker:
         """
         key_info = self.get_key_info(api_key)
 
-        # Extract spend from key info
-        # LiteLLM stores spend in the 'info' object
+        # Extract spend from key info.
+        # LiteLLM enforces budget against key-level/accounting state, so treat this
+        # as authoritative when it disagrees with spend-log aggregation.
         info = key_info.get("info", {})
-        spend = info.get("spend", 0.0)
+        key_info_spend = float(info.get("spend", 0.0) or 0.0)
+        spend = key_info_spend
         key_alias = info.get("key_alias", "unknown")
 
         # Get detailed usage from spend logs
         detailed_usage = None
+        spend_logs_cost: Optional[float] = None
         if include_detailed_logs:
             logs = self.get_spend_logs(api_key)
             if logs:
                 detailed_usage = self.aggregate_spend_logs(logs)
-                # Use detailed cost if available (more accurate)
-                if detailed_usage.total_cost_usd > 0:
-                    spend = detailed_usage.total_cost_usd
+                spend_logs_cost = float(detailed_usage.total_cost_usd or 0.0)
+                # Keep spend consistent with LiteLLM's budget enforcement semantics.
+                spend = max(key_info_spend, spend_logs_cost)
+                spend_delta = key_info_spend - spend_logs_cost
+                if abs(spend_delta) > self.SPEND_MISMATCH_EPSILON_USD:
+                    larger_source = "key/info" if spend_delta > 0 else "spend/logs"
+                    logger.warning(
+                        "LiteLLM spend mismatch: key/info spend "
+                        f"(${key_info_spend:.6f}) vs spend/logs aggregate "
+                        f"(${spend_logs_cost:.6f}), "
+                        f"delta=${spend_delta:.8f}, larger={larger_source}. "
+                        "Using max(source values)."
+                    )
                 logger.info(
                     f"Aggregated {len(logs)} LLM requests: "
                     f"{detailed_usage.total_api_calls} calls, "
@@ -681,6 +696,12 @@ class LiteLLMTracker:
                 "spend": spend,
                 "max_budget": info.get("max_budget"),
                 "metadata": info.get("metadata", {}),
+                "spend_sources": {
+                    "key_info_spend_usd": key_info_spend,
+                    "spend_logs_spend_usd": spend_logs_cost,
+                    "selected_total_spend_usd": spend,
+                    "selection_rule": "max(key_info_spend_usd, spend_logs_spend_usd)",
+                },
             },
             raw_response=key_info,
             detailed_usage=detailed_usage,
@@ -750,6 +771,112 @@ class LiteLLMTracker:
         output_path.write_text(json.dumps(output_data, indent=2, default=str))
 
         logger.info(f"Wrote LLM logs to {output_path}: {len(logs)} requests")
+        return output_path
+
+    def _categorize_failure(self, log: dict) -> str:
+        """Categorize a failed request log into a stable high-level reason."""
+        text = json.dumps(log, default=str).lower()
+
+        if "budgetexceedederror" in text or (
+            "max budget" in text and "current cost" in text
+        ):
+            return "budget_exceeded"
+        if (
+            "auth_error" in text
+            or "authentication error" in text
+            or "unauthorized" in text
+            or "forbidden" in text
+            or "invalid api key" in text
+        ):
+            return "auth_error"
+        if (
+            "rate limit" in text
+            or "too many requests" in text
+            or '"status_code": 429' in text
+        ):
+            return "rate_limited"
+        if "context length" in text or "maximum context length" in text:
+            return "context_length"
+        if "timeout" in text or "timed out" in text:
+            return "timeout"
+        if (
+            '"status_code": 500' in text
+            or '"status_code": 502' in text
+            or '"status_code": 503' in text
+            or '"status_code": 504' in text
+            or "internal server error" in text
+            or "service unavailable" in text
+        ):
+            return "server_error"
+        return "unknown_error"
+
+    def _is_failed_request(self, log: dict) -> bool:
+        """Heuristic to determine if a spend log entry represents a failed call."""
+        status_code = log.get("status_code")
+        if isinstance(status_code, int) and status_code >= 400:
+            return True
+
+        litellm_status = str(log.get("litellm_status", "")).lower()
+        if litellm_status in {"failure", "failed", "error"}:
+            return True
+
+        if log.get("error") or log.get("exception") or log.get("traceback"):
+            return True
+
+        return False
+
+    def summarize_spend_logs(self, logs: list[dict], trial_id: str) -> dict:
+        """Build concise, human-readable summary data from raw spend logs."""
+        by_model: dict[str, dict] = {}
+        failure_categories: dict[str, int] = {}
+        success_count = 0
+        failure_count = 0
+        total_cost_usd = 0.0
+
+        for log in logs:
+            model = str(log.get("model", "unknown"))
+            spend = float(log.get("spend", 0) or 0)
+            total_cost_usd += spend
+
+            model_stats = by_model.setdefault(model, {"calls": 0, "cost_usd": 0.0})
+            model_stats["calls"] += 1
+            model_stats["cost_usd"] += spend
+
+            if self._is_failed_request(log):
+                failure_count += 1
+                category = self._categorize_failure(log)
+                failure_categories[category] = failure_categories.get(category, 0) + 1
+            else:
+                success_count += 1
+
+        return {
+            "trial_id": trial_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "total_requests": len(logs),
+            "success_count": success_count,
+            "failure_count": failure_count,
+            "failure_categories": failure_categories,
+            "total_cost_usd_from_logs": total_cost_usd,
+            "by_model": by_model,
+        }
+
+    def write_llm_summary_file(
+        self,
+        api_key: ApiKey,
+        trial_id: str,
+        output_path: Path,
+    ) -> Path:
+        """Write concise LLM request summary to a JSON file."""
+        logs = self.get_spend_logs(api_key)
+        summary = self.summarize_spend_logs(logs, trial_id)
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(summary, indent=2, default=str))
+
+        logger.info(
+            f"Wrote LLM summary to {output_path}: "
+            f"{summary['success_count']} success, {summary['failure_count']} failure"
+        )
         return output_path
 
     def _build_key_alias(
