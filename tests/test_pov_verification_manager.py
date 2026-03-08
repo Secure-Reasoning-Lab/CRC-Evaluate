@@ -702,7 +702,7 @@ class TestGetReport:
 class TestAsyncMode:
     """Tests for POVVerificationManager async mode (VU-02/03/04)."""
 
-    def _make_manager(self, tmp_path: Path, *, redis_host=None):
+    def _make_manager(self, tmp_path: Path, *, redis_host=None, sanitizer="address"):
         from crsbench.evaluation.verification.pov.manager import (
             POVVerificationManager,
         )
@@ -723,6 +723,7 @@ class TestAsyncMode:
             redis_host=redis_host,
             experiment_name="exp1",
             trial_id="trial-1",
+            sanitizer=sanitizer,
         )
 
     def test_async_mode_enabled_with_redis_host(self, tmp_path: Path) -> None:
@@ -781,6 +782,7 @@ class TestAsyncMode:
         call_kwargs = mock_enqueue.call_args
         # pov_id format: {filename}:{hash}
         assert call_kwargs[1]["pov_id"] == "test.blob:abc123hash"
+        assert call_kwargs[1]["sanitizer"] == "address"
 
     @patch("crsbench.distributed.verify_queue.poll_single_pov_verdicts")
     def test_poll_pending_verdicts_processes_results(
@@ -1037,6 +1039,32 @@ class TestAsyncMode:
         # Should have verified inline
         manager._engine.verify_pov.assert_called_once()
         assert snapshot.povs_new == 1
+
+    def test_inline_mode_uses_sanitizer_scoped_builds(self, tmp_path: Path) -> None:
+        """Inline verification should use the manager sanitizer for build selection."""
+        from crsbench.evaluation.verification.models import PovVerificationResult
+
+        manager = self._make_manager(tmp_path, redis_host=None, sanitizer="undefined")
+        pov_file = tmp_path / "trial-1" / "pov_output" / "pov1.blob"
+        pov_file.write_bytes(b"inline_pov_content")
+
+        mock_result = PovVerificationResult(
+            status=PovVerificationStatus.NOT_VULNERABLE,
+            benchmark="test-benchmark",
+            pov_id="pov1.blob",
+            cpv_matched=[],
+        )
+        manager._engine = MagicMock()
+        manager._engine.get_or_build_results.return_value = {"v": MagicMock()}
+        manager._engine.verify_pov.return_value = mock_result
+        manager._adapter = MagicMock()
+
+        manager.on_snapshot(cycle=1)
+
+        manager._engine.get_or_build_results.assert_called_once_with(
+            manager._adapter,
+            sanitizer="undefined",
+        )
 
 
 class TestExchangeDirScanning:

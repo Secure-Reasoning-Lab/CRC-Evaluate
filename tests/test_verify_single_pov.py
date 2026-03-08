@@ -167,7 +167,7 @@ class TestVerifySinglePov:
     @patch("crsbench.distributed.evaluator_jobs._verification_engine", None)
     @patch(
         "crsbench.distributed.evaluator_jobs._built_results",
-        {"test-bench": {"v": "result"}},
+        {"exp::test-bench::auto": {"v": "result"}},
     )
     def test_engine_not_initialized(self) -> None:
         """Returns error when VerificationEngine is not initialized."""
@@ -178,7 +178,10 @@ class TestVerifySinglePov:
         assert result.verdict.status == "error"
         assert "not initialized" in result.verdict.error
 
-    @patch("crsbench.distributed.evaluator_jobs._built_results", {"test-bench": {}})
+    @patch(
+        "crsbench.distributed.evaluator_jobs._built_results",
+        {"exp::test-bench::auto": {}},
+    )
     def test_adapter_load_failure(self) -> None:
         """Returns error when adapter fails to load."""
         mock_engine = MagicMock()
@@ -194,7 +197,10 @@ class TestVerifySinglePov:
         assert result.verdict.status == "error"
         assert "Failed to load adapter" in result.verdict.error
 
-    @patch("crsbench.distributed.evaluator_jobs._built_results", {"test-bench": {}})
+    @patch(
+        "crsbench.distributed.evaluator_jobs._built_results",
+        {"exp::test-bench::auto": {}},
+    )
     def test_successful_cpv_match(self) -> None:
         """Successful verification with CPV match."""
         from crsbench.evaluation.verification.models import (
@@ -222,7 +228,10 @@ class TestVerifySinglePov:
         assert result.verdict.cpv_matches == ["cpv_0"]
         assert result.verdict.error is None
 
-    @patch("crsbench.distributed.evaluator_jobs._built_results", {"test-bench": {}})
+    @patch(
+        "crsbench.distributed.evaluator_jobs._built_results",
+        {"exp::test-bench::auto": {}},
+    )
     def test_cpv_match_includes_crash_logs(self) -> None:
         """Crash logs from engine result are propagated to verdict."""
         from crsbench.evaluation.verification.models import (
@@ -258,7 +267,10 @@ class TestVerifySinglePov:
             "patched-asan": "no crash",
         }
 
-    @patch("crsbench.distributed.evaluator_jobs._built_results", {"test-bench": {}})
+    @patch(
+        "crsbench.distributed.evaluator_jobs._built_results",
+        {"exp::test-bench::auto": {}},
+    )
     def test_no_crash_info_gives_empty_crash_logs(self) -> None:
         """When crash_info is None, crash_logs should be empty."""
         from crsbench.evaluation.verification.models import (
@@ -284,7 +296,10 @@ class TestVerifySinglePov:
         result = SinglePovResult.from_dict(result_dict)
         assert result.verdict.crash_logs == {}
 
-    @patch("crsbench.distributed.evaluator_jobs._built_results", {"test-bench": {}})
+    @patch(
+        "crsbench.distributed.evaluator_jobs._built_results",
+        {"exp::test-bench::auto": {}},
+    )
     def test_not_vulnerable(self) -> None:
         """POV does not trigger vulnerability."""
         from crsbench.evaluation.verification.models import (
@@ -311,7 +326,10 @@ class TestVerifySinglePov:
         assert result.verdict.status == "not_vulnerable"
         assert result.verdict.cpv_matches == []
 
-    @patch("crsbench.distributed.evaluator_jobs._built_results", {"test-bench": {}})
+    @patch(
+        "crsbench.distributed.evaluator_jobs._built_results",
+        {"exp::test-bench::auto": {}},
+    )
     def test_unintended_crash_status(self) -> None:
         """UNINTENDED_CRASH is correctly reflected in verdict status."""
         from crsbench.evaluation.verification.models import (
@@ -339,7 +357,10 @@ class TestVerifySinglePov:
         assert result.verdict.cpv_matches == []
         assert result.verdict.error is None
 
-    @patch("crsbench.distributed.evaluator_jobs._built_results", {"test-bench": {}})
+    @patch(
+        "crsbench.distributed.evaluator_jobs._built_results",
+        {"exp::test-bench::auto": {}},
+    )
     def test_verification_exception(self) -> None:
         """Exception during verification produces error verdict."""
         mock_engine = MagicMock()
@@ -434,3 +455,45 @@ class TestLazyBuildCache:
         result = SinglePovResult.from_dict(result_dict)
         assert result.verdict.triggered_bug is False
         assert "No built variants" in result.verdict.error
+
+    @patch("crsbench.distributed.evaluator_jobs._built_results", {})
+    def test_lazy_load_passes_payload_sanitizer(self) -> None:
+        """Lazy load must build with payload sanitizer for multi-sanitizer benchmarks."""
+        from crsbench.evaluation.verification.models import (
+            PovVerificationResult,
+            PovVerificationStatus,
+        )
+
+        mock_engine = MagicMock()
+        mock_adapter = MagicMock()
+        mock_engine.load_adapter.return_value = mock_adapter
+        mock_engine.get_or_build_results.return_value = {"variant-ubsan": MagicMock()}
+        mock_engine.verify_pov.return_value = PovVerificationResult(
+            status=PovVerificationStatus.CPV,
+            benchmark="lazy-bench",
+            cpv_matched=["cpv_1"],
+        )
+
+        mock_benchmark_path = MagicMock()
+        mock_benchmark_path.exists.return_value = True
+
+        payload = self._make_payload()
+        payload["sanitizer"] = "undefined"
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator_jobs._verification_engine",
+                mock_engine,
+            ),
+            patch(
+                "crsbench.distributed.evaluator_jobs.resolve_benchmark_path",
+                return_value=mock_benchmark_path,
+            ),
+        ):
+            result_dict = verify_single_pov(payload)
+
+        result = SinglePovResult.from_dict(result_dict)
+        assert result.verdict.triggered_bug is True
+        mock_engine.get_or_build_results.assert_called_once_with(
+            mock_adapter, sanitizer="undefined"
+        )

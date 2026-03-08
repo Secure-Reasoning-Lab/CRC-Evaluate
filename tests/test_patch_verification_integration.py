@@ -61,10 +61,7 @@ def get_oss_fuzz_path() -> Optional[Path]:
         return Path(os.environ["OSS_FUZZ_HOME"])
 
     candidates = [
-        get_project_root() / "oss-fuzz",  # submodule in repo
-        get_project_root().parent / "oss-fuzz",
-        Path.home() / "oss-fuzz",
-        Path("/oss-fuzz"),
+        get_project_root() / "third_party" / "oss-fuzz",  # managed checkout
     ]
     for candidate in candidates:
         if candidate.exists():
@@ -90,16 +87,22 @@ def is_inc_build_image_available(project_name: str, sanitizer: str = "address") 
     """Check if inc-build image is available locally or remotely.
 
     Checks multiple image formats:
-    1. OSS-Fuzz format: aixcc-afc/{project}:inc-{sanitizer}
-    2. Registry format: ghcr.io/team-atlanta/crsbench/{project}:inc-{sanitizer}
-    3. Nested format: aixcc-afc/aixcc/c/{project}:inc-{sanitizer}
+    1. OSS-Fuzz format: gcr.io/oss-fuzz/{project}-{san}:inc
+    2. Registry format: ghcr.io/team-atlanta/crsbench/{project}-{san}:inc
 
     Also attempts to pull from registry if not found locally.
     """
+    sanitizer_suffix = {
+        "address": "asan",
+        "undefined": "ubsan",
+        "memory": "msan",
+        "thread": "tsan",
+        "coverage": "cov",
+    }.get(sanitizer, sanitizer)
+    scoped_project = f"{project_name}-{sanitizer_suffix}"
     image_formats = [
-        f"aixcc-afc/{project_name}:inc-{sanitizer}",
-        f"ghcr.io/team-atlanta/crsbench/{project_name}:inc-{sanitizer}",
-        f"aixcc-afc/aixcc/c/{project_name}:inc-{sanitizer}",
+        f"gcr.io/oss-fuzz/{scoped_project}:inc",
+        f"ghcr.io/team-atlanta/crsbench/{scoped_project}:inc",
     ]
 
     # Check if any format exists locally
@@ -116,7 +119,7 @@ def is_inc_build_image_available(project_name: str, sanitizer: str = "address") 
             continue
 
     # Try to pull from registry
-    registry_image = f"ghcr.io/team-atlanta/crsbench/{project_name}:inc-{sanitizer}"
+    registry_image = f"ghcr.io/team-atlanta/crsbench/{scoped_project}:inc"
     try:
         result = subprocess.run(
             ["docker", "pull", registry_image],
@@ -146,9 +149,17 @@ def check_e2e_prerequisites(
         return "OSS-Fuzz directory not found. Set OSS_FUZZ_HOME env var."
 
     if not is_inc_build_image_available(project_name, sanitizer):
+        sanitizer_suffix = {
+            "address": "asan",
+            "undefined": "ubsan",
+            "memory": "msan",
+            "thread": "tsan",
+            "coverage": "cov",
+        }.get(sanitizer, sanitizer)
         return (
             f"Inc-build image not available for {project_name}. "
-            f"Pull with: docker pull ghcr.io/team-atlanta/crsbench/{project_name}:inc-{sanitizer}"
+            f"Pull with: docker pull ghcr.io/team-atlanta/crsbench/"
+            f"{project_name}-{sanitizer_suffix}:inc"
         )
 
     oss_fuzz_project = oss_fuzz / "projects" / project_name

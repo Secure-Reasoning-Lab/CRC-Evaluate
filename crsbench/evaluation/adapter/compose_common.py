@@ -122,7 +122,6 @@ def run_oss_crs_build_target(
     *,
     oss_crs_cmd: str = "oss-crs",
     timeout: int = 3600,
-    sanitizer: Optional[str] = None,
 ) -> tuple[str, str, int]:
     """Run ``oss-crs build-target`` to compile the target.
 
@@ -132,7 +131,6 @@ def run_oss_crs_build_target(
         target_proj_path: Path to the benchmark project directory.
         oss_crs_cmd: Path to the oss-crs executable.
         timeout: Maximum time in seconds.
-        sanitizer: Sanitizer to use (e.g., "address", "undefined").
 
     Returns:
         Tuple of (stdout, stderr, returncode).
@@ -147,12 +145,9 @@ def run_oss_crs_build_target(
         str(compose_file),
         "--work-dir",
         str(work_dir),
-        "--target-path",
+        "--fuzz-proj-path",
         str(target_proj_path),
     ]
-
-    if sanitizer is not None:
-        cmd.extend(["--sanitizer", sanitizer])
 
     logger.debug(f"Running oss-crs build-target: {' '.join(cmd)}")
 
@@ -179,7 +174,6 @@ def run_oss_crs_run(
     *,
     timeout: int,
     oss_crs_cmd: str = "oss-crs",
-    sanitizer: Optional[str] = None,
     run_id: Optional[str] = None,
     grace_period: int = 60,
     stop_event: Optional[threading.Event] = None,
@@ -200,7 +194,6 @@ def run_oss_crs_run(
         target_harness: Name of the harness to run.
         timeout: Maximum time in seconds for the run phase.
         oss_crs_cmd: Path to the oss-crs executable.
-        sanitizer: Sanitizer to use (e.g., "address", "undefined").
         run_id: Unique run identifier for deterministic path resolution.
         grace_period: Seconds to wait after SIGTERM before SIGKILL.
         stop_event: Threading event for early termination.
@@ -218,7 +211,7 @@ def run_oss_crs_run(
         str(compose_file),
         "--work-dir",
         str(work_dir),
-        "--target-path",
+        "--fuzz-proj-path",
         str(target_proj_path),
         "--target-harness",
         target_harness,
@@ -226,8 +219,6 @@ def run_oss_crs_run(
         str(timeout),
     ]
 
-    if sanitizer is not None:
-        cmd.extend(["--sanitizer", sanitizer])
     if run_id is not None:
         cmd.extend(["--run-id", run_id])
     if pov is not None:
@@ -268,7 +259,7 @@ def docker_compose_down_cleanup(work_dir: Path) -> None:
         for compose_file in compose_files:
             try:
                 logger.debug(f"Running docker compose down for {compose_file}")
-                subprocess.run(
+                proc = subprocess.run(
                     [
                         "docker",
                         "compose",
@@ -283,12 +274,22 @@ def docker_compose_down_cleanup(work_dir: Path) -> None:
                     text=True,
                     timeout=60,
                 )
+                if proc.returncode != 0:
+                    detail = proc.stderr or proc.stdout or "<no output>"
+                    logger.warning(
+                        "docker compose down failed for %s (rc=%s): %s",
+                        compose_file,
+                        proc.returncode,
+                        detail,
+                    )
             except (
                 subprocess.TimeoutExpired,
                 subprocess.SubprocessError,
                 OSError,
-            ):
-                logger.warning(f"Failed to run docker compose down for {compose_file}")
+            ) as e:
+                logger.warning(
+                    f"Failed to run docker compose down for {compose_file}: {e}"
+                )
 
         # Intentionally avoid daemon-wide ``docker network prune`` here.
         # Global pruning can race with other concurrent trials that are
@@ -330,7 +331,6 @@ def run_oss_crs_artifacts(
         target_harness: Name of the harness.
         run_id: Unique run identifier (same as passed to ``oss-crs run``).
         oss_crs_cmd: Path to the oss-crs executable.
-        sanitizer: Sanitizer name (e.g., "address").
 
     Returns:
         Parsed JSON dict from oss-crs artifacts output.
@@ -345,7 +345,7 @@ def run_oss_crs_artifacts(
         str(compose_file),
         "--work-dir",
         str(work_dir),
-        "--target-path",
+        "--fuzz-proj-path",
         str(target_proj_path),
         "--target-harness",
         target_harness,

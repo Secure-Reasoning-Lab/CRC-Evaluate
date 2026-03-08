@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from crsbench.evaluation.adapter import OssCrsAdapter
+from crsbench.evaluation.trial_identity import build_trial_uid
 from crsbench.evaluation.trial_paths import count_visible_files
 
 if TYPE_CHECKING:
@@ -121,6 +122,11 @@ class BenchmarkRunner:
         redis_host: Optional[str] = None,
         experiment_name: Optional[str] = None,
         pov_dedup_strategy: str = "patch-based",
+        inc_image_policy: Optional[str] = None,
+        inc_image_registry: Optional[str] = None,
+        inc_image_max_pull_bytes: Optional[int] = None,
+        inc_image_pull_timeout: Optional[int] = None,
+        local_image_prefix: Optional[str] = None,
     ):
         """Initialize benchmark runner.
 
@@ -183,6 +189,11 @@ class BenchmarkRunner:
         self.redis_host = redis_host
         self.experiment_name = experiment_name
         self.pov_dedup_strategy = pov_dedup_strategy
+        self.inc_image_policy = inc_image_policy
+        self.inc_image_registry = inc_image_registry
+        self.inc_image_max_pull_bytes = inc_image_max_pull_bytes
+        self.inc_image_pull_timeout = inc_image_pull_timeout
+        self.local_image_prefix = local_image_prefix
         self.logger = get_logger(__name__)
 
         if coverage_early_stop:
@@ -222,6 +233,7 @@ class BenchmarkRunner:
         oss_fuzz_path: Optional[Path] = None,
         *,
         skip_verification: bool = False,
+        sanitizer: str = "address",
         target_cpv_id: str | None = None,
     ) -> EvaluationResult:
         """Run a complete benchmark evaluation for a specific harness."""
@@ -257,6 +269,7 @@ class BenchmarkRunner:
                     trial_start_time=trial_start_time,
                     oss_fuzz_path=oss_fuzz_path,
                     skip_verification=skip_verification,
+                    sanitizer=sanitizer,
                     target_cpv_id=target_cpv_id,
                 )
             )
@@ -490,6 +503,7 @@ class BenchmarkRunner:
         oss_fuzz_path: Optional[Path],
         *,
         skip_verification: bool,
+        sanitizer: str = "address",
         target_cpv_id: str | None = None,
     ) -> tuple[HarnessResult, list[VerifResult], list[PatchVerificationResult]]:
         """Run evaluation for a single harness with snapshot management and verification."""
@@ -506,6 +520,7 @@ class BenchmarkRunner:
             benchmark_path=benchmark_path,
             trial_output_dir=trial_output_dir,
             trial_start_time=trial_start_time,
+            sanitizer=sanitizer,
             target_cpv_id=target_cpv_id,
         )
 
@@ -584,6 +599,7 @@ class BenchmarkRunner:
                 trial_output_dir=trial_output_dir,
                 oss_fuzz_path=oss_fuzz_path,
                 harness_name=harness.name,
+                sanitizer=sanitizer,
                 target_cpv_id=target_cpv_id,
             )
 
@@ -595,6 +611,7 @@ class BenchmarkRunner:
         benchmark_path: Path,
         trial_output_dir: Path,
         trial_start_time: float,
+        sanitizer: str = "address",
         target_cpv_id: str | None = None,
     ) -> tuple[
         HarnessResult,
@@ -655,6 +672,7 @@ class BenchmarkRunner:
                     trial_output_dir=trial_output_dir,
                     trial_start_time=trial_start_time,
                     harness_name=harness.name,
+                    sanitizer=sanitizer,
                 )
             )
 
@@ -928,6 +946,7 @@ class BenchmarkRunner:
         trial_output_dir: Path,
         trial_start_time: float,
         harness_name: str,
+        sanitizer: str = "address",
     ) -> tuple[Optional[POVVerificationManager], Optional[threading.Event]]:
         """Start POV verification manager if enabled.
 
@@ -939,6 +958,7 @@ class BenchmarkRunner:
             trial_output_dir: Trial output directory
             trial_start_time: Trial start timestamp
             harness_name: Name of the harness
+            sanitizer: Trial sanitizer for scoped async build selection
 
         Returns:
             Tuple of (POVVerificationManager, stop_event) or (None, None) if not applicable
@@ -955,6 +975,7 @@ class BenchmarkRunner:
             trial_output_dir=trial_output_dir,
             trial_start_time=trial_start_time,
             harness_name=harness_name,
+            sanitizer=sanitizer,
         )
 
         stop_event = None
@@ -971,6 +992,7 @@ class BenchmarkRunner:
         trial_output_dir: Path,
         trial_start_time: float,
         harness_name: str,
+        sanitizer: str = "address",
     ) -> Optional[POVVerificationManager]:
         """Create POVVerificationManager for real-time POV verification during trial.
 
@@ -979,6 +1001,7 @@ class BenchmarkRunner:
             trial_output_dir: Trial output directory
             trial_start_time: Trial start timestamp
             harness_name: Name of the harness
+            sanitizer: Trial sanitizer for scoped async build selection
 
         Returns:
             POVVerificationManager instance or None if creation fails
@@ -1052,14 +1075,23 @@ class BenchmarkRunner:
                 dedup_strategy=get_dedup_strategy(self.pov_dedup_strategy),
                 build_workers=self.build_workers,
                 verify_workers=self.verify_workers,
+                inc_image_policy=self.inc_image_policy,
+                inc_image_registry=self.inc_image_registry,
+                inc_image_max_pull_bytes=self.inc_image_max_pull_bytes,
+                inc_image_pull_timeout=self.inc_image_pull_timeout,
+                local_image_prefix=self.local_image_prefix,
             )
 
             # POV output directory (where CRS writes discovered POVs)
             pov_output_dir = trial_output_dir / "output" / "povs"
 
             # Create POV verification manager
-            # Derive trial_id from output dir name for async result correlation
-            trial_id = trial_output_dir.name
+            trial_id = build_trial_uid(
+                experiment=self.experiment_name,
+                benchmark=benchmark_path.name,
+                harness=harness_name,
+                trial_dir=trial_output_dir,
+            )
 
             # Use pre-resolved exchange POV path from oss-crs artifacts
             exchange_pov_dir = self.adapter.exchange_pov_dir
@@ -1078,6 +1110,7 @@ class BenchmarkRunner:
                 experiment_name=self.experiment_name,
                 trial_id=trial_id,
                 exchange_pov_dir=exchange_pov_dir,
+                sanitizer=sanitizer,
             )
 
             self.logger.info(
@@ -1321,6 +1354,7 @@ class BenchmarkRunner:
         trial_output_dir: Path,
         oss_fuzz_path: Path,
         harness_name: str,
+        sanitizer: str = "address",
         target_cpv_id: str | None = None,
     ) -> list[PatchVerificationResult]:
         """Verify CRS-generated patches for a specific harness.
@@ -1343,6 +1377,7 @@ class BenchmarkRunner:
                 benchmark_path=benchmark_path,
                 trial_output_dir=trial_output_dir,
                 harness_name=harness_name,
+                sanitizer=sanitizer,
                 target_cpv_id=target_cpv_id,
             )
 
@@ -1352,6 +1387,7 @@ class BenchmarkRunner:
             trial_output_dir=trial_output_dir,
             oss_fuzz_path=oss_fuzz_path,
             harness_name=harness_name,
+            sanitizer=sanitizer,
             target_cpv_id=target_cpv_id,
         )
 
@@ -1361,6 +1397,7 @@ class BenchmarkRunner:
         trial_output_dir: Path,
         oss_fuzz_path: Path,
         harness_name: str,
+        sanitizer: str = "address",
         target_cpv_id: str | None = None,
     ) -> list[PatchVerificationResult]:
         """Verify patches locally using PatchVerificationEngine.
@@ -1377,6 +1414,7 @@ class BenchmarkRunner:
         Returns:
             List of patch verification results
         """
+        engine: Optional[PatchVerificationEngine] = None
         try:
             self.logger.info(
                 f"Starting local patch verification for harness: {harness_name}"
@@ -1403,6 +1441,7 @@ class BenchmarkRunner:
 
             engine = PatchVerificationEngine(
                 oss_fuzz_path=oss_fuzz_path,
+                sanitizer=sanitizer,
                 timeout=self.per_pov_verify_timeout,
                 build_timeout=1200,
                 test_timeout=1800,
@@ -1411,6 +1450,11 @@ class BenchmarkRunner:
                 build_workers=self.build_workers,
                 verify_workers=self.verify_workers,
                 verify_variants=self.patch_verify_variants,
+                inc_image_policy=self.inc_image_policy,
+                inc_image_registry=self.inc_image_registry,
+                inc_image_max_pull_bytes=self.inc_image_max_pull_bytes,
+                inc_image_pull_timeout=self.inc_image_pull_timeout,
+                local_image_prefix=self.local_image_prefix,
             )
 
             results: list[PatchVerificationResult] = []
@@ -1449,9 +1493,6 @@ class BenchmarkRunner:
                 f"Patch verification completed: {valid_count}/{len(results)} patches valid"
             )
 
-            # Cleanup temporary files
-            engine.cleanup()
-
             return results
 
         except PatchDiscoveryError:
@@ -1462,12 +1503,16 @@ class BenchmarkRunner:
                 exc_info=True,
             )
             return []
+        finally:
+            if engine is not None:
+                engine.cleanup()
 
     def _verify_patches_distributed(
         self,
         benchmark_path: Path,
         trial_output_dir: Path,
         harness_name: str,
+        sanitizer: str = "address",
         target_cpv_id: str | None = None,
     ) -> list[PatchVerificationResult]:
         """Verify patches via distributed evaluator queues.
@@ -1525,11 +1570,16 @@ class BenchmarkRunner:
                     trial_output_dir=trial_output_dir,
                     oss_fuzz_path=self.oss_fuzz_path or Path(),
                     harness_name=harness_name,
+                    sanitizer=sanitizer,
                     target_cpv_id=target_cpv_id,
                 )
 
-            # Derive trial_id from output dir name
-            trial_id = trial_output_dir.name
+            trial_id = build_trial_uid(
+                experiment=self.experiment_name,
+                benchmark=benchmark_path.name,
+                harness=harness_name,
+                trial_dir=trial_output_dir,
+            )
 
             # Enqueue all patch jobs
             job_ids = enqueue_patch_jobs(
@@ -1540,7 +1590,9 @@ class BenchmarkRunner:
                 benchmark_path.name,
                 harness_name,
                 patches,
+                sanitizer=sanitizer,
                 verify_variants=self.patch_verify_variants,
+                use_inc_build=True,
             )
 
             if not job_ids:
@@ -1550,6 +1602,7 @@ class BenchmarkRunner:
                     trial_output_dir=trial_output_dir,
                     oss_fuzz_path=self.oss_fuzz_path or Path(),
                     harness_name=harness_name,
+                    sanitizer=sanitizer,
                     target_cpv_id=target_cpv_id,
                 )
 

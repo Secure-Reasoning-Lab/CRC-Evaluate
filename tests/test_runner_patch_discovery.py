@@ -102,3 +102,44 @@ def test_find_trial_pov_for_cpv_supports_blob_suffix(tmp_path: Path) -> None:
     blob.write_bytes(b"xyz")
 
     assert BenchmarkRunner._find_trial_pov_for_cpv(pov_dir, "cpv_1") == blob
+
+
+def test_verify_patches_local_cleans_engine_on_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_dir = tmp_path / "trial" / "output" / "patches"
+    patch_dir.mkdir(parents=True)
+    (patch_dir / "cpv_0").mkdir()
+    (patch_dir / "cpv_0" / "patch.diff").write_text("diff --git a b")
+
+    pov_dir = tmp_path / "trial" / "crs-input" / "povs"
+    pov_dir.mkdir(parents=True)
+    (pov_dir / "cpv_0").write_bytes(b"pov")
+
+    cleanup_called = {"value": False}
+
+    class _FakeEngine:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def verify_patch(self, **_kwargs):  # noqa: ANN003
+            raise RuntimeError("verification exploded")
+
+        def cleanup(self) -> None:
+            cleanup_called["value"] = True
+
+    monkeypatch.setattr(
+        "crsbench.evaluation.runner.PatchVerificationEngine", _FakeEngine
+    )
+
+    runner = _make_runner("bug-fixing")
+    results = runner._verify_patches_local(
+        benchmark_path=tmp_path / "benchmark",
+        trial_output_dir=tmp_path / "trial",
+        oss_fuzz_path=tmp_path / "oss-fuzz",
+        harness_name="harness-a",
+        target_cpv_id="cpv_0",
+    )
+
+    assert results == []
+    assert cleanup_called["value"] is True

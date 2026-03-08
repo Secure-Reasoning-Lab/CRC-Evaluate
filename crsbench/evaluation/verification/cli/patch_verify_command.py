@@ -45,6 +45,7 @@ from crsbench.evaluation.verification.models import (
 )
 from crsbench.evaluation.verification.patch import PatchVerificationEngine
 from crsbench.utils.logger import get_logger
+from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
 logger = get_logger(__name__)
 
@@ -110,7 +111,8 @@ Examples:
     patch_group.add_argument(
         "--patch-dir",
         type=Path,
-        help="Directory containing patches (structure: <pov_id>/patch.diff)",
+        help="Directory containing patches (structured <cpv_id>/patch.diff "
+        "or flat *.diff with inferable target)",
     )
 
     # POV input (one required)
@@ -139,7 +141,7 @@ Examples:
         "--oss-fuzz-path",
         type=Path,
         default=None,
-        help="Path to oss-fuzz directory (default: ./oss-fuzz)",
+        help="Path to oss-fuzz directory (default: managed third_party/oss-fuzz)",
     )
 
     # Source mode
@@ -293,26 +295,36 @@ def run_patch_verify(args: argparse.Namespace) -> int:
         return 1
 
     # Determine oss-fuzz path
-    oss_fuzz_path = args.oss_fuzz_path or Path("./oss-fuzz")
+    try:
+        oss_fuzz_path = args.oss_fuzz_path or Path(ensure_oss_fuzz_root())
+    except Exception as e:
+        logger.error(f"Failed to resolve OSS-Fuzz directory: {e}")
+        return 1
     if not oss_fuzz_path.exists():
         logger.error(f"OSS-Fuzz directory not found: {oss_fuzz_path}")
         return 1
 
-    # Create patch verification engine
-    engine = PatchVerificationEngine(
-        oss_fuzz_path=oss_fuzz_path,
-        test_mode=UnitTestMode(args.test_mode),
-        sanitizer=args.sanitizer,
-        timeout=args.timeout,
-        build_timeout=args.build_timeout,
-        test_timeout=args.test_timeout,
-        build_workers=args.build_workers,
-        verify_workers=args.verify_workers,
-        verify_variants=not args.no_variants,
-        force_rebuild=args.force_rebuild,
-        use_inc_build=args.inc_build,
-        source_mode=args.source,
-    )
+    def _make_engine(
+        *, build_only: bool, force_rebuild: bool
+    ) -> PatchVerificationEngine:
+        return PatchVerificationEngine(
+            oss_fuzz_path=oss_fuzz_path,
+            test_mode=UnitTestMode(args.test_mode),
+            sanitizer=args.sanitizer,
+            timeout=args.timeout,
+            build_timeout=args.build_timeout,
+            test_timeout=args.test_timeout,
+            build_workers=args.build_workers,
+            verify_workers=args.verify_workers,
+            verify_variants=not args.no_variants,
+            force_rebuild=force_rebuild,
+            use_inc_build=args.inc_build,
+            source_mode=args.source,
+            build_only=build_only,
+        )
+
+    # Engine used for adapter/discovery helpers.
+    engine = _make_engine(build_only=False, force_rebuild=False)
 
     # Resolve harness names
     harness_names = _resolve_harness_names(engine, args.benchmark_path, args.harness)
@@ -329,6 +341,42 @@ def run_patch_verify(args: argparse.Namespace) -> int:
     try:
         results: list[PatchVerificationResult] = []
         wall_clock_start = time.time()
+
+        def _build_and_verify(
+            *,
+            benchmark_path: Path,
+            patch_info: PatchInfo,
+            harness: str,
+            pov_path: Path,
+        ) -> PatchVerificationResult:
+            build_engine = _make_engine(
+                build_only=True, force_rebuild=args.force_rebuild
+            )
+            try:
+                build_result = build_engine.verify_patch(
+                    benchmark_path=benchmark_path,
+                    patch=patch_info,
+                    harness=harness,
+                    pov_path=pov_path,
+                    allow_build=True,
+                )
+            finally:
+                build_engine.cleanup()
+
+            if build_result.status != PatchVerificationStatus.VALID:
+                return build_result
+
+            verify_engine = _make_engine(build_only=False, force_rebuild=False)
+            try:
+                return verify_engine.verify_patch(
+                    benchmark_path=benchmark_path,
+                    patch=patch_info,
+                    harness=harness,
+                    pov_path=pov_path,
+                    allow_build=False,
+                )
+            finally:
+                verify_engine.cleanup()
 
         if mode == "single":
             logger.info(f"Verifying single patch: {args.patch}")
@@ -349,9 +397,9 @@ def run_patch_verify(args: argparse.Namespace) -> int:
                     return 1
 
             for harness in harness_names:
-                result = engine.verify_patch(
+                result = _build_and_verify(
                     benchmark_path=args.benchmark_path,
-                    patch=patch_info,
+                    patch_info=patch_info,
                     harness=harness,
                     pov_path=pov_path,
                 )
@@ -362,14 +410,37 @@ def run_patch_verify(args: argparse.Namespace) -> int:
             logger.info(f"Patch directory: {args.patch_dir}")
             logger.info(f"POV directory: {pov_dir}")
 
+            target_pov_id = engine._infer_single_pov_id(pov_dir)
+            patches = engine._discover_patches(
+                args.patch_dir, target_pov_id=target_pov_id
+            )
+            if not patches:
+                logger.warning(f"No patches found in {args.patch_dir}")
+                return 0
+
             for harness in harness_names:
-                harness_results = engine.verify_patches(
-                    benchmark_path=args.benchmark_path,
-                    patch_dir=args.patch_dir,
-                    harness=harness,
-                    pov_dir=pov_dir,
-                )
-                results.extend(harness_results)
+                for patch_info in patches:
+                    pov_path = engine._find_pov_for_patch(pov_dir, patch_info.pov_id)
+                    if not pov_path:
+                        results.append(
+                            PatchVerificationResult(
+                                status=PatchVerificationStatus.ERROR,
+                                patch_id=patch_info.patch_id,
+                                pov_id=patch_info.pov_id,
+                                benchmark=args.benchmark_path.name,
+                                patch_path=patch_info.patch_path,
+                                details=f"POV not found for {patch_info.pov_id}",
+                            )
+                        )
+                        continue
+                    results.append(
+                        _build_and_verify(
+                            benchmark_path=args.benchmark_path,
+                            patch_info=patch_info,
+                            harness=harness,
+                            pov_path=pov_path,
+                        )
+                    )
 
         wall_clock_time = time.time() - wall_clock_start
 

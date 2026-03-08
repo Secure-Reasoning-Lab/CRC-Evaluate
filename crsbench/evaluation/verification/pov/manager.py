@@ -82,6 +82,7 @@ class POVVerificationManager:
         experiment_name: Optional[str] = None,
         trial_id: Optional[str] = None,
         exchange_pov_dir: Optional[Path] = None,
+        sanitizer: Optional[str] = None,
     ):
         """Initialize POV verification manager.
 
@@ -101,6 +102,7 @@ class POVVerificationManager:
             experiment_name: Experiment name for async verify queue naming
             trial_id: Trial identifier for async result correlation
             exchange_pov_dir: Pre-resolved EXCHANGE_DIR pov path for real-time scanning
+            sanitizer: Trial sanitizer to scope async verification builds
 
         Raises:
             ValueError: If trial_dir doesn't exist
@@ -149,6 +151,7 @@ class POVVerificationManager:
         self._redis_host = redis_host
         self._experiment_name = experiment_name
         self._trial_id = trial_id
+        self._sanitizer = sanitizer
         self._verify_queue: Optional[object] = None  # Lazy-initialized RQ Queue
         self._pending_job_ids: list[str] = []  # Job IDs awaiting results
         self._pov_hash_to_path: dict[str, Path] = {}  # hash → local file path
@@ -253,6 +256,7 @@ class POVVerificationManager:
             harness=self.harness_name,
             pov_id=pov_id,
             pov_data=pov_data,
+            sanitizer=self._sanitizer,
         )
 
     def _poll_pending_verdicts(self) -> None:
@@ -423,8 +427,19 @@ class POVVerificationManager:
                 pov_id=pov_path.name,
             )
 
+            build_results = None
+            if self._sanitizer:
+                build_results = self._engine.get_or_build_results(
+                    self._adapter,
+                    sanitizer=self._sanitizer,
+                )
+
             # Verify the POV
-            return self._engine.verify_pov(request, self._adapter)
+            return self._engine.verify_pov(
+                request,
+                self._adapter,
+                build_results=build_results,
+            )
         except Exception as e:
             logger.error(f"POV verification failed for {pov_path}: {e}", exc_info=True)
             return None

@@ -33,7 +33,7 @@ class CrsComposeCrsEntry(BaseModel):
 
     source: CrsComposeSource
     cpuset: str
-    memory: str
+    memory: Optional[str] = None
     llm_budget: Optional[int] = None
     additional_env: Optional[dict[str, str]] = None
 
@@ -42,7 +42,7 @@ class CrsComposeInfra(BaseModel):
     """Infrastructure resource config for oss-crs services."""
 
     cpuset: str
-    memory: str
+    memory: Optional[str] = None
 
 
 class CrsComposeLlmConfig(BaseModel):

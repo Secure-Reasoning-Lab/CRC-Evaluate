@@ -116,7 +116,21 @@ class ResourceContext:
         if self._cgroup_path is not None:
             from crsbench.utils.cgroup import cleanup_cgroup
 
-            cleanup_cgroup(self._cgroup_path, force=True)
-            logger.info(f"ResourceContext: cleaned up cgroup {self._cgroup_path}")
+            try:
+                cleaned = cleanup_cgroup(self._cgroup_path, force=True)
+                if cleaned:
+                    logger.info(
+                        f"ResourceContext: cleaned up cgroup {self._cgroup_path}"
+                    )
+                else:
+                    logger.warning(
+                        "ResourceContext: cgroup cleanup reported failure for "
+                        f"{self._cgroup_path}"
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "ResourceContext: failed to cleanup cgroup "
+                    f"{self._cgroup_path}: {exc}"
+                )
 
         return False

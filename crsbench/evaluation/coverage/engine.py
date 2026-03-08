@@ -12,7 +12,7 @@ Architecture:
 
 Usage:
     engine = CoverageEngine(
-        oss_fuzz_path=Path("./oss-fuzz"),
+        oss_fuzz_path=Path("third_party/oss-fuzz"),
         build_workers=4,
     )
     try:

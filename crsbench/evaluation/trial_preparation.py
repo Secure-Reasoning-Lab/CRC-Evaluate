@@ -87,7 +87,7 @@ class TrialDirectoryPreparer:
         Args:
             experiment_dir: Root directory for experiment
             benchmarks_root: Path to benchmarks directory
-            oss_fuzz_dir: Path to oss-fuzz submodule
+            oss_fuzz_dir: Path to managed third_party/oss-fuzz checkout
             config: Experiment configuration
         """
         self.experiment_dir = Path(experiment_dir)

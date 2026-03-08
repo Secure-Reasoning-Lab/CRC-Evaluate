@@ -50,7 +50,7 @@ class VariantPlanner:
         skip_if_cached: bool = True,
         include_coverage: bool = False,
         include_patched: bool = False,
-        project_image_prefix: str = "aixcc-afc",
+        project_image_prefix: str = "crsbench",
     ) -> list[BuildSingleVariantJob]:
         """Create build jobs for all variants of a single benchmark.
 
@@ -226,7 +226,7 @@ class VariantPlanner:
         skip_if_cached: bool = True,
         include_coverage: bool = False,
         include_patched: bool = False,
-        project_image_prefix: str = "aixcc-afc",
+        project_image_prefix: str = "crsbench",
     ) -> list[BuildSingleVariantJob]:
         """Create build jobs for multiple benchmarks.
 

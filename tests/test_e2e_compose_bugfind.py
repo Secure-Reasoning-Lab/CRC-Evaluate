@@ -53,7 +53,10 @@ def make_bugfind_config_dict(tmp_path: Path, **overrides: Any) -> dict[str, Any]
         "build_timeout": 60,
         "run_timeout": 10,
         "crs_compose": {
-            "docker_registry": "ghcr.io/test",
+            "oss_crs_infra": {"num_cores": 1, "mem_limit": "8G"},
+            "crs_services": {
+                "test-crs": {"num_cores": 1, "mem_limit": "8G"},
+            },
         },
     }
     base.update(overrides)
@@ -165,6 +168,15 @@ def e2e_bugfind_env(tmp_path: Path) -> Path:
     (tmp_path / "report").mkdir()
 
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _mock_oss_fuzz_root(e2e_bugfind_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force distributed job runtime to use this test's oss-fuzz fixture path."""
+    monkeypatch.setattr(
+        "crsbench.distributed.jobs.ensure_oss_fuzz_root",
+        lambda: str(e2e_bugfind_env / "oss-fuzz"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +491,42 @@ class TestBugFindE2ECompose:
         # output/ directory from collect_results
         assert (tod / "output").exists()
         assert (tod / "output").is_dir()
+
+    @patch(_PATCH_ARTIFACTS)
+    @patch(_PATCH_RESOURCE_CTX)
+    @patch(_PATCH_RWGT)
+    @patch(_PATCH_SUBPROCESS)
+    def test_compose_includes_fuzzing_language_from_project_yaml(
+        self,
+        mock_subprocess_run: MagicMock,
+        mock_rwgt: MagicMock,
+        mock_resource_ctx: MagicMock,
+        mock_artifacts: MagicMock,
+        e2e_bugfind_env: Path,
+    ) -> None:
+        """Adapter must pass benchmark language to oss-crs via additional_env."""
+        env = e2e_bugfind_env
+        benchmark = env / "benchmarks" / "test-project"
+        project_yaml = benchmark / "project.yaml"
+        project = yaml.safe_load(project_yaml.read_text())
+        project["language"] = "jvm"
+        project_yaml.write_text(yaml.dump(project))
+
+        config_dict = _build_config_dict(env)
+        mock_subprocess_run.return_value = _SUBPROCESS_OK
+        _setup_noop_resource_ctx(mock_resource_ctx)
+        mock_rwgt.side_effect = _run_side_effect_factory("test-crs", "fuzz_target")
+        mock_artifacts.side_effect = _artifacts_side_effect_factory(
+            "test-crs", "fuzz_target"
+        )
+
+        _run_trial(config_dict)
+
+        compose_yaml = _trial_output_dir(env) / "crs-compose.yaml"
+        compose_data = yaml.safe_load(compose_yaml.read_text())
+        additional_env = compose_data["test-crs"]["additional_env"]
+        assert additional_env["SANITIZER"] == "address"
+        assert additional_env["FUZZING_LANGUAGE"] == "jvm"
 
 
 # ===========================================================================

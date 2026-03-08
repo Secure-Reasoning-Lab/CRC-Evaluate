@@ -319,3 +319,129 @@ class TestVerifyBenchmarkSkipHashes:
 
             assert isinstance(output.results, list)
             assert output.skipped_count == 1  # pov1.bin was skipped
+
+    def test_verify_benchmark_max_per_hash_limits_duplicates(
+        self, mock_oss_fuzz: Path, benchmark_path: Path, tmp_path: Path
+    ) -> None:
+        """max_per_hash should keep one file per content hash and skip duplicates."""
+        from crsbench.evaluation.verification.pov.engine import VerificationEngine
+
+        pov_dir = tmp_path / "output_povs_dedupe"
+        pov_dir.mkdir()
+        (pov_dir / "dup1.bin").write_bytes(b"same")
+        (pov_dir / "dup2.bin").write_bytes(b"same")
+        (pov_dir / "unique.bin").write_bytes(b"other")
+
+        with (
+            patch.object(VerificationEngine, "load_adapter") as mock_adapter,
+            patch.object(VerificationEngine, "get_or_build_results") as mock_build,
+            patch.object(VerificationEngine, "verify_povs_parallel") as mock_verify,
+        ):
+            adapter = MagicMock()
+            adapter.benchmark_name = "test-benchmark"
+            adapter.get_harness_names.return_value = ["test_harness"]
+            adapter.get_mode.return_value = MagicMock(value="full")
+            mock_adapter.return_value = adapter
+            mock_build.return_value = {"variant1": MagicMock(success=True)}
+            mock_verify.return_value = []
+
+            engine = VerificationEngine(mock_oss_fuzz)
+            output = engine.verify_benchmark(
+                benchmark_path, pov_dir=pov_dir, max_per_hash=1
+            )
+
+            # 3 files total, but only 2 unique contents should be verified.
+            verify_pairs = mock_verify.call_args.args[0]
+            assert len(verify_pairs) == 2
+            assert {pair[0] for pair in verify_pairs} == {"dup1.bin", "unique.bin"}
+            assert output.skipped_count == 1
+
+    def test_verify_benchmark_rejects_negative_max_per_hash(
+        self, mock_oss_fuzz: Path, benchmark_path: Path, pov_dir: Path
+    ) -> None:
+        """Negative max_per_hash should fail fast instead of silently disabling cap."""
+        from crsbench.evaluation.verification.pov.engine import VerificationEngine
+
+        engine = VerificationEngine(mock_oss_fuzz)
+        with pytest.raises(ValueError, match="max_per_hash must be >= 0"):
+            engine.verify_benchmark(
+                benchmark_path,
+                pov_dir=pov_dir,
+                max_per_hash=-1,
+            )
+
+    def test_verify_benchmark_combines_skip_hashes_and_max_per_hash(
+        self, mock_oss_fuzz: Path, benchmark_path: Path, tmp_path: Path
+    ) -> None:
+        """Combined skip_hashes + max_per_hash should sum skipped_count correctly."""
+        from crsbench.evaluation.verification.pov.engine import VerificationEngine
+
+        pov_dir = tmp_path / "output_povs_combined"
+        pov_dir.mkdir()
+        (pov_dir / "a.bin").write_bytes(b"skip-me")
+        (pov_dir / "b.bin").write_bytes(b"dup")
+        (pov_dir / "c.bin").write_bytes(b"dup")
+        (pov_dir / "d.bin").write_bytes(b"uniq")
+
+        skip_hashes = {compute_content_hash(pov_dir / "a.bin")}
+
+        with (
+            patch.object(VerificationEngine, "load_adapter") as mock_adapter,
+            patch.object(VerificationEngine, "get_or_build_results") as mock_build,
+            patch.object(VerificationEngine, "verify_povs_parallel") as mock_verify,
+        ):
+            adapter = MagicMock()
+            adapter.benchmark_name = "test-benchmark"
+            adapter.get_harness_names.return_value = ["test_harness"]
+            adapter.get_mode.return_value = MagicMock(value="full")
+            mock_adapter.return_value = adapter
+            mock_build.return_value = {"variant1": MagicMock(success=True)}
+            mock_verify.return_value = []
+
+            engine = VerificationEngine(mock_oss_fuzz)
+            output = engine.verify_benchmark(
+                benchmark_path,
+                pov_dir=pov_dir,
+                skip_hashes=skip_hashes,
+                max_per_hash=1,
+            )
+
+            verify_pairs = mock_verify.call_args.args[0]
+            assert {pair[0] for pair in verify_pairs} == {"b.bin", "d.bin"}
+            # one skipped by skip_hashes (a.bin) + one skipped by cap (c.bin)
+            assert output.skipped_count == 2
+
+    def test_verify_benchmark_max_per_hash_zero_skips_all_files(
+        self, mock_oss_fuzz: Path, benchmark_path: Path, tmp_path: Path
+    ) -> None:
+        """max_per_hash=0 should skip all POV files from pov_dir."""
+        from crsbench.evaluation.verification.pov.engine import VerificationEngine
+
+        pov_dir = tmp_path / "output_povs_zero_cap"
+        pov_dir.mkdir()
+        (pov_dir / "x.bin").write_bytes(b"x")
+        (pov_dir / "y.bin").write_bytes(b"y")
+
+        with (
+            patch.object(VerificationEngine, "load_adapter") as mock_adapter,
+            patch.object(VerificationEngine, "get_or_build_results") as mock_build,
+            patch.object(VerificationEngine, "verify_povs_parallel") as mock_verify,
+        ):
+            adapter = MagicMock()
+            adapter.benchmark_name = "test-benchmark"
+            adapter.get_harness_names.return_value = ["test_harness"]
+            adapter.get_mode.return_value = MagicMock(value="full")
+            mock_adapter.return_value = adapter
+            mock_build.return_value = {"variant1": MagicMock(success=True)}
+            mock_verify.return_value = []
+
+            engine = VerificationEngine(mock_oss_fuzz)
+            output = engine.verify_benchmark(
+                benchmark_path,
+                pov_dir=pov_dir,
+                max_per_hash=0,
+            )
+
+            mock_verify.assert_not_called()
+            assert output.results == []
+            assert output.skipped_count == 2

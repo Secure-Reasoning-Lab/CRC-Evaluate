@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Optional
 import yaml
 
 from crsbench.distributed.common import normalize_redis_host
+from crsbench.evaluation.trial_identity import build_trial_uid
 from crsbench.evaluation.trial_paths import (
     ExperimentDir,
     TrialDir,
@@ -36,11 +37,32 @@ from crsbench.evaluation.verification.models import (
     PovVerificationStatus,
 )
 from crsbench.utils.logger import get_logger
+from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
 if TYPE_CHECKING:
     import rq
 
 logger = get_logger(__name__)
+_POV_HASH_RE = re.compile(r"^(?:[0-9a-f]{16}|[0-9a-f]{64})$")
+
+
+class AsyncPovDrainError(TimeoutError):
+    """Raised when async POV drain times out after partial processing."""
+
+    def __init__(self, message: str, processed_count: int):
+        super().__init__(message)
+        self.processed_count = processed_count
+
+
+def _extract_valid_pov_hash(pov_id: str) -> Optional[str]:
+    """Extract and validate POV content hash from queued verdict ID."""
+    if not pov_id:
+        return None
+    hash_part = pov_id.rsplit(":", 1)[-1]
+    if not _POV_HASH_RE.fullmatch(hash_part):
+        return None
+    # Canonicalize to the 16-hex CRSBench content hash form.
+    return hash_part[:16]
 
 
 def add_reeval_subparser(subparsers: argparse._SubParsersAction) -> None:
@@ -81,7 +103,7 @@ Examples:
         "--oss-fuzz-path",
         type=Path,
         default=None,
-        help="Path to oss-fuzz directory (default: ./oss-fuzz)",
+        help="Path to oss-fuzz directory (default: managed third_party/oss-fuzz)",
     )
     parser.add_argument(
         "--source",
@@ -107,9 +129,14 @@ Examples:
         help="Force rebuild of variants",
     )
     parser.add_argument(
-        "--inc-build",
-        action="store_true",
-        help="Use incremental build instead of full build",
+        "--mode",
+        choices=["snapshot", "full"],
+        default="snapshot",
+        help=(
+            "Patch evaluation mode: 'snapshot' (default) uses incremental-image "
+            "build flow; 'full' disables incremental-image flow (use "
+            "--force-rebuild for clean rebuilds)"
+        ),
     )
     parser.add_argument(
         "--per-pov-verify-timeout",
@@ -272,6 +299,7 @@ def _reeval_bug_finding(
     verify_workers: Optional[int],
     per_pov_verify_timeout: int = 180,
     *,
+    sanitizer: Optional[str] = None,
     force_rebuild: bool,
     use_inc_build: bool,
 ) -> int:
@@ -288,14 +316,12 @@ def _reeval_bug_finding(
         verify_workers: Parallel verify workers
         force_rebuild: Force variant rebuild
         use_inc_build: Use incremental builds
+        sanitizer: Optional sanitizer to scope build selection
 
     Returns:
         Number of results produced
     """
-    from crsbench.evaluation.verification import (
-        PatchBasedDedup,
-        VerificationEngine,
-    )
+    from crsbench.evaluation.verification import VerificationEngine
     from crsbench.evaluation.verification.pov.store import POVStore
     from crsbench.evaluation.verification.utils import compute_content_hash
 
@@ -307,7 +333,6 @@ def _reeval_bug_finding(
     engine = VerificationEngine(
         oss_fuzz_path=oss_fuzz_path,
         timeout=per_pov_verify_timeout,
-        dedup_strategy=PatchBasedDedup(),
         build_workers=build_workers,
         verify_workers=verify_workers,
         source_mode=source_mode,
@@ -318,7 +343,10 @@ def _reeval_bug_finding(
         pov_dir=pov_dir,
         harness_filter=harness,
         force_rebuild=force_rebuild,
+        deduplicate=False,
+        max_per_hash=1,
         use_inc_build=use_inc_build,
+        sanitizer=sanitizer,
     )
 
     if output.results:
@@ -370,6 +398,7 @@ class _AsyncTrialState:
     """Per-trial tracking data accumulated during the enqueue phase."""
 
     trial_dir: Path
+    experiment_name: str
     benchmark_name: str
     harness: str
     dest_dir: Path
@@ -378,7 +407,12 @@ class _AsyncTrialState:
 
     @property
     def trial_id(self) -> str:
-        return f"{self.benchmark_name}__{self.harness}__{self.trial_dir.name}"
+        return build_trial_uid(
+            experiment=self.experiment_name,
+            benchmark=self.benchmark_name,
+            harness=self.harness,
+            trial_dir=self.trial_dir,
+        )
 
 
 @dataclass
@@ -386,6 +420,7 @@ class _AsyncPatchTrialState:
     """Per-trial patch verify tracking data accumulated during enqueue."""
 
     trial_dir: Path
+    experiment_name: str
     benchmark_name: str
     harness: str
     dest_dir: Path
@@ -394,7 +429,12 @@ class _AsyncPatchTrialState:
 
     @property
     def trial_id(self) -> str:
-        return f"{self.benchmark_name}__{self.harness}__{self.trial_dir.name}"
+        return build_trial_uid(
+            experiment=self.experiment_name,
+            benchmark=self.benchmark_name,
+            harness=self.harness,
+            trial_dir=self.trial_dir,
+        )
 
 
 def _infer_target_cpv_id_from_trial_path(trial_dir: Path) -> Optional[str]:
@@ -416,6 +456,56 @@ def _load_target_cpv_id_from_trial_metadata(trial_dir: Path) -> Optional[str]:
         return None
     target = metadata.get("target_cpv_id")
     return target if isinstance(target, str) and target else None
+
+
+def _infer_sanitizer_from_trial_path(trial_dir: Path) -> Optional[str]:
+    """Infer sanitizer from trial path layout (.../<sanitizer>/trial-<n>)."""
+    valid_sanitizers = {"address", "memory", "undefined", "thread", "leak"}
+    parts = trial_dir.parts
+    for i, part in enumerate(parts):
+        if re.fullmatch(r"trial-\d+", part) and i > 0:
+            candidate = parts[i - 1]
+            if candidate in valid_sanitizers:
+                return candidate
+    return None
+
+
+def _load_sanitizer_from_trial_metadata(trial_dir: Path) -> Optional[str]:
+    """Load sanitizer from trial metadata.json when available."""
+    valid_sanitizers = {"address", "memory", "undefined", "thread", "leak"}
+    metadata_path = trial_dir / "metadata.json"
+    if not metadata_path.exists():
+        return None
+    try:
+        metadata = json.loads(metadata_path.read_text())
+    except Exception:
+        return None
+    sanitizer = metadata.get("sanitizer")
+    if isinstance(sanitizer, str) and sanitizer in valid_sanitizers:
+        return sanitizer
+    if isinstance(sanitizer, str) and sanitizer:
+        logger.warning(
+            f"Ignoring invalid sanitizer {sanitizer!r} in {metadata_path}; "
+            "falling back to path inference/auto"
+        )
+    return None
+
+
+def _resolve_trial_sanitizer(trial: object, trial_dir: Path) -> Optional[str]:
+    """Resolve trial sanitizer from structured data, then metadata, then path."""
+    trial_sanitizer = (
+        trial.sanitizer.value
+        if hasattr(trial, "sanitizer") and hasattr(trial.sanitizer, "value")
+        else getattr(trial, "sanitizer", None)
+    )
+    if isinstance(trial_sanitizer, str) and trial_sanitizer:
+        return trial_sanitizer
+
+    metadata_sanitizer = _load_sanitizer_from_trial_metadata(trial_dir)
+    if metadata_sanitizer:
+        return metadata_sanitizer
+
+    return _infer_sanitizer_from_trial_path(trial_dir)
 
 
 def _discover_trial_patches(
@@ -525,6 +615,7 @@ def _enqueue_trial_povs(
     dest_dir: Path,
     verify_queue: rq.Queue,
     experiment_name: str,
+    sanitizer: Optional[str] = None,
 ) -> Optional[_AsyncTrialState]:
     """Enqueue all POVs for a single trial without polling.
 
@@ -558,6 +649,7 @@ def _enqueue_trial_povs(
 
     state = _AsyncTrialState(
         trial_dir=trial_dir,
+        experiment_name=experiment_name,
         benchmark_name=benchmark_name,
         harness=harness,
         dest_dir=dest_dir,
@@ -567,6 +659,14 @@ def _enqueue_trial_povs(
     for pov_file in pov_files:
         pov_data = pov_file.read_bytes()
         pov_hash = compute_content_hash(pov_file)
+
+        if pov_hash in state.pov_hash_to_path:
+            logger.debug(
+                f"Skipping duplicate POV content {pov_file.name} "
+                f"(same hash as {state.pov_hash_to_path[pov_hash].name})"
+            )
+            continue
+
         pov_id = f"{pov_file.name}:{pov_hash}"
         state.pov_hash_to_path[pov_hash] = pov_file
 
@@ -578,6 +678,7 @@ def _enqueue_trial_povs(
             harness=harness,
             pov_id=pov_id,
             pov_data=pov_data,
+            sanitizer=sanitizer,
         )
         if job_id:
             state.job_ids.append(job_id)
@@ -604,6 +705,7 @@ def _enqueue_trial_patches(
     verify_queue: rq.Queue,
     experiment_name: str,
     source_mode: str,
+    sanitizer: Optional[str],
     *,
     patch_verify_variants: bool,
     use_inc_build: bool,
@@ -633,6 +735,7 @@ def _enqueue_trial_patches(
 
     state = _AsyncPatchTrialState(
         trial_dir=trial_dir,
+        experiment_name=experiment_name,
         benchmark_name=benchmark_name,
         harness=harness,
         dest_dir=dest_dir,
@@ -647,6 +750,7 @@ def _enqueue_trial_patches(
         benchmark_name,
         harness,
         patches,
+        sanitizer=sanitizer or "address",
         source_mode=source_mode,
         verify_variants=patch_verify_variants,
         use_inc_build=use_inc_build,
@@ -667,6 +771,7 @@ def _enqueue_trial_patches(
 def _drain_all_async_results(
     trials: list[_AsyncTrialState],
     redis_host: str,
+    timeout_seconds: float = 7200.0,
 ) -> int:
     """Poll all enqueued trials in a single unified loop.
 
@@ -683,27 +788,34 @@ def _drain_all_async_results(
     from crsbench.distributed.verify_queue import poll_single_pov_verdicts
     from crsbench.evaluation.verification.pov.store import POVStore
 
-    # Build trial_id → state lookup and per-trial stores
+    # Build trial_id → state lookup
     trial_id_map: dict[str, _AsyncTrialState] = {}
-    trial_stores: dict[str, POVStore] = {}
     trial_results: dict[str, list[PovVerificationResult]] = {}
 
     all_job_ids: list[str] = []
     for state in trials:
         tid = state.trial_id
+        if tid in trial_id_map:
+            raise ValueError(f"Duplicate async trial routing key detected: {tid}")
         trial_id_map[tid] = state
-        # Preserve crs_run_start_time from original run
-        povs_dir = state.dest_dir / "povs"
-        crs_start = _load_crs_run_start_time(povs_dir)
-        trial_stores[tid] = POVStore(povs_dir, crs_run_start_time=crs_start)
         trial_results[tid] = []
         all_job_ids.extend(state.job_ids)
 
     logger.info(f"Draining {len(all_job_ids)} async jobs across {len(trials)} trials")
 
     remaining = all_job_ids
+    start_time = time.monotonic()
+    timed_out = False
 
     while remaining:
+        if time.monotonic() - start_time > timeout_seconds:
+            timed_out = True
+            logger.warning(
+                "Timed out draining async POV jobs (%d job(s) still pending)",
+                len(remaining),
+            )
+            break
+
         completed, remaining = poll_single_pov_verdicts(redis_host, remaining)
 
         for result_dict in completed:
@@ -715,27 +827,8 @@ def _drain_all_async_results(
                     logger.warning(f"Cannot route result for trial_id={tid}, skipping")
                     continue
 
-                store = trial_stores[tid]
                 status = PovVerificationStatus(result.verdict.status)
                 cpv_matched = result.verdict.cpv_matches
-                pov_hash = POVStore._extract_hash(result.verdict.pov_id)
-                pov_path = state.pov_hash_to_path.get(pov_hash)
-
-                if pov_path and pov_path.exists():
-                    store.add_pov(pov_path, status, cpv_matched, pov_hash=pov_hash)
-
-                for variant_name, crash_log in result.verdict.crash_logs.items():
-                    store.store_crash_log(
-                        pov_hash,
-                        crash_log,
-                        status,
-                        cpv_matched,
-                        variant_name=variant_name,
-                    )
-
-                if status == PovVerificationStatus.CPV:
-                    if pov_path and pov_path.exists():
-                        store.store_unique_pov(pov_path, pov_hash, status, cpv_matched)
 
                 crash_info = None
                 if result.verdict.crash_logs:
@@ -761,14 +854,87 @@ def _drain_all_async_results(
         if remaining:
             time.sleep(2)
 
-    # Save per-trial results
+    # Save per-trial results (raw queue verdicts), matching distributed
+    # execution semantics.
     total = 0
     for state in trials:
         tid = state.trial_id
         results = trial_results[tid]
-        store = trial_stores[tid]
+
+        # Preserve crs_run_start_time from original run
+        povs_dir = state.dest_dir / "povs"
+        crs_start = _load_crs_run_start_time(povs_dir)
+        store = POVStore(povs_dir, crs_run_start_time=crs_start)
 
         if results:
+            for result in results:
+                try:
+                    if not result.pov_id:
+                        continue
+                    pov_hash = _extract_valid_pov_hash(result.pov_id)
+                    if not pov_hash:
+                        logger.warning(
+                            "Skipping async POV store persistence for invalid pov_id: %s",
+                            result.pov_id,
+                        )
+                        continue
+                    pov_path = state.pov_hash_to_path.get(pov_hash)
+
+                    # Always persist verdict metadata first.
+                    if pov_path and pov_path.exists():
+                        try:
+                            store.add_pov(
+                                pov_path,
+                                result.status,
+                                result.cpv_matched,
+                                pov_hash=pov_hash,
+                            )
+                            if result.status == PovVerificationStatus.CPV:
+                                store.store_unique_pov(
+                                    pov_path,
+                                    pov_hash,
+                                    result.status,
+                                    result.cpv_matched,
+                                )
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to persist async POV blob metadata {result.pov_id}: {e}"
+                            )
+                    else:
+                        try:
+                            store.add_pov_by_id(
+                                pov_hash,
+                                result.status,
+                                result.cpv_matched,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to persist async POV metadata {result.pov_id}: {e}"
+                            )
+
+                    # Preserve crash evidence even when POV file is no longer present.
+                    if result.crash_info and "stdout" in result.crash_info:
+                        for variant_name, crash_log in result.crash_info[
+                            "stdout"
+                        ].items():
+                            try:
+                                store.store_crash_log(
+                                    pov_hash,
+                                    crash_log,
+                                    result.status,
+                                    result.cpv_matched,
+                                    variant_name=variant_name,
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to persist async crash log {result.pov_id}/{variant_name}: {e}"
+                                )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to persist async POV result {result.pov_id}: {e}"
+                    )
+                    continue
+
             path = _save_pov_results(results, state.dest_dir)
             logger.info(f"Wrote {len(results)} POV results to {path}")
             store.save()
@@ -777,6 +943,9 @@ def _drain_all_async_results(
             )
 
         total += len(results)
+
+    if timed_out:
+        raise AsyncPovDrainError("Timed out draining async POV jobs", total)
 
     return total
 
@@ -792,6 +961,8 @@ def _drain_all_async_patch_results(
     trial_id_map: dict[str, _AsyncPatchTrialState] = {
         state.trial_id: state for state in trials
     }
+    if len(trial_id_map) != len(trials):
+        raise ValueError("Duplicate async patch trial routing key detected")
     trial_results: dict[str, list[PatchVerificationResult]] = {
         state.trial_id: [] for state in trials
     }
@@ -863,6 +1034,7 @@ def _reeval_patch_generation(
     harness: str,
     dest_dir: Path,
     source_mode: str,
+    sanitizer: Optional[str],
     build_workers: Optional[int],
     verify_workers: Optional[int],
     per_pov_verify_timeout: int = 180,
@@ -911,6 +1083,7 @@ def _reeval_patch_generation(
 
     engine = PatchVerificationEngine(
         oss_fuzz_path=oss_fuzz_path,
+        sanitizer=sanitizer or "address",
         timeout=per_pov_verify_timeout,
         log_dir=work_dir,
         force_rebuild=force_rebuild,
@@ -921,12 +1094,15 @@ def _reeval_patch_generation(
         source_mode=source_mode,
     )
 
-    results = engine.verify_patches(
-        benchmark_path=benchmark_path,
-        patch_dir=patch_dir,
-        harness=harness,
-        pov_dir=pov_dir,
-    )
+    try:
+        results = engine.verify_patches(
+            benchmark_path=benchmark_path,
+            patch_dir=patch_dir,
+            harness=harness,
+            pov_dir=pov_dir,
+        )
+    finally:
+        engine.cleanup()
 
     if results:
         total_input_povs = TrialDir(trial_dir).count_visible_input_povs()
@@ -963,7 +1139,11 @@ def run_reeval(args: argparse.Namespace) -> int:
         logger.error(f"Experiment directory not found: {experiment_dir}")
         return 1
 
-    oss_fuzz_path = args.oss_fuzz_path or Path("./oss-fuzz")
+    try:
+        oss_fuzz_path = args.oss_fuzz_path or Path(ensure_oss_fuzz_root())
+    except Exception as e:
+        logger.error(f"Failed to resolve OSS-Fuzz directory: {e}")
+        return 1
     if not oss_fuzz_path.exists():
         logger.error(f"OSS-Fuzz directory not found: {oss_fuzz_path}")
         return 1
@@ -973,7 +1153,7 @@ def run_reeval(args: argparse.Namespace) -> int:
         benchmarks_root = Path(benchmarks_root)
 
     source_mode = args.source
-    use_inc_build = args.inc_build
+    use_snapshot = args.mode == "snapshot"
 
     # Resolve per-POV verify timeout: CLI flag > config > default 180s
     per_pov_verify_timeout = (
@@ -1020,7 +1200,6 @@ def run_reeval(args: argparse.Namespace) -> int:
                 trial_queue=trial_queue,
                 build_queue=build_queue,
                 verify_queue=verify_queue_name,
-                oss_fuzz_path=str(oss_fuzz_path),
                 benchmarks_root=str(benchmarks_root or Path("benchmarks")),
                 source_mode=source_mode,
                 per_pov_verify_timeout=per_pov_verify_timeout,
@@ -1099,6 +1278,8 @@ def run_reeval(args: argparse.Namespace) -> int:
 
             try:
                 if mode == TrialMode.bug_finding:
+                    trial_sanitizer = _resolve_trial_sanitizer(trial, trial_dir)
+
                     if verify_queue and redis_host:
                         # Phase 1: enqueue only, defer polling
                         state = _enqueue_trial_povs(
@@ -1108,6 +1289,7 @@ def run_reeval(args: argparse.Namespace) -> int:
                             dest_dir=dest_dir,
                             verify_queue=verify_queue,
                             experiment_name=experiment_name,
+                            sanitizer=trial_sanitizer,
                         )
                         if state:
                             async_trials.append(state)
@@ -1122,12 +1304,14 @@ def run_reeval(args: argparse.Namespace) -> int:
                         build_workers=args.build_workers,
                         verify_workers=args.verify_workers,
                         per_pov_verify_timeout=per_pov_verify_timeout,
+                        sanitizer=trial_sanitizer,
                         force_rebuild=args.force_rebuild,
-                        use_inc_build=use_inc_build,
+                        use_inc_build=use_snapshot,
                     )
                     total_results += count
 
                 elif mode == TrialMode.patch_generation:
+                    trial_sanitizer = _resolve_trial_sanitizer(trial, trial_dir)
                     if patch_build_queue and patch_verify_queue and redis_host:
                         state = _enqueue_trial_patches(
                             trial_dir=trial_dir,
@@ -1138,8 +1322,9 @@ def run_reeval(args: argparse.Namespace) -> int:
                             verify_queue=patch_verify_queue,
                             experiment_name=experiment_name,
                             source_mode=source_mode,
+                            sanitizer=trial_sanitizer,
                             patch_verify_variants=patch_verify_variants,
-                            use_inc_build=use_inc_build,
+                            use_inc_build=use_snapshot,
                         )
                         if state:
                             async_patch_trials.append(state)
@@ -1151,12 +1336,13 @@ def run_reeval(args: argparse.Namespace) -> int:
                         harness=harness,
                         dest_dir=dest_dir,
                         source_mode=source_mode,
+                        sanitizer=trial_sanitizer,
                         build_workers=args.build_workers,
                         verify_workers=args.verify_workers,
                         per_pov_verify_timeout=per_pov_verify_timeout,
                         patch_verify_variants=patch_verify_variants,
                         force_rebuild=args.force_rebuild,
-                        use_inc_build=use_inc_build,
+                        use_inc_build=use_snapshot,
                     )
                     total_results += count
 
@@ -1174,6 +1360,15 @@ def run_reeval(args: argparse.Namespace) -> int:
         if async_trials and redis_host:
             try:
                 total_results += _drain_all_async_results(async_trials, redis_host)
+            except AsyncPovDrainError as e:
+                total_results += e.processed_count
+                logger.exception(
+                    "Timed out draining async POV verification results "
+                    "(partial results persisted: %d)",
+                    e.processed_count,
+                )
+                errors += 1
+                drain_failed = True
             except Exception:
                 logger.exception("Error draining async POV verification results")
                 errors += 1

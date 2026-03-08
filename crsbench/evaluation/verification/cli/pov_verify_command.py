@@ -38,6 +38,7 @@ from crsbench.evaluation.verification import (
     get_dedup_strategy,
 )
 from crsbench.utils.logger import get_logger
+from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
 logger = get_logger(__name__)
 
@@ -104,7 +105,7 @@ Examples:
         "--oss-fuzz-path",
         type=Path,
         default=None,
-        help="Path to oss-fuzz directory (default: ./oss-fuzz)",
+        help="Path to oss-fuzz directory (default: managed third_party/oss-fuzz)",
     )
     parser.add_argument(
         "--source",
@@ -204,7 +205,11 @@ def run_verify(args: argparse.Namespace) -> int:
         return 1
 
     # Determine oss-fuzz path
-    oss_fuzz_path = args.oss_fuzz_path or Path("./oss-fuzz")
+    try:
+        oss_fuzz_path = args.oss_fuzz_path or Path(ensure_oss_fuzz_root())
+    except Exception as e:
+        logger.error(f"Failed to resolve OSS-Fuzz directory: {e}")
+        return 1
     if not oss_fuzz_path.exists():
         logger.error(f"OSS-Fuzz directory not found: {oss_fuzz_path}")
         return 1

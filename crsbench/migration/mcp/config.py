@@ -26,8 +26,8 @@ BASE_BENCHMARKS_DIR = str(Path(CRSBENCH_ROOT) / "benchmarks")
 # Temporary logs directory
 BASE_TMP_LOGS = str(Path(BASE_DIR) / "tmp-logs")
 
-# OSS-Fuzz directory (submodule in CRSBench repo)
-OSS_FUZZ_DIR = str(Path(CRSBENCH_ROOT) / "oss-fuzz")
+# OSS-Fuzz directory (managed sparse checkout in CRSBench repo)
+OSS_FUZZ_DIR = str(Path(CRSBENCH_ROOT) / "third_party" / "oss-fuzz")
 
 # OSS-Fuzz projects directory where benchmarks will be copied
 # Benchmarks will be under oss-fuzz/projects/aixcc/

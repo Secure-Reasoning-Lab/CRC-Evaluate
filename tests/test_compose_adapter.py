@@ -291,7 +291,7 @@ class TestComposeCommon:
             str(compose_file),
             "--work-dir",
             str(work_dir),
-            "--target-path",
+            "--fuzz-proj-path",
             str(target),
         ]
 
@@ -314,7 +314,7 @@ class TestComposeCommon:
             str(compose_file),
             "--work-dir",
             str(work_dir),
-            "--target-path",
+            "--fuzz-proj-path",
             str(target),
             "--target-harness",
             "test_harness",
@@ -564,6 +564,7 @@ class TestOssCrsAdapterBugFindFull:
                 "oss_crs_infra_cpuset": "0-15",
                 "oss_crs_infra_memory": "32G",
                 "litellm_config_path": "/tmp/custom-litellm.yaml",
+                "run_id": "trial-abc-123",
             }
         )
         assert adapter._build_timeout == 900
@@ -571,8 +572,10 @@ class TestOssCrsAdapterBugFindFull:
         assert adapter._docker_registry == "ghcr.io/team"
         assert adapter._oss_crs_cmd == "/opt/oss-crs"
         assert adapter._oss_crs_infra_cpuset == "0-15"
-        assert adapter._oss_crs_infra_memory == "32G"
+        assert adapter._infra_mem_limit == "32G"
         assert adapter._litellm_config_path == "/tmp/custom-litellm.yaml"
+        assert adapter._configured_run_id == "trial-abc-123"
+        assert adapter._run_id == "trial-abc-123"
 
     def test_build_lock_file_path_uses_crs_project_and_sanitizer(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -585,6 +588,39 @@ class TestOssCrsAdapterBugFindFull:
 
         assert lock_path.parent == (tmp_path / "locks")
         assert lock_path.name == "crsbench-oss-crs-build-test-crs-proj1-address.lock"
+
+    def test_configure_sanitizer_change_invalidates_compose_and_build_cache(
+        self, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter._compose_file = tmp_path / "trial1" / "crs-compose.yaml"
+        adapter._work_dir = tmp_path / "trial1" / "oss-crs-workdir"
+        adapter._resolved_artifacts = {"exchange_dir": {"base": "/tmp/exchange"}}
+        adapter._built_projects.add("proj1")
+
+        adapter.configure({"sanitizer": "undefined"})
+
+        assert adapter._sanitizer == "undefined"
+        assert adapter._compose_file is None
+        assert adapter._work_dir is None
+        assert adapter._resolved_artifacts is None
+        assert adapter._built_projects == set()
+
+    def test_configure_sanitizer_change_preserves_explicit_work_dir(
+        self, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter._compose_file = tmp_path / "trial1" / "crs-compose.yaml"
+        adapter._work_dir = tmp_path / "trial1" / "oss-crs-workdir"
+        configured_work_dir = tmp_path / "custom-workdir"
+
+        adapter.configure(
+            {"sanitizer": "undefined", "work_dir": str(configured_work_dir)}
+        )
+
+        assert adapter._sanitizer == "undefined"
+        assert adapter._compose_file is None
+        assert adapter._work_dir == configured_work_dir
 
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
     def test_build_calls_prepare_then_build_target(
@@ -679,6 +715,222 @@ class TestOssCrsAdapterBugFindFull:
         data = yaml.safe_load(compose_path.read_text())
         assert "test-crs" in data
         assert data["test-crs"]["source"]["url"] == "https://github.com/team/crs.git"
+        assert data["docker_registry"] == ""
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_generate_compose_yaml_assigns_cpusets_from_allocated_cpus(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure(
+            {
+                "allocated_cpus": "20-23",
+                "oss_crs_infra": {"num_cores": 1, "mem_limit": "8G"},
+                "crs_services": {
+                    "test-crs": {
+                        "num_cores": 2,
+                        "mem_limit": "16G",
+                    }
+                },
+            }
+        )
+
+        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+        data = yaml.safe_load(compose_path.read_text())
+        assert data["oss_crs_infra"]["cpuset"] == "20"
+        assert data["test-crs"]["cpuset"] == "21-22"
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_generate_compose_yaml_rejects_insufficient_allocated_cpus(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure(
+            {
+                "allocated_cpus": "0",
+                "oss_crs_infra": {"num_cores": 1, "mem_limit": "8G"},
+                "crs_services": {
+                    "test-crs": {
+                        "num_cores": 1,
+                        "mem_limit": "16G",
+                    }
+                },
+            }
+        )
+        with pytest.raises(RuntimeError, match="Insufficient allocated CPUs"):
+            adapter._generate_compose_yaml(tmp_path / "trial")
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_generate_compose_yaml_shared_infra_uses_service_union_cpuset(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure(
+            {
+                "allocated_cpus": "20-23",
+                "oss_crs_infra": {"shared": True},
+                "crs_services": {
+                    "test-crs": {
+                        "num_cores": 2,
+                    }
+                },
+            }
+        )
+
+        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+        data = yaml.safe_load(compose_path.read_text())
+        assert data["test-crs"]["cpuset"] == "20-21"
+        assert data["oss_crs_infra"]["cpuset"] == "20-21"
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_shared_infra_with_multiple_services_keeps_current_trial_scope(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure(
+            {
+                "allocated_cpus": "20-25",
+                "oss_crs_infra": {"shared": True},
+                "crs_services": {
+                    "test-crs": {"num_cores": 2},
+                    "other-crs": {"num_cores": 2},
+                },
+            }
+        )
+
+        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+        data = yaml.safe_load(compose_path.read_text())
+        assert "test-crs" in data
+        assert "other-crs" not in data
+        assert data["test-crs"]["cpuset"] == "20-21"
+        assert data["oss_crs_infra"]["cpuset"] == "20-21"
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_configure_crs_services_filters_to_current_trial_crs(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure(
+            {
+                "crs_services": {
+                    "test-crs": {"num_cores": 1, "mem_limit": "8G"},
+                    "other-crs": {"num_cores": 1, "mem_limit": "8G"},
+                }
+            }
+        )
+        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+        data = yaml.safe_load(compose_path.read_text())
+        assert "test-crs" in data
+        assert "other-crs" not in data
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_configure_crs_services_rejects_missing_current_trial_crs(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        with pytest.raises(RuntimeError, match="does not contain current trial CRS"):
+            adapter.configure(
+                {
+                    "crs_services": {
+                        "other-crs": {"num_cores": 1, "mem_limit": "8G"},
+                    }
+                }
+            )
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_configure_accepts_flat_crs_compose_service_keys(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure(
+            {
+                "oss_crs_infra": {"num_cores": 1},
+                "test-crs": {"num_cores": 1},
+            }
+        )
+        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+        data = yaml.safe_load(compose_path.read_text())
+        assert "test-crs" in data
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_generate_compose_yaml_sets_memory_when_unset(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure(
+            {
+                "allocated_memory": "12G",
+                "oss_crs_infra": {"num_cores": 1},
+                "crs_services": {"test-crs": {"num_cores": 1}},
+            }
+        )
+        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+        data = yaml.safe_load(compose_path.read_text())
+        assert data["oss_crs_infra"]["memory"] == "12G"
+        assert data["test-crs"]["memory"] == "12G"
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_generate_compose_yaml_service_memory_tracks_infra_updates(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure(
+            {
+                "oss_crs_infra": {"num_cores": 1},
+                "crs_services": {"test-crs": {"num_cores": 1}},
+            }
+        )
+        adapter.configure({"allocated_memory": "10G"})
+        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+        data = yaml.safe_load(compose_path.read_text())
+        assert data["oss_crs_infra"]["memory"] == "10G"
+        assert data["test-crs"]["memory"] == "10G"
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_configure_explicit_memory_not_overridden_by_later_call(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure(
+            {
+                "oss_crs_infra": {"num_cores": 1, "mem_limit": "8G"},
+                "crs_services": {"test-crs": {"num_cores": 1}},
+            }
+        )
+        adapter.configure({"allocated_memory": "10G"})
+        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+        data = yaml.safe_load(compose_path.read_text())
+        assert data["oss_crs_infra"]["memory"] == "8G"
+        assert data["test-crs"]["memory"] == "8G"
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_configure_unset_explicit_memory_allows_allocated_memory(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"oss_crs_infra": {"num_cores": 1, "mem_limit": "8G"}})
+        adapter.configure(
+            {
+                "oss_crs_infra": {"num_cores": 1, "mem_limit": None},
+                "allocated_memory": "10G",
+            }
+        )
+        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+        data = yaml.safe_load(compose_path.read_text())
+        assert data["oss_crs_infra"]["memory"] == "10G"
+        assert data["test-crs"]["memory"] == "10G"
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_configure_unset_legacy_explicit_memory_allows_allocated_memory(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"oss_crs_infra_memory": "8G"})
+        adapter.configure({"oss_crs_infra_memory": None, "allocated_memory": "11G"})
+        compose_path = adapter._generate_compose_yaml(tmp_path / "trial")
+        data = yaml.safe_load(compose_path.read_text())
+        assert data["oss_crs_infra"]["memory"] == "11G"
+        assert data["test-crs"]["memory"] == "11G"
 
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
     def test_generate_compose_yaml_does_not_inject_external_litellm_env(
@@ -840,6 +1092,197 @@ class TestOssCrsAdapterBugFindFull:
         assert "fuzz_target" in cmd
         assert isinstance(result, CRSExecutionResult)
         assert result.success is True
+
+    @patch("crsbench.evaluation.adapter.oss_crs.generate_run_id")
+    @patch("crsbench.evaluation.adapter.oss_crs.run_oss_crs_artifacts")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_resolve_artifacts_prefers_configured_run_id(
+        self,
+        mock_subprocess: MagicMock,
+        mock_artifacts: MagicMock,
+        mock_generate_run_id: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        mock_generate_run_id.return_value = "run-should-not-be-used"
+        mock_artifacts.return_value = {
+            "exchange_dir": {"base": str(tmp_path / "exchange")},
+        }
+
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t", "run_id": "trial-run-id-01"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+        adapter.build(bench, trial)
+
+        adapter.resolve_artifacts(bench, "fuzz_target", trial)
+
+        args, kwargs = mock_artifacts.call_args
+        assert args[4] == "trial-run-id-01"
+        assert kwargs["oss_crs_cmd"] == adapter._oss_crs_cmd
+        assert kwargs["sanitizer"] == adapter._sanitizer
+        mock_generate_run_id.assert_not_called()
+
+    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_run_uses_configured_run_id_when_pre_resolve_is_skipped(
+        self,
+        mock_subprocess: MagicMock,
+        mock_rwgt: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        mock_rwgt.return_value = ("output", "", 0, False)
+
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t", "run_id": "trial-run-id-02"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+        adapter.build(bench, trial)
+        harness = MagicMock()
+        harness.name = "fuzz_target"
+
+        adapter.run(bench, harness, trial)
+
+        cmd = mock_rwgt.call_args[0][0]
+        assert "--run-id" in cmd
+        assert "trial-run-id-02" in cmd
+
+    @patch("crsbench.evaluation.adapter.oss_crs.generate_run_id")
+    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_adapter_reuse_without_pre_resolve_generates_new_ids_per_trial(
+        self,
+        mock_subprocess: MagicMock,
+        mock_rwgt: MagicMock,
+        mock_generate_run_id: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        mock_rwgt.return_value = ("output", "", 0, False)
+        mock_generate_run_id.side_effect = ["run-A", "run-B"]
+
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        harness = MagicMock()
+        harness.name = "fuzz_target"
+
+        trial1 = tmp_path / "trial1"
+        trial2 = tmp_path / "trial2"
+        trial1.mkdir()
+        trial2.mkdir()
+
+        adapter.build(bench, trial1)
+        adapter.run(bench, harness, trial1)
+
+        adapter.build(bench, trial2)
+        adapter.run(bench, harness, trial2)
+
+        assert mock_generate_run_id.call_count == 2
+        assert "run-A" in mock_rwgt.call_args_list[0][0][0]
+        assert "run-B" in mock_rwgt.call_args_list[1][0][0]
+
+    @patch("crsbench.evaluation.adapter.oss_crs.generate_run_id")
+    @patch("crsbench.evaluation.adapter.oss_crs.run_oss_crs_artifacts")
+    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_adapter_reuse_without_configured_run_id_generates_new_ids_per_trial(
+        self,
+        mock_subprocess: MagicMock,
+        mock_rwgt: MagicMock,
+        mock_artifacts: MagicMock,
+        mock_generate_run_id: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        mock_rwgt.return_value = ("output", "", 0, False)
+        mock_artifacts.return_value = {}
+        mock_generate_run_id.side_effect = ["run-A", "run-B"]
+
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        harness = MagicMock()
+        harness.name = "fuzz_target"
+
+        trial1 = tmp_path / "trial1"
+        trial2 = tmp_path / "trial2"
+        trial1.mkdir()
+        trial2.mkdir()
+
+        adapter.build(bench, trial1)
+        adapter.resolve_artifacts(bench, harness.name, trial1)
+        adapter.run(bench, harness, trial1)
+
+        adapter.build(bench, trial2)
+        adapter.resolve_artifacts(bench, harness.name, trial2)
+        adapter.run(bench, harness, trial2)
+
+        assert mock_generate_run_id.call_count == 2
+        assert mock_artifacts.call_args_list[0][0][4] == "run-A"
+        assert mock_artifacts.call_args_list[1][0][4] == "run-B"
+        assert "run-A" in mock_rwgt.call_args_list[0][0][0]
+        assert "run-B" in mock_rwgt.call_args_list[1][0][0]
+
+    @patch("crsbench.evaluation.adapter.oss_crs.generate_run_id")
+    @patch("crsbench.evaluation.adapter.oss_crs.run_oss_crs_artifacts")
+    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_adapter_reuse_with_configured_run_id_updates_per_trial(
+        self,
+        mock_subprocess: MagicMock,
+        mock_rwgt: MagicMock,
+        mock_artifacts: MagicMock,
+        mock_generate_run_id: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        mock_rwgt.return_value = ("output", "", 0, False)
+        mock_artifacts.return_value = {}
+
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t", "run_id": "trial-A"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        harness = MagicMock()
+        harness.name = "fuzz_target"
+
+        trial1 = tmp_path / "trial1"
+        trial2 = tmp_path / "trial2"
+        trial1.mkdir()
+        trial2.mkdir()
+
+        adapter.build(bench, trial1)
+        adapter.resolve_artifacts(bench, harness.name, trial1)
+        adapter.run(bench, harness, trial1)
+
+        adapter.configure({"run_id": "trial-B"})
+        adapter.build(bench, trial2)
+        adapter.resolve_artifacts(bench, harness.name, trial2)
+        adapter.run(bench, harness, trial2)
+
+        mock_generate_run_id.assert_not_called()
+        assert mock_artifacts.call_args_list[0][0][4] == "trial-A"
+        assert mock_artifacts.call_args_list[1][0][4] == "trial-B"
+        assert "trial-A" in mock_rwgt.call_args_list[0][0][0]
+        assert "trial-B" in mock_rwgt.call_args_list[1][0][0]
 
     @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
@@ -1030,6 +1473,60 @@ class TestOssCrsAdapterBugFindFull:
         assert (output_dir / "logs" / "docker-compose.stdout.log").read_text() == (
             "compose-out"
         )
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_generate_compose_includes_sanitizer_env(
+        self,
+        mock_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t", "sanitizer": "undefined"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        adapter.build(bench, trial)
+
+        compose_path = trial / "crs-compose.yaml"
+        data = yaml.safe_load(compose_path.read_text())
+        assert data["test-crs"]["additional_env"]["SANITIZER"] == "undefined"
+
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_build_resets_artifacts_between_trials_without_reuse(
+        self,
+        mock_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+
+        trial1_pov_dir = tmp_path / "trial1-exchange" / "pov"
+        trial1_pov_dir.mkdir(parents=True)
+        (trial1_pov_dir / "crash-001").write_bytes(b"\x01")
+        adapter._run_id = "run-trial1"
+        adapter._resolved_artifacts = {"exchange_dir": {"pov": str(trial1_pov_dir)}}
+
+        trial2 = tmp_path / "trial2"
+        trial2.mkdir()
+        adapter.build(bench, trial2)
+
+        assert adapter._run_id is None
+        assert adapter._resolved_artifacts is None
+
+        metadata = adapter.collect_results(trial2, "harness1")
+        output_dir = Path(metadata["output_dir"])
+        assert metadata["exchange_pov_dir"] is None
+        assert not (output_dir / "povs" / "crash-001").exists()
 
     def test_collect_results_copies_top_level_run_logs(self, tmp_path: Path) -> None:
         adapter = self._make_adapter(tmp_path)
@@ -1316,11 +1813,14 @@ class TestExperimentConfigComposeValidation:
 
         cfg = self._base_config()
         cfg["adapter"] = AdapterType.OSS_CRS
-        cfg["crs_compose"] = CrsComposeConfig(docker_registry="ghcr.io/test")
+        cfg["crs_compose"] = CrsComposeConfig(
+            oss_crs_infra={"num_cores": 1, "mem_limit": "8G"},
+            crs_services={"crs1": {"num_cores": 1, "mem_limit": "8G"}},
+        )
 
         config = ExperimentConfig(**cfg)
         assert config.crs_compose is not None
-        assert config.crs_compose.docker_registry == "ghcr.io/test"
+        assert config.crs_compose.oss_crs_infra.num_cores == 1
 
     def test_accepts_oss_crs_adapter_without_crs_compose(self) -> None:
         from crsbench.validation.schemas import AdapterType, ExperimentConfig
@@ -1836,7 +2336,7 @@ class TestStageBenchmark:
 
         # build-target is the second subprocess.run call
         build_target_cmd = mock_run.call_args_list[1][0][0]
-        target_path_idx = build_target_cmd.index("--target-path") + 1
+        target_path_idx = build_target_cmd.index("--fuzz-proj-path") + 1
         target_path = build_target_cmd[target_path_idx]
         assert "/staged/" in target_path
         assert target_path != str(bench)
@@ -1867,7 +2367,7 @@ class TestStageBenchmark:
         adapter.run(bench, harness, trial)
 
         run_cmd = mock_rwgt.call_args[0][0]
-        target_path_idx = run_cmd.index("--target-path") + 1
+        target_path_idx = run_cmd.index("--fuzz-proj-path") + 1
         target_path = run_cmd[target_path_idx]
         assert "/staged/" in target_path
         assert target_path != str(bench)

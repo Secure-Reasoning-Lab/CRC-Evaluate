@@ -112,6 +112,49 @@ class TestCRSRunJobSnapshotIntegration:
         assert result.success is True
         assert result.details["snapshots_captured"] == 5
 
+    @patch("crsbench.experiment.jobs.crs_run.OssCrsAdapter")
+    @patch("crsbench.experiment.jobs.crs_run.SnapshotManager")
+    @patch("crsbench.experiment.jobs.crs_run.MetaYamlAdapter")
+    def test_project_language_forwarded_via_fuzzing_language(
+        self,
+        mock_meta_adapter_cls: MagicMock,
+        mock_snapshot_cls: MagicMock,
+        mock_adapter_cls: MagicMock,
+        base_job_params: dict,
+    ) -> None:
+        benchmark_path = base_job_params["benchmark_path"]
+        benchmark_path.mkdir(parents=True, exist_ok=True)
+        (benchmark_path / "project.yaml").write_text("language: jvm\n")
+
+        mock_meta_adapter = MagicMock()
+        mock_meta_adapter.get_harness.return_value = MagicMock(name="test_harness")
+        mock_meta_adapter.get_harness.return_value.vulns = []
+        mock_meta_adapter_cls.from_benchmark_path.return_value = mock_meta_adapter
+
+        mock_snapshot_mgr = MagicMock()
+        mock_snapshot_mgr.cycle = 0
+        mock_snapshot_cls.return_value = mock_snapshot_mgr
+
+        mock_crs_adapter = MagicMock()
+        mock_crs_adapter.run.return_value = MagicMock(
+            success=True,
+            error=None,
+            output="",
+            execution_time=1.0,
+            timed_out=False,
+        )
+        mock_adapter_cls.return_value = mock_crs_adapter
+
+        base_job_params["trial_output_dir"].mkdir(parents=True, exist_ok=True)
+        job = CRSRunJob(**base_job_params)
+
+        from crsbench.benchmark_ci.jobs.base import JobContext
+
+        result = job.execute(JobContext())
+        assert result.success is True
+        configured = mock_crs_adapter.configure.call_args.args[0]
+        assert configured["fuzzing_language"] == "jvm"
+
 
 class TestCRSRunJobEarlyTermination:
     """Test early termination support via stop_event."""

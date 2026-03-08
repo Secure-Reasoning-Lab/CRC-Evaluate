@@ -36,7 +36,7 @@ from crsbench.evaluation.adapter.config_gen import (
     CrsComposeYaml,
 )
 from crsbench.evaluation.results import CRSExecutionResult
-from crsbench.utils.crs_helper import get_all_crs_registry_names
+from crsbench.utils.cpu_pool import format_cpuset, parse_cpuset
 from crsbench.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -60,6 +60,41 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
     if text == "" or text.lower() in {"none", "null"}:
         return None
     return text
+
+
+def _default_memory_limit() -> str:
+    """Return a conservative default memory string for oss-crs compose.
+
+    Priority:
+    1. ``CRSBENCH_OSS_CRS_DEFAULT_MEMORY`` (when set and non-empty)
+    2. 90% of host MemTotal from ``/proc/meminfo`` (in MB)
+    3. ``65536MB`` fallback
+    """
+    env_override = _normalize_optional_text(
+        os.environ.get("CRSBENCH_OSS_CRS_DEFAULT_MEMORY")
+    )
+    if env_override:
+        return env_override
+
+    try:
+        meminfo = Path("/proc/meminfo")
+        if meminfo.exists():
+            for line in meminfo.read_text().splitlines():
+                if not line.startswith("MemTotal:"):
+                    continue
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                total_kb = int(parts[1])
+                # Keep headroom for host + sibling processes.
+                total_mb = max(1024, int(total_kb * 0.9 / 1024))
+                return f"{total_mb}MB"
+    except Exception:
+        logger.debug(
+            "Failed to derive host memory default from /proc/meminfo", exc_info=True
+        )
+
+    return "65536MB"
 
 
 class OssCrsAdapter:
@@ -95,7 +130,19 @@ class OssCrsAdapter:
         self._oss_crs_cmd: str = "oss-crs"
         self._docker_registry: str = ""
         self._oss_crs_infra_cpuset: str = "0-3"
-        self._oss_crs_infra_memory: str = "8G"
+        self._allocated_cpus: Optional[str] = None
+        self._fuzzing_language: str = "c"
+        self._infra_num_cores: int = 0
+        self._infra_shared: bool = True
+        self._infra_mem_limit: Optional[str] = None
+        self._infra_mem_explicit: bool = False
+        self._crs_service_configs: dict[str, dict[str, Any]] = {
+            self._crs_config_name: {
+                "num_cores": 1,
+                "mem_limit": None,
+                "additional_env": {},
+            }
+        }
         self._build_timeout: int = 3600
         self._run_timeout: int = 7200
         self._sanitizer: str = "address"
@@ -103,10 +150,10 @@ class OssCrsAdapter:
         self._litellm_runtime_url: str = ""
         self._litellm_runtime_api_key: str = ""
         self._litellm_config_path: str = ""
-        self._additional_env_overrides: dict[str, str] = {}
 
         # Artifacts resolved via `oss-crs artifacts`
         self._resolved_artifacts: Optional[dict[str, Any]] = None
+        self._configured_run_id: Optional[str] = None
         self._run_id: Optional[str] = None
 
     @staticmethod
@@ -326,8 +373,7 @@ class OssCrsAdapter:
         """Configure the adapter with experiment parameters.
 
         Extracts standard fields (build_timeout, run_timeout) and
-        oss-crs-specific fields (docker_registry, oss_crs_cmd, etc.)
-        from the flat config dict passed by the caller.
+        oss-crs-specific fields from the config dict passed by the caller.
         """
         if "build_timeout" in config:
             self._build_timeout = int(config["build_timeout"])
@@ -341,28 +387,133 @@ class OssCrsAdapter:
             normalized = _normalize_optional_text(config["docker_registry"])
             if normalized is not None:
                 self._docker_registry = normalized
+                logger.warning(
+                    "Ignoring docker_registry override from CRSBench config (%s); "
+                    "oss-crs registry config owns image resolution",
+                    normalized,
+                )
         if "oss_crs_infra_cpuset" in config:
             normalized = _normalize_optional_text(config["oss_crs_infra_cpuset"])
             if normalized is not None:
                 self._oss_crs_infra_cpuset = normalized
-            else:
-                logger.debug(
-                    "Ignoring empty oss_crs_infra_cpuset; keeping existing value "
-                    f"'{self._oss_crs_infra_cpuset}'"
-                )
+        explicit_infra_memory = False
         if "oss_crs_infra_memory" in config:
             normalized = _normalize_optional_text(config["oss_crs_infra_memory"])
+            self._infra_mem_limit = normalized
+            explicit_infra_memory = normalized is not None
+            self._infra_mem_explicit = explicit_infra_memory
+        if "allocated_cpus" in config:
+            self._allocated_cpus = _normalize_optional_text(config["allocated_cpus"])
+        allocated_memory = _normalize_optional_text(config.get("allocated_memory"))
+        if "fuzzing_language" in config:
+            normalized = _normalize_optional_text(config["fuzzing_language"])
             if normalized is not None:
-                self._oss_crs_infra_memory = normalized
-            else:
-                logger.debug(
-                    "Ignoring empty oss_crs_infra_memory; keeping existing value "
-                    f"'{self._oss_crs_infra_memory}'"
+                self._fuzzing_language = normalized
+        if "oss_crs_infra" in config and isinstance(config["oss_crs_infra"], dict):
+            infra = dict(config["oss_crs_infra"])
+            if "num_cores" in infra:
+                self._infra_num_cores = int(infra["num_cores"])
+                if "shared" not in infra:
+                    # Backward-compatible interpretation: explicit num_cores means
+                    # dedicated infra cores unless shared=true is explicitly set.
+                    self._infra_shared = False
+            if "shared" in infra:
+                self._infra_shared = bool(infra["shared"])
+            if "mem_limit" in infra:
+                normalized_infra_mem = _normalize_optional_text(infra["mem_limit"])
+                self._infra_mem_limit = normalized_infra_mem
+                explicit_infra_memory = normalized_infra_mem is not None
+                self._infra_mem_explicit = explicit_infra_memory
+        if (
+            allocated_memory is not None
+            and not explicit_infra_memory
+            and not self._infra_mem_explicit
+        ):
+            self._infra_mem_limit = allocated_memory
+        raw_crs_services = None
+        if "crs_services" in config and isinstance(config["crs_services"], dict):
+            raw_crs_services = dict(config["crs_services"])
+        else:
+            reserved = {
+                "build_timeout",
+                "run_timeout",
+                "oss_crs_cmd",
+                "docker_registry",
+                "oss_crs_infra_cpuset",
+                "oss_crs_infra_memory",
+                "allocated_cpus",
+                "fuzzing_language",
+                "oss_crs_infra",
+                "additional_env",
+                "work_dir",
+                "sanitizer",
+                "skip_litellm",
+                "litellm_runtime_url",
+                "litellm_runtime_api_key",
+                "litellm_config_path",
+                "run_id",
+            }
+            flat = {
+                str(name): dict(raw_service)
+                for name, raw_service in config.items()
+                if name not in reserved and isinstance(raw_service, dict)
+            }
+            if flat:
+                raw_crs_services = flat
+
+        if raw_crs_services is not None:
+            service_configs: dict[str, dict[str, Any]] = {}
+            for name, raw_service in raw_crs_services.items():
+                if not isinstance(raw_service, dict):
+                    continue
+                additional_env_raw = raw_service.get("additional_env")
+                additional_env = (
+                    {str(k): str(v) for k, v in additional_env_raw.items()}
+                    if isinstance(additional_env_raw, dict)
+                    else {}
                 )
+                service_configs[str(name)] = {
+                    "num_cores": int(raw_service.get("num_cores", 1)),
+                    "mem_limit": _normalize_optional_text(raw_service.get("mem_limit")),
+                    "additional_env": additional_env,
+                }
+            if service_configs:
+                if self._crs_config_name in service_configs:
+                    self._crs_service_configs = {
+                        self._crs_config_name: service_configs[self._crs_config_name]
+                    }
+                else:
+                    raise RuntimeError(
+                        "crs_services does not contain current trial CRS "
+                        f"'{self._crs_config_name}'"
+                    )
+        if "additional_env" in config and isinstance(config["additional_env"], dict):
+            # Backward-compatible adapter input: apply to current CRS service.
+            merged = {str(k): str(v) for k, v in dict(config["additional_env"]).items()}
+            service = self._crs_service_configs.get(self._crs_config_name)
+            if service is None:
+                self._crs_service_configs[self._crs_config_name] = {
+                    "num_cores": 1,
+                    "mem_limit": self._infra_mem_limit,
+                    "additional_env": merged,
+                }
+            else:
+                service_env = dict(service.get("additional_env", {}))
+                service_env.update(merged)
+                service["additional_env"] = service_env
         if "work_dir" in config and config["work_dir"] is not None:
             self._work_dir = Path(config["work_dir"])
         if "sanitizer" in config:
-            self._sanitizer = str(config["sanitizer"])
+            new_sanitizer = str(config["sanitizer"])
+            if new_sanitizer != self._sanitizer:
+                self._sanitizer = new_sanitizer
+                # Compose embeds SANITIZER via additional_env; changing sanitizer
+                # requires regenerating compose/workdir and rebuilding targets.
+                self._compose_file = None
+                if "work_dir" not in config or config["work_dir"] is None:
+                    self._work_dir = None
+                self._resolved_artifacts = None
+                self._built_projects.clear()
         if "skip_litellm" in config:
             self._skip_litellm = bool(config["skip_litellm"])
         if "litellm_runtime_url" in config:
@@ -373,24 +524,22 @@ class OssCrsAdapter:
             normalized = _normalize_optional_text(config["litellm_config_path"])
             if normalized is not None:
                 self._litellm_config_path = normalized
-        if "additional_env" in config and config["additional_env"] is not None:
-            self._additional_env_overrides = {
-                str(k): str(v) for k, v in dict(config["additional_env"]).items()
-            }
+        if "run_id" in config:
+            self._configured_run_id = _normalize_optional_text(config["run_id"])
+            # Keep adapter run-id aligned with explicit trial-scoped config.
+            self._run_id = self._configured_run_id
 
-    def _collect_required_llm_aliases(self) -> tuple[list[str], list[str]]:
+    def _collect_required_llm_aliases(
+        self, crs_names: list[str]
+    ) -> tuple[list[str], list[str]]:
         """Collect required LLM aliases from registry metadata.
 
-        For ensemble CRS configs, unions requirements from all registry members
-        listed in ``crses/configs/<config>/config-resource.yaml``.
+        Unions requirements from all CRS registry entries in ``crs_names``.
         """
-        registry_names = get_all_crs_registry_names(
-            self._crs_config_name, self._crs_configs_dir
-        )
         required: set[str] = set()
 
-        for registry_name in registry_names:
-            registry_yaml = self._registry_dir / f"{registry_name}.yaml"
+        for crs_name in crs_names:
+            registry_yaml = self._registry_dir / f"{crs_name}.yaml"
             if not registry_yaml.exists():
                 raise FileNotFoundError(
                     f"CRS registry entry not found for required_llms lookup: {registry_yaml}"
@@ -408,7 +557,73 @@ class OssCrsAdapter:
                 )
             required.update(x.strip() for x in raw_required if x and x.strip())
 
-        return sorted(required), registry_names
+        return sorted(required), sorted(crs_names)
+
+    def _assign_cpusets(self) -> tuple[str, dict[str, str]]:
+        """Assign cpusets for infra and each CRS service from allocated CPU pool."""
+        service_names = list(self._crs_service_configs.keys())
+        service_required = sum(
+            int(cfg["num_cores"]) for cfg in self._crs_service_configs.values()
+        )
+        required = (
+            service_required
+            if self._infra_shared
+            else self._infra_num_cores + service_required
+        )
+        if required < 1:
+            raise RuntimeError(
+                "Invalid CPU configuration: total required cores must be >= 1"
+            )
+
+        if self._allocated_cpus:
+            pool = sorted(set(parse_cpuset(self._allocated_cpus)))
+        elif _normalize_optional_text(self._oss_crs_infra_cpuset):
+            pool = sorted(set(parse_cpuset(self._oss_crs_infra_cpuset)))
+        else:
+            pool = list(range(required))
+
+        if len(pool) < required:
+            service_summary = ", ".join(
+                f"{name}:{self._crs_service_configs[name]['num_cores']}"
+                for name in service_names
+            )
+            raise RuntimeError(
+                "Insufficient allocated CPUs for oss-crs compose: "
+                f"required={required} (infra={'shared' if self._infra_shared else self._infra_num_cores}, "
+                f"services={{{service_summary}}}), "
+                f"available={len(pool)} from '{self._allocated_cpus or format_cpuset(pool)}'"
+            )
+
+        cursor = 0
+        infra_slice: list[int] = []
+        if self._infra_num_cores > 0:
+            infra_slice = pool[cursor : cursor + self._infra_num_cores]
+            cursor += self._infra_num_cores
+
+        service_cpusets: dict[str, str] = {}
+        for name in service_names:
+            count = int(self._crs_service_configs[name]["num_cores"])
+            slice_ = pool[cursor : cursor + count]
+            cursor += count
+            service_cpusets[name] = format_cpuset(slice_)
+
+        if self._infra_shared:
+            if service_names:
+                infra_cpus: set[int] = set()
+                for cpuset in service_cpusets.values():
+                    infra_cpus.update(parse_cpuset(cpuset))
+                infra_cpuset = format_cpuset(sorted(infra_cpus))
+            else:
+                infra_cpuset = format_cpuset(pool[:1])
+        elif self._infra_num_cores == 0:
+            if service_names:
+                infra_cpuset = service_cpusets[service_names[0]]
+            else:
+                infra_cpuset = format_cpuset(pool[:1])
+        else:
+            infra_cpuset = format_cpuset(infra_slice)
+
+        return infra_cpuset, service_cpusets
 
     @staticmethod
     def _load_litellm_aliases(litellm_config_path: Path) -> set[str]:
@@ -454,17 +669,15 @@ class OssCrsAdapter:
         Reads CRS source info from registry and creates the YAML config
         file in the trial output directory.
         """
-        source = read_crs_source_from_registry(
-            self._registry_dir, self._crs_config_name
-        )
-        required_llms, required_sources = self._collect_required_llm_aliases()
+        crs_names = list(self._crs_service_configs.keys())
+        required_llms, required_sources = self._collect_required_llm_aliases(crs_names)
         llm_config: Optional[CrsComposeLLMConfig] = None
         litellm_config_path = (
             Path(self._litellm_config_path) if self._litellm_config_path else None
         )
         if self._skip_litellm:
             logger.info(
-                f"skip_litellm=true; disabling LiteLLM for '{self._crs_config_name}'"
+                f"skip_litellm=true; disabling LiteLLM for CRSs: {', '.join(crs_names)}"
             )
         else:
             if self._litellm_mode != "external":
@@ -494,7 +707,8 @@ class OssCrsAdapter:
                     "CRSBench (litellm_runtime_url, litellm_runtime_api_key)."
                 )
             logger.info(
-                f"Configured oss-crs LiteLLM external mode for '{self._crs_config_name}'"
+                "Configured oss-crs LiteLLM external mode for CRSs: "
+                f"{', '.join(crs_names)}"
             )
 
         # Keep CRS-level required_llms information visible in logs.
@@ -505,22 +719,47 @@ class OssCrsAdapter:
                 f"[sources: {', '.join(required_sources)}]"
             )
 
-        additional_env: dict[str, str] = dict(self._additional_env_overrides)
+        infra_cpuset, service_cpusets = self._assign_cpusets()
+        infra_memory = (
+            _normalize_optional_text(self._infra_mem_limit) or _default_memory_limit()
+        )
+        crs_entries: dict[str, CrsComposeCrsEntry] = {}
+        for crs_name in crs_names:
+            source = read_crs_source_from_registry(self._registry_dir, crs_name)
+            service_cfg = self._crs_service_configs[crs_name]
+            service_memory = (
+                _normalize_optional_text(service_cfg.get("mem_limit")) or infra_memory
+            )
+            additional_env = {
+                str(k): str(v)
+                for k, v in dict(service_cfg.get("additional_env", {})).items()
+            }
+            if (
+                "FUZZING_LANGUAGE" in additional_env
+                and additional_env["FUZZING_LANGUAGE"] != self._fuzzing_language
+            ):
+                logger.warning(
+                    "Overriding configured FUZZING_LANGUAGE=%s with benchmark language=%s for CRS=%s",
+                    additional_env["FUZZING_LANGUAGE"],
+                    self._fuzzing_language,
+                    crs_name,
+                )
+            additional_env["SANITIZER"] = self._sanitizer
+            additional_env["FUZZING_LANGUAGE"] = self._fuzzing_language
+            crs_entries[crs_name] = CrsComposeCrsEntry(
+                source=source,
+                cpuset=service_cpusets[crs_name],
+                memory=service_memory,
+                additional_env=additional_env or None,
+            )
 
         compose_yaml = CrsComposeYaml(
-            docker_registry=self._docker_registry,
+            docker_registry="",
             oss_crs_infra=CrsComposeInfra(
-                cpuset=self._oss_crs_infra_cpuset,
-                memory=self._oss_crs_infra_memory,
+                cpuset=infra_cpuset,
+                memory=infra_memory,
             ),
-            crs_entries={
-                self._crs_config_name: CrsComposeCrsEntry(
-                    source=source,
-                    cpuset=self._oss_crs_infra_cpuset,
-                    memory=self._oss_crs_infra_memory,
-                    additional_env=additional_env or None,
-                ),
-            },
+            crs_entries=crs_entries,
             llm_config=llm_config,
         )
 
@@ -541,6 +780,10 @@ class OssCrsAdapter:
 
     def build(self, benchmark_path: Path, trial_output_dir: Path) -> None:
         """Build CRS for the given benchmark via oss-crs prepare + build-target."""
+        # Reset lifecycle-scoped run state for each trial build invocation.
+        self._run_id = self._configured_run_id
+        self._resolved_artifacts = None
+
         project_name = benchmark_path.name
         if project_name in self._built_projects:
             logger.debug(f"Project {project_name} already built, skipping")
@@ -564,35 +807,40 @@ class OssCrsAdapter:
                 logger.debug(f"Project {project_name} already built, skipping")
                 return
 
-            # Phase 1: prepare (build CRS Docker images)
-            logger.info(f"oss-crs prepare for {project_name}")
-            stdout, stderr, rc = run_oss_crs_prepare(
-                compose_file,
-                work_dir,
-                oss_crs_cmd=self._oss_crs_cmd,
-                timeout=self._build_timeout,
-            )
-            if rc != 0:
-                # oss-crs outputs errors via rich console to stdout
-                detail = stderr or stdout
-                msg = f"oss-crs prepare failed (rc={rc}): {detail}"
-                raise RuntimeError(msg)
+            build_succeeded = False
+            try:
+                # Phase 1: prepare (build CRS Docker images)
+                logger.info(f"oss-crs prepare for {project_name}")
+                stdout, stderr, rc = run_oss_crs_prepare(
+                    compose_file,
+                    work_dir,
+                    oss_crs_cmd=self._oss_crs_cmd,
+                    timeout=self._build_timeout,
+                )
+                if rc != 0:
+                    # oss-crs outputs errors via rich console to stdout
+                    detail = stderr or stdout
+                    msg = f"oss-crs prepare failed (rc={rc}): {detail}"
+                    raise RuntimeError(msg)
 
-            # Phase 2: build-target (compile the target project)
-            logger.info(f"oss-crs build-target for {project_name}")
-            stdout, stderr, rc = run_oss_crs_build_target(
-                compose_file,
-                work_dir,
-                staged_path,
-                oss_crs_cmd=self._oss_crs_cmd,
-                timeout=self._build_timeout,
-                sanitizer=self._sanitizer,
-            )
-            if rc != 0:
-                # oss-crs outputs errors via rich console to stdout
-                detail = stderr or stdout
-                msg = f"oss-crs build-target failed (rc={rc}): {detail}"
-                raise RuntimeError(msg)
+                # Phase 2: build-target (compile the target project)
+                logger.info(f"oss-crs build-target for {project_name}")
+                stdout, stderr, rc = run_oss_crs_build_target(
+                    compose_file,
+                    work_dir,
+                    staged_path,
+                    oss_crs_cmd=self._oss_crs_cmd,
+                    timeout=self._build_timeout,
+                )
+                if rc != 0:
+                    # oss-crs outputs errors via rich console to stdout
+                    detail = stderr or stdout
+                    msg = f"oss-crs build-target failed (rc={rc}): {detail}"
+                    raise RuntimeError(msg)
+                build_succeeded = True
+            finally:
+                if not build_succeeded:
+                    docker_compose_down_cleanup(work_dir)
 
             self._built_projects.add(project_name)
             logger.info(f"Build complete for {project_name}")
@@ -624,7 +872,8 @@ class OssCrsAdapter:
         # Reuse staged path created by build() — same deterministic location
         staged_path = trial_output_dir / "staged" / benchmark_path.name
 
-        self._run_id = generate_run_id()
+        if self._run_id is None:
+            self._run_id = self._configured_run_id or generate_run_id()
         try:
             self._resolved_artifacts = run_oss_crs_artifacts(
                 compose_file,
@@ -689,6 +938,9 @@ class OssCrsAdapter:
         rc = -1
         timed_out = False
 
+        if self._run_id is None:
+            self._run_id = self._configured_run_id or generate_run_id()
+
         try:
             stdout, stderr, rc, timed_out = run_oss_crs_run(
                 compose_file,
@@ -697,7 +949,6 @@ class OssCrsAdapter:
                 harness.name,
                 timeout=self._run_timeout,
                 oss_crs_cmd=self._oss_crs_cmd,
-                sanitizer=self._sanitizer,
                 run_id=self._run_id,
                 stop_event=stop_event,
                 pov_dir=pov_dir,
