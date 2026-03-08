@@ -30,6 +30,7 @@ def main():
         print("SUMMARY: AddressSanitizer: 5600 byte(s) leaked in 100 allocation(s).")
         sys.exit(1)
     elif b"CRASH" in content:
+        print("==ERROR: AddressSanitizer: SEGV")
         sys.exit(1)
     else:
         sys.exit(0)

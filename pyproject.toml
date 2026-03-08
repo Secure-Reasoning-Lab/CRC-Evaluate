@@ -94,7 +94,6 @@ extend-exclude = [
     "crsbench/_submodule_commits.py",
     "tests/",
     "oss-fuzz/",
-    "oss-patch/",
     "oss-crs/",
     "oss-crs-registry/",
     "snapshot-examples/",

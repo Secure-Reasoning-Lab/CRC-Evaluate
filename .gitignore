@@ -218,6 +218,7 @@ agent_logs/
 conversation_history/
 
 # Builder specific
+third_party/oss-fuzz/
 builder_workspace/
 ossfuzz_builds/
 *.build

@@ -1,0 +1,33 @@
+diff --git a/infra/helper.py b/infra/helper.py
+index cb0f2ffa..77ecfd74 100755
+--- a/infra/helper.py
++++ b/infra/helper.py
+@@ -270,7 +270,18 @@ def get_parser():  # pylint: disable=too-many-statements,too-many-locals
+                                     action='store_false',
+                                     help='do not clean existing artifacts '
+                                     '(default).')
++  build_fuzzers_parser.add_argument('--build-image',
++                                    dest='build_image',
++                                    action='store_true',
++                                    help='build project image before '
++                                    'building fuzzers (default).')
++  build_fuzzers_parser.add_argument('--no-build-image',
++                                    dest='build_image',
++                                    action='store_false',
++                                    help='use existing project image without '
++                                    'rebuilding.')
+   build_fuzzers_parser.set_defaults(clean=False)
++  build_fuzzers_parser.set_defaults(build_image=True)
+ 
+   fuzzbench_build_fuzzers_parser = subparsers.add_parser(
+       'fuzzbench_build_fuzzers')
+@@ -886,7 +897,8 @@ def build_fuzzers(args):
+                          args.e,
+                          args.source_path,
+                          mount_path=args.mount_path,
+-                         child_dir=child_dir)
++                         child_dir=child_dir,
++                         build_project_image=args.build_image)
+       for sanitizer, child_dir in sanitized_binary_directories)
+ 
+ 

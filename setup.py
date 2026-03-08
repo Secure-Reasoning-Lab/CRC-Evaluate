@@ -45,9 +45,9 @@ class BuildPyCommand(build_py):
         """Capture submodule commits before building."""
         project_root = Path(__file__).parent.resolve()
 
-        # Capture submodule commits from default locations (if they exist)
+        # Capture managed repo commits from default locations (if they exist)
         oss_crs_commit = get_git_commit(project_root / "oss-crs")
-        oss_fuzz_commit = get_git_commit(project_root / "oss-fuzz")
+        oss_fuzz_commit = get_git_commit(project_root / "third_party" / "oss-fuzz")
 
         # Write to a separate file so setuptools-scm doesn't interfere
         submodule_file = project_root / "crsbench" / "_submodule_commits.py"
@@ -56,7 +56,7 @@ class BuildPyCommand(build_py):
 This file is auto-generated during pip install.
 """
 
-# Build-time captured commits (from default submodule locations)
+# Build-time captured commits (from default local locations)
 OSS_CRS_COMMIT = "{oss_crs_commit}"
 OSS_FUZZ_COMMIT = "{oss_fuzz_commit}"
 '''
