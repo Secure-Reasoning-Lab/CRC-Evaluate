@@ -9,13 +9,13 @@
 
 ## 1. Overview
 
-### 1.3 Current Implementation Notes (2026-02)
+### 1.3 Current Implementation Notes (2026-03)
 
 The evaluator has three runtime modes in the current implementation:
 
 - Configless (default): no `--experiment-config`, no `--ci`
 - Config-pinned: `--experiment-config <yaml>`
-- CI standalone: `--ci`
+- CI compatibility alias: `--ci` (uses unified configless evaluator path with legacy queues `crsbench_ci_build` + `crsbench_ci_verify`)
 
 In configless mode, evaluator behavior is:
 
@@ -26,9 +26,28 @@ In configless mode, evaluator behavior is:
 Important constraints for configless multi-experiment operation:
 
 - All discovered experiments must have the same `benchmarks_root`.
-- All discovered experiments must have the same `oss_fuzz_path`.
-- Registry is snapshotted at startup; evaluator does not dynamically subscribe to newly added experiments after startup.
+- Evaluator refreshes discovered build/verify queue sets periodically at runtime
+  (registry-driven queue refresh).
 - Verifier timeout is shared as the max `per_pov_verify_timeout` across discovered experiments.
+
+CI hardening behavior (commit `a1c9b038`, 2026-03-06):
+
+- CI DAG enqueue now validates dependencies strictly: unknown dependency IDs and out-of-order dependencies fail fast.
+- Duplicate IDs are handled by deterministic stale-job policy:
+  - `finished` reused by default
+  - `failed`/`stopped`/`canceled` refreshed by default
+  - `queued`/`deferred`/`scheduled` always refreshed
+  - active non-terminal jobs are reused
+- Terminal statuses are handled uniformly as done states: `finished`, `failed`, `stopped`, `canceled`.
+- If `rq.job.Job.fetch_many()` returns `None` for a pending job, the result is recorded as infrastructure failure with `error_code=infra_missing_rq_job`.
+- If a job remains `started` beyond timeout+grace, it is recorded as `infra_stale_started_job` (retryable).
+
+Patch verification runtime source contract:
+
+- CRSBench mounts benchmark metadata/scripts at `/CRSBENCH_PROJ_PATH` and patched source at `/CRSBENCH_PATCHED_SRC`.
+- Unit-test execution resolves the effective container `WORKDIR` from image metadata (fallback: benchmark Dockerfile parsing).
+- Patched source is synchronized into that resolved `WORKDIR` (rsync `--delete` semantics), then `test.sh`/`run_tests.sh` executes from that directory.
+- `/src` is not treated as a universal source root during patch verification.
 
 ### 1.1 Goals
 
@@ -171,34 +190,16 @@ Build activity happens lazily as workers enqueue build jobs; configless startup 
 
 **File:** `crsbench/distributed/evaluator.py`
 
-The evaluator supervisor mirrors `worker.py _run_supervisor()`:
+The evaluator supervisor uses a dual/multi-queue pattern with build-priority dequeue:
 
 ```python
-def _run_evaluator_supervisor(redis_host, experiment_name, max_jobs, ...):
-    cpu_pool = CPUPool() if use_cpuset else None
-    trial_q, build_q, verify_q = resolve_queue_names(experiment_name)
-    verify_queue = rq.Queue(
-        verify_q,
-        connection=redis_conn,
-    )
-
+def run_multi_queue_supervisor(...):
     while True:
-        # Cleanup finished workers
-        # ...
-
-        # Dequeue verify job
-        result = rq.Queue.dequeue_any(
-            [verify_queue], timeout=None, connection=redis_conn,
-        )
-        if result:
-            job, _ = result
-            cpus = cpu_pool.allocate(cpu_count) if cpu_pool else None
-            # Spawn child process to run verification
-            p = multiprocessing.Process(
-                target=_run_single_verify_job,
-                args=(redis_host, experiment_name, name, job.id),
-            )
-            p.start()
+        # 1) Reap finished workers and release CPU/cgroup resources
+        # 2) Refresh queue set from registry periodically (configless mode)
+        # 3) Build-priority dequeue from queues that currently have capacity
+        # 4) Apply cpu_tag filtering / requeue on mismatch
+        # 5) Spawn child process for one job (build or verify)
 ```
 
 ### 3.4 File Locations
@@ -396,7 +397,7 @@ if cpus:
 
 For the DooD (Docker-outside-of-Docker) pattern used by OSS-Fuzz: use `--cgroup-parent` Docker flag to nest spawned containers under the evaluator's cgroup.
 
-**Implementation note:** The current codebase does NOT pass cgroup constraints to Docker containers spawned by `helper.py`. This should be resolved in Phase 20 implementation by passing `--cgroup-parent` to `docker run` calls made during `reproduce()`. The worker already has `_setup_shared_cgroup` (in `worker.py`) that provides the pattern.
+**Implementation note:** Current code propagates cgroup/cpuset constraints to OSS-Fuzz helper flows via env (`OSS_FUZZ_CGROUP_PARENT`, `OSS_FUZZ_CPUSET_CPUS`) and corresponding helper integration.
 
 ## 10. Graceful Degradation
 
@@ -426,7 +427,6 @@ Config-pinned mode (`--experiment-config`) reads paths from that YAML:
 
 | Field | Purpose |
 |-------|---------|
-| `oss_fuzz_path` | Path to oss-fuzz checkout |
 | `benchmarks_root` | Path to benchmarks directory |
 
 ### 11.2 Experiment Config
@@ -435,7 +435,7 @@ Configless mode reads runtime registration from Redis (published by orchestrator
 
 - Queue names (`trial`, `build`, `verify`)
 - Benchmark list and mode metadata
-- `oss_fuzz_path` and `benchmarks_root`
+- `benchmarks_root`
 - Per-experiment verify timeout metadata
 
 `ExperimentConfig` now supports an optional `evaluator:` block. In configless mode,
@@ -455,6 +455,11 @@ evaluator resolves resources with precedence `CLI > registry metadata > defaults
 | Redis disconnect | Evaluator retries connection (same pattern as worker) |
 | Timeout | Verify job killed after configured timeout, marked as failed |
 | Unknown benchmark | Job failed with error message, worker sees failure when polling |
+| CI unknown/unresolved dependency | Enqueue fails fast with validation error (invalid DAG dependency definition/order) |
+| CI duplicate job ID | Deterministic policy: `finished` reused by default; `failed/stopped/canceled` refreshed by default; queued/deferred/scheduled refreshed; active non-terminal reused |
+| CI missing RQ job metadata during polling | Recorded as infrastructure failure with `error_code=infra_missing_rq_job` |
+| CI stale started job during polling | Recorded as infrastructure failure with `error_code=infra_stale_started_job` (retryable) |
+| Supervisor spawn/cgroup path transient failure | Job is re-enqueued and supervisor continues (no global crash) |
 
 ## 13. Future Enhancements
 
@@ -463,6 +468,6 @@ evaluator resolves resources with precedence `CLI > registry metadata > defaults
 
 ---
 
-**Document Version**: 1.1
-**Last Updated**: 2026-02-26
+**Document Version**: 1.2
+**Last Updated**: 2026-03-06
 **Next Review**: After Phase 20 implementation

@@ -1,10 +1,10 @@
 # Benchmark CI
 
 End-to-end testing for CRSBench benchmarks: format validation, build, POV
-verification, patch verification, unit tests (full + RTS), and coverage.
+verification, patch verification, unit tests, and coverage.
 
 In distributed mode, `crsbench evaluator --ci` workers execute CI build jobs and
-verify/test jobs (POV, patch, RTS, unit tests) from Redis queues.
+verify/test jobs (POV, patch, unit tests) from Redis queues.
 
 ## What Gets Tested
 
@@ -15,7 +15,6 @@ verify/test jobs (POV, patch, RTS, unit tests) from Redis queues.
 | **POV** | POVs trigger correct CPVs on vulnerable variant | Yes |
 | **Patch** | Ground-truth patches fix vulnerabilities | Yes |
 | **Unit Test (FULL)** | test.sh passes on patched variant | Yes |
-| **Unit Test (RTS)** | RTS-selected tests pass (if project supports RTS) | Yes |
 | **Coverage** | Coverage collection on vulnerable variant (optional) | Yes |
 
 ## Quick Start
@@ -52,7 +51,7 @@ crsbench benchmark ci build     # Build variants only (no verification)
 crsbench benchmark ci pov       # Build + POV verification
 crsbench benchmark ci patch     # Build + patch verification + unit tests
 crsbench benchmark ci coverage  # Build + coverage collection
-crsbench benchmark ci rts       # Build + RTS unit test checks
+crsbench benchmark ci capabilities  # Show benchmark capabilities (may inspect/pull Docker images)
 crsbench benchmark ci all       # All of the above (coverage with --inc-coverage)
 crsbench benchmark ci parse     # Parse results from a previous run
 crsbench benchmark ci retry     # Retry failed benchmarks from a previous run
@@ -61,7 +60,8 @@ crsbench benchmark ci storage   # Show storage usage per benchmark (no Docker)
 
 ### Benchmark Selection
 
-All subcommands (except `parse`) accept:
+Benchmark-selection options are supported by:
+`format`, `build`, `pov`, `patch`, `coverage`, `all`, `capabilities`, and `storage`.
 
 ```bash
 # Single benchmark (positional)
@@ -85,20 +85,25 @@ crsbench benchmark ci all -s smoke-test-bug-finding
 
 ```bash
 --source {pkgs,main_repo}   # Source mode (default: pkgs = bundled tarballs)
---inc-build                  # Enable incremental build (default is full build)
---force-rebuild              # Rebuild even if cached (default ON for CI)
---exit-on-error              # Stop on first failure
+--mode {snapshot,full}       # Build mode (default: snapshot)
+--force-rebuild              # Rebuild even if cached (default OFF; cache reuse enabled)
+--exit-on-error              # Compatibility flag (currently no-op in modular benchmark-ci subcommands)
 --output-dir DIR             # Save per-job logs and artifacts
 --output FILE                # Save summary JSON
 --no-color                   # Disable colored output
 --max-povs-per-cpv N         # Limit POVs verified per CPV
---controller-cores N         # CPU cores reserved for controller (default: 2)
 ```
+
+Build/mode options (`--source`, `--mode`, `--force-rebuild`, `--max-povs-per-cpv`)
+apply to build-oriented execution commands (`build`, `pov`, `patch`, `coverage`,
+`all`, and `retry` where applicable), not `capabilities` or `storage`.
+`retry` defaults to `--mode full` unless overridden.
 
 ## Local Execution
 
-By default, `crsbench benchmark ci` runs locally in a single process. Jobs are
-topologically sorted by dependencies and executed **sequentially**.
+By default, DAG-based subcommands (`build`, `pov`, `patch`, `coverage`, `all`,
+`retry`) run locally in a single process. Jobs are topologically sorted by
+dependencies and executed **sequentially**. `format` supports `--parallel`.
 
 ```bash
 # Run all checks on all benchmarks (sequential)
@@ -118,11 +123,15 @@ crsbench benchmark ci patch --filter "afc-zookeeper-*"
 
 # Include coverage (expensive)
 crsbench benchmark ci all --all --inc-coverage --output-dir ci-results/
+
+# Force full-mode behavior (no snapshot/inc-build reuse)
+crsbench benchmark ci all --all --mode full
 ```
 
-**Note**: In local mode, `--build-workers` and `--verify-workers` are accepted
-but **not used** — execution is always sequential. Use distributed mode for
-parallel execution.
+**Note**: `--build-workers` and `--verify-workers` are currently compatibility
+flags and are not used by benchmark-ci submitter scheduling (local or distributed).
+Distributed parallelism is controlled by evaluator worker flags (`crsbench evaluator
+--ci --build-jobs ... --verify-jobs ...`).
 
 ### Execution Flow (Local)
 
@@ -144,35 +153,69 @@ crsbench benchmark ci all --all
 
 For parallel execution across multiple CPU cores or machines, use Redis RQ.
 
+### Recommended CI Workflow (Multi-Machine)
+
+Recommended default topology for reliability and deterministic scheduling:
+
+- **1 submitter**: `crsbench benchmark ci ... --distributed`
+- **1 evaluator machine**: `crsbench evaluator --ci ...` (CI build + verify queues)
+- **1 Redis/Valkey** shared by all machines
+- **Shared output path** for logs/artifacts
+
+Execution order:
+
+```bash
+# 1) Start Redis/Valkey
+python scripts/valkey-helper.py --password start
+
+# 2) Start evaluator (single machine, recommended)
+crsbench evaluator --ci \
+  --build-jobs 8 --build-cores-per-job 16 \
+  --verify-jobs 8 --verify-cores-per-job 16 \
+  --idle-timeout 0
+
+# 3) Submit CI jobs from submitter machine
+crsbench benchmark ci all --all \
+  --distributed \
+  --mode snapshot \
+  --output-dir ./ci-output
+```
+
+Notes:
+- Use **one evaluator** by default. Multiple evaluators are possible, but require
+  strict queue partitioning to avoid coordination complexity.
+- `--mode snapshot` assumes images are prepared/cached; use `--mode full` for
+  rebuild-oriented validation.
+
 ### Architecture
 
 ```
-                      +-------------------------+
-                      |  crsbench benchmark ci  |
-                      |  --distributed          |
-                      |  (submitter)            |
-                      +------------+------------+
-                               |
-                    enqueue jobs to Redis
-                               |
-                      +--------v--------+
-                      |     Redis       |
-                      |  build queue    |
-                      |  verify queue   |
-                      +--------+--------+
-                               |
-              +----------------+----------------+
-              |                |                |
-     +--------v------+ +------v--------+ +-----v---------+
-     | crsbench      | | crsbench      | | crsbench      |
-     | evaluator     | | evaluator     | | evaluator     |
-     | --ci          | | --ci          | | --ci          |
-     | (machine 1)   | | (machine 2)   | | (machine 3)   |
-     +---------------+ +---------------+ +---------------+
+Machine A (CI submitter + Redis/Valkey)
+┌──────────────────────────────────────────────┐
+│ crsbench benchmark ci ... --distributed      │
+│ (builds DAG, enqueues CI jobs, waits result) │
+└──────────────────────┬───────────────────────┘
+                       │ enqueue/poll
+                       v
+                ┌───────────────┐
+                │ Redis / RQ    │
+                │ crsbench_ci_* │
+                └───────┬───────┘
+                        │ dequeue
+                        v
+Machine B (single evaluator, recommended)
+┌──────────────────────────────────────────────┐
+│ crsbench evaluator --ci                      │
+│ - consumes build queue + verify queue        │
+│ - executes build / verify / patch test jobs  │
+└──────────────────────┬───────────────────────┘
+                       │ writes logs/artifacts
+                       v
+             output-dir/<benchmark>/{build,verify}/...
 ```
 
 The submitter builds the DAG, serializes jobs, enqueues them to Redis, then
-polls until all complete. Workers dequeue and execute jobs independently.
+polls until all complete. Evaluators dequeue and execute jobs.
 
 ### Step-by-Step Setup
 
@@ -186,7 +229,7 @@ python scripts/valkey-helper.py start
 
 # Multi-machine setup (0.0.0.0:6379, password auth)
 python scripts/valkey-helper.py --password start
-# Copy .env to worker machines: scp .env user@worker:/path/to/CRSBench/.env
+# Copy .env to evaluator machine(s): scp .env user@evaluator:/path/to/CRSBench/.env
 
 # Check status
 python scripts/valkey-helper.py status
@@ -202,52 +245,35 @@ For manual Redis setup: `docker run -d --name redis -p 6379:6379 redis:7`
 When configuring CRSBench, set `CRSBENCH_REDIS_HOST` as `host` or `host:port`
 (for example `localhost:6379` or `redis.internal:6380`).
 
-#### 2. Start Worker(s)
+#### 2. Start Evaluator
 
-Each worker runs a dual-queue supervisor that processes build jobs (priority)
-and verify/test jobs concurrently.
+For CI, evaluator runs a dual-queue supervisor that processes build jobs
+(priority) and verify/test jobs concurrently.
 
 ```bash
-# Single machine, 10 build slots + 20 verify slots
-crsbench evaluator --ci \
-  --build-jobs 10 --build-cores-per-job 2 --verify-jobs 20 \
-  --continuous
-
-# With CPU affinity (pin to specific cores)
-crsbench evaluator --ci \
-  --build-jobs 8 --build-cores-per-job 4 --verify-jobs 16 \
-  --cores 0-63 --skip-cpus 0-3 --continuous
-
-# Multiple machines (each connects to same Redis)
-# Machine A (64 cores):
-CRSBENCH_REDIS_HOST=redis.internal:6379 crsbench evaluator --ci \
-  --build-jobs 8 --build-cores-per-job 4 --verify-jobs 32 \
-  --cores 64 --continuous
-
-# Machine B (32 cores):
-CRSBENCH_REDIS_HOST=redis.internal:6379 crsbench evaluator --ci \
-  --build-jobs 4 --build-cores-per-job 4 --verify-jobs 16 \
-  --cores 32 --continuous
+# Recommended default: single evaluator machine for CI.
+uv run crsbench evaluator --ci --build-jobs 8 --build-cores-per-job 16 \
+  --verify-jobs 8 --verify-cores-per-job 16
 ```
 
-**Worker options:**
+**Evaluator options:**
 
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--ci` | Use CI queue mode (build + verify) | Required |
 | `--build-jobs N` | Max concurrent build jobs | 1 |
-| `--build-cores-per-job M` | CPUs per build job | 1 |
+| `--build-cores-per-job M` | CPUs per build job | 4 |
 | `--verify-jobs K` | Max concurrent verify/test jobs | build-jobs * build-cores / verify-cores |
-| `--verify-cores-per-job M` | CPUs per verify/test job | 1 |
+| `--verify-cores-per-job M` | CPUs per verify/test job | 4 |
 | `--cores CORES` | CPU count or cpuset range (e.g., `0-63`) | all |
 | `--skip-cpus CPUSET` | CPUs to exclude (e.g., `0-3`) | none |
-| `--continuous` | Keep running after queue drains | off |
-| `--worker-name NAME` | Identifier for this worker | hostname |
+| `--idle-timeout N` | Exit after N idle seconds (0 = run indefinitely) | 0 |
+| `--worker-name NAME` | Identifier for this evaluator process | hostname |
 
 #### 3. Submit CI Jobs
 
 ```bash
-# Submit all benchmarks to Redis workers
+# Submit all benchmarks to Redis/evaluator
 crsbench benchmark ci all --all --distributed --redis-host localhost \
   --output-dir ci-results/
 
@@ -261,12 +287,11 @@ crsbench benchmark ci all --all --distributed --redis-host localhost \
 
 The submitter will:
 1. Run format validation locally (fast)
-2. Build the DAG
-3. Enqueue build jobs to Redis build queue via `VariantPlanner`
-4. Poll until all builds complete
-5. Enqueue verify/patch/unittest/RTS jobs to Redis verify queue
-6. Poll until all verify jobs complete
-7. Aggregate and print results
+2. Build a single DAG
+3. Enqueue all jobs once (build jobs route to build queue, verify/test jobs route to verify queue)
+4. Rely on RQ dependencies for build-before-verify ordering
+5. Poll until all jobs complete
+6. Aggregate and print results
 
 ### Distributed Execution Flow
 
@@ -275,16 +300,12 @@ crsbench benchmark ci all --all --distributed
   |
   |-- Phase 1: Format validation (local, fast)
   |
-  |-- Phase 2a: Build phase
-  |     VariantPlanner creates build jobs
-  |     -> enqueue to Redis build queue
-  |     -> workers build Docker images in parallel
-  |     -> poll until all complete
-  |
-  |-- Phase 2b: Verify phase
-  |     Remaining jobs (POV, patch, unittest, RTS, coverage)
-  |     -> enqueue to Redis verify queue
-  |     -> workers execute in parallel
+  |-- Phase 2: Single DAG enqueue
+  |     -> enqueue all jobs once
+  |     -> build jobs route to build queue
+  |     -> verify/test jobs route to verify queue
+  |     -> RQ depends_on enforces ordering
+  |     -> evaluator executes with configured parallelism
   |     -> poll until all complete
   |
   |-- Phase 3: Aggregate results + print table
@@ -312,8 +333,6 @@ Per benchmark:
                                          │     ├── PatchPovTest(pov_0)
                                          │     ├── PatchVarTest(pov_1+)
                                          │     ├── PatchUnitTest(FULL)
-                                         │     └── PatchUnitTest(RTS)
-                                         │
   BuildSingleVariant(coverage)          ─┴── FlatCollectCoverage
 ```
 
@@ -321,6 +340,10 @@ Per benchmark:
 - **Verify/test jobs** depend on their build jobs
 - All verify/test jobs for the same benchmark can run in parallel once builds
   complete
+- Verify/test jobs consume prebuilt artifacts only. They do not trigger
+  fallback builds on missing artifacts in distributed CI execution.
+- Missing artifact/context errors fail only dependent jobs for that artifact;
+  unrelated benchmark jobs continue.
 
 ## Output and Results
 
@@ -329,10 +352,10 @@ Per benchmark:
 After completion, a summary table is printed:
 
 ```
-Benchmark                       FMT  POV  PATCH  RTS  COV   Time
-afc-curl-delta-01              PASS PASS  PASS  PASS SKIP   45s
-afc-curl-delta-02              PASS PASS  PASS  PASS SKIP   38s
-afc-zookeeper-delta-01         PASS PASS  PASS  PASS SKIP   92s
+Benchmark                       FMT  POV  PATCH  COV   Time
+afc-curl-delta-01              PASS PASS  PASS  SKIP   45s
+afc-curl-delta-02              PASS PASS  PASS  SKIP   38s
+afc-zookeeper-delta-01         PASS PASS  PASS  SKIP   92s
 ```
 
 ### Output Directory Structure
@@ -341,24 +364,32 @@ When `--output-dir` is specified:
 
 ```
 ci-results/
+├── results.txt                # Human-readable report
+├── summary.csv                # CSV summary
 ├── summary.json               # Full results JSON
-├── results.csv                # CSV summary
 └── {benchmark}/
-    └── {job-id}/
-        ├── stdout.log
-        └── stderr.log
+    ├── summary.json           # Per-benchmark summary
+    ├── errors.txt             # Failure details (when failed)
+    ├── build/                 # Build job logs
+    │   ├── *.log
+    │   ├── *.stdout
+    │   └── *.stderr
+    └── verify/                # Verify/test job logs
+        └── *.log
 ```
 
 ### Parsing Previous Results
 
 ```bash
-crsbench benchmark ci parse ci-results/
+crsbench benchmark ci parse --output-dir ci-results/
 ```
 
 ### Retrying Failed Benchmarks
 
 ```bash
-crsbench benchmark ci retry ci-results/ --output-dir ci-results-retry/
+crsbench benchmark ci retry --csv ci-results/summary.csv --output-dir ci-results-retry/
+crsbench benchmark ci retry --csv ci-results/summary.csv --mode snapshot --output-dir ci-results-retry/
+crsbench benchmark ci retry --csv ci-results/summary.csv --dry-run
 ```
 
 ## Source Mode
@@ -376,7 +407,6 @@ crsbench benchmark ci all --all --source main_repo
 
 - Start with `crsbench benchmark ci format --all` to catch structural issues fast
 - Use `--filter` to test a subset before running all benchmarks
-- Use `--exit-on-error` for fast feedback during development
 - For full parallel execution, use `--distributed` with Redis workers
-- Local mode is sequential — for parallelism, distributed mode is required
+- DAG local mode is sequential — for full parallelism, use `--distributed`
 - Coverage is expensive and disabled by default; use `--inc-coverage` when needed

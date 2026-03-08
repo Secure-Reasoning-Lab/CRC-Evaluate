@@ -2,17 +2,21 @@
 
 ## Overview
 
-This document defines how builds and verification work across all CRSBench commands. The core principle: **full build by default, inc-build opt-in via `--inc-build`, cache by default**.
+This document defines how builds and verification work across CRSBench commands. Core principle for benchmark-ci DAG commands (`build`, `pov`, `patch`, `coverage`, `all`): **snapshot mode by default (`--mode snapshot`), full mode available via `--mode full`, cache reuse by default**.
 
 ## Build Modes
 
-### Full Build (Default)
+### Snapshot Mode (Default for `benchmark ci`)
 
-Builds everything from scratch using base OSS-Fuzz images. This is the default mode.
+Uses incremental build flow and shared vulnerable snapshots for CI checks.
 
-### Inc-Build (Opt-In)
+### Full Build
 
-Uses pre-built Docker images (`ghcr.io/team-atlanta/crsbench/{project}:inc-{sanitizer}`) with pre-compiled dependencies. Only recompiles changed files. Enable with `--inc-build`.
+Builds using base OSS-Fuzz images without incremental-image flow.
+
+### Snapshot Build (Default)
+
+Uses pre-built Docker images (`ghcr.io/team-atlanta/crsbench/{project}-{san}:inc`) with pre-compiled dependencies. Only recompiles changed files. CI `--mode snapshot` enables this flow by default.
 
 Falls back to full build when:
 - Inc-build image not available
@@ -30,18 +34,19 @@ Builds are cached in `oss-fuzz/build/out/{variant_name}/`. By default, if a cach
 | `crsbench patch-verify` | full | ON | `--force-rebuild` | N/A |
 | `crsbench coverage` | full | ON | `--force-rebuild` | N/A |
 | `crsbench run` | full | ON | `--force-rebuild` | N/A |
-| `crsbench benchmark ci*` | full | **OFF** | always | N/A |
+| `crsbench benchmark ci {build,pov,patch,coverage,all}` | snapshot | ON | `--force-rebuild` | N/A |
+| `crsbench benchmark ci retry` | full (default) | ON | `--force-rebuild` | N/A |
 
-All commands support `--inc-build` to use incremental build mode (falls back to full build on failure).
+All commands support explicit `--mode` where applicable (`snapshot` or `full`).
 
 ### Standalone Commands
 
 ```
---inc-build       Use incremental build instead of full build
---force-rebuild   Ignore cache, rebuild from scratch
+--mode {snapshot,full}   Select snapshot-build or full-build flow
+--force-rebuild          Ignore cache, rebuild from scratch
 ```
 
-Default behavior (full build):
+Default behavior for standalone commands (full build):
 ```
 Has cached build? ──yes──→ Use cached build
        │no
@@ -49,7 +54,7 @@ Has cached build? ──yes──→ Use cached build
 Full build
 ```
 
-With `--inc-build`:
+With `--mode snapshot`:
 ```
 Has cached build? ──yes──→ Use cached build
        │no
@@ -64,33 +69,29 @@ Full build (fallback)               │yes
 
 ### CI Commands
 
-CI always uses `force_rebuild=True` because it validates that the build process itself works.
-
-CI defaults to full build (same as standalone). To test inc-build mode, use `--inc-build`. To compare both modes, run CI twice:
+CI defaults to snapshot mode with cache reuse. To force full mode, use `--mode full`. To compare both modes, run CI twice:
 ```bash
-# Test with full build (default)
-crsbench benchmark ci all --all --output-dir results-full
+# Test with snapshot mode (default)
+crsbench benchmark ci all --all --output-dir results-snapshot
 
-# Test with inc-build
-crsbench benchmark ci all --all --inc-build --output-dir results-inc
+# Test with full mode
+crsbench benchmark ci all --all --mode full --output-dir results-full
 
 # Compare results externally
-diff results-inc/summary.json results-full/summary.json
+diff results-snapshot/summary.json results-full/summary.json
 ```
 
 ## CI DAG Architecture
 
 ### Single-Mode Execution
 
-Each CI invocation runs **one build mode** (full build by default). All checks fan out in parallel after the initial build.
+Each CI invocation runs **one build mode** (snapshot by default). All checks fan out in parallel after the initial build.
 
 ```
 START ── build ──┬── verify-pov(pov1)
                  ├── verify-pov(pov2)
                  ├── build-patch(p1) ── test(p1, full)
-                 │                   └── test(p1, rts)
                  ├── build-patch(p2) ── test(p2, full)
-                 │                   └── test(p2, rts)
                  └── collect-coverage
 ```
 
@@ -112,18 +113,43 @@ Single-mode is simpler: one build, parallel fan-out, done. Compare modes externa
 After the initial build, all jobs fan out in parallel:
 - All `verify-pov` jobs run concurrently (read-only against Docker image)
 - All `build-patch` jobs run concurrently (each creates its own variant name)
-- `test(p1, full)` and `test(p1, rts)` can run concurrently (same build, different test selection)
 - `collect-coverage` runs concurrently with verify/patch jobs
 
-### RTS
+### Distributed Build-Context Hydration
 
-RTS runs alongside patch tests on the same build. It compares test selection strategies (full test.sh vs RTS-selected tests) — the build mode is fixed, only test selection differs.
+In distributed CI, verify workers must not rebuild variants that were already
+built by build workers. Build context loading therefore follows this rule:
+
+- `allow_build=False` on verify paths
+- on cache miss in memory, hydrate from on-disk build cache metadata
+- hard-fail only when required variants are genuinely missing from disk
+
+This preserves build/verify separation while avoiding cold-worker false errors
+from empty in-memory caches.
+
+### Patch Queue Identity and Dedup
+
+Patch build/verify jobs use deterministic queue `job_id` values derived from:
+
+- experiment/trial identifiers
+- benchmark + harness + CPV + patch ID
+- execution mode fields (`source_mode`, `test_mode`, `verify_variants`,
+  `use_inc_build`, sanitizer as applicable)
+
+If enqueue sees a duplicate, CRSBench reuses the existing job instead of
+creating a second concurrent copy. Patch verify jobs also consume the real
+upstream patch-build RQ job ID from payload metadata (no local reconstruction).
+
+### Inc-Image Local Build Pull Policy
+
+Local inc-image preparation uses `helper.py build_image --no-pull` by default
+to avoid forced registry refreshes in hot CI paths. Explicit image refreshes
+should be done via dedicated preflight/pull steps.
 
 ### Removed CI Subcommands and Flags
 
-- **`ci inc-build`**: Removed — use `ci all --inc-build` instead
-- **`--check-inc` on `ci pov`/`ci patch`**: Removed — use `ci all` (full build default) or `--inc-build`
-- **`--check-rts` on `ci patch`**: Removed — RTS always runs as part of `ci all`
+- **`ci inc-build`**: Removed
+- **`--check-inc` on `ci pov`/`ci patch`**: Removed — use `--mode full` or `--mode snapshot`
 
 ## Timing Breakdown
 
@@ -134,11 +160,10 @@ Each check type reports timing differently based on what's being measured:
 | POV | `B:Xs V:Ys` | Build and verify are separate phases |
 | Patch | Total (e.g., `30s`) | Rebuild is part of verification (apply patch → rebuild → test) |
 | Coverage | `B:Xs V:Ys` | Build and collection are separate phases |
-| RTS | Total per-patch | Comparable with Patch timing (same build, different tests) |
 
 ### Per-Patch Detail
 
-Patch and RTS checks include per-patch breakdown in `details`:
+Patch checks include per-patch breakdown in `details`:
 ```json
 {
   "per_patch": [
@@ -159,6 +184,11 @@ verify_benchmark()
       → [(pov, harness, variant)]    # Flattened task list
       → reproduce() per task
 ```
+
+`verify_benchmark()` hash-skip semantics:
+- `skip_hashes`: pre-verification skip set for already-tested POV content hashes.
+- `max_per_hash`: optional cap for files loaded from `pov_dir` (for example, `1` keeps one representative per hash).
+- POV file enumeration from `pov_dir` is deterministic (sorted by filename) so capped selection is stable across runs.
 
 ### Patch Engine (`evaluation/verification/patch/engine.py`)
 

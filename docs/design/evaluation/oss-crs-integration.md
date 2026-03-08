@@ -21,7 +21,7 @@ CRSBench Orchestrator
     ↓
 Trial-Specific Configuration
     ├── --build-dir (unique per trial)
-    ├── --oss-fuzz-dir (shared submodule)
+    ├── --oss-fuzz-dir (shared managed checkout)
     ├── --registry-dir (oss-crs/registry or crses/)
     ├── --project-path (from benchmarks/)
     └── source-path (pre-cloned by CRSBench)
@@ -89,17 +89,17 @@ oss-crs run --build-dir /experiments/exp-1/trial-0/build \
 
 **Purpose**: Specify the OSS-Fuzz repository location.
 
-**CRSBench Strategy**: Use the oss-fuzz submodule in the CRSBench repository.
+**CRSBench Strategy**: Use the managed `third_party/oss-fuzz` checkout in the CRSBench repository.
 
 ```python
 # In CRSBench configuration
-oss_fuzz_dir = CRSBENCH_ROOT / "oss-fuzz"  # Submodule location
+oss_fuzz_dir = CRSBENCH_ROOT / "third_party" / "oss-fuzz"
 ```
 
 **Usage**:
 ```bash
 # All trials share the same OSS-Fuzz directory
-oss-crs build --oss-fuzz-dir /path/to/CRSBench/oss-fuzz \
+oss-crs build --oss-fuzz-dir /path/to/CRSBench/third_party/oss-fuzz \
               --build-dir /experiments/exp-1/trial-0/build \
               example_configs/ensemble-c json-c
 ```
@@ -107,7 +107,7 @@ oss-crs build --oss-fuzz-dir /path/to/CRSBench/oss-fuzz \
 **Benefits**:
 - Single OSS-Fuzz installation for all trials
 - Consistent build infrastructure
-- Version control via git submodule
+- Version control via managed sparse checkout
 - No redundant OSS-Fuzz clones
 
 **Note**: OSS-Fuzz directory is **shared** across trials, while build-dir is **isolated** per trial.
@@ -328,7 +328,7 @@ class SourceManager:
 ```bash
 oss-crs build \
   --build-dir /experiments/exp-1/trial-0/build \
-  --oss-fuzz-dir /path/to/CRSBench/oss-fuzz \
+  --oss-fuzz-dir /path/to/CRSBench/third_party/oss-fuzz \
   --registry-dir /path/to/CRSBench/crses \
   --project-path /path/to/CRSBench/benchmarks/json-c-delta-01 \
   example_configs/ensemble-c \
@@ -340,7 +340,7 @@ oss-crs build \
 ```bash
 oss-crs run \
   --build-dir /experiments/exp-1/trial-0/build \
-  --oss-fuzz-dir /path/to/CRSBench/oss-fuzz \
+  --oss-fuzz-dir /path/to/CRSBench/third_party/oss-fuzz \
   --registry-dir /path/to/CRSBench/crses \
   example_configs/ensemble-c \
   json-c-delta-01 \
@@ -355,7 +355,7 @@ oss-crs run \
 ```bash
 oss-crs build \
   --build-dir /experiments/exp-1/trial-0/build \
-  --oss-fuzz-dir /path/to/CRSBench/oss-fuzz \
+  --oss-fuzz-dir /path/to/CRSBench/third_party/oss-fuzz \
   --registry-dir /path/to/CRSBench/crses \
   --project-path /path/to/CRSBench/benchmarks/json-c-delta-01 \
   example_configs/patch-agent \
@@ -367,7 +367,7 @@ oss-crs build \
 ```bash
 oss-crs run \
   --build-dir /experiments/exp-1/trial-0/build \
-  --oss-fuzz-dir /path/to/CRSBench/oss-fuzz \
+  --oss-fuzz-dir /path/to/CRSBench/third_party/oss-fuzz \
   --registry-dir /path/to/CRSBench/crses \
   example_configs/patch-agent \
   json-c-delta-01 \
@@ -733,7 +733,7 @@ class ExperimentOrchestrator:
         cmd = [
             "oss-crs", "build",
             "--build-dir", str(trial_dir / "build"),
-            "--oss-fuzz-dir", str(CRSBENCH_ROOT / "oss-fuzz"),
+            "--oss-fuzz-dir", str(CRSBENCH_ROOT / "third_party" / "oss-fuzz"),
             "--registry-dir", str(registry_dir),
             "--project-path", str(benchmark_dir),
             f"example_configs/{crs}",

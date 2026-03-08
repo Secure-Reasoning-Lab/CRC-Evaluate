@@ -49,7 +49,7 @@ CRSBench/
 ├── crses/                    # CRS configurations
 ├── experiment-configs/       # Experiment yaml configs
 ├── oss-crs/                  # Integrated upstream project
-└── oss-fuzz/                 # Integrated upstream project
+└── third_party/oss-fuzz/     # Official OSS-Fuzz (sparse checkout)
 ```
 
 ## Core Design Decisions
@@ -98,7 +98,7 @@ Alternative considered:
 ### 4. Integrated but Non-Canonical Upstream Docs
 
 Decision:
-- Treat `oss-crs/` and `oss-fuzz/` as integrated upstream references, but keep
+- Treat `oss-crs/` and `third_party/oss-fuzz/` as integrated upstream references, but keep
   CRSBench behavior docs canonical in root `docs/`.
 
 Why:

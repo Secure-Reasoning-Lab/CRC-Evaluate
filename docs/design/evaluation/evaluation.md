@@ -34,6 +34,26 @@ crsbench/evaluation/
 Evaluation supports periodic trial snapshots for progress tracking and partial-result inspection.
 See [docs/design/evaluation/snapshots.md](./snapshots.md) for snapshot format, capture lifecycle, and usage.
 
+## Distributed Evaluator and CI Result Semantics
+
+### Evaluator `--ci` behavior
+
+- `crsbench evaluator --ci` is a compatibility alias.
+- It now uses the same unified configless evaluator path as standard configless mode (`run_evaluator_configless`) and the same multi-queue supervisor path.
+- The only CI-specific behavior is queue selection: it targets legacy CI build/verify queues via the alias mode.
+
+### CI result status semantics
+
+- Dependency and infrastructure failures are surfaced as `ERROR` (not `FAIL`) in aggregate CI results.
+- This includes explicit dependency-failed job status and failed jobs with `error_code` prefixes such as `infra_`, `dependency_`, or `dep_`.
+- Aggregate benchmark status gives `ERROR` precedence over `FAIL`.
+
+### Split vs combined result fallback
+
+- Split POV/Patch checks are authoritative only when the full split set is present.
+- If split data is partial and a legacy combined check exists, the combined check remains authoritative for aggregate status/time.
+- If no combined check exists, available split checks are used.
+
 ## Core Components
 
 ### BenchmarkRunner (runner.py)

@@ -95,6 +95,30 @@ python scripts/cpv_report.py /path/to/experiment-data --csv
 
 The orchestrator and evaluator can be started in any order. The evaluator is optional — without it, POV verification jobs queue harmlessly and can be processed later via `crsbench re-eval`.
 
+## Queue Behavior and Cleanup
+
+Use experiment-scoped queue cleanup (safe in flat shared-queue mode):
+
+```bash
+crsbench queue clean --experiment <experiment-name> --yes
+```
+
+Optional scoped cleanup:
+
+```bash
+crsbench queue clean --experiment <experiment-name> --queues trial,verify --yes
+```
+
+`crsbench run` queue behavior:
+- TTY: prompts for `fresh` / `continue` / `quit` when existing jobs are found.
+- Non-TTY (CI): defaults to scoped `continue` (no prompt).
+- `continue`: skips existing jobs and handles orphaned started jobs.
+- Failed jobs are retried only with explicit opt-in:
+
+```bash
+crsbench run --experiment-config config.yaml --queue-mode continue --retry-failed
+```
+
 ## Full Workflow Example (Production)
 
 A realistic example on a 128-core machine running 7 trial jobs with an evaluator:
@@ -184,7 +208,6 @@ When workers run on machines with different filesystem layouts, add a `worker` s
 worker:
   jobs: 4
   continuous: true
-  oss_fuzz_path: /opt/oss-fuzz
   benchmarks_root: /data/benchmarks
   experiment_filestore: /mnt/shared/experiments
   report_filestore: /mnt/shared/reports
@@ -315,6 +338,15 @@ Re-runs POV/patch verification on completed experiment trials without re-running
 - Verification logic was updated
 - Need to re-collect crash logs
 
+Patch verification test execution context:
+- CRSBench evaluator runs unit tests inside the project builder image (`test.sh`/`run_tests.sh`) after patch build.
+- Test script path is resolved from `oss-fuzz/projects/<variant>/test.sh` (fallback: `run_tests.sh`) in evaluator workspace.
+- Unit test containers use Docker's default network mode by default so benchmark scripts that install runtime test deps (for example `apt`/`pip`) can execute.
+- You can override network mode for helper/direct Docker runs with `OSS_FUZZ_DOCKER_NETWORK` (for example `none`).
+- Before running tests, evaluator resolves the effective image `WORKDIR` (image inspect, Dockerfile fallback) and syncs patched source into that directory.
+- Internal test-container mounts are namespaced as `CRSBENCH_*` paths (for example `/CRSBENCH_PROJ_PATH`, `/CRSBENCH_PATCHED_SRC`).
+- This is separate from OSS-CRS builder sidecar `run-test`, which resolves `/OSS_CRS_PROJ_PATH/test.sh` inside the runtime snapshot image.
+
 ```bash
 # Basic re-evaluation with verbose output
 crsbench re-eval -c config.yaml -v
@@ -330,6 +362,11 @@ Re-eval preserves `metadata.json` and relative POV discovery times, but re-runs 
 For patch-generation trials, `patch_verify_variants` in the experiment config
 controls whether patch verification checks all `pov_*` variants (`true`) or
 single-POV mode (`false`, default).
+
+Bug-finding re-eval duplicate handling:
+- Re-eval verifies at most one file per unique POV content hash when reading from trial `output/povs`.
+- Selection is deterministic (filename order), so repeated runs choose the same representative file.
+- This behavior aligns local re-eval with distributed async single-POV verification semantics.
 
 | Flag | Description |
 |------|-------------|

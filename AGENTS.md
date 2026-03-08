@@ -42,6 +42,16 @@ When instructions conflict, prioritize in this order:
 - When behavior, interfaces, or workflows change, update the nearest relevant docs under `docs/`.
 - If doc entry points change, update the `Docs Index (Agent Jump List)` in this file.
 
+## Benchmark Change Logging
+
+- Any change under `benchmarks/<benchmark-name>/` must update that benchmark's `.aixcc/CHANGELOG.md`.
+- If `.aixcc/CHANGELOG.md` does not exist, create it.
+- Each entry should include at minimum: date, changed files, root cause, fix summary, and validation evidence (command + outcome).
+- Include actual textual diff content in the changelog entry (key hunks or full diff), not only file-name lists.
+- Use benchmark-relative paths in changelog diffs; do not include absolute local filesystem paths.
+- If a change is only a large binary blob, summarize it with path + reason instead of pasting binary diff content.
+- If multiple fixes are made for the same benchmark, append a new entry (do not rewrite prior history).
+
 ## Definition of Done
 
 Before considering work complete:
@@ -102,10 +112,12 @@ Then re-run the quality gate command above.
 ## Docs Index (Agent Jump List)
 
 - Start here: `docs/README.md`
+- Environment setup: `docs/environment-setup.md`
 - Architecture: `docs/design/architecture.md`
 - Distributed systems: `docs/design/distributed/distributed-evaluation.md`
 - Job queue/workers: `docs/design/distributed/distributed-job-queue.md`
 - Deployment/cloud: `docs/design/distributed/deployment-guide.md`
+- Configless runtime: `docs/design/distributed/configless-runtime.md`
 - Evaluation flow: `docs/design/evaluation/evaluation.md`
 - Testing setup: `docs/testing-setup.md`
 - Coding standards: `docs/coding-standards.md`

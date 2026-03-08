@@ -15,6 +15,7 @@ points to canonical docs to avoid drift.
 git clone https://github.com/sslab-gatech/CRSBench.git
 cd CRSBench
 uv sync --extra dev
+scripts/setup-third-party.sh
 ```
 
 ## Fast Local Checks
@@ -26,6 +27,9 @@ scripts/ci-tests/run-local.sh checks
 # Unit tests
 uv run pytest tests/ -v
 ```
+
+`run-local.sh checks` also enforces benchmark script path policy
+(`SRC`/`OUT`/`WORK` contract, no `/built-src` or `/test-src`).
 
 ## Distributed/Runtime Checks
 
@@ -42,7 +46,7 @@ For Redis/Valkey setup and multi-process runs (`run`, `worker`, `evaluator`):
 - In continuous mode, queue discovery is refreshed periodically, so newly
   registered experiments are adopted without restarting worker/evaluator.
 - Startup does not enqueue pre-build jobs in configless mode; builds are consumed lazily from build queues.
-- Multi-experiment configless mode requires shared `benchmarks_root` and `oss_fuzz_path` across discovered experiments.
+- Multi-experiment configless mode requires shared `benchmarks_root` across discovered experiments.
 - Evaluator resource sizing follows `CLI > experiment metadata (registry) > defaults`.
 - Worker cpuset sizing follows the same precedence using `--jobs` / `--cores-per-job` and `worker.*` metadata.
 - For numeric metadata conflicts without CLI overrides, runtime uses `max(...)`.

@@ -63,12 +63,19 @@ CRSBench copies these into trial output directories for verification/reporting.
 
 ## Verification and Dedup
 
-Discovered POVs are deduplicated before verification based on `pov_dedup_strategy` in experiment config:
+In `VerificationEngine.verify_benchmark`-based flows, `pov_dedup_strategy` controls post-verification deduplication of POV results:
 
 - `patch-based` (default)
 - `stack-based`
 - `status-based`
 - `none`
+
+Live bug-finding experiment runs use `POVVerificationManager`, which applies hash-based pre-verification filtering/skip logic rather than a post-verification strategy pass.
+
+Additional notes for bug-finding re-eval:
+- When re-eval verifies POV files from a trial directory, it first applies a per-content-hash cap (`max_per_hash=1`) so only one file per identical payload is verified.
+- File selection is deterministic by filename order.
+- Both synchronous and asynchronous/distributed re-eval persist raw verification results after this hash-capped selection step (no additional post-verification dedup strategy pass).
 
 ## Upstream OSS-CRS References
 

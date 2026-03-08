@@ -13,6 +13,17 @@ This page is the canonical index for CRSBench environment variables.
 | `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` | Upstream LiteLLM key-management/tracking credential (`external` mode preferred). |
 | `CRSBENCH_LLM_UPSTREAM_API_KEY` | Upstream LiteLLM runtime API key (`external` mode preferred). |
 
+## Evaluator Resource Propagation (Advanced)
+
+These variables are set by supervisor/resource context for worker job isolation.
+They are consumed by OSS-Fuzz helper Docker runs and CRSBench direct Docker runs.
+
+| Variable | Purpose |
+|---|---|
+| `OSS_FUZZ_CPUSET_CPUS` | CPU pinning for per-job containers (for example `80-95`). |
+| `OSS_FUZZ_CGROUP_PARENT` | Docker cgroup parent path for per-job cgroup enforcement. |
+| `OSS_FUZZ_DOCKER_NETWORK` | Optional Docker network mode override for helper/direct `docker run` (for example `none`). |
+
 ## Runtime Controls (Non-env)
 
 - Experiment identity and queue naming: `experiment` in `experiment-config.yaml`

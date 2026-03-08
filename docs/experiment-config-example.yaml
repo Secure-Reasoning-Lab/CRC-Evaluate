@@ -50,18 +50,20 @@ verify_timeout: 7200
 # ===== CRS and Benchmark Selection =====
 
 # List of CRS (Cyber Reasoning Systems) to evaluate.
-# This profile is single-CRS: exactly one CRS entry is allowed.
-# Use separate experiments for different CRS setups.
+# Multiple CRS entries are allowed.
 crses:
   - atlantis-c
 
 # Optional compose/runtime overrides for oss-crs adapter.
 # crs_compose:
-#   docker_registry: us-central1-docker.pkg.dev/aixcc-scoring-prod/oss-fuzz
-#
-# Optional per-CRS runtime env overrides keyed by CRS name in `crses`.
-# crs_overrides:
+#   oss_crs_infra:
+#     # Choose exactly one CPU mode:
+#     # 1) Dedicated infra cores:
+#     num_cores: 8
+#     # 2) Shared infra cores (union of CRS cpusets):
+#     # shared: true
 #   atlantis-c:
+#     num_cores: 8
 #     additional_env:
 #       ANTHROPIC_MODEL: claude-sonnet-4-5-20250929
 
@@ -251,11 +253,6 @@ pov_dedup_strategy: patch-based
 #   # Default: null (uses main report_filestore setting)
 #   # Similar to experiment_filestore override, for report output paths
 #   # report_filestore: /mnt/worker/reports
-#
-#   # OPTIONAL: Override oss-fuzz path for workers on different machines
-#   # Default: null (uses main oss_fuzz_path setting)
-#   # Useful when workers have oss-fuzz installed at a different location
-#   # oss_fuzz_path: /custom/path/to/oss-fuzz
 #
 #   # OPTIONAL: Override registry directory for workers on different machines
 #   # Default: null (uses main registry_dir setting or ./oss-crs/registry)

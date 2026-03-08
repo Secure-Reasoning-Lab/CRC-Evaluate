@@ -10,6 +10,7 @@ Unlike traditional fuzzing benchmarks (e.g., FuzzBench) that only report coverag
 # Install
 git clone https://github.com/sslab-gatech/CRSBench.git && cd CRSBench
 uv sync
+crsbench prepare                           # bootstrap managed OSS-Fuzz + pull base images (OSS-Fuzz + AIXCC)
 
 # Download benchmarks from HuggingFace (gated — requires access)
 #   1. Create a token at https://huggingface.co/settings/tokens
@@ -25,10 +26,63 @@ python scripts/valkey-helper.py --password start  # auto-generates password, sav
 crsbench run       --experiment-config experiment-configs/experiment-config-sanity.yaml
 crsbench worker    --experiment-config experiment-configs/experiment-config-sanity.yaml
 crsbench evaluator --experiment-config experiment-configs/experiment-config-sanity.yaml
+
+# Clean stale queue state for one experiment (use the `experiment:` name from config)
+crsbench queue clean --experiment sanity-test --yes
 ```
+
+`crsbench prepare` typical duration:
+- warm cache: ~10-60s
+- first run (image pulls): ~3-15m
+- with `--build-base-images`: 20m+ (can be significantly longer)
 
 If your virtual environment is not activated, prefix CLI commands with `uv run`
 (for example, `uv run crsbench download --all`).
+
+CRS experiments use a distributed job queue (Redis/RQ). The orchestrator (`run`) enqueues jobs,
+workers (`worker`) execute them. Add `evaluator` for real-time POV and patch verification.
+
+### Run / Worker / Evaluator Workflow
+
+```text
+Machine A (orchestrator + Redis)
+┌──────────────────────────┐
+│ crsbench run             │
+│ (orchestrator)           │
+└─────────────┬────────────┘
+              │ enqueue jobs + metadata
+              v
+      ┌───────────────────┐
+      │ Redis / RQ queues │
+      └───────┬─────┬─────┘
+              │     │
+   build/run  │     │ verify/patch-verify/coverage
+              │     │
+   ┌──────────┘     └──────────┐
+   v                           v
+Machine B/C/...               Machine D (single evaluator)
+┌─────────────────────┐       ┌──────────────────────┐
+│ crsbench worker     │  ...  │ crsbench evaluator   │
+│ executes CRS jobs   │       │ executes verify jobs │
+└──────────┬──────────┘       └──────────┬───────────┘
+           │                             │
+           └────── writes artifacts/logs ┴───────>
+                 shared experiment/trial output dirs
+```
+
+- Non-interactive runs default to scoped `continue` when existing jobs are detected.
+- Retry failed trials only when explicitly requested:
+  `crsbench run --experiment-config ... --queue-mode continue --retry-failed`
+
+### Execution Notes (oss-crs Workflow)
+
+- CRS lifecycle now uses `oss-crs prepare`, `oss-crs build-target`, `oss-crs artifacts`, and `oss-crs run`
+- Trial artifact discovery is resolved via `oss-crs artifacts` (no glob-based submit-dir discovery)
+- Real-time POV/patch collection is tied to resolved `EXCHANGE_DIR` paths
+- Additional POV dedup strategy `stack-based` is available via `pov_dedup_strategy` in experiment config
+
+See [Experiment Workflow](docs/experiment-workflow.md) for multi-machine setup, core pinning, and
+production deployment. See [Environment Setup](docs/environment-setup.md) for `.env` configuration.
 
 ### Shell Completion
 
@@ -44,19 +98,6 @@ eval "$(register-python-argcomplete crsbench)"
 
 See the [argcomplete docs](https://github.com/kislyuk/argcomplete#installation) for
 fish and other shell setup instructions.
-
-CRS experiments use a distributed job queue (Redis/RQ). The orchestrator (`run`) enqueues jobs,
-workers (`worker`) execute them. Add `evaluator` for real-time POV and patch verification.
-
-### Execution Notes (oss-crs Workflow)
-
-- CRS lifecycle now uses `oss-crs prepare`, `oss-crs build-target`, `oss-crs artifacts`, and `oss-crs run`
-- Trial artifact discovery is resolved via `oss-crs artifacts` (no glob-based submit-dir discovery)
-- Real-time POV/patch collection is tied to resolved `EXCHANGE_DIR` paths
-- Additional POV dedup strategy `stack-based` is available via `pov_dedup_strategy` in experiment config
-
-See [Experiment Workflow](docs/experiment-workflow.md) for multi-machine setup, core pinning, and
-production deployment. See [Environment Setup](docs/environment-setup.md) for `.env` configuration.
 
 ### Verification (Standalone)
 
@@ -110,7 +151,8 @@ CRSBench/
 │   └── utils/               #   Shared utilities (logger, YAML, etc.)
 ├── crses/                   # CRS configurations for evaluation
 ├── oss-crs/                 # CRS runtime and registry (submodule)
-├── oss-fuzz/                # OSS-Fuzz (submodule)
+├── third_party/oss-fuzz/    # Official OSS-Fuzz (sparse checkout, managed by `crsbench prepare`)
+├── third_party/patches/     # Local upstream patch set (applied by `crsbench prepare`)
 ├── docs/                    # Documentation hub (user + design docs)
 └── docs/design/             # Internal architecture docs
 ```
