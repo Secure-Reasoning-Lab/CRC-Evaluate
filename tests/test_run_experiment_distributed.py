@@ -6,9 +6,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from crsbench.distributed.jobs import _build_trial_output_path
 from crsbench.run_experiment import (
+    Trial,
     _prepare_trial_dir_for_retry,
+    build_trial_id,
     run_experiment_distributed,
 )
+from crsbench.validation.schemas import BenchmarkHarness, HarnessFile
 
 
 def test_register_failure_cleans_registry_lease(tmp_path: Path) -> None:
@@ -193,3 +196,42 @@ def test_prepare_trial_dir_for_retry_cleans_results_filestore(tmp_path: Path) ->
         )
         assert (trial_dir / "retries").exists()
         assert not (trial_dir / ".fail").exists()
+
+
+def _make_trial(target_cpv_id: str | None) -> Trial:
+    harness = HarnessFile(name="fuzz_target", path="./fuzz_target.c")
+    benchmark = BenchmarkHarness(
+        name="bench-a",
+        path=Path("/tmp/bench-a"),
+        harness=harness,
+    )
+    return Trial(
+        crs="crs-a",
+        benchmark_harness=benchmark,
+        trial_num=1,
+        mode="delta",
+        sanitizer="address",
+        target_cpv_id=target_cpv_id,
+    )
+
+
+def test_build_trial_id_includes_target_cpv_id() -> None:
+    cpv_trial = _make_trial("cpv_7")
+    trial_id = build_trial_id("exp", cpv_trial, "_abc123")
+    assert "-cpv-" in trial_id
+    assert "untargeted" not in trial_id
+    assert "-trial1_abc123" in trial_id
+
+
+def test_build_trial_id_uses_untargeted_fallback() -> None:
+    all_trial = _make_trial(None)
+    trial_id = build_trial_id("exp", all_trial, "_abc123")
+    assert "-untargeted-trial1_abc123" in trial_id
+
+
+def test_build_trial_id_avoids_cpv_normalization_collisions() -> None:
+    trial_a = _make_trial("cpv/A")
+    trial_b = _make_trial("cpv_a")
+    id_a = build_trial_id("exp", trial_a, "_abc123")
+    id_b = build_trial_id("exp", trial_b, "_abc123")
+    assert id_a != id_b

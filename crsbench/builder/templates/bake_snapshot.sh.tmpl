@@ -1,0 +1,23 @@
+set -euo pipefail
+project_path=@@PROJECT_MOUNT@@
+workdir=@@WORKDIR@@
+case "$workdir" in ""|"/") echo "Unsafe workdir: $workdir"; exit 2;; esac
+mkdir -p /CRSBENCH_PROJECT
+cp -a "$project_path/." /CRSBENCH_PROJECT/
+for f in test.sh run_tests.sh rts_config_jvm.py; do
+  if [ -f "$project_path/$f" ]; then
+    cp -f "$project_path/$f" "/src/$f"
+  fi
+done
+if [ -f /src/test.sh ]; then chmod +x /src/test.sh || true; fi
+if [ -f /src/run_tests.sh ]; then chmod +x /src/run_tests.sh || true; fi
+mkdir -p "$workdir"
+cd "$workdir"
+export SANITIZER=@@SANITIZER@@
+export PROJECT_NAME=@@PROJECT_NAME@@
+export FUZZING_LANGUAGE=@@FUZZING_LANGUAGE@@
+export FUZZING_ENGINE=libfuzzer
+export ARCHITECTURE=x86_64
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+compile

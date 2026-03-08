@@ -67,18 +67,20 @@ copy_results_after_trial: false
 # results_filestore: /opt/crsbench-finished/my-experiment
 
 # List of CRS implementations to evaluate.
-# This profile is single-CRS: exactly one CRS entry is allowed.
-# Use separate experiments for different CRS setups.
+# Multiple CRS entries are allowed.
 crses:
   - atlantis-c
 
 # Optional compose/runtime overrides for oss-crs adapter.
 # crs_compose:
-#   docker_registry: us-central1-docker.pkg.dev/aixcc-scoring-prod/oss-fuzz
-#
-# Optional per-CRS runtime env overrides keyed by CRS name in `crses`.
-# crs_overrides:
+#   oss_crs_infra:
+#     # Choose exactly one CPU mode:
+#     # 1) Dedicated infra cores:
+#     num_cores: 8
+#     # 2) Shared infra cores (union of CRS cpusets):
+#     # shared: true
 #   atlantis-c:
+#     num_cores: 8
 #     additional_env:
 #       ANTHROPIC_MODEL: claude-sonnet-4-5-20250929
 
@@ -180,8 +182,8 @@ worker:
   # Override report storage path.
   # report_filestore: /mnt/nfs/reports
 
-  # Override oss-fuzz installation path.
-  # oss_fuzz_path: /opt/oss-fuzz
+  # OSS-Fuzz path override is not used in distributed worker runtime.
+  # Workers always resolve the managed checkout via ensure_oss_fuzz_root().
 
   # Override CRS registry directory.
   # registry_dir: /opt/oss-crs/registry
@@ -247,8 +249,8 @@ evaluator:
 # Optional Features
 # =============================================================================
 
-# Path to oss-fuzz directory.
-oss_fuzz_path: ./oss-fuzz  # default: ./oss-fuzz
+# Managed OSS-Fuzz checkout is resolved automatically in distributed runtime.
+# (No oss_fuzz_path override needed here.)
 
 # Path to CRS registry directory.
 # registry_dir: ./oss-crs/registry  # default: ./oss-crs/registry
@@ -278,7 +280,7 @@ litellm_mode: external  # default: external
 llm_tracking_enabled: true  # default: true
 
 # Docker image prefix for custom project images.
-project_image_prefix: aixcc-afc  # default: aixcc-afc
+project_image_prefix: crsbench  # default: crsbench
 
 # Skip POV verification after CRS execution.
 skip_verification: false  # default: false

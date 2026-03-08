@@ -49,7 +49,10 @@ def make_bugfix_config_dict(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
         "build_timeout": 60,
         "run_timeout": 10,
         "crs_compose": {
-            "docker_registry": "ghcr.io/test",
+            "oss_crs_infra": {"num_cores": 1, "mem_limit": "8G"},
+            "crs_services": {
+                "test-crs": {"num_cores": 1, "mem_limit": "8G"},
+            },
         },
     }
     base.update(overrides)
@@ -162,6 +165,15 @@ def e2e_bugfix_env(tmp_path: Path) -> Path:
     )
 
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _mock_oss_fuzz_root(e2e_bugfix_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force distributed job runtime to use this test's oss-fuzz fixture path."""
+    monkeypatch.setattr(
+        "crsbench.distributed.jobs.ensure_oss_fuzz_root",
+        lambda: str(e2e_bugfix_env / "oss-fuzz"),
+    )
 
 
 # ---------------------------------------------------------------------------

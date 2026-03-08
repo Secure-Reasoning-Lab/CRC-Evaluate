@@ -245,8 +245,8 @@ Result: pkgs/ source in Docker image is OVERWRITTEN
 **Files involved:**
 - `crsbench/evaluation/crs_patch_executor.py:511` - Clones from main_repo
 - `crsbench/evaluation/crs_patch_executor.py:542-543` - Passes `--source-path`
-- `oss-crs/bug_fixing/src/oss_patch/project_builder/__init__.py:481` - Overwrites source
-- `oss-crs/bug_fixing/src/oss_patch/project_builder/__init__.py:509` - Mounts source
+- `oss-crs` builder path (project builder) - Overwrites source
+- `oss-crs` builder path (project builder) - Mounts source
 
 ### 4.2 Required Changes
 
@@ -675,8 +675,9 @@ Current implementation provides simple completion-based detection framework.
 ### 6.1 Creating New Benchmark (Challenge Developer)
 
 ```bash
-# 1. Create benchmark from template
-crsbench benchmark init ./my-new-vuln --template c-project
+# 1. Create benchmark directory scaffold manually
+# (there is currently no `crsbench benchmark init` command)
+mkdir -p ./my-new-vuln
 
 # 2. Set up source in Team-Atlanta (or use existing OSS)
 # Clone vulnerable version, add .aixcc for development convenience

@@ -96,6 +96,11 @@ class VerificationEngine:
         *,
         source_mode: str = "pkgs",
         max_povs_per_cpv: Optional[int] = None,
+        inc_image_policy: Optional[str] = None,
+        inc_image_registry: Optional[str] = None,
+        inc_image_max_pull_bytes: Optional[int] = None,
+        inc_image_pull_timeout: Optional[int] = None,
+        local_image_prefix: Optional[str] = None,
     ):
         """Initialize the verification engine.
 
@@ -117,6 +122,11 @@ class VerificationEngine:
             oss_fuzz_path,
             max_workers=resolve_build_workers(build_workers),
             source_mode=source_mode,
+            inc_image_policy=inc_image_policy,
+            inc_image_registry=inc_image_registry,
+            inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+            inc_image_pull_timeout=inc_image_pull_timeout,
+            local_image_prefix=local_image_prefix,
         )
         self.dedup_strategy = dedup_strategy if dedup_strategy else PatchBasedDedup()
         self._built_results: dict[str, dict[str, BuildResult]] = {}
@@ -190,7 +200,7 @@ class VerificationEngine:
                 break
 
             # ASAN/Sanitizer error (specific pattern with process ID)
-            if "==ERROR: AddressSanitizer" in line or "==ERROR: LeakSanitizer" in line:
+            if "ERROR: AddressSanitizer" in line or "ERROR: LeakSanitizer" in line:
                 start = max(0, i - 1)
                 # Find SUMMARY line
                 summary_idx = i
@@ -223,7 +233,11 @@ class VerificationEngine:
                 break
 
             # SUMMARY line as fallback for sanitizers
-            if line.startswith("SUMMARY:"):
+            if line.startswith("SUMMARY:") and (
+                "AddressSanitizer" in line
+                or "LeakSanitizer" in line
+                or "libFuzzer" in line
+            ):
                 start = max(0, i - 10)
                 end = min(len(lines), i + 2)
                 summary_lines = lines[start:end]
@@ -321,7 +335,8 @@ class VerificationEngine:
         # Execute reproduce calls in parallel
         crash_results: dict[VariantType, bool] = {}
         cpv_crash_map: dict[int, bool] = {}
-        crash_logs: dict[str, str] = {}  # variant_name -> crash_log
+        stdout_logs: dict[str, str] = {}  # variant_name -> stdout log
+        stderr_logs: dict[str, str] = {}  # variant_name -> stderr log
         variant_crashed: dict[str, bool] = {}  # variant_name -> crashed
 
         for task in tasks:
@@ -333,7 +348,9 @@ class VerificationEngine:
 
             # Collect crash log for all variants (not just crashed)
             if result.crash_log:
-                crash_logs[result.variant_name] = result.crash_log
+                stdout_logs[result.variant_name] = result.crash_log
+            if result.stderr:
+                stderr_logs[result.variant_name] = result.stderr
             variant_crashed[result.variant_name] = result.crashed
 
             logger.debug(
@@ -354,11 +371,22 @@ class VerificationEngine:
         )
 
         # Attach crash logs and variant crash status to result
-        if crash_logs:
+        if stdout_logs or stderr_logs:
+            combined_logs: dict[str, str] = {}
+            for variant_name in sorted(set(stdout_logs) | set(stderr_logs)):
+                out = stdout_logs.get(variant_name, "")
+                err = stderr_logs.get(variant_name, "")
+                combined = f"{out}\n{err}".strip()
+                if combined:
+                    combined_logs[variant_name] = combined
+
             verdict.crash_info = {
-                "logs": crash_logs,
+                "stdout": combined_logs,
+                "logs": combined_logs,
                 "variant_crashed": variant_crashed,
             }
+            if stderr_logs:
+                verdict.crash_info["stderr"] = stderr_logs
 
         return verdict
 
@@ -474,18 +502,37 @@ class VerificationEngine:
                 benchmark_name=adapter.benchmark_name,
                 pov_id=pov_id,
             )
-            # Attach stdout/stderr logs to result
+            # Attach stdout/stderr logs to result.
+            # Store combined output in stdout so downstream consumers that only
+            # read crash_info["stdout"] still see stderr-only sanitizer traces.
             crash_info: dict[str, dict[str, str]] = {}
-            if stdout_logs:
-                crash_info["stdout"] = stdout_logs
+            if stdout_logs or stderr_logs:
+                combined_logs: dict[str, str] = {}
+                for variant_name in sorted(set(stdout_logs) | set(stderr_logs)):
+                    out = stdout_logs.get(variant_name, "")
+                    err = stderr_logs.get(variant_name, "")
+                    combined = f"{out}\n{err}".strip()
+                    if combined:
+                        combined_logs[variant_name] = combined
+                crash_info["stdout"] = combined_logs
             if stderr_logs:
                 crash_info["stderr"] = stderr_logs
             if crash_info:
                 verdict.crash_info = crash_info
 
-            # Log crash summary for UNINTENDED_CRASH to help debugging
-            if verdict.status == PovVerificationStatus.UNINTENDED_CRASH and stdout_logs:
-                self._log_crash_summary(pov_id, stdout_logs)
+            # Log crash summary for UNINTENDED_CRASH to help debugging.
+            # Combine stdout/stderr per variant because sanitizer crashes often
+            # emit useful traces on stderr.
+            if verdict.status == PovVerificationStatus.UNINTENDED_CRASH:
+                combined_logs: dict[str, str] = {}
+                for variant_name in sorted(set(stdout_logs) | set(stderr_logs)):
+                    out = stdout_logs.get(variant_name, "")
+                    err = stderr_logs.get(variant_name, "")
+                    combined = f"{out}\n{err}".strip()
+                    if combined:
+                        combined_logs[variant_name] = combined
+                if combined_logs:
+                    self._log_crash_summary(pov_id, combined_logs)
 
             verification_results.append(verdict)
 
@@ -527,11 +574,14 @@ class VerificationEngine:
             return [], 0
 
         # Find all POV files (exclude dotfiles)
-        pov_files = [
-            f
-            for f in list(pov_dir.glob("*.bin")) + list(pov_dir.glob("*.pov"))
-            if not f.name.startswith(".")
-        ]
+        pov_files = sorted(
+            (
+                f
+                for f in list(pov_dir.glob("*.bin")) + list(pov_dir.glob("*.pov"))
+                if not f.name.startswith(".")
+            ),
+            key=lambda p: p.name,
+        )
         if not pov_files:
             logger.warning(f"No POV files found in {pov_dir}")
             return [], 0
@@ -604,7 +654,9 @@ class VerificationEngine:
         force_rebuild: bool = False,
         deduplicate: bool = True,
         skip_hashes: set[str] | None = None,
+        max_per_hash: Optional[int] = None,
         use_inc_build: Optional[bool] = None,
+        sanitizer: Optional[str] = None,
     ) -> PovBenchmarkOutput:
         """Verify POVs for a complete benchmark.
 
@@ -617,14 +669,24 @@ class VerificationEngine:
             force_rebuild: Force rebuild of variants
             deduplicate: Whether to deduplicate results
             skip_hashes: Optional set of content hashes to skip (pre-verification dedup)
+            max_per_hash: Optional per-content-hash cap for POV files from pov_dir.
+                When set (for example, 1), only the first N files per unique content hash
+                are verified and later duplicates are skipped.
             use_inc_build: Override incremental build setting (None uses project.yaml default)
+            sanitizer: Explicit sanitizer to scope build selection
 
         Returns:
             PovBenchmarkOutput containing:
             - results: list of verification results
             - skipped_count: number of POVs skipped due to hash
             - fallback_used: True if any build used inc-build fallback
+
+        Raises:
+            ValueError: If max_per_hash is negative.
         """
+        if max_per_hash is not None and max_per_hash < 0:
+            raise ValueError("max_per_hash must be >= 0")
+
         # Load benchmark configuration
         adapter = self.load_adapter(benchmark_path)
         if not adapter:
@@ -636,7 +698,10 @@ class VerificationEngine:
 
         build_start = time.time()
         build_results = self.get_or_build_results(
-            adapter, force_rebuild=force_rebuild, use_inc_build=use_inc_build
+            adapter,
+            force_rebuild=force_rebuild,
+            use_inc_build=use_inc_build,
+            sanitizer=sanitizer,
         )
         build_elapsed = time.time() - build_start
         if not build_results:
@@ -652,7 +717,8 @@ class VerificationEngine:
 
         # Collect (pov_id, pov_data, harness) tuples
         pov_harness_pairs: list[tuple[str, bytes, str]] = []
-        skipped_count = 0
+        skipped_prior_hash_count = 0
+        skipped_capped_count = 0
 
         if pov_dir:
             # Use explicit POV directory (override)
@@ -660,13 +726,17 @@ class VerificationEngine:
                 [harness_filter] if harness_filter else adapter.get_harness_names()
             )
 
-            pov_files = [
-                f
-                for f in pov_dir.glob("*")
-                if f.is_file() and not f.name.startswith(".")
-            ]
+            pov_files = sorted(
+                (
+                    f
+                    for f in pov_dir.glob("*")
+                    if f.is_file() and not f.name.startswith(".")
+                ),
+                key=lambda p: p.name,
+            )
 
             # Filter out POVs with hashes in skip_hashes (pre-verification dedup)
+            hash_counts: dict[str, int] = {}
             if skip_hashes:
                 filtered_pov_files = []
                 for pov_file in pov_files:
@@ -676,9 +746,26 @@ class VerificationEngine:
                             f"Skipping POV {pov_file.name} "
                             f"(hash {pov_hash} already tested)"
                         )
-                        skipped_count += 1
+                        skipped_prior_hash_count += 1
                     else:
                         filtered_pov_files.append(pov_file)
+                pov_files = filtered_pov_files
+
+            # Optionally cap number of files per unique content hash.
+            if max_per_hash is not None:
+                filtered_pov_files = []
+                for pov_file in pov_files:
+                    pov_hash = compute_content_hash(pov_file)
+                    count = hash_counts.get(pov_hash, 0)
+                    if count >= max_per_hash:
+                        logger.debug(
+                            f"Skipping POV {pov_file.name} "
+                            f"(hash {pov_hash} reached max_per_hash={max_per_hash})"
+                        )
+                        skipped_capped_count += 1
+                        continue
+                    hash_counts[pov_hash] = count + 1
+                    filtered_pov_files.append(pov_file)
                 pov_files = filtered_pov_files
 
             for pov_file in pov_files:
@@ -725,7 +812,7 @@ class VerificationEngine:
                             f"Skipping POV {pov_path.name} "
                             f"(hash {pov_hash} already tested)"
                         )
-                        skipped_count += 1
+                        skipped_prior_hash_count += 1
                         continue
                 pov_data = pov_path.read_bytes()
                 # Include vuln_keyword in pov_id to track POV→CPV correspondence
@@ -733,20 +820,35 @@ class VerificationEngine:
                 pov_id = f"{vuln_keyword}/{pov_path.name}"
                 pov_harness_pairs.append((pov_id, pov_data, harness_name))
 
+        skipped_count = skipped_prior_hash_count + skipped_capped_count
         if not pov_harness_pairs:
             if skipped_count > 0:
-                logger.debug(f"All {skipped_count} POVs skipped (already tested)")
+                reason_parts = []
+                if skipped_prior_hash_count > 0:
+                    reason_parts.append(f"{skipped_prior_hash_count} already tested")
+                if skipped_capped_count > 0:
+                    reason_parts.append(
+                        f"{skipped_capped_count} capped by max_per_hash"
+                    )
+                logger.debug(
+                    f"All {skipped_count} POVs skipped ({', '.join(reason_parts)})"
+                )
             else:
                 logger.warning("No POVs to verify")
             return PovBenchmarkOutput(
                 results=[], skipped_count=skipped_count, fallback_used=fallback_used
             )
 
+        reason_parts = []
+        if skipped_prior_hash_count > 0:
+            reason_parts.append(f"{skipped_prior_hash_count} already tested")
+        if skipped_capped_count > 0:
+            reason_parts.append(f"{skipped_capped_count} capped by max_per_hash")
         logger.debug(
             f"Verifying {len(pov_harness_pairs)} POV-harness pairs "
             f"against {adapter.benchmark_name}"
             + (
-                f" (skipped {skipped_count} already tested)"
+                f" (skipped {skipped_count}: {', '.join(reason_parts)})"
                 if skipped_count > 0
                 else ""
             )
@@ -780,6 +882,7 @@ class VerificationEngine:
         adapter: MetaYamlAdapter,
         *,
         force_rebuild: bool = False,
+        allow_build: bool = True,
         use_inc_build: Optional[bool] = None,
         sanitizer: Optional[str] = None,
     ) -> dict[str, BuildResult]:
@@ -788,26 +891,19 @@ class VerificationEngine:
         Args:
             adapter: MetaYamlAdapter for benchmark config
             force_rebuild: Force rebuild even if cached
+            allow_build: If False, return empty results on cache miss
             use_inc_build: Override incremental build setting (None uses adapter default)
             sanitizer: Explicit sanitizer to use (skips auto-detect when provided)
 
         Returns:
             Dict mapping variant names to BuildResult
         """
-        # Cache key includes sanitizer to avoid cross-sanitizer collisions
-        cache_key = adapter.benchmark_name
-        if sanitizer:
-            cache_key = f"{adapter.benchmark_name}:{sanitizer}"
-
-        if not force_rebuild and cache_key in self._built_results:
-            return self._built_results[cache_key]
-
-        # Determine mode
-        mode_str = adapter.get_mode().value
-        mode = BenchmarkMode.FULL if mode_str == "full" else BenchmarkMode.DELTA
-
         # Use override if provided, otherwise use adapter's setting
-        inc_build = use_inc_build if use_inc_build is not None else adapter.inc_build
+        inc_build = (
+            bool(use_inc_build)
+            if use_inc_build is not None
+            else bool(adapter.inc_build)
+        )
 
         # Use explicit sanitizer if provided, otherwise auto-detect
         if sanitizer is None:
@@ -819,6 +915,64 @@ class VerificationEngine:
                     f"{sanitizers}. POV verification will use {sanitizer}. "
                     "Use 'crsbench benchmark ci' for full multi-sanitizer support."
                 )
+
+        # Cache key includes sanitizer + inc_build mode to avoid cross-mode collisions
+        cache_key = (
+            f"{adapter.benchmark_name}:{sanitizer}:{'inc' if inc_build else 'clean'}"
+        )
+        if not force_rebuild and cache_key in self._built_results:
+            return self._built_results[cache_key]
+
+        if not allow_build:
+            mode_str = adapter.get_mode().value
+            mode = BenchmarkMode.FULL if mode_str == "full" else BenchmarkMode.DELTA
+            plan = self.builder.create_build_plan(
+                benchmark_name=adapter.benchmark_name,
+                benchmark_path=adapter.benchmark_path or Path(),
+                main_repo=adapter.main_repo,
+                mode=mode,
+                base_commit=adapter.get_base_commit(),
+                ref_commit=adapter.get_ref_commit(),
+                cpv_numbers=adapter.get_cpv_numbers(),
+                language=adapter.lang,
+                repo_name=adapter.repo_name,
+                include_coverage=False,
+                use_inc_build=inc_build,
+                sanitizer=sanitizer,
+            )
+            hydrated_results: dict[str, BuildResult] = {}
+            for config in plan.configs:
+                if not self.builder.is_variant_built(
+                    config.variant_name, require_inc_build=None
+                ):
+                    continue
+
+                metadata = self.builder.infra.read_build_metadata(config.variant_name)
+                if metadata is None:
+                    continue
+                if metadata.sanitizer != config.sanitizer:
+                    continue
+                # Accept successful inc-build fallbacks (clean build artifacts with
+                # fallback_used=True) so distributed verify can hydrate valid outputs.
+                if metadata.inc_build != config.use_inc_build and not (
+                    config.use_inc_build and metadata.fallback_used
+                ):
+                    continue
+
+                build_path = self.builder.infra.get_build_output_path(
+                    config.variant_name
+                )
+                hydrated_results[config.variant_name] = BuildResult.from_cache(
+                    config, build_path
+                )
+
+            if hydrated_results:
+                self._built_results[cache_key] = hydrated_results
+            return hydrated_results
+
+        # Determine mode
+        mode_str = adapter.get_mode().value
+        mode = BenchmarkMode.FULL if mode_str == "full" else BenchmarkMode.DELTA
 
         # Create build plan
         plan = self.builder.create_build_plan(

@@ -171,6 +171,55 @@ class BenchmarkValidationResult:
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
 
+    def _effective_checks(self) -> list[CheckResult]:
+        """Return checks that should contribute to aggregate status/time.
+
+        Split POV/Patch checks are used only when complete. When split data is
+        partial and a legacy combined check is present, combined remains
+        authoritative to avoid partial-hydration regressions.
+        """
+        checks: list[CheckResult | None] = [
+            self.format_check,
+            self.coverage_check,
+            self.pov_inc_check,
+            self.patch_inc_check,
+            self.patch_rts_check,
+            self.patch_inc_rts_check,
+            self.coverage_inc_check,
+        ]
+
+        pov_split = [self.pov_build_check, self.pov_pov_check, self.pov_var_check]
+        pov_split_complete = all(c is not None for c in pov_split)
+        if pov_split_complete:
+            checks.extend(pov_split)
+        elif self.pov_check is not None:
+            checks.append(self.pov_check)
+        else:
+            checks.extend(c for c in pov_split if c is not None)
+
+        patch_split = [
+            self.patch_build_check,
+            self.patch_pov_check,
+            self.patch_var_check,
+            self.patch_unittest_check,
+        ]
+        patch_split_complete = all(c is not None for c in patch_split)
+        if patch_split_complete:
+            checks.extend(patch_split)
+        elif self.patch_check is not None:
+            checks.append(self.patch_check)
+        else:
+            checks.extend(c for c in patch_split if c is not None)
+
+        return [c for c in checks if c is not None]
+
+    def _status_checks(self) -> list[CheckResult]:
+        """Return checks that should contribute to aggregate status.
+
+        Status uses the same split-vs-combined policy as timing aggregation.
+        """
+        return self._effective_checks()
+
     @property
     def total_status(self) -> CheckStatus:
         """Overall status - PASS if all executed checks pass.
@@ -179,28 +228,15 @@ class BenchmarkValidationResult:
         SKIP checks are ignored when determining pass/fail status.
         Returns PASS if all non-SKIP checks passed, SKIP if all checks were skipped.
         """
-        all_checks = [
-            self.format_check,
-            self.pov_check,
-            self.patch_check,
-            self.coverage_check,
-            self.pov_build_check,
-            self.pov_inc_check,
-            self.patch_inc_check,
-            self.patch_rts_check,
-            self.patch_inc_rts_check,
-            self.coverage_inc_check,
-        ]
-        # Filter out None (not requested by command)
-        checks = [c for c in all_checks if c is not None]
+        checks = self._status_checks()
         if not checks:
             return CheckStatus.SKIP
 
-        # Check for failures and errors first
-        if any(c.status == CheckStatus.FAIL for c in checks):
-            return CheckStatus.FAIL
+        # Check errors before failures: infra/dependency errors should dominate.
         if any(c.status == CheckStatus.ERROR for c in checks):
             return CheckStatus.ERROR
+        if any(c.status == CheckStatus.FAIL for c in checks):
+            return CheckStatus.FAIL
 
         # Filter out SKIP checks to determine if all executed checks passed
         executed_checks = [c for c in checks if c.status != CheckStatus.SKIP]
@@ -213,19 +249,7 @@ class BenchmarkValidationResult:
     @property
     def total_time(self) -> float:
         """Total time for all checks."""
-        all_checks = [
-            self.format_check,
-            self.pov_check,
-            self.patch_check,
-            self.coverage_check,
-            self.pov_build_check,
-            self.pov_inc_check,
-            self.patch_inc_check,
-            self.patch_rts_check,
-            self.patch_inc_rts_check,
-            self.coverage_inc_check,
-        ]
-        return sum(c.time_seconds for c in all_checks if c is not None)
+        return sum(c.time_seconds for c in self._effective_checks())
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""

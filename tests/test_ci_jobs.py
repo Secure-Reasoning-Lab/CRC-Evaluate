@@ -1,5 +1,6 @@
 """Tests for CI verify/test job serialization and execution."""
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -236,7 +237,7 @@ class TestSerializeAllJobTypes:
         }
         restored = _reconstruct_job(params)
         assert restored.sanitizer == "address"
-        assert restored.use_inc_build is False
+        assert restored.use_inc_build is True
 
     def test_build_single_variant_roundtrip(self) -> None:
         """BuildSingleVariantJob serializes and reconstructs correctly."""
@@ -285,7 +286,7 @@ class TestSerializeAllJobTypes:
         assert restored.repo_name == "test-repo"
 
     def test_build_single_variant_default_use_inc_build_false(self) -> None:
-        """BuildSingleVariantJob defaults use_inc_build to False on deserialize."""
+        """BuildSingleVariantJob defaults use_inc_build to True on deserialize."""
         from crsbench.distributed.ci_jobs import _reconstruct_job
 
         params = {
@@ -298,7 +299,33 @@ class TestSerializeAllJobTypes:
             "mode": "delta",
         }
         restored = _reconstruct_job(params)
-        assert restored.use_inc_build is False
+        assert restored.use_inc_build is True
+
+    def test_prepare_inc_image_job_roundtrip(self) -> None:
+        """PrepareIncImageJob serializes and reconstructs correctly."""
+        from crsbench.benchmark_ci.jobs.flat import PrepareIncImageJob
+        from crsbench.distributed.ci_jobs import _reconstruct_job, serialize_ci_job
+
+        job = PrepareIncImageJob(
+            benchmark_path=Path("/benchmarks/test-bench"),
+            benchmark_name="test-bench",
+            sanitizer="address",
+            use_inc_build=True,
+            source_mode="pkgs",
+        )
+        params = serialize_ci_job(job)
+        assert params["_job_class"] == "PrepareIncImageJob"
+        assert params["benchmark_path"] == "/benchmarks/test-bench"
+        assert params["benchmark_name"] == "test-bench"
+        assert params["sanitizer"] == "address"
+        assert params["use_inc_build"] is True
+        assert params["force_rebuild"] is False
+
+        restored = _reconstruct_job(params)
+        assert type(restored).__name__ == "PrepareIncImageJob"
+        assert restored.benchmark_name == "test-bench"
+        assert restored.sanitizer == "address"
+        assert restored.force_rebuild is False
 
     def test_patch_variant_test_default_test_mode_full(self) -> None:
         """PatchVariantTestJob defaults test_mode to FULL for legacy payloads."""
@@ -480,6 +507,287 @@ class TestExecuteCiJobContextPreload:
         assert result == {"success": True}
         mock_patch_load.assert_called_once()
         fake_job.execute.assert_called_once()
+
+    def test_returns_structured_error_on_missing_build_context(self) -> None:
+        """execute_ci_job should return typed infra failure for missing context."""
+        from crsbench.distributed.ci_jobs import (
+            InfraMissingBuildContextError,
+            execute_ci_job,
+        )
+
+        fake_job = MagicMock()
+        fake_job.job_id = "verify-cpv-pov/bench/cpv_0"
+        fake_job.build_job_ids = ["build-single/bench/bench-asan-deltaref"]
+        fake_job.benchmark_path = Path("/benchmarks/bench")
+        fake_job.use_inc_build = True
+        fake_job.execute = MagicMock()
+
+        with (
+            patch(
+                "crsbench.distributed.ci_jobs._reconstruct_job", return_value=fake_job
+            ),
+            patch(
+                "crsbench.distributed.ci_jobs._load_build_context_from_disk",
+                side_effect=InfraMissingBuildContextError(
+                    benchmark="bench",
+                    build_job_ids_requested=fake_job.build_job_ids,
+                    missing_build_job_ids=fake_job.build_job_ids,
+                    available_variants=[],
+                    source_mode="pkgs",
+                    use_inc_build=True,
+                ),
+            ),
+        ):
+            result = execute_ci_job(
+                {"_job_class": "VerifyCpvPovJob", "source_mode": "pkgs"}
+            )
+
+        assert result["success"] is False
+        assert result["job_id"] == "verify-cpv-pov/bench/cpv_0"
+        assert "infra_missing_build_context" in result["error"]
+        assert result["details"]["error_code"] == "infra_missing_build_context"
+        fake_job.execute.assert_not_called()
+
+    def test_patch_context_prefers_upstream_build_result_metadata(self) -> None:
+        """Patch context should use actual upstream build outcome when available."""
+        from crsbench.builder.types import BenchmarkMode
+        from crsbench.distributed.ci_jobs import _load_patch_build_context
+
+        context = MagicMock()
+        context.shared = {}
+
+        job = MagicMock()
+        job.build_patch_job_id = "build-patch/bench/cpv_0/patch_0"
+        job.benchmark_name = "bench"
+        job.benchmark_path = Path("/bench")
+        job.harness = "h0"
+        job.cpv_id = "cpv_0"
+        job.patch_id = "patch_0"
+        job.use_inc_build = True
+
+        adapter = MagicMock()
+        adapter.get_cpv_sanitizer.return_value = "address"
+        adapter.get_mode.return_value = BenchmarkMode.DELTA
+        adapter.lang = "c"
+        adapter.get_ref_commit.return_value = "abc123"
+        adapter.get_base_commit.return_value = "abc123"
+        adapter.main_repo = "https://example.com/repo"
+
+        current_rq_job = MagicMock()
+        current_rq_job.connection = MagicMock()
+        upstream_rq_job = MagicMock()
+        upstream_rq_job.result = {
+            "details": {
+                "variant_name": "bench-delta-cpv_0-patch_0",
+                "sanitizer": "memory",
+                "inc_build_available": False,
+            }
+        }
+
+        with (
+            patch(
+                "crsbench.utils.run_helper.ensure_oss_fuzz_root", return_value="/tmp/of"
+            ),
+            patch(
+                "crsbench.evaluation.verification.pov.VerificationEngine"
+            ) as mock_engine_cls,
+            patch(
+                "crsbench.builder.infrastructure.OSSFuzzInfrastructure"
+            ) as mock_infra_cls,
+            patch("rq.get_current_job", return_value=current_rq_job),
+            patch("rq.job.Job.fetch", return_value=upstream_rq_job),
+        ):
+            mock_engine = MagicMock()
+            mock_engine.load_adapter.return_value = adapter
+            mock_engine_cls.return_value = mock_engine
+            mock_infra = MagicMock()
+            mock_infra.is_variant_built.return_value = True
+            mock_infra_cls.return_value = mock_infra
+            _load_patch_build_context(context, job, source_mode="pkgs")
+
+        stored = context.shared[job.build_patch_job_id]
+        assert stored["variant_name"] == "bench-delta-cpv_0-patch_0"
+        assert stored["sanitizer"] == "memory"
+        assert stored["inc_build_available"] is False
+
+    def test_patch_context_defaults_to_job_inc_build_without_upstream_result(
+        self,
+    ) -> None:
+        """Missing upstream build result should fall back to job.use_inc_build."""
+        from crsbench.builder.types import BenchmarkMode
+        from crsbench.distributed.ci_jobs import _load_patch_build_context
+
+        context = MagicMock()
+        context.shared = {}
+
+        job = MagicMock()
+        job.build_patch_job_id = "build-patch/bench/cpv_0/patch_0"
+        job.benchmark_name = "bench"
+        job.benchmark_path = Path("/bench")
+        job.harness = "h0"
+        job.cpv_id = "cpv_0"
+        job.patch_id = "patch_0"
+        job.use_inc_build = True
+
+        adapter = MagicMock()
+        adapter.get_cpv_sanitizer.return_value = "address"
+        adapter.get_mode.return_value = BenchmarkMode.DELTA
+        adapter.lang = "c"
+        adapter.get_ref_commit.return_value = "abc123"
+        adapter.get_base_commit.return_value = "abc123"
+        adapter.main_repo = "https://example.com/repo"
+
+        with (
+            patch(
+                "crsbench.utils.run_helper.ensure_oss_fuzz_root", return_value="/tmp/of"
+            ),
+            patch(
+                "crsbench.evaluation.verification.pov.VerificationEngine"
+            ) as mock_engine_cls,
+            patch(
+                "crsbench.builder.infrastructure.OSSFuzzInfrastructure"
+            ) as mock_infra_cls,
+            patch("rq.get_current_job", return_value=None),
+        ):
+            mock_engine = MagicMock()
+            mock_engine.load_adapter.return_value = adapter
+            mock_engine_cls.return_value = mock_engine
+            mock_infra = MagicMock()
+            mock_infra.is_variant_built.return_value = True
+            mock_infra_cls.return_value = mock_infra
+            _load_patch_build_context(context, job, source_mode="pkgs")
+
+        stored = context.shared[job.build_patch_job_id]
+        assert stored["inc_build_available"] is True
+
+    def test_patch_context_missing_artifact_fails_fast(self) -> None:
+        """Patch context should fail when build metadata exists but artifact is absent."""
+        from crsbench.builder.types import BenchmarkMode
+        from crsbench.distributed.ci_jobs import (
+            InfraMissingBuildContextError,
+            _load_patch_build_context,
+        )
+
+        context = MagicMock()
+        context.shared = {}
+
+        job = MagicMock()
+        job.build_patch_job_id = "build-patch/bench/cpv_0/patch_0"
+        job.benchmark_name = "bench"
+        job.benchmark_path = Path("/bench")
+        job.harness = "h0"
+        job.cpv_id = "cpv_0"
+        job.patch_id = "patch_0"
+        job.use_inc_build = True
+
+        adapter = MagicMock()
+        adapter.get_cpv_sanitizer.return_value = "address"
+        adapter.get_mode.return_value = BenchmarkMode.DELTA
+        adapter.lang = "c"
+        adapter.get_ref_commit.return_value = "abc123"
+        adapter.get_base_commit.return_value = "abc123"
+        adapter.main_repo = "https://example.com/repo"
+
+        with (
+            patch(
+                "crsbench.utils.run_helper.ensure_oss_fuzz_root", return_value="/tmp/of"
+            ),
+            patch(
+                "crsbench.evaluation.verification.pov.VerificationEngine"
+            ) as mock_engine_cls,
+            patch(
+                "crsbench.builder.infrastructure.OSSFuzzInfrastructure"
+            ) as mock_infra_cls,
+            patch("rq.get_current_job", return_value=None),
+        ):
+            mock_engine = MagicMock()
+            mock_engine.load_adapter.return_value = adapter
+            mock_engine_cls.return_value = mock_engine
+            mock_infra = MagicMock()
+            mock_infra.is_variant_built.return_value = False
+            mock_infra_cls.return_value = mock_infra
+
+            with pytest.raises(InfraMissingBuildContextError) as exc_info:
+                _load_patch_build_context(context, job, source_mode="pkgs")
+
+        err = exc_info.value
+        assert err.error_code == "infra_missing_patch_build_context"
+
+
+class TestBuildPatchVariantJobSanitizer:
+    """Test sanitizer resolution in BuildPatchVariantJob."""
+
+    def test_uses_adapter_cpv_sanitizer_over_payload(self, tmp_path: Path) -> None:
+        """BuildPatchVariantJob should prefer adapter CPV sanitizer."""
+        from crsbench.benchmark_ci.jobs.base import JobContext
+        from crsbench.benchmark_ci.jobs.flat import BuildPatchVariantJob
+        from crsbench.builder.types import BenchmarkMode
+        from crsbench.evaluation.verification.models import PatchVerificationStatus
+
+        patch_path = tmp_path / "patch.diff"
+        patch_path.write_text("dummy")
+
+        job = BuildPatchVariantJob(
+            benchmark_path=Path("/bench"),
+            benchmark_name="bench",
+            cpv_id="cpv_0",
+            patch_id="patch_0",
+            patch_path=patch_path,
+            harness="h0",
+            sanitizer="address",
+            use_inc_build=True,
+            source_mode="pkgs",
+        )
+
+        context = JobContext(output_dir=tmp_path)
+
+        adapter = MagicMock()
+        adapter.get_cpv_sanitizer.return_value = "undefined"
+        adapter.get_mode.return_value = BenchmarkMode.DELTA
+        adapter.lang = "c"
+        adapter.get_ref_commit.return_value = "abc123"
+        adapter.get_base_commit.return_value = "abc123"
+        adapter.main_repo = "https://example.com/repo"
+
+        verify_result = MagicMock()
+        verify_result.status = PatchVerificationStatus.VALID
+        verify_result.fallback_used = False
+        verify_result.inc_build_available = True
+        verify_result.build_time = 0.1
+        verify_result.build_stdout = ""
+        verify_result.build_stderr = ""
+        verify_result.details = ""
+
+        with (
+            patch(
+                "crsbench.utils.run_helper.ensure_oss_fuzz_root",
+                return_value="/tmp/of",
+            ),
+            patch(
+                "crsbench.evaluation.verification.pov.VerificationEngine"
+            ) as mock_pov_engine_cls,
+            patch(
+                "crsbench.evaluation.verification.patch.PatchVerificationEngine"
+            ) as mock_patch_engine_cls,
+        ):
+            mock_pov_engine = MagicMock()
+            mock_pov_engine.load_adapter.return_value = adapter
+            mock_pov_engine_cls.return_value = mock_pov_engine
+
+            mock_patch_engine = MagicMock()
+            mock_patch_engine.verify_patch.return_value = verify_result
+            mock_patch_engine_cls.return_value = mock_patch_engine
+
+            result = job.execute(context)
+
+        assert result.success is True
+        assert mock_patch_engine_cls.call_args.kwargs["sanitizer"] == "undefined"
+        assert (
+            mock_patch_engine.verify_patch.call_args.kwargs.get("allow_build") is True
+        )
+        stored = context.shared[job.job_id]
+        assert stored["sanitizer"] == "undefined"
+        assert "-ubsan-" in stored["variant_name"]
 
 
 class TestReconstructUnknown:
@@ -773,7 +1081,11 @@ class TestLoadBuildContextMultiSanitizer:
             "bench-ubsan-deltaref2": MagicMock(name="ubsan-deltaref2"),
         }
 
-        def fake_get_or_build(_adapter, *, sanitizer=None):
+        def fake_get_or_build(
+            _adapter, *, sanitizer=None, use_inc_build=True, allow_build=True
+        ):
+            _ = use_inc_build
+            _ = allow_build
             if sanitizer == "address":
                 return asan_results
             if sanitizer == "undefined":
@@ -794,7 +1106,11 @@ class TestLoadBuildContextMultiSanitizer:
         ]
 
         _load_build_context_from_disk(
-            context, build_job_ids, Path("/benchmarks/bench"), "pkgs"
+            context,
+            build_job_ids,
+            Path("/benchmarks/bench"),
+            "pkgs",
+            use_inc_build=True,
         )
 
         # All 5 variants should be in context.shared
@@ -814,10 +1130,10 @@ class TestLoadBuildContextMultiSanitizer:
         # get_or_build_results called once per sanitizer
         assert mock_engine.get_or_build_results.call_count == 2
         mock_engine.get_or_build_results.assert_any_call(
-            mock_adapter, sanitizer="address"
+            mock_adapter, sanitizer="address", use_inc_build=True, allow_build=False
         )
         mock_engine.get_or_build_results.assert_any_call(
-            mock_adapter, sanitizer="undefined"
+            mock_adapter, sanitizer="undefined", use_inc_build=True, allow_build=False
         )
 
     @patch("crsbench.utils.run_helper.get_oss_fuzz_root", return_value="/oss-fuzz")
@@ -825,8 +1141,11 @@ class TestLoadBuildContextMultiSanitizer:
     def test_missing_variant_logs_warning_not_fallback(
         self, mock_engine_cls: MagicMock, mock_root: MagicMock
     ) -> None:
-        """Missing variant logs warning instead of silently using wrong sanitizer."""
-        from crsbench.distributed.ci_jobs import _load_build_context_from_disk
+        """Missing variant should fail fast with infra_missing_build_context."""
+        from crsbench.distributed.ci_jobs import (
+            InfraMissingBuildContextError,
+            _load_build_context_from_disk,
+        )
 
         assert mock_root.return_value == "/oss-fuzz"
 
@@ -848,9 +1167,662 @@ class TestLoadBuildContextMultiSanitizer:
             "build-single/bench/bench-ubsan-deltaref",
         ]
 
-        _load_build_context_from_disk(
-            context, build_job_ids, Path("/benchmarks/bench"), "pkgs"
-        )
+        with pytest.raises(InfraMissingBuildContextError) as exc_info:
+            _load_build_context_from_disk(
+                context,
+                build_job_ids,
+                Path("/benchmarks/bench"),
+                "pkgs",
+                use_inc_build=True,
+            )
 
+        err = exc_info.value
+        assert err.error_code == "infra_missing_build_context"
+        assert err.missing_build_job_ids == build_job_ids
         # Should NOT populate context.shared with wrong-sanitizer fallback
         assert len(context.shared) == 0
+
+    @patch("crsbench.utils.run_helper.get_oss_fuzz_root", return_value="/oss-fuzz")
+    @patch("crsbench.evaluation.verification.pov.VerificationEngine")
+    def test_fallback_load_accepts_non_inc_variants(
+        self, mock_engine_cls: MagicMock, mock_root: MagicMock
+    ) -> None:
+        """When strict inc load misses variants, retry with non-inc contexts."""
+        from crsbench.distributed.ci_jobs import _load_build_context_from_disk
+
+        assert mock_root.return_value == "/oss-fuzz"
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_all_cpv_sanitizers.return_value = ["address"]
+
+        mock_engine = MagicMock()
+        mock_engine_cls.return_value = mock_engine
+        mock_engine.load_adapter.return_value = mock_adapter
+
+        # Strict inc load misses required variant; fallback load finds it.
+        def fake_get_or_build(
+            _adapter, *, sanitizer=None, use_inc_build=True, allow_build=True
+        ):
+            _ = sanitizer
+            _ = allow_build
+            if use_inc_build:
+                return {}
+            return {"bench-asan-deltaref": MagicMock(name="fallback-deltaref")}
+
+        mock_engine.get_or_build_results.side_effect = fake_get_or_build
+
+        context = MagicMock()
+        context.shared = {}
+
+        build_job_ids = ["build-single/bench/bench-asan-deltaref"]
+        _load_build_context_from_disk(
+            context,
+            build_job_ids,
+            Path("/benchmarks/bench"),
+            "pkgs",
+            use_inc_build=True,
+        )
+
+        assert "build-single/bench/bench-asan-deltaref" in context.shared
+        assert mock_engine.get_or_build_results.call_count == 2
+        mock_engine.get_or_build_results.assert_any_call(
+            mock_adapter, sanitizer="address", use_inc_build=True, allow_build=False
+        )
+        mock_engine.get_or_build_results.assert_any_call(
+            mock_adapter, sanitizer="address", use_inc_build=False, allow_build=False
+        )
+
+
+class TestEnqueueAndPollCiJobs:
+    """Test enqueue_and_poll_ci_jobs stale/duplicate behavior."""
+
+    @staticmethod
+    def _make_build_job():
+        from crsbench.benchmark_ci.jobs.flat import BuildSingleVariantJob
+        from crsbench.builder.types import BenchmarkMode, VariantType
+
+        return BuildSingleVariantJob(
+            benchmark_path=Path("/bench"),
+            benchmark_name="bench",
+            variant_type=VariantType.DELTA_REF,
+            commit="abc123",
+            main_repo="https://example.com/repo.git",
+            mode=BenchmarkMode.DELTA,
+        )
+
+    @staticmethod
+    def _make_mock_rq_job(job_id: str, status: str, result: dict | None = None):
+        job = MagicMock()
+        job.id = job_id
+        job._status = status
+        job.result = result
+        job.exc_info = None
+        job.started_at = None
+        job.timeout = 3600
+        job.delete_called = False
+        job.get_status.side_effect = lambda: job._status
+        job.refresh.return_value = None
+
+        def _delete():
+            job.delete_called = True
+
+        job.delete.side_effect = _delete
+        return job
+
+    def test_rebuilds_finished_build_job(self, monkeypatch: pytest.MonkeyPatch):
+        """Finished build IDs are refreshed to guarantee fresh artifacts."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        existing = self._make_mock_rq_job(
+            "build-single/bench/bench-asan-deltaref", "finished"
+        )
+        reenqueued = self._make_mock_rq_job(
+            "build-single/bench/bench-asan-deltaref",
+            "finished",
+            {
+                "job_id": "build-single/bench/bench-asan-deltaref",
+                "job_type": "build",
+                "success": True,
+                "elapsed_seconds": 1.0,
+                "details": {},
+                "started_at": None,
+                "finished_at": None,
+                "error": None,
+            },
+        )
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_build"
+        queue.connection = MagicMock()
+        queue.enqueue.side_effect = [RuntimeError("duplicate"), reenqueued]
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+        monkeypatch.setattr(
+            "rq.job.Job.fetch",
+            lambda _job_id, **_kwargs: existing,
+        )
+        monkeypatch.setattr(
+            "rq.job.Job.fetch_many",
+            lambda pending_ids, **_kwargs: [reenqueued for _ in pending_ids],
+        )
+
+        job = self._make_build_job()
+
+        results = enqueue_and_poll_ci_jobs([job], redis_host="localhost")
+
+        assert queue.enqueue.call_count == 2
+        assert existing.delete_called is True
+        assert job.job_id in results
+        assert results[job.job_id]["success"] is True
+
+    def test_refresh_all_deletes_failed_terminal_before_enqueue(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """refresh_all policy should delete failed stale records before enqueue."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        existing = self._make_mock_rq_job(
+            "build-single/bench/bench-asan-deltaref", "failed"
+        )
+        enqueued = self._make_mock_rq_job(
+            "build-single/bench/bench-asan-deltaref",
+            "finished",
+            {
+                "job_id": "build-single/bench/bench-asan-deltaref",
+                "job_type": "build",
+                "success": True,
+                "elapsed_seconds": 1.0,
+                "details": {},
+                "started_at": None,
+                "finished_at": None,
+                "error": None,
+            },
+        )
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_build"
+        queue.connection = MagicMock()
+        queue.enqueue.return_value = enqueued
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+        monkeypatch.setattr(
+            "rq.job.Job.fetch",
+            lambda _job_id, **_kwargs: existing,
+        )
+        monkeypatch.setattr(
+            "rq.job.Job.fetch_many",
+            lambda pending_ids, **_kwargs: [enqueued for _ in pending_ids],
+        )
+
+        job = self._make_build_job()
+        results = enqueue_and_poll_ci_jobs(
+            [job],
+            redis_host="localhost",
+            stale_terminal_policy="refresh_all",
+        )
+
+        assert existing.delete_called is True
+        assert queue.enqueue.call_count == 1
+        assert job.job_id in results
+        assert results[job.job_id]["success"] is True
+
+    def test_refresh_all_deletes_finished_terminal_before_enqueue(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """refresh_all should also refresh finished jobs."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        existing = self._make_mock_rq_job(
+            "build-single/bench/bench-asan-deltaref", "finished"
+        )
+        enqueued = self._make_mock_rq_job(
+            "build-single/bench/bench-asan-deltaref",
+            "finished",
+            {
+                "job_id": "build-single/bench/bench-asan-deltaref",
+                "job_type": "build",
+                "success": True,
+                "elapsed_seconds": 1.0,
+                "details": {},
+                "started_at": None,
+                "finished_at": None,
+                "error": None,
+            },
+        )
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_build"
+        queue.connection = MagicMock()
+        queue.enqueue.return_value = enqueued
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+        monkeypatch.setattr(
+            "rq.job.Job.fetch",
+            lambda _job_id, **_kwargs: existing,
+        )
+        monkeypatch.setattr(
+            "rq.job.Job.fetch_many",
+            lambda pending_ids, **_kwargs: [enqueued for _ in pending_ids],
+        )
+
+        job = self._make_build_job()
+        results = enqueue_and_poll_ci_jobs(
+            [job],
+            redis_host="localhost",
+            stale_terminal_policy="refresh_all",
+        )
+
+        assert existing.delete_called is True
+        assert queue.enqueue.call_count == 1
+        assert job.job_id in results
+        assert results[job.job_id]["success"] is True
+
+    def test_raises_on_unknown_dependency(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Dependencies must be strict; unknown IDs cannot be silently ignored."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_build"
+        queue.connection = MagicMock()
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+
+        job = MagicMock()
+        job.job_type = "verify"
+        job.job_id = "verify-cpv-pov/bench/cpv_0"
+        job.depends_on = ["non-existent-build-job-id"]
+        monkeypatch.setattr(
+            "crsbench.distributed.ci_jobs.serialize_ci_job", lambda _j: {}
+        )
+
+        with pytest.raises(ValueError, match="unknown dependencies"):
+            enqueue_and_poll_ci_jobs([job], redis_host="localhost")
+
+        queue.enqueue.assert_not_called()
+
+    def test_raises_on_dependency_ordering_violation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Known dependency IDs declared later should fail as ordering errors."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_build"
+        queue.connection = MagicMock()
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+        monkeypatch.setattr(
+            "crsbench.distributed.ci_jobs.serialize_ci_job", lambda _j: {}
+        )
+
+        verify_job = MagicMock()
+        verify_job.job_type = "verify"
+        verify_job.job_id = "a-verify-cpv-pov/bench/cpv_0"
+        verify_job.depends_on = ["z-verify-cpv-pov/bench/cpv_1"]
+
+        later_verify_job = MagicMock()
+        later_verify_job.job_type = "verify"
+        later_verify_job.job_id = "z-verify-cpv-pov/bench/cpv_1"
+        later_verify_job.depends_on = []
+
+        with pytest.raises(ValueError, match="invalid DAG ordering"):
+            enqueue_and_poll_ci_jobs(
+                [verify_job, later_verify_job], redis_host="localhost"
+            )
+
+        queue.enqueue.assert_not_called()
+
+    def test_reuses_active_duplicate_job(self, monkeypatch: pytest.MonkeyPatch):
+        """Active started duplicate IDs should be reused instead of failing."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        existing = self._make_mock_rq_job(
+            "build-single/bench/bench-asan-deltaref", "started"
+        )
+        existing.result = {
+            "job_id": "build-single/bench/bench-asan-deltaref",
+            "job_type": "build",
+            "success": True,
+            "elapsed_seconds": 1.0,
+            "details": {},
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+        }
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_build"
+        queue.connection = MagicMock()
+        queue.enqueue.return_value = existing
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+        monkeypatch.setattr(
+            "rq.job.Job.fetch",
+            lambda _job_id, **_kwargs: existing,
+        )
+        poll_calls = {"count": 0}
+
+        def _fetch_many(pending_ids, **_kwargs):
+            poll_calls["count"] += 1
+            if poll_calls["count"] >= 1:
+                existing._status = "finished"
+            return [existing for _ in pending_ids]
+
+        monkeypatch.setattr("rq.job.Job.fetch_many", _fetch_many)
+
+        job = self._make_build_job()
+        results = enqueue_and_poll_ci_jobs([job], redis_host="localhost")
+
+        assert queue.enqueue.call_count == 0
+        assert job.job_id in results
+        assert results[job.job_id]["success"] is True
+
+    def test_refreshes_stale_started_duplicate_job(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Stale STARTED duplicate should be deleted/re-enqueued, not reused."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        existing = self._make_mock_rq_job(
+            "build-single/bench/bench-asan-deltaref", "started"
+        )
+        existing.started_at = datetime.now(timezone.utc) - timedelta(seconds=5000)
+        existing.timeout = 300
+        fresh = self._make_mock_rq_job(
+            "build-single/bench/bench-asan-deltaref",
+            "finished",
+            {
+                "job_id": "build-single/bench/bench-asan-deltaref",
+                "job_type": "build",
+                "success": True,
+                "elapsed_seconds": 1.0,
+                "details": {},
+                "started_at": None,
+                "finished_at": None,
+                "error": None,
+            },
+        )
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_build"
+        queue.connection = MagicMock()
+        queue.enqueue.return_value = fresh
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+        monkeypatch.setattr("rq.job.Job.fetch", lambda _job_id, **_kwargs: existing)
+        monkeypatch.setattr(
+            "rq.job.Job.fetch_many",
+            lambda pending_ids, **_kwargs: [fresh for _ in pending_ids],
+        )
+
+        job = self._make_build_job()
+        results = enqueue_and_poll_ci_jobs([job], redis_host="localhost")
+
+        assert existing.delete_called is True
+        assert queue.enqueue.call_count == 1
+        assert results[job.job_id]["success"] is True
+
+    @pytest.mark.parametrize("terminal_status", ["stopped", "canceled"])
+    def test_poll_drains_terminal_statuses(
+        self, monkeypatch: pytest.MonkeyPatch, terminal_status: str
+    ) -> None:
+        """Polling loop should treat stopped/canceled as terminal states."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_build"
+        queue.connection = MagicMock()
+
+        enqueued = self._make_mock_rq_job(
+            "build-single/bench/bench-asan-deltaref", "queued"
+        )
+        enqueued._status = terminal_status
+        queue.enqueue.return_value = enqueued
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+        monkeypatch.setattr(
+            "rq.job.Job.fetch_many",
+            lambda pending_ids, **_kwargs: [enqueued for _ in pending_ids],
+        )
+
+        job = self._make_build_job()
+        results = enqueue_and_poll_ci_jobs([job], redis_host="localhost")
+
+        assert results[job.job_id]["success"] is False
+        assert "Unknown error" in results[job.job_id]["error"]
+
+    def test_poll_handles_enum_like_finished_status(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Polling should treat enum-like FINISHED statuses as terminal."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        class _Status:
+            def __init__(self, value: str) -> None:
+                self.value = value
+
+            def __str__(self) -> str:
+                return f"JobStatus.{self.value.upper()}"
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_build"
+        queue.connection = MagicMock()
+
+        enqueued = self._make_mock_rq_job(
+            "build-single/bench/bench-asan-deltaref", "queued"
+        )
+        enqueued.get_status.side_effect = lambda: _Status("finished")
+        enqueued.result = {
+            "job_id": enqueued.id,
+            "job_type": "build",
+            "success": True,
+            "elapsed_seconds": 1.0,
+            "details": {},
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+        }
+        queue.enqueue.return_value = enqueued
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+        monkeypatch.setattr(
+            "rq.job.Job.fetch_many",
+            lambda pending_ids, **_kwargs: [enqueued for _ in pending_ids],
+        )
+
+        job = self._make_build_job()
+        results = enqueue_and_poll_ci_jobs([job], redis_host="localhost")
+
+        assert results[job.job_id]["success"] is True
+
+    def test_poll_missing_job_is_terminal_infra_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """fetch_many None should be treated as terminal infra failure."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_build"
+        queue.connection = MagicMock()
+
+        enqueued = self._make_mock_rq_job(
+            "build-single/bench/bench-asan-deltaref", "queued"
+        )
+        queue.enqueue.return_value = enqueued
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+        monkeypatch.setattr(
+            "rq.job.Job.fetch_many",
+            lambda pending_ids, **_kwargs: [None for _ in pending_ids],
+        )
+
+        job = self._make_build_job()
+        results = enqueue_and_poll_ci_jobs([job], redis_host="localhost")
+
+        assert results[job.job_id]["success"] is False
+        assert "infra_missing_rq_job" in results[job.job_id]["error"]
+        assert results[job.job_id]["details"]["error_code"] == "infra_missing_rq_job"
+
+    def test_poll_stale_started_job_is_terminal_infra_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Stale STARTED jobs should not block polling forever."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_build"
+        queue.connection = MagicMock()
+
+        enqueued = self._make_mock_rq_job(
+            "build-single/bench/bench-asan-deltaref", "started"
+        )
+        enqueued.started_at = datetime.now(timezone.utc) - timedelta(seconds=4000)
+        enqueued.timeout = 300
+        queue.enqueue.return_value = enqueued
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+        monkeypatch.setattr(
+            "rq.job.Job.fetch_many",
+            lambda pending_ids, **_kwargs: [enqueued for _ in pending_ids],
+        )
+
+        job = self._make_build_job()
+        results = enqueue_and_poll_ci_jobs([job], redis_host="localhost")
+
+        assert results[job.job_id]["success"] is False
+        assert "infra_stale_started_job" in results[job.job_id]["error"]
+        assert results[job.job_id]["details"]["error_code"] == "infra_stale_started_job"
+
+
+class TestBlockedDeferredRecovery:
+    """Test blocked deferred dependency detection."""
+
+    @staticmethod
+    def _make_mock_rq_job(
+        job_id: str,
+        status: str,
+        dependency_ids: list[str] | None = None,
+        *,
+        created_at: datetime | None = None,
+    ):
+        job = MagicMock()
+        job.id = job_id
+        job._status = status
+        job.dependency_ids = dependency_ids or []
+        job.created_at = created_at or (
+            datetime.now(timezone.utc) - timedelta(seconds=300)
+        )
+        job.get_status.side_effect = lambda: job._status
+        job.refresh.return_value = None
+        return job
+
+    def test_marks_deferred_job_when_dependency_failed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from crsbench.distributed.ci_jobs import _mark_blocked_deferred_jobs
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_verify"
+        queue.connection = MagicMock()
+
+        deferred = self._make_mock_rq_job("verify-1", "deferred", ["build-1"])
+        failed_dep = self._make_mock_rq_job("build-1", "failed")
+
+        rq_jobs = {"verify-1": deferred}
+        pending = {"verify-1"}
+        missing: dict[str, dict] = {}
+
+        mock_registry = MagicMock()
+        mock_registry.get_job_ids.return_value = ["verify-1"]
+
+        monkeypatch.setattr(
+            "rq.registry.DeferredJobRegistry", lambda **_kwargs: mock_registry
+        )
+        monkeypatch.setattr("rq.job.Job.fetch", lambda _dep_id, **_kwargs: failed_dep)
+
+        marked = _mark_blocked_deferred_jobs(queue, rq_jobs, pending, missing)
+
+        assert marked == 1
+        assert "verify-1" not in pending
+        assert missing["verify-1"]["details"]["error_code"] == "infra_dependency_failed"
+
+    def test_marks_deferred_job_immediately_when_dependency_failed_even_if_new(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from crsbench.distributed.ci_jobs import _mark_blocked_deferred_jobs
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_verify"
+        queue.connection = MagicMock()
+
+        deferred = self._make_mock_rq_job(
+            "verify-1",
+            "deferred",
+            ["build-1"],
+            created_at=datetime.now(timezone.utc),
+        )
+        failed_dep = self._make_mock_rq_job("build-1", "failed")
+
+        rq_jobs = {"verify-1": deferred}
+        pending = {"verify-1"}
+        missing: dict[str, dict] = {}
+
+        mock_registry = MagicMock()
+        mock_registry.get_job_ids.return_value = ["verify-1"]
+
+        monkeypatch.setattr(
+            "rq.registry.DeferredJobRegistry", lambda **_kwargs: mock_registry
+        )
+        monkeypatch.setattr("rq.job.Job.fetch", lambda _dep_id, **_kwargs: failed_dep)
+
+        marked = _mark_blocked_deferred_jobs(queue, rq_jobs, pending, missing)
+
+        assert marked == 1
+        assert "verify-1" not in pending
+        assert missing["verify-1"]["details"]["error_code"] == "infra_dependency_failed"

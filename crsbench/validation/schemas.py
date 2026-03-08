@@ -41,7 +41,7 @@ class TrialMode(str, Enum):
 class SourceInfo(BaseModel):
     """Source code information in trial metadata."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
     path: str
     commit: str | None = None
@@ -84,8 +84,8 @@ class FrameworkInfo(BaseModel):
 
     version: str = Field(description="CRSBench version")
     crsbench_commit: str = Field(description="CRSBench git commit")
-    oss_crs_commit: str = Field(description="oss-crs submodule commit")
-    oss_fuzz_commit: str = Field(description="oss-fuzz submodule commit")
+    oss_crs_commit: str = Field(description="oss-crs commit")
+    oss_fuzz_commit: str = Field(description="managed oss-fuzz checkout commit")
     build_timestamp: str | None = Field(default=None, description="Build timestamp")
 
 
@@ -1002,18 +1002,6 @@ class CrsComposeConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    docker_registry: str = Field(
-        ...,
-        description="Docker registry for CRS images (e.g., ghcr.io/team-atlanta/test)",
-    )
-    oss_crs_infra_cpuset: str = Field(
-        default="0-3",
-        description="CPU set for oss-crs infrastructure services",
-    )
-    oss_crs_infra_memory: str = Field(
-        default="8G",
-        description="Memory limit for oss-crs infrastructure services",
-    )
     oss_crs_cmd: str = Field(
         default="oss-crs",
         description="Path to oss-crs executable (default: assumes on PATH)",
@@ -1026,21 +1014,100 @@ class CrsComposeConfig(BaseModel):
         default=None,
         description="Deprecated LiteLLM config path override. Ignored for litellm_mode='external'.",
     )
+    oss_crs_infra: "CrsComposeInfraConfig" = Field(
+        ...,
+        description="Resource configuration for shared oss-crs infra services",
+    )
+    crs_services: Dict[str, "CrsComposeServiceConfig"] = Field(
+        default_factory=dict,
+        description="Per-CRS compose runtime overrides keyed by CRS name",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_flat_crs_services(cls, data: Any) -> Any:
+        """Support flat crs_compose format with CRS keys at top-level.
+
+        Accepted forms:
+        1) Nested: {oss_crs_infra: {...}, crs_services: {crs-x: {...}}}
+        2) Flat:   {oss_crs_infra: {...}, crs-x: {...}}
+        """
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+        nested = normalized.get("crs_services")
+        if isinstance(nested, dict):
+            return normalized
+
+        reserved = {
+            "oss_crs_cmd",
+            "work_dir",
+            "litellm_config_path",
+            "oss_crs_infra",
+            "crs_services",
+        }
+        flat_services = {
+            key: value
+            for key, value in normalized.items()
+            if key not in reserved and isinstance(value, dict)
+        }
+        if flat_services:
+            normalized["crs_services"] = flat_services
+            for key in flat_services:
+                normalized.pop(key, None)
+        return normalized
 
 
-class CrsOverrideConfig(BaseModel):
-    """Per-CRS runtime override configuration."""
+class CrsComposeServiceConfig(BaseModel):
+    """Runtime configuration for one compose service."""
 
     model_config = ConfigDict(extra="forbid")
 
-    litellm_config_path: Optional[Path] = Field(
+    num_cores: int = Field(
+        ...,
+        ge=1,
+        description="Number of CPU cores allocated to this service",
+    )
+    mem_limit: Optional[str] = Field(
         default=None,
-        description="Deprecated per-CRS LiteLLM config path override. Ignored for litellm_mode='external'.",
+        description="Optional container memory limit (e.g., 8G, 16384m). Omit for unlimited.",
     )
     additional_env: Optional[Dict[str, str]] = Field(
         default=None,
-        description="Additional environment variables injected into CRS runtime container",
+        description="Additional environment variables injected into the service container",
     )
+
+
+class CrsComposeInfraConfig(BaseModel):
+    """Runtime configuration for shared oss-crs infra services."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    num_cores: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Dedicated CPU cores for shared oss-crs infra services (optional).",
+    )
+    shared: bool = Field(
+        default=False,
+        description="When true, infra uses the union of all CRS service cpusets instead of dedicated cores.",
+    )
+    mem_limit: Optional[str] = Field(
+        default=None,
+        description="Optional container memory limit (e.g., 8G, 16384m). Omit for unlimited.",
+    )
+
+    @model_validator(mode="after")
+    def validate_cpu_mode(self):
+        """Require exactly one infra CPU mode: dedicated cores or shared pool."""
+        has_dedicated = self.num_cores is not None
+        if self.shared == has_dedicated:
+            raise ValueError(
+                "oss_crs_infra must set exactly one CPU mode: "
+                "either num_cores (dedicated) or shared=true."
+            )
+        return self
 
 
 class EvaluatorConfig(BaseModel):
@@ -1225,16 +1292,34 @@ class ExperimentConfig(BaseModel):
         "Set to 0 to disable.",
     )
     project_image_prefix: str = Field(
-        default="aixcc-afc",
-        description="Docker image prefix for custom project images (default: aixcc-afc)",
+        default="crsbench",
+        description="Docker image prefix for local custom project images (default: crsbench)",
+    )
+    inc_image_policy: Literal["auto", "pull_only", "build_only"] = Field(
+        default="auto",
+        description="On-demand inc-build image prepare policy (default: auto).",
+    )
+    inc_image_registry: str = Field(
+        default="ghcr.io/team-atlanta/crsbench",
+        description="Registry namespace for inc-build images.",
+    )
+    inc_image_max_pull_bytes: Optional[int] = Field(
+        default=10 * 1024 * 1024 * 1024,
+        ge=1,
+        description="Skip image pull when remote size exceeds this cap (bytes).",
+    )
+    inc_image_pull_timeout_sec: int = Field(
+        default=300,
+        ge=1,
+        description="Timeout in seconds for pulling inc-build images.",
     )
     skip_verification: bool = Field(
         default=False,
         description="Skip POV verification after CRS execution (default: False, verification enabled)",
     )
     oss_fuzz_path: Path = Field(
-        default=Path("oss-fuzz"),
-        description="Path to oss-fuzz directory (default: oss-fuzz)",
+        default=Path("third_party/oss-fuzz"),
+        description="Path to oss-fuzz directory (default: third_party/oss-fuzz)",
     )
     source_mode: Literal["main_repo", "pkgs"] = Field(
         default="pkgs",
@@ -1306,10 +1391,6 @@ class ExperimentConfig(BaseModel):
     crs_compose: Optional[CrsComposeConfig] = Field(
         default=None,
         description="Configuration for oss-crs adapter (used at runtime by OssCrsAdapter)",
-    )
-    crs_overrides: Optional[Dict[str, CrsOverrideConfig]] = Field(
-        default=None,
-        description="Per-CRS runtime overrides keyed by CRS config name",
     )
     keep_only_results: bool = Field(
         default=False,
@@ -1486,25 +1567,26 @@ class ExperimentConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def check_single_crs_execution_profile(self):
-        """Enforce single CRS setup profile per experiment."""
-        if len(self.crses) != 1:
-            raise ValueError(
-                f"Experiment must define exactly 1 CRS in 'crses' for a single setup profile; got {len(self.crses)}"
-            )
-        return self
-
-    @model_validator(mode="after")
-    def check_crs_override_keys(self):
-        """Validate that crs_overrides keys match configured CRS names."""
-        if not self.crs_overrides:
+    def check_crs_compose_service_keys(self):
+        """Validate that crs_compose.crs_services keys match configured CRS names."""
+        if not self.crs_compose:
             return self
 
         valid = set(self.crses)
-        unknown = sorted(k for k in self.crs_overrides.keys() if k not in valid)
+        service_keys = set(self.crs_compose.crs_services.keys())
+
+        unknown = sorted(k for k in service_keys if k not in valid)
         if unknown:
             raise ValueError(
-                f"Unknown CRS override key(s): {', '.join(unknown)}. Valid CRS names: {', '.join(sorted(valid))}"
+                f"Unknown CRS service override key(s): {', '.join(unknown)}. "
+                f"Valid CRS names: {', '.join(sorted(valid))}"
+            )
+
+        missing = sorted(k for k in valid if k not in service_keys)
+        if missing:
+            raise ValueError(
+                f"Missing crs_compose.crs_services key(s): {', '.join(missing)}. "
+                f"Must define one service override per CRS in 'crses'."
             )
         return self
 
@@ -1611,17 +1693,6 @@ class ExperimentConfig(BaseModel):
             self.crs_compose.litellm_config_path = (
                 self.crs_compose.litellm_config_path.resolve()
             )
-
-        # Per-CRS override optional path fields
-        if self.crs_overrides:
-            for override in self.crs_overrides.values():
-                if (
-                    override.litellm_config_path
-                    and not override.litellm_config_path.is_absolute()
-                ):
-                    override.litellm_config_path = (
-                        override.litellm_config_path.resolve()
-                    )
 
         return self
 

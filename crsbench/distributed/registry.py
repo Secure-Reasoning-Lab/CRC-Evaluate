@@ -76,9 +76,13 @@ class RuntimeRegistration(BaseModel):
     modes: list[str] = []
 
     # Paths (workers verify these exist locally)
-    oss_fuzz_path: str = "oss-fuzz"
     benchmarks_root: str = "benchmarks"
     source_mode: str = "pkgs"
+    inc_image_policy: str = "auto"
+    inc_image_registry: str = "ghcr.io/team-atlanta/crsbench"
+    inc_image_max_pull_bytes: Optional[int] = 10 * 1024 * 1024 * 1024
+    inc_image_pull_timeout_sec: int = 300
+    local_image_prefix: str = "crsbench"
 
     # Timeouts
     max_total_time: int = 7200
@@ -136,6 +140,33 @@ class RuntimeRegistration(BaseModel):
 
         trial_queue, build_queue, verify_queue = resolve_queue_names(experiment)
 
+        inc_image_policy = getattr(config, "inc_image_policy", "auto")
+        if not isinstance(inc_image_policy, str) or not inc_image_policy:
+            inc_image_policy = "auto"
+
+        inc_image_registry = getattr(
+            config, "inc_image_registry", "ghcr.io/team-atlanta/crsbench"
+        )
+        if not isinstance(inc_image_registry, str) or not inc_image_registry:
+            inc_image_registry = "ghcr.io/team-atlanta/crsbench"
+
+        inc_image_max_pull_bytes = getattr(
+            config, "inc_image_max_pull_bytes", 10 * 1024 * 1024 * 1024
+        )
+        if not isinstance(inc_image_max_pull_bytes, int):
+            inc_image_max_pull_bytes = 10 * 1024 * 1024 * 1024
+
+        inc_image_pull_timeout_sec = getattr(config, "inc_image_pull_timeout_sec", 300)
+        if (
+            not isinstance(inc_image_pull_timeout_sec, int)
+            or inc_image_pull_timeout_sec <= 0
+        ):
+            inc_image_pull_timeout_sec = 300
+
+        local_image_prefix = getattr(config, "project_image_prefix", "crsbench")
+        if not isinstance(local_image_prefix, str) or not local_image_prefix:
+            local_image_prefix = "crsbench"
+
         return cls(
             experiment=experiment,
             trial_queue=trial_queue,
@@ -166,9 +197,13 @@ class RuntimeRegistration(BaseModel):
             benchmarks=benchmarks,
             sanitizers=sanitizers,
             modes=modes,
-            oss_fuzz_path=str(config.oss_fuzz_path),
             benchmarks_root=str(config.benchmarks_root),
             source_mode=config.source_mode,
+            inc_image_policy=inc_image_policy,
+            inc_image_registry=inc_image_registry,
+            inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+            inc_image_pull_timeout_sec=inc_image_pull_timeout_sec,
+            local_image_prefix=local_image_prefix,
             max_total_time=config.max_total_time,
             build_timeout=config.build_timeout,
             per_pov_verify_timeout=config.per_pov_verify_timeout,
@@ -301,7 +336,10 @@ class RegistryClient:
                 try:
                     parsed = json.loads(text)
                     yield parsed["event"], parsed["experiment"]
-                except (json.JSONDecodeError, KeyError):
+                except (json.JSONDecodeError, KeyError) as e:
+                    logger.warning(
+                        f"Ignoring malformed registry event payload: {e} payload={text!r}"
+                    )
                     continue
         finally:
             try:

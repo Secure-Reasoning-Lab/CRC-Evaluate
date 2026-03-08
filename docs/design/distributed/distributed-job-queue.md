@@ -1271,6 +1271,65 @@ See `docs/design/distributed/configless-runtime.md` for canonical behavior.
   Failed retry is explicit (`--retry-failed`) and should reset the matching
   trial directory before re-enqueue.
 
+### 15.2.2 CI DAG Dependency Enforcement (Hard Errors)
+
+`crsbench.distributed.ci_jobs.enqueue_and_poll_ci_jobs()` enforces strict DAG
+validity before enqueue:
+
+- Unknown dependency IDs are rejected as hard errors:
+  - If a job declares a dependency not present in the submitted job set,
+    it raises `ValueError("...unknown dependencies...")`.
+- Invalid dependency ordering is rejected as hard errors:
+  - If a dependency exists in the DAG but has not been enqueued yet,
+    it raises `ValueError("...invalid DAG ordering...")`.
+- These are pre-enqueue validation failures; the offending job is not queued.
+
+This behavior is intentionally strict to prevent silent dependency drops and
+non-deterministic CI execution.
+
+### 15.2.3 CI Job ID Run-Isolation Expectations
+
+CI jobs use deterministic `job_id` values from flat DAG job classes (for
+example `build-single/...`, `verify-cpv-pov/...`, `test-patch-...`).
+
+- Terminal duplicate IDs are handled by `stale_terminal_policy`:
+  - Default: `refresh_stopped_canceled_failed`
+  - `finished` is reused by default
+  - `failed` / `stopped` / `canceled` are refreshed by default
+  - Supported values: `refresh_stopped_canceled`, `refresh_failed`,
+    `refresh_stopped_canceled_failed`, `refresh_all`, `quit`
+- Non-terminal duplicates:
+  - `queued` / `deferred` / `scheduled` are deleted and re-enqueued
+  - other active statuses (for example `started`) are reused for the run
+- Practical expectation: do not run concurrent CI DAG submissions that share
+  the same job ID namespace in one Redis/Valkey backend. Isolate by run
+  (separate queue namespace/backend or non-overlapping DAG/job IDs).
+
+### 15.2.4 CI Polling Outcomes: Terminal, Deferred, and Classification
+
+Polling semantics in `enqueue_and_poll_ci_jobs()`:
+
+- Terminal statuses are `finished`, `failed`, `stopped`, `canceled`.
+  Polling exits for a job when any terminal status is observed.
+- If `fetch_many()` returns `None` for a pending job, it is converted to a
+  terminal infrastructure failure with:
+  - `details.error_code = "infra_missing_rq_job"`
+  - `details.retryable = False`
+- If a job remains `started` beyond `job.timeout + grace`, it is converted to
+  terminal infrastructure failure with:
+  - `details.error_code = "infra_stale_started_job"`
+  - `details.retryable = True`
+- Orphaned deferred jobs are recovered every 30 seconds per queue:
+  - Jobs still in deferred state with all dependencies finished are moved
+    atomically to queued state.
+
+Outcome classification in aggregation (`benchmark_ci/cli/result_aggregator.py`):
+
+- Treated as `ERROR` class:
+  - `ExecutorResult.status == DEP_FAILED`
+  - `FAILED` with `details.error_code` prefix `infra_`, `dependency_`, or `dep_`
+- Other `FAILED` outcomes remain functional failures (`FAIL`).
+
 ### 15.3 File Locations
 
 ```
@@ -1311,5 +1370,5 @@ docs/design/
 ---
 
 **Document Version**: 1.0
-**Last Updated**: 2025-10-13
+**Last Updated**: 2026-03-06
 **Next Review**: After Phase 1 implementation

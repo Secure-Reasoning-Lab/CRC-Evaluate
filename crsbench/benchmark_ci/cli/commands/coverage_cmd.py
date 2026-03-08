@@ -23,6 +23,7 @@ from crsbench.benchmark_ci.cli.result_aggregator import aggregate_coverage_resul
 from crsbench.benchmark_ci.jobs.flat import (
     BuildSingleVariantJob,
     FlatCollectCoverageJob,
+    PrepareIncImageJob,
 )
 from crsbench.benchmark_ci.models import (
     BenchmarkValidationResult,
@@ -62,12 +63,13 @@ def run_coverage(args: argparse.Namespace) -> int:
     )
 
     source_mode = getattr(args, "source", "pkgs")
-    use_inc_build = getattr(args, "inc_build", False)
-    force_rebuild = getattr(args, "force_rebuild", True)
+    mode = getattr(args, "mode", "snapshot")
+    use_snapshot = mode == "snapshot"
+    force_rebuild = getattr(args, "force_rebuild", False)
     distributed = getattr(args, "distributed", False)
     redis_host = getattr(args, "redis_host", "localhost")
 
-    build_mode = "inc-build" if use_inc_build else "full-build"
+    build_mode = f"{mode}-mode"
     rebuild_mode = "force-rebuild" if force_rebuild else "cached"
     exec_mode = f", distributed (redis={redis_host})" if distributed else ", local"
     logger.info(
@@ -80,14 +82,18 @@ def run_coverage(args: argparse.Namespace) -> int:
 
     all_jobs, benchmark_metadata = _build_dag(
         list(paths),
-        use_inc_build=use_inc_build,
+        use_inc_build=use_snapshot,
         force_rebuild=force_rebuild,
         source_mode=source_mode,
         inc_coverage=True,
     )
 
     # Filter to build + coverage jobs only
-    build_jobs = [j for j in all_jobs if isinstance(j, BuildSingleVariantJob)]
+    build_jobs = [
+        j
+        for j in all_jobs
+        if isinstance(j, (BuildSingleVariantJob, PrepareIncImageJob))
+    ]
     coverage_jobs = [j for j in all_jobs if isinstance(j, FlatCollectCoverageJob)]
 
     logger.info(

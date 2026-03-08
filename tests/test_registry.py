@@ -39,7 +39,6 @@ class TestRuntimeRegistration:
             benchmarks=["bench-a", "bench-b"],
             sanitizers=["address"],
             modes=["delta"],
-            oss_fuzz_path="/opt/oss-fuzz",
             benchmarks_root="/data/benchmarks",
             max_total_time=3600,
             build_timeout=1800,
@@ -87,6 +86,11 @@ class TestRuntimeRegistration:
         config.oss_fuzz_path = "/opt/oss-fuzz"
         config.benchmarks_root = "/data/benchmarks"
         config.source_mode = "pkgs"
+        config.inc_image_policy = "auto"
+        config.inc_image_registry = "ghcr.io/team-atlanta/crsbench"
+        config.inc_image_max_pull_bytes = 10 * 1024 * 1024 * 1024
+        config.inc_image_pull_timeout_sec = 300
+        config.project_image_prefix = "crsbench"
         config.max_total_time = 7200
         config.build_timeout = 3600
         config.per_pov_verify_timeout = 180
@@ -119,6 +123,11 @@ class TestRuntimeRegistration:
         config.oss_fuzz_path = "/oss-fuzz"
         config.benchmarks_root = "/benchmarks"
         config.source_mode = "pkgs"
+        config.inc_image_policy = "auto"
+        config.inc_image_registry = "ghcr.io/team-atlanta/crsbench"
+        config.inc_image_max_pull_bytes = 10 * 1024 * 1024 * 1024
+        config.inc_image_pull_timeout_sec = 300
+        config.project_image_prefix = "crsbench"
         config.max_total_time = 7200
         config.build_timeout = 3600
         config.per_pov_verify_timeout = 180
@@ -142,6 +151,11 @@ class TestRuntimeRegistration:
         config.oss_fuzz_path = "oss-fuzz"
         config.benchmarks_root = "benchmarks"
         config.source_mode = "pkgs"
+        config.inc_image_policy = "auto"
+        config.inc_image_registry = "ghcr.io/team-atlanta/crsbench"
+        config.inc_image_max_pull_bytes = 10 * 1024 * 1024 * 1024
+        config.inc_image_pull_timeout_sec = 300
+        config.project_image_prefix = "crsbench"
         config.max_total_time = 7200
         config.build_timeout = 3600
         config.per_pov_verify_timeout = 180

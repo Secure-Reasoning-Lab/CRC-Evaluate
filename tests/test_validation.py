@@ -1007,25 +1007,24 @@ class TestExperimentConfigSchema:
         assert "max_total_time" in error_msg
         assert "build_timeout + run_timeout + verify_timeout" in error_msg
 
-    def test_single_crs_policy_rejects_multiple_crses(self):
-        """Experiment config must define exactly one CRS setup profile."""
-        with pytest.raises(PydanticValidationError) as exc_info:
-            ExperimentConfig(
-                experiment="test",
-                trials=1,
-                mode=EvaluationMode.DELTA,
-                adapter=AdapterType.OSS_CRS,
-                max_total_time=20000,
-                difficulty_level=1,
-                experiment_filestore="/tmp/exp",
-                report_filestore="/tmp/rep",
-                crses=["crs-a", "crs-b"],
-                benchmarks=["test-bench"],
-            )
-        assert "exactly 1 CRS" in str(exc_info.value)
+    def test_allows_multiple_crses(self):
+        """Experiment config can define multiple CRS entries."""
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
+            max_total_time=20000,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["crs-a", "crs-b"],
+            benchmarks=["test-bench"],
+        )
+        assert config.crses == ["crs-a", "crs-b"]
 
-    def test_crs_overrides_reject_unknown_key(self):
-        """Unknown override keys must fail validation."""
+    def test_crs_compose_rejects_unknown_service_key(self):
+        """Unknown crs_compose.crs_services keys must fail validation."""
         with pytest.raises(PydanticValidationError) as exc_info:
             ExperimentConfig(
                 experiment="test",
@@ -1038,15 +1037,165 @@ class TestExperimentConfigSchema:
                 report_filestore="/tmp/rep",
                 crses=["test-crs"],
                 benchmarks=["test-bench"],
-                crs_overrides={
-                    "other-crs": {
-                        "additional_env": {
-                            "ANTHROPIC_MODEL": "claude-sonnet-4-5-20250929"
-                        }
-                    }
+                crs_compose={
+                    "oss_crs_infra": {"num_cores": 1, "mem_limit": "8G"},
+                    "crs_services": {"other-crs": {"num_cores": 1, "mem_limit": "8G"}},
                 },
             )
-        assert "Unknown CRS override key" in str(exc_info.value)
+        assert "Unknown CRS service override key" in str(exc_info.value)
+
+    def test_crs_compose_rejects_missing_service_key(self):
+        """Missing crs_compose.crs_services keys must fail validation."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            ExperimentConfig(
+                experiment="test",
+                trials=1,
+                mode=EvaluationMode.DELTA,
+                adapter=AdapterType.OSS_CRS,
+                max_total_time=20000,
+                difficulty_level=1,
+                experiment_filestore="/tmp/exp",
+                report_filestore="/tmp/rep",
+                crses=["crs-a", "crs-b"],
+                benchmarks=["test-bench"],
+                crs_compose={
+                    "oss_crs_infra": {"num_cores": 1, "mem_limit": "8G"},
+                    "crs_services": {"crs-a": {"num_cores": 1, "mem_limit": "8G"}},
+                },
+            )
+        assert "Missing crs_compose.crs_services key" in str(exc_info.value)
+
+    def test_crs_compose_rejects_infra_additional_env(self):
+        """oss_crs_infra should not accept additional_env fields."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            ExperimentConfig(
+                experiment="test",
+                trials=1,
+                mode=EvaluationMode.DELTA,
+                adapter=AdapterType.OSS_CRS,
+                max_total_time=20000,
+                difficulty_level=1,
+                experiment_filestore="/tmp/exp",
+                report_filestore="/tmp/rep",
+                crses=["test-crs"],
+                benchmarks=["test-bench"],
+                crs_compose={
+                    "oss_crs_infra": {
+                        "num_cores": 1,
+                        "mem_limit": "8G",
+                        "additional_env": {"FOO": "BAR"},
+                    },
+                    "crs_services": {"test-crs": {"num_cores": 1, "mem_limit": "8G"}},
+                },
+            )
+        assert "extra_forbidden" in str(exc_info.value)
+
+    def test_crs_compose_accepts_flat_service_keys(self):
+        """Flat crs_compose CRS keys should normalize to service overrides."""
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
+            max_total_time=20000,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["test-crs"],
+            benchmarks=["test-bench"],
+            crs_compose={
+                "oss_crs_infra": {"num_cores": 1},
+                "test-crs": {"num_cores": 1},
+            },
+        )
+        assert config.crs_compose is not None
+        assert "test-crs" in config.crs_compose.crs_services
+
+    def test_crs_compose_allows_omitting_mem_limit(self):
+        """Service and infra mem_limit are optional (unlimited by default)."""
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
+            max_total_time=20000,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["test-crs"],
+            benchmarks=["test-bench"],
+            crs_compose={
+                "oss_crs_infra": {"num_cores": 1},
+                "crs_services": {"test-crs": {"num_cores": 1}},
+            },
+        )
+        assert config.crs_compose is not None
+        assert config.crs_compose.oss_crs_infra.mem_limit is None
+        assert config.crs_compose.crs_services["test-crs"].mem_limit is None
+
+    def test_crs_compose_infra_accepts_shared_mode(self):
+        """oss_crs_infra shared mode is valid without num_cores."""
+        config = ExperimentConfig(
+            experiment="test",
+            trials=1,
+            mode=EvaluationMode.DELTA,
+            adapter=AdapterType.OSS_CRS,
+            max_total_time=20000,
+            difficulty_level=1,
+            experiment_filestore="/tmp/exp",
+            report_filestore="/tmp/rep",
+            crses=["test-crs"],
+            benchmarks=["test-bench"],
+            crs_compose={
+                "oss_crs_infra": {"shared": True},
+                "test-crs": {"num_cores": 1},
+            },
+        )
+        assert config.crs_compose is not None
+        assert config.crs_compose.oss_crs_infra.shared is True
+        assert config.crs_compose.oss_crs_infra.num_cores is None
+
+    def test_crs_compose_infra_rejects_both_shared_and_num_cores(self):
+        """oss_crs_infra cannot set both shared and num_cores."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            ExperimentConfig(
+                experiment="test",
+                trials=1,
+                mode=EvaluationMode.DELTA,
+                adapter=AdapterType.OSS_CRS,
+                max_total_time=20000,
+                difficulty_level=1,
+                experiment_filestore="/tmp/exp",
+                report_filestore="/tmp/rep",
+                crses=["test-crs"],
+                benchmarks=["test-bench"],
+                crs_compose={
+                    "oss_crs_infra": {"shared": True, "num_cores": 1},
+                    "test-crs": {"num_cores": 1},
+                },
+            )
+        assert "exactly one CPU mode" in str(exc_info.value)
+
+    def test_crs_compose_infra_rejects_neither_shared_nor_num_cores(self):
+        """oss_crs_infra must set shared=true or num_cores."""
+        with pytest.raises(PydanticValidationError) as exc_info:
+            ExperimentConfig(
+                experiment="test",
+                trials=1,
+                mode=EvaluationMode.DELTA,
+                adapter=AdapterType.OSS_CRS,
+                max_total_time=20000,
+                difficulty_level=1,
+                experiment_filestore="/tmp/exp",
+                report_filestore="/tmp/rep",
+                crses=["test-crs"],
+                benchmarks=["test-bench"],
+                crs_compose={
+                    "oss_crs_infra": {"shared": False},
+                    "test-crs": {"num_cores": 1},
+                },
+            )
+        assert "exactly one CPU mode" in str(exc_info.value)
 
     def test_litellm_mode_explicit_missing_runtime_env_fails(self, monkeypatch):
         """Explicit litellm mode should fail fast on missing canonical env vars."""

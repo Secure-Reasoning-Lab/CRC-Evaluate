@@ -97,8 +97,8 @@ class TestTimeoutHandling:
 class TestCommandConstruction:
     """Test that commands are constructed correctly by mocking subprocess.run."""
 
-    def test_propagate_exit_codes_used(self, mock_oss_fuzz):
-        """Command should include --propagate_exit_codes."""
+    def test_propagate_exit_codes_not_used(self, mock_oss_fuzz):
+        """Official helper.py reproduce does not support --propagate_exit_codes."""
         from unittest.mock import MagicMock, patch
 
         infra = OSSFuzzInfrastructure(mock_oss_fuzz)
@@ -112,16 +112,17 @@ class TestCommandConstruction:
                 timeout=5,
             )
 
-            # Verify the command was called with --propagate_exit_codes
+            # Verify legacy flag is not used
             assert mock_run.called
             cmd = mock_run.call_args[0][0]
-            assert "--propagate_exit_codes" in cmd
+            assert "--propagate_exit_codes" not in cmd
 
-    def test_timeout_flag_used(self, mock_oss_fuzz):
-        """Command should include --timeout."""
+    def test_timeout_flag_not_used(self, mock_oss_fuzz):
+        """Official helper.py reproduce does not support --timeout."""
         from unittest.mock import MagicMock, patch
 
         infra = OSSFuzzInfrastructure(mock_oss_fuzz)
+        requested_timeout = 120
 
         with patch("crsbench.builder.infrastructure.run_with_timeout") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
@@ -129,16 +130,16 @@ class TestCommandConstruction:
                 project_name="test",
                 harness="fuzz",
                 pov_data=b"OK",
-                timeout=120,
+                timeout=requested_timeout,
             )
 
-            # Verify the command was called with --timeout
+            # Verify legacy timeout flag is not used
             assert mock_run.called
             cmd = mock_run.call_args[0][0]
-            assert "--timeout" in cmd
-            # Find the --timeout index and check the next arg is 120
-            timeout_idx = cmd.index("--timeout")
-            assert cmd[timeout_idx + 1] == "120"
+            assert "--timeout" not in cmd
+            # Outer subprocess timeout keeps a small grace above helper timeout.
+            assert mock_run.call_args.kwargs["timeout"] > requested_timeout
+            assert mock_run.call_args.kwargs["timeout"] == requested_timeout + 10
 
     def test_detect_leaks_disabled(self, mock_oss_fuzz):
         """Command should include -detect_leaks=0."""
@@ -177,7 +178,10 @@ class TestLeakSanitizerHandling:
 
     def test_is_leak_only_exit_helper(self):
         """Unit test for _is_leak_only_exit()."""
-        from crsbench.builder.infrastructure import _is_leak_only_exit
+        from crsbench.builder.infrastructure import (
+            _has_crash_signature,
+            _is_leak_only_exit,
+        )
 
         # Leak only → True
         assert _is_leak_only_exit(
@@ -191,6 +195,20 @@ class TestLeakSanitizerHandling:
 
         # No markers at all → False
         assert not _is_leak_only_exit("INFO: Running with entropic power schedule")
+
+        # Crash + leak markers → not leak-only
+        mixed_output = (
+            "runtime error: signed integer overflow\n"
+            "==ERROR: LeakSanitizer: detected memory leaks\n"
+            "SUMMARY: AddressSanitizer: 64 byte(s) leaked"
+        )
+        assert _has_crash_signature(mixed_output)
+        assert not _is_leak_only_exit(mixed_output)
+
+        # ASAN CHECK failed output should be treated as crash signature
+        assert _has_crash_signature(
+            "AddressSanitizer: CHECK failed: sanitizer_posix.cpp"
+        )
 
 
 class TestEnsureOssFuzzReady:

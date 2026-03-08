@@ -205,9 +205,9 @@ def _load_adapter(
     Returns None (with warning) if adapter cannot be loaded.
     """
     from crsbench.evaluation.verification.pov import VerificationEngine
-    from crsbench.utils.run_helper import get_oss_fuzz_root
+    from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
-    oss_fuzz_path = Path(get_oss_fuzz_root())
+    oss_fuzz_path = Path(ensure_oss_fuzz_root())
     engine = VerificationEngine(oss_fuzz_path, source_mode=source_mode)
     adapter = engine.load_adapter(benchmark_path)
     if not adapter:

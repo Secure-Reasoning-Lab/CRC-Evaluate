@@ -29,6 +29,7 @@ from crsbench.benchmark_ci.models import (
 )
 from crsbench.benchmark_ci.validator import _load_project_capabilities
 from crsbench.utils.logger import get_logger
+from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
 if TYPE_CHECKING:
     import argparse
@@ -134,12 +135,13 @@ def run_build(args: argparse.Namespace) -> int:
     )
 
     source_mode = getattr(args, "source", "pkgs")
-    use_inc_build = getattr(args, "inc_build", False)
+    mode = getattr(args, "mode", "snapshot")
+    use_snapshot = mode == "snapshot"
     force_rebuild = getattr(args, "force_rebuild", False)
     distributed = getattr(args, "distributed", False)
     redis_host = getattr(args, "redis_host", "localhost")
 
-    build_mode = "inc-build" if use_inc_build else "full-build"
+    build_mode = f"{mode}-mode"
     rebuild_mode = "force-rebuild" if force_rebuild else "docker-cache"
     exec_mode = f", distributed (redis={redis_host})" if distributed else ", local"
     logger.info(
@@ -151,10 +153,12 @@ def run_build(args: argparse.Namespace) -> int:
     # Use VariantPlanner for build job creation
     from crsbench.executor.variant_planner import VariantPlanner
 
-    planner = VariantPlanner(oss_fuzz_path=Path("oss-fuzz"), source_mode=source_mode)
+    planner = VariantPlanner(
+        oss_fuzz_path=Path(ensure_oss_fuzz_root()), source_mode=source_mode
+    )
     build_jobs = planner.plan_all_builds(
         list(paths),
-        use_inc_build=use_inc_build,
+        use_inc_build=use_snapshot,
         force_rebuild=force_rebuild,
         skip_if_cached=False,
     )

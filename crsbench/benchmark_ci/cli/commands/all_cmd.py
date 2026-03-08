@@ -1,7 +1,7 @@
 """Combined CI validation subcommand (all checks).
 
 Constructs a flat DAG with per-variant BuildSingleVariantJob instances,
-fan-out to POV/patch/RTS/coverage verify jobs. Enables parallel builds
+fan-out to POV/patch/coverage verify jobs. Enables parallel builds
 across variants when workers are available.
 """
 
@@ -48,6 +48,7 @@ from crsbench.benchmark_ci.jobs.flat import (
     PatchUnitTestJob,
     PatchVariantTestJob,
     PatchVarTestJob,
+    PrepareIncImageJob,
     VerifyCpvPovJob,
     VerifyCpvVarJob,
 )
@@ -60,6 +61,7 @@ from crsbench.benchmark_ci.models import (
 from crsbench.benchmark_ci.validator import _load_project_capabilities
 from crsbench.builder.types import BenchmarkMode, VariantType
 from crsbench.utils.logger import get_logger
+from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
 if TYPE_CHECKING:
     import argparse
@@ -79,9 +81,8 @@ type BenchmarkMeta = tuple[
 def _load_benchmark_adapter(path: Path, source_mode: str) -> MetaYamlAdapter | None:
     """Load benchmark adapter for extracting build configuration."""
     from crsbench.evaluation.verification.pov import VerificationEngine
-    from crsbench.utils.run_helper import get_oss_fuzz_root
 
-    oss_fuzz_path = Path(get_oss_fuzz_root())
+    oss_fuzz_path = Path(ensure_oss_fuzz_root())
     engine = VerificationEngine(oss_fuzz_path, source_mode=source_mode)
     return engine.load_adapter(path)
 
@@ -95,7 +96,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
             create_build_options_parent(),
             create_output_options_parent(),
         ],
-        help="Run all CI checks (format, POV, patch, RTS; coverage with --inc-coverage)",
+        help="Run all CI checks (format, POV, patch; coverage with --inc-coverage)",
     )
     parser.add_argument(
         "--inc-coverage",
@@ -124,6 +125,7 @@ def _build_dag(
     """
     all_jobs: list[Job] = []
     benchmark_metadata: list[BenchmarkMeta] = []
+    prepare_jobs_by_key: dict[tuple[str, str, str, bool], str] = {}
 
     for path in paths:
         supports_inc, rts_mode = _load_project_capabilities(path)
@@ -164,7 +166,7 @@ def _build_dag(
         # This respects patch_superset relationships (skips subset patches)
         from crsbench.builder.infrastructure import OSSFuzzInfrastructure
 
-        infra = OSSFuzzInfrastructure(Path("oss-fuzz"))
+        infra = OSSFuzzInfrastructure(Path(ensure_oss_fuzz_root()))
         all_patches = infra.get_all_patches(path)
 
         # Build shared variants (deltaref, allpatched) for each sanitizer
@@ -176,6 +178,23 @@ def _build_dag(
         )
 
         for sanitizer in required_sanitizers:
+            prepare_job_id = ""
+            if effective_inc:
+                prepare_key = (benchmark_name, sanitizer, source_mode, effective_inc)
+                prepare_job_id = prepare_jobs_by_key.get(prepare_key, "")
+                if not prepare_job_id:
+                    prepare_job = PrepareIncImageJob(
+                        benchmark_path=path,
+                        benchmark_name=benchmark_name,
+                        sanitizer=sanitizer,
+                        use_inc_build=effective_inc,
+                        force_rebuild=force_rebuild,
+                        source_mode=source_mode,
+                    )
+                    prepare_job_id = prepare_job.job_id
+                    prepare_jobs_by_key[prepare_key] = prepare_job_id
+                    all_jobs.append(prepare_job)
+
             # Create vulnerable variant for this sanitizer
             vulnerable_job = BuildSingleVariantJob(
                 benchmark_path=path,
@@ -190,6 +209,7 @@ def _build_dag(
                 source_mode=source_mode,
                 sanitizer=sanitizer,
                 repo_name=repo_name,
+                prepare_inc_job_id=prepare_job_id,
             )
             all_jobs.append(vulnerable_job)
 
@@ -208,6 +228,7 @@ def _build_dag(
                 source_mode=source_mode,
                 sanitizer=sanitizer,
                 repo_name=repo_name,
+                prepare_inc_job_id=prepare_job_id,
             )
             all_jobs.append(allpatched_job)
 
@@ -239,13 +260,14 @@ def _build_dag(
 
         harnesses = discover_harness_names(path)
         cpv_ids: list[str] = []
+        seen_cpv_identities: set[str] = set()
         patch_keys: list[tuple[str, str]] = []
 
         for harness in harnesses:
             for cpv_id in discover_cpv_ids(path, harness):
-                if cpv_id in cpv_ids:
+                cpv_identity = f"{harness}/{cpv_id}"
+                if cpv_identity in seen_cpv_identities:
                     continue
-                cpv_ids.append(cpv_id)
 
                 # Extract cpv_num from cpv_id (e.g., "cpv_0" -> 0)
                 cpv_num = int(cpv_id.split("_")[1])
@@ -256,31 +278,6 @@ def _build_dag(
                 # CPV variant patches = all patches except this CPV's patches
                 # This uses get_patches_except() which respects patch_superset relationships
                 cpv_variant_patches = infra.get_patches_except(path, cpv_num)
-
-                # Create BuildSingleVariantJob for this CPV variant
-                # Use CPV-specific sanitizer (supports mixed sanitizers within harness)
-                cpv_build_job = BuildSingleVariantJob(
-                    benchmark_path=path,
-                    benchmark_name=benchmark_name,
-                    variant_type=VariantType.CPV,
-                    commit=commit,
-                    main_repo=main_repo,
-                    mode=mode,
-                    language=language,
-                    cpv_num=cpv_num,
-                    patches=cpv_variant_patches,
-                    use_inc_build=effective_inc,
-                    force_rebuild=force_rebuild,
-                    source_mode=source_mode,
-                    sanitizer=cpv_sanitizer,
-                    repo_name=repo_name,
-                )
-                all_jobs.append(cpv_build_job)
-
-                # Build job IDs for this CPV: vulnerable + allpatched + CPV variant
-                # Use only the shared variants that match this CPV's sanitizer
-                cpv_build_job_ids = build_jobs_by_sanitizer[cpv_sanitizer].copy()
-                cpv_build_job_ids.append(cpv_build_job.job_id)
 
                 # Discover POV paths and split into pov_0 and variants
                 pov_paths = discover_pov_paths(path, harness, cpv_id)
@@ -297,18 +294,77 @@ def _build_dag(
                     else:
                         var_pov_paths.append(p)
 
-                # V:POV job - tests only pov_0 (ground truth)
-                if pov_0_path:
-                    pov_job = VerifyCpvPovJob(
-                        benchmark_name=benchmark_name,
-                        cpv_id=cpv_id,
-                        harness=harness,
-                        benchmark_path=path,
-                        pov_path=pov_0_path,
-                        build_job_ids=cpv_build_job_ids,
-                        source_mode=source_mode,
+                if not pov_0_path:
+                    logger.warning(
+                        "Skipping CPV %s for %s: missing pov_0 blob",
+                        cpv_identity,
+                        benchmark_name,
                     )
-                    all_jobs.append(pov_job)
+                    continue
+
+                seen_cpv_identities.add(cpv_identity)
+                cpv_ids.append(cpv_identity)
+
+                # Create BuildSingleVariantJob for this CPV variant
+                # Use CPV-specific sanitizer (supports mixed sanitizers within harness)
+                cpv_prepare_job_id = ""
+                if effective_inc:
+                    prepare_key = (
+                        benchmark_name,
+                        cpv_sanitizer,
+                        source_mode,
+                        effective_inc,
+                    )
+                    cpv_prepare_job_id = prepare_jobs_by_key.get(prepare_key, "")
+                    if not cpv_prepare_job_id:
+                        prepare_job = PrepareIncImageJob(
+                            benchmark_path=path,
+                            benchmark_name=benchmark_name,
+                            sanitizer=cpv_sanitizer,
+                            use_inc_build=effective_inc,
+                            force_rebuild=force_rebuild,
+                            source_mode=source_mode,
+                        )
+                        cpv_prepare_job_id = prepare_job.job_id
+                        prepare_jobs_by_key[prepare_key] = cpv_prepare_job_id
+                        all_jobs.append(prepare_job)
+
+                cpv_build_job = BuildSingleVariantJob(
+                    benchmark_path=path,
+                    benchmark_name=benchmark_name,
+                    variant_type=VariantType.CPV,
+                    commit=commit,
+                    main_repo=main_repo,
+                    mode=mode,
+                    language=language,
+                    cpv_num=cpv_num,
+                    patches=cpv_variant_patches,
+                    use_inc_build=effective_inc,
+                    force_rebuild=force_rebuild,
+                    source_mode=source_mode,
+                    sanitizer=cpv_sanitizer,
+                    repo_name=repo_name,
+                    prepare_inc_job_id=cpv_prepare_job_id,
+                )
+                all_jobs.append(cpv_build_job)
+
+                # Build job IDs for this CPV: vulnerable + allpatched + CPV variant
+                # Use only the shared variants that match this CPV's sanitizer
+                cpv_build_job_ids = build_jobs_by_sanitizer[cpv_sanitizer].copy()
+                cpv_build_job_ids.append(cpv_build_job.job_id)
+
+                # V:POV job - tests only pov_0 (ground truth)
+                pov_job = VerifyCpvPovJob(
+                    benchmark_name=benchmark_name,
+                    cpv_id=cpv_id,
+                    harness=harness,
+                    benchmark_path=path,
+                    pov_path=pov_0_path,
+                    build_job_ids=cpv_build_job_ids,
+                    use_inc_build=effective_inc,
+                    source_mode=source_mode,
+                )
+                all_jobs.append(pov_job)
 
                 # V:VAR job - tests only variants (pov_1+), runs parallel to V:POV
                 if var_pov_paths:
@@ -319,19 +375,20 @@ def _build_dag(
                         benchmark_path=path,
                         pov_paths=var_pov_paths,
                         build_job_ids=cpv_build_job_ids,
+                        use_inc_build=effective_inc,
                         source_mode=source_mode,
                     )
                     all_jobs.append(var_job)
 
                 # Patch build + test jobs
-                # New structure: build -> (P:POV, P:VAR, P:UT, P:RTS) all in parallel
+                # New structure: build -> (P:POV, P:VAR, P:UT) in parallel
                 # BuildPatchVariantJob depends on vulnerable build for adapter
                 # Use sanitizer-specific vulnerable job (first in the list)
                 cpv_vulnerable_job_id = build_jobs_by_sanitizer[cpv_sanitizer][0]
 
                 patches = discover_patch_paths(path, harness, cpv_id)
                 for patch_id, patch_path in patches:
-                    patch_keys.append((cpv_id, patch_id))
+                    patch_keys.append((cpv_identity, patch_id))
 
                     # Step 1: Build patch
                     build_patch_job = BuildPatchVariantJob(
@@ -345,23 +402,24 @@ def _build_dag(
                         use_inc_build=effective_inc,
                         force_rebuild=force_rebuild,
                         build_job_id=cpv_vulnerable_job_id,
+                        prepare_inc_job_id=cpv_prepare_job_id,
                         source_mode=source_mode,
                     )
                     all_jobs.append(build_patch_job)
 
                     # Step 2a: P:POV - tests only pov_0 (depends on build)
-                    if pov_0_path:
-                        pov_test_job = PatchPovTestJob(
-                            benchmark_path=path,
-                            benchmark_name=benchmark_name,
-                            cpv_id=cpv_id,
-                            patch_id=patch_id,
-                            harness=harness,
-                            pov_path=pov_0_path,
-                            build_patch_job_id=build_patch_job.job_id,
-                            source_mode=source_mode,
-                        )
-                        all_jobs.append(pov_test_job)
+                    pov_test_job = PatchPovTestJob(
+                        benchmark_path=path,
+                        benchmark_name=benchmark_name,
+                        cpv_id=cpv_id,
+                        patch_id=patch_id,
+                        harness=harness,
+                        pov_path=pov_0_path,
+                        build_patch_job_id=build_patch_job.job_id,
+                        use_inc_build=effective_inc,
+                        source_mode=source_mode,
+                    )
+                    all_jobs.append(pov_test_job)
 
                     # Step 2b: P:VAR - tests only variants (depends on build, parallel to P:POV)
                     if var_pov_paths:
@@ -373,6 +431,7 @@ def _build_dag(
                             harness=harness,
                             pov_paths=var_pov_paths,
                             build_patch_job_id=build_patch_job.job_id,
+                            use_inc_build=effective_inc,
                             source_mode=source_mode,
                         )
                         all_jobs.append(var_test_job)
@@ -386,25 +445,10 @@ def _build_dag(
                         harness=harness,
                         test_mode="FULL",
                         build_patch_job_id=build_patch_job.job_id,
+                        use_inc_build=effective_inc,
                         source_mode=source_mode,
                     )
                     all_jobs.append(unittest_full_job)
-
-                    # Step 2d: P:RTS - RTS unit tests (if available, parallel to others)
-                    # RTS requires inc-build images with /rts_config_jvm.py;
-                    # skip job creation when inc-build is not enabled (requires --inc-build)
-                    if rts_mode and effective_inc:
-                        unittest_rts_job = PatchUnitTestJob(
-                            benchmark_path=path,
-                            benchmark_name=benchmark_name,
-                            cpv_id=cpv_id,
-                            patch_id=patch_id,
-                            harness=harness,
-                            test_mode="RTS",
-                            build_patch_job_id=build_patch_job.job_id,
-                            source_mode=source_mode,
-                        )
-                        all_jobs.append(unittest_rts_job)
 
         # Coverage verification job (only if --inc-coverage)
         if inc_coverage and coverage_job_id:
@@ -439,6 +483,7 @@ def _build_dag(
 
 def _log_dag_summary(all_jobs: list[Job]) -> None:
     """Log DAG job counts by type."""
+    prepare_count = sum(1 for j in all_jobs if isinstance(j, PrepareIncImageJob))
     build_single_count = sum(
         1 for j in all_jobs if isinstance(j, BuildSingleVariantJob)
     )
@@ -458,7 +503,7 @@ def _log_dag_summary(all_jobs: list[Job]) -> None:
     patch_test_count = sum(1 for j in all_jobs if isinstance(j, PatchVariantTestJob))
     coverage_count = sum(1 for j in all_jobs if isinstance(j, FlatCollectCoverageJob))
 
-    build_info = f"{build_single_count} build-single"
+    build_info = f"{prepare_count} prepare-inc, {build_single_count} build-single"
 
     # Report new split verify structure
     verify_info = (
@@ -493,7 +538,6 @@ def _aggregate_benchmark(
     build_job_ids: list[str],
     *,
     inc_coverage: bool = False,
-    use_inc_build: bool = True,
 ) -> BenchmarkValidationResult:
     """Aggregate DAG results into a single BenchmarkValidationResult."""
     benchmark_name = path.name
@@ -526,16 +570,6 @@ def _aggregate_benchmark(
         dag_results, benchmark_name, patch_keys, test_mode="FULL"
     )
 
-    effective_inc = supports_inc and use_inc_build
-    if rts_mode and effective_inc:
-        rts_result = aggregate_patch_results(
-            dag_results, benchmark_name, patch_keys, test_mode="RTS"
-        )
-    elif rts_mode:
-        rts_result = CheckResult.skip("RTS skipped: inc-build disabled")
-    else:
-        rts_result = CheckResult.skip("No RTS mode")
-
     if inc_coverage:
         coverage_result = aggregate_coverage_result(dag_results, benchmark_name)
     else:
@@ -567,7 +601,6 @@ def _aggregate_benchmark(
         patch_pov_check=patch_pov_result,
         patch_var_check=patch_var_result,
         patch_unittest_check=patch_unittest_result,
-        patch_rts_check=rts_result,
         coverage_check=coverage_result,
         shared_build_time=shared_build_time,
         storage_bytes=storage_bytes,
@@ -591,12 +624,13 @@ def run_all(args: argparse.Namespace) -> int:
     source_mode = getattr(args, "source", "pkgs")
     build_workers = getattr(args, "build_workers", 4)
     verify_workers = getattr(args, "verify_workers", 4)
-    use_inc_build = getattr(args, "inc_build", False)
-    force_rebuild = getattr(args, "force_rebuild", True)
+    mode = getattr(args, "mode", "snapshot")
+    use_snapshot = mode == "snapshot"
+    force_rebuild = getattr(args, "force_rebuild", False)
     distributed = getattr(args, "distributed", False)
     redis_host = getattr(args, "redis_host", "localhost")
 
-    build_mode = "inc-build" if use_inc_build else "full-build"
+    build_mode = f"{mode}-mode"
     rebuild_mode = "force-rebuild" if force_rebuild else "cached"
     exec_mode = f", distributed (redis={redis_host})" if distributed else ""
     logger.info(
@@ -625,7 +659,7 @@ def run_all(args: argparse.Namespace) -> int:
     # Build full DAG (includes build + verify/test jobs)
     all_jobs, benchmark_metadata = _build_dag(
         list(paths),
-        use_inc_build=use_inc_build,
+        use_inc_build=use_snapshot,
         force_rebuild=force_rebuild,
         source_mode=source_mode,
         max_povs_per_cpv=max_povs_per_cpv,
@@ -683,7 +717,6 @@ def run_all(args: argparse.Namespace) -> int:
                 start_dt,
                 build_job_ids,
                 inc_coverage=inc_coverage,
-                use_inc_build=use_inc_build,
             )
         )
 

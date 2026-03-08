@@ -130,7 +130,7 @@ crsbench evaluator --ci --build-jobs 4
 ## Limitations
 
 - **Shared paths**: all experiments on a configless evaluator must share the
-  same `benchmarks_root` and `oss_fuzz_path`.  If different paths are needed,
+  same `benchmarks_root`. If different paths are needed,
   run separate evaluator processes or use `--experiment-config`.
 
 ## Implementation

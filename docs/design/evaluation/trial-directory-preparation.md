@@ -132,7 +132,7 @@ class TrialDirectoryPreparer:
         Args:
             experiment_dir: Root directory for experiment
             benchmarks_root: Path to benchmarks directory
-            oss_fuzz_dir: Path to oss-fuzz submodule
+            oss_fuzz_dir: Path to managed third_party/oss-fuzz checkout
             config: Experiment configuration
         """
         self.experiment_dir = experiment_dir
@@ -689,7 +689,7 @@ class ExperimentOrchestrator:
         preparer = TrialDirectoryPreparer(
             experiment_dir=self.experiment_dir,
             benchmarks_root=CRSBENCH_ROOT / "benchmarks",
-            oss_fuzz_dir=CRSBENCH_ROOT / "oss-fuzz",
+            oss_fuzz_dir=CRSBENCH_ROOT / "third_party" / "oss-fuzz",
             config=config
         )
 

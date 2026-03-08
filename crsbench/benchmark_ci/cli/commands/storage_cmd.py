@@ -20,7 +20,7 @@ from crsbench.benchmark_ci.storage import (
     format_storage_size,
 )
 from crsbench.utils.logger import get_logger
-from crsbench.utils.run_helper import get_oss_fuzz_root
+from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
 logger = get_logger(__name__)
 
@@ -35,8 +35,8 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument(
         "--project-image-prefix",
         type=str,
-        default="aixcc-afc",
-        help="Docker image prefix (default: aixcc-afc)",
+        default="crsbench",
+        help="Docker image prefix (default: crsbench)",
     )
     parser.add_argument(
         "--no-color",
@@ -60,8 +60,8 @@ def run_storage(args: argparse.Namespace) -> int:
         logger.error("No benchmarks found")
         return 1
 
-    oss_fuzz_path = Path(get_oss_fuzz_root())
-    prefix = getattr(args, "project_image_prefix", "aixcc-afc")
+    oss_fuzz_path = Path(ensure_oss_fuzz_root())
+    prefix = getattr(args, "project_image_prefix", "crsbench")
     no_color = getattr(args, "no_color", False)
 
     # Collect metrics for each benchmark

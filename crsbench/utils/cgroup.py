@@ -336,14 +336,37 @@ def _remove_cgroup_children(cgroup_path: Path) -> None:
     if not cgroup_path.exists():
         return
 
-    # Collect all child cgroup directories (only dirs, skip cgroup control files)
-    children = [p for p in cgroup_path.iterdir() if p.is_dir()]
+    # Collect child directories best-effort. The kernel/docker may concurrently
+    # remove nested cgroups while we are walking, so ENOENT is expected.
+    try:
+        candidates = list(cgroup_path.iterdir())
+    except FileNotFoundError:
+        return
+    except OSError as e:
+        logger.debug(f"Could not list child cgroups under {cgroup_path}: {e}")
+        return
+
+    children: list[Path] = []
+    for candidate in candidates:
+        try:
+            if candidate.is_dir():
+                children.append(candidate)
+        except FileNotFoundError:
+            # Child was deleted between listdir and stat; ignore.
+            continue
+        except OSError as e:
+            logger.debug(f"Could not stat child cgroup {candidate}: {e}")
+            continue
+
     for child in children:
         # Recurse first (depth-first, remove leaves before parents)
         _remove_cgroup_children(child)
         try:
             child.rmdir()
             logger.debug(f"Removed child cgroup {child}")
+        except FileNotFoundError:
+            # Child already removed concurrently.
+            continue
         except OSError as e:
             logger.debug(f"Could not remove child cgroup {child}: {e}")
 

@@ -25,6 +25,42 @@ logger = get_logger(__name__)
 MAX_POV_SIZE_BYTES = 10 * 1024 * 1024
 
 
+def _error_result_from_rq_job(job: Any, *, default_error: str) -> dict[str, Any]:
+    """Build a terminal error verdict preserving routing metadata."""
+    raw_args = getattr(job, "args", None)
+    raw_kwargs = getattr(job, "kwargs", None)
+    payload: dict[str, Any] = {}
+    if isinstance(raw_args, dict):
+        payload = raw_args
+    elif (
+        isinstance(raw_args, (list, tuple))
+        and raw_args
+        and isinstance(raw_args[0], dict)
+    ):
+        payload = raw_args[0]
+    elif isinstance(raw_kwargs, dict):
+        payload = raw_kwargs
+    pov_payload = payload.get("pov")
+    pov_id = (
+        pov_payload.get("pov_id", "unknown")
+        if isinstance(pov_payload, dict)
+        else "unknown"
+    )
+    return {
+        "trial_id": payload.get("trial_id", ""),
+        "benchmark": payload.get("benchmark", ""),
+        "harness": payload.get("harness", ""),
+        "verdict": {
+            "pov_id": pov_id,
+            "triggered_bug": False,
+            "status": "error",
+            "cpv_matches": [],
+            "error": default_error[:500],
+        },
+        "completed_at": time.time(),
+    }
+
+
 def initialize_verify_queue(
     redis_host: str, experiment_name: str
 ) -> Optional["rq.Queue"]:
@@ -64,6 +100,7 @@ def enqueue_single_pov(
     harness: str,
     pov_id: str,
     pov_data: bytes,
+    sanitizer: Optional[str] = None,
     job_timeout: int = 3600,
     cpu_tag: Optional[str] = None,
 ) -> Optional[str]:
@@ -80,6 +117,7 @@ def enqueue_single_pov(
         harness: Harness name
         pov_id: POV identifier (filename)
         pov_data: Raw POV file content
+        sanitizer: Sanitizer scope for selecting verification builds
         job_timeout: Job execution timeout in seconds
 
     Returns:
@@ -105,6 +143,7 @@ def enqueue_single_pov(
         harness=harness,
         pov=embedded_pov,
         enqueued_at=time.time(),
+        sanitizer=sanitizer,
     )
 
     try:
@@ -164,22 +203,9 @@ def poll_single_pov_verdicts(
                 if status == "finished" and job.result is not None:
                     completed.append(job.result)
                 elif status == "failed":
-                    # Return error as a verdict
                     exc_info = job.exc_info or "Unknown error"
                     completed.append(
-                        {
-                            "trial_id": "",
-                            "benchmark": "",
-                            "harness": "",
-                            "verdict": {
-                                "pov_id": "unknown",
-                                "triggered_bug": False,
-                                "status": "error",
-                                "cpv_matches": [],
-                                "error": str(exc_info)[:500],
-                            },
-                            "completed_at": time.time(),
-                        }
+                        _error_result_from_rq_job(job, default_error=str(exc_info))
                     )
                 else:
                     remaining.append(job_id)

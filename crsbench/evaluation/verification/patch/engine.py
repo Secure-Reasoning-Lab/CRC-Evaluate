@@ -6,9 +6,8 @@ This module provides the main orchestrator for patch verification:
 3. Build via build_fuzzers with inc-build image (ASAN-instrumented)
 4. Run POV test via reproduce (should NOT crash)
 
-Inc-build flow: rsyncs patched source to /src/, the image's OSS-PATCH
-in compile diffs /src/ against HEAD and applies to /built-src/ via
-git apply (preserves .o for unchanged files).
+Inc-build flow: rsyncs patched source to /src/ and uses replay-build
+semantics to preserve unchanged object files where possible.
 """
 
 from __future__ import annotations
@@ -31,7 +30,7 @@ from crsbench.evaluation.verification.models import (
     PatchVerificationStatus,
     UnitTestMode,
 )
-from crsbench.utils.docker import fix_docker_ownership
+from crsbench.utils.docker import docker_rmtree, fix_docker_ownership
 from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import clone_or_copy_cached_repo
 from crsbench.utils.workers import resolve_build_workers, resolve_verify_workers
@@ -40,6 +39,26 @@ if TYPE_CHECKING:
     from crsbench.validation.meta_adapter import MetaYamlAdapter
 
 logger = get_logger(__name__)
+
+
+def _summarize_build_failure(stdout: str, stderr: str) -> str:
+    """Extract a short human-meaningful build failure summary.
+
+    Prefer stderr lines that contain error/fail markers, then fall back to
+    the first non-empty line from stderr/stdout.
+    """
+    for text in (stderr, stdout):
+        if not text:
+            continue
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            continue
+        for line in lines:
+            lower = line.lower()
+            if any(token in lower for token in ("error", "failed", "exception")):
+                return line[:240]
+        return lines[0][:240]
+    return ""
 
 
 @dataclass
@@ -62,7 +81,7 @@ class PatchVerificationEngine:
     1. Load benchmark configuration
     2. Pull inc-build image (for faster incremental builds)
     3. Clone source repository and apply patch locally
-    4. Build fuzzers with inc-build image (--inc-fallback) or full build
+    4. Build fuzzers with snapshot build fallback or full build
     5. Run POV test (patch should prevent crash)
     6. Run unit tests (optional, to ensure no regressions)
 
@@ -100,6 +119,11 @@ class PatchVerificationEngine:
         max_povs_per_cpv: Optional[int] = None,
         skip_pov: bool = False,
         skip_unittest: bool = False,
+        inc_image_policy: Optional[str] = None,
+        inc_image_registry: Optional[str] = None,
+        inc_image_max_pull_bytes: Optional[int] = None,
+        inc_image_pull_timeout: Optional[int] = None,
+        local_image_prefix: Optional[str] = None,
     ):
         """Initialize the patch verification engine.
 
@@ -121,7 +145,9 @@ class PatchVerificationEngine:
                 are isolated to this directory with symlinks to oss-fuzz/build/out/
                 for helper.py compatibility. Use this for experiment-specific builds.
             log_dir: Directory for patch verification stdout/stderr log artifacts.
-                Defaults to work_dir when set, otherwise current directory.
+                Logs are written under <work_dir>/logs in structured files.
+                If work_dir is unset, a temporary runtime work_dir is created
+                and cleaned up (including logs).
             force_rebuild: If True, clean and rebuild even if build exists.
             use_inc_build: If True, use incremental builds when available (faster).
                 If False, always use full OSS-Fuzz build.
@@ -135,9 +161,27 @@ class PatchVerificationEngine:
             skip_unittest: If True, skip unit tests (run POV tests only).
         """
         self.oss_fuzz_path = Path(oss_fuzz_path)
-        self.work_dir = Path(work_dir) if work_dir else None
-        self.log_dir = Path(log_dir) if log_dir else None
-        self.infra = OSSFuzzInfrastructure(oss_fuzz_path, work_dir=work_dir)
+        effective_work_dir = Path(work_dir) if work_dir else None
+        effective_log_dir = Path(log_dir) if log_dir else None
+        temp_runtime_dir: Optional[Path] = None
+        if effective_work_dir is None:
+            # Use isolated temporary work_dir by default (including CI paths
+            # that provide explicit log_dir) to avoid cwd pollution and
+            # cross-job workspace interference.
+            temp_runtime_dir = Path(tempfile.mkdtemp(prefix="crsbench-patch-verify-"))
+            effective_work_dir = temp_runtime_dir
+
+        self.work_dir = effective_work_dir
+        self.log_dir = effective_log_dir
+        self.infra = OSSFuzzInfrastructure(
+            oss_fuzz_path,
+            work_dir=effective_work_dir,
+            inc_image_policy=inc_image_policy,
+            inc_image_registry=inc_image_registry,
+            inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+            inc_image_pull_timeout=inc_image_pull_timeout,
+            local_image_prefix=local_image_prefix,
+        )
         self.test_mode = test_mode
         self.sanitizer = sanitizer
         self.timeout = timeout
@@ -154,8 +198,9 @@ class PatchVerificationEngine:
         self.skip_pov = skip_pov
         self.skip_unittest = skip_unittest
         self._inc_images_pulled: set[str] = set()
-        self._inc_images_unavailable: set[str] = set()  # Cache failed pulls
         self._temp_dirs: list[Path] = []
+        if temp_runtime_dir is not None:
+            self._temp_dirs.append(temp_runtime_dir)
         self._built_variants: list[str] = []  # Track variants for cleanup
 
     def verify_patch(
@@ -164,6 +209,8 @@ class PatchVerificationEngine:
         patch: PatchInfo,
         harness: str,
         pov_path: Path,
+        *,
+        allow_build: bool = True,
     ) -> PatchVerificationResult:
         """Verify a single patch.
 
@@ -177,6 +224,16 @@ class PatchVerificationEngine:
             PatchVerificationResult with verification status
         """
         start_time = time.time()
+
+        if self.build_only and not allow_build:
+            return PatchVerificationResult(
+                status=PatchVerificationStatus.ERROR,
+                patch_id=patch.patch_id,
+                pov_id=patch.pov_id,
+                benchmark=benchmark_path.name,
+                patch_path=patch.patch_path,
+                details="build_only requires allow_build=True",
+            )
 
         # Load benchmark adapter first to get benchmark_name
         adapter = self._load_adapter(benchmark_path)
@@ -221,6 +278,14 @@ class PatchVerificationEngine:
 
         # Check build cache (respect inc_build mode)
         build_cached = False
+        if self.force_rebuild and not allow_build:
+            result.status = PatchVerificationStatus.BUILD_FAILED
+            result.details = (
+                f"Missing prebuilt artifact for {variant_name} "
+                "(allow_build=False, force_rebuild=True)"
+            )
+            return result
+
         if self.force_rebuild:
             logger.info(f"Force rebuild: cleaning {variant_name}")
             self.infra.cleanup_docker_images(variant_name)
@@ -229,11 +294,17 @@ class PatchVerificationEngine:
         elif self.infra.is_variant_built(
             variant_name,
             require_inc_build=self.use_inc_build,
+            # Patch verification requires a runnable source image for unit-test
+            # execution (and for build-only split jobs that feed unittest jobs).
+            require_source_image=(self.build_only or not self.skip_unittest),
         ):
             logger.debug(f"Using cached build for {variant_name}")
             # Track variant (for _built_variants list)
             self._built_variants.append(variant_name)
             build_cached = True
+            # Cache hit preserves the requested inc-build mode. This must be
+            # propagated so downstream split patch jobs use the same mode.
+            result.inc_build_available = self.use_inc_build
 
             # Build-only mode: build already exists, nothing to do
             if self.build_only:
@@ -243,57 +314,74 @@ class PatchVerificationEngine:
 
             # For verification mode, continue to prepare source for unit tests
 
+        if (not build_cached) and (not allow_build):
+            result.status = PatchVerificationStatus.BUILD_FAILED
+            result.details = (
+                f"Missing prebuilt artifact for {variant_name} (allow_build=False)"
+            )
+            return result
+
         # Step 1: Ensure inc-build image is available (if enabled and not cached)
         inc_available = False
         if not build_cached and self.use_inc_build:
-            inc_available = self._ensure_inc_build_image(project_name)
+            inc_available = self._ensure_inc_build_image(
+                project_name, benchmark_path=benchmark_path
+            )
         elif not build_cached:
             logger.debug(f"Inc-build disabled, using full build for {project_name}")
 
-        # Step 2: Prepare source and apply patch
-        # Use isolated source path if work_dir is set, otherwise use temp directory
-        if self.work_dir:
-            # Use isolated source path
-            src_dir = self.infra.get_isolated_src_path(variant_name)
-            src_dir.mkdir(parents=True, exist_ok=True)
-            repo_path = src_dir / "repo"
+        # Source and patch-apply are only needed when we might run unit tests.
+        # POV-only verification against a cached patched build can skip this.
+        needs_source_for_tests = not self.skip_unittest
+        repo_path: Optional[Path] = None
+        if (not build_cached) or needs_source_for_tests:
+            # Step 2: Prepare source and apply patch
+            # Use isolated source path if work_dir is set, otherwise temp directory
+            if self.work_dir:
+                src_dir = self.infra.get_isolated_src_path(variant_name)
+                src_dir.mkdir(parents=True, exist_ok=True)
+                candidate_repo_path = src_dir / "repo"
+            else:
+                temp_dir = Path(
+                    tempfile.mkdtemp(prefix=f"patch-verify-{patch.pov_id}-")
+                )
+                self._temp_dirs.append(temp_dir)
+                candidate_repo_path = temp_dir / "repo"
+
+            try:
+                source_path = self._prepare_source(
+                    benchmark_path=benchmark_path,
+                    dest_dir=candidate_repo_path,
+                    main_repo=main_repo,
+                    commit=commit,
+                    repo_name=repo_name,
+                )
+            except RuntimeError as e:
+                result.status = PatchVerificationStatus.BUILD_FAILED
+                result.details = str(e)
+                return result
+
+            if not source_path:
+                result.status = PatchVerificationStatus.BUILD_FAILED
+                result.details = f"Failed to prepare source for {benchmark_path.name}"
+                return result
+
+            # Use the actual source path (may differ for bundled source).
+            repo_path = source_path
+
+            if not self._apply_patch(repo_path, patch):
+                result.status = PatchVerificationStatus.BUILD_FAILED
+                result.details = f"Failed to apply patch: {patch.patch_path}"
+                return result
         else:
-            # Use temp directory (legacy behavior)
-            temp_dir = Path(tempfile.mkdtemp(prefix=f"patch-verify-{patch.pov_id}-"))
-            self._temp_dirs.append(temp_dir)
-            repo_path = temp_dir / "repo"
-
-        try:
-            source_path = self._prepare_source(
-                benchmark_path=benchmark_path,
-                dest_dir=repo_path,
-                main_repo=main_repo,
-                commit=commit,
-                repo_name=repo_name,
+            logger.debug(
+                f"Skipping source preparation and patch apply for cached POV-only "
+                f"verification: {variant_name}"
             )
-        except RuntimeError as e:
-            result.status = PatchVerificationStatus.BUILD_FAILED
-            result.details = str(e)
-            return result
 
-        if not source_path:
-            result.status = PatchVerificationStatus.BUILD_FAILED
-            result.details = f"Failed to prepare source for {benchmark_path.name}"
-            return result
-
-        # Use the actual source path (may differ from repo_path for bundled source)
-        repo_path = source_path
-
-        # Apply the patch
-        if not self._apply_patch(repo_path, patch):
-            result.status = PatchVerificationStatus.BUILD_FAILED
-            result.details = f"Failed to apply patch: {patch.patch_path}"
-            return result
-
-        # Step 3: Build via run_tests (uses inc-build for true incremental or standard)
-        # run_tests (helper.py's run_test) does both build AND unit tests:
-        # - With inc-build: Applies patch diff to /built-src/, incrementally compiles
-        # - With standard: Full rebuild from patched source
+        # Step 3: Build fuzzers (snapshot path or full path)
+        # - With snapshot_build: compile from replayable snapshot context
+        # - With full_build: full rebuild from patched source
         # Both output fuzzers to /out for subsequent POV testing
         used_inc_build = None
         if build_cached:
@@ -320,7 +408,7 @@ class PatchVerificationEngine:
                     return result
 
             # Use build_fuzzers for proper ASAN-instrumented binary
-            # Inc-build: rsync to /src/, image's OSS-PATCH diffs and applies to /built-src/
+            # Inc-build: rsync patched source to /src/ and use replay-build semantics.
             # Fallback: Full build without inc-build (automatic on inc-build failure)
             used_inc_build = inc_available
             fallback_to_full = self.use_inc_build and not inc_available
@@ -351,7 +439,7 @@ class PatchVerificationEngine:
                     build_config,
                     repo_path,
                     use_inc_image=True,
-                    inc_fallback=True,
+                    snapshot_fallback=True,
                 )
 
             # Record build time and output
@@ -361,10 +449,18 @@ class PatchVerificationEngine:
 
             if not build_result or not build_result.success:
                 result.status = PatchVerificationStatus.BUILD_FAILED
-                result.details = (
+                base_details = (
                     "Build failed (inc-build and full build both failed)"
                     if fallback_to_full
                     else "Build failed"
+                )
+                failure_summary = _summarize_build_failure(
+                    result.build_stdout, result.build_stderr
+                )
+                result.details = (
+                    f"{base_details}: {failure_summary}"
+                    if failure_summary
+                    else base_details
                 )
                 return result
 
@@ -372,11 +468,49 @@ class PatchVerificationEngine:
             build_out = self.infra.get_build_output_path(variant_name)
             harness_binary = build_out / harness
             if not harness_binary.exists():
-                result.status = PatchVerificationStatus.BUILD_FAILED
-                result.details = f"Build failed - {harness} not found in {build_out}"
-                result.elapsed_seconds = time.time() - start_time
-                self._built_variants.append(variant_name)
-                return result
+                # Inc-build may return success while producing no harness output
+                # (e.g., replay/snapshot mismatch). Treat this as an inc-build
+                # failure and retry once via clean fallback build.
+                if inc_available and not fallback_to_full:
+                    logger.warning(
+                        "Inc-build produced no harness output for %s/%s; "
+                        "retrying clean fallback build",
+                        variant_name,
+                        harness,
+                    )
+                    fallback_to_full = True
+                    used_inc_build = False
+
+                    self.infra.cleanup_build_outputs(variant_name)
+                    build_result = self.infra.build_fuzzers(
+                        build_config,
+                        repo_path,
+                        use_inc_image=True,
+                        snapshot_fallback=True,
+                    )
+                    result.build_stdout = build_result.stdout if build_result else ""
+                    result.build_stderr = build_result.stderr if build_result else ""
+
+                    if not build_result or not build_result.success:
+                        result.status = PatchVerificationStatus.BUILD_FAILED
+                        result.details = (
+                            "Build failed (inc-build harness-miss fallback failed)"
+                        )
+                        result.elapsed_seconds = time.time() - start_time
+                        self._built_variants.append(variant_name)
+                        return result
+
+                    build_out = self.infra.get_build_output_path(variant_name)
+                    harness_binary = build_out / harness
+
+                if not harness_binary.exists():
+                    result.status = PatchVerificationStatus.BUILD_FAILED
+                    result.details = (
+                        f"Build failed - {harness} not found in {build_out}"
+                    )
+                    result.elapsed_seconds = time.time() - start_time
+                    self._built_variants.append(variant_name)
+                    return result
 
             # Track variant for cleanup
             self._built_variants.append(variant_name)
@@ -454,7 +588,9 @@ class PatchVerificationEngine:
             # Check if inc-build image is available for the BASE project
             # Try to ensure it's available (pull if needed) when use_inc_build is enabled
             if self.use_inc_build:
-                used_inc_build = self._ensure_inc_build_image(project_name)
+                used_inc_build = self._ensure_inc_build_image(
+                    project_name, benchmark_path=benchmark_path
+                )
                 logger.debug(
                     f"Ensured inc_build={used_inc_build} for cached build {project_name}"
                 )
@@ -591,7 +727,7 @@ class PatchVerificationEngine:
                 return result
 
         # Step 5: Run unit tests (skip if skip_unittest is True)
-        # With the new run_tests approach, unit tests may have already run during build
+        # Some callers may treat unit tests as already handled during build-only flows.
         unit_test_start_time = time.time()
         if self.skip_unittest:
             logger.debug(f"Skipping unit tests for {variant_name} (skip_unittest=True)")
@@ -599,7 +735,7 @@ class PatchVerificationEngine:
                 result.unit_tests_passed = None  # Indicate unit tests were skipped
             result.unit_test_time = result.unit_test_time or 0.0
         elif result.unit_tests_passed is not None:
-            # Unit tests already ran during build phase (run_tests approach)
+            # Unit tests already handled by build-only flow.
             logger.debug(
                 f"Unit tests already ran during build for {variant_name}: "
                 f"passed={result.unit_tests_passed}"
@@ -701,6 +837,8 @@ class PatchVerificationEngine:
         patch_dir: Path,
         harness: str,
         pov_dir: Path,
+        *,
+        allow_build: bool = True,
     ) -> list[PatchVerificationResult]:
         """Verify multiple patches.
 
@@ -728,7 +866,7 @@ class PatchVerificationEngine:
         logger.info(f"Found {len(patches)} patches to verify")
         results: list[PatchVerificationResult] = []
 
-        # Get benchmark name for error results
+        # Get benchmark name for error results and pre-cache resource keys
         adapter = self._load_adapter(benchmark_path)
         benchmark_name = adapter.benchmark_name if adapter else str(benchmark_path.name)
 
@@ -752,10 +890,9 @@ class PatchVerificationEngine:
 
         # Pre-cache resources before parallel execution
         if tasks and len(tasks) > 1:
-            project_name = benchmark_path.name
+            project_name = benchmark_name
 
             # Pre-cache repository to avoid parallel clones
-            adapter = self._load_adapter(benchmark_path)
             if adapter:
                 main_repo = adapter.main_repo
                 commit = adapter.get_ref_commit() or adapter.get_base_commit()
@@ -763,19 +900,33 @@ class PatchVerificationEngine:
 
             # Pre-pull inc-build image (if enabled)
             if self.use_inc_build:
-                self._ensure_inc_build_image(project_name)
+                self._ensure_inc_build_image(
+                    project_name, benchmark_path=benchmark_path
+                )
 
         for patch, pov_path in tasks:
-            result = self.verify_patch(benchmark_path, patch, harness, pov_path)
+            result = self.verify_patch(
+                benchmark_path,
+                patch,
+                harness,
+                pov_path,
+                allow_build=allow_build,
+            )
             results.append(result)
 
         return results
 
-    def _ensure_inc_build_image(self, project_name: str) -> bool:
+    def _ensure_inc_build_image(
+        self,
+        project_name: str,
+        benchmark_path: Optional[Path] = None,
+    ) -> bool:
         """Ensure inc-build image is available.
 
         Args:
             project_name: OSS-Fuzz project name
+            benchmark_path: Optional benchmark path for creating the
+                `third_party/oss-fuzz/projects/<project_name>` alias.
 
         Returns:
             True if inc-build image is available
@@ -786,20 +937,20 @@ class PatchVerificationEngine:
         if cache_key in self._inc_images_pulled:
             return True
 
-        # Check if already known to be unavailable (avoid retrying failed pulls)
-        if cache_key in self._inc_images_unavailable:
-            return False
+        if benchmark_path is not None:
+            self.infra.create_variant_project(
+                benchmark_path=benchmark_path,
+                variant_name=project_name,
+            )
 
-        if self.infra.is_inc_image_available(project_name, self.sanitizer):
+        if self.infra.ensure_inc_image(
+            project_name,
+            self.sanitizer,
+            benchmark_path=benchmark_path,
+        ):
             self._inc_images_pulled.add(cache_key)
             return True
 
-        if self.infra.pull_inc_build_image(project_name, self.sanitizer):
-            self._inc_images_pulled.add(cache_key)
-            return True
-
-        # Cache the failure to avoid retrying
-        self._inc_images_unavailable.add(cache_key)
         logger.debug(
             f"Inc-build image not available for {project_name}, will use standard build"
         )
@@ -926,7 +1077,7 @@ class PatchVerificationEngine:
 
     def _get_verify_log_dir(self) -> Path:
         """Return base log directory for patch verification stream files."""
-        base_dir = self.log_dir or self.work_dir or Path.cwd()
+        base_dir = self.work_dir or self.log_dir or Path.cwd()
         log_dir = base_dir / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         return log_dir
@@ -969,7 +1120,7 @@ class PatchVerificationEngine:
             variant_name: Base variant name (for Docker image lookup)
             src_path: Path to patched source code
             benchmark_path: Path to benchmark directory
-            use_inc_image: If True, use inc-{sanitizer} tag; else use latest
+            use_inc_image: If True, use inc tag; else use latest
 
         Returns:
             Tuple of (passed, details)
@@ -1014,7 +1165,7 @@ class PatchVerificationEngine:
         # Test variant uses a different name (-unittest or -rts suffix) to avoid
         # overwriting ASAN binary from build_fuzzers.
         if use_inc_image:
-            # For inc-build: retag inc-{sanitizer} image from base project
+            # For inc-build: retag :inc image from base project
             # Extract base project name by stripping sanitizer and mode suffixes
             # Variant format: {benchmark}-{san_short}-{mode}-patched-{pov_id}-{patch_id}
             base_project = variant_name.rsplit("-patched-", 1)[0]
@@ -1040,7 +1191,7 @@ class PatchVerificationEngine:
                 )
         else:
             # For standard build: retag :latest image from source variant
-            # Without this, run_tests fails with exit code 125 (image not found)
+            # Without this, test container run fails with image-not-found.
             if not self.infra.prepare_image_for_variant(
                 variant_name, test_variant_name, docker_tag="latest"
             ):
@@ -1049,21 +1200,20 @@ class PatchVerificationEngine:
                     "tests may fail"
                 )
 
-        # For inc-build: use inc-{sanitizer} tag
+        # For inc-build: use :inc tag
         # For standard build: use latest tag
-        docker_tag = f"inc-{self.sanitizer}" if use_inc_image else "latest"
+        docker_tag = "inc" if use_inc_image else "latest"
         passed, stdout, stderr = self.infra.run_tests(
             test_variant_name,
             src_path,
             sanitizer=self.sanitizer,
             timeout=self.test_timeout,
             rts_mode=(self.test_mode == UnitTestMode.RTS),
-            docker_image_tag=docker_tag,
+            docker_tag=docker_tag,
         )
 
         if passed:
             return True, "", stdout or "", stderr or ""
-        # helper.py run_test sends most container output to stdout.
         # Preserve both streams so CI reports include actionable failure details.
         details_parts = []
         if stderr and stderr.strip():
@@ -1338,6 +1488,8 @@ class PatchVerificationEngine:
         self,
         benchmark_path: Path,
         harness: Optional[str] = None,
+        *,
+        allow_build: bool = True,
     ) -> PatchBenchmarkOutput:
         """Verify all patches in a benchmark using auto-discovery.
 
@@ -1392,10 +1544,12 @@ class PatchVerificationEngine:
 
         # Pre-cache resources before parallel execution
         if tasks and len(tasks) > 1:
-            project_name = benchmark_path.name
+            adapter = self._load_adapter(benchmark_path)
+            project_name = (
+                adapter.benchmark_name if adapter else str(benchmark_path.name)
+            )
 
             # Pre-cache repository to avoid parallel clones
-            adapter = self._load_adapter(benchmark_path)
             if adapter:
                 main_repo = adapter.main_repo
                 commit = adapter.get_ref_commit() or adapter.get_base_commit()
@@ -1403,7 +1557,9 @@ class PatchVerificationEngine:
 
             # Pre-pull inc-build image (if enabled)
             if self.use_inc_build:
-                self._ensure_inc_build_image(project_name)
+                self._ensure_inc_build_image(
+                    project_name, benchmark_path=benchmark_path
+                )
 
         # Deduplicate tasks by variant key (cpv_id, patch_id).
         # Different harnesses with the same CPV produce the same variant_name,
@@ -1423,7 +1579,13 @@ class PatchVerificationEngine:
             deduped_tasks.append((h, patch, pov_path))
 
         for h, patch, pov_path in deduped_tasks:
-            result = self.verify_patch(benchmark_path, patch, h, pov_path)
+            result = self.verify_patch(
+                benchmark_path,
+                patch,
+                h,
+                pov_path,
+                allow_build=allow_build,
+            )
             results.append(result)
 
         # Compute overall fallback status
@@ -1611,9 +1773,15 @@ class PatchVerificationEngine:
         for temp_dir in self._temp_dirs:
             if temp_dir.exists():
                 try:
+                    # Build/reproduce containers may leave root-owned files in
+                    # patch-verify temp dirs; normalize ownership before removal.
+                    fix_docker_ownership(temp_dir)
                     shutil.rmtree(temp_dir)
                 except Exception as e:
-                    logger.warning(f"Failed to clean up {temp_dir}: {e}")
+                    # Last-resort Docker-backed recursive delete for root-owned
+                    # leftovers from interrupted/failed container executions.
+                    if not docker_rmtree(temp_dir):
+                        logger.warning(f"Failed to clean up {temp_dir}: {e}")
         self._temp_dirs.clear()
 
         # Build outputs, project symlinks, and build symlinks are preserved

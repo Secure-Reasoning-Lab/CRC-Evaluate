@@ -102,7 +102,6 @@ redis-server --daemonize yes
 # experiment-config.yaml
 experiment: my-distributed-exp
 experiment_filestore: /data/experiments
-oss_fuzz_path: /opt/oss-fuzz
 benchmarks_root: /home/user/CRSBench/benchmarks
 max_total_time: 3600
 redis_host: localhost:6379
@@ -171,8 +170,8 @@ redis-cli smembers rq:workers
 ## Worker Config Overrides
 
 In distributed mode, the orchestrator serializes the full experiment config
-into each Redis job. Workers deserialize it, but the paths (oss_fuzz_path,
-benchmarks_root, etc.) reflect the orchestrator's filesystem — which may
+into each Redis job. Workers deserialize it, but path settings (for example
+`benchmarks_root`) reflect the orchestrator's filesystem — which may
 differ from the worker's.
 
 The `worker:` section in the experiment YAML provides machine-specific
@@ -185,18 +184,17 @@ needs different paths, use shared storage with consistent mount points.
 
 ```yaml
 # Experiment config with worker overrides
-oss_fuzz_path: /home/orchestrator/oss-fuzz    # orchestrator's path
 benchmarks_root: /home/orchestrator/benchmarks
 
 worker:
-  oss_fuzz_path: /opt/oss-fuzz                # worker's path
   benchmarks_root: /data/benchmarks
   experiment_filestore: /data/experiments
 ```
 
 ### Evaluator path config
 
-Evaluators read paths from experiment config directly:
+Evaluators use `benchmarks_root` from experiment config/CLI overrides, but OSS-Fuzz
+is always resolved from the managed checkout (`ensure_oss_fuzz_root()`):
 
 ```bash
 crsbench evaluator --experiment-config config.yaml \
@@ -217,10 +215,10 @@ crsbench benchmark ci build --all \
 crsbench evaluator --ci \
   --build-jobs 8 --build-cores-per-job 4 \
   --verify-cores-per-job 2 \
-  --continuous
+  --idle-timeout 0
 ```
 
-The submitter enqueues jobs to Redis build/verify queues. Evaluators running `crsbench evaluator --ci` dequeue and execute them. See [docs/modules/benchmark-ci.md](../../modules/benchmark-ci.md) for full worker options.
+The submitter enqueues jobs to Redis build/verify queues. Evaluators running `crsbench evaluator --ci` dequeue and execute them. See [docs/modules/benchmark-ci.md](../../modules/benchmark-ci.md) for full evaluator options.
 
 ## Post-Experiment Evaluation
 
@@ -250,12 +248,12 @@ Error: Could not connect to Redis at localhost:6379
 ### Docker image not found
 
 ```
-Error: No such image: aixcc-afc-...
+Error: No such image: crsbench-...
 ```
 
 - Evaluators build their own images locally. Each evaluator must build before verifying.
 - Workers build CRS images via `oss-crs prepare` / `oss-crs build-target`. Ensure Docker is running.
-- Check that `oss-fuzz` path points to a valid OSS-Fuzz directory with the project.
+- Check that the managed `third_party/oss-fuzz` checkout exists and includes the project.
 
 ### Worker override paths
 
@@ -264,7 +262,7 @@ Error: Benchmark not found: /home/orchestrator/benchmarks/...
 ```
 
 - The serialized config contains the orchestrator's paths. Workers on different machines need overrides.
-- Set `benchmarks_root`, `oss_fuzz_path`, etc. in the `worker:` section of the experiment YAML.
+- Set `benchmarks_root` and other worker path overrides in the `worker:` section of the experiment YAML.
 
 ### Evaluator not processing jobs
 

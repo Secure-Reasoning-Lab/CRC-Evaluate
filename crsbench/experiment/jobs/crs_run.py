@@ -15,6 +15,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+import yaml
+
 from crsbench.benchmark_ci.jobs.base import Job, JobContext, JobResult
 from crsbench.evaluation.adapter import OssCrsAdapter
 from crsbench.evaluation.snapshot_manager import SnapshotManager
@@ -155,6 +157,17 @@ class CRSRunJob(Job):
                 "run_timeout": self.run_timeout,
                 **self.executor_config,
             }
+            project_yaml = self.benchmark_path / "project.yaml"
+            try:
+                if project_yaml.exists():
+                    with project_yaml.open() as f:
+                        project = yaml.safe_load(f) or {}
+                    language = str(project.get("language", "c")).strip() or "c"
+                else:
+                    language = "c"
+            except Exception:
+                language = "c"
+            executor_config["fuzzing_language"] = language
             crs_adapter.configure(executor_config)
 
             # 8. Get harness from adapter

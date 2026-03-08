@@ -7,7 +7,7 @@ These tests run the full verification pipeline including:
 
 Requirements:
 - Docker must be running
-- oss-fuzz directory must exist
+- third_party/oss-fuzz directory must exist
 - sanity-mock-c-delta-01 benchmark must be available
 
 These tests are slow (~20-30s) due to Docker builds.
@@ -52,7 +52,7 @@ class TestPOVVerificationE2E:
 
     @pytest.fixture
     def oss_fuzz_path(self) -> Path:
-        path = Path("oss-fuzz")
+        path = Path("third_party/oss-fuzz")
         if not path.exists():
             pytest.skip(f"oss-fuzz not found: {path}")
         return path
@@ -132,7 +132,7 @@ class TestBuildUIDOwnership:
 
     @pytest.fixture
     def oss_fuzz_path(self) -> Path:
-        path = Path("oss-fuzz")
+        path = Path("third_party/oss-fuzz")
         if not path.exists():
             pytest.skip(f"oss-fuzz not found: {path}")
         return path

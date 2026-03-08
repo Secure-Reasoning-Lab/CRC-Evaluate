@@ -6,6 +6,8 @@ Tests cover:
 - Verification models
 """
 
+from pathlib import Path
+
 import pytest
 from crsbench.builder.types import BenchmarkMode, VariantType
 from crsbench.evaluation.verification.dedup import (
@@ -483,3 +485,180 @@ class TestVerificationEngineForceRebuild:
             engine.builder.execute_plan.assert_called_once_with(
                 mock_plan, force_rebuild=False
             )
+
+    def test_get_or_build_results_no_build_cache_hit(self):
+        """allow_build=False should return cached results without rebuilding."""
+        from unittest.mock import MagicMock, patch
+
+        with patch(
+            "crsbench.evaluation.verification.pov.engine.VerificationEngine.__init__",
+            return_value=None,
+        ):
+            from crsbench.evaluation.verification.pov.engine import VerificationEngine
+
+            engine = VerificationEngine.__new__(VerificationEngine)
+            cached_results = {"variant1": MagicMock()}
+            engine._built_results = {"test-benchmark:address:inc": cached_results}
+            engine.builder = MagicMock()
+
+            adapter = MagicMock()
+            adapter.benchmark_name = "test-benchmark"
+            adapter.get_all_cpv_sanitizers.return_value = ["address"]
+            adapter.inc_build = True
+
+            result = engine.get_or_build_results(adapter, allow_build=False)
+
+            assert result is cached_results
+            engine.builder.create_build_plan.assert_not_called()
+            engine.builder.execute_plan.assert_not_called()
+
+    def test_get_or_build_results_no_build_cache_miss_hydrates_disk_results(self):
+        """allow_build=False should hydrate built variants from disk on cache miss."""
+        from unittest.mock import MagicMock, patch
+
+        with patch(
+            "crsbench.evaluation.verification.pov.engine.VerificationEngine.__init__",
+            return_value=None,
+        ):
+            from crsbench.evaluation.verification.pov.engine import VerificationEngine
+
+            engine = VerificationEngine.__new__(VerificationEngine)
+            engine._built_results = {}
+            engine.builder = MagicMock()
+            engine.builder.infra = MagicMock()
+
+            built_config = MagicMock()
+            built_config.variant_name = "test-benchmark-asan-delta-cpv0"
+            built_config.use_inc_build = True
+            built_config.sanitizer = "address"
+
+            unbuilt_config = MagicMock()
+            unbuilt_config.variant_name = "test-benchmark-asan-delta-cpv1"
+            unbuilt_config.use_inc_build = True
+            unbuilt_config.sanitizer = "address"
+
+            mismatched_metadata_config = MagicMock()
+            mismatched_metadata_config.variant_name = "test-benchmark-asan-delta-cpv2"
+            mismatched_metadata_config.use_inc_build = True
+            mismatched_metadata_config.sanitizer = "address"
+
+            plan = MagicMock()
+            plan.configs = [built_config, unbuilt_config, mismatched_metadata_config]
+            engine.builder.create_build_plan.return_value = plan
+
+            def is_variant_built_side_effect(variant_name: str, **_kwargs) -> bool:
+                return variant_name != "test-benchmark-asan-delta-cpv1"
+
+            engine.builder.is_variant_built.side_effect = is_variant_built_side_effect
+            engine.builder.infra.read_build_metadata.side_effect = (
+                lambda variant_name: MagicMock(sanitizer="address", inc_build=True)
+                if variant_name == "test-benchmark-asan-delta-cpv0"
+                else MagicMock(sanitizer="undefined", inc_build=True)
+            )
+            engine.builder.infra.get_build_output_path.side_effect = (
+                lambda variant_name: Path(f"/tmp/{variant_name}")
+            )
+
+            adapter = MagicMock()
+            adapter.benchmark_name = "test-benchmark"
+            adapter.get_all_cpv_sanitizers.return_value = ["address"]
+            adapter.inc_build = True
+            adapter.get_mode.return_value.value = "delta"
+
+            result = engine.get_or_build_results(adapter, allow_build=False)
+
+            assert list(result.keys()) == ["test-benchmark-asan-delta-cpv0"]
+            engine.builder.create_build_plan.assert_called_once()
+            engine.builder.is_variant_built.assert_any_call(
+                "test-benchmark-asan-delta-cpv0", require_inc_build=None
+            )
+            engine.builder.is_variant_built.assert_any_call(
+                "test-benchmark-asan-delta-cpv1", require_inc_build=None
+            )
+            engine.builder.is_variant_built.assert_any_call(
+                "test-benchmark-asan-delta-cpv2", require_inc_build=None
+            )
+            engine.builder.execute_plan.assert_not_called()
+
+    def test_get_or_build_results_no_build_cache_miss_accepts_inc_fallback(
+        self,
+    ):
+        """allow_build=False should hydrate inc-build fallback artifacts."""
+        from unittest.mock import MagicMock, patch
+
+        with patch(
+            "crsbench.evaluation.verification.pov.engine.VerificationEngine.__init__",
+            return_value=None,
+        ):
+            from crsbench.evaluation.verification.pov.engine import VerificationEngine
+
+            engine = VerificationEngine.__new__(VerificationEngine)
+            engine._built_results = {}
+            engine.builder = MagicMock()
+            engine.builder.infra = MagicMock()
+
+            config = MagicMock()
+            config.variant_name = "test-benchmark-asan-delta-cpv0"
+            config.use_inc_build = True
+            config.sanitizer = "address"
+            plan = MagicMock()
+            plan.configs = [config]
+            engine.builder.create_build_plan.return_value = plan
+            engine.builder.is_variant_built.return_value = True
+            engine.builder.infra.read_build_metadata.return_value = MagicMock(
+                sanitizer="address",
+                inc_build=False,
+                fallback_used=True,
+            )
+            engine.builder.infra.get_build_output_path.return_value = Path(
+                "/tmp/test-benchmark-asan-delta-cpv0"
+            )
+
+            adapter = MagicMock()
+            adapter.benchmark_name = "test-benchmark"
+            adapter.get_all_cpv_sanitizers.return_value = ["address"]
+            adapter.inc_build = True
+            adapter.get_mode.return_value.value = "delta"
+
+            result = engine.get_or_build_results(adapter, allow_build=False)
+
+            assert list(result.keys()) == ["test-benchmark-asan-delta-cpv0"]
+            engine.builder.execute_plan.assert_not_called()
+
+    def test_get_or_build_results_no_build_cache_miss_returns_empty_when_not_built(
+        self,
+    ):
+        """allow_build=False should return {} when nothing is built on disk."""
+        from unittest.mock import MagicMock, patch
+
+        with patch(
+            "crsbench.evaluation.verification.pov.engine.VerificationEngine.__init__",
+            return_value=None,
+        ):
+            from crsbench.evaluation.verification.pov.engine import VerificationEngine
+
+            engine = VerificationEngine.__new__(VerificationEngine)
+            engine._built_results = {}
+            engine.builder = MagicMock()
+            engine.builder.infra = MagicMock()
+
+            config = MagicMock()
+            config.variant_name = "test-benchmark-asan-delta-cpv0"
+            config.use_inc_build = True
+            config.sanitizer = "address"
+            plan = MagicMock()
+            plan.configs = [config]
+            engine.builder.create_build_plan.return_value = plan
+            engine.builder.is_variant_built.return_value = False
+
+            adapter = MagicMock()
+            adapter.benchmark_name = "test-benchmark"
+            adapter.get_all_cpv_sanitizers.return_value = ["address"]
+            adapter.inc_build = True
+            adapter.get_mode.return_value.value = "delta"
+
+            result = engine.get_or_build_results(adapter, allow_build=False)
+
+            assert result == {}
+            engine.builder.create_build_plan.assert_called_once()
+            engine.builder.execute_plan.assert_not_called()

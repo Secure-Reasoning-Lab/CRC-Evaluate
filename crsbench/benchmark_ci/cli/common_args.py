@@ -89,15 +89,20 @@ def create_build_options_parent() -> argparse.ArgumentParser:
         help="Exit immediately on first benchmark failure",
     )
     parser.add_argument(
-        "--inc-build",
-        action="store_true",
-        help="Use incremental build instead of full build",
+        "--mode",
+        choices=["snapshot", "full"],
+        default="snapshot",
+        help=(
+            "Patch evaluation mode: 'snapshot' reuses global cached vulnerable builds "
+            "(default), 'full' disables incremental-image flow; use --force-rebuild "
+            "for clean rebuilds"
+        ),
     )
     parser.add_argument(
         "--force-rebuild",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Force rebuild even if cached build exists (on by default for CI)",
+        default=False,
+        help="Force rebuild even if cached build exists (off by default for snapshot reuse)",
     )
     parser.add_argument(
         "--max-povs-per-cpv",
@@ -105,12 +110,6 @@ def create_build_options_parent() -> argparse.ArgumentParser:
         default=None,
         dest="max_povs_per_cpv",
         help="Limit POVs verified per CPV (e.g., 1 uses only pov_0.blob)",
-    )
-    parser.add_argument(
-        "--controller-cores",
-        type=int,
-        default=None,
-        help="CPU cores reserved for controller (monitoring, default: 2).",
     )
     parser.add_argument(
         "--distributed",

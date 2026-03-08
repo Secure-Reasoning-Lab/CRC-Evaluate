@@ -10,6 +10,7 @@ This module implements the evaluator process that:
 
 import os
 import sys
+from pathlib import Path
 from typing import Optional
 
 from crsbench.distributed.common import (
@@ -21,11 +22,62 @@ from crsbench.distributed.common import (
     validate_optional_int_override,
 )
 from crsbench.distributed.queue import REDIS_AVAILABLE
+from crsbench.distributed.registry import RuntimeRegistration
 from crsbench.evaluation.results import TrialResult
 from crsbench.utils.benchmark_utils import filter_benchmarks_by_mode
 from crsbench.utils.logger import configure_logger, get_logger
 
 logger = get_logger(__name__)
+
+LEGACY_CI_ALIAS_EXPERIMENT = "__legacy_ci_alias__"
+LEGACY_CI_BUILD_QUEUE = "crsbench_ci_build"
+LEGACY_CI_VERIFY_QUEUE = "crsbench_ci_verify"
+
+
+def _is_duplicate_job_enqueue_error(exc: Exception) -> bool:
+    """Best-effort duplicate enqueue detection across RQ versions."""
+    msg = str(exc).lower()
+    return "already exists" in msg or "job id" in msg and "exists" in msg
+
+
+def _resolve_inc_image_runtime_settings(
+    *,
+    policy: object,
+    registry: object,
+    max_pull_bytes: object,
+    pull_timeout_sec: object,
+    local_prefix: object,
+) -> tuple[str, str, Optional[int], int, str]:
+    """Normalize inc-image runtime settings to safe primitive values."""
+    resolved_policy = policy if isinstance(policy, str) and policy else "auto"
+    if resolved_policy not in {"auto", "pull_only", "build_only"}:
+        resolved_policy = "auto"
+
+    resolved_registry = (
+        registry
+        if isinstance(registry, str) and registry
+        else "ghcr.io/team-atlanta/crsbench"
+    )
+
+    resolved_max_pull_bytes: Optional[int] = None
+    if isinstance(max_pull_bytes, int) and max_pull_bytes > 0:
+        resolved_max_pull_bytes = max_pull_bytes
+
+    resolved_pull_timeout = (
+        pull_timeout_sec
+        if isinstance(pull_timeout_sec, int) and pull_timeout_sec > 0
+        else 300
+    )
+    resolved_local_prefix = (
+        local_prefix if isinstance(local_prefix, str) and local_prefix else "crsbench"
+    )
+    return (
+        resolved_policy,
+        resolved_registry,
+        resolved_max_pull_bytes,
+        resolved_pull_timeout,
+        resolved_local_prefix,
+    )
 
 
 def _enqueue_pre_builds(
@@ -68,7 +120,9 @@ def _enqueue_pre_builds(
                 f"Filtered by mode={mode_str}: {len(benchmark_names)} of {original_count} benchmarks"
             )
 
-    oss_fuzz_path = config.oss_fuzz_path
+    from crsbench.utils.run_helper import ensure_oss_fuzz_root
+
+    oss_fuzz_path = Path(ensure_oss_fuzz_root())
     planner = VariantPlanner(oss_fuzz_path, source_mode="pkgs")
 
     from crsbench.distributed.queue import create_redis_connection, resolve_queue_names
@@ -92,7 +146,7 @@ def _enqueue_pre_builds(
 
         jobs = planner.plan_builds(
             benchmark_path,
-            use_inc_build=False,
+            use_inc_build=True,
             skip_if_cached=True,
         )
 
@@ -108,9 +162,15 @@ def _enqueue_pre_builds(
                     meta=job_meta,
                 )
                 enqueued += 1
-            except Exception:
-                # Job with same ID already exists (dedup)
-                logger.debug(f"Pre-build job {job.job_id} already exists, skipping")
+            except Exception as e:
+                if _is_duplicate_job_enqueue_error(e):
+                    logger.debug(f"Pre-build job {job.job_id} already exists, skipping")
+                    continue
+                logger.error(
+                    f"Failed to enqueue pre-build job {job.job_id}: {e}",
+                    exc_info=True,
+                )
+                raise
 
     return enqueued
 
@@ -179,14 +239,34 @@ def run_evaluator_main(
     logger.info("Queues: build (priority) + verify")
     logger.info("=" * 60)
 
+    (
+        resolved_policy,
+        resolved_registry,
+        resolved_max_pull_bytes,
+        resolved_pull_timeout,
+        resolved_local_prefix,
+    ) = _resolve_inc_image_runtime_settings(
+        policy=getattr(config, "inc_image_policy", None),
+        registry=getattr(config, "inc_image_registry", None),
+        max_pull_bytes=getattr(config, "inc_image_max_pull_bytes", None),
+        pull_timeout_sec=getattr(config, "inc_image_pull_timeout_sec", None),
+        local_prefix=getattr(config, "project_image_prefix", None),
+    )
+
     # Create verification engine for lazy verify use
     from crsbench.evaluation.verification.pov.engine import VerificationEngine
+    from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
-    oss_fuzz_path = config.oss_fuzz_path
+    oss_fuzz_path = Path(ensure_oss_fuzz_root())
 
     engine = VerificationEngine(
         oss_fuzz_path=oss_fuzz_path,
         timeout=config.per_pov_verify_timeout,
+        inc_image_policy=resolved_policy,
+        inc_image_registry=resolved_registry,
+        inc_image_max_pull_bytes=resolved_max_pull_bytes,
+        inc_image_pull_timeout=resolved_pull_timeout,
+        local_image_prefix=resolved_local_prefix,
     )
 
     # Set engine and benchmarks root for lazy build loading
@@ -450,7 +530,9 @@ def _enqueue_pre_builds_from_registration(
                 f"Filtered by mode={modes[0]}: {len(benchmark_names)} of {original_count} benchmarks"
             )
 
-    oss_fuzz_path = registration.oss_fuzz_path
+    from crsbench.utils.run_helper import ensure_oss_fuzz_root
+
+    oss_fuzz_path = Path(ensure_oss_fuzz_root())
     planner = VariantPlanner(oss_fuzz_path, source_mode=registration.source_mode)
 
     redis_conn = create_redis_connection(redis_host)
@@ -468,7 +550,7 @@ def _enqueue_pre_builds_from_registration(
 
         jobs = planner.plan_builds(
             benchmark_path,
-            use_inc_build=False,
+            use_inc_build=True,
             skip_if_cached=True,
         )
 
@@ -484,8 +566,15 @@ def _enqueue_pre_builds_from_registration(
                     meta=job_meta,
                 )
                 enqueued += 1
-            except Exception:
-                logger.debug(f"Pre-build job {job.job_id} already exists, skipping")
+            except Exception as e:
+                if _is_duplicate_job_enqueue_error(e):
+                    logger.debug(f"Pre-build job {job.job_id} already exists, skipping")
+                    continue
+                logger.error(
+                    f"Failed to enqueue pre-build job {job.job_id}: {e}",
+                    exc_info=True,
+                )
+                raise
 
     return enqueued
 
@@ -504,6 +593,7 @@ def run_evaluator_configless(
     cpu_tag: Optional[str] = None,
     idle_timeout: Optional[int] = None,
     benchmarks_root: Optional[str] = None,
+    legacy_ci_alias: bool = False,
 ) -> int:
     """Run evaluator in configless mode — discover experiments from Redis registry.
 
@@ -511,8 +601,8 @@ def run_evaluator_configless(
     up a verification engine from registration metadata, then starts a
     multi-queue supervisor across all discovered build/verify queues.
 
-    Limitation: All experiments must share the same ``benchmarks_root`` and
-    ``oss_fuzz_path`` on the evaluator machine.
+    Limitation: All experiments must share the same ``benchmarks_root`` on the
+    evaluator machine. OSS-Fuzz root is resolved from managed runtime bootstrap.
 
     Args:
         redis_host: Redis server hostname.
@@ -547,10 +637,26 @@ def run_evaluator_configless(
     logger.info("CRSBench Evaluator — Configless Mode")
     logger.info("=" * 60)
     logger.info(f"Redis host: {redis_host}")
-    logger.info("Discovering experiments from registry...")
-    logger.info("=" * 60)
 
-    _redis_conn, experiments = discover_registered_experiments(redis_host)
+    if legacy_ci_alias:
+        logger.info(
+            "--ci compatibility alias enabled; using unified evaluator "
+            "supervisor path with legacy CI queues"
+        )
+        experiments = {
+            LEGACY_CI_ALIAS_EXPERIMENT: RuntimeRegistration(
+                experiment=LEGACY_CI_ALIAS_EXPERIMENT,
+                trial_queue="",
+                build_queue=LEGACY_CI_BUILD_QUEUE,
+                verify_queue=LEGACY_CI_VERIFY_QUEUE,
+                benchmarks_root=benchmarks_root or "benchmarks",
+            )
+        }
+    else:
+        logger.info("Discovering experiments from registry...")
+        _redis_conn, experiments = discover_registered_experiments(redis_host)
+
+    logger.info("=" * 60)
 
     logger.info(f"Discovered {len(experiments)} experiment(s)")
 
@@ -585,8 +691,15 @@ def run_evaluator_configless(
         return 1
 
     # Validate shared paths — all registrations must agree on benchmarks_root
-    # and oss_fuzz_path since a single evaluator serves all experiments.
+    # since a single evaluator serves all experiments.
     first_reg = next(iter(experiments.values()))
+    first_inc_settings = _resolve_inc_image_runtime_settings(
+        policy=first_reg.inc_image_policy,
+        registry=first_reg.inc_image_registry,
+        max_pull_bytes=first_reg.inc_image_max_pull_bytes,
+        pull_timeout_sec=first_reg.inc_image_pull_timeout_sec,
+        local_prefix=first_reg.local_image_prefix,
+    )
     for name, reg in experiments.items():
         if reg.benchmarks_root != first_reg.benchmarks_root:
             logger.error(
@@ -596,19 +709,42 @@ def run_evaluator_configless(
                 "Use separate evaluator processes or --experiment-config mode."
             )
             return 1
-        if reg.oss_fuzz_path != first_reg.oss_fuzz_path:
+        reg_inc_settings = _resolve_inc_image_runtime_settings(
+            policy=reg.inc_image_policy,
+            registry=reg.inc_image_registry,
+            max_pull_bytes=reg.inc_image_max_pull_bytes,
+            pull_timeout_sec=reg.inc_image_pull_timeout_sec,
+            local_prefix=reg.local_image_prefix,
+        )
+        if reg_inc_settings != first_inc_settings:
             logger.error(
-                f"Experiment '{name}' has oss_fuzz_path='{reg.oss_fuzz_path}' "
-                f"but '{first_reg.experiment}' has '{first_reg.oss_fuzz_path}'. "
-                "All experiments on a configless evaluator must share the same paths. "
+                f"Experiment '{name}' has inc-image runtime settings {reg_inc_settings} "
+                f"but '{first_reg.experiment}' has {first_inc_settings}. "
+                "All experiments on a configless evaluator must share inc-image "
+                "policy/registry/pull limits/local prefix. "
                 "Use separate evaluator processes or --experiment-config mode."
             )
             return 1
-
     effective_benchmarks_root = benchmarks_root or first_reg.benchmarks_root
-    oss_fuzz_path = first_reg.oss_fuzz_path
+    from crsbench.utils.run_helper import ensure_oss_fuzz_root
+
+    oss_fuzz_path = Path(ensure_oss_fuzz_root())
     per_pov_verify_timeout = max(
         reg.per_pov_verify_timeout for reg in experiments.values()
+    )
+
+    (
+        resolved_policy,
+        resolved_registry,
+        resolved_max_pull_bytes,
+        resolved_pull_timeout,
+        resolved_local_prefix,
+    ) = _resolve_inc_image_runtime_settings(
+        policy=first_reg.inc_image_policy,
+        registry=first_reg.inc_image_registry,
+        max_pull_bytes=first_reg.inc_image_max_pull_bytes,
+        pull_timeout_sec=first_reg.inc_image_pull_timeout_sec,
+        local_prefix=first_reg.local_image_prefix,
     )
 
     # Set up verification engine
@@ -617,9 +753,12 @@ def run_evaluator_configless(
     engine = VerificationEngine(
         oss_fuzz_path=oss_fuzz_path,
         timeout=per_pov_verify_timeout,
+        inc_image_policy=resolved_policy,
+        inc_image_registry=resolved_registry,
+        inc_image_max_pull_bytes=resolved_max_pull_bytes,
+        inc_image_pull_timeout=resolved_pull_timeout,
+        local_image_prefix=resolved_local_prefix,
     )
-
-    from pathlib import Path
 
     from crsbench.distributed.evaluator_jobs import set_benchmarks_root, set_engine
 
@@ -763,37 +902,37 @@ def run_evaluator_configless(
 
     logger.info("Starting multi-queue supervisor (build + verify)...")
 
-    incompatible_path_warned: set[str] = set()
+    queue_refresher = None
+    if not legacy_ci_alias:
+        incompatible_path_warned: set[str] = set()
 
-    def _refresh_evaluator_queues(redis_conn):
-        from crsbench.distributed.registry import RegistryClient
+        def _refresh_evaluator_queues(redis_conn):
+            from crsbench.distributed.registry import RegistryClient
 
-        registry = RegistryClient(redis_conn)
-        refreshed = registry.list_experiments()
-        if not refreshed:
-            return [], []
+            registry = RegistryClient(redis_conn)
+            refreshed = registry.list_experiments()
+            if not refreshed:
+                return [], []
 
-        compatible = []
-        for name in sorted(refreshed):
-            reg = refreshed[name]
-            if (
-                reg.benchmarks_root != first_reg.benchmarks_root
-                or reg.oss_fuzz_path != first_reg.oss_fuzz_path
-            ):
-                if name not in incompatible_path_warned:
-                    logger.warning(
-                        "Skipping experiment due to incompatible shared paths: "
-                        f"{name} (benchmarks_root={reg.benchmarks_root}, "
-                        f"oss_fuzz_path={reg.oss_fuzz_path})"
-                    )
-                    incompatible_path_warned.add(name)
-                continue
-            compatible.append(reg)
+            compatible = []
+            for name in sorted(refreshed):
+                reg = refreshed[name]
+                if reg.benchmarks_root != first_reg.benchmarks_root:
+                    if name not in incompatible_path_warned:
+                        logger.warning(
+                            "Skipping experiment due to incompatible shared path: "
+                            f"{name} (benchmarks_root={reg.benchmarks_root})"
+                        )
+                        incompatible_path_warned.add(name)
+                    continue
+                compatible.append(reg)
 
-        return (
-            sorted({reg.build_queue for reg in compatible}),
-            sorted({reg.verify_queue for reg in compatible}),
-        )
+            return (
+                sorted({reg.build_queue for reg in compatible}),
+                sorted({reg.verify_queue for reg in compatible}),
+            )
+
+        queue_refresher = _refresh_evaluator_queues
 
     return run_multi_queue_supervisor(
         redis_host=redis_host,
@@ -810,7 +949,7 @@ def run_evaluator_configless(
         cores=resolved_cores,
         skip_cpus=resolved_skip_cpus,
         idle_timeout=resolved_idle_timeout,
-        queue_refresher=_refresh_evaluator_queues,
+        queue_refresher=queue_refresher,
         cpu_tag=resolved_cpu_tag,
     )
 
@@ -829,9 +968,10 @@ def run_evaluator_ci_mode(
     cpu_tag: Optional[str] = None,
     idle_timeout: Optional[int] = None,
 ) -> int:
-    """Run evaluator in CI mode (no experiment config required).
+    """Run evaluator in --ci compatibility mode.
 
-    Listens on crsbench_ci_build and crsbench_ci_verify queues.
+    Backward-compatible entrypoint that now reuses the unified configless
+    evaluator path with legacy CI queue names.
 
     Args:
         redis_host: Redis server hostname.
@@ -847,96 +987,17 @@ def run_evaluator_ci_mode(
     Returns:
         Exit code (0 for success, non-zero for failure).
     """
-    try:
-        build_jobs = validate_optional_int_override(
-            value=build_jobs,
-            field_name="evaluator.build_jobs",
-            minimum=1,
-        )
-        build_cores_per_job = validate_optional_int_override(
-            value=build_cores_per_job,
-            field_name="evaluator.build_cores_per_job",
-            minimum=1,
-        )
-        verify_jobs = validate_optional_int_override(
-            value=verify_jobs,
-            field_name="evaluator.verify_jobs",
-            minimum=1,
-        )
-        verify_cores_per_job = validate_optional_int_override(
-            value=verify_cores_per_job,
-            field_name="evaluator.verify_cores_per_job",
-            minimum=1,
-        )
-        idle_timeout = validate_optional_int_override(
-            value=idle_timeout,
-            field_name="evaluator.idle_timeout",
-            minimum=0,
-        )
-    except ValueError as exc:
-        logger.error(str(exc))
-        return 1
-
-    if not REDIS_AVAILABLE:
-        logger.error("Redis and RQ packages are required for evaluator execution")
-        logger.error("Install with: pip install redis rq")
-        return 1
-    normalized_redis_host = normalize_redis_host(redis_host)
-    if normalized_redis_host is None:
-        logger.error(
-            "CI evaluator requires a Redis host. "
-            "Set CRSBENCH_REDIS_HOST to a non-empty hostname."
-        )
-        return 1
-    redis_host = normalized_redis_host
-
-    resolved_build_jobs = build_jobs if build_jobs is not None else 1
-    resolved_build_cores_per_job = (
-        build_cores_per_job if build_cores_per_job is not None else 4
-    )
-    resolved_verify_cores_per_job = (
-        verify_cores_per_job if verify_cores_per_job is not None else 4
-    )
-    resolved_verify_jobs = (
-        verify_jobs
-        if verify_jobs is not None
-        else max(
-            1,
-            (resolved_build_jobs * resolved_build_cores_per_job)
-            // resolved_verify_cores_per_job,
-        )
-    )
-    resolved_idle_timeout = idle_timeout if idle_timeout is not None else 0
-
-    logger.info("=" * 60)
-    logger.info("CRSBench Evaluator — CI Mode")
-    logger.info("=" * 60)
-    logger.info(f"Redis host: {redis_host}")
-    logger.info(
-        f"Build jobs: {resolved_build_jobs} x {resolved_build_cores_per_job} CPUs"
-    )
-    logger.info(
-        f"Verify jobs: {resolved_verify_jobs} x {resolved_verify_cores_per_job} CPUs"
-    )
-    logger.info("Queues: crsbench_ci_build + crsbench_ci_verify")
-    logger.info("=" * 60)
-
-    from crsbench.distributed.ci_supervisor import run_ci_supervisor
-
-    return run_ci_supervisor(
+    return run_evaluator_configless(
         redis_host=redis_host,
-        build_queue_name="crsbench_ci_build",
-        verify_queue_name="crsbench_ci_verify",
         worker_name=worker_name,
-        build_jobs=resolved_build_jobs,
-        build_cores_per_job=resolved_build_cores_per_job,
-        verify_cores_per_job=resolved_verify_cores_per_job,
-        verify_jobs=resolved_verify_jobs,
-        job_runner=_evaluator_job_runner,
+        build_jobs=build_jobs,
+        build_cores_per_job=build_cores_per_job,
+        verify_jobs=verify_jobs,
+        verify_cores_per_job=verify_cores_per_job,
         use_cpuset=use_cpuset,
-        use_cgroups=use_cpuset,
         cores=cores,
         skip_cpus=skip_cpus,
         cpu_tag=cpu_tag,
-        idle_timeout=resolved_idle_timeout,
+        idle_timeout=idle_timeout,
+        legacy_ci_alias=True,
     )

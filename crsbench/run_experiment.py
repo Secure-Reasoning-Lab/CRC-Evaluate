@@ -22,6 +22,7 @@ Usage:
 """
 
 import argparse
+import base64
 import importlib.util
 import json
 import os
@@ -199,6 +200,29 @@ class Trial(BaseModel):
     target_cpv_id: str | None = None
 
 
+def build_trial_id(experiment_name: str, trial: Trial, trial_suffix: str) -> str:
+    """Build a deterministic trial_id with CPV isolation and compose-safe charset."""
+    bh = trial.benchmark_harness
+
+    if trial.target_cpv_id is None:
+        cpv_component = "untargeted"
+    else:
+        cpv_encoded = (
+            base64.b32encode(trial.target_cpv_id.encode("utf-8"))
+            .decode("ascii")
+            .rstrip("=")
+            .lower()
+        )
+        cpv_component = f"cpv-{cpv_encoded}"
+
+    raw_trial_id = (
+        f"{experiment_name}-{trial.crs}-{bh.name}-{bh.harness.name}-"
+        f"{trial.mode}-{trial.sanitizer}-{cpv_component}-trial{trial.trial_num}"
+        f"{trial_suffix}"
+    )
+    return sanitize_trial_id(raw_trial_id)
+
+
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     """Add arguments for the 'run' subcommand.
 
@@ -265,6 +289,9 @@ def parse_arguments() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Prepare local environment (managed oss-fuzz + base images)
+  %(prog)s prepare
+
   # Download benchmarks from HuggingFace
   %(prog)s download --all
 
@@ -303,6 +330,11 @@ Examples:
     from crsbench.dataset.cli import add_dataset_subparser
 
     add_dataset_subparser(subparsers)
+
+    # 'prepare' subcommand - local environment bootstrap
+    from crsbench.prepare.cli import add_prepare_subparser
+
+    add_prepare_subparser(subparsers)
 
     # 'run' subcommand - experiment execution
     run_parser = subparsers.add_parser(
@@ -1089,10 +1121,7 @@ def run_experiment_local(
         # Import and execute job directly
         from crsbench.distributed.jobs import run_crs_trial
 
-        # Build trial_id with random suffix
-        # Must be lowercase for Docker Compose project name compatibility
-        raw_trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{bh.harness.name}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
-        trial_id = sanitize_trial_id(raw_trial_id)
+        trial_id = build_trial_id(experiment_name, trial, trial_suffix)
 
         result = run_crs_trial(
             crs=trial.crs,
@@ -2049,10 +2078,7 @@ def run_experiment_distributed(
             cpu_count = crs_cpu_counts.get(trial.crs, 4)
             memory_limit = crs_memory_limits.get(trial.crs)
 
-            # Build trial_id at enqueue time with random suffix
-            # Must be lowercase for Docker Compose project name compatibility
-            raw_trial_id = f"{experiment_name}-{trial.crs}-{bh.name}-{bh.harness.name}-{trial.mode}-{trial.sanitizer}-trial{trial.trial_num}{trial_suffix}"
-            trial_id = sanitize_trial_id(raw_trial_id)
+            trial_id = build_trial_id(experiment_name, trial, trial_suffix)
 
             job = queue.enqueue(
                 "crsbench.distributed.jobs.run_crs_trial",
@@ -2336,6 +2362,11 @@ def main() -> None:
         from crsbench.dataset.cli import run_download
 
         sys.exit(run_download(args))
+
+    if args.command == "prepare":
+        from crsbench.prepare.cli import run_prepare
+
+        sys.exit(run_prepare(args))
 
     # Below is for 'run' command (experiment execution)
 

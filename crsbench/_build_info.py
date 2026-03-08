@@ -3,7 +3,8 @@
 This module provides git commit information from three sources:
 1. CRSBench (main repository) - from setuptools-scm generated _version.py
 2. oss-crs (submodule) - build-time + runtime detection
-3. oss-fuzz (submodule) - build-time + runtime detection with CLI override support
+3. oss-fuzz (managed third_party sparse checkout) - build-time + runtime detection
+   with CLI override support
 
 Uses setuptools-scm for main repo + build-time/runtime hybrid for submodules.
 """
@@ -165,9 +166,9 @@ def get_build_info(oss_fuzz_path: Optional[Path] = None) -> BuildInfo:
         oss_crs_commit = oss_crs_build_commit
         oss_crs_dirty = False
 
-    # oss-fuzz: use provided path or default, with build-time fallback
+    # oss-fuzz: use provided path or default managed checkout, with build-time fallback
     if oss_fuzz_path is None:
-        oss_fuzz_path = crsbench_root / "oss-fuzz"
+        oss_fuzz_path = crsbench_root / "third_party" / "oss-fuzz"
 
     oss_fuzz_commit, oss_fuzz_dirty = _get_git_commit(oss_fuzz_path)
     if oss_fuzz_commit == "unknown":

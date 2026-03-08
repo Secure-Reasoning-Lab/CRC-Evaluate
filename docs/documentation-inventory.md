@@ -18,11 +18,11 @@ This file records current documentation scope, canonical placement, and cleanup 
   - `dashboard/README.md`
 - In-repo integrated upstream docs:
   - `oss-crs/README.md`
-  - `oss-fuzz/README.md`
+  - `third_party/oss-fuzz/README.md`
 
 ### Out-of-scope for canonical consolidation
 - Tool-generated docs (for example `.pytest_cache/README.md`)
-- Deep upstream vendor docs beneath `oss-fuzz/docs/**` unless explicitly linked as local references
+- Deep upstream vendor docs beneath `third_party/oss-fuzz/docs/**` unless explicitly linked as local references
 
 ## Inventory Summary
 
@@ -45,7 +45,7 @@ This file records current documentation scope, canonical placement, and cleanup 
 ## Findings: Staleness, Contradictions, Overlap
 
 ### Confirmed stale or inconsistent items
-- `docs/design/architecture.md` referenced `oss-patch/` and older install flow details not aligned with current repository and root quick-start.
+- `docs/design/architecture.md` previously referenced legacy incremental-build internals and older install flow details not aligned with current repository and root quick-start.
 
 ### Overlap candidates
 - Root `README.md` and `docs/experiment-workflow.md` both describe runtime commands.

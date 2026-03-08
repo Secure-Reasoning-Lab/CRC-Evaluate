@@ -1,0 +1,55 @@
+diff --git a/infra/helper.py b/infra/helper.py
+index cb0f2ffa..3d0f1c6c 100755
+--- a/infra/helper.py
++++ b/infra/helper.py
+@@ -547,6 +547,7 @@ def _check_fuzzer_exists(project, fuzzer_name, args, architecture='x86_64'):
+   """Checks if a fuzzer exists."""
+   platform = 'linux/arm64' if architecture == 'aarch64' else 'linux/amd64'
+   command = ['docker', 'run', '--rm', '--platform', platform]
++  command.extend(_runtime_resource_docker_args())
+   command.extend(['-v', '%s:/out:z' % project.out])
+   command.append(_get_base_runner_image(args))
+ 
+@@ -620,6 +621,22 @@ def _env_to_docker_args(env_list):
+   return sum([['-e', v] for v in env_list], [])
+ 
+ 
++def _runtime_resource_docker_args():
++  """Returns optional docker run args for runtime resource controls."""
++  args = []
++  cpuset_cpus = os.getenv('OSS_FUZZ_CPUSET_CPUS', '').strip()
++  cgroup_parent = os.getenv('OSS_FUZZ_CGROUP_PARENT', '').strip()
++  docker_network = os.getenv('OSS_FUZZ_DOCKER_NETWORK', '').strip()
++
++  if cpuset_cpus:
++    args.extend(['--cpuset-cpus', cpuset_cpus])
++  if cgroup_parent:
++    args.extend(['--cgroup-parent', cgroup_parent])
++  if docker_network:
++    args.extend(['--network', docker_network])
++  return args
++
++
+ def workdir_from_lines(lines, default='/src'):
+   """Gets the WORKDIR from the given lines."""
+   for line in reversed(lines):  # reversed to get last WORKDIR.
+@@ -658,6 +675,7 @@ def docker_run(run_args, *, print_output=True, architecture='x86_64'):
+   command = [
+       'docker', 'run', '--privileged', '--shm-size=2g', '--platform', platform
+   ]
++  command.extend(_runtime_resource_docker_args())
+   if os.getenv('OSS_FUZZ_SAVE_CONTAINERS_NAME'):
+     command.append('--name')
+     command.append(os.getenv('OSS_FUZZ_SAVE_CONTAINERS_NAME'))
+@@ -677,7 +695,10 @@ def docker_run(run_args, *, print_output=True, architecture='x86_64'):
+ 
+   try:
+     subprocess.check_call(command, stdout=stdout, stderr=subprocess.STDOUT)
+-  except subprocess.CalledProcessError:
++  except subprocess.CalledProcessError as error:
++    logger.error('docker run failed with exit code %d.', error.returncode)
++    logger.debug('Failed command: %s',
++                 common_utils.get_command_string(command))
+     return False
+ 
+   return True

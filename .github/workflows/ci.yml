@@ -34,6 +34,9 @@ jobs:
       - name: Format check
         run: just format-check
 
+      - name: Benchmark path policy check
+        run: uv run python scripts/ci-tests/check_benchmark_paths.py
+
       - name: Run unit tests
         run: uv run pytest tests/ -v -n auto -m "not integration"
 

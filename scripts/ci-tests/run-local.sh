@@ -177,6 +177,10 @@ run_checks() {
     just format-check || fail "Format check failed"
     success "Format check passed"
 
+    echo "Running benchmark path policy check..."
+    uv run python scripts/ci-tests/check_benchmark_paths.py || fail "Benchmark path policy check failed"
+    success "Benchmark path policy check passed"
+
     echo "Running unit tests (excluding integration)..."
     uv run pytest tests/ -v -n auto -m "not integration" || fail "Tests failed"
     success "Unit tests passed"

@@ -22,6 +22,16 @@ from crsbench.benchmark_ci.cli.discovery import get_benchmarks_root
 from crsbench.benchmark_ci.cli.output import (
     _add_all_columns,
     _add_all_rows,
+    _add_build_columns,
+    _add_build_rows,
+    _add_default_columns,
+    _add_default_rows,
+    _add_format_columns,
+    _add_format_rows,
+    _add_inc_columns,
+    _add_inc_rows,
+    _add_rts_columns,
+    _add_rts_rows,
     print_results_table,
     save_output_dir,
     write_summary_csv,
@@ -73,12 +83,17 @@ def _parse_job_log(log_path: Path) -> Optional[dict]:
     """
     try:
         content = log_path.read_text()
-        # Find JSON block after the header
-        json_match = re.search(r"\{[\s\S]*\}", content)
-        if json_match:
-            return json.loads(json_match.group())
-    except Exception:
-        pass
+    except OSError as e:
+        logger.warning(f"Failed to read job log {log_path}: {e}")
+        return None
+    # Find JSON block after the header
+    json_match = re.search(r"\{[\s\S]*\}", content)
+    if not json_match:
+        return None
+    try:
+        return json.loads(json_match.group())
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse JSON block in job log {log_path}: {e}")
     return None
 
 
@@ -567,6 +582,20 @@ def _derive_combined_pov(
         pov_pov.time_seconds if pov_pov else 0.0
     )
 
+    if pov_build is None or pov_pov is None:
+        missing = []
+        if pov_build is None:
+            missing.append("pov_build")
+        if pov_pov is None:
+            missing.append("pov_pov")
+        return CheckResult(
+            status=CheckStatus.ERROR,
+            time_seconds=total_time,
+            build_time=build_time,
+            verify_time=verify_time,
+            error=f"Incomplete POV split results: missing {', '.join(missing)}",
+        )
+
     # Fail if either component fails
     if (pov_build and pov_build.status == CheckStatus.FAIL) or (
         pov_pov and pov_pov.status == CheckStatus.FAIL
@@ -612,6 +641,22 @@ def _derive_combined_patch(
         p.verify_time for p in [patch_pov, patch_unittest] if p is not None
     )
     total_time = sum(p.time_seconds for p in present)
+
+    if len(present) < len(parts):
+        missing = []
+        if patch_build is None:
+            missing.append("patch_build")
+        if patch_pov is None:
+            missing.append("patch_pov")
+        if patch_unittest is None:
+            missing.append("patch_unittest")
+        return CheckResult(
+            status=CheckStatus.ERROR,
+            time_seconds=total_time,
+            build_time=build_time,
+            verify_time=verify_time,
+            error=f"Incomplete patch split results: missing {', '.join(missing)}",
+        )
 
     if any(p.status == CheckStatus.FAIL for p in present):
         errors = [p.error for p in present if p.error]
@@ -747,6 +792,20 @@ def _load_summary_from_output_dir(
     with summary_path.open() as f:
         data = json.load(f)
 
+    check_mode_raw = data.get("check_mode", CheckMode.ALL.value)
+    try:
+        check_mode = CheckMode(check_mode_raw)
+    except ValueError:
+        logger.warning(
+            f"Unknown check_mode '{check_mode_raw}' in summary.json; defaulting to ALL"
+        )
+        check_mode = CheckMode.ALL
+    include_rts_results = check_mode in (
+        CheckMode.RTS,
+        CheckMode.INC_RTS,
+        CheckMode.ALL,
+    )
+
     # Parse the summary data
     results = []
     for r in data.get("results", []):
@@ -801,8 +860,16 @@ def _load_summary_from_output_dir(
         # Parse variant check results
         pov_inc_check = _parse_check_result(r.get("pov_inc_check"))
         patch_inc_check = _parse_check_result(r.get("patch_inc_check"))
-        patch_rts_check = _parse_check_result(r.get("patch_rts_check"))
-        patch_inc_rts_check = _parse_check_result(r.get("patch_inc_rts_check"))
+        patch_rts_check = (
+            _parse_check_result(r.get("patch_rts_check"))
+            if include_rts_results
+            else None
+        )
+        patch_inc_rts_check = (
+            _parse_check_result(r.get("patch_inc_rts_check"))
+            if include_rts_results
+            else None
+        )
         coverage_inc_check = _parse_check_result(r.get("coverage_inc_check"))
 
         result = BenchmarkValidationResult(
@@ -836,9 +903,6 @@ def _load_summary_from_output_dir(
             else None,
         )
         results.append(result)
-
-    # Always use ALL mode — shows full column set regardless of stored value
-    check_mode = CheckMode.ALL
 
     summary = ValidationSummary(
         check_mode=check_mode,
@@ -877,8 +941,24 @@ def _write_reparsed_files(
         console = Console(file=f, no_color=True, width=10_000)
         table = Table(title="Benchmark Validation Report", show_lines=False)
         table.add_column("Benchmark", min_width=25)
-        _add_all_columns(table)
-        _add_all_rows(table, summary)
+        if check_mode == CheckMode.FORMAT:
+            _add_format_columns(table)
+            _add_format_rows(table, summary)
+        elif check_mode == CheckMode.BUILD:
+            _add_build_columns(table)
+            _add_build_rows(table, summary)
+        elif check_mode == CheckMode.DEFAULT:
+            _add_default_columns(table)
+            _add_default_rows(table, summary)
+        elif check_mode == CheckMode.INC:
+            _add_inc_columns(table)
+            _add_inc_rows(table, summary)
+        elif check_mode == CheckMode.RTS:
+            _add_rts_columns(table)
+            _add_rts_rows(table, summary)
+        else:
+            _add_all_columns(table)
+            _add_all_rows(table, summary)
         console.print(table)
 
         # Calculate total storage across all benchmarks
@@ -989,6 +1069,7 @@ def run_parse(args: argparse.Namespace) -> int:
             if r.total_status in (CheckStatus.FAIL, CheckStatus.ERROR)
         ]
         summary = ValidationSummary(
+            check_mode=check_mode,
             started_at=summary.started_at,
             finished_at=summary.finished_at,
         )

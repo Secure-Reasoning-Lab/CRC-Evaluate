@@ -66,7 +66,7 @@ class TestBenchmarkCiNesting:
             "pov",
             "patch",
             "coverage",
-            "rts",
+            "capabilities",
             "all",
             "parse",
             "retry",
@@ -227,6 +227,7 @@ class TestOldTopLevelCommandsRemoved:
         from crsbench.evaluation.verification.cli.pov_verify_command import (
             add_verify_subparser,
         )
+        from crsbench.prepare.cli import add_prepare_subparser
         from crsbench.reporting.cli import (
             add_dashboard_subparser,
             add_report_subparser,
@@ -236,6 +237,7 @@ class TestOldTopLevelCommandsRemoved:
         subs = parser.add_subparsers(dest="command")
 
         add_dataset_subparser(subs)
+        add_prepare_subparser(subs)
         add_worker_subparser(subs)
         add_evaluator_subparser(subs)
         add_verify_subparser(subs)
@@ -272,3 +274,7 @@ class TestOldTopLevelCommandsRemoved:
     def test_benchmark_is_registered(self):
         commands = self._get_top_level_commands()
         assert "benchmark" in commands
+
+    def test_prepare_is_registered(self):
+        commands = self._get_top_level_commands()
+        assert "prepare" in commands

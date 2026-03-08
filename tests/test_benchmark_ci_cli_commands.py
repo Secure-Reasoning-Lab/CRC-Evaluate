@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from crsbench.benchmark_ci.cli import add_ci_subparser, dispatch_ci
+from crsbench.benchmark_ci.models import CheckMode
 
 
 def _make_parser() -> argparse.ArgumentParser:
@@ -123,7 +124,7 @@ class TestDispatchCi:
             ("pov", "run_pov", ["--all"]),
             ("patch", "run_patch", ["--all"]),
             ("coverage", "run_coverage", ["--all"]),
-            ("rts", "run_rts", ["--all"]),
+            ("capabilities", "run_capabilities", ["--all"]),
             ("all", "run_all", ["--all"]),
             ("parse", "run_parse", ["-d", "/tmp/nonexist"]),
         ],
@@ -234,6 +235,7 @@ class TestParseSubcommand:
             result = dispatch_ci(args)
             assert result == 0
             mock_table.assert_called_once()
+            assert mock_table.call_args.kwargs["check_mode"] == CheckMode.DEFAULT
 
     def test_parse_subcommand_json_format(self, tmp_path):
         _create_summary_json(tmp_path)
@@ -266,7 +268,7 @@ class TestParentParserInheritance:
 
     @pytest.mark.parametrize(
         "subcommand",
-        ["format", "pov", "patch", "coverage", "rts", "all"],
+        ["format", "pov", "patch", "coverage", "capabilities", "all"],
     )
     def test_all_subcommands_accept_benchmark_positional(self, subcommand):
         parser = _make_parser()
@@ -275,7 +277,7 @@ class TestParentParserInheritance:
 
     @pytest.mark.parametrize(
         "subcommand",
-        ["format", "pov", "patch", "coverage", "rts", "all"],
+        ["format", "pov", "patch", "coverage", "capabilities", "all"],
     )
     def test_all_subcommands_accept_all_flag(self, subcommand):
         parser = _make_parser()
@@ -284,7 +286,7 @@ class TestParentParserInheritance:
 
     @pytest.mark.parametrize(
         "subcommand",
-        ["pov", "patch", "coverage", "rts", "all"],
+        ["pov", "patch", "coverage", "all"],
     )
     def test_build_subcommands_accept_source(self, subcommand):
         parser = _make_parser()
@@ -293,7 +295,7 @@ class TestParentParserInheritance:
 
     @pytest.mark.parametrize(
         "subcommand",
-        ["pov", "patch", "coverage", "rts", "all"],
+        ["pov", "patch", "coverage", "all"],
     )
     def test_build_subcommands_accept_build_workers(self, subcommand):
         parser = _make_parser()
@@ -302,7 +304,7 @@ class TestParentParserInheritance:
 
     @pytest.mark.parametrize(
         "subcommand",
-        ["pov", "patch", "coverage", "rts", "all"],
+        ["pov", "patch", "coverage", "all"],
     )
     def test_build_subcommands_accept_verify_workers(self, subcommand):
         parser = _make_parser()
@@ -311,7 +313,16 @@ class TestParentParserInheritance:
 
     @pytest.mark.parametrize(
         "subcommand",
-        ["format", "pov", "patch", "coverage", "rts", "all"],
+        ["pov", "patch", "coverage", "all"],
+    )
+    def test_build_subcommands_accept_mode(self, subcommand):
+        parser = _make_parser()
+        args = parser.parse_args(["ci", subcommand, "--mode", "full", "--all"])
+        assert args.mode == "full"
+
+    @pytest.mark.parametrize(
+        "subcommand",
+        ["format", "pov", "patch", "coverage", "capabilities", "all"],
     )
     def test_all_subcommands_accept_no_color(self, subcommand):
         parser = _make_parser()
@@ -864,7 +875,7 @@ class TestPovSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.build_cmd._run_distributed_build")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._build_dag")
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.resolve_benchmark_paths")
-    def test_pov_default_no_inc_build(
+    def test_pov_default_snapshot_mode(
         self,
         mock_discover,
         mock_build_dag,
@@ -885,10 +896,10 @@ class TestPovSubcommand:
         args = parser.parse_args(["ci", "pov", "--all"])
         dispatch_ci(args)
 
-        # Check that _build_dag was called with use_inc_build=False (default)
+        # Default mode is snapshot (inc-build enabled), with cache reuse.
         call_args = mock_build_dag.call_args
-        assert call_args.kwargs["use_inc_build"] is False
-        assert call_args.kwargs["force_rebuild"] is True
+        assert call_args.kwargs["use_inc_build"] is True
+        assert call_args.kwargs["force_rebuild"] is False
 
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.print_results_table")
     @patch("crsbench.distributed.ci_jobs.ci_results_to_executor_results")
@@ -896,7 +907,7 @@ class TestPovSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.build_cmd._run_distributed_build")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._build_dag")
     @patch("crsbench.benchmark_ci.cli.commands.pov_cmd.resolve_benchmark_paths")
-    def test_pov_inc_build_flag(
+    def test_pov_snapshot_mode_uses_snapshot_build(
         self,
         mock_discover,
         mock_build_dag,
@@ -914,7 +925,7 @@ class TestPovSubcommand:
         mock_convert_results.return_value = _make_pov_dag_results("bench1", ["cpv_0"])
 
         parser = _make_parser()
-        args = parser.parse_args(["ci", "pov", "--all", "--inc-build"])
+        args = parser.parse_args(["ci", "pov", "--all", "--mode", "snapshot"])
         dispatch_ci(args)
 
         # Check that _build_dag was called with use_inc_build=True
@@ -1090,7 +1101,7 @@ class TestPatchSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.resolve_benchmark_paths")
-    def test_patch_default_no_inc_build(
+    def test_patch_default_snapshot_mode(
         self,
         mock_discover,
         mock_caps,
@@ -1118,8 +1129,8 @@ class TestPatchSubcommand:
         call_args = mock_executor_cls.return_value.execute.call_args
         jobs = call_args[0][0]
         build_job = next(j for j in jobs if j.job_id == "build-variants:bench1")
-        assert build_job.use_inc_build is False
-        assert build_job.force_rebuild is True
+        assert build_job.use_inc_build is True
+        assert build_job.force_rebuild is False
 
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.print_results_table")
     @patch("crsbench.distributed.ci_jobs.ci_results_to_executor_results")
@@ -1132,7 +1143,7 @@ class TestPatchSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.patch_cmd.resolve_benchmark_paths")
-    def test_patch_inc_build_flag(
+    def test_patch_snapshot_mode_uses_snapshot_build(
         self,
         mock_discover,
         mock_caps,
@@ -1154,7 +1165,7 @@ class TestPatchSubcommand:
         )
 
         parser = _make_parser()
-        args = parser.parse_args(["ci", "patch", "--all", "--inc-build"])
+        args = parser.parse_args(["ci", "patch", "--all", "--mode", "snapshot"])
         dispatch_ci(args)
 
         call_args = mock_executor_cls.return_value.execute.call_args
@@ -1503,7 +1514,7 @@ class TestCoverageSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.resolve_benchmark_paths")
-    def test_coverage_default_no_inc_build(
+    def test_coverage_default_snapshot_mode(
         self, mock_discover, mock_caps, mock_harness, mock_executor_cls, mock_table
     ):
         mock_discover.return_value = [Path("/tmp/bench1")]
@@ -1520,8 +1531,8 @@ class TestCoverageSubcommand:
         call_args = mock_executor_cls.return_value.execute.call_args
         jobs = call_args[0][0]
         build_job = next(j for j in jobs if j.job_id == "build-variants:bench1")
-        assert build_job.use_inc_build is False
-        assert build_job.force_rebuild is True
+        assert build_job.use_inc_build is True
+        assert build_job.force_rebuild is False
 
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.print_results_table")
     @patch("crsbench.distributed.ci_jobs.ci_results_to_executor_results")
@@ -1531,7 +1542,7 @@ class TestCoverageSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.discover_harness_names")
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.coverage_cmd.resolve_benchmark_paths")
-    def test_coverage_inc_build_flag(
+    def test_coverage_snapshot_mode_uses_snapshot_build(
         self, mock_discover, mock_caps, mock_harness, mock_executor_cls, mock_table
     ):
         mock_discover.return_value = [Path("/tmp/bench1")]
@@ -1542,7 +1553,7 @@ class TestCoverageSubcommand:
         )
 
         parser = _make_parser()
-        args = parser.parse_args(["ci", "coverage", "--all", "--inc-build"])
+        args = parser.parse_args(["ci", "coverage", "--all", "--mode", "snapshot"])
         dispatch_ci(args)
 
         call_args = mock_executor_cls.return_value.execute.call_args
@@ -2070,7 +2081,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
-    def test_all_default_no_inc_build_and_force_rebuild(
+    def test_all_default_snapshot_mode_and_cached_builds(
         self,
         mock_discover,
         mock_fmt,
@@ -2109,10 +2120,10 @@ class TestAllSubcommand:
             for j in jobs
             if isinstance(j, BuildSingleVariantJob) and "bench1" in j.job_id
         )
-        # ci all: inc-build off by default (opt-in via --inc-build)
-        assert build_job.use_inc_build is False
-        # ci all: always force-rebuild by default
-        assert build_job.force_rebuild is True
+        # ci all: snapshot mode is default.
+        assert build_job.use_inc_build is True
+        # ci all: cached builds are reused by default.
+        assert build_job.force_rebuild is False
 
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
     @patch("crsbench.distributed.ci_jobs.ci_results_to_executor_results")
@@ -2127,7 +2138,7 @@ class TestAllSubcommand:
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
-    def test_all_inc_build_flag(
+    def test_all_snapshot_mode_uses_snapshot_build(
         self,
         mock_discover,
         mock_fmt,
@@ -2153,7 +2164,7 @@ class TestAllSubcommand:
         )
 
         parser = _make_parser()
-        args = parser.parse_args(["ci", "all", "--all", "--inc-build"])
+        args = parser.parse_args(["ci", "all", "--all", "--mode", "snapshot"])
         dispatch_ci(args)
 
         call_args = mock_executor_cls.return_value.execute.call_args
@@ -2167,6 +2178,59 @@ class TestAllSubcommand:
             if isinstance(j, BuildSingleVariantJob) and "bench1" in j.job_id
         )
         assert build_job.use_inc_build is True
+
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
+    @patch("crsbench.distributed.ci_jobs.ci_results_to_executor_results")
+    @patch("crsbench.distributed.ci_jobs.enqueue_and_poll_ci_jobs")
+    @patch("crsbench.benchmark_ci.cli.commands.build_cmd._run_distributed_build")
+    @patch("crsbench.executor.variant_planner.VariantPlanner")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_pov_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_benchmark_adapter")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.validate_format")
+    @patch("crsbench.benchmark_ci.cli.commands.all_cmd.resolve_benchmark_paths")
+    def test_all_full_mode_disables_snapshot_build(
+        self,
+        mock_discover,
+        mock_fmt,
+        mock_caps,
+        mock_adapter,
+        mock_harness,
+        mock_cpvs,
+        mock_patches,
+        mock_povs,
+        mock_executor_cls,
+        mock_table,
+    ):
+        _setup_all_cmd_mocks(
+            mock_discover,
+            mock_fmt,
+            mock_caps,
+            mock_harness,
+            mock_cpvs,
+            mock_patches,
+            mock_povs,
+            mock_executor_cls,
+            mock_adapter,
+        )
+
+        parser = _make_parser()
+        args = parser.parse_args(["ci", "all", "--all", "--mode", "full"])
+        dispatch_ci(args)
+
+        call_args = mock_executor_cls.return_value.execute.call_args
+        jobs = call_args[0][0]
+        from crsbench.benchmark_ci.jobs.flat import BuildSingleVariantJob
+
+        build_job = next(
+            j
+            for j in jobs
+            if isinstance(j, BuildSingleVariantJob) and "bench1" in j.job_id
+        )
+        assert build_job.use_inc_build is False
 
     @patch("crsbench.benchmark_ci.cli.commands.all_cmd.print_results_table")
     @patch("crsbench.distributed.ci_jobs.ci_results_to_executor_results")
@@ -2382,11 +2446,11 @@ class TestAllSubcommand:
         adapter.get_cpv_sanitizer.assert_any_call("harness_undef", "cpv_1")
 
 
-# --- Test RTS job creation conditional on effective_inc ---
+# --- Test RTS flow removal in ci all ---
 
 
-class TestRtsJobCreationConditional:
-    """Test that RTS jobs are only created when inc-build is effective."""
+class TestRtsFlowRemoved:
+    """RTS jobs are no longer created in ci all DAG."""
 
     @staticmethod
     def _build_dag_with_params(
@@ -2453,8 +2517,8 @@ class TestRtsJobCreationConditional:
             )
         return jobs, metadata
 
-    def test_rts_jobs_created_when_inc_build_and_rts_mode(self):
-        """RTS jobs created when both rts_mode and effective_inc are True."""
+    def test_no_rts_jobs_even_when_inc_build_and_rts_mode(self):
+        """No RTS jobs even when project supports RTS and inc-build is enabled."""
         from crsbench.benchmark_ci.jobs.flat import PatchUnitTestJob
 
         jobs, _ = self._build_dag_with_params(
@@ -2463,12 +2527,10 @@ class TestRtsJobCreationConditional:
         rts_jobs = [
             j for j in jobs if isinstance(j, PatchUnitTestJob) and j.test_mode == "RTS"
         ]
-        assert len(rts_jobs) > 0, (
-            "RTS jobs should be created when inc-build is effective"
-        )
+        assert len(rts_jobs) == 0, "RTS jobs should not be created"
 
     def test_no_rts_jobs_when_inc_build_not_enabled(self):
-        """No RTS jobs when --inc-build is not used, even if project supports RTS."""
+        """No RTS jobs when snapshot build mode is disabled."""
         from crsbench.benchmark_ci.jobs.flat import PatchUnitTestJob
 
         jobs, _ = self._build_dag_with_params(
@@ -2477,7 +2539,7 @@ class TestRtsJobCreationConditional:
         rts_jobs = [
             j for j in jobs if isinstance(j, PatchUnitTestJob) and j.test_mode == "RTS"
         ]
-        assert len(rts_jobs) == 0, "RTS jobs should NOT be created without --inc-build"
+        assert len(rts_jobs) == 0, "RTS jobs should not be created"
 
     def test_no_rts_jobs_when_project_no_inc_support(self):
         """No RTS jobs when project doesn't support inc-build."""
@@ -2489,7 +2551,7 @@ class TestRtsJobCreationConditional:
         rts_jobs = [
             j for j in jobs if isinstance(j, PatchUnitTestJob) and j.test_mode == "RTS"
         ]
-        assert len(rts_jobs) == 0, "RTS jobs should NOT be created without inc support"
+        assert len(rts_jobs) == 0, "RTS jobs should not be created"
 
     def test_no_rts_jobs_when_no_rts_mode(self):
         """No RTS jobs when project has no rts_mode."""
@@ -2501,7 +2563,7 @@ class TestRtsJobCreationConditional:
         rts_jobs = [
             j for j in jobs if isinstance(j, PatchUnitTestJob) and j.test_mode == "RTS"
         ]
-        assert len(rts_jobs) == 0, "RTS jobs should NOT be created without rts_mode"
+        assert len(rts_jobs) == 0, "RTS jobs should not be created"
 
     def test_full_unit_test_jobs_always_created(self):
         """FULL unit test jobs are created regardless of inc-build."""
@@ -2515,12 +2577,30 @@ class TestRtsJobCreationConditional:
         ]
         assert len(full_jobs) > 0, "FULL unit test jobs should always be created"
 
+    def test_prepare_inc_jobs_created_and_wired(self):
+        """Inc-build DAG adds one prepare job per benchmark/sanitizer and wires deps."""
+        from crsbench.benchmark_ci.jobs.flat import (
+            BuildSingleVariantJob,
+            PrepareIncImageJob,
+        )
 
-class TestRtsAggregationConditional:
-    """Test that RTS aggregation respects inc-build availability."""
+        jobs, _ = self._build_dag_with_params(
+            use_inc_build=True, supports_inc=True, rts_mode=None
+        )
+        prepare_jobs = [j for j in jobs if isinstance(j, PrepareIncImageJob)]
+        assert len(prepare_jobs) == 1
+        prepare_job_id = prepare_jobs[0].job_id
 
-    def test_rts_aggregation_skip_when_no_inc_build(self):
-        """RTS aggregation returns skip when inc-build is disabled."""
+        build_jobs = [j for j in jobs if isinstance(j, BuildSingleVariantJob)]
+        assert len(build_jobs) > 0
+        assert all(j.depends_on == [prepare_job_id] for j in build_jobs)
+
+
+class TestRtsAggregationRemoved:
+    """ci all aggregation does not emit patch_rts_check."""
+
+    def test_patch_rts_check_is_none(self):
+        """patch_rts_check remains unset in aggregated results."""
         from datetime import datetime
 
         from crsbench.benchmark_ci.cli.commands.all_cmd import _aggregate_benchmark
@@ -2538,31 +2618,86 @@ class TestRtsAggregationConditional:
             },
             start_dt=datetime.now(),
             build_job_ids=[],
-            use_inc_build=False,
         )
-        assert result.patch_rts_check.status == CheckStatus.SKIP
-        assert "inc-build disabled" in result.patch_rts_check.error
+        assert result.patch_rts_check is None
 
-    def test_rts_aggregation_skip_when_no_rts_mode(self):
-        """RTS aggregation returns skip when no rts_mode."""
-        from datetime import datetime
 
-        from crsbench.benchmark_ci.cli.commands.all_cmd import _aggregate_benchmark
-        from crsbench.benchmark_ci.models import CheckResult, CheckStatus
+def test_all_build_dag_uses_harness_scoped_cpv_identity() -> None:
+    """_build_dag keeps same cpv_id across harnesses as distinct DAG identities."""
+    from crsbench.benchmark_ci.cli.commands.all_cmd import _build_dag
+    from crsbench.benchmark_ci.jobs.flat import BuildPatchVariantJob, VerifyCpvPovJob
 
-        result = _aggregate_benchmark(
-            dag_results={},
-            path=Path("/tmp/bench1"),
-            supports_inc=True,
-            rts_mode=None,
-            cpv_ids=[],
-            patch_keys=[],
-            format_results={
-                "bench1": CheckResult(status=CheckStatus.PASS, time_seconds=0.1)
-            },
-            start_dt=datetime.now(),
-            build_job_ids=[],
+    path = Path("/tmp/bench1")
+
+    with (
+        patch(
+            "crsbench.benchmark_ci.cli.commands.all_cmd.discover_harness_names"
+        ) as mock_harness,
+        patch(
+            "crsbench.benchmark_ci.cli.commands.all_cmd.discover_cpv_ids"
+        ) as mock_cpv,
+        patch(
+            "crsbench.benchmark_ci.cli.commands.all_cmd.discover_patch_paths"
+        ) as mock_patches,
+        patch(
+            "crsbench.benchmark_ci.cli.commands.all_cmd.discover_pov_paths"
+        ) as mock_povs,
+        patch(
+            "crsbench.benchmark_ci.cli.commands.all_cmd._load_project_capabilities"
+        ) as mock_caps,
+        patch(
+            "crsbench.benchmark_ci.cli.commands.all_cmd._load_benchmark_adapter"
+        ) as mock_adapter,
+        patch("crsbench.builder.infrastructure.OSSFuzzInfrastructure") as mock_infra,
+    ):
+        mock_harness.return_value = ["harness_a", "harness_b"]
+        mock_cpv.return_value = ["cpv_0"]
+        mock_patches.return_value = [("patch_0", Path("/tmp/patch_0.diff"))]
+        mock_povs.return_value = [Path("/tmp/pov_0.blob")]
+        mock_caps.return_value = (True, None)
+
+        adapter = MagicMock()
+        adapter.get_ref_commit.return_value = "abc123"
+        adapter.get_base_commit.return_value = "base123"
+        adapter.main_repo = "https://github.com/test/repo.git"
+        adapter.lang = "c"
+        adapter.repo_name = None
+        adapter.get_all_cpv_sanitizers.return_value = ["address"]
+        adapter.get_cpv_sanitizer.return_value = "address"
+        mock_adapter.return_value = adapter
+
+        mock_infra.return_value.get_all_patches.return_value = [Path("/tmp/p.diff")]
+        mock_infra.return_value.get_patches_except.return_value = []
+
+        jobs, metadata = _build_dag(
+            [path],
             use_inc_build=True,
+            force_rebuild=False,
+            source_mode="pkgs",
         )
-        assert result.patch_rts_check.status == CheckStatus.SKIP
-        assert "No RTS mode" in result.patch_rts_check.error
+
+    verify_job_ids = [
+        j.job_id
+        for j in jobs
+        if isinstance(j, VerifyCpvPovJob) and j.benchmark_name == "bench1"
+    ]
+    assert verify_job_ids == [
+        "verify-cpv-pov/bench1/harness_a/cpv_0",
+        "verify-cpv-pov/bench1/harness_b/cpv_0",
+    ]
+
+    build_patch_job_ids = [
+        j.job_id
+        for j in jobs
+        if isinstance(j, BuildPatchVariantJob) and j.benchmark_name == "bench1"
+    ]
+    assert build_patch_job_ids == [
+        "build-patch/bench1/harness_a/cpv_0/patch_0",
+        "build-patch/bench1/harness_b/cpv_0/patch_0",
+    ]
+
+    assert metadata[0][3] == ["harness_a/cpv_0", "harness_b/cpv_0"]
+    assert metadata[0][4] == [
+        ("harness_a/cpv_0", "patch_0"),
+        ("harness_b/cpv_0", "patch_0"),
+    ]

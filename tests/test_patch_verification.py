@@ -8,6 +8,7 @@ Tests cover:
 E2E tests are in test_patch_verification_integration.py.
 """
 
+import os
 import shutil
 import tempfile
 from collections.abc import Generator
@@ -32,6 +33,42 @@ BENCHMARK_NAME = "sanity-mock-c-delta-01"
 HARNESS_NAME = "fuzz_parse_buffer_section"
 CPV_ID = "cpv_1"
 POV_ID = "pov_0"
+
+
+# =============================================================================
+# Build Failure Summarization
+# =============================================================================
+
+
+class TestBuildFailureSummary:
+    def test_prefers_error_line_from_stderr(self) -> None:
+        from crsbench.evaluation.verification.patch.engine import (
+            _summarize_build_failure,
+        )
+
+        summary = _summarize_build_failure(
+            stdout="compiling...\nstep 2",
+            stderr="note: start\nERROR: build script failed\ntrailing",
+        )
+        assert summary == "ERROR: build script failed"
+
+    def test_falls_back_to_stdout_when_stderr_empty(self) -> None:
+        from crsbench.evaluation.verification.patch.engine import (
+            _summarize_build_failure,
+        )
+
+        summary = _summarize_build_failure(
+            stdout="fatal: patch does not apply\nnext",
+            stderr="",
+        )
+        assert summary == "fatal: patch does not apply"
+
+    def test_returns_empty_summary_when_no_logs(self) -> None:
+        from crsbench.evaluation.verification.patch.engine import (
+            _summarize_build_failure,
+        )
+
+        assert _summarize_build_failure("", "") == ""
 
 
 # =============================================================================
@@ -1959,7 +1996,7 @@ class TestUnitTestExecution:
     """Tests for unit test execution with Docker images.
 
     Unit tests use the original project name for:
-    1. Docker image lookup: aixcc-afc/{project_name}:inc-{sanitizer}
+    1. Docker image lookup: gcr.io/oss-fuzz/{project_name}-{san}:inc
     2. test.sh lookup: oss-fuzz/projects/{project_name}/test.sh
     """
 
@@ -1998,35 +2035,25 @@ class TestUnitTestExecution:
 
     def test_inc_build_docker_tag_format(self):
         """Test that inc-build uses the correct Docker image tag format."""
-        # The Docker tag should be "inc-{sanitizer}"
-        sanitizer = "address"
-        expected_tag = f"inc-{sanitizer}"
-
-        assert expected_tag == "inc-address"
-
-        # For ubsan
-        sanitizer = "undefined"
-        expected_tag = f"inc-{sanitizer}"
-        assert expected_tag == "inc-undefined"
+        # The Docker tag is now stable ":inc" and sanitizer is scoped in project key.
+        assert "inc" == "inc"
 
     def test_standard_build_uses_latest_docker_tag(self):
         """Test that standard build uses 'latest' for docker_image_tag."""
         # When use_inc_image=False, docker_tag should be "latest"
         # because standard build creates aixcc-afc/{variant}:latest
         use_inc_image = False
-        sanitizer = "address"
-        docker_tag = f"inc-{sanitizer}" if use_inc_image else "latest"
+        docker_tag = "inc" if use_inc_image else "latest"
 
         assert docker_tag == "latest"
 
     def test_inc_build_docker_tag(self):
         """Test that inc-build passes correct docker_image_tag."""
-        # When use_inc_image=True, docker_tag should be "inc-{sanitizer}"
+        # When use_inc_image=True, docker_tag should be "inc".
         use_inc_image = True
-        sanitizer = "address"
-        docker_tag = f"inc-{sanitizer}" if use_inc_image else None
+        docker_tag = "inc" if use_inc_image else None
 
-        assert docker_tag == "inc-address"
+        assert docker_tag == "inc"
 
 
 class TestRtsSkipReturnValue:
@@ -2113,6 +2140,147 @@ class TestRtsSkipReturnValue:
 
         # Should proceed normally and return True (tests passed)
         assert passed is True, "RTS should run and pass with inc-build available"
+        engine.infra.run_tests.assert_called_once_with(
+            "test-proj-rts",
+            tmp_path / "src",
+            sanitizer="address",
+            timeout=1800,
+            rts_mode=True,
+            docker_tag="inc",
+        )
+
+    def test_full_mode_forwards_run_tests_args(self, tmp_path: Path):
+        """FULL mode should forward expected args to infra.run_tests."""
+        from unittest.mock import MagicMock
+
+        from crsbench.evaluation.verification.models import UnitTestMode
+        from crsbench.evaluation.verification.patch.engine import (
+            PatchVerificationEngine,
+        )
+
+        oss_fuzz = tmp_path / "oss-fuzz"
+        infra_dir = oss_fuzz / "infra"
+        infra_dir.mkdir(parents=True)
+        (infra_dir / "helper.py").write_text("# mock")
+        project = oss_fuzz / "projects" / "test-proj"
+        project.mkdir(parents=True)
+        (project / "test.sh").write_text("#!/bin/bash\necho test")
+
+        engine = PatchVerificationEngine(
+            oss_fuzz,
+            test_mode=UnitTestMode.FULL,
+            use_inc_build=False,
+        )
+
+        engine.infra = MagicMock()
+        engine.infra.is_tests_available.return_value = True
+        engine.infra.create_variant_project.return_value = True
+        engine.infra.copy_build_output.return_value = True
+        engine.infra.prepare_image_for_variant.return_value = True
+        engine.infra.run_tests.return_value = (True, "tests passed", "")
+
+        passed, _details, _stdout, _stderr = engine._run_unit_tests(
+            variant_name="test-proj",
+            src_path=tmp_path / "src",
+            benchmark_path=tmp_path / "bench",
+            use_inc_image=False,
+        )
+
+        assert passed is True
+        engine.infra.run_tests.assert_called_once_with(
+            "test-proj-unittest",
+            tmp_path / "src",
+            sanitizer="address",
+            timeout=1800,
+            rts_mode=False,
+            docker_tag="latest",
+        )
+
+
+class TestCachedPovOnlyFastPath:
+    """Tests for cached-build POV-only verification fast path."""
+
+    def test_cached_skip_unittest_skips_source_and_patch_apply(
+        self, tmp_path: Path
+    ) -> None:
+        """Cached POV-only verification should not re-prepare source or patch."""
+        from unittest.mock import MagicMock
+
+        from crsbench.builder.types import BenchmarkMode
+        from crsbench.evaluation.verification.models import PatchInfo
+        from crsbench.evaluation.verification.patch.engine import (
+            PatchVerificationEngine,
+        )
+
+        # Minimal oss-fuzz directory
+        oss_fuzz = tmp_path / "oss-fuzz"
+        infra_dir = oss_fuzz / "infra"
+        infra_dir.mkdir(parents=True)
+        (infra_dir / "helper.py").write_text("# mock")
+
+        # Benchmark + POV/patch files
+        benchmark = tmp_path / "benchmark"
+        benchmark.mkdir(parents=True)
+        pov_path = benchmark / "pov_0.blob"
+        pov_path.write_bytes(b"pov")
+        patch_path = benchmark / "patch.diff"
+        patch_path.write_text("--- a/a\n+++ b/a\n")
+
+        class _Adapter:
+            benchmark_name = "test-proj"
+            main_repo = "https://example.com/repo.git"
+            repo_name = "repo"
+            lang = "c++"
+
+            @staticmethod
+            def get_ref_commit() -> str:
+                return "b" * 40
+
+            @staticmethod
+            def get_base_commit() -> str:
+                return "a" * 40
+
+            @staticmethod
+            def get_mode() -> BenchmarkMode:
+                return BenchmarkMode.DELTA
+
+        engine = PatchVerificationEngine(
+            oss_fuzz,
+            skip_unittest=True,
+            use_inc_build=True,
+            verify_variants=False,
+        )
+        engine._load_adapter = MagicMock(return_value=_Adapter())
+        engine._ensure_inc_build_image = MagicMock(return_value=True)
+        engine._prepare_source = MagicMock(
+            side_effect=AssertionError("source should not be prepared")
+        )
+        engine._apply_patch = MagicMock(
+            side_effect=AssertionError("patch should not be re-applied")
+        )
+        engine._verify_single_pov = MagicMock(return_value=("pov_0", True, "", ""))
+
+        # Simulate cached variant build.
+        engine.infra = MagicMock()
+        engine.infra.is_variant_built.return_value = True
+
+        result = engine.verify_patch(
+            benchmark_path=benchmark,
+            patch=PatchInfo(
+                patch_id="patch_0",
+                pov_id="cpv_0",
+                patch_path=patch_path,
+            ),
+            harness="fuzz",
+            pov_path=pov_path,
+        )
+
+        assert result.status == PatchVerificationStatus.VALID
+        assert result.pov_test_passed is True
+        assert result.inc_build_available is True
+        engine._prepare_source.assert_not_called()
+        engine._apply_patch.assert_not_called()
+        engine._verify_single_pov.assert_called_once()
 
 
 class TestPatchVerificationLogs:
@@ -2148,6 +2316,79 @@ class TestPatchVerificationLogs:
         assert len(stderr_files) == 1
         assert stdout_files[0].read_text() == "pov stdout"
         assert stderr_files[0].read_text() == "pov stderr"
+
+    def test_default_log_dir_uses_temp_dir_not_cwd(self, tmp_path: Path):
+        """Without work_dir/log_dir, logs should go to temp and be cleaned."""
+        from crsbench.evaluation.verification.patch.engine import (
+            PatchVerificationEngine,
+        )
+
+        oss_fuzz = tmp_path / "oss-fuzz"
+        infra_dir = oss_fuzz / "infra"
+        infra_dir.mkdir(parents=True)
+        (infra_dir / "helper.py").write_text("# mock")
+
+        old_cwd = Path.cwd()
+        try:
+            # If engine incorrectly defaults to cwd, this would create tmp_path/logs.
+            os.chdir(tmp_path)
+            engine = PatchVerificationEngine(oss_fuzz)
+            engine._write_verify_streams(
+                patch_id="patch_0",
+                cpv_id="cpv_0",
+                stage="pov",
+                run_id="pov_0",
+                stdout="pov stdout",
+                stderr="pov stderr",
+            )
+            assert not (tmp_path / "logs").exists()
+            assert engine.work_dir is not None
+            log_dir = engine.work_dir / "logs"
+            assert log_dir.exists()
+            assert list(log_dir.glob("*.stdout"))
+        finally:
+            os.chdir(old_cwd)
+            temp_work_dir = engine.work_dir
+            engine.cleanup()
+            assert temp_work_dir is not None
+            assert not temp_work_dir.exists()
+
+    def test_explicit_log_dir_still_uses_temp_work_dir(self, tmp_path: Path):
+        """Providing log_dir should not force work_dir to cwd."""
+        from crsbench.evaluation.verification.patch.engine import (
+            PatchVerificationEngine,
+        )
+
+        oss_fuzz = tmp_path / "oss-fuzz"
+        infra_dir = oss_fuzz / "infra"
+        infra_dir.mkdir(parents=True)
+        (infra_dir / "helper.py").write_text("# mock")
+
+        explicit_log_dir = tmp_path / "explicit-logs"
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(tmp_path)
+            engine = PatchVerificationEngine(oss_fuzz, log_dir=explicit_log_dir)
+            assert engine.work_dir is not None
+            assert engine.work_dir != tmp_path
+            engine._write_verify_streams(
+                patch_id="patch_0",
+                cpv_id="cpv_0",
+                stage="pov",
+                run_id="pov_0",
+                stdout="pov stdout",
+                stderr="pov stderr",
+            )
+            assert not (tmp_path / "logs").exists()
+            log_dir = engine.work_dir / "logs"
+            assert log_dir.exists()
+            assert list(log_dir.glob("*.stdout"))
+        finally:
+            os.chdir(old_cwd)
+            temp_work_dir = engine.work_dir
+            engine.cleanup()
+            assert temp_work_dir is not None
+            assert not temp_work_dir.exists()
 
 
 # =============================================================================

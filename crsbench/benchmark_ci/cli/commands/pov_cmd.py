@@ -26,6 +26,7 @@ from crsbench.benchmark_ci.cli.result_aggregator import (
 )
 from crsbench.benchmark_ci.jobs.flat import (
     BuildSingleVariantJob,
+    PrepareIncImageJob,
     VerifyCpvPovJob,
     VerifyCpvVarJob,
 )
@@ -67,13 +68,14 @@ def run_pov(args: argparse.Namespace) -> int:
     )
 
     source_mode = getattr(args, "source", "pkgs")
-    use_inc_build = getattr(args, "inc_build", False)
-    force_rebuild = getattr(args, "force_rebuild", True)
+    mode = getattr(args, "mode", "snapshot")
+    use_snapshot = mode == "snapshot"
+    force_rebuild = getattr(args, "force_rebuild", False)
     max_povs_per_cpv = getattr(args, "max_povs_per_cpv", None)
     distributed = getattr(args, "distributed", False)
     redis_host = getattr(args, "redis_host", "localhost")
 
-    build_mode = "inc-build" if use_inc_build else "full-build"
+    build_mode = f"{mode}-mode"
     rebuild_mode = "force-rebuild" if force_rebuild else "cached"
     exec_mode = f", distributed (redis={redis_host})" if distributed else ", local"
     logger.info(
@@ -86,14 +88,18 @@ def run_pov(args: argparse.Namespace) -> int:
 
     all_jobs, benchmark_metadata = _build_dag(
         list(paths),
-        use_inc_build=use_inc_build,
+        use_inc_build=use_snapshot,
         force_rebuild=force_rebuild,
         source_mode=source_mode,
         max_povs_per_cpv=max_povs_per_cpv,
     )
 
     # Filter to build + POV verify jobs only
-    build_jobs = [j for j in all_jobs if isinstance(j, BuildSingleVariantJob)]
+    build_jobs = [
+        j
+        for j in all_jobs
+        if isinstance(j, (BuildSingleVariantJob, PrepareIncImageJob))
+    ]
     pov_jobs = [
         j for j in all_jobs if isinstance(j, (VerifyCpvPovJob, VerifyCpvVarJob))
     ]

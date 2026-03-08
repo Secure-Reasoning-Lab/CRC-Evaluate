@@ -28,6 +28,11 @@ from crsbench.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _cpv_identity(harness: str, cpv_id: str) -> str:
+    """Return harness-qualified CPV identity for job IDs."""
+    return f"{harness}/{cpv_id}" if harness else cpv_id
+
+
 def _write_build_logs(
     context: JobContext, log_path: Path, stdout: str, stderr: str
 ) -> None:
@@ -37,15 +42,32 @@ def _write_build_logs(
 
     base_path = log_path.with_suffix("")  # Remove .log suffix
 
-    # Write stdout log
-    if stdout:
-        stdout_path = base_path.parent / f"{base_path.name}.stdout"
-        stdout_path.write_text(stdout)
+    # Always write both files so each build job has deterministic log artifacts.
+    stdout_path = base_path.parent / f"{base_path.name}.stdout"
+    stdout_path.write_text(stdout or "")
 
-    # Write stderr log
-    if stderr:
-        stderr_path = base_path.parent / f"{base_path.name}.stderr"
-        stderr_path.write_text(stderr)
+    stderr_path = base_path.parent / f"{base_path.name}.stderr"
+    stderr_path.write_text(stderr or "")
+
+
+def _expected_harnesses_for_sanitizer(benchmark_path: Path, sanitizer: str) -> set[str]:
+    """Return harness names expected to produce binaries for a sanitizer."""
+    from crsbench.validation.meta_adapter import MetaYamlAdapter
+
+    adapter = MetaYamlAdapter.from_benchmark_path(benchmark_path)
+    if not adapter:
+        return set()
+
+    expected: set[str] = set()
+    for harness_name in adapter.get_harness_names():
+        harness = adapter.get_harness(harness_name)
+        if not harness or not harness.vulns:
+            continue
+        for vuln in harness.vulns:
+            if adapter.get_cpv_sanitizer(harness_name, vuln.vuln_keyword) == sanitizer:
+                expected.add(harness_name)
+                break
+    return expected
 
 
 @dataclass
@@ -75,7 +97,8 @@ class BuildSingleVariantJob(Job):
     source_mode: str = "pkgs"
     sanitizer: str = "address"
     repo_name: Optional[str] = None
-    project_image_prefix: str = "aixcc-afc"
+    project_image_prefix: str = "crsbench"
+    prepare_inc_job_id: str = ""
 
     @property
     def job_id(self) -> str:
@@ -105,15 +128,19 @@ class BuildSingleVariantJob(Job):
     def job_type(self) -> str:
         return "build"
 
+    @property
+    def depends_on(self) -> list[str]:
+        return [self.prepare_inc_job_id] if self.prepare_inc_job_id else []
+
     def execute(self, context: JobContext) -> JobResult:
         """Build single variant via OSSFuzzBuilder."""
         started_at = datetime.now()
         try:
             from crsbench.builder import OSSFuzzBuilder
             from crsbench.builder.types import BuildConfig
-            from crsbench.utils.run_helper import get_oss_fuzz_root
+            from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
-            oss_fuzz_path = Path(get_oss_fuzz_root())
+            oss_fuzz_path = Path(ensure_oss_fuzz_root())
             builder = OSSFuzzBuilder(
                 oss_fuzz_path, max_workers=1, source_mode=self.source_mode
             )
@@ -141,6 +168,58 @@ class BuildSingleVariantJob(Job):
                 force_rebuild=self.force_rebuild,
                 skip_if_cached=self.skip_if_cached,
             )
+
+            if result.success:
+                expected_harnesses = _expected_harnesses_for_sanitizer(
+                    self.benchmark_path, self.sanitizer
+                )
+                if expected_harnesses:
+                    build_out = builder.infra.get_build_output_path(result.variant_name)
+
+                    def _missing_harnesses() -> list[str]:
+                        return sorted(
+                            harness
+                            for harness in expected_harnesses
+                            if not (build_out / harness).exists()
+                        )
+
+                    missing = _missing_harnesses()
+                    if missing and self.use_inc_build and not result.fallback_used:
+                        logger.warning(
+                            "Missing harness outputs after inc-build for %s; "
+                            "retrying with non-inc full build",
+                            result.variant_name,
+                        )
+                        fallback_config = BuildConfig(
+                            benchmark_name=self.benchmark_name,
+                            variant_type=self.variant_type,
+                            commit=self.commit,
+                            main_repo=self.main_repo,
+                            benchmark_path=self.benchmark_path,
+                            mode=self.mode,
+                            patches=self.patches,
+                            language=self.language,
+                            cpv_num=self.cpv_num,
+                            patch_id=self.patch_id,
+                            pov_id=self.pov_id,
+                            use_inc_build=False,
+                            sanitizer=self.sanitizer,
+                            repo_name=self.repo_name,
+                        )
+                        result = builder.build_single(
+                            fallback_config,
+                            force_rebuild=True,
+                            skip_if_cached=False,
+                        )
+                        build_out = builder.infra.get_build_output_path(
+                            result.variant_name
+                        )
+                        missing = _missing_harnesses()
+                        if result.success and not missing:
+                            result.fallback_used = True
+                    if missing:
+                        result.success = False
+                        result.error = f"Build failed - missing harness binaries: {', '.join(missing)}"
 
             # Store in context.shared for downstream jobs
             context.shared[self.job_id] = {
@@ -200,6 +279,86 @@ class BuildSingleVariantJob(Job):
 
 
 @dataclass
+class PrepareIncImageJob(Job):
+    """Prepare incremental build base image once per benchmark/sanitizer."""
+
+    benchmark_path: Path
+    benchmark_name: str
+    sanitizer: str = "address"
+    use_inc_build: bool = True
+    force_rebuild: bool = False
+    source_mode: str = "pkgs"
+
+    @property
+    def job_id(self) -> str:
+        mode = "inc" if self.use_inc_build else "std"
+        force_mode = "force" if self.force_rebuild else "cached"
+        return (
+            f"prepare-inc-image/{self.benchmark_name}/"
+            f"{self.sanitizer}/{self.source_mode}/{mode}/{force_mode}"
+        )
+
+    @property
+    def job_type(self) -> str:
+        return "build"
+
+    def execute(self, context: JobContext) -> JobResult:
+        started_at = datetime.now()
+        try:
+            if not self.use_inc_build:
+                finished_at = datetime.now()
+                result = JobResult(
+                    job_id=self.job_id,
+                    job_type=self.job_type,
+                    success=True,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    elapsed_seconds=(finished_at - started_at).total_seconds(),
+                    details={"inc_image_ready": False, "skipped": True},
+                )
+                self._write_job_log(context, result)
+                return result
+
+            from crsbench.builder.infrastructure import OSSFuzzInfrastructure
+            from crsbench.utils.run_helper import ensure_oss_fuzz_root
+
+            oss_fuzz_path = Path(ensure_oss_fuzz_root())
+            infra = OSSFuzzInfrastructure(oss_fuzz_path)
+            ready = infra.ensure_inc_image(
+                self.benchmark_name,
+                sanitizer=self.sanitizer,
+                benchmark_path=self.benchmark_path,
+                force_rebuild=self.force_rebuild,
+            )
+
+            finished_at = datetime.now()
+            result = JobResult(
+                job_id=self.job_id,
+                job_type=self.job_type,
+                success=True,
+                started_at=started_at,
+                finished_at=finished_at,
+                elapsed_seconds=(finished_at - started_at).total_seconds(),
+                details={"inc_image_ready": bool(ready), "skipped": False},
+            )
+            self._write_job_log(context, result)
+            return result
+        except Exception as e:
+            finished_at = datetime.now()
+            result = JobResult(
+                job_id=self.job_id,
+                job_type=self.job_type,
+                success=False,
+                started_at=started_at,
+                finished_at=finished_at,
+                elapsed_seconds=(finished_at - started_at).total_seconds(),
+                error=str(e),
+            )
+            self._write_job_log(context, result)
+            return result
+
+
+@dataclass
 class VerifyCpvPovJob(Job):
     """Verify ground truth POV (pov_0) for a single CPV against built variants.
 
@@ -213,11 +372,13 @@ class VerifyCpvPovJob(Job):
     benchmark_path: Optional[Path] = None
     pov_path: Optional[Path] = None  # Single pov_0 path
     build_job_ids: list[str] = field(default_factory=list)
+    use_inc_build: bool = True
     source_mode: str = "pkgs"
 
     @property
     def job_id(self) -> str:
-        return f"verify-cpv-pov/{self.benchmark_name}/{self.cpv_id}"
+        cpv_key = _cpv_identity(self.harness, self.cpv_id)
+        return f"verify-cpv-pov/{self.benchmark_name}/{cpv_key}"
 
     @property
     def job_type(self) -> str:
@@ -284,9 +445,9 @@ class VerifyCpvPovJob(Job):
                 PovVerificationStatus,
             )
             from crsbench.evaluation.verification.pov import VerificationEngine
-            from crsbench.utils.run_helper import get_oss_fuzz_root
+            from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
-            oss_fuzz_path = Path(get_oss_fuzz_root())
+            oss_fuzz_path = Path(ensure_oss_fuzz_root())
 
             # Collect build results from build jobs
             build_results: dict = {}
@@ -400,11 +561,13 @@ class VerifyCpvVarJob(Job):
     benchmark_path: Optional[Path] = None
     pov_paths: list[Path] = field(default_factory=list)  # pov_1+ paths
     build_job_ids: list[str] = field(default_factory=list)
+    use_inc_build: bool = True
     source_mode: str = "pkgs"
 
     @property
     def job_id(self) -> str:
-        return f"verify-cpv-var/{self.benchmark_name}/{self.cpv_id}"
+        cpv_key = _cpv_identity(self.harness, self.cpv_id)
+        return f"verify-cpv-var/{self.benchmark_name}/{cpv_key}"
 
     @property
     def job_type(self) -> str:
@@ -473,9 +636,9 @@ class VerifyCpvVarJob(Job):
                 PovVerificationStatus,
             )
             from crsbench.evaluation.verification.pov import VerificationEngine
-            from crsbench.utils.run_helper import get_oss_fuzz_root
+            from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
-            oss_fuzz_path = Path(get_oss_fuzz_root())
+            oss_fuzz_path = Path(ensure_oss_fuzz_root())
 
             # Collect build results from build jobs
             build_results: dict = {}
@@ -599,11 +762,13 @@ class BuildPatchVariantJob(Job):
     use_inc_build: bool = True
     force_rebuild: bool = False
     build_job_id: str = ""
+    prepare_inc_job_id: str = ""
     source_mode: str = "pkgs"
 
     @property
     def job_id(self) -> str:
-        return f"build-patch/{self.benchmark_name}/{self.cpv_id}/{self.patch_id}"
+        cpv_key = _cpv_identity(self.harness, self.cpv_id)
+        return f"build-patch/{self.benchmark_name}/{cpv_key}/{self.patch_id}"
 
     @property
     def job_type(self) -> str:
@@ -611,7 +776,12 @@ class BuildPatchVariantJob(Job):
 
     @property
     def depends_on(self) -> list[str]:
-        return [self.build_job_id] if self.build_job_id else []
+        deps: list[str] = []
+        if self.prepare_inc_job_id:
+            deps.append(self.prepare_inc_job_id)
+        if self.build_job_id and self.build_job_id not in deps:
+            deps.append(self.build_job_id)
+        return deps
 
     def execute(self, context: JobContext) -> JobResult:
         """Build patched variant using PatchVerificationEngine.
@@ -622,6 +792,7 @@ class BuildPatchVariantJob(Job):
         3. Build artifacts are cached for downstream PatchVariantTestJob
         """
         started_at = datetime.now()
+        engine = None
         try:
             from crsbench.evaluation.verification.models import (
                 PatchInfo,
@@ -629,11 +800,9 @@ class BuildPatchVariantJob(Job):
             )
             from crsbench.evaluation.verification.patch import PatchVerificationEngine
             from crsbench.evaluation.verification.pov import VerificationEngine
-            from crsbench.utils.run_helper import get_oss_fuzz_root
+            from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
-            oss_fuzz_path = Path(get_oss_fuzz_root())
-
-            sanitizer = self.sanitizer
+            oss_fuzz_path = Path(ensure_oss_fuzz_root())
 
             # Load adapter for BuildConfig metadata (mode, language, commit)
             pov_engine = VerificationEngine(oss_fuzz_path, source_mode=self.source_mode)
@@ -641,6 +810,26 @@ class BuildPatchVariantJob(Job):
 
             if not adapter:
                 raise ValueError(f"Failed to load adapter for {self.benchmark_path}")
+
+            # Resolve sanitizer from benchmark metadata when harness/cpv is known.
+            # Queue payload sanitizer is treated as fallback only.
+            sanitizer = self.sanitizer
+            if self.harness and self.cpv_id:
+                try:
+                    resolved = adapter.get_cpv_sanitizer(self.harness, self.cpv_id)
+                    if resolved:
+                        sanitizer = resolved
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to resolve CPV sanitizer for "
+                        f"{self.benchmark_name}/{self.harness}/{self.cpv_id}: {e}. "
+                        f"Using payload sanitizer={self.sanitizer}"
+                    )
+
+            job_log_path = self._job_log_path(context)
+            stream_log_dir = job_log_path.parent if job_log_path else None
+            if stream_log_dir is not None:
+                stream_log_dir.mkdir(parents=True, exist_ok=True)
 
             # Create PatchVerificationEngine with build_only=True
             # Source is prepared in temp dir - each job is self-contained
@@ -651,7 +840,7 @@ class BuildPatchVariantJob(Job):
                 force_rebuild=self.force_rebuild,
                 source_mode=self.source_mode,
                 build_only=True,  # Only build, skip verification
-                log_dir=context.output_dir,
+                log_dir=stream_log_dir,
             )
 
             # Create PatchInfo for the engine
@@ -667,6 +856,7 @@ class BuildPatchVariantJob(Job):
                 patch=patch_info,
                 harness=self.harness,
                 pov_path=self.patch_path.parent / "pov_0.blob",  # Placeholder, not used
+                allow_build=True,
             )
 
             # Determine variant_name from the result
@@ -738,6 +928,9 @@ class BuildPatchVariantJob(Job):
             )
             self._write_job_log(context, job_result)
             return job_result
+        finally:
+            if engine is not None:
+                engine.cleanup()
 
 
 @dataclass
@@ -749,7 +942,7 @@ class PatchVariantTestJob(Job):
 
     The engine handles:
     - POV tests with proper variant testing
-    - Unit tests with correct source path, sanitizer, and docker_image_tag
+    - Unit tests with correct source path, sanitizer, and image tag
     """
 
     benchmark_path: Path
@@ -761,12 +954,14 @@ class PatchVariantTestJob(Job):
     test_mode: str = "FULL"
     patch_path_override: Optional[Path] = None
     build_patch_job_id: str = ""
+    use_inc_build: bool = True
     source_mode: str = "pkgs"
 
     @property
     def job_id(self) -> str:
+        cpv_key = _cpv_identity(self.harness, self.cpv_id)
         return (
-            f"test-patch/{self.benchmark_name}/{self.cpv_id}"
+            f"test-patch/{self.benchmark_name}/{cpv_key}"
             f"/{self.patch_id}/{self.test_mode}"
         )
 
@@ -821,7 +1016,7 @@ class PatchVariantTestJob(Job):
         Uses PatchVerificationEngine with force_rebuild=False to leverage the
         cached build from BuildPatchVariantJob. The engine handles:
         1. POV tests (via reproduce)
-        2. Unit tests (with proper source path, sanitizer, docker_image_tag)
+        2. Unit tests (with proper source path, sanitizer, image tag)
         """
         from crsbench.evaluation.verification.models import (
             PatchInfo,
@@ -829,20 +1024,29 @@ class PatchVariantTestJob(Job):
             UnitTestMode,
         )
         from crsbench.evaluation.verification.patch import PatchVerificationEngine
-        from crsbench.utils.run_helper import get_oss_fuzz_root
+        from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
         started_at = datetime.now()
+        engine = None
         try:
+            job_log_path = self._job_log_path(context)
+            stream_log_dir = job_log_path.parent if job_log_path else None
+            if stream_log_dir is not None:
+                stream_log_dir.mkdir(parents=True, exist_ok=True)
+
             # Get build data from upstream job
             build_data = context.shared.get(self.build_patch_job_id, {})
             variant_name = build_data.get("variant_name")
             sanitizer = build_data.get("sanitizer", "address")
-            inc_build_available = build_data.get("inc_build_available", False)
+            inc_build_available = build_data.get(
+                "inc_build_available",
+                self.use_inc_build,
+            )
 
             if not variant_name:
                 raise ValueError(f"No variant name from {self.build_patch_job_id}")
 
-            oss_fuzz_path = Path(get_oss_fuzz_root())
+            oss_fuzz_path = Path(ensure_oss_fuzz_root())
 
             # Create PatchVerificationEngine for verification
             # - force_rebuild=False: use cached build from BuildPatchVariantJob
@@ -863,7 +1067,7 @@ class PatchVariantTestJob(Job):
                 source_mode=self.source_mode,
                 build_only=False,  # Run full verification
                 verify_variants=True,  # Test all POV variants
-                log_dir=context.output_dir,
+                log_dir=stream_log_dir,
             )
 
             # Get first POV path for the engine (it will discover all variants)
@@ -902,6 +1106,7 @@ class PatchVariantTestJob(Job):
                 patch=patch_info,
                 harness=self.harness,
                 pov_path=pov_path,
+                allow_build=False,
             )
 
             # Map engine result to job result
@@ -987,6 +1192,9 @@ class PatchVariantTestJob(Job):
             )
             self._write_job_log(context, job_result)
             return job_result
+        finally:
+            if engine is not None:
+                engine.cleanup()
 
 
 @dataclass
@@ -1005,11 +1213,13 @@ class PatchPovTestJob(Job):
     pov_path: Optional[Path] = None  # Single pov_0 path
     patch_path_override: Optional[Path] = None
     build_patch_job_id: str = ""
+    use_inc_build: bool = True
     source_mode: str = "pkgs"
 
     @property
     def job_id(self) -> str:
-        return f"test-patch-pov/{self.benchmark_name}/{self.cpv_id}/{self.patch_id}"
+        cpv_key = _cpv_identity(self.harness, self.cpv_id)
+        return f"test-patch-pov/{self.benchmark_name}/{cpv_key}/{self.patch_id}"
 
     @property
     def job_type(self) -> str:
@@ -1026,10 +1236,16 @@ class PatchPovTestJob(Job):
             PatchVerificationStatus,
         )
         from crsbench.evaluation.verification.patch import PatchVerificationEngine
-        from crsbench.utils.run_helper import get_oss_fuzz_root
+        from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
         started_at = datetime.now()
+        engine = None
         try:
+            job_log_path = self._job_log_path(context)
+            stream_work_dir = job_log_path.parent if job_log_path else None
+            if stream_work_dir is not None:
+                stream_work_dir.mkdir(parents=True, exist_ok=True)
+
             if not self.pov_path:
                 finished_at = datetime.now()
                 job_result = JobResult(
@@ -1053,12 +1269,14 @@ class PatchPovTestJob(Job):
             build_data = context.shared.get(self.build_patch_job_id, {})
             variant_name = build_data.get("variant_name")
             sanitizer = build_data.get("sanitizer", "address")
-            inc_build_available = build_data.get("inc_build_available", False)
+            inc_build_available = build_data.get(
+                "inc_build_available", self.use_inc_build
+            )
 
             if not variant_name:
                 raise ValueError(f"No variant name from {self.build_patch_job_id}")
 
-            oss_fuzz_path = Path(get_oss_fuzz_root())
+            oss_fuzz_path = Path(ensure_oss_fuzz_root())
 
             # Create engine - only test pov_0, no variants
             engine = PatchVerificationEngine(
@@ -1071,7 +1289,8 @@ class PatchPovTestJob(Job):
                 build_only=False,
                 verify_variants=False,  # Only test pov_0
                 skip_unittest=True,
-                log_dir=context.output_dir,
+                work_dir=stream_work_dir,
+                log_dir=stream_work_dir,
             )
 
             # Find patch path from benchmark structure
@@ -1102,6 +1321,7 @@ class PatchPovTestJob(Job):
                 patch=patch_info,
                 harness=self.harness,
                 pov_path=self.pov_path,
+                allow_build=False,
             )
 
             # pov_0 passes if patch blocks the crash
@@ -1150,6 +1370,9 @@ class PatchPovTestJob(Job):
             )
             self._write_job_log(context, job_result)
             return job_result
+        finally:
+            if engine is not None:
+                engine.cleanup()
 
 
 @dataclass
@@ -1168,11 +1391,13 @@ class PatchVarTestJob(Job):
     pov_paths: list[Path] = field(default_factory=list)  # pov_1+ paths
     patch_path_override: Optional[Path] = None
     build_patch_job_id: str = ""
+    use_inc_build: bool = True
     source_mode: str = "pkgs"
 
     @property
     def job_id(self) -> str:
-        return f"test-patch-var/{self.benchmark_name}/{self.cpv_id}/{self.patch_id}"
+        cpv_key = _cpv_identity(self.harness, self.cpv_id)
+        return f"test-patch-var/{self.benchmark_name}/{cpv_key}/{self.patch_id}"
 
     @property
     def job_type(self) -> str:
@@ -1188,10 +1413,16 @@ class PatchVarTestJob(Job):
             PatchInfo,
         )
         from crsbench.evaluation.verification.patch import PatchVerificationEngine
-        from crsbench.utils.run_helper import get_oss_fuzz_root
+        from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
         started_at = datetime.now()
+        engine = None
         try:
+            job_log_path = self._job_log_path(context)
+            stream_work_dir = job_log_path.parent if job_log_path else None
+            if stream_work_dir is not None:
+                stream_work_dir.mkdir(parents=True, exist_ok=True)
+
             if not self.pov_paths:
                 finished_at = datetime.now()
                 job_result = JobResult(
@@ -1215,12 +1446,14 @@ class PatchVarTestJob(Job):
             build_data = context.shared.get(self.build_patch_job_id, {})
             variant_name = build_data.get("variant_name")
             sanitizer = build_data.get("sanitizer", "address")
-            inc_build_available = build_data.get("inc_build_available", False)
+            inc_build_available = build_data.get(
+                "inc_build_available", self.use_inc_build
+            )
 
             if not variant_name:
                 raise ValueError(f"No variant name from {self.build_patch_job_id}")
 
-            oss_fuzz_path = Path(get_oss_fuzz_root())
+            oss_fuzz_path = Path(ensure_oss_fuzz_root())
 
             # Find patch path from benchmark structure
             patch_path = self.patch_path_override
@@ -1261,15 +1494,21 @@ class PatchVarTestJob(Job):
                     build_only=False,
                     verify_variants=False,  # Test one at a time
                     skip_unittest=True,
-                    log_dir=context.output_dir,
+                    work_dir=stream_work_dir,
+                    log_dir=stream_work_dir,
                 )
 
-                result = engine.verify_patch(
-                    benchmark_path=self.benchmark_path,
-                    patch=patch_info,
-                    harness=self.harness,
-                    pov_path=pov_path,
-                )
+                try:
+                    result = engine.verify_patch(
+                        benchmark_path=self.benchmark_path,
+                        patch=patch_info,
+                        harness=self.harness,
+                        pov_path=pov_path,
+                        allow_build=False,
+                    )
+                finally:
+                    engine.cleanup()
+                    engine = None
 
                 if result.pov_test_passed:
                     var_passed += 1
@@ -1317,6 +1556,9 @@ class PatchVarTestJob(Job):
             )
             self._write_job_log(context, job_result)
             return job_result
+        finally:
+            if engine is not None:
+                engine.cleanup()
 
 
 @dataclass
@@ -1336,12 +1578,14 @@ class PatchUnitTestJob(Job):
     test_mode: str = "FULL"  # FULL or RTS
     patch_path_override: Optional[Path] = None
     build_patch_job_id: str = ""  # Dependency on build job
+    use_inc_build: bool = True
     source_mode: str = "pkgs"
 
     @property
     def job_id(self) -> str:
+        cpv_key = _cpv_identity(self.harness, self.cpv_id)
         return (
-            f"test-patch-unittest/{self.benchmark_name}/{self.cpv_id}"
+            f"test-patch-unittest/{self.benchmark_name}/{cpv_key}"
             f"/{self.patch_id}/{self.test_mode}"
         )
 
@@ -1362,20 +1606,28 @@ class PatchUnitTestJob(Job):
             UnitTestMode,
         )
         from crsbench.evaluation.verification.patch import PatchVerificationEngine
-        from crsbench.utils.run_helper import get_oss_fuzz_root
+        from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
         started_at = datetime.now()
+        engine = None
         try:
+            job_log_path = self._job_log_path(context)
+            stream_work_dir = job_log_path.parent if job_log_path else None
+            if stream_work_dir is not None:
+                stream_work_dir.mkdir(parents=True, exist_ok=True)
+
             # Get build info directly from build job
             build_data = context.shared.get(self.build_patch_job_id, {})
             variant_name = build_data.get("variant_name")
             sanitizer = build_data.get("sanitizer", "address")
-            inc_build_available = build_data.get("inc_build_available", False)
+            inc_build_available = build_data.get(
+                "inc_build_available", self.use_inc_build
+            )
 
             if not variant_name:
                 raise ValueError(f"No variant name from {self.build_patch_job_id}")
 
-            oss_fuzz_path = Path(get_oss_fuzz_root())
+            oss_fuzz_path = Path(ensure_oss_fuzz_root())
 
             # Create engine with skip_pov=True - only run unit tests
             test_mode = (
@@ -1392,7 +1644,8 @@ class PatchUnitTestJob(Job):
                 build_only=False,
                 verify_variants=False,  # Not needed for unit tests
                 skip_pov=True,  # Skip POV, only run unit tests
-                log_dir=context.output_dir,
+                work_dir=stream_work_dir,
+                log_dir=stream_work_dir,
             )
 
             # Find patch path from benchmark structure
@@ -1434,6 +1687,7 @@ class PatchUnitTestJob(Job):
                 patch=patch_info,
                 harness=self.harness,
                 pov_path=dummy_pov,
+                allow_build=False,
             )
 
             unit_tests_passed = result.unit_tests_passed
@@ -1481,6 +1735,9 @@ class PatchUnitTestJob(Job):
             )
             self._write_job_log(context, job_result)
             return job_result
+        finally:
+            if engine is not None:
+                engine.cleanup()
 
 
 @dataclass
@@ -1529,9 +1786,9 @@ class FlatCollectCoverageJob(Job):
         started_at = datetime.now()
         temp_corpus_dir: Path | None = None
         try:
-            from crsbench.utils.run_helper import get_oss_fuzz_root
+            from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
-            oss_fuzz_path = Path(get_oss_fuzz_root())
+            oss_fuzz_path = Path(ensure_oss_fuzz_root())
             engine = CoverageEngine(oss_fuzz_path, source_mode=self.source_mode)
 
             # Use adapter from shared build context for corpus discovery

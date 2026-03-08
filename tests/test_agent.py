@@ -12,6 +12,7 @@ from crsbench.migration.test_sh import (
     ShTestGenerator,
     generate_test_sh_for_benchmark,
 )
+from crsbench.utils.paths import get_crsbench_root
 from crsbench.utils.repo_manager import find_or_clone_project
 
 # ============================================================================
@@ -365,12 +366,10 @@ class TestGenerateTestShForBenchmark:
     reason="LiteLLM environment variables not set",
 )
 @pytest.mark.skipif(
-    not os.path.exists("oss-fuzz/infra/helper.py"),
-    reason="OSS-Fuzz submodule not available",
-)
-@pytest.mark.skipif(
-    not os.path.exists("benchmarks/apache-commons-compress-delta-01"),
-    reason="Real benchmarks not available",
+    not (
+        get_crsbench_root() / "third_party" / "oss-fuzz" / "infra" / "helper.py"
+    ).exists(),
+    reason="Managed OSS-Fuzz checkout not available",
 )
 class TestMCPIntegration:
     """Integration tests for MCP-enabled test.sh generation using real benchmarks.
@@ -378,7 +377,7 @@ class TestMCPIntegration:
     These tests are heavy - they require:
     - LiteLLM connection
     - Docker installed and running
-    - OSS-Fuzz submodule initialized
+    - Managed OSS-Fuzz checkout initialized
     - Real benchmarks directory
     - Sufficient disk space for Docker images
     """
@@ -409,7 +408,7 @@ class TestMCPIntegration:
 
         NOTE: This test requires git access to clone the project repository.
         """
-        benchmark_dir = f"benchmarks/{benchmark_name}"
+        benchmark_dir = str(get_crsbench_root() / "benchmarks" / benchmark_name)
 
         # Check if benchmark exists
         if not os.path.exists(benchmark_dir):
@@ -422,7 +421,7 @@ class TestMCPIntegration:
 
         project_dir = find_or_clone_project(
             benchmark_name=benchmark_name,
-            benchmarks_root="benchmarks",
+            benchmarks_root=str(get_crsbench_root() / "benchmarks"),
             repos_dir=repos_dir,
             verbose=True,
         )

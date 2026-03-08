@@ -43,6 +43,27 @@ class WorkerEntry(NamedTuple):
     cgroup_path: Optional[Path]
 
 
+def _safe_cwd() -> Path:
+    """Return current working directory, falling back to root on ENOENT."""
+    try:
+        return Path.cwd()
+    except OSError:
+        return Path("/")
+
+
+def _make_unique_cgroup_name(queue_label: str, worker_num: int, job_id: str) -> str:
+    """Return a unique cgroup name to avoid stale-name collisions.
+
+    Reusing short names like ``verify-4`` can collide with stale cgroups from a
+    previous interrupted run. Include timestamp + job suffix so each spawn gets
+    a fresh cgroup path.
+    """
+    job_suffix = "".join(c if c.isalnum() else "-" for c in job_id)[:24].strip("-")
+    if not job_suffix:
+        job_suffix = "job"
+    return f"{queue_label}-{worker_num}-{int(time.time() * 1000)}-{job_suffix}"
+
+
 def check_disk_space(path: Path) -> int:
     """Check available disk space at given path.
 
@@ -53,12 +74,12 @@ def check_disk_space(path: Path) -> int:
         Available disk space in bytes
     """
     # Walk up to find an existing directory (handles case where path doesn't exist yet)
-    check_path = path
+    check_path = path if path.is_absolute() else (_safe_cwd() / path)
     while not check_path.exists():
         parent = check_path.parent
         if parent == check_path:
-            # Reached root without finding existing dir, fall back to cwd
-            check_path = Path.cwd()
+            # Reached root without finding existing dir; always check filesystem root
+            check_path = Path("/")
             break
         check_path = parent
 
@@ -251,7 +272,7 @@ def run_ci_supervisor(
             if current_time - last_disk_check >= disk_check_interval:
                 filestore_path = Path(
                     os.environ.get("CRSBENCH_WORKER_EXPERIMENT_FILESTORE")
-                    or str(Path.cwd())
+                    or str(_safe_cwd())
                 )
                 available_bytes = check_disk_space(filestore_path)
                 last_disk_check = current_time
@@ -378,7 +399,9 @@ def run_ci_supervisor(
                         create_cgroup,
                     )
 
-                    cgroup_name = f"{queue_label}-{worker_num}"
+                    cgroup_name = _make_unique_cgroup_name(
+                        queue_label, worker_num, job.id
+                    )
                     cgroup_path = create_cgroup(
                         cgroup_base, cgroup_name, cpuset=cpuset_str
                     )
@@ -429,6 +452,15 @@ def run_ci_supervisor(
                 os.environ.pop("OSS_FUZZ_CPUSET_CPUS", None)
                 # Keep worker_num in used_worker_nums so it's skipped on
                 # retry (the stale cgroup won't go away by itself).
+                if cgroup_path is not None:
+                    try:
+                        from crsbench.utils.cgroup import cleanup_cgroup
+
+                        cleanup_cgroup(cgroup_path, force=True)
+                    except Exception as cleanup_err:
+                        logger.warning(
+                            f"Failed to cleanup cgroup after spawn failure: {cleanup_err}"
+                        )
                 if cpu_pool and cpus:
                     cpu_pool.release(cpus)
                 queue_obj.enqueue_job(job, at_front=True)
@@ -439,11 +471,16 @@ def run_ci_supervisor(
         logger.info("\nCI supervisor interrupted, terminating workers...")
         _terminate_all(build_active, cpu_pool)
         _terminate_all(verify_active, cpu_pool)
+        _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
         return 0
     except Exception as e:
         logger.error(f"CI supervisor error: {e}", exc_info=True)
+        _terminate_all(build_active, cpu_pool)
+        _terminate_all(verify_active, cpu_pool)
+        _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
         return 3
 
+    _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
     return 0
 
 
@@ -698,7 +735,7 @@ def run_multi_queue_supervisor(
             if current_time - last_disk_check >= disk_check_interval:
                 filestore_path = Path(
                     os.environ.get("CRSBENCH_WORKER_EXPERIMENT_FILESTORE")
-                    or str(Path.cwd())
+                    or str(_safe_cwd())
                 )
                 available_bytes = check_disk_space(filestore_path)
                 last_disk_check = current_time
@@ -823,7 +860,9 @@ def run_multi_queue_supervisor(
                         create_cgroup,
                     )
 
-                    cgroup_name = f"{queue_label}-{worker_num}"
+                    cgroup_name = _make_unique_cgroup_name(
+                        queue_label, worker_num, job.id
+                    )
                     cgroup_path = create_cgroup(
                         cgroup_base, cgroup_name, cpuset=cpuset_str
                     )
@@ -869,6 +908,15 @@ def run_multi_queue_supervisor(
                 )
                 os.environ.pop("OSS_FUZZ_CGROUP_PARENT", None)
                 os.environ.pop("OSS_FUZZ_CPUSET_CPUS", None)
+                if cgroup_path is not None:
+                    try:
+                        from crsbench.utils.cgroup import cleanup_cgroup
+
+                        cleanup_cgroup(cgroup_path, force=True)
+                    except Exception as cleanup_err:
+                        logger.warning(
+                            f"Failed to cleanup cgroup after spawn failure: {cleanup_err}"
+                        )
                 if cpu_pool and cpus:
                     cpu_pool.release(cpus)
                 queue_obj.enqueue_job(job, at_front=True)
@@ -879,11 +927,16 @@ def run_multi_queue_supervisor(
         logger.info("\nMulti-queue supervisor interrupted, terminating workers...")
         _terminate_all(build_active, cpu_pool)
         _terminate_all(verify_active, cpu_pool)
+        _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
         return 0
     except Exception as e:
         logger.error(f"Multi-queue supervisor error: {e}", exc_info=True)
+        _terminate_all(build_active, cpu_pool)
+        _terminate_all(verify_active, cpu_pool)
+        _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
         return 3
 
+    _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
     return 0
 
 
@@ -1004,23 +1057,65 @@ def _sweep_deferred_cgroups(deferred: list[Path]) -> None:
     deferred.extend(remaining)
 
 
+def _force_cleanup_deferred_cgroups(deferred: list[Path]) -> None:
+    """Force-remove any deferred cgroups during supervisor shutdown."""
+    if not deferred:
+        return
+    from crsbench.utils.cgroup import cleanup_cgroup
+
+    remaining: list[Path] = []
+    for cg_path in deferred:
+        try:
+            cleaned = cleanup_cgroup(cg_path, force=True)
+            if not cleaned:
+                logger.warning(
+                    f"Deferred cgroup cleanup reported failure for {cg_path}"
+                )
+                remaining.append(cg_path)
+        except Exception as e:
+            logger.warning(f"Deferred cgroup cleanup failed for {cg_path}: {e}")
+            remaining.append(cg_path)
+    deferred.clear()
+    deferred.extend(remaining)
+
+
 def _terminate_all(
     active: dict[int, WorkerEntry],
     cpu_pool: Optional[object],
 ) -> None:
     """Terminate and clean up all active workers."""
     for entry in active.values():
-        if entry.process.is_alive():
-            entry.process.terminate()
+        try:
+            if entry.process.is_alive():
+                entry.process.terminate()
+        except Exception as e:
+            logger.warning(f"Failed to terminate worker process: {e}")
     for pid, entry in active.items():
-        entry.process.join(timeout=5)
-        if entry.process.is_alive():
-            logger.warning(f"Force killing worker (PID: {pid})")
-            entry.process.kill()
-            entry.process.join()
+        try:
+            entry.process.join(timeout=5)
+            if entry.process.is_alive():
+                logger.warning(f"Force killing worker (PID: {pid})")
+                entry.process.kill()
+                entry.process.join()
+        except Exception as e:
+            logger.warning(f"Failed joining/killing worker (PID: {pid}): {e}")
         if cpu_pool and entry.cpus:
-            cpu_pool.release(entry.cpus)  # type: ignore[union-attr]
+            try:
+                cpu_pool.release(entry.cpus)  # type: ignore[union-attr]
+            except Exception as e:
+                logger.warning(f"Failed to release CPUs {entry.cpus}: {e}")
         if entry.cgroup_path:
             from crsbench.utils.cgroup import cleanup_cgroup
 
-            cleanup_cgroup(entry.cgroup_path, force=True)
+            try:
+                cleaned = cleanup_cgroup(entry.cgroup_path, force=True)
+                if not cleaned:
+                    logger.warning(
+                        "Failed to cleanup worker cgroup during shutdown: "
+                        f"{entry.cgroup_path}"
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Exception during worker cgroup cleanup for "
+                    f"{entry.cgroup_path}: {e}"
+                )

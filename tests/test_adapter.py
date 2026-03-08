@@ -95,7 +95,7 @@ class TestOssCrsAdapter:
         )
         assert adapter._oss_crs_cmd == "/usr/local/bin/oss-crs"
         assert adapter._oss_crs_infra_cpuset == "0-7"
-        assert adapter._oss_crs_infra_memory == "16G"
+        assert adapter._infra_mem_limit == "16G"
 
     def test_run_requires_build_first(self) -> None:
         adapter = OssCrsAdapter(**FACTORY_ARGS, mode="bug-finding")

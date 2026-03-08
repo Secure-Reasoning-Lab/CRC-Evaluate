@@ -206,7 +206,7 @@ class TestDistributedFlagParsing:
 
     @pytest.mark.parametrize(
         "subcommand",
-        ["pov", "patch", "coverage", "rts", "all"],
+        ["pov", "patch", "coverage", "all"],
     )
     def test_distributed_default_false(self, subcommand):
         parser = self._make_parser()
@@ -215,7 +215,7 @@ class TestDistributedFlagParsing:
 
     @pytest.mark.parametrize(
         "subcommand",
-        ["pov", "patch", "coverage", "rts", "all"],
+        ["pov", "patch", "coverage", "all"],
     )
     def test_distributed_flag_sets_true(self, subcommand):
         parser = self._make_parser()

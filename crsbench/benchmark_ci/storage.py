@@ -136,7 +136,7 @@ def measure_benchmark_docker_size(benchmark_name: str, prefix: str) -> int:
 
     Args:
         benchmark_name: Benchmark name to match
-        prefix: Docker image prefix (e.g., "aixcc-afc")
+        prefix: Docker image prefix (e.g., "crsbench")
 
     Returns:
         Total size in bytes for unique images
@@ -202,7 +202,7 @@ def collect_benchmark_storage(
     benchmark_path: Path,
     oss_fuzz_path: Path,
     *,
-    project_image_prefix: str = "aixcc-afc",
+    project_image_prefix: str = "crsbench",
 ) -> StorageMetrics:
     """Collect all storage metrics for a benchmark.
 
@@ -215,7 +215,7 @@ def collect_benchmark_storage(
         benchmark_name: Name of the benchmark
         benchmark_path: Path to benchmark directory
         oss_fuzz_path: Path to oss-fuzz directory
-        project_image_prefix: Docker image prefix (default: "aixcc-afc")
+        project_image_prefix: Docker image prefix (default: "crsbench")
 
     Returns:
         StorageMetrics with all measurements

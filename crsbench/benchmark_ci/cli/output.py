@@ -304,7 +304,6 @@ def _add_rts_rows(table: Table, summary: ValidationSummary) -> None:
 def _add_all_columns(table: Table) -> None:
     """Add columns for ALL check mode (single build mode)."""
     table.add_column("inc", justify="center")
-    table.add_column("rts", justify="center")
     table.add_column("Fmt", justify="center")
     table.add_column("V:Bld", justify="center")  # Variant build (shared)
     table.add_column("V:POV", justify="center")  # POV verification (pov_0)
@@ -313,7 +312,6 @@ def _add_all_columns(table: Table) -> None:
     table.add_column("P:POV", justify="center")  # Patch POV test (pov_0)
     table.add_column("P:VAR", justify="center")  # Patch POV variants (pov_1+)
     table.add_column("P:UT", justify="center")
-    table.add_column("P:RTS", justify="center")
     table.add_column("Cov", justify="center")
     table.add_column("Storage", justify="right")
     table.add_column("Total", justify="center")
@@ -323,11 +321,9 @@ def _add_all_rows(table: Table, summary: ValidationSummary) -> None:
     """Add rows for ALL check mode (single build mode)."""
     for r in summary.results:
         inc_marker = "[green]Y[/green]" if r.supports_inc_build else "[dim]-[/dim]"
-        rts_mode = r.rts_mode[:6] if r.rts_mode else "[dim]-[/dim]"
         table.add_row(
             r.benchmark,
             inc_marker,
-            rts_mode,
             format_status(r.format_check),
             format_status(r.pov_build_check),  # V:Bld - variant builds
             format_status(r.pov_pov_check),  # V:POV - pov_0 verification
@@ -336,12 +332,11 @@ def _add_all_rows(table: Table, summary: ValidationSummary) -> None:
             format_status(r.patch_pov_check),  # P:POV - pov_0 test
             format_var_status(r.patch_var_check),  # P:VAR - pov_1+ variants
             format_status(r.patch_unittest_check),
-            format_status(r.patch_rts_check),
             format_status(r.coverage_check),
             _format_storage(r),
             _format_total_status(r.total_status),
         )
-        _add_detail_rows(table, r, 14)
+        _add_detail_rows(table, r, 12)
 
 
 def print_results_table(
@@ -621,19 +616,17 @@ def write_summary_csv(
     else:
         # ALL mode — split POV and patch columns for detailed analysis
         f.write(
-            "benchmark,inc,rts,fmt,"
+            "benchmark,inc,fmt,"
             "pov_build,pov_build_s,pov_pov,pov_pov_s,pov_var,pov_var_s,"
             "patch_build,patch_pov,patch_var,patch_unittest,"
             "patch_build_s,patch_pov_s,patch_var_s,patch_unittest_s,"
-            "patch_rts,patch_rts_s,"
             "cov,cov_verify_s,"
             "total,total_time_s,storage_bytes\n"
         )
         for r in summary.results:
             inc = "Y" if r.supports_inc_build else "N"
-            rts = r.rts_mode or ""
             f.write(
-                f"{r.benchmark},{inc},{rts},"
+                f"{r.benchmark},{inc},"
                 f"{_plain_status(r.format_check)},"
                 f"{_plain_status(r.pov_build_check)},"
                 f"{_check_build_time(r.pov_build_check):.1f},"
@@ -649,8 +642,6 @@ def write_summary_csv(
                 f"{_check_verify_time(r.patch_pov_check):.1f},"
                 f"{_check_verify_time(r.patch_var_check):.1f},"
                 f"{_check_verify_time(r.patch_unittest_check):.1f},"
-                f"{_plain_status(r.patch_rts_check)},"
-                f"{_check_verify_time(r.patch_rts_check):.1f},"
                 f"{_plain_status(r.coverage_check)},"
                 f"{_check_verify_time(r.coverage_check):.1f},"
                 f"{r.total_status.value.upper()},{r.total_time:.1f},{r.storage_bytes}\n"

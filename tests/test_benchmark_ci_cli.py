@@ -461,7 +461,6 @@ class TestPrintResultsTable:
         assert "P:POV" in captured.out
         assert "P:VAR" in captured.out  # Patch POV variants (pov_1+)
         assert "P:UT" in captured.out
-        assert "P:RTS" in captured.out
         assert "Cov" in captured.out
 
     def test_no_color_strips_markup(self, capsys):

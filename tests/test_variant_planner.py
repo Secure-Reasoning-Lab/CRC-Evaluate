@@ -11,7 +11,9 @@ from crsbench.executor.variant_planner import VariantPlanner
 
 @pytest.fixture
 def planner() -> VariantPlanner:
-    return VariantPlanner(oss_fuzz_path=Path("oss-fuzz"), source_mode="pkgs")
+    return VariantPlanner(
+        oss_fuzz_path=Path("third_party/oss-fuzz"), source_mode="pkgs"
+    )
 
 
 def _mock_adapter(

@@ -7,7 +7,7 @@ jobs from the Redis verify queue.
 Three modes:
   - Default (no config, no --ci): discover experiments from Redis registry
   - --experiment-config: focus on a specific experiment
-  - --ci: standalone CI worker on crsbench_ci_build/verify queues
+  - --ci: compatibility alias that runs the unified evaluator path on legacy CI queues
 """
 
 import argparse
@@ -49,7 +49,7 @@ Examples:
   # Focus on a specific experiment
   %(prog)s --experiment-config experiment-config.yaml --build-jobs 4
 
-  # CI mode (standalone)
+  # CI compatibility alias (legacy queues)
   %(prog)s --ci --build-jobs 4
         """,
     )
@@ -66,7 +66,7 @@ Examples:
     evaluator_parser.add_argument(
         "--ci",
         action="store_true",
-        help="Run in CI mode (standalone CI worker, no experiment config needed)",
+        help="Compatibility alias for legacy CI queues via unified evaluator mode",
     )
 
     evaluator_parser.add_argument(
@@ -168,7 +168,8 @@ def run_evaluator(args: argparse.Namespace) -> int:
 
     Without ``--experiment-config`` or ``--ci``, discovers experiments from
     the Redis registry.  With ``--experiment-config``, focuses on that
-    experiment.  With ``--ci``, runs as a standalone CI worker.
+    experiment.  With ``--ci``, runs the unified evaluator path against
+    legacy CI queues for backward compatibility.
 
     Args:
         args: Parsed command line arguments

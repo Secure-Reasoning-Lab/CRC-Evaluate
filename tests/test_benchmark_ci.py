@@ -208,6 +208,18 @@ class TestBenchmarkValidationResult:
         )
         assert result.total_status == CheckStatus.ERROR
 
+    def test_total_status_includes_split_patch_checks(self) -> None:
+        """Test total_status includes split patch checks used by ci patch/all flows."""
+        result = BenchmarkValidationResult(
+            benchmark="test-bench",
+            benchmark_path=Path("/tmp/test"),
+            patch_build_check=CheckResult(status=CheckStatus.PASS, time_seconds=1.0),
+            patch_pov_check=CheckResult(status=CheckStatus.FAIL, time_seconds=2.0),
+            patch_var_check=CheckResult(status=CheckStatus.PASS, time_seconds=3.0),
+            patch_unittest_check=CheckResult(status=CheckStatus.PASS, time_seconds=4.0),
+        )
+        assert result.total_status == CheckStatus.FAIL
+
     def test_total_time_includes_pov_build_check(self) -> None:
         """Test total_time includes pov_build_check time."""
         result = BenchmarkValidationResult(
@@ -216,6 +228,75 @@ class TestBenchmarkValidationResult:
             pov_build_check=CheckResult(status=CheckStatus.PASS, time_seconds=15.0),
         )
         assert result.total_time == 15.0
+
+    def test_total_time_includes_split_checks(self) -> None:
+        """Test total_time includes split POV/Patch check times."""
+        result = BenchmarkValidationResult(
+            benchmark="test-bench",
+            benchmark_path=Path("/tmp/test"),
+            pov_build_check=CheckResult(status=CheckStatus.PASS, time_seconds=1.0),
+            pov_pov_check=CheckResult(status=CheckStatus.PASS, time_seconds=2.0),
+            pov_var_check=CheckResult(status=CheckStatus.PASS, time_seconds=3.0),
+            patch_build_check=CheckResult(status=CheckStatus.PASS, time_seconds=4.0),
+            patch_pov_check=CheckResult(status=CheckStatus.PASS, time_seconds=5.0),
+            patch_var_check=CheckResult(status=CheckStatus.PASS, time_seconds=6.0),
+            patch_unittest_check=CheckResult(status=CheckStatus.PASS, time_seconds=7.0),
+        )
+        assert result.total_time == 28.0
+
+    def test_total_status_prefers_combined_when_split_is_partial(self) -> None:
+        """Partial split hydration must not hide combined failures."""
+        result = BenchmarkValidationResult(
+            benchmark="test-bench",
+            benchmark_path=Path("/tmp/test"),
+            pov_check=CheckResult(status=CheckStatus.FAIL, time_seconds=10.0),
+            pov_build_check=CheckResult(status=CheckStatus.PASS, time_seconds=1.0),
+            patch_check=CheckResult(status=CheckStatus.PASS, time_seconds=5.0),
+            patch_build_check=CheckResult(status=CheckStatus.PASS, time_seconds=1.0),
+        )
+        assert result.total_status == CheckStatus.FAIL
+
+    def test_total_time_prefers_combined_when_split_is_partial(self) -> None:
+        """Partial split hydration should keep combined timings authoritative."""
+        result = BenchmarkValidationResult(
+            benchmark="test-bench",
+            benchmark_path=Path("/tmp/test"),
+            pov_check=CheckResult(status=CheckStatus.PASS, time_seconds=10.0),
+            pov_build_check=CheckResult(status=CheckStatus.PASS, time_seconds=1.0),
+            patch_check=CheckResult(status=CheckStatus.PASS, time_seconds=7.0),
+            patch_build_check=CheckResult(status=CheckStatus.PASS, time_seconds=2.0),
+        )
+        assert result.total_time == 17.0
+
+    def test_total_status_prefers_combined_when_variant_split_missing(self) -> None:
+        """Missing split VAR fields should not override combined FAIL checks."""
+        result = BenchmarkValidationResult(
+            benchmark="test-bench",
+            benchmark_path=Path("/tmp/test"),
+            pov_check=CheckResult(status=CheckStatus.FAIL, time_seconds=10.0),
+            pov_build_check=CheckResult(status=CheckStatus.PASS, time_seconds=1.0),
+            pov_pov_check=CheckResult(status=CheckStatus.PASS, time_seconds=2.0),
+            # pov_var_check intentionally missing
+            patch_check=CheckResult(status=CheckStatus.FAIL, time_seconds=8.0),
+            patch_build_check=CheckResult(status=CheckStatus.PASS, time_seconds=1.0),
+            patch_pov_check=CheckResult(status=CheckStatus.PASS, time_seconds=2.0),
+            patch_unittest_check=CheckResult(status=CheckStatus.PASS, time_seconds=3.0),
+            # patch_var_check intentionally missing
+        )
+        assert result.total_status == CheckStatus.FAIL
+
+    def test_total_status_prefers_complete_split_over_combined_patch_fail(self) -> None:
+        """Complete split checks should override stale combined legacy FAIL."""
+        result = BenchmarkValidationResult(
+            benchmark="test-bench",
+            benchmark_path=Path("/tmp/test"),
+            patch_check=CheckResult(status=CheckStatus.FAIL, time_seconds=8.0),
+            patch_build_check=CheckResult(status=CheckStatus.PASS, time_seconds=1.0),
+            patch_pov_check=CheckResult(status=CheckStatus.PASS, time_seconds=2.0),
+            patch_var_check=CheckResult(status=CheckStatus.PASS, time_seconds=3.0),
+            patch_unittest_check=CheckResult(status=CheckStatus.PASS, time_seconds=4.0),
+        )
+        assert result.total_status == CheckStatus.PASS
 
     def test_total_time(self) -> None:
         """Test total_time calculation."""

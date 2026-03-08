@@ -20,6 +20,10 @@ Local test setup and execution guidance.
 
 - Validate benchmark format:
   - `crsbench benchmark validate benchmarks/<benchmark-name>`
+- Enforce benchmark path portability policy:
+  - `uv run python scripts/ci-tests/check_benchmark_paths.py`
+  - Benchmark scripts must use `SRC`/`OUT`/`WORK` and must not use
+    legacy hard-coded roots like `/built-src` or `/test-src`.
 - Run full benchmark CI checks:
   - `crsbench benchmark ci all benchmarks/<benchmark-name>`
 - Build benchmark package:

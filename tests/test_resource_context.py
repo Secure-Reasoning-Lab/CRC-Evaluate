@@ -230,6 +230,64 @@ class TestResourceContext:
         # After exit, env_vars dict should be empty
         assert ctx.env_vars == {}
 
+    def test_cleanup_cgroup_failure_is_logged_not_raised(self) -> None:
+        """Cleanup failure should not raise out of __exit__."""
+        from crsbench.evaluation.resource_context import ResourceContext
+
+        with (
+            patch("crsbench.utils.cgroup.run_preflight_checks") as mock_preflight,
+            patch("crsbench.utils.cgroup.setup_cgroup_hierarchy"),
+            patch("crsbench.utils.cgroup.create_cgroup") as mock_create,
+            patch("crsbench.utils.cgroup.cgroup_path_for_docker") as mock_docker_path,
+            patch(
+                "crsbench.utils.cgroup.cleanup_cgroup",
+                side_effect=RuntimeError("busy"),
+            ),
+            patch("crsbench.evaluation.resource_context.logger") as mock_logger,
+        ):
+            mock_preflight.return_value = Path("/sys/fs/cgroup/crsbench")
+            mock_create.return_value = Path("/sys/fs/cgroup/crsbench/fail-cleanup")
+            mock_docker_path.return_value = "crsbench/fail-cleanup"
+
+            with ResourceContext(
+                trial_name="fail-cleanup",
+                cpuset="0-1",
+                use_cgroups=True,
+            ):
+                pass
+
+        mock_logger.warning.assert_called()
+        assert "OSS_FUZZ_CGROUP_PARENT" not in os.environ
+        assert "OSS_FUZZ_CPUSET_CPUS" not in os.environ
+
+    def test_cleanup_cgroup_false_result_logs_warning(self) -> None:
+        """False return from cleanup should log warning and continue."""
+        from crsbench.evaluation.resource_context import ResourceContext
+
+        with (
+            patch("crsbench.utils.cgroup.run_preflight_checks") as mock_preflight,
+            patch("crsbench.utils.cgroup.setup_cgroup_hierarchy"),
+            patch("crsbench.utils.cgroup.create_cgroup") as mock_create,
+            patch("crsbench.utils.cgroup.cgroup_path_for_docker") as mock_docker_path,
+            patch("crsbench.utils.cgroup.cleanup_cgroup", return_value=False),
+            patch("crsbench.evaluation.resource_context.logger") as mock_logger,
+        ):
+            mock_preflight.return_value = Path("/sys/fs/cgroup/crsbench")
+            mock_create.return_value = Path("/sys/fs/cgroup/crsbench/false-cleanup")
+            mock_docker_path.return_value = "crsbench/false-cleanup"
+
+            with ResourceContext(
+                trial_name="false-cleanup",
+                cpuset="0-1",
+                use_cgroups=True,
+            ):
+                pass
+
+        assert any(
+            "reported failure" in str(call)
+            for call in mock_logger.warning.call_args_list
+        )
+
 
 # ---------------------------------------------------------------------------
 # Compose adapter LLM integration tests

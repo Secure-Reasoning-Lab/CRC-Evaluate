@@ -24,6 +24,15 @@ Canonical variable index: `docs/environment-variables.md`
    OPENAI_API_KEY=sk-your-openai-key  # Or another LLM provider
    ```
 
+4. **Ensure managed OSS-Fuzz checkout is prepared:**
+   ```bash
+   crsbench prepare
+   ```
+   This fetches sparse `third_party/oss-fuzz`, applies local helper patches
+   from `third_party/patches/` when present, pulls OSS-Fuzz base images, and
+   pre-pulls AIXCC base images used by CRSBench (`base-builder`, `base-runner`,
+   and `base-builder-jvm` at `v1.3.0`).
+
 ### Canonical LiteLLM Runtime Contract
 
 CRSBench prefers canonical `CRSBENCH_LLM_*` variables as the source of truth:
@@ -282,7 +291,6 @@ At least **one** provider key is required:
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `PROJECT_REPOS_DIR` | No | `./repos` | Directory with cloned repositories |
-| `OSS_FUZZ_PATH` | No | `./oss-fuzz` | Path to OSS-Fuzz installation |
 
 ### Redis/Valkey Configuration
 

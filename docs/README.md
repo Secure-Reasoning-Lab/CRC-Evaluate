@@ -4,6 +4,7 @@ This directory is the canonical entry point for CRSBench documentation.
 
 ## Start Here
 
+- Bootstrap prerequisites first: `uv sync && crsbench prepare`
 - [Environment Setup](./environment-setup.md)
 - [Environment Variables](./environment-variables.md)
 - [Experiment Workflow](./experiment-workflow.md)
@@ -26,6 +27,7 @@ This directory is the canonical entry point for CRSBench documentation.
 ## Runtime and Operations
 
 - [OSS-CRS Interface](./ossfuzz-crs-interface.md)
+- [Evaluator and CI Result Semantics](./design/evaluation/evaluation.md#distributed-evaluator-and-ci-result-semantics)
 - [Logger Usage Guide](./logger-usage-guide.md)
 - [Seed Corpus](./seed-corpus.md)
 - [Snapshot Examples](./snapshot-examples.md)
@@ -37,6 +39,7 @@ This directory is the canonical entry point for CRSBench documentation.
 - [Design Index](./design/README.md)
 - [Architecture Overview](./design/architecture.md)
 - [Distributed Execution](./design/distributed/)
+- [Configless Runtime](./design/distributed/configless-runtime.md)
 - [Evaluation](./design/evaluation/)
 - [Dataset](./design/dataset/dataset.md)
 - [Validation](./design/validation/validation.md)
@@ -61,4 +64,4 @@ This directory is the canonical entry point for CRSBench documentation.
 ## Integrated Upstream Projects
 
 - [oss-crs/README.md](../oss-crs/README.md)
-- [oss-fuzz/README.md](../oss-fuzz/README.md)
+- [third_party/oss-fuzz/README.md](../third_party/oss-fuzz/README.md)
