@@ -8,6 +8,7 @@ requiring a Redis connection.
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from crsbench.builder.types import BenchmarkMode
 from crsbench.distributed.patch_evaluator_jobs import (
     EmbeddedPatch,
     PatchBuildResult,
@@ -16,6 +17,8 @@ from crsbench.distributed.patch_evaluator_jobs import (
     _cleanup_patch_variant_artifacts,
     _collect_patch_verify_logs,
     _resolve_patch_job_output_dir,
+    _resolve_patch_variant_name,
+    execute_patch_build,
     execute_patch_verify,
 )
 
@@ -90,6 +93,7 @@ class TestPatchJobPayload:
             verify_variants=True,
             test_mode="RTS",
             use_inc_build=True,
+            build_patch_job_id="rq-build-123",
             enqueued_at=1700000000.0,
         )
 
@@ -108,10 +112,11 @@ class TestPatchJobPayload:
         assert restored.verify_variants is True
         assert restored.test_mode == "RTS"
         assert restored.use_inc_build is True
+        assert restored.build_patch_job_id == "rq-build-123"
         assert restored.enqueued_at == 1700000000.0
 
-    def test_patch_job_payload_use_inc_build_defaults_false(self) -> None:
-        """Missing use_inc_build in payload should default to False."""
+    def test_patch_job_payload_use_inc_build_defaults_true(self) -> None:
+        """Missing use_inc_build in payload should default to True."""
         payload = {
             "experiment_name": "exp",
             "trial_id": "trial-1",
@@ -127,7 +132,7 @@ class TestPatchJobPayload:
 
         restored = PatchJobPayload.from_dict(payload)
         assert restored.test_mode == "FULL"
-        assert restored.use_inc_build is False
+        assert restored.use_inc_build is True
 
 
 class TestPatchBuildResult:
@@ -145,6 +150,7 @@ class TestPatchBuildResult:
             variant_name="mock-bench-cpv_1-patch_0-address",
             error=None,
             completed_at=1700000100.0,
+            logs={"build.stderr": "compile failed"},
         )
 
         d = result.to_dict()
@@ -159,6 +165,71 @@ class TestPatchBuildResult:
         assert restored.variant_name == "mock-bench-cpv_1-patch_0-address"
         assert restored.error is None
         assert restored.completed_at == 1700000100.0
+        assert restored.logs == {"build.stderr": "compile failed"}
+
+
+class TestExecutePatchBuild:
+    """Tests for execute_patch_build log propagation on build failures."""
+
+    @patch("crsbench.distributed.patch_evaluator_jobs.resolve_benchmark_path")
+    @patch("crsbench.distributed.patch_evaluator_jobs.get_evaluator_benchmarks_root")
+    @patch("crsbench.distributed.ci_jobs.serialize_ci_job")
+    @patch("crsbench.distributed.ci_jobs.execute_ci_job")
+    @patch("crsbench.distributed.patch_evaluator_jobs.tempfile.mkdtemp")
+    def test_execute_patch_build_includes_stream_logs_on_failure(
+        self,
+        mock_mkdtemp: MagicMock,
+        mock_execute_ci_job: MagicMock,
+        mock_serialize_ci_job: MagicMock,
+        mock_get_benchmarks_root: MagicMock,
+        mock_resolve_benchmark_path: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Failed patch builds should return collected build stdout/stderr snippets."""
+        benchmark_root = tmp_path / "benchmarks"
+        benchmark_path = benchmark_root / "bench"
+        benchmark_path.mkdir(parents=True)
+        mock_get_benchmarks_root.return_value = benchmark_root
+        mock_resolve_benchmark_path.return_value = benchmark_path
+
+        build_output_dir = tmp_path / "build-output"
+        build_output_dir.mkdir(parents=True)
+        mock_mkdtemp.return_value = str(build_output_dir)
+
+        def _fake_execute_ci_job(params: dict) -> dict:
+            logs_dir = Path(params["output_dir"]) / "bench" / "build"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            (logs_dir / "build.stderr").write_text("compile error detail")
+            (logs_dir / "build.stdout").write_text("build stdout")
+            return {
+                "success": False,
+                "error": "Build failed",
+                "details": {"variant_name": "bench-asan-patched"},
+            }
+
+        mock_execute_ci_job.side_effect = _fake_execute_ci_job
+        mock_serialize_ci_job.return_value = {"_job_class": "BuildPatchVariantJob"}
+
+        payload = PatchJobPayload(
+            experiment_name="exp",
+            trial_id="trial-1",
+            benchmark="bench",
+            harness="h0",
+            cpv_id="cpv_0",
+            patch=EmbeddedPatch(
+                patch_id="patch_0",
+                pov_id="cpv_0",
+                patch_content_b64="ZHVtbXk=",  # dummy
+            ),
+        )
+
+        result = execute_patch_build(payload.to_dict())
+
+        assert result["success"] is False
+        assert result["error"] == "Build failed"
+        assert isinstance(result.get("logs"), dict)
+        assert result["logs"].get("bench/build/build.stderr") == "compile error detail"
+        assert result["logs"].get("bench/build/build.stdout") == "build stdout"
 
 
 class TestPatchVerifyResult:
@@ -195,7 +266,50 @@ class TestPatchVerifyResult:
         assert restored.security_verdict == "PASS"
         assert restored.details == "Patch passes both POV and unit tests"
         assert restored.error is None
-        assert restored.completed_at == 1700000200.0
+
+
+class TestPatchVariantResolution:
+    """Tests for patched variant name resolution in distributed cleanup."""
+
+    @patch("crsbench.evaluation.verification.pov.VerificationEngine")
+    def test_resolve_variant_prefers_cpv_sanitizer(
+        self,
+        mock_engine_cls: MagicMock,
+    ) -> None:
+        """Cleanup variant resolution should prefer CPV sanitizer metadata."""
+        adapter = MagicMock()
+        adapter.get_mode.return_value = BenchmarkMode.DELTA
+        adapter.lang = "c"
+        adapter.get_ref_commit.return_value = "a" * 40
+        adapter.get_base_commit.return_value = "b" * 40
+        adapter.main_repo = "https://example.com/repo.git"
+        adapter.get_cpv_sanitizer.return_value = "address"
+
+        mock_engine = MagicMock()
+        mock_engine.load_adapter.return_value = adapter
+        mock_engine_cls.return_value = mock_engine
+
+        payload = PatchJobPayload(
+            experiment_name="exp",
+            trial_id="trial-1",
+            benchmark="afc-dav1d-full-01",
+            harness="h0",
+            cpv_id="cpv_0",
+            patch=EmbeddedPatch(
+                patch_id="patch-1",
+                pov_id="cpv_0",
+                patch_content_b64="ZHVtbXk=",
+            ),
+            sanitizer="undefined",
+            source_mode="pkgs",
+        )
+        with patch(
+            "crsbench.utils.run_helper.ensure_oss_fuzz_root",
+            return_value="/tmp/oss-fuzz",
+        ):
+            variant = _resolve_patch_variant_name(payload, Path("/tmp/bench"))
+        assert variant is not None
+        assert "-asan-" in variant
 
 
 class TestInitializePatchQueues:
@@ -216,7 +330,12 @@ class TestEnqueuePatchJobs:
 
     def test_enqueue_patch_jobs_creates_build_and_verify(self, tmp_path: Path) -> None:
         """Enqueue a single patch: verify build and verify jobs created."""
-        from crsbench.distributed.patch_queue import enqueue_patch_jobs
+        from crsbench.distributed.patch_queue import (
+            _make_patch_build_rq_job_id,
+            _make_patch_verify_rq_job_id,
+            _patch_content_hash,
+            enqueue_patch_jobs,
+        )
 
         # Create a mock patch file
         patch_file = tmp_path / "patch.diff"
@@ -244,6 +363,7 @@ class TestEnqueuePatchJobs:
             "mock-bench",
             "harness_0",
             patches,
+            sanitizer="undefined",
             verify_variants=True,
         )
 
@@ -255,8 +375,22 @@ class TestEnqueuePatchJobs:
             == "crsbench.distributed.patch_evaluator_jobs.execute_patch_build"
         )
         build_payload = build_call_args[0][1]
-        assert build_payload["use_inc_build"] is False
+        patch_hash = _patch_content_hash(build_payload["patch"]["patch_content_b64"])
+        assert build_payload["use_inc_build"] is True
         assert build_payload["test_mode"] == "FULL"
+        assert build_payload["sanitizer"] == "undefined"
+        assert build_call_args[1]["job_id"] == _make_patch_build_rq_job_id(
+            experiment_name="test-exp",
+            trial_id="trial-1",
+            benchmark="mock-bench",
+            harness="harness_0",
+            cpv_id="cpv_1",
+            patch_id="patch_0",
+            sanitizer="undefined",
+            source_mode="pkgs",
+            use_inc_build=True,
+            patch_content_hash=patch_hash,
+        )
 
         # Verify verify queue called with execute_patch_verify and depends_on
         assert verify_queue.enqueue.call_count == 1
@@ -269,10 +403,129 @@ class TestEnqueuePatchJobs:
         verify_payload = verify_call_args[0][1]
         assert verify_payload["verify_variants"] is True
         assert verify_payload["test_mode"] == "FULL"
-        assert verify_payload["use_inc_build"] is False
+        assert verify_payload["use_inc_build"] is True
+        assert verify_payload["sanitizer"] == "undefined"
+        assert verify_payload["build_patch_job_id"] == "build-job-001"
+        assert verify_call_args[1]["job_id"] == _make_patch_verify_rq_job_id(
+            experiment_name="test-exp",
+            trial_id="trial-1",
+            benchmark="mock-bench",
+            harness="harness_0",
+            cpv_id="cpv_1",
+            patch_id="patch_0",
+            verify_variants=True,
+            test_mode="FULL",
+            source_mode="pkgs",
+            use_inc_build=True,
+            sanitizer="undefined",
+            patch_content_hash=patch_hash,
+        )
 
         # Returns list with one verify job ID
         assert job_ids == ["verify-job-001"]
+
+    @patch("crsbench.distributed.patch_queue.rq")
+    def test_enqueue_patch_jobs_reuses_existing_jobs_on_duplicate(
+        self, mock_rq: MagicMock, tmp_path: Path
+    ) -> None:
+        """Duplicate deterministic enqueue should reuse existing RQ jobs."""
+        from crsbench.distributed.patch_queue import enqueue_patch_jobs
+
+        patch_file = tmp_path / "patch.diff"
+        patch_file.write_text("--- a/x.c\n+++ b/x.c\n")
+
+        build_queue = MagicMock()
+        build_queue.connection = MagicMock()
+        build_queue.enqueue.side_effect = RuntimeError("job id already exists")
+        verify_queue = MagicMock()
+        verify_queue.connection = MagicMock()
+        verify_queue.enqueue.side_effect = RuntimeError("job id already exists")
+
+        existing_build = MagicMock()
+        existing_build.id = "build-existing"
+        existing_verify = MagicMock()
+        existing_verify.id = "verify-existing"
+        mock_rq.job.Job.fetch.side_effect = [existing_build, existing_verify]
+
+        job_ids = enqueue_patch_jobs(
+            build_queue,
+            verify_queue,
+            "test-exp",
+            "trial-1",
+            "mock-bench",
+            "harness_0",
+            [("cpv_1", "patch_0", patch_file)],
+        )
+
+        assert job_ids == ["verify-existing"]
+        assert mock_rq.job.Job.fetch.call_count == 2
+
+    def test_patch_job_ids_change_when_patch_content_changes(self) -> None:
+        """Deterministic IDs should change if embedded patch bytes change."""
+        from crsbench.distributed.patch_queue import (
+            _make_patch_build_rq_job_id,
+            _make_patch_verify_rq_job_id,
+            _patch_content_hash,
+        )
+
+        patch_hash_a = _patch_content_hash("Zm9v")  # "foo"
+        patch_hash_b = _patch_content_hash("YmFy")  # "bar"
+
+        build_a = _make_patch_build_rq_job_id(
+            experiment_name="exp",
+            trial_id="trial-1",
+            benchmark="bench",
+            harness="h",
+            cpv_id="cpv_0",
+            patch_id="patch_0",
+            sanitizer="address",
+            source_mode="pkgs",
+            use_inc_build=True,
+            patch_content_hash=patch_hash_a,
+        )
+        build_b = _make_patch_build_rq_job_id(
+            experiment_name="exp",
+            trial_id="trial-1",
+            benchmark="bench",
+            harness="h",
+            cpv_id="cpv_0",
+            patch_id="patch_0",
+            sanitizer="address",
+            source_mode="pkgs",
+            use_inc_build=True,
+            patch_content_hash=patch_hash_b,
+        )
+        verify_a = _make_patch_verify_rq_job_id(
+            experiment_name="exp",
+            trial_id="trial-1",
+            benchmark="bench",
+            harness="h",
+            cpv_id="cpv_0",
+            patch_id="patch_0",
+            verify_variants=True,
+            test_mode="FULL",
+            source_mode="pkgs",
+            use_inc_build=True,
+            sanitizer="address",
+            patch_content_hash=patch_hash_a,
+        )
+        verify_b = _make_patch_verify_rq_job_id(
+            experiment_name="exp",
+            trial_id="trial-1",
+            benchmark="bench",
+            harness="h",
+            cpv_id="cpv_0",
+            patch_id="patch_0",
+            verify_variants=True,
+            test_mode="FULL",
+            source_mode="pkgs",
+            use_inc_build=True,
+            sanitizer="address",
+            patch_content_hash=patch_hash_b,
+        )
+
+        assert build_a != build_b
+        assert verify_a != verify_b
 
 
 class TestPollPatchVerdicts:
@@ -647,6 +900,7 @@ class TestPatchVerifyCleanup:
                 patch_content_b64="ZHVtbXk=",  # dummy
             ),
             verify_variants=True,
+            build_patch_job_id="rq-build-777",
         )
 
         result = execute_patch_verify(payload.to_dict())
@@ -655,6 +909,7 @@ class TestPatchVerifyCleanup:
         patch_override = called_params.get("patch_path_override")
         assert isinstance(patch_override, str)
         assert patch_override.endswith("/patches/patch_1.diff")
+        assert called_params["build_patch_job_id"] == "rq-build-777"
 
 
 class TestPatchJobOutputDir:

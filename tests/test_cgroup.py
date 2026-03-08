@@ -10,6 +10,7 @@ from crsbench.utils.cgroup import (
     CGROUP_FS_ROOT,
     CgroupError,
     _kill_cgroup_processes,
+    _remove_cgroup_children,
     cgroup_path_for_docker,
     check_cgroup_delegation,
     check_cgroup_v2_available,
@@ -470,6 +471,33 @@ def test_kill_cgroup_processes_nonexistent_path():
     result = _kill_cgroup_processes(cgroup_path)
 
     assert result is False
+
+
+# ---------------------------------------------------------------------------
+# _remove_cgroup_children
+# ---------------------------------------------------------------------------
+
+
+def test_remove_cgroup_children_ignores_missing_during_iterdir() -> None:
+    """Concurrent ENOENT while listing children should be tolerated."""
+    cgroup_path = MagicMock(spec=Path)
+    cgroup_path.exists.return_value = True
+    cgroup_path.iterdir.side_effect = FileNotFoundError
+
+    _remove_cgroup_children(cgroup_path)
+
+
+def test_remove_cgroup_children_ignores_disappearing_child() -> None:
+    """Child vanishing between listdir/stat/rmdir should not raise."""
+    cgroup_path = MagicMock(spec=Path)
+    cgroup_path.exists.return_value = True
+
+    child = MagicMock(spec=Path)
+    child.is_dir.side_effect = FileNotFoundError
+    cgroup_path.iterdir.return_value = [child]
+
+    _remove_cgroup_children(cgroup_path)
+    child.rmdir.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

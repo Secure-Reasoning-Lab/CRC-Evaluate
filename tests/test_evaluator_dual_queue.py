@@ -174,6 +174,46 @@ class TestConfiglessEvaluator:
         assert callable(run_evaluator_configless)
 
     @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
+    def test_configless_rejects_conflicting_inc_image_settings(self) -> None:
+        """Configless evaluator fails when inc-image settings conflict."""
+        from crsbench.distributed.evaluator import run_evaluator_configless
+        from crsbench.distributed.registry import RuntimeRegistration
+
+        reg1 = RuntimeRegistration(
+            experiment="exp-a",
+            trial_queue="crsbench_exp-a",
+            build_queue="crsbench_exp-a_build",
+            verify_queue="crsbench_exp-a_verify",
+            benchmarks=[],
+            benchmarks_root="/tmp/benchmarks",
+            per_pov_verify_timeout=180,
+            inc_image_policy="auto",
+        )
+        reg2 = RuntimeRegistration(
+            experiment="exp-b",
+            trial_queue="crsbench_exp-b",
+            build_queue="crsbench_exp-b_build",
+            verify_queue="crsbench_exp-b_verify",
+            benchmarks=[],
+            benchmarks_root="/tmp/benchmarks",
+            per_pov_verify_timeout=180,
+            inc_image_policy="build_only",
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator.discover_registered_experiments",
+                return_value=(MagicMock(), {"exp-a": reg1, "exp-b": reg2}),
+            ),
+            patch("crsbench.evaluation.verification.pov.engine.VerificationEngine"),
+            patch("crsbench.distributed.evaluator_jobs.set_engine"),
+            patch("crsbench.distributed.evaluator_jobs.set_benchmarks_root"),
+        ):
+            result = run_evaluator_configless(redis_host="localhost")
+
+        assert result == 1
+
+    @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
     def test_configless_discovers_experiments(self) -> None:
         """Configless evaluator discovers experiments from registry."""
         from crsbench.distributed.evaluator import run_evaluator_configless
@@ -185,7 +225,6 @@ class TestConfiglessEvaluator:
             build_queue="crsbench_exp-42_build",
             verify_queue="crsbench_exp-42_verify",
             benchmarks=[],
-            oss_fuzz_path="/tmp/oss-fuzz",
             benchmarks_root="/tmp/benchmarks",
             per_pov_verify_timeout=180,
         )
@@ -226,7 +265,6 @@ class TestConfiglessEvaluator:
             build_queue="crsbench_exp-42_build",
             verify_queue="crsbench_exp-42_verify",
             benchmarks=[],
-            oss_fuzz_path="/tmp/oss-fuzz",
             benchmarks_root="/tmp/benchmarks",
             per_pov_verify_timeout=180,
             evaluator_build_jobs=6,
@@ -282,7 +320,6 @@ class TestConfiglessEvaluator:
             build_queue="crsbench_exp-42_build",
             verify_queue="crsbench_exp-42_verify",
             benchmarks=[],
-            oss_fuzz_path="/tmp/oss-fuzz",
             benchmarks_root="/tmp/benchmarks",
             per_pov_verify_timeout=180,
         )
@@ -319,7 +356,6 @@ class TestConfiglessEvaluator:
             build_queue="crsbench_exp-42_build",
             verify_queue="crsbench_exp-42_verify",
             benchmarks=["afc-mock-full-01"],
-            oss_fuzz_path="/tmp/oss-fuzz",
             benchmarks_root="/tmp/benchmarks",
             per_pov_verify_timeout=180,
         )
@@ -358,7 +394,6 @@ class TestConfiglessEvaluator:
             build_queue="crsbench_exp-a_build",
             verify_queue="crsbench_exp-a_verify",
             benchmarks=[],
-            oss_fuzz_path="/tmp/oss-fuzz",
             benchmarks_root="/tmp/benchmarks",
             per_pov_verify_timeout=180,
             evaluator_cores="32-47",
@@ -370,7 +405,6 @@ class TestConfiglessEvaluator:
             build_queue="crsbench_exp-b_build",
             verify_queue="crsbench_exp-b_verify",
             benchmarks=[],
-            oss_fuzz_path="/tmp/oss-fuzz",
             benchmarks_root="/tmp/benchmarks",
             per_pov_verify_timeout=180,
             evaluator_cores="48-63",
@@ -415,7 +449,6 @@ class TestConfiglessEvaluator:
             build_queue="crsbench_exp-42_build",
             verify_queue="crsbench_exp-42_verify",
             benchmarks=[],
-            oss_fuzz_path="/tmp/oss-fuzz",
             benchmarks_root="/tmp/benchmarks",
             per_pov_verify_timeout=180,
             evaluator_verify_cores_per_job=0,
@@ -446,7 +479,6 @@ class TestConfiglessEvaluator:
             build_queue="crsbench_exp-a_build",
             verify_queue="crsbench_exp-a_verify",
             benchmarks=[],
-            oss_fuzz_path="/tmp/oss-fuzz",
             benchmarks_root="/tmp/benchmarks",
             per_pov_verify_timeout=180,
             evaluator_cpu_tag="cpu-a",
@@ -457,7 +489,6 @@ class TestConfiglessEvaluator:
             build_queue="crsbench_exp-b_build",
             verify_queue="crsbench_exp-b_verify",
             benchmarks=[],
-            oss_fuzz_path="/tmp/oss-fuzz",
             benchmarks_root="/tmp/benchmarks",
             per_pov_verify_timeout=180,
             evaluator_cpu_tag="cpu-b",
@@ -488,7 +519,6 @@ class TestConfiglessEvaluator:
             build_queue="crsbench_exp-a_build",
             verify_queue="crsbench_exp-a_verify",
             benchmarks=[],
-            oss_fuzz_path="/tmp/oss-fuzz",
             benchmarks_root="/tmp/benchmarks",
             per_pov_verify_timeout=180,
             evaluator_cpu_tag="x86-avx2",
@@ -499,7 +529,6 @@ class TestConfiglessEvaluator:
             build_queue="crsbench_exp-b_build",
             verify_queue="crsbench_exp-b_verify",
             benchmarks=[],
-            oss_fuzz_path="/tmp/oss-fuzz",
             benchmarks_root="/tmp/benchmarks",
             per_pov_verify_timeout=180,
             evaluator_cpu_tag="  x86-avx2  ",
@@ -535,7 +564,6 @@ class TestConfiglessEvaluator:
             build_queue="crsbench_exp-42_build",
             verify_queue="crsbench_exp-42_verify",
             benchmarks=[],
-            oss_fuzz_path="/tmp/oss-fuzz",
             benchmarks_root="/tmp/benchmarks",
             per_pov_verify_timeout=180,
             evaluator_idle_timeout=-1,
@@ -566,7 +594,6 @@ class TestConfiglessEvaluator:
             build_queue="crsbench_exp-42_build",
             verify_queue="crsbench_exp-42_verify",
             benchmarks=[],
-            oss_fuzz_path="/tmp/oss-fuzz",
             benchmarks_root="/tmp/benchmarks",
             per_pov_verify_timeout=180,
         )
@@ -626,7 +653,6 @@ class TestConfiglessEvaluator:
             verify_queue="crsbench_exp-42_verify",
             benchmarks=[benchmark_name],
             modes=["full"],
-            oss_fuzz_path="/tmp/oss-fuzz",
             benchmarks_root=str(tmp_path),
             source_mode="pkgs",
             build_timeout=3600,
@@ -658,7 +684,7 @@ class TestConfiglessEvaluator:
         mock_filter.assert_called_once()
         mock_planner.plan_builds.assert_called_once_with(
             tmp_path / benchmark_name,
-            use_inc_build=False,
+            use_inc_build=True,
             skip_if_cached=True,
         )
 
@@ -932,7 +958,6 @@ class TestConfiglessEvaluator:
             build_queue="crsbench_exp-a_build",
             verify_queue="crsbench_exp-a_verify",
             benchmarks=[],
-            oss_fuzz_path="/tmp/oss-fuzz",
             benchmarks_root="/tmp/benchmarks",
             per_pov_verify_timeout=180,
             evaluator_cpu_tag="   ",
@@ -1043,19 +1068,64 @@ class TestRunSingleJob:
         assert not hasattr(mod, "_run_single_verify_job")
 
 
+class TestIncImageRuntimeSettings:
+    """Tests for inc-image runtime settings normalization."""
+
+    def test_resolve_settings_sets_none_pull_cap_when_unset(self) -> None:
+        """No pull-cap input should resolve to None."""
+        from crsbench.distributed.evaluator import _resolve_inc_image_runtime_settings
+
+        (
+            _policy,
+            _registry,
+            resolved_max_pull_bytes,
+            _pull_timeout,
+            _local_prefix,
+        ) = _resolve_inc_image_runtime_settings(
+            policy="auto",
+            registry="ghcr.io/team-atlanta/crsbench",
+            max_pull_bytes=None,
+            pull_timeout_sec=300,
+            local_prefix="crsbench",
+        )
+        assert resolved_max_pull_bytes is None
+
+
 class TestRunEvaluatorCiMode:
     """Tests for evaluator CI mode defaults."""
 
-    @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
-    @patch("crsbench.distributed.ci_supervisor.run_ci_supervisor")
-    def test_ci_mode_defaults_build_verify_cores_to_four(
-        self, mock_supervisor: MagicMock
+    @patch("crsbench.distributed.evaluator.run_evaluator_configless")
+    def test_ci_mode_uses_configless_compat_alias(
+        self, mock_configless: MagicMock
     ) -> None:
-        """CI mode defaults build/verify cores-per-job to 4."""
+        """CI mode should delegate to configless with legacy alias enabled."""
         from crsbench.distributed.evaluator import run_evaluator_ci_mode
 
-        mock_supervisor.return_value = 0
+        mock_configless.return_value = 0
         result = run_evaluator_ci_mode(redis_host="localhost")
+
+        assert result == 0
+        kwargs = mock_configless.call_args.kwargs
+        assert kwargs["redis_host"] == "localhost"
+        assert kwargs["legacy_ci_alias"] is True
+
+    def test_legacy_ci_alias_defaults_build_verify_cores_to_four(self) -> None:
+        """Configless legacy CI alias keeps 4-core defaults for build/verify jobs."""
+        from crsbench.distributed.evaluator import run_evaluator_configless
+
+        with (
+            patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True),
+            patch("crsbench.evaluation.verification.pov.engine.VerificationEngine"),
+            patch("crsbench.distributed.evaluator_jobs.set_engine"),
+            patch("crsbench.distributed.evaluator_jobs.set_benchmarks_root"),
+            patch(
+                "crsbench.distributed.ci_supervisor.run_multi_queue_supervisor"
+            ) as mock_supervisor,
+        ):
+            mock_supervisor.return_value = 0
+            result = run_evaluator_configless(
+                redis_host="localhost", legacy_ci_alias=True
+            )
 
         assert result == 0
         kwargs = mock_supervisor.call_args.kwargs

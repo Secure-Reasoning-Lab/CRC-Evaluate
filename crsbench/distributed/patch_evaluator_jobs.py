@@ -165,7 +165,8 @@ class PatchJobPayload:
     source_mode: str = "pkgs"
     verify_variants: bool = False
     test_mode: str = "FULL"
-    use_inc_build: bool = False
+    use_inc_build: bool = True
+    build_patch_job_id: str = ""
     enqueued_at: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
@@ -181,6 +182,7 @@ class PatchJobPayload:
             "verify_variants": self.verify_variants,
             "test_mode": self.test_mode,
             "use_inc_build": self.use_inc_build,
+            "build_patch_job_id": self.build_patch_job_id,
             "enqueued_at": self.enqueued_at,
         }
 
@@ -197,7 +199,8 @@ class PatchJobPayload:
             source_mode=d.get("source_mode", "pkgs"),
             verify_variants=d.get("verify_variants", False),
             test_mode=d.get("test_mode", "FULL"),
-            use_inc_build=d.get("use_inc_build", False),
+            use_inc_build=d.get("use_inc_build", True),
+            build_patch_job_id=d.get("build_patch_job_id", ""),
             enqueued_at=d.get("enqueued_at", 0.0),
         )
 
@@ -227,6 +230,7 @@ class PatchBuildResult:
     variant_name: str = ""
     error: Optional[str] = None
     completed_at: float = 0.0
+    logs: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -239,6 +243,7 @@ class PatchBuildResult:
             "variant_name": self.variant_name,
             "error": self.error,
             "completed_at": self.completed_at,
+            "logs": self.logs,
         }
 
     @classmethod
@@ -253,6 +258,7 @@ class PatchBuildResult:
             variant_name=d.get("variant_name", ""),
             error=d.get("error"),
             completed_at=d.get("completed_at", 0.0),
+            logs=d.get("logs", {}),
         )
 
 
@@ -329,24 +335,30 @@ def _collect_patch_verify_logs(payload: "PatchJobPayload") -> dict[str, str]:
     """Collect bounded patch verify stream logs from worker-local output dir."""
     output_dir = _resolve_patch_job_output_dir(payload)
     logs_dir = output_dir / "logs"
-    if not logs_dir.exists():
+    return _collect_bounded_stream_logs(logs_dir)
+
+
+def _collect_bounded_stream_logs(base_dir: Path) -> dict[str, str]:
+    """Collect bounded stdout/stderr snippets under a base directory."""
+    if not base_dir.exists():
         return {}
 
     collected: dict[str, str] = {}
     remaining = _MAX_LOG_TOTAL_BYTES
     selected_logs: list[tuple[str, Path]] = []
-    for path in logs_dir.iterdir():
+    for path in sorted(base_dir.rglob("*")):
         if not path.is_file() or path.suffix not in {".stdout", ".stderr"}:
             continue
-        insort(selected_logs, (path.name, path))
+        rel_name = str(path.relative_to(base_dir))
+        insort(selected_logs, (rel_name, path))
         if len(selected_logs) > _MAX_LOG_FILE_COUNT:
             selected_logs.pop()
 
-    for _, path in selected_logs:
+    for rel_name, path in selected_logs:
         if remaining <= 0:
             break
         # Reserve room for filename overhead in serialized payload.
-        name_overhead = len(path.name.encode("utf-8")) + 4
+        name_overhead = len(rel_name.encode("utf-8")) + 4
         if remaining <= name_overhead:
             break
         budget = min(_MAX_LOG_FILE_BYTES, remaining - name_overhead)
@@ -365,7 +377,7 @@ def _collect_patch_verify_logs(payload: "PatchJobPayload") -> dict[str, str]:
         text = _truncate_text_to_utf8_bytes(text, remaining - name_overhead)
         if not text:
             break
-        collected[path.name] = text
+        collected[rel_name] = text
         remaining -= len(text.encode("utf-8")) + name_overhead
     return collected
 
@@ -373,11 +385,32 @@ def _collect_patch_verify_logs(payload: "PatchJobPayload") -> dict[str, str]:
 def _cleanup_patch_job_output_dir(payload: "PatchJobPayload") -> None:
     """Remove temporary worker-local patch job artifacts."""
     output_dir = _resolve_patch_job_output_dir(payload)
+    root = Path(tempfile.gettempdir()) / "crsbench-distributed-patch-jobs"
     if output_dir.exists():
         try:
             shutil.rmtree(output_dir)
         except Exception as e:
             logger.warning(f"Failed to cleanup patch job output dir {output_dir}: {e}")
+            return
+    # Best-effort prune of empty parent directories up to the root container dir.
+    current = output_dir.parent
+    while current != root.parent:
+        try:
+            if current == root:
+                if current.exists() and not any(current.iterdir()):
+                    current.rmdir()
+                break
+            if current.exists() and not any(current.iterdir()):
+                current.rmdir()
+                current = current.parent
+                continue
+            break
+        except Exception:
+            logger.debug(
+                f"Stopped pruning patch job parent dirs at {current} due to cleanup error",
+                exc_info=True,
+            )
+            break
 
 
 # =============================================================================
@@ -412,12 +445,16 @@ def execute_patch_build(payload_dict: dict[str, Any]) -> dict[str, Any]:
     benchmark_path = resolve_benchmark_path(benchmarks_root, payload.benchmark)
 
     temp_patch_path: Optional[Path] = None
+    build_output_dir: Optional[Path] = None
     try:
         # Write embedded patch content to temp file
         temp_fd, temp_path_str = tempfile.mkstemp(suffix=".diff", prefix="patch_")
         os.close(temp_fd)
         temp_patch_path = Path(temp_path_str)
         patch.write_to(temp_patch_path)
+        build_output_dir = Path(
+            tempfile.mkdtemp(prefix="crsbench-distributed-patch-build-")
+        )
 
         # Create BuildPatchVariantJob using temp patch file
         from crsbench.benchmark_ci.jobs.flat import BuildPatchVariantJob
@@ -436,12 +473,13 @@ def execute_patch_build(payload_dict: dict[str, Any]) -> dict[str, Any]:
 
         # Serialize and execute via ci_jobs
         params = ci_jobs.serialize_ci_job(build_job)
-        params["output_dir"] = str(_resolve_patch_job_output_dir(payload))
+        params["output_dir"] = str(build_output_dir)
         result_dict = ci_jobs.execute_ci_job(params)
 
         success = result_dict.get("success", False)
         variant_name = result_dict.get("details", {}).get("variant_name", "")
         error = result_dict.get("error")
+        logs = _collect_bounded_stream_logs(build_output_dir) if not success else {}
 
         return PatchBuildResult(
             trial_id=payload.trial_id,
@@ -453,6 +491,7 @@ def execute_patch_build(payload_dict: dict[str, Any]) -> dict[str, Any]:
             variant_name=variant_name,
             error=error,
             completed_at=time.time(),
+            logs=logs,
         ).to_dict()
 
     except Exception as e:
@@ -466,11 +505,21 @@ def execute_patch_build(payload_dict: dict[str, Any]) -> dict[str, Any]:
             success=False,
             error=str(e),
             completed_at=time.time(),
+            logs=_collect_bounded_stream_logs(build_output_dir)
+            if build_output_dir is not None
+            else {},
         ).to_dict()
 
     finally:
         if temp_patch_path and temp_patch_path.exists():
             temp_patch_path.unlink()
+        if build_output_dir and build_output_dir.exists():
+            try:
+                shutil.rmtree(build_output_dir)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to cleanup patch build output dir {build_output_dir}: {e}"
+                )
 
 
 def _resolve_patch_variant_name(
@@ -480,15 +529,24 @@ def _resolve_patch_variant_name(
     try:
         from crsbench.builder.types import BuildConfig, VariantType
         from crsbench.evaluation.verification.pov import VerificationEngine
-        from crsbench.utils.run_helper import get_oss_fuzz_root
+        from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
-        oss_fuzz_path = Path(get_oss_fuzz_root())
+        oss_fuzz_path = Path(ensure_oss_fuzz_root())
         engine = VerificationEngine(oss_fuzz_path, source_mode=payload.source_mode)
         adapter = engine.load_adapter(benchmark_path)
         if not adapter:
             return None
 
-        sanitizer = adapter.get_cpv_sanitizer(payload.harness, payload.cpv_id)
+        try:
+            sanitizer = adapter.get_cpv_sanitizer(payload.harness, payload.cpv_id)
+        except Exception as e:
+            logger.debug(
+                "Failed CPV sanitizer lookup for cleanup variant resolution "
+                f"({payload.benchmark}/{payload.harness}/{payload.cpv_id}): {e}"
+            )
+            sanitizer = ""
+        if not sanitizer:
+            sanitizer = payload.sanitizer or "address"
         config = BuildConfig(
             benchmark_name=payload.benchmark,
             benchmark_path=benchmark_path,
@@ -522,9 +580,9 @@ def _cleanup_patch_variant_artifacts(variant_name: Optional[str]) -> None:
         return
     try:
         from crsbench.builder.infrastructure import OSSFuzzInfrastructure
-        from crsbench.utils.run_helper import get_oss_fuzz_root
+        from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
-        infra = OSSFuzzInfrastructure(Path(get_oss_fuzz_root()))
+        infra = OSSFuzzInfrastructure(Path(ensure_oss_fuzz_root()))
         for name in (variant_name, f"{variant_name}-unittest"):
             infra.cleanup_docker_images(name)
             infra.cleanup_variant(name)
@@ -599,10 +657,13 @@ def execute_patch_verify(payload_dict: dict[str, Any]) -> dict[str, Any]:
                 logs=_collect_patch_verify_logs(payload),
             ).to_dict()
 
-        # Build the patch build job ID (format matches BuildPatchVariantJob.job_id)
-        build_patch_job_id = (
-            f"build-patch/{payload.benchmark}/{payload.cpv_id}/{patch.patch_id}"
-        )
+        build_patch_job_id = payload.build_patch_job_id
+        if not build_patch_job_id:
+            # Backward compatibility for legacy payloads that predate explicit
+            # build RQ job ID propagation.
+            build_patch_job_id = (
+                f"build-patch/{payload.benchmark}/{payload.cpv_id}/{patch.patch_id}"
+            )
 
         pov_test_passed: Optional[bool] = None
         unit_test_passed: Optional[bool] = None
@@ -626,6 +687,7 @@ def execute_patch_verify(payload_dict: dict[str, Any]) -> dict[str, Any]:
                 test_mode=payload.test_mode,
                 patch_path_override=patch_file,
                 build_patch_job_id=build_patch_job_id,
+                use_inc_build=payload.use_inc_build,
                 source_mode=payload.source_mode,
             )
             variant_params = ci_jobs.serialize_ci_job(variant_test_job)
@@ -668,6 +730,7 @@ def execute_patch_verify(payload_dict: dict[str, Any]) -> dict[str, Any]:
                 pov_path=pov_paths[0],
                 patch_path_override=patch_file,
                 build_patch_job_id=build_patch_job_id,
+                use_inc_build=payload.use_inc_build,
                 source_mode=payload.source_mode,
             )
             pov_params = ci_jobs.serialize_ci_job(pov_test_job)
@@ -686,6 +749,7 @@ def execute_patch_verify(payload_dict: dict[str, Any]) -> dict[str, Any]:
                 test_mode=payload.test_mode,
                 patch_path_override=patch_file,
                 build_patch_job_id=build_patch_job_id,
+                use_inc_build=payload.use_inc_build,
                 source_mode=payload.source_mode,
             )
             unit_params = ci_jobs.serialize_ci_job(unit_test_job)

@@ -10,6 +10,34 @@ from crsbench.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_ERROR_CODE_PREFIXES = ("infra_", "dependency_", "dep_")
+
+
+def _error_code(result: ExecutorResult) -> str:
+    """Extract normalized job error_code from result details when present."""
+    if not result.job_result:
+        return ""
+    code = result.job_result.details.get("error_code")
+    return code.lower() if isinstance(code, str) else ""
+
+
+def _is_error_class_failure(result: ExecutorResult) -> bool:
+    """Classify dependency/infra failures as ERROR-class outcomes."""
+    if result.status == JobStatus.DEP_FAILED:
+        return True
+    return result.status == JobStatus.FAILED and _error_code(result).startswith(
+        _ERROR_CODE_PREFIXES
+    )
+
+
+def _result_error_text(result: ExecutorResult, default: str) -> str:
+    """Pick the most specific error text available for a failed result."""
+    if result.job_result and result.job_result.error:
+        return result.job_result.error
+    if result.error:
+        return result.error
+    return default
+
 
 def _get_build_fallback(
     dag_results: dict[str, ExecutorResult],
@@ -56,9 +84,12 @@ def aggregate_pov_build_results(
 
         build_time += result.elapsed_seconds
 
-        if result.status == JobStatus.FAILED:
-            error_msg = result.error or "build failed"
-            failures.append(f"{job_id}: {error_msg}")
+        if _is_error_class_failure(result):
+            errors.append(
+                f"{job_id}: {_result_error_text(result, 'dependency failed')}"
+            )
+        elif result.status == JobStatus.FAILED:
+            failures.append(f"{job_id}: {_result_error_text(result, 'build failed')}")
         elif result.status == JobStatus.SUCCESS:
             if result.job_result:
                 if result.job_result.details.get("fallback_used", False):
@@ -122,13 +153,14 @@ def aggregate_pov_pov_results(
 
         verify_time += result.elapsed_seconds
 
-        if result.status == JobStatus.DEP_FAILED:
-            errors.append(f"{cpv_id}: dependency failed")
+        if _is_error_class_failure(result):
+            errors.append(
+                f"{cpv_id}: {_result_error_text(result, 'verification dependency failed')}"
+            )
         elif result.status == JobStatus.FAILED:
-            if result.job_result and result.job_result.error:
-                failures.append(f"{cpv_id}: {result.job_result.error}")
-            else:
-                failures.append(f"{cpv_id}: verification failed")
+            failures.append(
+                f"{cpv_id}: {_result_error_text(result, 'verification failed')}"
+            )
         elif result.status == JobStatus.SUCCESS:
             # Check pov_0_passed specifically (ground truth)
             if result.job_result:
@@ -194,8 +226,10 @@ def aggregate_pov_var_results(
         has_var_jobs = True
         verify_time += result.elapsed_seconds
 
-        if result.status == JobStatus.DEP_FAILED:
-            errors.append(f"{cpv_id}: dependency failed")
+        if _is_error_class_failure(result):
+            errors.append(
+                f"{cpv_id}: {_result_error_text(result, 'verification dependency failed')}"
+            )
             continue
 
         if result.status == JobStatus.FAILED:
@@ -205,6 +239,10 @@ def aggregate_pov_var_results(
                 var_passed += cpv_var_passed
                 var_total += cpv_var_total
                 failures.append(f"{cpv_id}: {cpv_var_passed}/{cpv_var_total} variants")
+            else:
+                failures.append(
+                    f"{cpv_id}: {_result_error_text(result, 'variant verification failed')}"
+                )
             continue
 
         # Extract variant counts from job details
@@ -215,10 +253,6 @@ def aggregate_pov_var_results(
             var_total += cpv_var_total
             if cpv_var_total > 0 and cpv_var_passed < cpv_var_total:
                 failures.append(f"{cpv_id}: {cpv_var_passed}/{cpv_var_total} variants")
-
-    # No variant jobs found
-    if not has_var_jobs or var_total == 0:
-        return CheckResult.skip("No variants")
 
     if errors:
         return CheckResult(
@@ -245,6 +279,10 @@ def aggregate_pov_var_results(
                 "failures": failures,
             },
         )
+
+    # No variant jobs found (or no variant metadata emitted by successful jobs)
+    if not has_var_jobs or var_total == 0:
+        return CheckResult.skip("No variants")
 
     return CheckResult(
         status=CheckStatus.PASS,
@@ -282,13 +320,14 @@ def aggregate_pov_results(
 
         verify_time += result.elapsed_seconds
 
-        if result.status == JobStatus.DEP_FAILED:
-            errors.append(f"{cpv_id}: dependency failed")
+        if _is_error_class_failure(result):
+            errors.append(
+                f"{cpv_id}: {_result_error_text(result, 'verification dependency failed')}"
+            )
         elif result.status == JobStatus.FAILED:
-            if result.job_result and result.job_result.error:
-                failures.append(f"{cpv_id}: {result.job_result.error}")
-            else:
-                failures.append(f"{cpv_id}: verification failed")
+            failures.append(
+                f"{cpv_id}: {_result_error_text(result, 'verification failed')}"
+            )
         elif result.status == JobStatus.SUCCESS:
             if result.job_result and not result.job_result.success:
                 failures.append(f"{cpv_id}: POV not detected")
@@ -362,8 +401,11 @@ def aggregate_patch_results(
             build_time += build_result.elapsed_seconds
 
         if build_result and build_result.status != JobStatus.SUCCESS:
-            error_msg = build_result.error or "build failed"
-            errors.append(f"{cpv_id}/{patch_id}: {error_msg}")
+            message = _result_error_text(build_result, "build failed")
+            if _is_error_class_failure(build_result):
+                errors.append(f"{cpv_id}/{patch_id}: {message}")
+            else:
+                failures.append(f"{cpv_id}/{patch_id}: {message}")
             continue
 
         # Try new job structure first (separate POV and unittest jobs)
@@ -379,16 +421,15 @@ def aggregate_patch_results(
         if pov_result is not None:
             verify_time += pov_result.elapsed_seconds
 
-            if pov_result.status == JobStatus.DEP_FAILED:
-                errors.append(f"{cpv_id}/{patch_id}: POV dependency failed")
+            if _is_error_class_failure(pov_result):
+                errors.append(
+                    f"{cpv_id}/{patch_id}: {_result_error_text(pov_result, 'POV dependency failed')}"
+                )
                 continue
             if pov_result.status == JobStatus.FAILED:
-                error_msg = (
-                    pov_result.job_result.error
-                    if pov_result.job_result
-                    else "POV test failed"
+                failures.append(
+                    f"{cpv_id}/{patch_id}: {_result_error_text(pov_result, 'POV test failed')}"
                 )
-                failures.append(f"{cpv_id}/{patch_id}: {error_msg}")
                 continue
             if pov_result.status == JobStatus.SUCCESS:
                 if pov_result.job_result and not pov_result.job_result.success:
@@ -400,16 +441,14 @@ def aggregate_patch_results(
             if unittest_result is not None:
                 verify_time += unittest_result.elapsed_seconds
 
-                if unittest_result.status == JobStatus.DEP_FAILED:
-                    # Expected if POV failed - don't treat as error
-                    pass
-                elif unittest_result.status == JobStatus.FAILED:
-                    error_msg = (
-                        unittest_result.job_result.error
-                        if unittest_result.job_result
-                        else "unit test failed"
+                if _is_error_class_failure(unittest_result):
+                    errors.append(
+                        f"{cpv_id}/{patch_id}: {_result_error_text(unittest_result, 'unit test dependency failed')}"
                     )
-                    failures.append(f"{cpv_id}/{patch_id}: {error_msg}")
+                elif unittest_result.status == JobStatus.FAILED:
+                    failures.append(
+                        f"{cpv_id}/{patch_id}: {_result_error_text(unittest_result, 'unit test failed')}"
+                    )
                 elif unittest_result.status == JobStatus.SUCCESS:
                     if (
                         unittest_result.job_result
@@ -431,15 +470,14 @@ def aggregate_patch_results(
 
         verify_time += test_result.elapsed_seconds
 
-        if test_result.status == JobStatus.DEP_FAILED:
-            errors.append(f"{cpv_id}/{patch_id}: dependency failed")
-        elif test_result.status == JobStatus.FAILED:
-            error_msg = (
-                test_result.job_result.error
-                if test_result.job_result
-                else "test failed"
+        if _is_error_class_failure(test_result):
+            errors.append(
+                f"{cpv_id}/{patch_id}: {_result_error_text(test_result, 'dependency failed')}"
             )
-            failures.append(f"{cpv_id}/{patch_id}: {error_msg}")
+        elif test_result.status == JobStatus.FAILED:
+            failures.append(
+                f"{cpv_id}/{patch_id}: {_result_error_text(test_result, 'test failed')}"
+            )
         elif test_result.status == JobStatus.SUCCESS:
             if test_result.job_result and not test_result.job_result.success:
                 error_msg = test_result.job_result.error or "test failed"
@@ -507,11 +545,14 @@ def aggregate_patch_build_results(
 
         build_time += build_result.elapsed_seconds
 
-        if build_result.status == JobStatus.DEP_FAILED:
-            errors.append(f"{cpv_id}/{patch_id}: dependency failed")
+        if _is_error_class_failure(build_result):
+            errors.append(
+                f"{cpv_id}/{patch_id}: {_result_error_text(build_result, 'dependency failed')}"
+            )
         elif build_result.status != JobStatus.SUCCESS:
-            error_msg = build_result.error or "build failed"
-            failures.append(f"{cpv_id}/{patch_id}: {error_msg}")
+            failures.append(
+                f"{cpv_id}/{patch_id}: {_result_error_text(build_result, 'build failed')}"
+            )
 
     if errors:
         return CheckResult(
@@ -570,8 +611,18 @@ def aggregate_patch_pov_results(
             errors.append(f"{cpv_id}/{patch_id}: test job not found")
             continue
 
-        if test_result.status == JobStatus.DEP_FAILED:
-            errors.append(f"{cpv_id}/{patch_id}: dependency failed")
+        if _is_error_class_failure(test_result):
+            errors.append(
+                f"{cpv_id}/{patch_id}: {_result_error_text(test_result, 'dependency failed')}"
+            )
+            verify_time += test_result.elapsed_seconds
+            continue
+
+        if test_result.status == JobStatus.FAILED:
+            verify_time += test_result.elapsed_seconds
+            failures.append(
+                f"{cpv_id}/{patch_id}: {_result_error_text(test_result, 'POV test failed')}"
+            )
             continue
 
         # Extract pov_0_passed from job details
@@ -645,8 +696,10 @@ def aggregate_patch_var_results(
         has_var_jobs = True
         verify_time += test_result.elapsed_seconds
 
-        if test_result.status == JobStatus.DEP_FAILED:
-            errors.append(f"{cpv_id}/{patch_id}: dependency failed")
+        if _is_error_class_failure(test_result):
+            errors.append(
+                f"{cpv_id}/{patch_id}: {_result_error_text(test_result, 'dependency failed')}"
+            )
             continue
 
         if test_result.status == JobStatus.FAILED:
@@ -657,6 +710,10 @@ def aggregate_patch_var_results(
                 var_total += patch_var_total
                 failures.append(
                     f"{cpv_id}/{patch_id}: {patch_var_passed}/{patch_var_total} variants"
+                )
+            else:
+                failures.append(
+                    f"{cpv_id}/{patch_id}: {_result_error_text(test_result, 'variant test failed')}"
                 )
             continue
 
@@ -670,10 +727,6 @@ def aggregate_patch_var_results(
                 failures.append(
                     f"{cpv_id}/{patch_id}: {patch_var_passed}/{patch_var_total} variants"
                 )
-
-    # No variant jobs found
-    if not has_var_jobs or var_total == 0:
-        return CheckResult.skip("No variants")
 
     if errors:
         return CheckResult(
@@ -700,6 +753,10 @@ def aggregate_patch_var_results(
                 "failures": failures,
             },
         )
+
+    # No variant jobs found (or no variant metadata emitted by successful jobs)
+    if not has_var_jobs or var_total == 0:
+        return CheckResult.skip("No variants")
 
     return CheckResult(
         status=CheckStatus.PASS,
@@ -744,8 +801,18 @@ def aggregate_patch_unittest_results(
             errors.append(f"{cpv_id}/{patch_id}: test job not found")
             continue
 
-        if test_result.status == JobStatus.DEP_FAILED:
-            errors.append(f"{cpv_id}/{patch_id}: dependency failed")
+        if _is_error_class_failure(test_result):
+            errors.append(
+                f"{cpv_id}/{patch_id}: {_result_error_text(test_result, 'dependency failed')}"
+            )
+            continue
+
+        if test_result.status == JobStatus.FAILED:
+            has_results = True
+            verify_time += test_result.elapsed_seconds
+            failures.append(
+                f"{cpv_id}/{patch_id}: {_result_error_text(test_result, 'unit test failed')}"
+            )
             continue
 
         # Extract unit_tests_passed and unit_test_time from job details
@@ -805,8 +872,10 @@ def aggregate_coverage_result(
     if result is None:
         return CheckResult.make_error("Coverage job not found")
 
-    if result.status == JobStatus.DEP_FAILED:
-        return CheckResult.make_error("Coverage dependency failed")
+    if _is_error_class_failure(result):
+        return CheckResult.make_error(
+            _result_error_text(result, "Coverage dependency failed")
+        )
 
     # Include shared build time for display
     build_time = _get_shared_build_time(dag_results, benchmark_name)
@@ -815,7 +884,7 @@ def aggregate_coverage_result(
     fallback = _get_build_fallback(dag_results, benchmark_name)
 
     if result.status == JobStatus.FAILED:
-        error = result.error or "Coverage collection failed"
+        error = _result_error_text(result, "Coverage collection failed")
         return CheckResult(
             status=CheckStatus.FAIL,
             time_seconds=total_time,
@@ -845,8 +914,13 @@ def aggregate_build_result(
     if result is None:
         return CheckResult.make_error("Build job not found")
 
+    if _is_error_class_failure(result):
+        return CheckResult.make_error(
+            _result_error_text(result, "Build dependency failed")
+        )
+
     if result.status == JobStatus.FAILED:
-        error = result.error or "Build failed"
+        error = _result_error_text(result, "Build failed")
         return CheckResult(
             status=CheckStatus.FAIL,
             time_seconds=result.elapsed_seconds,

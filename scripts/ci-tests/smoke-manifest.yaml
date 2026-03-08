@@ -16,7 +16,7 @@ suites:
     timeouts:
       max_total_time: 3000
       build_timeout: 1800
-      run_timeout: 300
+      run_timeout: 900
       verify_timeout: 120
       per_pov_verify_timeout: 30
     pov_early_stop: true

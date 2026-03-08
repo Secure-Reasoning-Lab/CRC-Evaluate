@@ -8,7 +8,9 @@ unit test) go to the VERIFY queue (1 CPU) with RQ dependency on the build.
 Follows the same pattern as verify_queue.py for POV verification.
 """
 
+import hashlib
 import os
+import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -24,6 +26,140 @@ if TYPE_CHECKING:
     import redis
 
 logger = get_logger(__name__)
+
+
+def _sanitize_job_id_component(value: str) -> str:
+    """Normalize a string for safe/stable RQ job_id segments."""
+    normalized = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._")
+    return normalized or "unknown"
+
+
+def _stable_job_suffix(*parts: str) -> str:
+    """Generate deterministic short suffix from a tuple of fields."""
+    hasher = hashlib.sha1()
+    for part in parts:
+        hasher.update(part.encode("utf-8"))
+        hasher.update(b"\x1f")
+    return hasher.hexdigest()[:16]
+
+
+def _patch_content_hash(patch_content_b64: str) -> str:
+    """Stable short hash for embedded patch payload."""
+    return hashlib.sha1(patch_content_b64.encode("utf-8")).hexdigest()[:16]
+
+
+def _make_patch_build_rq_job_id(
+    *,
+    experiment_name: str,
+    trial_id: str,
+    benchmark: str,
+    harness: str,
+    cpv_id: str,
+    patch_id: str,
+    sanitizer: str,
+    source_mode: str,
+    use_inc_build: bool,
+    patch_content_hash: str,
+) -> str:
+    """Build deterministic RQ job_id for patch build enqueue."""
+    suffix = _stable_job_suffix(
+        experiment_name,
+        trial_id,
+        benchmark,
+        harness,
+        cpv_id,
+        patch_id,
+        sanitizer,
+        source_mode,
+        str(use_inc_build),
+        patch_content_hash,
+    )
+    return (
+        "patch-build/"
+        f"{_sanitize_job_id_component(benchmark)}/"
+        f"{_sanitize_job_id_component(harness)}/"
+        f"{_sanitize_job_id_component(cpv_id)}/"
+        f"{_sanitize_job_id_component(patch_id)}/"
+        f"{suffix}"
+    )
+
+
+def _make_patch_verify_rq_job_id(
+    *,
+    experiment_name: str,
+    trial_id: str,
+    benchmark: str,
+    harness: str,
+    cpv_id: str,
+    patch_id: str,
+    verify_variants: bool,
+    test_mode: str,
+    source_mode: str,
+    use_inc_build: bool,
+    sanitizer: str,
+    patch_content_hash: str,
+) -> str:
+    """Build deterministic RQ job_id for patch verify enqueue."""
+    suffix = _stable_job_suffix(
+        experiment_name,
+        trial_id,
+        benchmark,
+        harness,
+        cpv_id,
+        patch_id,
+        str(verify_variants),
+        test_mode,
+        source_mode,
+        str(use_inc_build),
+        sanitizer,
+        patch_content_hash,
+    )
+    return (
+        "patch-verify/"
+        f"{_sanitize_job_id_component(benchmark)}/"
+        f"{_sanitize_job_id_component(harness)}/"
+        f"{_sanitize_job_id_component(cpv_id)}/"
+        f"{_sanitize_job_id_component(patch_id)}/"
+        f"{suffix}"
+    )
+
+
+def _is_duplicate_job_enqueue_error(exc: Exception) -> bool:
+    """Best-effort duplicate enqueue detection across RQ versions."""
+    msg = str(exc).lower()
+    return "already exists" in msg or "job id" in msg and "exists" in msg
+
+
+def _enqueue_with_existing_reuse(
+    queue: "rq.Queue",
+    job_func: str,
+    payload: dict[str, Any],
+    *,
+    job_timeout: int,
+    meta: dict[str, str],
+    job_id: str,
+    depends_on: Optional[list[Any]] = None,
+) -> Any:
+    """Enqueue job by deterministic ID and reuse existing on duplicate."""
+    try:
+        return queue.enqueue(
+            job_func,
+            payload,
+            job_timeout=job_timeout,
+            result_ttl=-1,
+            job_id=job_id,
+            depends_on=depends_on,
+            meta=meta,
+        )
+    except Exception as e:
+        if not _is_duplicate_job_enqueue_error(e):
+            raise
+        try:
+            existing = rq.job.Job.fetch(job_id, connection=queue.connection)
+            logger.debug(f"Reusing existing patch RQ job {job_id}")
+            return existing
+        except Exception:
+            raise
 
 
 def _error_result_from_rq_job(job: Any, *, default_error: str) -> dict[str, Any]:
@@ -119,7 +255,7 @@ def enqueue_patch_jobs(
     *,
     verify_variants: bool = False,
     test_mode: str = "FULL",
-    use_inc_build: bool = False,
+    use_inc_build: bool = True,
     job_timeout: int = 3600,
     cpu_tag: Optional[str] = None,
 ) -> list[str]:
@@ -171,8 +307,7 @@ def enqueue_patch_jobs(
                 use_inc_build=use_inc_build,
                 enqueued_at=time.time(),
             )
-
-            payload_dict = payload.to_dict()
+            patch_content_hash = _patch_content_hash(embedded_patch.patch_content_b64)
 
             # Enqueue build job to build queue (multi-CPU)
             effective_cpu_tag = cpu_tag or os.environ.get("CRSBENCH_JOB_CPU_TAG")
@@ -180,12 +315,26 @@ def enqueue_patch_jobs(
             if effective_cpu_tag:
                 job_meta["cpu_tag"] = effective_cpu_tag
 
-            build_rq_job = build_queue.enqueue(
+            build_job_id = _make_patch_build_rq_job_id(
+                experiment_name=experiment_name,
+                trial_id=trial_id,
+                benchmark=benchmark,
+                harness=harness,
+                cpv_id=cpv_id,
+                patch_id=patch_id,
+                sanitizer=sanitizer,
+                source_mode=source_mode,
+                use_inc_build=use_inc_build,
+                patch_content_hash=patch_content_hash,
+            )
+            build_payload = payload.to_dict()
+            build_rq_job = _enqueue_with_existing_reuse(
+                build_queue,
                 "crsbench.distributed.patch_evaluator_jobs.execute_patch_build",
-                payload_dict,
+                build_payload,
                 job_timeout=job_timeout,
-                result_ttl=-1,
                 meta=job_meta,
+                job_id=build_job_id,
             )
             logger.debug(
                 f"Enqueued patch build job {build_rq_job.id[:8]} "
@@ -193,11 +342,28 @@ def enqueue_patch_jobs(
             )
 
             # Enqueue verify job to verify queue (1 CPU), depends on build
-            verify_rq_job = verify_queue.enqueue(
+            verify_payload = payload.to_dict()
+            verify_payload["build_patch_job_id"] = build_rq_job.id
+            verify_job_id = _make_patch_verify_rq_job_id(
+                experiment_name=experiment_name,
+                trial_id=trial_id,
+                benchmark=benchmark,
+                harness=harness,
+                cpv_id=cpv_id,
+                patch_id=patch_id,
+                verify_variants=verify_variants,
+                test_mode=test_mode,
+                source_mode=source_mode,
+                use_inc_build=use_inc_build,
+                sanitizer=sanitizer,
+                patch_content_hash=patch_content_hash,
+            )
+            verify_rq_job = _enqueue_with_existing_reuse(
+                verify_queue,
                 "crsbench.distributed.patch_evaluator_jobs.execute_patch_verify",
-                payload_dict,
+                verify_payload,
                 job_timeout=job_timeout,
-                result_ttl=-1,
+                job_id=verify_job_id,
                 depends_on=[build_rq_job],
                 meta=job_meta,
             )
@@ -406,8 +572,10 @@ def _try_recover_deferred_jobs(
                 pending.add(job_id)
                 if job.origin:
                     queues.add(job.origin)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(
+                    f"Deferred patch recovery could not fetch job {job_id[:8]}: {e}"
+                )
 
         if not rq_jobs:
             return

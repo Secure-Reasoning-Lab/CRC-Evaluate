@@ -161,7 +161,17 @@ def set_engine(engine: Any) -> None:
     _verification_engine = engine
 
 
-def _try_lazy_load_builds(benchmark_name: str) -> None:
+def _build_cache_key(
+    experiment_name: str, benchmark_name: str, sanitizer: Optional[str]
+) -> str:
+    """Build scoped cache key for build artifacts."""
+    sanitizer_scope = sanitizer or "auto"
+    return f"{experiment_name}::{benchmark_name}::{sanitizer_scope}"
+
+
+def _try_lazy_load_builds(
+    experiment_name: str, benchmark_name: str, sanitizer: Optional[str]
+) -> None:
     """Attempt to lazily load build results for a benchmark.
 
     When builds execute on the same evaluator machine before verify jobs
@@ -188,10 +198,13 @@ def _try_lazy_load_builds(benchmark_name: str) -> None:
         return
 
     try:
-        results = engine.get_or_build_results(adapter)
-        _built_results[benchmark_name] = results
+        results = engine.get_or_build_results(adapter, sanitizer=sanitizer)
+        _built_results[_build_cache_key(experiment_name, benchmark_name, sanitizer)] = (
+            results
+        )
         logger.info(
-            f"Lazy loaded build results for {benchmark_name} ({len(results)} variants)"
+            f"Lazy loaded build results for {experiment_name}/{benchmark_name} "
+            f"(sanitizer={sanitizer or 'auto'}, {len(results)} variants)"
         )
     except Exception as e:
         logger.warning(f"Lazy load failed for {benchmark_name}: {e}")
@@ -224,6 +237,7 @@ class SinglePovPayload:
     harness: str
     pov: EmbeddedPov
     enqueued_at: float
+    sanitizer: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -233,6 +247,7 @@ class SinglePovPayload:
             "harness": self.harness,
             "pov": self.pov.to_dict(),
             "enqueued_at": self.enqueued_at,
+            "sanitizer": self.sanitizer,
         }
 
     @classmethod
@@ -244,6 +259,7 @@ class SinglePovPayload:
             harness=d["harness"],
             pov=EmbeddedPov.from_dict(d["pov"]),
             enqueued_at=d["enqueued_at"],
+            sanitizer=d.get("sanitizer"),
         )
 
 
@@ -313,11 +329,15 @@ def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
         f"benchmark {payload.benchmark} harness {payload.harness}"
     )
 
-    # Check that we have builds for this benchmark; try lazy load if missing
-    if payload.benchmark not in _built_results:
-        _try_lazy_load_builds(payload.benchmark)
+    cache_key = _build_cache_key(
+        payload.experiment_name, payload.benchmark, payload.sanitizer
+    )
+    if cache_key not in _built_results:
+        _try_lazy_load_builds(
+            payload.experiment_name, payload.benchmark, payload.sanitizer
+        )
 
-    if payload.benchmark not in _built_results:
+    if cache_key not in _built_results:
         error_msg = (
             f"No built variants for benchmark '{payload.benchmark}'. "
             "Evaluator was not configured with this benchmark."
@@ -333,7 +353,7 @@ def verify_single_pov(payload_dict: dict[str, Any]) -> dict[str, Any]:
             completed_at=time.time(),
         ).to_dict()
 
-    build_results = _built_results[payload.benchmark]
+    build_results = _built_results[cache_key]
 
     engine = _verification_engine
     if engine is None:

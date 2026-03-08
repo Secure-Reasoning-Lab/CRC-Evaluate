@@ -41,6 +41,7 @@ from crsbench.utils.logger import (
     remove_file_handler,
     set_trial_context,
 )
+from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
 # Import file-based metadata schema (distinct from evaluation.results.TrialMetadata)
 from crsbench.validation.schemas import (
@@ -70,9 +71,42 @@ def _resolve_redis_host(config: ExperimentConfig) -> Optional[str]:
             host = conn_kwargs.get("host", "localhost")
             if host != "localhost":
                 return host
-    except Exception:
-        pass
+    except ImportError:
+        logger.debug("RQ unavailable while resolving redis host; using config value")
+    except Exception as e:
+        logger.warning(f"Failed to resolve redis host from current RQ job context: {e}")
     return getattr(config, "redis_host", None)
+
+
+def _load_benchmark_language(benchmark_path: Path) -> str:
+    """Load benchmark language from project.yaml for oss-crs env wiring.
+
+    Returns "c" when project.yaml is missing/invalid to preserve prior behavior.
+    """
+    project_yaml = benchmark_path / "project.yaml"
+    if not project_yaml.exists():
+        logger.warning(
+            f"project.yaml not found for benchmark {benchmark_path}; "
+            "defaulting FUZZING_LANGUAGE=c"
+        )
+        return "c"
+
+    try:
+        with project_yaml.open() as f:
+            project = yaml.safe_load(f) or {}
+    except Exception as e:
+        logger.warning(
+            f"Failed to read {project_yaml}: {e}; defaulting FUZZING_LANGUAGE=c"
+        )
+        return "c"
+
+    language = str(project.get("language", "c")).strip()
+    if not language:
+        logger.warning(
+            f"Empty language in {project_yaml}; defaulting FUZZING_LANGUAGE=c"
+        )
+        return "c"
+    return language
 
 
 def _generate_results_folder_name(
@@ -663,7 +697,7 @@ def _apply_worker_overrides(config: ExperimentConfig) -> None:
     In distributed execution, the orchestrator serializes the full
     ExperimentConfig (via ``config.model_dump()``) into each Redis job.
     Workers on different machines deserialize this config, but the paths
-    (oss_fuzz_path, benchmarks_root, etc.) reflect the orchestrator's
+    (benchmarks_root, etc.) reflect the orchestrator's
     filesystem — which may differ from the worker's.
 
     The ``worker:`` section in the experiment YAML provides
@@ -680,7 +714,6 @@ def _apply_worker_overrides(config: ExperimentConfig) -> None:
         return
 
     path_fields = [
-        "oss_fuzz_path",
         "registry_dir",
         "crs_configs_dir",
         "benchmarks_root",
@@ -867,7 +900,7 @@ def run_crs_trial(
 
         # Get required paths from config
         # Resolve to absolute paths to avoid issues with relative paths
-        oss_fuzz_path = config.oss_fuzz_path.resolve()
+        oss_fuzz_path = Path(ensure_oss_fuzz_root())
         registry_dir = config.registry_dir.resolve()
         benchmarks_root = config.benchmarks_root.resolve()
         crs_configs_dir = config.crs_configs_dir.resolve()
@@ -891,6 +924,11 @@ def run_crs_trial(
             mode=crs_type,
         )
 
+        # Resolve benchmark path and language for adapter env wiring
+        benchmark_path = _resolve_benchmark_path(benchmark, config)
+        benchmark_language = _load_benchmark_language(benchmark_path)
+        logger.debug(f"Resolved benchmark path: {benchmark_path}")
+
         # Configure adapter
         adapter_config = {
             "build_timeout": config.build_timeout,
@@ -909,13 +947,7 @@ def run_crs_trial(
             # Spread crs_compose config fields when present
             **(config.crs_compose.model_dump() if config.crs_compose else {}),
         }
-        if config.crs_overrides and crs in config.crs_overrides:
-            override_dict = config.crs_overrides[crs].model_dump(exclude_none=True)
-            if override_dict:
-                adapter_config.update(override_dict)
-                logger.info(f"Applied CRS overrides for '{crs}'")
-        if allocated_cpus:
-            adapter_config["oss_crs_infra_cpuset"] = allocated_cpus
+        adapter_config["fuzzing_language"] = benchmark_language
         adapter.configure(adapter_config)
 
         # Initialize benchmark runner with adapter and snapshot configuration
@@ -1011,11 +1043,12 @@ def run_crs_trial(
             redis_host=_resolve_redis_host(config),
             experiment_name=config.experiment,
             pov_dedup_strategy=config.pov_dedup_strategy,
+            inc_image_policy=config.inc_image_policy,
+            inc_image_registry=config.inc_image_registry,
+            inc_image_max_pull_bytes=config.inc_image_max_pull_bytes,
+            inc_image_pull_timeout=config.inc_image_pull_timeout_sec,
+            local_image_prefix=config.project_image_prefix,
         )
-
-        # Resolve benchmark path
-        benchmark_path = _resolve_benchmark_path(benchmark, config)
-        logger.debug(f"Resolved benchmark path: {benchmark_path}")
 
         # Ensure original project symlink exists in oss-fuzz/projects/
         # This allows tools like oss-bugfix-crs to find the project
@@ -1126,6 +1159,7 @@ def run_crs_trial(
                     trial_output_dir=trial_output_dir,
                     oss_fuzz_path=oss_fuzz_path,
                     skip_verification=config.skip_verification,
+                    sanitizer=sanitizer,
                     target_cpv_id=target_cpv_id,
                 )
             finally:

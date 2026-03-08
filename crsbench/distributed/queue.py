@@ -572,21 +572,23 @@ def remove_job_by_id(queue: "rq.Queue", job_id: str) -> bool:
         try:
             registry.remove(job_id, delete_job=False)
             removed = True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(
+                f"Registry remove skipped for job {job_id} in {type(registry).__name__}: {e}"
+            )
 
     try:
         queue.remove(job_id)
         removed = True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Queue remove skipped for job {job_id}: {e}")
 
     try:
         job = rq.job.Job.fetch(job_id, connection=queue.connection)  # type: ignore[attr-defined]
         job.delete()
         removed = True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Job payload delete skipped for job {job_id}: {e}")
 
     return removed
 

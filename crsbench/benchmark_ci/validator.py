@@ -31,7 +31,7 @@ from crsbench.evaluation.verification.models import (
 from crsbench.evaluation.verification.patch import PatchVerificationEngine
 from crsbench.evaluation.verification.pov import VerificationEngine
 from crsbench.utils.logger import add_file_handler, get_logger, remove_file_handler
-from crsbench.utils.run_helper import get_oss_fuzz_root
+from crsbench.utils.run_helper import ensure_oss_fuzz_root
 from crsbench.validation import validate_benchmark as format_validate
 
 logger = get_logger(__name__)
@@ -132,7 +132,7 @@ class BenchmarkValidator:
             source_mode: Source mode - "pkgs" (bundled, default) or "main_repo" (clone)
             max_povs_per_cpv: Limit POVs verified per CPV (None = no limit)
         """
-        self.oss_fuzz_path = Path(oss_fuzz_path or get_oss_fuzz_root())
+        self.oss_fuzz_path = Path(oss_fuzz_path or ensure_oss_fuzz_root())
         self.pov_timeout = pov_timeout
         self.build_workers = build_workers
         self.verify_workers = verify_workers

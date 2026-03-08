@@ -10,6 +10,8 @@ Pattern: Same as build_jobs.py — serialize → enqueue → execute on evaluato
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, cast
 
@@ -38,8 +40,41 @@ _SUPPORTED_JOB_TYPES = frozenset(
         "PatchUnitTestJob",
         "FlatCollectCoverageJob",
         "BuildPatchVariantJob",
+        "PrepareIncImageJob",
     }
 )
+
+
+@dataclass
+class InfraMissingBuildContextError(RuntimeError):
+    """Raised when verify/test jobs cannot load required build context."""
+
+    benchmark: str
+    build_job_ids_requested: list[str]
+    missing_build_job_ids: list[str]
+    available_variants: list[str]
+    source_mode: str
+    use_inc_build: bool
+    error_code: str = "infra_missing_build_context"
+
+    def __str__(self) -> str:
+        missing = ", ".join(self.missing_build_job_ids) or "<none>"
+        return (
+            f"{self.error_code}: benchmark={self.benchmark}, "
+            f"missing_build_job_ids=[{missing}]"
+        )
+
+    def to_details(self) -> dict[str, Any]:
+        return {
+            "error_code": self.error_code,
+            "benchmark": self.benchmark,
+            "build_job_ids_requested": self.build_job_ids_requested,
+            "missing_build_job_ids": self.missing_build_job_ids,
+            "available_variants": self.available_variants,
+            "source_mode": self.source_mode,
+            "use_inc_build": self.use_inc_build,
+            "retryable": False,
+        }
 
 
 def serialize_ci_job(job: Any) -> dict[str, Any]:
@@ -82,6 +117,7 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 "sanitizer": job.sanitizer,
                 "repo_name": job.repo_name,
                 "project_image_prefix": job.project_image_prefix,
+                "prepare_inc_job_id": getattr(job, "prepare_inc_job_id", ""),
             }
         )
     elif cls_name == "VerifyCpvPovJob":
@@ -95,6 +131,7 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 else None,
                 "pov_path": str(job.pov_path) if job.pov_path else None,
                 "build_job_ids": job.build_job_ids,
+                "use_inc_build": job.use_inc_build,
                 "source_mode": job.source_mode,
             }
         )
@@ -109,6 +146,7 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 else None,
                 "pov_paths": [str(p) for p in job.pov_paths],
                 "build_job_ids": job.build_job_ids,
+                "use_inc_build": job.use_inc_build,
                 "source_mode": job.source_mode,
             }
         )
@@ -125,6 +163,7 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 if job.patch_path_override
                 else None,
                 "build_patch_job_id": job.build_patch_job_id,
+                "use_inc_build": job.use_inc_build,
                 "source_mode": job.source_mode,
             }
         )
@@ -141,6 +180,7 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 if job.patch_path_override
                 else None,
                 "build_patch_job_id": job.build_patch_job_id,
+                "use_inc_build": job.use_inc_build,
                 "source_mode": job.source_mode,
             }
         )
@@ -158,6 +198,7 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 if job.patch_path_override
                 else None,
                 "build_patch_job_id": job.build_patch_job_id,
+                "use_inc_build": job.use_inc_build,
                 "source_mode": job.source_mode,
             }
         )
@@ -174,6 +215,7 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 if job.patch_path_override
                 else None,
                 "build_patch_job_id": job.build_patch_job_id,
+                "use_inc_build": job.use_inc_build,
                 "source_mode": job.source_mode,
             }
         )
@@ -201,6 +243,18 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 "use_inc_build": job.use_inc_build,
                 "force_rebuild": job.force_rebuild,
                 "build_job_id": job.build_job_id,
+                "prepare_inc_job_id": getattr(job, "prepare_inc_job_id", ""),
+                "source_mode": job.source_mode,
+            }
+        )
+    elif cls_name == "PrepareIncImageJob":
+        params.update(
+            {
+                "benchmark_path": str(job.benchmark_path),
+                "benchmark_name": job.benchmark_name,
+                "sanitizer": job.sanitizer,
+                "use_inc_build": job.use_inc_build,
+                "force_rebuild": job.force_rebuild,
                 "source_mode": job.source_mode,
             }
         )
@@ -225,6 +279,7 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
         PatchUnitTestJob,
         PatchVariantTestJob,
         PatchVarTestJob,
+        PrepareIncImageJob,
         VerifyCpvPovJob,
         VerifyCpvVarJob,
     )
@@ -245,13 +300,14 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             patch_id=params.get("patch_id"),
             pov_id=params.get("pov_id"),
             patches=[Path(p) for p in params.get("patches", [])],
-            use_inc_build=params.get("use_inc_build", False),
+            use_inc_build=params.get("use_inc_build", True),
             force_rebuild=params.get("force_rebuild", False),
             skip_if_cached=params.get("skip_if_cached", False),
             source_mode=params.get("source_mode", "pkgs"),
             sanitizer=params.get("sanitizer", "address"),
             repo_name=params.get("repo_name"),
-            project_image_prefix=params.get("project_image_prefix", "aixcc-afc"),
+            project_image_prefix=params.get("project_image_prefix", "crsbench"),
+            prepare_inc_job_id=params.get("prepare_inc_job_id", ""),
         )
     if cls_name == "VerifyCpvPovJob":
         return VerifyCpvPovJob(
@@ -263,6 +319,7 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             else None,
             pov_path=Path(params["pov_path"]) if params.get("pov_path") else None,
             build_job_ids=params.get("build_job_ids", []),
+            use_inc_build=params.get("use_inc_build", True),
             source_mode=params.get("source_mode", "pkgs"),
         )
     if cls_name == "VerifyCpvVarJob":
@@ -275,6 +332,7 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             else None,
             pov_paths=[Path(p) for p in params.get("pov_paths", [])],
             build_job_ids=params.get("build_job_ids", []),
+            use_inc_build=params.get("use_inc_build", True),
             source_mode=params.get("source_mode", "pkgs"),
         )
     if cls_name == "PatchPovTestJob":
@@ -289,6 +347,7 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             if params.get("patch_path_override")
             else None,
             build_patch_job_id=params.get("build_patch_job_id", ""),
+            use_inc_build=params.get("use_inc_build", True),
             source_mode=params.get("source_mode", "pkgs"),
         )
     if cls_name == "PatchVarTestJob":
@@ -303,6 +362,7 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             if params.get("patch_path_override")
             else None,
             build_patch_job_id=params.get("build_patch_job_id", ""),
+            use_inc_build=params.get("use_inc_build", True),
             source_mode=params.get("source_mode", "pkgs"),
         )
     if cls_name == "PatchVariantTestJob":
@@ -318,6 +378,7 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             if params.get("patch_path_override")
             else None,
             build_patch_job_id=params.get("build_patch_job_id", ""),
+            use_inc_build=params.get("use_inc_build", True),
             source_mode=params.get("source_mode", "pkgs"),
         )
     if cls_name == "PatchUnitTestJob":
@@ -332,6 +393,7 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             if params.get("patch_path_override")
             else None,
             build_patch_job_id=params.get("build_patch_job_id", ""),
+            use_inc_build=params.get("use_inc_build", True),
             source_mode=params.get("source_mode", "pkgs"),
         )
     if cls_name == "FlatCollectCoverageJob":
@@ -352,9 +414,19 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             patch_path=Path(params["patch_path"]),
             harness=params.get("harness", ""),
             sanitizer=params.get("sanitizer", "address"),
-            use_inc_build=params.get("use_inc_build", False),
+            use_inc_build=params.get("use_inc_build", True),
             force_rebuild=params.get("force_rebuild", False),
             build_job_id=params.get("build_job_id", ""),
+            prepare_inc_job_id=params.get("prepare_inc_job_id", ""),
+            source_mode=params.get("source_mode", "pkgs"),
+        )
+    if cls_name == "PrepareIncImageJob":
+        return PrepareIncImageJob(
+            benchmark_path=Path(params["benchmark_path"]),
+            benchmark_name=params["benchmark_name"],
+            sanitizer=params.get("sanitizer", "address"),
+            use_inc_build=params.get("use_inc_build", True),
+            force_rebuild=params.get("force_rebuild", False),
             source_mode=params.get("source_mode", "pkgs"),
         )
 
@@ -366,6 +438,7 @@ def _load_build_context_from_disk(
     build_job_ids: list[str],
     benchmark_path: Path,
     source_mode: str,
+    use_inc_build: bool,
 ) -> None:
     """Load build results from disk into context.shared.
 
@@ -380,27 +453,77 @@ def _load_build_context_from_disk(
         source_mode: Source mode for VerificationEngine
     """
     from crsbench.evaluation.verification.pov import VerificationEngine
-    from crsbench.utils.run_helper import get_oss_fuzz_root
+    from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
-    oss_fuzz_path = Path(get_oss_fuzz_root())
+    oss_fuzz_path = Path(ensure_oss_fuzz_root())
     engine = VerificationEngine(oss_fuzz_path, source_mode=source_mode)
     adapter = engine.load_adapter(benchmark_path)
     if not adapter:
-        logger.warning(f"Failed to load adapter for {benchmark_path}")
-        return
+        raise InfraMissingBuildContextError(
+            benchmark=benchmark_path.name,
+            build_job_ids_requested=build_job_ids,
+            missing_build_job_ids=build_job_ids,
+            available_variants=[],
+            source_mode=source_mode,
+            use_inc_build=use_inc_build,
+        )
+
+    # Parse required variant names from build job ids up front so we can
+    # detect and recover missing contexts for fallback-built variants.
+    required_variant_names: set[str] = set()
+    for bid in build_job_ids:
+        parts = bid.split("/")
+        if len(parts) > 2 and parts[2]:
+            required_variant_names.add(parts[2])
 
     # Get build results for ALL sanitizers this benchmark uses
     build_results: dict[str, BuildResult] = {}
     for san in adapter.get_all_cpv_sanitizers():
-        results = engine.get_or_build_results(adapter, sanitizer=san)
+        results = engine.get_or_build_results(
+            adapter,
+            sanitizer=san,
+            use_inc_build=use_inc_build,
+            allow_build=False,
+        )
         build_results.update(results)
 
+    # If verify requested inc-build contexts but some required variants are
+    # missing, retry metadata load in non-strict mode. This accepts variants
+    # that were legitimately built via fallback (inc image unavailable or
+    # replay fallback path) and prevents false infra_missing_build_context.
+    if use_inc_build:
+        missing_after_strict = required_variant_names - set(build_results.keys())
+        if missing_after_strict:
+            logger.info(
+                "Strict inc-build context load missed %d variant(s) for %s; "
+                "retrying with fallback-compatible context load",
+                len(missing_after_strict),
+                benchmark_path.name,
+            )
+            for san in adapter.get_all_cpv_sanitizers():
+                results = engine.get_or_build_results(
+                    adapter,
+                    sanitizer=san,
+                    use_inc_build=False,
+                    allow_build=False,
+                )
+                for variant_name, result in results.items():
+                    if variant_name in missing_after_strict:
+                        build_results[variant_name] = result
+
     if not build_results:
-        logger.warning(f"No build results found for {benchmark_path.name}")
-        return
+        raise InfraMissingBuildContextError(
+            benchmark=benchmark_path.name,
+            build_job_ids_requested=build_job_ids,
+            missing_build_job_ids=build_job_ids,
+            available_variants=[],
+            source_mode=source_mode,
+            use_inc_build=use_inc_build,
+        )
 
     # Populate context.shared for each build_job_id
     # Build job IDs have format "build-single/{benchmark}/{variant_name}"
+    missing_build_job_ids: list[str] = []
     for bid in build_job_ids:
         parts = bid.split("/")
         variant_name = parts[2] if len(parts) > 2 else None
@@ -410,10 +533,17 @@ def _load_build_context_from_disk(
                 "adapter": adapter,
             }
         else:
-            logger.warning(
-                f"Build result not found for {bid} (variant: {variant_name}). "
-                f"Available: {list(build_results.keys())}"
-            )
+            missing_build_job_ids.append(bid)
+
+    if missing_build_job_ids:
+        raise InfraMissingBuildContextError(
+            benchmark=benchmark_path.name,
+            build_job_ids_requested=build_job_ids,
+            missing_build_job_ids=missing_build_job_ids,
+            available_variants=sorted(build_results.keys()),
+            source_mode=source_mode,
+            use_inc_build=use_inc_build,
+        )
 
     logger.info(
         f"Loaded {len(context.shared)} build context entries for {benchmark_path.name}"
@@ -435,15 +565,16 @@ def _load_patch_build_context(
         job: Patch verify/test job with build_patch_job_id
         source_mode: Source mode for VerificationEngine
     """
+    from crsbench.builder.infrastructure import OSSFuzzInfrastructure
     from crsbench.builder.types import BuildConfig, VariantType
     from crsbench.evaluation.verification.pov import VerificationEngine
-    from crsbench.utils.run_helper import get_oss_fuzz_root
+    from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
     bid = job.build_patch_job_id
     if not bid:
         return
 
-    oss_fuzz_path = Path(get_oss_fuzz_root())
+    oss_fuzz_path = Path(ensure_oss_fuzz_root())
     engine = VerificationEngine(oss_fuzz_path, source_mode=source_mode)
     adapter = engine.load_adapter(job.benchmark_path)
     if not adapter:
@@ -464,14 +595,54 @@ def _load_patch_build_context(
         pov_id=job.cpv_id,
     )
 
+    variant_name = config.variant_name
+    inc_build_available = bool(getattr(job, "use_inc_build", False))
+
+    # Prefer the actual upstream build result when available. This preserves
+    # fallback/inc-build decisions made during build execution.
+    try:
+        import rq
+
+        current_job = rq.get_current_job()
+        if current_job and current_job.connection:
+            upstream = rq.job.Job.fetch(bid, connection=current_job.connection)
+            upstream_result = upstream.result
+            if isinstance(upstream_result, dict):
+                details = upstream_result.get("details", {})
+                if isinstance(details, dict):
+                    variant_name = details.get("variant_name", variant_name)
+                    sanitizer = details.get("sanitizer", sanitizer)
+                    upstream_inc = details.get("inc_build_available")
+                    if isinstance(upstream_inc, bool):
+                        inc_build_available = upstream_inc
+    except Exception as e:
+        logger.debug(f"Could not load upstream patch build result for {bid}: {e}")
+
+    infra = OSSFuzzInfrastructure(oss_fuzz_path)
+    variant_ready = infra.is_variant_built(
+        variant_name,
+        require_inc_build=inc_build_available,
+        require_source_image=True,
+    )
+    if not variant_ready:
+        raise InfraMissingBuildContextError(
+            benchmark=job.benchmark_name,
+            build_job_ids_requested=[bid],
+            missing_build_job_ids=[bid],
+            available_variants=[],
+            source_mode=source_mode,
+            use_inc_build=inc_build_available,
+            error_code="infra_missing_patch_build_context",
+        )
+
     context.shared[bid] = {
-        "variant_name": config.variant_name,
+        "variant_name": variant_name,
         "sanitizer": sanitizer,
         "fallback_used": False,
-        "inc_build_available": False,
+        "inc_build_available": inc_build_available,
     }
 
-    logger.info(f"Loaded patch build context for {bid}: variant={config.variant_name}")
+    logger.info(f"Loaded patch build context for {bid}: variant={variant_name}")
 
 
 def execute_ci_job(params: dict[str, Any]) -> dict[str, Any]:
@@ -506,16 +677,34 @@ def execute_ci_job(params: dict[str, Any]) -> dict[str, Any]:
     # Pre-populate context.shared from disk so verify jobs find build results
     source_mode = params.get("source_mode", "pkgs")
 
-    if hasattr(job, "build_job_ids") and job.build_job_ids:
-        benchmark_path = getattr(job, "benchmark_path", None)
-        if benchmark_path:
-            _load_build_context_from_disk(
-                context, job.build_job_ids, benchmark_path, source_mode
-            )
+    try:
+        if hasattr(job, "build_job_ids") and job.build_job_ids:
+            benchmark_path = getattr(job, "benchmark_path", None)
+            if benchmark_path:
+                _load_build_context_from_disk(
+                    context,
+                    job.build_job_ids,
+                    benchmark_path,
+                    source_mode,
+                    getattr(job, "use_inc_build", True),
+                )
 
-    if hasattr(job, "build_patch_job_id") and job.build_patch_job_id:
-        if job.build_patch_job_id not in context.shared:
-            _load_patch_build_context(context, job, source_mode)
+        if hasattr(job, "build_patch_job_id") and job.build_patch_job_id:
+            if job.build_patch_job_id not in context.shared:
+                _load_patch_build_context(context, job, source_mode)
+    except InfraMissingBuildContextError as e:
+        logger.warning(str(e))
+        now = datetime.now().isoformat()
+        return {
+            "job_id": getattr(job, "job_id", "unknown"),
+            "job_type": "verify",
+            "success": False,
+            "started_at": now,
+            "finished_at": now,
+            "elapsed_seconds": 0.0,
+            "error": str(e),
+            "details": e.to_details(),
+        }
 
     result = job.execute(context)
     return result.to_dict()
@@ -586,11 +775,127 @@ def _recover_orphaned_deferred_jobs(
     return recovered
 
 
+def _is_orphaned_started_job(
+    rq_job: "rq.job.Job",
+    stale_started_grace_seconds: int,
+) -> tuple[bool, float, int]:
+    """Return whether a STARTED job is stale/orphaned.
+
+    A job is considered stale/orphaned when:
+    - status is STARTED
+    - started_at is known
+    - age exceeds (timeout + grace)
+    """
+    status_value = getattr(rq_job.get_status(), "value", rq_job.get_status())
+    if str(status_value).lower() != "started":
+        return False, 0.0, int(getattr(rq_job, "timeout", 3600) or 3600)
+
+    started_at = getattr(rq_job, "started_at", None)
+    timeout_seconds = int(getattr(rq_job, "timeout", 3600) or 3600)
+    if started_at is None:
+        return False, 0.0, timeout_seconds
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    age_seconds = (datetime.now(timezone.utc) - started_at).total_seconds()
+    is_stale = age_seconds > (timeout_seconds + stale_started_grace_seconds)
+    return is_stale, age_seconds, timeout_seconds
+
+
+def _mark_blocked_deferred_jobs(
+    queue: "rq.Queue",
+    rq_jobs: dict[str, "rq.job.Job"],
+    pending: set[str],
+    missing_job_failures: dict[str, dict[str, Any]],
+) -> int:
+    """Mark deferred jobs as infra-failed if a dependency is missing/failed."""
+    import rq.registry
+    from rq.exceptions import NoSuchJobError
+
+    deferred_registry = rq.registry.DeferredJobRegistry(queue=queue)
+    deferred_ids = set(deferred_registry.get_job_ids()) & pending
+    if not deferred_ids:
+        return 0
+
+    marked = 0
+    blocked_deferred_grace_seconds = 120
+    now_utc = datetime.now(timezone.utc)
+    for job_id in deferred_ids:
+        rq_job = rq_jobs.get(job_id)
+        if rq_job is None:
+            continue
+        rq_job.refresh()
+        status_value = getattr(rq_job.get_status(), "value", rq_job.get_status())
+        if str(status_value).lower() != "deferred":
+            continue
+        dep_ids = list(rq_job.dependency_ids or [])
+        blocked_reason: str | None = None
+        blocked_dep: str | None = None
+        for dep_id in dep_ids:
+            if dep_id in missing_job_failures:
+                blocked_reason = "infra_dependency_failed"
+                blocked_dep = dep_id
+                break
+            try:
+                dep_job = rq_jobs.get(dep_id) or rq.job.Job.fetch(
+                    dep_id, connection=queue.connection
+                )
+            except NoSuchJobError:
+                blocked_reason = "infra_missing_dependency_job"
+                blocked_dep = dep_id
+                break
+            dep_status_value = getattr(
+                dep_job.get_status(), "value", dep_job.get_status()
+            )
+            dep_status = str(dep_status_value).lower()
+            if dep_status in {"failed", "stopped", "canceled"}:
+                blocked_reason = "infra_dependency_failed"
+                blocked_dep = dep_id
+                break
+
+        if blocked_reason is None:
+            # Only apply grace when dependency state is not yet conclusively blocked.
+            created_at = getattr(rq_job, "created_at", None)
+            if isinstance(created_at, datetime):
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                age_seconds = (now_utc - created_at).total_seconds()
+                if age_seconds < blocked_deferred_grace_seconds:
+                    continue
+            continue
+
+        missing_job_failures[job_id] = {
+            "job_id": job_id,
+            "job_type": "unknown",
+            "success": False,
+            "error": (
+                f"{blocked_reason}: deferred job is blocked by dependency {blocked_dep}"
+            ),
+            "elapsed_seconds": 0.0,
+            "details": {
+                "error_code": blocked_reason,
+                "retryable": True,
+                "dependency_job_id": blocked_dep,
+            },
+            "started_at": None,
+            "finished_at": now_utc.isoformat(),
+        }
+        pending.discard(job_id)
+        marked += 1
+
+    if marked:
+        logger.warning(
+            f"Marked {marked} blocked deferred CI jobs as infra failures "
+            f"for queue {queue.name}"
+        )
+    return marked
+
+
 def enqueue_and_poll_ci_jobs(
     jobs: list[Any],
     redis_host: str,
     queue_name: str | Callable[[Any], str] = "crsbench_ci_verify",
     output_dir: str | None = None,
+    stale_terminal_policy: str = "refresh_stopped_canceled_failed",
 ) -> dict[str, dict[str, Any]]:
     """Enqueue CI jobs to Redis and poll until all complete.
 
@@ -644,19 +949,173 @@ def enqueue_and_poll_ci_jobs(
         return queues[name]
 
     rq_jobs: dict[str, rq.job.Job] = {}
+    all_job_ids = {job.job_id for job in ordered_jobs}
+    terminal_statuses = {"finished", "failed", "stopped", "canceled"}
+    reenqueue_safe_statuses = {"queued", "deferred", "scheduled"}
+    stale_started_grace_seconds = 120
+    terminal_conflicts: dict[str, list[str]] = {
+        "finished": [],
+        "failed": [],
+        "stopped": [],
+        "canceled": [],
+    }
+    existing_jobs: dict[str, rq.job.Job] = {}
+
+    def _status_name(status: object) -> str:
+        """Normalize RQ status values (str/enum) to lowercase string."""
+        value = getattr(status, "value", status)
+        return str(value).lower()
+
+    def _should_refresh(status_name: str, policy: str) -> bool:
+        if policy == "refresh_all":
+            return status_name in {"finished", "failed", "stopped", "canceled"}
+        if policy == "refresh_stopped_canceled_failed":
+            return status_name in {"failed", "stopped", "canceled"}
+        if policy == "refresh_failed":
+            return status_name == "failed"
+        if policy == "refresh_stopped_canceled":
+            return status_name in {"stopped", "canceled"}
+        return False
+
+    # Pre-scan existing jobs so prompt (if needed) happens once at startup.
+    for job in ordered_jobs:
+        existing_job: rq.job.Job | None = None
+        try:
+            existing_job = rq.job.Job.fetch(job.job_id, connection=redis_conn)
+        except Exception:
+            existing_job = None
+        if existing_job is None:
+            continue
+        existing_jobs[job.job_id] = existing_job
+        status_name = _status_name(existing_job.get_status())
+        if status_name in terminal_conflicts:
+            terminal_conflicts[status_name].append(job.job_id)
+
+    has_stale_terminals = any(terminal_conflicts[k] for k in terminal_conflicts)
+    policy = stale_terminal_policy
+    if policy not in {
+        "refresh_stopped_canceled",
+        "refresh_failed",
+        "refresh_stopped_canceled_failed",
+        "refresh_all",
+        "quit",
+    }:
+        logger.warning(
+            f"Unknown stale_terminal_policy={policy!r}; defaulting to "
+            "refresh_stopped_canceled_failed"
+        )
+        policy = "refresh_stopped_canceled_failed"
+    if has_stale_terminals:
+        logger.warning(
+            "Detected stale terminal CI jobs in Redis: "
+            f"FINISHED={len(terminal_conflicts['finished'])}, "
+            f"FAILED={len(terminal_conflicts['failed'])}, "
+            "STOPPED/CANCELED="
+            f"{len(terminal_conflicts['stopped']) + len(terminal_conflicts['canceled'])}. "
+            f"Applying policy: {policy}"
+        )
+    if policy == "quit" and has_stale_terminals:
+        raise RuntimeError(
+            "Stale terminal CI jobs detected; quitting per selected policy."
+        )
+
     for job in ordered_jobs:
         params = serialize_ci_job(job)
         if output_dir:
             params["output_dir"] = output_dir
 
         job_queue = _get_queue(job)
+        existing_job = existing_jobs.get(job.job_id)
+
+        if existing_job is not None:
+            existing_status = existing_job.get_status()
+            status_name = _status_name(existing_status)
+            if status_name == "finished":
+                if job.job_type == "build":
+                    logger.warning(
+                        f"CI build job {job.job_id} already finished; deleting stale "
+                        "record before enqueue to guarantee fresh build artifacts"
+                    )
+                    existing_job.delete()
+                elif _should_refresh(status_name, policy):
+                    logger.warning(
+                        f"CI job {job.job_id} already finished; deleting stale "
+                        "record before enqueue per selected policy"
+                    )
+                    existing_job.delete()
+                else:
+                    logger.warning(
+                        f"CI job {job.job_id} already finished; reusing existing result"
+                    )
+                    rq_jobs[job.job_id] = existing_job
+                    continue
+            elif status_name in {"failed", "stopped", "canceled"}:
+                if _should_refresh(status_name, policy):
+                    logger.warning(
+                        f"CI job {job.job_id} has terminal status "
+                        f"({existing_status}), deleting stale record before enqueue"
+                    )
+                    existing_job.delete()
+                elif policy == "quit":
+                    raise RuntimeError(
+                        "Stale terminal CI jobs detected; quitting per selected policy."
+                    )
+                else:
+                    logger.warning(
+                        f"CI job {job.job_id} has terminal status "
+                        f"({existing_status}); reusing existing result"
+                    )
+                    rq_jobs[job.job_id] = existing_job
+                    continue
+            elif status_name in reenqueue_safe_statuses:
+                logger.warning(
+                    f"CI job {job.job_id} already exists with status "
+                    f"({existing_status}), deleting stale queued/deferred record "
+                    "before enqueue"
+                )
+                existing_job.delete()
+            else:
+                is_stale_started, age_seconds, timeout_seconds = (
+                    _is_orphaned_started_job(existing_job, stale_started_grace_seconds)
+                )
+                if is_stale_started:
+                    logger.warning(
+                        "CI job %s has stale STARTED status "
+                        "(age=%.1fs timeout=%ss); deleting and re-enqueuing",
+                        job.job_id,
+                        age_seconds,
+                        timeout_seconds,
+                    )
+                    existing_job.delete()
+                else:
+                    logger.warning(
+                        f"CI job {job.job_id} already active with status="
+                        f"{existing_status}; reusing existing job for this run"
+                    )
+                    rq_jobs[job.job_id] = existing_job
+                    continue
 
         # Map depends_on to RQ dependency IDs
         depends_on_rq: Optional[list[rq.job.Job]] = None
         if job.depends_on:
-            dep_rq_jobs = [rq_jobs[d] for d in job.depends_on if d in rq_jobs]
-            if dep_rq_jobs:
-                depends_on_rq = dep_rq_jobs
+            unknown_dep_ids = [
+                dep_id for dep_id in job.depends_on if dep_id not in all_job_ids
+            ]
+            if unknown_dep_ids:
+                missing_csv = ", ".join(unknown_dep_ids)
+                raise ValueError(
+                    f"CI job {job.job_id} has unknown dependencies: {missing_csv}"
+                )
+            unresolved_dep_ids = [
+                dep_id for dep_id in job.depends_on if dep_id not in rq_jobs
+            ]
+            if unresolved_dep_ids:
+                unresolved_csv = ", ".join(unresolved_dep_ids)
+                raise ValueError(
+                    f"CI job {job.job_id} has dependencies that were not enqueued "
+                    f"before it (invalid DAG ordering): {unresolved_csv}"
+                )
+            depends_on_rq = [rq_jobs[d] for d in job.depends_on]
 
         try:
             rq_job = job_queue.enqueue(
@@ -672,14 +1131,30 @@ def enqueue_and_poll_ci_jobs(
         except Exception:
             existing = rq.job.Job.fetch(job.job_id, connection=redis_conn)
             status = existing.get_status()
-            if status in ("finished", "failed"):
-                rq_jobs[job.job_id] = existing
-                logger.info(f"CI job {job.job_id} already done (status: {status})")
-            else:
-                # Stale job from previous run — delete and re-enqueue
+            status_name = _status_name(status)
+            if status_name in terminal_statuses:
+                if status_name == "finished" and job.job_type == "build":
+                    logger.warning(
+                        f"CI build job {job.job_id} already finished; "
+                        "deleting and re-enqueuing to guarantee fresh build artifacts"
+                    )
+                    existing.delete()
+                    rq_job = job_queue.enqueue(
+                        "crsbench.distributed.ci_jobs.execute_ci_job",
+                        params,
+                        job_timeout=3600,
+                        result_ttl=-1,
+                        job_id=job.job_id,
+                        depends_on=depends_on_rq,
+                    )
+                    rq_jobs[job.job_id] = rq_job
+                    continue
+                # Never reuse terminal jobs across runs. Reusing "finished" can
+                # hide missing Docker artifacts and make verify/test fail with
+                # infra_missing_*_build_context while build appears successful.
                 logger.warning(
-                    f"CI job {job.job_id} stale (status: {status}), "
-                    f"deleting and re-enqueuing"
+                    f"CI job {job.job_id} has terminal status ({status}), "
+                    f"deleting and re-enqueuing for fresh run"
                 )
                 existing.delete()
                 rq_job = job_queue.enqueue(
@@ -691,6 +1166,49 @@ def enqueue_and_poll_ci_jobs(
                     depends_on=depends_on_rq,
                 )
                 rq_jobs[job.job_id] = rq_job
+            elif status_name in reenqueue_safe_statuses:
+                logger.warning(
+                    f"CI job {job.job_id} already exists with status ({status}), "
+                    "deleting stale queued/deferred record and re-enqueuing"
+                )
+                existing.delete()
+                rq_job = job_queue.enqueue(
+                    "crsbench.distributed.ci_jobs.execute_ci_job",
+                    params,
+                    job_timeout=3600,
+                    result_ttl=-1,
+                    job_id=job.job_id,
+                    depends_on=depends_on_rq,
+                )
+                rq_jobs[job.job_id] = rq_job
+            else:
+                is_stale_started, age_seconds, timeout_seconds = (
+                    _is_orphaned_started_job(existing, stale_started_grace_seconds)
+                )
+                if is_stale_started:
+                    logger.warning(
+                        "CI job %s has stale STARTED status "
+                        "(age=%.1fs timeout=%ss); deleting and re-enqueuing",
+                        job.job_id,
+                        age_seconds,
+                        timeout_seconds,
+                    )
+                    existing.delete()
+                    rq_job = job_queue.enqueue(
+                        "crsbench.distributed.ci_jobs.execute_ci_job",
+                        params,
+                        job_timeout=3600,
+                        result_ttl=-1,
+                        job_id=job.job_id,
+                        depends_on=depends_on_rq,
+                    )
+                    rq_jobs[job.job_id] = rq_job
+                else:
+                    logger.warning(
+                        f"CI job {job.job_id} already active with status={status}; "
+                        "reusing existing job for this run"
+                    )
+                    rq_jobs[job.job_id] = existing
 
     logger.info(
         f"Enqueued {len(rq_jobs)} CI jobs ({len(build_type_jobs)} build, "
@@ -700,6 +1218,7 @@ def enqueue_and_poll_ci_jobs(
 
     # Poll for results with deferred job recovery
     pending = set(rq_jobs.keys())
+    missing_job_failures: dict[str, dict[str, Any]] = {}
     recovery_interval = 30  # seconds between recovery sweeps
     last_recovery = time.monotonic()
 
@@ -707,12 +1226,66 @@ def enqueue_and_poll_ci_jobs(
         # Batch-fetch all pending jobs in one Redis pipeline round-trip
         pending_ids = list(pending)
         fetched = rq.job.Job.fetch_many(pending_ids, connection=redis_conn)
-        for rq_job in fetched:
+        for pending_id, rq_job in zip(pending_ids, fetched, strict=False):
             if rq_job is None:
+                missing_job_failures[pending_id] = {
+                    "job_id": pending_id,
+                    "job_type": "unknown",
+                    "success": False,
+                    "error": (
+                        "infra_missing_rq_job: job metadata missing from Redis during "
+                        "polling (fetch_many returned None)"
+                    ),
+                    "elapsed_seconds": 0.0,
+                    "details": {
+                        "error_code": "infra_missing_rq_job",
+                        "retryable": False,
+                    },
+                    "started_at": None,
+                    "finished_at": datetime.now().isoformat(),
+                }
+                pending.discard(pending_id)
                 continue
             rq_jobs[rq_job.id] = rq_job
             status = rq_job.get_status()
-            if status in ("finished", "failed"):
+            status_name = _status_name(status)
+            if status_name == "started":
+                is_stale_started, age_seconds, timeout_seconds = (
+                    _is_orphaned_started_job(rq_job, stale_started_grace_seconds)
+                )
+                if is_stale_started:
+                    started_at = getattr(rq_job, "started_at", None)
+                    if started_at is not None and started_at.tzinfo is None:
+                        started_at = started_at.replace(tzinfo=timezone.utc)
+                    logger.warning(
+                        "Marking stale STARTED CI job as infra failure: "
+                        f"{pending_id} (age={age_seconds:.1f}s, "
+                        f"timeout={timeout_seconds}s)"
+                    )
+                    missing_job_failures[pending_id] = {
+                        "job_id": pending_id,
+                        "job_type": "unknown",
+                        "success": False,
+                        "error": (
+                            "infra_stale_started_job: job remained STARTED past "
+                            "timeout window; likely orphaned worker or crashed "
+                            "supervisor"
+                        ),
+                        "elapsed_seconds": 0.0,
+                        "details": {
+                            "error_code": "infra_stale_started_job",
+                            "retryable": True,
+                            "started_age_seconds": age_seconds,
+                            "timeout_seconds": timeout_seconds,
+                        },
+                        "started_at": started_at.isoformat()
+                        if started_at is not None
+                        else None,
+                        "finished_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    pending.discard(pending_id)
+                    continue
+            if status_name in terminal_statuses:
                 pending.discard(rq_job.id)
 
         # Periodically recover orphaned deferred jobs (RQ race condition)
@@ -727,6 +1300,16 @@ def enqueue_and_poll_ci_jobs(
                         f"will retry next interval",
                         exc_info=True,
                     )
+                try:
+                    _mark_blocked_deferred_jobs(
+                        q, rq_jobs, pending, missing_job_failures
+                    )
+                except Exception:
+                    logger.warning(
+                        f"Blocked deferred sweep failed for queue {q.name}, "
+                        "will retry next interval",
+                        exc_info=True,
+                    )
             last_recovery = now
 
         if pending:
@@ -735,11 +1318,15 @@ def enqueue_and_poll_ci_jobs(
 
     # Collect results
     raw_results: dict[str, dict[str, Any]] = {}
+    raw_results.update(missing_job_failures)
     for job_id, rq_job in rq_jobs.items():
+        if job_id in missing_job_failures:
+            continue
         rq_job.refresh()
         status = rq_job.get_status()
 
-        if status == "finished" and rq_job.result:
+        status_name = _status_name(status)
+        if status_name == "finished" and rq_job.result:
             raw_results[job_id] = rq_job.result
         else:
             exc_info = rq_job.exc_info or "Unknown error"

@@ -90,6 +90,8 @@ Examples:
         action="store_true",
         help="Show which benchmarks would be retried without running them",
     )
+    # Keep retry behavior aligned with historical full-build default unless overridden.
+    parser.set_defaults(mode="full")
     parser.set_defaults(ci_func=run_retry)
 
 
@@ -144,6 +146,9 @@ def run_retry(args: argparse.Namespace) -> int:
     retry_args.all = False
     retry_args.filter = None
 
+    logger.info(
+        f"Retry mode: {getattr(retry_args, 'mode', 'full')} (use --mode to override)"
+    )
     logger.info(f"Retrying {len(failed_benchmarks)} failed benchmark(s)...")
 
     # Run the all command with the failed benchmarks

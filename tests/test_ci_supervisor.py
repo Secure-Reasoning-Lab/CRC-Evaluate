@@ -630,6 +630,122 @@ class TestSupervisorExitCondition:
         assert result == 0
         assert iterations[0] == 6
 
+    def test_exception_path_terminates_workers(self) -> None:
+        """Unexpected supervisor errors should terminate active workers."""
+        from crsbench.distributed.ci_supervisor import run_ci_supervisor
+
+        mock_build_queue = _make_mock_queue("crsbench_ci_build", count=1)
+        mock_verify_queue = _make_mock_queue("crsbench_ci_verify", count=0)
+
+        def queue_factory(name, **_kwargs):
+            if "build" in name:
+                return mock_build_queue
+            return mock_verify_queue
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor._terminate_all"
+            ) as mock_terminate,
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            mock_rq.Queue.dequeue_any.side_effect = RuntimeError("boom")
+            result = run_ci_supervisor(
+                redis_host="localhost",
+                build_queue_name="crsbench_ci_build",
+                verify_queue_name="crsbench_ci_verify",
+                worker_name="test-worker",
+                build_jobs=1,
+                build_cores_per_job=1,
+                verify_jobs=1,
+                job_runner=lambda _h, _n, _j: None,
+            )
+
+        assert result == 3
+        assert mock_terminate.call_count == 2
+
+    def test_exception_path_cleans_active_worker_resources(self) -> None:
+        """Exception after spawn should cleanup process, CPUs, and cgroup."""
+        from pathlib import Path
+
+        from crsbench.distributed.ci_supervisor import run_ci_supervisor
+
+        mock_build_queue = _make_mock_queue("crsbench_ci_build", count=1)
+        mock_verify_queue = _make_mock_queue("crsbench_ci_verify", count=0)
+
+        def queue_factory(name, **_kwargs):
+            if "build" in name:
+                return mock_build_queue
+            return mock_verify_queue
+
+        mock_job = MagicMock()
+        mock_job.id = "test-job-12345678"
+        mock_job.meta = {}
+        mock_job.get_status.return_value = "queued"
+
+        mock_process = MagicMock()
+        mock_process.pid = 43210
+        # reap check, terminate loop check, force-kill check
+        mock_process.is_alive.side_effect = [True, True, True]
+
+        dequeue_calls = {"n": 0}
+
+        def dequeue_any(_queues, **_kwargs):
+            dequeue_calls["n"] += 1
+            if dequeue_calls["n"] == 1:
+                return (mock_job, mock_build_queue)
+            raise RuntimeError("boom")
+
+        mock_pool = MagicMock()
+        mock_pool.allocate.return_value = [0]
+        mock_pool.total_cpus = 1
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor.multiprocessing.Process"
+            ) as mock_proc_cls,
+            patch("crsbench.utils.cpu_pool.CPUPool", return_value=mock_pool),
+            patch(
+                "crsbench.utils.cgroup.run_preflight_checks",
+                return_value=Path("/sys/fs/cgroup/crsbench"),
+            ),
+            patch("crsbench.utils.cgroup.setup_cgroup_hierarchy"),
+            patch("crsbench.utils.cgroup.cleanup_stale_cgroups", return_value=0),
+            patch(
+                "crsbench.utils.cgroup.create_cgroup",
+                return_value=Path("/sys/fs/cgroup/crsbench/build-1"),
+            ),
+            patch(
+                "crsbench.utils.cgroup.cgroup_path_for_docker",
+                return_value="crsbench/build-1",
+            ),
+            patch("crsbench.utils.cgroup.cleanup_cgroup", return_value=True) as mock_cg,
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            mock_rq.Queue.dequeue_any.side_effect = dequeue_any
+            mock_proc_cls.return_value = mock_process
+            result = run_ci_supervisor(
+                redis_host="localhost",
+                build_queue_name="crsbench_ci_build",
+                verify_queue_name="crsbench_ci_verify",
+                worker_name="test-worker",
+                build_jobs=2,
+                build_cores_per_job=1,
+                verify_jobs=1,
+                job_runner=lambda _h, _n, _j: None,
+                use_cpuset=True,
+                use_cgroups=True,
+            )
+
+        assert result == 3
+        mock_process.terminate.assert_called_once()
+        mock_process.kill.assert_called_once()
+        mock_pool.release.assert_called_once_with([0])
+        mock_cg.assert_called_with(Path("/sys/fs/cgroup/crsbench/build-1"), force=True)
+
 
 class TestMultiQueueSupervisor:
     """Tests for run_multi_queue_supervisor with multiple queue lists."""
@@ -858,6 +974,117 @@ class TestMultiQueueSupervisor:
         assert result == 0
         assert iterations[0] == 6
 
+    def test_exception_path_terminates_workers(self) -> None:
+        """Unexpected multi-queue errors should terminate active workers."""
+        from crsbench.distributed.ci_supervisor import run_multi_queue_supervisor
+
+        build_q = _make_mock_queue("crsbench_exp_build", count=1)
+        verify_q = _make_mock_queue("crsbench_exp_verify", count=0)
+
+        def queue_factory(name, **_kwargs):
+            return build_q if "build" in name else verify_q
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor._terminate_all"
+            ) as mock_terminate,
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            mock_rq.Queue.dequeue_any.side_effect = RuntimeError("boom")
+            result = run_multi_queue_supervisor(
+                redis_host="localhost",
+                build_queue_names=["crsbench_exp_build"],
+                verify_queue_names=["crsbench_exp_verify"],
+                worker_name="test-worker",
+                build_jobs=1,
+                build_cores_per_job=1,
+                verify_jobs=1,
+                job_runner=lambda _h, _n, _j: None,
+            )
+
+        assert result == 3
+        assert mock_terminate.call_count == 2
+
+    def test_exception_path_cleans_active_worker_resources(self) -> None:
+        """Multi-queue exception after spawn should cleanup active worker resources."""
+        from pathlib import Path
+
+        from crsbench.distributed.ci_supervisor import run_multi_queue_supervisor
+
+        build_q = _make_mock_queue("crsbench_exp_build", count=1)
+        verify_q = _make_mock_queue("crsbench_exp_verify", count=0)
+
+        def queue_factory(name, **_kwargs):
+            return build_q if "build" in name else verify_q
+
+        mock_job = MagicMock()
+        mock_job.id = "test-job-12345678"
+        mock_job.meta = {}
+        mock_job.get_status.return_value = "queued"
+
+        mock_process = MagicMock()
+        mock_process.pid = 12321
+        mock_process.is_alive.side_effect = [True, True, True]
+
+        dequeue_calls = {"n": 0}
+
+        def dequeue_any(_queues, **_kwargs):
+            dequeue_calls["n"] += 1
+            if dequeue_calls["n"] == 1:
+                return (mock_job, build_q)
+            raise RuntimeError("boom")
+
+        mock_pool = MagicMock()
+        mock_pool.allocate.return_value = [0]
+        mock_pool.total_cpus = 1
+
+        with (
+            _patch_supervisor(),
+            patch("crsbench.distributed.ci_supervisor.rq") as mock_rq,
+            patch(
+                "crsbench.distributed.ci_supervisor.multiprocessing.Process"
+            ) as mock_proc_cls,
+            patch("crsbench.utils.cpu_pool.CPUPool", return_value=mock_pool),
+            patch(
+                "crsbench.utils.cgroup.run_preflight_checks",
+                return_value=Path("/sys/fs/cgroup/crsbench"),
+            ),
+            patch("crsbench.utils.cgroup.setup_cgroup_hierarchy"),
+            patch("crsbench.utils.cgroup.cleanup_stale_cgroups", return_value=0),
+            patch(
+                "crsbench.utils.cgroup.create_cgroup",
+                return_value=Path("/sys/fs/cgroup/crsbench/build-1"),
+            ),
+            patch(
+                "crsbench.utils.cgroup.cgroup_path_for_docker",
+                return_value="crsbench/build-1",
+            ),
+            patch("crsbench.utils.cgroup.cleanup_cgroup", return_value=True) as mock_cg,
+        ):
+            mock_rq.Queue.side_effect = queue_factory
+            mock_rq.Queue.dequeue_any.side_effect = dequeue_any
+            mock_proc_cls.return_value = mock_process
+            result = run_multi_queue_supervisor(
+                redis_host="localhost",
+                build_queue_names=["crsbench_exp_build"],
+                verify_queue_names=["crsbench_exp_verify"],
+                worker_name="test-worker",
+                build_jobs=2,
+                build_cores_per_job=1,
+                verify_jobs=1,
+                job_runner=lambda _h, _n, _j: None,
+                use_cpuset=True,
+                use_cgroups=True,
+            )
+
+        assert result == 3
+        mock_process.terminate.assert_called_once()
+        mock_process.kill.assert_called_once()
+        mock_pool.release.assert_called_once_with([0])
+        mock_cg.assert_called_with(Path("/sys/fs/cgroup/crsbench/build-1"), force=True)
+
 
 class TestHelperFunctions:
     """Test internal helper functions."""
@@ -887,6 +1114,26 @@ class TestHelperFunctions:
         assert isinstance(result, int)
         assert result > 0
 
+    def test_safe_cwd_falls_back_to_root_on_enoent(self) -> None:
+        """_safe_cwd should not propagate ENOENT from Path.cwd()."""
+        from pathlib import Path
+
+        from crsbench.distributed.ci_supervisor import _safe_cwd
+
+        with patch.object(Path, "cwd", side_effect=FileNotFoundError("cwd missing")):
+            assert _safe_cwd() == Path("/")
+
+    def test_check_disk_space_uses_safe_cwd_for_relative_paths(self) -> None:
+        """Relative paths should still resolve when cwd cannot be read."""
+        from pathlib import Path
+
+        from crsbench.distributed.ci_supervisor import check_disk_space
+
+        with patch.object(Path, "cwd", side_effect=FileNotFoundError("cwd missing")):
+            result = check_disk_space(Path("relative/missing/path"))
+            assert isinstance(result, int)
+            assert result > 0
+
     def test_matches_cpu_tag_strict_for_untagged_workers(self) -> None:
         """Untagged workers should not execute tagged jobs."""
         from crsbench.distributed.ci_supervisor import _matches_cpu_tag
@@ -913,3 +1160,39 @@ class TestHelperFunctions:
         assert _matches_cpu_tag(untagged_job, "x86-avx2") is True
         assert _matches_cpu_tag(matching_job, "x86-avx2") is True
         assert _matches_cpu_tag(mismatching_job, "x86-avx2") is False
+
+    def test_force_cleanup_deferred_cgroups_clears_successes(self) -> None:
+        """Force cleanup should remove successful paths and keep failures only."""
+        from pathlib import Path
+
+        from crsbench.distributed.ci_supervisor import _force_cleanup_deferred_cgroups
+
+        deferred = [Path("/cg/a"), Path("/cg/b")]
+
+        def _cleanup(path: Path, force: bool) -> bool:
+            assert force is True
+            if str(path).endswith("/b"):
+                raise RuntimeError("still busy")
+            return True
+
+        with patch("crsbench.utils.cgroup.cleanup_cgroup", side_effect=_cleanup):
+            _force_cleanup_deferred_cgroups(deferred)
+
+        assert deferred == [Path("/cg/b")]
+
+    def test_force_cleanup_deferred_cgroups_keeps_false_results(self) -> None:
+        """False return from cleanup_cgroup should keep path deferred."""
+        from pathlib import Path
+
+        from crsbench.distributed.ci_supervisor import _force_cleanup_deferred_cgroups
+
+        deferred = [Path("/cg/a"), Path("/cg/b")]
+
+        def _cleanup(path: Path, force: bool) -> bool:
+            assert force is True
+            return not str(path).endswith("/b")
+
+        with patch("crsbench.utils.cgroup.cleanup_cgroup", side_effect=_cleanup):
+            _force_cleanup_deferred_cgroups(deferred)
+
+        assert deferred == [Path("/cg/b")]
