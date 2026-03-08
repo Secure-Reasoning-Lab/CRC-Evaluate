@@ -10,6 +10,10 @@ from typing import Optional
 
 import yaml
 
+from crsbench.benchmark.packaging.path_policy import (
+    find_path_policy_violations,
+    format_path_policy_error,
+)
 from crsbench.benchmark.packaging.workdir_parser import get_expected_source_dir
 from crsbench.builder.types import BenchmarkMode
 from crsbench.utils.logger import get_logger
@@ -107,6 +111,11 @@ def validate_benchmark(benchmark_path: Path) -> ValidationResult:
     # Check ref.diff for delta mode benchmarks
     ref_diff_warnings = _validate_ref_diff(benchmark_path, meta_yaml)
     warnings.extend(ref_diff_warnings)
+
+    # Enforce benchmark script path portability.
+    path_policy_violations = find_path_policy_violations(benchmark_path)
+    if path_policy_violations:
+        errors.append(format_path_policy_error(benchmark_path, path_policy_violations))
 
     return ValidationResult(
         valid=len(errors) == 0,

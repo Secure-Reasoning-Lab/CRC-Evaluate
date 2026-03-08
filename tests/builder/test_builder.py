@@ -309,6 +309,33 @@ class TestOSSFuzzBuilder:
         assert builder.is_variant_built(variant_name)
         assert not builder.is_variant_built("nonexistent-variant")
 
+    def test_apply_patches_for_variant_raises_on_apply_failure(
+        self, mock_oss_fuzz_path: Path, tmp_path: Path
+    ):
+        """Patch apply failures must fail the build path explicitly."""
+        builder = OSSFuzzBuilder(mock_oss_fuzz_path)
+        builder.infra = MagicMock()
+        builder.infra.apply_patches_from_list.return_value = False
+
+        patch_file = tmp_path / "patch_0.diff"
+        patch_file.write_text("diff --git a/a b/a\n")
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+
+        config = BuildConfig(
+            benchmark_name="test-benchmark",
+            variant_type=VariantType.CPV,
+            commit="abc123",
+            main_repo="https://github.com/test/repo",
+            benchmark_path=tmp_path / "benchmark",
+            patches=[patch_file],
+            mode=BenchmarkMode.DELTA,
+            cpv_num=0,
+        )
+
+        with pytest.raises(RuntimeError, match="Patch application failed"):
+            builder._apply_patches_for_variant(config, repo_path)
+
 
 class TestOSSFuzzBuilderForceRebuild:
     """Tests for force_rebuild cleanup behavior in OSSFuzzBuilder."""
@@ -529,10 +556,8 @@ class TestCleanupDockerImages:
         """Test that existing Docker images are removed via docker rmi."""
         variant = "test-variant"
         expected_images = [
-            f"aixcc-afc/{variant}:latest",
-            f"aixcc-afc/{variant}:inc-address",
-            f"aixcc-afc/{variant}:inc-undefined",
-            f"aixcc-afc/{variant}:inc-memory",
+            f"gcr.io/oss-fuzz/{variant}:latest",
+            f"gcr.io/oss-fuzz/{variant}:inc",
         ]
 
         mock_run = MagicMock(return_value=MagicMock(returncode=0))
@@ -578,7 +603,7 @@ class TestCleanupDockerImages:
             infra.cleanup_docker_images("test-variant")
 
             # docker rmi was attempted for all images
-            assert mock_run.call_count == 4
+            assert mock_run.call_count == 2
 
     def test_cleanup_build_outputs_does_not_call_cleanup_docker_images(
         self, infra, mock_oss_fuzz_path: Path
@@ -715,6 +740,7 @@ class TestIncBuildSupport:
         self, builder: OSSFuzzBuilder, tmp_path: Path
     ):
         """Test that _build_single uses inc-build path when image is available."""
+        (tmp_path / "benchmark").mkdir()
         config = BuildConfig(
             benchmark_name="test-benchmark",
             variant_type=VariantType.DELTA_REF,
@@ -743,7 +769,11 @@ class TestIncBuildSupport:
             builder._build_single(config)
 
             # Should call ensure_inc_image and _build_with_inc_image
-            mock_ensure.assert_called_once_with("test-benchmark", "address")
+            mock_ensure.assert_called_once_with(
+                "test-benchmark",
+                "address",
+                benchmark_path=tmp_path / "benchmark",
+            )
             mock_inc_build.assert_called_once()
             mock_standard.assert_not_called()
 
@@ -958,6 +988,34 @@ class TestBuildMetadataCaching:
         assert infra.is_variant_built("test-variant", require_inc_build=True) is False
         assert infra.is_variant_built("test-variant", require_inc_build=False) is False
 
+    def test_is_variant_built_requires_latest_source_image_when_requested(self, infra):
+        """When require_source_image=True, :latest image must exist."""
+        self._create_mock_build(infra, "test-variant", inc_build=False)
+
+        with patch.object(infra, "_docker_image_exists", return_value=False):
+            assert (
+                infra.is_variant_built(
+                    "test-variant",
+                    require_inc_build=False,
+                    require_source_image=True,
+                )
+                is False
+            )
+
+    def test_is_variant_built_requires_inc_source_image_when_requested(self, infra):
+        """When require_source_image=True with inc-build, :inc image must exist."""
+        self._create_mock_build(infra, "test-variant", inc_build=True)
+
+        with patch.object(infra, "_docker_image_exists", return_value=False):
+            assert (
+                infra.is_variant_built(
+                    "test-variant",
+                    require_inc_build=True,
+                    require_source_image=True,
+                )
+                is False
+            )
+
     def test_builder_uses_cache_when_inc_build_matches(
         self, oss_fuzz_path: Path, infra, tmp_path: Path
     ):
@@ -1019,3 +1077,50 @@ class TestBuildMetadataCaching:
             mock.assert_called_once()
             assert config.variant_name in results
             assert results[config.variant_name].cached is False
+
+
+class TestTempSourceCleanup:
+    """Tests for conditional temp source ownership repair."""
+
+    def test_cleanup_skips_ownership_fix_when_remove_succeeds(self, tmp_path: Path):
+        oss_fuzz = tmp_path / "oss-fuzz"
+        (oss_fuzz / "infra").mkdir(parents=True)
+        (oss_fuzz / "infra" / "helper.py").touch()
+        (oss_fuzz / "projects").mkdir()
+        (oss_fuzz / "build" / "out").mkdir(parents=True)
+        builder = OSSFuzzBuilder(oss_fuzz)
+        temp_dir = tmp_path / "temp-src"
+        temp_dir.mkdir()
+
+        with (
+            patch(
+                "crsbench.builder.builder.docker_rmtree", return_value=True
+            ) as rm_mock,
+            patch("crsbench.builder.builder.fix_docker_ownership") as fix_mock,
+        ):
+            builder._cleanup_temp_source_dir(temp_dir)
+
+        rm_mock.assert_called_once_with(temp_dir)
+        fix_mock.assert_not_called()
+
+    def test_cleanup_fixes_ownership_only_after_remove_failure(self, tmp_path: Path):
+        oss_fuzz = tmp_path / "oss-fuzz"
+        (oss_fuzz / "infra").mkdir(parents=True)
+        (oss_fuzz / "infra" / "helper.py").touch()
+        (oss_fuzz / "projects").mkdir()
+        (oss_fuzz / "build" / "out").mkdir(parents=True)
+        builder = OSSFuzzBuilder(oss_fuzz)
+        temp_dir = tmp_path / "temp-src"
+        temp_dir.mkdir()
+
+        with (
+            patch(
+                "crsbench.builder.builder.docker_rmtree",
+                side_effect=[False, True],
+            ) as rm_mock,
+            patch("crsbench.builder.builder.fix_docker_ownership") as fix_mock,
+        ):
+            builder._cleanup_temp_source_dir(temp_dir)
+
+        assert rm_mock.call_count == 2
+        fix_mock.assert_called_once_with(temp_dir)

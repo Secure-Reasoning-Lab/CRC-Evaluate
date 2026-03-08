@@ -191,7 +191,7 @@ def docker_image_exists(image_tag: str) -> bool:
     """Check if a Docker image exists locally.
 
     Args:
-        image_tag: Docker image tag (e.g., "aixcc-afc/benchmark-name")
+        image_tag: Docker image tag (e.g., "crsbench/benchmark-name")
 
     Returns:
         True if image exists locally, False otherwise
@@ -218,9 +218,7 @@ def get_oss_fuzz_root() -> str:
     """Get OSS-Fuzz root directory.
 
     Priority:
-    1. OSS_FUZZ_ROOT environment variable (if set)
-    2. ../oss-fuzz relative to CRSBench root (sibling directory)
-    3. ~/oss-fuzz as fallback
+    1. Managed sparse checkout at third_party/oss-fuzz
 
     Returns:
         Path to OSS-Fuzz root directory
@@ -228,34 +226,97 @@ def get_oss_fuzz_root() -> str:
     Raises:
         RuntimeError: If OSS-Fuzz directory not found
     """
-    # 1. Check environment variable first
-    env_path = os.getenv("OSS_FUZZ_ROOT")
-    if env_path:
-        if Path(env_path).is_dir():
-            return env_path
-        logger.warning(f"OSS_FUZZ_ROOT={env_path} does not exist, trying other paths")
-
-    # 2. Check sibling directory (../oss-fuzz relative to CRSBench)
-    # This file is at crsbench/utils/run_helper.py
-    # CRSBench root is two levels up
     crsbench_root = Path(__file__).parent.parent.parent
-    sibling_path = crsbench_root / "oss-fuzz"
-    if sibling_path.is_dir():
-        return str(sibling_path)
+    managed_path = crsbench_root / "third_party" / "oss-fuzz"
 
-    # 3. Fallback to ~/oss-fuzz
-    home_path = Path.home() / "oss-fuzz"
-    if home_path.is_dir():
-        return str(home_path)
+    # Managed sparse checkout under third_party/
+    helper_py = managed_path / "infra" / "helper.py"
+    if helper_py.exists():
+        return str(managed_path)
 
     # None found - raise error
     raise RuntimeError(
         f"OSS-Fuzz not found. Searched:\n"
-        f"  1. OSS_FUZZ_ROOT env var: {env_path or '(not set)'}\n"
-        f"  2. Sibling directory: {sibling_path}\n"
-        f"  3. Home directory: {home_path}\n"
-        f"Please set OSS_FUZZ_ROOT or clone oss-fuzz to one of these locations."
+        f"  1. Managed sparse checkout: {managed_path}\n"
+        f"Run scripts/setup-third-party.sh to fetch official oss-fuzz."
     )
+
+
+def ensure_oss_fuzz_root(*, bootstrap_if_missing: bool = True) -> str:
+    """Resolve OSS-Fuzz root, optionally bootstrapping managed checkout.
+
+    Args:
+        bootstrap_if_missing: If True, run scripts/setup-third-party.sh when
+            OSS-Fuzz cannot be resolved by get_oss_fuzz_root().
+
+    Returns:
+        Path to OSS-Fuzz root.
+
+    Raises:
+        RuntimeError: If OSS-Fuzz cannot be resolved or bootstrap fails.
+    """
+    first_error: RuntimeError | None = None
+    try:
+        return get_oss_fuzz_root()
+    except RuntimeError as e:
+        first_error = e
+        if not bootstrap_if_missing:
+            raise
+
+    crsbench_root = Path(__file__).parent.parent.parent
+    setup_script = crsbench_root / "scripts" / "setup-third-party.sh"
+    if not setup_script.exists():
+        assert first_error is not None
+        raise first_error
+
+    try:
+        lock_dir = crsbench_root / ".crsbench-repos"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = lock_dir / ".oss-fuzz-setup.lock"
+
+        try:
+            import fcntl
+        except ImportError as e:
+            raise RuntimeError(
+                "Managed oss-fuzz bootstrap requires file locking support "
+                "(fcntl unavailable). Run scripts/setup-third-party.sh once in a "
+                "single process, then retry."
+            ) from e
+
+        with lock_path.open("w") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                try:
+                    # Another process may have completed setup while we waited.
+                    return get_oss_fuzz_root()
+                except RuntimeError:
+                    pass
+
+                result = subprocess.run(
+                    ["bash", str(setup_script)],
+                    cwd=str(crsbench_root),
+                    capture_output=True,
+                    text=True,
+                    stdin=subprocess.DEVNULL,
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        "Failed to bootstrap managed oss-fuzz checkout via "
+                        f"{setup_script} (exit={result.returncode}).\n"
+                        f"stdout:\n{result.stdout}\n"
+                        f"stderr:\n{result.stderr}"
+                    )
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+        return get_oss_fuzz_root()
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(
+            "Failed to bootstrap managed oss-fuzz checkout due to unexpected error: "
+            f"{type(e).__name__}: {e}"
+        ) from e
 
 
 def get_benchmarks_root() -> str:
@@ -585,7 +646,7 @@ def run_helper(
         Tuple of (stdout, stderr)
     """
     if oss_fuzz_root is None:
-        oss_fuzz_root = get_oss_fuzz_root()
+        oss_fuzz_root = ensure_oss_fuzz_root()
 
     helper_path = Path(oss_fuzz_root) / "infra" / "helper.py"
     command = ["python", str(helper_path)] + helper_command
@@ -863,7 +924,7 @@ def prepare_benchmark_for_oss_fuzz(
         The OSS-Fuzz project path (e.g., "aixcc/benchmark-name") or None
     """
     if oss_fuzz_root is None:
-        oss_fuzz_root = get_oss_fuzz_root()
+        oss_fuzz_root = ensure_oss_fuzz_root()
 
     benchmark_dir = get_benchmark_dir(benchmark_name)
 
@@ -987,7 +1048,7 @@ def build_benchmark_with_logging(
         BuildResult with build status and logs
     """
     if oss_fuzz_root is None:
-        oss_fuzz_root = get_oss_fuzz_root()
+        oss_fuzz_root = ensure_oss_fuzz_root()
 
     oss_fuzz_path = Path(oss_fuzz_root)
     log_dir_path: Path
@@ -1117,7 +1178,7 @@ def run_test_sh(
         RuntimeError: For other unexpected results
     """
     if oss_fuzz_root is None:
-        oss_fuzz_root = get_oss_fuzz_root()
+        oss_fuzz_root = ensure_oss_fuzz_root()
 
     benchmark_dir = get_benchmark_dir(benchmark)
     test_sh_path = benchmark_dir / "test.sh"
@@ -1189,7 +1250,7 @@ def run_test_sh(
     sanitizer = sanitizers[0] if sanitizers else "address"
 
     # Docker image tag
-    image_tag = f"aixcc-afc/{benchmark}"
+    image_tag = f"crsbench/{benchmark}"
 
     # Build Docker command
     docker_command = ["docker", "run"]
@@ -1643,7 +1704,7 @@ def run_command_in_container(
         Command output
     """
     if oss_fuzz_root is None:
-        oss_fuzz_root = get_oss_fuzz_root()
+        oss_fuzz_root = ensure_oss_fuzz_root()
 
     # Get project source directory
     project_src_dir = get_project_source_dir(benchmark_name)
@@ -1655,7 +1716,7 @@ def run_command_in_container(
     workdir = get_workdir_from_dockerfile(benchmark_dir)
 
     # Docker image tag
-    image_tag = f"aixcc-afc/{benchmark_name}"
+    image_tag = f"crsbench/{benchmark_name}"
 
     logger.debug(
         f"Running command in container for benchmark '{benchmark_name}': {command}"

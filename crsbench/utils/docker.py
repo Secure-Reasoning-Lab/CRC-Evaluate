@@ -37,7 +37,10 @@ def docker_rmtree(path: Path, *, timeout: int = 120) -> bool:
         shutil.rmtree(path)
         logger.debug(f"Removed {path}")
         return True
-    except PermissionError:
+    except FileNotFoundError:
+        return True
+    except OSError:
+        # Fall through to Docker cleanup for permission / race / busy cases.
         pass
 
     # Fallback: root-owned files from a failed/interrupted build
@@ -55,19 +58,21 @@ def docker_rmtree(path: Path, *, timeout: int = 120) -> bool:
                 "alpine",
                 "sh",
                 "-c",
-                "rm -rf /target/* /target/.[!.]* /target/..?* 2>/dev/null; true",
+                "rm -rf /target/* /target/.[!.]* /target/..?* 2>/dev/null",
             ],
             timeout=timeout,
         )
 
         if result.returncode == 0:
             logger.debug(f"Removed contents of {path} via Docker")
-            # Remove the now-empty directory on the host
+            # Remove the directory itself; return False if anything remains.
             try:
-                path.rmdir()
+                shutil.rmtree(path)
+                logger.debug(f"Removed {path} after Docker fallback")
+                return True
             except OSError:
-                pass  # OK if dir isn't fully empty or is still mounted
-            return True
+                logger.warning(f"Docker cleanup left residual files in {path}")
+                return False
 
         logger.warning(f"Failed to remove {path} via Docker: {result.stderr}")
         return False

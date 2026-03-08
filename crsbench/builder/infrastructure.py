@@ -6,15 +6,25 @@ for building fuzzers and reproducing crashes.
 
 import hashlib
 import json
+import os
+import posixpath
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
 import threading
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from crsbench.builder.replay_policy import (
+    REPLAY_MODE_ENFORCE,
+    replay_install_script,
+    resolve_replay_policy,
+)
 from crsbench.builder.types import (
     BUILD_METADATA_FILE,
     BuildConfig,
@@ -23,6 +33,14 @@ from crsbench.builder.types import (
     ReproduceOutput,
 )
 from crsbench.utils.docker import docker_rmtree, fix_docker_ownership
+from crsbench.utils.image_names import (
+    DEFAULT_LOCAL_IMAGE_PREFIX,
+    DEFAULT_REGISTRY,
+    helper_inc_image_name,
+    helper_latest_image_name,
+    local_inc_image_name,
+    registry_inc_image_name,
+)
 from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import clone_or_copy_cached_repo
 from crsbench.utils.subprocess_utils import run_with_timeout
@@ -33,14 +51,28 @@ reproduce_logger = get_logger("reproduce")
 
 # Exit code constants from helper.py
 EXIT_CODE_TIMEOUT = 124  # Subprocess timeout in helper.py
+DEFAULT_CONTAINER_LOCALE = "C.UTF-8"
 
 _LEAK_MARKERS = (
     "LeakSanitizer:",
     "detected memory leaks",
 )
+_CRASH_MARKERS = (
+    "AddressSanitizer:DEADLYSIGNAL",
+    "AddressSanitizer: CHECK failed",
+    "ERROR: AddressSanitizer:",
+    "UndefinedBehaviorSanitizer",
+    "MemorySanitizer",
+    "ThreadSanitizer",
+    "libFuzzer: deadly signal",
+    "runtime error:",
+    "ERROR: AddressSanitizer",
+    "== Java Exception:",
+    "Exception in thread",
+)
 
 
-def _is_leak_only_exit(stdout: str) -> bool:
+def _is_leak_only_exit(output: str) -> bool:
     """Check if reproduce output is a LeakSanitizer-only exit (not a real crash).
 
     LeakSanitizer exits with non-zero code but memory leaks are diagnostic,
@@ -51,7 +83,13 @@ def _is_leak_only_exit(stdout: str) -> bool:
     atexit LeakSanitizer handler runs, so leak markers and real crashes
     are mutually exclusive.
     """
-    return any(marker in stdout for marker in _LEAK_MARKERS)
+    has_leak_markers = any(marker in output for marker in _LEAK_MARKERS)
+    return has_leak_markers and not _has_crash_signature(output)
+
+
+def _has_crash_signature(output: str) -> bool:
+    """Return True when reproduce output contains crash/sanitizer markers."""
+    return any(marker in output for marker in _CRASH_MARKERS)
 
 
 # Track initialized OSS-Fuzz paths to avoid redundant setup
@@ -243,6 +281,14 @@ def deduplicate_hunks(
     return result, new_hashes
 
 
+@dataclass
+class _RedisLockLease:
+    """Token-bound distributed lock lease."""
+
+    key: str
+    token: str
+
+
 def write_patch_files_to_diff(patch_files: list[PatchFile]) -> str:
     """Convert list of PatchFile objects back to unified diff format."""
     return "\n".join(pf.to_diff() for pf in patch_files) + "\n"
@@ -294,7 +340,19 @@ class OSSFuzzInfrastructure:
         work_dir: Working directory for isolated builds (None = shared mode)
     """
 
-    def __init__(self, oss_fuzz_path: Path, work_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        oss_fuzz_path: Path,
+        work_dir: Optional[Path] = None,
+        *,
+        inc_image_policy: Optional[str] = None,
+        inc_image_registry: Optional[str] = None,
+        inc_image_max_pull_bytes: Optional[int] = None,
+        inc_image_pull_timeout: Optional[int] = None,
+        snapshot_commit_timeout: Optional[int] = None,
+        inc_image_retry_interval_sec: Optional[int] = None,
+        local_image_prefix: Optional[str] = None,
+    ):
         """Initialize the OSS-Fuzz infrastructure.
 
         Args:
@@ -310,15 +368,77 @@ class OSSFuzzInfrastructure:
         self.work_dir = Path(work_dir).resolve() if work_dir else None
         self.projects_base = self.oss_fuzz_path / "projects"
         self._helper_script = self.oss_fuzz_path / "infra" / "helper.py"
+        self._templates_dir = Path(__file__).resolve().parent / "templates"
+        self.inc_image_policy = inc_image_policy or os.getenv(
+            "CRSBENCH_INC_IMAGE_POLICY", "auto"
+        )
+        self.inc_image_registry = inc_image_registry or os.getenv(
+            "CRSBENCH_INC_IMAGE_REGISTRY", DEFAULT_REGISTRY
+        )
+        max_pull_env = os.getenv("CRSBENCH_INC_IMAGE_MAX_PULL_BYTES")
+        self.inc_image_max_pull_bytes = (
+            inc_image_max_pull_bytes
+            if inc_image_max_pull_bytes is not None
+            else (int(max_pull_env) if max_pull_env else None)
+        )
+        pull_timeout_env = os.getenv("CRSBENCH_INC_IMAGE_PULL_TIMEOUT")
+        self.inc_image_pull_timeout = (
+            inc_image_pull_timeout
+            if inc_image_pull_timeout is not None
+            else (int(pull_timeout_env) if pull_timeout_env else 300)
+        )
+        snapshot_commit_timeout_env = os.getenv("CRSBENCH_SNAPSHOT_COMMIT_TIMEOUT")
+        self.snapshot_commit_timeout = (
+            snapshot_commit_timeout
+            if snapshot_commit_timeout is not None
+            else (
+                int(snapshot_commit_timeout_env)
+                if snapshot_commit_timeout_env
+                else 1800
+            )
+        )
+        retry_interval_env = os.getenv("CRSBENCH_INC_IMAGE_RETRY_INTERVAL_SEC")
+        self.inc_image_retry_interval_sec = (
+            inc_image_retry_interval_sec
+            if inc_image_retry_interval_sec is not None
+            else (int(retry_interval_env) if retry_interval_env else 120)
+        )
+        self.local_image_prefix = local_image_prefix or os.getenv(
+            "CRSBENCH_LOCAL_IMAGE_PREFIX", DEFAULT_LOCAL_IMAGE_PREFIX
+        )
 
-        # Cache for inc-build image availability (project:sanitizer -> bool)
-        # Prevents redundant docker pull attempts during parallel builds
+        # Cache for successful inc-build image availability (project:sanitizer -> True).
         self._inc_image_cache: dict[str, bool] = {}
+        # Last failed availability check timestamp by cache key.
+        # Failures are retried after inc_image_retry_interval_sec.
+        self._inc_image_last_failure: dict[str, float] = {}
         # Per-project locks to allow parallel pulls for different projects
         self._inc_image_locks: dict[str, threading.Lock] = {}
         self._inc_image_locks_lock = (
             threading.Lock()
         )  # Meta-lock for creating per-project locks
+        self.inc_image_dist_lock_mode = os.getenv(
+            "CRSBENCH_INC_IMAGE_DIST_LOCK", "auto"
+        ).strip()
+        self.inc_image_dist_lock_ttl_sec = int(
+            os.getenv("CRSBENCH_INC_IMAGE_DIST_LOCK_TTL_SEC", "1800")
+        )
+        self.inc_image_dist_lock_wait_sec = int(
+            os.getenv("CRSBENCH_INC_IMAGE_DIST_LOCK_WAIT_SEC", "600")
+        )
+        self.inc_image_dist_lock_poll_sec = max(
+            1, int(os.getenv("CRSBENCH_INC_IMAGE_DIST_LOCK_POLL_SEC", "2"))
+        )
+        self.inc_image_dist_lock_renew_interval_sec = max(
+            1, int(os.getenv("CRSBENCH_INC_IMAGE_DIST_LOCK_RENEW_SEC", "30"))
+        )
+        self._inc_image_dist_lock_conn = None
+        self._inc_image_dist_lock_conn_lock = threading.Lock()
+        self._inc_image_dist_lock_warned = False
+        # Cache image tags that have replay hooks installed, keyed by resolved
+        # image id. Tags can be retargeted to a different image id, so tag-only
+        # caching is unsafe.
+        self._replay_hooked_images: dict[str, str] = {}
 
         # Ensure OSS-Fuzz is ready for parallel builds
         ensure_oss_fuzz_ready(self.oss_fuzz_path)
@@ -327,6 +447,151 @@ class OSSFuzzInfrastructure:
             raise FileNotFoundError(
                 f"OSS-Fuzz helper.py not found: {self._helper_script}"
             )
+
+    def _ensure_replay_hooks_in_image(self, image_name: str, policy) -> bool:
+        """Install replay hook files into an image via docker run+commit."""
+        if not policy.enabled:
+            return True
+        current_image_id = self._get_local_image_id(image_name)
+        cached_image_id = self._replay_hooked_images.get(image_name)
+        if (
+            current_image_id is not None
+            and cached_image_id is not None
+            and cached_image_id == current_image_id
+        ):
+            return True
+
+        original_entrypoint: Optional[list[str]] = None
+        original_cmd: Optional[list[str]] = None
+        try:
+            inspect_result = run_with_timeout(
+                ["docker", "image", "inspect", image_name],
+                timeout=30,
+            )
+            if inspect_result.returncode == 0 and inspect_result.stdout:
+                payload = json.loads(inspect_result.stdout)
+                if payload and isinstance(payload, list):
+                    config = payload[0].get("Config") or {}
+                    entry = config.get("Entrypoint")
+                    cmd = config.get("Cmd")
+                    if isinstance(entry, list):
+                        original_entrypoint = [str(v) for v in entry]
+                    if isinstance(cmd, list):
+                        original_cmd = [str(v) for v in cmd]
+        except Exception as e:
+            logger.debug(
+                f"Failed to inspect original image config for replay hook ({image_name}): {e}"
+            )
+
+        container_name = (
+            f"crsbench-replay-hooks-{os.getpid()}-{int(time.time() * 1000)}"
+        )
+        hook_cmd = replay_install_script(policy)
+
+        run_cmd = [
+            "docker",
+            "run",
+            "--name",
+            container_name,
+        ]
+        run_cmd.extend(self._locale_docker_run_args())
+        run_cmd.extend(self._docker_resource_run_args())
+        run_cmd.extend(
+            [
+                image_name,
+                "/bin/bash",
+                "-lc",
+                hook_cmd,
+            ]
+        )
+        commit_cmd = ["docker", "commit"]
+        if original_entrypoint is not None:
+            commit_cmd.extend(
+                ["--change", f"ENTRYPOINT {json.dumps(original_entrypoint)}"]
+            )
+        if original_cmd is not None:
+            commit_cmd.extend(["--change", f"CMD {json.dumps(original_cmd)}"])
+        commit_cmd.extend([container_name, image_name])
+        rm_cmd = ["docker", "rm", "-f", container_name]
+
+        try:
+            run_result = run_with_timeout(run_cmd, timeout=300)
+            if run_result.returncode != 0:
+                logger.error(
+                    "Failed to install replay hooks into {}: {}",
+                    image_name,
+                    (run_result.stderr or run_result.stdout or "").strip()[:500],
+                )
+                return False
+            commit_result = run_with_timeout(commit_cmd, timeout=120)
+            if commit_result.returncode != 0:
+                logger.error(
+                    "Failed to commit replay-hooked image {}: {}",
+                    image_name,
+                    (commit_result.stderr or "").strip()[:500],
+                )
+                return False
+            hooked_image_id = self._get_local_image_id(image_name)
+            if hooked_image_id is not None:
+                self._replay_hooked_images[image_name] = hooked_image_id
+            return True
+        finally:
+            try:
+                run_with_timeout(rm_cmd, timeout=30)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _docker_resource_run_args() -> list[str]:
+        """Return docker run resource args propagated from supervisor env.
+
+        Supervisor sets these for worker processes so helper.py-driven docker runs
+        are constrained. Direct docker run paths must forward them explicitly.
+        """
+        args: list[str] = []
+        cpuset = os.environ.get("OSS_FUZZ_CPUSET_CPUS", "").strip()
+        cgroup_parent = os.environ.get("OSS_FUZZ_CGROUP_PARENT", "").strip()
+        docker_network = os.environ.get("OSS_FUZZ_DOCKER_NETWORK", "").strip()
+        if cpuset:
+            args.extend(["--cpuset-cpus", cpuset])
+        if cgroup_parent:
+            args.extend(["--cgroup-parent", cgroup_parent])
+        if docker_network:
+            args.extend(["--network", docker_network])
+        return args
+
+    @staticmethod
+    def _locale_docker_run_args() -> list[str]:
+        """Return locale env args for direct docker run invocations."""
+        return [
+            "-e",
+            f"LANG={DEFAULT_CONTAINER_LOCALE}",
+            "-e",
+            f"LC_ALL={DEFAULT_CONTAINER_LOCALE}",
+        ]
+
+    @staticmethod
+    def _locale_helper_env_args() -> list[str]:
+        """Return helper.py environment args for locale consistency."""
+        return [
+            "-e",
+            f"LANG={DEFAULT_CONTAINER_LOCALE}",
+            "-e",
+            f"LC_ALL={DEFAULT_CONTAINER_LOCALE}",
+        ]
+
+    @staticmethod
+    def _validate_variant_name(variant_name: str) -> str:
+        """Validate variant name for safe filesystem usage."""
+        if not variant_name:
+            raise ValueError("Variant name cannot be empty")
+        if variant_name in (".", ".."):
+            raise ValueError(f"Invalid variant name: {variant_name!r}")
+        if "/" in variant_name or "\\" in variant_name:
+            raise ValueError(
+                f"Variant name cannot contain path separators: {variant_name!r}"
+            )
+        return variant_name
 
     def get_build_output_path(self, variant_name: str) -> Path:
         """Get the build output path for a variant (in oss-fuzz).
@@ -340,7 +605,8 @@ class OSSFuzzInfrastructure:
         Returns:
             Path to build output directory in oss-fuzz
         """
-        return self.oss_fuzz_path / "build" / "out" / variant_name
+        safe_variant = self._validate_variant_name(variant_name)
+        return self.oss_fuzz_path / "build" / "out" / safe_variant
 
     def get_isolated_build_path(self, variant_name: str) -> Path:
         """Get the actual build output path (isolated or shared).
@@ -355,7 +621,8 @@ class OSSFuzzInfrastructure:
             Path to actual build output directory
         """
         if self.work_dir:
-            return self.work_dir / variant_name / "build" / "out"
+            safe_variant = self._validate_variant_name(variant_name)
+            return self.work_dir / safe_variant / "build" / "out"
         return self.get_build_output_path(variant_name)
 
     def get_isolated_work_path(self, variant_name: str) -> Path:
@@ -368,8 +635,10 @@ class OSSFuzzInfrastructure:
             Path to work directory
         """
         if self.work_dir:
-            return self.work_dir / variant_name / "build" / "work"
-        return self.oss_fuzz_path / "build" / "work" / variant_name
+            safe_variant = self._validate_variant_name(variant_name)
+            return self.work_dir / safe_variant / "build" / "work"
+        safe_variant = self._validate_variant_name(variant_name)
+        return self.oss_fuzz_path / "build" / "work" / safe_variant
 
     def copy_build_output(
         self,
@@ -430,9 +699,10 @@ class OSSFuzzInfrastructure:
         Returns:
             Path to source directory
         """
+        safe_variant = self._validate_variant_name(variant_name)
         if self.work_dir:
-            return self.work_dir / variant_name / "src"
-        return self.oss_fuzz_path / "build" / "src" / variant_name
+            return self.work_dir / safe_variant / "src"
+        return self.oss_fuzz_path / "build" / "src" / safe_variant
 
     def is_isolated(self) -> bool:
         """Check if running in isolated mode.
@@ -511,8 +781,9 @@ class OSSFuzzInfrastructure:
             logger.debug(f"Removed symlink: {ossfuzz_path}")
 
         # Remove isolated directory
+        safe_variant = self._validate_variant_name(variant_name)
         if self.work_dir:
-            isolated_dir = self.work_dir / variant_name
+            isolated_dir = self.work_dir / safe_variant
             if isolated_dir.exists():
                 try:
                     shutil.rmtree(isolated_dir)
@@ -525,6 +796,7 @@ class OSSFuzzInfrastructure:
         variant_name: str,
         *,
         require_inc_build: Optional[bool] = None,
+        require_source_image: bool = False,
     ) -> bool:
         """Check if a variant has been built successfully.
 
@@ -537,12 +809,17 @@ class OSSFuzzInfrastructure:
             require_inc_build: If specified, also verify the cached build
                 matches the requested inc-build mode. None means don't check.
                 When True, also rejects builds that used fallback.
+            require_source_image: If True, also require the corresponding
+                source image tag to exist locally:
+                - :inc when require_inc_build=True
+                - :latest otherwise
 
         Returns:
             True if built fuzzers exist (and match required inc_build mode if specified)
         """
         build_path = self.get_build_output_path(variant_name)
-        project_path = self.projects_base / variant_name
+        safe_variant = self._validate_variant_name(variant_name)
+        project_path = self.projects_base / safe_variant
 
         # Both project directory and build output must exist
         if not build_path.exists() or not project_path.exists():
@@ -577,6 +854,17 @@ class OSSFuzzInfrastructure:
                 logger.debug(
                     f"Cache mismatch for {variant_name}: "
                     f"cached build used fallback, but pure inc-build required"
+                )
+                return False
+
+        if require_source_image:
+            image_tag = "inc" if require_inc_build else "latest"
+            image_name = f"gcr.io/oss-fuzz/{variant_name}:{image_tag}"
+            if not self._docker_image_exists(image_name):
+                logger.debug(
+                    "Cache incomplete for %s: missing source image %s",
+                    variant_name,
+                    image_name,
                 )
                 return False
 
@@ -710,7 +998,7 @@ class OSSFuzzInfrastructure:
     def cleanup_docker_images(self, variant_name: str) -> None:
         """Remove Docker images for a variant to force full rebuild.
 
-        Removes both the normal build image and all inc-build sanitizer images.
+        Removes both the normal build image and the inc-build image.
         Missing images are skipped silently. Failed removals are logged as
         warnings but do not raise exceptions (cleanup failures should not
         block the build).
@@ -719,10 +1007,8 @@ class OSSFuzzInfrastructure:
             variant_name: Variant name (e.g., "benchmark-asan-deltaref")
         """
         image_names = [
-            f"aixcc-afc/{variant_name}:latest",
-            f"aixcc-afc/{variant_name}:inc-address",
-            f"aixcc-afc/{variant_name}:inc-undefined",
-            f"aixcc-afc/{variant_name}:inc-memory",
+            f"gcr.io/oss-fuzz/{variant_name}:latest",
+            f"gcr.io/oss-fuzz/{variant_name}:inc",
         ]
 
         for image_name in image_names:
@@ -756,7 +1042,8 @@ class OSSFuzzInfrastructure:
         Args:
             variant_name: Variant name
         """
-        variant_path = self.projects_base / variant_name
+        safe_variant = self._validate_variant_name(variant_name)
+        variant_path = self.projects_base / safe_variant
         if variant_path.is_symlink():
             variant_path.unlink()
             logger.debug(f"Removed project symlink: {variant_path}")
@@ -801,7 +1088,8 @@ class OSSFuzzInfrastructure:
         Returns:
             Path to variant project symlink, or None on failure
         """
-        variant_path = self.projects_base / variant_name
+        safe_variant = self._validate_variant_name(variant_name)
+        variant_path = self.projects_base / safe_variant
         target_path = benchmark_path.resolve()
 
         if variant_path.is_symlink():
@@ -822,7 +1110,7 @@ class OSSFuzzInfrastructure:
         try:
             variant_path.parent.mkdir(parents=True, exist_ok=True)
             variant_path.symlink_to(target_path)
-            logger.debug(f"Linked variant project: {variant_name} -> {benchmark_path}")
+            logger.debug(f"Linked variant project: {safe_variant} -> {benchmark_path}")
             return variant_path
         except FileExistsError:
             # Race condition: another worker created it first
@@ -855,8 +1143,10 @@ class OSSFuzzInfrastructure:
         Returns:
             Path to variant project symlink, or None on failure
         """
-        variant_path = self.projects_base / variant_name
-        source_path = self.projects_base / source_project
+        safe_variant = self._validate_variant_name(variant_name)
+        safe_source = self._validate_variant_name(source_project)
+        variant_path = self.projects_base / safe_variant
+        source_path = self.projects_base / safe_source
 
         # Check if correct symlink already exists
         if variant_path.is_symlink():
@@ -875,7 +1165,7 @@ class OSSFuzzInfrastructure:
 
         try:
             variant_path.symlink_to(source_path)
-            logger.debug(f"Linked variant project: {variant_name} -> {source_project}")
+            logger.debug(f"Linked variant project: {safe_variant} -> {safe_source}")
             return variant_path
         except FileExistsError:
             # Race condition: another worker created it
@@ -929,8 +1219,7 @@ class OSSFuzzInfrastructure:
         src_path: Optional[Path] = None,
         *,
         use_inc_image: bool = False,
-        inc_fallback: bool = False,
-        inc_patch: Optional[Path] = None,
+        snapshot_fallback: bool = False,
     ) -> FuzzerBuildResult:
         """Build fuzzers for a variant.
 
@@ -938,15 +1227,12 @@ class OSSFuzzInfrastructure:
             config: Build configuration
             src_path: Path to source repository. If None, uses bundled source in Docker.
             use_inc_image: Use pre-built inc-build image for faster builds
-            inc_fallback: Fallback to clean build using /src instead of /built-src.
-                Use when incremental build fails due to incompatibility.
-            inc_patch: Path to patch file to apply to /built-src/ for true incremental
-                builds. When provided with use_inc_image=True, applies patch to /built-src
-                and compiles incrementally.
+            snapshot_fallback: Fallback to clean build from /src.
+                Use when incremental/replay build fails due to incompatibility.
 
         Returns:
             FuzzerBuildResult with success status and fallback tracking.
-            When inc_fallback=True is used, fallback_used will be True to indicate
+            When snapshot_fallback=True is used, fallback_used will be True to indicate
             that the build MAY have used fallback (we can't detect if it was actually
             triggered, but we track the intent for correct cache metadata).
         """
@@ -966,22 +1252,57 @@ class OSSFuzzInfrastructure:
             "-e",
             f"FUZZING_LANGUAGE={fuzzing_language}",
         ]
+        cmd.extend(self._locale_helper_env_args())
 
-        # Use inc-build image for faster incremental builds
+        # Use inc-build image for faster incremental builds.
+        # In inc-build mode we prepare variant :latest from inc image and must
+        # avoid helper.py image rebuilds that would overwrite replay hooks.
+        replay_policy = resolve_replay_policy(
+            inc_build=(use_inc_image and not snapshot_fallback)
+        )
+        replay_shims_ready = False
         if use_inc_image:
-            cmd.extend(
-                [
-                    "--docker_image_tag",
-                    f"inc-{config.sanitizer}",
-                    "--no-build-image",
-                ]
-            )
-            # Add inc-fallback flag if needed
-            if inc_fallback:
-                cmd.append("--inc-fallback")
-            # Add inc-patch for true incremental patched builds
-            if inc_patch:
-                cmd.extend(["--inc-patch", str(inc_patch)])
+            cmd.append("--no-build-image")
+            replay_build = "0" if snapshot_fallback else "1"
+            cmd.extend(["-e", f"REPLAY_BUILD={replay_build}"])
+            if src_path and replay_policy.enabled:
+                image_for_hooks = helper_latest_image_name(variant_name)
+                if not self._ensure_replay_hooks_in_image(
+                    image_for_hooks, replay_policy
+                ):
+                    logger.error(
+                        "Replay hook install failed for {} image {}",
+                        variant_name,
+                        image_for_hooks,
+                    )
+                    return FuzzerBuildResult(
+                        success=False,
+                        fallback_used=False,
+                        stdout="",
+                        stderr="Replay hook installation failed",
+                    )
+                cmd.extend(
+                    [
+                        "-e",
+                        f"CRSBENCH_REPLAY_POLICY={REPLAY_MODE_ENFORCE}",
+                        "-e",
+                        f"CRSBENCH_REPLAY_POLICY_SOURCE={replay_policy.source}",
+                        "-e",
+                        f"CRSBENCH_REPLAY_POLICY_TOOLS={replay_policy.tool_hooks_csv()}",
+                    ]
+                )
+                replay_shims_ready = True
+            elif replay_policy.enabled and not src_path:
+                logger.error(
+                    "Replay policy requires source path for {} but src_path is None",
+                    variant_name,
+                )
+                return FuzzerBuildResult(
+                    success=False,
+                    fallback_used=False,
+                    stdout="",
+                    stderr="Replay policy requires src_path in inc-build mode",
+                )
 
         cmd.append(variant_name)
         # source_path mounts local extracted source into the container via
@@ -992,6 +1313,13 @@ class OSSFuzzInfrastructure:
 
         logger.debug(f"Building {variant_name} with {config.sanitizer} sanitizer...")
         logger.debug(f"Build command: {' '.join(cmd)}")
+        if replay_shims_ready:
+            logger.debug(
+                "Replay policy active for {}: source={} tools={}",
+                variant_name,
+                replay_policy.source,
+                replay_policy.tool_hooks_csv(),
+            )
 
         try:
             result = run_with_timeout(
@@ -1008,8 +1336,8 @@ class OSSFuzzInfrastructure:
                 fix_docker_ownership(self.get_build_output_path(variant_name))
                 # Track if fallback may have been used
                 # Only relevant when inc-build was attempted (use_inc_image=True)
-                # and fallback was enabled (inc_fallback=True)
-                actual_fallback = use_inc_image and inc_fallback
+                # and fallback was enabled (snapshot_fallback=True)
+                actual_fallback = use_inc_image and snapshot_fallback
                 return FuzzerBuildResult(
                     success=True,
                     fallback_used=actual_fallback,
@@ -1490,11 +1818,12 @@ class OSSFuzzInfrastructure:
     ) -> "ReproduceOutput":
         """Reproduce a crash using OSS-Fuzz helper.py.
 
-        Uses --propagate_exit_codes to get explicit exit codes:
+        Uses official OSS-Fuzz helper.py reproduce invocation.
+
+        Exit handling:
         - 0: No crash
-        - 77: ASAN crash
         - 124: Timeout (treated as no crash)
-        - Other non-zero: Other crash types
+        - Other non-zero: Crash/error (subject to leak-only filtering)
 
         Note: sanitizer is embedded in project_name (e.g., project-asan-deltaref).
         helper.py reproduce doesn't accept --sanitizer flag.
@@ -1528,9 +1857,7 @@ class OSSFuzzInfrastructure:
                 "python3",
                 str(self._helper_script),
                 "reproduce",
-                "--propagate_exit_codes",
-                "--timeout",
-                str(timeout),
+                *self._locale_helper_env_args(),
                 project_name,
                 harness,
                 str(testcase_path),
@@ -1540,11 +1867,15 @@ class OSSFuzzInfrastructure:
 
             logger.debug(f"{req_prefix}Reproducing: {' '.join(cmd)}")
 
-            # Use slightly longer subprocess timeout to let helper.py handle it
+            # Use a longer outer timeout than the helper/libFuzzer timeout path
+            # so helper.py can return its native reproduce exit semantics
+            # (e.g., non-zero crash code or 124 timeout) instead of being cut off
+            # by our subprocess guard under load.
+            helper_timeout = timeout + 10
             # Use binary mode to handle fuzzer output that may contain non-UTF-8 bytes
             result = run_with_timeout(
                 cmd,
-                timeout=timeout + 10,  # Grace period for helper.py
+                timeout=helper_timeout,
                 cwd=self.oss_fuzz_path,
                 text=False,
             )
@@ -1576,9 +1907,11 @@ class OSSFuzzInfrastructure:
                     exit_code=124,
                 )
 
+            combined_output = f"{stdout}\n{stderr}"
+
             # Check for LeakSanitizer-only exit (not a real crash)
             # -detect_leaks=0 flag may not suppress ASAN_OPTIONS=detect_leaks=1
-            if _is_leak_only_exit(stdout):
+            if _is_leak_only_exit(combined_output):
                 reproduce_logger.debug(
                     f"{req_prefix}{pov_prefix}{project_name}/{harness} "
                     f"LeakSanitizer only (exit code {result.returncode}), not a crash"
@@ -1590,10 +1923,13 @@ class OSSFuzzInfrastructure:
                     exit_code=result.returncode,
                 )
 
+            # Keep origin/main semantics:
+            # any non-zero exit (except 124 and leak-only) is treated as crash.
             logger.debug(
                 f"{req_prefix}{pov_prefix}{project_name}/{harness} crashed "
                 f"(exit code {result.returncode})"
             )
+
             return ReproduceOutput(
                 crashed=True,
                 stdout=stdout,
@@ -1706,7 +2042,7 @@ class OSSFuzzInfrastructure:
         self,
         project_name: str,
         sanitizer: str = "address",
-        registry: str = "ghcr.io/team-atlanta/crsbench",
+        registry: str = DEFAULT_REGISTRY,
     ) -> str:
         """Get inc-build Docker image name.
 
@@ -1716,15 +2052,24 @@ class OSSFuzzInfrastructure:
             registry: Docker registry
 
         Returns:
-            Full Docker image name (e.g., ghcr.io/team-atlanta/crsbench/proj:inc-address)
+            Full Docker image name (e.g., ghcr.io/team-atlanta/crsbench/proj-asan:inc)
         """
-        return f"{registry}/{project_name}:inc-{sanitizer}"
+        return registry_inc_image_name(project_name, sanitizer, registry=registry)
+
+    def get_local_inc_image_name(
+        self,
+        project_name: str,
+        sanitizer: str = "address",
+        local_prefix: str = DEFAULT_LOCAL_IMAGE_PREFIX,
+    ) -> str:
+        """Get local CRSBench-managed inc-build image name."""
+        return local_inc_image_name(project_name, sanitizer, local_prefix=local_prefix)
 
     def has_inc_build_image(
         self,
         project_name: str,
         sanitizer: str = "address",
-        registry: str = "ghcr.io/team-atlanta/crsbench",
+        registry: str = DEFAULT_REGISTRY,
     ) -> bool:
         """Check if inc-build Docker image exists.
 
@@ -1737,39 +2082,22 @@ class OSSFuzzInfrastructure:
             True if inc-build image exists
         """
         image_name = self.get_inc_build_image_name(project_name, sanitizer, registry)
-        try:
-            result = subprocess.run(
-                ["docker", "image", "inspect", image_name],
-                capture_output=True,
-                check=False,
-            )
-            return result.returncode == 0
-        except Exception:
-            return False
+        return self._docker_image_exists(image_name)
 
     def get_ossfuzz_image_name(
         self,
         project_name: str,
         sanitizer: str = "address",
     ) -> str:
-        """Get OSS-Fuzz compatible Docker image name.
-
-        OSS-Fuzz helper.py expects images in format: aixcc-afc/{project}:{tag}
-
-        Args:
-            project_name: OSS-Fuzz project name
-            sanitizer: Sanitizer type
-
-        Returns:
-            OSS-Fuzz compatible image name (e.g., aixcc-afc/proj:inc-address)
-        """
-        return f"aixcc-afc/{project_name}:inc-{sanitizer}"
+        """Get OSS-Fuzz helper-compatible Docker image name."""
+        return helper_inc_image_name(project_name, sanitizer)
 
     def is_inc_image_available(
         self,
         project_name: str,
         sanitizer: str = "address",
-        registry: str = "ghcr.io/team-atlanta/crsbench",
+        registry: str = DEFAULT_REGISTRY,
+        local_prefix: str = DEFAULT_LOCAL_IMAGE_PREFIX,
     ) -> bool:
         """Check if inc-build image exists locally and ensure OSS-Fuzz format.
 
@@ -1784,19 +2112,56 @@ class OSSFuzzInfrastructure:
         Returns:
             True if image exists locally (in OSS-Fuzz format)
         """
-        ossfuzz_image = self.get_ossfuzz_image_name(project_name, sanitizer)
+        helper_image = self.get_ossfuzz_image_name(project_name, sanitizer)
+        local_image = self.get_local_inc_image_name(
+            project_name, sanitizer, local_prefix
+        )
+        remote_image = self.get_inc_build_image_name(project_name, sanitizer, registry)
 
-        # Check OSS-Fuzz compatible image first (already retagged)
-        if self._docker_image_exists(ossfuzz_image):
+        # Helper-compatible image first.
+        if self._docker_image_exists(helper_image):
             return True
 
-        # Check registry image and retag if found
-        inc_image = self.get_inc_build_image_name(project_name, sanitizer, registry)
-        if self._docker_image_exists(inc_image):
-            self._retag_for_ossfuzz(inc_image, ossfuzz_image)
-            return True
+        # Local CRSBench namespace image.
+        if self._docker_image_exists(local_image):
+            return self._retag_for_ossfuzz(local_image, helper_image)
+
+        # Remote-namespaced image present locally.
+        if self._docker_image_exists(remote_image):
+            return self._retag_for_ossfuzz(
+                remote_image, local_image
+            ) and self._retag_for_ossfuzz(local_image, helper_image)
 
         return False
+
+    def _get_remote_image_size(self, image_name: str) -> Optional[int]:
+        """Get remote image size in bytes using docker manifest inspect."""
+        try:
+            result = subprocess.run(
+                ["docker", "manifest", "inspect", image_name, "--verbose"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                stdin=subprocess.DEVNULL,
+            )
+            if result.returncode != 0:
+                return None
+            data = json.loads(result.stdout)
+            if isinstance(data, list):
+                total = 0
+                for entry in data:
+                    size = entry.get("Descriptor", {}).get("size")
+                    if isinstance(size, int):
+                        total += size
+                return total or None
+            if isinstance(data, dict):
+                size = data.get("Descriptor", {}).get("size")
+                if isinstance(size, int):
+                    return size
+            return None
+        except Exception as e:
+            logger.debug(f"Failed to read remote size for {image_name}: {e}")
+            return None
 
     def _docker_image_exists(self, image_name: str) -> bool:
         """Check if a Docker image exists locally."""
@@ -1816,7 +2181,10 @@ class OSSFuzzInfrastructure:
         self,
         project_name: str,
         sanitizer: str = "address",
-        registry: str = "ghcr.io/team-atlanta/crsbench",
+        registry: str = DEFAULT_REGISTRY,
+        *,
+        local_prefix: str = DEFAULT_LOCAL_IMAGE_PREFIX,
+        timeout: int = 300,
     ) -> bool:
         """Pull inc-build image from registry and retag for OSS-Fuzz.
 
@@ -1828,11 +2196,14 @@ class OSSFuzzInfrastructure:
         Returns:
             True if pull succeeded
         """
-        ossfuzz_image = self.get_ossfuzz_image_name(project_name, sanitizer)
+        helper_image = self.get_ossfuzz_image_name(project_name, sanitizer)
+        local_image = self.get_local_inc_image_name(
+            project_name, sanitizer, local_prefix
+        )
 
         # Check if already available
-        if self._docker_image_exists(ossfuzz_image):
-            logger.debug(f"OSS-Fuzz compatible image already exists: {ossfuzz_image}")
+        if self._docker_image_exists(helper_image):
+            logger.debug(f"OSS-Fuzz compatible image already exists: {helper_image}")
             return True
 
         inc_image = self.get_inc_build_image_name(project_name, sanitizer, registry)
@@ -1840,29 +2211,211 @@ class OSSFuzzInfrastructure:
         # Check if source image exists locally
         if self._docker_image_exists(inc_image):
             logger.debug(f"Inc-build image available locally: {inc_image}")
-            return self._retag_for_ossfuzz(inc_image, ossfuzz_image)
+            return self._retag_for_ossfuzz(
+                inc_image, local_image
+            ) and self._retag_for_ossfuzz(local_image, helper_image)
 
         # Pull from registry
         logger.debug(f"Pulling inc-build image: {inc_image}")
         try:
             result = run_with_timeout(
                 ["docker", "pull", inc_image],
-                timeout=300,
+                timeout=timeout,
             )
 
             if result.returncode == 0:
                 logger.debug(f"Successfully pulled: {inc_image}")
-                return self._retag_for_ossfuzz(inc_image, ossfuzz_image)
+                return self._retag_for_ossfuzz(
+                    inc_image, local_image
+                ) and self._retag_for_ossfuzz(local_image, helper_image)
 
             logger.debug(f"Inc-build image not available: {inc_image}")
             return False
-
         except subprocess.TimeoutExpired:
             logger.error(f"Timeout pulling {inc_image}")
             return False
         except Exception as e:
             logger.error(f"Error pulling {inc_image}: {e}")
             return False
+
+    def build_inc_build_image(
+        self,
+        project_name: str,
+        sanitizer: str = "address",
+        *,
+        benchmark_path: Optional[Path] = None,
+        local_prefix: str = DEFAULT_LOCAL_IMAGE_PREFIX,
+    ) -> bool:
+        """Build an inc image locally and map to local/helper tags.
+
+        Local snapshot creation flow:
+        1. Build base helper image via `helper.py build_image`.
+        2. If benchmark_path is provided, bake benchmark project files into
+           `/CRSBENCH_PROJECT`, run `compile` in-container to capture
+           intermediate build state.
+        3. Tag the baked image to local/helper `:inc`.
+        """
+        helper_latest = helper_latest_image_name(project_name)
+        local_image = self.get_local_inc_image_name(
+            project_name, sanitizer, local_prefix
+        )
+        helper_inc = self.get_ossfuzz_image_name(project_name, sanitizer)
+
+        result = run_with_timeout(
+            [
+                "python3",
+                str(self._helper_script),
+                "build_image",
+                "--no-pull",
+                project_name,
+            ],
+            timeout=1200,
+            cwd=self.oss_fuzz_path,
+        )
+        if result.returncode != 0:
+            logger.warning(
+                f"Failed local inc image build for {project_name}: "
+                f"{(result.stderr or '').strip()[:400]}"
+            )
+            return False
+
+        if benchmark_path is not None:
+            if not self._bake_snapshot_state(
+                project_name=project_name,
+                sanitizer=sanitizer,
+                benchmark_path=benchmark_path,
+                image_name=helper_latest,
+            ):
+                return False
+
+        return self._retag_for_ossfuzz(
+            helper_latest, local_image
+        ) and self._retag_for_ossfuzz(local_image, helper_inc)
+
+    def _bake_snapshot_state(
+        self,
+        *,
+        project_name: str,
+        sanitizer: str,
+        benchmark_path: Path,
+        image_name: str,
+    ) -> bool:
+        """Bake source/project state + compile intermediates into image."""
+        benchmark_path = Path(benchmark_path).resolve()
+        if not benchmark_path.exists():
+            logger.warning(
+                f"Snapshot bake skipped for {project_name}: "
+                f"benchmark path not found: {benchmark_path}"
+            )
+            return False
+
+        workdir = self._resolve_test_workdir(image_name, benchmark_path)
+        container_name = (
+            f"crsbench-snapshot-{project_name}-{os.getpid()}-{int(time.time() * 1000)}"
+        )
+        project_mount = "/CRSBENCH_PROJ_PATH"
+        fuzzing_language = self._resolve_fuzzing_language(benchmark_path)
+        bake_script = self._render_template(
+            "bake_snapshot.sh.tmpl",
+            {
+                "@@PROJECT_MOUNT@@": shlex.quote(project_mount),
+                "@@WORKDIR@@": shlex.quote(workdir),
+                "@@SANITIZER@@": shlex.quote(sanitizer),
+                "@@PROJECT_NAME@@": shlex.quote(project_name),
+                "@@FUZZING_LANGUAGE@@": shlex.quote(fuzzing_language),
+            },
+        )
+
+        run_cmd = [
+            "docker",
+            "run",
+            "--name",
+            container_name,
+            "--user",
+            "0",
+            "-v",
+            f"{benchmark_path}:{project_mount}:ro",
+        ]
+        run_cmd.extend(self._locale_docker_run_args())
+        run_cmd.extend(self._docker_resource_run_args())
+        run_cmd.extend(
+            [
+                image_name,
+                "/bin/bash",
+                "-lc",
+                bake_script,
+            ]
+        )
+
+        commit_cmd = [
+            "docker",
+            "commit",
+            container_name,
+            image_name,
+        ]
+        rm_cmd = ["docker", "rm", "-f", container_name]
+
+        try:
+            run_result = run_with_timeout(run_cmd, timeout=3600)
+            if run_result.returncode != 0:
+                stdout_tail = (run_result.stdout or "").strip()[-1200:]
+                stderr_tail = (run_result.stderr or "").strip()[-1200:]
+                combined = "\n".join(
+                    part
+                    for part in (
+                        f"[stdout tail]\n{stdout_tail}" if stdout_tail else "",
+                        f"[stderr tail]\n{stderr_tail}" if stderr_tail else "",
+                    )
+                    if part
+                )
+                logger.warning(
+                    f"Snapshot bake failed for {project_name}: "
+                    f"{combined or '(no output)'}"
+                )
+                return False
+
+            commit_result = run_with_timeout(
+                commit_cmd, timeout=self.snapshot_commit_timeout
+            )
+            if commit_result.returncode != 0:
+                logger.warning(
+                    f"Snapshot commit failed for {project_name}: "
+                    f"{(commit_result.stderr or '').strip()[:400]}"
+                )
+                return False
+
+            logger.debug(f"Baked snapshot state into {image_name} for {project_name}")
+            return True
+        finally:
+            try:
+                run_with_timeout(rm_cmd, timeout=60)
+            except Exception:
+                pass
+
+    def _resolve_fuzzing_language(self, benchmark_path: Path) -> str:
+        """Resolve OSS-Fuzz FUZZING_LANGUAGE from project.yaml with safe default."""
+        project_yaml = benchmark_path / "project.yaml"
+        if not project_yaml.exists():
+            return "c++"
+        try:
+            import yaml
+
+            with project_yaml.open(encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            lang = str(data.get("language", "c")).strip().lower()
+            return "c++" if lang == "c" else lang
+        except Exception:
+            return "c++"
+
+    def _render_template(self, template_name: str, values: dict[str, str]) -> str:
+        """Render a small shell template using exact placeholder replacement."""
+        template_path = self._templates_dir / template_name
+        if not template_path.exists():
+            raise FileNotFoundError(f"Template not found: {template_path}")
+        rendered = template_path.read_text(encoding="utf-8")
+        for placeholder, value in values.items():
+            rendered = rendered.replace(placeholder, value)
+        return rendered
 
     def _retag_for_ossfuzz(self, src_image: str, dst_image: str) -> bool:
         """Retag an image for OSS-Fuzz compatibility."""
@@ -1876,12 +2429,50 @@ class OSSFuzzInfrastructure:
             )
             if result.returncode == 0:
                 logger.debug(f"Retagged {src_image} -> {dst_image}")
+                # Destination tag may now point to a different image id.
+                self._replay_hooked_images.pop(dst_image, None)
                 return True
             logger.error(f"Failed to retag: {result.stderr}")
             return False
         except Exception as e:
             logger.error(f"Error retagging image: {e}")
             return False
+
+    def _get_local_image_id(self, image_name: str) -> Optional[str]:
+        """Return local Docker image id for tag, or None if unavailable."""
+        try:
+            result = subprocess.run(
+                ["docker", "image", "inspect", "--format", "{{.Id}}", image_name],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                stdin=subprocess.DEVNULL,
+            )
+            if result.returncode != 0:
+                return None
+            image_id = (result.stdout or "").strip()
+            return image_id if image_id else None
+        except Exception:
+            return None
+
+    def _remove_local_image_if_exists(self, image_name: str) -> None:
+        """Remove a local Docker image tag if present."""
+        if not self._docker_image_exists(image_name):
+            return
+        try:
+            result = subprocess.run(
+                ["docker", "rmi", image_name],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                stdin=subprocess.DEVNULL,
+            )
+            if result.returncode != 0:
+                logger.debug(
+                    f"Failed to remove image {image_name}: {(result.stderr or '').strip()[:200]}"
+                )
+        except Exception as e:
+            logger.debug(f"Error removing image {image_name}: {e}")
 
     def prepare_inc_image_for_variant(
         self,
@@ -1906,17 +2497,27 @@ class OSSFuzzInfrastructure:
             True if image is ready for use
         """
         src_image = self.get_ossfuzz_image_name(project_name, sanitizer)
-        dst_image = f"aixcc-afc/{variant_name}:inc-{sanitizer}"
+        # Variant runtime image names already include sanitizer in variant_name
+        # (e.g., ...-asan-...), so keep :inc tag stable without appending
+        # another sanitizer suffix.
+        dst_image = f"gcr.io/oss-fuzz/{variant_name}:inc"
+        dst_latest = helper_latest_image_name(variant_name)
 
-        if self._docker_image_exists(dst_image):
-            logger.debug(f"Variant inc-build image already exists: {dst_image}")
+        if self._docker_image_exists(dst_image) and self._docker_image_exists(
+            dst_latest
+        ):
+            logger.debug(
+                f"Variant inc-build image already exists: {dst_image} and {dst_latest}"
+            )
             return True
 
         if not self._docker_image_exists(src_image):
             logger.warning(f"Source inc-build image not available: {src_image}")
             return False
 
-        return self._retag_for_ossfuzz(src_image, dst_image)
+        return self._retag_for_ossfuzz(
+            src_image, dst_image
+        ) and self._retag_for_ossfuzz(src_image, dst_latest)
 
     def prepare_image_for_variant(
         self,
@@ -1937,8 +2538,8 @@ class OSSFuzzInfrastructure:
         Returns:
             True if image is ready for use
         """
-        src_image = f"aixcc-afc/{source_variant}:{docker_tag}"
-        dst_image = f"aixcc-afc/{target_variant}:{docker_tag}"
+        src_image = f"gcr.io/oss-fuzz/{source_variant}:{docker_tag}"
+        dst_image = f"gcr.io/oss-fuzz/{target_variant}:{docker_tag}"
 
         if self._docker_image_exists(dst_image):
             logger.debug(f"Target variant image already exists: {dst_image}")
@@ -1967,11 +2568,139 @@ class OSSFuzzInfrastructure:
                 self._inc_image_locks[cache_key] = threading.Lock()
             return self._inc_image_locks[cache_key]
 
+    def _inc_image_cache_key(
+        self, project_name: str, sanitizer: str, registry: str, local_prefix: str
+    ) -> str:
+        """Build cache key for inc image lookups, scoped by namespace settings."""
+        return f"{registry}|{local_prefix}|{project_name}:{sanitizer}"
+
+    def _distributed_inc_lock_enabled(self) -> bool:
+        """Return whether Redis-based distributed inc-image lock should be used."""
+        mode = (self.inc_image_dist_lock_mode or "auto").strip().lower()
+        if mode in {"1", "true", "yes", "on"}:
+            return True
+        if mode in {"0", "false", "no", "off"}:
+            return False
+        # Auto mode: enable when a Redis connection is actually available.
+        # This covers RQ worker jobs, evaluator subprocesses, and any runtime
+        # where distributed queues are active even without explicit env hints.
+        return self._get_inc_image_dist_lock_connection() is not None
+
+    def _get_inc_image_dist_lock_connection(self):
+        """Get Redis connection for distributed inc-image lock, if available."""
+        if self._inc_image_dist_lock_conn is not None:
+            return self._inc_image_dist_lock_conn
+        with self._inc_image_dist_lock_conn_lock:
+            if self._inc_image_dist_lock_conn is not None:
+                return self._inc_image_dist_lock_conn
+            try:
+                # Prefer the active RQ worker/job connection when available.
+                import rq
+
+                current_job = rq.get_current_job()
+                if current_job is not None and current_job.connection is not None:
+                    self._inc_image_dist_lock_conn = current_job.connection
+                    return self._inc_image_dist_lock_conn
+            except Exception:
+                pass
+            try:
+                from crsbench.distributed.queue import create_redis_connection
+
+                redis_host = os.getenv("CRSBENCH_REDIS_HOST", "localhost")
+                self._inc_image_dist_lock_conn = create_redis_connection(redis_host)
+                return self._inc_image_dist_lock_conn
+            except Exception as exc:
+                if not self._inc_image_dist_lock_warned:
+                    logger.warning(
+                        "Distributed inc-image lock disabled for this process "
+                        f"(Redis unavailable): {exc}"
+                    )
+                    self._inc_image_dist_lock_warned = True
+                return None
+
+    @staticmethod
+    def _inc_image_dist_lock_key(cache_key: str) -> str:
+        key_hash = hashlib.sha256(cache_key.encode()).hexdigest()[:24]
+        return f"crsbench:inc-image-lock:v1:{key_hash}"
+
+    def _acquire_inc_image_dist_lock(
+        self, lock_key: str, wait_timeout_sec: int
+    ) -> Optional[_RedisLockLease]:
+        """Acquire Redis distributed lock for inc-image prepare with bounded wait."""
+        conn = self._get_inc_image_dist_lock_connection()
+        if conn is None:
+            return None
+        token = str(uuid.uuid4())
+        deadline = time.monotonic() + max(0, wait_timeout_sec)
+        while True:
+            try:
+                acquired = conn.set(
+                    lock_key,
+                    token,
+                    nx=True,
+                    ex=self.inc_image_dist_lock_ttl_sec,
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"Failed to acquire distributed inc-image lock {lock_key}: {exc}"
+                )
+                return None
+            if acquired:
+                return _RedisLockLease(key=lock_key, token=token)
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(self.inc_image_dist_lock_poll_sec)
+
+    def _renew_inc_image_dist_lock(self, lease: _RedisLockLease) -> bool:
+        """Renew lock TTL only if token still matches."""
+        conn = self._get_inc_image_dist_lock_connection()
+        if conn is None:
+            return False
+        script = (
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+            "  return redis.call('expire', KEYS[1], tonumber(ARGV[2])) "
+            "else return 0 end"
+        )
+        try:
+            result = conn.eval(
+                script,
+                1,
+                lease.key,
+                lease.token,
+                str(self.inc_image_dist_lock_ttl_sec),
+            )
+        except Exception:
+            return False
+        return bool(result)
+
+    def _release_inc_image_dist_lock(self, lease: _RedisLockLease) -> bool:
+        """Release lock only if token still matches owner token."""
+        conn = self._get_inc_image_dist_lock_connection()
+        if conn is None:
+            return False
+        script = (
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+            "  return redis.call('del', KEYS[1]) "
+            "else return 0 end"
+        )
+        try:
+            result = conn.eval(script, 1, lease.key, lease.token)
+        except Exception:
+            return False
+        return bool(result)
+
     def ensure_inc_image(
         self,
         project_name: str,
         sanitizer: str = "address",
-        registry: str = "ghcr.io/team-atlanta/crsbench",
+        registry: Optional[str] = None,
+        *,
+        benchmark_path: Optional[Path] = None,
+        policy: Optional[str] = None,
+        max_pull_bytes: Optional[int] = None,
+        pull_timeout: Optional[int] = None,
+        local_prefix: Optional[str] = None,
+        force_rebuild: bool = False,
     ) -> bool:
         """Ensure inc-build image is available for use.
 
@@ -1994,11 +2723,47 @@ class OSSFuzzInfrastructure:
         Returns:
             True if inc-build image is available and ready for use
         """
-        cache_key = f"{project_name}:{sanitizer}"
+        registry = registry or self.inc_image_registry
+        policy = policy or self.inc_image_policy
+        if max_pull_bytes is None:
+            max_pull_bytes = self.inc_image_max_pull_bytes
+        if pull_timeout is None:
+            pull_timeout = self.inc_image_pull_timeout
+        local_prefix = local_prefix or self.local_image_prefix
+        cache_key = self._inc_image_cache_key(
+            project_name, sanitizer, registry, local_prefix
+        )
+
+        if force_rebuild:
+            self._inc_image_cache.pop(cache_key, None)
+            self._inc_image_last_failure.pop(cache_key, None)
+            self._replay_hooked_images.pop(
+                self.get_ossfuzz_image_name(project_name, sanitizer), None
+            )
+            self._replay_hooked_images.pop(helper_latest_image_name(project_name), None)
+            self._remove_local_image_if_exists(
+                self.get_ossfuzz_image_name(project_name, sanitizer)
+            )
+            self._remove_local_image_if_exists(helper_latest_image_name(project_name))
+            self._remove_local_image_if_exists(
+                self.get_local_inc_image_name(project_name, sanitizer, local_prefix)
+            )
+            self._remove_local_image_if_exists(
+                self.get_inc_build_image_name(project_name, sanitizer, registry)
+            )
 
         # Quick check without lock - if already cached, return immediately
         if cache_key in self._inc_image_cache:
             return self._inc_image_cache[cache_key]
+
+        # Avoid retry storms after transient failures; retry after cooldown.
+        last_failure = self._inc_image_last_failure.get(cache_key)
+        now = time.monotonic()
+        if (
+            last_failure is not None
+            and now - last_failure < self.inc_image_retry_interval_sec
+        ):
+            return False
 
         # Get per-project lock (allows parallel pulls for different projects)
         project_lock = self._get_inc_image_lock(cache_key)
@@ -2007,32 +2772,273 @@ class OSSFuzzInfrastructure:
             # Double-check after acquiring lock (another thread may have completed)
             if cache_key in self._inc_image_cache:
                 return self._inc_image_cache[cache_key]
+            last_failure = self._inc_image_last_failure.get(cache_key)
+            now = time.monotonic()
+            if (
+                last_failure is not None
+                and now - last_failure < self.inc_image_retry_interval_sec
+            ):
+                return False
 
-            # Check if already available locally
-            if self.is_inc_image_available(project_name, sanitizer, registry):
-                logger.debug(f"Inc-build image available for {project_name}")
-                self._inc_image_cache[cache_key] = True
-                return True
+            lease: Optional[_RedisLockLease] = None
+            renew_stop = threading.Event()
+            lease_lost = threading.Event()
+            renew_thread: Optional[threading.Thread] = None
+            if self._distributed_inc_lock_enabled():
+                lock_key = self._inc_image_dist_lock_key(cache_key)
+                lease = self._acquire_inc_image_dist_lock(
+                    lock_key, self.inc_image_dist_lock_wait_sec
+                )
+                if lease is None:
+                    # Another worker may have completed while we waited.
+                    if self.is_inc_image_available(
+                        project_name,
+                        sanitizer,
+                        registry,
+                        local_prefix=local_prefix,
+                    ):
+                        self._inc_image_cache[cache_key] = True
+                        self._inc_image_last_failure.pop(cache_key, None)
+                        return True
+                    logger.warning(
+                        "Timed out waiting for distributed inc-image lock for "
+                        f"{project_name}:{sanitizer}; falling back to standard build"
+                    )
+                    return False
 
-            # Try to pull from registry
-            logger.debug(
-                f"Inc-build image not found locally, trying to pull: {project_name}"
-            )
-            if self.pull_inc_build_image(project_name, sanitizer, registry):
-                logger.debug(f"Successfully pulled inc-build image for {project_name}")
-                self._inc_image_cache[cache_key] = True
-                return True
+                def _renew_loop() -> None:
+                    while not renew_stop.wait(
+                        self.inc_image_dist_lock_renew_interval_sec
+                    ):
+                        if not self._renew_inc_image_dist_lock(lease):
+                            logger.warning(
+                                "Lost distributed inc-image lock lease for "
+                                f"{project_name}:{sanitizer}"
+                            )
+                            lease_lost.set()
+                            break
 
-            logger.warning(
-                f"Inc-build image not available for {project_name}, "
-                "will fall back to standard build"
-            )
-            self._inc_image_cache[cache_key] = False
-            return False
+                renew_thread = threading.Thread(
+                    target=_renew_loop,
+                    name=f"inc-image-lock-renew-{project_name}-{sanitizer}",
+                    daemon=True,
+                )
+                renew_thread.start()
+
+            try:
+                # Check if already available locally.
+                if self.is_inc_image_available(
+                    project_name,
+                    sanitizer,
+                    registry,
+                    local_prefix=local_prefix,
+                ):
+                    logger.debug(f"Inc-build image available for {project_name}")
+                    self._inc_image_cache[cache_key] = True
+                    self._inc_image_last_failure.pop(cache_key, None)
+                    return True
+                if lease_lost.is_set():
+                    logger.warning(
+                        "Skipping inc-image prepare after distributed lock lease loss "
+                        f"for {project_name}:{sanitizer}"
+                    )
+                    return False
+
+                allow_pull = policy in ("auto", "pull_only")
+                allow_build = policy in ("auto", "build_only")
+
+                # Pull path with optional remote size gate.
+                if allow_pull:
+                    remote_image = self.get_inc_build_image_name(
+                        project_name, sanitizer, registry
+                    )
+                    if max_pull_bytes is not None:
+                        remote_size = self._get_remote_image_size(remote_image)
+                        if remote_size is not None and remote_size > max_pull_bytes:
+                            logger.info(
+                                f"Skipping pull for {project_name}:{sanitizer} "
+                                f"(remote size {remote_size} > cap {max_pull_bytes})"
+                            )
+                        else:
+                            logger.debug(
+                                "Inc-build image not found locally, trying pull: "
+                                f"{project_name}"
+                            )
+                            if self.pull_inc_build_image(
+                                project_name,
+                                sanitizer,
+                                registry,
+                                local_prefix=local_prefix,
+                                timeout=pull_timeout,
+                            ):
+                                logger.debug(
+                                    f"Successfully pulled inc-build image for {project_name}"
+                                )
+                                self._inc_image_cache[cache_key] = True
+                                self._inc_image_last_failure.pop(cache_key, None)
+                                return True
+                            if lease_lost.is_set():
+                                logger.warning(
+                                    "Distributed lock lease lost during inc-image pull "
+                                    f"for {project_name}:{sanitizer}"
+                                )
+                                return False
+                    else:
+                        logger.info(
+                            "Inc-build image not found locally, trying pull: "
+                            f"{project_name}"
+                        )
+                        if self.pull_inc_build_image(
+                            project_name,
+                            sanitizer,
+                            registry,
+                            local_prefix=local_prefix,
+                            timeout=pull_timeout,
+                        ):
+                            logger.debug(
+                                f"Successfully pulled inc-build image for {project_name}"
+                            )
+                            self._inc_image_cache[cache_key] = True
+                            self._inc_image_last_failure.pop(cache_key, None)
+                            return True
+                        if lease_lost.is_set():
+                            logger.warning(
+                                "Distributed lock lease lost during inc-image pull "
+                                f"for {project_name}:{sanitizer}"
+                            )
+                            return False
+
+                # Local-build path.
+                if allow_build:
+                    if lease_lost.is_set():
+                        logger.warning(
+                            "Skipping local inc-image build after distributed lock "
+                            f"lease loss for {project_name}:{sanitizer}"
+                        )
+                        return False
+                    logger.info(
+                        f"Preparing local inc image for {project_name}:{sanitizer} "
+                        "(on-demand fallback)"
+                    )
+                    if self.build_inc_build_image(
+                        project_name,
+                        sanitizer,
+                        benchmark_path=benchmark_path,
+                        local_prefix=local_prefix,
+                    ):
+                        self._inc_image_cache[cache_key] = True
+                        self._inc_image_last_failure.pop(cache_key, None)
+                        return True
+                    if lease_lost.is_set():
+                        logger.warning(
+                            "Distributed lock lease lost during local inc-image build "
+                            f"for {project_name}:{sanitizer}"
+                        )
+                        return False
+
+                logger.warning(
+                    f"Inc-build image not available for {project_name}, "
+                    "will fall back to standard build"
+                )
+                self._inc_image_last_failure[cache_key] = time.monotonic()
+                return False
+            finally:
+                if lease is not None:
+                    renew_stop.set()
+                    if renew_thread is not None:
+                        renew_thread.join(timeout=1)
+                    if not self._release_inc_image_dist_lock(lease):
+                        logger.warning(
+                            "Failed to release distributed inc-image lock for "
+                            f"{project_name}:{sanitizer}"
+                        )
 
     # =========================================================================
     # Unit test support for patch verification
     # =========================================================================
+
+    @staticmethod
+    def _normalize_container_workdir(raw_workdir: str) -> str:
+        """Normalize container WORKDIR with conservative defaults."""
+        workdir = (raw_workdir or "").strip()
+        if not workdir:
+            return "/src"
+        workdir = workdir.replace("${SRC}", "/src").replace("$SRC", "/src")
+        parts_raw = [part for part in workdir.split("/") if part]
+        if ".." in parts_raw:
+            return "/src"
+        if not workdir.startswith("/"):
+            workdir = f"/src/{workdir}"
+        normalized = posixpath.normpath(workdir)
+        if not normalized.startswith("/"):
+            normalized = f"/{normalized}"
+        # Guard against unsafe or unexpected sync targets.
+        if normalized in ("", "/", "/."):
+            return "/src"
+        # Test-source overlays are supported only under /src semantics.
+        if normalized == "/src":
+            return normalized
+        if not normalized.startswith("/src/"):
+            return "/src"
+        return normalized
+
+    @staticmethod
+    def _parse_workdir_from_dockerfile(project_dir: Path) -> str:
+        """Parse Dockerfile WORKDIR with cumulative relative semantics."""
+        dockerfile = project_dir / "Dockerfile"
+        if not dockerfile.exists():
+            return "/src"
+        workdir = "/src"
+        pattern = re.compile(r"^\s*WORKDIR\s+(.+?)\s*$")
+        for raw_line in dockerfile.read_text(
+            encoding="utf-8", errors="ignore"
+        ).splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.upper().startswith("FROM "):
+                workdir = "/src"
+                continue
+            match = pattern.match(line)
+            if not match:
+                continue
+            value = match.group(1).split("#", 1)[0].strip().strip("\"'")
+            value = value.replace("${SRC}", "/src").replace("$SRC", "/src")
+            if value.startswith("/"):
+                workdir = posixpath.normpath(value)
+            else:
+                workdir = posixpath.normpath(posixpath.join(workdir, value))
+        return workdir or "/src"
+
+    def _resolve_test_workdir(self, image: str, project_dir: Path) -> str:
+        """Resolve runtime WORKDIR for test execution."""
+        inspect_cmd = [
+            "docker",
+            "image",
+            "inspect",
+            "--format",
+            "{{.Config.WorkingDir}}",
+            image,
+        ]
+        try:
+            inspect_result = run_with_timeout(inspect_cmd, timeout=15)
+            if inspect_result.returncode == 0:
+                return self._normalize_container_workdir(inspect_result.stdout.strip())
+            logger.debug(
+                "Failed to inspect image working dir for {} (code={}, stderr={})",
+                image,
+                inspect_result.returncode,
+                inspect_result.stderr.strip(),
+            )
+        except Exception as e:
+            logger.debug(f"Image inspect failed for {image}: {e}")
+
+        try:
+            parsed = self._parse_workdir_from_dockerfile(project_dir)
+            return self._normalize_container_workdir(parsed)
+        except Exception as e:
+            logger.debug(f"Dockerfile WORKDIR fallback failed for {project_dir}: {e}")
+            return "/src"
 
     def run_tests(
         self,
@@ -2042,9 +3048,9 @@ class OSSFuzzInfrastructure:
         timeout: int = 1800,
         *,
         rts_mode: bool = False,
-        docker_image_tag: Optional[str] = None,
+        docker_tag: str = "latest",
     ) -> tuple[bool, str, str]:
-        """Run unit tests via helper.py run_test.
+        """Run unit tests by executing benchmark test script inside builder image.
 
         Args:
             project_name: OSS-Fuzz project name
@@ -2052,30 +3058,148 @@ class OSSFuzzInfrastructure:
             sanitizer: Sanitizer type
             timeout: Timeout in seconds
             rts_mode: If True, run only patch-affected tests (RTS)
-            docker_image_tag: Optional Docker image tag (e.g., "inc-address")
+            docker_tag: Docker image tag to use (e.g., "latest", "inc")
 
         Returns:
             Tuple of (passed, stdout, stderr)
         """
-        cmd = [
-            "python3",
-            str(self._helper_script),
-            "run_test",
-            "--sanitizer",
-            sanitizer,
+        project_dir = self.projects_base / project_name
+        run_tests_sh = project_dir / "run_tests.sh"
+        src_path = src_path.resolve()
+        project_mount = "/CRSBENCH_PROJ_PATH"
+        patched_src_container = "/CRSBENCH_PATCHED_SRC"
+        image = f"gcr.io/oss-fuzz/{project_name}:{docker_tag}"
+        test_workdir = self._resolve_test_workdir(image, project_dir)
+        replay_policy = resolve_replay_policy(inc_build=(docker_tag == "inc"))
+        if replay_policy.enabled:
+            if not self._ensure_replay_hooks_in_image(image, replay_policy):
+                return False, "", "Replay hook installation failed"
+        logger.info(
+            "Resolved test workdir for {}: image={} workdir={}",
             project_name,
-            str(src_path),
-        ]
-
+            image,
+            test_workdir,
+        )
+        test_cmd = (
+            f'if [ -n "${{CRSBENCH_REPLAY_BIN:-}}" ] && [ -d "${{CRSBENCH_REPLAY_BIN}}" ]; then '
+            'case ":$PATH:" in *":${CRSBENCH_REPLAY_BIN}:"*) ;; '
+            '*) export PATH="${CRSBENCH_REPLAY_BIN}:$PATH" ;; esac; fi; '
+            f"project_path={shlex.quote(project_mount)}; "
+            f"patched_src={shlex.quote(patched_src_container)}; "
+            f"workdir={shlex.quote(test_workdir)}; "
+            'case "$workdir" in ""|"/") echo "Unsafe workdir: $workdir"; exit 2;; esac; '
+            'if [ -L "$workdir" ]; then echo "Unsafe symlink workdir: $workdir"; exit 2; fi; '
+            'mkdir -p "$workdir"; '
+            'resolved_workdir="$workdir"; '
+            "if command -v realpath >/dev/null 2>&1; then "
+            'resolved_workdir=$(realpath -m "$workdir" 2>/dev/null || echo "$workdir"); '
+            "else "
+            'echo "realpath unavailable; refusing unsafe sync"; exit 2; '
+            "fi; "
+            'case "$resolved_workdir" in /src|/src/*) ;; '
+            '*) echo "Unsafe resolved workdir: $resolved_workdir"; exit 2;; esac; '
+            'if [ -d "$patched_src" ]; then '
+            'if [ "$workdir" = "/src" ]; then '
+            "preserve_list=$(mktemp); "
+            "for env_var in MVN MAVEN_HOME M2_HOME GRADLE_HOME; do "
+            'env_val="${!env_var:-}"; '
+            'case "$env_val" in '
+            '/src/*) top="${env_val#/src/}"; top="${top%%/*}"; [ -n "$top" ] && echo "$top" >> "$preserve_list" ;; '
+            "esac; "
+            "done; "
+            'manual_preserve="${CRSBENCH_TEST_PRESERVE_TOPLEVEL:-}"; '
+            'if [ -n "$manual_preserve" ]; then '
+            'for top in ${manual_preserve//,/ }; do [ -n "$top" ] && echo "$top" >> "$preserve_list"; done; '
+            "fi; "
+            "for path_entry in ${PATH//:/ }; do "
+            'case "$path_entry" in '
+            '/src/*) top="${path_entry#/src/}"; top="${top%%/*}"; [ -n "$top" ] && echo "$top" >> "$preserve_list" ;; '
+            "esac; "
+            "done; "
+            'sort -u -o "$preserve_list" "$preserve_list" 2>/dev/null || true; '
+            "for p in /src/* /src/.[!.]* /src/..?*; do "
+            '[ -e "$p" ] || continue; '
+            'base=$(basename "$p"); '
+            'if ! grep -Fxq "$base" "$preserve_list"; then rm -rf "$p"; fi; '
+            "done; "
+            'cp -a "$patched_src/." "$workdir/"; '
+            'rm -f "$preserve_list"; '
+            "else "
+            "if command -v rsync >/dev/null 2>&1; then "
+            'rsync -a --delete "$patched_src/" "$workdir/"; '
+            "else "
+            'find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +; '
+            'cp -a "$patched_src/." "$workdir/"; '
+            "fi; "
+            "fi; "
+            "fi; "
+            'if [ -f "$project_path/test.sh" ]; then '
+            'cd "$workdir" && /bin/bash "$project_path/test.sh"; '
+            'elif [ -f "$project_path/run_tests.sh" ]; then '
+            'cd "$workdir" && /bin/bash "$project_path/run_tests.sh"; '
+            "else echo 'No test.sh or run_tests.sh found, skipping'; exit 0; fi"
+        )
         if rts_mode:
-            cmd.append("--rts")
+            test_cmd = f"export RTS_MODE=1; {test_cmd}"
 
-        if docker_image_tag:
-            cmd.extend(["--docker_image_tag", docker_image_tag])
+        out_dir = self.get_build_output_path(project_name)
+        work_dir = self.get_isolated_work_path(project_name)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        work_dir.mkdir(parents=True, exist_ok=True)
+
+        cmd = [
+            "docker",
+            "run",
+            "--rm",
+            "--user",
+            "0",
+            "-e",
+            f"SANITIZER={sanitizer}",
+            "-e",
+            f"FUZZING_LANGUAGE={self._resolve_fuzzing_language(project_dir)}",
+            "-e",
+            f"PROJECT_NAME={project_name}",
+            "-e",
+            f"CRSBENCH_PATCHED_SRC={patched_src_container}",
+            "-e",
+            f"CRSBENCH_PROJ_PATH={project_mount}",
+            "-e",
+            f"CRSBENCH_EFFECTIVE_WORKDIR={test_workdir}",
+            "-v",
+            f"{src_path}:{patched_src_container}:ro",
+            "-v",
+            f"{project_dir.resolve()}:{project_mount}:ro",
+            "-v",
+            f"{out_dir.resolve()}:/out",
+            "-v",
+            f"{work_dir.resolve()}:/work",
+        ]
+        cmd[5:5] = self._locale_docker_run_args()
+        cmd.extend(self._docker_resource_run_args())
+        cmd.extend(
+            [
+                image,
+                "/bin/bash",
+                "-lc",
+                test_cmd,
+            ]
+        )
+        if replay_policy.enabled:
+            cmd[cmd.index(image) : cmd.index(image)] = [
+                "-e",
+                f"CRSBENCH_REPLAY_POLICY_SOURCE={replay_policy.source}",
+                "-e",
+                f"CRSBENCH_REPLAY_POLICY_TOOLS={replay_policy.tool_hooks_csv()}",
+            ]
+        if run_tests_sh.exists():
+            cmd[cmd.index(image) : cmd.index(image)] = [
+                "-v",
+                f"{run_tests_sh.resolve()}:/src/run_tests.sh:ro",
+            ]
 
         logger.debug(
             f"Running unit tests for {project_name} "
-            f"(rts={rts_mode}, sanitizer={sanitizer})"
+            f"(rts={rts_mode}, sanitizer={sanitizer}, tag={docker_tag})"
         )
         logger.debug(f"Command: {' '.join(cmd)}")
 
@@ -2083,7 +3207,6 @@ class OSSFuzzInfrastructure:
             result = run_with_timeout(
                 cmd,
                 timeout=timeout,
-                cwd=self.oss_fuzz_path,
             )
 
             passed = result.returncode == 0
@@ -2096,15 +3219,21 @@ class OSSFuzzInfrastructure:
                 )
 
             fix_docker_ownership(self.get_build_output_path(project_name))
+            fix_docker_ownership(work_dir)
+            fix_docker_ownership(src_path)
             return passed, result.stdout, result.stderr
 
         except subprocess.TimeoutExpired:
             logger.error(f"Test timeout for {project_name}")
             fix_docker_ownership(self.get_build_output_path(project_name))
+            fix_docker_ownership(work_dir)
+            fix_docker_ownership(src_path)
             return False, "", "Test execution timed out"
         except Exception as e:
             logger.error(f"Test execution error for {project_name}: {e}")
             fix_docker_ownership(self.get_build_output_path(project_name))
+            fix_docker_ownership(work_dir)
+            fix_docker_ownership(src_path)
             return False, "", str(e)
 
     def is_tests_available(self, project_name: str) -> bool:
@@ -2116,5 +3245,7 @@ class OSSFuzzInfrastructure:
         Returns:
             True if test.sh exists
         """
-        test_script = self.projects_base / project_name / "test.sh"
-        return test_script.exists()
+        project_dir = self.projects_base / project_name
+        return (project_dir / "test.sh").exists() or (
+            project_dir / "run_tests.sh"
+        ).exists()

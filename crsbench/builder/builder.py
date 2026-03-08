@@ -26,6 +26,7 @@ from crsbench.builder.types import (
     BuildResult,
     VariantType,
 )
+from crsbench.utils.docker import docker_rmtree, fix_docker_ownership
 from crsbench.utils.logger import get_logger
 from crsbench.utils.repo_manager import clone_or_copy_cached_repo
 
@@ -53,6 +54,11 @@ class OSSFuzzBuilder:
         max_workers: int = 4,
         *,
         source_mode: str = "pkgs",
+        inc_image_policy: Optional[str] = None,
+        inc_image_registry: Optional[str] = None,
+        inc_image_max_pull_bytes: Optional[int] = None,
+        inc_image_pull_timeout: Optional[int] = None,
+        local_image_prefix: Optional[str] = None,
     ):
         """Initialize the builder.
 
@@ -64,7 +70,14 @@ class OSSFuzzBuilder:
         self.oss_fuzz_path = Path(oss_fuzz_path).resolve()
         self.max_workers = max_workers
         self.source_mode = source_mode
-        self.infra = OSSFuzzInfrastructure(oss_fuzz_path)
+        self.infra = OSSFuzzInfrastructure(
+            oss_fuzz_path,
+            inc_image_policy=inc_image_policy,
+            inc_image_registry=inc_image_registry,
+            inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+            inc_image_pull_timeout=inc_image_pull_timeout,
+            local_image_prefix=local_image_prefix,
+        )
 
     def build_variants(
         self,
@@ -221,8 +234,18 @@ class OSSFuzzBuilder:
 
         # Use inc-build path for supported variants when enabled and image available
         if config.variant_type.supports_inc_build() and config.use_inc_build:
+            # Ensure benchmark project alias exists under third_party/oss-fuzz/projects/
+            # before trying local inc-image build fallback.
+            self.infra.create_variant_project(
+                benchmark_path=config.benchmark_path,
+                variant_name=config.benchmark_name,
+            )
             # Check if inc-build image is available (pull if needed)
-            if self.infra.ensure_inc_image(config.benchmark_name, config.sanitizer):
+            if self.infra.ensure_inc_image(
+                config.benchmark_name,
+                config.sanitizer,
+                benchmark_path=config.benchmark_path,
+            ):
                 return self._build_with_inc_image(config, start_time)
             # Fall back to standard build if inc-build image not available
             # Mark as fallback so PASS-FB signals "prepare the inc-build image"
@@ -285,61 +308,63 @@ class OSSFuzzBuilder:
         # In pkgs mode this extracts the bundled tarball; in main_repo mode
         # it clones from git. Patches (if any) are applied to the extracted
         # source before mounting.
-        with tempfile.TemporaryDirectory() as temp_dir:
-            try:
-                repo_path = self._prepare_source(config, Path(temp_dir))
-                if not repo_path:
-                    return BuildResult.from_error(
-                        config=config,
-                        error="Failed to prepare source",
-                        elapsed_seconds=time.time() - start_time,
-                    )
-
-                # Apply patches for validation variants (not coverage)
-                if config.variant_type.is_validation_variant():
-                    self._apply_patches_for_variant(config, repo_path)
-
-                # Apply patches for patch verification variants
-                if config.variant_type.is_patch_variant():
-                    self._apply_patches_for_variant(config, repo_path)
-
-                # Build fuzzers
-                build_result = self.infra.build_fuzzers(config, repo_path)
-                if not build_result.success:
-                    return BuildResult(
-                        config=config,
-                        success=False,
-                        variant_name=variant_name,
-                        error="Build failed",
-                        elapsed_seconds=time.time() - start_time,
-                        stdout=build_result.stdout,
-                        stderr=build_result.stderr,
-                    )
-
-                # Success - write metadata and return
-                build_path = self.infra.get_build_output_path(variant_name)
-                self.infra.write_build_metadata(
-                    variant_name,
-                    inc_build=False,
-                    sanitizer=config.sanitizer,
+        temp_dir = Path(tempfile.mkdtemp(prefix="crsbench-build-src-"))
+        try:
+            repo_path = self._prepare_source(config, temp_dir)
+            if not repo_path:
+                return BuildResult.from_error(
+                    config=config,
+                    error="Failed to prepare source",
+                    elapsed_seconds=time.time() - start_time,
                 )
+
+            # Apply patches for validation variants (not coverage)
+            if config.variant_type.is_validation_variant():
+                self._apply_patches_for_variant(config, repo_path)
+
+            # Apply patches for patch verification variants
+            if config.variant_type.is_patch_variant():
+                self._apply_patches_for_variant(config, repo_path)
+
+            # Build fuzzers
+            build_result = self.infra.build_fuzzers(config, repo_path)
+            if not build_result.success:
                 return BuildResult(
                     config=config,
-                    success=True,
+                    success=False,
                     variant_name=variant_name,
-                    build_path=build_path,
+                    error="Build failed",
                     elapsed_seconds=time.time() - start_time,
-                    fallback_used=fallback_from_inc,
                     stdout=build_result.stdout,
                     stderr=build_result.stderr,
                 )
 
-            except Exception as e:
-                return BuildResult.from_error(
-                    config=config,
-                    error=str(e),
-                    elapsed_seconds=time.time() - start_time,
-                )
+            # Success - write metadata and return
+            build_path = self.infra.get_build_output_path(variant_name)
+            self.infra.write_build_metadata(
+                variant_name,
+                inc_build=False,
+                sanitizer=config.sanitizer,
+            )
+            return BuildResult(
+                config=config,
+                success=True,
+                variant_name=variant_name,
+                build_path=build_path,
+                elapsed_seconds=time.time() - start_time,
+                fallback_used=fallback_from_inc,
+                stdout=build_result.stdout,
+                stderr=build_result.stderr,
+            )
+
+        except Exception as e:
+            return BuildResult.from_error(
+                config=config,
+                error=str(e),
+                elapsed_seconds=time.time() - start_time,
+            )
+        finally:
+            self._cleanup_temp_source_dir(temp_dir)
 
     def _prepare_source(self, config: BuildConfig, temp_dir: Path) -> Optional[Path]:
         """Prepare source for building - from pkgs/ or git clone.
@@ -418,104 +443,126 @@ class OSSFuzzBuilder:
         variant_name = config.variant_name
 
         # Prepare source (from pkgs/ or git clone)
-        with tempfile.TemporaryDirectory() as temp_dir:
-            try:
-                repo_path = self._prepare_source(config, Path(temp_dir))
-                if not repo_path:
-                    return BuildResult.from_error(
-                        config=config,
-                        error="Failed to prepare source",
-                        elapsed_seconds=time.time() - start_time,
-                    )
-
-                # Apply CRS-generated patches
-                if config.patches:
-                    self._apply_patches_for_variant(config, repo_path)
-
-                # Create variant project for build
-                variant_project_path = self.infra.create_variant_project(
-                    benchmark_path=config.benchmark_path,
-                    variant_name=variant_name,
+        temp_dir = Path(tempfile.mkdtemp(prefix="crsbench-build-src-inc-"))
+        try:
+            repo_path = self._prepare_source(config, temp_dir)
+            if not repo_path:
+                return BuildResult.from_error(
+                    config=config,
+                    error="Failed to prepare source",
+                    elapsed_seconds=time.time() - start_time,
                 )
-                if not variant_project_path:
-                    return BuildResult.from_error(
-                        config=config,
-                        error="Failed to create variant project directory",
-                        elapsed_seconds=time.time() - start_time,
-                    )
 
-                # Prepare variant inc-build image (retag from project to variant)
-                if not self.infra.prepare_inc_image_for_variant(
-                    config.benchmark_name, variant_name, config.sanitizer
-                ):
-                    return BuildResult.from_error(
-                        config=config,
-                        error="Failed to prepare inc-build image for variant",
-                        elapsed_seconds=time.time() - start_time,
-                    )
+            # Apply CRS-generated patches
+            if config.patches:
+                self._apply_patches_for_variant(config, repo_path)
 
-                # Inc-build: rsync patched source to /src/, the image's
-                # OSS-PATCH in compile diffs /src/ against HEAD and applies
-                # to /built-src/ via git apply (preserves .o for unchanged files)
+            # Create variant project for build
+            variant_project_path = self.infra.create_variant_project(
+                benchmark_path=config.benchmark_path,
+                variant_name=variant_name,
+            )
+            if not variant_project_path:
+                return BuildResult.from_error(
+                    config=config,
+                    error="Failed to create variant project directory",
+                    elapsed_seconds=time.time() - start_time,
+                )
+
+            # Prepare variant inc-build image (retag from project to variant)
+            if not self.infra.prepare_inc_image_for_variant(
+                config.benchmark_name, variant_name, config.sanitizer
+            ):
+                return BuildResult.from_error(
+                    config=config,
+                    error="Failed to prepare inc-build image for variant",
+                    elapsed_seconds=time.time() - start_time,
+                )
+
+            # Inc-build: rsync patched source to /src/ and use replay-build
+            # semantics to preserve unchanged object files where possible.
+            build_result = self.infra.build_fuzzers(
+                config, repo_path, use_inc_image=True
+            )
+
+            # If inc-build fails, fallback to building from /src/
+            # using the same inc-build image (deps already installed)
+            fallback_used = False
+            if not build_result.success:
+                logger.warning(
+                    f"Inc-build failed for {variant_name}, "
+                    "falling back to clean build from /src/"
+                )
+                fallback_used = True
+                self.infra.cleanup_build_outputs(variant_name)
                 build_result = self.infra.build_fuzzers(
-                    config, repo_path, use_inc_image=True
+                    config,
+                    repo_path,
+                    use_inc_image=True,
+                    snapshot_fallback=True,
                 )
 
-                # If inc-build fails, fallback to building from /src/
-                # using the same inc-build image (deps already installed)
-                fallback_used = False
-                if not build_result.success:
-                    logger.warning(
-                        f"Inc-build failed for {variant_name}, "
-                        "falling back to clean build from /src/"
-                    )
-                    fallback_used = True
-                    self.infra.cleanup_build_outputs(variant_name)
-                    build_result = self.infra.build_fuzzers(
-                        config,
-                        repo_path,
-                        use_inc_image=True,
-                        inc_fallback=True,
-                    )
-
-                if not build_result.success:
-                    return BuildResult(
-                        config=config,
-                        success=False,
-                        variant_name=variant_name,
-                        error="Build failed (inc-build and full build both failed)"
-                        if fallback_used
-                        else "Build failed",
-                        elapsed_seconds=time.time() - start_time,
-                        stdout=build_result.stdout,
-                        stderr=build_result.stderr,
-                    )
-
-                # Success - write metadata and return
-                build_path = self.infra.get_build_output_path(variant_name)
-                self.infra.write_build_metadata(
-                    variant_name,
-                    inc_build=not fallback_used,  # True only if inc-build succeeded
-                    sanitizer=config.sanitizer,
-                    fallback_used=fallback_used,
-                )
+            if not build_result.success:
                 return BuildResult(
                     config=config,
-                    success=True,
+                    success=False,
                     variant_name=variant_name,
-                    build_path=build_path,
+                    error="Build failed (inc-build and full build both failed)"
+                    if fallback_used
+                    else "Build failed",
                     elapsed_seconds=time.time() - start_time,
-                    fallback_used=fallback_used,
                     stdout=build_result.stdout,
                     stderr=build_result.stderr,
                 )
 
-            except Exception as e:
-                return BuildResult.from_error(
-                    config=config,
-                    error=str(e),
-                    elapsed_seconds=time.time() - start_time,
-                )
+            # Success - write metadata and return
+            build_path = self.infra.get_build_output_path(variant_name)
+            self.infra.write_build_metadata(
+                variant_name,
+                inc_build=not fallback_used,  # True only if inc-build succeeded
+                sanitizer=config.sanitizer,
+                fallback_used=fallback_used,
+            )
+            return BuildResult(
+                config=config,
+                success=True,
+                variant_name=variant_name,
+                build_path=build_path,
+                elapsed_seconds=time.time() - start_time,
+                fallback_used=fallback_used,
+                stdout=build_result.stdout,
+                stderr=build_result.stderr,
+            )
+
+        except Exception as e:
+            return BuildResult.from_error(
+                config=config,
+                error=str(e),
+                elapsed_seconds=time.time() - start_time,
+            )
+        finally:
+            self._cleanup_temp_source_dir(temp_dir)
+
+    def _cleanup_temp_source_dir(self, temp_dir: Path) -> None:
+        """Cleanup extracted source with conditional ownership repair.
+
+        Fast path removes the directory directly. If removal fails (typically
+        because Docker produced root-owned artifacts), repair ownership once
+        and retry cleanup.
+        """
+        if not temp_dir.exists():
+            return
+
+        if docker_rmtree(temp_dir):
+            return
+
+        logger.debug(
+            "Temp source cleanup failed for {}. Retrying after ownership repair.",
+            temp_dir,
+        )
+        fix_docker_ownership(temp_dir)
+        if temp_dir.exists():
+            docker_rmtree(temp_dir)
 
     def _apply_patches_for_variant(
         self,
@@ -538,7 +585,12 @@ class OSSFuzzBuilder:
         logger.debug(
             f"Applying {len(config.patches)} patches for {config.variant_name}"
         )
-        self.infra.apply_patches_from_list(repo_path, config.patches)
+        applied = self.infra.apply_patches_from_list(repo_path, config.patches)
+        if not applied:
+            raise RuntimeError(
+                "Patch application failed for "
+                f"{config.variant_name}; see preceding patch apply logs."
+            )
 
     def create_build_plan(
         self,

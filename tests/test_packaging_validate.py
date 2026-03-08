@@ -21,6 +21,33 @@ RUN tar -xzf $SRC/foo.tar.gz && rm $SRC/foo.tar.gz
 WORKDIR $SRC/foo
 """
 
+LEGACY_PATH_TEST_SH = """\
+#!/bin/bash
+cd /built-src/foo
+"""
+
+LEGACY_PATH_COMMENT_ONLY_TEST_SH = """\
+#!/bin/bash
+# historical note: migrated from /built-src/foo
+echo ok
+"""
+
+LEGACY_PATH_INLINE_COMMENT_TEST_SH = """\
+#!/bin/bash
+echo ok # historical note: migrated from /built-src/foo
+"""
+
+LEGACY_PATH_PARAMETER_EXPANSION_TEST_SH = """\
+#!/bin/bash
+x=${var#/built-src/foo}
+echo "$x"
+"""
+
+LEGACY_PATH_EMBEDDED_WORD_TEST_SH = """\
+#!/bin/bash
+echo prefix#/built-src/foo
+"""
+
 # Dockerfile with ADD instead of COPY
 ADD_DOCKERFILE = """\
 FROM ghcr.io/aixcc-finals/base-builder:v1.3.0
@@ -210,6 +237,78 @@ class TestPackagingValidationIntegration:
         assert not result.valid
         # Should have errors about the tarball mismatch
         assert any("foo.tar.gz" in e for e in result.errors)
+
+    def test_validate_legacy_source_path_fails(self, tmp_path: Path) -> None:
+        """Legacy /built-src or /test-src usage in scripts should fail validation."""
+        bm = _create_benchmark(
+            tmp_path,
+            dockerfile_content=VALID_DOCKERFILE,
+            tarball_name="foo.tar.gz",
+        )
+        (bm / "test.sh").write_text(LEGACY_PATH_TEST_SH)
+
+        result = validate_benchmark(bm)
+        assert not result.valid
+        assert any("Forbidden legacy source paths" in e for e in result.errors)
+        assert any("/built-src" in e for e in result.errors)
+
+    def test_validate_legacy_source_path_in_comment_only_passes(
+        self, tmp_path: Path
+    ) -> None:
+        """Comment-only legacy path mentions should not fail validation."""
+        bm = _create_benchmark(
+            tmp_path,
+            dockerfile_content=VALID_DOCKERFILE,
+            tarball_name="foo.tar.gz",
+        )
+        (bm / "test.sh").write_text(LEGACY_PATH_COMMENT_ONLY_TEST_SH)
+
+        result = validate_benchmark(bm)
+        assert result.valid
+
+    def test_validate_legacy_source_path_in_inline_comment_passes(
+        self, tmp_path: Path
+    ) -> None:
+        """Inline trailing comments with legacy paths should not fail validation."""
+        bm = _create_benchmark(
+            tmp_path,
+            dockerfile_content=VALID_DOCKERFILE,
+            tarball_name="foo.tar.gz",
+        )
+        (bm / "test.sh").write_text(LEGACY_PATH_INLINE_COMMENT_TEST_SH)
+
+        result = validate_benchmark(bm)
+        assert result.valid
+
+    def test_validate_legacy_source_path_in_parameter_expansion_fails(
+        self, tmp_path: Path
+    ) -> None:
+        """Shell parameter expansion with '/built-src' must still be flagged."""
+        bm = _create_benchmark(
+            tmp_path,
+            dockerfile_content=VALID_DOCKERFILE,
+            tarball_name="foo.tar.gz",
+        )
+        (bm / "test.sh").write_text(LEGACY_PATH_PARAMETER_EXPANSION_TEST_SH)
+
+        result = validate_benchmark(bm)
+        assert not result.valid
+        assert any("Forbidden legacy source paths" in e for e in result.errors)
+
+    def test_validate_legacy_source_path_embedded_word_fails(
+        self, tmp_path: Path
+    ) -> None:
+        """Embedded '#/built-src' token in a word should still be flagged."""
+        bm = _create_benchmark(
+            tmp_path,
+            dockerfile_content=VALID_DOCKERFILE,
+            tarball_name="foo.tar.gz",
+        )
+        (bm / "test.sh").write_text(LEGACY_PATH_EMBEDDED_WORD_TEST_SH)
+
+        result = validate_benchmark(bm)
+        assert not result.valid
+        assert any("Forbidden legacy source paths" in e for e in result.errors)
 
     def test_validate_existing_benchmark_no_regression(self) -> None:
         """Run validate_benchmark() on a real benchmark to ensure no false positives."""
