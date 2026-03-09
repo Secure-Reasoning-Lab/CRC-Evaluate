@@ -3,7 +3,7 @@
 This document describes how CRSBench orchestrates CRS execution using the `oss-crs` command-line interface with trial isolation and parameter management.
 
 > Note: Some command examples in this design doc are historical and may not match the latest `oss-crs` CLI flags exactly.
-> For current behavior, see [docs/ossfuzz-crs-interface.md](../../ossfuzz-crs-interface.md) and [oss-crs/docs/design/parallel.md](../../../oss-crs/docs/design/parallel.md).
+> For current behavior, see [docs/reference/oss-crs-interface.md](../../reference/oss-crs-interface.md) and [oss-crs/docs/design/parallel.md](../../../oss-crs/docs/design/parallel.md).
 
 ## Purpose
 
