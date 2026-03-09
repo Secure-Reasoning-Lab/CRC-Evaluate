@@ -124,7 +124,7 @@ Patch verification runtime source contract:
 
 Same as existing infrastructure:
 - **Valkey 8.0+** / Redis: Message broker and job storage
-- **RQ 1.11.1+**: Python job queue (works with Valkey)
+- **RQ 2.6.1+**: Python job queue (works with Valkey)
 - **Python 3.11+**: Implementation language
 - **Docker**: Variant image builds and reproduce() execution
 

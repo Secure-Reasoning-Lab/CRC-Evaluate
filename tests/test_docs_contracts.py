@@ -20,3 +20,38 @@ def test_experiment_workflow_config_paths_exist() -> None:
             missing.append(rel)
 
     assert not missing, f"Missing experiment-config files referenced in docs: {missing}"
+
+
+def test_docs_do_not_use_removed_dataset_cli_forms() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    docs_root = repo_root / "docs"
+    forbidden = [
+        "crsbench dataset bundle",
+        "crsbench dataset validate",
+        "crsbench upload --dataset",
+    ]
+
+    offenders: list[str] = []
+    for path in docs_root.rglob("*.md"):
+        text = path.read_text(encoding="utf-8")
+        for token in forbidden:
+            if token in text:
+                offenders.append(f"{path.relative_to(repo_root)} :: {token}")
+
+    assert not offenders, "Found removed CLI forms in docs:\n" + "\n".join(offenders)
+
+
+def test_distributed_docs_do_not_reference_legacy_rq_version() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    distributed_docs = repo_root / "docs" / "design" / "distributed"
+    forbidden = "RQ 1.11.1+"
+
+    offenders: list[str] = []
+    for path in distributed_docs.rglob("*.md"):
+        text = path.read_text(encoding="utf-8")
+        if forbidden in text:
+            offenders.append(str(path.relative_to(repo_root)))
+
+    assert not offenders, (
+        f"Legacy RQ version marker '{forbidden}' found in: {', '.join(offenders)}"
+    )

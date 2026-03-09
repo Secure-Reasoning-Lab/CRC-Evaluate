@@ -73,7 +73,7 @@ This document describes the design and implementation of a distributed job queue
 ### 2.2 Technology Stack
 
 - **Valkey 8.0+**: Message broker and job queue storage (Redis-compatible)
-- **RQ (Redis Queue) 1.11.1+**: Python job queue library (works with Valkey)
+- **RQ (Redis Queue) 2.6.1+**: Python job queue library (works with Valkey)
 - **Docker Compose**: Local orchestration
 - **Python 3.11+**: Implementation language
 
@@ -1247,38 +1247,30 @@ Outcome classification in aggregation (`benchmark_ci/cli/result_aggregator.py`):
 
 ```
 crsbench/
-├── run_experiment.py                # Main CLI entry point (Orchestrator)
-├── __init__.py                      # Package initialization
-└── distributed/                     # Distributed job queue module
-    ├── __init__.py                  # Module exports
-    ├── jobs.py                      # Job definitions
-    ├── worker.py                    # Worker implementation
-    └── queue.py                     # Queue utilities
-
-compose/
-└── crsbench.yaml                    # Docker compose
-
-docker/
-└── worker/
-    ├── Dockerfile                   # Worker container image
-    └── startup-worker.sh            # Worker startup script
+├── run_experiment.py
+└── distributed/
+    ├── worker.py
+    ├── evaluator.py
+    ├── queue.py
+    ├── jobs.py
+    ├── build_jobs.py
+    ├── evaluator_jobs.py
+    ├── patch_evaluator_jobs.py
+    ├── ci_jobs.py
+    └── ci_supervisor.py
 
 tests/
-└── test_distributed/                # Tests for distributed module
-    ├── __init__.py
-    ├── test_jobs.py                 # Job tests
-    ├── test_worker.py               # Worker tests
-    └── test_queue.py                # Queue utilities tests
-
-docs/design/
-└── distributed-job-queue.md         # This document
+├── test_distributed_worker.py
+├── test_distributed_jobs.py
+├── test_evaluator_dual_queue.py
+├── test_ci_jobs.py
+└── test_ci_supervisor.py
 ```
 
 **Module Organization Rationale**:
-- **Only `run_experiment.py` at root**: Single entry point as per coding standards
-- **`crsbench/distributed/` module**: All distributed execution code grouped together
-- **Cohesive structure**: Related functionality (jobs, worker, queue) in one place
-- **Clear separation**: Distributed features isolated from core evaluation logic
+- **`crsbench/distributed/` module**: Distributed queue/supervisor logic is colocated
+- **Specialized job modules**: Build/verify/CI execution paths are separated by concern
+- **Dedicated test modules**: Worker/evaluator/CI semantics are validated independently
 
 ---
 

@@ -101,10 +101,12 @@ runtime:
   #   max_pull_bytes: 1073741824  # 1 GB (e.g., 1048576=1 MB)
   #   pull_timeout_sec: 900
   inputs:
+    # runtime.inputs apply to both bugfinding and bugfixing runs.
+    # Presence means enabled.
     pov:
       # Provide one POV variant per CPV.
       max_variants_per_cpv: 1
-    # Optional inputs (presence means enabled):
+    # Optional inputs:
     # SARIF bug-candidate hints (level 1..5, higher = more detailed).
     # sarif:
     #   level: 3
@@ -148,7 +150,6 @@ worker:
   # (not configured in experiment YAML).
   # Optional worker capability tag for matching cpu_tag jobs.
   # cpu_tag: amd-epyc
-  # shared_cpus: 112-127
   # redis_host: localhost:6379  # defaults to runtime.redis_host
   minimum_disk_size: "10GB"
   disk_check_interval: 60

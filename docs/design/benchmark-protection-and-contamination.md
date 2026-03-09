@@ -339,10 +339,10 @@ crsbench benchmark prepare-delta ./libpng-vuln-001
 crsbench benchmark bundle ./libpng-vuln-001 --output ./dist/
 
 # Bundle entire dataset
-crsbench dataset bundle ./benchmarks/ --output ./dist/ --name team-atlanta
+crsbench benchmark bundle-all ./benchmarks/ --output-dir ./dist/
 
 # Upload to HuggingFace
-crsbench upload --dataset crsbench
+crsbench benchmark upload ./benchmarks/ --dataset-name crsbench
 ```
 
 ### 4.4 Bundle Implementation Details
@@ -700,13 +700,13 @@ crsbench benchmark bundle ./my-new-vuln
 ```bash
 # 1. Ensure all benchmarks have pkgs/ and ref.diff
 crsbench benchmark prepare-delta --all
-crsbench benchmark bundle --all
+crsbench benchmark bundle-all ./benchmarks/
 
 # 2. Validate entire dataset
-crsbench dataset validate ./benchmarks/
+crsbench benchmark validate ./benchmarks/
 
 # 3. Upload to HuggingFace
-crsbench upload --dataset crsbench
+crsbench benchmark upload ./benchmarks/ --dataset-name crsbench
 ```
 
 ### 6.3 Using Benchmarks (Public User)
@@ -774,8 +774,8 @@ curl-vuln-001/       → Same pattern
 - [ ] Implement `crsbench benchmark bundle` command
 - [ ] Implement `crsbench benchmark prepare-delta` command
 - [ ] Implement `crsbench benchmark validate` command (port from CI scripts)
-- [ ] Implement `crsbench dataset bundle` command
-- [ ] Implement `crsbench dataset upload` command (HuggingFace)
+- [ ] Implement `crsbench benchmark bundle-all` command
+- [ ] Implement `crsbench benchmark upload` command (HuggingFace)
 - [ ] Implement `crsbench download` command
 
 ### 8.3 Runtime Changes

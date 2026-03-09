@@ -670,43 +670,16 @@ class ProjectCIResult:
 
 ## CLI Interface
 
-```python
-# crsbench/benchmark_ci/cli.py
+Current interface is argparse-based and nested under:
+`crsbench benchmark ci <subcommand> ...`
 
-@click.command()
-@click.argument("benchmark_path", type=click.Path(exists=True))
-@click.option("--sanitizer", default="address", help="Sanitizer to use")
-@click.option("--build-workers", default=4, help="Parallel build workers")
-@click.option("--verify-workers", default=4, help="Parallel verify workers")
-@click.option("--output", type=click.Path(), help="Output CSV path")
-@click.option("--dry-run", is_flag=True, help="Show jobs without executing")
-def ci(benchmark_path, sanitizer, build_workers, verify_workers, output, dry_run):
-    """Run CI validation for a benchmark."""
-    adapter = MetaYamlAdapter.from_benchmark_path(Path(benchmark_path))
+Typical subcommands:
+- `format`, `build`, `pov`, `patch`, `coverage`, `all`, `retry`, `storage`, `capabilities`
 
-    # Create jobs
-    factory = JobFactory(adapter, sanitizer=sanitizer)
-    jobs = factory.create_all_jobs()
+Example:
 
-    if dry_run:
-        _print_job_plan(jobs)
-        return
-
-    # Run
-    runner = ProjectCIRunner(
-        oss_fuzz_path=get_oss_fuzz_root(),
-        build_workers=build_workers,
-        verify_workers=verify_workers,
-    )
-    result = runner.run(jobs)
-
-    # Report
-    _print_summary(result)
-
-    if output:
-        result.to_csv(Path(output))
-
-    sys.exit(0 if result.passed else 1)
+```bash
+crsbench benchmark ci all benchmarks/curl --mode snapshot --output-dir ./ci-results
 ```
 
 ## GitHub CI Integration
@@ -751,8 +724,7 @@ jobs:
 
       - name: Run benchmark CI
         run: |
-          uv run crsbench benchmark ci benchmarks/${{ matrix.benchmark }} \
-            --sanitizer address \
+          uv run crsbench benchmark ci all benchmarks/${{ matrix.benchmark }} \
             --output results-${{ matrix.benchmark }}.csv
 
       - name: Upload results
@@ -794,7 +766,7 @@ crsbench/benchmark_ci/
 ## Example Output
 
 ```
-$ crsbench benchmark ci benchmarks/curl --sanitizer address
+$ crsbench benchmark ci all benchmarks/curl
 
 === Build Phase: 5 jobs ===
 [build:curl-asan-deltabase]    PASS (245.3s)
