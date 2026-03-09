@@ -4,21 +4,21 @@ Use this page for CI queue topology and evaluator deployment.
 
 ## Recommended Topology
 
-- one submitter: `crsbench benchmark ci ... --distributed`
-- one evaluator machine: `crsbench evaluator --ci ...`
+- one submitter: `uv run crsbench benchmark ci ... --distributed`
+- one evaluator machine: `uv run crsbench evaluator --ci ...`
 - one shared Valkey/Redis instance
 
 ## Example
 
 ```bash
-python scripts/valkey-helper.py --password start
+uv run python scripts/valkey-helper.py --password start
 
-crsbench evaluator --ci \
+uv run crsbench evaluator --ci \
   --build-jobs 8 --build-cores-per-job 16 \
   --verify-jobs 8 --verify-cores-per-job 16 \
   --idle-timeout 0
 
-crsbench benchmark ci all --all \
+uv run crsbench benchmark ci all --all \
   --distributed \
   --mode snapshot \
   --output-dir ./ci-output

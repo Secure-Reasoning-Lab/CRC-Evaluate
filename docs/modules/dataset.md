@@ -26,21 +26,14 @@ extensible support for S3 and Azure.
 | `manifest.py` | Shared fingerprint/index helpers for incremental upload/download |
 | `cli.py` | `crsbench download` CLI subparser (top-level command) |
 
-Upload CLI is wired through `crsbench benchmark upload` in
+Upload CLI is wired through the benchmark packaging command layer in
 `crsbench/benchmark/packaging/cli/benchmark_command.py`.
 
-## CLI Usage
+## Operational Boundaries
 
-```bash
-# Download (user-facing, top-level command)
-crsbench download --all
-crsbench download --dataset crsbench --benchmarks afc-curl-delta-01
-crsbench download --benchmark-suite sanity
-
-# Upload (maintainer-facing, under benchmark subcommand)
-crsbench benchmark upload --dataset crsbench
-crsbench benchmark upload --dataset crsbench --dry-run
-```
+- user-facing dataset download workflows are documented in `docs/guides/`
+- maintainer-facing upload workflows are documented in contributor/runtime docs
+- this page only defines the module surface and backend layout
 
 ## Dependency
 

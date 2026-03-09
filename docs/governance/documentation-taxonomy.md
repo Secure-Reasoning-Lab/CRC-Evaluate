@@ -43,7 +43,15 @@ documentation-governance source of truth.
   - `docs/design/**`
 
 ### 5. Module Reference
-- Goal: Keep module-level operational guidance concise and discoverable.
+- Goal: Keep module-scoped reference and short operational notes concise and discoverable.
+- Scope:
+  - one subsystem at a time
+  - terminology, file layout, and short operational notes for that subsystem
+- Non-goals:
+  - first-time-user onboarding
+  - cross-module workflows
+  - primary operator runbooks
+  - deep architecture/design rationale
 - Canonical entries:
   - `docs/modules/README.md`
   - `docs/modules/**`
@@ -69,9 +77,13 @@ documentation-governance source of truth.
 | Project overview and quick start | `README.md` | Adjacent package `README.md` files (keep local scope only) |
 | Docs navigation | `docs/README.md` | Root README docs section (summary only) |
 | Benchmark format requirements | `docs/RFC.md` | None |
-| Install and environment setup | `docs/getting-started/README.md` | `docs/getting-started/install.md`, `docs/getting-started/configuration.md`, operational snippets in `README.md` |
-| Experiment execution workflow | `docs/guides/experiments/README.md` | `docs/getting-started/first-experiment.md`, command examples in `README.md` |
-| Module operational guidance | `docs/modules/README.md` | `docs/modules/**`, deep implementation detail in design docs |
+| Getting-started section hub | `docs/getting-started/README.md` | Summary links in `docs/README.md`, root `README.md` |
+| Install workflow | `docs/getting-started/install.md` | Setup summaries in `docs/getting-started/README.md`, root `README.md` |
+| Environment and configuration | `docs/getting-started/configuration.md` | Setup summaries in `docs/getting-started/README.md`, root `README.md` |
+| First experiment walkthrough | `docs/getting-started/first-experiment.md` | Workflow summaries in `docs/guides/experiments/README.md`, root `README.md` |
+| Experiment workflow section hub | `docs/guides/experiments/README.md` | Command examples in `README.md` |
+| Benchmark CI workflow section hub | `docs/guides/benchmark-ci/README.md` | Command examples in `README.md` |
+| Module reference hub | `docs/modules/README.md` | Module-scoped notes in `docs/modules/**`, deep implementation detail in design docs |
 | Architecture decisions and rationale | `docs/design/README.md` | `docs/design/architecture.md`, relevant `docs/design/**`, intro summaries in module docs |
 
 ## Placement Rules
@@ -81,7 +93,9 @@ documentation-governance source of truth.
 - Keep `docs/` root reserved for:
   - the docs navigation hub: `docs/README.md`
   - top-level normative specs: `docs/RFC.md`
-  - high-value example/reference artifacts that are intended to be directly discoverable, such as `docs/*.yaml`
+  - repository-level schema/example artifacts:
+    - `docs/*.yaml`
+    - explicitly approved top-level example/reference docs only when they serve the whole repository rather than one workflow or subsystem
 - Put prose documentation under grouped subdirectories by reader/task:
   - `docs/getting-started/`
   - `docs/guides/`
@@ -90,8 +104,11 @@ documentation-governance source of truth.
   - `docs/governance/`
   - `docs/design/`
   - `docs/modules/`
+- Treat `docs/modules/` as module-scoped reference and short operational notes only.
+- Do not place first-time-user onboarding or primary cross-cutting workflows in `docs/modules/`; those belong in `docs/getting-started/` or `docs/guides/`.
 - Do not add root-level moved-page shims or compatibility pointers.
 - Do not create duplicate canonical ownership across a root doc and a grouped doc.
+- Do not place ordinary workflow guides, contributor docs, subsystem references, or moved-page aliases at `docs/` root.
 
 ### General Placement Rules
 
@@ -99,7 +116,7 @@ documentation-governance source of truth.
 2. Keep repository entry-point content in `README.md` or `CONTRIBUTING.md`; do not duplicate full workflows there.
 3. Put architecture or implementation internals in `docs/design/`.
 4. Put reader-facing operational docs in `docs/getting-started/`, `docs/guides/`, or `docs/reference/`.
-5. Keep `docs/modules/` concise and secondary; do not use it as a parallel primary navigation tree.
+5. Keep `docs/modules/` concise, module-scoped, and secondary; do not use it as a parallel primary navigation tree.
 6. Keep each topic owned by one canonical page.
 7. Avoid copying large command blocks to multiple pages; link to canonical setup/workflow pages.
 

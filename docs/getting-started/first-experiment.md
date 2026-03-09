@@ -1,14 +1,23 @@
 # First Experiment
 
-Use this page for the happy path on one machine.
+Use this page for the smallest happy path on one machine.
+
+This page assumes the queue-backed runtime on a single host:
+- one terminal runs `uv run crsbench run`
+- one other terminal runs `uv run crsbench worker`
+- `uv run crsbench evaluator` is not part of the minimal first-run path
+
+If you want the fuller queue topology, CPU partitioning, or real-time
+build/verify processing, use [Single-Machine Experiments](../guides/experiments/single-machine.md)
+or [Distributed Experiments](../guides/experiments/distributed.md).
 
 ## 1. Start Services
 
 ```bash
-python scripts/valkey-helper.py start
+uv run python scripts/valkey-helper.py start
 ```
 
-If your CRS needs LiteLLM, ensure `.env` is configured first using
+If your CRS needs LiteLLM, configure `.env` first using
 [configuration.md](./configuration.md).
 
 ## 2. Pick a Config
@@ -30,12 +39,12 @@ runtime:
   run_timeout: 1800
   verify_timeout: 900
   redis_host: localhost:6379
+  litellm:
+    skip: true
 
 storage:
   experiment_filestore: ./results/experiment-data
   report_filestore: ./results/report-data
-
-skip_litellm: true
 
 crs_compose:
   atlantis-multilang-given_fuzzer:
@@ -43,25 +52,32 @@ crs_compose:
 ```
 
 If you want a fuller starting point, use:
-
 - [Distributed experiment config example](../experiment-config-distributed-example.yaml)
 - [Example configs index](../reference/example-configs.md)
 
-## 3. Run the Experiment
+## 3. Start a Worker
+
+In a separate terminal, start at least one worker before submitting the run:
 
 ```bash
-crsbench run --experiment-config path/to/config.yaml
-crsbench worker --experiment-config path/to/config.yaml --continuous
+uv run crsbench worker --experiment-config path/to/config.yaml --continuous
 ```
 
-Optionally start an evaluator in another terminal if you want build/verify work
-to be processed immediately:
+## 4. Submit the Experiment
 
 ```bash
-crsbench evaluator --experiment-config path/to/config.yaml
+uv run crsbench run --experiment-config path/to/config.yaml
 ```
 
-## 4. Go Deeper
+`uv run crsbench run` submits work to Valkey and waits for worker-completed results.
+If no worker is running, the submitter will enqueue jobs but no trial will
+progress.
+
+Do not start `uv run crsbench evaluator` for this first-run path. The evaluator
+is for build/verify queues and benchmark-CI-style workflows, not the minimal
+CRS trial queue.
+
+## 5. Go Deeper
 
 - Single-machine workflow details: [../guides/experiments/single-machine.md](../guides/experiments/single-machine.md)
 - Distributed workflow: [../guides/experiments/distributed.md](../guides/experiments/distributed.md)

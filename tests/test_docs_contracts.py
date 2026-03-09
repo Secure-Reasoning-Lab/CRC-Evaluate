@@ -152,3 +152,83 @@ def test_docs_do_not_reference_removed_legacy_doc_paths() -> None:
     assert not offenders, "Found references to removed legacy doc paths:\n" + "\n".join(
         sorted(offenders)
     )
+
+
+def test_docs_root_contains_only_allowed_canonical_files() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    docs_root = repo_root / "docs"
+    allowed_files = {
+        "README.md",
+        "RFC.md",
+        "benchmark-suite-example.yaml",
+        "experiment-config-distributed-example.yaml",
+        "meta-example.yaml",
+    }
+    offenders = [
+        path.name
+        for path in docs_root.iterdir()
+        if path.is_file() and path.name not in allowed_files
+    ]
+
+    assert not offenders, "Unexpected root-level docs files:\n" + "\n".join(
+        sorted(offenders)
+    )
+
+
+def test_module_docs_do_not_contain_primary_cli_tutorial_sections() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    module_docs = list((repo_root / "docs" / "modules").rglob("*.md"))
+    forbidden_headings = [
+        "## Quick Start",
+        "## CLI Usage",
+        "## Usage",
+    ]
+    offenders: list[str] = []
+    for path in module_docs:
+        text = path.read_text(encoding="utf-8")
+        for heading in forbidden_headings:
+            if heading in text:
+                offenders.append(f"{path.relative_to(repo_root)} :: {heading}")
+
+    assert not offenders, (
+        "Module docs contain tutorial-style CLI sections:\n"
+        + "\n".join(sorted(offenders))
+    )
+
+
+def test_design_docs_do_not_contain_runnable_python_or_bash_fences() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    exempt = {
+        repo_root / "docs" / "design" / "doc-authoring-guidelines.md",
+    }
+    offenders: list[str] = []
+    for path in (repo_root / "docs" / "design").rglob("*.md"):
+        if path in exempt:
+            continue
+        text = path.read_text(encoding="utf-8")
+        if "```python" in text or "```bash" in text:
+            offenders.append(str(path.relative_to(repo_root)))
+
+    assert not offenders, (
+        "Design docs contain runnable python/bash fences:\n"
+        + "\n".join(sorted(offenders))
+    )
+
+
+def test_design_docs_do_not_contain_implementation_checklists() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    exempt = {
+        repo_root / "docs" / "design" / "doc-authoring-guidelines.md",
+    }
+    offenders: list[str] = []
+    for path in (repo_root / "docs" / "design").rglob("*.md"):
+        if path in exempt:
+            continue
+        text = path.read_text(encoding="utf-8")
+        if "- [ ]" in text or "- [x]" in text:
+            offenders.append(str(path.relative_to(repo_root)))
+
+    assert not offenders, (
+        "Design docs contain implementation checklists:\n"
+        + "\n".join(sorted(offenders))
+    )

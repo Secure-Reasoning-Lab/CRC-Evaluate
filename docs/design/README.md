@@ -1,8 +1,10 @@
 # Design Documentation
 
 Architecture and implementation design documents for CRSBench.
-This section is for internal design details; user workflows belong in top-level
-docs and operational module guidance belongs in `docs/modules/`.
+This section is for internal design details; user workflows belong in grouped
+reader-facing docs such as `docs/getting-started/`, `docs/guides/`,
+`docs/reference/`, and `docs/contributors/`. Operational module guidance
+belongs in `docs/modules/`.
 
 ## Core
 
@@ -13,21 +15,23 @@ docs and operational module guidance belongs in `docs/modules/`.
 
 ## Subsystems
 
-- [Distributed](./distributed/)
-- [Evaluation](./evaluation/)
-- [Validation](./validation/)
-- [Dataset](./dataset/)
-- [Reporting](./reporting/)
-- [Benchmark CI](./benchmark-ci/)
-- [Benchmark Lifecycle](./benchmark/)
-- [Migration](./migration/)
-- [Logging](./logging/)
-- [Services](./services/)
+- [Distributed Queue Semantics](./distributed/distributed-job-queue.md)
+- [Distributed Evaluator and Worker Execution](./distributed/distributed-evaluation.md)
+- [Evaluation Contract](./evaluation/evaluation.md)
+- [Validation Contract](./validation/validation.md)
+- [Dataset Contract](./dataset/dataset.md)
+- [Reporting Contract](./reporting/report-generation.md)
+- [Benchmark CI Contract](./benchmark-ci/benchmark-ci.md)
+- [Benchmark Lifecycle Contract](./benchmark/benchmark-lifecycle.md)
+- [Migration Design](./migration/migration-validation.md)
+- [Logging Contract](./logging/logging-architecture.md)
+- [Services Contract](./services/litellm.md)
 
 ## Scope
 
 - Use this folder for architecture rationale, data models, and internals.
-- Avoid duplicating CLI quick-start or setup instructions from top-level docs.
+- Avoid duplicating CLI quick-start or setup instructions from grouped
+  reader-facing docs.
 - Keep design docs contract-focused; follow `doc-authoring-guidelines.md`.
 
 ## Canonical Contract Map

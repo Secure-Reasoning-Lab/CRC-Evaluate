@@ -1,15 +1,17 @@
-# Experiment Workflow
+# Distributed Experiments
 
 End-to-end guide for running CRSBench experiments.
 
 ## Architecture
 
-CRSBench uses a distributed model backed by a Redis-compatible queue (Valkey):
+CRSBench uses a distributed model backed by a Redis-compatible queue (Valkey).
+Commands below use the repo-local invocation style (`uv run ...`) so they are
+directly runnable from a fresh clone.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   CRSBench Orchestrator                     │
-│                  (crsbench run)                             │
+│                  (uv run crsbench run)                             │
 │                                                             │
 │  • Generates trial matrix (CRS × Benchmark × Trials)       │
 │  • Enqueues trial jobs to Redis                            │
@@ -38,11 +40,11 @@ CRSBench uses a distributed model backed by a Redis-compatible queue (Valkey):
 ```
 
 **Required processes:**
-- **Orchestrator** (`crsbench run`): generates trial matrix and enqueues CRS trial jobs
-- **Workers** (`crsbench worker`): execute CRS trials, discover POVs
+- **Orchestrator** (`uv run crsbench run`): generates trial matrix and enqueues CRS trial jobs
+- **Workers** (`uv run crsbench worker`): execute CRS trials, discover POVs
 
 **Optional processes:**
-- **Evaluator** (`crsbench evaluator`): build variant images and verify discovered POVs/patches
+- **Evaluator** (`uv run crsbench evaluator`): build variant images and verify discovered POVs/patches
 - **Remote workers**: scale out to additional machines
 
 **Queue names (same Redis instance):**
@@ -66,10 +68,10 @@ For canonical queue-model behavior and configless details, see
 
 ```bash
 # Local development (host access, no auth)
-python scripts/valkey-helper.py start
+uv run python scripts/valkey-helper.py start
 
 # Remote workers (password auth, binds 0.0.0.0)
-python scripts/valkey-helper.py --password start
+uv run python scripts/valkey-helper.py --password start
 ```
 
 4. **Experiment config** — YAML file defining CRSes, benchmarks, timeouts, and resources.
@@ -78,35 +80,38 @@ python scripts/valkey-helper.py --password start
 
 ```bash
 # 1. Start Valkey
-python scripts/valkey-helper.py start
+uv run python scripts/valkey-helper.py start
 
-# 2. Run orchestrator (enqueues jobs and monitors)
-crsbench run --experiment-config config.yaml
+# 2. Start worker (separate terminal; required for trial progress)
+uv run crsbench worker --experiment-config config.yaml --continuous
 
-# 3. Start worker (separate terminal; defaults from worker config, CLI can override)
-crsbench worker --experiment-config config.yaml --continuous
+# 3. Run orchestrator (enqueues jobs and monitors)
+uv run crsbench run --experiment-config config.yaml
 
-# 4. (Optional) Start evaluator for POV verification (separate terminal)
-crsbench evaluator --experiment-config config.yaml
+# 4. (Optional) Start evaluator for build/verify queue processing
+uv run crsbench evaluator --experiment-config config.yaml
 
 # 5. (Optional) Generate report after completion
-python scripts/cpv_report.py /path/to/experiment-data --csv
+uv run python scripts/cpv_report.py /path/to/experiment-data --csv
 ```
 
-The orchestrator and evaluator can be started in any order. The evaluator is optional — without it, POV verification jobs queue harmlessly and can be processed later via `crsbench re-eval`.
+The worker should be running before or at the same time as the orchestrator so
+trial jobs can start immediately. The evaluator is optional — without it,
+build/verify work queues harmlessly and can be processed later via
+`crsbench re-eval` or a later evaluator run.
 
 ## Queue Behavior and Cleanup
 
 Use experiment-scoped queue cleanup (safe in flat shared-queue mode):
 
 ```bash
-crsbench queue clean --experiment <experiment-name> --yes
+uv run crsbench queue clean --experiment <experiment-name> --yes
 ```
 
 Optional scoped cleanup:
 
 ```bash
-crsbench queue clean --experiment <experiment-name> --queues trial,verify --yes
+uv run crsbench queue clean --experiment <experiment-name> --queues trial,verify --yes
 ```
 
 `crsbench run` queue behavior:
@@ -116,7 +121,7 @@ crsbench queue clean --experiment <experiment-name> --queues trial,verify --yes
 - Failed jobs are retried only with explicit opt-in:
 
 ```bash
-crsbench run --experiment-config config.yaml --queue-mode continue --retry-failed
+uv run crsbench run --experiment-config config.yaml --queue-mode continue --retry-failed
 ```
 
 ## Benchmark CI Flag Semantics
@@ -128,37 +133,43 @@ For modular benchmark-ci commands (`crsbench benchmark ci all|build|pov|patch|co
 - With `--distributed`, keep `--build-workers` / `--verify-workers` at defaults; set concurrency on evaluator processes instead (`crsbench evaluator --ci --build-jobs ... --verify-jobs ...`).
 - In `crsbench evaluator --ci`, `--worker-name` defaults to `ci-evaluator` when omitted.
 
-## Full Workflow Example (Production)
+## Full Workflow Example (Production Example)
 
-A realistic example on a 128-core machine running 7 trial jobs with an evaluator:
+This is one illustrative 128-core topology running 7 trial jobs with an
+evaluator. It is not the only valid sizing layout.
 
 ```bash
 # 1. Start Valkey with password auth (for remote workers)
-python scripts/valkey-helper.py --password start
+uv run python scripts/valkey-helper.py --password start
 
-# 2. Start evaluator (cores 112-127, 16 cores)
-#    Uses config defaults: evaluator.jobs=1, evaluator.cores_per_job=4
-#    (set split overrides only when build and verify need different capacity)
-crsbench evaluator \
+# 2. Start worker (cores 0-111; explicit concurrency shown)
+uv run crsbench worker \
     --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml \
+    --jobs 7 \
+    --cores-per-job 16 \
+    --cpuset 0-111 \
+    --continuous
+
+# 3. (Optional) Start evaluator (cores 112-127; explicit concurrency shown)
+uv run crsbench evaluator \
+    --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml \
+    --build-jobs 4 \
+    --build-cores-per-job 4 \
+    --verify-jobs 4 \
+    --verify-cores-per-job 4 \
     --cpuset 112-127
 
-# 3. Run orchestrator (enqueues jobs, monitors progress)
-crsbench run --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml
-
-# 4. Start worker (cores 0-111; defaults from worker.jobs/cores_per_job, CLI can override)
-crsbench worker \
-    --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml \
-    --cpuset 0-111
+# 4. Run orchestrator (enqueues jobs, monitors progress)
+uv run crsbench run --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml
 
 # 5. (After completion) Generate CPV report
-python scripts/cpv_report.py /path/to/experiment-data --csv
+uv run python scripts/cpv_report.py /path/to/experiment-data --csv
 ```
 
 **Core allocation breakdown:**
 ```
 Cores 0-111  (112 cores) → Worker: 7 jobs × 16 cores/trial
-Cores 112-127 (16 cores) → Evaluator: 4 jobs × 4 cores/job (unified default)
+Cores 112-127 (16 cores) → Evaluator: 4 build jobs × 4 cores/job and 4 verify jobs × 4 cores/job in this example
 ```
 
 ## Configuration
@@ -180,6 +191,8 @@ runtime:
   run_timeout: 14400
   verify_timeout: 7200
   redis_host: localhost:6379  # or localhost:6380
+  litellm:
+    skip: true
   # Optional LiteLLM runtime contract
   # litellm:
   #   mode: external
@@ -200,9 +213,6 @@ crs_compose:
 # experiment:
 #   benchmarks:
 #     - libjpeg-turbo
-
-# No LLM needed for pure fuzzers
-skip_litellm: true
 
 resources:
   cores_per_trial: 16
@@ -293,7 +303,7 @@ See [experiment-config-distributed-example.yaml](../../experiment-config-distrib
 The evaluator builds variant Docker images (vulnerable, allpatched, CPV) and verifies POVs discovered by workers.
 
 ```bash
-crsbench evaluator \
+uv run crsbench evaluator \
   --experiment-config config.yaml \
   --cpuset 112-127
 ```
@@ -330,7 +340,7 @@ The evaluator is optional. Without it:
 Workers pull trial jobs from the queue and execute CRS against benchmarks.
 
 ```bash
-crsbench worker \
+uv run crsbench worker \
   --experiment-config config.yaml \
   --cpuset 0-111 \
   --continuous
@@ -354,17 +364,17 @@ crsbench worker \
 **Machine A** (Valkey + Orchestrator + Evaluator):
 ```bash
 # Start Valkey with password auth
-python scripts/valkey-helper.py --password start
+uv run python scripts/valkey-helper.py --password start
 
 # Start evaluator
-crsbench evaluator --experiment-config config.yaml \
+uv run crsbench evaluator --experiment-config config.yaml \
     --cpuset 112-127
 
 # Run orchestrator
-crsbench run --experiment-config config.yaml
+uv run crsbench run --experiment-config config.yaml
 
 # Start local worker
-crsbench worker --experiment-config config.yaml --cpuset 0-111
+uv run crsbench worker --experiment-config config.yaml --cpuset 0-111
 ```
 
 **Machine B..N** (Remote Workers):
@@ -376,7 +386,7 @@ scp user@machine-a:/path/to/CRSBench/.env /path/to/CRSBench/.env
 scripts/orchestrate-workers.sh setup
 
 # Start worker (set CRSBENCH_REDIS_HOST in .env for Machine A)
-crsbench worker --experiment-config config.yaml \
+uv run crsbench worker --experiment-config config.yaml \
     --continuous
 ```
 
@@ -394,8 +404,8 @@ scripts/orchestrate-workers.sh collect
 
 **Machine A** (Valkey + Orchestrator):
 ```bash
-python scripts/valkey-helper.py start
-crsbench run --experiment-config config.yaml
+uv run python scripts/valkey-helper.py start
+uv run crsbench run --experiment-config config.yaml
 ```
 
 **Machine B..N** (Workers):
@@ -404,7 +414,7 @@ crsbench run --experiment-config config.yaml
 ssh -N -L 6379:localhost:6379 user@machine-a &
 
 # Start worker (set CRSBENCH_REDIS_HOST=localhost:6379 via tunnel)
-crsbench worker --experiment-config config.yaml --continuous
+uv run crsbench worker --experiment-config config.yaml --continuous
 ```
 
 For persistent tunnels during long experiments:
@@ -431,13 +441,13 @@ Patch verification test execution context:
 
 ```bash
 # Basic re-evaluation with verbose output
-crsbench re-eval -c config.yaml -v
+uv run crsbench re-eval -c config.yaml -v
 
 # With custom timeout and forced rebuild
-crsbench re-eval -c config.yaml --force-rebuild --per-pov-verify-timeout 300
+uv run crsbench re-eval -c config.yaml --force-rebuild --per-pov-verify-timeout 300
 
 # Write to separate output directory
-crsbench re-eval -c config.yaml --output /tmp/reeval-results
+uv run crsbench re-eval -c config.yaml --output /tmp/reeval-results
 ```
 
 Re-eval preserves `metadata.json` and relative POV discovery times, but re-runs verification and collects crash logs.
@@ -466,10 +476,10 @@ After experiments complete, generate CPV detection reports:
 
 ```bash
 # Generate CSV report
-python scripts/cpv_report.py /path/to/experiment-data --csv
+uv run python scripts/cpv_report.py /path/to/experiment-data --csv
 
 # Generate report with benchmark metadata
-python scripts/cpv_report.py /path/to/experiment-data --benchmarks-dir benchmarks/
+uv run python scripts/cpv_report.py /path/to/experiment-data --benchmarks-dir benchmarks/
 ```
 
 HTML/JSON reports are auto-generated by the orchestrator at completion and saved to the `report_filestore` directory.
@@ -478,22 +488,22 @@ HTML/JSON reports are auto-generated by the orchestrator at completion and saved
 
 ```bash
 # Check status
-python scripts/valkey-helper.py status
+uv run python scripts/valkey-helper.py status
 
 # Clean specific experiment queues
-python scripts/valkey-helper.py clean my-old-exp
+uv run python scripts/valkey-helper.py clean my-old-exp
 
 # Clean all data (with confirmation)
-python scripts/valkey-helper.py clean-all
+uv run python scripts/valkey-helper.py clean-all
 
 # Check queue state
-python scripts/valkey-helper.py list-queues
+uv run python scripts/valkey-helper.py list-queues
 
 # View queue details
-python scripts/valkey-helper.py queue-info my-exp
+uv run python scripts/valkey-helper.py queue-info my-exp
 
 # View statistics
-python scripts/valkey-helper.py stats
+uv run python scripts/valkey-helper.py stats
 ```
 
 Always clean queues before re-running an experiment with the same name or after an interrupted run.
@@ -514,9 +524,9 @@ Smoke bug-fixing suites currently run with LiteLLM tracking enabled in the sanit
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | Workers not picking up jobs | Queue name mismatch | Verify `experiment` in config is identical on orchestrator and workers |
-| "Redis not available" | Valkey not running or wrong host | `python scripts/valkey-helper.py status`; check `redis_host` in config |
+| "Redis not available" | Valkey not running or wrong host | `uv run python scripts/valkey-helper.py status`; check `redis_host` in config |
 | Workers exit immediately | Queue is empty (burst mode) | Use `--continuous` flag to keep workers running |
-| Stale jobs from previous run | Queue not cleaned | `python scripts/valkey-helper.py clean <experiment>` |
+| Stale jobs from previous run | Queue not cleaned | `uv run python scripts/valkey-helper.py clean <experiment>` |
 | `CRSBENCH_LLM_UPSTREAM_BASE_URL not set` | LiteLLM env contract is incomplete for this trial | Set `skip_litellm: true` when LLM is not needed, or provide required `CRSBENCH_LLM_*` vars |
 
 ## CLI Reference

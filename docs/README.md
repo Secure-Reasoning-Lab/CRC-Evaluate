@@ -35,11 +35,11 @@ Use this page as the primary navigation hub.
 - [Reference Hub](./reference/README.md)
 - [Benchmark RFC](./RFC.md)
 - [Environment Variables](./reference/environment-variables.md)
+- [Logging Reference](./reference/logging.md)
 - [OSS-CRS Interface](./reference/oss-crs-interface.md)
 - [Seed Corpus](./reference/seed-corpus.md)
 - [Snapshots](./reference/snapshots.md)
 - [Example Configs](./reference/example-configs.md)
-- [Distributed Experiment Config](./experiment-config-distributed-example.yaml)
 
 ## Contributors
 
@@ -54,6 +54,9 @@ Use this page as the primary navigation hub.
 
 - [Design Index](./design/README.md)
 - [Architecture Overview](./design/architecture.md)
+
+## Module Reference
+
 - [Module Index](./modules/README.md)
 
 ## Governance

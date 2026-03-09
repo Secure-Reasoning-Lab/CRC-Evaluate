@@ -64,7 +64,7 @@ artifact, not a policy source of truth.
 
 1. Root README remains summary-only for setup and runtime links.
 2. `docs/README.md` is the canonical navigation hub.
-3. Design rationale is anchored in `docs/design/architecture.md`.
+3. Design rationale is anchored in `docs/design/README.md`, with `docs/design/architecture.md` as a primary architecture entry within that tree.
 4. Legacy pointer pages were removed after references were updated to canonical paths.
 5. Documentation governance is anchored in `docs/governance/documentation-taxonomy.md`.
 

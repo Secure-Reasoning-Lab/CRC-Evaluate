@@ -1,5 +1,8 @@
 # Single Config Multi-Machine Contract
 
+Audience: contributors changing single-config multi-machine orchestration semantics.
+Scope: contract for using one experiment config across multiple machines with configless workers/evaluators.
+
 ## Goal
 
 Operate one experiment with a single config file across multiple machines:

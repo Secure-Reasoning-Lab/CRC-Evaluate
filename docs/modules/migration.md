@@ -1,382 +1,66 @@
 # CRSBench Migration Module
 
-## Script-Based Atlanta to RFC Migration
+This page is the module-level index for migration-related tooling. It points to
+the canonical design docs for each subsystem instead of duplicating their
+workflow documentation.
 
-In addition to the LangGraph-based migration system described above, this module includes a direct script-based implementation for migrating Team-Atlanta format to CRSBench RFC format.
+## Scope
 
-### Implementation
+The migration area covers:
+- Team-Atlanta to CRSBench benchmark conversion
+- `test.sh` generation and optional container-assisted refinement
+- `vuln.yaml` generation from benchmark evidence
+- shared repository acquisition/reuse utilities
 
-The script-based migrator consists of:
+Runnable maintainer workflows belong in contributor documentation. This page
+records the subsystem boundaries and where to find their canonical design docs.
 
-#### **atlanta_to_rfc.py**
-Main CLI script for orchestrating migrations.
+## Subsystems
 
-#### **config_converter.py**
-Converts `config.yaml` to `meta.yaml` format.
+### Atlanta-to-RFC Migration
 
-#### **vuln_metadata_generator.py**
-Generates vulnerability YAML files with mock data.
+Converts historical Team-Atlanta benchmark material into CRSBench benchmark
+layout while preserving harness/CPV identity and validation compatibility.
 
-#### **file_migrator.py**
-Handles file operations with dry-run support.
+Canonical design doc:
+- [Atlanta-to-RFC migration](../design/migration/migration-atlanta-to-rfc.md)
 
-### Atlanta-to-RFC Quick Start
+### test.sh Generator
 
-```bash
-# Dry run to validate
-.venv/bin/python -m crsbench.migration.atlanta_to_rfc \
-  --source-dir /path/to/oss-fuzz/projects \
-  --target-dir /path/to/CRSBench/benchmarks \
-  --dry-run
+Generates benchmark-scoped `test.sh` artifacts and supporting notes from
+repository context, optionally with iterative container-assisted validation.
 
-# Actual migration
-.venv/bin/python -m crsbench.migration.atlanta_to_rfc \
-  --source-dir /path/to/oss-fuzz/projects \
-  --target-dir /path/to/CRSBench/benchmarks \
-  --projects curl-delta-04
-```
+Canonical design docs:
+- [test.sh generator](../design/migration/test-sh-generator.md)
 
-### Atlanta-to-RFC Features
+### vuln.yaml Generator
 
-- ✅ Complete directory structure transformation
-- ✅ Config.yaml to meta.yaml conversion
-- ✅ Vulnerability metadata generation with mock data
-- ✅ Multiple POV variant support
-- ✅ Dry-run mode for validation
-- ✅ Comprehensive logging
-- ✅ CSV migration reports
+Derives CPV vulnerability metadata and supporting diagnostics from crash logs,
+POVs, source context, and existing benchmark evidence.
 
-### Atlanta-to-RFC Design Documentation
+Canonical design docs:
+- [vuln.yaml generator](../design/migration/vuln-yaml-generator.md)
 
-See [migration design document](../design/migration/migration-atlanta-to-rfc.md) for implementation details.
+### Repository Manager
 
----
+Provides shared repository acquisition, cache reuse, and revision checkout
+contracts used by migration and generation tooling.
 
-## Test.sh Generator
+Canonical design docs:
+- [repository manager](../design/migration/repo-manager.md)
 
-Automated tool to generate `test.sh` functional test scripts for benchmarks using Claude Agent SDK.
+### Migration Validation
 
-### Test.sh Generator Overview
+Validates migrated source and target artifacts against the CRSBench benchmark
+layout and issue taxonomy.
 
-Security patch validation requires functional testing beyond vulnerability triggering. The test.sh generator automatically creates test scripts by:
-1. Analyzing project repositories to find unit tests
-2. Identifying build systems and test frameworks
-3. Generating appropriate test.sh scripts for Docker environments
+Canonical design docs:
+- [migration validation](../design/migration/migration-validation.md)
 
-### Test.sh Generator Quick Start
+## Module Boundaries
 
-#### Option 1: Using .env file (Recommended)
-
-```bash
-# Create .env file in project root
-cat > .env << 'EOF'
-CRSBENCH_LLM_BASE_URL=http://localhost:4000
-CRSBENCH_LLM_API_KEY=your-api-key-here
-PROJECT_REPOS_DIR=/home/acorn421/work/team-atlanta/afc-repos
-EOF
-
-# .env is automatically loaded by the tool
-```
-
-#### Option 2: Set environment variables manually
-
-```bash
-export CRSBENCH_LLM_BASE_URL="http://localhost:4000"
-export CRSBENCH_LLM_API_KEY="your-api-key"
-export PROJECT_REPOS_DIR="/home/acorn421/work/team-atlanta/afc-repos"
-```
-
-#### Generate test.sh for a benchmark
-
-**Option 1: Auto-clone (simplest!)**
-```bash
-# Repository is automatically cloned if not found
-python -m crsbench.migration.cli.test_sh_command \
-  --benchmark apache-commons-compress-delta-01 \
-  --verbose
-
-# Cloned to PROJECT_REPOS_DIR/commons-compress
-```
-
-**Option 2: Specify existing project directory**
-```bash
-python -m crsbench.migration.cli.test_sh_command \
-  --benchmark apache-commons-compress-delta-01 \
-  --project-dir /path/to/commons-compress \
-  --verbose
-```
-
-### Test.sh Generator Features
-
-- ✅ **Auto-clone repositories**: Automatically clones project repos from benchmark config
-- ✅ Automatic unit test discovery using Claude Agent SDK
-- ✅ Multi-build system support (Maven, Make, CMake, Gradle)
-- ✅ Docker environment handling (test exclusions, permission issues)
-- ✅ Generates both test.sh and analysis documentation
-
-### Testing the Agent
-
-Two test scripts are provided:
-
-#### Minimal Test (No Dependencies)
-```bash
-python crsbench/migration/test_agent_minimal.py
-```
-Basic structure validation without requiring Claude Agent SDK.
-
-#### Full Test (Requires LiteLLM)
-```bash
-# Set up environment first
-export CRSBENCH_LLM_BASE_URL="http://localhost:4000"
-export CRSBENCH_LLM_API_KEY="your-api-key"
-
-# Run full test suite
-python crsbench/migration/test_agent_simple.py
-```
-Tests actual agent functionality including:
-- Simple queries
-- Tool usage (Read, Grep, Glob)
-- Agent initialization
-
-### Programmatic Usage
-
-```python
-from crsbench.migration.test_sh import generate_test_sh_for_benchmark
-
-result = generate_test_sh_for_benchmark(
-    benchmark_name="apache-commons-compress-delta-01",
-    benchmark_dir="benchmarks/apache-commons-compress-delta-01",
-    project_dir="/path/to/commons-compress",
-    verbose=True
-)
-
-if result["success"]:
-    print(f"✅ Generated: {result['test_sh_path']}")
-    print(f"📄 Analysis: {result['analysis_md_path']}")
-```
-
-### Test.sh Generator Design Documentation
-
-See [test.sh generator design document](../design/migration/test-sh-generator.md) for architecture details.
-
----
-
-## MCP-Enhanced test.sh Generator
-
-An optional iterative approach to test.sh generation using Model Context Protocol (MCP) with Claude Agent SDK.
-
-### MCP-Enhanced Overview
-
-The MCP-enhanced generator adds Docker testing capabilities to the standard test.sh generator:
-1. Build Docker images and analyze build logs
-2. Test generated test.sh scripts in containers
-3. Iteratively refine based on test failures
-4. Automatic retry until test.sh works
-
-### MCP-Enhanced Quick Start
-
-```python
-from crsbench.migration.test_sh import generate_test_sh_for_benchmark
-
-# Standard two-phase generation
-result = generate_test_sh_for_benchmark(
-    benchmark_name="curl-delta-01",
-    benchmark_dir="benchmarks/curl-delta-01",
-    project_dir="/path/to/curl",
-    verbose=True
-)
-
-# With Docker testing (MCP-enabled)
-result = generate_test_sh_for_benchmark(
-    benchmark_name="curl-delta-01",
-    benchmark_dir="benchmarks/curl-delta-01",
-    project_dir="/path/to/curl",
-    with_docker_testing=True,  # Enable MCP tools
-    verbose=True
-)
-```
-
-### MCP-Enhanced Features
-
-- ✅ **Integrated approach**: MCP tools work alongside Claude Agent SDK
-- ✅ **Docker integration**: Builds images and tests scripts in containers
-- ✅ **Iterative refinement**: Tests and improves test.sh until it works
-- ✅ **Multi-language**: Supports C, C++, Java, Python, Go
-- ✅ **No separate client**: MCP server managed by SDK automatically
-
-### Available Tools
-
-**Claude Agent SDK tools** (always available):
-- `Read`, `Grep`, `Glob` - File operations
-- `WebSearch`, `WebFetch` - Research capabilities
-- `TodoWrite` - Task tracking
-
-**MCP tools** (when `with_docker_testing=True`):
-- `mcp__crsbench__build_benchmark` - Build Docker image
-- `mcp__crsbench__get_build_logs` - Retrieve build logs
-- `mcp__crsbench__check_test_sh` - Run and validate test.sh
-- `mcp__crsbench__get_benchmark_info` - Get metadata
-
-### Comparison: Standard vs MCP-Enhanced
-
-| Feature | Standard | MCP-Enhanced |
-|---------|----------|--------------|
-| Approach | Two-phase (analyze → generate) | Iterative (generate → test → refine) |
-| Testing | Post-generation (manual) | Integrated (automatic) |
-| Docker | Not used | Build and test in container |
-| Iteration | Single pass | Multiple attempts until success |
-| Setup | Simpler | Requires Docker |
-
-### Detailed Documentation
-
-See [test.sh generator design doc](../design/migration/test-sh-generator.md) for:
-- Architecture details
-- MCP integration details
-- Tool descriptions
-- Advanced usage examples
-
----
-
-## vuln.yaml Generator
-
-Automatically generates vuln.yaml files for CPVs by analyzing crash logs, POV files, and source code.
-
-### vuln.yaml Generator Features
-- Analyzes crash logs (pov_*.log) to extract vulnerability information
-- Identifies CWE classifications based on vulnerability type
-- Locates vulnerable code in source files
-- Generates accurate vuln.yaml with proper metadata
-- **Auto-detects temporary MOCK files** and regenerates them automatically
-
-### vuln.yaml Generator Usage
-
-```bash
-# Generate vuln.yaml for ALL CPVs in a benchmark
-python -m crsbench.migration.cli.vuln_yaml_command \
-  --benchmark atlanta-curl-delta-01
-
-# Generate vuln.yaml for a specific CPV
-python -m crsbench.migration.cli.vuln_yaml_command \
-  --benchmark atlanta-curl-delta-01 \
-  --harness curl_fuzzer_http \
-  --cpv cpv_0
-
-# Force overwrite ALL existing vuln.yaml files
-python -m crsbench.migration.cli.vuln_yaml_command \
-  --benchmark atlanta-curl-delta-01 \
-  --force
-```
-
-### MOCK File Auto-Detection
-
-The generator automatically detects and replaces temporary vuln.yaml files:
-- Files containing `MOCK:` are considered temporary
-- Files containing `(TBD)` are considered temporary
-- These files are automatically regenerated **without** needing `--force`
-
-Example:
-```yaml
-# This will be auto-detected and replaced:
-name: 'MOCK: cpv_0 vulnerability in curl_fuzzer_http'
-description: 'MOCK: ... (TBD) ...'
-```
-
-### Generated Files
-1. **vuln.yaml** - Vulnerability metadata (per CPV)
-2. **vuln_analysis.md** - Detailed analysis document (per CPV)
-3. **vuln_agent_log.txt** - Agent execution log (per CPV)
-
-### Requirements
-- CRSBENCH_LLM_BASE_URL and CRSBENCH_LLM_API_KEY environment variables
-- Claude Agent SDK
-- Project source code (auto-cloned if not present)
-
-### vuln.yaml Generator Design Documentation
-
-See [vuln.yaml generator design document](../design/migration/vuln-yaml-generator.md) for architecture details.
-
----
-
-## Repository Manager
-
-Core utility for automatic cloning and checkout of project repositories needed during migration and test generation workflows.
-
-### Repository Manager Overview
-
-The repository manager (`repo_manager.py`) provides:
-- **Automatic repository cloning** from benchmark configuration
-- **Smart repository caching** to avoid redundant clones
-- **Commit checkout** for reproducible testing
-- **Configuration extraction** from benchmark metadata
-
-### Key Features
-
-- ✅ **Reads repository info** from `project.yaml` and `.aixcc/meta.yaml`
-- ✅ **Auto-clones repositories** if they don't exist locally
-- ✅ **Caches repositories** in `PROJECT_REPOS_DIR` for reuse
-- ✅ **Checks out specific commits** for reproducibility
-- ✅ **Smart reuse** - detects existing git repositories
-- ✅ **Graceful error handling** with detailed logging
-
-### Repository Manager Usage
-
-#### Basic Usage
-```python
-from crsbench.migration.repo_manager import find_or_clone_project
-
-# Automatically clone if needed
-project_dir = find_or_clone_project(
-    benchmark_name="json-c",
-    benchmarks_root="benchmarks",
-    verbose=True
-)
-```
-
-#### With Custom Cache Location
-```python
-import os
-from crsbench.migration.repo_manager import ensure_project_repository
-
-# Set custom cache
-os.environ['PROJECT_REPOS_DIR'] = '/mnt/ssd/git-cache'
-
-project_dir = ensure_project_repository(
-    benchmark_dir="benchmarks/curl",
-    verbose=True
-)
-```
-
-#### Using Existing Clone
-```python
-from crsbench.migration.repo_manager import ensure_project_repository
-
-# Use pre-cloned repository
-project_dir = ensure_project_repository(
-    benchmark_dir="benchmarks/json-c",
-    project_dir="/home/user/projects/json-c",
-    verbose=True
-)
-```
-
-### Environment Variables
-
-**`PROJECT_REPOS_DIR`** (optional)
-- Default cache location for cloned repositories
-- Default: `/home/acorn421/work/team-atlanta/afc-repos`
-- Override to customize cache location
-
-### Integration
-
-The repository manager is used by:
-- **test.sh generator** - Needs project source for test discovery
-- **vuln.yaml generator** - Needs source code for vulnerability analysis
-- **Migration scripts** - Can pre-clone repositories for batch operations
-
-### Repository Manager Design Documentation
-
-See [repository manager design document](../design/migration/repo-manager.md) for full implementation details including:
-- Architecture and component relationships
-- Function workflows and algorithms
-- Error handling strategies
-- Configuration requirements
-- Usage examples and testing approaches
+- `crsbench/migration/` contains maintainer-oriented migration and generation
+  tooling
+- the canonical contracts for those tools live under `docs/design/migration/`
+- this page should stay a concise module index rather than a tutorial or
+  multi-tool handbook

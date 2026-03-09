@@ -1,5 +1,8 @@
 # Multi-Machine Deployment Contract
 
+Audience: contributors changing non-local deployment behavior or distributed runtime assumptions.
+Scope: deployment-level contracts for orchestrators, workers, evaluators, and shared queue/storage dependencies.
+
 This document defines the non-local deployment contract for CRSBench.
 
 Operational runbooks and exact commands live in:

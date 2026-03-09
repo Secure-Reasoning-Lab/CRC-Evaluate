@@ -1,389 +1,105 @@
 # Benchmark Lifecycle
+- Audience: maintainers working on benchmark creation, packaging, publication, and runtime loading
+- Scope: lifecycle contracts across generation, packaging, distribution, and execution-time loading
+- Related: [RFC](../../RFC.md), [Dataset Module](../dataset/dataset.md)
 
-This document describes the complete benchmark lifecycle in CRSBench, from creation to evaluation.
-
-## Overview
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         Benchmark Lifecycle                                 │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  [1. GENERATION]        [2. PACKAGING]        [3. PUBLISH]   [4. RUNTIME]   │
-│                                                                             │
-│  Create benchmark       Bundle for            Distribute     Load for       │
-│  from sources           distribution          to users       evaluation     │
-│  ─────────────          ────────────          ──────────     ──────────     │
-│  • oss-fuzz-vuln        • Source tarball      • Git repo     • Detect pkgs/ │
-│  • CVE/NVD              • ref.diff            • Release      • Clone or use │
-│  • Bug bounties         • Validation          • Registry     • Provide CRS  │
-│  • Manual input         • Provenance                                        │
-│                                                                             │
-│  Adapters convert       Packaging prepares    Published      Runtime loads  │
-│  to standard format     for offline use       benchmarks     for execution  │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-## Module Structure
-
-```
-crsbench/benchmark/
-├── __init__.py                    # Top-level exports
-│
-├── generation/                    # Phase 1: CREATE benchmarks
-│   ├── __init__.py
-│   ├── README.md                  # Future architecture
-│   └── (future: adapters/)        # Convert external sources
-│
-├── packaging/                     # Phase 2: PACKAGE for distribution
-│   ├── __init__.py
-│   ├── tarball.py                 # Source tarball creation
-│   ├── bundle.py                  # High-level bundling
-│   ├── validate.py                # Structure validation
-│   ├── workdir_parser.py          # Dockerfile WORKDIR parsing
-│   └── cli/                       # CLI commands
-│       └── benchmark_command.py
-│
-└── runtime/                       # Phase 4: LOAD for evaluation
-    ├── __init__.py
-    ├── loader.py                  # Source loading logic
-    └── models.py                  # BenchmarkSource dataclass
-```
-
-## Phase 1: Generation (Future)
-
-**Purpose**: Create new benchmarks from external vulnerability sources.
-
-**Status**: Not yet implemented. See [docs/modules/benchmark/generation.md](../../modules/benchmark/generation.md) for planned architecture.
-
-### Planned Adapters
-
-| Adapter | Source | Description |
-|---------|--------|-------------|
-| `OSSFuzzVulnAdapter` | oss-fuzz-vuln | Google's OSS-Fuzz vulnerability database |
-| `CVEAdapter` | NVD/CVE | National Vulnerability Database |
-| `BugBountyAdapter` | HackerOne, etc. | Bug bounty platform reports |
-| `ManualAdapter` | Interactive | Wizard for manual benchmark creation |
-
-### Workflow
-
-```
-External Source ──► Adapter ──► VulnerabilityInfo ──► Generator ──► Benchmark Directory
-                                (normalized)                        (ready for packaging)
-```
-
-### Future CLI
-
-```bash
-crsbench benchmark generate --from ossfuzz-vuln --id OSV-2024-1234
-crsbench benchmark generate --from cve --id CVE-2024-12345
-crsbench benchmark generate --interactive
-```
-
-## Phase 2: Packaging
-
-**Purpose**: Bundle benchmark source into distributable tarballs.
-
-### Packaging Components
-
-#### `workdir_parser.py`
-
-Parses Dockerfile to determine expected source directory name.
-
-```python
-from crsbench.benchmark.packaging import get_expected_source_dir
-
-# Returns "curl" from: WORKDIR $SRC/curl
-source_name = get_expected_source_dir(dockerfile_path)
-```
-
-Handles OSS-Fuzz conventions:
-- `WORKDIR $SRC/curl` → `curl`
-- `WORKDIR ${SRC}/curl` → `curl`
-- `WORKDIR /src/curl` → `curl`
-- `WORKDIR libtiff` (relative) → `libtiff`
-
-#### `tarball.py`
-
-Creates source tarballs with fresh git history.
-
-```python
-from crsbench.benchmark.packaging import create_source_tarball
-
-tarball_path, ref_diff_path = create_source_tarball(
-    repo_url="https://github.com/curl/curl",
-    base_commit="abc123",
-    source_name="curl",
-    output_dir=Path("./pkgs"),
-    ref_commit="def456",  # Optional, for delta mode
-)
-```
-
-Features:
-- Fresh `git init` with single commit (no history leakage)
-- Fixed author/date for reproducibility
-- Generates `ref.diff` for delta mode
+## Goals and Non-goals
 
-#### `validate.py`
+### Goals
+- define the canonical lifecycle phases for CRSBench benchmarks
+- define what each phase must produce for the next phase
+- keep runtime loading behavior compatible with packaged benchmark artifacts
 
-Validates benchmark structure and format.
+### Non-goals
+- command tutorials for packaging or validation
+- implementation snapshots of packaging helpers
+- source-specific generation playbooks
 
-```python
-from crsbench.benchmark.packaging import validate_benchmark, ValidationResult
+## Lifecycle Phases
 
-result = validate_benchmark(benchmark_path)
-if result.valid:
-    print("Benchmark is valid")
-else:
-    print(f"Errors: {result.errors}")
-    print(f"Warnings: {result.warnings}")
-```
+The benchmark lifecycle has four contract phases:
+1. generation
+2. packaging
+3. publish/distribution
+4. runtime loading
 
-Checks:
-- Required files: `Dockerfile`, `project.yaml`, `.aixcc/meta.yaml`
-- meta.yaml format (nested or flat)
-- pkgs/ structure if exists
+Each phase consumes the previous phase's artifacts and must preserve benchmark
+identity, harness identity, and CPV semantics.
 
-Supports two meta.yaml formats:
+## Generation Contract
 
-```yaml
-# Nested format (current standard)
-delta_mode:
-  base_commit: abc123
-  ref_commit: def456
-full_mode:
-  base_commit: def456
+Generation creates a benchmark directory from an upstream vulnerability source
+or manual input. A generated benchmark must already satisfy the CRSBench
+benchmark shape closely enough that packaging and validation can proceed without
+guessing intent.
 
-# Flat format (legacy)
-base_commit: abc123
-ref_commit: def456
-```
+Generation remains a separate concern from distribution and runtime loading.
 
-#### `bundle.py`
+## Packaging Contract
 
-High-level bundling interface.
+Packaging transforms a benchmark into a distributable form while preserving:
+- source provenance
+- benchmark metadata
+- runtime-usable source layout
+- delta/full mode semantics where applicable
 
-```python
-from crsbench.benchmark.packaging import bundle_benchmark
+For packaged source, the produced artifact must match the runtime loader's
+expectations for directory naming and source availability.
 
-pkgs_dir = bundle_benchmark(
-    benchmark_path,
-    force=True,  # Overwrite existing pkgs/
-)
-```
+## Publish Contract
 
-Workflow:
-1. Validate benchmark structure
-2. Extract repo info from project.yaml and meta.yaml
-3. Determine source name from Dockerfile WORKDIR
-4. Clone repo, checkout base_commit, create tarball
-5. Generate ref.diff if delta mode
-6. Write pkg_refs.txt for provenance
+Publication distributes packaged benchmarks through a dataset or equivalent
+distribution channel. Published artifacts must preserve:
+- reproducibility/provenance information
+- packaging integrity
+- any blind-evaluation separation between runnable content and ground truth
 
-### CLI Commands
+## Runtime Loading Contract
 
-```bash
-# Validate benchmark structure
-crsbench benchmark validate ./benchmarks/afc-curl-delta-01
+Runtime loading resolves the source material needed for evaluation. The loader
+must be able to distinguish between:
+- bundled source already present in the benchmark package
+- source that must be materialized or cloned at runtime
 
-# Create pkgs/ tarball
-crsbench benchmark bundle ./benchmarks/afc-curl-delta-01
+Callers must be able to reason about whether an explicit source path is needed.
 
-# Generate ref.diff only
-crsbench benchmark prepare-delta ./benchmarks/afc-curl-delta-01
-```
+## Cross-Phase Invariants
 
-### Output Structure
+- harness/CPV identity must not drift between phases
+- packaging must not introduce runtime-only assumptions that generation never
+  guaranteed
+- runtime loading must honor the packaged benchmark contract rather than infer a
+  different source layout opportunistically
+- provenance must remain available for audit and reproduction
 
-After packaging, a benchmark contains:
-
-```
-benchmarks/afc-curl-delta-01/
-├── Dockerfile
-├── project.yaml
-├── .aixcc/
-│   ├── meta.yaml
-│   └── ref.diff              # Generated for delta mode
-└── pkgs/
-    ├── curl.tar.gz           # Source tarball (matches WORKDIR)
-    └── pkg_refs.txt          # Provenance: "https://github.com/curl/curl@abc123"
-```
-
-## Phase 3: Publish
-
-**Purpose**: Distribute packaged benchmarks to users.
-
-### Distribution Methods
-
-1. **Git Repository**: Benchmarks committed with pkgs/ included
-2. **Releases**: Tagged releases with benchmark archives
-3. **Registry**: Centralized benchmark registry (future)
-
-### Provenance
-
-Each packaged benchmark includes `pkgs/pkg_refs.txt`:
-
-```
-https://github.com/curl/curl@abc123def456789...
-```
-
-This enables:
-- Verification of source origin
-- Reproducibility audits
-- License compliance tracking
-
-## Phase 4: Runtime
-
-**Purpose**: Load benchmarks for CRS evaluation.
-
-### Runtime Components
-
-#### `models.py`
-
-Data model for loaded benchmark source.
-
-```python
-from crsbench.benchmark.runtime import BenchmarkSource
-
-# Bundled source (from pkgs/)
-source = BenchmarkSource(path=None, is_bundled=True)
-assert source.requires_source_path is False
-
-# Cloned source
-source = BenchmarkSource(path=Path("/tmp/src"), is_bundled=False)
-assert source.requires_source_path is True
-```
-
-#### `loader.py`
-
-Unified source loading interface.
-
-```python
-from crsbench.benchmark.runtime import load_benchmark_source, has_bundled_source
-
-# Check if benchmark has pkgs/
-if has_bundled_source(benchmark_path):
-    print("Using bundled source")
-
-# Load source (auto-detects pkgs/ vs clone)
-source = load_benchmark_source(
-    benchmark_path,
-    dest_dir=trial_dir / "src",  # Required if cloning
-    mode="delta",
-    verbose=True,
-)
-
-# Use in executor
-if source.requires_source_path:
-    cmd.extend(["--source-path", str(source.path)])
-```
-
-### Flow Diagram
-
-```
-                     ┌─────────────────────┐
-                     │  load_benchmark_    │
-                     │      source()       │
-                     └──────────┬──────────┘
-                                │
-                     ┌──────────▼──────────┐
-                     │  has_bundled_       │
-                     │     source()?       │
-                     └──────────┬──────────┘
-                                │
-              ┌─────────────────┼─────────────────┐
-              │ YES             │                 │ NO
-              ▼                 │                 ▼
-   ┌──────────────────┐         │      ┌──────────────────┐
-   │ BenchmarkSource  │         │      │ Clone via        │
-   │ path=None        │         │      │ repo_manager     │
-   │ is_bundled=True  │         │      └────────┬─────────┘
-   └──────────────────┘         │               │
-              │                 │               ▼
-              │                 │      ┌──────────────────┐
-              │                 │      │ BenchmarkSource  │
-              │                 │      │ path=/tmp/src    │
-              │                 │      │ is_bundled=False │
-              │                 │      └──────────────────┘
-              │                 │               │
-              └─────────────────┴───────────────┘
-                                │
-                     ┌──────────▼──────────┐
-                     │  Executor uses      │
-                     │  source.path or     │
-                     │  Docker's built-in  │
-                     └─────────────────────┘
-```
-
-### Integration with Executors
-
-Executors use the runtime module to load source:
-
-```python
-# In crs_patch_executor.py or crs_bug_finding_executor.py
-
-from crsbench.benchmark.runtime import load_benchmark_source
-
-source = load_benchmark_source(
-    benchmark_path,
-    dest_dir=trial_build_dir / "src",
-    verbose=self.config.get("verbose", False),
-)
-
-# Build CRS command
-cmd = ["oss-crs", "build", ...]
-
-# Only add --source-path if not using bundled source
-if source.requires_source_path:
-    cmd.extend(["--source-path", str(source.path)])
-```
-
-## Design Decisions
-
-### Why Fresh Git Init?
-
-CRS tools often use git commands internally. The tarball includes a fresh git repo with:
-- Single commit (no history)
-- Fixed author/date for reproducibility
-- No sensitive information from original repo
-
-### Why pkgs/ Detection in Runtime?
-
-When `pkgs/` exists with tarballs:
-1. Docker image builds with source baked in
-2. No need to pass `--source-path` to CRS
-3. Prevents overwriting Docker's source with external mount
-
-### Why Separate Generation and Packaging?
-
-- **Generation**: Creates benchmark metadata and structure from vulnerability info
-- **Packaging**: Bundles existing benchmark for distribution
-
-A benchmark might be:
-- Generated from oss-fuzz-vuln, then packaged
-- Manually created, then packaged
-- Imported from another format, then packaged
-
-## Future Extensions
-
-### Runtime Module
-
-Could expand to include:
-- `runtime/hints.py` - Load SARIF reports and corpus
-- `runtime/corpus.py` - Corpus management
-- `runtime/pov.py` - POV file handling
-
-### Generation Module
-
-Planned adapters for:
-- oss-fuzz-vuln database
-- CVE/NVD entries
-- Bug bounty reports
-- Interactive wizard
-
-## Related Documentation
-
-- [docs/RFC.md](../../RFC.md) - RFC for benchmark format
-- [docs/reference/oss-crs-interface.md](../../reference/oss-crs-interface.md) - CRS interface specification
-- [docs/modules/benchmark/generation.md](../../modules/benchmark/generation.md) - Planned generation architecture
+## Failure Semantics
+
+- generation failure means no benchmark is ready for packaging
+- packaging failure means no distributable artifact is ready for publication
+- publication failure must not claim dataset availability prematurely
+- runtime load failure must distinguish missing bundled source from clone/load
+  failures
+
+## Decisions and Tradeoffs
+
+- decision: keep lifecycle phases explicit
+  - tradeoff: more subsystem boundaries, much clearer contracts
+- decision: make packaging/runtime compatibility normative
+  - tradeoff: tighter requirements on packaged output, fewer runtime surprises
+- decision: preserve provenance through the lifecycle
+  - tradeoff: more metadata, better reproducibility
+
+## Risks and Validation
+
+This contract should be validated by:
+- packaging validation tests
+- tarball/source layout tests
+- runtime loader tests
+- end-to-end tests covering packaged benchmark execution
+
+## Implementation Pointers
+
+- `crsbench/benchmark/generation/`
+- `crsbench/benchmark/packaging/`
+- `crsbench/benchmark/runtime/`
+- benchmark-related tests under `tests/`

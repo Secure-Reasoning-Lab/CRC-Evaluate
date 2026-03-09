@@ -6,6 +6,8 @@ Unlike traditional fuzzing benchmarks (e.g., FuzzBench) that only report coverag
 
 ## Quick Start
 
+First-time users should start with [docs/getting-started/first-experiment.md](docs/getting-started/first-experiment.md).
+
 ```bash
 # Install
 git clone https://github.com/sslab-gatech/CRSBench.git && cd CRSBench
@@ -20,12 +22,33 @@ uv run hf auth login
 crsbench download --all                     # all 134 benchmarks (~12GB)
 crsbench download --all --no-ground-truth   # skip .aixcc/ ground truth
 crsbench download --benchmark-suite sanity  # small test suite
+```
 
-# Run an experiment (requires Valkey/Redis for job queue)
+Production-style single-machine queue-backed example (128 cores):
+
+```bash
 python scripts/valkey-helper.py --password start  # auto-generates password, saved to .env
-crsbench run       --experiment-config experiment-configs/experiment-config-sanity.yaml
-crsbench worker    --experiment-config experiment-configs/experiment-config-sanity.yaml
-crsbench evaluator --experiment-config experiment-configs/experiment-config-sanity.yaml
+
+# Terminal 1: worker
+crsbench worker \
+  --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml \
+  --jobs 7 \
+  --cores-per-job 16 \
+  --cpuset 0-111 \
+  --continuous
+
+# Terminal 2: evaluator (optional for normal CRS runs; use for real-time build/verify processing)
+crsbench evaluator \
+  --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml \
+  --build-jobs 4 \
+  --build-cores-per-job 4 \
+  --verify-jobs 4 \
+  --verify-cores-per-job 4 \
+  --cpuset 112-127
+
+# Terminal 3: orchestrator
+crsbench run \
+  --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml
 
 # Clean stale queue state for one experiment (use the `experiment:` name from config)
 crsbench queue clean --experiment sanity-test --yes
@@ -39,8 +62,11 @@ crsbench queue clean --experiment sanity-test --yes
 If your virtual environment is not activated, prefix CLI commands with `uv run`
 (for example, `uv run crsbench download --all`).
 
-CRS experiments use a distributed job queue (Redis/RQ). The orchestrator (`run`) enqueues jobs,
-workers (`worker`) execute them. Add `evaluator` for real-time POV and patch verification.
+CRSBench supports queue-backed execution with Redis/RQ. In that model, the
+orchestrator (`run`) enqueues jobs, workers (`worker`) execute CRS trial jobs,
+and `evaluator` processes build/verify queues for real-time POV and patch
+verification. For the smallest first run, follow
+[docs/getting-started/first-experiment.md](docs/getting-started/first-experiment.md).
 
 ### Run / Worker / Evaluator Workflow
 

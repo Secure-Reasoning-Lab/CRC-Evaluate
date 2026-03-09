@@ -6,7 +6,7 @@ This page is the canonical index for CRSBench environment variables.
 
 | Variable | Purpose |
 |---|---|
-| `CRSBENCH_REDIS_HOST` | Enables distributed mode and sets queue backend host (`host` or `host:port`; default port is `6379`). |
+| `CRSBENCH_REDIS_HOST` | Sets the Redis/Valkey queue backend host (`host` or `host:port`; default port is `6379`) for queue-backed worker/evaluator/configless flows and as a runtime default where applicable. |
 | `CRSBENCH_REDIS_PASSWORD` | Password for Redis/Valkey auth (if enabled). |
 | `CRSBENCH_LLM_BASE_URL` | Immediate LiteLLM endpoint called directly. |
 | `CRSBENCH_LLM_UPSTREAM_BASE_URL` | Upstream/forwarding LiteLLM endpoint. |

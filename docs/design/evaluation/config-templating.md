@@ -1,8 +1,7 @@
 # CRS Compose Runtime Configuration
 
-## Status
-
-Current and active design. This replaces the old `crs_overrides` proposal.
+Audience: contributors changing `crs_compose` schema, CPU/memory assignment, or oss-crs compose generation.
+Scope: runtime configuration contract from experiment config into generated oss-crs compose files.
 
 ## Overview
 
@@ -102,14 +101,6 @@ CRSBench validates at config parse time:
   - `shared: true`
 - `num_cores` values must be positive for CRS services
 - unknown keys are rejected
-
-## Migration Notes
-
-From legacy config:
-
-- `crs_overrides` -> removed
-- flat CRS keys remain accepted for compatibility, but prefer direct `crs_compose.<name>`
-- `mem_limit` -> now optional
 
 ## Implementation Pointers
 

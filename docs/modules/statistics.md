@@ -13,19 +13,7 @@ statistics/
 └── cli.py           # CLI entry point
 ```
 
-## CLI Usage
-
-```bash
-# Via main crsbench command
-crsbench benchmark stats --summary-only
-crsbench benchmark stats --output benchmarks.csv
-crsbench benchmark stats --benchmarks atlanta-curl-delta-01,afc-libxml2-delta-01
-
-# Standalone execution
-python -m crsbench.statistics.cli --summary-only
-```
-
-### Options
+## Operational Surface
 
 | Option | Description |
 |--------|-------------|
@@ -36,6 +24,10 @@ python -m crsbench.statistics.cli --summary-only
 | `--include-no-vulns` | Include benchmarks with no vulnerabilities |
 | `--verbose`, `-v` | Enable verbose logging |
 
+Operator walkthroughs and runnable examples belong in the benchmark guides.
+This module page records the supported CLI surface and library entry points for
+the statistics subsystem.
+
 ## Library Usage
 
 ```python
@@ -45,20 +37,14 @@ from crsbench.statistics import (
     print_summary,
     BenchmarkStats,
 )
-
-# Collect benchmark data
-benchmarks = collect_benchmark_stats(benchmarks_dir)
-
-# Calculate aggregate statistics
-stats = BenchmarkStats.from_benchmarks(benchmarks)
-print(f"Total: {stats.total_benchmarks} projects, {stats.total_vulns} vulns")
-
-# Export to CSV
-export_benchmarks_csv(benchmarks, output_path)
-
-# Print summary to console
-print_summary(benchmarks)
 ```
+
+Key entry points:
+
+- `collect_benchmark_stats(benchmarks_dir)`
+- `BenchmarkStats.from_benchmarks(benchmarks)`
+- `export_benchmarks_csv(benchmarks, output_path)`
+- `print_summary(benchmarks)`
 
 ## Key Classes
 

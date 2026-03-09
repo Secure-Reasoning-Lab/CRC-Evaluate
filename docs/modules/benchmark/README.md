@@ -18,39 +18,26 @@ benchmark/
 └── runtime/        # Load benchmarks for CRS evaluation
 ```
 
-## Quick Start
+## Reference Surface
 
-### Packaging (Bundle a Benchmark)
+### Packaging APIs
 
 ```python
 from crsbench.benchmark import bundle_benchmark, validate_benchmark
-
-# Validate first
-result = validate_benchmark(benchmark_path)
-if result.valid:
-    # Bundle to create pkgs/
-    pkgs_dir = bundle_benchmark(benchmark_path)
 ```
 
-CLI:
-```bash
-crsbench benchmark validate ./benchmarks/my-benchmark
-crsbench benchmark bundle ./benchmarks/my-benchmark
-```
+Packaging command usage is documented in the benchmark contributor guide.
 
-### Runtime (Load for Evaluation)
+### Runtime APIs
 
 ```python
 from crsbench.benchmark import load_benchmark_source
-
-# Auto-detects pkgs/ vs git clone
-source = load_benchmark_source(benchmark_path, dest_dir=trial_dir)
-
-if source.requires_source_path:
-    cmd.extend(["--source-path", str(source.path)])
 ```
+
+Runtime command usage is documented in the experiment guides.
 
 ## Documentation
 
 - Design: `../../design/benchmark/benchmark-lifecycle.md`
 - Generation plan: `./generation.md`
+- Contributor workflow: `../../contributors/benchmark-developer-guide.md`

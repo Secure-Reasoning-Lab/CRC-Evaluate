@@ -6,6 +6,7 @@ Start here:
 
 - [Benchmark RFC](../RFC.md)
 - [Environment Variables](./environment-variables.md)
+- [Logging Reference](./logging.md)
 - [OSS-CRS Interface](./oss-crs-interface.md)
 - [Seed Corpus](./seed-corpus.md)
 - [Snapshots](./snapshots.md)

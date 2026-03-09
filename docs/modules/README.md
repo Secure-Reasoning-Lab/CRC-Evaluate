@@ -1,12 +1,13 @@
 # Module Documentation
 
 Module-specific documentation moved from `crsbench/*/README.md` into this folder.
-These pages are intentionally concise and should link to detailed design docs
-under `docs/design/` instead of duplicating implementation detail.
+This subtree is for module-scoped reference and short operational notes only.
+Primary onboarding and cross-cutting workflows belong under `docs/getting-started/`
+or `docs/guides/`. These pages should link to detailed design docs under
+`docs/design/` instead of duplicating implementation detail.
 
 ## Available Modules
 
-- [Benchmark CI](../guides/benchmark-ci/reference.md)
 - [Benchmark](./benchmark/README.md)
 - [Benchmark Generation](./benchmark/generation.md)
 - [Dataset](./dataset.md)
@@ -18,5 +19,10 @@ under `docs/design/` instead of duplicating implementation detail.
 
 ## Maintenance Rule
 
-- Keep module pages task-oriented and short.
+- Keep module pages:
+  - scoped to one subsystem
+  - short and reference-oriented
+  - linked outward to canonical guides or design docs where needed
 - Put deep architecture/mechanism details in `docs/design/`.
+- Put first-time-user and cross-module workflows in `docs/getting-started/` or `docs/guides/`.
+- Do not use module pages for onboarding, cross-module workflows, primary CLI tutorials, or implementation tracking.

@@ -1,5 +1,8 @@
 # CRSBench Architecture
 
+Audience: contributors changing system-level structure or cross-module contracts.
+Scope: repository-wide architecture intent, boundaries, and major design decisions.
+
 This document describes the architecture intent for CRSBench and the main design
 tradeoffs behind its current structure.
 
