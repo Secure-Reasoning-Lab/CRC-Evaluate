@@ -1,0 +1,38 @@
+experiment:
+  name: afc-bugfinding-given-fuzzer-run
+  task: bugfinding
+  benchmark_suite: afc-final
+  sanitizers:
+  - address
+  - undefined
+  mode: full
+#  only_cpv_harnesses: true
+runtime:
+  trials: 1
+  max_total_time: 46800
+  build_timeout: 14400
+  run_timeout: 21600
+  verify_timeout: 7200
+  per_pov_verify_timeout: 300
+  redis_host: localhost
+  source_mode: pkgs
+  pov_early_stop: true
+  litellm:
+#    tracking_enabled: false
+    skip: true
+storage:
+  experiment_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/experiment-data-afc-run/afc-bugfinding-given-fuzzer-run
+  report_filestore: /home/dongkwan/crsbench_eval_given_fuzzer/report-data-afc-run/afc-bugfinding-given-fuzzer-run
+resources:
+  cores_per_trial: 16
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  atlantis-multilang-given_fuzzer:
+    num_cores: 16
+worker:
+  storage:
+    cleanup_after_trial: true
+  cores_per_job: 16
+evaluator:
+  cores_per_job: 16

@@ -1,0 +1,45 @@
+experiment:
+  name: sanity-mock-c-crs-copilot-cli-gpt-5-3-codex-delta-rerun
+  task: bugfixing
+  benchmarks:
+  - sanity-mock-c-delta-01
+  sanitizers:
+  - address
+  mode: delta
+runtime:
+  trials: 1
+  max_total_time: 3600
+  build_timeout: 1200
+  run_timeout: 900
+  verify_timeout: 1200
+  per_pov_verify_timeout: 600
+  redis_host: localhost
+  inputs:
+    pov:
+      max_variants_per_cpv: 1
+    sarif:
+      level: 3
+    seed: {}
+    diff: {}
+  litellm:
+    cost_budget: 2
+    mode: external
+    tracking_enabled: true
+storage:
+  experiment_filestore: /tmp/crsbench/sanity-copilot/experiment-data/sanity-mock-c-crs-copilot-cli-gpt-5-3-codex-delta-rerun
+  report_filestore: /tmp/crsbench/sanity-copilot/report-data/sanity-mock-c-crs-copilot-cli-gpt-5-3-codex-delta-rerun
+resources:
+  cores_per_trial: 4
+crs_compose:
+  crs-copilot-cli:
+    num_cores: 8
+    additional_env:
+      CRS_AGENT: copilot_cli
+      COPILOT_MODEL: gpt-5.3-codex
+      COPILOT_GITHUB_TOKEN: ${COPILOT_GITHUB_TOKEN}
+worker:
+  cores_per_job: 8
+  storage:
+    cleanup_after_trial: false
+evaluator:
+  cores_per_job: 8

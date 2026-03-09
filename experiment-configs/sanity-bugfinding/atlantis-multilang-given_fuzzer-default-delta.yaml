@@ -1,0 +1,34 @@
+experiment:
+  name: sanity-test
+  task: bugfinding
+  benchmark_suite: sanity
+  mode: delta
+runtime:
+  trials: 1
+  max_total_time: 1200
+  build_timeout: 300
+  run_timeout: 300
+  verify_timeout: 300
+  redis_host: localhost
+  inputs:
+    pov:
+      max_variants_per_cpv: 1
+  litellm:
+    skip: true
+storage:
+  experiment_filestore: /tmp/crsbench/sanity/experiment-data/sanity-test
+  report_filestore: /tmp/crsbench/sanity/report-data/sanity-test
+resources:
+  cores_per_trial: 2
+  memory_per_trial: 4G
+worker:
+  storage:
+    cleanup_after_trial: true
+  cores_per_job: 2
+crs_compose:
+  oss_crs_infra:
+    shared: true
+  atlantis-multilang-given_fuzzer:
+    num_cores: 2
+evaluator:
+  cores_per_job: 16

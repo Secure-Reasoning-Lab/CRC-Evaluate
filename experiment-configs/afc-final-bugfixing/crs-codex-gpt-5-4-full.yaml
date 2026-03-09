@@ -1,0 +1,40 @@
+experiment:
+  name: afc-all-crs-codex-gpt-5-4-full
+  task: bugfixing
+  benchmark_suite: afc-final
+  sanitizers:
+  - address
+  - undefined
+  mode: full
+runtime:
+  trials: 1
+  max_total_time: 39600
+  build_timeout: 14400
+  run_timeout: 7200
+  verify_timeout: 14400
+  per_pov_verify_timeout: 7200
+  redis_host: localhost
+  patch_verify_variants: false
+  inputs:
+    pov:
+      max_variants_per_cpv: 1
+  litellm:
+    cost_budget: 10
+    mode: external
+    tracking_enabled: true
+storage:
+  experiment_filestore: /home/dongkwan/crsbench_eval_patch/experiment-data/afc-all-crs-codex-gpt-5-4-full
+  report_filestore: /home/dongkwan/crsbench_eval_patch/report-data/afc-all-crs-codex-gpt-5-4-full
+resources:
+  cores_per_trial: 8
+crs_compose:
+  crs-codex:
+    num_cores: 8
+    additional_env:
+      CODEX_MODEL: gpt-5.4
+worker:
+  cores_per_job: 8
+  storage:
+    cleanup_after_trial: false
+evaluator:
+  cores_per_job: 8
