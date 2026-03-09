@@ -41,6 +41,19 @@ When instructions conflict, prioritize in this order:
 
 - When behavior, interfaces, or workflows change, update the nearest relevant docs under `docs/`.
 - If doc entry points change, update the `Docs Index (Agent Jump List)` in this file.
+- Follow `docs/governance/documentation-taxonomy.md` for canonical doc placement.
+- Keep `docs/` root reserved for the docs hub, top-level normative specs, and high-value example/reference artifacts.
+- Put prose docs under grouped subdirectories such as `docs/getting-started/`, `docs/guides/`, `docs/reference/`, `docs/contributors/`, `docs/governance/`, `docs/design/`, and `docs/modules/`.
+- Do not add root-level moved-page shims or duplicate canonical docs under `docs/`.
+
+## Design Doc Authoring Policy (Subagents)
+
+- When creating or editing files under `docs/design/`, follow `docs/design/doc-authoring-guidelines.md`.
+- Treat `docs/design/` as contract-level documentation (invariants, interfaces, state transitions, failure semantics, deployment behavior), not implementation snapshots.
+- Do not paste large implementation code blocks into design docs. If code is needed, keep short pseudocode and link implementation files.
+- Do not add checklist-style implementation tracking (`- [ ]`, `- [x]`), commit-hash narratives, or "current shape" snapshots in design docs.
+- For distributed/queue/worker/evaluator topics, explicitly document non-local behavior and failure/retry semantics.
+- If behavior changes, update the canonical design section in the same PR/commit; do not rely on "historical/outdated" disclaimers.
 
 ## Benchmark Change Logging
 
@@ -61,6 +74,7 @@ Before considering work complete:
 - Distributed/non-local validation is completed when applicable.
 - Relevant docs are updated when behavior or workflows changed.
 - Pre-commit quality gate passes: `scripts/ci-tests/run-local.sh checks`.
+- Post-commit review loop is completed: commit -> agent-team review -> fixes -> repeat until no findings.
 
 ## Development Workflow Loop
 
@@ -112,12 +126,16 @@ Then re-run the quality gate command above.
 ## Docs Index (Agent Jump List)
 
 - Start here: `docs/README.md`
-- Environment setup: `docs/environment-setup.md`
+- Documentation taxonomy: `docs/governance/documentation-taxonomy.md`
+- Install: `docs/getting-started/install.md`
+- Configuration: `docs/getting-started/configuration.md`
+- Normative benchmark spec: `docs/RFC.md`
 - Architecture: `docs/design/architecture.md`
+- Design doc policy: `docs/design/doc-authoring-guidelines.md`
 - Distributed systems: `docs/design/distributed/distributed-evaluation.md`
 - Job queue/workers: `docs/design/distributed/distributed-job-queue.md`
 - Deployment/cloud: `docs/design/distributed/deployment-guide.md`
 - Configless runtime: `docs/design/distributed/configless-runtime.md`
 - Evaluation flow: `docs/design/evaluation/evaluation.md`
-- Testing setup: `docs/testing-setup.md`
-- Coding standards: `docs/coding-standards.md`
+- Testing setup: `docs/contributors/testing.md`
+- Coding standards: `docs/contributors/coding-standards.md`

@@ -166,6 +166,153 @@ class TestRuntimeRegistration:
         assert reg.cores_per_trial == 4  # Default
         assert reg.memory_per_trial is None  # Unlimited by default
 
+    def test_from_experiment_config_evaluator_unified_defaults(self) -> None:
+        """Unified evaluator jobs/cores_per_job populate build+verify metadata."""
+        from crsbench.distributed.registry import RuntimeRegistration
+        from crsbench.validation.schemas import EvaluatorConfig
+
+        config = MagicMock()
+        config.experiment = "exp"
+        config.mode.value = "delta"
+        config.sanitizers = []
+        config.resources = None
+        config.worker = None
+        config.evaluator = EvaluatorConfig(jobs=6, cores_per_job=8)
+        config.oss_fuzz_path = "/oss-fuzz"
+        config.benchmarks_root = "/benchmarks"
+        config.source_mode = "pkgs"
+        config.inc_image_policy = "auto"
+        config.inc_image_registry = "ghcr.io/team-atlanta/crsbench"
+        config.inc_image_max_pull_bytes = 10 * 1024 * 1024 * 1024
+        config.inc_image_pull_timeout_sec = 300
+        config.project_image_prefix = "crsbench"
+        config.max_total_time = 7200
+        config.build_timeout = 3600
+        config.per_pov_verify_timeout = 180
+        config.get_benchmark_list.return_value = []
+        config.model_dump.return_value = {"experiment": "exp", "mode": "delta"}
+
+        reg = RuntimeRegistration.from_experiment_config(config)
+        assert reg.evaluator_build_jobs == 6
+        assert reg.evaluator_verify_jobs == 6
+        assert reg.evaluator_build_cores_per_job == 8
+        assert reg.evaluator_verify_cores_per_job == 8
+
+    def test_from_experiment_config_evaluator_split_overrides_unified(self) -> None:
+        """Split evaluator values override unified defaults per queue role."""
+        from crsbench.distributed.registry import RuntimeRegistration
+        from crsbench.validation.schemas import EvaluatorConfig
+
+        config = MagicMock()
+        config.experiment = "exp"
+        config.mode.value = "delta"
+        config.sanitizers = []
+        config.resources = None
+        config.worker = None
+        config.evaluator = EvaluatorConfig(
+            jobs=6,
+            cores_per_job=8,
+            verify_jobs=3,
+            verify_cores_per_job=5,
+        )
+        config.oss_fuzz_path = "/oss-fuzz"
+        config.benchmarks_root = "/benchmarks"
+        config.source_mode = "pkgs"
+        config.inc_image_policy = "auto"
+        config.inc_image_registry = "ghcr.io/team-atlanta/crsbench"
+        config.inc_image_max_pull_bytes = 10 * 1024 * 1024 * 1024
+        config.inc_image_pull_timeout_sec = 300
+        config.project_image_prefix = "crsbench"
+        config.max_total_time = 7200
+        config.build_timeout = 3600
+        config.per_pov_verify_timeout = 180
+        config.get_benchmark_list.return_value = []
+        config.model_dump.return_value = {"experiment": "exp", "mode": "delta"}
+
+        reg = RuntimeRegistration.from_experiment_config(config)
+        assert reg.evaluator_build_jobs == 6
+        assert reg.evaluator_build_cores_per_job == 8
+        assert reg.evaluator_verify_jobs == 3
+        assert reg.evaluator_verify_cores_per_job == 5
+
+    def test_from_experiment_config_evaluator_build_override_falls_back_verify(
+        self,
+    ) -> None:
+        """Build overrides do not break verify fallback to unified defaults."""
+        from crsbench.distributed.registry import RuntimeRegistration
+        from crsbench.validation.schemas import EvaluatorConfig
+
+        config = MagicMock()
+        config.experiment = "exp"
+        config.mode.value = "delta"
+        config.sanitizers = []
+        config.resources = None
+        config.worker = None
+        config.evaluator = EvaluatorConfig(
+            jobs=6,
+            cores_per_job=8,
+            build_jobs=10,
+            build_cores_per_job=12,
+        )
+        config.oss_fuzz_path = "/oss-fuzz"
+        config.benchmarks_root = "/benchmarks"
+        config.source_mode = "pkgs"
+        config.inc_image_policy = "auto"
+        config.inc_image_registry = "ghcr.io/team-atlanta/crsbench"
+        config.inc_image_max_pull_bytes = 10 * 1024 * 1024 * 1024
+        config.inc_image_pull_timeout_sec = 300
+        config.project_image_prefix = "crsbench"
+        config.max_total_time = 7200
+        config.build_timeout = 3600
+        config.per_pov_verify_timeout = 180
+        config.get_benchmark_list.return_value = []
+        config.model_dump.return_value = {"experiment": "exp", "mode": "delta"}
+
+        reg = RuntimeRegistration.from_experiment_config(config)
+        assert reg.evaluator_build_jobs == 10
+        assert reg.evaluator_build_cores_per_job == 12
+        assert reg.evaluator_verify_jobs == 6
+        assert reg.evaluator_verify_cores_per_job == 8
+
+    def test_from_experiment_config_evaluator_verify_override_falls_back_build(
+        self,
+    ) -> None:
+        """Verify overrides do not break build fallback to unified defaults."""
+        from crsbench.distributed.registry import RuntimeRegistration
+        from crsbench.validation.schemas import EvaluatorConfig
+
+        config = MagicMock()
+        config.experiment = "exp"
+        config.mode.value = "delta"
+        config.sanitizers = []
+        config.resources = None
+        config.worker = None
+        config.evaluator = EvaluatorConfig(
+            jobs=6,
+            cores_per_job=8,
+            verify_jobs=3,
+            verify_cores_per_job=5,
+        )
+        config.oss_fuzz_path = "/oss-fuzz"
+        config.benchmarks_root = "/benchmarks"
+        config.source_mode = "pkgs"
+        config.inc_image_policy = "auto"
+        config.inc_image_registry = "ghcr.io/team-atlanta/crsbench"
+        config.inc_image_max_pull_bytes = 10 * 1024 * 1024 * 1024
+        config.inc_image_pull_timeout_sec = 300
+        config.project_image_prefix = "crsbench"
+        config.max_total_time = 7200
+        config.build_timeout = 3600
+        config.per_pov_verify_timeout = 180
+        config.get_benchmark_list.return_value = []
+        config.model_dump.return_value = {"experiment": "exp", "mode": "delta"}
+
+        reg = RuntimeRegistration.from_experiment_config(config)
+        assert reg.evaluator_build_jobs == 6
+        assert reg.evaluator_build_cores_per_job == 8
+        assert reg.evaluator_verify_jobs == 3
+        assert reg.evaluator_verify_cores_per_job == 5
+
 
 class TestRegistryClient:
     """Test RegistryClient CRUD operations using mocked Redis."""
@@ -308,12 +455,12 @@ class TestRegistryClientLock:
     def test_unlock_releases_lock(self) -> None:
         """After unlock(), a subsequent lock() can succeed."""
         client, mock_conn = self._make_client()
-        # First call held, second call succeeds (simulates unlock then lock)
-        mock_conn.set.side_effect = [None, True]
+        mock_conn.set.return_value = True
+        mock_conn.eval.return_value = 1
 
-        assert client.lock("my-exp") is False
-        client.unlock("my-exp")
         assert client.lock("my-exp") is True
+        client.unlock("my-exp")
+        assert "my-exp" not in client._lock_tokens
 
 
 class TestRegistryLease:
@@ -328,6 +475,7 @@ class TestRegistryLease:
 
     def test_cleanup_deregisters_and_unlocks(self) -> None:
         from crsbench.distributed.registry import (
+            _LOCK_UNLOCK_SCRIPT,
             RegistryClient,
             RegistryLease,
             RuntimeRegistration,
@@ -340,16 +488,26 @@ class TestRegistryLease:
         reg = RuntimeRegistration(experiment="exp-test")
 
         assert lease.acquire_lock() is True
+        token = client._lock_tokens["exp-test"]
         lease.register(reg)
         lease.cleanup()
 
         mock_conn.hdel.assert_called_once_with(
             "crsbench:registry:experiments", "exp-test"
         )
-        mock_conn.delete.assert_called_once_with("crsbench:lock:exp-test")
+        mock_conn.eval.assert_any_call(
+            _LOCK_UNLOCK_SCRIPT,
+            1,
+            "crsbench:lock:exp-test",
+            token,
+        )
 
     def test_cleanup_without_registration_only_unlocks(self) -> None:
-        from crsbench.distributed.registry import RegistryClient, RegistryLease
+        from crsbench.distributed.registry import (
+            _LOCK_UNLOCK_SCRIPT,
+            RegistryClient,
+            RegistryLease,
+        )
 
         mock_conn = MagicMock()
         mock_conn.set.return_value = True
@@ -357,10 +515,16 @@ class TestRegistryLease:
         lease = RegistryLease(client, "exp-test")
 
         assert lease.acquire_lock() is True
+        token = client._lock_tokens["exp-test"]
         lease.cleanup()
 
         mock_conn.hdel.assert_not_called()
-        mock_conn.delete.assert_called_once_with("crsbench:lock:exp-test")
+        mock_conn.eval.assert_any_call(
+            _LOCK_UNLOCK_SCRIPT,
+            1,
+            "crsbench:lock:exp-test",
+            token,
+        )
 
     def test_register_rejects_mismatched_experiment(self) -> None:
         from crsbench.distributed.registry import (
@@ -382,10 +546,10 @@ class TestRegistryLease:
         mock_conn = MagicMock()
         mock_conn.set.return_value = True
         mock_conn.hdel.side_effect = RuntimeError("redis down")
-        mock_conn.delete.side_effect = RuntimeError("redis down")
+        mock_conn.eval.side_effect = RuntimeError("redis down")
         client = RegistryClient(mock_conn)
         lease = RegistryLease(client, "exp-test")
-        lease.lock_acquired = True
+        assert lease.acquire_lock() is True
         lease.registration_published = True
 
         lease.cleanup()
@@ -402,31 +566,89 @@ class TestRegistryLease:
 
         client.lock("exp-42")
 
-        mock_conn.set.assert_called_once_with(
-            "crsbench:lock:exp-42", "locked", nx=True, ex=LOCK_TTL
-        )
+        assert mock_conn.set.call_count == 1
+        args, kwargs = mock_conn.set.call_args
+        assert args[0] == "crsbench:lock:exp-42"
+        assert isinstance(args[1], str)
+        assert args[1]
+        assert kwargs == {"nx": True, "ex": LOCK_TTL}
 
     def test_renew_returns_true_when_key_exists(self) -> None:
         """renew() returns True and extends TTL when the lock exists."""
-        from crsbench.distributed.registry import LOCK_TTL
+        from crsbench.distributed.registry import _LOCK_RENEW_SCRIPT, LOCK_TTL
 
         client, mock_conn = self._make_client()
-        mock_conn.expire.return_value = True
+        mock_conn.set.return_value = True
+        mock_conn.eval.return_value = 1
 
+        assert client.lock("exp-42") is True
         assert client.renew("exp-42") is True
-        mock_conn.expire.assert_called_once_with("crsbench:lock:exp-42", LOCK_TTL)
+        mock_conn.eval.assert_called_with(
+            _LOCK_RENEW_SCRIPT,
+            1,
+            "crsbench:lock:exp-42",
+            client._lock_tokens["exp-42"],
+            str(LOCK_TTL),
+        )
 
     def test_renew_returns_false_when_key_missing(self) -> None:
         """renew() returns False when the lock has expired."""
         client, mock_conn = self._make_client()
-        mock_conn.expire.return_value = False
+        mock_conn.set.return_value = True
+        mock_conn.eval.return_value = 0
 
+        assert client.lock("exp-42") is True
         assert client.renew("exp-42") is False
 
-    def test_unlock_deletes_key(self) -> None:
-        """unlock() calls DELETE on the correct lock key."""
-        client, mock_conn = self._make_client()
+    def test_unlock_uses_compare_and_delete(self) -> None:
+        """unlock() uses token compare-and-delete Lua script."""
+        from crsbench.distributed.registry import _LOCK_UNLOCK_SCRIPT
 
+        client, mock_conn = self._make_client()
+        mock_conn.set.return_value = True
+        mock_conn.eval.return_value = 1
+
+        assert client.lock("exp-42") is True
+        token = client._lock_tokens["exp-42"]
         client.unlock("exp-42")
 
-        mock_conn.delete.assert_called_once_with("crsbench:lock:exp-42")
+        mock_conn.eval.assert_called_with(
+            _LOCK_UNLOCK_SCRIPT,
+            1,
+            "crsbench:lock:exp-42",
+            token,
+        )
+
+    def test_stale_owner_renew_fails_with_token_mismatch(self) -> None:
+        """stale owner must not renew lock after another owner acquires it."""
+        from crsbench.distributed.registry import RegistryClient
+
+        client_a, conn_a = self._make_client()
+        client_b = RegistryClient(conn_a)
+        conn_a.set.return_value = True
+        conn_a.eval.side_effect = [0]
+
+        assert client_a.lock("exp-42") is True
+        assert client_b.lock("exp-42") is True
+        assert client_a.renew("exp-42") is False
+
+    def test_stale_owner_unlock_does_not_delete_new_owner_lock(self) -> None:
+        """stale owner unlock must not delete lock held by a newer owner."""
+        from crsbench.distributed.registry import _LOCK_UNLOCK_SCRIPT, RegistryClient
+
+        client_a, conn_a = self._make_client()
+        client_b = RegistryClient(conn_a)
+        conn_a.set.return_value = True
+        conn_a.eval.side_effect = [0]
+
+        assert client_a.lock("exp-42") is True
+        assert client_b.lock("exp-42") is True
+        stale_token = client_a._lock_tokens["exp-42"]
+        client_a.unlock("exp-42")
+
+        conn_a.eval.assert_called_with(
+            _LOCK_UNLOCK_SCRIPT,
+            1,
+            "crsbench:lock:exp-42",
+            stale_token,
+        )

@@ -1,261 +1,91 @@
 # LiteLLM Service Design
 
-## Overview
+Audience: contributors modifying CRSBench's LiteLLM integration contract.
 
-LiteLLM acts as an OpenAI-compatible proxy for CRSBench, providing:
-- Unified API for multiple LLM providers (OpenAI, Anthropic, Google, Azure, etc.)
-- Per-trial instances for isolation
-- File-based request/response logging for snapshotting
-- Dynamic configuration from environment variables and config files
+Related:
+- [Environment Variables Reference](../../reference/environment-variables.md)
+- [Configuration Guide](../../getting-started/configuration.md)
+- [oss-crs Integration](../evaluation/oss-crs-integration.md)
 
-## Architecture
+## Purpose
 
-### Direct Mode (Default)
+This document defines the CRSBench contract for using LiteLLM as the LLM access
+layer for CRS execution.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      CRSBench Trial                         │
-│  ┌─────────────┐     ┌─────────────┐     ┌──────────────┐  │
-│  │   CRS       │────▶│   LiteLLM   │────▶│ LLM Provider │  │
-│  │  Container  │     │   Proxy     │     │ (OpenAI/etc) │  │
-│  └─────────────┘     └─────────────┘     └──────────────┘  │
-│                            │                                │
-│                            ▼                                │
-│                      ┌──────────┐                          │
-│                      │  Logs    │                          │
-│                      │  (JSON)  │                          │
-│                      └──────────┘                          │
-└─────────────────────────────────────────────────────────────┘
-```
+## Scope
 
-### Proxy Mode (Multi-tier)
+Covered here:
+- runtime contract CRSBench expects from LiteLLM-related configuration
+- trust boundaries between CRS containers, CRSBench runtime, and upstream
+  LiteLLM services
+- accounting/tracking semantics used by CRSBench
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│                         CRSBench Trial                             │
-│  ┌───────────┐    ┌──────────────┐    ┌───────────────┐          │
-│  │    CRS    │───▶│ Trial        │───▶│  Central      │──────────▶│
-│  │ Container │    │ LiteLLM      │    │  LiteLLM      │  Provider │
-│  └───────────┘    │ (Proxy)      │    │  (Gateway)    │           │
-│       │           └──────────────┘    └───────────────┘          │
-│  uses CRSBENCH_      │  forwards          │  uses provider        │
-│  LLM_MASTER_KEY      │  with              │  API keys             │
-│                      │  CRSBENCH_LLM_     │                        │
-│                      │  API_KEY           │                        │
-│                      ▼                     ▼                        │
-│                   ┌──────────┐          ┌──────────┐              │
-│                   │Trial Logs│          │Central   │              │
-│                   │(per-trial│          │Logs      │              │
-│                   │debugging)│          │(billing) │              │
-│                   └──────────┘          └──────────┘              │
-└────────────────────────────────────────────────────────────────────┘
+Not covered here:
+- deployment tutorials
+- provider-specific operational setup
+- container/runtime implementation details for helper scripts
 
-Key Configuration:
-- CRS containers: Use CRSBENCH_LLM_MASTER_KEY to authenticate with trial LiteLLM
-- Trial LiteLLM: Uses CRSBENCH_LLM_UPSTREAM_API_KEY to authenticate with central LiteLLM
-- Central LiteLLM: Connects to providers with provider API keys
+## Supported Runtime Model
 
-Benefits:
-- Trial-level logging for debugging
-- Central cost tracking and billing
-- Simplified API key management (only central instance needs provider keys)
-- Fine-grained access control per trial
-```
+CRSBench experiment runtime currently treats external LiteLLM as the canonical
+supported mode. CRSBench resolves the LiteLLM endpoint and credentials from the
+runtime configuration and `CRSBENCH_LLM_*` environment contract.
 
-## Directory Structure
+Status:
+- supported now: `runtime.litellm.mode: external`
+- supported now: `runtime.litellm.skip: true`
+- planned, not implemented: `runtime.litellm.mode: self_hosted`
 
-```
-services/litellm/
-├── docker-compose.yml.j2      # Jinja2 template for deployment
-├── README.md                  # Usage documentation
-└── default-models.yaml        # Default model configurations
+## Contract Boundary
 
-scripts/
-└── litellm-helper.py          # CLI for managing LiteLLM instances
+The relevant actors are:
+- CRSBench runtime, which resolves endpoint and credentials
+- CRS containers, which consume the resolved endpoint contract
+- upstream LiteLLM service, which authenticates, forwards, and optionally tracks
+  usage
 
-Trial logs stored at:
-  {experiment_filestore}/{experiment}/{crs}/{benchmark}/{trial_id}/litellm-logs/
-```
+CRSBench does not define provider-specific semantics. It expects an
+OpenAI-compatible endpoint with the configured authentication contract.
 
-## Configuration
+## Configuration Contract
 
-### Environment Variables
+Canonical CRSBench-facing variables are the `CRSBENCH_LLM_*` names documented in
+reference docs. Runtime configuration controls:
+- whether LiteLLM participation is skipped entirely
+- whether usage tracking/accounting is required
+- which endpoint CRSBench should treat as authoritative
 
-API keys loaded from `.env` file (env vars take precedence over config):
+This contract is consumed by CRSBench and then projected into the `oss-crs`
+runtime boundary. CRSBench does not currently support managing a self-hosted
+LiteLLM deployment as an experiment-runtime mode.
 
-| Variable | Purpose | Required |
-|----------|----------|----------|
-| `CRSBENCH_LLM_MASTER_KEY` | Authentication key passed to CRS containers (self_hosted mode) | Self-hosted mode |
-| `CRSBENCH_LLM_UPSTREAM_MASTER_KEY` | Admin key for upstream LiteLLM key-management/tracking (`litellm_mode: external`) | External mode only |
-| `CRSBENCH_LLM_UPSTREAM_API_KEY` | Runtime key for authenticating with upstream LiteLLM (`litellm_mode: external`) | External mode only |
-| `CRSBENCH_LLM_UPSTREAM_BASE_URL` | URL of central/upstream LiteLLM instance (`litellm_mode: external`) | External mode only |
-| `OPENAI_API_KEY` | OpenAI API access | No (direct mode only) |
-| `ANTHROPIC_API_KEY` | Anthropic API access | No (direct mode only) |
-| `GOOGLE_API_KEY` | Google AI API access | No (direct mode only) |
-| `AZURE_API_KEY` | Azure OpenAI access | No (direct mode only) |
-| `AZURE_API_BASE` | Azure OpenAI endpoint | No (direct mode only) |
-| `MISTRAL_API_KEY` | Mistral API access | No (direct mode only) |
-| `GROQ_API_KEY` | Groq API access | No (direct mode only) |
-| `TOGETHER_API_KEY` | Together AI API access | No (direct mode only) |
-| `DEEPSEEK_API_KEY` | DeepSeek API access | No (direct mode only) |
+When usage tracking is enabled, credentials required for upstream key management
+or accounting must be present before execution starts.
 
-### Model Configuration
+## Invariants
 
-Default models defined in `services/litellm/default-models.yaml`:
+- CRSBench must resolve one unambiguous LiteLLM endpoint for a given trial.
+- Runtime credential resolution must prefer canonical `CRSBENCH_LLM_*` inputs.
+- Tracking/accounting settings must not silently degrade into a less strict mode.
+- Trial execution must not depend on provider API keys being directly visible to
+  CRS containers when the configured runtime model uses an upstream gateway.
 
-```yaml
-model_list:
-  # OpenAI
-  - model_name: gpt-4o
-    litellm_params:
-      model: gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: gpt-4o-mini
-    litellm_params:
-      model: gpt-4o-mini
-      api_key: os.environ/OPENAI_API_KEY
+## Failure Semantics
 
-  # Anthropic
-  - model_name: claude-sonnet-4-20250514
-    litellm_params:
-      model: claude-sonnet-4-20250514
-      api_key: os.environ/ANTHROPIC_API_KEY
+- Missing required LiteLLM endpoint configuration is a setup failure.
+- Missing tracking credentials when tracking is enabled is a setup failure.
+- Provider-side or upstream LiteLLM request failures are runtime execution
+  failures and should surface as such, not as configuration success.
 
-  # Google
-  - model_name: gemini-2.0-flash
-    litellm_params:
-      model: gemini/gemini-2.0-flash
-      api_key: os.environ/GOOGLE_API_KEY
-```
+## Validation
 
-## File-Based Logging
+Changes here require coverage for:
+- canonical environment resolution
+- skip/enable behavior
+- tracking-enabled credential enforcement
+- adapter/runtime propagation of resolved LiteLLM settings
 
-### Log Format
+## Implementation Pointers
 
-Each request/response logged as JSON file:
-
-```
-litellm-logs/
-├── 2024-01-15T10:30:45.123_abc123.json
-├── 2024-01-15T10:31:02.456_def456.json
-└── ...
-```
-
-### Log Entry Schema
-
-```json
-{
-  "id": "chatcmpl-abc123",
-  "timestamp": "2024-01-15T10:30:45.123Z",
-  "model": "gpt-4o-mini",
-  "request": {
-    "messages": [...],
-    "temperature": 0.7,
-    "max_tokens": 1000
-  },
-  "response": {
-    "choices": [...],
-    "usage": {
-      "prompt_tokens": 150,
-      "completion_tokens": 200,
-      "total_tokens": 350
-    }
-  },
-  "latency_ms": 1234,
-  "cost_usd": 0.00025
-}
-```
-
-### LiteLLM Settings for Logging
-
-```yaml
-litellm_settings:
-  json_logs: true
-  log_responses: true
-  store_model_in_db: false
-
-  # Custom callback for file logging
-  success_callback: ["langfuse"]  # or custom file logger
-  failure_callback: ["langfuse"]
-```
-
-## Docker Compose Template
-
-`services/litellm/docker-compose.yml.j2`:
-
-```yaml
-services:
-  litellm:
-    image: ghcr.io/berriai/litellm:main-stable
-    container_name: litellm-{{ trial_id }}
-    environment:
-      - CRSBENCH_LLM_MASTER_KEY=${CRSBENCH_LLM_MASTER_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-      - AZURE_API_KEY=${AZURE_API_KEY:-}
-      - AZURE_API_BASE=${AZURE_API_BASE:-}
-      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
-      - GROQ_API_KEY=${GROQ_API_KEY:-}
-      - TOGETHER_API_KEY=${TOGETHER_API_KEY:-}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
-    ports:
-      - "{{ port }}:4000"
-    volumes:
-      - {{ config_path }}:/app/config.yaml:ro
-      - {{ logs_path }}:/logs
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-    command: --config /app/config.yaml --detailed_debug
-    networks:
-      - {{ network_name }}
-
-networks:
-  {{ network_name }}:
-    driver: bridge
-```
-
-## Helper Script Commands
-
-`scripts/litellm-helper.py`:
-
-| Command | Description |
-|---------|-------------|
-| `start [--port PORT] [--config CONFIG]` | Start LiteLLM instance |
-| `stop` | Stop running instance |
-| `status` | Show instance status |
-| `logs [-f]` | View container logs |
-| `health` | Check health endpoint |
-
-## Integration with CRSBench
-
-### Experiment Config
-
-Add to experiment config schema:
-
-```yaml
-litellm:
-  enabled: true
-  port: 4000  # Base port (incremented per trial)
-  models_config: services/litellm/default-models.yaml  # Optional override
-```
-
-### CRS Executor Integration
-
-Executors pass LiteLLM URL to CRS containers:
-
-```python
-# In crs_patch_executor.py
-litellm_url = f"http://host.docker.internal:{litellm_port}"
-cmd.extend(["--litellm-base", litellm_url, "--litellm-key", litellm_key])
-```
-
-## Security Considerations
-
-- Master key required for all API calls
-- API keys stored in `.env` file (not committed)
-- Ports not exposed externally by default
-- Per-trial isolation prevents cross-contamination
+Implementation is split between environment/config resolution, orchestration, and
+adapter/runtime invocation paths under `crsbench/`.

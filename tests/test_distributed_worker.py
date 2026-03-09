@@ -379,8 +379,8 @@ class TestConfiglessWorker:
             mock_worker.continuous = False
             mock_worker.minimum_disk_size = "10GB"
             mock_worker.disk_check_interval = 60
-            mock_worker.cores = None
-            mock_worker.skip_cpus = None
+            mock_worker.cpuset = None
+            mock_worker.skip_cpuset = None
             mock_worker.redis_host = None
 
             mock_config = MagicMock()
@@ -427,8 +427,8 @@ class TestConfiglessWorker:
             mock_worker.continuous = False
             mock_worker.minimum_disk_size = "10GB"
             mock_worker.disk_check_interval = 60
-            mock_worker.cores = None
-            mock_worker.skip_cpus = None
+            mock_worker.cpuset = None
+            mock_worker.skip_cpuset = None
             mock_worker.redis_host = " none "
 
             mock_config = MagicMock()
@@ -598,8 +598,8 @@ class TestConfiglessWorker:
         assert kwargs["build_jobs"] == 1
         assert kwargs["build_cores_per_job"] == 4
 
-    def test_configless_cpuset_uses_first_metadata_for_worker_cpu_pinning(self):
-        """Configless worker uses first metadata cores/skip with warning on conflicts."""
+    def test_configless_cpuset_uses_cli_cpu_pinning_only(self):
+        """Configless worker uses CLI cpuset/skip-cpuset (no metadata pinning)."""
         from crsbench.distributed.registry import RuntimeRegistration
         from crsbench.distributed.worker import run_worker_configless
 
@@ -608,16 +608,12 @@ class TestConfiglessWorker:
             trial_queue="crsbench_exp-a",
             build_queue="crsbench_exp-a_build",
             verify_queue="crsbench_exp-a_verify",
-            worker_cores="8-15",
-            worker_skip_cpus="9",
         )
         reg2 = RuntimeRegistration(
             experiment="exp-b",
             trial_queue="crsbench_exp-b",
             build_queue="crsbench_exp-b_build",
             verify_queue="crsbench_exp-b_verify",
-            worker_cores="16-23",
-            worker_skip_cpus="17",
         )
 
         with (
@@ -629,19 +625,19 @@ class TestConfiglessWorker:
                 "crsbench.distributed.ci_supervisor.run_multi_queue_supervisor",
                 return_value=0,
             ) as mock_supervisor,
-            patch("crsbench.distributed.common.logger.warning") as mock_warning,
         ):
             result = run_worker_configless(
                 redis_host="localhost",
                 use_cpuset=True,
                 continuous=True,
+                cores="8-15",
+                skip_cpus="9",
             )
 
         assert result == 0
         kwargs = mock_supervisor.call_args.kwargs
         assert kwargs["cores"] == "8-15"
         assert kwargs["skip_cpus"] == "9"
-        assert mock_warning.called
 
     @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
     def test_configless_rejects_conflicting_cpu_tag_metadata(self):
@@ -772,6 +768,127 @@ class TestConfiglessWorker:
             result = run_worker_configless(redis_host="localhost", jobs_override=0)
 
         assert result == 1
+
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
+    def test_configless_refresh_skips_incompatible_resource_profile(self):
+        """Refresh should not adopt experiments requiring incompatible worker profile."""
+        from crsbench.distributed.registry import RuntimeRegistration
+        from crsbench.distributed.worker import run_worker_configless
+
+        initial_reg = RuntimeRegistration(
+            experiment="exp-a",
+            trial_queue="crsbench_exp-a",
+            build_queue="crsbench_exp-a_build",
+            verify_queue="crsbench_exp-a_verify",
+            worker_jobs=1,
+            worker_cores_per_job=4,
+            worker_cpu_tag="x86-avx2",
+        )
+        compatible_reg = RuntimeRegistration(
+            experiment="exp-b",
+            trial_queue="crsbench_exp-b",
+            build_queue="crsbench_exp-b_build",
+            verify_queue="crsbench_exp-b_verify",
+            worker_jobs=1,
+            worker_cores_per_job=4,
+            worker_cpu_tag="x86-avx2",
+        )
+        incompatible_reg = RuntimeRegistration(
+            experiment="exp-c",
+            trial_queue="crsbench_exp-c",
+            build_queue="crsbench_exp-c_build",
+            verify_queue="crsbench_exp-c_verify",
+            worker_jobs=2,
+            worker_cores_per_job=4,
+            worker_cpu_tag="x86-avx2",
+        )
+
+        def _run_supervisor(**kwargs):
+            refresher = kwargs["queue_refresher"]
+            with patch("crsbench.distributed.registry.RegistryClient") as mock_registry:
+                mock_client = MagicMock()
+                mock_client.list_experiments.return_value = {
+                    "exp-a": initial_reg,
+                    "exp-b": compatible_reg,
+                    "exp-c": incompatible_reg,
+                }
+                mock_registry.return_value = mock_client
+                refreshed_build, refreshed_verify = refresher(MagicMock())
+            assert refreshed_build == ["crsbench_exp-a", "crsbench_exp-b"]
+            assert refreshed_verify == []
+            return 0
+
+        with (
+            patch(
+                "crsbench.distributed.worker.discover_registered_experiments",
+                return_value=(MagicMock(), {"exp-a": initial_reg}),
+            ),
+            patch(
+                "crsbench.distributed.ci_supervisor.run_multi_queue_supervisor",
+                side_effect=_run_supervisor,
+            ),
+            patch("crsbench.distributed.worker.logger.warning") as mock_warning,
+        ):
+            result = run_worker_configless(redis_host="localhost")
+
+        assert result == 0
+        assert any(
+            "incompatible worker resource profile" in str(call.args[0])
+            for call in mock_warning.call_args_list
+        )
+
+    @patch("crsbench.distributed.worker.REDIS_AVAILABLE", new=True)
+    def test_configless_refresh_keeps_untagged_experiment_with_tagged_worker(self):
+        """Untagged experiments should remain compatible during refresh."""
+        from crsbench.distributed.registry import RuntimeRegistration
+        from crsbench.distributed.worker import run_worker_configless
+
+        initial_reg = RuntimeRegistration(
+            experiment="exp-a",
+            trial_queue="crsbench_exp-a",
+            build_queue="crsbench_exp-a_build",
+            verify_queue="crsbench_exp-a_verify",
+            worker_jobs=1,
+            worker_cores_per_job=4,
+            worker_cpu_tag="x86-avx2",
+        )
+        untagged_reg = RuntimeRegistration(
+            experiment="exp-b",
+            trial_queue="crsbench_exp-b",
+            build_queue="crsbench_exp-b_build",
+            verify_queue="crsbench_exp-b_verify",
+            worker_jobs=1,
+            worker_cores_per_job=4,
+            worker_cpu_tag=None,
+        )
+
+        def _run_supervisor(**kwargs):
+            refresher = kwargs["queue_refresher"]
+            with patch("crsbench.distributed.registry.RegistryClient") as mock_registry:
+                mock_client = MagicMock()
+                mock_client.list_experiments.return_value = {
+                    "exp-a": initial_reg,
+                    "exp-b": untagged_reg,
+                }
+                mock_registry.return_value = mock_client
+                refreshed_build, refreshed_verify = refresher(MagicMock())
+            assert refreshed_build == ["crsbench_exp-a", "crsbench_exp-b"]
+            assert refreshed_verify == []
+            return 0
+
+        with (
+            patch(
+                "crsbench.distributed.worker.discover_registered_experiments",
+                return_value=(MagicMock(), {"exp-a": initial_reg}),
+            ),
+            patch(
+                "crsbench.distributed.ci_supervisor.run_multi_queue_supervisor",
+                side_effect=_run_supervisor,
+            ),
+        ):
+            result = run_worker_configless(redis_host="localhost")
+
+        assert result == 0
 
 
 class TestMetadataValidationHelpers:

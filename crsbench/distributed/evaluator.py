@@ -18,7 +18,6 @@ from crsbench.distributed.common import (
     discover_registered_experiments,
     normalize_cpu_tag,
     normalize_redis_host,
-    resolve_cli_or_first_metadata,
     validate_optional_int_override,
 )
 from crsbench.distributed.queue import REDIS_AVAILABLE
@@ -84,6 +83,12 @@ def _enqueue_pre_builds(
     config,
     experiment_name: str,
     redis_host: str,
+    *,
+    inc_image_policy: str | None = None,
+    inc_image_registry: str | None = None,
+    inc_image_max_pull_bytes: int | None = None,
+    inc_image_pull_timeout: int | None = None,
+    local_image_prefix: str | None = None,
 ) -> int:
     """Enqueue build jobs for all experiment benchmarks at startup.
 
@@ -124,6 +129,29 @@ def _enqueue_pre_builds(
 
     oss_fuzz_path = Path(ensure_oss_fuzz_root())
     planner = VariantPlanner(oss_fuzz_path, source_mode="pkgs")
+    (
+        inc_image_policy,
+        inc_image_registry,
+        inc_image_max_pull_bytes,
+        inc_image_pull_timeout,
+        local_image_prefix,
+    ) = _resolve_inc_image_runtime_settings(
+        policy=inc_image_policy
+        if inc_image_policy is not None
+        else getattr(config, "inc_image_policy", None),
+        registry=inc_image_registry
+        if inc_image_registry is not None
+        else getattr(config, "inc_image_registry", None),
+        max_pull_bytes=inc_image_max_pull_bytes
+        if inc_image_max_pull_bytes is not None
+        else getattr(config, "inc_image_max_pull_bytes", None),
+        pull_timeout_sec=inc_image_pull_timeout
+        if inc_image_pull_timeout is not None
+        else getattr(config, "inc_image_pull_timeout_sec", None),
+        local_prefix=local_image_prefix
+        if local_image_prefix is not None
+        else getattr(config, "project_image_prefix", None),
+    )
 
     from crsbench.distributed.queue import create_redis_connection, resolve_queue_names
 
@@ -148,6 +176,11 @@ def _enqueue_pre_builds(
             benchmark_path,
             use_inc_build=True,
             skip_if_cached=True,
+            inc_image_policy=inc_image_policy,
+            inc_image_registry=inc_image_registry,
+            inc_image_max_pull_bytes=inc_image_max_pull_bytes,
+            inc_image_pull_timeout=inc_image_pull_timeout,
+            local_image_prefix=local_image_prefix,
         )
 
         for job in jobs:
@@ -281,6 +314,11 @@ def run_evaluator_main(
             config,
             experiment_name,
             redis_host,
+            inc_image_policy=resolved_policy,
+            inc_image_registry=resolved_registry,
+            inc_image_max_pull_bytes=resolved_max_pull_bytes,
+            inc_image_pull_timeout=resolved_pull_timeout,
+            local_image_prefix=resolved_local_prefix,
         )
         logger.info(f"Pre-build: enqueued {enqueued} build jobs")
 
@@ -552,6 +590,11 @@ def _enqueue_pre_builds_from_registration(
             benchmark_path,
             use_inc_build=True,
             skip_if_cached=True,
+            inc_image_policy=registration.inc_image_policy,
+            inc_image_registry=registration.inc_image_registry,
+            inc_image_max_pull_bytes=registration.inc_image_max_pull_bytes,
+            inc_image_pull_timeout=registration.inc_image_pull_timeout_sec,
+            local_image_prefix=registration.local_image_prefix,
         )
 
         for job in jobs:
@@ -807,14 +850,6 @@ def run_evaluator_configless(
     except RuntimeError as exc:
         logger.error(str(exc))
         return 1
-    meta_cores_ordered = [
-        reg.evaluator_cores for reg in ordered_regs if reg.evaluator_cores is not None
-    ]
-    meta_skip_ordered = [
-        reg.evaluator_skip_cpus
-        for reg in ordered_regs
-        if reg.evaluator_skip_cpus is not None
-    ]
     meta_cpu_tags_ordered: list[str] = []
     for reg in ordered_regs:
         candidate_tag = normalize_cpu_tag(reg.evaluator_cpu_tag) or normalize_cpu_tag(
@@ -857,16 +892,8 @@ def run_evaluator_configless(
         else (max(meta_idle_timeout) if meta_idle_timeout else 0)
     )
 
-    resolved_cores = resolve_cli_or_first_metadata(
-        cli_value=cores,
-        metadata_values=meta_cores_ordered,
-        field_name="evaluator.cores",
-    )
-    resolved_skip_cpus = resolve_cli_or_first_metadata(
-        cli_value=skip_cpus,
-        metadata_values=meta_skip_ordered,
-        field_name="evaluator.skip_cpus",
-    )
+    resolved_cpuset = cores
+    resolved_skip_cpuset = skip_cpus
     if cpu_tag is not None:
         resolved_cpu_tag = normalize_cpu_tag(cpu_tag)
     else:
@@ -891,12 +918,12 @@ def run_evaluator_configless(
     from crsbench.distributed.ci_supervisor import run_multi_queue_supervisor
 
     logger.info(
-        "Evaluator resource profile (CLI > metadata > default): "
+        "Evaluator resource profile (CLI > metadata > default for jobs/cores): "
         f"build_jobs={resolved_build_jobs}, "
         f"build_cores_per_job={resolved_build_cores_per_job}, "
         f"verify_jobs={resolved_verify_jobs}, "
         f"verify_cores_per_job={resolved_verify_cores_per_job}, "
-        f"cores={resolved_cores}, skip_cpus={resolved_skip_cpus}, "
+        f"cpuset={resolved_cpuset}, skip_cpuset={resolved_skip_cpuset} (CLI-owned), "
         f"cpu_tag={resolved_cpu_tag}, idle_timeout={resolved_idle_timeout}"
     )
 
@@ -904,7 +931,148 @@ def run_evaluator_configless(
 
     queue_refresher = None
     if not legacy_ci_alias:
-        incompatible_path_warned: set[str] = set()
+        warned_incompatible: set[tuple[str, str]] = set()
+
+        def _warn_incompatible_once(experiment_name: str, reason: str) -> None:
+            key = (experiment_name, reason)
+            if key in warned_incompatible:
+                return
+            warned_incompatible.add(key)
+            logger.warning(
+                "Skipping experiment due to incompatible evaluator resource profile: "
+                f"{experiment_name} ({reason})"
+            )
+
+        def _is_refresh_compatible(
+            experiment_name: str, reg: RuntimeRegistration
+        ) -> bool:
+            if reg.benchmarks_root != first_reg.benchmarks_root:
+                _warn_incompatible_once(
+                    experiment_name,
+                    "benchmarks_root mismatch "
+                    f"(expected={first_reg.benchmarks_root}, got={reg.benchmarks_root})",
+                )
+                return False
+
+            reg_inc_settings = _resolve_inc_image_runtime_settings(
+                policy=reg.inc_image_policy,
+                registry=reg.inc_image_registry,
+                max_pull_bytes=reg.inc_image_max_pull_bytes,
+                pull_timeout_sec=reg.inc_image_pull_timeout_sec,
+                local_prefix=reg.local_image_prefix,
+            )
+            if reg_inc_settings != first_inc_settings:
+                _warn_incompatible_once(
+                    experiment_name,
+                    "inc-image settings mismatch "
+                    f"(expected={first_inc_settings}, got={reg_inc_settings})",
+                )
+                return False
+
+            try:
+                reg_build_jobs_values = collect_validated_int_metadata(
+                    registrations=[reg],
+                    attr_name="evaluator_build_jobs",
+                    field_name="evaluator.build_jobs",
+                    minimum=1,
+                )
+                reg_build_cores_values = collect_validated_int_metadata(
+                    registrations=[reg],
+                    attr_name="evaluator_build_cores_per_job",
+                    field_name="evaluator.build_cores_per_job",
+                    minimum=1,
+                )
+                reg_verify_jobs_values = collect_validated_int_metadata(
+                    registrations=[reg],
+                    attr_name="evaluator_verify_jobs",
+                    field_name="evaluator.verify_jobs",
+                    minimum=1,
+                )
+                reg_verify_cores_values = collect_validated_int_metadata(
+                    registrations=[reg],
+                    attr_name="evaluator_verify_cores_per_job",
+                    field_name="evaluator.verify_cores_per_job",
+                    minimum=1,
+                )
+                reg_idle_timeout_values = collect_validated_int_metadata(
+                    registrations=[reg],
+                    attr_name="evaluator_idle_timeout",
+                    field_name="evaluator.idle_timeout",
+                    minimum=0,
+                )
+            except RuntimeError as exc:
+                _warn_incompatible_once(experiment_name, str(exc))
+                return False
+
+            required_build_jobs = (
+                reg_build_jobs_values[0] if reg_build_jobs_values else 1
+            )
+            required_build_cores = (
+                reg_build_cores_values[0] if reg_build_cores_values else 4
+            )
+            required_verify_cores = (
+                reg_verify_cores_values[0] if reg_verify_cores_values else 4
+            )
+            required_verify_jobs = (
+                reg_verify_jobs_values[0]
+                if reg_verify_jobs_values
+                else max(
+                    1,
+                    (required_build_jobs * required_build_cores)
+                    // required_verify_cores,
+                )
+            )
+            required_idle_timeout = (
+                reg_idle_timeout_values[0] if reg_idle_timeout_values else 0
+            )
+
+            if required_build_jobs > resolved_build_jobs:
+                _warn_incompatible_once(
+                    experiment_name,
+                    "requires evaluator.build_jobs="
+                    f"{required_build_jobs} but evaluator runs with build_jobs={resolved_build_jobs}",
+                )
+                return False
+            if required_build_cores > resolved_build_cores_per_job:
+                _warn_incompatible_once(
+                    experiment_name,
+                    "requires evaluator.build_cores_per_job="
+                    f"{required_build_cores} but evaluator runs with build_cores_per_job={resolved_build_cores_per_job}",
+                )
+                return False
+            if required_verify_jobs > resolved_verify_jobs:
+                _warn_incompatible_once(
+                    experiment_name,
+                    "requires evaluator.verify_jobs="
+                    f"{required_verify_jobs} but evaluator runs with verify_jobs={resolved_verify_jobs}",
+                )
+                return False
+            if required_verify_cores > resolved_verify_cores_per_job:
+                _warn_incompatible_once(
+                    experiment_name,
+                    "requires evaluator.verify_cores_per_job="
+                    f"{required_verify_cores} but evaluator runs with verify_cores_per_job={resolved_verify_cores_per_job}",
+                )
+                return False
+            if required_idle_timeout > resolved_idle_timeout:
+                _warn_incompatible_once(
+                    experiment_name,
+                    "requires evaluator.idle_timeout="
+                    f"{required_idle_timeout} but evaluator runs with idle_timeout={resolved_idle_timeout}",
+                )
+                return False
+
+            reg_cpu_tag = normalize_cpu_tag(reg.evaluator_cpu_tag) or normalize_cpu_tag(
+                reg.cpu_tag
+            )
+            if reg_cpu_tag is not None and reg_cpu_tag != resolved_cpu_tag:
+                _warn_incompatible_once(
+                    experiment_name,
+                    f"requires cpu_tag={reg_cpu_tag!r} but evaluator runs with cpu_tag={resolved_cpu_tag!r}",
+                )
+                return False
+
+            return True
 
         def _refresh_evaluator_queues(redis_conn):
             from crsbench.distributed.registry import RegistryClient
@@ -917,13 +1085,7 @@ def run_evaluator_configless(
             compatible = []
             for name in sorted(refreshed):
                 reg = refreshed[name]
-                if reg.benchmarks_root != first_reg.benchmarks_root:
-                    if name not in incompatible_path_warned:
-                        logger.warning(
-                            "Skipping experiment due to incompatible shared path: "
-                            f"{name} (benchmarks_root={reg.benchmarks_root})"
-                        )
-                        incompatible_path_warned.add(name)
+                if not _is_refresh_compatible(name, reg):
                     continue
                 compatible.append(reg)
 
@@ -946,8 +1108,8 @@ def run_evaluator_configless(
         job_runner=_evaluator_job_runner,
         use_cpuset=use_cpuset,
         use_cgroups=use_cpuset,
-        cores=resolved_cores,
-        skip_cpus=resolved_skip_cpus,
+        cores=resolved_cpuset,
+        skip_cpus=resolved_skip_cpuset,
         idle_timeout=resolved_idle_timeout,
         queue_refresher=queue_refresher,
         cpu_tag=resolved_cpu_tag,

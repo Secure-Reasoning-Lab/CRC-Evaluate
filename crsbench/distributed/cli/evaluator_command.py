@@ -84,21 +84,15 @@ Examples:
     )
 
     evaluator_parser.add_argument(
-        "--no-cpuset",
-        action="store_true",
-        help="Disable CPU affinity for verify jobs",
-    )
-
-    evaluator_parser.add_argument(
-        "--cores",
+        "--cpuset",
         type=str,
         default=None,
-        metavar="CORES",
+        metavar="CPUSET",
         help="CPU cores for evaluator pool. Integer count (e.g., '32') or cpuset range (e.g., '16-47')",
     )
 
     evaluator_parser.add_argument(
-        "--skip-cpus",
+        "--skip-cpuset",
         type=str,
         default=None,
         metavar="CPUSET",
@@ -186,9 +180,9 @@ def run_evaluator(args: argparse.Namespace) -> int:
     logger = get_logger(__name__)
 
     ci_mode = args.ci
-    use_cpuset = not args.no_cpuset
-    cores = args.cores
-    skip_cpus = args.skip_cpus
+    cores = getattr(args, "cpuset", None)
+    skip_cpus = getattr(args, "skip_cpuset", None)
+    use_cpuset = cores is not None or skip_cpus is not None
     cpu_tag = getattr(args, "cpu_tag", None)
     build_jobs = args.build_jobs
     build_cores_per_job = args.build_cores_per_job
@@ -296,13 +290,23 @@ def run_evaluator(args: argparse.Namespace) -> int:
             logger.info(f"Evaluator override: benchmarks_root = {args.benchmarks_root}")
 
         evaluator_cfg = config.evaluator
+        default_jobs = (
+            evaluator_cfg.jobs
+            if evaluator_cfg and evaluator_cfg.jobs is not None
+            else 1
+        )
+        default_cores_per_job = (
+            evaluator_cfg.cores_per_job
+            if evaluator_cfg and evaluator_cfg.cores_per_job is not None
+            else 4
+        )
         resolved_build_jobs = (
             build_jobs
             if build_jobs is not None
             else (
                 evaluator_cfg.build_jobs
                 if evaluator_cfg and evaluator_cfg.build_jobs is not None
-                else 1
+                else default_jobs
             )
         )
         resolved_build_cores_per_job = (
@@ -311,7 +315,7 @@ def run_evaluator(args: argparse.Namespace) -> int:
             else (
                 evaluator_cfg.build_cores_per_job
                 if evaluator_cfg and evaluator_cfg.build_cores_per_job is not None
-                else 4
+                else default_cores_per_job
             )
         )
         resolved_verify_cores_per_job = (
@@ -320,7 +324,7 @@ def run_evaluator(args: argparse.Namespace) -> int:
             else (
                 evaluator_cfg.verify_cores_per_job
                 if evaluator_cfg and evaluator_cfg.verify_cores_per_job is not None
-                else 4
+                else default_cores_per_job
             )
         )
         resolved_verify_jobs = (
@@ -329,10 +333,14 @@ def run_evaluator(args: argparse.Namespace) -> int:
             else (
                 evaluator_cfg.verify_jobs
                 if evaluator_cfg and evaluator_cfg.verify_jobs is not None
-                else max(
-                    1,
-                    (resolved_build_jobs * resolved_build_cores_per_job)
-                    // resolved_verify_cores_per_job,
+                else (
+                    default_jobs
+                    if evaluator_cfg and evaluator_cfg.jobs is not None
+                    else max(
+                        1,
+                        (resolved_build_jobs * resolved_build_cores_per_job)
+                        // resolved_verify_cores_per_job,
+                    )
                 )
             )
         )
@@ -345,10 +353,8 @@ def run_evaluator(args: argparse.Namespace) -> int:
                 else 0
             )
         )
-        resolved_cores = cores or (evaluator_cfg.cores if evaluator_cfg else None)
-        resolved_skip_cpus = skip_cpus or (
-            evaluator_cfg.skip_cpus if evaluator_cfg else None
-        )
+        resolved_cores = cores
+        resolved_skip_cpus = skip_cpus
         cli_cpu_tag = normalize_cpu_tag(cpu_tag)
         evaluator_cpu_tag = normalize_cpu_tag(
             evaluator_cfg.cpu_tag if evaluator_cfg else None

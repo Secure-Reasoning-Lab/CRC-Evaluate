@@ -12,12 +12,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
-from crsbench.utils.litellm_env import (
-    required_env_errors_for_mode,
-    resolve_litellm_runtime_env,
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
 )
+
 from crsbench.validation.ground_truth_paths import validate_ground_truth_segment
 
 # =============================================================================
@@ -74,7 +76,14 @@ class TrialConfig(BaseModel):
 
     hints_enabled: bool = False
     hints_corpus_level: int | None = None
+    hint_sarif_level: int | None = None
+    seed_corpus_enabled: bool = False
+    seed_corpus_max_time: int | None = None
+    pov_input_enabled: bool = True
+    diff_enabled: bool = False
+    patch_verify_variants: bool = False
     target_povs: int | None = None
+    inputs: dict[str, Any] | None = None
 
 
 class FrameworkInfo(BaseModel):
@@ -810,26 +819,6 @@ class ValidationMetadata(BaseModel):
     )
 
 
-class LitellmResourceConfig(BaseModel):
-    """LiteLLM resource configuration."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    max_concurrent_requests: int = Field(
-        default=10, ge=1, description="Maximum concurrent requests to LiteLLM"
-    )
-    cost_budget: float = Field(default=100.0, ge=0, description="Cost budget in USD")
-    team: Optional[str] = Field(
-        default=None,
-        description="Team name to group API keys. If not set, experiment name is used.",
-    )
-    team_max_budget: Optional[float] = Field(
-        default=None,
-        ge=0,
-        description="Maximum budget in USD for the team. Applied when creating or updating team.",
-    )
-
-
 class ResourceConfig(BaseModel):
     """Resource allocation configuration for trials."""
 
@@ -840,14 +829,14 @@ class ResourceConfig(BaseModel):
     )
     memory_per_trial: Optional[str] = Field(
         default=None,
-        description="Memory allocation per trial (e.g., '8G', '16G'). None means unlimited.",
+        description=(
+            "Memory allocation per trial (e.g., '8G', '16G'). "
+            "None defers to adapter default memory policy."
+        ),
     )
     cpu_tag: Optional[str] = Field(
         default=None,
         description="Optional CPU capability tag required by trial/build/verify jobs in this experiment.",
-    )
-    litellm: Optional[LitellmResourceConfig] = Field(
-        default=None, description="LiteLLM resource configuration"
     )
 
 
@@ -864,6 +853,46 @@ class WorkerConfig(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
+
+    class StorageOverrides(BaseModel):
+        """Grouped worker storage overrides."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        experiment_filestore: Optional[Path] = Field(
+            default=None,
+            description="Override experiment data storage path for this worker",
+        )
+        report_filestore: Optional[Path] = Field(
+            default=None,
+            description="Override report storage path for this worker",
+        )
+        keep_only_results: Optional[bool] = Field(
+            default=None,
+            description="Override cleanup-after-experiment policy for this worker",
+        )
+        cleanup_after_trial: Optional[bool] = Field(
+            default=None,
+            description="Override cleanup-after-trial policy for this worker",
+        )
+        copy_results_after_trial: Optional[bool] = Field(
+            default=None,
+            description="Override per-trial result copying policy for this worker",
+        )
+        results_filestore: Optional[Path] = Field(
+            default=None,
+            description="Override copied-results destination for this worker",
+        )
+
+        @field_validator(
+            "experiment_filestore",
+            "report_filestore",
+            "results_filestore",
+            mode="before",
+        )
+        @classmethod
+        def normalize_optional_paths(cls, v):
+            return _normalize_optional_path_override(v)
 
     jobs: int = Field(default=4, ge=1, description="Number of parallel jobs per worker")
     cores_per_job: Optional[int] = Field(
@@ -886,13 +915,9 @@ class WorkerConfig(BaseModel):
         description="Optional base worker name for identification. "
         "Defaults to hostname when not set.",
     )
-    experiment_filestore: Optional[Path] = Field(
+    storage: Optional[StorageOverrides] = Field(
         default=None,
-        description="Override experiment data storage path for workers on different machines",
-    )
-    report_filestore: Optional[Path] = Field(
-        default=None,
-        description="Override report storage path for workers on different machines",
+        description="Optional grouped worker storage overrides.",
     )
     oss_fuzz_path: Optional[Path] = Field(
         default=None,
@@ -901,10 +926,6 @@ class WorkerConfig(BaseModel):
     registry_dir: Optional[Path] = Field(
         default=None,
         description="Override registry directory for workers on different machines",
-    )
-    crs_configs_dir: Optional[Path] = Field(
-        default=None,
-        description="Override CRS configs directory for workers on different machines",
     )
     build_workers: Optional[int] = Field(
         default=None,
@@ -924,22 +945,6 @@ class WorkerConfig(BaseModel):
         default=None,
         description="Override benchmark suites root directory for workers on different machines",
     )
-    keep_only_results: Optional[bool] = Field(
-        default=None,
-        description="Override cleanup after experiment completion for workers",
-    )
-    cleanup_after_trial: Optional[bool] = Field(
-        default=None,
-        description="Override cleanup after each trial for workers",
-    )
-    copy_results_after_trial: Optional[bool] = Field(
-        default=None,
-        description="Override per-trial result copying for workers",
-    )
-    results_filestore: Optional[Path] = Field(
-        default=None,
-        description="Override results destination path for workers (contains experiment-data/ and report-data/)",
-    )
     minimum_disk_size: str = Field(
         default="10GB",
         description="Minimum free disk space required to accept new jobs (e.g., '200GB', '100MB')",
@@ -948,21 +953,6 @@ class WorkerConfig(BaseModel):
         default=60,
         ge=1,
         description="Interval (seconds) between disk space checks when paused",
-    )
-    skip_cpus: Optional[str] = Field(
-        default=None,
-        description="CPUs to exclude from allocation (cpuset format, e.g., '0-3,8-11'). "
-        "These cores are skipped when building the CPU pool.",
-    )
-    shared_cpus: Optional[str] = Field(
-        default=None,
-        description="CPUs shared across all trials without exclusive allocation (cpuset format, e.g., '0-1'). "
-        "These cores are available to every container but not managed by the CPU pool.",
-    )
-    cores: Optional[str] = Field(
-        default=None,
-        description="Restrict CPU pool to these cores only (cpuset format, e.g., '16-47'). "
-        "If not set, all system cores are used. Accepts cpuset format.",
     )
     cpu_tag: Optional[str] = Field(
         default=None,
@@ -981,14 +971,10 @@ class WorkerConfig(BaseModel):
         return normalized
 
     @field_validator(
-        "experiment_filestore",
-        "report_filestore",
         "oss_fuzz_path",
         "registry_dir",
-        "crs_configs_dir",
         "benchmarks_root",
         "benchmark_suites_root",
-        "results_filestore",
         mode="before",
     )
     @classmethod
@@ -1015,10 +1001,10 @@ class CrsComposeConfig(BaseModel):
         description="Deprecated LiteLLM config path override. Ignored for litellm_mode='external'.",
     )
     oss_crs_infra: "CrsComposeInfraConfig" = Field(
-        ...,
+        default_factory=lambda: CrsComposeInfraConfig(shared=True),
         description="Resource configuration for shared oss-crs infra services",
     )
-    crs_services: Dict[str, "CrsComposeServiceConfig"] = Field(
+    services: Dict[str, "CrsComposeServiceConfig"] = Field(
         default_factory=dict,
         description="Per-CRS compose runtime overrides keyed by CRS name",
     )
@@ -1026,37 +1012,52 @@ class CrsComposeConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def normalize_flat_crs_services(cls, data: Any) -> Any:
-        """Support flat crs_compose format with CRS keys at top-level.
-
-        Accepted forms:
-        1) Nested: {oss_crs_infra: {...}, crs_services: {crs-x: {...}}}
-        2) Flat:   {oss_crs_infra: {...}, crs-x: {...}}
-        """
+        """Accept only flat crs_compose service keys at top-level."""
         if not isinstance(data, dict):
             return data
 
         normalized = dict(data)
-        nested = normalized.get("crs_services")
-        if isinstance(nested, dict):
-            return normalized
+        if "crs_services" in normalized:
+            raise ValueError(
+                "Legacy crs_compose.crs_services is not supported. "
+                "Define CRS services as flat keys under crs_compose."
+            )
 
         reserved = {
             "oss_crs_cmd",
             "work_dir",
             "litellm_config_path",
             "oss_crs_infra",
-            "crs_services",
+            "services",
         }
+        existing_services = normalized.get("services")
+        if existing_services is not None and not isinstance(existing_services, dict):
+            raise ValueError("crs_compose.services must be an object when provided")
+
         flat_services = {
             key: value
             for key, value in normalized.items()
             if key not in reserved and isinstance(value, dict)
         }
-        if flat_services:
-            normalized["crs_services"] = flat_services
-            for key in flat_services:
-                normalized.pop(key, None)
+        if existing_services and flat_services:
+            raise ValueError(
+                "Conflicting crs_compose service definitions: use either "
+                "`services` or flat service keys, not both."
+            )
+        normalized["services"] = (
+            existing_services if existing_services else flat_services
+        )
+        for key in flat_services:
+            normalized.pop(key, None)
         return normalized
+
+    @model_validator(mode="after")
+    def validate_services_present(self):
+        if not self.services:
+            raise ValueError(
+                "crs_compose must define at least one flat per-CRS service entry"
+            )
+        return self
 
 
 class CrsComposeServiceConfig(BaseModel):
@@ -1115,33 +1116,35 @@ class EvaluatorConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    jobs: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Default concurrent evaluator jobs used for both build and verify when split overrides are not set",
+    )
+    cores_per_job: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Default CPUs per evaluator job used for both build and verify when split overrides are not set",
+    )
     build_jobs: Optional[int] = Field(
         default=None,
         ge=1,
-        description="Max concurrent build jobs for distributed evaluator",
+        description="Optional advanced override for build job concurrency",
     )
     build_cores_per_job: Optional[int] = Field(
         default=None,
         ge=1,
-        description="CPUs per evaluator build job",
+        description="Optional advanced override for build CPUs per job",
     )
     verify_jobs: Optional[int] = Field(
         default=None,
         ge=1,
-        description="Max concurrent verify jobs for distributed evaluator",
+        description="Optional advanced override for verify job concurrency",
     )
     verify_cores_per_job: Optional[int] = Field(
         default=None,
         ge=1,
-        description="CPUs per evaluator verify job",
-    )
-    cores: Optional[str] = Field(
-        default=None,
-        description="Restrict evaluator CPU pool to these cores only (cpuset format)",
-    )
-    skip_cpus: Optional[str] = Field(
-        default=None,
-        description="CPUs to exclude from evaluator pool (cpuset format)",
+        description="Optional advanced override for verify CPUs per job",
     )
     idle_timeout: Optional[int] = Field(
         default=None,
@@ -1154,11 +1157,110 @@ class EvaluatorConfig(BaseModel):
     )
 
 
+class ExperimentPovInputs(BaseModel):
+    """POV input settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: Optional[bool] = Field(
+        default=False,
+        description="Whether CRSBench should stage explicit POV inputs when available.",
+    )
+    max_variants_per_cpv: Optional[int] = Field(
+        default=1,
+        ge=1,
+        description="Maximum POV variants per CPV when POV inputs are enabled. "
+        "None means all available variants.",
+    )
+
+
+class ExperimentSarifInputs(BaseModel):
+    """SARIF hint input settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: Optional[bool] = Field(
+        default=False,
+        description="Whether CRSBench should require and stage SARIF bug-candidate hints.",
+    )
+    level: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=5,
+        description="SARIF hint level when enabled (1=vague, 5=detailed).",
+    )
+
+
+class ExperimentSeedInputs(BaseModel):
+    """Seed input settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: Optional[bool] = Field(
+        default=False,
+        description="Whether CRSBench should require and stage seed corpus input.",
+    )
+    max_time: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Maximum relative time (seconds) for seed corpus files.",
+    )
+
+
+class ExperimentDiffInputs(BaseModel):
+    """Diff input settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: Optional[bool] = Field(
+        default=False,
+        description="Whether CRSBench should require and stage explicit delta diff input.",
+    )
+
+
+class ExperimentInputsConfig(BaseModel):
+    """Structured explicit CRS runtime inputs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pov: ExperimentPovInputs = Field(default_factory=ExperimentPovInputs)
+    sarif: ExperimentSarifInputs = Field(default_factory=ExperimentSarifInputs)
+    seed: ExperimentSeedInputs = Field(default_factory=ExperimentSeedInputs)
+    diff: ExperimentDiffInputs = Field(default_factory=ExperimentDiffInputs)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_seed_key(cls, data: Any):
+        """Normalize presence-based explicit inputs."""
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        for key in ("pov", "sarif", "seed", "diff"):
+            if key not in normalized:
+                continue
+            value = normalized.get(key)
+            if isinstance(value, bool):
+                normalized[key] = {"enabled": value}
+                continue
+            if isinstance(value, dict):
+                section = dict(value)
+                if "enabled" not in section:
+                    section["enabled"] = True
+                normalized[key] = section
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_inputs(self):
+        """Validate explicit input configuration consistency."""
+        if self.sarif.enabled and self.sarif.level is None:
+            raise ValueError("inputs.sarif requires level when enabled")
+        return self
+
+
 class ExperimentConfig(BaseModel):
     """Experiment configuration schema."""
 
     model_config = ConfigDict(extra="forbid")
-
     description: Optional[str] = Field(
         default=None,
         description="Human-readable description of this experiment run",
@@ -1170,14 +1272,14 @@ class ExperimentConfig(BaseModel):
     experiment: str = Field(
         ..., description="Unique identifier for this experiment run"
     )
+    task: Optional[Literal["bugfinding", "bugfixing"]] = Field(
+        default=None,
+        description="Experiment task type. Allowed values: 'bugfinding' or 'bugfixing'.",
+    )
     trials: int = Field(..., ge=1, description="Number of trials (must be >= 1)")
     mode: EvaluationMode = Field(
         ...,
         description="Evaluation mode: 'delta', 'full', 'all' (run all available), or 'auto' (single mode, delta preferred)",
-    )
-    adapter: AdapterType = Field(
-        default=AdapterType.OSS_CRS,
-        description="CRS adapter type (only oss-crs supported)",
     )
     max_total_time: int = Field(
         ..., ge=1, description="Maximum time in seconds per trial (must be >= 1)"
@@ -1197,8 +1299,10 @@ class ExperimentConfig(BaseModel):
         ge=1,
         description="Maximum time in seconds for POV verification phase (default: 7200 = 2 hours)",
     )
-    difficulty_level: int = Field(
-        ..., ge=0, le=4, description="Difficulty level controlling assistance (0-4)"
+    inputs: ExperimentInputsConfig = Field(
+        default_factory=ExperimentInputsConfig,
+        description="Explicit CRS runtime inputs (pov/sarif/seed/diff). "
+        "Defaults to all disabled when omitted.",
     )
     experiment_filestore: Path = Field(
         ..., description="Directory path for experiment data storage"
@@ -1206,7 +1310,6 @@ class ExperimentConfig(BaseModel):
     report_filestore: Path = Field(
         ..., description="Directory path for HTML reports and summary data"
     )
-    crses: List[str] = Field(..., description="List of CRS implementations to evaluate")
     sanitizers: List[Sanitizer] = Field(
         default=[Sanitizer.ADDRESS],
         description="List of sanitizers to use (address, memory, undefined). Each creates separate trials.",
@@ -1244,25 +1347,6 @@ class ExperimentConfig(BaseModel):
         default=Path("oss-crs/registry"),
         description="Path to CRS registry directory (default: oss-crs/registry)",
     )
-    crs_configs_dir: Path = Field(
-        default=Path("crses/configs"),
-        description="Path to CRS configs directory (default: crses/configs)",
-    )
-    hints_enabled: bool = Field(
-        default=False, description="Enable hints for CRS evaluation"
-    )
-    hint_sarif_level: Optional[int] = Field(
-        default=None,
-        ge=1,
-        le=5,
-        description="SARIF hint level (1=vague, 5=detailed). None disables SARIF hints.",
-    )
-    hint_corpus_level: Optional[int] = Field(
-        default=None,
-        ge=1,
-        le=5,
-        description="Pre-fuzz corpus level (1=minimal, 5=comprehensive). None disables corpus. [PLACEHOLDER - not yet implemented]",
-    )
     litellm_mode: Optional[Literal["external", "self_hosted"]] = Field(
         default="external",
         description="LiteLLM mode: 'external' uses an external LiteLLM endpoint "
@@ -1283,6 +1367,11 @@ class ExperimentConfig(BaseModel):
         "Requires canonical runtime envs (CRSBENCH_LLM_*). "
         "Set to false to explicitly disable. "
         "Generates llm-usage.json with per-trial cost and token metrics.",
+    )
+    litellm_cost_budget: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="Optional LiteLLM cost budget in USD for per-trial virtual keys.",
     )
     llm_accounting_settle_seconds: int = Field(
         default=60,
@@ -1351,13 +1440,6 @@ class ExperimentConfig(BaseModel):
         description="Timeout in seconds for each single POV verification (default: 180 = 3 minutes). "
         "This is the time allowed to run the harness binary with a POV input to check if it crashes.",
     )
-    max_pov_variants_per_cpv: Optional[int] = Field(
-        default=1,
-        ge=1,
-        description="For bug-fixing CRS input staging, maximum POV variants per CPV to provide via --pov-dir. "
-        "Set to 1 for a single POV per CPV (default), N for multiple variants per CPV, "
-        "or null to include all available variants.",
-    )
     patch_verify_variants: bool = Field(
         default=False,
         description="For bug-fixing patch verification, whether to verify patches against all benchmark POV variants "
@@ -1416,17 +1498,6 @@ class ExperimentConfig(BaseModel):
         "'stack-based' (by crash signature from sanitizer stack trace), "
         "'status-based' (one per status type), 'none' (keep all).",
     )
-    seed_corpus_enabled: bool = Field(
-        default=False,
-        description="Enable seed corpus from previous experiment runs. "
-        "Requires corpus to be imported via 'crsbench benchmark seed-import'.",
-    )
-    seed_corpus_max_time: Optional[int] = Field(
-        default=None,
-        ge=1,
-        description="Maximum relative time (seconds) for seed corpus files. "
-        "Only files discovered within this time are used. None uses all available seeds.",
-    )
 
     @field_validator("experiment")
     @classmethod
@@ -1436,24 +1507,232 @@ class ExperimentConfig(BaseModel):
             raise ValueError("Experiment name cannot be empty")
         return v.strip()
 
-    @field_validator("crses")
+    @model_validator(mode="before")
     @classmethod
-    def validate_crses(cls, v):
-        """Validate CRS list."""
-        if not v:
-            raise ValueError("At least one CRS must be specified")
+    def normalize_experiment_grouping(cls, data: Any):
+        """Support grouped config keys under `experiment`/`runtime`/`storage`.
 
-        # Check for empty strings
-        cleaned = [crs.strip() for crs in v if crs and crs.strip()]
-        if len(cleaned) != len(v):
-            raise ValueError("crses list contains empty CRS names")
+        Accepted grouped form:
+            experiment:
+              name: <str>
+              mode: <str>
+              benchmark_suite: <str>  # or benchmarks: [...]
+              sanitizers: [...]
+            runtime:
+              trials: <int>
+              skip_litellm: <bool>
+              timeouts:
+                total: <int>
+                build: <int>
+                run: <int>
+                verify: <int>
+                per_pov_verify: <int>
+              redis:
+                host: <str|none>
+              litellm:
+                mode: <str|null>
+                tracking_enabled: <bool>
+              inputs: <dict>
+              patch_verify_variants: <bool>
+            storage:
+              experiment_filestore: <path>
+              report_filestore: <path>
+              keep_only_results: <bool>
+              cleanup_after_trial: <bool>
+              copy_results_after_trial: <bool>
+              results_filestore: <path>
 
-        # Check for duplicates
-        if len(cleaned) != len(set(cleaned)):
-            duplicates = [crs for crs in cleaned if cleaned.count(crs) > 1]
-            raise ValueError(f"Duplicate CRS names found: {', '.join(set(duplicates))}")
+        Top-level keys remain supported. When both grouped and top-level values
+        are provided, they must match.
+        """
+        if not isinstance(data, dict):
+            return data
 
-        return cleaned
+        normalized = dict(data)
+        grouped: dict[str, Any] = {}
+        experiment_field = normalized.get("experiment")
+        if isinstance(experiment_field, dict):
+            grouped = dict(experiment_field)
+            name = grouped.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(
+                    "Grouped experiment config requires 'experiment.name' as a non-empty string"
+                )
+            normalized["experiment"] = name.strip()
+
+            experiment_groupable_keys = (
+                "task",
+                "mode",
+                "benchmark_suite",
+                "benchmarks",
+                "sanitizers",
+                "only_cpv_harnesses",
+            )
+            for grouped_key in experiment_groupable_keys:
+                if grouped_key not in grouped:
+                    continue
+                grouped_value = grouped[grouped_key]
+                if grouped_key in normalized and normalized[grouped_key] is not None:
+                    if normalized[grouped_key] != grouped_value:
+                        raise ValueError(
+                            f"Conflicting values for '{grouped_key}' between top-level "
+                            "and grouped 'experiment' block"
+                        )
+                    continue
+                normalized[grouped_key] = grouped_value
+
+        runtime = normalized.get("runtime")
+        if isinstance(runtime, dict):
+            runtime_groupable_keys = (
+                "trials",
+                "inputs",
+                "max_total_time",
+                "build_timeout",
+                "run_timeout",
+                "verify_timeout",
+                "per_pov_verify_timeout",
+                "redis_host",
+                "litellm_mode",
+                "llm_tracking_enabled",
+                "skip_litellm",
+                "patch_verify_variants",
+                "source_mode",
+                "snapshot_period",
+                "only_cpv_harnesses",
+                "pov_early_stop",
+                "coverage_enabled",
+                "coverage_saturation_time",
+                "coverage_early_stop",
+            )
+            for grouped_key in runtime_groupable_keys:
+                if grouped_key not in runtime:
+                    continue
+                grouped_value = runtime[grouped_key]
+                # Grouped runtime redis is authoritative over top-level compatibility key.
+                if grouped_key == "redis_host":
+                    normalized["redis_host"] = grouped_value
+                    continue
+                if grouped_key in normalized and normalized[grouped_key] is not None:
+                    if normalized[grouped_key] != grouped_value:
+                        raise ValueError(
+                            f"Conflicting values for '{grouped_key}' between top-level "
+                            "and grouped 'runtime' block"
+                        )
+                    continue
+                normalized[grouped_key] = grouped_value
+
+            runtime_timeouts = runtime.get("timeouts")
+            if isinstance(runtime_timeouts, dict):
+                timeout_map = {
+                    "total": "max_total_time",
+                    "build": "build_timeout",
+                    "run": "run_timeout",
+                    "verify": "verify_timeout",
+                    "per_pov_verify": "per_pov_verify_timeout",
+                }
+                for src_key, dst_key in timeout_map.items():
+                    if src_key not in runtime_timeouts:
+                        continue
+                    grouped_value = runtime_timeouts[src_key]
+                    if dst_key in normalized and normalized[dst_key] is not None:
+                        if normalized[dst_key] != grouped_value:
+                            raise ValueError(
+                                f"Conflicting values for '{dst_key}' between top-level "
+                                "and grouped 'runtime.timeouts' block"
+                            )
+                        continue
+                    normalized[dst_key] = grouped_value
+
+            runtime_redis = runtime.get("redis")
+            if isinstance(runtime_redis, dict) and "host" in runtime_redis:
+                # Most specific grouped redis value wins for compatibility.
+                normalized["redis_host"] = runtime_redis["host"]
+
+            runtime_litellm = runtime.get("litellm")
+            if isinstance(runtime_litellm, dict):
+                litellm_map = {
+                    "mode": "litellm_mode",
+                    "tracking_enabled": "llm_tracking_enabled",
+                    "cost_budget": "litellm_cost_budget",
+                    "skip": "skip_litellm",
+                }
+                for src_key, dst_key in litellm_map.items():
+                    if src_key not in runtime_litellm:
+                        continue
+                    grouped_value = runtime_litellm[src_key]
+                    if dst_key in normalized and normalized[dst_key] is not None:
+                        if normalized[dst_key] != grouped_value:
+                            raise ValueError(
+                                f"Conflicting values for '{dst_key}' between top-level "
+                                "and grouped 'runtime.litellm' block"
+                            )
+                        continue
+                    normalized[dst_key] = grouped_value
+
+            runtime_inc_build = runtime.get("inc_build")
+            if isinstance(runtime_inc_build, dict):
+                inc_build_map = {
+                    "policy": "inc_image_policy",
+                    "registry": "inc_image_registry",
+                    "max_pull_bytes": "inc_image_max_pull_bytes",
+                    "pull_timeout_sec": "inc_image_pull_timeout_sec",
+                }
+                for src_key, dst_key in inc_build_map.items():
+                    if src_key not in runtime_inc_build:
+                        continue
+                    grouped_value = runtime_inc_build[src_key]
+                    if dst_key in normalized and normalized[dst_key] is not None:
+                        if normalized[dst_key] != grouped_value:
+                            raise ValueError(
+                                f"Conflicting values for '{dst_key}' between top-level "
+                                "and grouped 'runtime.inc_build' block"
+                            )
+                        continue
+                    normalized[dst_key] = grouped_value
+
+        storage = normalized.get("storage")
+        if isinstance(storage, dict):
+            storage_groupable_keys = (
+                "experiment_filestore",
+                "report_filestore",
+                "keep_only_results",
+                "cleanup_after_trial",
+                "copy_results_after_trial",
+                "results_filestore",
+            )
+            for grouped_key in storage_groupable_keys:
+                if grouped_key not in storage:
+                    continue
+                grouped_value = storage[grouped_key]
+                if grouped_key in normalized and normalized[grouped_key] is not None:
+                    if normalized[grouped_key] != grouped_value:
+                        raise ValueError(
+                            f"Conflicting values for '{grouped_key}' between top-level "
+                            "and grouped 'storage' block"
+                        )
+                    continue
+                normalized[grouped_key] = grouped_value
+
+        # Keep temporary grouping blocks out of strict model fields.
+        normalized.pop("runtime", None)
+        normalized.pop("storage", None)
+
+        return normalized
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_inputs_present(cls, data: Any):
+        """Normalize runtime.inputs contract; default to all-disabled when omitted."""
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        runtime = normalized.get("runtime")
+        if normalized.get("inputs") is None and isinstance(runtime, dict):
+            if runtime.get("inputs") is not None:
+                normalized["inputs"] = runtime.get("inputs")
+        if normalized.get("inputs") is None:
+            normalized["inputs"] = {}
+        return normalized
 
     @field_validator("sanitizers")
     @classmethod
@@ -1567,37 +1846,12 @@ class ExperimentConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def check_crs_compose_service_keys(self):
-        """Validate that crs_compose.crs_services keys match configured CRS names."""
+    def check_crs_compose_present(self):
+        """Require compose CRS services as single source of CRS truth."""
         if not self.crs_compose:
-            return self
-
-        valid = set(self.crses)
-        service_keys = set(self.crs_compose.crs_services.keys())
-
-        unknown = sorted(k for k in service_keys if k not in valid)
-        if unknown:
-            raise ValueError(
-                f"Unknown CRS service override key(s): {', '.join(unknown)}. "
-                f"Valid CRS names: {', '.join(sorted(valid))}"
-            )
-
-        missing = sorted(k for k in valid if k not in service_keys)
-        if missing:
-            raise ValueError(
-                f"Missing crs_compose.crs_services key(s): {', '.join(missing)}. "
-                f"Must define one service override per CRS in 'crses'."
-            )
-        return self
-
-    @model_validator(mode="after")
-    def check_hints_configuration(self):
-        """Validate hint configuration consistency."""
-        if self.hints_enabled:
-            if self.hint_sarif_level is None and self.hint_corpus_level is None:
-                raise ValueError(
-                    "hints_enabled=True requires at least one of hint_sarif_level or hint_corpus_level to be set"
-                )
+            raise ValueError("crs_compose is required")
+        if not self.crs_compose.services:
+            raise ValueError("crs_compose must contain at least one CRS service entry")
         return self
 
     @model_validator(mode="after")
@@ -1611,6 +1865,12 @@ class ExperimentConfig(BaseModel):
                 f"{self.build_timeout} + {self.run_timeout} + {self.verify_timeout})"
             )
         return self
+
+    def get_crs_registry_ids(self) -> List[str]:
+        """Resolve CRS registry IDs from flat crs_compose service keys."""
+        if self.crs_compose is None:
+            return []
+        return list(self.crs_compose.services.keys())
 
     @model_validator(mode="after")
     def check_results_filestore_configuration(self):
@@ -1641,21 +1901,8 @@ class ExperimentConfig(BaseModel):
                 "Use litellm_mode='external'."
             )
 
-        if (
-            "litellm_mode" not in self.model_fields_set
-            and "llm_tracking_enabled" not in self.model_fields_set
-        ):
-            return self
-
-        runtime_env = resolve_litellm_runtime_env(self.litellm_mode)
-        errors = required_env_errors_for_mode(
-            runtime_env, tracking_enabled=self.llm_tracking_enabled
-        )
-        if errors:
-            joined = "; ".join(errors)
-            raise ValueError(
-                f"Missing required LiteLLM runtime inputs for litellm_mode='{self.litellm_mode}': {joined}"
-            )
+        # Runtime environment secrets are validated during execution preflight,
+        # not schema parsing, so configs remain portable across machines.
         return self
 
     @model_validator(mode="after")
@@ -1672,7 +1919,6 @@ class ExperimentConfig(BaseModel):
             "benchmarks_root",
             "benchmark_suites_root",
             "registry_dir",
-            "crs_configs_dir",
             "oss_fuzz_path",
         ]
         for field_name in path_fields:

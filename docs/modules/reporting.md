@@ -11,26 +11,11 @@ Generate comprehensive reports from trial snapshots after experiment completion,
 - **Resource Analysis**: Understand LLM token usage and cost patterns
 - **Comparative Analysis**: Compare different CRS implementations
 
-## Usage
+## Operational Surface
 
-### CLI Commands
-
-```bash
-# Generate report for an experiment
-crsbench report --experiment test-experiment --output ./reports
-
-# Generate JSON reports only
-crsbench report --experiment test-experiment --format json
-
-# Generate HTML reports only
-crsbench report --experiment test-experiment --format html
-
-# Validate experiment completeness only
-crsbench report --experiment test-experiment --validate-only
-
-# Generate report for a single trial
-crsbench report --trial ./experiment_filestore/test-exp/json-c__ensemble-c/trial-1
-```
+User-facing report-generation workflows belong in the experiment guides and CLI
+reference. This page records the reporting module's public surface and data
+layout.
 
 ### Python API
 
@@ -143,4 +128,5 @@ Aggregate analysis across all trials:
 
 ## Documentation
 
-See [report generation design](../design/reporting/report-generation.md).
+- [Report generation design](../design/reporting/report-generation.md)
+- [Experiment guides](../guides/experiments/README.md)

@@ -1,5 +1,8 @@
 # Migration Validation Design
 
+Audience: contributors changing migration validation guarantees or issue taxonomy.
+Scope: validation contract for Team-Atlanta to RFC migration output, not CLI workflow details.
+
 ## Overview
 
 This document describes validation functionality for the migration module to verify that Team-Atlanta to RFC format conversion was successful by comparing source and target directories.
@@ -26,25 +29,11 @@ Compare source Team-Atlanta project with migrated RFC benchmark:
 - Source: `.aixcc/povs/{harness}/{cpv}` → Target: `.aixcc/{harness}/{cpv}/blobs/pov_0.blob`
 - Source: `.aixcc/crash_logs/{harness}/{cpv}.log` → Target: `.aixcc/{harness}/{cpv}/logs/pov_0.log`
 
-## Implementation
+## Implementation Contract
 
-### Module: `crsbench/migration/migration_validator.py`
-
-#### Main Function
-
-```python
-def validate_source_target(source_dir: Path, target_dir: Path) -> MigrationValidationResult:
-    """
-    Validate migration by comparing source with target.
-
-    Args:
-        source_dir: Path to Team-Atlanta source project
-        target_dir: Path to migrated RFC benchmark
-
-    Returns:
-        MigrationValidationResult with validation status and issues
-    """
-```
+The concrete validator implementation lives in
+`crsbench/migration/migration_validator.py`. This document defines the
+validation guarantees and issue taxonomy, not the exact callable signatures.
 
 #### Validation Codes
 
@@ -60,40 +49,11 @@ def validate_source_target(source_dir: Path, target_dir: Path) -> MigrationValid
 | `HASH_MISMATCH` | warning | File hash (SHA256) differs |
 | `SOURCE_FILE_NOT_FOUND` | warning | Source file missing |
 
-## Usage
+## Operational Boundary
 
-```bash
-# Validate all projects
-python -m crsbench.migration.migration_validator \
-  --source-dir /path/to/team-atlanta/projects \
-  --target-dir /path/to/benchmarks
-
-# Validate specific projects
-python -m crsbench.migration.migration_validator \
-  --source-dir /path/to/team-atlanta/projects \
-  --target-dir /path/to/benchmarks \
-  --projects curl-delta-04,libxml2-delta-03
-
-# Verbose output
-python -m crsbench.migration.migration_validator \
-  --source-dir /path/to/team-atlanta/projects \
-  --target-dir /path/to/benchmarks \
-  --verbose
-```
-
-### Example Workflow
-
-```bash
-# 1. Run migration
-python crsbench/migration/atlanta_to_rfc.py \
-  --source-dir /path/to/team-atlanta/projects \
-  --target-dir /path/to/benchmarks
-
-# 2. Validate migrated projects
-python -m crsbench.migration.migration_validator \
-  --source-dir /path/to/team-atlanta/projects \
-  --target-dir /path/to/benchmarks
-```
+Runnable migration-validation commands belong in contributor-facing migration
+workflows. This design page records what the validator must compare and what
+issue codes it must emit.
 
 ## Error Handling
 
@@ -102,14 +62,11 @@ python -m crsbench.migration.migration_validator \
 - **Missing target files**: Collect all issues before returning
 - **Hash mismatch**: Report as warning (uses SHA256)
 
-## Testing
+## Validation Coverage
 
-Test cases in `tests/test_migration_validator.py`:
-
-1. Missing source directory returns error
-2. Missing source config returns error
-3. Valid migration passes validation
-4. Missing root files detected
-5. Missing patch/blob/log files detected
-6. File size mismatches detected
-7. Missing source files generate warnings
+Regression coverage should verify:
+- missing source/config preconditions fail fast
+- valid migrations pass without issues
+- missing root or artifact files are reported
+- content mismatches are surfaced with the expected severity
+- missing source-side comparison material degrades to warnings where intended

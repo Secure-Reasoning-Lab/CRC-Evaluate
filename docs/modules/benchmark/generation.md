@@ -1,24 +1,34 @@
 # Benchmark Generation
 
-This module will provide tools to **create new benchmarks** from various vulnerability sources.
+Module scope: future benchmark-generation capabilities that create CRSBench
+benchmark structures from upstream vulnerability sources.
 
-## Status
+## Current State
 
-**Not yet implemented** - Placeholder for future development.
+This module area is reserved for future generation workflows. CRSBench does not
+currently expose a mature benchmark-generation subsystem here.
 
-## Scope
+## Intended Responsibility
 
-This page is intentionally concise. Detailed design and future-generation plans are maintained in:
-- `docs/design/benchmark/benchmark-lifecycle.md`
+When implemented, benchmark generation should cover:
+- source ingestion from supported vulnerability inputs
+- normalization into CRSBench benchmark structure
+- handoff into packaging/validation workflows for release readiness
 
-### Planned Capability Summary
+## Out of Scope
 
-- Source adapters for vulnerability feeds and manual input
-- Normalization into CRSBench benchmark structure
-- Generator orchestration that outputs packaging-ready benchmark directories
-- Future CLI entrypoint under `crsbench benchmark generate ...`
+This page does not define:
+- contributor benchmark-authoring workflow
+- benchmark packaging contract
+- runtime benchmark loading behavior
 
-## Related Modules
+## Canonical References
 
-- `../packaging/` - Package generated benchmarks for distribution
-- `../runtime/` - Load packaged benchmarks for evaluation
+- [Benchmark Lifecycle Design](../../design/benchmark/benchmark-lifecycle.md)
+- [Benchmark Developer Guide](../../contributors/benchmark-developer-guide.md)
+- [Benchmark RFC](../../RFC.md)
+
+## Implementation Pointers
+
+- future benchmark-generation entrypoints are expected to live under the
+  benchmark CLI surface when that subsystem is implemented

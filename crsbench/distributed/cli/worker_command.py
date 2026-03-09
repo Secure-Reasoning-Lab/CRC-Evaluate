@@ -42,7 +42,7 @@ Examples:
   %(prog)s --experiment-config my-experiment.yaml --continuous
 
   # With CPU affinity
-  %(prog)s --continuous --cores 16-47
+  %(prog)s --continuous --cpuset 16-47
         """,
     )
 
@@ -91,21 +91,15 @@ Examples:
     )
 
     worker_parser.add_argument(
-        "--no-cpuset",
-        action="store_true",
-        help="Disable CPU affinity and cgroup pinning",
-    )
-
-    worker_parser.add_argument(
-        "--cores",
+        "--cpuset",
         type=str,
         default=None,
-        metavar="CORES",
+        metavar="CPUSET",
         help="CPU cores for worker pool. Integer count (e.g., '32') or cpuset range (e.g., '16-47')",
     )
 
     worker_parser.add_argument(
-        "--skip-cpus",
+        "--skip-cpuset",
         type=str,
         default=None,
         metavar="CPUSET",
@@ -145,9 +139,9 @@ def run_worker(args: argparse.Namespace) -> int:
     os.environ["CRSBENCH_LOG_LEVEL"] = log_level
     logger = get_logger(__name__)
 
-    use_cpuset = not getattr(args, "no_cpuset", False)
-    cores = getattr(args, "cores", None)
-    skip_cpus = getattr(args, "skip_cpus", None)
+    cores = getattr(args, "cpuset", None)
+    skip_cpus = getattr(args, "skip_cpuset", None)
+    use_cpuset = cores is not None or skip_cpus is not None
     cpu_tag = getattr(args, "cpu_tag", None)
     jobs_override = getattr(args, "jobs", None)
     cores_per_job_override = getattr(args, "cores_per_job", None)
@@ -267,10 +261,6 @@ def run_worker(args: argparse.Namespace) -> int:
     minimum_disk_size = worker_config.minimum_disk_size if worker_config else "10GB"
     disk_check_interval = worker_config.disk_check_interval if worker_config else 60
 
-    if cores is None and worker_config:
-        cores = worker_config.cores
-    if skip_cpus is None and worker_config:
-        skip_cpus = worker_config.skip_cpus
     if cpu_tag is None:
         worker_cpu_tag = normalize_cpu_tag(
             worker_config.cpu_tag if worker_config else None

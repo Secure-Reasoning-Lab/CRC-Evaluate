@@ -1,0 +1,38 @@
+experiment:
+  name: sanity-test-crs-claude-code-8c-2h
+  task: bugfixing
+  benchmark_suite: sanity
+  mode: delta
+runtime:
+  trials: 1
+  max_total_time: 39600
+  build_timeout: 14400
+  run_timeout: 7200
+  verify_timeout: 14400
+  per_pov_verify_timeout: 7200
+  redis_host: localhost
+  inputs:
+    pov:
+      max_variants_per_cpv: 1
+    sarif:
+      level: 3
+    seed: {}
+    diff: {}
+  litellm:
+    cost_budget: 10
+    mode: external
+    tracking_enabled: true
+storage:
+  experiment_filestore: /home/dongkwan/crsbench_eval_patch/experiment-data/sanity-test-crs-claude-code-8c-2h
+  report_filestore: /home/dongkwan/crsbench_eval_patch/report-data/sanity-test-crs-claude-code-8c-2h
+crs_compose:
+  crs-claude-code:
+    num_cores: 8
+resources:
+  cores_per_trial: 8
+worker:
+  cores_per_job: 8
+  storage:
+    cleanup_after_trial: false
+evaluator:
+  cores_per_job: 8

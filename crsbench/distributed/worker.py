@@ -26,7 +26,6 @@ from crsbench.distributed.common import (
     discover_registered_experiments,
     normalize_cpu_tag,
     normalize_redis_host,
-    resolve_cli_or_first_metadata,
     validate_optional_int_override,
 )
 from crsbench.distributed.queue import REDIS_AVAILABLE
@@ -666,12 +665,6 @@ def run_worker_configless(
     except RuntimeError as exc:
         logger.error(str(exc))
         return 1
-    metadata_worker_cores = [
-        reg.worker_cores for reg in ordered_regs if reg.worker_cores is not None
-    ]
-    metadata_worker_skip = [
-        reg.worker_skip_cpus for reg in ordered_regs if reg.worker_skip_cpus is not None
-    ]
     metadata_worker_cpu_tags: list[str] = []
     for reg in ordered_regs:
         candidate_tag = normalize_cpu_tag(reg.worker_cpu_tag) or normalize_cpu_tag(
@@ -693,16 +686,8 @@ def run_worker_configless(
             else DEFAULT_TRIAL_CORES_PER_JOB
         )
     )
-    resolved_cores = resolve_cli_or_first_metadata(
-        cli_value=cores,
-        metadata_values=metadata_worker_cores,
-        field_name="worker.cores",
-    )
-    resolved_skip_cpus = resolve_cli_or_first_metadata(
-        cli_value=skip_cpus,
-        metadata_values=metadata_worker_skip,
-        field_name="worker.skip_cpus",
-    )
+    resolved_cpuset = cores
+    resolved_skip_cpuset = skip_cpus
     resolved_cpu_tag: Optional[str]
     if cpu_tag is not None:
         resolved_cpu_tag = normalize_cpu_tag(cpu_tag)
@@ -717,11 +702,81 @@ def run_worker_configless(
         resolved_cpu_tag = distinct_cpu_tags[0] if distinct_cpu_tags else None
     logger.info(f"Discovered {len(experiments)} experiment(s), queues: {queue_names}")
     logger.info(
-        f"Worker resource profile (CLI > metadata > default): jobs={resolved_jobs}, "
+        f"Worker resource profile (CLI > metadata > default for jobs/cores): jobs={resolved_jobs}, "
         f"cores_per_job={resolved_cores_per_job}, "
-        f"cores={resolved_cores}, skip_cpus={resolved_skip_cpus}, "
+        f"cpuset={resolved_cpuset}, skip_cpuset={resolved_skip_cpuset} (CLI-owned), "
         f"cpu_tag={resolved_cpu_tag}"
     )
+
+    warned_incompatible: set[tuple[str, str]] = set()
+
+    def _warn_incompatible_once(experiment_name: str, reason: str) -> None:
+        key = (experiment_name, reason)
+        if key in warned_incompatible:
+            return
+        warned_incompatible.add(key)
+        logger.warning(
+            "Skipping experiment due to incompatible worker resource profile: "
+            f"{experiment_name} ({reason})"
+        )
+
+    def _is_refresh_compatible(experiment_name: str, reg) -> bool:
+        try:
+            reg_jobs_values = collect_validated_int_metadata(
+                registrations=[reg],
+                attr_name="worker_jobs",
+                field_name="worker.jobs",
+                minimum=1,
+            )
+            reg_cores_per_job_values = collect_validated_int_metadata(
+                registrations=[reg],
+                attr_name="worker_cores_per_job",
+                field_name="worker.cores_per_job",
+                minimum=1,
+            )
+            if not reg_cores_per_job_values:
+                reg_cores_per_job_values = collect_validated_int_metadata(
+                    registrations=[reg],
+                    attr_name="cores_per_trial",
+                    field_name="resources.cores_per_trial",
+                    minimum=1,
+                )
+        except RuntimeError as exc:
+            _warn_incompatible_once(experiment_name, str(exc))
+            return False
+
+        required_jobs = reg_jobs_values[0] if reg_jobs_values else 1
+        if required_jobs > resolved_jobs:
+            _warn_incompatible_once(
+                experiment_name,
+                f"requires worker.jobs={required_jobs} but worker runs with jobs={resolved_jobs}",
+            )
+            return False
+
+        required_cores_per_job = (
+            reg_cores_per_job_values[0]
+            if reg_cores_per_job_values
+            else DEFAULT_TRIAL_CORES_PER_JOB
+        )
+        if required_cores_per_job > resolved_cores_per_job:
+            _warn_incompatible_once(
+                experiment_name,
+                "requires worker.cores_per_job="
+                f"{required_cores_per_job} but worker runs with cores_per_job={resolved_cores_per_job}",
+            )
+            return False
+
+        reg_cpu_tag = normalize_cpu_tag(reg.worker_cpu_tag) or normalize_cpu_tag(
+            reg.cpu_tag
+        )
+        if reg_cpu_tag is not None and reg_cpu_tag != resolved_cpu_tag:
+            _warn_incompatible_once(
+                experiment_name,
+                f"requires cpu_tag={reg_cpu_tag!r} but worker runs with cpu_tag={resolved_cpu_tag!r}",
+            )
+            return False
+
+        return True
 
     def _refresh_trial_queues(redis_conn):
         from crsbench.distributed.registry import RegistryClient
@@ -731,7 +786,11 @@ def run_worker_configless(
         if not refreshed:
             return [], []
         refreshed_trial_queues = sorted(
-            {refreshed[name].trial_queue for name in sorted(refreshed)}
+            {
+                refreshed[name].trial_queue
+                for name in sorted(refreshed)
+                if _is_refresh_compatible(name, refreshed[name])
+            }
         )
         return refreshed_trial_queues, []
 
@@ -750,8 +809,8 @@ def run_worker_configless(
         job_runner=_trial_job_runner,
         use_cpuset=use_cpuset,
         use_cgroups=use_cpuset,
-        cores=resolved_cores,
-        skip_cpus=resolved_skip_cpus,
+        cores=resolved_cpuset,
+        skip_cpus=resolved_skip_cpuset,
         minimum_disk_size=minimum_disk_size,
         disk_check_interval=disk_check_interval,
         continuous=continuous,

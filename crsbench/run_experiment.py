@@ -46,7 +46,7 @@ from crsbench.distributed.jobs import (
     get_crs_type,
 )
 from crsbench.evaluation.cleanup import cleanup_trial_directory
-from crsbench.evaluation.results import TrialResult
+from crsbench.evaluation.results import TrialMetadata, TrialResult
 from crsbench.evaluation.trial_paths import (
     experiment_dir as resolve_experiment_dir,
 )
@@ -58,7 +58,6 @@ from crsbench.utils.benchmark_utils import (
     filter_benchmarks_by_mode,
     get_available_modes_for_benchmark,
 )
-from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.logger import configure_logger, get_logger
 from crsbench.validation.ground_truth_paths import GroundTruthPaths
 from crsbench.validation.meta_adapter import MetaYamlAdapter
@@ -684,19 +683,17 @@ def _filter_matched_cpvs(
 
 def generate_trial_matrix(
     benchmark_harnesses: List["BenchmarkHarness"],
-    crses: List[str],
+    oss_crs_registry: List[str],
     config,
     registry_dir: Path,
-    crs_configs_dir: Path,
 ) -> List[Trial]:
     """Generate all trial combinations from BenchmarkHarness objects, CRSes, and trials.
 
     Args:
         benchmark_harnesses: List of BenchmarkHarness objects
-        crses: List of CRS identifiers
+        oss_crs_registry: List of CRS registry identifiers
         config: Experiment configuration with trials count and mode
         registry_dir: Path to CRS registry directory
-        crs_configs_dir: Path to CRS configs directory
 
     Returns:
         List of Trial namedtuples with mode information
@@ -704,10 +701,9 @@ def generate_trial_matrix(
     trials = []
     config_mode = config.mode.value  # Get string value from enum
 
-    for crs in crses:
-        # Detect CRS type
-        registry_name = get_crs_registry_name(crs, crs_configs_dir)
-        crs_type = get_crs_type(registry_name, registry_dir)
+    for crs in oss_crs_registry:
+        # CRS entries are resolved directly from registry.
+        crs_type = get_crs_type(crs, registry_dir)
         is_bug_fixing = crs_type == "bug-fixing"
 
         for benchmark_harness in benchmark_harnesses:
@@ -813,7 +809,7 @@ def generate_trial_matrix(
                             )
 
     logger.info(
-        f"Generated {len(trials)} trials: {len(crses)} CRSes × "
+        f"Generated {len(trials)} trials: {len(oss_crs_registry)} CRSes × "
         f"{len(benchmark_harnesses)} benchmark-harness pairs × "
         f"{len(config.sanitizers)} sanitizers × "
         f"{config.trials} trials × mode={config_mode}"
@@ -955,7 +951,6 @@ def display_trial_matrix(trials: List[Trial], start_index: int = 0) -> None:
 def _is_all_bug_fixing_crs(
     trials: List[Trial],
     registry_dir: Path,
-    crs_configs_dir: Path,
 ) -> bool:
     """Check if all trials use bug-fixing CRS only.
 
@@ -966,13 +961,11 @@ def _is_all_bug_fixing_crs(
     Args:
         trials: List of trials to check
         registry_dir: Path to CRS registry directory
-        crs_configs_dir: Path to CRS configs directory
 
     Returns:
         True if all trials are bug-fixing CRS
     """
     from crsbench.distributed.jobs import get_crs_type
-    from crsbench.utils.crs_helper import get_crs_registry_name
 
     if not trials:
         return False
@@ -982,8 +975,7 @@ def _is_all_bug_fixing_crs(
 
     for crs in unique_crses:
         try:
-            registry_name = get_crs_registry_name(crs, crs_configs_dir)
-            crs_type = get_crs_type(registry_name, registry_dir)
+            crs_type = get_crs_type(crs, registry_dir)
             if crs_type != "bug-fixing":
                 return False
         except (FileNotFoundError, ValueError) as e:
@@ -1123,6 +1115,8 @@ def run_experiment_local(
 
         trial_id = build_trial_id(experiment_name, trial, trial_suffix)
 
+        config_payload = config.model_dump()
+
         result = run_crs_trial(
             crs=trial.crs,
             benchmark=bh.name,
@@ -1130,7 +1124,7 @@ def run_experiment_local(
             harness_path=bh.harness.path,
             trial_num=trial.trial_num,
             trial_id=trial_id,
-            config_dict=config.model_dump(),
+            config_dict=config_payload,
             mode=trial.mode,
             sanitizer=trial.sanitizer,
             target_cpv_id=trial.target_cpv_id,
@@ -1300,7 +1294,6 @@ def _monitor_jobs_basic(
 ) -> List[TrialResult]:
     """Basic job monitoring without Rich UI."""
     from crsbench.distributed.queue import get_queue_stats
-    from crsbench.evaluation.results import TrialMetadata
 
     last_renew = time.monotonic()
     logger.info(f"\nMonitoring {len(job_list)} jobs for experiment: {experiment_name}")
@@ -1373,6 +1366,9 @@ def _monitor_jobs_basic(
                             logger.warning(
                                 f"Job {job.id[:8]} finished but result is None"
                             )
+                            _write_orchestrator_marker(
+                                _build_missing_job_result(job), config
+                            )
                         else:
                             _write_orchestrator_marker(result, config)
                         marked_jobs.add(job.id)
@@ -1432,8 +1428,10 @@ def _monitor_jobs_basic(
     results: List[TrialResult] = []
     for job in job_list:
         job.refresh()
-        if job.result:
+        if job.result is not None:
             results.append(job.result)
+        elif job.is_finished:
+            results.append(_build_missing_job_result(job))
         elif job.is_failed:
             # Create TrialResult for failed jobs using job kwargs
             kwargs = job.kwargs or {}
@@ -1478,7 +1476,6 @@ def _monitor_jobs_rich(
     from rich.table import Table
 
     from crsbench.distributed.queue import get_queue_stats
-    from crsbench.evaluation.results import TrialMetadata
 
     console = Console()
 
@@ -1568,6 +1565,9 @@ def _monitor_jobs_rich(
                                 logger.warning(
                                     f"Job {job.id[:8]} finished but result is None"
                                 )
+                                _write_orchestrator_marker(
+                                    _build_missing_job_result(job), config
+                                )
                             else:
                                 _write_orchestrator_marker(result, config)
                             marked_jobs.add(job.id)
@@ -1627,8 +1627,10 @@ def _monitor_jobs_rich(
     results: List[TrialResult] = []
     for job in job_list:
         job.refresh()
-        if job.result:
+        if job.result is not None:
             results.append(job.result)
+        elif job.is_finished:
+            results.append(_build_missing_job_result(job))
         elif job.is_failed:
             # Create TrialResult for failed jobs using job kwargs
             kwargs = job.kwargs or {}
@@ -1658,6 +1660,32 @@ def _monitor_jobs_rich(
 
     console.print("\n[green]✓[/green] All jobs completed!")
     return results
+
+
+def _build_missing_job_result(job) -> TrialResult:
+    """Create a synthetic failed TrialResult for finished jobs with no result."""
+    kwargs = job.kwargs or {}
+    meta = job.meta or {}
+    return TrialResult(
+        crs=kwargs.get("crs", meta.get("crs", "unknown")),
+        benchmark=kwargs.get("benchmark", meta.get("benchmark", "unknown")),
+        harness=kwargs.get("harness_name", meta.get("harness", "unknown")),
+        trial_num=kwargs.get("trial_num", meta.get("trial_num", 0)),
+        crs_type="bug-finding",
+        mode=kwargs.get("mode", meta.get("mode")),
+        sanitizer=kwargs.get("sanitizer"),
+        target_cpv_id=kwargs.get("target_cpv_id", meta.get("target_cpv_id")),
+        success=False,
+        execution_time=0.0,
+        error="Job finished without TrialResult payload",
+        error_type="MissingJobResult",
+        report={},
+        metadata=TrialMetadata(
+            timestamp_start=0.0,
+            timestamp_end=0.0,
+            worker_machine=meta.get("worker_name"),
+        ),
+    )
 
 
 def prompt_queue_mode(existing: dict[str, dict]) -> str:
@@ -1752,86 +1780,26 @@ def _prepare_trial_dir_for_retry(config: ExperimentConfig, job) -> bool:
     return True
 
 
-def get_crs_cpu_count(crs_name: str, crs_configs_dir: Path) -> int:
-    """Get CPU count for a CRS from its resource config.
-
-    Reads the CRS resource configuration file and parses the cpuset
-    string to determine the number of CPUs required.
-
-    Args:
-        crs_name: CRS name (e.g., "crs-libfuzzer")
-        crs_configs_dir: Path to CRS configs directory
-
-    Returns:
-        Number of CPUs (default: 4 if config not found)
-
-    Examples:
-        >>> get_crs_cpu_count("crs-libfuzzer", Path("/crses/configs"))
-        16  # If cpuset is "0-15"
-    """
-    from crsbench.utils.cpu_pool import cpuset_count
-
-    resource_config_path = crs_configs_dir / crs_name / "config-resource.yaml"
-    if not resource_config_path.exists():
-        logger.debug(
-            f"No resource config found for {crs_name}, using default cpu_count=4"
-        )
-        return 4  # Default
-
-    try:
-        with resource_config_path.open() as f:
-            config_data = yaml.safe_load(f)
-
-        # Get cpuset from first worker (or specific worker)
-        workers = config_data.get("workers", {})
-        if workers:
-            first_worker = list(workers.values())[0]
-            cpuset_str = first_worker.get("cpuset", "0-3")
-            cpu_count = cpuset_count(cpuset_str)
-            logger.debug(
-                f"CRS {crs_name}: parsed cpuset '{cpuset_str}' → {cpu_count} CPUs"
-            )
-            return cpu_count
-
-        logger.debug(
-            f"No workers section in resource config for {crs_name}, using default cpu_count=4"
-        )
-        return 4  # Default
-
-    except Exception as e:
-        logger.warning(
-            f"Error reading resource config for {crs_name}: {e}, using default cpu_count=4"
-        )
-        return 4  # Default on error
+def get_crs_cpu_count(crs_name: str, config: ExperimentConfig) -> int:
+    """Get CPU count for a CRS from compose overrides or experiment defaults."""
+    if config.crs_compose:
+        service = config.crs_compose.services.get(crs_name)
+        if service:
+            return service.num_cores
+    if config.resources and config.resources.cores_per_trial:
+        return config.resources.cores_per_trial
+    return 4
 
 
-def get_crs_memory(crs_name: str, crs_configs_dir: Path) -> str | None:
-    """Get memory limit for a CRS from its resource config.
-
-    Reads the CRS resource configuration file and returns the memory setting.
-
-    Args:
-        crs_name: CRS name (e.g., "crs-libfuzzer")
-        crs_configs_dir: Path to CRS configs directory
-
-    Returns:
-        Memory string (e.g., "16G") or None if not found
-
-    Examples:
-        >>> get_crs_memory("crs-libfuzzer", Path("/crses/configs"))
-        "16G"
-    """
-    from crsbench.utils.crs_helper import get_crs_worker_resources
-
-    try:
-        resources = get_crs_worker_resources(crs_name, crs_configs_dir)
-        return resources.get("memory")
-    except FileNotFoundError:
-        logger.debug(f"No resource config found for {crs_name}, memory not specified")
-        return None
-    except Exception as e:
-        logger.warning(f"Error reading resource config for {crs_name}: {e}")
-        return None
+def get_crs_memory(crs_name: str, config: ExperimentConfig) -> str | None:
+    """Get memory limit for a CRS from compose overrides or experiment defaults."""
+    if config.crs_compose:
+        service = config.crs_compose.services.get(crs_name)
+        if service and service.mem_limit:
+            return service.mem_limit
+    if config.resources and config.resources.memory_per_trial:
+        return config.resources.memory_per_trial
+    return None
 
 
 def run_experiment_distributed(
@@ -1873,9 +1841,6 @@ def run_experiment_distributed(
         raise RuntimeError(f"Failed to initialize Redis queue at {redis_host}")
     queue = session.trial_queue
 
-    # Resolve CRS paths with defaults
-    crs_configs_dir = config.crs_configs_dir.resolve()
-
     # Check for existing jobs in queue (queue sanity check)
     from crsbench.distributed.queue import (
         clear_experiment_jobs,
@@ -1885,193 +1850,189 @@ def run_experiment_distributed(
 
     existing = get_existing_trials(queue, experiment_name=experiment_name)
     has_existing = any(existing.values())
+    from crsbench.distributed.registry import RuntimeRegistration
+
+    registration = RuntimeRegistration.from_experiment_config(config)
+    lock_acquired = False
 
     normalized_queue_mode = queue_mode.lower() if queue_mode else None
 
-    if has_existing and normalized_queue_mode is None:
-        if sys.stdin.isatty():
-            normalized_queue_mode = prompt_queue_mode(existing)
-            if normalized_queue_mode == "quit":
-                logger.info("Aborted by user")
-                return
-        else:
-            normalized_queue_mode = "continue"
-            logger.info(
-                "Non-interactive mode detected with existing queue jobs; "
-                "using scoped queue mode: continue"
-            )
+    try:
+        if has_existing and normalized_queue_mode is None:
+            if sys.stdin.isatty():
+                normalized_queue_mode = prompt_queue_mode(existing)
+                if normalized_queue_mode == "quit":
+                    logger.info("Aborted by user")
+                    return
+            else:
+                normalized_queue_mode = "continue"
+                logger.info(
+                    "Non-interactive mode detected with existing queue jobs; "
+                    "using scoped queue mode: continue"
+                )
 
-    if has_existing and normalized_queue_mode == "quit":
-        logger.info("Aborted by queue-mode=quit")
-        return
+        if has_existing and normalized_queue_mode == "quit":
+            logger.info("Aborted by queue-mode=quit")
+            return
 
-    # Default to fresh if no existing jobs and no mode specified
-    if normalized_queue_mode is None:
-        normalized_queue_mode = "fresh"
+        # Default to fresh if no existing jobs and no mode specified
+        if normalized_queue_mode is None:
+            normalized_queue_mode = "fresh"
 
-    # TODO: too later to purge queue; as the old jobs are already taken by workers
-    # Handle queue based on mode
-    if normalized_queue_mode == "fresh":
-        if has_existing:
-            total_existing = sum(len(v) for v in existing.values())
-            logger.warning(
-                f"Purging {total_existing} existing jobs from queue for experiment={experiment_name}"
-            )
-            clear_experiment_jobs(queue, experiment_name)
-    elif normalized_queue_mode == "continue":
-        # Handle orphaned started jobs (move to failed + retry)
-        if existing["started"]:
-            orphaned_count = handle_orphaned_jobs(queue, existing["started"])
-            if orphaned_count > 0:
-                logger.info(f"Handled {orphaned_count} orphaned jobs")
-
-        # Optional failed retries require explicit opt-in and clean trial dirs.
-        if retry_failed and existing["failed"]:
-            retried = 0
-            for failed_job in existing["failed"].values():
-                if not _prepare_trial_dir_for_retry(config, failed_job):
-                    continue
-                failed_job.meta["force_retry"] = True
-                failed_job.save_meta()
+        # TODO: too later to purge queue; as the old jobs are already taken by workers
+        # Handle queue based on mode
+        if normalized_queue_mode == "fresh":
+            if has_existing:
                 try:
-                    queue.enqueue_job(failed_job)
-                    retried += 1
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to requeue failed job {failed_job.id[:8]}: {e}"
+                    session.register_or_raise(registration)
+                    lock_acquired = True
+                except LockContentionError:
+                    logger.error(
+                        f"Experiment '{experiment_name}' is already running. "
+                        "Use a different experiment name or wait for the current run to finish."
                     )
-            if retried > 0:
-                logger.info(f"Requeued {retried} failed jobs with clean retry dirs")
+                    return
+                total_existing = sum(len(v) for v in existing.values())
+                logger.warning(
+                    f"Purging {total_existing} existing jobs from queue for experiment={experiment_name}"
+                )
+                clear_experiment_jobs(queue, experiment_name)
+        elif normalized_queue_mode == "continue":
+            if has_existing and not lock_acquired:
+                try:
+                    session.register_or_raise(registration)
+                    lock_acquired = True
+                except LockContentionError:
+                    logger.error(
+                        f"Experiment '{experiment_name}' is already running. "
+                        "Use a different experiment name or wait for the current run to finish."
+                    )
+                    return
 
-    # Filter trials if in continue mode
-    if normalized_queue_mode == "continue" and has_existing:
-        # Build set of existing trial keys
-        existing_keys = set()
-        for status_dict in existing.values():
-            existing_keys.update(status_dict.keys())
+            # Handle orphaned started jobs (move to failed + retry)
+            if existing["started"]:
+                orphaned_count = handle_orphaned_jobs(queue, existing["started"])
+                if orphaned_count > 0:
+                    logger.info(f"Handled {orphaned_count} orphaned jobs")
 
-        # Filter out existing trials
+            # Optional failed retries require explicit opt-in and clean trial dirs.
+            if retry_failed and existing["failed"]:
+                retried = 0
+                for failed_job in existing["failed"].values():
+                    if not _prepare_trial_dir_for_retry(config, failed_job):
+                        continue
+                    failed_job.meta["force_retry"] = True
+                    failed_job.save_meta()
+                    try:
+                        queue.enqueue_job(failed_job)
+                        retried += 1
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to requeue failed job {failed_job.id[:8]}: {e}"
+                        )
+                if retried > 0:
+                    logger.info(f"Requeued {retried} failed jobs with clean retry dirs")
+
+        # Filter trials if in continue mode
+        if normalized_queue_mode == "continue" and has_existing:
+            # Build set of existing trial keys
+            existing_keys = set()
+            for status_dict in existing.values():
+                existing_keys.update(status_dict.keys())
+
+            # Filter out existing trials
+            original_count = len(trials)
+            trials = [
+                t
+                for t in trials
+                if (
+                    f"{t.crs}:{t.benchmark_harness.name}:{t.benchmark_harness.harness.name}:"
+                    f"{t.mode}:{t.sanitizer}:{t.trial_num}:{t.target_cpv_id or '-'}"
+                )
+                not in existing_keys
+            ]
+            skipped_count = original_count - len(trials)
+            if skipped_count > 0:
+                logger.info(
+                    f"Skipping {skipped_count} existing trials, enqueueing {len(trials)} new trials"
+                )
+
+        # Disk-based filtering: skip trials with .success markers on orchestrator disk
+        # This catches trials completed by remote workers in previous runs
         original_count = len(trials)
         trials = [
             t
             for t in trials
-            if (
-                f"{t.crs}:{t.benchmark_harness.name}:{t.benchmark_harness.harness.name}:"
-                f"{t.mode}:{t.sanitizer}:{t.trial_num}:{t.target_cpv_id or '-'}"
+            if _check_existing_trial(
+                config,
+                t.crs,
+                t.benchmark_harness.name,
+                t.benchmark_harness.harness.name,
+                t.mode,
+                t.sanitizer,
+                t.trial_num,
+                t.target_cpv_id,
             )
-            not in existing_keys
+            is None
         ]
-        skipped_count = original_count - len(trials)
-        if skipped_count > 0:
-            logger.info(
-                f"Skipping {skipped_count} existing trials, enqueueing {len(trials)} new trials"
-            )
+        disk_skipped = original_count - len(trials)
+        if disk_skipped > 0:
+            logger.info(f"Skipping {disk_skipped} trials already complete on disk")
 
-    # Disk-based filtering: skip trials with .success markers on orchestrator disk
-    # This catches trials completed by remote workers in previous runs
-    original_count = len(trials)
-    trials = [
-        t
-        for t in trials
-        if _check_existing_trial(
-            config,
-            t.crs,
-            t.benchmark_harness.name,
-            t.benchmark_harness.harness.name,
-            t.mode,
-            t.sanitizer,
-            t.trial_num,
-            t.target_cpv_id,
-        )
-        is None
-    ]
-    disk_skipped = original_count - len(trials)
-    if disk_skipped > 0:
-        logger.info(f"Skipping {disk_skipped} trials already complete on disk")
+        # Dump trial matrix to JSON
+        dump_trial_matrix(trials, config)
 
-    # Dump trial matrix to JSON
-    dump_trial_matrix(trials, config)
+        logger.info(f"Total trials to enqueue: {len(trials)}")
+        logger.info("=" * 60)
 
-    logger.info(f"Total trials to enqueue: {len(trials)}")
-    logger.info("=" * 60)
+        log_section("Enqueuing Trial Jobs", width=60)
 
-    log_section("Enqueuing Trial Jobs", width=60)
+        # Enqueue jobs
+        logger.info("\nEnqueuing jobs...")
 
-    # Enqueue jobs
-    logger.info("\nEnqueuing jobs...")
+        # Extract unique CRS names from trials
+        crses = sorted({t.crs for t in trials})
 
-    # Extract unique CRS names from trials
-    crses = sorted({t.crs for t in trials})
-
-    # Get CPU counts for each CRS
-    # Priority: experiment config > CRS resource config > default (4)
-    # Note: crs_configs_dir already resolved above
-    crs_cpu_counts = {}
-    if config.resources and config.resources.cores_per_trial:
-        # Use experiment-level resource config (highest priority)
+        # Get CPU counts for each CRS
+        # Priority: crs_compose service override > experiment config > default (4)
+        crs_cpu_counts = {}
         for crs in crses:
-            crs_cpu_counts[crs] = config.resources.cores_per_trial
-            logger.debug(
-                f"CRS {crs} using experiment config: {crs_cpu_counts[crs]} CPUs"
-            )
-    else:
-        # Fall back to CRS-specific resource configs
-        for crs in crses:
-            crs_cpu_counts[crs] = get_crs_cpu_count(crs, crs_configs_dir)
-            logger.debug(f"CRS {crs} using CRS config: {crs_cpu_counts[crs]} CPUs")
+            crs_cpu_counts[crs] = get_crs_cpu_count(crs, config)
+            logger.debug(f"CRS {crs} cpu_count={crs_cpu_counts[crs]}")
 
-    # Get memory limits for each CRS
-    # Priority: experiment config > CRS resource config > None
-    crs_memory_limits = {}
-    if config.resources and config.resources.memory_per_trial:
-        # Use experiment-level resource config (highest priority)
+        # Get memory limits for each CRS
+        # Priority: crs_compose service override > experiment config > None
+        crs_memory_limits = {}
         for crs in crses:
-            crs_memory_limits[crs] = config.resources.memory_per_trial
-            logger.debug(
-                f"CRS {crs} using experiment config: {crs_memory_limits[crs]} memory"
-            )
-    else:
-        # Fall back to CRS-specific resource configs
-        for crs in crses:
-            crs_memory_limits[crs] = get_crs_memory(crs, crs_configs_dir)
+            crs_memory_limits[crs] = get_crs_memory(crs, config)
             if crs_memory_limits[crs]:
-                logger.debug(
-                    f"CRS {crs} using CRS config: {crs_memory_limits[crs]} memory"
-                )
+                logger.debug(f"CRS {crs} memory={crs_memory_limits[crs]}")
             else:
                 logger.debug(f"CRS {crs} has no memory limit configured")
 
-    cpu_tag = None
-    if config.resources:
-        cpu_tag = config.resources.cpu_tag
+        cpu_tag = None
+        if config.resources:
+            cpu_tag = config.resources.cpu_tag
 
-    # Generate 6-char random alphanumeric suffix (shared by all trials)
-    trial_suffix = "_" + "".join(
-        secrets.choice(string.ascii_lowercase + string.digits) for _ in range(6)
-    )
+        # Generate 6-char random alphanumeric suffix (shared by all trials)
+        trial_suffix = "_" + "".join(
+            secrets.choice(string.ascii_lowercase + string.digits) for _ in range(6)
+        )
 
-    # Generate timestamp once for all jobs in this experiment batch
-    results_timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        # Generate timestamp once for all jobs in this experiment batch
+        results_timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    # Acquire a distributed lock so only one orchestrator runs per
-    # experiment name at a time.  If the lock is already held, reject
-    # the second invocation immediately.
-    from crsbench.distributed.registry import RuntimeRegistration
-
-    # Register experiment in the Redis registry so configless workers
-    # and evaluators can discover queues and resource requirements.
-    # Wrapped in try/finally to guarantee cleanup on crash or
-    # KeyboardInterrupt.
-    registration = RuntimeRegistration.from_experiment_config(config)
-    try:
         try:
-            session.register_or_raise(registration)
+            if not lock_acquired:
+                session.register_or_raise(registration)
+                lock_acquired = True
         except LockContentionError:
             logger.error(
                 f"Experiment '{experiment_name}' is already running. "
                 "Use a different experiment name or wait for the current run to finish."
             )
             return
+
         jobs = []
         for trial in trials:
             bh = trial.benchmark_harness
@@ -2079,6 +2040,8 @@ def run_experiment_distributed(
             memory_limit = crs_memory_limits.get(trial.crs)
 
             trial_id = build_trial_id(experiment_name, trial, trial_suffix)
+
+            config_payload = config.model_dump()
 
             job = queue.enqueue(
                 "crsbench.distributed.jobs.run_crs_trial",
@@ -2088,7 +2051,7 @@ def run_experiment_distributed(
                 harness_path=bh.harness.path,
                 trial_num=trial.trial_num,
                 trial_id=trial_id,
-                config_dict=config.model_dump(),
+                config_dict=config_payload,
                 mode=trial.mode,
                 sanitizer=trial.sanitizer,
                 target_cpv_id=trial.target_cpv_id,
@@ -2393,9 +2356,14 @@ def main() -> None:
     logger.info(f"Experiment name: {experiment_name}")
     logger.info(f"Configuration file: {args.experiment_config}")
 
-    # Resolve CRSes from config
-    crses = config.crses
-    logger.info(f"CRSes ({len(crses)}): {', '.join(crses)}")
+    # Resolve CRSes from crs_compose service keys
+    oss_crs_registry = config.get_crs_registry_ids()
+    if not oss_crs_registry:
+        logger.error("No CRS configured in crs_compose")
+        sys.exit(1)
+    logger.info(
+        f"OSS CRS registry IDs ({len(oss_crs_registry)}): {', '.join(oss_crs_registry)}"
+    )
 
     # Resolve benchmarks from config
     try:
@@ -2442,9 +2410,8 @@ def main() -> None:
 
     # Calculate total jobs using trial matrix (accounts for mode and CPV filtering)
     registry_dir = config.registry_dir
-    crs_configs_dir = config.crs_configs_dir
     trial_matrix = generate_trial_matrix(
-        benchmark_harnesses, crses, config, registry_dir, crs_configs_dir
+        benchmark_harnesses, oss_crs_registry, config, registry_dir
     )
 
     total_jobs = len(trial_matrix)

@@ -237,7 +237,10 @@ Examples:
     ci_parser.add_argument(
         "--exit-on-error",
         action="store_true",
-        help="Exit immediately on first benchmark failure (for fast feedback)",
+        help=(
+            "Exit immediately on first benchmark failure "
+            "(legacy non-modular ci command path)"
+        ),
     )
 
     # Display options

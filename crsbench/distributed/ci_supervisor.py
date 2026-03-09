@@ -27,6 +27,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 DEQUEUE_POLL_TIMEOUT_SECONDS = 1
+NON_CONTINUOUS_CPU_MISMATCH_LIMIT = 3
+CPU_TAG_MISMATCH_EXIT_CODE = 4
 
 # job_runner(redis_host, child_name, job_id) -> None
 type JobRunner = Callable[[str, str, str], None]
@@ -188,6 +190,10 @@ def run_ci_supervisor(
     max_total = build_jobs + verify_jobs
     build_phase_complete = False
     idle_since: float = 0.0
+    consecutive_cpu_mismatch_requeues = 0
+    mismatch_job_ids: set[str] = set()
+    mismatch_queue_names: set[str] = set()
+    cpu_tag_livelock_detected = False
 
     # Disk space state
     minimum_disk_bytes = parse_size_to_bytes(minimum_disk_size)
@@ -349,8 +355,14 @@ def run_ci_supervisor(
             job_status = job.get_status()
             if job_status in ("finished", "failed"):
                 logger.debug(f"Skipping stale job {job.id[:30]} (status={job_status})")
+                consecutive_cpu_mismatch_requeues = 0
+                mismatch_job_ids.clear()
+                mismatch_queue_names.clear()
                 continue
             if not _matches_cpu_tag(job, cpu_tag):
+                consecutive_cpu_mismatch_requeues += 1
+                mismatch_job_ids.add(job.id)
+                mismatch_queue_names.add(queue_obj.name)
                 queue_obj.enqueue_job(job)
                 if len(queues_with_capacity) > 1:
                     queue_cooldown_until[queue_obj.name] = time.time() + 0.1
@@ -358,9 +370,37 @@ def run_ci_supervisor(
                     f"Re-queued job {job.id[:8]} due to cpu_tag mismatch: "
                     f"job={job.meta.get('cpu_tag')!r}, worker={cpu_tag!r}"
                 )
+                if (
+                    not continuous
+                    and not build_active
+                    and not verify_active
+                    and mismatch_job_ids
+                    and consecutive_cpu_mismatch_requeues
+                    >= NON_CONTINUOUS_CPU_MISMATCH_LIMIT
+                ):
+                    non_empty_queue_names = {
+                        q.name for q in (build_queue, verify_queue) if q.count > 0
+                    }
+                    all_pending_unschedulable = bool(
+                        non_empty_queue_names
+                    ) and non_empty_queue_names.issubset(mismatch_queue_names)
+                    if not all_pending_unschedulable:
+                        queue_cooldown_until[queue_obj.name] = time.time() + 1.0
+                        time.sleep(0.05)
+                        continue
+                    logger.warning(
+                        "Exiting non-continuous supervisor after repeated cpu_tag "
+                        "mismatches to avoid requeue livelock; jobs remain queued "
+                        "for compatible workers."
+                    )
+                    cpu_tag_livelock_detected = True
+                    break
                 time.sleep(0.05)
                 continue
 
+            consecutive_cpu_mismatch_requeues = 0
+            mismatch_job_ids.clear()
+            mismatch_queue_names.clear()
             is_build = queue_obj.name == build_queue_name
             queue_label = "build" if is_build else "verify"
             cpu_count = build_cores_per_job if is_build else verify_cores_per_job
@@ -429,12 +469,37 @@ def run_ci_supervisor(
                     os.environ.pop("OSS_FUZZ_CGROUP_PARENT", None)
                 os.environ.pop("OSS_FUZZ_CPUSET_CPUS", None)
 
-                if p.pid is not None:
-                    entry = WorkerEntry(p, cpus or [], job.id, worker_num, cgroup_path)
-                    if is_build:
-                        build_active[p.pid] = entry
-                    else:
-                        verify_active[p.pid] = entry
+                if p.pid is None:
+                    raise RuntimeError("Child process started without PID")
+
+                if not p.is_alive():
+                    p.join(timeout=0.1)
+                    early_status = job.get_status()
+                    if early_status in ("finished", "failed"):
+                        if early_status == "finished":
+                            _enqueue_dependents_for_job(redis_conn, job.id)
+                        if cpu_pool and cpus:
+                            cpu_pool.release(cpus)
+                        if cgroup_path is not None:
+                            from crsbench.utils.cgroup import cleanup_cgroup
+
+                            cleanup_cgroup(cgroup_path, force=True)
+                        used_worker_nums.discard(worker_num)
+                        logger.warning(
+                            f"Child for job {job.id[:8]} exited immediately "
+                            f"(status={early_status}); skipping requeue."
+                        )
+                        continue
+                    raise RuntimeError(
+                        f"Child for job {job.id[:8]} exited before registration "
+                        f"(status={early_status}); re-enqueuing."
+                    )
+
+                entry = WorkerEntry(p, cpus or [], job.id, worker_num, cgroup_path)
+                if is_build:
+                    build_active[p.pid] = entry
+                else:
+                    verify_active[p.pid] = entry
 
                 logger.info(
                     f"Started {queue_label} job {job.id[:8]} (PID: {p.pid})"
@@ -466,6 +531,29 @@ def run_ci_supervisor(
                 queue_obj.enqueue_job(job, at_front=True)
                 time.sleep(0.5)
                 continue
+            except Exception as spawn_err:
+                logger.warning(
+                    f"Child startup failed for worker {worker_num}: {spawn_err}. "
+                    "Re-enqueuing job."
+                )
+                os.environ.pop("OSS_FUZZ_CGROUP_PARENT", None)
+                os.environ.pop("OSS_FUZZ_CPUSET_CPUS", None)
+                if cgroup_path is not None:
+                    try:
+                        from crsbench.utils.cgroup import cleanup_cgroup
+
+                        cleanup_cgroup(cgroup_path, force=True)
+                    except Exception as cleanup_err:
+                        logger.warning(
+                            f"Failed to cleanup cgroup after startup failure: "
+                            f"{cleanup_err}"
+                        )
+                if cpu_pool and cpus:
+                    cpu_pool.release(cpus)
+                used_worker_nums.discard(worker_num)
+                queue_obj.enqueue_job(job, at_front=True)
+                time.sleep(0.5)
+                continue
 
     except KeyboardInterrupt:
         logger.info("\nCI supervisor interrupted, terminating workers...")
@@ -481,6 +569,8 @@ def run_ci_supervisor(
         return 3
 
     _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
+    if cpu_tag_livelock_detected:
+        return CPU_TAG_MISMATCH_EXIT_CODE
     return 0
 
 
@@ -592,7 +682,7 @@ def run_multi_queue_supervisor(
         if cleaned > 0:
             logger.info(f"Cleaned up {cleaned} stale cgroup(s)")
 
-    # Build a set for fast membership check
+    # Build set for fast membership checks
     build_queue_name_set = set(build_queue_names)
 
     # Tracking state
@@ -604,6 +694,10 @@ def run_multi_queue_supervisor(
     max_total = build_jobs + verify_jobs
     build_phase_complete = False
     idle_since: float = 0.0
+    consecutive_cpu_mismatch_requeues = 0
+    mismatch_job_ids: set[str] = set()
+    mismatch_queue_names: set[str] = set()
+    cpu_tag_livelock_detected = False
 
     # Disk space state
     minimum_disk_bytes = parse_size_to_bytes(minimum_disk_size)
@@ -812,8 +906,14 @@ def run_multi_queue_supervisor(
             job_status = job.get_status()
             if job_status in ("finished", "failed"):
                 logger.debug(f"Skipping stale job {job.id[:30]} (status={job_status})")
+                consecutive_cpu_mismatch_requeues = 0
+                mismatch_job_ids.clear()
+                mismatch_queue_names.clear()
                 continue
             if not _matches_cpu_tag(job, cpu_tag):
+                consecutive_cpu_mismatch_requeues += 1
+                mismatch_job_ids.add(job.id)
+                mismatch_queue_names.add(queue_obj.name)
                 queue_obj.enqueue_job(job)
                 if len(queues_with_capacity) > 1:
                     queue_cooldown_until[queue_obj.name] = time.time() + 0.1
@@ -821,9 +921,37 @@ def run_multi_queue_supervisor(
                     f"Re-queued job {job.id[:8]} due to cpu_tag mismatch: "
                     f"job={job.meta.get('cpu_tag')!r}, worker={cpu_tag!r}"
                 )
+                if (
+                    not continuous
+                    and not build_active
+                    and not verify_active
+                    and mismatch_job_ids
+                    and consecutive_cpu_mismatch_requeues
+                    >= NON_CONTINUOUS_CPU_MISMATCH_LIMIT
+                ):
+                    non_empty_queue_names = {
+                        q.name for q in (*build_queues, *verify_queues) if q.count > 0
+                    }
+                    all_pending_unschedulable = bool(
+                        non_empty_queue_names
+                    ) and non_empty_queue_names.issubset(mismatch_queue_names)
+                    if not all_pending_unschedulable:
+                        queue_cooldown_until[queue_obj.name] = time.time() + 1.0
+                        time.sleep(0.05)
+                        continue
+                    logger.warning(
+                        "Exiting non-continuous multi-queue supervisor after "
+                        "repeated cpu_tag mismatches to avoid requeue livelock; "
+                        "jobs remain queued for compatible workers."
+                    )
+                    cpu_tag_livelock_detected = True
+                    break
                 time.sleep(0.05)
                 continue
 
+            consecutive_cpu_mismatch_requeues = 0
+            mismatch_job_ids.clear()
+            mismatch_queue_names.clear()
             is_build = queue_obj.name in build_queue_name_set
             queue_label = "build" if is_build else "verify"
             cpu_count = build_cores_per_job if is_build else verify_cores_per_job
@@ -890,12 +1018,37 @@ def run_multi_queue_supervisor(
                     os.environ.pop("OSS_FUZZ_CGROUP_PARENT", None)
                 os.environ.pop("OSS_FUZZ_CPUSET_CPUS", None)
 
-                if p.pid is not None:
-                    entry = WorkerEntry(p, cpus or [], job.id, worker_num, cgroup_path)
-                    if is_build:
-                        build_active[p.pid] = entry
-                    else:
-                        verify_active[p.pid] = entry
+                if p.pid is None:
+                    raise RuntimeError("Child process started without PID")
+
+                if not p.is_alive():
+                    p.join(timeout=0.1)
+                    early_status = job.get_status()
+                    if early_status in ("finished", "failed"):
+                        if early_status == "finished":
+                            _enqueue_dependents_for_job(redis_conn, job.id)
+                        if cpu_pool and cpus:
+                            cpu_pool.release(cpus)
+                        if cgroup_path is not None:
+                            from crsbench.utils.cgroup import cleanup_cgroup
+
+                            cleanup_cgroup(cgroup_path, force=True)
+                        used_worker_nums.discard(worker_num)
+                        logger.warning(
+                            f"Child for job {job.id[:8]} exited immediately "
+                            f"(status={early_status}); skipping requeue."
+                        )
+                        continue
+                    raise RuntimeError(
+                        f"Child for job {job.id[:8]} exited before registration "
+                        f"(status={early_status}); re-enqueuing."
+                    )
+
+                entry = WorkerEntry(p, cpus or [], job.id, worker_num, cgroup_path)
+                if is_build:
+                    build_active[p.pid] = entry
+                else:
+                    verify_active[p.pid] = entry
 
                 logger.info(
                     f"Started {queue_label} job {job.id[:8]} (PID: {p.pid})"
@@ -922,6 +1075,29 @@ def run_multi_queue_supervisor(
                 queue_obj.enqueue_job(job, at_front=True)
                 time.sleep(0.5)
                 continue
+            except Exception as spawn_err:
+                logger.warning(
+                    f"Child startup failed for worker {worker_num}: {spawn_err}. "
+                    "Re-enqueuing job."
+                )
+                os.environ.pop("OSS_FUZZ_CGROUP_PARENT", None)
+                os.environ.pop("OSS_FUZZ_CPUSET_CPUS", None)
+                if cgroup_path is not None:
+                    try:
+                        from crsbench.utils.cgroup import cleanup_cgroup
+
+                        cleanup_cgroup(cgroup_path, force=True)
+                    except Exception as cleanup_err:
+                        logger.warning(
+                            f"Failed to cleanup cgroup after startup failure: "
+                            f"{cleanup_err}"
+                        )
+                if cpu_pool and cpus:
+                    cpu_pool.release(cpus)
+                used_worker_nums.discard(worker_num)
+                queue_obj.enqueue_job(job, at_front=True)
+                time.sleep(0.5)
+                continue
 
     except KeyboardInterrupt:
         logger.info("\nMulti-queue supervisor interrupted, terminating workers...")
@@ -937,6 +1113,8 @@ def run_multi_queue_supervisor(
         return 3
 
     _force_cleanup_deferred_cgroups(deferred_cgroup_cleanup)
+    if cpu_tag_livelock_detected:
+        return CPU_TAG_MISMATCH_EXIT_CODE
     return 0
 
 

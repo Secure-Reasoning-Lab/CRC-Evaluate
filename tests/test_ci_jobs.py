@@ -214,13 +214,28 @@ class TestSerializeAllJobTypes:
             patch_path=Path("/patch.diff"),
             harness="h",
             sanitizer="undefined",
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123456,
+            inc_image_pull_timeout=77,
+            local_image_prefix="custom-prefix",
         )
         params = serialize_ci_job(job)
         assert params["sanitizer"] == "undefined"
+        assert params["inc_image_policy"] == "pull_only"
+        assert params["inc_image_registry"] == "ghcr.io/example/custom"
+        assert params["inc_image_max_pull_bytes"] == 123456
+        assert params["inc_image_pull_timeout"] == 77
+        assert params["local_image_prefix"] == "custom-prefix"
         restored = _reconstruct_job(params)
         assert type(restored).__name__ == "BuildPatchVariantJob"
         assert restored.patch_path == Path("/patch.diff")
         assert restored.sanitizer == "undefined"
+        assert restored.inc_image_policy == "pull_only"
+        assert restored.inc_image_registry == "ghcr.io/example/custom"
+        assert restored.inc_image_max_pull_bytes == 123456
+        assert restored.inc_image_pull_timeout == 77
+        assert restored.local_image_prefix == "custom-prefix"
 
     def test_build_patch_variant_default_sanitizer(self) -> None:
         """BuildPatchVariantJob defaults sanitizer and use_inc_build on deserialize."""
@@ -264,6 +279,11 @@ class TestSerializeAllJobTypes:
             sanitizer="address",
             repo_name="test-repo",
             project_image_prefix="aixcc-afc",
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123456,
+            inc_image_pull_timeout=77,
+            local_image_prefix="custom-prefix",
         )
         params = serialize_ci_job(job)
 
@@ -274,6 +294,11 @@ class TestSerializeAllJobTypes:
         assert params["patches"] == ["/patches/p1.diff"]
         assert params["patch_id"] == "patch_0"
         assert params["pov_id"] == "cpv_0"
+        assert params["inc_image_policy"] == "pull_only"
+        assert params["inc_image_registry"] == "ghcr.io/example/custom"
+        assert params["inc_image_max_pull_bytes"] == 123456
+        assert params["inc_image_pull_timeout"] == 77
+        assert params["local_image_prefix"] == "custom-prefix"
 
         restored = _reconstruct_job(params)
         assert type(restored).__name__ == "BuildSingleVariantJob"
@@ -284,6 +309,11 @@ class TestSerializeAllJobTypes:
         assert restored.patches == [Path("/patches/p1.diff")]
         assert restored.sanitizer == "address"
         assert restored.repo_name == "test-repo"
+        assert restored.inc_image_policy == "pull_only"
+        assert restored.inc_image_registry == "ghcr.io/example/custom"
+        assert restored.inc_image_max_pull_bytes == 123456
+        assert restored.inc_image_pull_timeout == 77
+        assert restored.local_image_prefix == "custom-prefix"
 
     def test_build_single_variant_default_use_inc_build_false(self) -> None:
         """BuildSingleVariantJob defaults use_inc_build to True on deserialize."""
@@ -312,6 +342,11 @@ class TestSerializeAllJobTypes:
             sanitizer="address",
             use_inc_build=True,
             source_mode="pkgs",
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123456,
+            inc_image_pull_timeout=77,
+            local_image_prefix="custom-prefix",
         )
         params = serialize_ci_job(job)
         assert params["_job_class"] == "PrepareIncImageJob"
@@ -320,12 +355,22 @@ class TestSerializeAllJobTypes:
         assert params["sanitizer"] == "address"
         assert params["use_inc_build"] is True
         assert params["force_rebuild"] is False
+        assert params["inc_image_policy"] == "pull_only"
+        assert params["inc_image_registry"] == "ghcr.io/example/custom"
+        assert params["inc_image_max_pull_bytes"] == 123456
+        assert params["inc_image_pull_timeout"] == 77
+        assert params["local_image_prefix"] == "custom-prefix"
 
         restored = _reconstruct_job(params)
         assert type(restored).__name__ == "PrepareIncImageJob"
         assert restored.benchmark_name == "test-bench"
         assert restored.sanitizer == "address"
         assert restored.force_rebuild is False
+        assert restored.inc_image_policy == "pull_only"
+        assert restored.inc_image_registry == "ghcr.io/example/custom"
+        assert restored.inc_image_max_pull_bytes == 123456
+        assert restored.inc_image_pull_timeout == 77
+        assert restored.local_image_prefix == "custom-prefix"
 
     def test_patch_variant_test_default_test_mode_full(self) -> None:
         """PatchVariantTestJob defaults test_mode to FULL for legacy payloads."""
@@ -1429,6 +1474,122 @@ class TestEnqueueAndPollCiJobs:
         assert job.job_id in results
         assert results[job.job_id]["success"] is True
 
+    def test_default_policy_refreshes_finished_verify_job(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Default stale policy should refresh finished non-build jobs."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        existing = self._make_mock_rq_job("verify-cpv-pov/bench/cpv_0", "finished")
+        existing.result = {
+            "job_id": "verify-cpv-pov/bench/cpv_0",
+            "job_type": "verify",
+            "success": True,
+            "elapsed_seconds": 1.0,
+            "details": {},
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+        }
+        enqueued = self._make_mock_rq_job("verify-cpv-pov/bench/cpv_0", "finished")
+        enqueued.result = {
+            "job_id": "verify-cpv-pov/bench/cpv_0",
+            "job_type": "verify",
+            "success": True,
+            "elapsed_seconds": 2.0,
+            "details": {"rerun": True},
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+        }
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_verify"
+        queue.connection = MagicMock()
+        queue.enqueue.return_value = enqueued
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+        monkeypatch.setattr(
+            "rq.job.Job.fetch",
+            lambda _job_id, **_kwargs: existing,
+        )
+        monkeypatch.setattr(
+            "rq.job.Job.fetch_many",
+            lambda pending_ids, **_kwargs: [enqueued for _ in pending_ids],
+        )
+
+        job = MagicMock()
+        job.job_type = "verify"
+        job.job_id = "verify-cpv-pov/bench/cpv_0"
+        job.depends_on = []
+        monkeypatch.setattr(
+            "crsbench.distributed.ci_jobs.serialize_ci_job", lambda _j: {}
+        )
+
+        results = enqueue_and_poll_ci_jobs([job], redis_host="localhost")
+
+        assert existing.delete_called is True
+        assert queue.enqueue.call_count == 1
+        assert results[job.job_id]["details"] == {"rerun": True}
+
+    def test_explicit_policy_can_reuse_finished_verify_job(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Explicit refresh_stopped_canceled_failed should still reuse finished."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        existing = self._make_mock_rq_job("verify-cpv-pov/bench/cpv_0", "finished")
+        existing.result = {
+            "job_id": "verify-cpv-pov/bench/cpv_0",
+            "job_type": "verify",
+            "success": True,
+            "elapsed_seconds": 1.0,
+            "details": {"reused": True},
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+        }
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_verify"
+        queue.connection = MagicMock()
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+        monkeypatch.setattr(
+            "rq.job.Job.fetch",
+            lambda _job_id, **_kwargs: existing,
+        )
+        monkeypatch.setattr(
+            "rq.job.Job.fetch_many",
+            lambda pending_ids, **_kwargs: [existing for _ in pending_ids],
+        )
+
+        job = MagicMock()
+        job.job_type = "verify"
+        job.job_id = "verify-cpv-pov/bench/cpv_0"
+        job.depends_on = []
+        monkeypatch.setattr(
+            "crsbench.distributed.ci_jobs.serialize_ci_job", lambda _j: {}
+        )
+
+        results = enqueue_and_poll_ci_jobs(
+            [job],
+            redis_host="localhost",
+            stale_terminal_policy="refresh_stopped_canceled_failed",
+        )
+
+        assert existing.delete_called is False
+        assert queue.enqueue.call_count == 0
+        assert results[job.job_id]["details"] == {"reused": True}
+
     def test_raises_on_unknown_dependency(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1591,6 +1752,183 @@ class TestEnqueueAndPollCiJobs:
         assert existing.delete_called is True
         assert queue.enqueue.call_count == 1
         assert results[job.job_id]["success"] is True
+
+    def test_duplicate_fallback_reuses_finished_non_build_for_refresh_stopped_failed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Duplicate fallback should reuse finished verify job for non-refresh policy."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        existing = self._make_mock_rq_job("verify-cpv-pov/bench/cpv_0", "finished")
+        existing.result = {
+            "job_id": "verify-cpv-pov/bench/cpv_0",
+            "job_type": "verify",
+            "success": True,
+            "elapsed_seconds": 1.0,
+            "details": {"reused": True},
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+        }
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_verify"
+        queue.connection = MagicMock()
+        queue.enqueue.side_effect = RuntimeError("duplicate")
+
+        fetch_calls = {"count": 0}
+
+        def _fetch(_job_id, **_kwargs):
+            fetch_calls["count"] += 1
+            if fetch_calls["count"] == 1:
+                raise RuntimeError("not found during prescan")
+            return existing
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+        monkeypatch.setattr("rq.job.Job.fetch", _fetch)
+        monkeypatch.setattr(
+            "rq.job.Job.fetch_many",
+            lambda pending_ids, **_kwargs: [existing for _ in pending_ids],
+        )
+        monkeypatch.setattr(
+            "crsbench.distributed.ci_jobs.serialize_ci_job", lambda _j: {}
+        )
+
+        job = MagicMock()
+        job.job_type = "verify"
+        job.job_id = "verify-cpv-pov/bench/cpv_0"
+        job.depends_on = []
+
+        results = enqueue_and_poll_ci_jobs(
+            [job],
+            redis_host="localhost",
+            stale_terminal_policy="refresh_stopped_canceled_failed",
+        )
+
+        assert queue.enqueue.call_count == 1
+        assert existing.delete_called is False
+        assert results[job.job_id]["details"] == {"reused": True}
+
+    def test_duplicate_fallback_refresh_failed_deletes_failed_and_reenqueues(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Duplicate fallback should refresh failed terminal jobs for refresh_failed."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        existing = self._make_mock_rq_job("verify-cpv-pov/bench/cpv_0", "failed")
+        existing.result = {
+            "job_id": "verify-cpv-pov/bench/cpv_0",
+            "job_type": "verify",
+            "success": False,
+            "elapsed_seconds": 1.0,
+            "details": {"stale": True},
+            "started_at": None,
+            "finished_at": None,
+            "error": "old-error",
+        }
+        reenqueued = self._make_mock_rq_job("verify-cpv-pov/bench/cpv_0", "finished")
+        reenqueued.result = {
+            "job_id": "verify-cpv-pov/bench/cpv_0",
+            "job_type": "verify",
+            "success": True,
+            "elapsed_seconds": 2.0,
+            "details": {"rerun": True},
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+        }
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_verify"
+        queue.connection = MagicMock()
+        queue.enqueue.side_effect = [RuntimeError("duplicate"), reenqueued]
+
+        fetch_calls = {"count": 0}
+
+        def _fetch(_job_id, **_kwargs):
+            fetch_calls["count"] += 1
+            if fetch_calls["count"] == 1:
+                raise RuntimeError("not found during prescan")
+            return existing
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+        monkeypatch.setattr("rq.job.Job.fetch", _fetch)
+        monkeypatch.setattr(
+            "rq.job.Job.fetch_many",
+            lambda pending_ids, **_kwargs: [reenqueued for _ in pending_ids],
+        )
+        monkeypatch.setattr(
+            "crsbench.distributed.ci_jobs.serialize_ci_job", lambda _j: {}
+        )
+
+        job = MagicMock()
+        job.job_type = "verify"
+        job.job_id = "verify-cpv-pov/bench/cpv_0"
+        job.depends_on = []
+
+        results = enqueue_and_poll_ci_jobs(
+            [job],
+            redis_host="localhost",
+            stale_terminal_policy="refresh_failed",
+        )
+
+        assert queue.enqueue.call_count == 2
+        assert existing.delete_called is True
+        assert results[job.job_id]["details"] == {"rerun": True}
+
+    def test_duplicate_fallback_quit_policy_raises_for_terminal_duplicate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Duplicate fallback should honor quit policy for terminal duplicates."""
+        from crsbench.distributed.ci_jobs import enqueue_and_poll_ci_jobs
+
+        existing = self._make_mock_rq_job("verify-cpv-pov/bench/cpv_0", "failed")
+
+        queue = MagicMock()
+        queue.name = "crsbench_ci_verify"
+        queue.connection = MagicMock()
+        queue.enqueue.side_effect = RuntimeError("duplicate")
+
+        fetch_calls = {"count": 0}
+
+        def _fetch(_job_id, **_kwargs):
+            fetch_calls["count"] += 1
+            if fetch_calls["count"] == 1:
+                raise RuntimeError("not found during prescan")
+            return existing
+
+        monkeypatch.setattr(
+            "crsbench.distributed.queue.create_redis_connection",
+            lambda _host: MagicMock(),
+        )
+        monkeypatch.setattr("rq.Queue", lambda *_args, **_kwargs: queue)
+        monkeypatch.setattr("rq.job.Job.fetch", _fetch)
+        monkeypatch.setattr(
+            "crsbench.distributed.ci_jobs.serialize_ci_job", lambda _j: {}
+        )
+
+        job = MagicMock()
+        job.job_type = "verify"
+        job.job_id = "verify-cpv-pov/bench/cpv_0"
+        job.depends_on = []
+
+        with pytest.raises(RuntimeError, match="quitting per selected policy"):
+            enqueue_and_poll_ci_jobs(
+                [job],
+                redis_host="localhost",
+                stale_terminal_policy="quit",
+            )
+
+        assert existing.delete_called is False
+        assert queue.enqueue.call_count == 1
 
     @pytest.mark.parametrize("terminal_status", ["stopped", "canceled"])
     def test_poll_drains_terminal_statuses(

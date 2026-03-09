@@ -99,6 +99,11 @@ class BuildSingleVariantJob(Job):
     repo_name: Optional[str] = None
     project_image_prefix: str = "crsbench"
     prepare_inc_job_id: str = ""
+    inc_image_policy: Optional[str] = None
+    inc_image_registry: Optional[str] = None
+    inc_image_max_pull_bytes: Optional[int] = None
+    inc_image_pull_timeout: Optional[int] = None
+    local_image_prefix: Optional[str] = None
 
     @property
     def job_id(self) -> str:
@@ -142,7 +147,14 @@ class BuildSingleVariantJob(Job):
 
             oss_fuzz_path = Path(ensure_oss_fuzz_root())
             builder = OSSFuzzBuilder(
-                oss_fuzz_path, max_workers=1, source_mode=self.source_mode
+                oss_fuzz_path,
+                max_workers=1,
+                source_mode=self.source_mode,
+                inc_image_policy=self.inc_image_policy,
+                inc_image_registry=self.inc_image_registry,
+                inc_image_max_pull_bytes=self.inc_image_max_pull_bytes,
+                inc_image_pull_timeout=self.inc_image_pull_timeout,
+                local_image_prefix=self.local_image_prefix,
             )
 
             # Build config from job fields
@@ -288,6 +300,11 @@ class PrepareIncImageJob(Job):
     use_inc_build: bool = True
     force_rebuild: bool = False
     source_mode: str = "pkgs"
+    inc_image_policy: Optional[str] = None
+    inc_image_registry: Optional[str] = None
+    inc_image_max_pull_bytes: Optional[int] = None
+    inc_image_pull_timeout: Optional[int] = None
+    local_image_prefix: Optional[str] = None
 
     @property
     def job_id(self) -> str:
@@ -323,7 +340,14 @@ class PrepareIncImageJob(Job):
             from crsbench.utils.run_helper import ensure_oss_fuzz_root
 
             oss_fuzz_path = Path(ensure_oss_fuzz_root())
-            infra = OSSFuzzInfrastructure(oss_fuzz_path)
+            infra = OSSFuzzInfrastructure(
+                oss_fuzz_path,
+                inc_image_policy=self.inc_image_policy,
+                inc_image_registry=self.inc_image_registry,
+                inc_image_max_pull_bytes=self.inc_image_max_pull_bytes,
+                inc_image_pull_timeout=self.inc_image_pull_timeout,
+                local_image_prefix=self.local_image_prefix,
+            )
             ready = infra.ensure_inc_image(
                 self.benchmark_name,
                 sanitizer=self.sanitizer,
@@ -764,6 +788,11 @@ class BuildPatchVariantJob(Job):
     build_job_id: str = ""
     prepare_inc_job_id: str = ""
     source_mode: str = "pkgs"
+    inc_image_policy: Optional[str] = None
+    inc_image_registry: Optional[str] = None
+    inc_image_max_pull_bytes: Optional[int] = None
+    inc_image_pull_timeout: Optional[int] = None
+    local_image_prefix: Optional[str] = None
 
     @property
     def job_id(self) -> str:
@@ -805,7 +834,15 @@ class BuildPatchVariantJob(Job):
             oss_fuzz_path = Path(ensure_oss_fuzz_root())
 
             # Load adapter for BuildConfig metadata (mode, language, commit)
-            pov_engine = VerificationEngine(oss_fuzz_path, source_mode=self.source_mode)
+            pov_engine = VerificationEngine(
+                oss_fuzz_path,
+                source_mode=self.source_mode,
+                inc_image_policy=self.inc_image_policy,
+                inc_image_registry=self.inc_image_registry,
+                inc_image_max_pull_bytes=self.inc_image_max_pull_bytes,
+                inc_image_pull_timeout=self.inc_image_pull_timeout,
+                local_image_prefix=self.local_image_prefix,
+            )
             adapter = pov_engine.load_adapter(self.benchmark_path)
 
             if not adapter:
@@ -841,6 +878,11 @@ class BuildPatchVariantJob(Job):
                 source_mode=self.source_mode,
                 build_only=True,  # Only build, skip verification
                 log_dir=stream_log_dir,
+                inc_image_policy=self.inc_image_policy,
+                inc_image_registry=self.inc_image_registry,
+                inc_image_max_pull_bytes=self.inc_image_max_pull_bytes,
+                inc_image_pull_timeout=self.inc_image_pull_timeout,
+                local_image_prefix=self.local_image_prefix,
             )
 
             # Create PatchInfo for the engine

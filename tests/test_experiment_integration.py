@@ -266,6 +266,5 @@ class TestJobTypesAndDependencies:
             oss_fuzz_path=tmp_path / "oss-fuzz",
             registry_dir=tmp_path / "registry",
             benchmarks_root=tmp_path / "benchmarks",
-            crs_configs_dir=tmp_path / "configs",
         )
         assert job.job_type == "crs_run"

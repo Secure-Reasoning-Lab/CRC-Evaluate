@@ -111,7 +111,6 @@ class OssCrsAdapter:
         oss_fuzz_path: Path,
         registry_dir: Path,
         benchmarks_root: Path,
-        crs_configs_dir: Path,
         *,
         litellm_mode: str = "external",
         mode: str = "bug-finding",
@@ -120,7 +119,6 @@ class OssCrsAdapter:
         self._oss_fuzz_path = oss_fuzz_path
         self._registry_dir = registry_dir
         self._benchmarks_root = benchmarks_root
-        self._crs_configs_dir = crs_configs_dir
         self._litellm_mode = litellm_mode
         self._mode = mode
         self._built_projects: set[str] = set()
@@ -411,8 +409,9 @@ class OssCrsAdapter:
                 self._fuzzing_language = normalized
         if "oss_crs_infra" in config and isinstance(config["oss_crs_infra"], dict):
             infra = dict(config["oss_crs_infra"])
-            if "num_cores" in infra:
-                self._infra_num_cores = int(infra["num_cores"])
+            infra_num_cores = infra.get("num_cores")
+            if infra_num_cores is not None:
+                self._infra_num_cores = int(infra_num_cores)
                 if "shared" not in infra:
                     # Backward-compatible interpretation: explicit num_cores means
                     # dedicated infra cores unless shared=true is explicitly set.
@@ -483,10 +482,16 @@ class OssCrsAdapter:
                         self._crs_config_name: service_configs[self._crs_config_name]
                     }
                 else:
-                    raise RuntimeError(
-                        "crs_services does not contain current trial CRS "
-                        f"'{self._crs_config_name}'"
-                    )
+                    # Explicit crs_services override omitted current trial CRS:
+                    # reset to default per-service config instead of keeping
+                    # stale values from a previous configure() call.
+                    self._crs_service_configs = {
+                        self._crs_config_name: {
+                            "num_cores": 1,
+                            "mem_limit": None,
+                            "additional_env": {},
+                        }
+                    }
         if "additional_env" in config and isinstance(config["additional_env"], dict):
             # Backward-compatible adapter input: apply to current CRS service.
             merged = {str(k): str(v) for k, v in dict(config["additional_env"]).items()}
@@ -906,8 +911,9 @@ class OssCrsAdapter:
     ) -> CRSExecutionResult:
         """Execute CRS against a harness via oss-crs run.
 
-        For bug-finding: runs without pov_dir/diff/seed_dir.
-        For bug-fixing: locates pov_dir, diff, and seed_dir from
+        For bug-finding: runs without directed inputs.
+        For bug-fixing: locates pov_dir, diff, seed_dir, and bug-candidate
+        SARIF directory from
         trial_output_dir before running.
         """
         compose_file, work_dir = self._ensure_compose_state()
@@ -920,17 +926,16 @@ class OssCrsAdapter:
         # Stage benchmark to exclude ground truth dotfiles
         staged_path = self._stage_benchmark(benchmark_path, trial_output_dir)
 
-        # Bug-fixing inputs (only used when mode is bug-fixing)
-        pov_dir: Optional[Path] = None
-        diff: Optional[Path] = None
-        seed_dir: Optional[Path] = None
-
-        if self._mode == "bug-fixing":
-            pov_dir = self._find_pov_dir(trial_output_dir)
-            diff_path = trial_output_dir / "ref.diff"
-            diff = diff_path if diff_path.exists() else None
-            seed_path = trial_output_dir / "seeds"
-            seed_dir = seed_path if seed_path.exists() else None
+        # Runtime inputs are passed when present, independent of adapter mode.
+        pov_dir: Optional[Path] = self._find_pov_dir(trial_output_dir)
+        diff_path = trial_output_dir / "ref.diff"
+        diff: Optional[Path] = diff_path if diff_path.exists() else None
+        seed_path = trial_output_dir / "seeds"
+        seed_dir: Optional[Path] = seed_path if seed_path.exists() else None
+        bug_candidate_path = trial_output_dir / "bug-candidates"
+        bug_candidate_dir: Optional[Path] = (
+            bug_candidate_path if bug_candidate_path.exists() else None
+        )
 
         start_time = time.time()
         stdout = ""
@@ -954,6 +959,7 @@ class OssCrsAdapter:
                 pov_dir=pov_dir,
                 diff=diff,
                 seed_dir=seed_dir,
+                bug_candidate_dir=bug_candidate_dir,
             )
         finally:
             docker_compose_down_cleanup(work_dir)
@@ -1128,7 +1134,6 @@ def create_adapter(
     oss_fuzz_path: Path,
     registry_dir: Path,
     benchmarks_root: Path,
-    crs_configs_dir: Path,
     *,
     mode: str = "bug-finding",
 ) -> OssCrsAdapter:
@@ -1142,7 +1147,6 @@ def create_adapter(
         oss_fuzz_path=oss_fuzz_path,
         registry_dir=registry_dir,
         benchmarks_root=benchmarks_root,
-        crs_configs_dir=crs_configs_dir,
         litellm_mode=config.litellm_mode or "external",
         mode=mode,
     )

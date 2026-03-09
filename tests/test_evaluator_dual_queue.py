@@ -383,8 +383,8 @@ class TestConfiglessEvaluator:
         mock_enqueue.assert_not_called()
 
     @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
-    def test_configless_uses_first_metadata_for_conflicting_cpu_pinning(self) -> None:
-        """Configless evaluator uses first metadata cores/skip and warns on conflicts."""
+    def test_configless_uses_cli_cpu_pinning_only(self) -> None:
+        """Configless evaluator uses CLI cpuset/skip-cpuset (no metadata pinning)."""
         from crsbench.distributed.evaluator import run_evaluator_configless
         from crsbench.distributed.registry import RuntimeRegistration
 
@@ -396,8 +396,6 @@ class TestConfiglessEvaluator:
             benchmarks=[],
             benchmarks_root="/tmp/benchmarks",
             per_pov_verify_timeout=180,
-            evaluator_cores="32-47",
-            evaluator_skip_cpus="33",
         )
         reg2 = RuntimeRegistration(
             experiment="exp-b",
@@ -407,8 +405,6 @@ class TestConfiglessEvaluator:
             benchmarks=[],
             benchmarks_root="/tmp/benchmarks",
             per_pov_verify_timeout=180,
-            evaluator_cores="48-63",
-            evaluator_skip_cpus="49",
         )
 
         with (
@@ -427,15 +423,17 @@ class TestConfiglessEvaluator:
                 "crsbench.distributed.ci_supervisor.run_multi_queue_supervisor",
                 return_value=0,
             ) as mock_supervisor,
-            patch("crsbench.distributed.common.logger.warning") as mock_warning,
         ):
-            result = run_evaluator_configless(redis_host="localhost")
+            result = run_evaluator_configless(
+                redis_host="localhost",
+                cores="32-47",
+                skip_cpus="33",
+            )
 
         assert result == 0
         kwargs = mock_supervisor.call_args.kwargs
         assert kwargs["cores"] == "32-47"
         assert kwargs["skip_cpus"] == "33"
-        assert mock_warning.called
 
     @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
     def test_configless_rejects_invalid_verify_cores_metadata(self) -> None:
@@ -617,6 +615,151 @@ class TestConfiglessEvaluator:
         result = run_evaluator_configless()
         assert result == 1
 
+    @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
+    def test_configless_refresh_skips_incompatible_resource_profile(self) -> None:
+        """Refresh should not adopt experiments requiring incompatible evaluator profile."""
+        from crsbench.distributed.evaluator import run_evaluator_configless
+        from crsbench.distributed.registry import RuntimeRegistration
+
+        initial_reg = RuntimeRegistration(
+            experiment="exp-a",
+            trial_queue="crsbench_exp-a",
+            build_queue="crsbench_exp-a_build",
+            verify_queue="crsbench_exp-a_verify",
+            benchmarks=[],
+            benchmarks_root="/tmp/benchmarks",
+            per_pov_verify_timeout=180,
+            evaluator_verify_cores_per_job=4,
+            evaluator_cpu_tag="x86-avx2",
+        )
+        compatible_reg = RuntimeRegistration(
+            experiment="exp-b",
+            trial_queue="crsbench_exp-b",
+            build_queue="crsbench_exp-b_build",
+            verify_queue="crsbench_exp-b_verify",
+            benchmarks=[],
+            benchmarks_root="/tmp/benchmarks",
+            per_pov_verify_timeout=180,
+            evaluator_verify_cores_per_job=4,
+            evaluator_cpu_tag="x86-avx2",
+        )
+        incompatible_reg = RuntimeRegistration(
+            experiment="exp-c",
+            trial_queue="crsbench_exp-c",
+            build_queue="crsbench_exp-c_build",
+            verify_queue="crsbench_exp-c_verify",
+            benchmarks=[],
+            benchmarks_root="/tmp/benchmarks",
+            per_pov_verify_timeout=180,
+            evaluator_verify_cores_per_job=8,
+            evaluator_cpu_tag="x86-avx2",
+        )
+
+        def _run_supervisor(**kwargs):
+            refresher = kwargs["queue_refresher"]
+            with patch("crsbench.distributed.registry.RegistryClient") as mock_registry:
+                mock_client = MagicMock()
+                mock_client.list_experiments.return_value = {
+                    "exp-a": initial_reg,
+                    "exp-b": compatible_reg,
+                    "exp-c": incompatible_reg,
+                }
+                mock_registry.return_value = mock_client
+                refreshed_build, refreshed_verify = refresher(MagicMock())
+            assert refreshed_build == ["crsbench_exp-a_build", "crsbench_exp-b_build"]
+            assert refreshed_verify == [
+                "crsbench_exp-a_verify",
+                "crsbench_exp-b_verify",
+            ]
+            return 0
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator.discover_registered_experiments",
+                return_value=(MagicMock(), {"exp-a": initial_reg}),
+            ),
+            patch("crsbench.evaluation.verification.pov.engine.VerificationEngine"),
+            patch("crsbench.distributed.evaluator_jobs.set_engine"),
+            patch("crsbench.distributed.evaluator_jobs.set_benchmarks_root"),
+            patch(
+                "crsbench.distributed.ci_supervisor.run_multi_queue_supervisor",
+                side_effect=_run_supervisor,
+            ),
+            patch("crsbench.distributed.evaluator.logger.warning") as mock_warning,
+        ):
+            result = run_evaluator_configless(redis_host="localhost")
+
+        assert result == 0
+        assert any(
+            "incompatible evaluator resource profile" in str(call.args[0])
+            for call in mock_warning.call_args_list
+        )
+
+    @patch("crsbench.distributed.evaluator.REDIS_AVAILABLE", new=True)
+    def test_configless_refresh_keeps_untagged_experiment_with_tagged_evaluator(
+        self,
+    ) -> None:
+        """Untagged experiments should remain compatible during evaluator refresh."""
+        from crsbench.distributed.evaluator import run_evaluator_configless
+        from crsbench.distributed.registry import RuntimeRegistration
+
+        initial_reg = RuntimeRegistration(
+            experiment="exp-a",
+            trial_queue="crsbench_exp-a",
+            build_queue="crsbench_exp-a_build",
+            verify_queue="crsbench_exp-a_verify",
+            benchmarks=[],
+            benchmarks_root="/tmp/benchmarks",
+            per_pov_verify_timeout=180,
+            evaluator_verify_cores_per_job=4,
+            evaluator_cpu_tag="x86-avx2",
+        )
+        untagged_reg = RuntimeRegistration(
+            experiment="exp-b",
+            trial_queue="crsbench_exp-b",
+            build_queue="crsbench_exp-b_build",
+            verify_queue="crsbench_exp-b_verify",
+            benchmarks=[],
+            benchmarks_root="/tmp/benchmarks",
+            per_pov_verify_timeout=180,
+            evaluator_verify_cores_per_job=4,
+            evaluator_cpu_tag=None,
+        )
+
+        def _run_supervisor(**kwargs):
+            refresher = kwargs["queue_refresher"]
+            with patch("crsbench.distributed.registry.RegistryClient") as mock_registry:
+                mock_client = MagicMock()
+                mock_client.list_experiments.return_value = {
+                    "exp-a": initial_reg,
+                    "exp-b": untagged_reg,
+                }
+                mock_registry.return_value = mock_client
+                refreshed_build, refreshed_verify = refresher(MagicMock())
+            assert refreshed_build == ["crsbench_exp-a_build", "crsbench_exp-b_build"]
+            assert refreshed_verify == [
+                "crsbench_exp-a_verify",
+                "crsbench_exp-b_verify",
+            ]
+            return 0
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator.discover_registered_experiments",
+                return_value=(MagicMock(), {"exp-a": initial_reg}),
+            ),
+            patch("crsbench.evaluation.verification.pov.engine.VerificationEngine"),
+            patch("crsbench.distributed.evaluator_jobs.set_engine"),
+            patch("crsbench.distributed.evaluator_jobs.set_benchmarks_root"),
+            patch(
+                "crsbench.distributed.ci_supervisor.run_multi_queue_supervisor",
+                side_effect=_run_supervisor,
+            ),
+        ):
+            result = run_evaluator_configless(redis_host="localhost")
+
+        assert result == 0
+
     def test_enqueue_pre_builds_from_registration_exists(self) -> None:
         """_enqueue_pre_builds_from_registration helper exists."""
         from crsbench.distributed.evaluator import (
@@ -686,6 +829,146 @@ class TestConfiglessEvaluator:
             tmp_path / benchmark_name,
             use_inc_build=True,
             skip_if_cached=True,
+            inc_image_policy="auto",
+            inc_image_registry="ghcr.io/team-atlanta/crsbench",
+            inc_image_max_pull_bytes=10 * 1024 * 1024 * 1024,
+            inc_image_pull_timeout=300,
+            local_image_prefix="crsbench",
+        )
+
+    @patch("rq.Queue")
+    @patch("crsbench.distributed.queue.create_redis_connection")
+    @patch("crsbench.distributed.ci_jobs.serialize_ci_job")
+    @patch("crsbench.executor.variant_planner.VariantPlanner")
+    @patch("crsbench.utils.benchmark_utils.filter_benchmarks_by_mode")
+    def test_enqueue_pre_builds_from_registration_propagates_inc_image_settings(
+        self,
+        mock_filter: MagicMock,
+        mock_planner_cls: MagicMock,
+        mock_serialize: MagicMock,
+        mock_create_redis: MagicMock,
+        mock_queue_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Configless pre-build helper forwards registration inc-image settings."""
+        from crsbench.distributed.evaluator import _enqueue_pre_builds_from_registration
+        from crsbench.distributed.registry import RuntimeRegistration
+
+        benchmark_name = "afc-mock-full-02"
+        (tmp_path / benchmark_name).mkdir(parents=True, exist_ok=True)
+
+        reg = RuntimeRegistration(
+            experiment="exp-43",
+            trial_queue="crsbench_exp-43",
+            build_queue="crsbench_exp-43_build",
+            verify_queue="crsbench_exp-43_verify",
+            benchmarks=[benchmark_name],
+            modes=["full"],
+            benchmarks_root=str(tmp_path),
+            source_mode="pkgs",
+            build_timeout=3600,
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123456,
+            inc_image_pull_timeout_sec=77,
+            local_image_prefix="custom-prefix",
+        )
+
+        mock_filter.side_effect = lambda names, _mode, _root: names
+        mock_create_redis.return_value = MagicMock()
+        mock_queue_cls.return_value = MagicMock()
+        mock_serialize.return_value = {"kind": "build"}
+
+        mock_planner = MagicMock()
+        job = MagicMock()
+        job.job_id = "job-2"
+        mock_planner.plan_builds.return_value = [job]
+        mock_planner_cls.return_value = mock_planner
+
+        enqueued = _enqueue_pre_builds_from_registration(
+            reg,
+            redis_host="localhost",
+            benchmarks_root=str(tmp_path),
+        )
+
+        assert enqueued == 1
+        mock_planner.plan_builds.assert_called_once_with(
+            tmp_path / benchmark_name,
+            use_inc_build=True,
+            skip_if_cached=True,
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123456,
+            inc_image_pull_timeout=77,
+            local_image_prefix="custom-prefix",
+        )
+
+    @patch("rq.Queue")
+    @patch("crsbench.distributed.queue.create_redis_connection")
+    @patch("crsbench.distributed.ci_jobs.serialize_ci_job")
+    @patch("crsbench.executor.variant_planner.VariantPlanner")
+    @patch("crsbench.distributed.evaluator.filter_benchmarks_by_mode")
+    def test_enqueue_pre_builds_propagates_inc_image_settings(
+        self,
+        mock_filter: MagicMock,
+        mock_planner_cls: MagicMock,
+        mock_serialize: MagicMock,
+        mock_create_redis: MagicMock,
+        mock_queue_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Config-mode pre-build helper forwards resolved inc-image settings."""
+        from types import SimpleNamespace
+
+        from crsbench.distributed.evaluator import _enqueue_pre_builds
+
+        benchmark_name = "afc-mock-full-03"
+        (tmp_path / benchmark_name).mkdir(parents=True, exist_ok=True)
+
+        config = SimpleNamespace(
+            benchmarks_root=tmp_path,
+            mode=SimpleNamespace(value="full"),
+            resources=SimpleNamespace(cpu_tag=None),
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123456,
+            inc_image_pull_timeout_sec=77,
+            project_image_prefix="custom-prefix",
+            get_benchmark_list=lambda: [benchmark_name],
+        )
+
+        mock_filter.side_effect = lambda names, _mode, _root: names
+        mock_create_redis.return_value = MagicMock()
+        mock_queue_cls.return_value = MagicMock()
+        mock_serialize.return_value = {"kind": "build"}
+
+        mock_planner = MagicMock()
+        job = MagicMock()
+        job.job_id = "job-3"
+        mock_planner.plan_builds.return_value = [job]
+        mock_planner_cls.return_value = mock_planner
+
+        enqueued = _enqueue_pre_builds(
+            config,
+            experiment_name="exp-44",
+            redis_host="localhost",
+            inc_image_policy="build_only",
+            inc_image_registry="ghcr.io/example/resolved",
+            inc_image_max_pull_bytes=654321,
+            inc_image_pull_timeout=91,
+            local_image_prefix="resolved-prefix",
+        )
+
+        assert enqueued == 1
+        mock_planner.plan_builds.assert_called_once_with(
+            tmp_path / benchmark_name,
+            use_inc_build=True,
+            skip_if_cached=True,
+            inc_image_policy="build_only",
+            inc_image_registry="ghcr.io/example/resolved",
+            inc_image_max_pull_bytes=654321,
+            inc_image_pull_timeout=91,
+            local_image_prefix="resolved-prefix",
         )
 
     def test_evaluator_cli_configless_mode(self) -> None:
@@ -761,6 +1044,157 @@ class TestConfiglessEvaluator:
 
         assert result == 0
         assert mock_main.call_args.kwargs["cpu_tag"] == "x86-avx2"
+
+    def test_evaluator_cli_config_mode_derives_verify_jobs_when_unset(self) -> None:
+        """Config mode derives verify_jobs from build concurrency when fully unset."""
+        import argparse
+
+        from crsbench.distributed.cli.evaluator_command import run_evaluator
+
+        args = argparse.Namespace(
+            experiment_config="test.yaml",
+            ci=False,
+            verbose=False,
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag=None,
+            build_jobs=2,
+            build_cores_per_job=8,
+            verify_cores_per_job=2,
+            verify_jobs=None,
+            worker_name=None,
+            idle_timeout=None,
+            benchmarks_root=None,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator.run_evaluator_main", return_value=0
+            ) as mock_main,
+            patch("crsbench.run_experiment.load_experiment_config") as mock_load,
+        ):
+            mock_config = MagicMock()
+            mock_config.experiment = "exp-1"
+            mock_config.redis_host = "localhost"
+            mock_config.evaluator = None
+            mock_config.resources = None
+            mock_load.return_value = mock_config
+
+            result = run_evaluator(args)
+
+        assert result == 0
+        assert mock_main.call_args.kwargs["verify_jobs"] == 8
+
+    def test_evaluator_cli_config_mode_prefers_unified_jobs_for_verify_fallback(
+        self,
+    ) -> None:
+        """Config mode uses evaluator.jobs for verify_jobs when verify split override is unset."""
+        import argparse
+
+        from crsbench.distributed.cli.evaluator_command import run_evaluator
+
+        args = argparse.Namespace(
+            experiment_config="test.yaml",
+            ci=False,
+            verbose=False,
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag=None,
+            build_jobs=None,
+            build_cores_per_job=None,
+            verify_cores_per_job=1,
+            verify_jobs=None,
+            worker_name=None,
+            idle_timeout=None,
+            benchmarks_root=None,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator.run_evaluator_main", return_value=0
+            ) as mock_main,
+            patch("crsbench.run_experiment.load_experiment_config") as mock_load,
+        ):
+            mock_evaluator = MagicMock()
+            mock_evaluator.jobs = 3
+            mock_evaluator.cores_per_job = 4
+            mock_evaluator.build_jobs = None
+            mock_evaluator.build_cores_per_job = None
+            mock_evaluator.verify_jobs = None
+            mock_evaluator.verify_cores_per_job = None
+            mock_evaluator.idle_timeout = None
+            mock_evaluator.cpuset = None
+            mock_evaluator.skip_cpuset = None
+            mock_evaluator.cpu_tag = None
+
+            mock_config = MagicMock()
+            mock_config.experiment = "exp-1"
+            mock_config.redis_host = "localhost"
+            mock_config.evaluator = mock_evaluator
+            mock_config.resources = None
+            mock_load.return_value = mock_config
+
+            result = run_evaluator(args)
+
+        assert result == 0
+        assert mock_main.call_args.kwargs["verify_jobs"] == 3
+
+    def test_evaluator_cli_config_mode_prefers_verify_split_override_over_unified_jobs(
+        self,
+    ) -> None:
+        """Config mode uses evaluator.verify_jobs before evaluator.jobs fallback."""
+        import argparse
+
+        from crsbench.distributed.cli.evaluator_command import run_evaluator
+
+        args = argparse.Namespace(
+            experiment_config="test.yaml",
+            ci=False,
+            verbose=False,
+            no_cpuset=True,
+            cores=None,
+            skip_cpus=None,
+            cpu_tag=None,
+            build_jobs=None,
+            build_cores_per_job=None,
+            verify_cores_per_job=None,
+            verify_jobs=None,
+            worker_name=None,
+            idle_timeout=None,
+            benchmarks_root=None,
+        )
+
+        with (
+            patch(
+                "crsbench.distributed.evaluator.run_evaluator_main", return_value=0
+            ) as mock_main,
+            patch("crsbench.run_experiment.load_experiment_config") as mock_load,
+        ):
+            mock_evaluator = MagicMock()
+            mock_evaluator.jobs = 3
+            mock_evaluator.cores_per_job = 4
+            mock_evaluator.build_jobs = None
+            mock_evaluator.build_cores_per_job = None
+            mock_evaluator.verify_jobs = 7
+            mock_evaluator.verify_cores_per_job = None
+            mock_evaluator.idle_timeout = None
+            mock_evaluator.cpuset = None
+            mock_evaluator.skip_cpuset = None
+            mock_evaluator.cpu_tag = None
+
+            mock_config = MagicMock()
+            mock_config.experiment = "exp-1"
+            mock_config.redis_host = "localhost"
+            mock_config.evaluator = mock_evaluator
+            mock_config.resources = None
+            mock_load.return_value = mock_config
+
+            result = run_evaluator(args)
+
+        assert result == 0
+        assert mock_main.call_args.kwargs["verify_jobs"] == 7
 
     def test_evaluator_cli_config_mode_uses_env_redis_host_fallback(self) -> None:
         """Config-mode evaluator should honor CRSBENCH_REDIS_HOST fallback."""
@@ -928,8 +1362,8 @@ class TestConfiglessEvaluator:
             mock_evaluator.verify_cores_per_job = None
             mock_evaluator.verify_jobs = None
             mock_evaluator.idle_timeout = None
-            mock_evaluator.cores = None
-            mock_evaluator.skip_cpus = None
+            mock_evaluator.cpuset = None
+            mock_evaluator.skip_cpuset = None
 
             mock_config = MagicMock()
             mock_config.experiment = "exp-1"

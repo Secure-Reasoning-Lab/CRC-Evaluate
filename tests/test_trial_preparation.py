@@ -10,6 +10,15 @@ from crsbench.evaluation.trial_preparation import (
     TrialPreparationResult,
 )
 
+DEFAULT_INPUTS_DISABLED_HINTS = {
+    "inputs": {
+        "pov": {"enabled": True, "max_variants_per_cpv": 1},
+        "sarif": {"enabled": False, "level": None},
+        "seed": {"enabled": False, "max_time": None},
+        "diff": {"enabled": False},
+    }
+}
+
 # Fixtures
 
 
@@ -118,7 +127,7 @@ def mock_benchmark_with_povs(mock_benchmark):
 @pytest.fixture
 def preparer(temp_experiment_dir, temp_benchmarks_dir, temp_oss_fuzz_dir):
     """Create TrialDirectoryPreparer instance."""
-    config = {"hints_enabled": False, "verbose": False}
+    config = {**DEFAULT_INPUTS_DISABLED_HINTS, "verbose": False}
     return TrialDirectoryPreparer(
         experiment_dir=temp_experiment_dir,
         benchmarks_root=temp_benchmarks_dir,
@@ -205,7 +214,7 @@ class TestHintsPreparation:
         trial_dir = preparer.experiment_dir / "trial-0"
         trial_dir.mkdir()
 
-        # Config has hints_enabled=False by default and no mode set (defaults to full)
+        # Config has inputs.sarif.enabled=False by default.
         hints_dir = preparer._prepare_hints("test-bench", trial_dir)
 
         assert hints_dir is None
@@ -218,7 +227,14 @@ class TestHintsPreparation:
         temp_oss_fuzz_dir,
     ):
         """Test hints preparation when enabled."""
-        config = {"hints_enabled": True, "hint_sarif_level": 1}
+        config = {
+            "inputs": {
+                "sarif": {"enabled": True, "level": 1},
+                "seed": {"enabled": False, "max_time": None},
+                "pov": {"enabled": True, "max_variants_per_cpv": 1},
+                "diff": {"enabled": True},
+            }
+        }
         preparer = TrialDirectoryPreparer(
             experiment_dir=temp_experiment_dir,
             benchmarks_root=temp_benchmarks_dir,
@@ -245,7 +261,14 @@ class TestHintsPreparation:
         temp_oss_fuzz_dir,
     ):
         """Test hints preparation with SARIF level 2."""
-        config = {"hints_enabled": True, "hint_sarif_level": 2}
+        config = {
+            "inputs": {
+                "sarif": {"enabled": True, "level": 2},
+                "seed": {"enabled": False, "max_time": None},
+                "pov": {"enabled": True, "max_variants_per_cpv": 1},
+                "diff": {"enabled": True},
+            }
+        }
         preparer = TrialDirectoryPreparer(
             experiment_dir=temp_experiment_dir,
             benchmarks_root=temp_benchmarks_dir,
@@ -261,6 +284,38 @@ class TestHintsPreparation:
         assert hints_dir is not None
         sarif_files = list(hints_dir.glob("*.sarif"))
         assert len(sarif_files) == 1  # Only cpv_0 has level_2.sarif
+
+    def test_prepare_hints_uses_explicit_inputs_contract(
+        self,
+        mock_benchmark_with_hints,
+        temp_experiment_dir,
+        temp_benchmarks_dir,
+        temp_oss_fuzz_dir,
+    ):
+        """Explicit inputs.sarif should drive hints runtime behavior."""
+        config = {
+            "inputs": {
+                "sarif": {"enabled": True, "level": 1},
+                "seed": {"enabled": False, "max_time": None},
+                "pov": {"enabled": True, "max_variants_per_cpv": 1},
+                "diff": {"enabled": True},
+            },
+        }
+        preparer = TrialDirectoryPreparer(
+            experiment_dir=temp_experiment_dir,
+            benchmarks_root=temp_benchmarks_dir,
+            oss_fuzz_dir=temp_oss_fuzz_dir,
+            config=config,
+        )
+
+        trial_dir = temp_experiment_dir / "trial-0"
+        trial_dir.mkdir()
+
+        hints_dir = preparer._prepare_hints("test-bench", trial_dir)
+
+        assert hints_dir is not None
+        sarif_files = list(hints_dir.glob("*.sarif"))
+        assert len(sarif_files) == 2
 
 
 class TestPOVsPreparation:
@@ -301,9 +356,7 @@ class TestPOVsPreparation:
         temp_oss_fuzz_dir,
     ):
         """Test POVs preparation with target_cpvs filter."""
-        config = {
-            "target_cpvs": ["cpv_0"]  # Only include cpv_0
-        }
+        config = {**DEFAULT_INPUTS_DISABLED_HINTS, "target_cpvs": ["cpv_0"]}
         preparer = TrialDirectoryPreparer(
             experiment_dir=temp_experiment_dir,
             benchmarks_root=temp_benchmarks_dir,
@@ -342,7 +395,7 @@ class TestPOVsPreparation:
         self, temp_experiment_dir, temp_benchmarks_dir, temp_oss_fuzz_dir
     ):
         """Test CPV inclusion with filter."""
-        config = {"target_cpvs": ["cpv_0", "cpv_2"]}
+        config = {**DEFAULT_INPUTS_DISABLED_HINTS, "target_cpvs": ["cpv_0", "cpv_2"]}
         preparer = TrialDirectoryPreparer(
             experiment_dir=temp_experiment_dir,
             benchmarks_root=temp_benchmarks_dir,
@@ -425,7 +478,7 @@ class TestCompleteTrialPreparation:
         temp_oss_fuzz_dir,
     ):
         """Test complete trial preparation for bug finding."""
-        config = {"hints_enabled": False}
+        config = DEFAULT_INPUTS_DISABLED_HINTS
         preparer = TrialDirectoryPreparer(
             experiment_dir=temp_experiment_dir,
             benchmarks_root=temp_benchmarks_dir,
@@ -467,7 +520,7 @@ class TestCompleteTrialPreparation:
         temp_oss_fuzz_dir,
     ):
         """Test complete trial preparation for patch generation."""
-        config = {"hints_enabled": False}
+        config = DEFAULT_INPUTS_DISABLED_HINTS
         preparer = TrialDirectoryPreparer(
             experiment_dir=temp_experiment_dir,
             benchmarks_root=temp_benchmarks_dir,
@@ -504,7 +557,14 @@ class TestCompleteTrialPreparation:
         temp_oss_fuzz_dir,
     ):
         """Test complete trial preparation with hints enabled."""
-        config = {"hints_enabled": True, "hint_sarif_level": 1}
+        config = {
+            "inputs": {
+                "sarif": {"enabled": True, "level": 1},
+                "seed": {"enabled": False, "max_time": None},
+                "pov": {"enabled": True, "max_variants_per_cpv": 1},
+                "diff": {"enabled": True},
+            }
+        }
         preparer = TrialDirectoryPreparer(
             experiment_dir=temp_experiment_dir,
             benchmarks_root=temp_benchmarks_dir,
@@ -540,7 +600,7 @@ class TestCompleteTrialPreparation:
         self, temp_experiment_dir, temp_benchmarks_dir, temp_oss_fuzz_dir
     ):
         """Test trial preparation failure handling."""
-        config = {}
+        config = DEFAULT_INPUTS_DISABLED_HINTS
         preparer = TrialDirectoryPreparer(
             experiment_dir=temp_experiment_dir,
             benchmarks_root=temp_benchmarks_dir,

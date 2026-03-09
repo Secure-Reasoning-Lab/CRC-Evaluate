@@ -118,6 +118,13 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 "repo_name": job.repo_name,
                 "project_image_prefix": job.project_image_prefix,
                 "prepare_inc_job_id": getattr(job, "prepare_inc_job_id", ""),
+                "inc_image_policy": getattr(job, "inc_image_policy", None),
+                "inc_image_registry": getattr(job, "inc_image_registry", None),
+                "inc_image_max_pull_bytes": getattr(
+                    job, "inc_image_max_pull_bytes", None
+                ),
+                "inc_image_pull_timeout": getattr(job, "inc_image_pull_timeout", None),
+                "local_image_prefix": getattr(job, "local_image_prefix", None),
             }
         )
     elif cls_name == "VerifyCpvPovJob":
@@ -245,6 +252,13 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 "build_job_id": job.build_job_id,
                 "prepare_inc_job_id": getattr(job, "prepare_inc_job_id", ""),
                 "source_mode": job.source_mode,
+                "inc_image_policy": getattr(job, "inc_image_policy", None),
+                "inc_image_registry": getattr(job, "inc_image_registry", None),
+                "inc_image_max_pull_bytes": getattr(
+                    job, "inc_image_max_pull_bytes", None
+                ),
+                "inc_image_pull_timeout": getattr(job, "inc_image_pull_timeout", None),
+                "local_image_prefix": getattr(job, "local_image_prefix", None),
             }
         )
     elif cls_name == "PrepareIncImageJob":
@@ -256,6 +270,13 @@ def serialize_ci_job(job: Any) -> dict[str, Any]:
                 "use_inc_build": job.use_inc_build,
                 "force_rebuild": job.force_rebuild,
                 "source_mode": job.source_mode,
+                "inc_image_policy": getattr(job, "inc_image_policy", None),
+                "inc_image_registry": getattr(job, "inc_image_registry", None),
+                "inc_image_max_pull_bytes": getattr(
+                    job, "inc_image_max_pull_bytes", None
+                ),
+                "inc_image_pull_timeout": getattr(job, "inc_image_pull_timeout", None),
+                "local_image_prefix": getattr(job, "local_image_prefix", None),
             }
         )
 
@@ -308,6 +329,11 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             repo_name=params.get("repo_name"),
             project_image_prefix=params.get("project_image_prefix", "crsbench"),
             prepare_inc_job_id=params.get("prepare_inc_job_id", ""),
+            inc_image_policy=params.get("inc_image_policy"),
+            inc_image_registry=params.get("inc_image_registry"),
+            inc_image_max_pull_bytes=params.get("inc_image_max_pull_bytes"),
+            inc_image_pull_timeout=params.get("inc_image_pull_timeout"),
+            local_image_prefix=params.get("local_image_prefix"),
         )
     if cls_name == "VerifyCpvPovJob":
         return VerifyCpvPovJob(
@@ -419,6 +445,11 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             build_job_id=params.get("build_job_id", ""),
             prepare_inc_job_id=params.get("prepare_inc_job_id", ""),
             source_mode=params.get("source_mode", "pkgs"),
+            inc_image_policy=params.get("inc_image_policy"),
+            inc_image_registry=params.get("inc_image_registry"),
+            inc_image_max_pull_bytes=params.get("inc_image_max_pull_bytes"),
+            inc_image_pull_timeout=params.get("inc_image_pull_timeout"),
+            local_image_prefix=params.get("local_image_prefix"),
         )
     if cls_name == "PrepareIncImageJob":
         return PrepareIncImageJob(
@@ -428,6 +459,11 @@ def _reconstruct_job(params: dict[str, Any]) -> Any:
             use_inc_build=params.get("use_inc_build", True),
             force_rebuild=params.get("force_rebuild", False),
             source_mode=params.get("source_mode", "pkgs"),
+            inc_image_policy=params.get("inc_image_policy"),
+            inc_image_registry=params.get("inc_image_registry"),
+            inc_image_max_pull_bytes=params.get("inc_image_max_pull_bytes"),
+            inc_image_pull_timeout=params.get("inc_image_pull_timeout"),
+            local_image_prefix=params.get("local_image_prefix"),
         )
 
     raise ValueError(f"Unknown job class: {cls_name}")
@@ -895,7 +931,7 @@ def enqueue_and_poll_ci_jobs(
     redis_host: str,
     queue_name: str | Callable[[Any], str] = "crsbench_ci_verify",
     output_dir: str | None = None,
-    stale_terminal_policy: str = "refresh_stopped_canceled_failed",
+    stale_terminal_policy: str = "refresh_all",
 ) -> dict[str, dict[str, Any]]:
     """Enqueue CI jobs to Redis and poll until all complete.
 
@@ -1001,10 +1037,9 @@ def enqueue_and_poll_ci_jobs(
         "quit",
     }:
         logger.warning(
-            f"Unknown stale_terminal_policy={policy!r}; defaulting to "
-            "refresh_stopped_canceled_failed"
+            f"Unknown stale_terminal_policy={policy!r}; defaulting to refresh_all"
         )
-        policy = "refresh_stopped_canceled_failed"
+        policy = "refresh_all"
     if has_stale_terminals:
         logger.warning(
             "Detected stale terminal CI jobs in Redis: "
@@ -1128,7 +1163,7 @@ def enqueue_and_poll_ci_jobs(
             )
             rq_jobs[job.job_id] = rq_job
             logger.info(f"Enqueued CI job {job.job_id} -> {job_queue.name}")
-        except Exception:
+        except Exception as err:
             existing = rq.job.Job.fetch(job.job_id, connection=redis_conn)
             status = existing.get_status()
             status_name = _status_name(status)
@@ -1149,23 +1184,31 @@ def enqueue_and_poll_ci_jobs(
                     )
                     rq_jobs[job.job_id] = rq_job
                     continue
-                # Never reuse terminal jobs across runs. Reusing "finished" can
-                # hide missing Docker artifacts and make verify/test fail with
-                # infra_missing_*_build_context while build appears successful.
-                logger.warning(
-                    f"CI job {job.job_id} has terminal status ({status}), "
-                    f"deleting and re-enqueuing for fresh run"
-                )
-                existing.delete()
-                rq_job = job_queue.enqueue(
-                    "crsbench.distributed.ci_jobs.execute_ci_job",
-                    params,
-                    job_timeout=3600,
-                    result_ttl=-1,
-                    job_id=job.job_id,
-                    depends_on=depends_on_rq,
-                )
-                rq_jobs[job.job_id] = rq_job
+                if _should_refresh(status_name, policy):
+                    logger.warning(
+                        f"CI job {job.job_id} has terminal status ({status}), "
+                        "deleting and re-enqueuing per selected policy"
+                    )
+                    existing.delete()
+                    rq_job = job_queue.enqueue(
+                        "crsbench.distributed.ci_jobs.execute_ci_job",
+                        params,
+                        job_timeout=3600,
+                        result_ttl=-1,
+                        job_id=job.job_id,
+                        depends_on=depends_on_rq,
+                    )
+                    rq_jobs[job.job_id] = rq_job
+                elif policy == "quit":
+                    raise RuntimeError(
+                        "Stale terminal CI jobs detected; quitting per selected policy."
+                    ) from err
+                else:
+                    logger.warning(
+                        f"CI job {job.job_id} has terminal status ({status}); "
+                        "reusing existing result"
+                    )
+                    rq_jobs[job.job_id] = existing
             elif status_name in reenqueue_safe_statuses:
                 logger.warning(
                     f"CI job {job.job_id} already exists with status ({status}), "

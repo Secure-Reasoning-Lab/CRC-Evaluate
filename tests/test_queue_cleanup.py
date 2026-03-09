@@ -1,7 +1,10 @@
 """Tests for experiment-scoped queue cleanup helpers."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import crsbench.distributed.queue as queue_module
+import pytest
 from crsbench.distributed.queue import get_trial_key
 from crsbench.distributed.queue_cleanup import clean_experiment_queues
 
@@ -104,3 +107,63 @@ def test_get_trial_key_falls_back_for_non_trial_jobs() -> None:
     job.id = "job-123"
     job.meta = {"experiment_name": "exp-x"}
     assert get_trial_key(job) == "job:exp-x:job-123"
+
+
+def test_handle_orphaned_jobs_requeues_when_only_unrelated_workers_exist(
+    monkeypatch,
+) -> None:
+    if not queue_module.REDIS_AVAILABLE:
+        pytest.skip("Redis/RQ not available")
+
+    queue = MagicMock()
+    queue.name = "crsbench_trial"
+    queue.connection = MagicMock()
+
+    job = MagicMock()
+    job.id = "job-1"
+    started_jobs = {"trial-1": job}
+
+    other_queue_worker = SimpleNamespace(
+        queues=[SimpleNamespace(name="crsbench_build")],
+    )
+    monkeypatch.setattr(
+        queue_module.rq.Worker,  # type: ignore[union-attr]
+        "all",
+        lambda **_kwargs: [other_queue_worker],
+    )
+
+    handled = queue_module.handle_orphaned_jobs(queue, started_jobs)
+
+    assert handled == 1
+    job.set_status.assert_called_once_with(
+        queue_module.rq.job.JobStatus.FAILED  # type: ignore[union-attr]
+    )
+    queue.enqueue_job.assert_called_once_with(job)
+
+
+def test_handle_orphaned_jobs_skips_when_queue_worker_exists(monkeypatch) -> None:
+    if not queue_module.REDIS_AVAILABLE:
+        pytest.skip("Redis/RQ not available")
+
+    queue = MagicMock()
+    queue.name = "crsbench_trial"
+    queue.connection = MagicMock()
+
+    job = MagicMock()
+    job.id = "job-1"
+    started_jobs = {"trial-1": job}
+
+    trial_queue_worker = SimpleNamespace(
+        queues=[SimpleNamespace(name="crsbench_trial")],
+    )
+    monkeypatch.setattr(
+        queue_module.rq.Worker,  # type: ignore[union-attr]
+        "all",
+        lambda **_kwargs: [trial_queue_worker],
+    )
+
+    handled = queue_module.handle_orphaned_jobs(queue, started_jobs)
+
+    assert handled == 0
+    job.set_status.assert_not_called()
+    queue.enqueue_job.assert_not_called()

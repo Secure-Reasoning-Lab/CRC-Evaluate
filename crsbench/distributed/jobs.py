@@ -8,6 +8,7 @@ import json
 import os
 import socket
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -28,7 +29,6 @@ from crsbench.evaluation.trial_paths import (
 from crsbench.evaluation.trial_paths import (
     trial_relative_to_experiment,
 )
-from crsbench.utils.crs_helper import get_crs_registry_name
 from crsbench.utils.litellm_env import (
     required_env_errors_for_mode,
     resolve_litellm_runtime_env,
@@ -53,6 +53,71 @@ from crsbench.validation.schemas import (
 from crsbench.validation.schemas import TrialMetadata as TrialMetadataFile
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class EffectiveInputSettings:
+    """Runtime input settings derived from explicit inputs contract."""
+
+    pov_enabled: bool
+    max_pov_variants_per_cpv: Optional[int]
+    hints_enabled: bool
+    hint_sarif_level: Optional[int]
+    hint_corpus_level: Optional[int]
+    seed_corpus_enabled: bool
+    seed_corpus_max_time: Optional[int]
+    diff_enabled: bool
+    patch_verify_variants: bool
+    source: str
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize settings for metadata/job payloads."""
+        return {
+            "pov": {
+                "enabled": self.pov_enabled,
+                "max_variants_per_cpv": self.max_pov_variants_per_cpv,
+            },
+            "sarif": {
+                "enabled": self.hints_enabled,
+                "level": self.hint_sarif_level,
+            },
+            "seed": {
+                "enabled": self.seed_corpus_enabled,
+                "max_time": self.seed_corpus_max_time,
+            },
+            "diff": {"enabled": self.diff_enabled},
+            "patch_verify_variants": self.patch_verify_variants,
+        }
+
+
+def _resolve_effective_input_settings(
+    config: ExperimentConfig, raw_config: Dict[str, Any]
+) -> EffectiveInputSettings:
+    """Resolve effective runtime inputs from explicit runtime.inputs only."""
+    del raw_config
+    inputs = config.inputs
+
+    pov_enabled = bool(inputs.pov.enabled)
+    max_pov_variants = inputs.pov.max_variants_per_cpv
+    hints_enabled = bool(inputs.sarif.enabled)
+    hint_sarif_level = inputs.sarif.level
+    seed_corpus_enabled = bool(inputs.seed.enabled)
+    seed_corpus_max_time = inputs.seed.max_time
+    diff_enabled = bool(inputs.diff.enabled)
+    hint_corpus_level = None
+
+    return EffectiveInputSettings(
+        pov_enabled=pov_enabled,
+        max_pov_variants_per_cpv=max_pov_variants if pov_enabled else None,
+        hints_enabled=hints_enabled,
+        hint_sarif_level=hint_sarif_level if hints_enabled else None,
+        hint_corpus_level=hint_corpus_level if hints_enabled else None,
+        seed_corpus_enabled=seed_corpus_enabled,
+        seed_corpus_max_time=seed_corpus_max_time if seed_corpus_enabled else None,
+        diff_enabled=diff_enabled,
+        patch_verify_variants=config.patch_verify_variants,
+        source="inputs",
+    )
 
 
 def _resolve_redis_host(config: ExperimentConfig) -> Optional[str]:
@@ -172,10 +237,8 @@ def _setup_llm_tracking(
             master_key=runtime_env.master_key,
         )
 
-        # Extract cost budget from config if present
-        max_budget = None
-        if config.resources and config.resources.litellm:
-            max_budget = config.resources.litellm.cost_budget
+        # Extract cost budget from runtime LiteLLM config if present
+        max_budget = config.litellm_cost_budget
 
         # TODO(team-tracking): Re-enable team budget tracking once LiteLLM team API is integrated
 
@@ -713,20 +776,25 @@ def _apply_worker_overrides(config: ExperimentConfig) -> None:
     if wc is None:
         return
 
-    path_fields = [
-        "registry_dir",
-        "crs_configs_dir",
-        "benchmarks_root",
-        "benchmark_suites_root",
-        "experiment_filestore",
-        "report_filestore",
-        "results_filestore",
-    ]
+    path_fields = ["registry_dir", "benchmarks_root", "benchmark_suites_root"]
     for field in path_fields:
         value = getattr(wc, field, None)
         if value is not None:
             setattr(config, field, value)
             logger.info(f"Worker override applied: {field} = {value}")
+
+    storage_overrides = wc.storage
+    if storage_overrides:
+        storage_path_fields = [
+            "experiment_filestore",
+            "report_filestore",
+            "results_filestore",
+        ]
+        for field in storage_path_fields:
+            value = getattr(storage_overrides, field, None)
+            if value is not None:
+                setattr(config, field, value)
+                logger.info(f"Worker storage override applied: {field} = {value}")
 
     int_fields = ["build_workers", "verify_workers"]
     for field in int_fields:
@@ -735,16 +803,17 @@ def _apply_worker_overrides(config: ExperimentConfig) -> None:
             setattr(config, field, value)
             logger.info(f"Worker override applied: {field} = {value}")
 
-    bool_fields = [
-        "keep_only_results",
-        "cleanup_after_trial",
-        "copy_results_after_trial",
-    ]
-    for field in bool_fields:
-        value = getattr(wc, field, None)
-        if value is not None:
-            setattr(config, field, value)
-            logger.info(f"Worker override applied: {field} = {value}")
+    if storage_overrides:
+        storage_bool_fields = [
+            "keep_only_results",
+            "cleanup_after_trial",
+            "copy_results_after_trial",
+        ]
+        for field in storage_bool_fields:
+            value = getattr(storage_overrides, field, None)
+            if value is not None:
+                setattr(config, field, value)
+                logger.info(f"Worker storage override applied: {field} = {value}")
 
 
 def run_crs_trial(
@@ -797,8 +866,11 @@ def run_crs_trial(
         ... )
         >>> assert result.povs_found >= 0
     """
-    # Reconstruct ExperimentConfig from dict - Pydantic will convert strings to Paths
-    config = ExperimentConfig(**config_dict)
+    # Reconstruct ExperimentConfig from dict - Pydantic will convert strings to Paths.
+    # Strip internal transport-only markers before schema validation.
+    config_parse_dict = dict(config_dict)
+    config = ExperimentConfig(**config_parse_dict)
+    effective_inputs = _resolve_effective_input_settings(config, config_dict)
 
     # Apply worker overrides from config.worker section (if present)
     _apply_worker_overrides(config)
@@ -836,6 +908,7 @@ def run_crs_trial(
             # Only set runtime fields (static fields already set at enqueue)
             job.meta["started_at"] = start_time
             job.meta["worker_name"] = runtime_worker_name
+            job.meta["effective_inputs"] = effective_inputs.to_dict()
             job.save_meta()
             logger.debug(f"Updated runtime job metadata for job {job.id}")
     except Exception as e:
@@ -903,11 +976,8 @@ def run_crs_trial(
         oss_fuzz_path = Path(ensure_oss_fuzz_root())
         registry_dir = config.registry_dir.resolve()
         benchmarks_root = config.benchmarks_root.resolve()
-        crs_configs_dir = config.crs_configs_dir.resolve()
-
-        # Resolve CRS config name to registry name
-        registry_name = get_crs_registry_name(crs, crs_configs_dir)
-        logger.info(f"Resolved CRS config '{crs}' to registry '{registry_name}'")
+        registry_name = crs
+        logger.info(f"Using CRS registry entry '{registry_name}'")
 
         # Detect CRS type from registry
         crs_type = get_crs_type(registry_name, registry_dir)
@@ -920,7 +990,6 @@ def run_crs_trial(
             oss_fuzz_path=oss_fuzz_path,
             registry_dir=registry_dir,
             benchmarks_root=benchmarks_root,
-            crs_configs_dir=crs_configs_dir,
             mode=crs_type,
         )
 
@@ -930,12 +999,29 @@ def run_crs_trial(
         logger.debug(f"Resolved benchmark path: {benchmark_path}")
 
         # Configure adapter
+        compose_config = {}
+        if config.crs_compose:
+            compose_config = config.crs_compose.model_dump(exclude={"services"})
+            compose_config.update(
+                {
+                    name: service.model_dump()
+                    for name, service in config.crs_compose.services.items()
+                }
+            )
+
         adapter_config = {
             "build_timeout": config.build_timeout,
             "run_timeout": config.run_timeout,
-            "hints_enabled": config.hints_enabled,
-            "hint_sarif_level": config.hint_sarif_level,
-            "hint_corpus_level": config.hint_corpus_level,
+            "hints_enabled": effective_inputs.hints_enabled,
+            "hint_sarif_level": effective_inputs.hint_sarif_level,
+            "hint_corpus_level": effective_inputs.hint_corpus_level,
+            "seed_corpus_enabled": effective_inputs.seed_corpus_enabled,
+            "seed_corpus_max_time": effective_inputs.seed_corpus_max_time,
+            "diff_input_enabled": effective_inputs.diff_enabled,
+            "pov_input_enabled": effective_inputs.pov_enabled,
+            "max_pov_variants_per_cpv": effective_inputs.max_pov_variants_per_cpv,
+            "patch_verify_variants": effective_inputs.patch_verify_variants,
+            "inputs": effective_inputs.to_dict(),
             "project_image_prefix": config.project_image_prefix,
             "mode": mode,
             "sanitizer": sanitizer,
@@ -944,8 +1030,7 @@ def run_crs_trial(
             "run_id": trial_id,
             "source_mode": config.source_mode,
             "skip_litellm": config.skip_litellm,
-            # Spread crs_compose config fields when present
-            **(config.crs_compose.model_dump() if config.crs_compose else {}),
+            **compose_config,
         }
         adapter_config["fuzzing_language"] = benchmark_language
         adapter.configure(adapter_config)
@@ -1038,8 +1123,14 @@ def run_crs_trial(
             llm_accounting_settle_seconds=config.llm_accounting_settle_seconds,
             build_workers=config.build_workers,
             verify_workers=config.verify_workers,
-            max_pov_variants_per_cpv=config.max_pov_variants_per_cpv,
-            patch_verify_variants=config.patch_verify_variants,
+            max_pov_variants_per_cpv=effective_inputs.max_pov_variants_per_cpv,
+            patch_verify_variants=effective_inputs.patch_verify_variants,
+            pov_input_enabled=effective_inputs.pov_enabled,
+            sarif_input_enabled=effective_inputs.hints_enabled,
+            sarif_level=effective_inputs.hint_sarif_level,
+            seed_corpus_enabled=effective_inputs.seed_corpus_enabled,
+            seed_corpus_max_time=effective_inputs.seed_corpus_max_time,
+            diff_input_enabled=effective_inputs.diff_enabled,
             redis_host=_resolve_redis_host(config),
             experiment_name=config.experiment,
             pov_dedup_strategy=config.pov_dedup_strategy,
@@ -1104,8 +1195,16 @@ def run_crs_trial(
             mode=trial_mode,
             source=SourceInfo(path=str(benchmark_path)),
             config=TrialConfig(
-                hints_enabled=config.hints_enabled,
-                hints_corpus_level=config.hint_corpus_level,
+                hints_enabled=effective_inputs.hints_enabled,
+                hints_corpus_level=effective_inputs.hint_corpus_level,
+                target_povs=effective_inputs.max_pov_variants_per_cpv,
+                hint_sarif_level=effective_inputs.hint_sarif_level,
+                seed_corpus_enabled=effective_inputs.seed_corpus_enabled,
+                seed_corpus_max_time=effective_inputs.seed_corpus_max_time,
+                pov_input_enabled=effective_inputs.pov_enabled,
+                diff_enabled=effective_inputs.diff_enabled,
+                patch_verify_variants=effective_inputs.patch_verify_variants,
+                inputs=effective_inputs.to_dict(),
             ),
             worker_machine=runtime_worker_name,
             worker_trial_dir=str(trial_output_dir),
@@ -1113,11 +1212,7 @@ def run_crs_trial(
             sanitizer=sanitizer,
             target_cpv_id=target_cpv_id,
             experiment_name=config.experiment,
-            litellm_budget=(
-                config.resources.litellm.cost_budget
-                if config.resources and config.resources.litellm
-                else None
-            ),
+            litellm_budget=config.litellm_cost_budget,
             cores_per_trial=config.resources.cores_per_trial
             if config.resources
             else None,
@@ -1190,17 +1285,12 @@ def run_crs_trial(
         metadata = TrialMetadata(
             experiment_filestore=str(config.experiment_filestore),
             max_total_time=config.max_total_time,
-            difficulty_level=config.difficulty_level,
             timestamp_start=start_time,
             timestamp_end=time.time(),
             build_time=build_time,
             run_time=run_time,
             experiment_name=config.experiment,
-            litellm_budget=(
-                config.resources.litellm.cost_budget
-                if config.resources and config.resources.litellm
-                else None
-            ),
+            litellm_budget=config.litellm_cost_budget,
             cores_per_trial=config.resources.cores_per_trial
             if config.resources
             else None,

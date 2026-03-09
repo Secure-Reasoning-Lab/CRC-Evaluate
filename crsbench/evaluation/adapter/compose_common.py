@@ -182,6 +182,8 @@ def run_oss_crs_run(
     pov_dir: Optional[Path] = None,
     diff: Optional[Path] = None,
     seed_dir: Optional[Path] = None,
+    bug_candidate: Optional[Path] = None,
+    bug_candidate_dir: Optional[Path] = None,
 ) -> tuple[str, str, int, bool]:
     """Run ``oss-crs run`` with timeout and graceful shutdown.
 
@@ -202,9 +204,16 @@ def run_oss_crs_run(
         pov_dir: Path to a directory of POVs (bug-fixing).
         diff: Path to a reference diff file (bug-fixing).
         seed_dir: Path to seed corpus directory.
+        bug_candidate: Path to a single bug-candidate report file (e.g. SARIF).
+        bug_candidate_dir: Path to a directory of bug-candidate reports.
     Returns:
         Tuple of (stdout, stderr, returncode, timed_out).
     """
+    if bug_candidate is not None and bug_candidate_dir is not None:
+        raise ValueError(
+            "bug_candidate and bug_candidate_dir are mutually exclusive; provide only one"
+        )
+
     cmd = [
         oss_crs_cmd,
         "run",
@@ -230,6 +239,10 @@ def run_oss_crs_run(
         cmd.extend(["--diff", str(diff)])
     if seed_dir is not None:
         cmd.extend(["--seed-dir", str(seed_dir)])
+    if bug_candidate is not None:
+        cmd.extend(["--bug-candidate", str(bug_candidate)])
+    if bug_candidate_dir is not None:
+        cmd.extend(["--bug-candidate-dir", str(bug_candidate_dir)])
 
     logger.debug(f"Running oss-crs run: {' '.join(cmd)}")
 

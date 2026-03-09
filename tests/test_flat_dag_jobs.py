@@ -8,6 +8,7 @@ Tests verify:
 """
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from crsbench.benchmark_ci.jobs.base import JobContext
 from crsbench.benchmark_ci.jobs.flat import (
@@ -133,6 +134,62 @@ class TestBuildSingleVariantJob:
         )
         assert job.depends_on == ["prepare-inc-image/test-proj/address/pkgs/inc/cached"]
 
+    def test_execute_passes_inc_image_runtime_settings_to_builder(self) -> None:
+        job = BuildSingleVariantJob(
+            benchmark_path=Path("/bench/test-proj"),
+            benchmark_name="test-proj",
+            variant_type=VariantType.DELTA_REF,
+            commit="abc123",
+            main_repo="https://github.com/test/repo",
+            mode=BenchmarkMode.DELTA,
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123456,
+            inc_image_pull_timeout=77,
+            local_image_prefix="custom-prefix",
+        )
+
+        build_result = MagicMock()
+        build_result.success = True
+        build_result.variant_name = "test-proj-asan-deltaref"
+        build_result.cached = False
+        build_result.fallback_used = False
+        build_result.error = None
+        build_result.stdout = ""
+        build_result.stderr = ""
+
+        storage_metrics = MagicMock()
+        storage_metrics.total_bytes = 0
+
+        builder = MagicMock()
+        builder.build_single.return_value = build_result
+        builder.infra.get_build_output_path.return_value = Path("/tmp/out")
+
+        with (
+            patch(
+                "crsbench.utils.run_helper.ensure_oss_fuzz_root",
+                return_value="/tmp/oss-fuzz",
+            ),
+            patch("crsbench.builder.OSSFuzzBuilder", return_value=builder) as mock_cls,
+            patch(
+                "crsbench.benchmark_ci.jobs.flat.collect_benchmark_storage",
+                return_value=storage_metrics,
+            ),
+        ):
+            result = job.execute(JobContext())
+
+        assert result.success is True
+        mock_cls.assert_called_once_with(
+            Path("/tmp/oss-fuzz"),
+            max_workers=1,
+            source_mode="pkgs",
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123456,
+            inc_image_pull_timeout=77,
+            local_image_prefix="custom-prefix",
+        )
+
 
 class TestPrepareIncImageJob:
     def test_job_id_and_type(self) -> None:
@@ -145,6 +202,45 @@ class TestPrepareIncImageJob:
         )
         assert job.job_id == "prepare-inc-image/test-proj/address/pkgs/inc/cached"
         assert job.job_type == "build"
+
+    def test_execute_passes_inc_image_runtime_settings_to_infra(self) -> None:
+        job = PrepareIncImageJob(
+            benchmark_path=Path("/bench/test-proj"),
+            benchmark_name="test-proj",
+            sanitizer="address",
+            use_inc_build=True,
+            source_mode="pkgs",
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123456,
+            inc_image_pull_timeout=77,
+            local_image_prefix="custom-prefix",
+        )
+
+        infra = MagicMock()
+        infra.ensure_inc_image.return_value = True
+
+        with (
+            patch(
+                "crsbench.utils.run_helper.ensure_oss_fuzz_root",
+                return_value="/tmp/oss-fuzz",
+            ),
+            patch(
+                "crsbench.builder.infrastructure.OSSFuzzInfrastructure",
+                return_value=infra,
+            ) as mock_cls,
+        ):
+            result = job.execute(JobContext())
+
+        assert result.success is True
+        mock_cls.assert_called_once_with(
+            Path("/tmp/oss-fuzz"),
+            inc_image_policy="pull_only",
+            inc_image_registry="ghcr.io/example/custom",
+            inc_image_max_pull_bytes=123456,
+            inc_image_pull_timeout=77,
+            local_image_prefix="custom-prefix",
+        )
 
 
 class TestVerifyCpvPovJob:

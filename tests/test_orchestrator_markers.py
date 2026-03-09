@@ -12,7 +12,7 @@ from crsbench.distributed.jobs import _build_trial_output_path, _check_existing_
 from crsbench.evaluation.results import TrialMetadata as ResultsTrialMetadata
 from crsbench.evaluation.results import TrialResult
 from crsbench.run_experiment import _write_orchestrator_marker
-from crsbench.validation.schemas import AdapterType, ExperimentConfig, TrialMode
+from crsbench.validation.schemas import ExperimentConfig, TrialMode
 from crsbench.validation.schemas import TrialMetadata as SchemasTrialMetadata
 
 # ---------------------------------------------------------------------------
@@ -26,12 +26,11 @@ def _make_experiment_config(tmp_path: Path, **overrides) -> ExperimentConfig:
         "experiment": "test-exp",
         "trials": 1,
         "mode": "delta",
-        "adapter": AdapterType.OSS_CRS,
         "max_total_time": 86400,
-        "difficulty_level": 0,
+        "inputs": {"pov": {"enabled": True, "max_variants_per_cpv": 1}},
         "experiment_filestore": str(tmp_path / "experiment-data"),
         "report_filestore": str(tmp_path / "report-data"),
-        "crses": ["test-crs"],
+        "crs_compose": {"test-crs": {"num_cores": 1}},
         "benchmarks": ["bench-01"],
     }
     defaults.update(overrides)

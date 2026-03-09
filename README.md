@@ -6,6 +6,8 @@ Unlike traditional fuzzing benchmarks (e.g., FuzzBench) that only report coverag
 
 ## Quick Start
 
+First-time users should start with [docs/getting-started/first-experiment.md](docs/getting-started/first-experiment.md).
+
 ```bash
 # Install
 git clone https://github.com/sslab-gatech/CRSBench.git && cd CRSBench
@@ -20,12 +22,33 @@ uv run hf auth login
 crsbench download --all                     # all 134 benchmarks (~12GB)
 crsbench download --all --no-ground-truth   # skip .aixcc/ ground truth
 crsbench download --benchmark-suite sanity  # small test suite
+```
 
-# Run an experiment (requires Valkey/Redis for job queue)
+Production-style single-machine queue-backed example (128 cores):
+
+```bash
 python scripts/valkey-helper.py --password start  # auto-generates password, saved to .env
-crsbench run       --experiment-config experiment-configs/experiment-config-sanity.yaml
-crsbench worker    --experiment-config experiment-configs/experiment-config-sanity.yaml
-crsbench evaluator --experiment-config experiment-configs/experiment-config-sanity.yaml
+
+# Terminal 1: worker
+crsbench worker \
+  --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml \
+  --jobs 7 \
+  --cores-per-job 16 \
+  --cpuset 0-111 \
+  --continuous
+
+# Terminal 2: evaluator (optional for normal CRS runs; use for real-time build/verify processing)
+crsbench evaluator \
+  --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml \
+  --build-jobs 4 \
+  --build-cores-per-job 4 \
+  --verify-jobs 4 \
+  --verify-cores-per-job 4 \
+  --cpuset 112-127
+
+# Terminal 3: orchestrator
+crsbench run \
+  --experiment-config experiment-configs/afc-final-bugfinding/atlantis-multilang-given_fuzzer-default-full-given-fuzzer-run.yaml
 
 # Clean stale queue state for one experiment (use the `experiment:` name from config)
 crsbench queue clean --experiment sanity-test --yes
@@ -39,8 +62,11 @@ crsbench queue clean --experiment sanity-test --yes
 If your virtual environment is not activated, prefix CLI commands with `uv run`
 (for example, `uv run crsbench download --all`).
 
-CRS experiments use a distributed job queue (Redis/RQ). The orchestrator (`run`) enqueues jobs,
-workers (`worker`) execute them. Add `evaluator` for real-time POV and patch verification.
+CRSBench supports queue-backed execution with Redis/RQ. In that model, the
+orchestrator (`run`) enqueues jobs, workers (`worker`) execute CRS trial jobs,
+and `evaluator` processes build/verify queues for real-time POV and patch
+verification. For the smallest first run, follow
+[docs/getting-started/first-experiment.md](docs/getting-started/first-experiment.md).
 
 ### Run / Worker / Evaluator Workflow
 
@@ -81,8 +107,29 @@ Machine B/C/...               Machine D (single evaluator)
 - Real-time POV/patch collection is tied to resolved `EXCHANGE_DIR` paths
 - Additional POV dedup strategy `stack-based` is available via `pov_dedup_strategy` in experiment config
 
-See [Experiment Workflow](docs/experiment-workflow.md) for multi-machine setup, core pinning, and
-production deployment. See [Environment Setup](docs/environment-setup.md) for `.env` configuration.
+See [Distributed Experiments](docs/guides/experiments/distributed.md) for multi-machine setup, core pinning, and
+production deployment. See [Configuration](docs/getting-started/configuration.md) for `.env` configuration.
+
+### CRS Config Resolution (Important)
+
+CRS services are declared under `crs_compose` in experiment YAML.
+
+Resolution flow:
+1. Add one or more CRS service keys under `crs_compose` (for example `crs-codex`)
+2. Each CRS key resolves to `./oss-crs/registry/<crs>.yaml` by default
+3. Registry YAML defines source (git or `local_path`) and runtime defaults
+
+Example:
+
+```yaml
+crs_compose:
+  crs-codex:
+    num_cores: 8
+```
+
+For LiteLLM in experiment runtime (`runtime.litellm.mode: external`):
+- Tracking enabled (`runtime.litellm.tracking_enabled: true`) requires `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`
+- Tracking disabled (`runtime.litellm.tracking_enabled: false`) requires either `CRSBENCH_LLM_UPSTREAM_API_KEY` or `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`
 
 ### Shell Completion
 
@@ -104,7 +151,7 @@ fish and other shell setup instructions.
 ```bash
 crsbench verify       benchmarks/project --pov-dir ./povs/
 crsbench patch-verify benchmarks/project --patch-dir ./patches --pov-dir ./povs
-crsbench coverage     benchmarks/project --corpus-dir ./corpus/
+crsbench coverage     benchmarks/project --corpus-dir ./corpus/  # experimental
 ```
 
 ### Results
@@ -149,7 +196,7 @@ CRSBench/
 │   ├── reporting/           #   Reports & dashboard
 │   ├── statistics/          #   Benchmark statistics
 │   └── utils/               #   Shared utilities (logger, YAML, etc.)
-├── crses/                   # CRS configurations for evaluation
+├── oss-crs/registry/        # OSS-CRS registry entries referenced by `crs_compose` keys
 ├── oss-crs/                 # CRS runtime and registry (submodule)
 ├── third_party/oss-fuzz/    # Official OSS-Fuzz (sparse checkout, managed by `crsbench prepare`)
 ├── third_party/patches/     # Local upstream patch set (applied by `crsbench prepare`)
@@ -162,16 +209,18 @@ CRSBench/
 - Entry point: [docs/README.md](docs/README.md)
 - Benchmark format contract: [docs/RFC.md](docs/RFC.md)
 - Documentation governance:
-  - [Taxonomy and Canonical Map](docs/documentation-taxonomy.md)
-  - [Inventory and Audit](docs/documentation-inventory.md)
-  - [Maintenance Guide](docs/documentation-maintenance.md)
+  - [Taxonomy and Canonical Map](docs/governance/documentation-taxonomy.md)
+  - [Inventory and Audit](docs/governance/documentation-inventory.md)
 - Setup and runtime:
-  - [Environment Setup](docs/environment-setup.md)
-  - [Environment Variables](docs/environment-variables.md)
-  - [Experiment Workflow](docs/experiment-workflow.md)
+  - [Install](docs/getting-started/install.md)
+  - [Configuration](docs/getting-started/configuration.md)
+  - [Environment Variables](docs/reference/environment-variables.md)
+  - [First Experiment](docs/getting-started/first-experiment.md)
+  - [Distributed Experiments](docs/guides/experiments/distributed.md)
+  - [Distributed Experiment Config Contract (source-of-truth)](docs/experiment-config-distributed-example.yaml)
 - Contributor tracks:
-  - [Framework Developer Guide](docs/framework-developer-guide.md)
-  - [Benchmark Developer Guide](docs/benchmark-developer-guide.md)
+  - [Framework Developer Guide](docs/contributors/framework-developer-guide.md)
+  - [Benchmark Developer Guide](docs/contributors/benchmark-developer-guide.md)
 - Architecture and modules:
   - [Design Docs](docs/design/README.md)
   - [Module Docs](docs/modules/README.md)

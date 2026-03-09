@@ -19,7 +19,6 @@ FACTORY_ARGS = {
     "oss_fuzz_path": Path("/tmp/fake/oss-fuzz"),
     "registry_dir": Path("/tmp/fake/registry"),
     "benchmarks_root": Path("/tmp/fake/benchmarks"),
-    "crs_configs_dir": Path("/tmp/fake/configs"),
 }
 
 

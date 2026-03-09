@@ -1,154 +1,70 @@
-# test.sh Generator Design
+# Design: test.sh Generator
+- Audience: maintainers working on benchmark functional-test generation
+- Scope: contracts for generating `test.sh` artifacts and related analysis outputs
+- Related: [Migration Validation](./migration-validation.md)
 
-## Overview
-Automated tool to generate `test.sh` functional test scripts for benchmarks that lack them. Uses Claude Agent SDK to analyze project repositories, find unit tests, and generate appropriate test.sh scripts.
+## Goals and Non-goals
 
-## Problem Statement
-- Security patch validation requires functional testing beyond vulnerability triggering
-- Manual creation of test.sh is time-consuming
-- Many benchmarks lack test.sh files
-- Need automated approach leveraging existing unit tests in project repositories
+### Goals
+- define the generator inputs, outputs, and invariants
+- define how repository context and benchmark metadata influence generated test artifacts
+- define failure semantics for agent-assisted and container-assisted generation flows
 
-## Architecture
+### Non-goals
+- shell walkthroughs for local use
+- implementation snapshots of agent prompts or helper scripts
+- provider-specific model setup tutorials
 
-### Components
-1. **TestFinder Agent**: Discovers unit tests in project repository
-2. **DocumentationGenerator Agent**: Creates markdown documentation from discovered tests
-3. **TestShGenerator Agent**: Generates test.sh script from documentation
-4. **BadPatchGenerator Agent**: Generates bad_patch.diff that breaks functionality
-5. **TestShValidator**: Validates test.sh execution in OSS-Fuzz container
-6. **CLI Orchestrator**: Coordinates the workflow
+## Inputs
 
-### Agent Communication
-All agents use Claude Agent SDK with LiteLLM proxy (CRSBENCH_LLM_BASE_URL, CRSBENCH_LLM_API_KEY from environment)
+The generator consumes:
+- benchmark metadata
+- project repository context
+- detected build/test-system information
+- optional container-validation capabilities
 
-### Data Flow
-```
-Project Repo → TestFinder → MD Doc → TestShGenerator → test.sh → Validator
-                  ↓                        ↓                ↓
-            unit_tests.md          test_sh_plan.md    execution.log
-                                         ↓
-                                   BadPatchGenerator → bad_patch.diff
-                                         ↓
-                                  bad_patch_plan.md
-```
+## Outputs
 
-## Implementation Plan
+The generator may emit:
+- `test.sh`
+- supporting analysis notes or logs
+- structured generation outcome metadata
 
-### 1. TestFinder Agent
-**Input**: Project directory path
-**Output**: Markdown file listing discovered unit tests with metadata
-**Tools**: Read, Grep, Glob, Bash
-**Prompt Strategy**:
-- Search for test files (test/, tests/, *Test.java, *_test.py, etc.)
-- Identify test framework (JUnit, pytest, gtest, etc.)
-- List test classes/functions with file paths
-- Note build system (Maven, Gradle, CMake, etc.)
+## Core Invariants
 
-### 2. DocumentationGenerator Agent
-**Input**: Unit tests markdown, project metadata
-**Output**: Structured markdown for test.sh generation
-**Tools**: Read
-**Prompt Strategy**:
-- Analyze test organization
-- Identify functional vs unit tests
-- Note excluded tests (like root-only tests in Docker)
-- Recommend test invocation commands
+- generated scripts must be benchmark-scoped and reproducible from the same repository state
+- generator output must remain compatible with containerized benchmark execution
+- container-validation/refinement steps must not silently change benchmark semantics
 
-### 3. TestShGenerator Agent
-**Input**: Test documentation markdown
-**Output**: test.sh script
-**Tools**: Read, Write
-**Prompt Strategy**:
-- Generate bash script following existing test.sh patterns
-- Include build tool invocation (mvn, make, etc.)
-- Handle test exclusions (e.g., -Dtest=!TestClass)
-- Add appropriate flags (skip coverage, checkstyle, etc.)
+## Runtime Modes
 
-### 4. BadPatchGenerator Agent
-**Input**: Test documentation markdown, project directory
-**Output**: bad_patch.diff file
-**Tools**: Read, Grep, Glob, Write, Skill
-**Prompt Strategy**:
-- Analyze test suite to understand tested functionality
-- Find source files implementing tested features
-- Generate 3-5 semantic mutations (wrong logic, not syntax errors)
-- Create unified diff that compiles but breaks tests
-- Examples: flip conditionals, change operators, modify return values
+### Standard generation
+Analyze repository context and emit candidate `test.sh` plus supporting notes.
 
-**Key Requirements**:
-- Patch must compile successfully (no syntax errors)
-- Patch must break functionality (tests will fail)
-- Target files that are tested by test.sh
-- Use plausible mutations (off-by-one, wrong operator, etc.)
+### Iterative/container-assisted generation
+Optionally build and validate generated artifacts in a container loop, refining until the artifact satisfies the generator's acceptance criteria or fails with an explicit reason.
 
-### 5. TestShValidator
-**Input**: test.sh path, benchmark name
-**Output**: Validation report
-**Tools**: Bash (infra/helper.py)
-**Actions**:
-- Build benchmark container
-- Execute test.sh inside container
-- Capture output and exit code
-- Report success/failure
+## Failure Semantics
 
-### 6. CLI Orchestrator
-**Command**: `crsbench generate-test-sh <benchmark-name>`
-**Workflow**:
-1. Check if test.sh already exists
-2. Locate project repository (from environment or meta.yaml)
-3. Run TestFinder agent (Phase 1: Unit test discovery)
-4. Run TestShGenerator agent (Phase 2: test.sh generation)
-5. Run BadPatchGenerator agent (Phase 2.5: bad_patch.diff generation)
-6. Run TestShValidator (Phase 3: Validation)
-7. Save test.sh and bad_patch.diff to benchmark directory
+- missing repository context is a generation precondition failure
+- unsupported or ambiguous test/build layouts are reported explicitly
+- container-validation failures must be surfaced as generation failures, not hidden retries
 
-## File Locations
-- Tool implementation: `crsbench/migration/test_sh_generator.py`
-- CLI integration: `crsbench/run_experiment.py` (add subcommand)
-- Tests: `tests/test_test_sh_generator.py`
-- Skills: `.claude/skills/bad-patch-generator/SKILL.md`
-- Generated artifacts:
-  - `benchmarks/<name>/test.sh`
-  - `benchmarks/<name>/bad_patch.diff`
-  - `benchmarks/<name>/.agent/test_analysis.md`
-  - `benchmarks/<name>/.agent/test_sh_gen.md`
-  - `benchmarks/<name>/.agent/bad_patch_gen.md`
-  - `benchmarks/<name>/.agent/agent_log.txt`
+## Decisions and Tradeoffs
 
-## Example test.sh Patterns
+- decision: keep generation benchmark-scoped
+  - tradeoff: more repeated work, simpler artifact provenance
+- decision: support optional iterative/container-assisted refinement
+  - tradeoff: more complexity, better artifact validation before handoff
 
-### Maven (Java)
-```bash
-#!/bin/bash
-MAVEN_ARGS="-Djacoco.skip=true -Drat.skip=true -Dcheckstyle.skip=true \
-  -Djavac.target.version=11 -Dtest=!ExcludedTest"
-${MVN:-mvn} test $MAVEN_ARGS
-```
+## Validation
 
-### Make (C/C++)
-```bash
-#!/bin/bash
-make test
-```
+This contract should be covered by:
+- generator unit tests
+- repository-context tests
+- optional container-validation tests where applicable
 
-### CMake (C/C++)
-```bash
-#!/bin/bash
-mkdir -p build && cd build
-cmake .. -DBUILD_TESTING=ON
-make test
-```
+## Implementation Pointers
 
-## Environment Requirements
-- `CRSBENCH_LLM_BASE_URL`: LiteLLM proxy endpoint
-- `CRSBENCH_LLM_API_KEY`: API key for LiteLLM
-- `PROJECT_REPO_DIR`: Optional, directory containing cloned project repos
-
-## Future Enhancements (TODO)
-- Validate test.sh after patch application (verify bad_patch.diff causes test failures)
-- Support more build systems
-- Auto-detect test exclusions needed for Docker environment
-- Cache analysis results to avoid re-running agents
-- Add validation step to ensure bad_patch.diff compiles but breaks tests
-- Support multiple bad patch variants for different mutation strategies
+- migration/test-sh generator modules under `crsbench/`
+- related migration/test agent tests under `tests/`

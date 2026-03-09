@@ -1,5 +1,8 @@
 # CRSBench Architecture
 
+Audience: contributors changing system-level structure or cross-module contracts.
+Scope: repository-wide architecture intent, boundaries, and major design decisions.
+
 This document describes the architecture intent for CRSBench and the main design
 tradeoffs behind its current structure.
 
@@ -46,7 +49,6 @@ CRSBench/
 │   └── run_experiment.py     # CLI entrypoint
 ├── docs/                     # User docs, module docs, design docs
 ├── benchmarks/               # Benchmark artifacts
-├── crses/                    # CRS configurations
 ├── experiment-configs/       # Experiment yaml configs
 ├── oss-crs/                  # Integrated upstream project
 └── third_party/oss-fuzz/     # Official OSS-Fuzz (sparse checkout)
