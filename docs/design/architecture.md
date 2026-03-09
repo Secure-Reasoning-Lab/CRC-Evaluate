@@ -56,7 +56,7 @@ CRSBench/
 ### 1. Spec-First Benchmark Quality Gate
 
 Decision:
-- Use `docs/RFC.md` + validation modules as the source of truth for benchmark
+- Use `docs/reference/benchmark-rfc.md` + validation modules as the source of truth for benchmark
   structure and required metadata.
 
 Why:

@@ -630,4 +630,4 @@ def clone_repository_with_retry(repo_url, target_dir, max_retries=3):
 
 - **test.sh Generator**: [docs/design/migration/test-sh-generator.md](./test-sh-generator.md)
 - **Migration Script**: [docs/design/migration/migration-atlanta-to-rfc.md](./migration-atlanta-to-rfc.md)
-- **Benchmark Format**: [docs/RFC.md](../../RFC.md)
+- **Benchmark Format**: [docs/reference/benchmark-rfc.md](../../reference/benchmark-rfc.md)

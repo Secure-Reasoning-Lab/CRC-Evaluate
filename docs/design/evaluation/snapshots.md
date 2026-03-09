@@ -1515,81 +1515,16 @@ def capture_snapshot(self):
 - Partial files in snapshots are acceptable (will be complete in next snapshot)
 - No locks needed (filesystem provides natural ordering)
 
-## Implementation Checklist
+## Runtime Contract Summary
 
-### Phase 1: Core Implementation
+The snapshot subsystem is invoked from both local and distributed execution
+paths. The contract is:
 
-- [ ] **Schema updates**
-  - [ ] Add `snapshot_period` to `ExperimentConfig` in `crsbench/validation/schemas.py`
-  - [ ] Add validator for snapshot period (60s minimum)
-  - [ ] Update `docs/experiment-config-distributed-example.yaml` with snapshot_period
-
-- [ ] **Create SnapshotManager**
-  - [ ] Create `crsbench/evaluation/snapshot_manager.py`
-  - [ ] Implement `SnapshotManager` class with threading
-  - [ ] Implement timing mechanism (`sleep_until_next_snapshot`)
-  - [ ] Implement capture logic (`capture_snapshot`)
-  - [ ] Implement incremental tracking (POVs, patches)
-
-- [ ] **Integrate with BenchmarkRunner**
-  - [ ] Modify `BenchmarkRunner.__init__` to accept `snapshot_period`
-  - [ ] Modify `run_benchmark` to accept `trial_output_dir`
-  - [ ] Start/stop snapshot thread during benchmark execution
-  - [ ] Update `crsbench/evaluation/__init__.py` exports
-
-- [ ] **Integrate with Orchestrator**
-  - [ ] Modify `run_experiment_local` to pass `snapshot_period`
-  - [ ] Create trial output directories
-  - [ ] Pass directories to `BenchmarkRunner.run_benchmark`
-  - [ ] Modify `run_experiment_distributed` for workers
-
-### Phase 2: Testing
-
-- [ ] **Unit tests**
-  - [ ] Create `tests/test_snapshot_manager.py`
-  - [ ] Test SnapshotManager initialization
-  - [ ] Test timing mechanism
-  - [ ] Test incremental capture (POVs, patches)
-  - [ ] Test LLM usage capture
-  - [ ] Test log tail capture
-
-- [ ] **Integration tests**
-  - [ ] Test with BenchmarkRunner
-  - [ ] Test thread lifecycle
-  - [ ] Test snapshot directory structure
-  - [ ] Test snapshot validation
-
-- [ ] **Run tests**
-  - [ ] `pytest tests/test_snapshot_manager.py -v`
-  - [ ] Verify all tests pass
-
-### Phase 3: Documentation
-
-- [ ] **Update design docs**
-
-- [ ] **Update user docs**
-  - [ ] Document snapshot_period in experiment config docs
-  - [ ] Add snapshot directory structure to docs
-  - [ ] Create example showing how to inspect snapshots
-
-- [ ] **Code documentation**
-  - [ ] Add docstrings to all SnapshotManager methods
-  - [ ] Add module docstring to snapshot_manager.py
-  - [ ] Update BenchmarkRunner docstrings
-
-### Phase 4: Validation
-
-- [ ] **Manual testing**
-  - [ ] Run actual CRS trial with snapshots enabled
-  - [ ] Verify snapshots are created at correct intervals
-  - [ ] Inspect snapshot contents for correctness
-  - [ ] Verify no CRS performance degradation
-
-- [ ] **Edge case testing**
-  - [ ] Test with very short snapshot period (60s)
-  - [ ] Test with very long trial (>24 hours)
-  - [ ] Test CRS that produces many POVs rapidly
-  - [ ] Test CRS failure during trial
+- snapshot capture happens within the trial-local output directory only
+- distributed workers do not write snapshot data into shared/global temp roots
+- snapshot archives are self-contained and portable across hosts
+- snapshot file names and metadata remain deterministic for a given cycle
+- partial file capture is acceptable; the next snapshot may contain the completed data
 
 ## Future Extensions
 
@@ -1842,38 +1777,12 @@ class SnapshotValidator:
 5. Metadata cycle matches filename
 6. Patch directory structure correct (organized by POV ID)
 
-### Usage
+### Operational Usage
 
-**Generate snapshots:**
-```bash
-python snapshot-examples/generate_snapshot.py [output_dir]
-```
+User-facing snapshot commands and examples are documented in:
 
-**List snapshots:**
-```bash
-# List all snapshots in directory with summaries
-python snapshot-examples/generate_snapshot.py --list [snapshot_dir]
-
-# List detailed contents of specific snapshot
-python snapshot-examples/generate_snapshot.py --list-snapshot <snapshot.tar.gz>
-```
-
-**Validate snapshots:**
-```bash
-python snapshot-examples/generate_snapshot.py --validate [snapshot_dir]
-```
-
-**Inspect snapshots (manual):**
-```bash
-# List contents
-tar -tzf snapshot-examples/trial-example/snapshot-0001.tar.gz
-
-# Extract
-tar -xzf snapshot-examples/trial-example/snapshot-0001.tar.gz
-
-# View metadata
-cat metadata.json
-```
+- [docs/reference/snapshots.md](../../reference/snapshots.md)
+- [snapshot-examples/README.md](../../../snapshot-examples/README.md)
 
 ### Integration with Testing
 

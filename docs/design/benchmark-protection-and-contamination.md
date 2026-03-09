@@ -326,24 +326,10 @@ crsbench/
 │   └── workdir_parser.py      # Parse WORKDIR from Dockerfile
 ```
 
-**CLI Commands:**
+User-facing benchmark commands are documented in:
 
-```bash
-# Validate benchmark format
-crsbench benchmark validate ./libpng-vuln-001
-
-# Generate ref.diff for delta mode
-crsbench benchmark prepare-delta ./libpng-vuln-001
-
-# Bundle single benchmark (creates pkgs/ tarballs)
-crsbench benchmark bundle ./libpng-vuln-001
-
-# Bundle entire dataset
-crsbench benchmark bundle-all ./benchmarks/
-
-# Upload to HuggingFace
-crsbench benchmark upload --dataset crsbench --benchmarks-dir ./benchmarks
-```
+- [docs/contributors/benchmark-developer-guide.md](../contributors/benchmark-developer-guide.md)
+- [docs/reference/benchmark-rfc.md](../reference/benchmark-rfc.md)
 
 ### 4.4 Bundle Implementation Details
 
@@ -672,6 +658,15 @@ Current implementation provides simple completion-based detection framework.
 
 ## 6. Workflows
 
+User-facing workflows are maintained outside this design doc:
+
+- benchmark creation and validation:
+  [docs/contributors/benchmark-developer-guide.md](../contributors/benchmark-developer-guide.md)
+- benchmark download and experiment execution:
+  [README.md](../../README.md)
+
+This section records lifecycle-state requirements only.
+
 ### 6.1 Creating New Benchmark (Challenge Developer)
 
 ```bash
@@ -697,48 +692,24 @@ crsbench benchmark bundle ./my-new-vuln
 
 ### 6.2 Releasing Dataset (Maintainer)
 
-```bash
-# 1. Ensure all benchmarks have pkgs/ and ref.diff
-for b in ./benchmarks/*; do crsbench benchmark prepare-delta "$b"; done
-crsbench benchmark bundle-all ./benchmarks/
+Maintainer release procedure is intentionally documented in contributor/user
+guides rather than in this design contract. The contract requirement is:
 
-# 2. Validate entire dataset
-for b in ./benchmarks/*; do crsbench benchmark validate "$b"; done
-
-# 3. Upload to HuggingFace
-crsbench benchmark upload --dataset crsbench --benchmarks-dir ./benchmarks
-```
+- every released benchmark includes bundled `pkgs/`
+- delta benchmarks include required reference diff metadata
+- released bundles pass benchmark validation before publication
 
 ### 6.3 Using Benchmarks (Public User)
 
-```bash
-# 1. Install framework
-pip install crsbench
-
-# 2. Request HF access (one-time)
-# Visit: https://huggingface.co/datasets/sslab-gatech/crsbench-dataset
-
-# 3. Download benchmarks
-crsbench download --all
-
-# 4. Run evaluation
-crsbench run --experiment-config config.yaml
-```
+Public-user installation, download, and runtime instructions live in the root
+README. This design contract only requires that published benchmarks be
+consumable without private repository access.
 
 ### 6.4 Development (Maintainer with Private Repo Access)
 
-```bash
-# Clone benchmark repo directly
-git clone git@github.com:sslab-gatech/crsbench-benchmarks.git
-
-# Work on benchmarks
-# - Edit Dockerfile, project.yaml
-# - Update .aixcc ground truth
-
-# For source changes, update Team-Atlanta repo
-# Then re-bundle
-crsbench benchmark bundle ./updated-benchmark
-```
+Maintainer development workflow is documented in the benchmark contributor
+guide. The contract requirement is that private-development convenience data
+must not leak into public bundles.
 
 ## 7. Benchmark Lifecycle
 

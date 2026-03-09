@@ -92,7 +92,7 @@ YYYY-MM-DD HH:mm:ss | LEVEL    | [module/path]                   | message
 ## Usage Patterns
 
 Usage examples and operational guidance are maintained in:
-- `docs/logger-usage-guide.md`
+- `docs/reference/logging.md`
 
 This architecture document focuses on internals and design rationale.
 
@@ -164,5 +164,5 @@ uv run pytest tests/test_logger.py -v
 
 - Implementation: `crsbench/utils/logger.py`
 - Tests: `tests/test_logger.py`
-- Usage Guide: [docs/logger-usage-guide.md](../../logger-usage-guide.md)
+- Usage Guide: [docs/reference/logging.md](../../reference/logging.md)
 - Loguru Documentation: https://loguru.readthedocs.io/

@@ -48,7 +48,6 @@ documentation-governance source of truth.
 - Goal: Define normative benchmark requirements and example schema data.
 - Canonical entries:
   - `docs/reference/benchmark-rfc.md`
-  - `docs/benchmark-spec.md` (compatibility pointer to RFC)
   - `docs/benchmark-suite-example.yaml`
   - `docs/experiment-config-distributed-example.yaml`
   - `docs/meta-example.yaml`
@@ -66,10 +65,10 @@ documentation-governance source of truth.
 | Project overview and quick start | `README.md` | Adjacent package `README.md` files (keep local scope only) |
 | Docs navigation | `docs/README.md` | Root README docs section (summary only) |
 | Benchmark format requirements | `docs/reference/benchmark-rfc.md` | `docs/benchmark-spec.md` (pointer only) |
-| Install and environment setup | `docs/getting-started/install.md` + `docs/getting-started/configuration.md` | Operational snippets in `README.md` |
-| Experiment execution workflow | `docs/getting-started/first-experiment.md` + `docs/guides/experiments/**` | Command examples in `README.md` |
-| Module operational guidance | `docs/modules/**` | Deep implementation detail in design docs |
-| Architecture decisions and rationale | `docs/design/architecture.md` + relevant `docs/design/**` pages | Intro summaries in module docs |
+| Install and environment setup | `docs/getting-started/README.md` | `docs/getting-started/install.md`, `docs/getting-started/configuration.md`, operational snippets in `README.md` |
+| Experiment execution workflow | `docs/guides/experiments/README.md` | `docs/getting-started/first-experiment.md`, command examples in `README.md` |
+| Module operational guidance | `docs/modules/README.md` | `docs/modules/**`, deep implementation detail in design docs |
+| Architecture decisions and rationale | `docs/design/README.md` | `docs/design/architecture.md`, relevant `docs/design/**`, intro summaries in module docs |
 
 ## Placement Rules
 

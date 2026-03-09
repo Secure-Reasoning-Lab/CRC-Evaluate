@@ -55,64 +55,20 @@ User runs: crsbench run --experiment-config config.yaml
     └── Aggregate results, calculate statistics, display summary
 ```
 
-## CLI Interface
+## CLI Surface
 
-### Installation
+User-facing CLI syntax and examples are documented in:
 
-```bash
-# Install dependencies
-uv sync
+- [First Experiment](../getting-started/first-experiment.md)
+- [Distributed Experiments](../guides/experiments/distributed.md)
+- [Experiment Config Reference](../guides/experiments/config-reference.md)
 
-# Creates executable: .venv/bin/crsbench
-```
+Design constraint:
 
-### Command Signature
-
-```bash
-crsbench run \
-  --experiment-config CONFIG_FILE \
-  [--local-only] \
-  [--distributed] \
-  [--queue-mode {fresh,continue,quit}] \
-  [--retry-failed] \
-  [--dry-run] \
-  [--verbose]
-```
-
-**Key Design Decision**: The experiment config YAML is the source of truth for benchmarks, CRSes, mode, paths, and other experiment settings. The CLI provides only execution-control flags.
-
-### Arguments
-
-| Argument | Required | Type | Description |
-|----------|----------|------|-------------|
-| `--experiment-config` | Yes | Path | Path to experiment YAML config |
-| `--local-only` | No | Flag | Force local execution |
-| `--distributed` | No | Flag | Force distributed execution |
-| `--queue-mode` | No | Choice | Existing queue policy (`fresh`, `continue`, `quit`) |
-| `--retry-failed` | No | Flag | Requeue failed trials in continue mode |
-| `--dry-run` | No | Flag | Show what would run without executing |
-| `--verbose` / `-v` | No | Flag | Enable verbose output |
-
-Benchmarks, CRSes, benchmark suites, mode, paths, hint settings, and all other experiment parameters are specified in the experiment config YAML.
-
-### Usage Examples
-
-**Minimal usage (benchmarks, `crs_compose`, etc. configured in YAML):**
-```bash
-crsbench run --experiment-config my-experiment.yaml
-```
-
-**Force local execution:**
-```bash
-crsbench run --experiment-config config.yaml \
-             --local-only
-```
-
-**Dry run (show what would execute):**
-```bash
-crsbench run --experiment-config config.yaml \
-             --dry-run
-```
+- the experiment config YAML is the source of truth for benchmarks, CRS
+  services, mode, paths, and runtime contract
+- the CLI is limited to execution-control flags such as local/distributed
+  forcing, queue handling, and verbosity
 
 ## Configuration Resolution
 

@@ -15,31 +15,19 @@ Operate one experiment with a single config file across multiple machines:
 - Worker/evaluator start in configless mode and discover runtime registration from Redis.
 - Queue model must be pinned cluster-wide via `CRSBENCH_QUEUE_MODEL`.
 
-## Recommended Startup
+## Startup Expectations
 
-Machine A:
+- Machine A exports the shared Redis host and queue model, then runs the
+  orchestrator against the experiment config.
+- Machine B exports the same Redis host and queue model, then runs a single
+  evaluator in configless mode.
+- Machine C..N export the same Redis host and queue model, then run workers in
+  continuous mode.
 
-```bash
-export CRSBENCH_REDIS_HOST=<redis-host>:6379
-export CRSBENCH_QUEUE_MODEL=flat
-uv run crsbench run --experiment-config /path/to/config.yaml
-```
+Exact commands are documented in:
 
-Machine B (single evaluator):
-
-```bash
-export CRSBENCH_REDIS_HOST=<redis-host>:6379
-export CRSBENCH_QUEUE_MODEL=flat
-uv run crsbench evaluator
-```
-
-Machine C..N (workers):
-
-```bash
-export CRSBENCH_REDIS_HOST=<redis-host>:6379
-export CRSBENCH_QUEUE_MODEL=flat
-uv run crsbench worker --continuous
-```
+- [Distributed Experiments](../../guides/experiments/distributed.md)
+- [Multi-Machine Deployment Contract](./deployment-guide.md)
 
 ## Evaluator Capacity Policy
 

@@ -533,4 +533,4 @@ def get_mount_mapping(harness: HarnessFile, ...,
 - **Validation Module**: [docs/design/validation/validation.md](../validation/validation.md) - Path validation in meta.yaml
 - **Repository Manager**: [docs/design/migration/repo-manager.md](../migration/repo-manager.md) - Repository cloning
 - **OSS-CRS Integration**: [docs/design/evaluation/oss-crs-integration.md](./oss-crs-integration.md) - Integration points
-- **Benchmark Spec**: [docs/RFC.md](../../RFC.md) - Harness path specification
+- **Benchmark Spec**: [docs/reference/benchmark-rfc.md](../../reference/benchmark-rfc.md) - Harness path specification

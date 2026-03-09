@@ -163,7 +163,7 @@ class BenchmarkConfig(BaseModel):
 ### ExperimentConfig Model
 
 The canonical config contract is documented in:
-- [docs/experiment-config-distributed-example.yaml](/home/dongkwan/CRSBench/docs/experiment-config-distributed-example.yaml)
+- [docs/experiment-config-distributed-example.yaml](../../experiment-config-distributed-example.yaml)
 
 Current source-of-truth highlights:
 - CRS identity/source selection is declared by `crs_compose` service keys.
