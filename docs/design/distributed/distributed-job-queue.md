@@ -433,8 +433,8 @@ Add `redis_host` and `benchmarks_root` fields to experiment configuration:
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| task | str | Yes | - | Experiment task (`bugfinding` or `bugfixing`) |
-| mode | str | Yes | - | Experiment mode (`full`, `delta`, etc.) |
+| task | enum | No | null | Optional experiment task (`bugfinding` or `bugfixing`) |
+| mode | enum | Yes | - | Evaluation mode (`delta`, `full`, `all`, `auto`) |
 | trials | int | Yes | - | Number of trials per CRS-benchmark combination (≥1) |
 | max_total_time | int | Yes | - | Maximum time in seconds per trial (≥1) |
 | experiment_filestore | str | Yes | - | Directory for storing experiment data and results |
@@ -520,8 +520,8 @@ benchmarks_root: /opt/crsbench/benchmarks
 class ExperimentConfig(BaseModel):
     """Experiment configuration schema."""
 
-    task: Literal["bugfinding", "bugfixing"] = Field(...)
-    mode: str = Field(...)
+    task: Optional[Literal["bugfinding", "bugfixing"]] = Field(default=None)
+    mode: EvaluationMode = Field(...)
     trials: int = Field(..., ge=1)
     max_total_time: int = Field(..., ge=1)
     experiment_filestore: str = Field(...)

@@ -17,14 +17,15 @@ Canonical variable index: `docs/environment-variables.md`
    ```
    CRSBench loads `.env` automatically via `python-dotenv`; no manual export is required.
 
-3. **Set required API keys** (at minimum):
+3. **Set required runtime contract keys** (at minimum):
    ```bash
    CRSBENCH_LLM_UPSTREAM_BASE_URL=http://your-litellm:4000
    # Runtime auth: either upstream API key or upstream master key
    CRSBENCH_LLM_UPSTREAM_API_KEY=sk-your-api-key
    # Required when runtime.litellm.tracking_enabled: true
    # CRSBENCH_LLM_UPSTREAM_MASTER_KEY=sk-your-master-key
-   OPENAI_API_KEY=sk-your-openai-key  # Or another LLM provider
+   # Optional provider key(s), depending on your LiteLLM backend/provider config:
+   # OPENAI_API_KEY=sk-your-openai-key
    ```
 
 4. **Ensure managed OSS-Fuzz checkout is prepared:**
@@ -47,7 +48,7 @@ CRSBench prefers canonical `CRSBENCH_LLM_*` variables as the source of truth:
 - `CRSBENCH_LLM_UPSTREAM_MASTER_KEY`: external LiteLLM key-management credential (required when `runtime.litellm.tracking_enabled: true`; optional otherwise if `CRSBENCH_LLM_UPSTREAM_API_KEY` is used)
 - External runtime mode requires `CRSBENCH_LLM_UPSTREAM_BASE_URL` (preferred) or `CRSBENCH_LLM_BASE_URL`.
 
-Only `CRSBENCH_LLM_*` names are supported.
+Only `CRSBENCH_LLM_*` names are used by CRSBench runtime contract resolution.
 
 4. **Verify configuration:**
    ```bash
