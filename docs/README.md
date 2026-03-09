@@ -19,6 +19,7 @@ Use this page as the primary navigation hub.
 
 ## Guides
 
+- [Guides Hub](./guides/README.md)
 - [Experiments Hub](./guides/experiments/README.md)
   - [Single Machine](./guides/experiments/single-machine.md)
   - [Distributed](./guides/experiments/distributed.md)
