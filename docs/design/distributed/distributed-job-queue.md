@@ -1064,24 +1064,13 @@ report_filestore: /tmp/crsbench/report-data
 
 **Schema Update**:
 
-```python
-class ExperimentConfig(BaseModel):
-    """Experiment configuration schema."""
+Use the same `ExperimentConfig` contract described in section 5.2:
 
-    task: Literal["bugfinding", "bugfixing"] = Field(...)
-    mode: str = Field(...)
-    trials: int = Field(..., ge=1)
-    max_total_time: int = Field(..., ge=1)
-    experiment_filestore: str = Field(...)
-    report_filestore: str = Field(...)
-    redis_host: Optional[str] = Field(default=None, description="Redis server hostname (optional, omit for local mode)")
-
-    @validator('redis_host')
-    def validate_redis_host(cls, v):
-        if v and v.strip() and v.strip().lower() != 'none':
-            return v.strip()
-        return None  # Treat empty or "none" as None
-```
+- `task`: optional (`bugfinding` | `bugfixing`)
+- `mode`: required evaluation mode enum (`delta` | `full` | `all` | `auto`)
+- `trials`: required integer `>= 1`
+- `max_total_time`: required integer `>= 1`
+- `redis_host`: optional (unset/`none` means local mode)
 
 **User Experience**:
 
