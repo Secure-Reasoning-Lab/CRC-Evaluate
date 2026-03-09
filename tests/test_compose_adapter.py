@@ -763,6 +763,58 @@ class TestOssCrsAdapterBugFindFull:
         with pytest.raises(RuntimeError, match="build-target failed"):
             adapter.build(bench, tmp_path / "trial")
 
+    @patch("crsbench.evaluation.adapter.compose_common.run_with_graceful_timeout")
+    @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
+    def test_run_passes_runtime_input_paths_when_present(
+        self,
+        mock_subprocess: MagicMock,
+        mock_rwgt: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Bug-finding mode should still forward staged runtime input paths."""
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        mock_rwgt.return_value = ("out", "", 0, False)
+
+        adapter = self._make_adapter(tmp_path)
+        adapter.configure({"docker_registry": "ghcr.io/t"})
+        bench = tmp_path / "benchmarks" / "proj1"
+        bench.mkdir(parents=True)
+        trial = tmp_path / "trial"
+        trial.mkdir()
+
+        pov_dir = trial / "povs"
+        pov_dir.mkdir()
+        (pov_dir / "crash-001").write_bytes(b"\x00" * 8)
+
+        diff_path = trial / "ref.diff"
+        diff_path.write_text("--- a/file\n+++ b/file\n")
+
+        seed_dir = trial / "seeds"
+        seed_dir.mkdir()
+        (seed_dir / "seed-a").write_text("seed")
+
+        bug_candidates_dir = trial / "bug-candidates"
+        bug_candidates_dir.mkdir()
+        (bug_candidates_dir / "cpv_0.sarif").write_text("{}")
+
+        adapter.build(bench, trial)
+        harness = MagicMock()
+        harness.name = "fuzz_target"
+
+        adapter.run(bench, harness, trial)
+
+        cmd = mock_rwgt.call_args[0][0]
+        assert "--pov-dir" in cmd
+        assert str(pov_dir) in cmd
+        assert "--diff" in cmd
+        assert str(diff_path) in cmd
+        assert "--seed-dir" in cmd
+        assert str(seed_dir) in cmd
+        assert "--bug-candidate-dir" in cmd
+        assert str(bug_candidates_dir) in cmd
+
     @patch("crsbench.evaluation.adapter.compose_common.subprocess.run")
     def test_generate_compose_yaml_calls_registry(
         self, mock_run: MagicMock, tmp_path: Path
@@ -2256,7 +2308,7 @@ class TestBugFixInputStaging:
                 benchmark, "fuzz_target", trial_dir, target_cpv_id="cpv_missing"
             )
 
-    def test_prepare_bugfix_runtime_inputs_skips_pov_when_disabled(
+    def test_prepare_runtime_inputs_skips_pov_when_disabled(
         self, tmp_path: Path
     ) -> None:
         benchmark = self._make_benchmark_with_variants(tmp_path)
@@ -2275,14 +2327,12 @@ class TestBugFixInputStaging:
             seed_corpus_enabled=False,
         )
 
-        runner._prepare_bugfix_runtime_inputs(benchmark, "fuzz_target", trial_dir)
+        runner._prepare_runtime_inputs(benchmark, "fuzz_target", trial_dir)
 
         assert not (trial_dir / "povs").exists()
         assert not (trial_dir / "ref.diff").exists()
 
-    def test_prepare_bugfix_runtime_inputs_stages_seed_and_diff(
-        self, tmp_path: Path
-    ) -> None:
+    def test_prepare_runtime_inputs_stages_seed_and_diff(self, tmp_path: Path) -> None:
         benchmark = self._make_benchmark_with_variants(tmp_path)
         seed_dir = benchmark / ".aixcc" / "fuzz_target" / "seeds"
         seed_dir.mkdir(parents=True, exist_ok=True)
@@ -2315,13 +2365,13 @@ class TestBugFixInputStaging:
             diff_input_enabled=True,
         )
 
-        runner._prepare_bugfix_runtime_inputs(benchmark, "fuzz_target", trial_dir)
+        runner._prepare_runtime_inputs(benchmark, "fuzz_target", trial_dir)
 
         staged_seed_files = {p.name for p in (trial_dir / "seeds").iterdir()}
         assert staged_seed_files == {"seed_a"}
         assert (trial_dir / "ref.diff").exists()
 
-    def test_prepare_bugfix_runtime_inputs_stages_bug_candidates_from_sarif(
+    def test_prepare_runtime_inputs_stages_bug_candidates_from_sarif(
         self, tmp_path: Path
     ) -> None:
         benchmark = self._make_benchmark_with_variants(tmp_path)
@@ -2344,14 +2394,14 @@ class TestBugFixInputStaging:
             sarif_level=1,
         )
 
-        runner._prepare_bugfix_runtime_inputs(
+        runner._prepare_runtime_inputs(
             benchmark, "fuzz_target", trial_dir, target_cpv_id="cpv_0"
         )
 
         staged = trial_dir / "bug-candidates" / "cpv_0.sarif"
         assert staged.exists()
 
-    def test_prepare_bugfix_runtime_inputs_cleans_stale_bug_candidates(
+    def test_prepare_runtime_inputs_cleans_stale_bug_candidates(
         self, tmp_path: Path
     ) -> None:
         benchmark = self._make_benchmark_with_variants(tmp_path)
@@ -2373,11 +2423,11 @@ class TestBugFixInputStaging:
             sarif_level=None,
         )
 
-        runner._prepare_bugfix_runtime_inputs(benchmark, "fuzz_target", trial_dir)
+        runner._prepare_runtime_inputs(benchmark, "fuzz_target", trial_dir)
 
         assert not stale_dir.exists()
 
-    def test_prepare_bugfix_runtime_inputs_replaces_stale_pov_dirs(
+    def test_prepare_runtime_inputs_replaces_stale_pov_dirs(
         self, tmp_path: Path
     ) -> None:
         benchmark = self._make_benchmark_with_variants(tmp_path)
@@ -2402,13 +2452,13 @@ class TestBugFixInputStaging:
             pov_input_enabled=True,
         )
 
-        runner._prepare_bugfix_runtime_inputs(benchmark, "fuzz_target", trial_dir)
+        runner._prepare_runtime_inputs(benchmark, "fuzz_target", trial_dir)
 
         assert not (stale_adapter / "old").exists()
         assert not (stale_input / "old").exists()
         assert not (stale_cpvs / "old").exists()
 
-    def test_prepare_bugfix_runtime_inputs_fails_when_sarif_enabled_but_missing(
+    def test_prepare_runtime_inputs_fails_when_sarif_enabled_but_missing(
         self, tmp_path: Path
     ) -> None:
         benchmark = self._make_benchmark_with_variants(tmp_path)
@@ -2428,9 +2478,9 @@ class TestBugFixInputStaging:
         with pytest.raises(
             EvaluationError, match="SARIF bug-candidate input enabled but no matching"
         ):
-            runner._prepare_bugfix_runtime_inputs(benchmark, "fuzz_target", trial_dir)
+            runner._prepare_runtime_inputs(benchmark, "fuzz_target", trial_dir)
 
-    def test_prepare_bugfix_runtime_inputs_fails_when_seed_enabled_but_missing(
+    def test_prepare_runtime_inputs_fails_when_seed_enabled_but_missing(
         self, tmp_path: Path
     ) -> None:
         benchmark = self._make_benchmark_with_variants(tmp_path)
@@ -2449,9 +2499,9 @@ class TestBugFixInputStaging:
         with pytest.raises(
             EvaluationError, match="Seed corpus input enabled but unavailable"
         ):
-            runner._prepare_bugfix_runtime_inputs(benchmark, "fuzz_target", trial_dir)
+            runner._prepare_runtime_inputs(benchmark, "fuzz_target", trial_dir)
 
-    def test_prepare_bugfix_runtime_inputs_fails_when_diff_enabled_but_missing(
+    def test_prepare_runtime_inputs_fails_when_diff_enabled_but_missing(
         self, tmp_path: Path
     ) -> None:
         benchmark = self._make_benchmark_with_variants(tmp_path)
@@ -2471,7 +2521,7 @@ class TestBugFixInputStaging:
             EvaluationError,
             match="Diff input enabled but benchmark ref.diff is missing",
         ):
-            runner._prepare_bugfix_runtime_inputs(benchmark, "fuzz_target", trial_dir)
+            runner._prepare_runtime_inputs(benchmark, "fuzz_target", trial_dir)
 
 
 class TestBugFixPatchStatsCollection:

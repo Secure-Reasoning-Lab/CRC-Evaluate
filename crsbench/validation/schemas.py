@@ -954,11 +954,6 @@ class WorkerConfig(BaseModel):
         ge=1,
         description="Interval (seconds) between disk space checks when paused",
     )
-    shared_cpus: Optional[str] = Field(
-        default=None,
-        description="CPUs shared across all trials without exclusive allocation (cpuset format, e.g., '0-1'). "
-        "These cores are available to every container but not managed by the CPU pool.",
-    )
     cpu_tag: Optional[str] = Field(
         default=None,
         description="Worker CPU capability tag for matching jobs that require resources.cpu_tag.",
@@ -1857,19 +1852,6 @@ class ExperimentConfig(BaseModel):
             raise ValueError("crs_compose is required")
         if not self.crs_compose.services:
             raise ValueError("crs_compose must contain at least one CRS service entry")
-        return self
-
-    @model_validator(mode="after")
-    def check_task_input_compatibility(self):
-        """Validate task-specific runtime input compatibility."""
-        if self.task != "bugfinding":
-            return self
-        if self.inputs.sarif.enabled:
-            raise ValueError("task=bugfinding does not support runtime.inputs.sarif")
-        if self.inputs.seed.enabled:
-            raise ValueError("task=bugfinding does not support runtime.inputs.seed")
-        if self.inputs.diff.enabled:
-            raise ValueError("task=bugfinding does not support runtime.inputs.diff")
         return self
 
     @model_validator(mode="after")

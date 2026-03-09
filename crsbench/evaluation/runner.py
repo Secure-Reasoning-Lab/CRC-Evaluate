@@ -663,15 +663,14 @@ class BenchmarkRunner:
                 benchmark_path, harness.name, trial_output_dir
             )
 
-            # For bug-fixing CRS, stage CPV/POV inputs from benchmark .aixcc
-            # into the trial directory before managers are initialized.
-            if self._crs_type == "bug-fixing":
-                self._prepare_bugfix_runtime_inputs(
-                    benchmark_path=benchmark_path,
-                    harness_name=harness.name,
-                    trial_output_dir=trial_output_dir,
-                    target_cpv_id=target_cpv_id,
-                )
+            # Stage configured runtime inputs from benchmark .aixcc into
+            # the trial directory before managers are initialized.
+            self._prepare_runtime_inputs(
+                benchmark_path=benchmark_path,
+                harness_name=harness.name,
+                trial_output_dir=trial_output_dir,
+                target_cpv_id=target_cpv_id,
+            )
 
             # Start managers
             coverage_manager, coverage_thread, stop_event = (
@@ -821,14 +820,14 @@ class BenchmarkRunner:
             patch_verification_manager,
         )
 
-    def _prepare_bugfix_runtime_inputs(
+    def _prepare_runtime_inputs(
         self,
         benchmark_path: Path,
         harness_name: str,
         trial_output_dir: Path,
         target_cpv_id: str | None = None,
     ) -> None:
-        """Stage bug-fixing runtime inputs based on effective input settings."""
+        """Stage configured runtime inputs based on effective input settings."""
         if self.pov_input_enabled:
             self._prepare_bugfix_inputs(
                 benchmark_path=benchmark_path,
@@ -844,7 +843,7 @@ class BenchmarkRunner:
             ]:
                 if stale.is_dir():
                     shutil.rmtree(stale)
-            self.logger.info("Bug-fixing POV input staging disabled")
+            self.logger.info("Runtime POV input staging disabled")
 
         self._prepare_seed_corpus_inputs(
             benchmark_path=benchmark_path,

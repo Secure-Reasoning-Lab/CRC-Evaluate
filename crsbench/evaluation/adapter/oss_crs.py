@@ -926,22 +926,16 @@ class OssCrsAdapter:
         # Stage benchmark to exclude ground truth dotfiles
         staged_path = self._stage_benchmark(benchmark_path, trial_output_dir)
 
-        # Bug-fixing inputs (only used when mode is bug-fixing)
-        pov_dir: Optional[Path] = None
-        diff: Optional[Path] = None
-        seed_dir: Optional[Path] = None
-        bug_candidate_dir: Optional[Path] = None
-
-        if self._mode == "bug-fixing":
-            pov_dir = self._find_pov_dir(trial_output_dir)
-            diff_path = trial_output_dir / "ref.diff"
-            diff = diff_path if diff_path.exists() else None
-            seed_path = trial_output_dir / "seeds"
-            seed_dir = seed_path if seed_path.exists() else None
-            bug_candidate_path = trial_output_dir / "bug-candidates"
-            bug_candidate_dir = (
-                bug_candidate_path if bug_candidate_path.exists() else None
-            )
+        # Runtime inputs are passed when present, independent of adapter mode.
+        pov_dir: Optional[Path] = self._find_pov_dir(trial_output_dir)
+        diff_path = trial_output_dir / "ref.diff"
+        diff: Optional[Path] = diff_path if diff_path.exists() else None
+        seed_path = trial_output_dir / "seeds"
+        seed_dir: Optional[Path] = seed_path if seed_path.exists() else None
+        bug_candidate_path = trial_output_dir / "bug-candidates"
+        bug_candidate_dir: Optional[Path] = (
+            bug_candidate_path if bug_candidate_path.exists() else None
+        )
 
         start_time = time.time()
         stdout = ""

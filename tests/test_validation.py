@@ -792,17 +792,26 @@ class TestExperimentConfigSchema:
         ):
             ExperimentConfig(**data)
 
-    def test_bugfinding_rejects_sarif_seed_diff_inputs(self):
+    def test_bugfinding_accepts_all_runtime_inputs(self):
         data = self._base_kwargs()
         data["task"] = "bugfinding"
         data["inputs"] = {
+            "pov": {"enabled": True, "max_variants_per_cpv": 1},
             "sarif": {"enabled": True, "level": 1},
             "seed": {"enabled": True},
             "diff": {"enabled": True},
         }
+        config = ExperimentConfig(**data)
+        assert config.inputs.pov.enabled is True
+        assert config.inputs.sarif.enabled is True
+        assert config.inputs.seed.enabled is True
+        assert config.inputs.diff.enabled is True
+
+    def test_worker_shared_cpus_rejected(self):
+        data = self._base_kwargs()
+        data["worker"] = {"shared_cpus": "0-3"}
         with pytest.raises(
-            PydanticValidationError,
-            match="task=bugfinding does not support runtime.inputs.sarif",
+            PydanticValidationError, match="Extra inputs are not permitted"
         ):
             ExperimentConfig(**data)
 
